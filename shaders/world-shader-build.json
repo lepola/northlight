@@ -1,5 +1,5 @@
 {
-  "source_sha256": "243312b572e4ac37c33546789202368118fae17049285b5ab61db887944bc830",
+  "source_sha256": "93c842fc3c76e4439b3a8aee3b5367552327cfb993f883bc131340ccae79e62b",
   "compiler": "Wine d3dcompiler_47 D3DCompile",
   "game_launched": false,
   "shaders": {
@@ -203,11 +203,11 @@
         "rsq": 8
       }
     },
-    "TemporalLight": {
+    "RemovalSmooth": {
       "target": "ps_3_0",
-      "bytes": 8124,
-      "sha256": "4cac38b915faa8fe195b9e8d42139d068b9c9ee22d0cb202841f241641c7d0fb",
-      "static_instruction_slots": 509,
+      "bytes": 4456,
+      "sha256": "f9a37687f81302cfe388b01213645e23e77882516312b91e3d9e0df30780c258",
+      "static_instruction_slots": 263,
       "temporary_registers": 24,
       "samplers": [
         0,
@@ -215,31 +215,61 @@
         8,
         10,
         12,
-        14,
-        15
+        14
       ],
       "instructions": {
-        "mul": 77,
-        "frc": 6,
-        "add": 85,
-        "rcp": 42,
-        "mov": 127,
-        "texldl": 20,
-        "max": 33,
-        "min": 22,
-        "cmp": 22,
-        "if": 7,
+        "mul": 49,
+        "frc": 4,
+        "add": 38,
+        "rcp": 23,
+        "mov": 67,
+        "texldl": 12,
+        "max": 15,
+        "min": 7,
+        "cmp": 6,
+        "if": 3,
         "mad": 2,
         "log": 1,
         "exp": 2,
         "rep": 1,
         "break": 1,
-        "else": 7,
-        "endif": 7,
-        "rsq": 2,
-        "abs": 5,
-        "endrep": 1,
-        "dp2add": 1
+        "else": 3,
+        "endif": 3,
+        "rsq": 1,
+        "dp3": 1,
+        "abs": 2,
+        "endrep": 1
+      }
+    },
+    "TemporalLight": {
+      "target": "ps_3_0",
+      "bytes": 5000,
+      "sha256": "c2dcff7332ca899b45c1f3b7580b1ef505a602bbc03cd96e5fd3f45d5f2cc75b",
+      "static_instruction_slots": 293,
+      "temporary_registers": 13,
+      "samplers": [
+        1,
+        8,
+        9,
+        14,
+        15
+      ],
+      "instructions": {
+        "mul": 38,
+        "frc": 4,
+        "add": 58,
+        "rcp": 22,
+        "mov": 66,
+        "texldl": 12,
+        "max": 20,
+        "min": 16,
+        "cmp": 19,
+        "if": 4,
+        "abs": 3,
+        "dp2add": 1,
+        "rsq": 1,
+        "else": 4,
+        "endif": 4
       }
     },
     "LocalFog": {

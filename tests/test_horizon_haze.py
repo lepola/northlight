@@ -388,7 +388,8 @@ def main():
             # SourceVisibilityPS gains the wrap ring taps (test_solar_volume pins the source).
             # WorldLighting (baseline alpha) and LocalDirect (daylight sunlit factor) change on purpose.
             # 0.3.175: WorldNormals' wide-sample threshold .85 -> .95 (r76) and both-or-neither wide pair (r77).
-            if name not in ('WorldComposite', 'TemporalLight', 'SourceVisibilityPS', 'WorldLighting', 'LocalDirect', 'WorldNormals'):
+            # 0.3.185: RemovalSmooth is new (the removal smoothing's own half-res pass; TemporalLight shrinks).
+            if name not in ('WorldComposite', 'TemporalLight', 'SourceVisibilityPS', 'WorldLighting', 'LocalDirect', 'WorldNormals', 'RemovalSmooth'):
                 assert info['sha256'] == BEFORE[name], name
                 unchanged.append(name)
         assert sorted(unchanged) == sorted(k for k in BEFORE if k not in ('TemporalLight', 'SourceVisibilityPS', 'WorldLighting', 'LocalDirect', 'WorldNormals'))

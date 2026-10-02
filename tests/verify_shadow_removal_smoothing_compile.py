@@ -7,7 +7,7 @@ world shader whose bytecode changed from 0.3.158 (besides WorldComposite, which 
 horizon lift colour from c35.yzw, and SourceVisibilityPS with its wrap ring, since 0.3.163; and
 WorldLighting (baseline alpha) plus LocalDirect (daylight lamps), since 0.3.165; WorldNormals' wide-sample
 threshold since 0.3.175), it stays within the SM3 limits (slots reported),
-it samples Scene (s0) and BaselineLighting (s12) besides its 0.3.158 samplers, and every .bin
+it samples SmoothedLighting (s9) besides its 0.3.158 samplers (0.3.185: Scene s0, AO s10, BaselineLighting s12 moved to RemovalSmooth), and every .bin
 matches the manifest. Reads files only; no Wine, GPU or game."""
 import sys; from pathlib import Path; sys.path.insert(0, str(Path(__file__).resolve().parents[1]))  # repo root
 import northlight_paths as fp
@@ -35,12 +35,16 @@ if manifest['source_sha256']!=source:
     sys.exit(1)
 shaders=manifest['shaders'];checks={}
 changed=sorted(k for k,v in shaders.items() if v['sha256']!=BEFORE.get(k))
-checks[f'only TemporalLight (and the WorldComposite) changed (changed: {changed})']=changed==['LocalDirect','SourceVisibilityPS','TemporalLight','WorldComposite','WorldLighting','WorldNormals'] and sorted(shaders)==sorted(BEFORE)
+# 0.3.185: RemovalSmooth is new (smoothRemoval moved out of TemporalLight into its own half-res pass).
+checks[f'only TemporalLight (and the WorldComposite) changed, RemovalSmooth added (changed: {changed})']=changed==['LocalDirect','RemovalSmooth','SourceVisibilityPS','TemporalLight','WorldComposite','WorldLighting','WorldNormals'] and sorted(shaders)==sorted([*BEFORE,'RemovalSmooth'])
 t=shaders['TemporalLight']
-# 0.3.174 (r72 decisions-g1 §8): an exact budget of 509 (the ps_3_0 minimum 512 is the hard gate). Headroom is
-# exhausted: any later TemporalLight change must free slots first, or this fails loudly.
-checks[f"TemporalLight {t['static_instruction_slots']} slots == 509 (<= 512), {t['temporary_registers']}/32 temporaries (0.3.158: 217, 11)"]=t['static_instruction_slots']==509<=512 and t['temporary_registers']<=32 and t['target']=='ps_3_0'
-checks[f"TemporalLight samplers {t['samplers']} = 0.3.158 [1,8,14,15] + Scene s0 + AO/bloom s10 + BaselineLighting s12"]=t['samplers']==[0,1,8,10,12,14,15]
+# 0.3.185: smoothRemoval left TemporalLight (it had hit an exact budget of 509 of the ps_3_0 minimum 512 in 0.3.174) for RemovalSmooth,
+# which carries the Scene, AO/bloom s10, BaselineLighting and NormalBuffer s14 reads. Both are pinned exactly: any later growth must be deliberate.
+r=shaders['RemovalSmooth']
+checks[f"TemporalLight {t['static_instruction_slots']} slots == 293 (<= 512), {t['temporary_registers']}/32 temporaries (0.3.158: 217, 11)"]=t['static_instruction_slots']==293<=512 and t['temporary_registers']<=32 and t['target']=='ps_3_0'
+checks[f"TemporalLight samplers {t['samplers']} = 0.3.158 [1,8,14,15] + SmoothedLighting s9 (no Scene s0, AO s10, BaselineLighting s12 any more)"]=t['samplers']==[1,8,9,14,15]
+checks[f"RemovalSmooth {r['static_instruction_slots']} slots == 263 (<= 512), {r['temporary_registers']}/32 temporaries"]=r['static_instruction_slots']==263<=512 and r['temporary_registers']<=32 and r['target']=='ps_3_0'
+checks[f"RemovalSmooth samplers {r['samplers']} = Scene s0, Depth s1, LightingBuffer s8, AO/bloom s10, BaselineLighting s12, NormalBuffer s14"]=r['samplers']==[0,1,8,10,12,14]
 checks['every .bin matches its manifest hash']=all(hashlib.sha256(fp.src(f'{k}.bin').read_bytes()).hexdigest()==v['sha256'] for k,v in shaders.items())
 for name,ok in checks.items():print(('PASS ' if ok else 'FAIL ')+name)
 assert all(checks.values())

@@ -15,7 +15,7 @@ sampler2D BaselineLighting : register(s12);
 sampler2D RegionalFog : register(s13); // ground, day extinction, night extra, layer height
 float4 RegionalFogInfo : register(c31); // world node0 XY, inverse field span, night fraction
 float4 WaterInfo : register(c30);
-float4 RemovalInfo : register(c30); // TemporalLight only: y 1 when a lit source is drawn, z 1/(summed source weight), w disc radius in half-res pixels at view distance 1
+float4 RemovalInfo : register(c30); // RemovalSmooth, TemporalLight: y 1 when a lit source is drawn, z 1/(summed source weight), w disc radius in half-res pixels at view distance 1
 sampler2D ProbeMetadata : register(s10); // exact integer world-cell xyz, first-valid time w (-1 invalid)
 sampler2D AmbientOcclusion : register(s10); // 0.3.174 TemporalLight/WorldComposite: half-res contact AO (a), pre-weighted bloom (rgb), LINEAR; neutral (0,0,0,1) unless the world composites
 
@@ -59,6 +59,7 @@ float4 SourceInfo : register(c67); // disc tangent radius, history weight, horiz
 float4 HorizonSun : register(c67); // zw: horizontal sun direction x lobe strength (WorldComposite only)
 sampler2D LightHistory : register(s14); // previous frame's stabilized lighting buffer (temporal pass only)
 sampler2D DepthHistory : register(s15); // previous frame's linear view distance per half-res texel
+sampler2D SmoothedLighting : register(s9); // 0.3.185 TemporalLight only: the LightingBuffer after RemovalSmooth (s9 is FogBuffer's slot, idle and rebound before its readers)
 row_major float4x4 PreviousView : register(c53);
 float4 TemporalInfo : register(c57); // history weight (0 disables), horizon shape (yzw)
 float4 HorizonShape : register(c57); // yzw: terrain start view Z, 1/ramp (0 = sky only), log2(e)/sin(band) (WorldComposite only)
@@ -449,6 +450,18 @@ float4 LocalDirect(float2 uv:TEXCOORD0):COLOR0 {
 // their value. The fraction includes the composite's albedo bound (legacy fog T):
 // correction/baseline alone still steps where the facet normal predicts no painted
 // light, because the albedo estimate saturates there.
+// 0.3.185 direction-dependent halo: looking toward a low sun, the camera-facing face of an actor or
+// cliff faces away from it (N.L<=0, removal ratio about 0) in the same shadow state as the ground, and
+// the depth weight alone accepts it at the contact: its zero removal leaked into the adjacent ground
+// (under-removal, a light halo). Each tap is also weighted by the agreement of the smoothed world
+// normal (s14): full up to 25 degrees (10 degree facet creases stay smoothed), none from 40. A wall is
+// ~90 degrees from the ground at any distance, which no depth tolerance can tell. A 45 degree face
+// leaves under 2/255 at 25 u (its crease texel's blended normal is 24 degrees off); 35/20 would add a
+// capture step above 5/255 (rock facets there differ by 32 degrees). A silhouette centre (confidence
+// 0: its one-sided normal may be the neighbour's) skips the test (the old weights); silhouette taps of
+// a confident centre are tested with their own normal. Own half-res pass (RemovalSmooth): the extra
+// read does not fit TemporalLight's 512 slots; TemporalLight reads its result as SmoothedLighting (s9)
+// and clamps against the raw s8.
 // The composite applies correction*min(transported/baseline,T); as a fraction of the
 // transported colour that is correction*T/removalScale.
 // legacyT>=.001 keeps the first operand >=.00015, so the scene term needs no floor.
@@ -470,17 +483,30 @@ float3 smoothRemoval(float4 current,float2 q,float2 base,float2 size,float z){
         float radius=clamp(RemovalInfo.w/z,3,16);
         float depthScale=-1.442695/max(.25,z*.03);
         float visibilityScale=2*RemovalInfo.z/GridInfo.z;
+        float4 centreNormal=tex2Dlod(NormalBuffer,float4(q,0,0));
         float3 sum=max(ratio,-.45);float total=1,t=.5;float2 dir=float2(1,0);
         [loop]for(int i=0;i<24;++i){
             float2 tq=(clamp(floor(base+.5+dir*(sqrt(t*(1.0/24))*radius)),0,size-1)+.5)/size;
             float4 light=tex2Dlod(LightingBuffer,float4(tq,0,0));
-            float w=exp2(abs(viewDistance(normalizedDepth(depthUV(tq)))-z)*depthScale)*saturate(1-abs(light.a-current.a)*visibilityScale);
+            float4 tapNormal=tex2Dlod(NormalBuffer,float4(tq,0,0));
+            float agree=saturate((dot(centreNormal.xyz,tapNormal.xyz)-.766)*7.13);
+            float w=exp2(abs(viewDistance(normalizedDepth(depthUV(tq)))-z)*depthScale)*saturate(1-abs(light.a-current.a)*visibilityScale)*(centreNormal.w>.5?agree:1);
             sum+=max(light.rgb*legacyT/removalScale(tex2Dlod(BaselineLighting,float4(tq,0,0)).rgb,tex2Dlod(Scene,float4(tq,0,0)).rgb*tex2Dlod(AmbientOcclusion,float4(tq,0,0)).a,fog,legacyT),-.45)*w;total+=w;
             dir=float2(dir.x*-.7373688-dir.y*.6754903,dir.x*.6754903-dir.y*.7373688);t+=1;
         }
         result=lerp(ratio,sum/total,amount)*scale/legacyT;
     }
     return result;
+}
+// Half-res pass before TemporalLight: the lighting buffer with the removal smoothing applied (own
+// pass for the slot budget). Lit, sky and no-source pixels are a bit-identical copy.
+float4 RemovalSmooth(float2 uv:TEXCOORD0):COLOR0 {
+    float2 half=ScreenSize.zw;
+    float2 base=floor(uv*half);float2 q=(base+.5)/half;
+    float4 current=tex2Dlod(LightingBuffer,float4(q,0,0));
+    float d=normalizedDepth(depthUV(q));
+    [branch]if(RemovalInfo.y>0&&d<.99999)current.rgb=smoothRemoval(current,q,base,half,viewDistance(d));
+    return current;
 }
 // Temporal stabilization of the half-resolution lighting buffer (shadow
 // visibility, GI and local light corrections). The previous frame's result is
@@ -492,9 +518,8 @@ struct TemporalOutput {float4 light:COLOR0;float4 depth:COLOR1;};
 TemporalOutput TemporalLight(float2 uv:TEXCOORD0) {
     TemporalOutput o;float2 half=ScreenSize.zw;
     float2 base=floor(uv*half);float2 q=(base+.5)/half;
-    float4 current=tex2Dlod(LightingBuffer,float4(q,0,0));
+    float4 current=tex2Dlod(SmoothedLighting,float4(q,0,0));
     float2 duv=depthUV(q);float d=normalizedDepth(duv);float z=viewDistance(d);
-    [branch]if(RemovalInfo.y>0&&d<.99999)current.rgb=smoothRemoval(current,q,base,half,z);
     o.light=current;o.depth=float4(z,0,0,1);
     if(TemporalInfo.x<=0||d>=.99999)return o;
     float3 p=worldPosition(duv,d);
