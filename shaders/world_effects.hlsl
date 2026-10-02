@@ -454,11 +454,15 @@ float4 LocalDirect(float2 uv:TEXCOORD0):COLOR0 {
 // cliff faces away from it (N.L<=0, removal ratio about 0) in the same shadow state as the ground, and
 // the depth weight alone accepts it at the contact: its zero removal leaked into the adjacent ground
 // (under-removal, a light halo). Each tap is also weighted by the agreement of the smoothed world
-// normal (s14): full up to 25 degrees (10 degree facet creases stay smoothed), none from 40. A wall is
-// ~90 degrees from the ground at any distance, which no depth tolerance can tell. A 45 degree face
-// leaves under 2/255 at 25 u (its crease texel's blended normal is 24 degrees off); 35/20 would add a
-// capture step above 5/255 (rock facets there differ by 32 degrees). A silhouette centre (confidence
-// 0: its one-sided normal may be the neighbour's) skips the test (the old weights); silhouette taps of
+// normal (s14): full up to 35 degrees, none from 50. A wall is ~90 degrees from the ground at any
+// distance, which no depth tolerance can tell. 0.3.186: was 25/40, which rejected taps across
+// low-poly dune facets (grazing creases of 35-45 degrees whose N.L removal steps the smoothing hides,
+// under a low sun or the moon) and brought back faint sharp triangles; creases up to 35 degrees now
+// smooth exactly as without the test. A 45 degree crease and a 45 degree face look the same to any
+// angle gate, so at 45 both are half-way (face halo 4.8/255 at 25 u, 8.5 untested; crease +4.3/255
+// over untested); 55 and the vertical faces are rejected. Source-aware variants (reject only taps
+// facing away from the source) changed nothing: the away-facing dune facet is that very case. A
+// silhouette centre (confidence 0: its one-sided normal may be the neighbour's) skips the test (the old weights); silhouette taps of
 // a confident centre are tested with their own normal. Own half-res pass (RemovalSmooth): the extra
 // read does not fit TemporalLight's 512 slots; TemporalLight reads its result as SmoothedLighting (s9)
 // and clamps against the raw s8.
@@ -489,7 +493,7 @@ float3 smoothRemoval(float4 current,float2 q,float2 base,float2 size,float z){
             float2 tq=(clamp(floor(base+.5+dir*(sqrt(t*(1.0/24))*radius)),0,size-1)+.5)/size;
             float4 light=tex2Dlod(LightingBuffer,float4(tq,0,0));
             float4 tapNormal=tex2Dlod(NormalBuffer,float4(tq,0,0));
-            float agree=saturate((dot(centreNormal.xyz,tapNormal.xyz)-.766)*7.13);
+            float agree=saturate((dot(centreNormal.xyz,tapNormal.xyz)-.6428)*5.67);
             float w=exp2(abs(viewDistance(normalizedDepth(depthUV(tq)))-z)*depthScale)*saturate(1-abs(light.a-current.a)*visibilityScale)*(centreNormal.w>.5?agree:1);
             sum+=max(light.rgb*legacyT/removalScale(tex2Dlod(BaselineLighting,float4(tq,0,0)).rgb,tex2Dlod(Scene,float4(tq,0,0)).rgb*tex2Dlod(AmbientOcclusion,float4(tq,0,0)).a,fog,legacyT),-.45)*w;total+=w;
             dir=float2(dir.x*-.7373688-dir.y*.6754903,dir.x*.6754903-dir.y*.7373688);t+=1;

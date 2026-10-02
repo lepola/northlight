@@ -1,5 +1,5 @@
 {
-  "source_sha256": "93c842fc3c76e4439b3a8aee3b5367552327cfb993f883bc131340ccae79e62b",
+  "source_sha256": "4ddebc51633c965676a4285f75bf96dff215f23957907b5e6b9449eda13c88b6",
   "compiler": "Wine d3dcompiler_47 D3DCompile",
   "game_launched": false,
   "shaders": {
@@ -206,7 +206,7 @@
     "RemovalSmooth": {
       "target": "ps_3_0",
       "bytes": 4456,
-      "sha256": "f9a37687f81302cfe388b01213645e23e77882516312b91e3d9e0df30780c258",
+      "sha256": "485461e2b8a2bf2928a5819a8cd13527e1ee21203934aeae22187fb54b5e22c1",
       "static_instruction_slots": 263,
       "temporary_registers": 24,
       "samplers": [

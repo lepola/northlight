@@ -11,7 +11,7 @@ legacy fog T), over a 1.5-unit disc (centre + 24 golden-angle taps) on the same 
 state, and writes it back as a correction.
 
 0.3.185: smoothRemoval moved to its own half-res pass (RemovalSmooth; TemporalLight reads the result as SmoothedLighting, s9, and
-clamps against the raw s8) and weights every tap by the agreement of the smoothed world normal (full <= 25 degrees, none from 40): a
+clamps against the raw s8) and weights every tap by the agreement of the smoothed world normal (full <= 35 degrees, none from 50; 0.3.186, was 25/40): a
 camera-facing actor/cliff face (N.L<=0 toward a low sun, ratio ~0, same shadow state, depth-accepted at the contact) no longer leaks into
 the ground (a light halo). Section 2b checks that on a pinhole-camera scene with depth and normals from the geometry.
 
@@ -87,7 +87,7 @@ for needle in ('clamp(RemovalInfo.w/z,3,16)','-1.442695/max(.25,z*.03)','2*Remov
                'float3 fog=(1-legacyT)*LegacyFogColor.rgb;','sum+=max(light.rgb*legacyT/removalScale(','fog,legacyT),-.45)*w;total+=w;',
                # 0.3.185 normal weight (cos 50 = .6428, 1/(cos 30 - cos 50) = 4.48) and the centre/tap normal reads
                'float4 centreNormal=tex2Dlod(NormalBuffer,float4(q,0,0));','float4 tapNormal=tex2Dlod(NormalBuffer,float4(tq,0,0));',
-               'float agree=saturate((dot(centreNormal.xyz,tapNormal.xyz)-.766)*7.13);',
+               'float agree=saturate((dot(centreNormal.xyz,tapNormal.xyz)-.6428)*5.67);',
                '*saturate(1-abs(light.a-current.a)*visibilityScale)*(centreNormal.w>.5?agree:1);',
                'dir=float2(dir.x*-.7373688-dir.y*.6754903,dir.x*.6754903-dir.y*.7373688);t+=1;',
                'result=lerp(ratio,sum/total,amount)*scale/legacyT;',
@@ -108,9 +108,9 @@ _r=random.Random(174)
 for _ in range(20000):
     T=max(_r.random(),.001);b=[_r.random() for _ in range(3)];s=[_r.random() for _ in range(3)];f=[_r.random() for _ in range(3)]
     assert removal_scale(b,s,f,T)==[max(T*max(x,.15),max(y-min(z,y),.0001)) for x,y,z in zip(b,s,f)]
-GATE=(.766,7.13) # cos 40 and 1/(cos 25 - cos 40): the shader's saturate((dot-.766)*7.13)
+GATE=(.6428,5.67) # cos 50 and 1/(cos 35 - cos 50): the shader's saturate((dot-.6428)*5.67)
 def agreement(c,t):
-    """RemovalSmooth's per-tap normal weight; c,t = (nx,ny,nz,confidence): saturate((dot-cos40)*7.13), 1 up to 25 degrees, 0 from 40.
+    """RemovalSmooth's per-tap normal weight; c,t = (nx,ny,nz,confidence): saturate((dot-cos50)*5.67), 1 up to 35 degrees, 0 from 50.
     A silhouette centre (confidence 0) skips the test (the old weights; capture: its one-sided normals are arbitrary, and ignoring confidence
     altogether gives 16 pairs, 9/255). Silhouette taps of a confident centre are tested with their own normal: rejecting them outright
     steepens a grazing 10 degree crease (its crease texel is confidence 0: 7.6 -> 10/255 at z 300), skipping the test leaks the rim of an actor."""
@@ -281,12 +281,12 @@ for z in (25,100,200,300):
     halo_rows.append((z,row))
 halo_text='; '.join(f'z {z}: '+', '.join(f'{n} {o:.2f}->{nw:.2f}' for n,o,nw in row) for z,row in halo_rows)
 print('ground halo outside the 2 px contact band, /255, old weights -> normal weight: '+halo_text)
-# The 45 degree face at z 25 keeps 1.6/255 (old 8.5): the crease texel between it and the ground has a blended normal 24.6 degrees from the ground's,
-# accepted at full weight. Gates that remove it (30/15: .66) reject the capture's 32 degree rock facets (35/20 adds a 5.76/255 pair), so that one
-# case is pinned at <= 2/255 and <= 1/4 of the old halo; every other case holds the 1/255 bound.
+# 0.3.186 trade-off, measured on this scene and the creases below: a 45 degree face and a 45 degree crease are indistinguishable by angle, so the
+# gate (35/50) leaves the 45 degree face 4.8/255 at z 25 (old 8.5; 25/40 left 1.6 but re-exposed 35-45 degree dune creases as lighter triangles).
+# Pinned at <= 5/255 and <= .6 x the old halo; the vertical faces, the character and the 55 degree face hold the 1/255 bound.
 exempt=lambda z,n:z==25 and n.startswith('45deg')
-checks['ground halo (character 2 u, vertical cliff 6/20 u z 25..300, 45/55 degree faces z 25..200; normals derived like WorldNormals): new <= 1/255 (45 degree face at z 25: <= 2/255, old 8.5); old weights show it (z 25 > 5/255)']=(
-    all(nw<=(2 if exempt(z,n) and nw<=o/4 else 1) for z,row in halo_rows for n,o,nw in row) and all(o>5 for n,o,nw in halo_rows[0][1]) and all(nw<=o+1e-9 for z,row in halo_rows for n,o,nw in row))
+checks['ground halo (character 2 u, vertical cliff 6/20 u z 25..300, 45/55 degree faces z 25..200; normals derived like WorldNormals): new <= 1/255 (45 degree face at z 25: <= 5/255, old 8.5); old weights show it (z 25 > 5/255)']=(
+    all(nw<=(5 if exempt(z,n) and nw<=.6*o else 1) for z,row in halo_rows for n,o,nw in row) and all(o>5 for n,o,nw in halo_rows[0][1]) and all(nw<=o+1e-9 for z,row in halo_rows for n,o,nw in row))
 checks[f'silhouettes: no value outside the input range, no new ring (worst |new-own surface| - |old-own surface| {ring_worst:.3f}/255 <= 0)']=ring_worst<=1e-9
 # 10 degree facet crease on grazing ground: removal ratio -0.20 -> -0.35 (the N.L change of a 10 degree tilt at a low sun, raw step 7.7/255);
 # adjacent steps along the screen line across it. The harsher -0.03 -> -0.35 (16.3/255) is reported too: HEAD's depth weight leaves 9.4/255 at
@@ -307,8 +307,35 @@ for amplitude in ('mild','harsh'):
 checks['10 degree facet crease (ratio step 7.7/255) at z 25..300, both orientations: step <= 5/255 and never above the old weights (harsh step: unchanged)']=(
     all(n<=5 for m,a,z,o,n in crease_rows if m=='mild') and all(n<=o+1e-9 for m,a,z,o,n in crease_rows))
 
+# ---- 2c. grazing-terrain creases with N.L removal steps (0.3.186; the "faint sharp triangles" on dunes) ----
+# Two ground facets 20/30/35/45 degrees apart (convex, transverse and longitudinal), each with the removal ratio its own N.L earns under a low
+# source (ratio = -.45 min(1, 2.5 N.L)); sources: sun 10 and 25 degrees ahead, 25 behind and abeam, a 40 degree moon; z 25..300; normals
+# derived like WorldNormals. The 25/40 gate rejected taps across 35/45 degree creases (steps up to +10/255 over the untested weights, the
+# triangles); 35/50 holds creases up to 35 degrees at the untested weights' step.
+def source_dir(elevation,azimuth):
+    e=math.radians(elevation);a=math.radians(azimuth);return (math.sin(a)*math.cos(e),math.cos(a)*math.cos(e),math.sin(e))
+nl_crease={}
+for elevation,azimuth in ((10,0),(25,0),(25,180),(25,90),(40,45)):
+    Ls=source_dir(elevation,azimuth)
+    for axis in ('transverse','longitudinal'):
+        for degrees in (20,30,35,45):
+            a=math.radians(degrees);nb=(0,-math.sin(a),math.cos(a)) if axis=='transverse' else (-math.sin(a),0,math.cos(a))
+            ratio_n=lambda n:-.45*min(1,max(0,sum(i*j for i,j in zip(n,Ls)))*2.5)
+            ra,rb=ratio_n((0,0,1)),ratio_n(nb)
+            for z in (25,100,200,300):
+                D=at_depth(z);hit=scene_hit(D,None,crease=(axis,degrees));L,B,Dist,Sc,Nrm=scene_fields(hit,lambda k:ra if k=='a' else rb)
+                fr=int(foot_row(D));line=[(SW//2,y) for y in range(fr-40,fr+40)] if axis=='transverse' else [(x,fr) for x in range(SW//2-60,SW//2+60)]
+                line=[pt for pt in line if hit(*pt)[1]=='ground'];res=[]
+                for flag in (False,True):
+                    v=[smooth(L,B,Dist,Sc,x,y,SCENE,1,1.,PIXEL,normal=Nrm if flag else None)[0]/.3 for x,y in line]
+                    res.append(max(abs(p-q) for p,q in zip(v,v[1:]))*51)
+                nl_crease[(elevation,azimuth,axis,degrees,z)]=res
+worst_nl={d:max(n-o for k,(o,n) in nl_crease.items() if k[3]==d) for d in (20,30,35,45)}
+print('N.L creases, worst (gated step - untested step) /255 over 5 sources x 2 axes x z 25..300: '+', '.join(f'{d} deg {v:+.2f}' for d,v in worst_nl.items()))
+checks['grazing creases 20/30/35 degrees with N.L removal steps (5 sources, both axes, z 25..300): step <= the untested weights\' + .5/255 (45 degrees reported, half-way by design)']=all(worst_nl[d]<=.5 for d in (20,30,35))
+
 # ---- 3. the capture ----
-report={'synthetic':{'scene_halo_old_new':halo_rows,'crease_old_new':crease_rows,'scene_ring_worst':ring_worst,'facet_step_before':round(before,2),'facet_step_after':round(after,2),'depth_bleed':bleed,'protrusion_halo_1u':halo,'shadow_edge':edge}}
+report={'synthetic':{'scene_halo_old_new':halo_rows,'crease_old_new':crease_rows,'nl_crease_worst_delta':worst_nl,'scene_ring_worst':ring_worst,'facet_step_before':round(before,2),'facet_step_after':round(after,2),'depth_bleed':bleed,'protrusion_halo_1u':halo,'shadow_edge':edge}}
 capture=fp.setting('r1_capture')
 if capture:
     from analyze_world_diagnostics import Buffer
