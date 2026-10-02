@@ -29,6 +29,7 @@ test_contact_normal_endpoints.py
 test_device_mirror.py
 test_diagnostics_switch.py
 test_dll_memcmp.py
+test_draw_gates.py
 test_draw_snapshot.py
 test_effect_switches.py
 test_effects_buckets.py
