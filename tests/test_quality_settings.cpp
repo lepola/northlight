@@ -378,7 +378,7 @@ int main(){
     {std::vector<std::string> p;
         p.clear();parse("[Quality]\nNoSuchKey=1\n",nullptr,p);assert(p.size()==1&&p[0].find("unknown key NoSuchKey ignored")!=std::string::npos);}
     // 0.3.151 spike spreading: 6 faces / 1 slice (the 0.3.150 paths) in the code default and every preset, own origin slots.
-    assert(sizeof(Settings::origin)==31&&d.pointShadowFacesPerFrame==6&&d.staticCacheSlices==1);
+    assert(sizeof(Settings::origin)==32&&d.pointShadowFacesPerFrame==6&&d.staticCacheSlices==1);
     for(auto p:{Preset::Balanced,Preset::Performance})assert(preset(p).pointShadowFacesPerFrame==6&&preset(p).staticCacheSlices==1);
     {auto on=parse("[Quality]\nPointShadowFacesPerFrame=2\nStaticCacheSlices=4\n");assert(on.pointShadowFacesPerFrame==2&&on.staticCacheSlices==4&&on!=d);
         unsigned i=0;for(const auto& k:Keys){const std::string n=k.name;assert(on.origin[i]==(n=="PointShadowFacesPerFrame"||n=="StaticCacheSlices"?'f':'d'));++i;}
@@ -426,6 +426,15 @@ int main(){
         std::vector<std::string> p;assert(parse("[Quality]\nActorShadows=2\n",nullptr,p)==d&&p.size()==1);
         p.clear();assert(parse(nullptr,"[ShadowExperiment]\nActorShadows=0\n",p)==d&&p.size()==1);
         assert(describe(d).find(" HorizonHazeTerrain=1(default) ActorShadows=1(default)")!=std::string::npos&&describe(off).find(" ActorShadows=0(file)")!=std::string::npos);}
+    // 0.3.187 FrameDrawGates: 1 (the per-frame draw gates) in the code default and every preset, 0..1, own
+    // last origin slot; 0 restores the 0.3.184 per-draw hook work. ActorShadows=0 does not force it.
+    assert(d.frameDrawGates==1&&preset(Preset::Balanced).frameDrawGates==1&&preset(Preset::Performance).frameDrawGates==1);
+    assert(std::string(Keys[31].name)=="FrameDrawGates"&&Keys[31].field==&Settings::frameDrawGates&&Keys[31].low==0&&Keys[31].high==1);
+    {auto off=parse("[Quality]\nFrameDrawGates=0\n");assert(off.frameDrawGates==0&&off!=d&&parse("[Quality]\nFrameDrawGates=1\n")==d);
+        unsigned i=0;for(const auto& k:Keys){assert(off.origin[i]==(std::string(k.name)=="FrameDrawGates"?'f':'d'));++i;}
+        std::vector<std::string> p;assert(parse("[Quality]\nFrameDrawGates=2\n",nullptr,p)==d&&p.size()==1);
+        assert(effective(off).frameDrawGates==0&&effective(parse("[Quality]\nActorShadows=0\n")).frameDrawGates==1);
+        assert(describe(d).find(" ActorShadows=1(default) FrameDrawGates=1(default)")!=std::string::npos&&describe(off).find(" FrameDrawGates=0(file)")!=std::string::npos);}
     { /* effective(): the identity with ActorShadows=1 (any value of every key), with 0 only the two replay keys drop. */
       std::mt19937 er(158);
       for(int round=0;round<4000;++round){Settings s;s.preset=Preset(er()%3);unsigned i=0;

@@ -119,6 +119,7 @@ Individual settings (Quality / Balanced / Performance):
   Diagnostics           0 / 0 / 0      periodic statistics and timings in the log (0 = only startup, settings and errors; the image does not change)
   RenderProfile         0 / 0 / 0      measurement: render thread timings in the log (needs Diagnostics=1; the image does not change)
   DiagReplayProbe       0 / 0 / 0      measurement: the near-shadow character draws a second time, hidden, in 10 s periods, and the timing in the log (needs RenderProfile=1; the image does not change)
+  FrameDrawGates        1 / 1 / 1      per-frame draw checks (0 = check every draw as before 0.3.187, for comparisons; the image does not change)
 When both NearShadowInterval and FarShadowInterval are at least 2, frames that
 draw neither shadow also skip copying the character geometry (about 1–1.5 ms
 of CPU per skipped frame). Light and normal frames alternate: the average FPS

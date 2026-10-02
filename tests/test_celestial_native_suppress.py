@@ -28,8 +28,10 @@ renderer=fp.src('renderer.cpp').read_text()
 assert 'celestialDiscs->setIdentityMap([this](std::uintptr_t exposed){return mirrorResources.rawOf(exposed,!mirrorState.enabled);});' in renderer
 assert 'if((!early&&!observer.lateDisc(i,suppressed))||' in fp.src('celestial_disc_renderer.h').read_text()
 # F10: every native claim is gated by the effects switch and the pre-effects phase.
-hooks=re.findall(r'if\(celestialDiscs&&enabled&&!applied&&count<=4&&celestialDiscs->nativeClaimPossible\(t,count\)\)',renderer)
-assert len(hooks)==4,len(hooks)
+# 0.3.187: one claim helper (count<=4 first) used by drawHook, the shared body of the four draw entry points.
+hooks=re.findall(r'if\(count<=4&&celestialDiscs&&enabled&&!applied&&celestialDiscs->nativeClaimPossible\(t,count\)\)',renderer)
+assert len(hooks)==1,len(hooks)
+assert renderer.count('skyClaim(t,count,claimed);')==2 and renderer.count('return drawHook(t,count,')==4
 effects=renderer[renderer.index('    void renderEffects() {'):renderer.index('template<class Capture> void prepareDraw(')]
 assert effects.index('if (applied || !enabled || failed || !projectionValid) return;')<effects.index('celestialDiscs->render(')
 

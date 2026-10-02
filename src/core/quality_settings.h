@@ -53,7 +53,10 @@ struct Settings {
     // (character, creature, server object) shadows, the game's blob shadows return, and model
     // capture runs only for GI actor packets. Forces the replay-derived keys off (effective()).
     unsigned actorShadows=1;
-    char origin[31]={'d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d'};
+    // 0.3.187 FrameDrawGates: 1 = the draw hooks skip the sky, blob and terrain shadow work in frames
+    // where its per-frame preconditions are off (draw_gates.h); 0 = the 0.3.184 per-draw work. Same image.
+    unsigned frameDrawGates=1;
+    char origin[32]={'d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d'};
 };
 struct Key { const char* name; unsigned Settings::*field; unsigned low,high; unsigned preset[3]; };
 // preset[] = Quality, Balanced, Performance. Quality must equal Settings{}.
@@ -89,6 +92,7 @@ inline const Key Keys[]={
     {"HorizonHazeBand",&Settings::horizonHazeBand,2,15,{6,6,6}},
     {"HorizonHazeTerrain",&Settings::horizonHazeTerrain,0,1,{1,1,1}},
     {"ActorShadows",&Settings::actorShadows,0,1,{1,1,1}},
+    {"FrameDrawGates",&Settings::frameDrawGates,0,1,{1,1,1}},
 };
 inline bool operator==(const Settings& a,const Settings& b){for(const auto& k:Keys)if(a.*k.field!=b.*k.field)return false;return true;}
 inline bool operator!=(const Settings& a,const Settings& b){return !(a==b);}

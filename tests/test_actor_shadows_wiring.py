@@ -18,7 +18,8 @@ def code(text):return re.sub(r'/\*.*?\*/','',re.sub(r'//[^\n]*','',text),flags=r
 checks={}
 # Settings: key appended last (origin indices of the older keys unchanged), default 1 in every preset.
 keys=q[q.index('inline const Key Keys[]={'):q.index('};',q.index('inline const Key Keys[]={'))]
-checks['key last, 0..1, presets 1/1/1']=keys.rstrip().endswith('{"ActorShadows",&Settings::actorShadows,0,1,{1,1,1}},') and 'unsigned actorShadows=1;' in q and 'char origin[31]=' in q
+# 0.3.187: FrameDrawGates is appended after it (Keys[30] stays ActorShadows).
+checks['key last, 0..1, presets 1/1/1']=keys.rstrip().endswith('{"ActorShadows",&Settings::actorShadows,0,1,{1,1,1}},\n    {"FrameDrawGates",&Settings::frameDrawGates,0,1,{1,1,1}},') and 'unsigned actorShadows=1;' in q and 'char origin[32]=' in q
 checks['effective() forces exactly the two replay keys']=('inline Settings effective(Settings s){if(!s.actorShadows)for(const auto& k:ActorShadowForced)s.*k.field=0;return s;}' in q
     and 'inline const ForcedKey ActorShadowForced[]={\n    {"ShadowFateDiagnostics",' in q and 'persistentRigidProps' not in q and 'persistentCasters' not in q
     and '{"ShadowFateDiagnostics",&Settings::shadowFateDiagnostics},{"DiagReplayProbe",&Settings::diagReplayProbe}};' in q)
@@ -79,8 +80,10 @@ checks['point: both replay loops and the count gated on withReplays']=(pb.count(
     and re.search(r'\breplays(\[|\.size\(\))',code(outside)) is None)
 # Blob filter: one helper for all four draw entry points, off with ActorShadows=0 (F9 keeps its meaning).
 helper='bool blobFilterActive()const{return shadowBlobs&&enabled&&effectKeys.settings.shadows&&!applied&&terrain&&!failed&&world&&world->hasContext()&&world->actorShadowsEnabled();}'
-checks['blob filter: one helper, four draw sites']=(r.count(helper)==1 and r.count('if(!claimed&&blobFilterActive())extensionWork("blob shadow filter"')==4
-    and r.count('effectKeys.settings.shadows&&!applied&&terrain')==1 and r.count('blobClaim(count)')==4
+# 0.3.187: the four draw entry points share drawHook(); FrameDrawGates=0 and =1 both test the helper.
+checks['blob filter: one helper, every draw through drawHook']=(r.count(helper)==1 and r.count('if(!claimed&&blobFilterActive())extensionWork("blob shadow filter",[&]{blobFilter(count,claimed);});')==1
+    and r.count('if(!claimed&&drawGates.blob){stage="blob shadow filter";if(blobFilterActive())blobFilter(count,claimed);}')==1 and r.count('return drawHook(t,count,')==4
+    and r.count('effectKeys.settings.shadows&&!applied&&terrain')==1 and r.count('blobClaim(count)')==1
     and 'bool actorShadowsEnabled()const{return quality.actorShadows!=0;}' in w)
 # Documentation: the shipped ini keeps the key commented (the file must still parse as Quality).
 ini=fp.src('windows-package/northlight-quality.ini').read_text();readme=fp.src('windows-package/README.txt').read_text(encoding='utf-8')

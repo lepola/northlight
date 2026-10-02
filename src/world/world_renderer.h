@@ -1831,7 +1831,8 @@ public:
     bool captureSkippedLastFrame()const{return lastCaptureSkipped;} /* for the sampled CPU profile, logged after endFrame */
     unsigned capturePhaseReadsLastFrame()const{return lastCapturePhaseReads;} /* 0.3.150: clock reads of the capture-phase subset (inside the capture timers), likewise */
     bool hasContext()const{return valid&&!failed&&!workerFault();}
-    bool actorShadowsEnabled()const{return quality.actorShadows!=0;} /* 0.3.158: ActorShadows=0 leaves actor shadows to the game's blobs */
+    bool actorShadowsEnabled()const{return quality.actorShadows!=0;}
+    bool frameDrawGates()const{return quality.frameDrawGates!=0;} /* 0.3.187: read once at device creation */ /* 0.3.158: ActorShadows=0 leaves actor shadows to the game's blobs */
     const float* legacyFogParameters()const{return legacyFog.parameters;}
     const NorthlightCelestialProfiles::Profile& celestialPalette(const char* map,const float* camera){
         // Freeze once per frame: early disc, late halo, direct/GI and fog cannot
@@ -2056,6 +2057,7 @@ public:
         terrainShadowShaders[shader]=replacement;return replacement;
     }
     bool terrainShadowActive()const{return effects.shadows&&ready()&&shadowsComposited;}
+    bool shadowsRequested()const{return effects.shadows;} /* 0.3.187: changes only in setEffects (frame boundary) */
     void registerPixelShader(IDirect3DPixelShader9* shader){
         fogShaders.erase(shader);UINT size=0;
         {auto old=terrainShadowShaders.find(shader);if(old!=terrainShadowShaders.end()){drop(old->second);terrainShadowShaders.erase(old);}}
