@@ -171,13 +171,13 @@ checks['WorldComposite: AO in the tent (same weight, nearest fallback), bloom bi
     < composite.index('float3 color=original.rgb;') < composite.index('float3 fogPart=min((1-legacyT)*LegacyFogColor.rgb,original.rgb);')
     < composite.index('if(relight){\n        // Thin receivers'))
 checks['smoothRemoval: both Scene reads times the AO alpha; removalScale without the .0001 floor'] = (
-    world.count('tex2Dlod(Scene,qc).rgb*tex2Dlod(AmbientOcclusion,qc).a') == 1
-    and world.count('tex2Dlod(Scene,tc).rgb*tex2Dlod(AmbientOcclusion,tc).a') == 1
+    world.count('tex2Dlod(Scene,float4(q,0,0)).rgb*tex2Dlod(AmbientOcclusion,float4(q,0,0)).a') == 1
+    and world.count('tex2Dlod(Scene,float4(tq,0,0)).rgb*tex2Dlod(AmbientOcclusion,float4(tq,0,0)).a') == 1
     and 'return max(legacyT*max(baseline,.15),scene-min(fog,scene));' in world and '.0001));' not in world[world.index('float3 removalScale('):world.index('float3 smoothRemoval(')])
 wm = json.loads(fp.src('world-shader-build.json').read_text())['shaders']
-checks[f"world manifest: WorldComposite {wm['WorldComposite']['static_instruction_slots']} <= 500 with s10; TemporalLight {wm['TemporalLight']['static_instruction_slots']} == 512"] = (
+checks[f"world manifest: WorldComposite {wm['WorldComposite']['static_instruction_slots']} <= 500 with s10; TemporalLight {wm['TemporalLight']['static_instruction_slots']} == 509"] = (
     wm['WorldComposite']['static_instruction_slots'] <= 500 and wm['WorldComposite']['samplers'] == [0, 1, 8, 9, 10, 11, 12]
-    and wm['TemporalLight']['static_instruction_slots'] == 512 and wm['TemporalLight']['samplers'] == [0, 1, 8, 10, 12, 14, 15])
+    and wm['TemporalLight']['static_instruction_slots'] == 509 and wm['TemporalLight']['samplers'] == [0, 1, 8, 10, 12, 14, 15])
 
 # 6. no new key
 config = [fp.src('quality_settings.h').read_text(), fp.src('windows-package/northlight-quality.ini').read_text(),

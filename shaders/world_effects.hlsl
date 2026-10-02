@@ -449,28 +449,14 @@ float4 LocalDirect(float2 uv:TEXCOORD0):COLOR0 {
 // their value. The fraction includes the composite's albedo bound (legacy fog T):
 // correction/baseline alone still steps where the facet normal predicts no painted
 // light, because the albedo estimate saturates there.
-// 0.3.185: looking toward the source, the camera-facing faces of actors and cliffs face away from it
-// (N.L<=0, ratio ~0) in the same shadow state, and the loose raw-depth tolerance (3% of z) let their
-// taps blend into the adjacent ground: too little removal, a halo growing with distance.
-// Same-surface test against the centre's receiver plane instead: hardware depth d is affine in screen
-// space on a plane, so a tap expects d+dot(offset,grad) (grad = ddx/ddy of d per half-res pixel).
-// Weight exp2(-|d-expected|/tol), tol=.2*|dot(offset,grad)|+.2 u in d-units (n*f/((f-n)z^2) per u).
-// Angle form: a facet crease or wide/one-pixel normal switch deviates from the plane in proportion to
-// the offset, so a plain depth tolerance breaks facet smoothing at grazing views (and a tighter raw one
-// the capture rows); the floor keeps flat ground sharp. k=.2 keeps a 10 degree crease at <=5/255 and
-// halves the halo around a character; the plane still crosses a wall at its foot (about 2/255 remain).
-// A 2x2 quad over a depth step gives a garbage grad: it is capped at a surface seen at 3 degrees
-// (19 z/FPX u per pixel, FPX=RemovalInfo.w/.75), else the plane would pass through the far side. The
-// two pixels of such a quad still blend with it (tests/test_shadow_removal_smoothing.py, case c).
 // The composite applies correction*min(transported/baseline,T); as a fraction of the
 // transported colour that is correction*T/removalScale.
 // legacyT>=.001 keeps the first operand >=.00015, so the scene term needs no floor.
 float3 removalScale(float3 baseline,float3 scene,float3 fog,float legacyT){
     return max(legacyT*max(baseline,.15),scene-min(fog,scene));
 }
-float3 smoothRemoval(float4 current,float2 q,float2 base,float2 size,float z,float d,float2 grad){
-    float invStrength=1/GridInfo.z;
-    float amount=saturate((1-current.a*RemovalInfo.z)*invStrength);
+float3 smoothRemoval(float4 current,float2 q,float2 base,float2 size,float z){
+    float amount=saturate((1-current.a*RemovalInfo.z)/GridInfo.z);
     float3 result=current.rgb;
     // Fractional source weights leave fp16 alpha a hair below 1/RemovalInfo.z in sunlight: skip
     // the taps below 1/256, which also keeps those lit pixels exactly unchanged.
@@ -479,23 +465,20 @@ float3 smoothRemoval(float4 current,float2 q,float2 base,float2 size,float z,flo
         float3 fog=(1-legacyT)*LegacyFogColor.rgb;
         // 0.3.174: the Scene copy precedes the contact AO when the world composites; apply it here
         // (a neutral 1 otherwise) so the removal sees the colour the composite relights.
-        float4 qc=float4(q,0,0);
-        float3 scale=removalScale(tex2Dlod(BaselineLighting,qc).rgb,tex2Dlod(Scene,qc).rgb*tex2Dlod(AmbientOcclusion,qc).a,fog,legacyT);
+        float3 scale=removalScale(tex2Dlod(BaselineLighting,float4(q,0,0)).rgb,tex2Dlod(Scene,float4(q,0,0)).rgb*tex2Dlod(AmbientOcclusion,float4(q,0,0)).a,fog,legacyT);
         float3 ratio=current.rgb*legacyT/scale;
         float radius=clamp(RemovalInfo.w/z,3,16);
-        float floorD=.2*ImageClip.z*ImageClip.w/((ImageClip.w-ImageClip.z)*z*z);
-        float gmax=floorD*71*z/RemovalInfo.w;grad=clamp(grad,-gmax,gmax);
-        float visibilityScale=2*RemovalInfo.z*invStrength;
-        float3 sum=max(ratio,-.45);float total=1;float2 dir=float2(1,0);
-        [loop]for(float t=.5;t<24;t+=1){
-            float2 px=clamp(floor(base+.5+dir*(sqrt(t*(1.0/24))*radius)),0,size-1);float4 tc=float4((px+.5)/size,0,0);
-            float plane=dot(px-base,grad);
-            float4 light=tex2Dlod(LightingBuffer,tc);
-            float w=exp2(-abs(normalizedDepth(depthUV(tc.xy))-d-plane)/(.2*abs(plane)+floorD))*saturate(1-abs(light.a-current.a)*visibilityScale);
-            sum+=max(light.rgb*legacyT/removalScale(tex2Dlod(BaselineLighting,tc).rgb,tex2Dlod(Scene,tc).rgb*tex2Dlod(AmbientOcclusion,tc).a,fog,legacyT),-.45)*w;total+=w;
-            dir=dir.x*float2(-.7373688,.6754903)+dir.y*float2(-.6754903,-.7373688);
+        float depthScale=-1.442695/max(.25,z*.03);
+        float visibilityScale=2*RemovalInfo.z/GridInfo.z;
+        float3 sum=max(ratio,-.45);float total=1,t=.5;float2 dir=float2(1,0);
+        [loop]for(int i=0;i<24;++i){
+            float2 tq=(clamp(floor(base+.5+dir*(sqrt(t*(1.0/24))*radius)),0,size-1)+.5)/size;
+            float4 light=tex2Dlod(LightingBuffer,float4(tq,0,0));
+            float w=exp2(abs(viewDistance(normalizedDepth(depthUV(tq)))-z)*depthScale)*saturate(1-abs(light.a-current.a)*visibilityScale);
+            sum+=max(light.rgb*legacyT/removalScale(tex2Dlod(BaselineLighting,float4(tq,0,0)).rgb,tex2Dlod(Scene,float4(tq,0,0)).rgb*tex2Dlod(AmbientOcclusion,float4(tq,0,0)).a,fog,legacyT),-.45)*w;total+=w;
+            dir=float2(dir.x*-.7373688-dir.y*.6754903,dir.x*.6754903-dir.y*.7373688);t+=1;
         }
-        result=lerp(ratio,sum*(1/total),amount)*scale*(1/legacyT);
+        result=lerp(ratio,sum/total,amount)*scale/legacyT;
     }
     return result;
 }
@@ -511,8 +494,7 @@ TemporalOutput TemporalLight(float2 uv:TEXCOORD0) {
     float2 base=floor(uv*half);float2 q=(base+.5)/half;
     float4 current=tex2Dlod(LightingBuffer,float4(q,0,0));
     float2 duv=depthUV(q);float d=normalizedDepth(duv);float z=viewDistance(d);
-    float2 grad=float2(ddx(d),ddy(d));
-    [branch]if(RemovalInfo.y>0&&d<.99999)current.rgb=smoothRemoval(current,q,base,half,z,d,grad);
+    [branch]if(RemovalInfo.y>0&&d<.99999)current.rgb=smoothRemoval(current,q,base,half,z);
     o.light=current;o.depth=float4(z,0,0,1);
     if(TemporalInfo.x<=0||d>=.99999)return o;
     float3 p=worldPosition(duv,d);

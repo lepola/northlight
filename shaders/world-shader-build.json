@@ -1,5 +1,5 @@
 {
-  "source_sha256": "234048e251a61718df41a29f3d4e240b2d93a67e235c927fd430ed963f791fab",
+  "source_sha256": "243312b572e4ac37c33546789202368118fae17049285b5ab61db887944bc830",
   "compiler": "Wine d3dcompiler_47 D3DCompile",
   "game_launched": false,
   "shaders": {
@@ -205,9 +205,9 @@
     },
     "TemporalLight": {
       "target": "ps_3_0",
-      "bytes": 8168,
-      "sha256": "67bb9d9a6e3ad8eed28e69b3f89a369b4d422930913c1a9418e775f900e98aed",
-      "static_instruction_slots": 512,
+      "bytes": 8124,
+      "sha256": "4cac38b915faa8fe195b9e8d42139d068b9c9ee22d0cb202841f241641c7d0fb",
+      "static_instruction_slots": 509,
       "temporary_registers": 24,
       "samplers": [
         0,
@@ -219,16 +219,14 @@
         15
       ],
       "instructions": {
-        "mul": 80,
+        "mul": 77,
         "frc": 6,
         "add": 85,
-        "rcp": 38,
-        "mov": 124,
+        "rcp": 42,
+        "mov": 127,
         "texldl": 20,
-        "max": 32,
-        "min": 23,
-        "dsx": 1,
-        "dsy": 1,
+        "max": 33,
+        "min": 22,
         "cmp": 22,
         "if": 7,
         "mad": 2,
@@ -239,9 +237,9 @@
         "else": 7,
         "endif": 7,
         "rsq": 2,
-        "dp2add": 2,
-        "abs": 6,
-        "endrep": 1
+        "abs": 5,
+        "endrep": 1,
+        "dp2add": 1
       }
     },
     "LocalFog": {
