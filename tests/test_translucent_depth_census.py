@@ -24,9 +24,10 @@ assert 'isSkinnedShader(vs)' in block and 'drawWaterVS' in block
 assert 'color=(cw&7)!=0' in block,'colour means an RGB write'
 assert 'after=firstTranslucentZAt!=0' in block,'only a blended Z-writing draw opens the after window'
 assert 'lastOpaqueZAt=at' in block and 'firstTranslucentZAt=at' in block and 'firstDepthOnlyAt=at' in block
+assert 'if(skin&&!firstTranslucentZSkinnedAt)firstTranslucentZSkinnedAt=at;' in block,'first skinned translucent Z-writing draw'
 counters=['translucentZWriteSkinned','translucentZWriteOther','translucentNoZWrite','depthOnlyPrepass','depthOnlyPrepassSkinned',
           'opaqueZWriteAfterSkinned','opaqueZWriteAfterOther','waterZWriteAfterTranslucent','translucentSrcBlend','translucentDestBlend',
-          'censusDraws','firstTranslucentZAt','firstDepthOnlyAt','lastOpaqueZAt','clearResolveAt']
+          'censusDraws','firstTranslucentZAt','firstTranslucentZSkinnedAt','firstDepthOnlyAt','lastOpaqueZAt','clearResolveAt']
 reset=r[r.index('void resetTranslucentCensus(){'):]
 reset=reset[:reset.index('}')]
 fin=r[r.index('void finishFrame() {'):r.index('++frame;mirrorState.gate.frame')]
@@ -36,7 +37,7 @@ for c in counters:
     assert c in reset,'reset '+c
     assert c in line,'log '+c
 for k in ('zwriteSkinned=','zwriteOther=','noZWrite=','depthOnly=','depthOnlySkinned=','opaqueZAfterSkinned=','opaqueZAfterOther=','waterZAfter=','firstBlend=',
-          'draws=','firstTranslucentZ=','firstDepthOnly=','lastOpaqueZ=','clearResolve='):assert k in line,k
+          'draws=','firstTranslucentZ=','firstTranslucentZSkinned=','firstDepthOnly=','lastOpaqueZ=','clearResolve='):assert k in line,k
 assert 'if(ds==worldDepth&&resolveDepth()&&sampled()&&!clearResolveAt)clearResolveAt=censusDraws+1;' in r,'Clear(Z) resolve position'
 t=fin.index('TRANSLUCENT frame=');rs=fin.index('resetTranslucentCensus();',t)
 assert t<rs<fin.index('clearFrame();',rs)

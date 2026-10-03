@@ -295,12 +295,14 @@ class Device final : public GuardedMirrorDevice {
     unsigned postEffectWorldDraws=0,postEffectSkinnedDraws=0;
     // 0.3.188 (task 3): per-sample-frame census of translucent Z-writing world draws (the ghost/stealth silhouette hypothesis); read-only, logged as TRANSLUCENT.
     // Positions are 1-based census draw indices (0 = none): the resolve can move to the first translucent
-    // Z-writing draw only if lastOpaqueZ precedes it; clearResolve marks a Clear(Z)-triggered resolve.
+    // Z-writing draw only if lastOpaqueZ precedes it (firstTranslucentZSkinned: the same test for a trigger
+    // limited to skinned draws); clearResolve marks a Clear(Z)-triggered resolve. Positions run over the
+    // whole frame: with a Clear(Z) between world passes they mix passes, read them against clearResolve.
     unsigned translucentZWriteSkinned=0,translucentZWriteOther=0,translucentNoZWrite=0,depthOnlyPrepass=0,depthOnlyPrepassSkinned=0,opaqueZWriteAfterSkinned=0,opaqueZWriteAfterOther=0,waterZWriteAfterTranslucent=0;
-    unsigned censusDraws=0,firstTranslucentZAt=0,firstDepthOnlyAt=0,lastOpaqueZAt=0,clearResolveAt=0;
+    unsigned censusDraws=0,firstTranslucentZAt=0,firstTranslucentZSkinnedAt=0,firstDepthOnlyAt=0,lastOpaqueZAt=0,clearResolveAt=0;
     DWORD translucentSrcBlend=0,translucentDestBlend=0;
     void resetTranslucentCensus(){translucentZWriteSkinned=translucentZWriteOther=translucentNoZWrite=depthOnlyPrepass=depthOnlyPrepassSkinned=opaqueZWriteAfterSkinned=opaqueZWriteAfterOther=waterZWriteAfterTranslucent=0;
-        censusDraws=firstTranslucentZAt=firstDepthOnlyAt=lastOpaqueZAt=clearResolveAt=0;translucentSrcBlend=translucentDestBlend=0;}
+        censusDraws=firstTranslucentZAt=firstTranslucentZSkinnedAt=firstDepthOnlyAt=lastOpaqueZAt=clearResolveAt=0;translucentSrcBlend=translucentDestBlend=0;}
     LONGLONG cpuPrep=0,cpuCapture=0,cpuWaterCapture=0,cpuEffects=0,cpuMirrorAudit=0;
     NorthlightEffectsBuckets::Frame effectsBuckets;bool effectsBucketed=false; /* 0.3.175 (S3): this sample frame's effects split */
     unsigned long long cpuCaptureReads=0; /* 0.3.150: timer clock reads inside cpuCapture, sample frames (an outer pair adds one) */
@@ -623,7 +625,7 @@ class Device final : public GuardedMirrorDevice {
                     const unsigned at=++censusDraws;const bool skin=world->isSkinnedShader(vs),after=firstTranslucentZAt!=0,color=(cw&7)!=0;
                     if(zw&&color&&drawWaterVS){if(after)++waterZWriteAfterTranslucent;}
                     else if(zw&&!color){++depthOnlyPrepass;if(skin)++depthOnlyPrepassSkinned;if(!firstDepthOnlyAt)firstDepthOnlyAt=at;}
-                    else if(zw&&ab){if(skin)++translucentZWriteSkinned;else ++translucentZWriteOther;if(!after)firstTranslucentZAt=at,translucentSrcBlend=sb,translucentDestBlend=db;}
+                    else if(zw&&ab){if(skin)++translucentZWriteSkinned;else ++translucentZWriteOther;if(!after)firstTranslucentZAt=at,translucentSrcBlend=sb,translucentDestBlend=db;if(skin&&!firstTranslucentZSkinnedAt)firstTranslucentZSkinnedAt=at;}
                     else if(ab)++translucentNoZWrite;
                     else if(zw){lastOpaqueZAt=at;if(after){if(skin)++opaqueZWriteAfterSkinned;else ++opaqueZWriteAfterOther;}}}
                 {const unsigned long long reads=CpuScope::reads;{CpuScope cap(sampledDrawTimers()?&cpuCapture:nullptr);capture(vs);}if(CpuScope::reads!=reads)cpuCaptureReads+=CpuScope::reads-reads-1;}
@@ -999,7 +1001,7 @@ public:
         // Read before clearFrame() resets the water renderer's frame counters.
         const unsigned waterDraws=water?water->frameCaptures():0,waterScans=water?water->frameMaskScans():0,waterClears=water?water->frameClears():0,waterReadFailures=water?water->frameReadFailures():0;
         if(sampled())logf("EFFECT trailing world frame=%u worldDraws=%u skinnedDraws=%u",frame,postEffectWorldDraws,postEffectSkinnedDraws);
-        if(sampled())logf("TRANSLUCENT frame=%u zwriteSkinned=%u zwriteOther=%u noZWrite=%u depthOnly=%u depthOnlySkinned=%u opaqueZAfterSkinned=%u opaqueZAfterOther=%u waterZAfter=%u firstBlend=%lu/%lu draws=%u firstTranslucentZ=%u firstDepthOnly=%u lastOpaqueZ=%u clearResolve=%u",frame,translucentZWriteSkinned,translucentZWriteOther,translucentNoZWrite,depthOnlyPrepass,depthOnlyPrepassSkinned,opaqueZWriteAfterSkinned,opaqueZWriteAfterOther,waterZWriteAfterTranslucent,(unsigned long)translucentSrcBlend,(unsigned long)translucentDestBlend,censusDraws,firstTranslucentZAt,firstDepthOnlyAt,lastOpaqueZAt,clearResolveAt);
+        if(sampled())logf("TRANSLUCENT frame=%u zwriteSkinned=%u zwriteOther=%u noZWrite=%u depthOnly=%u depthOnlySkinned=%u opaqueZAfterSkinned=%u opaqueZAfterOther=%u waterZAfter=%u firstBlend=%lu/%lu draws=%u firstTranslucentZ=%u firstTranslucentZSkinned=%u firstDepthOnly=%u lastOpaqueZ=%u clearResolve=%u",frame,translucentZWriteSkinned,translucentZWriteOther,translucentNoZWrite,depthOnlyPrepass,depthOnlyPrepassSkinned,opaqueZWriteAfterSkinned,opaqueZWriteAfterOther,waterZWriteAfterTranslucent,(unsigned long)translucentSrcBlend,(unsigned long)translucentDestBlend,censusDraws,firstTranslucentZAt,firstTranslucentZSkinnedAt,firstDepthOnlyAt,lastOpaqueZAt,clearResolveAt);
         resetTranslucentCensus();
         postEffectWorldDraws=postEffectSkinnedDraws=0;
         const bool sampledFrame=sampled(),frameApplied=applied;
