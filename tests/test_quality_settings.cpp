@@ -378,7 +378,7 @@ int main(){
     {std::vector<std::string> p;
         p.clear();parse("[Quality]\nNoSuchKey=1\n",nullptr,p);assert(p.size()==1&&p[0].find("unknown key NoSuchKey ignored")!=std::string::npos);}
     // 0.3.151 spike spreading: 6 faces / 1 slice (the 0.3.150 paths) in the code default and every preset, own origin slots.
-    assert(sizeof(Settings::origin)==33&&d.pointShadowFacesPerFrame==6&&d.staticCacheSlices==1);
+    assert(sizeof(Settings::origin)==32&&d.pointShadowFacesPerFrame==6&&d.staticCacheSlices==1);
     for(auto p:{Preset::Balanced,Preset::Performance})assert(preset(p).pointShadowFacesPerFrame==6&&preset(p).staticCacheSlices==1);
     {auto on=parse("[Quality]\nPointShadowFacesPerFrame=2\nStaticCacheSlices=4\n");assert(on.pointShadowFacesPerFrame==2&&on.staticCacheSlices==4&&on!=d);
         unsigned i=0;for(const auto& k:Keys){const std::string n=k.name;assert(on.origin[i]==(n=="PointShadowFacesPerFrame"||n=="StaticCacheSlices"?'f':'d'));++i;}
@@ -435,14 +435,6 @@ int main(){
         std::vector<std::string> p;assert(parse("[Quality]\nFrameDrawGates=2\n",nullptr,p)==d&&p.size()==1);
         assert(effective(off).frameDrawGates==0&&effective(parse("[Quality]\nActorShadows=0\n")).frameDrawGates==1);
         assert(describe(d).find(" ActorShadows=1(default) FrameDrawGates=1(default)")!=std::string::npos&&describe(off).find(" FrameDrawGates=0(file)")!=std::string::npos);}
-    // 0.3.188 TranslucentActorDepth: 1 in the code default and every preset, 0..2, own last origin slot.
-    assert(d.translucentActorDepth==1&&preset(Preset::Balanced).translucentActorDepth==1&&preset(Preset::Performance).translucentActorDepth==1);
-    assert(std::string(Keys[32].name)=="TranslucentActorDepth"&&Keys[32].field==&Settings::translucentActorDepth&&Keys[32].low==0&&Keys[32].high==2&&sizeof(Settings::origin)==33);
-    {auto off=parse("[Quality]\nTranslucentActorDepth=0\n");assert(off.translucentActorDepth==0&&off!=d&&parse("[Quality]\nTranslucentActorDepth=1\n")==d&&parse("[Quality]\nTranslucentActorDepth=2\n").translucentActorDepth==2);
-        unsigned i=0;for(const auto& k:Keys){assert(off.origin[i]==(std::string(k.name)=="TranslucentActorDepth"?'f':'d'));++i;}
-        std::vector<std::string> p;assert(parse("[Quality]\nTranslucentActorDepth=3\n",nullptr,p)==d&&p.size()==1);
-        assert(effective(off).translucentActorDepth==0&&effective(parse("[Quality]\nActorShadows=0\n")).translucentActorDepth==1);
-        assert(describe(d).find(" FrameDrawGates=1(default) TranslucentActorDepth=1(default)")!=std::string::npos&&describe(off).find(" TranslucentActorDepth=0(file)")!=std::string::npos);}
     { /* effective(): the identity with ActorShadows=1 (any value of every key), with 0 only the two replay keys drop. */
       std::mt19937 er(158);
       for(int round=0;round<4000;++round){Settings s;s.preset=Preset(er()%3);unsigned i=0;

@@ -18,8 +18,8 @@ def code(text):return re.sub(r'/\*.*?\*/','',re.sub(r'//[^\n]*','',text),flags=r
 checks={}
 # Settings: key appended last (origin indices of the older keys unchanged), default 1 in every preset.
 keys=q[q.index('inline const Key Keys[]={'):q.index('};',q.index('inline const Key Keys[]={'))]
-# 0.3.187: FrameDrawGates is appended after it (Keys[30] stays ActorShadows); 0.3.188: TranslucentActorDepth last.
-checks['key last, 0..1, presets 1/1/1']=keys.rstrip().endswith('{"ActorShadows",&Settings::actorShadows,0,1,{1,1,1}},\n    {"FrameDrawGates",&Settings::frameDrawGates,0,1,{1,1,1}},\n    {"TranslucentActorDepth",&Settings::translucentActorDepth,0,2,{1,1,1}},') and 'unsigned actorShadows=1;' in q and 'char origin[33]=' in q
+# 0.3.187: FrameDrawGates is appended after it (Keys[30] stays ActorShadows).
+checks['key last, 0..1, presets 1/1/1']=keys.rstrip().endswith('{"ActorShadows",&Settings::actorShadows,0,1,{1,1,1}},\n    {"FrameDrawGates",&Settings::frameDrawGates,0,1,{1,1,1}},') and 'unsigned actorShadows=1;' in q and 'char origin[32]=' in q
 checks['effective() forces exactly the two replay keys']=('inline Settings effective(Settings s){if(!s.actorShadows)for(const auto& k:ActorShadowForced)s.*k.field=0;return s;}' in q
     and 'inline const ForcedKey ActorShadowForced[]={\n    {"ShadowFateDiagnostics",' in q and 'persistentRigidProps' not in q and 'persistentCasters' not in q
     and '{"ShadowFateDiagnostics",&Settings::shadowFateDiagnostics},{"DiagReplayProbe",&Settings::diagReplayProbe}};' in q)

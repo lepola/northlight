@@ -56,11 +56,7 @@ struct Settings {
     // 0.3.187 FrameDrawGates: 1 = the draw hooks skip the sky, blob and terrain shadow work in frames
     // where its per-frame preconditions are off (draw_gates.h); 0 = the 0.3.184 per-draw work. Same image.
     unsigned frameDrawGates=1;
-    // 0.3.188 TranslucentActorDepth: the effects read the depth from before the first translucent Z-writing
-    // actor draw (stealth, ghost pets), so the ground seen through them is lit like its surroundings.
-    // 0 = depth at the first UI draw as before; 1 = before the first skinned translucent/depth-only draw; 2 = any world draw.
-    unsigned translucentActorDepth=1;
-    char origin[33]={'d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d'};
+    char origin[32]={'d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d'};
 };
 struct Key { const char* name; unsigned Settings::*field; unsigned low,high; unsigned preset[3]; };
 // preset[] = Quality, Balanced, Performance. Quality must equal Settings{}.
@@ -97,7 +93,6 @@ inline const Key Keys[]={
     {"HorizonHazeTerrain",&Settings::horizonHazeTerrain,0,1,{1,1,1}},
     {"ActorShadows",&Settings::actorShadows,0,1,{1,1,1}},
     {"FrameDrawGates",&Settings::frameDrawGates,0,1,{1,1,1}},
-    {"TranslucentActorDepth",&Settings::translucentActorDepth,0,2,{1,1,1}},
 };
 inline bool operator==(const Settings& a,const Settings& b){for(const auto& k:Keys)if(a.*k.field!=b.*k.field)return false;return true;}
 inline bool operator!=(const Settings& a,const Settings& b){return !(a==b);}
