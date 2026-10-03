@@ -105,6 +105,7 @@ checks['mode read once at device creation']='translucentActorDepth=world->transl
 checks['setting: last key, 0..2, presets 1/1/1']=q[q.index('inline const Key Keys[]={'):].split('};')[0].rstrip().endswith('{"TranslucentActorDepth",&Settings::translucentActorDepth,0,2,{1,1,1}},') and 'unsigned translucentActorDepth=1;' in q and 'char origin[33]=' in q
 checks['resolveDepth unchanged: SavedState and captured=true on success']=(lambda f:'SavedState saved(ext,&stateBlocks);' in f and f.rstrip().endswith('captured = true; return true;')or 'captured = true; return true;' in f)(r[r.index('bool resolveDepth() {'):r.index('HRESULT quad(UINT w')])
 checks['terrain draw still clears captured']='terrain=true; captured=false;' in r
+checks['banner']='translucent depth census; early depth for translucent actors; backend=' in r
 ini=fp.src('windows-package/northlight-quality.ini').read_text();rd=fp.src('windows-package/README.txt').read_text()
 checks['docs: ini and README']=';TranslucentActorDepth=1' in ini and 'TranslucentActorDepth 1 / 1 / 1' in rd
 for n,ok in checks.items():print(('PASS ' if ok else 'FAIL ')+n)
