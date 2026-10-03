@@ -294,19 +294,15 @@ class Device final : public GuardedMirrorDevice {
     unsigned drawCalls=0, missingVS=0, terrainDraws=0, terrainShadowDraws=0, viewportRejects=0, depthRejects=0, uiDraws=0, uiAfterTerrain=0;
     unsigned viewportReports=0;
     unsigned postEffectWorldDraws=0,postEffectSkinnedDraws=0;
-    // 0.3.188 (task 3): per-sample-frame census of translucent Z-writing world draws (the ghost/stealth silhouette hypothesis); read-only, logged as TRANSLUCENT.
-    // Positions are 1-based census draw indices (0 = none): the resolve can move to the first translucent
-    // Z-writing draw only if lastOpaqueZ precedes it (firstTranslucentZSkinned: the same test for a trigger
-    // limited to skinned draws); clearResolve marks a Clear(Z)-triggered resolve. Positions run over the
-    // whole frame: with a Clear(Z) between world passes they mix passes, read them against clearResolve.
-    unsigned translucentZWriteSkinned=0,translucentZWriteOther=0,translucentNoZWrite=0,depthOnlyPrepass=0,depthOnlyPrepassSkinned=0,opaqueZWriteAfterSkinned=0,opaqueZWriteAfterOther=0,waterZWriteAfterTranslucent=0;
-    unsigned censusDraws=0,firstTranslucentZAt=0,firstTranslucentZSkinnedAt=0,firstDepthOnlyAt=0,lastOpaqueZAt=0,clearResolveAt=0;
-    DWORD translucentSrcBlend=0,translucentDestBlend=0;
-    // 0.3.188 (task 3) early depth for translucent actors (translucent_depth.h), always on: the depth resolve runs before the first translucent Z-writing actor draw
-    // (once per frame, tried flag in earlyDepth); a later terrain draw clears `captured` (beforeDraw) and the UI-time resolve redoes it, the old behaviour.
-    unsigned earlyResolveAt=0,earlyResolveTotal=0,earlyResolveUndone=0,earlyResolveUndoneTotal=0;NorthlightTranslucentDepth::Frame earlyDepth;
-    void resetTranslucentCensus(){translucentZWriteSkinned=translucentZWriteOther=translucentNoZWrite=depthOnlyPrepass=depthOnlyPrepassSkinned=opaqueZWriteAfterSkinned=opaqueZWriteAfterOther=waterZWriteAfterTranslucent=0;
-        censusDraws=firstTranslucentZAt=firstTranslucentZSkinnedAt=firstDepthOnlyAt=lastOpaqueZAt=clearResolveAt=earlyResolveAt=earlyResolveUndone=0;translucentSrcBlend=translucentDestBlend=0;}
+    // 0.3.188 (task 3): per-sample-frame census of the early depth resolve, read-only, logged as TRANSLUCENT. Positions are 1-based census draw
+    // indices (0 = none), over the whole frame (with a Clear(Z) between world passes read them against clearResolve): lastOpaqueZ is the last
+    // non-water Z-writing draw writing RGB effectively opaque (the undo rule); clearResolve marks a Clear(Z)-triggered resolve.
+    unsigned censusDraws=0,lastOpaqueZAt=0,clearResolveAt=0;
+    // 0.3.188 (task 3) early depth for translucent actors (translucent_depth.h), always on: the depth resolve runs before the first translucent skinned Z-writing draw.
+    // Undo: while earlyDepth.earlyCaptured and `captured`, a terrain draw (beforeDraw) or a later effectively opaque Z+RGB or water Z draw (prepareDrawImpl) clears `captured`,
+    // so the UI-time resolve redoes the depth, counts earlyResolveUndone and re-arms the latch (capped at Frame::kMaxAttempts per frame). A Clear(Z) resolve sets `captured` without earlyCaptured, so it is never counted.
+    unsigned earlyResolves=0,earlyResolveAt=0,earlyResolveTotal=0,earlyResolveUndone=0,earlyResolveUndoneTotal=0;NorthlightTranslucentDepth::Frame earlyDepth;
+    void resetTranslucentCensus(){censusDraws=lastOpaqueZAt=clearResolveAt=earlyResolves=earlyResolveAt=earlyResolveUndone=0;}
     LONGLONG cpuPrep=0,cpuCapture=0,cpuWaterCapture=0,cpuEffects=0,cpuMirrorAudit=0;
     NorthlightEffectsBuckets::Frame effectsBuckets;bool effectsBucketed=false; /* 0.3.175 (S3): this sample frame's effects split */
     unsigned long long cpuCaptureReads=0; /* 0.3.150: timer clock reads inside cpuCapture, sample frames (an outer pair adds one) */
@@ -352,7 +348,7 @@ class Device final : public GuardedMirrorDevice {
         if(!applied||failed)stateBlocks.clear();
         if(!enabled||extensionFault){stateBlocks.clear();if(world)world->releaseStateCache();if(water)water->releaseStateCache();}
         if(world)world->endFrame(!extensionFault);if(water)water->endFrame();if(celestialDiscs)celestialDiscs->endFrame();if(shadowBlobs)shadowBlobs->endFrame();
-        drop(worldDepth); terrain = captured = applied = projectionValid = false;earlyDepth.reset();
+        drop(worldDepth); terrain = captured = applied = projectionValid = false;earlyDepth.reset();resetTranslucentCensus(); /* the TRANSLUCENT line is logged before clearFrame */
     }
     void releaseResources() {
         stateBlocks.clear();clearFrame();
@@ -624,19 +620,15 @@ class Device final : public GuardedMirrorDevice {
             const bool worldDomain=statesRead&&NorthlightWorldDrawDomain::accepts(projectionValid,depthEnabled!=FALSE,
                 worldMinDepth,worldMaxDepth,viewport.MinZ,viewport.MaxZ);
             if(worldDomain){if(gateFrame)++gateCounts.capture;
-                if(terrain&&!captured&&!earlyDepth.tried&&NorthlightTranslucentDepth::shouldResolve(drawWaterVS, /* 0.3.188 (2A): early depth for translucent actors, every frame, minimum state reads */
-                    [&]{DWORD v=0;ext->GetRenderState(D3DRS_ZWRITEENABLE,&v);return v;},[&]{DWORD v=0;ext->GetRenderState(D3DRS_ALPHABLENDENABLE,&v);return v;},
-                    [&]{DWORD v=0;ext->GetRenderState(D3DRS_COLORWRITEENABLE,&v);return v;},[&]{return world->isSkinnedShader(vs);})&&earlyDepth.attempt()){
+                /* 0.3.188 (task 3): lazy state reads for the early resolve, its undo and the census, each read at most once per draw */
+                auto rs=[&](D3DRENDERSTATETYPE t){return [this,t,v=DWORD(0),known=false]()mutable{if(!known){ext->GetRenderState(t,&v);known=true;}return v;};};
+                auto zw=rs(D3DRS_ZWRITEENABLE);auto ab=rs(D3DRS_ALPHABLENDENABLE);auto sb=rs(D3DRS_SRCBLEND);auto db=rs(D3DRS_DESTBLEND);auto cw=rs(D3DRS_COLORWRITEENABLE);
+                if(captured&&earlyDepth.earlyCaptured&&NorthlightTranslucentDepth::isUndo(drawWaterVS,zw,ab,sb,db,cw)){captured=false;earlyDepth.undo();++earlyResolveUndone;++earlyResolveUndoneTotal;} /* undo: later opaque or water Z draw after the early resolve */
+                if(terrain&&!captured&&earlyDepth.armed()&&NorthlightTranslucentDepth::shouldResolve(drawWaterVS,zw,ab,sb,db,cw,[&]{return world->isSkinnedShader(vs);})&&earlyDepth.attempt()){ /* 0.3.188 (2A): early depth for translucent actors, every frame, minimum state reads */
                     ExtensionDevice::RawScope raw(*ext);
-                    if(resolveDepth()){++earlyDepth.resolves;++earlyResolveTotal;if(sampled())earlyResolveAt=censusDraws+1;}}
-                if(sampled()){DWORD ab=0,zw=0,cw=0,sb=0,db=0; /* 0.3.188 (task 3): read-only census before capture(vs) so no early return hides a draw; sample frames only */
-                    ext->GetRenderState(D3DRS_ALPHABLENDENABLE,&ab);ext->GetRenderState(D3DRS_ZWRITEENABLE,&zw);ext->GetRenderState(D3DRS_COLORWRITEENABLE,&cw);ext->GetRenderState(D3DRS_SRCBLEND,&sb);ext->GetRenderState(D3DRS_DESTBLEND,&db);
-                    const unsigned at=++censusDraws;const bool skin=world->isSkinnedShader(vs),after=firstTranslucentZAt!=0,color=(cw&7)!=0;
-                    if(zw&&color&&drawWaterVS){if(after)++waterZWriteAfterTranslucent;}
-                    else if(zw&&!color){++depthOnlyPrepass;if(skin)++depthOnlyPrepassSkinned;if(!firstDepthOnlyAt)firstDepthOnlyAt=at;}
-                    else if(zw&&ab){if(skin)++translucentZWriteSkinned;else ++translucentZWriteOther;if(!after)firstTranslucentZAt=at,translucentSrcBlend=sb,translucentDestBlend=db;if(skin&&!firstTranslucentZSkinnedAt)firstTranslucentZSkinnedAt=at;}
-                    else if(ab)++translucentNoZWrite;
-                    else if(zw){lastOpaqueZAt=at;if(after){if(skin)++opaqueZWriteAfterSkinned;else ++opaqueZWriteAfterOther;}}}
+                    if(resolveDepth()){earlyDepth.success();++earlyResolves;++earlyResolveTotal;if(sampled())earlyResolveAt=censusDraws+1;}}
+                if(sampled()){const unsigned at=++censusDraws; /* 0.3.188 (task 3): read-only census before capture(vs) so no early return hides a draw; sample frames only */
+                    if(!drawWaterVS&&NorthlightTranslucentDepth::opaqueZWrite(zw,ab,sb,db,cw))lastOpaqueZAt=at;}
                 {const unsigned long long reads=CpuScope::reads;{CpuScope cap(sampledDrawTimers()?&cpuCapture:nullptr);capture(vs);}if(CpuScope::reads!=reads)cpuCaptureReads+=CpuScope::reads-reads-1;}
                 if(mirrorState.active()&&mirrorAuditSchedule.afterWorldCapture(frame,
                     mirrorState.vsFloatKnown[0]&&mirrorState.vsFloatKnown[DeviceMirror::VsFloat-1])){
@@ -783,7 +775,7 @@ class Device final : public GuardedMirrorDevice {
                 logf("DISABLED: unsupported world depth format %u",unsigned(dd.Format));failed=true;drop(ds);return;
             }
             drop(worldDepth); worldDepth=ds;
-            if(captured&&earlyDepth.resolves){++earlyResolveUndone;++earlyResolveUndoneTotal;} /* 0.3.188 (2A): a terrain draw after the early resolve: the UI-time resolve redoes it */
+            if(captured&&earlyDepth.earlyCaptured){earlyDepth.undo();++earlyResolveUndone;++earlyResolveUndoneTotal;} /* 0.3.188 (2A): a terrain draw after the early resolve: the UI-time resolve redoes it */
             terrain=true; captured=false;
             resources(desc.Width,desc.Height,desc.Format);
             if(gateFrame)++gateCounts.fullPasses;
@@ -944,7 +936,7 @@ public:
     void finishFrame() {
         Guard mirrorLock(mirrorState.gate);
         struct InvalidateOnReturn {DeviceMirror& state;~InvalidateOnReturn(){state.invalidate();}} invalidate{mirrorState};
-        if(extensionFault){resetTranslucentCensus();clearFrame();return;}
+        if(extensionFault){clearFrame();return;}
         extensionWork("frame finish",[&]{finishFrameImpl();});
     }
     void finishFrameImpl() {
@@ -1011,8 +1003,7 @@ public:
         // Read before clearFrame() resets the water renderer's frame counters.
         const unsigned waterDraws=water?water->frameCaptures():0,waterScans=water?water->frameMaskScans():0,waterClears=water?water->frameClears():0,waterReadFailures=water?water->frameReadFailures():0;
         if(sampled())logf("EFFECT trailing world frame=%u worldDraws=%u skinnedDraws=%u",frame,postEffectWorldDraws,postEffectSkinnedDraws);
-        if(sampled())logf("TRANSLUCENT frame=%u zwriteSkinned=%u zwriteOther=%u noZWrite=%u depthOnly=%u depthOnlySkinned=%u opaqueZAfterSkinned=%u opaqueZAfterOther=%u waterZAfter=%u firstBlend=%lu/%lu draws=%u firstTranslucentZ=%u firstTranslucentZSkinned=%u firstDepthOnly=%u lastOpaqueZ=%u clearResolve=%u earlyResolve=%u earlyResolveAt=%u earlyResolveTotal=%u earlyResolveUndone=%u earlyResolveUndoneTotal=%u",frame,translucentZWriteSkinned,translucentZWriteOther,translucentNoZWrite,depthOnlyPrepass,depthOnlyPrepassSkinned,opaqueZWriteAfterSkinned,opaqueZWriteAfterOther,waterZWriteAfterTranslucent,(unsigned long)translucentSrcBlend,(unsigned long)translucentDestBlend,censusDraws,firstTranslucentZAt,firstTranslucentZSkinnedAt,firstDepthOnlyAt,lastOpaqueZAt,clearResolveAt,earlyDepth.resolves,earlyResolveAt,earlyResolveTotal,earlyResolveUndone,earlyResolveUndoneTotal);
-        resetTranslucentCensus();
+        if(sampled())logf("TRANSLUCENT frame=%u draws=%u lastOpaqueZ=%u clearResolve=%u earlyResolve=%u earlyResolveAt=%u earlyResolveTotal=%u earlyResolveUndone=%u earlyResolveUndoneTotal=%u",frame,censusDraws,lastOpaqueZAt,clearResolveAt,earlyResolves,earlyResolveAt,earlyResolveTotal,earlyResolveUndone,earlyResolveUndoneTotal);
         postEffectWorldDraws=postEffectSkinnedDraws=0;
         const bool sampledFrame=sampled(),frameApplied=applied;
         {CpuScope cpu(sampledFrame?&cleanup:nullptr);clearFrame();}
@@ -1110,9 +1101,10 @@ public:
         return hr;
     }
     HRESULT STDMETHODCALLTYPE Clear(DWORD n,const D3DRECT* rects,DWORD flags,D3DCOLOR color,float z,DWORD stencil) override { Guard mirrorLock(mirrorState.gate);
-        if ((flags&D3DCLEAR_ZBUFFER)&&terrain&&!captured&&!applied&&enabled&&!failed) {
+        if ((flags&D3DCLEAR_ZBUFFER)&&terrain&&(!captured||earlyDepth.earlyCaptured)&&!applied&&enabled&&!failed) {
             IDirect3DSurface9* ds=nullptr;ext->GetDepthStencilSurface(&ds);
-            if(ds==worldDepth&&resolveDepth()&&sampled()&&!clearResolveAt)clearResolveAt=censusDraws+1;drop(ds); /* 0.3.188 (task 3): census position of a Clear(Z) resolve */
+            /* 0.3.188 (task 3): a Clear(Z) after the early resolve freezes it (no later undo would find the cleared depth useful); census position of either */
+            if(ds==worldDepth&&(captured?(earlyDepth.freeze(),true):resolveDepth())&&sampled()&&!clearResolveAt)clearResolveAt=censusDraws+1;drop(ds);
         }
         return ext->Clear(n,rects,flags,color,z,stencil);
     }
