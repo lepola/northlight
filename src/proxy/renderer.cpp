@@ -32,6 +32,7 @@
 #include "render_thread_probe.h"
 #include "effects_buckets.h"
 #include "draw_gates.h"
+#include "translucent_depth.h"
 #include "log_rotation.h"
 #include "memory_guard.h"
 #include "northlight_mem.h"
@@ -301,8 +302,11 @@ class Device final : public GuardedMirrorDevice {
     unsigned translucentZWriteSkinned=0,translucentZWriteOther=0,translucentNoZWrite=0,depthOnlyPrepass=0,depthOnlyPrepassSkinned=0,opaqueZWriteAfterSkinned=0,opaqueZWriteAfterOther=0,waterZWriteAfterTranslucent=0;
     unsigned censusDraws=0,firstTranslucentZAt=0,firstTranslucentZSkinnedAt=0,firstDepthOnlyAt=0,lastOpaqueZAt=0,clearResolveAt=0;
     DWORD translucentSrcBlend=0,translucentDestBlend=0;
+    // 0.3.188 (task 3) TranslucentActorDepth (translucent_depth.h): the depth resolve runs before the first translucent Z-writing actor draw
+    // (once per frame, tried flag in earlyDepth); a later terrain draw clears `captured` (beforeDraw) and the UI-time resolve redoes it, the old behaviour.
+    unsigned translucentActorDepth=1,earlyResolveAt=0,earlyResolveTotal=0,earlyResolveUndone=0,earlyResolveUndoneTotal=0;NorthlightTranslucentDepth::Frame earlyDepth;
     void resetTranslucentCensus(){translucentZWriteSkinned=translucentZWriteOther=translucentNoZWrite=depthOnlyPrepass=depthOnlyPrepassSkinned=opaqueZWriteAfterSkinned=opaqueZWriteAfterOther=waterZWriteAfterTranslucent=0;
-        censusDraws=firstTranslucentZAt=firstTranslucentZSkinnedAt=firstDepthOnlyAt=lastOpaqueZAt=clearResolveAt=0;translucentSrcBlend=translucentDestBlend=0;}
+        censusDraws=firstTranslucentZAt=firstTranslucentZSkinnedAt=firstDepthOnlyAt=lastOpaqueZAt=clearResolveAt=earlyResolveAt=earlyResolveUndone=0;translucentSrcBlend=translucentDestBlend=0;}
     LONGLONG cpuPrep=0,cpuCapture=0,cpuWaterCapture=0,cpuEffects=0,cpuMirrorAudit=0;
     NorthlightEffectsBuckets::Frame effectsBuckets;bool effectsBucketed=false; /* 0.3.175 (S3): this sample frame's effects split */
     unsigned long long cpuCaptureReads=0; /* 0.3.150: timer clock reads inside cpuCapture, sample frames (an outer pair adds one) */
@@ -348,7 +352,7 @@ class Device final : public GuardedMirrorDevice {
         if(!applied||failed)stateBlocks.clear();
         if(!enabled||extensionFault){stateBlocks.clear();if(world)world->releaseStateCache();if(water)water->releaseStateCache();}
         if(world)world->endFrame(!extensionFault);if(water)water->endFrame();if(celestialDiscs)celestialDiscs->endFrame();if(shadowBlobs)shadowBlobs->endFrame();
-        drop(worldDepth); terrain = captured = applied = projectionValid = false;
+        drop(worldDepth); terrain = captured = applied = projectionValid = false;earlyDepth.reset();
     }
     void releaseResources() {
         stateBlocks.clear();clearFrame();
@@ -620,6 +624,11 @@ class Device final : public GuardedMirrorDevice {
             const bool worldDomain=statesRead&&NorthlightWorldDrawDomain::accepts(projectionValid,depthEnabled!=FALSE,
                 worldMinDepth,worldMaxDepth,viewport.MinZ,viewport.MaxZ);
             if(worldDomain){if(gateFrame)++gateCounts.capture;
+                if(translucentActorDepth&&terrain&&!captured&&!earlyDepth.tried&&NorthlightTranslucentDepth::shouldResolve(translucentActorDepth,drawWaterVS, /* 0.3.188 (2A): early depth for translucent actors, every frame, minimum state reads */
+                    [&]{DWORD v=0;ext->GetRenderState(D3DRS_ZWRITEENABLE,&v);return v;},[&]{DWORD v=0;ext->GetRenderState(D3DRS_ALPHABLENDENABLE,&v);return v;},
+                    [&]{DWORD v=0;ext->GetRenderState(D3DRS_COLORWRITEENABLE,&v);return v;},[&]{return world->isSkinnedShader(vs);})&&earlyDepth.attempt()){
+                    ExtensionDevice::RawScope raw(*ext);
+                    if(resolveDepth()){++earlyDepth.resolves;++earlyResolveTotal;if(sampled())earlyResolveAt=censusDraws+1;}}
                 if(sampled()){DWORD ab=0,zw=0,cw=0,sb=0,db=0; /* 0.3.188 (task 3): read-only census before capture(vs) so no early return hides a draw; sample frames only */
                     ext->GetRenderState(D3DRS_ALPHABLENDENABLE,&ab);ext->GetRenderState(D3DRS_ZWRITEENABLE,&zw);ext->GetRenderState(D3DRS_COLORWRITEENABLE,&cw);ext->GetRenderState(D3DRS_SRCBLEND,&sb);ext->GetRenderState(D3DRS_DESTBLEND,&db);
                     const unsigned at=++censusDraws;const bool skin=world->isSkinnedShader(vs),after=firstTranslucentZAt!=0,color=(cw&7)!=0;
@@ -774,6 +783,7 @@ class Device final : public GuardedMirrorDevice {
                 logf("DISABLED: unsupported world depth format %u",unsigned(dd.Format));failed=true;drop(ds);return;
             }
             drop(worldDepth); worldDepth=ds;
+            if(captured&&earlyDepth.resolves){++earlyResolveUndone;++earlyResolveUndoneTotal;} /* 0.3.188 (2A): a terrain draw after the early resolve: the UI-time resolve redoes it */
             terrain=true; captured=false;
             resources(desc.Width,desc.Height,desc.Format);
             if(gateFrame)++gateCounts.fullPasses;
@@ -830,7 +840,7 @@ public:
         parent->AddRef(); QueryPerformanceFrequency(&cpuFrequency); gpuProfile=std::make_unique<NorthlightGpuProfile>(ext); world=std::make_unique<WorldRenderer>(ext);world->setEffectsBuckets(&effectsBuckets);
         world->setConstantEpochSource({&mirrorState.constantEpoch,&mirrorState}); /* 0.3.180 (C1): read in place under the draw's gate */
         char skyRoot[MAX_PATH*3];WideCharToMultiByte(CP_UTF8,0,rootPath,-1,skyRoot,sizeof skyRoot,nullptr,nullptr);celestialDiscs=std::make_unique<NorthlightCelestialDiscRenderer>(ext,std::string(skyRoot)+"world-cache/celestial");celestialDiscs->setTerrainSource([this]{return world->celestialTerrainGeneration();},[this](unsigned body,const float* matrix){return world->drawCelestialTerrain(body,matrix);},[this](unsigned body){world->noteCelestialTerrainReuse(body);});celestialDiscs->setIdentityMap([this](std::uintptr_t exposed){return mirrorResources.rawOf(exposed,!mirrorState.enabled);});shadowBlobs=std::make_unique<NorthlightShadowBlobFilter>(ext);water=std::make_unique<NorthlightWaterRenderer>(ext); logf("D3D9 device wrapped. Ctrl+Shift+F7 fog; F8 GI; F9 shadows; F10 all effects; F12 world debug (all with Ctrl+Shift). F11 unassigned. Components start ON; GI cache stays warm.");
-        frameDrawGates=world->frameDrawGates();latchDrawGates(); /* 0.3.187: after the renderers exist */
+        translucentActorDepth=world->translucentActorDepth();frameDrawGates=world->frameDrawGates();latchDrawGates(); /* 0.3.187: after the renderers exist */
         // The async sweep feeds the memory guard (always) and the periodic MEMORY line
         // (Diagnostics only). Allocation admission stays synchronous in WorldRenderer.
         try{memoryDiagnostics=std::make_unique<NorthlightMemoryDiagnostics::Sampler>(&queryAddressSpace);}
@@ -1001,7 +1011,7 @@ public:
         // Read before clearFrame() resets the water renderer's frame counters.
         const unsigned waterDraws=water?water->frameCaptures():0,waterScans=water?water->frameMaskScans():0,waterClears=water?water->frameClears():0,waterReadFailures=water?water->frameReadFailures():0;
         if(sampled())logf("EFFECT trailing world frame=%u worldDraws=%u skinnedDraws=%u",frame,postEffectWorldDraws,postEffectSkinnedDraws);
-        if(sampled())logf("TRANSLUCENT frame=%u zwriteSkinned=%u zwriteOther=%u noZWrite=%u depthOnly=%u depthOnlySkinned=%u opaqueZAfterSkinned=%u opaqueZAfterOther=%u waterZAfter=%u firstBlend=%lu/%lu draws=%u firstTranslucentZ=%u firstTranslucentZSkinned=%u firstDepthOnly=%u lastOpaqueZ=%u clearResolve=%u",frame,translucentZWriteSkinned,translucentZWriteOther,translucentNoZWrite,depthOnlyPrepass,depthOnlyPrepassSkinned,opaqueZWriteAfterSkinned,opaqueZWriteAfterOther,waterZWriteAfterTranslucent,(unsigned long)translucentSrcBlend,(unsigned long)translucentDestBlend,censusDraws,firstTranslucentZAt,firstTranslucentZSkinnedAt,firstDepthOnlyAt,lastOpaqueZAt,clearResolveAt);
+        if(sampled())logf("TRANSLUCENT frame=%u zwriteSkinned=%u zwriteOther=%u noZWrite=%u depthOnly=%u depthOnlySkinned=%u opaqueZAfterSkinned=%u opaqueZAfterOther=%u waterZAfter=%u firstBlend=%lu/%lu draws=%u firstTranslucentZ=%u firstTranslucentZSkinned=%u firstDepthOnly=%u lastOpaqueZ=%u clearResolve=%u earlyResolve=%u earlyResolveAt=%u earlyResolveTotal=%u earlyResolveUndone=%u earlyResolveUndoneTotal=%u",frame,translucentZWriteSkinned,translucentZWriteOther,translucentNoZWrite,depthOnlyPrepass,depthOnlyPrepassSkinned,opaqueZWriteAfterSkinned,opaqueZWriteAfterOther,waterZWriteAfterTranslucent,(unsigned long)translucentSrcBlend,(unsigned long)translucentDestBlend,censusDraws,firstTranslucentZAt,firstTranslucentZSkinnedAt,firstDepthOnlyAt,lastOpaqueZAt,clearResolveAt,earlyDepth.resolves,earlyResolveAt,earlyResolveTotal,earlyResolveUndone,earlyResolveUndoneTotal);
         resetTranslucentCensus();
         postEffectWorldDraws=postEffectSkinnedDraws=0;
         const bool sampledFrame=sampled(),frameApplied=applied;
