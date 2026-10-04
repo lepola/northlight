@@ -680,9 +680,9 @@ class Device final : public GuardedMirrorDevice {
         D3DSURFACE_DESC desc={};D3DVIEWPORT9 viewport={};if(!fullViewport(desc,&viewport))return;
         IDirect3DPixelShader9* ps=nullptr;struct PixelRelease {IDirect3DPixelShader9*& p;~PixelRelease(){drop(p);}} releasePS{ps};if(SUCCEEDED(ext->GetPixelShader(&ps))&&ps)water->capture(vs,ps,desc.Width,desc.Height,worldDepth,viewport,userPointer,mirrorState.invalidations,draw);
     }
-    // Blob shadows are filtered only while the mod draws actor shadows: effects (F10) and shadows (F9)
-    // on, a world context, and 0.3.158 ActorShadows=1 (with 0 the game's blobs are the actor shadows).
-    // Since 0.3.189 the filter is off via HidesNativeBlobs (the game's blobs are drawn).
+    // 0.3.189: HidesNativeBlobs=false, the filter is off and the game's blobs are drawn. With true, blob
+    // shadows are filtered only while the mod draws actor shadows: effects (F10) and shadows (F9) on,
+    // a world context, and 0.3.158 ActorShadows=1 (with 0 the game's blobs are the actor shadows).
     bool blobFilterActive()const{return NorthlightShadowBlobFilter::HidesNativeBlobs&&shadowBlobs&&enabled&&effectKeys.settings.shadows&&!applied&&terrain&&!failed&&world&&world->hasContext()&&world->actorShadowsEnabled();}
     // 0.3.187 per-frame draw gates (draw_gates.h, FrameDrawGates=1): latched where every input can
     // rise, never inside a frame: at the end of finishFrameImpl (after F9/F10/F12, setEffects and the
