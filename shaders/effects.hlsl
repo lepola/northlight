@@ -53,6 +53,21 @@ float3 SafeNormal(float3 n)
     return n.z > 0.0 ? -n : n;
 }
 
+// 0.3.189: snap a uv to the centre of an explicit full-resolution depth texel. The half-resolution
+// AO pass samples at (i+.5)/(w/2), exactly the boundary between full-res texels 2i and 2i+1, where
+// POINT sampling depends on GPU interpolation rounding and can flip from row to row.
+// +0.25: in the half-res pass uv*size is about 2i+1 and picks texel 2i+1 unambiguously (the nominal
+// texel of depthUV() in world_effects.hlsl); in a full-res pass uv*size is j+.5 and picks j.
+float2 DepthTexelUV(float2 uv)
+{
+    // (floor(t) + .5) / size with t = uv*size + .25, written as uv + (.75 - frac(t)) / size (slot
+    // budget). The centre is kept one texel inside every edge, so CLAMP never folds SurfaceNormal's
+    // +-1 neighbour onto it (a zero tangent on the last column/row would give a camera-facing normal).
+    uv = mad(0.75 - frac(mad(uv, 1.0 / ImageAndClip.xy, 0.25)), ImageAndClip.xy, uv);
+    return clamp(uv, 1.5 * ImageAndClip.xy, 1.0 - 1.5 * ImageAndClip.xy);
+}
+
+// uv must already be a full-resolution texel centre (DepthTexelUV): the neighbours are exactly one texel away.
 float3 SurfaceNormal(float2 uv, float3 p)
 {
     float2 dx = float2(ImageAndClip.x, 0);
@@ -65,11 +80,18 @@ float3 SurfaceNormal(float2 uv, float3 p)
     // derivative across the foreground/background depth discontinuity.
     float3 tx = abs(r.z - p.z) < abs(p.z - l.z) ? r - p : p - l;
     float3 ty = abs(b.z - p.z) < abs(p.z - u.z) ? b - p : p - u;
+    // 0.3.189: a zero-length tangent (neighbour resolved to the centre texel) would fall back to a
+    // camera-facing normal and turn ground taps into occluders (dark AO row); span both sides instead.
+    // Vertical only (slot budget): the rows are the half-res pass's ambiguous axis on flat ground.
+    ty = dot(ty, ty) < 1e-14 ? b - u : ty;
     return SafeNormal(cross(tx, ty));
 }
 
 float4 AOImpl(float2 uv, bool colorBounce)
 {
+    // 0.3.189: the centre, its normal neighbours and the noise rotation use one explicit depth texel;
+    // kernel taps (suv) stay unsnapped.
+    uv = DepthTexelUV(uv);
     float d = ReadDepth(uv);
     if (d >= SKY_DEPTH || IsWater(uv,d))
         return float4(0, 0, 0, 1);
