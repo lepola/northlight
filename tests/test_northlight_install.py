@@ -211,6 +211,18 @@ class Preflight(Base):
         self.assertIn('preload', self.refused())
 
 
+class MacFileSets(unittest.TestCase):
+    def test_mac_package_payload_and_migration_files_are_disjoint(self):
+        """INSTALL.chain_problems skips migration records: safe only while no macOS package record holds a
+        file migrate_mac_proxy writes (the mac payload is PAYLOAD_COMMON; d3d9.dll goes to mods/ by migration)."""
+        import ast
+        tree_ = ast.parse(fp.src('build_packages.py').read_text(encoding='utf-8'))
+        common = next(ast.literal_eval(n.value) for n in tree_.body if isinstance(n, ast.Assign) and
+                      any(getattr(t, 'id', None) == 'PAYLOAD_COMMON' for t in n.targets))
+        self.assertTrue(common)
+        self.assertFalse(set(common) & set(mig.MANAGED))
+
+
 class RunningCheck(unittest.TestCase):
     """migrate_mac_proxy.running(): our own launcher chain never counts, whatever its paths contain."""
     LAUNCHER = [(1, 0, '/sbin/launchd', '/sbin/launchd'),
@@ -374,6 +386,58 @@ class Install(Base):
         self.assertEqual(tree(self.client), self.before)
         self.assertFalse((self.client / 'world-cache').exists())
 
+    def version_package(self, n):
+        """A copy of the package whose renderer DLL and celestial-profiles.ini differ (on macOS the package
+        records hold only the ini files, so the DLL alone would not stack)."""
+        root = self.base / 'Downloads' / f'Northlight-v{n}'
+        shutil.copytree(self.pkg_root, root)
+        dll, ini = PROXY + b' v%d' % n, b'[Sun]\nversion=%d\n' % n
+        (root / 'payload/d3d9.dll').write_bytes(dll); (root / 'payload/celestial-profiles.ini').write_bytes(ini)
+        manifest = json.loads((root / 'payload-manifest.json').read_text())
+        for e in manifest:
+            data = {'d3d9.dll': dll, 'celestial-profiles.ini': ini}.get(e['path'])
+            if data is not None:
+                e['sha256'] = sha(data)
+        (root / 'payload-manifest.json').write_text(json.dumps(manifest))
+        (root / 'BUILD-INFO.json').write_text(json.dumps({'version': f'0.3.{n}', 'dll_sha256': sha(dll)}))
+        return root
+
+    def stack(self, n=3):
+        for i in range(1, n + 1):
+            self.pkg_root = self.version_package(160 + i)
+            self.installer().install(self.client, world_cache=False)
+
+    def test_uninstall_after_three_stacked_installs(self):
+        self.stack()
+        self.assertGreaterEqual(len([b for b, r in self.installer().all_transactions(self.client) if r.get('kind', 'package') == 'package']), 3)
+        self.installer().uninstall(self.client)
+        self.assertEqual(tree(self.client), self.before)
+
+    def stacked_state(self):
+        return tree(self.client), [json.loads(p.read_text())['status'] for p in sorted(self.client.glob('renderer-backups/**/transaction.json'))]
+
+    def test_uninstall_refused_after_later_edit(self):
+        self.stack()
+        (self.client / 'celestial-profiles.ini').write_bytes(b'user edit')
+        state = self.stacked_state()
+        with self.assertRaises(fi.Refusal) as cm:
+            self.installer().uninstall(self.client)
+        self.assertIn('Nothing was changed', str(cm.exception))
+        self.assertEqual(self.stacked_state(), state)
+        self.assertNotIn('restored', state[1])
+
+    def test_uninstall_refused_with_damaged_backup(self):
+        self.stack()
+        # The first install had nothing to back up; the second one's before/ holds the first one's files.
+        damaged = [p for b, r in reversed(self.installer().all_transactions(self.client)) if r.get('kind', 'package') == 'package'
+                   for p in (b / 'before').rglob('*') if p.is_file()]
+        self.assertTrue(damaged); damaged[0].write_bytes(b'bad')
+        state = self.stacked_state()
+        with self.assertRaises(fi.Refusal) as cm:
+            self.installer().uninstall(self.client)
+        self.assertIn('Backup damaged', str(cm.exception))
+        self.assertEqual(self.stacked_state(), state)
+
     def test_uninstall_keeps_foreign_cache(self):
         (self.client / 'world-cache/dev').mkdir(parents=True); (self.client / 'world-cache/dev/x.fg3').write_bytes(b'dev')
         self.before = tree(self.client)
@@ -497,6 +561,26 @@ class WindowsInstall(Install):
         self.assertFalse((self.client / 'Data/patch-y.mpq').exists())
         self.assertEqual((self.client / 'd3d9.dll').read_bytes(), PROXY)
         self.assertEqual((self.client / 'northlight-renderer.ini').read_bytes(), b'[Renderer]\r\nBackend=native\r\n')
+        self.assertFalse((self.client / 'world-cache/a.fgm').exists())
+        self.installer().uninstall(self.client)
+        self.assertEqual(tree(self.client), self.before)
+
+    def test_old_package_with_update_on_top_restored_first(self):
+        old = self.base / 'old-package'
+        (old / 'payload/world-cache').mkdir(parents=True); (old / 'payload/world-cache/a.fgm').write_bytes(b'old')
+        (old / 'payload/d3d9.dll').write_bytes(b'MZ Northlight renderer 0.3.144; old')
+        (old / 'payload-manifest.json').write_text(json.dumps([{'path': p, 'sha256': sha((old / 'payload' / p).read_bytes())}
+                                                               for p in ['world-cache/a.fgm', 'd3d9.dll']]))
+        first = INSTALL.install(self.client, old)
+        small = self.base / 'small-update'
+        (small / 'payload').mkdir(parents=True); (small / 'payload/d3d9.dll').write_bytes(b'MZ Northlight renderer 0.3.150; update')
+        (small / 'payload-manifest.json').write_text(json.dumps([{'path': 'd3d9.dll', 'sha256': sha(b'MZ Northlight renderer 0.3.150; update')}]))
+        second = INSTALL.install(self.client, small)
+        self.assertEqual([b for b, _ in INSTALL.transactions(self.client)], [first, second])
+        self.installer().install(self.client, backend='native')
+        for b in (first, second):
+            self.assertEqual(json.loads((b / 'transaction.json').read_text())['status'], 'restored')
+        self.assertEqual((self.client / 'd3d9.dll').read_bytes(), PROXY)
         self.assertFalse((self.client / 'world-cache/a.fgm').exists())
         self.installer().uninstall(self.client)
         self.assertEqual(tree(self.client), self.before)

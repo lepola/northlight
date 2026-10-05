@@ -118,21 +118,40 @@ def config_backend(path):
         if key.strip().lower() == 'backend': return value.strip().lower()
     return None
 
+def chain_problems(client, chain):
+    """Why restoring chain [(backup, record)], newest first, would refuse, checked without writing
+    anything: [(backup, message)] ([] = the whole chain restorable). Each record is checked against the
+    files as the restore of the newer records leaves them."""
+    state, problems = {}, []   # state: {path: sha | None} after the simulated restores
+    def now(path):
+        if path not in state:
+            target = safe_path(client, path)
+            state[path] = sha(target) if target.exists() else None
+        return state[path]
+    for backup, record in chain:
+        # Other kinds (macOS mac-proxy-migration) are skipped: their files (migrate_mac_proxy.MANAGED) are disjoint
+        # from the package records on macOS (payload_plan proxy=False, backend None) and their undo is
+        # semantic (keeps later edits), so it never refuses.
+        if record.get('kind', 'package') != 'package': continue
+        if Path(record['client']).resolve() != client.resolve():
+            problems.append((backup, 'Backup belongs to another client')); continue
+        for e in record['files']:
+            current = now(e['path'])
+            # A user-editable settings file that was edited after installation is left as it is.
+            if e.get('preserve') and current not in (e['before'], e['after']): continue
+            if current not in (e['before'], e['after']):
+                problems.append((backup, 'File changed after installation: '+str(safe_path(client, e['path'])))); continue
+            if e['before'] and sha(safe_path(backup/'before', e['path'])) != e['before']:
+                problems.append((backup, 'Backup damaged: '+e['path']))
+            state[e['path']] = e['before']
+    return problems
+
 def restore_problems(client, backup):
     """Why restore(client, backup) would refuse, checked without writing anything ([] = restorable)."""
     record = json.loads((backup/'transaction.json').read_text(encoding='utf-8'))
     if Path(record['client']).resolve() != client.resolve(): return ['Backup belongs to another client']
     if record.get('kind', 'package') != 'package': return ['This backup was made by '+record['kind']+'; restore it with that tool']
-    problems = []
-    for e in record['files']:
-        target = safe_path(client, e['path'])
-        current = sha(target) if target.exists() else None
-        # A user-editable settings file that was edited after installation is left as it is.
-        if e.get('preserve') and current not in (e['before'], e['after']): continue
-        if current not in (e['before'], e['after']): problems.append('File changed after installation: '+str(target))
-        elif e['before'] and sha(safe_path(backup/'before', e['path'])) != e['before']:
-            problems.append('Backup damaged: '+e['path'])
-    return problems
+    return [m for _, m in chain_problems(client, [(backup, record)])]
 
 def restore(client, backup):
     record = json.loads((backup/'transaction.json').read_text(encoding='utf-8'))
@@ -152,13 +171,14 @@ def restore(client, backup):
 def transactions(client, root=None):
     """Unrestored package transactions of this client, oldest first: [(backup folder, record)]."""
     found = []
-    for path in sorted((root or client/'renderer-backups').glob('*/transaction.json')):
+    for path in (root or client/'renderer-backups').glob('*/transaction.json'):
         try: record = json.loads(path.read_text(encoding='utf-8'))
         except (OSError, ValueError): continue
         if record.get('kind', 'package') == 'package' and record.get('status') != 'restored' and \
                 Path(record.get('client', '')).resolve() == client.resolve():
             found.append((path.parent, record))
-    return found
+    # Install order: second, then the exact creation time (same-second installs), then the folder name.
+    return sorted(found, key=lambda t: (t[0].name[:15], t[1].get('created', ''), t[0].name))
 
 def legacy_cache_transactions(client):
     """Unrestored transactions of the old full packages (0.3.98-0.3.144), which recorded every world-cache file."""
@@ -193,7 +213,8 @@ def commit(client, plan, staged, payload=None, version='__RELEASE_VERSION__', ki
     if shutil.disk_usage(client).free < needed+128*1024*1024: raise ValueError('Insufficient disk space for payload and rollback')
     backups = safe_path(client, 'renderer-backups')
     backups.mkdir(exist_ok=True)
-    backup = backups/(datetime.now().strftime('%Y%m%d-%H%M%S')+'-'+uuid.uuid4().hex[:8])
+    now = datetime.now()
+    backup = backups/(now.strftime('%Y%m%d-%H%M%S')+'-'+uuid.uuid4().hex[:8])
     backup.mkdir()
     # Save every original before modifying the first destination.
     for e in plan:
@@ -201,7 +222,7 @@ def commit(client, plan, staged, payload=None, version='__RELEASE_VERSION__', ki
             target = safe_path(backup/'before', e['path']); target.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(safe_path(client,e['path']), target)
             if sha(target) != e['before']: raise ValueError('Backup verification failed: '+e['path'])
-    record = {'version':version,'kind':kind,'client':str(client.resolve()),'status':'pending','files':plan}
+    record = {'version':version,'kind':kind,'created':now.strftime('%Y%m%d-%H%M%S.%f'),'client':str(client.resolve()),'status':'pending','files':plan}
     atomic_json(backup/'transaction.json', record)
     stage = backup/'staged'
     for name, data in staged.items():

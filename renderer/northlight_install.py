@@ -632,7 +632,8 @@ class Installer:
             m = migrate()
             found += [(b, read_json(b / 'transaction.json')) for b in m.backups(client, [self.mac_backups(client)])
                       if (read_json(b / 'transaction.json') or {}).get('status') != 'restored']
-        return sorted(found, key=lambda br: (br[0].name[:15], br[1].get('kind', 'package') == 'package', br[0].name),
+        return sorted(found, key=lambda br: (br[0].name[:15], br[1].get('kind', 'package') == 'package',
+                                              br[1].get('created', ''), br[0].name),
                       reverse=True)
 
     def restore(self, client, backup, record):
@@ -646,14 +647,17 @@ class Installer:
         INSTALL.atomic_json(backup / 'transaction.json', record)
 
     def legacy(self, client):
-        """D13: an old full package (with world-cache/ in its transaction) is restored first, or refused."""
+        """D13: an old full package (with world-cache/ in its transaction) is restored first, or refused. Package
+        updates installed on top of it go with it: the whole chain from the oldest such record up is returned."""
         old = INSTALL.legacy_cache_transactions(client)
         if not old:
             return []
-        problems = [p for b, _ in old for p in INSTALL.restore_problems(client, b)]
+        every = INSTALL.transactions(client)
+        old = every[[b for b, _ in every].index(old[0][0]):]
+        problems = INSTALL.chain_problems(client, list(reversed(old)))
         if problems:
             raise Refusal('An older renderer package with its own world-cache is installed, and its files have '
-                          'changed since, so it cannot be restored automatically: ' + problems[0] +
+                          'changed since, so it cannot be restored automatically: ' + problems[0][1] +
                           '\nRestore or remove that installation first (its backups are in renderer-backups).')
         versions = ', '.join(sorted({r.get('version', '?') for _, r in old}))
         if not self.ask(f'An older renderer package ({versions}) is installed with its own world-cache. '
@@ -870,11 +874,10 @@ class Installer:
         except ValueError as e:
             raise Refusal(str(e))
         found = self.all_transactions(client)
-        for backup, record in found:
-            if record.get('kind', 'package') == 'package':
-                problems = INSTALL.restore_problems(client, backup)
-                if problems:
-                    raise Refusal(f'Cannot restore {backup.name}: {problems[0]}. Nothing was changed.')
+        problems = INSTALL.chain_problems(client, found)
+        if problems:
+            backup, problem = problems[0]
+            raise Refusal(f'Cannot restore {backup.name}: {problem}. Nothing was changed.')
         with locked(client):
             return self.apply_uninstall(client, found)
 

@@ -172,12 +172,13 @@ def apply(client,dll,backup_root,roots=()):
     if backup_root is None:raise ValueError('backup_root is required')
     steps=plan(client,dll,[backup_root,*roots])
     if not steps:return None
-    record_dir=backup_root/(datetime.now().strftime('%Y%m%d-%H%M%S')+'-'+uuid.uuid4().hex[:8]);record_dir.mkdir(parents=True)
+    stamp=datetime.now()
+    record_dir=backup_root/(stamp.strftime('%Y%m%d-%H%M%S')+'-'+uuid.uuid4().hex[:8]);record_dir.mkdir(parents=True)
     for s in steps:   # every replaced file, before the first write
         if s['old'] is not None:
             target=record_dir/'before'/s['path'];target.parent.mkdir(parents=True,exist_ok=True);target.write_bytes(s['old'])
             if digest(target.read_bytes())!=s['before']:raise ValueError('Backup verification failed: '+s['path'])
-    record={'kind':KIND,'version':version(dll.read_bytes()),'client':str(client),'status':'pending','files':[{k:s[k] for k in ('path','before','after')} for s in steps]}
+    record={'kind':KIND,'created':stamp.strftime('%Y%m%d-%H%M%S.%f'),'version':version(dll.read_bytes()),'client':str(client),'status':'pending','files':[{k:s[k] for k in ('path','before','after')} for s in steps]}
     m.atomic_json(record_dir/'transaction.json',record)
     done=[]
     try:
