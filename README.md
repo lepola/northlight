@@ -19,7 +19,7 @@ Every effect below is on by default and is drawn on top of the game's own frame.
   same hue toward the sun.
 - **Shadows.** Sun and moon shadows in two cascades (about 48 and 192 yards around the player), with
   a cached static layer for terrain, buildings, trees and props, and distant terrain shadows out to
-  928 yards (4096 in the zones listed in `shadow-range-profiles.ini`). Characters, creatures, mounts,
+  928 yards (up to 4096 in the zones listed in `shadow-range-profiles.ini`). Characters, creatures, mounts,
   doors, ships and other moving objects cast shadows too. The game's baked terrain shadows and the
   round blob shadows under characters are replaced, and where the sun is blocked the game's painted
   sunlight is removed smoothly, without facet steps.
