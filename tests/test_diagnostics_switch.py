@@ -45,7 +45,7 @@ KEEP={
  'TERRAIN projection':'capped: first 12','STATIC SHADOW draw retry':'capped: first 8','MODEL snapshot rejected':'capped: first 12',
  'WORLD GPU diagnostic':'user-triggered GPU capture (F12 debug)','WORLD slow submission':'capped: first 12','POINT pass skipped':'capped: first 12',
  'CELESTIAL disabled':'error','CELESTIAL native texture identity':'error','CELESTIAL early draw skipped':'capped: first 4',
- 'SHADOWBLOB candidate':'capped: first 4','SHADOWBLOB identified':'capped: first 8','SHADOWBLOB draw states':'capped: first 2','SHADOWBLOB faint texture unavailable':'one-off error','WATER disabled':'error','WATER explicit recovery':'user-triggered',
+ 'SHADOWBLOB candidate':'capped: first 4','SHADOWBLOB identified':'capped: first 8','SHADOWBLOB draw states':'capped: first 2','SHADOWBLOB faint texture unavailable':'capped: first 3 failures (the creation is retried every 600 frames)','WATER disabled':'error','WATER explicit recovery':'user-triggered',
  'PREPARE worker':'warning/error: the prepare worker watchdog (at most 5 a session), its re-arm (at most 4) or a record exception (first 4); 0.3.177', 'WATER registered':'one-off: shader registration','WATER mask patch skipped':'capped: first 8 (patch rejected or patched hash mismatch; that shader only)','GPU profile':'gated: no sample opens when off (beginFrame/poll gated)','%s':'gpu_profile report: gated as above; 0.3.176 flushDeferredLogs(): lines formatted at their gated deferLogf sites',
 }
 def conditions(s,pos):

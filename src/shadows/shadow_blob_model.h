@@ -43,8 +43,10 @@ inline std::vector<std::uint8_t> faintPixels(unsigned strength){
 // (not alpha-premultiplied) filtering: under modulate the texel's colour is what darkens the
 // target, and the outside is colour 255 (no darkening), so averaging the colour channels as
 // stored gives exactly the average of what the full-size texels would draw; premultiplying would
-// drop the white outside and darken every edge texel at distance. Alpha is averaged the same way
-// (it is not used by the modulate blend, so mip alpha above 0 at the edge is harmless).
+// drop the white outside and darken every edge texel at distance. Alpha is thresholded to binary at
+// every level (average >= 128 -> 255, else 0): the game's texture has 1-bit alpha, so its mips are
+// 0/255 and an alpha-tested edge (ALPHATESTENABLE/ALPHAREF) must flip at the same coverage as the
+// original, not stay partly transparent at a distance.
 inline std::vector<std::vector<std::uint8_t>> faintMipChain(unsigned strength){
     std::vector<std::vector<std::uint8_t>> levels{faintPixels(strength)};
     for(unsigned size=Width/2;size>=1;size/=2){
@@ -52,7 +54,7 @@ inline std::vector<std::vector<std::uint8_t>> faintMipChain(unsigned strength){
         std::vector<std::uint8_t> level(std::size_t(size)*size*4);
         for(unsigned y=0;y<size;++y)for(unsigned x=0;x<size;++x)for(unsigned c=0;c<4;++c){
             unsigned sum=0;for(unsigned dy=0;dy<2;++dy)for(unsigned dx=0;dx<2;++dx)sum+=above[(std::size_t(y*2+dy)*aboveSize+x*2+dx)*4+c];
-            level[(std::size_t(y)*size+x)*4+c]=std::uint8_t((sum+2)/4);
+            const unsigned mean=(sum+2)/4;level[(std::size_t(y)*size+x)*4+c]=std::uint8_t(c==3?(mean>=128?255u:0u):mean);
         }
         levels.push_back(std::move(level));
     }

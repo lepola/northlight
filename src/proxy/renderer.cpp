@@ -681,12 +681,11 @@ class Device final : public GuardedMirrorDevice {
         D3DSURFACE_DESC desc={};D3DVIEWPORT9 viewport={};if(!fullViewport(desc,&viewport))return;
         IDirect3DPixelShader9* ps=nullptr;struct PixelRelease {IDirect3DPixelShader9*& p;~PixelRelease(){drop(p);}} releasePS{ps};if(SUCCEEDED(ext->GetPixelShader(&ps))&&ps)water->capture(vs,ps,desc.Width,desc.Height,worldDepth,viewport,userPointer,mirrorState.invalidations,draw);
     }
-    // 0.3.192 BlobShadowStrength (blobStrength, read once at device creation): 100 = the filter is off and the
+    // 0.3.192 BlobShadowStrength (held by the filter, read once at device creation): 100 = the filter is off and the
     // game's blobs are drawn as they are; 0 = they are skipped (0.3.154..0.3.191); 1..99 = drawn with a lighter
-    // texture. Applies only while the mod draws actor shadows: effects (F10) and shadows (F9) on, a world
+    // texture (skipped when the game's blend cannot be lightened). Applies only while the mod draws actor shadows: effects (F10) and shadows (F9) on, a world
     // context, and 0.3.158 ActorShadows=1 (with 0 the game's blobs are the actor shadows).
-    unsigned blobStrength=100;
-    bool blobFilterActive()const{return blobStrength<100&&shadowBlobs&&enabled&&effectKeys.settings.shadows&&!applied&&terrain&&!failed&&world&&world->hasContext()&&world->actorShadowsEnabled();}
+    bool blobFilterActive()const{return shadowBlobs&&shadowBlobs->active()&&enabled&&effectKeys.settings.shadows&&!applied&&terrain&&!failed&&world&&world->hasContext()&&world->actorShadowsEnabled();}
     // 0.3.187 per-frame draw gates (draw_gates.h, FrameDrawGates=1): latched where every input can
     // rise, never inside a frame: at the end of finishFrameImpl (after F9/F10/F12, setEffects and the
     // retry's failed=false; clearFrame runs before that retry, so it is not the place), in Reset
@@ -696,7 +695,7 @@ class Device final : public GuardedMirrorDevice {
     LONGLONG* hookTimer=nullptr; /* &cpuDrawHooks on a timed RenderProfile sample frame (frame, gateUntimed: set before the latch) */
     void latchDrawGates(){
         NorthlightDrawGates::Inputs in;
-        in.sky=celestialDiscs!=nullptr;in.blobs=blobStrength<100&&shadowBlobs!=nullptr;in.world=world!=nullptr;in.enabled=enabled;in.failed=failed;
+        in.sky=celestialDiscs!=nullptr;in.blobs=shadowBlobs!=nullptr&&shadowBlobs->active();in.world=world!=nullptr;in.enabled=enabled;in.failed=failed;
         in.shadowsKey=effectKeys.settings.shadows;in.actorShadows=world&&world->actorShadowsEnabled();
         in.worldShadows=world&&world->shadowsRequested();in.debugOff=debugMode==0&&worldDebug==0;
         drawGates=NorthlightDrawGates::latch(frameDrawGates,in);
@@ -713,18 +712,20 @@ class Device final : public GuardedMirrorDevice {
         if(count<=4&&celestialDiscs&&enabled&&!applied&&celestialDiscs->nativeObservePossible(hr,t,count)){D3DSURFACE_DESC desc;if(fullViewport(desc))celestialDiscs->observeNativeDraw(hr,t,count,true);}
     }
     // 0.3.192 faint blob: planned inside the guarded claim, applied around the real draw (outside
-    // extensionWork, like the terrain shadow swap): texture 0 is the faint disc for the draw and the
-    // game's texture again after it. Both pointers are set or neither.
-    IDirect3DBaseTexture9* blobOriginal=nullptr;IDirect3DTexture9* blobFaint=nullptr;unsigned blobFaintDraws=0;
-    void dropBlobFaint(){if(blobOriginal)blobOriginal->Release();blobOriginal=nullptr;blobFaint=nullptr;}
-    void planBlobFaint(){
-        IDirect3DTexture9* faint=shadowBlobs->faintTexture();if(!faint)return;
-        IDirect3DBaseTexture9* original=nullptr;if(FAILED(ext->GetTexture(0,&original))||!original)return;
-        blobOriginal=original;blobFaint=faint;
+    // extensionWork, like the terrain shadow swap): texture 0 is shadowBlobs->faintTexture() for the draw and
+    // the game's texture again after it. blobOriginal is the AddRef'd texture claim() handed back; a plan
+    // holds it only when the faint texture exists.
+    IDirect3DBaseTexture9* blobOriginal=nullptr;unsigned blobFaintDraws=0;
+    void dropBlobFaint(){if(blobOriginal)blobOriginal->Release();blobOriginal=nullptr;}
+    void planBlobFaint(IDirect3DBaseTexture9* original){
+        if(!original)return;
+        if(!shadowBlobs->faintTexture()){original->Release();return;}
+        blobOriginal=original;
     }
     template<class Draw> HRESULT blobFaintDraw(bool claimed,Draw draw){
         if(!blobOriginal)return terrainShadowDraw(claimed,draw);
-        IDirect3DBaseTexture9* original=blobOriginal;IDirect3DTexture9* faint=blobFaint;blobOriginal=nullptr;blobFaint=nullptr;
+        IDirect3DBaseTexture9* original=blobOriginal;blobOriginal=nullptr;IDirect3DTexture9* faint=shadowBlobs->faintTexture();
+        if(!faint){const HRESULT plain=terrainShadowDraw(claimed,draw);original->Release();return plain;}
         const HRESULT hr=terrainShadowDraw(claimed,[&]{
             {CpuScope swap(sampledHookTimer());ext->SetTexture(0,faint);}
             const HRESULT result=draw();
@@ -734,9 +735,9 @@ class Device final : public GuardedMirrorDevice {
         return hr;
     }
     void blobFilter(UINT count,bool& claimed){
-        const NorthlightShadowBlobFilter::Claim verdict=blobClaim(count);
-        claimed=verdict==NorthlightShadowBlobFilter::Claim::Skip;
-        if(verdict==NorthlightShadowBlobFilter::Claim::Faint)planBlobFaint();
+        const NorthlightShadowBlobFilter::Result verdict=blobClaim(count);
+        claimed=verdict.claim==NorthlightShadowBlobFilter::Claim::Skip;
+        if(verdict.claim==NorthlightShadowBlobFilter::Claim::Faint)planBlobFaint(verdict.original);
         if(claimed&&blobSignatureReports<4){++blobSignatureReports;IDirect3DVertexShader9* bvs=nullptr;IDirect3DPixelShader9* bps=nullptr;ext->GetVertexShader(&bvs);ext->GetPixelShader(&bps);auto vi=vsHashes.find(bvs);auto pi=psHashes.find(bps);logf("SHADOWBLOB draw signature vs=%016llx ps=%016llx primitives=%u",(unsigned long long)(vi==vsHashes.end()?0:vi->second),(unsigned long long)(pi==psHashes.end()?0:pi->second),count);drop(bvs);drop(bps);}
     }
     // One game draw: capture, the native sky and blob claims, the real draw (outside every extension
@@ -771,9 +772,9 @@ class Device final : public GuardedMirrorDevice {
         return hr;
     }
     // 0.3.154: blob shadow claim with the profile frame's counts (claim() reads texture 0 for 1..256 primitives).
-    NorthlightShadowBlobFilter::Claim blobClaim(UINT count){
+    NorthlightShadowBlobFilter::Result blobClaim(UINT count){
         if(gateFrame){++gateCounts.blobCalls;if(count&&count<=256)++gateCounts.blobTextures;}
-        const auto verdict=shadowBlobs->claim(count);if(gateFrame&&verdict==NorthlightShadowBlobFilter::Claim::Skip)++gateCounts.blobClaimed;return verdict;
+        const auto verdict=shadowBlobs->claim(count);if(gateFrame&&verdict.claim==NorthlightShadowBlobFilter::Claim::Skip)++gateCounts.blobClaimed;return verdict;
     }
     void beforeDraw(IDirect3DVertexShader9* vs) {
         auto it=vsTags.find(vs); const int entry=it==vsTags.end()?0:it->second; int tag=entry&kTagMask;
@@ -858,7 +859,7 @@ public:
         mirrorState.gate.reportContext=this;mirrorState.gate.report=&gateForeignReport;
         parent->AddRef(); QueryPerformanceFrequency(&cpuFrequency); gpuProfile=std::make_unique<NorthlightGpuProfile>(ext); world=std::make_unique<WorldRenderer>(ext);world->setEffectsBuckets(&effectsBuckets);
         world->setConstantEpochSource({&mirrorState.constantEpoch,&mirrorState}); /* 0.3.180 (C1): read in place under the draw's gate */
-        char skyRoot[MAX_PATH*3];WideCharToMultiByte(CP_UTF8,0,rootPath,-1,skyRoot,sizeof skyRoot,nullptr,nullptr);celestialDiscs=std::make_unique<NorthlightCelestialDiscRenderer>(ext,std::string(skyRoot)+"world-cache/celestial");celestialDiscs->setTerrainSource([this]{return world->celestialTerrainGeneration();},[this](unsigned body,const float* matrix){return world->drawCelestialTerrain(body,matrix);},[this](unsigned body){world->noteCelestialTerrainReuse(body);});celestialDiscs->setIdentityMap([this](std::uintptr_t exposed){return mirrorResources.rawOf(exposed,!mirrorState.enabled);});blobStrength=world->blobShadowStrength();shadowBlobs=std::make_unique<NorthlightShadowBlobFilter>(ext,blobStrength);water=std::make_unique<NorthlightWaterRenderer>(ext); logf("D3D9 device wrapped. Ctrl+Shift+F7 fog; F8 GI; F9 shadows; F10 all effects; F12 world debug (all with Ctrl+Shift). F11 unassigned. Components start ON; GI cache stays warm.");
+        char skyRoot[MAX_PATH*3];WideCharToMultiByte(CP_UTF8,0,rootPath,-1,skyRoot,sizeof skyRoot,nullptr,nullptr);celestialDiscs=std::make_unique<NorthlightCelestialDiscRenderer>(ext,std::string(skyRoot)+"world-cache/celestial");celestialDiscs->setTerrainSource([this]{return world->celestialTerrainGeneration();},[this](unsigned body,const float* matrix){return world->drawCelestialTerrain(body,matrix);},[this](unsigned body){world->noteCelestialTerrainReuse(body);});celestialDiscs->setIdentityMap([this](std::uintptr_t exposed){return mirrorResources.rawOf(exposed,!mirrorState.enabled);});shadowBlobs=std::make_unique<NorthlightShadowBlobFilter>(ext,world->blobShadowStrength());water=std::make_unique<NorthlightWaterRenderer>(ext); logf("D3D9 device wrapped. Ctrl+Shift+F7 fog; F8 GI; F9 shadows; F10 all effects; F12 world debug (all with Ctrl+Shift). F11 unassigned. Components start ON; GI cache stays warm.");
         frameDrawGates=world->frameDrawGates();latchDrawGates(); /* 0.3.187: after the renderers exist */
         // The async sweep feeds the memory guard (always) and the periodic MEMORY line
         // (Diagnostics only). Allocation admission stays synchronous in WorldRenderer.

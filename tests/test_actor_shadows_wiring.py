@@ -80,7 +80,7 @@ checks['point: both replay loops and the count gated on withReplays']=(pb.count(
     and code(pb[gs:ge]).count('{')==code(pb[gs:ge]).count('}')+1
     and re.search(r'\breplays(\[|\.size\(\))',code(outside)) is None)
 # Blob filter: one helper for all four draw entry points, off with ActorShadows=0 (F9 keeps its meaning).
-helper='bool blobFilterActive()const{return blobStrength<100&&shadowBlobs&&enabled&&effectKeys.settings.shadows&&!applied&&terrain&&!failed&&world&&world->hasContext()&&world->actorShadowsEnabled();}'
+helper='bool blobFilterActive()const{return shadowBlobs&&shadowBlobs->active()&&enabled&&effectKeys.settings.shadows&&!applied&&terrain&&!failed&&world&&world->hasContext()&&world->actorShadowsEnabled();}'
 # 0.3.187: the four draw entry points share drawHook(); FrameDrawGates=0 and =1 both test the helper.
 checks['blob filter: one helper, every draw through drawHook']=(r.count(helper)==1 and r.count('if(!claimed&&blobFilterActive())extensionWork("blob shadow filter",[&]{blobFilter(count,claimed);});')==1
     and r.count('if(!claimed&&drawGates.blob){stage="blob shadow filter";if(blobFilterActive())blobFilter(count,claimed);}')==1 and r.count('return drawHook(t,count,')==4
@@ -90,15 +90,16 @@ checks['blob filter: one helper, every draw through drawHook']=(r.count(helper)=
 ini=fp.src('windows-package/northlight-quality.ini').read_text();readme=fp.src('windows-package/README.txt').read_text(encoding='utf-8')
 checks['ini and README document ActorShadows']=(';ActorShadows=1\n' in ini and '\nActorShadows=' not in ini and 'Allowed 0..1. 1 / 1 / 1' in ini[ini.index('; Actor shadows'):ini.index(';ActorShadows=1')]
     and 'ActorShadows          1 / 1 / 1      shadows of characters and moving objects (0 = static shadows only' in readme)
-# 0.3.192: the blob filter is kept but switched off at compile time; both uses of the constant are pinned.
+# 0.3.192: there is no compile-time switch; the strength is held by the filter, the Device asks it (blobFilterActive, the latch), and it is read from the quality settings once at device creation.
 bf=fp.src('shadow_blob_filter.h').read_text()
 bq=fp.src('quality_settings.h').read_text()
 checks['0.3.192 BlobShadowStrength: read once at device creation, gates blobFilterActive and the latched gate; no compile-time switch']=('HidesNativeBlobs' not in bf and 'HidesNativeBlobs' not in r
-    and 'unsigned blobShadowStrength=50;' in bq and 'blobStrength=world->blobShadowStrength();shadowBlobs=std::make_unique<NorthlightShadowBlobFilter>(ext,blobStrength);' in r
-    and 'in.blobs=blobStrength<100&&shadowBlobs!=nullptr;' in r and 'unsigned blobShadowStrength()const{return quality.blobShadowStrength>100?100:quality.blobShadowStrength;}' in w)
+    and 'unsigned blobShadowStrength=50;' in bq and 'shadowBlobs=std::make_unique<NorthlightShadowBlobFilter>(ext,world->blobShadowStrength());' in r and 'blobStrength' not in r
+    and 'in.blobs=shadowBlobs!=nullptr&&shadowBlobs->active();' in r and 'bool blobFilterActive()const{return shadowBlobs&&shadowBlobs->active()&&' in r
+    and 'unsigned blobShadowStrength()const{return quality.blobShadowStrength;}' in w and 'blobShadowStrength=0)' not in bf and 'strength(blobShadowStrength)' in bf)
 checks['0.3.192 filter: Skip at 0, Faint only under a modulate blend, faint texture A8R8G8B8 MANAGED, released in the destructor']=(
     'enum class Claim {None,Skip,Faint};' in bf and 'if(strength>=100||' in bf and 'op==D3DBLENDOP_ADD&&((src==D3DBLEND_DESTCOLOR&&dst==D3DBLEND_ZERO)||(src==D3DBLEND_ZERO&&dst==D3DBLEND_SRCCOLOR))' in bf
-    and 'D3DFMT_A8R8G8B8,D3DPOOL_MANAGED' in bf and '~NorthlightShadowBlobFilter(){release(faint);}' in bf and 'faintMipChain(strength)' in bf and 'blob shadow draws follow BlobShadowStrength' in bf)
+    and 'D3DFMT_A8R8G8B8,D3DPOOL_MANAGED' in bf and '~NorthlightShadowBlobFilter(){release(faint);}' in bf and 'faintMipChain(strength)' in bf and 'return {Claim::Skip};}   // 0.3.192: cannot lighten it' in bf and 'faintFailures++<3' in bf and 'frame-faintFailedFrame<600' in bf and 'guard.p=nullptr;return {Claim::Faint,bound};' in bf and 'blob shadow draws follow BlobShadowStrength' in bf)
 for name,ok in checks.items():print(('PASS ' if ok else 'FAIL ')+name)
 assert all(checks.values())
 print('PASS ActorShadows wiring: predicates reduce to freshReplays at 1; at 0 GI-only capture, no replay consumer, no deferral, forced keys; 0.3.192 BlobShadowStrength wiring')
