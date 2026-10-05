@@ -131,8 +131,9 @@ checks['runtime undo needs captured and earlyCaptured, clears captured, counts u
 checks['no SetRenderState and no resolve in the early/undo/census region']='SetRenderState' not in impl[dom:cap] and impl[dom:cap].count('resolveDepth()')==1
 checks['state reads include Z write, blend, src/dst, colour write, skinned']=all(x in impl[dom:cen] for x in ('D3DRS_ZWRITEENABLE','D3DRS_ALPHABLENDENABLE','D3DRS_SRCBLEND','D3DRS_DESTBLEND','D3DRS_COLORWRITEENABLE','isSkinnedShader(vs)'))
 hook=r[r.index('template<class Capture,class Draw> HRESULT drawHook('):][:3500]
+# 0.3.192: the real draw goes through blobFaintDraw (it wraps terrainShadowDraw) in both drawHook modes.
 checks['early block runs before the real draw (prepareDraw/prepareDrawImpl precede draw in both drawHook modes)']=(
-    hook.index('prepareDraw(capture);')<hook.index('terrainShadowDraw(claimed,draw)')<hook.index('prepareDrawImpl(capture);')<hook.rindex('terrainShadowDraw(claimed,draw)'))
+    hook.index('prepareDraw(capture);')<hook.index('blobFaintDraw(claimed,draw)')<hook.index('prepareDrawImpl(capture);')<hook.rindex('blobFaintDraw(claimed,draw)'))
 cf=r[r.index('void clearFrame() {'):r.index('void releaseResources()')]
 checks['clearFrame resets the latch and the census']='earlyDepth.reset()' in cf and 'resetTranslucentCensus()' in cf
 fin=r[r.index('void finishFrameImpl() {'):r.index('++frame;mirrorState.gate.frame')]

@@ -6,7 +6,7 @@ every replay (actor) shadow: model capture runs only for GI actor packets, no sh
 reads the replays of a GI frame (replayShadows), every map and cube is complete without them
 (replaysComplete, so nothing defers or demands a capture), the replay-derived keys are forced
 off at load (effective()). Blob shadows: the filter was bypassed at 0 only until 0.3.191; since
-0.3.192 it is off at both values (HidesNativeBlobs=false) and the game's blobs are drawn. ActorShadows=1:
+0.3.192 BlobShadowStrength (0..100) decides, at both values: 0 hides, 100 draws the game's blob, between a faint texture. ActorShadows=1:
 both predicates are exactly freshReplays, the replay blocks run as before. The decision and
 schedule model is exercised in test_quality_settings.cpp."""
 import sys; from pathlib import Path; sys.path.insert(0, str(Path(__file__).resolve().parents[1]))  # repo root
@@ -19,8 +19,8 @@ def code(text):return re.sub(r'/\*.*?\*/','',re.sub(r'//[^\n]*','',text),flags=r
 checks={}
 # Settings: key appended last (origin indices of the older keys unchanged), default 1 in every preset.
 keys=q[q.index('inline const Key Keys[]={'):q.index('};',q.index('inline const Key Keys[]={'))]
-# 0.3.187: FrameDrawGates is appended after it (Keys[30] stays ActorShadows); 0.3.190 appends ShadowPivotCorrection.
-checks['key last, 0..1, presets 1/1/1']=keys.rstrip().endswith('{"ActorShadows",&Settings::actorShadows,0,1,{1,1,1}},\n    {"FrameDrawGates",&Settings::frameDrawGates,0,1,{1,1,1}},\n    {"ShadowPivotCorrection",&Settings::shadowPivotCorrection,0,1,{1,1,1}},') and 'unsigned actorShadows=1;' in q and 'char origin[33]=' in q
+# 0.3.187: FrameDrawGates is appended after it (Keys[30] stays ActorShadows); 0.3.190 appends ShadowPivotCorrection; 0.3.192 appends BlobShadowStrength (last).
+checks['key last, 0..1, presets 1/1/1']=keys.rstrip().endswith('{"ActorShadows",&Settings::actorShadows,0,1,{1,1,1}},\n    {"FrameDrawGates",&Settings::frameDrawGates,0,1,{1,1,1}},\n    {"ShadowPivotCorrection",&Settings::shadowPivotCorrection,0,1,{1,1,1}},\n    {"BlobShadowStrength",&Settings::blobShadowStrength,0,100,{50,50,50}},') and 'unsigned actorShadows=1;' in q and 'char origin[34]=' in q
 checks['effective() forces exactly the two replay keys']=('inline Settings effective(Settings s){if(!s.actorShadows)for(const auto& k:ActorShadowForced)s.*k.field=0;return s;}' in q
     and 'inline const ForcedKey ActorShadowForced[]={\n    {"ShadowFateDiagnostics",' in q and 'persistentRigidProps' not in q and 'persistentCasters' not in q
     and '{"ShadowFateDiagnostics",&Settings::shadowFateDiagnostics},{"DiagReplayProbe",&Settings::diagReplayProbe}};' in q)
@@ -80,7 +80,7 @@ checks['point: both replay loops and the count gated on withReplays']=(pb.count(
     and code(pb[gs:ge]).count('{')==code(pb[gs:ge]).count('}')+1
     and re.search(r'\breplays(\[|\.size\(\))',code(outside)) is None)
 # Blob filter: one helper for all four draw entry points, off with ActorShadows=0 (F9 keeps its meaning).
-helper='bool blobFilterActive()const{return NorthlightShadowBlobFilter::HidesNativeBlobs&&shadowBlobs&&enabled&&effectKeys.settings.shadows&&!applied&&terrain&&!failed&&world&&world->hasContext()&&world->actorShadowsEnabled();}'
+helper='bool blobFilterActive()const{return blobStrength<100&&shadowBlobs&&enabled&&effectKeys.settings.shadows&&!applied&&terrain&&!failed&&world&&world->hasContext()&&world->actorShadowsEnabled();}'
 # 0.3.187: the four draw entry points share drawHook(); FrameDrawGates=0 and =1 both test the helper.
 checks['blob filter: one helper, every draw through drawHook']=(r.count(helper)==1 and r.count('if(!claimed&&blobFilterActive())extensionWork("blob shadow filter",[&]{blobFilter(count,claimed);});')==1
     and r.count('if(!claimed&&drawGates.blob){stage="blob shadow filter";if(blobFilterActive())blobFilter(count,claimed);}')==1 and r.count('return drawHook(t,count,')==4
@@ -88,12 +88,20 @@ checks['blob filter: one helper, every draw through drawHook']=(r.count(helper)=
     and 'bool actorShadowsEnabled()const{return quality.actorShadows!=0;}' in w)
 # Documentation: the shipped ini keeps the key commented (the file must still parse as Quality).
 ini=fp.src('windows-package/northlight-quality.ini').read_text();readme=fp.src('windows-package/README.txt').read_text(encoding='utf-8')
-checks['ini and README document the key']=(';ActorShadows=1\n' in ini and '\nActorShadows=' not in ini and 'Allowed 0..1. 1 / 1 / 1' in ini[ini.index('; Actor shadows'):ini.index(';ActorShadows=1')]
+checks['ini and README document ActorShadows']=(';ActorShadows=1\n' in ini and '\nActorShadows=' not in ini and 'Allowed 0..1. 1 / 1 / 1' in ini[ini.index('; Actor shadows'):ini.index(';ActorShadows=1')]
     and 'ActorShadows          1 / 1 / 1      shadows of characters and moving objects (0 = static shadows only' in readme)
 # 0.3.192: the blob filter is kept but switched off at compile time; both uses of the constant are pinned.
 bf=fp.src('shadow_blob_filter.h').read_text()
-checks['0.3.192 blob filter off: HidesNativeBlobs=false, gating blobFilterActive and the latched gate']=(bf.count('static constexpr bool HidesNativeBlobs=false;')==1 and r.count('NorthlightShadowBlobFilter::HidesNativeBlobs&&')==2
-    and r.count('in.blobs=NorthlightShadowBlobFilter::HidesNativeBlobs&&shadowBlobs!=nullptr;')==1)
+bq=fp.src('quality_settings.h').read_text()
+checks['0.3.192 BlobShadowStrength: read once at device creation, gates blobFilterActive and the latched gate; no compile-time switch']=('HidesNativeBlobs' not in bf and 'HidesNativeBlobs' not in r
+    and 'unsigned blobShadowStrength=50;' in bq and 'blobStrength=world->blobShadowStrength();shadowBlobs=std::make_unique<NorthlightShadowBlobFilter>(ext,blobStrength);' in r
+    and 'in.blobs=blobStrength<100&&shadowBlobs!=nullptr;' in r and 'unsigned blobShadowStrength()const{return quality.blobShadowStrength>100?100:quality.blobShadowStrength;}' in w)
+checks['0.3.192 filter: Skip at 0, Faint only under a modulate blend, faint texture A8R8G8B8 MANAGED, released in the destructor']=(
+    'enum class Claim {None,Skip,Faint};' in bf and 'if(strength>=100||' in bf and 'op==D3DBLENDOP_ADD&&((src==D3DBLEND_DESTCOLOR&&dst==D3DBLEND_ZERO)||(src==D3DBLEND_ZERO&&dst==D3DBLEND_SRCCOLOR))' in bf
+    and 'D3DFMT_A8R8G8B8,D3DPOOL_MANAGED' in bf and '~NorthlightShadowBlobFilter(){release(faint);}' in bf and 'faintMipChain(strength)' in bf and 'blob shadow draws follow BlobShadowStrength' in bf)
 for name,ok in checks.items():print(('PASS ' if ok else 'FAIL ')+name)
 assert all(checks.values())
-print('PASS ActorShadows wiring: predicates reduce to freshReplays at 1; at 0 GI-only capture, no replay consumer, no deferral, forced keys; 0.3.192 blob filter off (HidesNativeBlobs=false)')
+print('PASS ActorShadows wiring: predicates reduce to freshReplays at 1; at 0 GI-only capture, no replay consumer, no deferral, forced keys; 0.3.192 BlobShadowStrength wiring')
+ini2=ini[ini.index(';BlobShadowStrength=50')-1500:ini.index(';BlobShadowStrength=50')+30]
+assert ';BlobShadowStrength=50\n' in ini and '\nBlobShadowStrength=' not in ini and 'Allowed 0..100. 50 / 50 / 50' in ini2 and 'BlobShadowStrength   ' in readme
+print('PASS BlobShadowStrength documented in the ini and the README')

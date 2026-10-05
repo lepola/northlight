@@ -444,6 +444,15 @@ int main(){
         std::vector<std::string> p;assert(parse("[Quality]\nShadowPivotCorrection=2\n",nullptr,p)==d&&p.size()==1);
         assert(effective(off).shadowPivotCorrection==0&&effective(parse("[Quality]\nActorShadows=0\n")).shadowPivotCorrection==1);
         assert(describe(d).find(" FrameDrawGates=1(default) ShadowPivotCorrection=1(default)")!=std::string::npos&&describe(off).find(" ShadowPivotCorrection=0(file)")!=std::string::npos);}
+    // 0.3.192 BlobShadowStrength: 50 in the code default and every preset, 0..100, own last origin slot; ActorShadows=0 does not force it.
+    assert(d.blobShadowStrength==50&&preset(Preset::Balanced).blobShadowStrength==50&&preset(Preset::Performance).blobShadowStrength==50);
+    assert(std::string(Keys[33].name)=="BlobShadowStrength"&&Keys[33].field==&Settings::blobShadowStrength&&Keys[33].low==0&&Keys[33].high==100&&sizeof(Keys)/sizeof(Keys[0])==34);
+    for(unsigned v:{0u,1u,50u,99u,100u}){auto on=parse(("[Quality]\nBlobShadowStrength="+std::to_string(v)+"\n").c_str());assert(on.blobShadowStrength==v&&(on==d)==(v==50));
+        unsigned i=0;for(const auto& k:Keys){assert(on.origin[i]==(std::string(k.name)=="BlobShadowStrength"?'f':'d'));++i;}
+        assert(effective(on).blobShadowStrength==v&&effective(parse(("[Quality]\nActorShadows=0\nBlobShadowStrength="+std::to_string(v)+"\n").c_str())).blobShadowStrength==v);}
+    {std::vector<std::string> p;assert(parse("[Quality]\nBlobShadowStrength=101\n",nullptr,p)==d&&p.size()==1);
+     p.clear();assert(parse("[Quality]\nBlobShadowStrength=-1\n",nullptr,p)==d&&p.size()==1);
+     assert(describe(d).find(" ShadowPivotCorrection=1(default) BlobShadowStrength=50(default)")!=std::string::npos&&describe(parse("[Quality]\nBlobShadowStrength=0\n")).find(" BlobShadowStrength=0(file)")!=std::string::npos);}
     { /* effective(): the identity with ActorShadows=1 (any value of every key), with 0 only the two replay keys drop. */
       std::mt19937 er(158);
       for(int round=0;round<4000;++round){Settings s;s.preset=Preset(er()%3);unsigned i=0;

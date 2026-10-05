@@ -1,6 +1,7 @@
 #pragma once
 // Identifies the game's unit "blob" shadow decal by texture content and lets the
-// device wrapper skip those draws while the extension's own shadow maps are on.
+// device wrapper skip those draws (BlobShadowStrength=0) or draw them with a lighter
+// texture (1..99) while the extension's own shadow maps are on.
 // Include after logf(const char*, ...). Never wraps or retains game textures:
 // a verdict is cached per texture pointer, re-validated by level description on
 // every claim and by content every 600 frames to survive pointer reuse.
@@ -8,6 +9,7 @@
 #include <d3d9.h>
 #include <cstdint>
 #include <cstdlib>
+#include <cstring>
 #include <unordered_map>
 #include <vector>
 #include "actor_texture.h"
@@ -20,6 +22,9 @@ class NorthlightShadowBlobFilter {
     std::vector<std::uint8_t> raw,decoded;
     const std::vector<std::uint8_t> reference=NorthlightShadowBlobModel::referencePixels();   // ~10 us once, at construction
     unsigned frame=0,skippedThisFrame=0,skippedTotal=0,identified=0,unsupported=0,reported=0;
+    unsigned strength;                       // 0.3.192 BlobShadowStrength, read once at construction
+    IDirect3DTexture9* faint=nullptr;bool faintFailed=false;
+    unsigned faintThisFrame=0,faintTotal=0,statesLogged=0;
     static void release(IUnknown* p){if(p)p->Release();}
     bool contentMatches(IDirect3DTexture9* texture,const D3DSURFACE_DESC& desc){
         using Format=NorthlightActorTexture::Format;Format format;
@@ -49,25 +54,53 @@ class NorthlightShadowBlobFilter {
         v.width=desc.Width;v.height=desc.Height;v.format=desc.Format;
         if(desc.Width!=NorthlightShadowBlobModel::Width||desc.Height!=NorthlightShadowBlobModel::Height)return v;
         v.blob=contentMatches(texture,desc);
-        if(v.blob&&identified++<8)logf("SHADOWBLOB identified texture=%p %ux%u format=%u; native blob shadow draws are skipped while the extension is enabled",static_cast<void*>(base),desc.Width,desc.Height,unsigned(desc.Format));
+        if(v.blob&&identified++<8)logf("SHADOWBLOB identified texture=%p %ux%u format=%u; native blob shadow draws follow BlobShadowStrength=%u while the extension draws actor shadows (0 skipped, 1..99 lighter texture under modulate blend, 100 unchanged)",static_cast<void*>(base),desc.Width,desc.Height,unsigned(desc.Format),strength);
         return v;
     }
+    // 0.3.192: one lazily created A8R8G8B8 MANAGED texture (survives Reset) with the faint disc's mip chain.
+    // Null on failure (logged once); the caller then leaves the game's blob alone.
+    IDirect3DTexture9* ensureFaint(){
+        if(faint||faintFailed)return faint;
+        const auto levels=NorthlightShadowBlobModel::faintMipChain(strength);
+        IDirect3DTexture9* texture=nullptr;
+        HRESULT hr=d->CreateTexture(NorthlightShadowBlobModel::Width,NorthlightShadowBlobModel::Height,UINT(levels.size()),0,D3DFMT_A8R8G8B8,D3DPOOL_MANAGED,&texture,nullptr);
+        for(UINT level=0;SUCCEEDED(hr)&&texture&&level<levels.size();++level){
+            const UINT size=NorthlightShadowBlobModel::Width>>level;D3DLOCKED_RECT locked={};
+            hr=texture->LockRect(level,&locked,nullptr,0);if(FAILED(hr))break;
+            if(!locked.pBits||locked.Pitch<INT(size*4)){texture->UnlockRect(level);hr=E_FAIL;break;}
+            for(UINT row=0;row<size;++row)std::memcpy(static_cast<std::uint8_t*>(locked.pBits)+std::size_t(row)*unsigned(locked.Pitch),levels[level].data()+std::size_t(row)*size*4,size*4);
+            texture->UnlockRect(level);
+        }
+        if(FAILED(hr)||!texture){release(texture);faintFailed=true;logf("SHADOWBLOB faint texture unavailable hr=%08lx; native blob shadows are drawn unchanged",static_cast<unsigned long>(hr));return nullptr;}
+        faint=texture;return faint;
+    }
+    // The first identified draws log the states the faint swap depends on (confirms the modulate blend).
+    void logStates(UINT primitiveCount,bool accepted){
+        DWORD v[8]={};D3DRENDERSTATETYPE rs[7]={D3DRS_SRCBLEND,D3DRS_DESTBLEND,D3DRS_BLENDOP,D3DRS_ALPHATESTENABLE,D3DRS_ALPHAREF,D3DRS_ALPHABLENDENABLE,D3DRS_ALPHAFUNC};
+        for(int i=0;i<7;++i)d->GetRenderState(rs[i],&v[i]);
+        DWORD c0=0,a1=0,a2=0,ao=0,c1=0,fvf=0;
+        d->GetTextureStageState(0,D3DTSS_COLOROP,&c0);d->GetTextureStageState(0,D3DTSS_COLORARG1,&a1);d->GetTextureStageState(0,D3DTSS_COLORARG2,&a2);d->GetTextureStageState(0,D3DTSS_ALPHAOP,&ao);d->GetTextureStageState(1,D3DTSS_COLOROP,&c1);d->GetFVF(&fvf);
+        logf("SHADOWBLOB draw states srcBlend=%u destBlend=%u blendOp=%u alphaBlend=%u alphaTest=%u alphaRef=%u alphaFunc=%u stage0 colorOp=%u arg1=%u arg2=%u alphaOp=%u stage1 colorOp=%u fvf=0x%x primitives=%u strength=%u faintAccepted=%d",
+            unsigned(v[0]),unsigned(v[1]),unsigned(v[2]),unsigned(v[5]),unsigned(v[3]),unsigned(v[4]),unsigned(v[6]),unsigned(c0),unsigned(a1),unsigned(a2),unsigned(ao),unsigned(c1),unsigned(fvf),unsigned(primitiveCount),strength,accepted?1:0);
+    }
 public:
-    // 0.3.192: false = the game's blob shadows are drawn again (the filter is kept, not called).
-    // true = hide them while the mod draws actor shadows (0.3.154..0.3.191 behaviour).
-    static constexpr bool HidesNativeBlobs=false;
-    explicit NorthlightShadowBlobFilter(IDirect3DDevice9* device):d(device){}
+    enum class Claim {None,Skip,Faint};   // draw normally / skip the game's draw (strength 0) / draw with faintTexture()
+    explicit NorthlightShadowBlobFilter(IDirect3DDevice9* device,unsigned blobShadowStrength=0):d(device),strength(blobShadowStrength>100?100:blobShadowStrength){}
+    ~NorthlightShadowBlobFilter(){release(faint);}
     NorthlightShadowBlobFilter(const NorthlightShadowBlobFilter&)=delete;
     NorthlightShadowBlobFilter& operator=(const NorthlightShadowBlobFilter&)=delete;
     void reset(){verdicts.clear();}
-    void endFrame(){++frame;if(frame%600==0&&NorthlightDiagnostics::enabled()&&(skippedTotal||reported++<3))logf("SHADOWBLOB skippedThisFrame=%u skippedTotal=%u verdicts=%zu",skippedThisFrame,skippedTotal,verdicts.size());skippedThisFrame=0;
+    void endFrame(){++frame;if(frame%600==0&&NorthlightDiagnostics::enabled()&&(skippedTotal||faintTotal||reported++<3))logf("SHADOWBLOB skippedThisFrame=%u skippedTotal=%u faintThisFrame=%u faintTotal=%u verdicts=%zu",skippedThisFrame,skippedTotal,faintThisFrame,faintTotal,verdicts.size());skippedThisFrame=0;faintThisFrame=0;
         if(verdicts.size()>4096)verdicts.clear();}
-    // True when the draw about to be issued uses the blob shadow texture with
-    // alpha blending. The caller skips the native draw; nothing else changes.
-    bool claim(UINT primitiveCount){
-        if(!primitiveCount||primitiveCount>256)return false;
+    IDirect3DTexture9* faintTexture()const{return faint;}
+    // Skip: the draw about to be issued uses the blob shadow texture with alpha blending and the
+    // strength is 0; the caller skips the native draw. Faint (strength 1..99): same draw, with a
+    // modulate blend (ALPHABLENDENABLE, BLENDOP ADD, DESTCOLOR*ZERO or ZERO*SRCCOLOR); the caller
+    // binds faintTexture() to stage 0 around the draw. Anything else, or strength 100: None.
+    Claim claim(UINT primitiveCount){
+        if(strength>=100||!primitiveCount||primitiveCount>256)return Claim::None;
         IDirect3DBaseTexture9* bound=nullptr;
-        if(FAILED(d->GetTexture(0,&bound))||!bound)return false;
+        if(FAILED(d->GetTexture(0,&bound))||!bound)return Claim::None;
         struct Release {IDirect3DBaseTexture9* p;~Release(){release(p);}} guard{bound};
         auto it=verdicts.find(bound);
         if(it==verdicts.end()){it=verdicts.emplace(bound,evaluate(bound)).first;}
@@ -78,8 +111,15 @@ public:
                 if(!same||frame-v.checkedFrame>=600)v=evaluate(bound);
             }
         }
-        if(!it->second.blob)return false;
-        DWORD blend=0;if(FAILED(d->GetRenderState(D3DRS_ALPHABLENDENABLE,&blend))||!blend)return false;
-        ++skippedThisFrame;++skippedTotal;return true;
+        if(!it->second.blob)return Claim::None;
+        DWORD blend=0;if(FAILED(d->GetRenderState(D3DRS_ALPHABLENDENABLE,&blend))||!blend)return Claim::None;
+        if(!strength){if(statesLogged<2){++statesLogged;logStates(primitiveCount,false);}++skippedThisFrame;++skippedTotal;return Claim::Skip;}
+        DWORD op=0,src=0,dst=0;
+        const bool modulate=SUCCEEDED(d->GetRenderState(D3DRS_BLENDOP,&op))&&SUCCEEDED(d->GetRenderState(D3DRS_SRCBLEND,&src))&&SUCCEEDED(d->GetRenderState(D3DRS_DESTBLEND,&dst))
+            &&op==D3DBLENDOP_ADD&&((src==D3DBLEND_DESTCOLOR&&dst==D3DBLEND_ZERO)||(src==D3DBLEND_ZERO&&dst==D3DBLEND_SRCCOLOR));
+        const bool accepted=modulate&&ensureFaint()!=nullptr;
+        if(statesLogged<2){++statesLogged;logStates(primitiveCount,accepted);}
+        if(!accepted)return Claim::None;
+        ++faintThisFrame;++faintTotal;return Claim::Faint;
     }
 };

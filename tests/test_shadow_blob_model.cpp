@@ -88,6 +88,36 @@ int main(int argc,char** argv){
     unsigned rejected=0;for(auto& v:variants(model))rejected+=!accepted(v,model);
     assert(rejected>=100);
     std::printf("model: 32x32, %u opaque, BGRA8 round trip accepted, %u of %zu variants rejected\n",opaque,rejected,variants(model).size());
+    // 0.3.192 faint disc: s=100 is the reference, s=0 is white (no darkening) everywhere, alpha never changes, colour stays 255
+    // where alpha is 0, the grey follows 255-round(s*(255-grey)/100) and only gets lighter as s falls; the mip chain is 32..1, box filtered.
+    {using namespace NorthlightShadowBlobModel;
+     assert(faintPixels(100)==model&&faintPixels(250)==model);
+     const Pixels white=faintPixels(0);unsigned whiteOpaque=0;
+     for(std::size_t i=0;i<Bytes;i+=4){assert(white[i]==255&&white[i+1]==255&&white[i+2]==255&&white[i+3]==model[i+3]);whiteOpaque+=white[i+3]>0;}
+     assert(whiteOpaque==648);
+     unsigned previousSum=0;
+     for(unsigned strength=0;strength<=100;++strength){const Pixels f=faintPixels(strength);assert(f.size()==Bytes);unsigned sum=0;
+         for(std::size_t i=0;i<Bytes;i+=4){assert(f[i]==f[i+1]&&f[i]==f[i+2]&&f[i+3]==model[i+3]);
+             if(model[i+3]==0)assert(f[i]==255);
+             const int expected=255-int(std::lround(strength*(255-model[i])/100.0));assert(std::abs(int(f[i])-expected)<=0&&f[i]<=255);
+             sum+=255-f[i];}
+         assert(sum>=previousSum);previousSum=sum;}   // darker (more total darkness) as the strength rises
+     assert(faintPixels(50)[(15*32+15)*4]==255-int(std::lround(50*95/100.0)));  // centre grey 160 -> 207 or 208
+     for(unsigned strength:{0u,1u,25u,50u,99u,100u}){const auto chain=faintMipChain(strength);assert(chain.size()==6);
+         const unsigned sizes[6]={32,16,8,4,2,1};
+         for(unsigned level=0;level<6;++level)assert(chain[level].size()==std::size_t(sizes[level])*sizes[level]*4);
+         assert(chain[0]==faintPixels(strength));
+         for(unsigned level=1;level<6;++level){const unsigned size=sizes[level];
+             for(unsigned y=0;y<size;++y)for(unsigned x=0;x<size;++x)for(unsigned c=0;c<4;++c){
+                 unsigned sum=0;for(unsigned dy=0;dy<2;++dy)for(unsigned dx=0;dx<2;++dx)sum+=chain[level-1][(std::size_t(y*2+dy)*size*2+x*2+dx)*4+c];
+                 assert(chain[level][(std::size_t(y)*size+x)*4+c]==(sum+2)/4);}}
+         // Straight filtering: an edge texel never gets darker than its darkest source texel, and fully outside blocks stay 255.
+         for(unsigned level=1;level<6;++level)for(std::size_t i=0;i<chain[level].size();i+=4)assert(chain[level][i]>=*std::min_element(chain[0].begin(),chain[0].end()));
+         assert(chain[0][0]==255&&chain[1][0]==255&&chain[2][0]==255);   // the corner is outside the disc down to 4x4 texel blocks
+         if(strength==0)for(unsigned level=0;level<6;++level)for(std::size_t i=0;i<chain[level].size();i+=4)assert(chain[level][i]==255);
+         // The 1x1 level is the mean colour of the whole level 0 (within rounding of the 5 halvings).
+         double mean=0;for(std::size_t i=0;i<Bytes;i+=4)mean+=chain[0][i];mean/=Bytes/4;assert(std::abs(double(chain[5][0])-mean)<=2.5);}
+     std::printf("faint: s=100 is the reference, s=0 white, alpha unchanged, outside 255, mip chain 32..1 box filtered\n");}
     sixteenBit();
     // The model as A1R5G5B5 / A4R4G4B4 uploads is accepted. The filter's 16-bit formats
     // add no claims: through A1R5G5B5 every variant keeps its 8-bit verdict, and

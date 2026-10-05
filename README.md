@@ -21,7 +21,7 @@ Every effect below is on by default and is drawn on top of the game's own frame.
   a cached static layer for terrain, buildings, trees and props, and distant terrain shadows out to
   928 yards (up to 4096 in the zones listed in `shadow-range-profiles.ini`). Characters, creatures, mounts,
   doors, ships and other moving objects cast shadows too. The game's baked terrain shadows are
-  replaced, its round blob shadows under characters are kept, and where the sun is blocked the
+  replaced, its round blob shadows under characters are kept, fainter (`BlobShadowStrength`), and where the sun is blocked the
   game's painted sunlight is removed smoothly, without facet steps.
 - **Global illumination.** Sky light and bounced light from probes ray traced against the world
   geometry on a background thread, about 76 yards around the camera (52 in the Balanced and Performance
