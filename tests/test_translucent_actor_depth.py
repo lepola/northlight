@@ -145,7 +145,7 @@ checks['state reads cached per draw']='known=true' in impl
 checks['no TranslucentActorDepth setting']=all('ranslucentActorDepth' not in x for x in (r,q,w))
 rd_=r[r.index('bool resolveDepth() {'):r.index('HRESULT quad(UINT w')]
 checks['resolveDepth unchanged: SavedState and captured=true on success']='SavedState saved(ext,&stateBlocks);' in rd_ and 'captured = true; return true;' in rd_
-checks['banner']='translucent depth census; early depth for translucent actors;' in r and 'DXVK 3.1.1 default with 2.7.1 fallback; backend=' in r
+checks['banner']='translucent depth census; early depth for translucent actors; DXVK 3.1.1 default with 2.7.1 fallback; AO depth texel snap; shadow cascades follow camera zoom and collision; reduced terrain shadow reach under address-space pressure; backend=' in r
 ini=fp.src('windows-package/northlight-quality.ini').read_text();rm=fp.src('windows-package/README.txt').read_text()
 checks['docs: no setting in the ini or README']='TranslucentActorDepth' not in ini and 'TranslucentActorDepth' not in rm
 for n,ok in checks.items():print(('PASS ' if ok else 'FAIL ')+n)

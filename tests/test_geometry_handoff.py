@@ -42,7 +42,7 @@ SNAPSHOT
 HANDOFF
    ++enteredGI;consumed=r;
  }}
- bool failure(){Request r=request;
+ bool failure(){Request r=request;auto stallEnd=[](const char*){}; /* 0.3.190 memory stall episode log: not under test here */
 ERROR
   return publishError();
  }
