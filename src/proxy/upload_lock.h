@@ -14,7 +14,7 @@ namespace NorthlightUpload {
    returns the same mapped slice: same bytes, same image. Creation zero-fills a
    direct buffer synchronously (host-visible memset in D3D9Initializer::InitBuffer),
    so no queued command writes over the upload.
-   0.3.188: DXVK 3.x (d3d9_common_buffer.cpp DetermineMapMode) maps only DYNAMIC buffers
+   0.3.189: DXVK 3.x (d3d9_common_buffer.cpp DetermineMapMode) maps only DYNAMIC buffers
    directly; DEFAULT|WRITEONLY buffers use BUFFER mode with a persistent host-cached staging
    copy. Lock skips the CS wait anyway (skipWait = !needsReadback && !directMapping) and
    Unlock copies through FlushBuffer (staging + ThrottleAllocation). NOOVERWRITE is kept for

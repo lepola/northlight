@@ -73,7 +73,7 @@ def audit():
     # 0.3.175: DXVK_ASYNC is never set (the runtime's own setting applies); vendor/buffer defaults only for Backend=dxvk.
     assert 'DXVK_ASYNC' not in src.replace('DXVK_ASYNC is left to the runtime','')
     assert 'if(NorthlightBackend::isPackagedDxvk(kind))configureDxvkCompatibility(info);' in loader and src.count('configureDxvkCompatibility(')==2
-    # 0.3.188: both option names (2.x / >=3.0), dxvk2 shares the DXVK rules, default-path dxvk falls back to dxvk2 once.
+    # 0.3.189: both option names (2.x / >=3.0), dxvk2 shares the DXVK rules, default-path dxvk falls back to dxvk2 once.
     compat=fp.src('dxvk_compatibility.h').read_text()
     assert 'd3d9.cachedDynamicBuffers = True' in compat and 'd3d9.cachedWriteOnlyBuffers = True' in compat and 'd3d9.customVendorId = 1002' in compat
     assert 'L"renderer-backends\\\\dxvk2\\\\dxvk2_d3d9.dll"' in policy and 'isPackagedDxvk(configured)' in src
@@ -82,7 +82,7 @@ def audit():
     proc=src[src.index('template<class T> static T procedure'):src.index('#define NORTHLIGHT_EXPORT')]
     assert proc.count('backend()')==1 and 'GetModuleHandle' not in proc and 'Module' not in proc.replace('HMODULE','')
     assert 'configured==NorthlightBackend::Kind::Dxvk&&overridden.empty()' in src
-    # 0.3.188 crash marker: ONE shared helper writes it, calls the backend, clears it only on a good result.
+    # 0.3.189 crash marker: ONE shared helper writes it, calls the backend, clears it only on a good result.
     assert 'renderer-backends\\\\dxvk\\\\northlight-dxvk3-init.pending' in policy
     assert src.count('dxvkInitProbe(')==3 and src.count('dxvkInitMarkerWrite()')==2   # definition + call inside the helper, one probe call per export
     for call,ex in [('IDirect3D9* p=nullptr;','Direct3DCreate9(UINT'),('HRESULT hr=S_OK;','Direct3DCreate9Ex(UINT')]:
@@ -98,7 +98,7 @@ def audit():
     assert src.index('static void dxvkInitMarkerWrite')>src.index('static HMODULE recursionBackend')
     # Marker content binds it to the DXVK 3 build; reparse-point folders are neither written nor honoured.
     w=src[src.index('static void dxvkInitMarkerWrite'):src.index('struct DxvkInitResult')]
-    assert '"Northlight 0.3.188 DXVK3 init sha256="+dxvk3Sha+"\\r\\n"' in w and 'dxvk3FolderReparse(root)' in w and 'reparse point' in w
+    assert '"Northlight 0.3.189 DXVK3 init sha256="+dxvk3Sha+"\\r\\n"' in w and 'dxvk3FolderReparse(root)' in w and 'reparse point' in w
     assert 'FILE_ATTRIBUTE_REPARSE_POINT' in src and src.count('FILE_ATTRIBUTE_REPARSE_POINT')==1
     be=src[src.index('static HMODULE backend()'):src.index('static HMODULE recursionBackend')]
     assert 'dxvkInitMarkerWrite' not in be and 'DeleteFile' not in be and 'dxvkInitProbe' not in be

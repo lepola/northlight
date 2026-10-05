@@ -32,6 +32,7 @@
 #include "render_thread_probe.h"
 #include "effects_buckets.h"
 #include "draw_gates.h"
+#include "translucent_depth.h"
 #include "log_rotation.h"
 #include "memory_guard.h"
 #include "northlight_mem.h"
@@ -293,6 +294,15 @@ class Device final : public GuardedMirrorDevice {
     unsigned drawCalls=0, missingVS=0, terrainDraws=0, terrainShadowDraws=0, viewportRejects=0, depthRejects=0, uiDraws=0, uiAfterTerrain=0;
     unsigned viewportReports=0;
     unsigned postEffectWorldDraws=0,postEffectSkinnedDraws=0;
+    // 0.3.188 (task 3): per-sample-frame census of the early depth resolve, read-only, logged as TRANSLUCENT. Positions are 1-based census draw
+    // indices (0 = none), over the whole frame (with a Clear(Z) between world passes read them against clearResolve): lastOpaqueZ is the last
+    // non-water Z-writing draw writing RGB effectively opaque (the undo rule); clearResolve marks a Clear(Z)-triggered resolve.
+    unsigned censusDraws=0,lastOpaqueZAt=0,clearResolveAt=0;
+    // 0.3.188 (task 3) early depth for translucent actors (translucent_depth.h), always on: the depth resolve runs before the first translucent skinned Z-writing draw.
+    // Undo: while earlyDepth.earlyCaptured and `captured`, a terrain draw (beforeDraw) or a later effectively opaque Z+RGB or water Z draw (prepareDrawImpl) clears `captured`,
+    // so the UI-time resolve redoes the depth, counts earlyResolveUndone and re-arms the latch (capped at Frame::kMaxAttempts per frame). A Clear(Z) resolve sets `captured` without earlyCaptured, so it is never counted.
+    unsigned earlyResolves=0,earlyResolveAt=0,earlyResolveTotal=0,earlyResolveUndone=0,earlyResolveUndoneTotal=0;NorthlightTranslucentDepth::Frame earlyDepth;
+    void resetTranslucentCensus(){censusDraws=lastOpaqueZAt=clearResolveAt=earlyResolves=earlyResolveAt=earlyResolveUndone=0;}
     LONGLONG cpuPrep=0,cpuCapture=0,cpuWaterCapture=0,cpuEffects=0,cpuMirrorAudit=0;
     NorthlightEffectsBuckets::Frame effectsBuckets;bool effectsBucketed=false; /* 0.3.175 (S3): this sample frame's effects split */
     unsigned long long cpuCaptureReads=0; /* 0.3.150: timer clock reads inside cpuCapture, sample frames (an outer pair adds one) */
@@ -338,7 +348,7 @@ class Device final : public GuardedMirrorDevice {
         if(!applied||failed)stateBlocks.clear();
         if(!enabled||extensionFault){stateBlocks.clear();if(world)world->releaseStateCache();if(water)water->releaseStateCache();}
         if(world)world->endFrame(!extensionFault);if(water)water->endFrame();if(celestialDiscs)celestialDiscs->endFrame();if(shadowBlobs)shadowBlobs->endFrame();
-        drop(worldDepth); terrain = captured = applied = projectionValid = false;
+        drop(worldDepth); terrain = captured = applied = projectionValid = false;earlyDepth.reset();resetTranslucentCensus(); /* the TRANSLUCENT line is logged before clearFrame */
     }
     void releaseResources() {
         stateBlocks.clear();clearFrame();
@@ -610,6 +620,15 @@ class Device final : public GuardedMirrorDevice {
             const bool worldDomain=statesRead&&NorthlightWorldDrawDomain::accepts(projectionValid,depthEnabled!=FALSE,
                 worldMinDepth,worldMaxDepth,viewport.MinZ,viewport.MaxZ);
             if(worldDomain){if(gateFrame)++gateCounts.capture;
+                /* 0.3.188 (task 3): lazy state reads for the early resolve, its undo and the census, each read at most once per draw */
+                auto rs=[&](D3DRENDERSTATETYPE t){return [this,t,v=DWORD(0),known=false]()mutable{if(!known){ext->GetRenderState(t,&v);known=true;}return v;};};
+                auto zw=rs(D3DRS_ZWRITEENABLE);auto ab=rs(D3DRS_ALPHABLENDENABLE);auto sb=rs(D3DRS_SRCBLEND);auto db=rs(D3DRS_DESTBLEND);auto cw=rs(D3DRS_COLORWRITEENABLE);
+                if(captured&&earlyDepth.earlyCaptured&&NorthlightTranslucentDepth::isUndo(drawWaterVS,zw,ab,sb,db,cw)){captured=false;earlyDepth.undo();++earlyResolveUndone;++earlyResolveUndoneTotal;} /* undo: later opaque or water Z draw after the early resolve */
+                if(terrain&&!captured&&earlyDepth.armed()&&NorthlightTranslucentDepth::shouldResolve(drawWaterVS,zw,ab,sb,db,cw,[&]{return world->isSkinnedShader(vs);})&&earlyDepth.attempt()){ /* 0.3.188 (2A): early depth for translucent actors, every frame, minimum state reads */
+                    ExtensionDevice::RawScope raw(*ext);
+                    if(resolveDepth()){earlyDepth.success();++earlyResolves;++earlyResolveTotal;if(sampled())earlyResolveAt=censusDraws+1;}}
+                if(sampled()){const unsigned at=++censusDraws; /* 0.3.188 (task 3): read-only census before capture(vs) so no early return hides a draw; sample frames only */
+                    if(!drawWaterVS&&NorthlightTranslucentDepth::opaqueZWrite(zw,ab,sb,db,cw))lastOpaqueZAt=at;}
                 {const unsigned long long reads=CpuScope::reads;{CpuScope cap(sampledDrawTimers()?&cpuCapture:nullptr);capture(vs);}if(CpuScope::reads!=reads)cpuCaptureReads+=CpuScope::reads-reads-1;}
                 if(mirrorState.active()&&mirrorAuditSchedule.afterWorldCapture(frame,
                     mirrorState.vsFloatKnown[0]&&mirrorState.vsFloatKnown[DeviceMirror::VsFloat-1])){
@@ -756,6 +775,7 @@ class Device final : public GuardedMirrorDevice {
                 logf("DISABLED: unsupported world depth format %u",unsigned(dd.Format));failed=true;drop(ds);return;
             }
             drop(worldDepth); worldDepth=ds;
+            if(captured&&earlyDepth.earlyCaptured){earlyDepth.undo();++earlyResolveUndone;++earlyResolveUndoneTotal;} /* 0.3.188 (2A): a terrain draw after the early resolve: the UI-time resolve redoes it */
             terrain=true; captured=false;
             resources(desc.Width,desc.Height,desc.Format);
             if(gateFrame)++gateCounts.fullPasses;
@@ -983,6 +1003,7 @@ public:
         // Read before clearFrame() resets the water renderer's frame counters.
         const unsigned waterDraws=water?water->frameCaptures():0,waterScans=water?water->frameMaskScans():0,waterClears=water?water->frameClears():0,waterReadFailures=water?water->frameReadFailures():0;
         if(sampled())logf("EFFECT trailing world frame=%u worldDraws=%u skinnedDraws=%u",frame,postEffectWorldDraws,postEffectSkinnedDraws);
+        if(sampled())logf("TRANSLUCENT frame=%u draws=%u lastOpaqueZ=%u clearResolve=%u earlyResolve=%u earlyResolveAt=%u earlyResolveTotal=%u earlyResolveUndone=%u earlyResolveUndoneTotal=%u",frame,censusDraws,lastOpaqueZAt,clearResolveAt,earlyResolves,earlyResolveAt,earlyResolveTotal,earlyResolveUndone,earlyResolveUndoneTotal);
         postEffectWorldDraws=postEffectSkinnedDraws=0;
         const bool sampledFrame=sampled(),frameApplied=applied;
         {CpuScope cpu(sampledFrame?&cleanup:nullptr);clearFrame();}
@@ -1080,9 +1101,10 @@ public:
         return hr;
     }
     HRESULT STDMETHODCALLTYPE Clear(DWORD n,const D3DRECT* rects,DWORD flags,D3DCOLOR color,float z,DWORD stencil) override { Guard mirrorLock(mirrorState.gate);
-        if ((flags&D3DCLEAR_ZBUFFER)&&terrain&&!captured&&!applied&&enabled&&!failed) {
+        if ((flags&D3DCLEAR_ZBUFFER)&&terrain&&(!captured||earlyDepth.earlyCaptured)&&!applied&&enabled&&!failed) {
             IDirect3DSurface9* ds=nullptr;ext->GetDepthStencilSurface(&ds);
-            if(ds==worldDepth)resolveDepth();drop(ds);
+            /* 0.3.188 (task 3): a Clear(Z) after the early resolve freezes it (no later undo would find the cleared depth useful); census position of either */
+            if(ds==worldDepth&&(captured?(earlyDepth.freeze(),true):resolveDepth())&&sampled()&&!clearResolveAt)clearResolveAt=censusDraws+1;drop(ds);
         }
         return ext->Clear(n,rects,flags,color,z,stencil);
     }
@@ -1202,7 +1224,7 @@ static void configureDxvkCompatibility(const NorthlightBackendLoader::Inspection
         const auto combined=NorthlightDxvkCompatibility::config(existing);
         const BOOL set=SetEnvironmentVariableA("DXVK_CONFIG",combined.c_str());
         // DXVK 1.10.x reads only dxvk.conf/DXVK_CONFIG_FILE: the variable is then inert.
-        // 0.3.188: DXVK 2.x reads cachedDynamicBuffers, >=3.0 cachedWriteOnlyBuffers; each ignores the other's key.
+        // 0.3.189: DXVK 2.x reads cachedDynamicBuffers, >=3.0 cachedWriteOnlyBuffers; each ignores the other's key.
         logf("DXVK compatibility process defaults applied=%u vendor=1002 cachedDynamicBuffers(2.x)=True cachedWriteOnlyBuffers(>=3.0)=True explicitInlineOverrides=%u dxvk=%s DXVK_CONFIG supported=%u",
              unsigned(set!=FALSE),unsigned(!existing.empty()),info.dxvkVersion.empty()?"unknown":info.dxvkVersion.c_str(),unsigned(info.dxvkConfigEnv));
     }catch(...){logf("DXVK compatibility defaults unavailable: allocation failure");}
@@ -1291,7 +1313,7 @@ static void logProxyPlacement(Win32BackendSys& sys,const std::wstring& root,cons
     if(loaded&&gameSha!=backendAttempt.info.sha256)
         logf("GAME WARNING: the game-folder d3d9.dll differs from the backend copy (launcher update or backend switch?). The renderer keeps using %ls.",backendAttempt.path.c_str());
 }
-// 0.3.188 dxvk -> dxvk2 fallback by crash marker (see dxvkInitProbe): DXVK 3 throws out of Direct3DCreate9
+// 0.3.189 dxvk -> dxvk2 fallback by crash marker (see dxvkInitProbe): DXVK 3 throws out of Direct3DCreate9
 // when no adapter passes its device checks. Armed by backend() for the default-path Backend=dxvk only and
 // claimed once per process by the first outer export; there is no in-process runtime swap.
 static std::atomic<bool> dxvk3Probe{false};
@@ -1321,7 +1343,7 @@ static HMODULE backend() {
     Win32BackendSys sys(configured);
     const std::wstring root(rootPath),system=systemD3d9(),overridden=NorthlightBackend::overridePath(custom,root);
     const auto candidates=NorthlightBackend::candidates(configured,overridden,root,systemDirectory());
-    // 0.3.188: a surviving DXVK 3 init marker (the last start ended in a failed DXVK 3 start) naming the sha256 of
+    // 0.3.189: a surviving DXVK 3 init marker (the last start ended in a failed DXVK 3 start) naming the sha256 of
     // the current dxvk_d3d9.dll selects dxvk2 for default-path Backend=dxvk. Read-only; a marker for another
     // build is ignored (the next write replaces it); nothing is read inside a reparse-point folder.
     const std::wstring marker=NorthlightBackend::dxvkInitMarker(root);
@@ -1341,7 +1363,7 @@ static HMODULE backend() {
     // Only DXVK keeps the legacy (unchecked, no RESZ dummy draw) rules; every
     // other runtime, including the system fallback, gets the native rules.
     if(module&&(result.fallback||(configured==NorthlightBackend::Kind::Legacy&&!last.info.dxvk)))selectedBackend=NorthlightBackend::Kind::Native;
-    logf("Northlight renderer 0.3.188; reference sun look (sun glow hue from native/sunHalo band, soft-shoulder glare, veil, sun-tinted haze), native sun/moon suppressed (F1b), lamps dimmed to 30 pct in direct sun, native moon02 skipped by texture identity, no game bytes in the DLL, MEMREAD self-read profile (RenderProfile), soft sun removal in shadow, jump-stable shadow anchor, geometry coverage hold with travel lead, steadier animated shadow edges (near 5x5 tent, still-camera shadow history), native blob shadows identified in 16-bit A1R5G5B5 uploads, bilinear lighting history, near capture reserve for the player and companions, remembered rigid prop shadows (drawn-by-game states, windowed held), AO and bloom folded into the world composite, ground normals reject object tops, both wide samples, batched celestial terrain mask, DXVK async left to the runtime, render-thread terrain upload and rigid bookkeeping trims, moon without the horizon stall, art layer bands retimed to the sun and moon, actor prepare on a worker, trimmed prepare handoff, in-place capture constants, gate thread census, predicted snapshot lookups, word-wise memcmp, owner-thread gate elision; abandoned-frame prepare quarantine; removal smoothing on matching normals in its own pass (35/50 degree gate); per-frame draw gates; DXVK 3.1.1 default with 2.7.1 fallback; backend=%s path=%ls loaded=%d error=%lu",
+    logf("Northlight renderer 0.3.189; reference sun look (sun glow hue from native/sunHalo band, soft-shoulder glare, veil, sun-tinted haze), native sun/moon suppressed (F1b), lamps dimmed to 30 pct in direct sun, native moon02 skipped by texture identity, no game bytes in the DLL, MEMREAD self-read profile (RenderProfile), soft sun removal in shadow, jump-stable shadow anchor, geometry coverage hold with travel lead, steadier animated shadow edges (near 5x5 tent, still-camera shadow history), native blob shadows identified in 16-bit A1R5G5B5 uploads, bilinear lighting history, near capture reserve for the player and companions, remembered rigid prop shadows (drawn-by-game states, windowed held), AO and bloom folded into the world composite, ground normals reject object tops, both wide samples, batched celestial terrain mask, DXVK async left to the runtime, render-thread terrain upload and rigid bookkeeping trims, moon without the horizon stall, art layer bands retimed to the sun and moon, actor prepare on a worker, trimmed prepare handoff, in-place capture constants, gate thread census, predicted snapshot lookups, word-wise memcmp, owner-thread gate elision; abandoned-frame prepare quarantine; removal smoothing on matching normals in its own pass (35/50 degree gate); per-frame draw gates; translucent depth census; early depth for translucent actors; DXVK 3.1.1 default with 2.7.1 fallback; backend=%s path=%ls loaded=%d error=%lu",
          NorthlightBackend::name(configured),last.path.c_str(),module!=nullptr,module?0ul:(last.error?last.error:(unsigned long)ERROR_INVALID_PARAMETER));
     logAttempts(result.attempts);
     logHostExecutable(sys.selfPath);
@@ -1377,7 +1399,7 @@ static HMODULE recursionBackend() {
     }();
     return cached;
 }
-// 0.3.188: crash marker around the armed dxvk Direct3DCreate9/Ex. DXVK 3 throws out of it (process dies) or
+// 0.3.189: crash marker around the armed dxvk Direct3DCreate9/Ex. DXVK 3 throws out of it (process dies) or
 // returns null / no adapters when no device passes its checks. Written before the call; cleared only when the
 // result is good, otherwise left so the next start loads dxvk2 (backend() honours it when it names the current
 // dxvk_d3d9.dll sha256). Best effort. Not part of Win32BackendSys (that range stays read-only).
@@ -1386,7 +1408,7 @@ static void dxvkInitMarkerWrite(){
     if(dxvk3FolderReparse(root)){logf("BACKEND DXVK 3 marker not written: %ls is a reparse point (a DXVK 3 start failure cannot be remembered)",dxvk3Folder(root).c_str());return;}
     HANDLE h=CreateFileW(path.c_str(),GENERIC_WRITE,FILE_SHARE_READ|FILE_SHARE_DELETE,nullptr,CREATE_ALWAYS,FILE_ATTRIBUTE_NORMAL,nullptr);
     if(h==INVALID_HANDLE_VALUE){logf("BACKEND FALLBACK marker not written: %ls error=%lu (a DXVK 3 start failure cannot be remembered)",path.c_str(),(unsigned long)GetLastError());return;}
-    const std::string line="Northlight 0.3.188 DXVK3 init sha256="+dxvk3Sha+"\r\n";DWORD got=0;
+    const std::string line="Northlight 0.3.189 DXVK3 init sha256="+dxvk3Sha+"\r\n";DWORD got=0;
     WriteFile(h,line.data(),DWORD(line.size()),&got,nullptr);CloseHandle(h);
 }
 struct DxvkInitResult{IDirect3D9* raw;HRESULT hr;};

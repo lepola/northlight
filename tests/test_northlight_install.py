@@ -581,7 +581,7 @@ class WindowsInstall(Install):
         """The proxy's marker line; by default for the package's current DXVK 3 build."""
         sha = sha or hashlib.sha256(b'MZ DXVK: \0v3.1.1\0').hexdigest()
         m = self.client / self.MARKER
-        m.parent.mkdir(parents=True, exist_ok=True); m.write_bytes(f'Northlight 0.3.188 DXVK3 init sha256={sha}\r\n'.encode())
+        m.parent.mkdir(parents=True, exist_ok=True); m.write_bytes(f'Northlight 0.3.189 DXVK3 init sha256={sha}\r\n'.encode())
         return m
 
     def test_marker_for_another_dxvk3_build_gets_a_retry_note(self):
