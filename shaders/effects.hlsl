@@ -58,12 +58,17 @@ float3 SafeNormal(float3 n)
 // POINT sampling depends on GPU interpolation rounding and can flip from row to row.
 // +0.25: in the half-res pass uv*size is about 2i+1 and picks texel 2i+1 unambiguously (the nominal
 // texel of depthUV() in world_effects.hlsl); in a full-res pass uv*size is j+.5 and picks j.
-float2 DepthTexelUV(float2 uv)
+// Odd sizes: w/2 truncates, so uv*size drifts from 2i+1; where its fraction passes .75 (the last
+// quarter of columns/rows) the snap picks 2i+2 while depthUV() keeps 2i+1, and one row/column there
+// is a near-tie. Both are single neighbouring texels of the same surface, not a zero tangent.
+// size = 1/ImageAndClip.xy (the caller's, computed once).
+float2 DepthTexelUV(float2 uv, float2 size)
 {
     // (floor(t) + .5) / size with t = uv*size + .25, written as uv + (.75 - frac(t)) / size (slot
     // budget). The centre is kept one texel inside every edge, so CLAMP never folds SurfaceNormal's
-    // +-1 neighbour onto it (a zero tangent on the last column/row would give a camera-facing normal).
-    uv = mad(0.75 - frac(mad(uv, 1.0 / ImageAndClip.xy, 0.25)), ImageAndClip.xy, uv);
+    // +-1 neighbour onto it (a tangent in the camera plane on the last column/row would give a
+    // camera-facing normal).
+    uv = mad(0.75 - frac(mad(uv, size, 0.25)), ImageAndClip.xy, uv);
     return clamp(uv, 1.5 * ImageAndClip.xy, 1.0 - 1.5 * ImageAndClip.xy);
 }
 
@@ -80,10 +85,6 @@ float3 SurfaceNormal(float2 uv, float3 p)
     // derivative across the foreground/background depth discontinuity.
     float3 tx = abs(r.z - p.z) < abs(p.z - l.z) ? r - p : p - l;
     float3 ty = abs(b.z - p.z) < abs(p.z - u.z) ? b - p : p - u;
-    // 0.3.189: a zero-length tangent (neighbour resolved to the centre texel) would fall back to a
-    // camera-facing normal and turn ground taps into occluders (dark AO row); span both sides instead.
-    // Vertical only (slot budget): the rows are the half-res pass's ambiguous axis on flat ground.
-    ty = dot(ty, ty) < 1e-14 ? b - u : ty;
     return SafeNormal(cross(tx, ty));
 }
 
@@ -91,7 +92,8 @@ float4 AOImpl(float2 uv, bool colorBounce)
 {
     // 0.3.189: the centre, its normal neighbours and the noise rotation use one explicit depth texel;
     // kernel taps (suv) stay unsnapped.
-    uv = DepthTexelUV(uv);
+    float2 size = 1.0 / ImageAndClip.xy;
+    uv = DepthTexelUV(uv, size);
     float d = ReadDepth(uv);
     if (d >= SKY_DEPTH || IsWater(uv,d))
         return float4(0, 0, 0, 1);
@@ -108,7 +110,7 @@ float4 AOImpl(float2 uv, bool colorBounce)
     // (hands, shoulders) onto the ground at each tap offset as faint ghost
     // shadows; rotation turns those copies into fine noise the composite's
     // depth/normal filter averages away.
-    float2 pixel = uv / ImageAndClip.xy;
+    float2 pixel = uv * size; // the snapped texel's centre
     float2 rot = frac(float2(52.9829189, 37.4136) * frac(dot(pixel, float2(0.06711056, 0.00583715)))) * 2.0 - 1.0;
     rot *= rsqrt(max(dot(rot, rot), 1e-4));
     float2 axisX = rot * uvRadius, axisY = float2(-rot.y, rot.x) * uvRadius;
@@ -206,7 +208,9 @@ float4 Composite(float2 uv : TEXCOORD0) : COLOR0
     float2 ambientSize = max(floor(0.5 / ImageAndClip.xy + 0.01), float2(1, 1));
     float2 ambientTexel = 1.0 / ambientSize;
     // 0.3.189: an ambient texel centre is a full-resolution texel boundary; a quarter full-res texel
-    // inward makes the depth and NeighbourNormal reads there pick one texel on every GPU.
+    // inward makes the depth and NeighbourNormal reads there pick one texel on every GPU at even
+    // sizes. Odd sizes drift the tap toward a boundary near three quarters across (a near-tie there);
+    // depth and NeighbourNormal move together and both candidates lie in the same ambient texel.
     float2 ambientCenter = mad(floor(uv * ambientSize) + 0.5, ambientTexel, 0.25 * ImageAndClip.xy);
     static const float2 taps[5] = {
         float2(0, 0), float2(-1, 0), float2(1, 0),
