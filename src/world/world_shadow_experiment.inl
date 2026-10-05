@@ -50,6 +50,7 @@
                 for(const auto& item:shadowCandidates)replays[item.index]->shadowSelected=item.keep;
             }
             else if(NorthlightActorShadowSelection::Enabled){if(budget)actorShadowHistory.keptAll();else actorShadowHistory.clear();}
+            if(stableRan){pivotSelfCaptured=stable.radiusSelf==1;pivotSelfFrame=frames;} /* 0.3.190: the self was captured in this selection (not merely held) */
             if(stable.actors+stable.rigidActors){result.kept=stable.kept;result.dropped=stable.dropped;result.keptBytes=stable.keptBytes;result.droppedBytes=stable.droppedBytes;result.unknown=stable.unknown;}
             // Do not destroy excluded constant-bank owners. GI has already
             // copied its packets; shadows alone see this reduced, ordered list.

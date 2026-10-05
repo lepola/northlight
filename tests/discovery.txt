@@ -92,6 +92,7 @@ test_shadow_blob_client.py
 test_shadow_blob_model.py
 test_shadow_experiment.py
 test_shadow_layer_analysis.py
+test_shadow_pivot.py
 test_shadow_removal_smoothing.py
 test_shadow_shimmer.py
 test_snapshot_allocation.py
