@@ -14,6 +14,11 @@ namespace NorthlightUpload {
    returns the same mapped slice: same bytes, same image. Creation zero-fills a
    direct buffer synchronously (host-visible memset in D3D9Initializer::InitBuffer),
    so no queued command writes over the upload.
+   0.3.189: DXVK 3.x (d3d9_common_buffer.cpp DetermineMapMode) maps only DYNAMIC buffers
+   directly; DEFAULT|WRITEONLY buffers use BUFFER mode with a persistent host-cached staging
+   copy. Lock skips the CS wait anyway (skipWait = !needsReadback && !directMapping) and
+   Unlock copies through FlushBuffer (staging + ThrottleAllocation). NOOVERWRITE is kept for
+   the DEFAULT pool: ineffective but safe there, and still needed for the 2.7.1 (dxvk2) backend.
    Never pass it to re-lock a buffer a draw may have read: that is a silent write race
    (test_upload_locks.py lists every buffer Lock). MANAGED buffers drop the flag.
    false: flags 0, the 0.3.150 behaviour. */
