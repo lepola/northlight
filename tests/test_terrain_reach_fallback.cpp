@@ -19,6 +19,17 @@ int main(){
     assert(!GM::admits(observed,GM::buildBudget(24*GM::MiB)));
     assert(GM::buildBudget().available==768*GM::MiB&&GM::ContiguousMargin==32*GM::MiB&&GM::ProcessReserve==512*GM::MiB);
 
+    // The sample is taken fresh per call and drops by what the stage itself holds: the extended attempt has
+    // 64 MiB-class buffers live when it asks for the next one; freeing them (the retry) restores the sample.
+    {uint64_t held=0;const uint64_t entryAvail=980*GM::MiB,entryLargest=754*GM::MiB;
+     auto sample=[&]{return GM::Sample{entryAvail-held,held?63*GM::MiB:entryLargest,true};};
+     auto admit=[&](uint64_t bytes){return GM::admits(sample(),GM::buildBudget(bytes));};
+     held=220*GM::MiB;                              // extended terrain scene + merged vertices already built (mid-build)
+     assert(sample().available<768*GM::MiB&&sample().largest==63*GM::MiB);
+     assert(!admit(64*GM::MiB));                    // extended refused
+     held=0;                                        // torn down before the reduced attempt
+     assert(admit(1*GM::MiB)&&admit(24*GM::MiB)); // reduced allocations admitted again, same margins
+    }
     // Fallback decisions.
     {State s;auto c=choose(s,Ext,1000);assert(c.reach==Ext&&!c.reduced&&!c.restored);
      assert(memoryRefused(s,c.reach,1000));                         // reduce on first refusal
@@ -46,5 +57,9 @@ int main(){
      assert(e.refused(100));assert(!e.refused(1100));assert(!e.refused(2100));e.markReduced();
      assert(e.end(0xFFFFFFFFu+1u+400u,ms,n)==true&&ms==uint32_t(400u-100u)&&n==3&&e.reduced);
      assert(!e.end(1,ms,n));assert(e.refused(9)&&!e.reduced);}
+    // Episode bookkeeping: begin once, end once; a new episode begins after an end.
+    {Episode e;int begins=0,ends=0;uint32_t ms=0;unsigned n=0;
+     for(int i=0;i<3;++i){begins+=e.refused(i*10);}ends+=e.end(40,ms,n);ends+=e.end(50,ms,n);
+     begins+=e.refused(60);ends+=e.end(70,ms,n);assert(begins==2&&ends==2);}
     std::cout<<"terrain reach fallback PASS\n";
 }

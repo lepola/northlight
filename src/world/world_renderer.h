@@ -977,6 +977,7 @@ private:
             auto result=std::make_shared<Snapshot>();result->map=r.map;result->center=r.geometryCenter;
             DWORD started=GetTickCount();result->requestId=r.id;result->requestedAt=r.queuedAt;result->queueMs=started-r.queuedAt;
             auto publishError=[&](){
+                stallEnd("error"); // the build ends here whatever the publication outcome
                 std::lock_guard<std::mutex> lock(mutex);
                 if(stopping||request.id!=r.id){++superseded;return false;}
                 // A failed replacement must not replace usable geometry with
@@ -993,8 +994,12 @@ private:
                 DWORD now=GetTickCount();if(!memoryReportAt||now-memoryReportAt>=1000){memoryReportAt=now;logGeometryMemory(stage,sample,generations.live(),workerMemoryExact);}
                 // The consumed request must survive a stationary camera. Never
                 // replace a newer request with r; next loop reads latest state.
-                std::unique_lock<std::mutex> lock(mutex);retry=true;
-                buildWake.wait_for(lock,std::chrono::milliseconds(delay),[&]{return stopping||builderExit||request.id!=r.id;});
+                bool abandoned=false;
+                {std::unique_lock<std::mutex> lock(mutex);retry=true;
+                 buildWake.wait_for(lock,std::chrono::milliseconds(delay),[&]{return stopping||builderExit||request.id!=r.id;});
+                 // The request moved on and this region no longer applies: the stalled build is dropped.
+                 abandoned=stopping||builderExit||!NorthlightWorldStreaming::applicable(r.map,r.geometryCenter,request.map,request.camera);}
+                if(abandoned)stallEnd("superseded");
             };
             auto built=std::make_unique<Built>();
             // BEGIN REGION BUILD: tests substitute a synthetic region for this block.
@@ -1076,6 +1081,10 @@ private:
                 reach=reachChoice.reach;
                 if(reachChoice.restored)logf("WORLD shadow terrain reach restored to=%.0f",reach);
                 // Memory refusal of an extended build: rebuild the terrain stages at the base reach now (margins unchanged).
+                // The retry can pass: terrainAdmission re-samples address space on every call, and the refused extended
+                // attempt's own terrain/plan/page allocations are freed (goto destroys them) before the reduced attempt.
+                // The 745-767/63 MiB sample is taken mid-build after the extended terrain load; stage entry and the moment
+                // after a torn-down attempt show ~965-984/754 and ~977 MiB available.
                 auto reduceReach=[&]{
                     if(!NorthlightTerrainReach::memoryRefused(reachState,reach,GetTickCount()))return false;
                     memoryStall.markReduced();

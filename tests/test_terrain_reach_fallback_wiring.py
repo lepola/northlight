@@ -26,7 +26,8 @@ for text in ('WORLD geometry memory stall begin stage=%s availableMiB=%llu large
              'WORLD shadow terrain reach reduced from=%.0f to=%.0f reason=memory',
              'WORLD shadow terrain reach restored to=%.0f'):
     assert text in w, text
-assert 'stallEnd(memoryStall.reduced?"reduced":"published")' in w and w.count('stallEnd("superseded")') == 2
+assert 'stallEnd(memoryStall.reduced?"reduced":"published")' in w and w.count('stallEnd("superseded")') == 3
 assert 'WORLD skip episode begin reason=%s' in r and 'WORLD skip episode reason=%s last=%s frames=%u ms=%lu' in r
 assert '#include "terrain_reach_fallback.h"' in (Path(__file__).parent / 'test_concurrent_geometry_build.py').read_text()
+assert 'stallEnd("error")' in w and 'if(abandoned)stallEnd("superseded")' in w
 print('terrain reach fallback wiring PASS')
