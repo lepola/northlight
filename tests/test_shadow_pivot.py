@@ -28,8 +28,8 @@ checks['WORLD camera line extended, on the existing periodic line only']=(w.coun
 checks['quality key: last, 0..1, presets 1/1/1, default 1, own origin slot']=('{"ShadowPivotCorrection",&Settings::shadowPivotCorrection,0,1,{1,1,1}},' in q and 'unsigned shadowPivotCorrection=1;' in q and 'char origin[33]=' in q)
 checks['documented in the ini template and the README']=(';ShadowPivotCorrection=1' in ini and 'ShadowPivotCorrection' in readme)
 checks['portable: no D3D or Win32, no allocation']=all(x not in h for x in ('d3d9','windows.h','#include <vector>','new ','malloc','push_back'))
-checks['rules: 1 yd along, .35 across, .9995 forward, 4-frame run, 1 yd deadband, 8 yd jump, 0.5..80']=all(x in h for x in (
-    'ForwardDot=.9995f,SnapAlong=1.f,SnapAcrossRatio=.35f,SnapAcrossMax=1.5f,SnapJump=40.f,Min=.5f,Max=80.f;','SnapRun=4;','SelfDeadband=1.f,SelfJump=8.f,SelfGain=.3f,SelfStep=1.5f;'))
+checks['rules: 1 yd along, .35 across, .9995 forward, impulse (previous move < .5 yd and < .25 of this), 1 yd deadband, 8 yd jump, 0.5..80']=all(x in h for x in (
+    'ForwardDot=.9995f,SnapAlong=1.f,SnapAcrossRatio=.35f,SnapAcrossMax=1.5f,SnapJump=40.f,SnapPrev=.5f,SnapPrevRatio=.25f,Min=.5f,Max=80.f;','SelfDeadband=1.f,SelfJump=8.f,SelfGain=.3f,SelfStep=1.5f;'))
 for name,ok in checks.items():print(('PASS ' if ok else 'FAIL ')+name)
 assert all(checks.values())
 with tempfile.TemporaryDirectory(prefix='northlight-pivot-') as tmp:

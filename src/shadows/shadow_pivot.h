@@ -9,11 +9,14 @@
 // orbiting still leaves every cascade where it was. Two sources:
 //  snap: frame to frame the forward is nearly unchanged (dot > ForwardDot), the eye's move across the
 //   ray is small (<= SnapAcrossRatio of its move along it, at most SnapAcrossMax yd), and its move along
-//   the ray is at least SnapAlong yd: the distance loses that move (zoom/collision in: shorter, zoom
-//   out: longer). Walking (~.12 yd/frame) and flying (~.7 yd/frame, camera pitched down: .57 along,
-//   .4 across) never reach SnapAlong. A faster straight flight along the ray cannot be told from a
-//   zoom by the camera alone, so at most SnapRun frames in a row correct (a zoom animation spans a few);
-//   the run restarts after a frame under SnapAlong. A move over SnapJump yd is a teleport, not a snap.
+//   the ray is at least SnapAlong yd AND the previous call's move along the ray was small (under
+//   SnapPrev yd and under SnapPrevRatio of this one): an impulse out of stillness. The distance loses
+//   that move (zoom/collision in: shorter, zoom out: longer). Collision snaps are single impulses;
+//   walking (~.12 yd/call), flying and mounted or taxi travel are sustained moves along the ray and never
+//   correct after their first call (a start from rest may correct once, a ramp-up such as .3, .9, 1.5 does
+//   not). shadowPivot() is not called every frame (capture intervals), so per-call moves can be doubled.
+//   A smooth wheel zoom (~.33 yd/frame) stays under SnapAlong and does not snap: the self path follows it.
+//   A move over SnapJump yd is a teleport, not a snap.
 //  self: only while the actor-shadow self was CAPTURED in the latest selection (the caller passes null
 //   otherwise: during a capture gap selfAt only follows the camera). The self's axis midpoint (selfAt +
 //   SelfAxis/2 up) must lie within SelfRay of the ray at SelfMinT..SelfMaxT (actor_shadow_selection.h);
@@ -25,13 +28,12 @@
 #include <algorithm>
 #include <cmath>
 namespace NorthlightShadowPivot {
-constexpr float ForwardDot=.9995f,SnapAlong=1.f,SnapAcrossRatio=.35f,SnapAcrossMax=1.5f,SnapJump=40.f,Min=.5f,Max=80.f;
-constexpr unsigned SnapRun=4;
+constexpr float ForwardDot=.9995f,SnapAlong=1.f,SnapAcrossRatio=.35f,SnapAcrossMax=1.5f,SnapJump=40.f,SnapPrev=.5f,SnapPrevRatio=.25f,Min=.5f,Max=80.f;
 constexpr float SelfDeadband=1.f,SelfJump=8.f,SelfGain=.3f,SelfStep=1.5f;
 enum Source : unsigned {Orbit=0,Snap=1,Self=2};
 inline const char* name(Source s){return s==Snap?"snap":s==Self?"self":"orbit";}
 struct State {
-    float eye[3]={},forward[3]={};bool valid=false;unsigned run=0;
+    float eye[3]={},forward[3]={},prevAlong=0;bool valid=false;
     unsigned snapCorrections=0;Source source=Orbit;
     float selfDistance=-1,selfPoint[3]={};bool hasSelf=false,selfAccepted=false; /* the latest captured self */
     void reset(){*this=State{};}
@@ -48,9 +50,9 @@ struct State {
         if(valid){float d[3],m=0,along=0,turn=0;
             for(unsigned k=0;k<3;++k){d[k]=e[k]-eye[k];m+=d[k]*d[k];along+=d[k]*f[k];turn+=f[k]*forward[k];}
             const float across=std::sqrt(std::max(0.f,m-along*along)),size=std::fabs(along);
-            if(size<SnapAlong)run=0;
-            else if(turn>ForwardDot&&m<=SnapJump*SnapJump&&across<=std::min(SnapAcrossRatio*size,SnapAcrossMax)&&run<SnapRun){
-                now=std::min(Max,std::max(Min,now-along));++run;++snapCorrections;source=Snap;}}
+            if(size>=SnapAlong&&prevAlong<SnapPrev&&prevAlong<SnapPrevRatio*size&&turn>ForwardDot&&m<=SnapJump*SnapJump&&across<=std::min(SnapAcrossRatio*size,SnapAcrossMax)){
+                now=std::min(Max,std::max(Min,now-along));++snapCorrections;source=Snap;}
+            prevAlong=size;}
         for(unsigned k=0;k<3;++k){eye[k]=e[k];forward[k]=f[k];}valid=true;
         hasSelf=selfAccepted=false;selfDistance=-1;
         if(finite(selfAt)){

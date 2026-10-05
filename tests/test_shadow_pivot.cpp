@@ -26,9 +26,9 @@ int main(){
      const float steps[]={1.5f,3.f,2.f,2.5f,1.5f};
      for(float step:steps){for(int i=0;i<6;++i)d=s.update(e,f,d,nullptr);t-=step;eyeAt(t,e);d=s.update(e,f,d,nullptr);assert(s.source==Snap&&std::fabs(d-t)<.01f);}
      assert(s.snapCorrections==5);}
-    // The same zoom as a 3-frame animation (1 yd per frame, 3 frames): corrected each frame.
+    // A smooth wheel zoom (.33 yd/frame) stays under SnapAlong: no snap (the self path follows it).
     {State s;float e[3];float t=30,d=30;eyeAt(t,e);s.update(e,f,d,nullptr);
-     for(int i=0;i<4;++i){t-=1.2f;eyeAt(t,e);d=s.update(e,f,d,nullptr);}assert(std::fabs(d-t)<.01f&&s.snapCorrections==4);}
+     for(int i=0;i<30;++i){t-=.33f;eyeAt(t,e);d=s.update(e,f,d,nullptr);}assert(d==30&&s.snapCorrections==0);}
     // Zoom out: longer; clamped to 80 and, in, to .5.
     {State s;float e[3];float d=10;eyeAt(10,e);s.update(e,f,d,nullptr);eyeAt(16,e);d=s.update(e,f,d,nullptr);assert(std::fabs(d-16)<.01f&&s.source==Snap);
      float far=78;eyeAt(70,e);State z;z.update(e,f,far,nullptr);eyeAt(79,e);far=z.update(e,f,far,nullptr);assert(far==Max);
@@ -44,9 +44,23 @@ int main(){
      assert(d==14&&s.snapCorrections==0);
      // Faster (1.6 yd/frame): the across share (.92) is over 35% of the along share (1.3): still none.
      for(int i=0;i<100;++i){for(unsigned k=0;k<3;++k)e[k]+=dir[k]*1.6f;d=s.update(e,g,d,nullptr);}assert(d==14&&s.snapCorrections==0);
-     // Straight fast flight along the ray (cannot be told from a zoom): bounded to SnapRun corrections, then none.
-     State fast;float q[3]={0,0,300};d=60;fast.update(q,f,d,nullptr);for(int i=0;i<200;++i){for(unsigned k=0;k<3;++k)q[k]+=f[k]*1.5f;d=fast.update(q,f,d,nullptr);}
-     assert(fast.snapCorrections==SnapRun&&std::fabs(d-(60-1.5f*SnapRun))<.01f);}
+     }
+    // Sustained straight motion along the ray, no self: flight 1.35 yd/call, taxi 3 yd/call (200 calls), also from a ramp-up: the distance stays.
+    {for(float speed:{1.35f,3.f}){State fast;float q[3]={0,0,300};float d=12;fast.update(q,f,d,nullptr);
+        for(int i=0;i<200;++i){for(unsigned k=0;k<3;++k)q[k]+=f[k]*speed;d=fast.update(q,f,d,nullptr);if(i>0)assert(fast.source==Orbit);}
+        assert(std::fabs(d-12)<.01f+(fast.snapCorrections?speed:0)&&fast.snapCorrections<=1);}
+     State ramp;float q[3]={0,0,300};float d=12;ramp.update(q,f,d,nullptr);
+     const float moves[]={.3f,.9f,1.5f};for(float m:moves){for(unsigned k=0;k<3;++k)q[k]+=f[k]*m;d=ramp.update(q,f,d,nullptr);}
+     for(int i=0;i<200;++i){for(unsigned k=0;k<3;++k)q[k]+=f[k]*1.5f;d=ramp.update(q,f,d,nullptr);}assert(d==12&&ramp.snapCorrections==0);
+     // The same ramp at double the per-call move (capture intervals): still none.
+     State ramp2;float r[3]={0,0,300};d=12;ramp2.update(r,f,d,nullptr);const float moves2[]={.6f,1.8f,3.f};
+     for(float m:moves2){for(unsigned k=0;k<3;++k)r[k]+=f[k]*m;d=ramp2.update(r,f,d,nullptr);}
+     for(int i=0;i<200;++i){for(unsigned k=0;k<3;++k)r[k]+=f[k]*3.f;d=ramp2.update(r,f,d,nullptr);}assert(d==12&&ramp2.snapCorrections==0);}
+    // Collision impulse after standing still, and while walking slowly sideways: corrected.
+    {State s;float e[3];eyeAt(20,e);float d=20;for(int i=0;i<30;++i)d=s.update(e,f,d,nullptr);eyeAt(6,e);d=s.update(e,f,d,nullptr);assert(s.source==Snap&&std::fabs(d-6)<.01f);
+     State w;eyeAt(20,e);d=20;const float side[3]={f[1],-f[0],0};w.update(e,f,d,nullptr);
+     for(int i=0;i<30;++i){for(unsigned k=0;k<3;++k)e[k]+=side[k]*.12f;d=w.update(e,f,d,nullptr);}
+     for(unsigned k=0;k<3;++k)e[k]+=f[k]*14+side[k]*.12f;d=w.update(e,f,d,nullptr);assert(w.source==Snap&&std::fabs(d-6)<.05f&&w.snapCorrections==1);}
     // Orbit: the eye circles a point 20 yd ahead (1.2 degrees/frame, the estimator's distance right): the pivot never moves.
     {State s;float d=20,pivot[3];float e[3];float yaw=30;float g[3];forwardOf(yaw,-12,g);for(unsigned k=0;k<3;++k)e[k]=player[k]-g[k]*d;
      for(unsigned k=0;k<3;++k)pivot[k]=e[k]+g[k]*d;s.update(e,g,d,nullptr);
@@ -96,5 +110,5 @@ int main(){
      const float nb=s.nearBlendAtSelf(m);assert(nb==0); /* 20/48=.42 */
      State t;const float far[3]={40,0,-1.5f};t.update(e,ff,20,far);assert(std::fabs(t.nearBlendAtSelf(m)-((40.f/48-.72f)/.18f))<1e-5f);
      State u;const float edge[3]={47,0,-1.5f};u.update(e,ff,20,edge);assert(u.nearBlendAtSelf(m)==1&&u.nearBlendAtSelf(nullptr)==-1);}
-    std::puts("PASS shadow pivot: collision snap 30->5 yd, wheel zoom steps and animation, zoom out and clamps 0.5..80, walking/running/flying never correct, fast straight flight bounded to 4 corrections, orbit leaves the pivot point put, captured self steers with 1 yd deadband / 1.5 yd steps / 8 yd jump, capture gap and off-ray self ignored, no source flapping over a jittery self, non-finite input unchanged, switch off = input bit for bit");
+    std::puts("PASS shadow pivot: collision snap 30->5 yd, wheel zoom steps and animation, zoom out and clamps 0.5..80, walking/running/flying never correct, sustained flight/taxi and ramp-ups never correct, smooth zoom does not snap, impulses after stillness or sideways walking do, orbit leaves the pivot point put, captured self steers with 1 yd deadband / 1.5 yd steps / 8 yd jump, capture gap and off-ray self ignored, no source flapping over a jittery self, non-finite input unchanged, switch off = input bit for bit");
 }
