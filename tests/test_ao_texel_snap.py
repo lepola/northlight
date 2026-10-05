@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # northlight-test:
-"""0.3.189: the half-resolution AO pass reads the full-resolution depth at explicit texel centres.
+"""0.3.190: the half-resolution AO pass reads the full-resolution depth at explicit texel centres.
 
 CPU reference only: no game, graphics device or GPU is started. The old AO pass point-sampled the
 full-resolution INTZ depth at the half-resolution texel centre (i+.5)/(w/2), exactly the boundary

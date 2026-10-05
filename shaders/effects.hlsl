@@ -53,7 +53,7 @@ float3 SafeNormal(float3 n)
     return n.z > 0.0 ? -n : n;
 }
 
-// 0.3.189: snap a uv to the centre of an explicit full-resolution depth texel. The half-resolution
+// 0.3.190: snap a uv to the centre of an explicit full-resolution depth texel. The half-resolution
 // AO pass samples at (i+.5)/(w/2), exactly the boundary between full-res texels 2i and 2i+1, where
 // POINT sampling depends on GPU interpolation rounding and can flip from row to row.
 // +0.25: in the half-res pass uv*size is about 2i+1 and picks texel 2i+1 unambiguously (the nominal
@@ -90,7 +90,7 @@ float3 SurfaceNormal(float2 uv, float3 p)
 
 float4 AOImpl(float2 uv, bool colorBounce)
 {
-    // 0.3.189: the centre, its normal neighbours and the noise rotation use one explicit depth texel;
+    // 0.3.190: the centre, its normal neighbours and the noise rotation use one explicit depth texel;
     // kernel taps (suv) stay unsnapped.
     float2 size = 1.0 / ImageAndClip.xy;
     uv = DepthTexelUV(uv, size);
@@ -207,7 +207,7 @@ float4 Composite(float2 uv : TEXCOORD0) : COLOR0
     float sumWeight = 0.0;
     float2 ambientSize = max(floor(0.5 / ImageAndClip.xy + 0.01), float2(1, 1));
     float2 ambientTexel = 1.0 / ambientSize;
-    // 0.3.189: an ambient texel centre is a full-resolution texel boundary; a quarter full-res texel
+    // 0.3.190: an ambient texel centre is a full-resolution texel boundary; a quarter full-res texel
     // inward makes the depth and NeighbourNormal reads there pick one texel on every GPU at even
     // sizes. Odd sizes drift the tap toward a boundary near three quarters across (a near-tie there);
     // depth and NeighbourNormal move together and both candidates lie in the same ambient texel.

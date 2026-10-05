@@ -129,6 +129,8 @@ def verify_installer(path):
         check(problems, not missing, f'Windows runtime lacks {missing}')
         check(problems, sha(files.get('payload/' + bp.DXVK_BACKEND, b'')) == bp.PINS['dxvk']['member_sha256'], 'DXVK pin')
         check(problems, info['dxvk']['sha256'] == bp.PINS['dxvk']['sha256'], 'DXVK archive pin')
+        check(problems, sha(files.get('payload/' + bp.DXVK2_BACKEND, b'')) == bp.PINS['dxvk2']['member_sha256'], 'DXVK fallback (dxvk2) pin')
+        check(problems, info['dxvk_fallback']['sha256'] == bp.PINS['dxvk2']['sha256'], 'DXVK fallback archive pin')
         pinned = runtime_zip()
         if pinned:
             with zipfile.ZipFile(pinned) as z:
