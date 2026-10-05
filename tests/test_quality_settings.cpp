@@ -62,7 +62,7 @@ int main(){
     /* Defaults: absent files, empty file and Preset=Quality are the 0.3.136 constants, except the 0.3.167 FarShadowInterval 4
        and the 0.3.176 PointShadows 0 (off in every preset). */
     const Settings d{};
-    assert(d.minSkinnedTriangles==0&&d.captureBudgetMiB==32&&d.actorShadowBudgetMiB==0&&d.farShadowInterval==4);
+    assert(d.minSkinnedTriangles==100&&d.captureBudgetMiB==32&&d.actorShadowBudgetMiB==0&&d.farShadowInterval==4);
     assert(d.localLightLimit==NorthlightLocalLightSelection::Limit&&d.pointShadows==0&&d.pointShadowRefreshMs==0&&d.shadowDirectionSteps==2048);
     assert(parse(nullptr)==d&&parse("")==d&&parse("[Quality]\nPreset=Quality\n")==d&&preset(Preset::Quality)==d);
     for(const auto& k:Keys){assert(k.preset[0]==d.*k.field);for(unsigned p=0;p<3;++p)assert(k.preset[p]>=k.low&&k.preset[p]<=k.high);}
@@ -92,18 +92,18 @@ int main(){
     const char* legacy="; 0.3.131 experiment\n[ShadowExperiment]\nMinSkinnedTriangles=50\nCaptureBudgetMiB=32\nActorShadowBudgetMiB=16\n";
     s=parse(nullptr,legacy);assert(s.minSkinnedTriangles==50&&s.captureBudgetMiB==32&&s.actorShadowBudgetMiB==16&&s.farShadowInterval==4);
     s=parse(nullptr,"[ShadowExperiment]\nMinSkinnedTriangles=501\nCaptureBudgetMiB=0\nActorShadowBudgetMiB=33\n");assert(s==d); /* 0.3.136: 0,32,0 */
-    s=parse(nullptr,"[ShadowExperiment]\nCaptureBudgetMiB=16\n");assert(s.captureBudgetMiB==16&&s.minSkinnedTriangles==0);
+    s=parse(nullptr,"[ShadowExperiment]\nCaptureBudgetMiB=16\n");assert(s.captureBudgetMiB==16&&s.minSkinnedTriangles==100);
     /* No northlight-quality.ini, or Preset=Quality: each machine exactly as today (Mac legacy file, Windows none). */
     assert(parse(nullptr,legacy)==parse("[Quality]\nPreset=Quality\n",legacy)&&parse(nullptr,nullptr)==d);
     s=parse(nullptr,legacy);assert(s.origin[0]=='l'&&s.origin[1]=='l'&&s.origin[2]=='l'&&s.origin[3]=='d');
     assert(describe(s).find("MinSkinnedTriangles=50(legacy)")!=std::string::npos&&describe(s).find("FarShadowInterval=4(default)")!=std::string::npos);
     /* Balanced/Performance: preset beats the legacy file, identically on Mac and Windows. */
     problems.clear();s=parse("[Quality]\nPreset=Performance\n",legacy,problems);
-    assert(s==preset(Preset::Performance)&&s.minSkinnedTriangles==100&&s.actorShadowBudgetMiB==8&&s.captureBudgetMiB==32&&problems.size()==1);
+    assert(s==preset(Preset::Performance)&&s.minSkinnedTriangles==180&&s.actorShadowBudgetMiB==8&&s.captureBudgetMiB==32&&problems.size()==1);
     assert(parse("[Quality]\nPreset=Balanced\n",legacy)==parse("[Quality]\nPreset=Balanced\n")&&s.origin[2]=='p');
     /* Explicit keys beat both. */
     s=parse("[Quality]\nActorShadowBudgetMiB=4\n",legacy);assert(s.actorShadowBudgetMiB==4&&s.minSkinnedTriangles==50&&s.origin[2]=='f'&&s.origin[0]=='l');
-    s=parse("[Quality]\nPreset=Performance\nActorShadowBudgetMiB=0\n",legacy);assert(s.actorShadowBudgetMiB==0&&s.minSkinnedTriangles==100&&s.origin[2]=='f');
+    s=parse("[Quality]\nPreset=Performance\nActorShadowBudgetMiB=0\n",legacy);assert(s.actorShadowBudgetMiB==0&&s.minSkinnedTriangles==180&&s.origin[2]=='f');
     /* 0.3.141 diagnostics keys (0.3.169: Diagnostics defaults to 0 in every preset): default off/off, Diagnostics=0 forces the fate tracker off, invalid values kept. */
     assert(d.diagnostics==0&&d.shadowFateDiagnostics==0&&!shadowFate(d));
     s=parse("[Quality]\nShadowFateDiagnostics=1\n");assert(!shadowFate(s)&&describe(s).find("shadowFateEffective=0")!=std::string::npos);
@@ -378,7 +378,7 @@ int main(){
     {std::vector<std::string> p;
         p.clear();parse("[Quality]\nNoSuchKey=1\n",nullptr,p);assert(p.size()==1&&p[0].find("unknown key NoSuchKey ignored")!=std::string::npos);}
     // 0.3.151 spike spreading: 6 faces / 1 slice (the 0.3.150 paths) in the code default and every preset, own origin slots.
-    assert(sizeof(Settings::origin)==32&&d.pointShadowFacesPerFrame==6&&d.staticCacheSlices==1);
+    assert(sizeof(Settings::origin)==sizeof(Keys)/sizeof(Keys[0])&&d.pointShadowFacesPerFrame==6&&d.staticCacheSlices==1);
     for(auto p:{Preset::Balanced,Preset::Performance})assert(preset(p).pointShadowFacesPerFrame==6&&preset(p).staticCacheSlices==1);
     {auto on=parse("[Quality]\nPointShadowFacesPerFrame=2\nStaticCacheSlices=4\n");assert(on.pointShadowFacesPerFrame==2&&on.staticCacheSlices==4&&on!=d);
         unsigned i=0;for(const auto& k:Keys){const std::string n=k.name;assert(on.origin[i]==(n=="PointShadowFacesPerFrame"||n=="StaticCacheSlices"?'f':'d'));++i;}
@@ -435,6 +435,15 @@ int main(){
         std::vector<std::string> p;assert(parse("[Quality]\nFrameDrawGates=2\n",nullptr,p)==d&&p.size()==1);
         assert(effective(off).frameDrawGates==0&&effective(parse("[Quality]\nActorShadows=0\n")).frameDrawGates==1);
         assert(describe(d).find(" ActorShadows=1(default) FrameDrawGates=1(default)")!=std::string::npos&&describe(off).find(" FrameDrawGates=0(file)")!=std::string::npos);}
+    // 0.3.190 ShadowPivotCorrection: 1 (the pivot distance follows zoom/collision snaps and the captured self) in the
+    // code default and every preset, 0..1, own last origin slot; 0 is the old orbit-only distance. ActorShadows=0 does not force it.
+    assert(d.shadowPivotCorrection==1&&preset(Preset::Balanced).shadowPivotCorrection==1&&preset(Preset::Performance).shadowPivotCorrection==1);
+    assert(std::string(Keys[32].name)=="ShadowPivotCorrection"&&Keys[32].field==&Settings::shadowPivotCorrection&&Keys[32].low==0&&Keys[32].high==1);
+    {auto off=parse("[Quality]\nShadowPivotCorrection=0\n");assert(off.shadowPivotCorrection==0&&off!=d&&parse("[Quality]\nShadowPivotCorrection=1\n")==d);
+        unsigned i=0;for(const auto& k:Keys){assert(off.origin[i]==(std::string(k.name)=="ShadowPivotCorrection"?'f':'d'));++i;}
+        std::vector<std::string> p;assert(parse("[Quality]\nShadowPivotCorrection=2\n",nullptr,p)==d&&p.size()==1);
+        assert(effective(off).shadowPivotCorrection==0&&effective(parse("[Quality]\nActorShadows=0\n")).shadowPivotCorrection==1);
+        assert(describe(d).find(" FrameDrawGates=1(default) ShadowPivotCorrection=1(default)")!=std::string::npos&&describe(off).find(" ShadowPivotCorrection=0(file)")!=std::string::npos);}
     { /* effective(): the identity with ActorShadows=1 (any value of every key), with 0 only the two replay keys drop. */
       std::mt19937 er(158);
       for(int round=0;round<4000;++round){Settings s;s.preset=Preset(er()%3);unsigned i=0;

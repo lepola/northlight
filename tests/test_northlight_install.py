@@ -90,7 +90,8 @@ class Base(unittest.TestCase):
         files = {'celestial-profiles.ini': b'[Sun]\n', 'shadow-range-profiles.ini': b'[Range]\n',
                  'northlight-quality.ini': b'[Quality]\nPreset=Quality\n'}
         if self.platform == 'windows':
-            files.update({'d3d9.dll': PROXY, 'renderer-backends/dxvk/dxvk_d3d9.dll': b'MZ DXVK: \0v2.7.1\0'})
+            files.update({'d3d9.dll': PROXY, 'renderer-backends/dxvk/dxvk_d3d9.dll': b'MZ DXVK: \0v3.1.1\0',
+                          'renderer-backends/dxvk2/dxvk2_d3d9.dll': b'MZ DXVK: \0v2.7.1\0'})
         (root / 'payload/d3d9.dll').write_bytes(PROXY)
         for n, d in files.items():
             p = root / 'payload' / n; p.parent.mkdir(parents=True, exist_ok=True); p.write_bytes(d)
@@ -208,6 +209,18 @@ class Preflight(Base):
     def test_mac_preload_missing(self):
         (self.client / 'libDllLdr.dll').unlink(); self.before = tree(self.client)
         self.assertIn('preload', self.refused())
+
+
+class MacFileSets(unittest.TestCase):
+    def test_mac_package_payload_and_migration_files_are_disjoint(self):
+        """INSTALL.chain_problems skips migration records: safe only while no macOS package record holds a
+        file migrate_mac_proxy writes (the mac payload is PAYLOAD_COMMON; d3d9.dll goes to mods/ by migration)."""
+        import ast
+        tree_ = ast.parse(fp.src('build_packages.py').read_text(encoding='utf-8'))
+        common = next(ast.literal_eval(n.value) for n in tree_.body if isinstance(n, ast.Assign) and
+                      any(getattr(t, 'id', None) == 'PAYLOAD_COMMON' for t in n.targets))
+        self.assertTrue(common)
+        self.assertFalse(set(common) & set(mig.MANAGED))
 
 
 class RunningCheck(unittest.TestCase):
@@ -373,6 +386,58 @@ class Install(Base):
         self.assertEqual(tree(self.client), self.before)
         self.assertFalse((self.client / 'world-cache').exists())
 
+    def version_package(self, n):
+        """A copy of the package whose renderer DLL and celestial-profiles.ini differ (on macOS the package
+        records hold only the ini files, so the DLL alone would not stack)."""
+        root = self.base / 'Downloads' / f'Northlight-v{n}'
+        shutil.copytree(self.pkg_root, root)
+        dll, ini = PROXY + b' v%d' % n, b'[Sun]\nversion=%d\n' % n
+        (root / 'payload/d3d9.dll').write_bytes(dll); (root / 'payload/celestial-profiles.ini').write_bytes(ini)
+        manifest = json.loads((root / 'payload-manifest.json').read_text())
+        for e in manifest:
+            data = {'d3d9.dll': dll, 'celestial-profiles.ini': ini}.get(e['path'])
+            if data is not None:
+                e['sha256'] = sha(data)
+        (root / 'payload-manifest.json').write_text(json.dumps(manifest))
+        (root / 'BUILD-INFO.json').write_text(json.dumps({'version': f'0.3.{n}', 'dll_sha256': sha(dll)}))
+        return root
+
+    def stack(self, n=3):
+        for i in range(1, n + 1):
+            self.pkg_root = self.version_package(160 + i)
+            self.installer().install(self.client, world_cache=False)
+
+    def test_uninstall_after_three_stacked_installs(self):
+        self.stack()
+        self.assertGreaterEqual(len([b for b, r in self.installer().all_transactions(self.client) if r.get('kind', 'package') == 'package']), 3)
+        self.installer().uninstall(self.client)
+        self.assertEqual(tree(self.client), self.before)
+
+    def stacked_state(self):
+        return tree(self.client), [json.loads(p.read_text())['status'] for p in sorted(self.client.glob('renderer-backups/**/transaction.json'))]
+
+    def test_uninstall_refused_after_later_edit(self):
+        self.stack()
+        (self.client / 'celestial-profiles.ini').write_bytes(b'user edit')
+        state = self.stacked_state()
+        with self.assertRaises(fi.Refusal) as cm:
+            self.installer().uninstall(self.client)
+        self.assertIn('Nothing was changed', str(cm.exception))
+        self.assertEqual(self.stacked_state(), state)
+        self.assertNotIn('restored', state[1])
+
+    def test_uninstall_refused_with_damaged_backup(self):
+        self.stack()
+        # The first install had nothing to back up; the second one's before/ holds the first one's files.
+        damaged = [p for b, r in reversed(self.installer().all_transactions(self.client)) if r.get('kind', 'package') == 'package'
+                   for p in (b / 'before').rglob('*') if p.is_file()]
+        self.assertTrue(damaged); damaged[0].write_bytes(b'bad')
+        state = self.stacked_state()
+        with self.assertRaises(fi.Refusal) as cm:
+            self.installer().uninstall(self.client)
+        self.assertIn('Backup damaged', str(cm.exception))
+        self.assertEqual(self.stacked_state(), state)
+
     def test_uninstall_keeps_foreign_cache(self):
         (self.client / 'world-cache/dev').mkdir(parents=True); (self.client / 'world-cache/dev/x.fg3').write_bytes(b'dev')
         self.before = tree(self.client)
@@ -499,6 +564,187 @@ class WindowsInstall(Install):
         self.assertFalse((self.client / 'world-cache/a.fgm').exists())
         self.installer().uninstall(self.client)
         self.assertEqual(tree(self.client), self.before)
+
+    def test_old_package_with_update_on_top_restored_first(self):
+        old = self.base / 'old-package'
+        (old / 'payload/world-cache').mkdir(parents=True); (old / 'payload/world-cache/a.fgm').write_bytes(b'old')
+        (old / 'payload/d3d9.dll').write_bytes(b'MZ Northlight renderer 0.3.144; old')
+        (old / 'payload-manifest.json').write_text(json.dumps([{'path': p, 'sha256': sha((old / 'payload' / p).read_bytes())}
+                                                               for p in ['world-cache/a.fgm', 'd3d9.dll']]))
+        first = INSTALL.install(self.client, old)
+        small = self.base / 'small-update'
+        (small / 'payload').mkdir(parents=True); (small / 'payload/d3d9.dll').write_bytes(b'MZ Northlight renderer 0.3.150; update')
+        (small / 'payload-manifest.json').write_text(json.dumps([{'path': 'd3d9.dll', 'sha256': sha(b'MZ Northlight renderer 0.3.150; update')}]))
+        second = INSTALL.install(self.client, small)
+        self.assertEqual([b for b, _ in INSTALL.transactions(self.client)], [first, second])
+        self.installer().install(self.client, backend='native')
+        for b in (first, second):
+            self.assertEqual(json.loads((b / 'transaction.json').read_text())['status'], 'restored')
+        self.assertEqual((self.client / 'd3d9.dll').read_bytes(), PROXY)
+        self.assertFalse((self.client / 'world-cache/a.fgm').exists())
+        self.installer().uninstall(self.client)
+        self.assertEqual(tree(self.client), self.before)
+
+    def ini(self):
+        return (self.client / 'northlight-renderer.ini').read_bytes()
+
+    def test_fresh_install_writes_dxvk_and_dxvk2_choice_is_kept(self):
+        self.installer().install(self.client)
+        self.assertEqual(self.ini(), b'[Renderer]\r\nBackend=dxvk\r\n')
+        self.installer().install(self.client, backend='dxvk2')
+        self.assertEqual(self.ini(), b'[Renderer]\r\nBackend=dxvk2\r\n')
+        self.installer().install(self.client)   # no --backend: the installed choice stays
+        self.assertEqual(self.ini(), b'[Renderer]\r\nBackend=dxvk2\r\n')
+        self.installer().install(self.client, backend='dxvk')
+        self.assertEqual(self.ini(), b'[Renderer]\r\nBackend=dxvk\r\n')
+        self.installer().install(self.client)
+        self.assertEqual(self.ini(), b'[Renderer]\r\nBackend=dxvk\r\n')
+
+    def test_main_backend_defaults_to_none(self):
+        seen = []
+        with patch.object(fi.Installer, 'install', lambda self, *a: seen.append(a)), patch.object(fi, 'host_platform', lambda: 'windows'):
+            self.assertEqual(fi.main(['install', '--client', str(self.client), '--package', str(self.pkg_root)]), 0)
+            self.assertEqual(fi.main(['install', '--backend', 'dxvk2', '--client', str(self.client), '--package', str(self.pkg_root)]), 0)
+        self.assertEqual([a[3] for a in seen], [None, 'dxvk2'])
+
+    DXVK2 = 'renderer-backends/dxvk2/dxvk2_d3d9.dll'
+
+    def test_unselected_dxvk_file_missing_does_not_block_but_selected_does(self):
+        (self.pkg_root / 'payload' / self.DXVK2).unlink()
+        inst = self.installer()
+        inst.install(self.client)
+        self.assertIn('backend dxvk2 will not be available', inst.out.getvalue())
+        self.assertFalse((self.client / 'renderer-backends/dxvk2').exists())
+        self.installer().uninstall(self.client)
+        self.assertEqual(tree(self.client), self.before)
+        with self.assertRaises(fi.Refusal) as e:
+            self.installer().install(self.client, backend='dxvk2')
+        self.assertIn('antivirus product may have removed it', str(e.exception))
+        self.assertIn('--backend dxvk / --backend native', str(e.exception))
+
+    def test_modified_dxvk_file_is_refused_even_when_unselected(self):
+        (self.pkg_root / 'payload' / self.DXVK2).write_bytes(b'modified by antivirus')
+        for backend in (None, 'dxvk', 'native', 'dxvk2'):
+            with self.assertRaises(fi.Refusal) as e:
+                self.installer().install(self.client, backend=backend)
+            self.assertIn('damaged or modified; download and unzip the package again', str(e.exception))
+        self.assertFalse((self.client / 'd3d9.dll').exists())
+
+    def test_stale_client_dxvk2_is_removed_when_the_package_lacks_it(self):
+        self.installer().install(self.client, backend='dxvk2')
+        stale = self.client / self.DXVK2
+        stale.write_bytes(b'older unverified dxvk2')
+        (self.pkg_root / 'payload' / self.DXVK2).unlink()
+        report = self.installer().install(self.client, backend='dxvk')
+        self.assertFalse(stale.exists())
+        fi.INSTALL.restore(self.client, Path(report['backups'][-1]))
+        self.assertEqual(stale.read_bytes(), b'older unverified dxvk2')
+
+    def test_native_choice_is_kept_on_a_plain_reinstall(self):
+        self.installer().install(self.client, backend='native')
+        self.installer().install(self.client)
+        self.assertEqual(self.ini(), b'[Renderer]\r\nBackend=native\r\n')
+
+    def test_plan_install_resolves_the_backend_once(self):
+        calls = []
+        real = fi.INSTALL.resolve_backend
+        with patch.object(fi.INSTALL, 'resolve_backend', lambda *a: calls.append(a) or real(*a)):
+            self.installer().install(self.client)
+        self.assertEqual(len(calls), 1)
+
+    def test_uninstall_removes_the_empty_dxvk2_folder(self):
+        self.installer().install(self.client, backend='dxvk2')
+        self.assertTrue((self.client / 'renderer-backends/dxvk2/dxvk2_d3d9.dll').is_file())
+        self.installer().uninstall(self.client)
+        self.assertFalse((self.client / 'renderer-backends').exists())
+        self.assertEqual(tree(self.client), self.before)
+
+    MARKER = 'renderer-backends/dxvk/northlight-dxvk3-init.pending'
+
+    def marker(self, sha=None):
+        """The proxy's marker line; by default for the package's current DXVK 3 build."""
+        sha = sha or hashlib.sha256(b'MZ DXVK: \0v3.1.1\0').hexdigest()
+        m = self.client / self.MARKER
+        m.parent.mkdir(parents=True, exist_ok=True); m.write_bytes(f'Northlight 0.3.189 DXVK3 init sha256={sha}\r\n'.encode())
+        return m
+
+    def test_marker_for_another_dxvk3_build_gets_a_retry_note(self):
+        self.installer().install(self.client)
+        m = self.marker('0' * 64)
+        inst = self.installer()
+        inst.install(self.client)
+        self.assertTrue(m.is_file())
+        self.assertNotIn('failed to start earlier', inst.out.getvalue())
+        self.assertIn('new DXVK 3 build; it will be tried again', inst.out.getvalue())
+
+    def test_backend_path_survives_a_plain_reinstall_and_explicit_switch_rewrites(self):
+        self.installer().install(self.client)
+        ini = self.client / 'northlight-renderer.ini'
+        custom = b'[Renderer]\r\nBackend=dxvk\r\nBackendPath=my_d3d9.dll\r\n'
+        ini.write_bytes(custom)
+        self.installer().install(self.client)
+        self.assertEqual(ini.read_bytes(), custom)
+        self.installer().install(self.client, backend='dxvk2')
+        self.assertEqual(ini.read_bytes(), b'[Renderer]\r\nBackend=dxvk2\r\n')
+        custom2 = b'[Renderer]\r\nBackend=native\r\nBackendPath=x.dll\r\n'
+        ini.write_bytes(custom2)
+        self.installer().install(self.client)
+        self.assertEqual(ini.read_bytes(), custom2)
+
+    def test_dxvk3_marker_kept_without_backend_with_a_notice(self):
+        self.installer().install(self.client)
+        m = self.marker()
+        inst = self.installer()
+        inst.install(self.client)
+        self.assertTrue(m.is_file())
+        self.assertIn('DXVK 3 failed to start earlier', inst.out.getvalue())
+        self.assertIn('--backend dxvk', inst.out.getvalue())
+
+    def test_dxvk3_marker_cleared_only_by_an_explicit_dxvk(self):
+        self.installer().install(self.client)
+        m = self.marker()
+        for backend in ('dxvk2', 'native'):
+            self.installer().install(self.client, backend=backend)
+            self.assertTrue(m.is_file(), backend)
+        inst = self.installer()
+        inst.install(self.client, backend='dxvk')
+        self.assertFalse(m.exists())
+        self.assertNotIn('failed to start earlier', inst.out.getvalue())
+
+    def test_dxvk3_marker_is_unlinked_only_after_a_successful_commit(self):
+        self.installer().install(self.client, backend='dxvk2')
+        m = self.marker()
+        with patch.object(fi.INSTALL, 'commit', side_effect=OSError('disk full')):
+            with self.assertRaises(OSError):
+                self.installer().install(self.client, backend='dxvk')
+        self.assertTrue(m.is_file())
+        self.installer().install(self.client, backend='dxvk')
+        self.assertFalse(m.exists())
+
+    def test_dxvk3_marker_is_unlinked_when_nothing_else_changes(self):
+        self.installer().install(self.client, backend='dxvk')
+        m = self.marker()
+        self.installer().install(self.client, backend='dxvk')
+        self.assertFalse(m.exists())
+
+    def test_linked_dxvk_folder_is_refused_for_install_and_uninstall(self):
+        elsewhere = self.client.parent / 'elsewhere-dxvk'
+        elsewhere.mkdir()
+        (elsewhere / 'northlight-dxvk3-init.pending').write_bytes(b'pending')
+        (self.client / 'renderer-backends').mkdir()
+        (self.client / 'renderer-backends/dxvk').symlink_to(elsewhere, target_is_directory=True)
+        with self.assertRaises(ValueError):
+            self.installer().install(self.client)
+        with self.assertRaises(fi.Refusal):
+            self.installer().uninstall(self.client)
+        self.assertTrue((elsewhere / 'northlight-dxvk3-init.pending').is_file())
+
+    def test_dxvk3_marker_does_not_block_install_or_uninstall(self):
+        self.installer().install(self.client)
+        self.marker()
+        self.installer().uninstall(self.client)
+        self.assertEqual(tree(self.client), self.before)
+        self.assertFalse((self.client / 'renderer-backends').exists())
 
 
 if __name__ == '__main__':

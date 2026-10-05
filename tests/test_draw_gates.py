@@ -88,7 +88,7 @@ assert len(old_draws)==4
 
 checks={}
 checkflag=fp.src('shadow_blob_filter.h').read_text()
-checks['real source: HidesNativeBlobs=false (0.3.189 blobs drawn); the mock uses true']=checkflag.count('static constexpr bool HidesNativeBlobs=false;')==1
+checks['real source: HidesNativeBlobs=false (0.3.192 blobs drawn); the mock uses true']=checkflag.count('static constexpr bool HidesNativeBlobs=false;')==1
 # The other three overrides: 0.3.184's capture call and real draw, passed to drawHook unchanged.
 def old_parts(line):
     cap=re.search(r'prepareDraw\(\[&\]\(IDirect3DVertexShader9\* vs\)\{(.*?)captureWater\(vs,(\w+::\w+),\[&\]\{return (ext->\w+\([^)]*\));\}\);\}\);',line)

@@ -53,8 +53,8 @@ class NorthlightShadowBlobFilter {
         return v;
     }
 public:
-    // 0.3.189: false = the game's blob shadows are drawn again (the filter is kept, not called).
-    // true = hide them while the mod draws actor shadows (0.3.154..0.3.188 behaviour).
+    // 0.3.192: false = the game's blob shadows are drawn again (the filter is kept, not called).
+    // true = hide them while the mod draws actor shadows (0.3.154..0.3.191 behaviour).
     static constexpr bool HidesNativeBlobs=false;
     explicit NorthlightShadowBlobFilter(IDirect3DDevice9* device):d(device){}
     NorthlightShadowBlobFilter(const NorthlightShadowBlobFilter&)=delete;

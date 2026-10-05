@@ -13,6 +13,7 @@ import re,struct,subprocess,tempfile
 HERE=Path(__file__).resolve().parent
 CLIENT=fp.client_root()
 DXVK=fp.tools()/'dxvk-2.7.1-download/d3d9.dll'   # optional third-party download
+DXVK3=fp.tools()/'dxvk-3.1.1-download/d3d9.dll'
 # Named exports of Windows d3d9.dll (and DXVK) with their ordinals.
 D3D9={'Direct3DCreate9On12':20,'Direct3DCreate9On12Ex':21,'Direct3DShaderValidatorCreate9':24,'PSGPError':25,'PSGPSampleTexture':26,
       'D3DPERF_BeginEvent':27,'D3DPERF_EndEvent':28,'D3DPERF_GetStatus':29,'D3DPERF_QueryRepeatFrame':30,'D3DPERF_SetMarker':31,
@@ -29,7 +30,7 @@ def pe_exports(data):
 
 def native():
     real=[]
-    for expect,path in [('dxvk-v2.7.1+env',DXVK),('ours',fp.dll()),('plain',CLIENT/'wow.exe')]:
+    for expect,path in [('dxvk-v3.1.1+env',DXVK3),('dxvk-v2.7.1+env',DXVK),('ours',fp.dll()),('plain',CLIENT/'wow.exe')]:
         if path.is_file():real.append(expect+':'+str(path))
     real.append('ours:'+str(fp.dll()))
     with tempfile.TemporaryDirectory() as t:
@@ -71,7 +72,42 @@ def audit():
         assert forbidden not in loader,forbidden   # the executable and candidates are only read
     # 0.3.175: DXVK_ASYNC is never set (the runtime's own setting applies); vendor/buffer defaults only for Backend=dxvk.
     assert 'DXVK_ASYNC' not in src.replace('DXVK_ASYNC is left to the runtime','')
-    assert 'if(kind==NorthlightBackend::Kind::Dxvk)configureDxvkCompatibility(info);' in loader and src.count('configureDxvkCompatibility(')==2
+    assert 'if(NorthlightBackend::isPackagedDxvk(kind))configureDxvkCompatibility(info);' in loader and src.count('configureDxvkCompatibility(')==2
+    # 0.3.189: both option names (2.x / >=3.0), dxvk2 shares the DXVK rules, default-path dxvk falls back to dxvk2 once.
+    compat=fp.src('dxvk_compatibility.h').read_text()
+    assert 'd3d9.cachedDynamicBuffers = True' in compat and 'd3d9.cachedWriteOnlyBuffers = True' in compat and 'd3d9.customVendorId = 1002' in compat
+    assert 'L"renderer-backends\\\\dxvk2\\\\dxvk2_d3d9.dll"' in policy and 'isPackagedDxvk(configured)' in src
+    # No in-process runtime swap: the marker alone selects dxvk2 on the next start.
+    assert 'dxvkFallback' not in src and 'dxvkFallbackModule' not in src and 'dxvkFallbackArmed' not in src
+    proc=src[src.index('template<class T> static T procedure'):src.index('#define NORTHLIGHT_EXPORT')]
+    assert proc.count('backend()')==1 and 'GetModuleHandle' not in proc and 'Module' not in proc.replace('HMODULE','')
+    assert 'configured==NorthlightBackend::Kind::Dxvk&&overridden.empty()' in src
+    # 0.3.189 crash marker: ONE shared helper writes it, calls the backend, clears it only on a good result.
+    assert 'renderer-backends\\\\dxvk\\\\northlight-dxvk3-init.pending' in policy
+    assert src.count('dxvkInitProbe(')==3 and src.count('dxvkInitMarkerWrite()')==2   # definition + call inside the helper, one probe call per export
+    for call,ex in [('IDirect3D9* p=nullptr;','Direct3DCreate9(UINT'),('HRESULT hr=S_OK;','Direct3DCreate9Ex(UINT')]:
+        body=src[src.index(call,src.index(ex)):];body=body[:body.index('\n}\n')]
+        assert body.count('if(probe)dxvkInitProbe(create);else create();')==1 and body.count('if(probe')==1
+        assert 'reentered()&&dxvk3Probe.exchange(false)' in src[src.index(ex):src.index(call,src.index(ex))]
+        assert 'dxvkInitMarkerClear' not in body and 'DeleteFile' not in body
+    helper=src[src.index('template<class F> static void dxvkInitProbe'):src.index('template<class T> static T procedure')]
+    assert helper.index('dxvkInitMarkerWrite();')<helper.index('create()')<helper.index('GetAdapterCount()==0')
+    assert 'if(!why)DeleteFileW(path.c_str());' in helper and helper.count('DeleteFileW')==1   # a bad result leaves the marker
+    assert 'BACKEND DXVK 3 start failed reason=%s; the next start uses dxvk2 (marker=%ls)' in helper
+    assert '"null"' in helper and '"adapters=0"' in helper and 'hr=0x%08lx' in helper
+    assert src.index('static void dxvkInitMarkerWrite')>src.index('static HMODULE recursionBackend')
+    # Marker content binds it to the DXVK 3 build; reparse-point folders are neither written nor honoured.
+    w=src[src.index('static void dxvkInitMarkerWrite'):src.index('struct DxvkInitResult')]
+    assert '"Northlight 0.3.189 DXVK3 init sha256="+dxvk3Sha+"\\r\\n"' in w and 'dxvk3FolderReparse(root)' in w and 'reparse point' in w
+    assert 'FILE_ATTRIBUTE_REPARSE_POINT' in src and src.count('FILE_ATTRIBUTE_REPARSE_POINT')==1
+    be=src[src.index('static HMODULE backend()'):src.index('static HMODULE recursionBackend')]
+    assert 'dxvkInitMarkerWrite' not in be and 'DeleteFile' not in be and 'dxvkInitProbe' not in be
+    assert '!dxvk3FolderReparse(root)' in be and 'sys.read(marker,text)' in be and 'body.find("sha256="+sha)' in be and 'fileSha(' in be
+    assert 'BACKEND DXVK 3 marker stale (other DXVK build); retrying DXVK 3' in be
+    assert 'dxvk3Sha=last.info.sha256;' in be and '!fromMarker' in be
+    assert be.count('loadDxvk2(')==1 and src.count('Kind::Dxvk2,L"",root')==1 and 'markerAttempts' not in src
+    assert 'result.attempts=attempts;' in be
+    assert 'reason=previous-start-ended-in-dxvk3-init marker=%ls' in be
     assert 'static bool applied=false;if(applied)return;applied=true;' in src   # one prefix, even after a refusal
     assert 'NorthlightBackendLoader::ExportScope::reentered()?recursionBackend():backend()' in src
     assert '!NorthlightBackendLoader::ExportScope::reentered()?new Factory(p):p' in src

@@ -5,6 +5,7 @@ test_actor_shadow_selection.py
 test_actor_shadows_wiring.py
 test_actor_texture_worker.py
 test_ao_fold.py
+test_ao_texel_snap.py
 test_art_layer.py
 test_async_memory_diagnostics.py
 test_backend_proxy.py
@@ -92,6 +93,7 @@ test_shadow_blob_client.py
 test_shadow_blob_model.py
 test_shadow_experiment.py
 test_shadow_layer_analysis.py
+test_shadow_pivot.py
 test_shadow_removal_smoothing.py
 test_shadow_shimmer.py
 test_snapshot_allocation.py
@@ -107,6 +109,8 @@ test_terrain_cache_capacity.py
 test_terrain_capture_bounds.py
 test_terrain_capture_optimization.py
 test_terrain_content_cache.py
+test_terrain_reach_fallback.py
+test_terrain_reach_fallback_wiring.py
 test_terrain_shadow_candidates.py
 test_terrain_shared_snapshot.py
 test_terrain_snapshot.py

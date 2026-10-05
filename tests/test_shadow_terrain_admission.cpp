@@ -10,6 +10,9 @@ int main(int argc,char**argv){
     using namespace NorthlightGeometryMemory;
     const Sample fragmented{2195*MiB,90*MiB,true};
     assert(!admits(fragmented,buildBudget(128*MiB))); // observed 0.3.92 deadlock
+    // Bael Modan 0.3.188 sample: extended-reach growth checks are refused (see test_terrain_reach_fallback).
+    const Sample baelModan{760*MiB,63*MiB,true};
+    for(double mib:{1.0,23.58,37.92,64.0})assert(!admits(baelModan,buildBudget(uint64_t(mib*MiB))));
     for(Vec3 center:{Vec3(-10875.52f,-761.07f,61.47f),Vec3(-10726.54f,-1214.74f,35.38f)}){
         int tx=int(std::floor((17066.6666667-center.y)/533.3333333)),ty=int(std::floor((17066.6666667-center.x)/533.3333333));
         std::vector<std::string> localFiles,farFiles;

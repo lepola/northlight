@@ -13,7 +13,7 @@ int main(int argc,char** argv){
     assert(table.at("Kalimdor",440)==4096&&table.at("Azeroth",440)==928&&table.at("Kalimdor",1637)==928);
     assert(table.at("Azeroth",4)==4096&&table.at("Kalimdor",215)==4096&&table.at("Kalimdor",17)==4096);
     assert(table.at("Kalimdor",4)==928&&table.at("Azeroth",215)==928&&table.at("Azeroth",17)==928);
-    assert(table.at("Azeroth",12)==928&&table.at("Azeroth",1519)==928);
+    assert(table.at("Azeroth",12)==1856&&table.at("Kalimdor",12)==928&&table.at("Azeroth",1519)==928);
     for(const char* bad:{"[Kalimdor:440]\nterrain_radius=900", "[Kalimdor:440]\nterrain_radius=4097", "[Kalimdor:440]\nterrain_radius=nan", "[Unknown:440]\nterrain_radius=2048", "[Kalimdor:440]\n", "[Kalimdor:440]\nterrain_radius=2048\nterrain_radius=2048"}){
         std::istringstream in(bad);assert(!parse(in,table,error));assert(table.at("Kalimdor",440)==4096);
     }

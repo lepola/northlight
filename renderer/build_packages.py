@@ -12,7 +12,8 @@ Northlight-<v>-<macOS|Windows>.zip holds one folder of the same name:
   runtime/      Python 3.13 (macOS: python-build-standalone arm64, pruned; Windows: python.org
                 embed-amd64) and StormLib (scripts/build_stormlib.py; the bytes must equal the pin)
   payload/      d3d9.dll (the renderer), the profile .ini files, northlight-quality.ini (kept when the
-                player has one); Windows: DXVK 2.7.1 as renderer-backends/dxvk/dxvk_d3d9.dll
+                player has one); Windows: DXVK 3.1.1 as renderer-backends/dxvk/dxvk_d3d9.dll
+                and DXVK 2.7.1 (the fallback backend dxvk2) as renderer-backends/dxvk2/dxvk2_d3d9.dll
   variants/     the prebuilt cache manifests the installer matches (from --variant-manifest)
   LICENSES/     third-party licences; macOS also python-third-party/ (the libraries linked into its python3)
   BUILD-INFO.json, payload-manifest.json, README.txt and the launchers
@@ -61,6 +62,7 @@ PAYLOAD_COMMON = {'celestial-profiles.ini': 'client-config/celestial-profiles.in
                   'northlight-quality.ini': 'renderer/windows-package/northlight-quality.ini'}
 PRESERVE = {'northlight-quality.ini'}
 DXVK_BACKEND = 'renderer-backends/dxvk/dxvk_d3d9.dll'
+DXVK2_BACKEND = 'renderer-backends/dxvk2/dxvk2_d3d9.dll'
 # Pruned from the macOS runtime: pip, Tk, IDLE, docs, headers and the embedding library (the
 # python3.13 executable links libpython statically).
 MAC_RUNTIME_DROP = re.compile(r'^(bin/(?!python3\.13$)|include/|share/|lib/(libpython|libtcl|itcl|tcl|tk|thread|pkgconfig)|'
@@ -220,8 +222,8 @@ def windows_runtime(tree, pin, stormlib):
     tree.add('LICENSES/Python-LICENSE.txt', tree.data('runtime/LICENSE.txt'))
 
 
-def dxvk_files():
-    pin = PINS['dxvk']
+def dxvk_files(pin_name='dxvk'):
+    pin = PINS[pin_name]
     with tarfile.open(download(pin)) as tar:
         dll = tar.extractfile(pin['member']).read()
     if hashlib.sha256(dll).hexdigest() != pin['member_sha256']:
@@ -271,9 +273,13 @@ def build(platform, version, dll, variants, out, stormlib_dir):
     (windows_runtime if platform == 'windows' else mac_runtime)(tree, runtime_pin, lib)
     payload = {n: (fp.REPO / src).read_bytes() for n, src in PAYLOAD_COMMON.items()}
     if platform == 'windows':
-        backend, license_text = dxvk_files()
-        payload.update({'d3d9.dll': dll_data, DXVK_BACKEND: backend, 'renderer-backends/dxvk/LICENSE': license_text})
+        backend, license_text = dxvk_files('dxvk')
+        backend2, license_text2 = dxvk_files('dxvk2')
+        payload.update({'d3d9.dll': dll_data, DXVK_BACKEND: backend, 'renderer-backends/dxvk/LICENSE': license_text,
+                        DXVK2_BACKEND: backend2, 'renderer-backends/dxvk2/LICENSE': license_text2})
         tree.add('LICENSES/DXVK-LICENSE.txt', license_text)
+        if license_text2 != license_text:
+            tree.add('LICENSES/DXVK-2.x-LICENSE.txt', license_text2)
     else:
         tree.add('payload/d3d9.dll', dll_data)   # installed by migrate_mac_proxy as mods/d3d9.dll
     for name, data in payload.items():
@@ -295,6 +301,7 @@ def build(platform, version, dll, variants, out, stormlib_dir):
             'stormlib_sha256': sha(lib), 'stormlib_source_tree_sha256': PINS['stormlib']['source_tree_sha256'],
             'runtime': {k: runtime_pin[k] for k in ('name', 'version', 'url', 'sha256')},
             'dxvk': {k: PINS['dxvk'][k] for k in ('version', 'url', 'sha256')} if platform == 'windows' else None,
+            'dxvk_fallback': {k: PINS['dxvk2'][k] for k in ('version', 'url', 'sha256')} if platform == 'windows' else None,
             'variants': {n: {'cache_digest': m['cache_digest'], 'files': len(m['files'])} for n, m in sorted(variants.items())},
             'app_files': {n: sha(fp.REPO / n) for n in APP_FILES}}
     tree.add('BUILD-INFO.json', (json.dumps(info, indent=2) + '\n').encode())

@@ -9,6 +9,7 @@
 using namespace NorthlightBackendLoader;
 template<size_t N> static std::string lit(const char (&s)[N]){return std::string(s,N-1);}
 static std::vector<unsigned char> bytes(const std::string& s){return {s.begin(),s.end()};}
+static const std::string DXVK31=lit("MZ...DXVK: \0v3.1.1\0Build: \0x86\0...DXVK_CONFIG\0");
 static const std::string DXVK27=lit("MZ...DXVK: \0v2.7.1\0Build: \0x86\0...DXVK_CONFIG\0DXVK_CONFIG_FILE\0");
 static const std::string DXVK110=lit("MZ..DXVK: \0\0\0v1.10.3-20230507-async (macOS)\0..DXVK_CONFIG_FILE\0");
 static const std::string OURS=lit("MZ..Northlight renderer 0.3.147; backend=%s DXVK_CONFIG\0");
@@ -44,6 +45,8 @@ static FakeSys world(){FakeSys s;s.add(SYS,{1,"MZ system d3d9"});s.add(DX,{2,DXV
 static void inspection(){
     auto a=inspect((const unsigned char*)DXVK27.data(),DXVK27.size());
     assert(a.read&&a.dxvk&&a.dxvkVersion=="v2.7.1"&&a.dxvkConfigEnv&&!a.ours);
+    auto a3=inspect((const unsigned char*)DXVK31.data(),DXVK31.size());
+    assert(a3.read&&a3.dxvk&&a3.dxvkVersion=="v3.1.1"&&a3.dxvkConfigEnv&&!a3.ours);
     auto b=inspect((const unsigned char*)DXVK110.data(),DXVK110.size());
     assert(b.dxvk&&b.dxvkVersion=="v1.10.3-20230507-async (macOS)"&&!b.dxvkConfigEnv);
     auto c=inspect((const unsigned char*)OURS.data(),OURS.size());assert(c.ours&&!c.dxvk&&!c.dxvkConfigEnv);
