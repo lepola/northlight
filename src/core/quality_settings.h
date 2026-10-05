@@ -14,7 +14,7 @@ namespace NorthlightQuality {
 enum class Preset { Quality, Balanced, Performance };
 struct Settings {
     Preset preset=Preset::Quality;
-    unsigned minSkinnedTriangles=0,captureBudgetMiB=32,actorShadowBudgetMiB=0;
+    unsigned minSkinnedTriangles=100,captureBudgetMiB=32,actorShadowBudgetMiB=0;
     unsigned farShadowInterval=4,nearShadowInterval=1,localLightLimit=32,pointShadows=0,pointShadowRefreshMs=0,shadowDirectionSteps=2048;
     // Where each value in Keys order came from: 'd' code default (Quality), 'p' Balanced/Performance
     // preset, 'l' legacy shadow-experiment.ini, 'f' northlight-quality.ini key. Not part of ==.
@@ -56,12 +56,15 @@ struct Settings {
     // 0.3.187 FrameDrawGates: 1 = the draw hooks skip the sky, blob and terrain shadow work in frames
     // where its per-frame preconditions are off (draw_gates.h); 0 = the 0.3.184 per-draw work. Same image.
     unsigned frameDrawGates=1;
-    char origin[32]={'d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d'};
+    // 0.3.190 ShadowPivotCorrection: 1 = the cascade pivot's distance follows a camera zoom or collision snap and
+    // the player's own position (shadow_pivot.h); 0 = the orbit estimate alone, as before 0.3.190.
+    unsigned shadowPivotCorrection=1;
+    char origin[33]={'d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d'};
 };
 struct Key { const char* name; unsigned Settings::*field; unsigned low,high; unsigned preset[3]; };
 // preset[] = Quality, Balanced, Performance. Quality must equal Settings{}.
 inline const Key Keys[]={
-    {"MinSkinnedTriangles",&Settings::minSkinnedTriangles,0,500,{0,50,100}},
+    {"MinSkinnedTriangles",&Settings::minSkinnedTriangles,0,500,{100,150,180}},
     {"CaptureBudgetMiB",&Settings::captureBudgetMiB,1,32,{32,32,32}},
     {"ActorShadowBudgetMiB",&Settings::actorShadowBudgetMiB,0,32,{0,16,8}},
     {"FarShadowInterval",&Settings::farShadowInterval,1,16,{4,5,6}},
@@ -69,7 +72,7 @@ inline const Key Keys[]={
     {"LocalLightLimit",&Settings::localLightLimit,8,64,{32,24,16}},
     {"PointShadows",&Settings::pointShadows,0,1,{0,0,0}}, /* 0.3.176: off in every preset (only building lights cast) */
     {"PointShadowRefreshMs",&Settings::pointShadowRefreshMs,0,100,{0,33,33}},
-    {"ShadowDirectionSteps",&Settings::shadowDirectionSteps,256,2048,{2048,1024,512}},
+    {"ShadowDirectionSteps",&Settings::shadowDirectionSteps,256,2048,{2048,2048,2048}},
     {"GI",&Settings::gi,0,1,{1,1,1}},
     {"GIRays",&Settings::giRays,16,64,{64,48,32}},
     {"GIBounces",&Settings::giBounces,1,3,{3,3,2}},
@@ -93,6 +96,7 @@ inline const Key Keys[]={
     {"HorizonHazeTerrain",&Settings::horizonHazeTerrain,0,1,{1,1,1}},
     {"ActorShadows",&Settings::actorShadows,0,1,{1,1,1}},
     {"FrameDrawGates",&Settings::frameDrawGates,0,1,{1,1,1}},
+    {"ShadowPivotCorrection",&Settings::shadowPivotCorrection,0,1,{1,1,1}},
 };
 inline bool operator==(const Settings& a,const Settings& b){for(const auto& k:Keys)if(a.*k.field!=b.*k.field)return false;return true;}
 inline bool operator!=(const Settings& a,const Settings& b){return !(a==b);}

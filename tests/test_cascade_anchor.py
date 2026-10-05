@@ -21,7 +21,7 @@ checks['cascade frames, prebuild frame and prebuild matrix use the anchor']=('ca
 after=render[render.index(update)+len(update):]
 checks['no other consumer of the raw pivot after the anchor']=re.search(r'\bpivot\b',re.sub(r'//[^\n]*','',after)) is None
 checks['static caster request keeps the raw pivot']='staticFramePivot=shadowPivot();staticPivotReady=true;' in w
-checks['reset() restarts the window']='pivotValid=false;pivotDistance=12.f;cascadeAnchor.reset();' in w and '#include "cascade_anchor.h"' in w
+checks['reset() restarts the window']='pivotValid=false;pivotDistance=12.f;pivotCorrection.reset();pivotSelfCaptured=false;cascadeAnchor.reset();' in w and '#include "cascade_anchor.h"' in w
 a=fp.src('cascade_anchor.h').read_text()
 checks['1 s window, 40 yd teleport reset, 24 yd lag bound, fixed 256-entry ring (no allocation)']=('constexpr uint32_t Window=1000;' in a and 'constexpr float ResetDistance=40;' in a
     and 'constexpr float MaxLag=24;' in a and 'constexpr unsigned Capacity=256;' in a and 'Sample minima[Capacity];' in a and all(x not in a for x in ('#include <deque>','#include <vector>','push_back','malloc')) and re.search(r'\bnew\s+\w+\s*[\[({]',a) is None)

@@ -24,6 +24,8 @@ if address:
     start=next(i for i,l in enumerate(dis) if l.startswith(address+':'))
     for l in dis[start:]:
         if body and (not l.strip() or re.match(r'^[0-9a-f]+ <',l)):break
+        # 0.3.189: an unnamed function may follow without a symbol line; the body ends at retl + alignment padding.
+        if body and re.search(r'\tretl?\b',body[-1]) and re.search(r'\t(nop[lw]?|int3)\b',l):break
         body.append(l)
 mnemonics={l.split('\t')[1].split()[0] for l in body if '\t' in l and len(l.split('\t'))>1 and l.split('\t')[1].strip()}
 ALLOWED={'pushl','popl','movl','movzbl','movb','cmpl','cmpb','addl','subl','xorl','orl','andl','notl','leal','shrl','testl','je','jne','jb','jae','ja','jbe',

@@ -105,6 +105,19 @@
   },
   "dxvk": {
     "name": "DXVK",
+    "version": "3.1.1",
+    "file": "dxvk-3.1.1-download/dxvk-3.1.1.tar.gz",
+    "url": "https://github.com/doitsujin/dxvk/releases/download/v3.1.1/dxvk-3.1.1.tar.gz",
+    "sha256": "40565b4a724aadc4433fa4e010b4b23916d9b1f1baeee64e17186db94f54e608",
+    "sha256_source": "GitHub release asset digest",
+    "member": "dxvk-3.1.1/x32/d3d9.dll",
+    "member_sha256": "265888c31ca78dffa290c39cb7e50bfb02762590e41927906e46fb32f01497fa",
+    "license_file": "dxvk-3.1.1-download/LICENSE",
+    "license_sha256": "a5cb1a6ded7d2d7e92d550ba28edd21be2d1d4044662b399887351023e30ce64",
+    "license": "zlib"
+  },
+  "dxvk2": {
+    "name": "DXVK 2.x (fallback backend dxvk2)",
     "version": "2.7.1",
     "file": "dxvk-2.7.1-download/dxvk-2.7.1.tar.gz",
     "url": "https://github.com/doitsujin/dxvk/releases/download/v2.7.1/dxvk-2.7.1.tar.gz",

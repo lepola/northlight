@@ -13,7 +13,14 @@ DOWNLOADS
 
 REQUIREMENTS
 - 64-bit Windows 10 or 11 and a WoW 3.3.5a (12340) client.
-- A graphics driver with Vulkan for x86 programs (DXVK 2.7.1 needs Vulkan 1.3).
+- A graphics driver with Vulkan for x86 programs. The default DXVK 3.1.1
+  still asks for Vulkan 1.3 but also needs extra device features (for example
+  maintenance6, 8/16-bit storage and scalarBlockLayout), so an old driver or
+  GPU (some AMD Polaris/Vega and Intel Gen9 graphics) may not be supported.
+  On such a driver the first start ends (see below) and the following starts
+  use DXVK 2.7.1 (the dxvk2 backend) by themselves.
+- AMD RX 5000/6000 (RDNA 1/2): DXVK's own release notes say DXVK 3 performs
+  badly on them on Windows. Install with Install.cmd --backend dxvk2.
 - Only ASCII characters in the game folder path (no ä, ö, å or other special
   characters), a path of at most about 150 characters, and the game must not
   be in Program Files.
@@ -44,6 +51,7 @@ are skipped. Log: the logs folder of the extracted package.
 
 Options (Install.cmd ...):
   --locale enUS          if the client has several locales and the installer cannot tell which one is used
+  --backend dxvk2        DXVK 2.7.1 for AMD RX 5000/6000 or drivers DXVK 3 does not support
   --backend native       Windows' own Direct3D 9 instead of DXVK
   --backend legacy       the d3d9.dll that was already in the game folder (for example your own DXVK or ReShade)
   --no-art-layer         no lighting layer (patch-z)
@@ -67,9 +75,42 @@ the actual Direct3D 9 implementation from elsewhere.
   reshade-shaders, enbseries.ini) stay in the game folder.
 
 The backend is chosen in northlight-renderer.ini: Backend=dxvk.
-- dxvk:   renderer-backends\dxvk\dxvk_d3d9.dll (the package's DXVK 2.7.1, the default)
+- dxvk:   renderer-backends\dxvk\dxvk_d3d9.dll (the package's DXVK 3.1.1, the default)
+- dxvk2:  renderer-backends\dxvk2\dxvk2_d3d9.dll (DXVK 2.7.1; for AMD RX 5000/6000 and
+          for drivers DXVK 3 does not support: Install.cmd --backend dxvk2 or
+          Backend=dxvk2 in northlight-renderer.ini)
 - native: Windows' own System32\d3d9.dll
 - legacy: renderer-backends\legacy\legacy_d3d9.dll (the game folder's earlier d3d9.dll)
+On a driver DXVK 3.1.1 does not support, DXVK usually throws an error while
+the game starts, and the game closes (DXVK's own log, Wow_d3d9.log in the
+game folder, says "Failed to initialize DXVK" or "Device does not support
+required feature"). The renderer marks that start in
+renderer-backends\dxvk\northlight-dxvk3-init.pending. The renderer does not
+switch backends within a start: when the DXVK 3 start fails or finds no
+adapter, the next start uses DXVK 2.7.1 (the log says BACKEND DXVK 3 start
+failed reason=...; the next start uses dxvk2, and later starts say BACKEND
+FALLBACK dxvk -> dxvk2). So the first start can fail and the next one works.
+The marker is tied to the DXVK 3 build it was written for: a package with a
+new DXVK 3 build tries DXVK 3 again by itself. To try DXVK 3 again on the same
+build after a driver update, delete the .pending file or run
+Install.cmd --backend dxvk (the file is removed once that install succeeded).
+To avoid the failed first start, install with --backend dxvk2. If DXVK 2.7.1
+fails too (the driver has no Vulkan 1.3), use --backend native.
+Known limitation: if the game is closed or crashes during the short DXVK 3
+start (for example an overlay or Vulkan layer crashes), the next starts also
+use DXVK 2.7.1 until the .pending file is deleted or Install.cmd --backend dxvk
+is run.
+A reinstall without --backend keeps an installed dxvk2 or native choice and a
+pending marker; --backend dxvk switches back to DXVK 3 and clears the marker.
+Some antivirus products flag 32-bit DXVK builds as a false positive. If one
+removes a DXVK file of the package, the installer still installs the backend you
+use and says which one is not available; an older copy of that file in the game
+folder is removed, so nothing unverified is loaded. A DXVK file that is present
+but damaged or modified is always refused: download and unzip the package again.
+If the file of the backend you install is missing, the installer stops and
+names the options: allow the file in the antivirus product and unzip again, or
+install with --backend dxvk2 (for the dxvk file) / --backend dxvk (for the
+dxvk2 file) / --backend native.
 BackendPath= can also point to another D3D9 implementation (a path relative to
 the game folder or a full path); the file name must not be d3d9.dll (name the
 copy, for example, my_d3d9.dll). The renderer never loads itself: if the chosen
@@ -91,14 +132,14 @@ Individual settings (Quality / Balanced / Performance):
   ActorShadowBudgetMiB  0 / 16 / 8     character shadows, nearest first (0 = no limit)
   ActorShadowRadius     40 / 35 / 20   characters more than N yards from your own character cast no shadow (0..200; 0 = no limit; 1..3 = your own character, mount, weapons and whatever is right next to you)
   ActorShadows          1 / 1 / 1      shadows of characters and moving objects (0 = static shadows only: terrain, buildings, and the trees and objects placed on the map; characters, creatures, mounts and pets lose their shadow, your own character too, and so do objects the server places, such as doors, elevators, ships, zeppelins, mailboxes and event decorations; swaying trees, windmills and flags keep a shadow frozen in their rest pose; the game's own round shadows return under characters; saves about 4–5 ms per frame in crowds and about 1 ms in quiet areas; with GIDynamicProbes=1 characters are still copied about every 200 ms for indirect light, GIDynamicProbes=0 removes that too; 0 also turns off the ShadowFateDiagnostics and DiagReplayProbe settings; no preset changes this); with 1, shop signs and other small still objects the server places keep their shadow when the camera turns away
-  MinSkinnedTriangles   0 / 50 / 100   small animated parts cast no shadow
+  MinSkinnedTriangles   100/150/180    small animated parts cast no shadow
   FarShadowInterval     4 / 5 / 6      distant shadows (beyond ~48 m) are drawn every Nth frame (1..16)
   NearShadowInterval    1 / 2 / 2      moving parts of the near shadows (characters) every Nth frame (1..16)
   LocalLightLimit       32 / 24 / 16   lamps lighting at the same time (8..64; above 32 = more distant lamps too)
   PointShadows          0 / 0 / 0      lamp shadows (1 = on): only lights inside buildings cast faint shadows, at dusk and night; street lamps, lanterns and torches never do; off by default
   PointShadowRefreshMs  0 / 33 / 33    lamp shadow update interval
   PointShadowFacesPerFrame 6 / 6 / 6   lamp shadow directions updated per frame (1..6; 6 = all at once; lower = smaller spikes, a brief seam at the edge)
-  ShadowDirectionSteps  2048/1024/512  sun direction quantization (fewer jumps)
+  ShadowDirectionSteps  2048/2048/2048 sun direction quantization (fewer jumps)
   StaticCacheSlices     1 / 1 / 1      a partial redraw of the cached shadow is spread over N frames (1..4; 1 = in one frame; a new shadow can appear N-1 frames late)
   CaptureBudgetMiB      32 / 32 / 32   capture limit for animated geometry (your own character and mount may use an extra 4 MiB once it is reached)
   GI                    1 / 1 / 1      indirect light (0 = off, the background computation too)
@@ -120,6 +161,7 @@ Individual settings (Quality / Balanced / Performance):
   RenderProfile         0 / 0 / 0      measurement: render thread timings in the log (needs Diagnostics=1; the image does not change)
   DiagReplayProbe       0 / 0 / 0      measurement: the near-shadow character draws a second time, hidden, in 10 s periods, and the timing in the log (needs RenderProfile=1; the image does not change)
   FrameDrawGates        1 / 1 / 1      per-frame draw checks (0 = check every draw as before 0.3.187, for comparisons; the image does not change)
+  ShadowPivotCorrection 1 / 1 / 1      near shadow detail follows camera zoom and collisions (0 = the distance of the sharp shadow area is only estimated while orbiting, as before 0.3.190, for comparisons)
 When both NearShadowInterval and FarShadowInterval are at least 2, frames that
 draw neither shadow also skip copying the character geometry (about 1–1.5 ms
 of CPU per skipped frame). Light and normal frames alternate: the average FPS
@@ -140,9 +182,14 @@ Before a test or a problem report, set Diagnostics=1 in northlight-quality.ini
 1. Check the start of the new run's northlight-renderer.log file:
    Northlight renderer <version>; d3d9.dll proxy ... backend=dxvk ... loaded=1 error=0
    The backend path must point to renderer-backends\dxvk\dxvk_d3d9.dll.
-   The BACKEND selected=... runtime=v2.7.1 line gives the loaded DXVK version and
+   The BACKEND selected=... runtime=v3.1.1 line (v2.7.1 with dxvk2) gives the loaded DXVK version and
    the HOST line the path of the wow.exe used.
    The Backend capabilities line is expected to show INTZ=1 RESZ=1 floatRT=1 SM3=1.
+   If the log has BACKEND FALLBACK dxvk -> dxvk2, DXVK 2.7.1 is in use because
+   DXVK 3 found no supported adapter or an earlier start ended while it started.
+   The first launches compile shaders (cached under %LOCALAPPDATA%), so they
+   stutter more. To locate a GPU hang, start the game with the environment
+   variable DXVK_DEBUG=hang set and send the log.
 2. Test the Stormwind crowd and Tanaris/Gadgetzan. Check the shadows of
    characters and trees, GI, fog, the sun being covered, and camera rotation.
 3. Let the shaders warm up for one round. Stop at the same view:
@@ -166,6 +213,7 @@ a conflict stops the restore before any change.
 
 SOURCES AND LICENSES
 LICENSES folder: Python (PSF), StormLib (MIT) and the zlib, bzip2,
-LibTomCrypt/LibTomMath and LZMA SDK that come with it, DXVK (zlib license).
+LibTomCrypt/LibTomMath and LZMA SDK that come with it, DXVK 3.1.1 and 2.7.1 (zlib license).
+DXVK 3.1.1: https://github.com/doitsujin/dxvk/releases/tag/v3.1.1
 DXVK 2.7.1: https://github.com/doitsujin/dxvk/releases/tag/v2.7.1
 BUILD-INFO.json lists the versions and checksums of every part of the package.

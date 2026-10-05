@@ -18,6 +18,9 @@ from datetime import datetime
 PROXY = 'd3d9.dll'
 LEGACY = 'renderer-backends/legacy/legacy_d3d9.dll'
 DXVK = 'renderer-backends/dxvk/dxvk_d3d9.dll'
+DXVK2 = 'renderer-backends/dxvk2/dxvk2_d3d9.dll'   # DXVK 2.7.1, the fallback backend
+DXVK3_MARKER = 'renderer-backends/dxvk/northlight-dxvk3-init.pending'   # the renderer's crash marker; never packaged or recorded
+DXVK_FOLDERS = {'dxvk': 'renderer-backends/dxvk/', 'dxvk2': 'renderer-backends/dxvk2/'}
 CONFIG = 'northlight-renderer.ini'
 MARKER = b'Northlight renderer '
 PROXY_SIGNATURE = b'PROXY module=%ls root=%ls'   # the proxy's start-up log line; carries no product name
@@ -28,6 +31,37 @@ def sha(path):
     with path.open('rb') as f:
         for data in iter(lambda: f.read(1024*1024), b''): h.update(data)
     return h.hexdigest()
+
+_sha_cache = {}
+
+def package_sha(path):
+    """sha256 of a package file, computed once per (path, size, mtime): the front end and payload_plan both
+    verify every payload file, and DXVK builds are large."""
+    st = path.stat()
+    key = (str(path), st.st_size, st.st_mtime_ns)
+    if key not in _sha_cache: _sha_cache[key] = sha(path)
+    return _sha_cache[key]
+
+def other_dxvk(path, selected):
+    """The DXVK backend ('dxvk'/'dxvk2') that owns the payload path when it is not the selected backend, else None
+    (the one predicate for 'this DXVK file may be absent'; 'native' and 'legacy' select neither)."""
+    for name, folder in DXVK_FOLDERS.items():
+        if path.startswith(folder) and name != selected: return name
+    return None
+
+def package_problem(path, selected, missing, label=None):
+    """Refusal text for a package file that is missing or does not match the manifest. A missing/damaged file of
+    the selected DXVK backend names the alternatives (the other DXVK backend, or native)."""
+    label = label or path
+    owner = next((n for n, folder in DXVK_FOLDERS.items() if path.startswith(folder)), None)
+    if missing and owner:
+        text = 'Package file '+label+' is missing; an antivirus product may have removed it. Allow the file and unzip the package again'
+    else:
+        text = 'Package file '+label+(' is missing' if missing else ' is damaged or modified')+'; download and unzip the package again'
+    if owner:
+        alternatives = ['--backend '+n for n in DXVK_FOLDERS if n != owner]+['--backend native']
+        text += ', or install with '+' / '.join(alternatives)
+    return text+'.'
 
 def safe_path(root, name):
     p = PurePosixPath(name)
@@ -218,18 +252,31 @@ def commit(client, plan, staged, payload=None, version='__RELEASE_VERSION__', ki
         shutil.rmtree(stage, ignore_errors=True)
     return backup
 
+def resolve_backend(client, backend=None):
+    """The one place that picks the backend. An explicit backend wins; else an installed Backend=dxvk2 or
+    native is kept; else dxvk. An installed Backend=legacy resolves to dxvk here: switch_plan keeps the legacy
+    selection by itself while the foreign d3d9.dll is still there (and writes dxvk when it is gone)."""
+    if backend is not None: return backend
+    installed = config_backend(safe_path(client, CONFIG))
+    return installed if installed in ('dxvk2', 'native') else 'dxvk'
+
 def config_bytes(backend):
     return ('[Renderer]\r\nBackend='+backend+'\r\n').encode('ascii')
 
 def payload_plan(client, package, use_existing=False, backend=None, extra=None, proxy=True):
     """(plan, staged, foreign): the entries that bring client to the package payload.
-    backend None keeps the payload's northlight-renderer.ini; 'dxvk'/'native' writes Backend=<backend>;
-    'legacy' (like use_existing) selects a foreign d3d9.dll kept as the legacy backend.
+    backend is already resolved (resolve_backend; None only with proxy=False, which writes no ini): 'dxvk'/'dxvk2'/'native'
+    writes Backend=<backend>; 'legacy' (like use_existing) selects a foreign d3d9.dll kept as the legacy backend.
+    A DXVK file of an unselected DXVK backend that is MISSING from the package is skipped with a notice, and an older
+    client copy of it is removed through the transaction (so the renderer never loads a copy this install did not
+    put there); an installed ini whose Backend already is the resolved one is left untouched; a present file that does not match the manifest is always refused.
     extra {client path: bytes} adds staged files (the art layer). proxy=False (macOS, where
     migrate_mac_proxy owns d3d9.dll and northlight-renderer.ini) leaves the game-folder d3d9.dll alone."""
+    if backend is None and proxy: raise ValueError('payload_plan needs a resolved backend (resolve_backend)')
     if backend == 'legacy': use_existing = True
     first, staged, config, foreign = switch_plan(client, use_existing) if proxy else ([], {}, None, False)
-    if config is None and backend in ('dxvk', 'native'): config = config_bytes(backend)
+    effective = 'legacy' if config else backend if backend in ('dxvk', 'dxvk2', 'native') else None
+    if config is None and backend in ('dxvk', 'dxvk2', 'native'): config = config_bytes(backend)
     manifest = json.loads((package/'payload-manifest.json').read_text(encoding='utf-8'))
     if proxy and PROXY not in [e['path'] for e in manifest]: raise ValueError('Package lacks the renderer '+PROXY)
     if foreign:
@@ -238,14 +285,30 @@ def payload_plan(client, package, use_existing=False, backend=None, extra=None, 
             print('Note: its settings (e.g. ReShade.ini, reshade-shaders, enbseries.ini) stay in the game folder;'
                   ' a ReShade/ENB used as Backend=legacy may not find them there.', flush=True)
     plan, proxy_entry = list(first), []
-    if proxy and backend is not None and CONFIG not in [e['path'] for e in manifest]:
+    # The selected DXVK backend's files must verify. A file missing from another DXVK folder (an antivirus
+    # product may have removed it) is skipped with a notice; 'native' and 'legacy' need neither.
+    selected = backend or 'dxvk'
+    # An installed ini that already says the effective backend is kept byte for byte (BackendPath= and other keys survive).
+    keep_ini = proxy and effective is not None and config_backend(safe_path(client, CONFIG)) == effective
+    if proxy and backend is not None and not keep_ini and CONFIG not in [e['path'] for e in manifest]:
         manifest = manifest+[{'path':CONFIG, 'sha256':None}]
     print('Verifying package and comparing installed files...', flush=True)
     for e in manifest:
+        if e['path'] == CONFIG and keep_ini: continue
         dst = safe_path(client, e['path'])
         if e['sha256'] is not None:
             src = safe_path(package/'payload', e['path'])
-            if not src.is_file() or sha(src) != e['sha256']: raise ValueError('Package checksum mismatch: '+e['path'])
+            other = other_dxvk(e['path'], selected)
+            if src.is_file():
+                if package_sha(src) != e['sha256']: raise ValueError(package_problem(e['path'], selected, False))
+            elif other is None: raise ValueError(package_problem(e['path'], selected, True))
+            else:
+                print('Note:', e['path'], 'is missing from the package (an antivirus product may have removed it);'
+                      ' skipping it. Backend', other, 'will not be available.', flush=True)
+                if dst.exists():
+                    print('Removing the older', e['path'], 'from the game folder (it was not verified by this install).', flush=True)
+                    plan.append({'path':e['path'], 'before':sha(dst), 'after':None})
+                continue
         old = sha(dst) if dst.exists() else None
         # User settings (northlight-quality.ini) are installed only when missing, never overwritten.
         if e.get('preserve') and dst.exists():
@@ -273,7 +336,7 @@ def install(client, package=PACKAGE, use_existing=False, backend=None, extra=Non
             src=safe_path(client,e['path'])
             if not src.is_file() or sha(src)!=e['sha256']:
                 raise ValueError('This small update needs the matching world-cache. Use the FULL package: '+e['path'])
-    plan, staged, foreign = payload_plan(client, package, use_existing, backend, extra)
+    plan, staged, foreign = payload_plan(client, package, use_existing, resolve_backend(client, backend), extra)
     if not plan:
         print('This package is already installed.'); return None
     backup = commit(client, plan, staged, package/'payload', version)
