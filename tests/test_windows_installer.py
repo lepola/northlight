@@ -8,7 +8,9 @@ import json
 import os
 from pathlib import Path
 import tempfile
+import types
 import unittest
+from datetime import datetime,timedelta
 from unittest.mock import patch
 
 spec=importlib.util.spec_from_file_location('installer',fp.src('windows-package/install.py'))
@@ -207,5 +209,65 @@ class InstallerTests(unittest.TestCase):
         m.restore(self.client,backup)
         self.assertEqual(self.read('northlight-quality.ini'),b'[Quality]\nPreset=Balanced\n')
         self.assertEqual(self.read('d3d9.dll'),FOREIGN)
+    def set_payload(self,name,data):
+        (self.pkg/'payload'/name).write_bytes(data)
+        manifest=json.loads((self.pkg/'payload-manifest.json').read_text())
+        for e in manifest:
+            if e['path']==name:e['sha256']=hashlib.sha256(data).hexdigest()
+        (self.pkg/'payload-manifest.json').write_text(json.dumps(manifest))
+    def stack(self,n=3):
+        """n package versions installed on top of each other (distinct d3d9.dll; v2 also another ini): [backup, ...] oldest first."""
+        out=[]
+        for i in range(1,n+1):
+            self.set_payload('d3d9.dll',PROXY+b' v%d'%i)
+            if i==2:self.set_payload('northlight-renderer.ini',b'[Renderer]\r\nBackend=native\r\n')
+            out.append(m.install(self.client,self.pkg,version='v%d'%i))
+        return out
+    def chain(self):return list(reversed(m.transactions(self.client)))
+    def test_stacked_installs_chain_check_and_restore(self):
+        self.foreign();before=self.snapshot();backups=self.stack()
+        self.assertEqual([b for b,_ in m.transactions(self.client)],backups)
+        self.assertEqual(m.chain_problems(self.client,self.chain()),[])
+        self.assertTrue(m.restore_problems(self.client,backups[0]))   # alone it sees only the newest file
+        for b,_ in self.chain():m.restore(self.client,b)
+        self.assertEqual(self.snapshot(),before)
+    def test_chain_refuses_edit_after_latest_install(self):
+        backups=self.stack();(self.client/'d3d9.dll').write_bytes(b'user-edit')
+        problems=m.chain_problems(self.client,self.chain())
+        self.assertEqual(problems[0][0],backups[2]);self.assertIn('File changed after installation',problems[0][1])
+    def test_chain_refuses_edit_between_installs(self):
+        first=self.stack(1)[0];(self.client/'d3d9.dll').write_bytes(b'user-edit')
+        self.set_payload('d3d9.dll',PROXY+b' v2');m.install(self.client,self.pkg,version='v2')
+        problems=m.chain_problems(self.client,self.chain())
+        self.assertEqual([b for b,_ in problems],[first]);self.assertIn('File changed after installation',problems[0][1])
+        with self.assertRaises(ValueError):m.restore(self.client,first)   # after the newer one is restored
+    def test_chain_damaged_older_backup(self):
+        self.foreign();backups=self.stack();(backups[0]/'before/d3d9.dll').write_bytes(b'bad')
+        problems=m.chain_problems(self.client,self.chain())
+        self.assertEqual(problems,[(backups[0],'Backup damaged: d3d9.dll')])
+    def test_chain_preserve_edit_kept(self):
+        self.add_quality();backups=self.stack();(self.client/'northlight-quality.ini').write_bytes(b'[Quality]\nPreset=Balanced\n')
+        self.assertEqual(m.chain_problems(self.client,self.chain()),[])
+        for b,_ in self.chain():m.restore(self.client,b)
+        self.assertEqual(self.read('northlight-quality.ini'),b'[Quality]\nPreset=Balanced\n')
+    def test_chain_newer_record_deleting_a_file(self):
+        name='world-cache/models/a.fgm';digest=hashlib.sha256(self.files[name]).hexdigest();payload=self.pkg/'payload'
+        first=m.commit(self.client,[{'path':name,'before':None,'after':digest}],{},payload)
+        second=m.commit(self.client,[{'path':name,'before':digest,'after':None}],{},payload)
+        self.assertIsNone(self.read(name));self.assertEqual([b for b,_ in m.transactions(self.client)],[first,second])
+        self.assertEqual(m.chain_problems(self.client,self.chain()),[])
+        (self.client/name).write_bytes(b'user-file')   # created by the user after the deletion
+        self.assertEqual(m.chain_problems(self.client,self.chain())[0][0],second)
+        (self.client/name).unlink()
+        for b,_ in self.chain():m.restore(self.client,b)
+        self.assertIsNone(self.read(name))
+    def test_same_second_transactions_keep_install_order(self):
+        ticks=iter(range(1000));hexes=iter(range(10**6))
+        fake_dt=types.SimpleNamespace(now=lambda:datetime(2030,1,1,12,0,0)+timedelta(microseconds=next(ticks)))
+        # Decreasing suffixes: the later commit gets the lexically smaller folder name.
+        fake_uuid=types.SimpleNamespace(uuid4=lambda:types.SimpleNamespace(hex='%08x'%(0xfffffff-next(hexes))+'0'*24))
+        with patch.object(m,'datetime',fake_dt),patch.object(m,'uuid',fake_uuid):backups=self.stack()
+        self.assertEqual(len({b.name[:15] for b in backups}),1);self.assertGreater(backups[0].name,backups[2].name)
+        self.assertEqual([b for b,_ in m.transactions(self.client)],backups)
 
 if __name__=='__main__':unittest.main()
