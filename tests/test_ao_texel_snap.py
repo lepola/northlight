@@ -237,6 +237,22 @@ def check_float32():
                 assert abs(snapped-expected)*n < .02, (n, out, i, snapped*n, expected*n)
 
 
+def check_composite(dimensions):
+    """Legacy Composite: its ambient tap (ambient texel centre + a quarter full-res texel) and the
+    NeighbourNormal reads one texel right/down each point-sample one stable, distinct texel."""
+    for axis, n in enumerate(dimensions):
+        a = max(1, math.floor(.5*n+.01))
+        for k in range(1, a-1):
+            u = (k+.5)/a+.25/n
+            for d in (0, 1):
+                x = (u+d/n)*n
+                picks = {point_texel(u+d/n, n, j) for j in (-JITTER, 0., JITTER)}
+                assert len(picks) == 1 or abs(x-round(x)) <= 2*JITTER, (dimensions, axis, k, d, picks)
+            # Odd sizes drift the tap across a texel boundary once; that genuine tie is the old behaviour.
+            if abs(u*n-round(u*n)) > 2*JITTER:
+                assert point_texel(u, n) != point_texel(u+1/n, n), (dimensions, axis, k)
+
+
 def audit_source():
     text = fp.src('effects.hlsl').read_text()
     helper = re.search(r'float2 DepthTexelUV\(float2 uv\)\s*\{(.*?)\n\}', text, re.S)
@@ -251,10 +267,12 @@ def audit_source():
     assert 'DepthTexelUV(suv)' not in impl and 'float2 suv = uv + kernel[i].x * axisX' in impl
     normal = text[text.index('float3 SurfaceNormal('):text.index('float4 AOImpl(')]
     assert 'DepthTexelUV' not in normal and 'ty = dot(ty, ty) < 1e-14 ? b - u : ty;' in normal
+    composite = text[text.index('float4 Composite('):]
+    assert 'float2 ambientCenter = mad(floor(uv * ambientSize) + 0.5, ambientTexel, 0.25 * ImageAndClip.xy);' in composite
     build = json.loads(fp.src('shader-build.json').read_text())
     digest = hashlib.sha256(fp.src('effects.hlsl').read_bytes()).hexdigest()
     assert build['source_sha256'] == digest, 'shaders/shader-build.json is stale: run scripts/shaders/compile_shaders.py'
-    slots = {name: build['shaders'][name]['static_instruction_slots'] for name in ('AO', 'AOContactBloom')}
+    slots = {name: build['shaders'][name]['static_instruction_slots'] for name in ('AO', 'AOContactBloom', 'Composite')}
     assert all(n <= 512 for n in slots.values()), slots
     return digest, slots
 
@@ -263,6 +281,8 @@ def run():
     snap = [check_snap(d) for d in DIMENSIONS]
     normals = [check_normals(d, tilt) for d in DIMENSIONS for tilt in (0., .3, -.3)]
     check_float32()
+    for d in DIMENSIONS:
+        check_composite(d)
     check_guard()
     digest, slots = audit_source()
     assert any(n['old_degenerate_rows'] for n in normals), 'the old selection never produced a degenerate normal'

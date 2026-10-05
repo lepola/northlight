@@ -205,7 +205,9 @@ float4 Composite(float2 uv : TEXCOORD0) : COLOR0
     float sumWeight = 0.0;
     float2 ambientSize = max(floor(0.5 / ImageAndClip.xy + 0.01), float2(1, 1));
     float2 ambientTexel = 1.0 / ambientSize;
-    float2 ambientCenter = (floor(uv * ambientSize) + 0.5) * ambientTexel;
+    // 0.3.189: an ambient texel centre is a full-resolution texel boundary; a quarter full-res texel
+    // inward makes the depth and NeighbourNormal reads there pick one texel on every GPU.
+    float2 ambientCenter = mad(floor(uv * ambientSize) + 0.5, ambientTexel, 0.25 * ImageAndClip.xy);
     static const float2 taps[5] = {
         float2(0, 0), float2(-1, 0), float2(1, 0),
         float2(0, -1), float2(0, 1)
