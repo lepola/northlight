@@ -32,6 +32,7 @@
 #include "cpu_retirement.h"
 #include "deferred_gpu_release.h"
 #include "geometry_memory.h"
+#include "terrain_reach_fallback.h"
 #include "memory_admission_probe.h"
 #include <chrono>
 #include "world_probe_cache.h"
@@ -940,6 +941,16 @@ private:
               return result;
           };
           DWORD memoryReportAt=0;
+          NorthlightTerrainReach::State reachState;NorthlightTerrainReach::Episode memoryStall;
+          // Episode logs (begin on the first memory refusal, end when the build is delivered or dropped).
+          auto stallBegin=[&](const char* stage,NorthlightGeometryMemory::Sample sample){
+              if(memoryStall.refused(GetTickCount()))logf("WORLD geometry memory stall begin stage=%s availableMiB=%llu largestMiB=%llu generations=%zu",
+                  stage,(unsigned long long)(sample.available>>20),(unsigned long long)(sample.largest>>20),generations.live());
+          };
+          auto stallEnd=[&](const char* outcome){
+              uint32_t ms=0;unsigned tries=0;
+              if(memoryStall.end(GetTickCount(),ms,tries))logf("WORLD geometry memory stall end ms=%u attempts=%u outcome=%s",ms,tries,outcome);
+          };
           NorthlightLocalLights::Cache lightCache(root+"world-cache/lights");
           // Last delivered region. Any build that does not deliver forces the next
           // request to build again, as the 0.3.151 worker did without a BVH.
@@ -1004,7 +1015,7 @@ private:
                 if(!generations.canAdmit()){++generationDeferrals;{std::lock_guard<std::mutex> lock(mutex);generationStall.deferred(GetTickCount());}deferBuild("generation-deferred",memory,100);continue;}
                 {std::lock_guard<std::mutex> lock(mutex);generationStall.admitted();}
                 if(!NorthlightGeometryMemory::admits(memory,NorthlightGeometryMemory::buildBudget(64*NorthlightGeometryMemory::MiB))){localGeometry.reset();memory=workerMemory(NorthlightGeometryMemory::buildBudget(64*NorthlightGeometryMemory::MiB));}
-                if(!NorthlightGeometryMemory::admits(memory,NorthlightGeometryMemory::buildBudget(64*NorthlightGeometryMemory::MiB))){deferBuild("build-deferred",memory,1000);continue;}
+                if(!NorthlightGeometryMemory::admits(memory,NorthlightGeometryMemory::buildBudget(64*NorthlightGeometryMemory::MiB))){stallBegin("build-deferred",memory);deferBuild("build-deferred",memory,1000);continue;}
                 if(NorthlightDiagnostics::enabled())logGeometryMemory("before-load",memory,generations.live(),workerMemoryExact);
                 std::string error;
                 const V center=r.geometryCenter;
@@ -1015,18 +1026,18 @@ private:
                     char name[512];std::snprintf(name,sizeof name,"%sworld-cache/%s/%d_%d.fg3",root.c_str(),r.map.c_str(),x,y);
                     FILE* f=std::fopen(name,"rb");if(f){std::fclose(f);tiles.emplace_back(name);}
                 }
-                bool localDeferred=false;
+                bool localDeferred=false;NorthlightGeometryMemory::Sample localSample;
                 NorthlightGI::AllocationAdmission localAdmission=[&](uint64_t bytes){
                     if(bytes<NorthlightGeometryMemory::MiB)return true;
                     auto sample=workerMemory(NorthlightGeometryMemory::buildBudget(bytes));
                     if(NorthlightGeometryMemory::admits(sample,NorthlightGeometryMemory::buildBudget(bytes)))return true;
-                    localDeferred=true;logGeometryMemory("local-geometry-allocation-deferred",sample,generations.live(),workerMemoryExact);return false;
+                    localDeferred=true;localSample=sample;logGeometryMemory("local-geometry-allocation-deferred",sample,generations.live(),workerMemoryExact);return false;
                 };
                 auto replacement=std::make_shared<NorthlightGI::BVH>();
                 if(!generations.track(replacement))throw std::runtime_error("Geometry generation admission invariant");
                 if(tiles.empty()||!localGeometry.build(tiles,root+"world-cache/models",r.map,center-V(288,288,320),center+V(288,288,320),*replacement,error,localAdmission,quality.giFastBVH!=0)||!replacement->triangleCount()){
                     replacement.reset();
-                    if(localDeferred){localGeometry.reset();deferBuild("local-geometry-retry",workerMemory(),1000);continue;}
+                    if(localDeferred){localGeometry.reset();stallBegin("local-geometry",localSample);deferBuild("local-geometry-retry",workerMemory(),1000);continue;}
                     result->message=error.empty()?"No cached geometry for "+r.map:error;publishError();continue;
                 }
                 const auto& localStats=localGeometry.stats();
@@ -1034,16 +1045,20 @@ private:
                     (unsigned long long)localStats.modelReads,(unsigned long long)localStats.pieceBuilds,(unsigned long long)localStats.pieceReuses,
                     (unsigned long long)localStats.reusedTriangles,(unsigned long long)localStats.builtTriangles,double(localStats.retainedBytes)/1048576,
                     double(localStats.flatBytes)/1048576,double(localStats.bvhBytes)/1048576,localStats.loadMs,localStats.pieceMs,localStats.assembleMs,localStats.bvhMs,localStats.totalMs);
-                if(!currentGeometry()){++superseded;continue;}
+                if(!currentGeometry()){++superseded;stallEnd("superseded");continue;}
                 memory=workerMemory();if(NorthlightDiagnostics::enabled())logGeometryMemory("after-bvh",memory,generations.live(),workerMemoryExact);
                 if(!NorthlightGeometryMemory::admits(memory,NorthlightGeometryMemory::buildBudget())){
-                    replacement.reset();deferBuild("plan-deferred",memory,1000);continue;
+                    replacement.reset();stallBegin("plan",memory);deferBuild("plan-deferred",memory,1000);continue;
                 }
+                // Reduced-reach retry re-enters here with the local BVH (`replacement`, still tracked in
+                // `generations`) kept: it does not depend on the terrain stages.
+                float reach=0;
+                terrainStage:
                 auto plan=std::make_shared<NorthlightWorldMesh::WorldMeshUploadPlan>();
                 // GI stays local. Load only authored terrain over the complete
                 // directional caster volume into a separate GPU shadow source.
                 const double localPhaseMs=phaseElapsed();
-                bool terrainDeferred=false;uint64_t terrainLargest=0;unsigned terrainChecks=0;
+                bool terrainDeferred=false;NorthlightGeometryMemory::Sample terrainSample;uint64_t terrainLargest=0;unsigned terrainChecks=0;
                 NorthlightGI::AllocationAdmission terrainAdmission=[&](uint64_t bytes){
                     terrainLargest=std::max(terrainLargest,bytes);
                     // Small metadata cannot fragment a large block. Keep the
@@ -1052,11 +1067,20 @@ private:
                     ++terrainChecks;
                     auto sample=workerMemory(NorthlightGeometryMemory::buildBudget(bytes));
                     if(NorthlightGeometryMemory::admits(sample,NorthlightGeometryMemory::buildBudget(bytes)))return true;
-                    terrainDeferred=true;logGeometryMemory("shadow-terrain-allocation-deferred",sample,generations.live(),workerMemoryExact);
+                    terrainDeferred=true;terrainSample=sample;logGeometryMemory("shadow-terrain-allocation-deferred",sample,generations.live(),workerMemoryExact);
                     logf("WORLD terrain allocation requestMiB=%.2f requiredContiguousMiB=%.2f",double(bytes)/1048576,double(bytes+NorthlightGeometryMemory::ContiguousMargin)/1048576);
                     return false;
                 };
-                const float reach=shadowRanges.at(r.map,NorthlightRegionalFog::zoneAt(paletteRegion->region,center.x,center.y));
+                const float profileReach=shadowRanges.at(r.map,NorthlightRegionalFog::zoneAt(paletteRegion->region,center.x,center.y));
+                const auto reachChoice=NorthlightTerrainReach::choose(reachState,profileReach,GetTickCount());
+                reach=reachChoice.reach;
+                if(reachChoice.restored)logf("WORLD shadow terrain reach restored to=%.0f",reach);
+                // Memory refusal of an extended build: rebuild the terrain stages at the base reach now (margins unchanged).
+                auto reduceReach=[&]{
+                    if(!NorthlightTerrainReach::memoryRefused(reachState,reach,GetTickCount()))return false;
+                    memoryStall.markReduced();
+                    logf("WORLD shadow terrain reach reduced from=%.0f to=%.0f reason=memory",reach,NorthlightTerrainReach::BaseReach);return true;
+                };
                 const bool extended=reach>NorthlightShadowTerrain::Radius;
                 const int tileReach=extended?int(std::ceil(reach/NorthlightRegionalFog::TileSize)):2;
                 std::function<bool(V,V)> terrainFilter,terrainChunkFilter;
@@ -1073,21 +1097,30 @@ private:
                 const bool terrainLoaded=NorthlightGI::loadInstancedScenes(shadowTiles,root+"world-cache/models",center-V(reach,reach,reach),center+V(reach,reach,reach),shadowTerrain,error,1,terrainAdmission,terrainFilter,terrainChunkFilter);
                 const double terrainLoadMs=phaseElapsed();
                 if(!terrainLoaded||!NorthlightShadowTerrain::build(replacement->scene(),shadowTerrain,center,*plan,error,terrainAdmission,reach)){
-                    if(terrainDeferred){shadowTerrain=NorthlightGI::WorldScene{};plan.reset();replacement.reset();deferBuild("shadow-terrain-retry",workerMemory(),1000);continue;}
+                    if(terrainDeferred){
+                        stallBegin("shadow-terrain",terrainSample);
+                        if(reduceReach())goto terrainStage;
+                        shadowTerrain=NorthlightGI::WorldScene{};plan.reset();replacement.reset();deferBuild("shadow-terrain-retry",workerMemory(),1000);continue;}
                     result->message=error;publishError();continue;
                 }
                 const double shadowPlanMs=phaseElapsed();
                 if(NorthlightDiagnostics::enabled())logf("WORLD terrain allocation largestMiB=%.2f checks=%u",double(terrainLargest)/1048576,terrainChecks);
                 if(NorthlightDiagnostics::enabled())logf("WORLD shadow terrain: localTriangles=%zu shadowTriangles=%u fixedChunks=%zu reach=%.0f tiles=%zu",replacement->triangleCount(),plan->triangleCount,plan->fixedTerrainChunks.size(),reach,shadowTiles.size());
-                if(!currentGeometry()){++superseded;continue;}
+                if(!currentGeometry()){++superseded;stallEnd("superseded");continue;}
                 shadowTerrain=NorthlightGI::WorldScene{}; // merged shadow plan already owns its data
                 auto pages=std::make_shared<NorthlightWorldMeshPages::Plan>();
                 if(!NorthlightWorldMeshPages::build(*plan,*pages,error,terrainAdmission)){
-                    if(terrainDeferred){pages.reset();plan.reset();replacement.reset();deferBuild("mesh-page-retry",workerMemory(),1000);continue;}
+                    if(terrainDeferred){
+                        stallBegin("mesh-page",terrainSample);
+                        if(reduceReach())goto terrainStage;
+                        pages.reset();plan.reset();replacement.reset();deferBuild("mesh-page-retry",workerMemory(),1000);continue;}
                     result->message=error;publishError();continue;
                 }
                 if(!NorthlightWorldMeshPages::seal(*plan,pages,error,terrainAdmission)){
-                    if(terrainDeferred){pages.reset();plan.reset();replacement.reset();deferBuild("mesh-page-seal-retry",workerMemory(),1000);continue;}
+                    if(terrainDeferred){
+                        stallBegin("mesh-page-seal",terrainSample);
+                        if(reduceReach())goto terrainStage;
+                        pages.reset();plan.reset();replacement.reset();deferBuild("mesh-page-seal-retry",workerMemory(),1000);continue;}
                     result->message=error;publishError();continue;
                 }
                 if(NorthlightDiagnostics::enabled())logf("WORLD mesh pages=%zu batches=%zu originalBatches=%zu vertexMiB=%.2f indexMiB=%.2f maxResourceKiB=512",pages->pages.size(),pages->batches.size(),plan->batches.size(),double(pages->vertexBytes)/1048576,double(pages->indexBytes)/1048576);
@@ -1120,6 +1153,7 @@ private:
             {std::lock_guard<std::mutex> lock(mutex);if(stopping||builderExit)return;
              std::swap(builtGeometry,built);geometryWanted=false;}
             wake.notify_one();built.reset();
+            stallEnd(memoryStall.reduced?"reduced":"published");
             builtMap=r.map;builtCenter=r.geometryCenter;builtValid=true;wanted=false;superseded=0;
           }
           }catch(const std::bad_alloc&){workerFaultCode.store(1);}

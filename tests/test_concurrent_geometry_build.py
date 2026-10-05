@@ -51,6 +51,7 @@ fixture=r'''
 #include "gi_solve_pool.h"
 #include "quality_settings.h"
 #include "geometry_memory.h"
+#include "terrain_reach_fallback.h"
 #include "memory_admission_probe.h"
 #include "worker_actor_memo.h"
 #include "diagnostics_switch.h"
