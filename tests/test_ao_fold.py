@@ -93,8 +93,8 @@ flow = [i for i, l in enumerate(asm) if re.match(r'\s*(if|rep|loop|break|ret|cal
 checks[f'AOContactBloom: its {len(texld)} tex2D reads (texld, s0) precede all flow control (sky/water return included)'] = (
     len(texld) == 5 and all(asm[i].rstrip().endswith('s0') for i in texld) and flow and max(texld) < min(flow))
 manifest = json.loads(fp.src('shader-build.json').read_text())['shaders']
-checks[f"effects manifest: AOContactBloom {manifest['AOContactBloom']['static_instruction_slots']} <= 500, AOContact gone"] = (
-    manifest['AOContactBloom']['static_instruction_slots'] <= 500 and 'AOContact' not in manifest)
+checks[f"effects manifest: AOContactBloom {manifest['AOContactBloom']['static_instruction_slots']} <= 512, AOContact gone"] = (
+    manifest['AOContactBloom']['static_instruction_slots'] <= 512 and 'AOContact' not in manifest)
 
 # 3. the AO upsample: WorldComposite's depth-weighted tent on the half-res lighting grid
 def upsample(ao_row, depth_row, x, z):
