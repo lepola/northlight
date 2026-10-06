@@ -65,6 +65,7 @@
 #include "replay_bulk_layout.h"
 #include "dynamic_ring.h"
 #include "lock_meter.h"
+#include "replay_copies.h"
 #include "vertex_declaration_cache.h"
 #include "replay_draw_state.h"
 #include "render_thread_probe.h"
@@ -1835,6 +1836,7 @@ public:
         flushDeferredLogs(); /* 0.3.176 (U0/S0): after every bucketed span of the frame */
         frameFence.endFrame(); /* 0.3.192 (DXVK3): the one Issue of the frame's fence, after every replay/terrain draw, before any early return; reset() calls endFrame() too */
         NorthlightLockMeter::endFrame();
+        if(NorthlightReplayCopies::enabled.load(std::memory_order_relaxed))NorthlightReplayCopies::advanceFrame(); /* 0.3.192 (CS): the CPU copies' thrash/fill time base, once per frame on the replay thread */
         if(NorthlightDiagnostics::enabled()){const DWORD tick=GetTickCount();
             if(!lockMeterTick){lockMeterTick=tick?tick:1;NorthlightLockMeter::takeInterval();}
             else if(DWORD(tick-lockMeterTick)>=2000){lockMeterTick=tick;logLockMeter();}}

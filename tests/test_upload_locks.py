@@ -120,4 +120,12 @@ assert 'static_cast<IDirect3DVertexBuffer9*>(p->inner)->Lock(a->off,a->size,&dst
 dev=renderer[renderer.index('class Device final'):renderer.index('class Factory final')]
 assert 'ext->CreateVertexBuffer(' in dev and 'NorthlightTrackedBuffers::wrap<IDirect3DVertexBuffer9' in dev and 'NorthlightTrackedBuffers::wrap<IDirect3DIndexBuffer9' in dev
 assert dev.count('NorthlightTrackedBuffers::unwrap(buffer)')==1 # ProcessVertices is the only unwrapping use of a game buffer for a write
+# R1: the capture holds the RAW buffer (ext->GetStreamSource/GetIndices after Device::SetStreamSource/SetIndices unwrap): the copy registry must resolve raw pointers too
+assert 'attach(record.copy,record.raw,record.exposed,this,' in tracked and 's.registry[raw]=&c;s.registry[exposed]=&c;' in copies and 's.registry.erase(c.raw);s.registry.erase(c.exposed)' in copies
+assert 'static_cast<T*>(this),record.metadata.size' not in tracked # not keyed by the wrapper pointer only
+# R2: the thrash guard and the deferred fill are measured in frames, advanced once per frame on the replay thread (WorldRenderer::endFrame), never in reads
+assert 'kThrashReads' not in copies and 'kBackoffReads' not in copies and 's.tick' not in copies and 'c.frames>=2' in copies and 'c.frames=0;' in copies
+assert sources['world_renderer.h'].count('NorthlightReplayCopies::advanceFrame()')==1
+# R3: a pin holds a COM reference on the wrapper that owns the slot; the last Release happens outside the store mutex
+assert 'c.ref(c.owner,true)' in copies and copies.count('ref(owner,false)')==2
 print('PASS replay copies wiring: gate set before the first buffer, wrapper hooks, ProcessVertices/Reset invalidation, pressure shrink')

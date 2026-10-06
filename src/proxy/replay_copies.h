@@ -23,38 +23,46 @@
    arbitrary bytes for them, so a capture or revalidate compare that read them would be reading undefined data either way (the revision
    changes with the DISCARD, so no cache keyed on it survives).
 
+   Lookup: the capture gets its buffers from ext->GetStreamSource/GetIndices, which return the RAW DXVK buffer (Device::SetStreamSource/SetIndices unwrap
+   before forwarding), not the wrapper. attach() therefore registers a Slot under BOTH the raw and the exposed pointer; read() accepts either.
    Only the buffers the capture actually reads get a copy: the Reader (replay_copy_reader.h) fills one with ONE whole-buffer read of the real
-   buffer (the readBackLock() path) on the read that follows a read of the same buffer (at once for buffers <= kEagerBytes: a whole-buffer read of a
-   big static buffer to serve one small range would cost more than it saves), then it stays current from the replayed writes.
+   buffer (the readBackLock() path) on a read of a buffer <= kEagerBytes or a whole-buffer request, else once the buffer was read in 2 distinct recent
+   frames (a whole-buffer read of a big static buffer to serve one small range would cost more than it saves), then it stays current from the replayed writes.
    32-bit address space: a hard cap (kCapBytes = 16 MiB; the LOCK METER read-back volume is ~0.5-1.7 MiB/frame, and the game's whole VB/IB working set
    that capture touches is a fraction of it) with LRU eviction by last capture read; halved under memory pressure (setPressure, from the memory guard's
-   per-frame decision); a buffer above cap/4 never gets a copy; a buffer evicted and refilled within kThrashReads reads kMaxStrikes times in a row (a working set larger than the cap) stays on the fallback for kBackoffReads reads (thrash guard).
+   per-frame decision); a buffer above cap/4 never gets a copy. Thrash guard in FRAMES (advanceFrame(), once per frame from WorldRenderer::endFrame; a frame
+   makes hundreds of reads, so reads are no time base): an eviction or invalidation clears the buffer's read-frame count (a big buffer needs 2 more frames
+   of reads before it refills); a refill within kThrashFrames of that is a strike; after kMaxStrikes strikes in a row the buffer stays on the fallback for kBackoffFrames.
    A buffer without a valid copy takes today's readBackLock() path.
    Gate: `enabled` (set where the stream starts, with CommandStream=0 it stays false): no wrapper hook copies anything, no Reader changes a call.
    Threads: every writer and every capture site runs on the replay thread; the registry is still mutex-guarded (the wrapper can be released
-   elsewhere). A pinned copy (a Reader between lock() and unlock()) is never evicted or freed; a write cannot reach it meanwhile (same thread). */
+   elsewhere). A pinned copy (a Reader between lock() and unlock()) is never evicted or freed; a write cannot reach it meanwhile (same thread).
+   LIFETIME: the Slot lives inside the wrapper's Record (Buffer::record), freed by ~Buffer. A pin therefore holds a COM reference on the wrapper
+   (Slot::owner, AddRef at pin, Release at unpin AFTER the store mutex is dropped, since the last Release runs ~Buffer -> detach() -> that mutex), so
+   the wrapper and the Slot outlive every pin and the slot is never touched after its Release. */
 namespace NorthlightReplayCopies {
 inline constexpr std::uint64_t kCapBytes=16u<<20;
 inline constexpr UINT kEagerBytes=64u<<10;
-inline constexpr unsigned kMaxStrikes=3;                 // refills within kThrashReads reads of an eviction before the buffer is left on the fallback
-inline constexpr std::uint64_t kThrashReads=64,kBackoffReads=8192;   // reads (any buffer) = the time base: a frame reads dozens to hundreds
+inline constexpr unsigned kMaxStrikes=3;                 // refills within kThrashFrames of an eviction/invalidation before the buffer is left on the fallback
+inline constexpr std::uint64_t kThrashFrames=4,kBackoffFrames=600,kRecentFrames=8;   // frames (advanceFrame) = the time base; kRecentFrames: gap that restarts a buffer's read-frame count
 inline std::atomic<bool> enabled{false};
 
 struct Slot {
     // immutable after attach
-    bool attached=false;const void* key=nullptr;UINT size=0;const std::atomic<unsigned>* locks=nullptr;   // locks: the wrapper's outstanding lock count
+    bool attached=false;const void* raw=nullptr;const void* exposed=nullptr;void* owner=nullptr;void(*ref)(void*,bool)=nullptr;UINT size=0;const std::atomic<unsigned>* locks=nullptr;   // locks: the wrapper's outstanding lock count; owner: the wrapper (pins hold a reference)
     // guarded by the store mutex (state is also read lock-free by the wrapper hooks)
     enum State:unsigned char{None,Filling,Valid};
     std::atomic<unsigned char> state{None};
     std::vector<unsigned char> data;
-    bool gpuWritten=false,pending=false;unsigned strikes=0,reads=0,pins=0,listAt=0;std::uint64_t used=0,evictedAt=0;
+    bool gpuWritten=false,pending=false,evicted=false;unsigned strikes=0,frames=0,pins=0,listAt=0;std::uint64_t used=0,lastFrame=0,evictedFrame=0,parkUntil=0;   // frames: distinct recent frames with a capture read
     UINT pOff=0,pEnd=0;const unsigned char* pPtr=nullptr;   // the outstanding write lock: range and mapped pointer
 };
 struct Store {
     std::mutex m;std::unordered_map<const void*,Slot*> registry;std::vector<Slot*> list;   // list: Filling and Valid slots
-    std::uint64_t used=0,clock=0,tick=0,cap=kCapBytes;
+    std::uint64_t used=0,clock=0,frame=1,cap=kCapBytes;
 };
 inline Store& store(){static Store s;return s;}
+inline void pinRef(Slot& c){++c.pins;if(c.owner)c.ref(c.owner,true);}   // a pin holds the wrapper alive (see LIFETIME); store mutex held
 namespace detail {
 namespace M=NorthlightLockMeter;
 inline void gauges(Store& s){auto& m=M::state();m.copyResidentBytes.store(s.used,std::memory_order_relaxed);m.copyResidentBuffers.store(s.list.size(),std::memory_order_relaxed);m.copyCapBytes.store(s.cap,std::memory_order_relaxed);}
@@ -63,7 +71,8 @@ enum class Why{Invalidate,Evict,Silent};
 inline void drop(Store& s,Slot& c,Why why){
     if(c.state.load()==Slot::None)return;
     const std::uint64_t n=c.size;Slot* last=s.list.back();s.list[c.listAt]=last;last->listAt=c.listAt;s.list.pop_back();
-    s.used-=n;c.state.store(Slot::None);c.evictedAt=s.tick;c.pending=false;c.pPtr=nullptr;
+    s.used-=n;c.state.store(Slot::None);c.pending=false;c.pPtr=nullptr;
+    if(why!=Why::Silent){c.evicted=true;c.evictedFrame=s.frame;c.frames=0;}   // a refill needs 2 fresh frames of reads, and counts as a strike when it comes soon
     if(!c.pins)std::vector<unsigned char>().swap(c.data);
     auto& m=M::state();if(why==Why::Evict)m.copyEvictions.fetch_add(1,std::memory_order_relaxed);else if(why==Why::Invalidate)m.copyInvalidations.fetch_add(1,std::memory_order_relaxed);
     gauges(s);
@@ -76,16 +85,16 @@ inline bool evictOne(Store& s){
 }
 }
 // ---- wrapper side (tracked_buffers.h, replay thread) ----
-inline void attach(Slot& c,const void* key,UINT size,const std::atomic<unsigned>* locks){
+template<class O> void attach(Slot& c,const void* raw,const void* exposed,O* owner,UINT size,const std::atomic<unsigned>* locks){   // owner: the wrapper, AddRef/Release by pins
     if(!size)return;
     Store& s=store();std::lock_guard<std::mutex> g(s.m);
-    try{s.registry[key]=&c;}catch(...){return;}
-    c.attached=true;c.key=key;c.size=size;c.locks=locks;
+    try{s.registry[raw]=&c;s.registry[exposed]=&c;}catch(...){s.registry.erase(raw);s.registry.erase(exposed);return;}   // raw: what ext->GetStreamSource/GetIndices return
+    c.attached=true;c.raw=raw;c.exposed=exposed;c.owner=owner;c.ref=[](void* o,bool add){if(add)static_cast<O*>(o)->AddRef();else static_cast<O*>(o)->Release();};c.size=size;c.locks=locks;
 }
 inline void detach(Slot& c){
     if(!c.attached)return;
     Store& s=store();std::lock_guard<std::mutex> g(s.m);
-    detail::drop(s,c,detail::Why::Silent);s.registry.erase(c.key);c.attached=false;
+    detail::drop(s,c,detail::Why::Silent);s.registry.erase(c.raw);s.registry.erase(c.exposed);c.attached=false;
 }
 // A successful write Lock (not READONLY). before = locks already outstanding on the buffer. A nested write, an offset past the end or a
 // null pointer cannot be mirrored exactly: the copy is dropped. Size 0 = to the end, a range past the end is clamped (as the stream does).
@@ -114,39 +123,53 @@ inline void beforeUnlock(Slot& c,unsigned before){
     c.pending=false;c.pPtr=nullptr;
 }
 // ---- reader side (replay_copy_reader.h) ----
-// The bytes at [off,off+size) of the buffer at its replay position, pinned until unpin(); null when no valid copy (slot is set when the buffer
-// is tracked at all, to let the caller try a fill). Not served while any lock is outstanding or a write is pending.
-inline const unsigned char* read(const void* key,UINT off,UINT size,Slot*& slot){
-    slot=nullptr;Store& s=store();std::lock_guard<std::mutex> g(s.m);++s.tick;
-    auto it=s.registry.find(key);if(it==s.registry.end())return nullptr;
-    Slot& c=*it->second;slot=&c;
-    if(c.state.load()!=Slot::Valid||c.pending||(c.locks&&c.locks->load())||!size||std::uint64_t(off)+size>c.size){++c.reads;return nullptr;}
-    ++c.pins;c.used=++s.clock;return c.data.data()+off;
+// Once per frame (replay thread, WorldRenderer::endFrame): the time base of the thrash guard and of the deferred fill.
+inline void advanceFrame(){Store& s=store();std::lock_guard<std::mutex> g(s.m);++s.frame;}
+namespace detail {
+inline void touch(Store& s,Slot& c){   // one capture read in this frame
+    if(c.frames&&c.lastFrame==s.frame)return;
+    c.frames=(c.frames&&s.frame-c.lastFrame<=kRecentFrames)?c.frames+1:1;c.lastFrame=s.frame;
 }
+}
+// The bytes at [off,off+size) of the buffer at its replay position, pinned until unpin(); null when no valid copy (slot is set when the buffer
+// is tracked at all, to let the caller try a fill). key: the raw or the exposed pointer. Not served while any lock is outstanding or a write is pending.
+inline const unsigned char* read(const void* key,UINT off,UINT size,Slot*& slot){
+    slot=nullptr;Store& s=store();std::lock_guard<std::mutex> g(s.m);
+    auto it=s.registry.find(key);if(it==s.registry.end())return nullptr;
+    Slot& c=*it->second;slot=&c;detail::touch(s,c);
+    if(c.state.load()!=Slot::Valid||c.pending||(c.locks&&c.locks->load())||!size||std::uint64_t(off)+size>c.size)return nullptr;
+    pinRef(c);c.used=++s.clock;return c.data.data()+off;
+}
+// Drops one pin; the bytes go if the slot was dropped meanwhile. The wrapper reference is released last, outside the mutex (it may be the final one).
 inline void unpin(Slot& c){
-    Store& s=store();std::lock_guard<std::mutex> g(s.m);
-    if(c.pins)--c.pins;
-    if(!c.pins&&c.state.load()==Slot::None)std::vector<unsigned char>().swap(c.data);
+    void* const owner=c.owner;void(*const ref)(void*,bool)=c.ref;
+    {Store& s=store();std::lock_guard<std::mutex> g(s.m);
+     if(c.pins)--c.pins;
+     if(!c.pins&&c.state.load()==Slot::None)std::vector<unsigned char>().swap(c.data);}
+    if(owner)ref(owner,false);   // c may be freed from here on
 }
 // Reserves room for a whole-buffer copy of c (evicting LRU entries) and pins it; false = stay on the fallback.
 inline bool beginFill(Slot& c,UINT requested){
     Store& s=store();std::lock_guard<std::mutex> g(s.m);auto& m=NorthlightLockMeter::state();
-    const bool wanted=c.size<=kEagerBytes||c.reads>0||requested>=c.size;
+    const bool wanted=c.size<=kEagerBytes||requested>=c.size||c.frames>=2;   // a big buffer read for a small range: only once it proved to be read in 2 recent frames
     if(c.state.load()!=Slot::None||c.pins||!wanted)return false;
-    if(c.evictedAt&&c.strikes>=kMaxStrikes&&s.tick-c.evictedAt<kBackoffReads){m.copyRefused.fetch_add(1,std::memory_order_relaxed);return false;}
-    if(c.gpuWritten||c.size>s.cap/4||(c.locks&&c.locks->load())){m.copyRefused.fetch_add(1,std::memory_order_relaxed);return false;}
+    if(s.frame<c.parkUntil||c.gpuWritten||c.size>s.cap/4||(c.locks&&c.locks->load())){m.copyRefused.fetch_add(1,std::memory_order_relaxed);return false;}
+    const bool recent=c.evicted&&s.frame-c.evictedFrame<=kThrashFrames;
+    if(recent&&c.strikes>=kMaxStrikes){c.parkUntil=s.frame+kBackoffFrames;c.strikes=0;c.evicted=false;m.copyRefused.fetch_add(1,std::memory_order_relaxed);return false;}   // thrash guard: parked
     while(s.used+c.size>s.cap)if(!detail::evictOne(s)){m.copyRefused.fetch_add(1,std::memory_order_relaxed);return false;}
     try{c.data.assign(c.size,0);s.list.push_back(&c);}catch(...){std::vector<unsigned char>().swap(c.data);m.copyRefused.fetch_add(1,std::memory_order_relaxed);return false;}
-    c.listAt=unsigned(s.list.size()-1);c.state.store(Slot::Filling);c.pending=false;c.used=++s.clock;++c.pins;s.used+=c.size;
-    if(c.evictedAt&&s.tick-c.evictedAt<kThrashReads)++c.strikes;else c.strikes=0;detail::gauges(s);
+    c.listAt=unsigned(s.list.size()-1);c.state.store(Slot::Filling);c.pending=false;c.used=++s.clock;pinRef(c);s.used+=c.size;
+    if(recent)++c.strikes;else c.strikes=0;detail::gauges(s);
     return true;
 }
 // The fill is done (data written by the caller while the slot was Filling and pinned). ok keeps the pin (the caller reads, then unpin()s).
 inline void endFill(Slot& c,bool ok){
-    Store& s=store();std::lock_guard<std::mutex> g(s.m);auto& m=NorthlightLockMeter::state();
-    if(ok&&c.state.load()==Slot::Filling){c.state.store(Slot::Valid);m.copyFills.fetch_add(1,std::memory_order_relaxed);m.copyFillBytes.fetch_add(c.size,std::memory_order_relaxed);return;}
-    detail::drop(s,c,detail::Why::Silent);if(c.pins)--c.pins;
-    if(!c.pins)std::vector<unsigned char>().swap(c.data);
+    void* const owner=c.owner;void(*const ref)(void*,bool)=c.ref;
+    {Store& s=store();std::lock_guard<std::mutex> g(s.m);auto& m=NorthlightLockMeter::state();
+     if(ok&&c.state.load()==Slot::Filling){c.state.store(Slot::Valid);m.copyFills.fetch_add(1,std::memory_order_relaxed);m.copyFillBytes.fetch_add(c.size,std::memory_order_relaxed);return;}
+     detail::drop(s,c,detail::Why::Silent);if(c.pins)--c.pins;
+     if(!c.pins)std::vector<unsigned char>().swap(c.data);}
+    if(owner)ref(owner,false);   // the fill's pin; c may be freed from here on
 }
 // The memory guard's decision (replay thread, once per frame): halves the cap and evicts down to it; unpinned copies only.
 inline void setPressure(bool on){

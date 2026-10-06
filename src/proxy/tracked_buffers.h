@@ -146,7 +146,7 @@ public:
                 discardBytes=desc.Pool==D3DPOOL_DEFAULT&&(desc.Usage&D3DUSAGE_DYNAMIC)?desc.Size:0;
             }
         }
-        if(NorthlightReplayCopies::enabled.load(std::memory_order_relaxed))NorthlightReplayCopies::attach(record.copy,static_cast<T*>(this),record.metadata.size,&record.locks); // size 0 (descriptor unknown): never copied
+        if(NorthlightReplayCopies::enabled.load(std::memory_order_relaxed))NorthlightReplayCopies::attach(record.copy,record.raw,record.exposed,this,record.metadata.size,&record.locks); // size 0 (descriptor unknown): never copied
         {std::lock_guard<std::mutex> guard(mutex);
          records.emplace(record.raw,&record);
          try{records.emplace(record.exposed,&record);}catch(...){records.erase(record.raw);NorthlightReplayCopies::detach(record.copy);throw;}}
