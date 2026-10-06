@@ -355,8 +355,8 @@ private:
              double(gNs-lastGameNs_-(gW-lastGameWait_))/1e6*inv2,double(sNs-lastSyncNs_)/1e6*inv2,double(pNs-lastPresentNs_)/1e6*inv2,double(bNs-lastBpNs_)/1e6*inv2,
              double(cm-lastCmds_)*inv2,double(an-lastAnswered_)*inv2,double(sc-lastSyncCalls_)*inv2);
          lastGameNs_=gNs;lastGameWait_=gW;lastPresentNs_=pNs;lastSyncNs_=sNs;lastBpNs_=bNs;lastCmds_=cm;lastAnswered_=an;lastSyncCalls_=sc;}
-        put(buf,n," texShadow=%.1f/%.0fMB hits=%llu fresh=%llu readbacks=%llu refused=%llu/%.1fMB",double(std::max<std::int64_t>(0,s.texShadowBytes.load()))/1048576.0,double(core.q.texShadowCap())/1048576.0,
-            (unsigned long long)get(s.texShadowHits),(unsigned long long)get(s.texShadowFresh),(unsigned long long)get(s.texShadowReadbacks),(unsigned long long)get(s.texShadowRefused),get(s.texShadowRefusedBytes)/1048576.0);
+        put(buf,n," texShadow=%.1f/%.0fMB hits=%llu fresh=%llu readbacks=%llu evicted=%llu freshUseful=%llu refused=%llu/%.1fMB",double(std::max<std::int64_t>(0,s.texShadowBytes.load()))/1048576.0,double(core.q.texShadowCap())/1048576.0,
+            (unsigned long long)get(s.texShadowHits),(unsigned long long)get(s.texShadowFresh),(unsigned long long)get(s.texShadowReadbacks),(unsigned long long)get(s.texShadowEvicted),(unsigned long long)get(s.texShadowFreshUseful),(unsigned long long)get(s.texShadowRefused),get(s.texShadowRefusedBytes)/1048576.0);
         put(buf,n," pass[");
         for(unsigned r=0;r<Counters::kPassReasons;++r)put(buf,n,"%s%s=%llu",r?",":"",passReasonName(r),(unsigned long long)get(s.passThrough[r]));
         put(buf,n,"] census[");

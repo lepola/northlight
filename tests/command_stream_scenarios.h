@@ -197,12 +197,36 @@ static void textureShadows(){
         CHECK(b->LockRect(0,&lr,nullptr,0)==D3D_OK&&get(s.passThrough[unsigned(PassReason::Written)])==w+1&&b->UnlockRect(0)==D3D_OK);a->Release();b->Release();
     }
     rig.sync();CHECK(s.texShadowBytes.load()>=0);
-    // the cap: never more than 32 MiB of level copies; the rest pass through and still work
-    std::vector<IDirect3DTexture9*> big;const auto refusedBefore=get(s.texShadowRefused);
-    for(int i=0;i<18;++i){IDirect3DTexture9* t=nullptr;CHECK(rig.dev->CreateTexture(1024,512,1,0,(D3DFORMAT)22,(D3DPOOL)1,&t,nullptr)==D3D_OK);D3DLOCKED_RECT lr{};RECT rc{0,0,8,2};
-        CHECK(t->LockRect(0,&lr,&rc,0)==D3D_OK&&t->UnlockRect(0)==D3D_OK&&t->LockRect(0,&lr,&rc,0)==D3D_OK&&t->UnlockRect(0)==D3D_OK);big.push_back(t);}
-    CHECK(get(s.texShadowRefused)>refusedBefore&&get(s.texShadowRefusedBytes)>=2u<<20&&s.texShadowBytes.load()<=std::int64_t(q.texShadowCap()));
-    for(auto* t:big)t->Release();rig.sync();CHECK(s.texShadowBytes.load()==0);
+    // The cap fills with fresh keeps (levels WoW loads once and never locks again); the levels that ARE re-locked must still end up shadowed:
+    // shadows are evictable, never-re-locked ones first, and each hot level costs one readback and then no sync at all.
+    std::vector<IDirect3DTexture9*> fresh;const auto evicted0=get(s.texShadowEvicted);
+    for(int i=0;i<140;++i){IDirect3DTexture9* t=nullptr;CHECK(rig.dev->CreateTexture(256,256,1,0,(D3DFORMAT)22,(D3DPOOL)1,&t,nullptr)==D3D_OK);D3DLOCKED_RECT lr{};   // 256 KiB: the largest fresh keep
+        CHECK(t->LockRect(0,&lr,nullptr,0)==D3D_OK&&t->UnlockRect(0)==D3D_OK);fresh.push_back(t);}
+    CHECK(s.texShadowBytes.load()<=std::int64_t(q.texShadowCap())&&get(s.texShadowEvicted)>evicted0);   // 140 x 256 KiB > 32 MiB: older fresh keeps were evicted, nothing refused
+    std::vector<IDirect3DTexture9*> hot;
+    for(int i=0;i<4;++i){IDirect3DTexture9* t=nullptr;CHECK(rig.dev->CreateTexture(1024,512,1,0,(D3DFORMAT)22,(D3DPOOL)1,&t,nullptr)==D3D_OK);D3DLOCKED_RECT lr{};RECT rc{0,0,8,2};
+        CHECK(t->LockRect(0,&lr,&rc,0)==D3D_OK&&t->UnlockRect(0)==D3D_OK);hot.push_back(t);}   // first write: staged (the level is above the fresh limit)
+    const auto sl0=get(s.census[(std::size_t)Cmd::SyncLock]),rb0=get(s.texShadowReadbacks);
+    for(int round=0;round<30;++round)for(auto* t:hot){D3DLOCKED_RECT lr{};RECT rc{0,0,8,2};CHECK(t->LockRect(0,&lr,&rc,0)==D3D_OK&&t->UnlockRect(0)==D3D_OK);}
+    CHECK(get(s.texShadowReadbacks)==rb0+4&&get(s.census[(std::size_t)Cmd::SyncLock])==sl0+4);   // one readback per hot level, then nothing synchronous
+    CHECK(s.texShadowBytes.load()<=std::int64_t(q.texShadowCap()));
+    // a kept first write that is locked again was worth keeping (counted once), and a re-locked shadow outlives never-re-locked ones
+    const auto useful0=get(s.texShadowFreshUseful);{D3DLOCKED_RECT lr{};IDirect3DTexture9* t=fresh.back();CHECK(t->LockRect(0,&lr,nullptr,0)==D3D_OK&&t->UnlockRect(0)==D3D_OK&&t->LockRect(0,&lr,nullptr,0)==D3D_OK&&t->UnlockRect(0)==D3D_OK);}
+    CHECK(get(s.texShadowFreshUseful)==useful0+1);
+    for(int i=0;i<140;++i){IDirect3DTexture9* t=nullptr;CHECK(rig.dev->CreateTexture(256,256,1,0,(D3DFORMAT)22,(D3DPOOL)1,&t,nullptr)==D3D_OK);D3DLOCKED_RECT lr{};CHECK(t->LockRect(0,&lr,nullptr,0)==D3D_OK&&t->UnlockRect(0)==D3D_OK);fresh.push_back(t);}   // more fresh keeps churn
+    const auto sl1=get(s.census[(std::size_t)Cmd::SyncLock]);
+    for(auto* t:hot){D3DLOCKED_RECT lr{};RECT rc{0,0,8,2};CHECK(t->LockRect(0,&lr,&rc,0)==D3D_OK&&t->UnlockRect(0)==D3D_OK);}
+    CHECK(get(s.census[(std::size_t)Cmd::SyncLock])==sl1);   // the hot set survived the churn: still shadowed
+    // a fresh keep never evicts a re-locked shadow: with only re-locked ones left it is refused, and still works
+    for(auto* t:fresh)t->Release();fresh.clear();rig.sync();
+    std::vector<IDirect3DTexture9*> warm;
+    for(int i=0;i<16;++i){IDirect3DTexture9* t=nullptr;CHECK(rig.dev->CreateTexture(1024,512,1,0,(D3DFORMAT)22,(D3DPOOL)1,&t,nullptr)==D3D_OK);D3DLOCKED_RECT lr{};RECT rc{0,0,8,2};
+        CHECK(t->LockRect(0,&lr,&rc,0)==D3D_OK&&t->UnlockRect(0)==D3D_OK&&t->LockRect(0,&lr,&rc,0)==D3D_OK&&t->UnlockRect(0)==D3D_OK);warm.push_back(t);}   // 20 re-locked 2 MiB levels > the 32 MiB cap: the oldest were evicted
+    CHECK(s.texShadowBytes.load()<=std::int64_t(q.texShadowCap()));
+    const auto refused0=get(s.texShadowRefused);{IDirect3DTexture9* t=nullptr;CHECK(rig.dev->CreateTexture(64,64,1,0,(D3DFORMAT)22,(D3DPOOL)1,&t,nullptr)==D3D_OK);D3DLOCKED_RECT lr{};
+        const auto size0=s.texShadowBytes.load();CHECK(size0+64*64*4>std::int64_t(q.texShadowCap()));   // the cap is full of re-locked levels
+        CHECK(t->LockRect(0,&lr,nullptr,0)==D3D_OK&&t->UnlockRect(0)==D3D_OK&&get(s.texShadowRefused)==refused0+1&&s.texShadowBytes.load()==size0);t->Release();}
+    for(auto* t:hot)t->Release();for(auto* t:warm)t->Release();rig.sync();CHECK(s.texShadowBytes.load()==0);
     rig.finish();checkClean();
 }
 static void queriesAndSyncCensus(){

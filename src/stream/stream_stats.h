@@ -34,7 +34,7 @@ struct Counters {
     // Per-level texture shadows (own cap, outside the queue budget): live bytes, locks served from a shadow, shadows made from a fresh
     // lock (nothing to read back) or from one synchronous readback, refusals by the cap.
     std::atomic<std::int64_t> texShadowBytes{0};
-    Counter texShadowHits{0},texShadowFresh{0},texShadowReadbacks{0},texShadowRefused{0},texShadowRefusedBytes{0};
+    Counter texShadowEvicted{0},texShadowFreshUseful{0},texShadowHits{0},texShadowFresh{0},texShadowReadbacks{0},texShadowRefused{0},texShadowRefusedBytes{0};
     // The game thread's own time per frame (Present to Present, minus its sync and backpressure waits), in ns, and its frames.
     Counter gameNs{0},gameWaitNs{0},gameFrames{0};
     Counter stateAnswered{0},stateSynced{0},syncOnlySlots{0},lockAsync{0},queryPolls{0};

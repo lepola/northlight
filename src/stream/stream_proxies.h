@@ -59,6 +59,7 @@ inline const char* passReasonName(unsigned r){static const char* n[]={"readonly"
 
 struct StreamCore;
 struct ProxyBase;
+struct SubRes;
 // Proxies alive in the process (a leak check for the tests and the CSTREAM diagnostics).
 inline std::atomic<long> liveProxyObjects{0};
 
@@ -172,6 +173,8 @@ struct StreamCore {
     std::atomic<unsigned> availableTextureMem{0};
     std::atomic<std::uint64_t> syncOnly[14]{};    // bit per audited scalar slot, see StreamState
     std::atomic<std::uint64_t> framesReplayed{0};
+    // The live level shadows (see SubRes): inserted and evicted on the game thread, removed by a proxy's destructor on the replay thread.
+    std::mutex texMutex;std::vector<SubRes*> texList;std::uint64_t texClock=0;
     void (*logLine)(const char*)=nullptr;        // diagnostics sink (renderer.cpp's logf); may be null
     explicit StreamCore(std::size_t budget=BudgetBytes):q(budget){}
     void log(const char* text){if(logLine)logLine(text);}
@@ -226,6 +229,9 @@ struct SubRes {
     // A CPU copy of the whole level in our own tight layout (block rows of levelRowBytes), plus slack. Locks return pointers into it
     // and Unlock records the locked rows; shadowDead: never again (GPU-written, readback failed, ...).
     std::vector<unsigned char> shadow;bool shadowOn=false,shadowDead=false;UINT levelRowBytes=0,levelRows=0,levelSlices=0;std::size_t shadowOffset=0;
+    // Eviction bookkeeping (StreamCore::texList): the shadow may be evicted at any time it is not locked; the level then simply takes
+    // the readback path at its next re-lock. relocked: served a second lock (or made by a readback): evicted last. fromFresh: kept from a first write.
+    std::uint64_t lastUse=0;std::size_t listIndex=0;bool relocked=false,fromFresh=false;
 };
 // What a staged Unlock records (followed by nothing: the bytes are in the command's Block).
 struct UnlockImageArgs {ProxyBase* proxy;UINT level,face;DWORD flags;UINT hasRect,rows,slices,rowBytes,pitch,slicePitch;LONG l,t,r,b;UINT bf,bk;UINT route;};
@@ -233,11 +239,30 @@ struct UnlockBufferArgs {ProxyBase* proxy;UINT off,size,flags,inlineData;};
 enum ImageRoute:UINT{RouteSurface=0,RouteTexture=1,RouteCube=2,RouteVolumeTexture=3,RouteVolume=4};
 
 inline void countPass(ProxyBase& p,PassReason r){add(p.core->q.stats.passThrough[unsigned(r)]);}
-inline void dropSubShadow(StreamCore& c,SubRes& s){
+// Both need StreamCore::texMutex held. A shadow is game-side memory and no queued command refers to it (Unlock copies the rows into a Block).
+inline void dropShadowLocked(StreamCore& c,SubRes& s){
     if(!s.shadowOn)return;
+    SubRes* last=c.texList.back();c.texList[s.listIndex]=last;last->listIndex=s.listIndex;c.texList.pop_back();
     c.q.addTexShadowBytes(-std::int64_t(std::size_t(s.levelRows)*s.levelRowBytes*s.levelSlices));
     std::vector<unsigned char>().swap(s.shadow);s.shadowOn=false;
 }
+inline void dropSubShadow(StreamCore& c,SubRes& s){std::lock_guard<std::mutex> l(c.texMutex);dropShadowLocked(c,s);}
+// Game thread: makes `bytes` fit the texture-shadow cap by evicting least-recently-locked shadows, never-re-locked ones (fresh keeps) first,
+// never one that is locked now or `keep`. mayEvictRelocked=false (a fresh keep) leaves the re-locked ones alone. false = still no room.
+inline bool makeRoomForShadow(StreamCore& c,std::size_t bytes,bool mayEvictRelocked,const SubRes* keep){
+    while(!c.q.texShadowAdmit(bytes)){
+        std::lock_guard<std::mutex> l(c.texMutex);
+        SubRes* victim=nullptr;
+        for(SubRes* s:c.texList){
+            if(s==keep||s->mode==SubRes::Shadowed||(s->relocked&&!mayEvictRelocked))continue;
+            if(!victim||(victim->relocked&&!s->relocked)||(victim->relocked==s->relocked&&s->lastUse<victim->lastUse))victim=s;
+        }
+        if(!victim)return false;
+        dropShadowLocked(c,*victim);add(c.q.stats.texShadowEvicted);
+    }
+    return true;
+}
+inline void listShadow(StreamCore& c,SubRes& s){std::lock_guard<std::mutex> l(c.texMutex);s.listIndex=c.texList.size();c.texList.push_back(&s);}
 // A GPU-side write (StretchRect, UpdateTexture, ColorFill, mip generation, ...): the CPU copy is stale for good.
 inline void markGpuWritten(StreamCore& c,SubRes& s){s.written=true;dropSubShadow(c,s);s.shadowDead=true;}
 
@@ -323,7 +348,7 @@ inline UnlockImageArgs makeUnlockArgs(ProxyBase& self,const SubRes& sub,UINT rou
     UnlockImageArgs a{};a.proxy=&self;a.level=level;a.face=face;a.flags=sub.flags;a.hasRect=sub.hasRect;a.rows=sub.rows;a.slices=sub.slices;a.rowBytes=sub.rowBytes;a.pitch=sub.pitch;a.slicePitch=sub.slicePitch;
     a.l=sub.rect.left;a.t=sub.rect.top;a.r=sub.rect.right;a.b=sub.rect.bottom;a.bf=sub.box.Front;a.bk=sub.box.Back;a.route=route;return a;
 }
-constexpr std::size_t kFreshShadowMax=std::size_t(1)<<20;   // a fresh level up to this size keeps its first-write bytes as its shadow
+constexpr std::size_t kFreshShadowMax=std::size_t(256)<<10;   // a fresh level up to this size keeps its first-write bytes as its shadow
 // self: the object the game called (its inner receives the replayed Lock); root: where creation info and `sub` live.
 inline HRESULT lockImage(ProxyBase& self,ProxyBase& root,SubRes& sub,UINT route,UINT level,UINT face,UINT lw,UINT lh,UINT ld,
                          D3DLOCKED_RECT* lr,D3DLOCKED_BOX* lb,const RECT* rect,const D3DBOX* box,DWORD flags){
@@ -352,11 +377,12 @@ inline HRESULT lockImage(ProxyBase& self,ProxyBase& root,SubRes& sub,UINT route,
     if(!rtLike&&fi.ok){
         const UINT lrows=(lh+fi.bh-1)/fi.bh,lrowBytes=((lw+fi.bw-1)/fi.bw)*fi.bytes;
         const std::size_t levelBytes=std::size_t(lrows)*lrowBytes*ld;
+        bool justMade=false;
         if(!sub.shadowOn&&!sub.shadowDead){
             const bool undefined=!sub.written||(eff&D3::kLockDiscard)!=0;   // nothing to preserve: a zero shadow is as good as the real bytes
             const bool fresh=undefined&&levelBytes<=kFreshShadowMax,readback=!undefined&&!(flags&D3::kLockReadOnly)&&levelBytes<=kMaxStagedImage;
             if(fresh||readback){
-                if(!q.texShadowAdmit(levelBytes)){add(q.stats.texShadowRefused);add(q.stats.texShadowRefusedBytes,levelBytes);}
+                if(!makeRoomForShadow(*self.core,levelBytes,readback,&sub)){add(q.stats.texShadowRefused);add(q.stats.texShadowRefusedBytes,levelBytes);}
                 else{
                     bool ok=true;
                     try{sub.shadow.assign(levelBytes+kLockSlack,0);}catch(...){ok=false;}
@@ -372,12 +398,17 @@ inline HRESULT lockImage(ProxyBase& self,ProxyBase& root,SubRes& sub,UINT route,
                         if(!ran)return D3DERR_INVALIDCALL;
                         if(ok)add(q.stats.texShadowReadbacks);
                     }else if(ok)add(q.stats.texShadowFresh);
-                    if(ok){sub.shadowOn=true;sub.levelRowBytes=lrowBytes;sub.levelRows=lrows;sub.levelSlices=ld;q.addTexShadowBytes(std::int64_t(levelBytes));}
+                    if(ok){
+                        sub.shadowOn=true;sub.levelRowBytes=lrowBytes;sub.levelRows=lrows;sub.levelSlices=ld;q.addTexShadowBytes(std::int64_t(levelBytes));
+                        sub.relocked=readback;sub.fromFresh=fresh;listShadow(*self.core,sub);justMade=true;   // a readback is a re-lock by definition: evicted last
+                    }
                     else{std::vector<unsigned char>().swap(sub.shadow);sub.shadowDead=true;}   // the real level cannot be read: pass-through as before
                 }
             }
         }
         if(sub.shadowOn){
+            sub.lastUse=++self.core->texClock;
+            if(!justMade&&!sub.relocked){sub.relocked=true;if(sub.fromFresh)add(q.stats.texShadowFreshUseful);}   // a kept first write that was locked again was worth keeping
             describe();sub.mode=SubRes::Shadowed;
             sub.shadowOffset=std::size_t(f)*lrows*lrowBytes+std::size_t(t/fi.bh)*lrowBytes+std::size_t(l/fi.bw)*fi.bytes;
             unsigned char* at=sub.shadow.data()+sub.shadowOffset;
