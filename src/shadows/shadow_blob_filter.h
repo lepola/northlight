@@ -22,7 +22,7 @@ class NorthlightShadowBlobFilter {
     std::vector<std::uint8_t> raw,decoded;
     const std::vector<std::uint8_t> reference=NorthlightShadowBlobModel::referencePixels();   // ~10 us once, at construction
     unsigned frame=0,skippedThisFrame=0,skippedTotal=0,identified=0,unsupported=0,reported=0;
-    const unsigned strength;                 // 0.3.192 BlobShadowStrength 0..100 (clamped by the quality parser), read once at construction; the Device asks strength()/active()
+    const unsigned strength;                 // 0.3.193 BlobShadowStrength 0..100 (clamped by the quality parser), read once at construction; the Device asks strength()/active()
     IDirect3DTexture9* faint=nullptr;unsigned faintFailures=0,faintFailedFrame=0;
     unsigned faintThisFrame=0,faintTotal=0,statesLogged=0;
     static void release(IUnknown* p){if(p)p->Release();}
@@ -57,7 +57,7 @@ class NorthlightShadowBlobFilter {
         if(v.blob&&identified++<8)logf("SHADOWBLOB identified texture=%p %ux%u format=%u; native blob shadow draws follow BlobShadowStrength=%u while the extension draws actor shadows (0 skipped, 1..99 lighter texture under modulate blend, 100 unchanged)",static_cast<void*>(base),desc.Width,desc.Height,unsigned(desc.Format),strength);
         return v;
     }
-    // 0.3.192: one lazily created A8R8G8B8 MANAGED texture (survives Reset) with the faint disc's mip chain.
+    // 0.3.193: one lazily created A8R8G8B8 MANAGED texture (survives Reset) with the faint disc's mip chain.
     // Null on failure: logged for the first few failures, retried every 600 frames (a transient CreateTexture/LockRect failure
     // must not last the session); claim() hides the blob meanwhile.
     IDirect3DTexture9* ensureFaint(){
@@ -87,7 +87,7 @@ class NorthlightShadowBlobFilter {
     }
 public:
     enum class Claim {None,Skip,Faint};   // draw normally / skip the game's draw (strength 0, or 1..99 without a liftable blend) / draw with faintTexture()
-    // 0.3.192: Faint hands back the AddRef'd texture bound to stage 0 (the caller restores and releases it); Skip/None hold nothing.
+    // 0.3.193: Faint hands back the AddRef'd texture bound to stage 0 (the caller restores and releases it); Skip/None hold nothing.
     struct Result {Claim claim=Claim::None;IDirect3DBaseTexture9* original=nullptr;};
     NorthlightShadowBlobFilter(IDirect3DDevice9* device,unsigned blobShadowStrength):d(device),strength(blobShadowStrength){}
     ~NorthlightShadowBlobFilter(){release(faint);}
@@ -100,7 +100,7 @@ public:
     bool active()const{return strength<100;}   // 100 = the filter does no work and the game's blobs are drawn as they are
     // Skip: the draw about to be issued uses the blob shadow texture with alpha blending and the
     // strength is 0, or 1..99 and the faint swap is not possible (the blend is not a modulate or the faint
-    // texture is unavailable: the 0.3.191 behaviour, the blob is hidden); the caller skips the native draw.
+    // texture is unavailable: the 0.3.192 behaviour, the blob is hidden); the caller skips the native draw.
     // Faint (strength 1..99): same draw, with a modulate blend (ALPHABLENDENABLE, BLENDOP ADD,
     // DESTCOLOR*ZERO or ZERO*SRCCOLOR); the caller binds faintTexture() to stage 0 around the draw and
     // releases Result::original. Not a blob draw, or strength 100: None.
@@ -126,7 +126,7 @@ public:
             &&op==D3DBLENDOP_ADD&&((src==D3DBLEND_DESTCOLOR&&dst==D3DBLEND_ZERO)||(src==D3DBLEND_ZERO&&dst==D3DBLEND_SRCCOLOR));
         const bool accepted=modulate&&ensureFaint()!=nullptr;
         if(statesLogged<2){++statesLogged;logStates(primitiveCount,modulate,accepted?"faint":"skip");}
-        if(!accepted){++skippedThisFrame;++skippedTotal;return {Claim::Skip};}   // 0.3.192: cannot lighten it, hide it as 0.3.191 did
+        if(!accepted){++skippedThisFrame;++skippedTotal;return {Claim::Skip};}   // 0.3.193: cannot lighten it, hide it as 0.3.192 did
         ++faintThisFrame;++faintTotal;guard.p=nullptr;return {Claim::Faint,bound};
     }
 };

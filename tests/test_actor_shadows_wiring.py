@@ -5,8 +5,8 @@ ActorShadows=0 keeps the static mod shadows (terrain, world-cache casters, the u
 every replay (actor) shadow: model capture runs only for GI actor packets, no shadow consumer
 reads the replays of a GI frame (replayShadows), every map and cube is complete without them
 (replaysComplete, so nothing defers or demands a capture), the replay-derived keys are forced
-off at load (effective()). Blob shadows: the filter was bypassed at 0 only until 0.3.191; since
-0.3.192 BlobShadowStrength (0..100) decides, at both values: 0 hides, 100 draws the game's blob, between a faint texture. ActorShadows=1:
+off at load (effective()). Blob shadows: the filter was bypassed at 0 only until 0.3.192; since
+0.3.193 BlobShadowStrength (0..100) decides, at both values: 0 hides, 100 draws the game's blob, between a faint texture. ActorShadows=1:
 both predicates are exactly freshReplays, the replay blocks run as before. The decision and
 schedule model is exercised in test_quality_settings.cpp."""
 import sys; from pathlib import Path; sys.path.insert(0, str(Path(__file__).resolve().parents[1]))  # repo root
@@ -19,8 +19,8 @@ def code(text):return re.sub(r'/\*.*?\*/','',re.sub(r'//[^\n]*','',text),flags=r
 checks={}
 # Settings: key appended last (origin indices of the older keys unchanged), default 1 in every preset.
 keys=q[q.index('inline const Key Keys[]={'):q.index('};',q.index('inline const Key Keys[]={'))]
-# 0.3.187: FrameDrawGates is appended after it (Keys[30] stays ActorShadows); 0.3.190 appends ShadowPivotCorrection; 0.3.192 appends BlobShadowStrength (last).
-checks['key last, 0..1, presets 1/1/1']=keys.rstrip().endswith('{"ActorShadows",&Settings::actorShadows,0,1,{1,1,1}},\n    {"FrameDrawGates",&Settings::frameDrawGates,0,1,{1,1,1}},\n    {"ShadowPivotCorrection",&Settings::shadowPivotCorrection,0,1,{1,1,1}},\n    {"BlobShadowStrength",&Settings::blobShadowStrength,0,100,{50,50,50}},') and 'unsigned actorShadows=1;' in q and 'char origin[34]=' in q
+# 0.3.187: FrameDrawGates is appended after it (Keys[30] stays ActorShadows); 0.3.190 appends ShadowPivotCorrection; 0.3.192 CommandStream; 0.3.193 BlobShadowStrength (last).
+checks['key last, 0..1, presets 1/1/1']=keys.rstrip().endswith('{"ActorShadows",&Settings::actorShadows,0,1,{1,1,1}},\n    {"FrameDrawGates",&Settings::frameDrawGates,0,1,{1,1,1}},\n    {"ShadowPivotCorrection",&Settings::shadowPivotCorrection,0,1,{1,1,1}},\n    {"CommandStream",&Settings::commandStream,0,1,{1,1,1}},\n    {"BlobShadowStrength",&Settings::blobShadowStrength,0,100,{50,50,50}},') and 'unsigned actorShadows=1;' in q and 'char origin[35]=' in q
 checks['effective() forces exactly the two replay keys']=('inline Settings effective(Settings s){if(!s.actorShadows)for(const auto& k:ActorShadowForced)s.*k.field=0;return s;}' in q
     and 'inline const ForcedKey ActorShadowForced[]={\n    {"ShadowFateDiagnostics",' in q and 'persistentRigidProps' not in q and 'persistentCasters' not in q
     and '{"ShadowFateDiagnostics",&Settings::shadowFateDiagnostics},{"DiagReplayProbe",&Settings::diagReplayProbe}};' in q)
@@ -90,19 +90,19 @@ checks['blob filter: one helper, every draw through drawHook']=(r.count(helper)=
 ini=fp.src('windows-package/northlight-quality.ini').read_text();readme=fp.src('windows-package/README.txt').read_text(encoding='utf-8')
 checks['ini and README document ActorShadows']=(';ActorShadows=1\n' in ini and '\nActorShadows=' not in ini and 'Allowed 0..1. 1 / 1 / 1' in ini[ini.index('; Actor shadows'):ini.index(';ActorShadows=1')]
     and 'ActorShadows          1 / 1 / 1      shadows of characters and moving objects (0 = static shadows only' in readme)
-# 0.3.192: there is no compile-time switch; the strength is held by the filter, the Device asks it (blobFilterActive, the latch), and it is read from the quality settings once at device creation.
+# 0.3.193: there is no compile-time switch; the strength is held by the filter, the Device asks it (blobFilterActive, the latch), and it is read from the quality settings once at device creation.
 bf=fp.src('shadow_blob_filter.h').read_text()
 bq=fp.src('quality_settings.h').read_text()
-checks['0.3.192 BlobShadowStrength: read once at device creation, gates blobFilterActive and the latched gate; no compile-time switch']=('HidesNativeBlobs' not in bf and 'HidesNativeBlobs' not in r
+checks['0.3.193 BlobShadowStrength: read once at device creation, gates blobFilterActive and the latched gate; no compile-time switch']=('HidesNativeBlobs' not in bf and 'HidesNativeBlobs' not in r
     and 'unsigned blobShadowStrength=50;' in bq and 'shadowBlobs=std::make_unique<NorthlightShadowBlobFilter>(ext,world->blobShadowStrength());' in r and 'blobStrength' not in r
     and 'in.blobs=shadowBlobs!=nullptr&&shadowBlobs->active();' in r and 'bool blobFilterActive()const{return shadowBlobs&&shadowBlobs->active()&&' in r
     and 'unsigned blobShadowStrength()const{return quality.blobShadowStrength;}' in w and 'blobShadowStrength=0)' not in bf and 'strength(blobShadowStrength)' in bf)
-checks['0.3.192 filter: Skip at 0, Faint only under a modulate blend, faint texture A8R8G8B8 MANAGED, released in the destructor']=(
+checks['0.3.193 filter: Skip at 0, Faint only under a modulate blend, faint texture A8R8G8B8 MANAGED, released in the destructor']=(
     'enum class Claim {None,Skip,Faint};' in bf and 'if(strength>=100||' in bf and 'op==D3DBLENDOP_ADD&&((src==D3DBLEND_DESTCOLOR&&dst==D3DBLEND_ZERO)||(src==D3DBLEND_ZERO&&dst==D3DBLEND_SRCCOLOR))' in bf
-    and 'D3DFMT_A8R8G8B8,D3DPOOL_MANAGED' in bf and '~NorthlightShadowBlobFilter(){release(faint);}' in bf and 'faintMipChain(strength)' in bf and 'return {Claim::Skip};}   // 0.3.192: cannot lighten it' in bf and 'faintFailures++<3' in bf and 'frame-faintFailedFrame<600' in bf and 'guard.p=nullptr;return {Claim::Faint,bound};' in bf and 'blob shadow draws follow BlobShadowStrength' in bf)
+    and 'D3DFMT_A8R8G8B8,D3DPOOL_MANAGED' in bf and '~NorthlightShadowBlobFilter(){release(faint);}' in bf and 'faintMipChain(strength)' in bf and 'return {Claim::Skip};}   // 0.3.193: cannot lighten it' in bf and 'faintFailures++<3' in bf and 'frame-faintFailedFrame<600' in bf and 'guard.p=nullptr;return {Claim::Faint,bound};' in bf and 'blob shadow draws follow BlobShadowStrength' in bf)
 for name,ok in checks.items():print(('PASS ' if ok else 'FAIL ')+name)
 assert all(checks.values())
-print('PASS ActorShadows wiring: predicates reduce to freshReplays at 1; at 0 GI-only capture, no replay consumer, no deferral, forced keys; 0.3.192 BlobShadowStrength wiring')
+print('PASS ActorShadows wiring: predicates reduce to freshReplays at 1; at 0 GI-only capture, no replay consumer, no deferral, forced keys; 0.3.193 BlobShadowStrength wiring')
 ini2=ini[ini.index(';BlobShadowStrength=50')-1500:ini.index(';BlobShadowStrength=50')+30]
 assert ';BlobShadowStrength=50\n' in ini and '\nBlobShadowStrength=' not in ini and 'Allowed 0..100. 50 / 50 / 50' in ini2 and 'BlobShadowStrength   ' in readme
 print('PASS BlobShadowStrength documented in the ini and the README')

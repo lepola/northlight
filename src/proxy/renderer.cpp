@@ -19,11 +19,17 @@
 #include "mirror_resources.h"
 #include "tracked_buffers.h"
 #include "signatures.h"
+#include "shader_tags.h"
+#include "stream_hooks.h"
+#include "stream_device.h"
 #include "compiled_shaders.h"
 #include "projection.h"
 #include "world_draw_domain.h"
 #include "extension_guard.h"
 #include "backend_policy.h"
+#include "upload_lock.h"
+#include "lock_meter.h"
+#include "replay_copies.h"
 #include "dxvk_compatibility.h"
 #include "backend_loader.h"
 #include "frame_intervals.h"
@@ -35,6 +41,7 @@
 #include "translucent_depth.h"
 #include "log_rotation.h"
 #include "memory_guard.h"
+#include "address_space_snapshot.h"
 #include "northlight_mem.h"
 
 // 0.3.181 (r90): the DLL's one memcmp. This strong definition overrides zig compiler_rt's weak byte
@@ -180,10 +187,7 @@ template<class T> static uint64_t shaderHash(T* shader, std::vector<DWORD>& word
     if (!shader || FAILED(shader->GetFunction(nullptr, &size)) || size > 1024 * 1024) return 0;
     words.assign((size + 3) / 4, 0);
     if (FAILED(shader->GetFunction(words.data(), &size))) { words.clear(); return 0; }
-    const unsigned char* bytes = reinterpret_cast<const unsigned char*>(words.data());
-    uint64_t h = 14695981039346656037ULL;
-    for (UINT i = 0; i < size; ++i) h = (h ^ bytes[i]) * 1099511628211ULL;
-    return h;
+    return NorthlightShaderTags::fnv1a(words.data(), size); // 0.3.192 (CS): shader_tags.h, shared with the stream's triggers
 }
 
 #include "saved_state.h"
@@ -255,10 +259,10 @@ class Device final : public GuardedMirrorDevice {
         const MirrorGate& g=mirrorState.gate;const bool first=g.firstReady.load(std::memory_order_acquire);
         auto foreign=[&](MirrorSite s){return unsigned(g.foreign[unsigned(s)].load(std::memory_order_relaxed));};
         auto tid=[](const std::atomic<std::uint32_t>& t){return (unsigned long)t.load(std::memory_order_relaxed);};
-        if(NorthlightDiagnostics::enabled())logf("GATE threads device=%ld owner=%lu presentTid=%lu swapPresentTid=%lu drawTid=%lu foreignDevice=%u foreignRegistry=%u foreignResource=%u foreignStateBlock=%u foreignSwapChain=%u foreignRaw=%u foreignBuffer=%u ownerLocked=%u first=%lu/%s/%u frame=%u event=%s",
+        if(NorthlightDiagnostics::enabled())logf("GATE threads device=%ld owner=%lu presentTid=%lu swapPresentTid=%lu drawTid=%lu foreignDevice=%u foreignRegistry=%u foreignResource=%u foreignStateBlock=%u foreignSwapChain=%u foreignRaw=%u foreignBuffer=%u ownerLocked=%u first=%lu/%s/%u frame=%u gameTid=%lu replayTid=%lu event=%s",
             diagnosticId,(unsigned long)g.ownerTid,tid(g.presentTid),tid(g.swapPresentTid),tid(g.drawTid),foreign(MirrorSite::Device),foreign(MirrorSite::Registry),foreign(MirrorSite::Resource),
             foreign(MirrorSite::StateBlock),foreign(MirrorSite::SwapChain),foreign(MirrorSite::Raw),foreign(MirrorSite::Buffer),unsigned(g.ownerLocked.load(std::memory_order_relaxed)),
-            first?(unsigned long)g.firstTid:0ul,mirrorSiteName(first?g.firstSite:MirrorGate::Sites),first?unsigned(g.firstFrame):0u,unsigned(g.frame.load(std::memory_order_relaxed)),event);
+            first?(unsigned long)g.firstTid:0ul,mirrorSiteName(first?g.firstSite:MirrorGate::Sites),first?unsigned(g.firstFrame):0u,unsigned(g.frame.load(std::memory_order_relaxed)),NorthlightStream::gameTid.load(std::memory_order_relaxed),NorthlightStream::replayTid.load(std::memory_order_relaxed),event); /* 0.3.192 (CS): 0/0 on the direct path */
     }
 
     std::unique_ptr<WorldRenderer> world;
@@ -681,8 +685,8 @@ class Device final : public GuardedMirrorDevice {
         D3DSURFACE_DESC desc={};D3DVIEWPORT9 viewport={};if(!fullViewport(desc,&viewport))return;
         IDirect3DPixelShader9* ps=nullptr;struct PixelRelease {IDirect3DPixelShader9*& p;~PixelRelease(){drop(p);}} releasePS{ps};if(SUCCEEDED(ext->GetPixelShader(&ps))&&ps)water->capture(vs,ps,desc.Width,desc.Height,worldDepth,viewport,userPointer,mirrorState.invalidations,draw);
     }
-    // 0.3.192 BlobShadowStrength (held by the filter, read once at device creation): 100 = the filter is off and the
-    // game's blobs are drawn as they are; 0 = they are skipped (0.3.154..0.3.191); 1..99 = drawn with a lighter
+    // 0.3.193 BlobShadowStrength (held by the filter, read once at device creation): 100 = the filter is off and the
+    // game's blobs are drawn as they are; 0 = they are skipped (0.3.154..0.3.192); 1..99 = drawn with a lighter
     // texture (skipped when the game's blend cannot be lightened). Applies only while the mod draws actor shadows: effects (F10) and shadows (F9) on, a world
     // context, and 0.3.158 ActorShadows=1 (with 0 the game's blobs are the actor shadows).
     bool blobFilterActive()const{return shadowBlobs&&shadowBlobs->active()&&enabled&&effectKeys.settings.shadows&&!applied&&terrain&&!failed&&world&&world->hasContext()&&world->actorShadowsEnabled();}
@@ -711,7 +715,7 @@ class Device final : public GuardedMirrorDevice {
     void skyObserve(HRESULT hr,D3DPRIMITIVETYPE t,UINT count){
         if(count<=4&&celestialDiscs&&enabled&&!applied&&celestialDiscs->nativeObservePossible(hr,t,count)){D3DSURFACE_DESC desc;if(fullViewport(desc))celestialDiscs->observeNativeDraw(hr,t,count,true);}
     }
-    // 0.3.192 faint blob: planned inside the guarded claim, applied around the real draw (outside
+    // 0.3.193 faint blob: planned inside the guarded claim, applied around the real draw (outside
     // extensionWork, like the terrain shadow swap): texture 0 is shadowBlobs->faintTexture() for the draw and
     // the game's texture again after it. blobOriginal is the AddRef'd texture claim() handed back; a plan
     // holds it only when the faint texture exists.
@@ -826,6 +830,21 @@ class Device final : public GuardedMirrorDevice {
         }
     }
 public:
+    // 0.3.192 (CS): the replay thread takes over as owner thread (called on it, before its first command and before CreateDevice returns).
+    void adoptOwnerThread(){mirrorState.gate.ownerTid=MirrorGuard::threadId();}
+    // 0.3.192 (CS): direct replay (stream mode). The extension device runs the same MirrorDevice methods on the same real device and mirror as the
+    // Device's own non-overridden ones; the replay thread calls it with RAW pointers for the methods the generator's DIRECT list names.
+    IDirect3DDevice9* extensionDevice(){return ext;}
+    // The backend object this Device would pass on for an exposed resource (what mirrorResources.unwrap / NorthlightTrackedBuffers::resolveInput
+    // return), or nullptr when that is not a pure tracked unwrap: the stream then replays that proxy's calls through the Device.
+    IUnknown* rawOfExposed(IUnknown* exposed,NorthlightStream::Kind kind){
+        using K=NorthlightStream::Kind;if(!exposed)return nullptr;
+        bool wrapped=false;
+        if(kind==K::VertexBuffer){auto* raw=NorthlightTrackedBuffers::resolveInput(static_cast<IDirect3DVertexBuffer9*>(exposed),wrapped);return wrapped?static_cast<IUnknown*>(raw):nullptr;}
+        if(kind==K::IndexBuffer){auto* raw=NorthlightTrackedBuffers::resolveInput(static_cast<IDirect3DIndexBuffer9*>(exposed),wrapped);return wrapped?static_cast<IUnknown*>(raw):nullptr;}
+        return reinterpret_cast<IUnknown*>(mirrorResources.rawOf(reinterpret_cast<std::uintptr_t>(exposed),false));
+    }
+    bool setExclusiveOwner(bool on){return mirrorState.gate.setExclusive(on);} /* 0.3.192 (CS): one thread makes every Device call (mirror_guard.h) */
     HRESULT STDMETHODCALLTYPE SetCursorProperties(UINT XHotSpot, UINT YHotSpot, IDirect3DSurface9* pCursorBitmap) override{Guard mirrorLock(mirrorState.gate);return ext->SetCursorProperties(XHotSpot, YHotSpot, mirrorResources.unwrap(pCursorBitmap));}
     HRESULT STDMETHODCALLTYPE GetBackBuffer(UINT iSwapChain, UINT iBackBuffer, D3DBACKBUFFER_TYPE Type, IDirect3DSurface9** ppBackBuffer) override{Guard mirrorLock(mirrorState.gate);HRESULT hr=ext->GetBackBuffer(iSwapChain, iBackBuffer, Type, ppBackBuffer);if(SUCCEEDED(hr)){mirrorResources.wrap(ppBackBuffer);}return hr;}
     HRESULT STDMETHODCALLTYPE CreateTexture(UINT Width, UINT Height, UINT Levels, DWORD Usage, D3DFORMAT Format, D3DPOOL Pool, IDirect3DTexture9** ppTexture, HANDLE* pSharedHandle) override{Guard mirrorLock(mirrorState.gate);HRESULT hr=ext->CreateTexture(Width, Height, Levels, Usage, Format, Pool, ppTexture, pSharedHandle);if(SUCCEEDED(hr)){NorthlightReplayDrawState::noteTextureFormat(Format);mirrorResources.wrap(ppTexture);}return hr;}
@@ -854,6 +873,21 @@ public:
     HRESULT STDMETHODCALLTYPE SetPixelShader(IDirect3DPixelShader9* pShader) override{Guard mirrorLock(mirrorState.gate);return ext->SetPixelShader(mirrorResources.unwrap(pShader));}
     HRESULT STDMETHODCALLTYPE GetPixelShader(IDirect3DPixelShader9** ppShader) override{Guard mirrorLock(mirrorState.gate);HRESULT hr=ext->GetPixelShader(ppShader);if(SUCCEEDED(hr)){mirrorResources.wrap(ppShader);}return hr;}
     HRESULT STDMETHODCALLTYPE CreateQuery(D3DQUERYTYPE Type, IDirect3DQuery9** ppQuery) override{Guard mirrorLock(mirrorState.gate);HRESULT hr=ext->CreateQuery(Type, ppQuery);if(SUCCEEDED(hr)){mirrorResources.wrap(ppQuery);}return hr;}
+    // 0.3.192 (MEMMAP): address-space snapshot at a device lifecycle point (see address_space_snapshot.h). Always on, never throws.
+    // Not reachable without new plumbing: world/geometry mesh, BVH/plan, GI and static-shadow cpu MiB (WorldRenderer privates), the stream's
+    // queue/bufShadow/texShadow memMB (replayer is owned by StreamDevice), retirement queue bytes, live proxies/tracked buffer counts.
+    void memmap(const char* point){
+        try{
+            char label[128],tally[320];
+            std::snprintf(label,sizeof label,"device=%ld point=%s frame=%u tick=%lu",diagnosticId,point,frame,(unsigned long)GetTickCount());
+            const auto& m=NorthlightLockMeter::state();
+            std::snprintf(tally,sizeof tally,"mirrorResources=%zu copyResidentMiB=%.1f copyResidentBuffers=%llu copyLargeMiB=%.1f copyCapMiB=%.1f streamActive=%d memoryPressure=%d liveDevices=%ld",
+                mirrorResources.size(),double(m.copyResidentBytes.load(std::memory_order_relaxed))/1048576.0,(unsigned long long)m.copyResidentBuffers.load(std::memory_order_relaxed),
+                double(m.copyLargeBytes.load(std::memory_order_relaxed))/1048576.0,double(m.copyCapBytes.load(std::memory_order_relaxed))/1048576.0,
+                int(NorthlightStream::streamActive.load(std::memory_order_relaxed)),int(NorthlightStream::memoryPressure.load(std::memory_order_relaxed)),(long)liveDevices);
+            NorthlightMemMap::snapshot([](const char* line){logf("%s",line);},label,tally);
+        }catch(...){}
+    }
     Device(IDirect3DDevice9* d,IDirect3D9* p):GuardedMirrorDevice(d,&mirrorState),parent(p),mirrorResources(this,mirrorState.gate,&mirrorEscape,&mirrorState,d),ext(new ExtensionDevice(d,&mirrorState)),stateBlocks(ext) {
         mirrorState.gate.ownerTid=MirrorGuard::threadId(); /* 0.3.180 (D0): the CreateDevice caller */
         mirrorState.gate.reportContext=this;mirrorState.gate.report=&gateForeignReport;
@@ -867,15 +901,18 @@ public:
         catch(...){logf("MEMORY async sampler unavailable; memory guard and periodic diagnostics skipped");}
         diagnosticId=InterlockedIncrement(&deviceSerial);
         logf("DEVICE lifetime event=create id=%ld live=%ld tick=%lu",diagnosticId,InterlockedIncrement(&liveDevices),(unsigned long)GetTickCount());
+        memmap("create");
     }
     ~Device() {
         logf("DEVICE lifetime event=destroy-begin id=%ld tick=%lu",diagnosticId,(unsigned long)GetTickCount());
+        memmap("destroy-begin");
         logGateThreads("destroy");
         memoryDiagnostics.reset();
         dropBlobFaint();shadowBlobs.reset();celestialDiscs.reset();gpuProfile.reset();water.reset();world.reset();releaseResources();
         stateBlocks.clear();ext->Release();ext=nullptr;
         const ULONG backendReferences=real->Release();parent->Release();
         logf("DEVICE lifetime event=destroy-end id=%ld live=%ld backendReleaseCount=%lu tick=%lu",diagnosticId,InterlockedDecrement(&liveDevices),(unsigned long)backendReferences,(unsigned long)GetTickCount());
+        memmap("destroy-end");
     }
     HRESULT STDMETHODCALLTYPE QueryInterface(REFIID id,void** out) override { Guard mirrorLock(mirrorState.gate);
         if (!out) return E_POINTER;
@@ -1036,6 +1073,8 @@ public:
         const bool sampledFrame=sampled(),frameApplied=applied;
         {CpuScope cpu(sampledFrame?&cleanup:nullptr);clearFrame();}
         if(memoryCaps>=0&&world)world->setMemoryPressure(memoryCaps==1);
+        if(memoryCaps>=0&&NorthlightReplayCopies::enabled.load(std::memory_order_relaxed))NorthlightReplayCopies::setPressure(memoryCaps==1); /* 0.3.192 (CS): replay thread: halves the CPU copies' cap and evicts down to it */
+        if(memoryCaps>=0)NorthlightStream::memoryPressure.store(memoryCaps==1,std::memory_order_relaxed); /* 0.3.192 (CS): the stream's game side halves its queue budget at its next Present */
         if(memoryTrim)trimMemory(memorySample);
         if(NorthlightRenderThreadProbe::profiling()&&cpuFrequency.QuadPart>0){namespace P=NorthlightRenderThreadProbe;
             // Windows: the probe's (flushed when it changes), else 600 kept frames. Sample frames are excluded.
@@ -1097,6 +1136,7 @@ public:
         }
         cpuPrep=cpuCapture=cpuWaterCapture=cpuEffects=0;cpuCaptureReads=0;cpuDrawHooks=0;
         ++frame;mirrorState.gate.frame.store(frame,std::memory_order_relaxed); /* 0.3.180: the census' frame */
+        if(frame==300)memmap(diagnosticId==1?"baseline-frame300":"frame300"); /* 0.3.192 (MEMMAP): allocations settled; device 1 is the baseline */
         // Per-type call counts run only through a RenderProfile sample frame.
         mirrorState.rawCounting=sampled()&&NorthlightRenderThreadProbe::profiling();
         if(mirrorState.rawCounting){std::memset(mirrorState.rawMethodCalls,0,sizeof mirrorState.rawMethodCalls);
@@ -1164,6 +1204,8 @@ public:
     }
     HRESULT STDMETHODCALLTYPE ProcessVertices(UINT src,UINT dest,UINT count,IDirect3DVertexBuffer9* buffer,IDirect3DVertexDeclaration9* decl,DWORD flags) override { Guard mirrorLock(mirrorState.gate);
         if(buffer&&!NorthlightTrackedBuffers::isWrapped(buffer))mirrorState.disable("raw ProcessVertices buffer");
+        // 0.3.192 (DXVK3): NOOVERWRITE read-backs skip the needsReadback wait of a buffer ProcessVertices wrote; the game is not expected to use it.
+        if(NorthlightLockMeter::processVertices()&&NorthlightUpload::ReadBackNoOverwrite.load(std::memory_order_relaxed))logf("LOCK METER warning: ProcessVertices called while the NOOVERWRITE read-back flag is on (first call src=%u dest=%u count=%u)",src,dest,count);
         if(gateFrame)++gateCounts.processVertices; /* 0.3.154: up to two generations */
         NorthlightTrackedBuffers::written(buffer);
         HRESULT hr=ext->ProcessVertices(src,dest,count,NorthlightTrackedBuffers::unwrap(buffer),mirrorResources.unwrap(decl),flags);
@@ -1172,7 +1214,7 @@ public:
     }
     HRESULT STDMETHODCALLTYPE CreateVertexShader(const DWORD* code,IDirect3DVertexShader9** out) override { Guard mirrorLock(mirrorState.gate);
         HRESULT hr=ext->CreateVertexShader(code,out);
-        if(SUCCEEDED(hr)&&out&&*out)extensionWork("vertex shader registration",[&]{std::vector<DWORD> words;auto h=shaderHash(*out,words);int tag=contains(kTerrainVS,h)?1:contains(kUiVS,h)?2:0;vsHashes[*out]=h;if(world)world->registerShader(*out,h);if(water)water->registerVertex(*out,h,words.data(),words.size());vsTags[*out]=tag|(water&&water->hasVertex(*out)?kWaterTag:0);if(tag==1)++matchedTerrain;else if(tag==2)++matchedUI;});
+        if(SUCCEEDED(hr)&&out&&*out)extensionWork("vertex shader registration",[&]{std::vector<DWORD> words;auto h=shaderHash(*out,words);int tag=NorthlightShaderTags::deviceTag(h);vsHashes[*out]=h;if(world)world->registerShader(*out,h);if(water)water->registerVertex(*out,h,words.data(),words.size());vsTags[*out]=tag|(water&&water->hasVertex(*out)?kWaterTag:0);if(tag==1)++matchedTerrain;else if(tag==2)++matchedUI;});
         if(SUCCEEDED(hr))mirrorResources.wrap(out);return hr;
     }
     HRESULT STDMETHODCALLTYPE CreatePixelShader(const DWORD* code,IDirect3DPixelShader9** out) override { Guard mirrorLock(mirrorState.gate);
@@ -1210,6 +1252,25 @@ public:
     }
     ULONG STDMETHODCALLTYPE AddRef() override{return InterlockedIncrement(&refs);}
     ULONG STDMETHODCALLTYPE Release() override{auto n=InterlockedDecrement(&refs);if(!n)delete this;return n;}
+    // 0.3.192 (CS): wraps the Device in the command stream; on any failure the game keeps the Device directly (the worker core
+    // budgets were read with the stream flag set, a harmless one core less).
+    IDirect3DDevice9* startStream(IDirect3DDevice9* device,D3DPRESENT_PARAMETERS* pp){
+        Device* target=static_cast<Device*>(device);const char* reason="unknown";
+        NorthlightStream::StreamDevice::Options options;
+        options.capture=&NorthlightStream::capture;
+        options.threadStart=[target]{target->adoptOwnerThread();};
+        options.log=[](const char* line){logf("%s",line);};
+        options.diagnostics=&NorthlightDiagnostics::enabled;
+        options.readBackLock=&NorthlightUpload::readBackLock;
+        options.extension=target->extensionDevice();options.rawOf=[target](IUnknown* exposed,unsigned kind){return target->rawOfExposed(exposed,NorthlightStream::Kind(kind));};
+        NorthlightStream::StreamDevice* stream=nullptr;
+        const bool exclusiveOwner=target->setExclusiveOwner(true); /* before the replay thread exists: its calls take the cheap owner entry; a foreign call stays safe */
+        try{stream=NorthlightStream::StreamDevice::make(device,this,pp,std::move(options),&reason);}catch(...){reason="exception";}
+        if(!stream){NorthlightStream::streamActive.store(false,std::memory_order_relaxed);NorthlightReplayCopies::enabled.store(false,std::memory_order_relaxed);target->setExclusiveOwner(false);target->adoptOwnerThread(); /* the gate owner is this thread again (a replay thread that ran has been joined) */
+            logf("CSTREAM disabled reason=%s",reason);return device;}
+        logf("CSTREAM active gameTid=%lu replayTid=%lu exclusiveGate=%d",NorthlightStream::gameTid.load(),NorthlightStream::replayTid.load(),int(exclusiveOwner));
+        return stream;
+    }
     HRESULT STDMETHODCALLTYPE CreateDevice(UINT adapter,D3DDEVTYPE type,HWND window,DWORD flags,D3DPRESENT_PARAMETERS* pp,IDirect3DDevice9** out) override {
         if(selectedBackend!=NorthlightBackend::Kind::Legacy){
             D3DDISPLAYMODE mode={};D3DCAPS9 caps={};D3DADAPTER_IDENTIFIER9 id={};
@@ -1228,9 +1289,14 @@ public:
                 return D3DERR_NOTAVAILABLE;
             }
         }
+        const bool stream=NorthlightStream::commandStreamRequested(rootPath); /* 0.3.192 (CS): CommandStream=0 or an unreadable ini is the old path below */
+        if(stream)NorthlightStream::streamActive.store(true,std::memory_order_relaxed); /* before the Device exists: worker core budgets read it once */
+        if(stream)NorthlightReplayCopies::enabled.store(true,std::memory_order_relaxed); /* 0.3.192 (CS): before the first game buffer is wrapped: the replay-side CPU copies of replay_copies.h; never on with CommandStream=0 */
+        if(stream)flags|=D3DCREATE_MULTITHREADED; /* DXVK's window-proc hook may touch the swap chain on the game thread while the replay thread presents */
         HRESULT hr=real->CreateDevice(adapter,type,window,flags,pp,out);
         logf("CreateDevice HRESULT=0x%08lx flags=0x%lx",(unsigned long)hr,(unsigned long)flags);
         if(SUCCEEDED(hr)&&out&&*out)*out=new Device(*out,this);
+        if(SUCCEEDED(hr)&&out&&*out&&stream)*out=startStream(*out,pp);
         return hr;
     }
 };
@@ -1391,12 +1457,15 @@ static HMODULE backend() {
     // Only DXVK keeps the legacy (unchecked, no RESZ dummy draw) rules; every
     // other runtime, including the system fallback, gets the native rules.
     if(module&&(result.fallback||(configured==NorthlightBackend::Kind::Legacy&&!last.info.dxvk)))selectedBackend=NorthlightBackend::Kind::Native;
-    logf("Northlight renderer 0.3.192; reference sun look (sun glow hue from native/sunHalo band, soft-shoulder glare, veil, sun-tinted haze), native sun/moon suppressed (F1b), lamps dimmed to 30 pct in direct sun, native moon02 skipped by texture identity, no game bytes in the DLL, MEMREAD self-read profile (RenderProfile), soft sun removal in shadow, jump-stable shadow anchor, geometry coverage hold with travel lead, steadier animated shadow edges (near 5x5 tent, still-camera shadow history), native blob shadows kept at BlobShadowStrength (faint texture under modulate blend), bilinear lighting history, near capture reserve for the player and companions, remembered rigid prop shadows (drawn-by-game states, windowed held), AO and bloom folded into the world composite, ground normals reject object tops, both wide samples, batched celestial terrain mask, DXVK async left to the runtime, render-thread terrain upload and rigid bookkeeping trims, moon without the horizon stall, art layer bands retimed to the sun and moon, actor prepare on a worker, trimmed prepare handoff, in-place capture constants, gate thread census, predicted snapshot lookups, word-wise memcmp, owner-thread gate elision; abandoned-frame prepare quarantine; removal smoothing on matching normals in its own pass (35/50 degree gate); per-frame draw gates; translucent depth census; early depth for translucent actors; DXVK 3.1.1 default with 2.7.1 fallback; AO depth texel snap; shadow cascades follow camera zoom and collision; reduced terrain shadow reach under address-space pressure; backend=%s path=%ls loaded=%d error=%lu",
+    logf("Northlight renderer 0.3.193; reference sun look (sun glow hue from native/sunHalo band, soft-shoulder glare, veil, sun-tinted haze), native sun/moon suppressed (F1b), lamps dimmed to 30 pct in direct sun, native moon02 skipped by texture identity, no game bytes in the DLL, MEMREAD self-read profile (RenderProfile), soft sun removal in shadow, jump-stable shadow anchor, geometry coverage hold with travel lead, steadier animated shadow edges (near 5x5 tent, still-camera shadow history), native blob shadows kept at BlobShadowStrength (faint texture under modulate blend), bilinear lighting history, near capture reserve for the player and companions, remembered rigid prop shadows (drawn-by-game states, windowed held), AO and bloom folded into the world composite, ground normals reject object tops, both wide samples, batched celestial terrain mask, DXVK async left to the runtime, render-thread terrain upload and rigid bookkeeping trims, moon without the horizon stall, art layer bands retimed to the sun and moon, actor prepare on a worker, trimmed prepare handoff, in-place capture constants, gate thread census, predicted snapshot lookups, word-wise memcmp, owner-thread gate elision; abandoned-frame prepare quarantine; removal smoothing on matching normals in its own pass (35/50 degree gate); per-frame draw gates; translucent depth census; early depth for translucent actors; DXVK 3.1.1 default with 2.7.1 fallback; AO depth texel snap; shadow cascades follow camera zoom and collision; reduced terrain shadow reach under address-space pressure; command-stream replay thread; backend=%s path=%ls loaded=%d error=%lu",
          NorthlightBackend::name(configured),last.path.c_str(),module!=nullptr,module?0ul:(last.error?last.error:(unsigned long)ERROR_INVALID_PARAMETER));
     logAttempts(result.attempts);
     logHostExecutable(sys.selfPath);
     logf("BACKEND selected=%ls runtime=%s rules=%s BackendPath=%ls fallback=%u",module?last.path.c_str():L"(none)",
          last.info.dxvk?(last.info.dxvkVersion.empty()?"DXVK (unknown version)":last.info.dxvkVersion.c_str()):"non-DXVK",NorthlightBackend::name(selectedBackend),overridden.empty()?L"(default)":overridden.c_str(),unsigned(result.fallback));
+    // 0.3.192 (DXVK3): the NOOVERWRITE read-back flag only for the backend that actually loaded and is DXVK >= 3 (see upload_lock.h).
+    NorthlightUpload::ReadBackNoOverwrite.store(module&&!result.fallback&&last.info.dxvk&&NorthlightBackend::dxvkMajor(last.info.dxvkVersion)>=3,std::memory_order_relaxed);
+    logf("LOCK METER read-back lock flags readBackLock=0x%x (NOOVERWRITE only on a loaded DXVK >= 3 backend)",unsigned(NorthlightUpload::readBackLock()));
     if(result.fallback&&module)logf("BACKEND SELF-LOAD REFUSED: the configured backend resolves to this proxy (or another Northlight build); fell back to the system d3d9 runtime. Fix northlight-renderer.ini Backend/BackendPath.");
     else if(result.fallback)logf("BACKEND SELF-LOAD REFUSED: the configured backend resolves to this proxy (or another Northlight build) and the system d3d9 fallback FAILED too (expected under Wine with d3d9=n: the system d3d9 is builtin; the fallback is Windows-only). Fix northlight-renderer.ini Backend/BackendPath.");
     if(module&&last.info.dxvk&&!NorthlightBackend::isPackagedDxvk(configured))

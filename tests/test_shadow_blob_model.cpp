@@ -88,7 +88,7 @@ int main(int argc,char** argv){
     unsigned rejected=0;for(auto& v:variants(model))rejected+=!accepted(v,model);
     assert(rejected>=100);
     std::printf("model: 32x32, %u opaque, BGRA8 round trip accepted, %u of %zu variants rejected\n",opaque,rejected,variants(model).size());
-    // 0.3.192 faint disc: s=100 is the reference, s=0 is white (no darkening) everywhere, alpha never changes, colour stays 255
+    // 0.3.193 faint disc: s=100 is the reference, s=0 is white (no darkening) everywhere, alpha never changes, colour stays 255
     // where alpha is 0, the grey follows 255-round(s*(255-grey)/100) and only gets lighter as s falls; the mip chain is 32..1, colour box filtered, alpha thresholded to 0/255.
     {using namespace NorthlightShadowBlobModel;
      assert(faintPixels(100)==model&&faintPixels(250)==model);

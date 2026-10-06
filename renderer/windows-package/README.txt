@@ -132,7 +132,7 @@ Individual settings (Quality / Balanced / Performance):
   ActorShadowBudgetMiB  0 / 16 / 8     character shadows, nearest first (0 = no limit)
   ActorShadowRadius     40 / 35 / 20   characters more than N yards from your own character cast no shadow (0..200; 0 = no limit; 1..3 = your own character, mount, weapons and whatever is right next to you)
   ActorShadows          1 / 1 / 1      shadows of characters and moving objects (0 = static shadows only: terrain, buildings, and the trees and objects placed on the map; characters, creatures, mounts and pets lose their shadow, your own character too, and so do objects the server places, such as doors, elevators, ships, zeppelins, mailboxes and event decorations; swaying trees, windmills and flags keep a shadow frozen in their rest pose; with 0 the game's own round shadows under characters are drawn unchanged, with 1 they follow BlobShadowStrength; saves about 4–5 ms per frame in crowds and about 1 ms in quiet areas; with GIDynamicProbes=1 characters are still copied about every 200 ms for indirect light, GIDynamicProbes=0 removes that too; 0 also turns off the ShadowFateDiagnostics and DiagReplayProbe settings; no preset changes this); with 1, shop signs and other small still objects the server places keep their shadow when the camera turns away
-  BlobShadowStrength    50 / 50 / 50   how dark the game's own round shadow under characters is while the renderer's character shadows are on (0..100; 100 = as the game draws it, 0 = hidden, in between = fainter, or hidden if the game's blend cannot be lightened; FPS cost not measured: a cached texture check on small draws and two SetTexture calls per blob draw, as in 0.3.191 and earlier; 100 skips it)
+  BlobShadowStrength    50 / 50 / 50   how dark the game's own round shadow under characters is while the renderer's character shadows are on (0..100; 100 = as the game draws it, 0 = hidden, in between = fainter, or hidden if the game's blend cannot be lightened; FPS cost not measured: a cached texture check on small draws and two SetTexture calls per blob draw, as in 0.3.192 and earlier; 100 skips it)
   MinSkinnedTriangles   100/150/180    small animated parts cast no shadow
   FarShadowInterval     4 / 5 / 6      distant shadows (beyond ~48 m) are drawn every Nth frame (1..16)
   NearShadowInterval    1 / 2 / 2      moving parts of the near shadows (characters) every Nth frame (1..16)
@@ -163,6 +163,7 @@ Individual settings (Quality / Balanced / Performance):
   DiagReplayProbe       0 / 0 / 0      measurement: the near-shadow character draws a second time, hidden, in 10 s periods, and the timing in the log (needs RenderProfile=1; the image does not change)
   FrameDrawGates        1 / 1 / 1      per-frame draw checks (0 = check every draw as before 0.3.187, for comparisons; the image does not change)
   ShadowPivotCorrection 1 / 1 / 1      near shadow detail follows camera zoom and collisions (0 = the distance of the sharp shadow area is only estimated while orbiting, as before 0.3.190, for comparisons)
+  CommandStream         1 / 1 / 1      the game records its graphics calls and a second thread runs the renderer (0 = everything on the game's thread as before 0.3.192, for comparisons; read at game start)
 When both NearShadowInterval and FarShadowInterval are at least 2, frames that
 draw neither shadow also skip copying the character geometry (about 1–1.5 ms
 of CPU per skipped frame). Light and normal frames alternate: the average FPS
@@ -180,6 +181,23 @@ The file can be saved as UTF-8, ANSI or Notepad's Unicode.
 WINDOWS TEST
 Before a test or a problem report, set Diagnostics=1 in northlight-quality.ini
 (the default is 0); the log then contains the periodic statistics and timings.
+The LOCK METER line (every 2 s) shows how much buffer data the game and the
+renderer lock per frame, which DXVK 3 counts towards its upload throttling:
+discardKiB/frame and stagingKiB/frame (avg, max), over10MiB = frames above
+10 MiB, the share of each source (replayVB, replayIB, liveIB, arena, instances,
+game), ring = the renderer's upload ring wraps (fenceReuse = no DISCARD needed),
+readback = the renderer's read-only locks of game buffers (dynamic, defaultStatic,
+other) with the lock flags used (flag=0x1010 on DXVK 3, 0x10 otherwise).
+MEMMAP lines (always on, a few per device lifecycle point): when the game recreates
+the D3D9 device (for example after an MSAA change) the log gets an address-space
+snapshot at destroy-begin, destroy-end, create and at frame 300 of each device
+(device 1's is "baseline-frame300"). MEMMAP summary = committed/reserved MiB per
+type (image/mapped/private), free and largest free block; top = the 12 largest
+allocations (module= names an image); diff-new / diff-gone / diff-changed = what
+appeared, vanished or changed by 1 MiB or more since the previous snapshot;
+process, heaps, threads give the working set, heap sizes and thread/module counts;
+northlight = Northlight's own cheap tallies. Compare destroy-begin with destroy-end
+to see which allocations of the old device survive.
 1. Check the start of the new run's northlight-renderer.log file:
    Northlight renderer <version>; d3d9.dll proxy ... backend=dxvk ... loaded=1 error=0
    The backend path must point to renderer-backends\dxvk\dxvk_d3d9.dll.

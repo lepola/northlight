@@ -131,7 +131,7 @@ checks['runtime undo needs captured and earlyCaptured, clears captured, counts u
 checks['no SetRenderState and no resolve in the early/undo/census region']='SetRenderState' not in impl[dom:cap] and impl[dom:cap].count('resolveDepth()')==1
 checks['state reads include Z write, blend, src/dst, colour write, skinned']=all(x in impl[dom:cen] for x in ('D3DRS_ZWRITEENABLE','D3DRS_ALPHABLENDENABLE','D3DRS_SRCBLEND','D3DRS_DESTBLEND','D3DRS_COLORWRITEENABLE','isSkinnedShader(vs)'))
 hook=r[r.index('template<class Capture,class Draw> HRESULT drawHook('):][:3500]
-# 0.3.192: the real draw goes through blobFaintDraw (it wraps terrainShadowDraw) in both drawHook modes.
+# 0.3.193: the real draw goes through blobFaintDraw (it wraps terrainShadowDraw) in both drawHook modes.
 checks['early block runs before the real draw (prepareDraw/prepareDrawImpl precede draw in both drawHook modes)']=(
     hook.index('prepareDraw(capture);')<hook.index('blobFaintDraw(claimed,draw)')<hook.index('prepareDrawImpl(capture);')<hook.rindex('blobFaintDraw(claimed,draw)'))
 cf=r[r.index('void clearFrame() {'):r.index('void releaseResources()')]
@@ -146,7 +146,7 @@ checks['state reads cached per draw']='known=true' in impl
 checks['no TranslucentActorDepth setting']=all('ranslucentActorDepth' not in x for x in (r,q,w))
 rd_=r[r.index('bool resolveDepth() {'):r.index('HRESULT quad(UINT w')]
 checks['resolveDepth unchanged: SavedState and captured=true on success']='SavedState saved(ext,&stateBlocks);' in rd_ and 'captured = true; return true;' in rd_
-checks['banner']='translucent depth census; early depth for translucent actors; DXVK 3.1.1 default with 2.7.1 fallback; AO depth texel snap; shadow cascades follow camera zoom and collision; reduced terrain shadow reach under address-space pressure; backend=' in r
+checks['banner']='translucent depth census; early depth for translucent actors; DXVK 3.1.1 default with 2.7.1 fallback; AO depth texel snap; shadow cascades follow camera zoom and collision; reduced terrain shadow reach under address-space pressure; command-stream replay thread; backend=' in r
 ini=fp.src('windows-package/northlight-quality.ini').read_text();rm=fp.src('windows-package/README.txt').read_text()
 checks['docs: no setting in the ini or README']='TranslucentActorDepth' not in ini and 'TranslucentActorDepth' not in rm
 for n,ok in checks.items():print(('PASS ' if ok else 'FAIL ')+n)

@@ -90,7 +90,7 @@ checks={}
 checkflag=fp.src('shadow_blob_filter.h').read_text()
 checks['real source: no compile-time switch left; BlobShadowStrength gates blobFilterActive and the latch (the equivalence runs use strength 0 = skip)']=('HidesNativeBlobs' not in checkflag and 'HidesNativeBlobs' not in renderer
     and 'bool blobFilterActive()const{return shadowBlobs&&shadowBlobs->active()&&' in renderer and 'in.blobs=shadowBlobs!=nullptr&&shadowBlobs->active();' in renderer)
-# 0.3.192 faint swap: planned in the guarded claim, applied around the real draw outside every extension region, texture 0 restored.
+# 0.3.193 faint swap: planned in the guarded claim, applied around the real draw outside every extension region, texture 0 restored.
 swap_src=member(renderer,'template<class Draw> HRESULT blobFaintDraw(')
 checks['faint swap: SetTexture(faint), the draw, SetTexture(original), then Release; no extensionWork around it']=(
     'ext->SetTexture(0,faint);' in swap_src and 'shadowBlobs->faintTexture()' in swap_src and swap_src.index('ext->SetTexture(0,faint);')<swap_src.index('draw();')<swap_src.index('ext->SetTexture(0,original);')<swap_src.rindex('original->Release();')
@@ -214,7 +214,7 @@ struct MockSky{
 // Result converts to bool (Skip) for the 0.3.184 code; the current code reads claim and original.
 struct NorthlightShadowBlobFilter{enum class Claim{None,Skip,Faint};struct Result{Claim claim=Claim::None;IDirect3DBaseTexture9* original=nullptr;operator bool()const{return claim==Claim::Skip;}};};
 using ClaimResult=NorthlightShadowBlobFilter::Result;
-// faintMode off (old-vs-new runs): Skip or None as before 0.3.192. On: None, Skip or Faint (Faint = GetTexture(0) taken inside the claim and
+// faintMode off (old-vs-new runs): Skip or None as before 0.3.193. On: None, Skip or Faint (Faint = GetTexture(0) taken inside the claim and
 // handed back AddRef'd, None when that fails, like the real claim()), and a null faint texture now and then.
 struct MockBlobs{Env* env=nullptr;MockExt* ext=nullptr;bool faintMode=false;unsigned strengthValue=0;IDirect3DTexture9 faint;
     bool active()const{return strengthValue<100;}
@@ -319,7 +319,7 @@ static bool run(std::uint64_t seed,bool gates,unsigned faultOneIn,bool mutate,Co
     if(!same&&!mutate){std::fprintf(stderr,"END STATE MISMATCH seed=%llu gates=%d\n",(unsigned long long)seed,int(gates));std::abort();}
     return same;
 }
-// 0.3.192 faint blobs (strength 50): per draw, texture 0 is the faint disc only around the real draw, the original comes back right
+// 0.3.193 faint blobs (strength 50): per draw, texture 0 is the faint disc only around the real draw, the original comes back right
 // after it (also when the extension work faults before or inside the claim: then nothing was planned), every GetTexture is released,
 // and a swap composes with the terrain pixel shader swap. Only the current code runs here: the 0.3.184 code never swapped textures.
 struct FaintCoverage{unsigned draws=0,swaps=0,composed=0,faults=0,noPlan=0;};

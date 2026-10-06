@@ -41,7 +41,7 @@ check('draw joins only its matrix (prepare), never the whole job','const auto& p
 check('reset drops finished builds (exact old identity); others install',"void reset(){mutate(true);" in gpu and 'else if(discard){slot=Plan{};slot.occupied=item.savedOccupied;slot.valid=item.savedValid;' in gpu)
 check('worker never touches plans_/stats_/D3D',all(x not in gpu[gpu.index('    void runItem(unsigned i)const{'):gpu.index('    bool joinMatrix(')] for x in ('plans_','stats_','->Lock','SetRenderState','device_','canInstance_','epoch_')))
 check('pinned slots are never LRU victims','if(plan.pinned)continue;' in gpu and 'if(!plan.pinned)return plan;' in gpu)
-check('two cores or fewer: always synchronous','bool asyncPlans_=NorthlightStaticPlanJob::Async&&std::thread::hardware_concurrency()>2;' in gpu and 'if(!asyncPlans_||!lruPlans_||' in gpu)
+check('two cores or fewer: always synchronous','bool asyncPlans_=NorthlightStaticPlanJob::Async&&NorthlightStream::cores()>2;' in gpu and 'if(!asyncPlans_||!lruPlans_||' in gpu)
 check('failed or stolen items get their exact old entry back','if(state==NorthlightStaticPlanJob::State::Stolen||item.failed){slot=std::move(item.saved);if(item.evicted)--stats_.planEvictions;' in gpu
       and 'catch(...){returnNodes(ctx,previous,next);for(const auto& move:ctx.chunkMoves)previous.chunks[move.from]=std::move(next.chunks[move.to]);' in gpu)
 check('worker: one thread, claims under the mutex, steal-back of pending items','if(states_[i]==State::Pending){states_[i]=State::Stolen;return State::Stolen;}' in job and 'states_[i]=State::Running;}' in job and job.count('std::thread(')==1)
@@ -94,6 +94,13 @@ with tempfile.TemporaryDirectory(prefix='northlight-0.3.152-') as tmp:
         got=re.search(r'HASH (\d+)',subprocess.run([str(exe)],capture_output=True,text=True).stdout) if not b.returncode else None
         want=BASE_0_3_151.get(arch)
         check(f'plan bytes and draw records identical to base 0.3.151 [{arch}]',got and want is not None and int(got.group(1))==want,f'hash {got.group(1) if got else b.stderr.strip()[-200:]} base {want}')
+# 0.3.192 (DXVK3): the GpuCache lifecycle test also proves the Instances LOCK METER charge (instanceDiscards x buffer bytes).
+check('instance DISCARD is metered at the whole buffer',"if(flags==D3DLOCK_DISCARD)NorthlightLockMeter::discard(NorthlightLockMeter::Instances,std::uint64_t(instanceCapacity_)*sizeof(Instance));" in gpu)
+with tempfile.TemporaryDirectory(prefix='northlight-static-gpu-') as tmp:
+    exe=Path(tmp)/'static_shadow_gpu'
+    b=subprocess.run(['clang++','-std=c++17','-Wall','-Wextra','-Werror','-UNDEBUG','-O2',*fp.test_include_flags(),'-I',str(fp.SUPPORT),str(HERE/'test_static_shadow_gpu.cpp'),str(fp.src('world_gi.cpp')),'-o',str(exe)],capture_output=True,text=True)
+    r=subprocess.run([str(exe)],capture_output=True,text=True) if not b.returncode else b
+    check('static shadow GPU cache incl. Instances meter == instanceDiscards x capacity x 48',r.returncode==0 and 'tests passed' in r.stdout,(r.stdout+r.stderr).strip()[-300:])
 failed=[n for n,ok in results if not ok]
 print(f'\n{len(results)} checks, {len(failed)} failed')
 if failed:sys.exit(1)

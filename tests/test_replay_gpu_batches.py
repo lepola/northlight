@@ -9,7 +9,7 @@ from pathlib import Path
 import ast,re,subprocess,tempfile
 HERE=Path(__file__).resolve().parent
 def literal(file,key):return next(ast.literal_eval(n.value) for n in ast.parse(file.read_text()).body if isinstance(n,ast.Assign) and any(getattr(t,'id','')==key for t in n.targets))
-stub=literal(HERE/'test_terrain_snapshot.py','stub').replace('struct IDirect3DDevice9{','''constexpr unsigned D3DPOOL_DEFAULT=0,D3DLOCK_NOOVERWRITE=0x1000,D3DSAMP_ADDRESSU=1,D3DSAMP_ADDRESSV=2;
+stub=literal(HERE/'test_terrain_snapshot.py','stub').replace('struct IDirect3DDevice9{','''constexpr unsigned D3DSAMP_ADDRESSU=1,D3DSAMP_ADDRESSV=2;
 struct IDirect3DVertexShader9{};struct IDirect3DBaseTexture9{};
 struct IDirect3DDevice9{
 virtual HRESULT CreateVertexBuffer(UINT,DWORD,UINT,unsigned,IDirect3DVertexBuffer9**,void*)=0;

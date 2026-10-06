@@ -24,7 +24,7 @@ inline std::vector<std::uint8_t> referencePixels(){
     }
     return rgba;
 }
-// 0.3.192 BlobShadowStrength: the same disc, lighter. The game draws the blob with a modulate blend
+// 0.3.193 BlobShadowStrength: the same disc, lighter. The game draws the blob with a modulate blend
 // (destination * texture colour), so only the colour matters and a lighter blob is a lighter colour:
 // grey' = 255 - round(strength*(255-grey)/100), alpha unchanged, colour 255 where alpha is 0.
 // strength 100 = the reference, 0 = white everywhere (no darkening). Bytes are B,G,R,A (A8R8G8B8 on

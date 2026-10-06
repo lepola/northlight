@@ -159,7 +159,7 @@ int main(){
 }
 '''
 
-gpu_stub=stub.replace('struct IDirect3DDevice9{','constexpr unsigned D3DPOOL_DEFAULT=0,D3DLOCK_NOOVERWRITE=0x1000;\nstruct IDirect3DDevice9{\nvirtual HRESULT CreateVertexBuffer(UINT,DWORD,UINT,unsigned,IDirect3DVertexBuffer9**,void*)=0;\nvirtual HRESULT CreateIndexBuffer(UINT,DWORD,D3DFORMAT,unsigned,IDirect3DIndexBuffer9**,void*)=0;')
+gpu_stub=stub.replace('struct IDirect3DDevice9{','struct IDirect3DDevice9{\nvirtual HRESULT CreateVertexBuffer(UINT,DWORD,UINT,unsigned,IDirect3DVertexBuffer9**,void*)=0;\nvirtual HRESULT CreateIndexBuffer(UINT,DWORD,D3DFORMAT,unsigned,IDirect3DIndexBuffer9**,void*)=0;')
 gpu=r'''
 #include "replay_gpu_cache.h"
 #include <chrono>
@@ -257,7 +257,7 @@ trim=r[r.index('    void trimMemory(const NorthlightMemoryDiagnostics::Sample& t
 checks={
  'sampler always created (no diagnostics gate), below-normal walk':'try{memoryDiagnostics=std::make_unique<NorthlightMemoryDiagnostics::Sampler>(&queryAddressSpace);}' in r and 'SetThreadPriority(GetCurrentThread(),THREAD_PRIORITY_BELOW_NORMAL)' in r,
  'render thread requests on the guard cadence, never walks':'if(memoryGuard.requestDue(now))memoryDiagnostics->request();' in finish and 'VirtualQuery' not in finish,
- 'caps and trim only after clearFrame() (frame boundary)':re.search(r'clearFrame\(\);\}\n        if\(memoryCaps>=0&&world\)world->setMemoryPressure\(memoryCaps==1\);\n        if\(memoryTrim\)trimMemory\(memorySample\);',finish) is not None and finish.count('trimMemory(memorySample)')==1 and finish.count('setMemoryPressure(')==1,
+ 'caps and trim only after clearFrame() (frame boundary)':re.search(r'clearFrame\(\);\}\n        if\(memoryCaps>=0&&world\)world->setMemoryPressure\(memoryCaps==1\);\n        if\(memoryCaps>=0&&NorthlightReplayCopies::enabled\.load\(std::memory_order_relaxed\)\)NorthlightReplayCopies::setPressure\(memoryCaps==1\);[^\n]*\n        if\(memoryCaps>=0\)NorthlightStream::memoryPressure\.store\(memoryCaps==1,std::memory_order_relaxed\);[^\n]*\n        if\(memoryTrim\)trimMemory\(memorySample\);',finish) is not None and finish.count('trimMemory(memorySample)')==1 and finish.count('setMemoryPressure(')==1,
  'caps follow pressure transitions':'memoryCaps=decision.entered?1:0;' in finish,
  'periodic line gated, events ungated':'if(decision.report&&diagnostics())logf("MEMORY frame=' in finish and 'logf("MEMORY guard %s' in finish and 'if(decision.afterTrim)logf(' in finish,
  'trim: world caches, exact-walk before values, estimates, no address-space ballast':'t=world->trimMemory();' in trim and 'memoryGuard.trimCompleted(now);' in trim and 'logf("MEMORY guard trim frame=%u exactWalk=1 beforeAvailableVirtualMiB=' in trim and all(x not in r for x in ['Ballast','ballast','MEM_RESERVE','VirtualAlloc(']),
