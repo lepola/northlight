@@ -142,6 +142,16 @@ static void resetAndShutdown(){
     rig.finish();CHECK(gLiveTargets.load()==0&&liveProxyObjects.load()==0&&!gTrace.empty());   // the final Release joined the replay thread
 }
 
+static void cursorAndForeignThread(){
+    gTrace.clear();Rig rig(true);auto& s=rig.core().q.stats;
+    CHECK(rig.dev->ShowCursor(1)==0&&rig.dev->ShowCursor(0)==1);   // the previous visibility, tracked locally
+    std::thread other([&]{rig.dev->SetCursorPosition(5,6,7);});other.join();   // a foreign thread never touches the queue
+    CHECK(get(s.foreignEntries)==1);
+    rig.dev->SetCursorPosition(1,2,3);rig.sync();   // the game thread's next entry drains the foreign one first
+    std::vector<std::string> cursor;for(auto& t:gTrace)if(t.rfind("Device::SetCursorPosition",0)==0||t.rfind("Device::ShowCursor",0)==0)cursor.push_back(t);
+    CHECK(cursor.size()==4&&cursor[0].rfind("Device::ShowCursor",0)==0&&cursor[2].find("5.000000 6.000000 7.000000")!=std::string::npos&&cursor[3].find("1.000000 2.000000 3.000000")!=std::string::npos);
+    rig.finish();checkClean();
+}
 static void nestedSyncInPump(){
     gTrace.clear();Rig rig(true);auto& s=rig.core().q.stats;
     static Rig* r;static HRESULT nested;static int calls;r=&rig;nested=12345;calls=0;
@@ -314,7 +324,7 @@ static void equivalence(int steps,std::uint64_t seed){
     std::printf("equivalence seed=%llu steps=%d results=%zu trace=%zu presents=%zu\n",(unsigned long long)seed,steps,outA.size(),traceA.size(),presA.size());
 }
 static void streamTests(bool threadsOnly){
-    lifetimeAndIdentity();stateKnownUnknown();locksPreserveBytes();queriesAndSyncCensus();resetAndShutdown();nestedSyncInPump();upDrawsAndBackpressure();snapshotTriggers();
+    lifetimeAndIdentity();stateKnownUnknown();locksPreserveBytes();queriesAndSyncCensus();resetAndShutdown();cursorAndForeignThread();nestedSyncInPump();upDrawsAndBackpressure();snapshotTriggers();
     equivalence(3000,7);
     if(!threadsOnly){equivalence(20000,12345);}
 }
