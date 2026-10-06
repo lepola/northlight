@@ -33,6 +33,11 @@
    per-frame decision); a buffer above cap/4 never gets a copy. Thrash guard in FRAMES (advanceFrame(), once per frame from WorldRenderer::endFrame; a frame
    makes hundreds of reads, so reads are no time base): an eviction or invalidation clears the buffer's read-frame count (a big buffer needs 2 more frames
    of reads before it refills); a refill within kThrashFrames of that is a strike; after kMaxStrikes strikes in a row the buffer stays on the fallback for kBackoffFrames.
+   LARGE allowance: a buffer above cap/4 (the game's ~15.8 MB DYNAMIC buffer) may hold a copy of up to kLargeCopyBytes (16 MiB) in a SEPARATE budget of
+   kLargeCapBytes (one such buffer; outside kCapBytes, never counted in `used`), only without memory pressure. It fills only after reads in 2 distinct recent
+   frames (a whole-buffer request does not shortcut that), not within kLargeRefillFrames of its own eviction/invalidation, and not within kLargeBackoffFrames
+   after a pressure edge (the fill is one 16 MB read on the replay thread: it must not repeat). Pressure drops it at once, or at its unpin when pinned
+   (never freed while pinned); another large buffer takes the allowance only when the holder is unpinned and unread for kLargeRefillFrames.
    A buffer without a valid copy takes today's readBackLock() path.
    Gate: `enabled` (set where the stream starts, with CommandStream=0 it stays false): no wrapper hook copies anything, no Reader changes a call.
    Threads: every writer and every capture site runs on the replay thread; the registry is still mutex-guarded (the wrapper can be released
@@ -44,6 +49,8 @@ namespace NorthlightReplayCopies {
 inline constexpr std::uint64_t kCapBytes=16u<<20;
 inline constexpr UINT kEagerBytes=64u<<10;
 inline constexpr unsigned kMaxStrikes=3;                 // refills within kThrashFrames of an eviction/invalidation before the buffer is left on the fallback
+inline constexpr std::uint64_t kLargeCapBytes=16u<<20,kLargeCopyBytes=16u<<20;
+inline constexpr std::uint64_t kLargeRefillFrames=60,kLargeBackoffFrames=600;
 inline constexpr std::uint64_t kThrashFrames=4,kBackoffFrames=600,kRecentFrames=8;   // frames (advanceFrame) = the time base; kRecentFrames: gap that restarts a buffer's read-frame count
 inline std::atomic<bool> enabled{false};
 
@@ -54,24 +61,25 @@ struct Slot {
     enum State:unsigned char{None,Filling,Valid};
     std::atomic<unsigned char> state{None};
     std::vector<unsigned char> data;
-    bool gpuWritten=false,pending=false,evicted=false;unsigned strikes=0,frames=0,pins=0,listAt=0;std::uint64_t used=0,lastFrame=0,evictedFrame=0,parkUntil=0;   // frames: distinct recent frames with a capture read
+    bool gpuWritten=false,pending=false,evicted=false,large=false,dropAtUnpin=false;unsigned strikes=0,frames=0,pins=0,listAt=0;std::uint64_t used=0,lastFrame=0,evictedFrame=0,parkUntil=0;   // frames: distinct recent frames with a capture read
     UINT pOff=0,pEnd=0;const unsigned char* pPtr=nullptr;   // the outstanding write lock: range and mapped pointer
 };
 struct Store {
     std::mutex m;std::unordered_map<const void*,Slot*> registry;std::vector<Slot*> list;   // list: Filling and Valid slots
-    std::uint64_t used=0,clock=0,frame=1,cap=kCapBytes;
+    std::uint64_t used=0,clock=0,frame=1,cap=kCapBytes,largeUsed=0,largeBlockUntil=0;bool pressure=false;   // largeUsed: the large allowance's bytes (not in `used`)
 };
 inline Store& store(){static Store s;return s;}
 inline void pinRef(Slot& c){++c.pins;if(c.owner)c.ref(c.owner,true);}   // a pin holds the wrapper alive (see LIFETIME); store mutex held
 namespace detail {
 namespace M=NorthlightLockMeter;
-inline void gauges(Store& s){auto& m=M::state();m.copyResidentBytes.store(s.used,std::memory_order_relaxed);m.copyResidentBuffers.store(s.list.size(),std::memory_order_relaxed);m.copyCapBytes.store(s.cap,std::memory_order_relaxed);}
+inline void gauges(Store& s){auto& m=M::state();m.copyResidentBytes.store(s.used,std::memory_order_relaxed);m.copyResidentBuffers.store(s.list.size(),std::memory_order_relaxed);m.copyCapBytes.store(s.cap,std::memory_order_relaxed);m.copyLargeBytes.store(s.largeUsed,std::memory_order_relaxed);}
 enum class Why{Invalidate,Evict,Silent};
 // Takes the slot out of the byte budget and the list; the bytes are freed unless a Reader still pins them (unpin frees then).
 inline void drop(Store& s,Slot& c,Why why){
     if(c.state.load()==Slot::None)return;
     const std::uint64_t n=c.size;Slot* last=s.list.back();s.list[c.listAt]=last;last->listAt=c.listAt;s.list.pop_back();
-    s.used-=n;c.state.store(Slot::None);c.pending=false;c.pPtr=nullptr;
+    if(c.large){s.largeUsed-=n;M::state().copyLargeDrops.fetch_add(1,std::memory_order_relaxed);c.large=false;}else s.used-=n;
+    c.dropAtUnpin=false;c.state.store(Slot::None);c.pending=false;c.pPtr=nullptr;
     if(why!=Why::Silent){c.evicted=true;c.evictedFrame=s.frame;c.frames=0;}   // a refill needs 2 fresh frames of reads, and counts as a strike when it comes soon
     if(!c.pins)std::vector<unsigned char>().swap(c.data);
     auto& m=M::state();if(why==Why::Evict)m.copyEvictions.fetch_add(1,std::memory_order_relaxed);else if(why==Why::Invalidate)m.copyInvalidations.fetch_add(1,std::memory_order_relaxed);
@@ -79,9 +87,17 @@ inline void drop(Store& s,Slot& c,Why why){
 }
 inline bool evictOne(Store& s){
     Slot* victim=nullptr;
-    for(Slot* c:s.list)if(c->state.load()==Slot::Valid&&!c->pins&&(!victim||c->used<victim->used))victim=c;
+    for(Slot* c:s.list)if(!c->large&&c->state.load()==Slot::Valid&&!c->pins&&(!victim||c->used<victim->used))victim=c;
     if(!victim)return false;
     drop(s,*victim,Why::Evict);return true;
+}
+// The large allowance is free for `c`: nobody holds it, or the holder is unpinned, Valid and unread for kLargeRefillFrames (then it is dropped).
+inline bool freeLarge(Store& s,const Slot& c){
+    if(s.largeUsed+c.size<=kLargeCapBytes)return true;
+    Slot* victim=nullptr;
+    for(Slot* o:s.list)if(o->large&&o!=&c&&o->state.load()==Slot::Valid&&!o->pins&&s.frame>=o->lastFrame+kLargeRefillFrames)victim=o;
+    if(!victim)return false;
+    drop(s,*victim,Why::Evict);return s.largeUsed+c.size<=kLargeCapBytes;
 }
 }
 // ---- wrapper side (tracked_buffers.h, replay thread) ----
@@ -145,20 +161,24 @@ inline void unpin(Slot& c){
     void* const owner=c.owner;void(*const ref)(void*,bool)=c.ref;
     {Store& s=store();std::lock_guard<std::mutex> g(s.m);
      if(c.pins)--c.pins;
+     if(!c.pins&&c.dropAtUnpin&&c.large&&c.state.load()!=Slot::None)detail::drop(s,c,detail::Why::Evict);   // pressure began while it was pinned
      if(!c.pins&&c.state.load()==Slot::None)std::vector<unsigned char>().swap(c.data);}
     if(owner)ref(owner,false);   // c may be freed from here on
 }
 // Reserves room for a whole-buffer copy of c (evicting LRU entries) and pins it; false = stay on the fallback.
 inline bool beginFill(Slot& c,UINT requested){
     Store& s=store();std::lock_guard<std::mutex> g(s.m);auto& m=NorthlightLockMeter::state();
-    const bool wanted=c.size<=kEagerBytes||requested>=c.size||c.frames>=2;   // a big buffer read for a small range: only once it proved to be read in 2 recent frames
+    const bool large=c.size>s.cap/4;   // above the regular per-buffer limit: the large allowance or nothing
+    const bool wanted=large?c.frames>=2:(c.size<=kEagerBytes||requested>=c.size||c.frames>=2);   // a big buffer read for a small range: only once it proved to be read in 2 recent frames
     if(c.state.load()!=Slot::None||c.pins||!wanted)return false;
-    if(s.frame<c.parkUntil||c.gpuWritten||c.size>s.cap/4||(c.locks&&c.locks->load())){m.copyRefused.fetch_add(1,std::memory_order_relaxed);return false;}
+    if(s.frame<c.parkUntil||c.gpuWritten||(c.locks&&c.locks->load())){m.copyRefused.fetch_add(1,std::memory_order_relaxed);return false;}
+    if(large&&(c.size>kLargeCopyBytes||s.pressure||s.frame<s.largeBlockUntil||(c.evicted&&s.frame-c.evictedFrame<kLargeRefillFrames)||!detail::freeLarge(s,c))){m.copyRefused.fetch_add(1,std::memory_order_relaxed);return false;}
     const bool recent=c.evicted&&s.frame-c.evictedFrame<=kThrashFrames;
     if(recent&&c.strikes>=kMaxStrikes){c.parkUntil=s.frame+kBackoffFrames;c.strikes=0;c.evicted=false;m.copyRefused.fetch_add(1,std::memory_order_relaxed);return false;}   // thrash guard: parked
-    while(s.used+c.size>s.cap)if(!detail::evictOne(s)){m.copyRefused.fetch_add(1,std::memory_order_relaxed);return false;}
+    if(!large)while(s.used+c.size>s.cap)if(!detail::evictOne(s)){m.copyRefused.fetch_add(1,std::memory_order_relaxed);return false;}
     try{c.data.assign(c.size,0);s.list.push_back(&c);}catch(...){std::vector<unsigned char>().swap(c.data);m.copyRefused.fetch_add(1,std::memory_order_relaxed);return false;}
-    c.listAt=unsigned(s.list.size()-1);c.state.store(Slot::Filling);c.pending=false;c.used=++s.clock;pinRef(c);s.used+=c.size;
+    c.listAt=unsigned(s.list.size()-1);c.state.store(Slot::Filling);c.pending=false;c.used=++s.clock;pinRef(c);c.dropAtUnpin=false;
+    if(large){c.large=true;s.largeUsed+=c.size;m.copyLargeGrants.fetch_add(1,std::memory_order_relaxed);}else s.used+=c.size;
     if(recent)++c.strikes;else c.strikes=0;detail::gauges(s);
     return true;
 }
@@ -175,6 +195,9 @@ inline void endFill(Slot& c,bool ok){
 inline void setPressure(bool on){
     Store& s=store();std::lock_guard<std::mutex> g(s.m);
     s.cap=on?kCapBytes/2:kCapBytes;
+    if(on!=s.pressure){s.pressure=on;s.largeBlockUntil=s.frame+kLargeBackoffFrames;}   // either edge: no large grant for kLargeBackoffFrames
+    if(on){std::vector<Slot*> big;for(Slot* c:s.list)if(c->large)big.push_back(c);   // (drop() edits the list)
+           for(Slot* c:big){if(c->pins)c->dropAtUnpin=true;else detail::drop(s,*c,detail::Why::Evict);}}
     while(s.used>s.cap&&detail::evictOne(s)){}
     detail::gauges(s);
 }

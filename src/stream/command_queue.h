@@ -45,6 +45,13 @@ constexpr std::size_t TextureShadowBudgetBytes=std::size_t(16)<<20;   // per-lev
 constexpr std::size_t ShadowBudgetBytes=std::size_t(16)<<20;
 constexpr std::size_t kShadowBudgetMaxBytes=std::size_t(32)<<20,kShadowGrowStep=std::size_t(4)<<20;
 constexpr std::uint64_t kShadowHotFrames=60,kShadowGrowFrames=60;
+// 0.3.192 (CS): LARGE-buffer allowance, outside the regular cap: a DYNAMIC buffer above a quarter of the current cap (so never admitted by shadowAdmit) up to
+// kMaxLargeShadow may keep a shadow in a separate budget of LargeShadowBudgetBytes (normally exactly one such buffer: the game's ~15.8 MB dynamic buffer
+// whose every lock was a synchronous pass-through). Only without memory pressure (granted nowhere under it, dropped when it starts, never while locked).
+// Granted at creation when the allowance is free, else at a write re-lock (readback) or a DISCARD lock; another large buffer takes it over only by LRU
+// when the holder is unlocked and idle for kLargeIdleFrames (a 16 MB readback must not ping-pong). Worst case +16 MiB game-side on top of the regular cap.
+constexpr std::size_t LargeShadowBudgetBytes=std::size_t(16)<<20,kMaxLargeShadow=std::size_t(16)<<20;
+constexpr std::uint64_t kLargeIdleFrames=60;
 constexpr std::size_t kPoolMaxChunks=4,kReserveChunks=2;   // idle chunks kept at most / after a quiet window
 constexpr std::uint32_t kAutoPublishCommands=64,kAutoPublishBytes=64u<<10;
 constexpr std::uint32_t kNoPayload=0xFFFFFFFFu;   // a nullable pointer's offset in a generated Args struct
@@ -288,6 +295,9 @@ public:
     void addTexShadowBytes(std::int64_t delta){stats.texShadowBytes.fetch_add(delta,std::memory_order_relaxed);}
     std::size_t texShadowCap()const{return pressure_.load()?TextureShadowBudgetBytes/2:TextureShadowBudgetBytes;}
     bool texShadowAdmit(std::size_t bytes)const{const auto s=stats.texShadowBytes.load(std::memory_order_relaxed);return (s>0?std::size_t(s):0)+bytes<=texShadowCap();}
+    std::size_t largeBytes()const{const auto s=stats.largeShadowBytes.load(std::memory_order_relaxed);return s>0?std::size_t(s):0;}
+    void addLargeBytes(std::int64_t delta){stats.largeShadowBytes.fetch_add(delta,std::memory_order_relaxed);}
+    bool largeAdmit(std::size_t bytes)const{return !pressure_.load()&&bytes<=kMaxLargeShadow&&largeBytes()+bytes<=LargeShadowBudgetBytes;}   // allowance free now (no pressure)
     bool shadowAdmit(std::size_t bytes)const{const auto s=stats.shadowBytes.load(std::memory_order_relaxed);return (s>0?std::size_t(s):0)+bytes<=shadowCap();}
     bool canAdmit(std::size_t bytes)const{return !over(bytes);}
     // Memory pressure (any thread): halves the budget. trim() (producer, at a quiet point) releases pooled idle memory.

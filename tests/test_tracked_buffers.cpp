@@ -267,7 +267,31 @@ static void copiesTests(){
    assert(plain>=4&&m.copyResidentBuffers.load()==v.size()-plain);} // the survivors of the shrink stay served; no 3 MiB buffer is filled any more
   C::setPressure(false);assert(m.copyCapBytes.load()==C::kCapBytes);
   for(auto& b:v)freeVB(b);assert(m.copyResidentBytes.load()==0&&m.copyResidentBuffers.load()==0);}
- {VB b=makeVB(owner,5u<<20);replayWrite(b,0,64,0,1);for(int i=0;i<4;++i){C::advanceFrame();b.raw->readLocks=0;assert(readSame(b,0,64)&&b.raw->readLocks==1);}freeVB(b);} // above cap/4 at any time: always ordinary
+ {VB b=makeVB(owner,5u<<20);replayWrite(b,0,64,0,1);for(int i=0;i<4;++i){C::advanceFrame();b.raw->readLocks=0;assert(readSame(b,0,64)&&b.raw->readLocks==1);}freeVB(b);} // above cap/4: ordinary while the large allowance is blocked (the pressure edges above start its back-off)
+ // L1: the LARGE allowance: a ~15.8 MB buffer (above cap/4) gets a copy of its own, outside the regular cap, without memory pressure
+ {const UINT L=15800000;for(unsigned i=0;i<C::kLargeBackoffFrames+2;++i)C::advanceFrame();   // the back-off of the pressure edges above is over
+  VB b=makeVB(owner,L);replayWrite(b,0,4096,0,41);const auto g0=m.copyLargeGrants.load(),d0=m.copyLargeDrops.load(),res0=m.copyResidentBytes.load();
+  b.raw->readLocks=0;assert(readSame(b,0,64)&&b.raw->readLocks==1&&m.copyLargeBytes.load()==0);   // frame 1: a read-back lock, no whole-buffer fill (not even for a whole-buffer request)
+  {C::Reader<IDirect3DVertexBuffer9> r(b.raw);void* p=nullptr;assert(r.lock(0,L,&p)==S_OK&&r.unlock()==S_OK);assert(m.copyLargeBytes.load()==0&&b.raw->readLocks==2);}
+  C::advanceFrame();assert(readSame(b,0,64)&&b.raw->readLocks==3);   // frame 2: ONE whole-buffer read fills it
+  assert(m.copyLargeBytes.load()==L&&m.copyLargeGrants.load()==g0+1&&m.copyResidentBytes.load()==res0&&m.copyFillBytes.load()>=L);   // separate budget: `resident` is the regular cap only
+  b.raw->readLocks=0;const auto s0=served();assert(readSame(b,0,L)&&readSame(b,100000,200)&&b.raw->readLocks==0&&served()==s0+2);   // served through the raw pointer
+  replayWrite(b,5000,300,D3DLOCK_NOOVERWRITE,42);replayWrite(b,L-100,100,0,43);assert(readSame(b,0,L)&&b.raw->readLocks==0);   // kept current from the replayed writes
+  // a second large buffer is refused while the first is read recently, regular buffers are unaffected
+  {VB c2=makeVB(owner,L);replayWrite(c2,0,64,0,44);for(int i=0;i<4;++i){C::advanceFrame();c2.raw->readLocks=0;assert(readSame(c2,0,64)&&readSame(b,0,64));assert(c2.raw->readLocks==1);}assert(m.copyLargeBytes.load()==L);freeVB(c2);}
+  // pressure: dropped (a pinned one at its unpin: its bytes stay valid until then), no re-grant within the back-off, then granted again
+  {assert(readSame(b,0,64));C::Reader<IDirect3DVertexBuffer9> r(b.raw);void* p=nullptr;assert(r.lock(0,128,&p)==S_OK);
+   C::setPressure(true);assert(m.copyLargeBytes.load()==L&&m.copyLargeDrops.load()==d0);assert(!std::memcmp(p,b.raw->mem.data(),128));   // pinned: kept until the unpin
+   assert(r.unlock()==S_OK);assert(m.copyLargeBytes.load()==0&&m.copyLargeDrops.load()==d0+1);}
+  b.raw->readLocks=0;assert(readSame(b,0,64)&&b.raw->readLocks==1);
+  C::setPressure(false);
+  for(unsigned i=0;i<C::kLargeBackoffFrames-2;++i){C::advanceFrame();if(i%97==0){assert(readSame(b,0,64));assert(m.copyLargeBytes.load()==0);}}   // reads in many frames: still no 16 MB fill
+  assert(m.copyLargeGrants.load()==g0+1);
+  for(int i=0;i<5;++i){C::advanceFrame();assert(readSame(b,0,64));}
+  assert(m.copyLargeGrants.load()==g0+2&&m.copyLargeBytes.load()==L);   // the back-off is over: one fill again
+  // a GPU write invalidates it for good
+  written(b.vb);assert(m.copyLargeBytes.load()==0);b.raw->readLocks=0;for(int i=0;i<3;++i){C::advanceFrame();assert(readSame(b,0,64));}assert(b.raw->readLocks==3&&m.copyLargeGrants.load()==g0+2);
+  freeVB(b);assert(m.copyLargeBytes.load()==0&&m.copyResidentBytes.load()==res0);}
  // R1: the lookup accepts the RAW pointer (what ext->GetStreamSource/GetIndices return) as well as the wrapper; both reach the same slot
  {VB b=makeVB(owner,4096);replayWrite(b,0,4096,D3DLOCK_DISCARD,1);const auto s0=served(),f0=fallback();
   {C::Reader<IDirect3DVertexBuffer9> r(b.raw);void* p=nullptr;assert(r.lock(0,128,&p)==S_OK&&!std::memcmp(p,b.raw->mem.data(),128)&&r.unlock()==S_OK);} // the fill, through the raw pointer

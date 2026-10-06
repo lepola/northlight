@@ -177,7 +177,7 @@ public:
     // pooled), buffer shadows, texture shadows, snapshots.
     struct Memory {std::size_t queue,bufferShadows,textureShadows,snapshots;std::size_t total()const{return queue+bufferShadows+textureShadows+snapshots;}};
     Memory memory()const{
-        const auto& s=core.q.stats;const auto bs=s.shadowBytes.load(std::memory_order_relaxed),ts=s.texShadowBytes.load(std::memory_order_relaxed);
+        const auto& s=core.q.stats;const auto bs=s.shadowBytes.load(std::memory_order_relaxed)+s.largeShadowBytes.load(std::memory_order_relaxed),ts=s.texShadowBytes.load(std::memory_order_relaxed);
         return {core.q.reservedBytes(),bs>0?std::size_t(bs):0,ts>0?std::size_t(ts):0,snapshots.reservedBytes()};
     }
     // The background workers (GI, geometry builder, static shadow streamer) run BELOW_NORMAL; the replay thread is the critical path and
@@ -384,9 +384,9 @@ private:
             (unsigned long long)get(s.texShadowHits),(unsigned long long)get(s.texShadowFresh),(unsigned long long)get(s.texShadowReadbacks),(unsigned long long)get(s.texShadowEvicted),(unsigned long long)get(s.texShadowFreshUseful),(unsigned long long)get(s.texShadowRefused),get(s.texShadowRefusedBytes)/1048576.0);
         {const std::uint64_t rbD=get(s.dynShadowReadbacks),rbS=get(s.stShadowReadbacks),evD=get(s.dynShadowEvicted),evS=get(s.stShadowEvicted),evH=get(s.hotShadowEvicted),rf=get(s.relockRefused);
          const double f=sampleEvery?1.0/double(sampleEvery):0.0;
-         put(buf,n," bufShadow=%.1f/%.0fMB readbacks/frame=%.2f+%.2f evicted/frame=%.2f(hot %.2f) refused/frame=%.2f grows=%llu total[readbacks=%llu+%llu evicted=%llu+%llu hot=%llu refused=%llu/%.1fMB]",
+         put(buf,n," bufShadow=%.1f/%.0fMB readbacks/frame=%.2f+%.2f evicted/frame=%.2f(hot %.2f) refused/frame=%.2f grows=%llu large=%.1f/%.0fMB(%llu,%llu) total[readbacks=%llu+%llu evicted=%llu+%llu hot=%llu refused=%llu/%.1fMB]",
              double(std::max<std::int64_t>(0,s.shadowBytes.load()))/1048576.0,double(core.q.shadowCap())/1048576.0,double(rbD-lastBufRbD_)*f,double(rbS-lastBufRbS_)*f,double(evD+evS-lastBufEv_)*f,double(evH-lastBufHot_)*f,double(rf-lastBufRef_)*f,
-             (unsigned long long)get(s.shadowCapGrows),(unsigned long long)rbD,(unsigned long long)rbS,(unsigned long long)evD,(unsigned long long)evS,(unsigned long long)evH,(unsigned long long)rf,get(s.relockRefusedBytes)/1048576.0);
+             (unsigned long long)get(s.shadowCapGrows),double(core.q.largeBytes())/1048576.0,double(LargeShadowBudgetBytes)/1048576.0,(unsigned long long)get(s.largeShadowGrants),(unsigned long long)get(s.largeShadowDrops),(unsigned long long)rbD,(unsigned long long)rbS,(unsigned long long)evD,(unsigned long long)evS,(unsigned long long)evH,(unsigned long long)rf,get(s.relockRefusedBytes)/1048576.0);
          lastBufRbD_=rbD;lastBufRbS_=rbS;lastBufEv_=evD+evS;lastBufHot_=evH;lastBufRef_=rf;}
         put(buf,n," pass[");
         for(unsigned r=0;r<Counters::kPassReasons;++r)put(buf,n,"%s%s=%llu",r?",":"",passReasonName(r),(unsigned long long)get(s.passThrough[r]));

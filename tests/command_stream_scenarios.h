@@ -317,6 +317,49 @@ static void adaptiveShadowCap(){
     rig.finish();checkClean();
 }
 
+// 0.3.192 (CS): the LARGE-buffer allowance: a ~15.8 MB DYNAMIC buffer (above a quarter of the regular cap) keeps a shadow in its own 16 MiB budget (not in
+// shadowBytes): granted at creation when free, so its locks never sync; a second large buffer is refused while the holder is in use and takes it by LRU only
+// when the holder is idle; pressure drops it (never while locked: at the unlock) and blocks a re-grant until it ends.
+static void largeBufferAllowance(){
+    gTrace.clear();StreamDevice::Options opt;opt.readBackLock=&dxvk3ReadBack;
+    Rig rig(true,opt);auto& q=rig.core().q;auto& s=q.stats;IDirect3DDevice9* d=rig.dev;
+    const UINT L=15800000;
+    IDirect3DVertexBuffer9 *A=nullptr,*B=nullptr;
+    CHECK(d->CreateVertexBuffer(L,D3::kUsageDynamic,0,(D3DPOOL)0,&A,nullptr)==D3D_OK);
+    CHECK(shadowOn(A)&&q.largeBytes()==L&&s.shadowBytes.load()==0&&get(s.largeShadowGrants)==1&&get(s.shadowRefused)==0);
+    CHECK(d->CreateVertexBuffer(L,D3::kUsageDynamic,0,(D3DPOOL)0,&B,nullptr)==D3D_OK);
+    CHECK(!shadowOn(B)&&q.largeBytes()==L&&get(s.shadowRefused)==1);   // the allowance is taken: no eviction at creation
+    BufModel ma(L),mb(L);const auto noshadow=[&]{return get(s.passThrough[unsigned(PassReason::NoShadow)]);};
+    rig.sync();const auto sync0=get(s.syncCalls),pass0=noshadow();
+    ma.write(A,0,4096,0x11);ma.write(A,5000,300,0x12,D3::kLockNoOverwrite);ma.write(A,9000,64,0x13,D3::kLockDiscard);ma.write(A,70000,64,0x14);
+    CHECK(get(s.syncCalls)==sync0&&noshadow()==pass0);   // the whole point: no pass-through syncs
+    rig.sync();CHECK(ma.same(targetBytes(A)));
+    // B: first write staged, then its re-lock is refused (the holder was locked in this frame) and passes through
+    mb.write(B,0,64,0x21);{const auto rf=get(s.relockRefused);mb.write(B,100,64,0x22);CHECK(!shadowOn(B)&&get(s.relockRefused)==rf+1&&q.largeBytes()==L&&shadowOn(A));}
+    // the holder idle for kLargeIdleFrames: B takes the allowance by LRU (one readback), A goes
+    frames(d,kLargeIdleFrames+1);
+    {const auto rb=get(s.dynShadowReadbacks),dr=get(s.largeShadowDrops);mb.write(B,200,64,0x23);
+     CHECK(shadowOn(B)&&!shadowOn(A)&&get(s.dynShadowReadbacks)==rb+1&&get(s.largeShadowDrops)==dr+1&&q.largeBytes()==L&&get(s.largeShadowGrants)==2);
+     ma.write(A,300,16,0x15);CHECK(!shadowOn(A)&&shadowOn(B));}   // A: B is in use this frame, A passes through (bytes still right)
+    rig.sync();CHECK(ma.same(targetBytes(A))&&mb.same(targetBytes(B)));
+    // pressure while B is locked: it stays until its unlock, then goes; no re-grant under pressure
+    frames(d,1);
+    {void* p=nullptr;CHECK(B->Lock(400,32,&p,0)==D3D_OK);std::memset(p,0x31,32);std::memset(mb.bytes.data()+400,0x31,32);
+     rig.sync();rig.core().memoryPressure.store(true);frames(d,1);rig.sync();
+     CHECK(q.pressure()&&shadowOn(B)&&q.largeBytes()==L);   // locked: kept
+     CHECK(B->Unlock()==D3D_OK&&!shadowOn(B)&&q.largeBytes()==0);}   // the unlock under pressure drops it
+    rig.sync();CHECK(mb.same(targetBytes(B)));
+    {const auto rf=get(s.relockRefused),g=get(s.largeShadowGrants);mb.write(B,500,16,0x32);mb.write(B,600,16,0x33);ma.write(A,700,16,0x16);
+     CHECK(!shadowOn(B)&&!shadowOn(A)&&q.largeBytes()==0&&get(s.largeShadowGrants)==g&&get(s.relockRefused)>=rf+2);}
+    rig.sync();CHECK(mb.same(targetBytes(B))&&ma.same(targetBytes(A)));
+    // pressure over: the next write re-lock grants it again
+    rig.core().memoryPressure.store(false);frames(d,1);rig.sync();CHECK(!q.pressure());
+    {const auto g=get(s.largeShadowGrants);mb.write(B,800,16,0x34);CHECK(shadowOn(B)&&q.largeBytes()==L&&get(s.largeShadowGrants)==g+1);}
+    rig.sync();CHECK(mb.same(targetBytes(B)));
+    A->Release();B->Release();rig.sync();CHECK(q.largeBytes()==0&&s.shadowBytes.load()==0);
+    rig.finish();checkClean();
+}
+
 static void shadowCap(){
     gTrace.clear();Rig rig(true);auto& q=rig.core().q;auto& s=q.stats;
     const int n=int(ShadowBudgetBytes/(2u<<20));   // how many 2 MiB shadows fit the cap
@@ -558,7 +601,7 @@ static void statsLine(){
     rig.sync();
     std::vector<std::string> lines;for(auto& l:gStatLines)if(l.find(" frames=600 ")!=std::string::npos)lines.push_back(l);   // the 600th replayed frame
     CHECK(lines.size()==1&&lines[0].rfind("CSTREAM cmds=",0)==0&&lines[0].find("passPerFrame=")!=std::string::npos&&lines[0].find("census[")!=std::string::npos&&lines[0].back()==']');
-    for(const char* field:{"game[per frame]: ms=","syncMs=","presentWaitMs=","bpMs=","sleeps=","publishes=","replayBusyMs/frame=","recorded=","answered=","texShadow=","readbacks=","bufShadow=","readbacks/frame=","evicted/frame=","(hot ","refused/frame=","grows=","memMB="})CHECK(lines[0].find(field)!=std::string::npos);   // per-window numbers
+    for(const char* field:{"game[per frame]: ms=","syncMs=","presentWaitMs=","bpMs=","sleeps=","publishes=","replayBusyMs/frame=","recorded=","answered=","texShadow=","readbacks=","bufShadow=","readbacks/frame=","evicted/frame=","(hot ","refused/frame=","grows=","large=","memMB="})CHECK(lines[0].find(field)!=std::string::npos);   // per-window numbers
     CHECK(lines[0].size()<1600);
     rig.finish();checkClean();
 }
@@ -968,7 +1011,7 @@ static void idlePollWakes(){
 }
 static void streamTests(bool threadsOnly){
     layoutIsolation();replayTimingAccounting();diagnosticsOffSkipsAudit();idlePollWakes();
-    lifetimeAndIdentity();stateKnownUnknown();locksPreserveBytes();staticBufferShadows();dynamicBufferShadows();adaptiveShadowCap();shadowCap();queriesAndSyncCensus();resetAndShutdown();directReplayRaw();redundantFiltering();renderTargetResetsViewport();textureShadows();statsLine();childrenOutliveTheDevice();queryProbeAndDeadQuery();initFailureFallback();cursorHandling();nestedSyncInPump();upDrawsAndBackpressure();snapshotTriggers();snapshotPoolNotExhausted();memoryPressureRelease();
+    lifetimeAndIdentity();stateKnownUnknown();locksPreserveBytes();staticBufferShadows();dynamicBufferShadows();largeBufferAllowance();adaptiveShadowCap();shadowCap();queriesAndSyncCensus();resetAndShutdown();directReplayRaw();redundantFiltering();renderTargetResetsViewport();textureShadows();statsLine();childrenOutliveTheDevice();queryProbeAndDeadQuery();initFailureFallback();cursorHandling();nestedSyncInPump();upDrawsAndBackpressure();snapshotTriggers();snapshotPoolNotExhausted();memoryPressureRelease();
     equivalence(20000,12345);equivalence(20000,987654321);
     (void)threadsOnly;
 }

@@ -500,6 +500,7 @@ struct BufferState {
     // (GPU-written by ProcessVertices, or the readback failed). A buffer without a shadow (refused at creation, evicted, dropped under pressure) is not
     // "refused for good": it gets one at its next write re-lock (one readback) or, DYNAMIC, at a DISCARD lock, whenever room can be made.
     bool canShadow=false,shadowDead=false;
+    bool large=false;   // the shadow lives in the large allowance (Queue::largeAdmit), not in the regular cap
 };
 // Buffer shadows (game-side memory, persistent CPU copies of the buffer; every lock of one returns shadow memory and Unlock copies the locked range into
 // the queue). They share one cap (ShadowBudgetBytes, adaptive, outside the queue budget) and ONE LRU: a DYNAMIC buffer gets its shadow at creation when
@@ -507,14 +508,15 @@ struct BufferState {
 // thread frees one when the proxy dies; StreamCore::bufList (under texMutex) makes those safe against each other. No queued command refers to a
 // shadow, so dropping an unlocked one is always safe.
 inline bool dynamicBuffer(const ProxyBase& p){return (p.info.usage&D3::kUsageDynamic)!=0;}
-inline void registerShadow(ProxyBase& p,BufferState& s){
-    s.shadowOn=true;p.core->q.addShadowBytes(std::int64_t(p.info.length));s.lastUse=p.core->frameNo;s.tick=++p.core->texClock;
+inline void registerShadow(ProxyBase& p,BufferState& s,bool large=false){
+    s.shadowOn=true;s.large=large;if(large){p.core->q.addLargeBytes(std::int64_t(p.info.length));add(p.core->q.stats.largeShadowGrants);}else p.core->q.addShadowBytes(std::int64_t(p.info.length));s.lastUse=p.core->frameNo;s.tick=++p.core->texClock;
     std::lock_guard<std::mutex> l(p.core->texMutex);s.listIndex=p.core->bufList.size();p.core->bufList.push_back({&p,&s});
 }
 inline void dropShadowLocked(ProxyBase& p,BufferState& s){
     if(!s.shadowOn)return;
     auto& list=p.core->bufList;auto last=list.back();list[s.listIndex]=last;last.state->listIndex=s.listIndex;list.pop_back();
-    p.core->q.addShadowBytes(-std::int64_t(p.info.length));std::vector<unsigned char>().swap(s.shadow);s.shadowOn=false;
+    if(s.large){p.core->q.addLargeBytes(-std::int64_t(p.info.length));add(p.core->q.stats.largeShadowDrops);s.large=false;}else p.core->q.addShadowBytes(-std::int64_t(p.info.length));
+    std::vector<unsigned char>().swap(s.shadow);s.shadowOn=false;
 }
 inline void noteShadowEvicted(StreamCore& c,const ProxyBase& p){add(dynamicBuffer(p)?c.q.stats.dynShadowEvicted:c.q.stats.stShadowEvicted);}
 // Game thread: makes `bytes` fit the cap by evicting shadows, least recently locked first (one tick for all buffer shadows), never a locked one, `keep`,
@@ -529,7 +531,7 @@ inline bool makeRoomForBufferShadow(StreamCore& c,std::size_t bytes,bool relock,
         const StreamCore::BufEntry* victim=nullptr;
         for(const auto& e:c.bufList){
             const BufferState* s=e.state;
-            if(s==keep||s->mode!=BufferState::Free||s->lastUse>=c.frameNo)continue;
+            if(s==keep||s->large||s->mode!=BufferState::Free||s->lastUse>=c.frameNo)continue;   // (a large shadow frees nothing of the regular cap)
             if(!victim||s->tick<victim->state->tick)victim=&e;
         }
         if(!victim){if(relock&&c.q.growShadowCap(c.frameNo))continue;return false;}
@@ -539,11 +541,30 @@ inline bool makeRoomForBufferShadow(StreamCore& c,std::size_t bytes,bool relock,
     }
     return true;
 }
+// Large allowance (see kMaxLargeShadow): a DYNAMIC buffer too big for the regular cap. true = the allowance has room for it (no pressure; when taken by another
+// large shadow and mayEvict, that one is dropped if unlocked and idle for kLargeIdleFrames, LRU). Game thread.
+inline bool largeCandidate(const ProxyBase& p){const std::size_t len=p.info.length;return dynamicBuffer(p)&&len>p.core->q.shadowCap()/4&&len<=kMaxLargeShadow;}
+inline bool makeRoomForLarge(StreamCore& c,std::size_t bytes,bool mayEvict,const BufferState* keep){
+    while(!c.q.largeAdmit(bytes)){
+        if(!mayEvict||c.q.pressure()||bytes>kMaxLargeShadow)return false;
+        std::lock_guard<std::mutex> l(c.texMutex);
+        const StreamCore::BufEntry* victim=nullptr;
+        for(const auto& e:c.bufList){
+            const BufferState* s=e.state;
+            if(!s->large||s==keep||s->mode!=BufferState::Free||c.frameNo<s->lastUse+kLargeIdleFrames)continue;
+            if(!victim||s->tick<victim->state->tick)victim=&e;
+        }
+        if(!victim)return false;
+        const StreamCore::BufEntry v=*victim;noteShadowEvicted(c,*v.proxy);dropShadowLocked(*v.proxy,*v.state);
+    }
+    return true;
+}
 inline bool takeShadow(ProxyBase& p,BufferState& s,bool relock=false){   // a zero-filled shadow (creation, or a DISCARD lock: the contents are undefined anyway)
     const std::size_t len=p.info.length;
-    if(!len||!makeRoomForBufferShadow(*p.core,len,relock,&s))return false;
+    const bool large=len&&largeCandidate(p);
+    if(!len||!(large?makeRoomForLarge(*p.core,len,relock,&s):makeRoomForBufferShadow(*p.core,len,relock,&s)))return false;
     try{s.shadow.assign(len+kLockSlack,0);}catch(...){return false;}
-    registerShadow(p,s);return true;
+    registerShadow(p,s,large);return true;
 }
 inline void initShadow(ProxyBase& p,BufferState& s,bool game=true){   // game=false: an implicit proxy made on the replay thread never shadows
     if(!game)return;
@@ -563,7 +584,8 @@ inline void markBufferGpuWritten(ProxyBase& p,BufferState& s){dropShadow(p,s);s.
 // (refused or unreadable: the lock takes the old paths), -1 = could not wait (nested in a pumped wait).
 inline int readBackShadow(ProxyBase& self,BufferState& s){
     StreamCore& core=*self.core;Queue& q=core.q;const UINT len=self.info.length;const bool dyn=dynamicBuffer(self);
-    if(len>q.shadowCap()/4||!makeRoomForBufferShadow(core,len,true,&s)){add(q.stats.relockRefused);add(q.stats.relockRefusedBytes,len);return 0;}
+    const bool large=largeCandidate(self);
+    if(!(large?makeRoomForLarge(core,len,true,&s):(len<=q.shadowCap()/4&&makeRoomForBufferShadow(core,len,true,&s)))){add(q.stats.relockRefused);add(q.stats.relockRefusedBytes,len);return 0;}
     try{s.shadow.assign(std::size_t(len)+kLockSlack,0);}catch(...){return 0;}
     bool ok=false;
     const bool ran=runTask(core,[&](StreamCore& c){
@@ -576,13 +598,17 @@ inline int readBackShadow(ProxyBase& self,BufferState& s){
     if(!ran){std::vector<unsigned char>().swap(s.shadow);return -1;}
     if(!ok){std::vector<unsigned char>().swap(s.shadow);s.shadowDead=true;return 0;}   // the real buffer cannot be read: pass-through as before
     add(dyn?q.stats.dynShadowReadbacks:q.stats.stShadowReadbacks);
-    registerShadow(self,s);return 1;
+    registerShadow(self,s,large);return 1;
 }
 // Memory pressure (game thread, at a Present): drop shadows of buffers not locked for idleFrames, then, while still over the (halved) cap, the
 // least recently locked unlocked ones (both kinds, one LRU). A dropped buffer's next write re-lock reads it back again (or a DISCARD lock of a
 // DYNAMIC one makes a zero-filled shadow) when the cap allows: the correctness rule is unchanged.
 inline void dropIdleBufferShadows(StreamCore& c,unsigned idleFrames){
     std::lock_guard<std::mutex> l(c.texMutex);
+    for(std::size_t i=0;i<c.bufList.size();){   // the large allowance goes first and whole (never a locked one: its unlock or the next tick, see unlockBuffer)
+        auto e=c.bufList[i];
+        if(e.state->large&&e.state->mode==BufferState::Free){noteShadowEvicted(c,*e.proxy);dropShadowLocked(*e.proxy,*e.state);}else ++i;
+    }
     for(std::size_t i=0;i<c.bufList.size();){
         auto e=c.bufList[i];
         if(e.state->mode==BufferState::Free&&c.frameNo>=e.state->lastUse+idleFrames){noteShadowEvicted(c,*e.proxy);dropShadowLocked(*e.proxy,*e.state);}   // (swap-removed: look at index i again)
@@ -590,7 +616,7 @@ inline void dropIdleBufferShadows(StreamCore& c,unsigned idleFrames){
     }
     while(!c.q.shadowAdmit(0)){
         StreamCore::BufEntry* victim=nullptr;
-        for(auto& e:c.bufList)if(e.state->mode==BufferState::Free&&(!victim||e.state->tick<victim->state->tick))victim=&e;
+        for(auto& e:c.bufList)if(!e.state->large&&e.state->mode==BufferState::Free&&(!victim||e.state->tick<victim->state->tick))victim=&e;
         if(!victim)break;
         StreamCore::BufEntry v=*victim;noteShadowEvicted(c,*v.proxy);dropShadowLocked(*v.proxy,*v.state);
     }
@@ -654,7 +680,9 @@ inline HRESULT unlockBuffer(ProxyBase& self,BufferState& s){
                 *a=UnlockBufferArgs{&self,s.off+done,n,done?(s.flags&~D3::kLockDiscard):s.flags,1};std::memcpy(a+1,s.shadow.data()+s.off+done,n);q.commit();
             }
         }
-        s.written=true;return D3D_OK;
+        s.written=true;
+        if(s.large&&q.pressure()){std::lock_guard<std::mutex> l(self.core->texMutex);noteShadowEvicted(*self.core,self);dropShadowLocked(self,s);}   // pressure began under the lock: the large shadow goes now
+        return D3D_OK;
     case BufferState::Staged:{
         noteRecorded(self,s,s.size);
         auto* a=static_cast<UnlockBufferArgs*>(q.reserveWithBlock((std::uint16_t)Cmd::UnlockBuffer,sizeof(UnlockBufferArgs),s.stage));

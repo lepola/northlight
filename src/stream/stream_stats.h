@@ -40,6 +40,8 @@ struct Counters {
     // 0.3.192 (CS): buffer shadows made by ONE synchronous whole-buffer readback at a write re-lock (DYNAMIC late shadows / non-DYNAMIC shadows), LRU evictions
     // by kind (hot = locked within kShadowHotFrames), re-locks refused (too big for the cap / no victim qualified), and adaptive cap growths.
     Counter dynShadowReadbacks{0},stShadowReadbacks{0},dynShadowEvicted{0},stShadowEvicted{0},hotShadowEvicted{0},relockRefused{0},relockRefusedBytes{0},shadowCapGrows{0};
+    // 0.3.192 (CS): the LARGE-buffer allowance (command_queue.h LargeShadowBudgetBytes): grants (shadows made) and drops (evicted for another large buffer, pressure, GPU write).
+    Counter largeShadowGrants{0},largeShadowDrops{0};
     // The game thread's own time per frame (Present to Present, minus its sync and backpressure waits), in ns, and its frames.
     Counter gameNs{0},gameWaitNs{0},gameFrames{0};
     Counter filteredCalls{0};   // redundant Sets the game side did not record
@@ -52,7 +54,7 @@ struct Counters {
     // ---- Both threads write: memory in flight (chunks handed to the producer and not yet recycled, live blocks, registered shadows). ----
     alignas(kLine) Counter chunksLive{0};
     Counter blocksLive{0},blockBytes{0};
-    std::atomic<std::int64_t> shadowBytes{0},texShadowBytes{0};
+    std::atomic<std::int64_t> shadowBytes{0},texShadowBytes{0},largeShadowBytes{0};   // largeShadowBytes: the large allowance, NOT part of shadowBytes (shadowAdmit's cap)
 };
 static_assert(alignof(Counters)==kLine&&sizeof(Counters)%kLine==0,"Counters groups are line-aligned");
 static_assert(offsetof(Counters,commands)/kLine!=offsetof(Counters,consumerSleeps)/kLine&&offsetof(Counters,consumerSleeps)/kLine!=offsetof(Counters,chunksLive)/kLine,"counter groups on distinct lines");

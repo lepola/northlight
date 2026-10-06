@@ -20,6 +20,7 @@ struct State {
     // gauges (not reset): bytes and buffers resident, the current cap.
     Counter copyServed,copyServedBytes,copyFills,copyFillBytes,copyFallback,copyEvictions,copyInvalidations,copyRefused;
     Counter copyResidentBytes,copyResidentBuffers,copyCapBytes;
+    Counter copyLargeGrants,copyLargeDrops,copyLargeBytes;   // the large-copy allowance (replay_copies.h): grants/drops per interval, bytes resident (gauge)
     Counter frames,discardSum,discardMax,stagingSum,stagingMax,over10MiB,siteSum[SiteCount]; // interval roll-up
     std::atomic<bool> processVerticesSeen;
 };
@@ -54,7 +55,7 @@ struct Snapshot {
     std::uint64_t ringWraps=0,ringFenceReuse=0,ringDiscards=0,ringShrinks=0,processVertices=0;
     std::uint64_t readLocks=0,readBytes=0,readClass[3]={},readClassBytes[3]={};
     std::uint64_t copyServed=0,copyServedBytes=0,copyFills=0,copyFillBytes=0,copyFallback=0,copyEvictions=0,copyInvalidations=0,copyRefused=0;
-    std::uint64_t copyResidentBytes=0,copyResidentBuffers=0,copyCapBytes=0;   // gauges at the end of the interval
+    std::uint64_t copyResidentBytes=0,copyResidentBuffers=0,copyCapBytes=0,copyLargeGrants=0,copyLargeDrops=0,copyLargeBytes=0;   // gauges at the end of the interval
 };
 // Returns the interval since the previous call and starts the next one.
 inline Snapshot takeInterval(){
@@ -66,6 +67,7 @@ inline Snapshot takeInterval(){
     r.copyServed=take(s.copyServed);r.copyServedBytes=take(s.copyServedBytes);r.copyFills=take(s.copyFills);r.copyFillBytes=take(s.copyFillBytes);r.copyFallback=take(s.copyFallback);
     r.copyEvictions=take(s.copyEvictions);r.copyInvalidations=take(s.copyInvalidations);r.copyRefused=take(s.copyRefused);
     r.copyResidentBytes=s.copyResidentBytes.load(std::memory_order_relaxed);r.copyResidentBuffers=s.copyResidentBuffers.load(std::memory_order_relaxed);r.copyCapBytes=s.copyCapBytes.load(std::memory_order_relaxed);
+    r.copyLargeGrants=take(s.copyLargeGrants);r.copyLargeDrops=take(s.copyLargeDrops);r.copyLargeBytes=s.copyLargeBytes.load(std::memory_order_relaxed);
     return r;
 }
 }

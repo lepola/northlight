@@ -1823,14 +1823,14 @@ public:
     DWORD lockMeterTick=0;
     void logLockMeter(){
         const auto m=NorthlightLockMeter::takeInterval();const double frames=m.frames?double(m.frames):1.0,kib=1024.0;
-        logf("LOCK METER frames=%u discardKiB/frame avg=%.0f max=%.0f stagingKiB/frame avg=%.0f max=%.0f over10MiB=%u | replayVB=%.0f replayIB=%.0f liveIB=%.0f arena=%.0f instances=%.0f game=%.0f | ring wraps=%u fenceReuse=%u discards=%u shrinks=%u | readback/frame locks=%.1f KiB=%.0f dynamic=%u/%.0fKiB defaultStatic=%u/%.0fKiB other=%u/%.0fKiB per frame flag=0x%x processVertices=%u | copies/frame served=%.1f/%.0fKiB fallbackLocks=%.1f fills=%u/%.0fKiB evictions=%u invalidations=%u refused=%u resident=%.0fKiB/%ubuffers cap=%.0fKiB",
+        logf("LOCK METER frames=%u discardKiB/frame avg=%.0f max=%.0f stagingKiB/frame avg=%.0f max=%.0f over10MiB=%u | replayVB=%.0f replayIB=%.0f liveIB=%.0f arena=%.0f instances=%.0f game=%.0f | ring wraps=%u fenceReuse=%u discards=%u shrinks=%u | readback/frame locks=%.1f KiB=%.0f dynamic=%u/%.0fKiB defaultStatic=%u/%.0fKiB other=%u/%.0fKiB per frame flag=0x%x processVertices=%u | copies/frame served=%.1f/%.0fKiB fallbackLocks=%.1f fills=%u/%.0fKiB evictions=%u invalidations=%u refused=%u resident=%.0fKiB/%ubuffers cap=%.0fKiB large=%.0fKiB/%u/%u",
              unsigned(m.frames),m.discardSum/frames/kib,double(m.discardMax)/kib,m.stagingSum/frames/kib,double(m.stagingMax)/kib,unsigned(m.over10MiB),
              m.site[NorthlightLockMeter::ReplayVB]/frames/kib,m.site[NorthlightLockMeter::ReplayIB]/frames/kib,m.site[NorthlightLockMeter::LiveIB]/frames/kib,
              m.site[NorthlightLockMeter::Arena]/frames/kib,m.site[NorthlightLockMeter::Instances]/frames/kib,m.site[NorthlightLockMeter::Game]/frames/kib,
              unsigned(m.ringWraps),unsigned(m.ringFenceReuse),unsigned(m.ringDiscards),unsigned(m.ringShrinks),
              m.readLocks/frames,m.readBytes/frames/kib,unsigned(m.readClass[NorthlightLockMeter::ReadDynamic]),m.readClassBytes[NorthlightLockMeter::ReadDynamic]/frames/kib,unsigned(m.readClass[NorthlightLockMeter::ReadDefaultStatic]),m.readClassBytes[NorthlightLockMeter::ReadDefaultStatic]/frames/kib,unsigned(m.readClass[NorthlightLockMeter::ReadOther]),m.readClassBytes[NorthlightLockMeter::ReadOther]/frames/kib,
              unsigned(NorthlightUpload::readBackLock()),unsigned(m.processVertices),
-             m.copyServed/frames,m.copyServedBytes/frames/kib,m.copyFallback/frames,unsigned(m.copyFills),m.copyFillBytes/kib,unsigned(m.copyEvictions),unsigned(m.copyInvalidations),unsigned(m.copyRefused),m.copyResidentBytes/kib,unsigned(m.copyResidentBuffers),m.copyCapBytes/kib);
+             m.copyServed/frames,m.copyServedBytes/frames/kib,m.copyFallback/frames,unsigned(m.copyFills),m.copyFillBytes/kib,unsigned(m.copyEvictions),unsigned(m.copyInvalidations),unsigned(m.copyRefused),m.copyResidentBytes/kib,unsigned(m.copyResidentBuffers),m.copyCapBytes/kib,m.copyLargeBytes/kib,unsigned(m.copyLargeGrants),unsigned(m.copyLargeDrops));
     }
     void endFrame(bool retainPool=true){
         flushDeferredLogs(); /* 0.3.176 (U0/S0): after every bucketed span of the frame */
