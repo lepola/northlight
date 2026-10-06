@@ -67,6 +67,8 @@ for _, name in sorted(gf.DIRECT):
     buffer = (r'\{GuardmirrorLock\(mirrorState\.gate\);boolwrapped=false;auto\*raw=NorthlightTrackedBuffers::resolveInput\(buffer,wrapped\);'
               r'if\(buffer&&!wrapped\)mirrorState\.disable\("raw(?:vertex|index)bufferinput"\);returnext->' + name + r'\([\w,]*\);\}')
     assert re.fullmatch(pure, body) or re.fullmatch(buffer, body), (name, body)   # anything more than unwrap + forward must not be direct
+# The replay thread attaches no input queue: the cursor is the game thread's own Win32 state (StreamDevice does it at the call).
+assert 'AttachThreadInput(' not in ''.join(f.read_text() for f in (fp.src('replay_thread.h'), fp.src('stream_device.h'), fp.src('stream_proxies.h')))
 print('direct audit ok:', len(gf.DIRECT), 'methods')
 
 # ---- the SDK stub: every type the 14 interfaces mention, and the interfaces with default (non-pure) methods ----
@@ -87,7 +89,7 @@ BODIES = {
     'RECT': 'LONG left;LONG top;LONG right;LONG bottom;', 'POINT': 'LONG x;LONG y;', 'D3DRECT': 'LONG x1;LONG y1;LONG x2;LONG y2;',
     'D3DVIEWPORT9': 'DWORD X;DWORD Y;DWORD Width;DWORD Height;float MinZ;float MaxZ;',
     'D3DVERTEXELEMENT9': 'WORD Stream;WORD Offset;BYTE Type;BYTE Method;BYTE Usage;BYTE UsageIndex;',
-    'D3DPRESENT_PARAMETERS': 'UINT BackBufferWidth;UINT BackBufferHeight;D3DFORMAT BackBufferFormat;UINT BackBufferCount;D3DMULTISAMPLE_TYPE MultiSampleType;DWORD MultiSampleQuality;DWORD pad[8];',
+    'D3DPRESENT_PARAMETERS': 'UINT BackBufferWidth;UINT BackBufferHeight;D3DFORMAT BackBufferFormat;UINT BackBufferCount;D3DMULTISAMPLE_TYPE MultiSampleType;DWORD MultiSampleQuality;BOOL Windowed;DWORD pad[8];',
     'D3DDEVICE_CREATION_PARAMETERS': 'UINT AdapterOrdinal;unsigned DeviceType;HWND hFocusWindow;DWORD BehaviorFlags;',
     'RGNDATAHEADER': 'DWORD dwSize;DWORD iType;DWORD nCount;DWORD nRgnSize;RECT rcBound;', 'RGNDATA': 'RGNDATAHEADER rdh;char Buffer[1];',
 }

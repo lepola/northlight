@@ -25,6 +25,34 @@ constexpr bool kFilterRedundantState=NORTHLIGHT_STREAM_FILTER!=0;
 inline std::atomic<StreamCore*> activeCore{nullptr};
 inline const void* innerOfActive(const void* p){StreamCore* c=activeCore.load(std::memory_order_acquire);return c?c->reg.innerOf(p):p;}
 
+// The Win32 calls DXVK's hardware cursor makes (d3d9_cursor.cpp), behind function pointers so the host tests can observe them. Plain Win32 on
+// the calling thread's input queue: the stream does them on the GAME thread, at the call, exactly as DXVK would on the direct path.
+struct CursorApi {
+    BOOL (*getPos)(POINT*)=nullptr;BOOL (*setPos)(int,int)=nullptr;
+    void* (*create)(UINT hotX,UINT hotY,const unsigned char* bgra32x32)=nullptr;   // CreateBitmap mask + colour, CreateIconIndirect, DeleteObject x2
+    void (*destroy)(void*)=nullptr;void (*set)(void*)=nullptr;                     // DestroyCursor, ::SetCursor
+#ifdef _WIN32
+    static CursorApi native(){
+        CursorApi a;
+        a.getPos=[](POINT* p){return ::GetCursorPos(p);};a.setPos=[](int x,int y){return ::SetCursorPos(x,y);};
+        a.create=[](UINT hx,UINT hy,const unsigned char* bits)->void*{
+            // gdi32 is resolved at run time: the DLL links user32 only, and the game process has gdi32 loaded anyway.
+            using CreateBitmapFn=HBITMAP(WINAPI*)(int,int,UINT,UINT,const void*);using DeleteObjectFn=BOOL(WINAPI*)(HGDIOBJ);
+            static const HMODULE gdi=::LoadLibraryW(L"gdi32.dll");
+            static const auto createBitmap=gdi?reinterpret_cast<CreateBitmapFn>(reinterpret_cast<void*>(::GetProcAddress(gdi,"CreateBitmap"))):nullptr;
+            static const auto deleteObject=gdi?reinterpret_cast<DeleteObjectFn>(reinterpret_cast<void*>(::GetProcAddress(gdi,"DeleteObject"))):nullptr;
+            if(!createBitmap||!deleteObject)return nullptr;
+            DWORD mask[32];std::memset(mask,~0,sizeof mask);ICONINFO info={};info.fIcon=FALSE;info.xHotspot=hx;info.yHotspot=hy;
+            info.hbmMask=createBitmap(32,32,1,1,mask);info.hbmColor=createBitmap(32,32,1,32,bits);
+            HCURSOR h=::CreateIconIndirect(&info);deleteObject(info.hbmMask);deleteObject(info.hbmColor);return h;};
+        a.destroy=[](void* h){::DestroyCursor(static_cast<HCURSOR>(h));};a.set=[](void* h){::SetCursor(static_cast<HCURSOR>(h));};
+        return a;
+    }
+#else
+    static CursorApi native(){CursorApi a;a.getPos=[](POINT*){return BOOL(0);};a.setPos=[](int,int){return BOOL(0);};a.create=[](UINT,UINT,const unsigned char*)->void*{return nullptr;};a.destroy=[](void*){};a.set=[](void*){};return a;}
+#endif
+};
+
 class StreamDevice final:public IDirect3DDevice9 {
 public:
     struct Options {
@@ -35,6 +63,7 @@ public:
         // Direct replay: the ExtensionDevice (same real device and mirror as the Device) and the resolver of a Device-level object to the backend
         // object the Device would unwrap it to (null: not provably a pure unwrap). Both null / directReplay off: everything goes through the Device.
         IDirect3DDevice9* extension=nullptr;std::function<IUnknown*(IUnknown*,unsigned)> rawOf;bool directReplay=true;
+        const CursorApi* cursorApi=nullptr;                             // null: the real Win32 calls
         bool filterRedundant=true;                                      // see redundant(); off: every Set is recorded
         bool (*diagnostics)()=nullptr;                                  // NorthlightDiagnostics::enabled in the DLL
     };
@@ -69,7 +98,7 @@ public:
     NORTHLIGHT_STREAM_DEVICE_METHODS
 
     // ---- hooks the generated bodies call ----
-    Queue& streamQueue(){if(foreignPending.load(std::memory_order_relaxed))drainForeign();return core.q;}
+    Queue& streamQueue(){return core.q;}
     template<Cmd C,class... A> void observe(CmdTag<C>,A&&...){}
     template<Cmd C,class... A> typename MethodTraits<C>::Ret syncCall(CmdTag<C> t,A... a){noteSync(t,a...);return runSync(streamQueue(),t,a...);}
     template<Cmd C,class... A> typename MethodTraits<C>::Ret syncGet(CmdTag<C> t,A... a){own(core.q.stats.stateSynced);return runSync(streamQueue(),t,a...);}
@@ -257,11 +286,48 @@ public:
         const LONG n=refs.fetch_sub(1)-1;
         if(n==0)finalRelease();
         return n<0?0:ULONG(n);}
-    BOOL STDMETHODCALLTYPE ShowCursor(BOOL show) override{const BOOL prev=cursorVisible;cursorVisible=show;record_Device_ShowCursor(streamQueue(),show);return prev;}
-    void STDMETHODCALLTYPE SetCursorPosition(int x,int y,DWORD flags) override{
-        if(std::this_thread::get_id()!=gameThread){   // a foreign thread must not touch the single-producer queue: hand it to the game thread
-            add(core.q.stats.foreignEntries);{std::lock_guard<std::mutex> l(foreignMutex);foreign.push_back({x,y,flags});}foreignPending.fetch_add(1);return;}
-        record_Device_SetCursorPosition(streamQueue(),x,y,flags);}
+    // ---- the cursor: Win32 state of the calling thread's input queue, so never recorded ----
+    // DXVK's hardware cursor is plain Win32 (GetCursorPos/SetCursorPos, ::SetCursor, CreateIconIndirect). Replayed a frame late on another thread
+    // it warped the mouse back to a stale position and fought the game thread's WM_SETCURSOR, so the game thread does it, at the call. A foreign
+    // thread does it on its own thread (pure Win32; only the handle and the visibility flag are shared, under cursorMutex).
+    // Handoff: our HCURSOR is the only hardware cursor. SetCursorProperties of a software cursor (fullscreen and larger than 32 pixels, which DXVK
+    // does not implement either) is still forwarded through the queue; in the backend it does nothing, as on the direct path, and leaves ours alone.
+    // The handle survives Reset (DXVK keeps it) and is destroyed with the device.
+    BOOL STDMETHODCALLTYPE ShowCursor(BOOL show) override{
+        if(std::this_thread::get_id()!=gameThread)add(core.q.stats.foreignEntries);
+        std::lock_guard<std::mutex> l(cursorMutex);
+        if(hCursor)cursor.set(show?hCursor:nullptr);
+        const BOOL prev=cursorVisible;cursorVisible=show;return prev;}
+    void STDMETHODCALLTYPE SetCursorPosition(int x,int y,DWORD) override{
+        if(std::this_thread::get_id()!=gameThread)add(core.q.stats.foreignEntries);
+        POINT now{};if(cursor.getPos(&now)&&now.x==x&&now.y==y)return;
+        cursor.setPos(x,y);}
+    HRESULT STDMETHODCALLTYPE SetCursorProperties(UINT hotX,UINT hotY,IDirect3DSurface9* bitmap) override{
+        if(!bitmap)return D3DERR_INVALIDCALL;
+        ProxyBase* b=ProxyBase::of(bitmap);if(!b||b->kind!=Kind::Surface)return D3DERR_INVALIDCALL;
+        auto* sf=static_cast<StreamSurface*>(b);
+        if(sf->info.fmt!=21)return D3DERR_INVALIDCALL;   // A8R8G8B8 only, as DXVK
+        const UINT w=sf->info.w,h=sf->info.h;
+        if(!(pp.Windowed||w<=32||h<=32)){record_Device_SetCursorProperties(streamQueue(),hotX,hotY,bitmap);return D3D_OK;}   // software cursor: forwarded, see above
+        // Hardware cursor: a 32x32 A8R8G8B8 bitmap (pitch 128) from the surface's current bytes, never stale ones.
+        unsigned char bits[32*32*4]={};const UINT rows=h<32?h:32,rowBytes=(w<32?w:32)*4;
+        SubRes& sub=*sf->subp;
+        if(sub.mode!=SubRes::Free)return D3DERR_INVALIDCALL;
+        if(sub.shadowOn&&sub.levelRowBytes==w*4){for(UINT y=0;y<rows;++y)std::memcpy(bits+y*128,sub.shadow.data()+std::size_t(y)*sub.levelRowBytes,rowBytes);}   // the level's CPU copy is current
+        else{   // no copy: one synchronous readback (cursor shapes change rarely)
+            HRESULT hr=D3DERR_INVALIDCALL;
+            const bool ran=runTask(core,[&](StreamCore&){
+                if(!sf->inner||sf->dead.load())return;
+                D3DLOCKED_RECT lr{};hr=static_cast<IDirect3DSurface9*>(sf->inner)->LockRect(&lr,nullptr,D3::kLockReadOnly);if(FAILED(hr))return;
+                for(UINT y=0;y<rows;++y)std::memcpy(bits+y*128,static_cast<const unsigned char*>(lr.pBits)+std::ptrdiff_t(y)*lr.Pitch,rowBytes);
+                static_cast<IDirect3DSurface9*>(sf->inner)->UnlockRect();},Cmd::SyncLock);
+            if(!ran)return D3DERR_INVALIDCALL;if(FAILED(hr))return hr;
+        }
+        std::lock_guard<std::mutex> l(cursorMutex);
+        if(hCursor)cursor.destroy(hCursor);   // DXVK destroys the old cursor before it creates the new one
+        hCursor=cursor.create(hotX,hotY,bits);
+        if(hCursor)cursor.set(cursorVisible?hCursor:nullptr);
+        return D3D_OK;}
 
     HRESULT STDMETHODCALLTYPE Present(const RECT* src,const RECT* dst,HWND window,const RGNDATA* dirty) override{return presentCommon(nullptr,src,dst,window,dirty,0);}
     HRESULT presentCommon(StreamSwapChain* swap,const RECT* src,const RECT* dst,HWND window,const RGNDATA* dirty,DWORD flags){
@@ -451,18 +517,17 @@ public:
     std::uint64_t draws()const{return drawOrdinal;}
 
 private:
-    struct Foreign {int x,y;DWORD flags;};
     std::unique_ptr<StreamCore> coreOwner;StreamCore& core;Replayer replayer;StreamState st;std::function<void()> restoreOwner;
     IDirect3D9* parent;D3DCAPS9 caps{};D3DDEVICE_CREATION_PARAMETERS creation{};D3DPRESENT_PARAMETERS pp{};
     StreamSwapChain* sc0=nullptr;std::atomic<LONG> refs{1};
-    bool recording=false,cursorVisible=false,pressureApplied=false,filter=true;unsigned getsSincePublish=0;std::uint64_t frameEnd=0,waitsAtFrameEnd=0;std::uint64_t prevPresent=0,drawOrdinal=0;
+    bool recording=false,pressureApplied=false,filter=true;BOOL cursorVisible=0;void* hCursor=nullptr;std::mutex cursorMutex;CursorApi cursor=CursorApi::native();unsigned getsSincePublish=0;std::uint64_t frameEnd=0,waitsAtFrameEnd=0;std::uint64_t prevPresent=0,drawOrdinal=0;
     std::thread::id gameThread=std::this_thread::get_id();
-    std::mutex foreignMutex;std::vector<Foreign> foreign;std::atomic<unsigned> foreignPending{0};
     TriggerPolicy policy;bool (*capture)(GameSnapshot&,Trigger,std::uint64_t)=nullptr;
 
     StreamDevice(IDirect3DDevice9* target,IDirect3D9* par,const D3DPRESENT_PARAMETERS* p,Options opt)
         :coreOwner(new StreamCore(opt.budget)),core(*coreOwner),replayer(core),parent(par),capture(opt.capture){
         core.target=target;core.game=this;core.logLine=nullptr;st.core=&core;
+        if(opt.cursorApi)cursor=*opt.cursorApi;
         restoreOwner=opt.threadStart;replayer.threadStart=std::move(opt.threadStart);replayer.log=opt.log;replayer.diagnostics=opt.diagnostics;filter=opt.filterRedundant;
         if(kDirectReplay&&opt.directReplay&&opt.extension&&opt.rawOf){core.ext=opt.extension;auto f=opt.rawOf;core.reg.rawOf=[f](IUnknown* e,Kind k){return f(e,unsigned(k));};}
         if(p)pp=*p;
@@ -490,15 +555,12 @@ private:
             if(i<n&&SUCCEEDED(sc->GetBackBuffer(i,(D3DBACKBUFFER_TYPE)0,&b))&&b){c.reg.bindInner(k,b);k->dead.store(false);}else k->dead.store(true);
         }
     }
-    void drainForeign(){
-        std::vector<Foreign> take;{std::lock_guard<std::mutex> l(foreignMutex);take.swap(foreign);foreignPending.store(0);}
-        for(const auto& f:take)record_Device_SetCursorPosition(core.q,f.x,f.y,f.flags);
-    }
     void finalRelease(){
         st.clear();sc0->comRelease();   // binds and the swap chain's own reference go; the Destroys run before the Target's release
         runTask(core,[&](StreamCore& c){c.target->Release();c.target=nullptr;},Cmd::SyncRelease);   // the Device's final release happens on the replay thread
         replayer.stop();
         innerOf=nullptr;activeCore.store(nullptr,std::memory_order_release);
+        if(hCursor){cursor.destroy(hCursor);hCursor=nullptr;}
         IDirect3D9* p=parent;
         delete this;
         if(p)p->Release();

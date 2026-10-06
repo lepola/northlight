@@ -179,13 +179,16 @@ struct TargetExt:FakeDevice {
     HRESULT SetSoftwareVertexProcessing(WINBOOL b) override{FakeDevice::SetSoftwareVertexProcessing(b);if(!inBlock)swvp=b;return D3D_OK;}
     HRESULT SetCurrentTexturePalette(UINT n) override{FakeDevice::SetCurrentTexturePalette(n);if(!inBlock)palette=n;return D3D_OK;}
     // the points where the Target's state matters: every draw, clear, copy and present logs a digest of it
-    std::string digest(){
-        std::uint64_t h=1469598103934665603ull;auto mixb=[&](const void* p,std::size_t n){for(std::size_t i=0;i<n;++i)h=(h^static_cast<const unsigned char*>(p)[i])*1099511628211ull;};
-        mixb(rs,sizeof rs);mixb(samp,sizeof samp);mixb(tss,sizeof tss);mixb(&vp,sizeof vp);mixb(&scissor,sizeof scissor);mixb(xf[2].m,64);mixb(xf[3].m,64);mixb(vsF,sizeof vsF);
-        mixb(&mat,sizeof mat);mixb(clip,sizeof clip);mixb(lightEn,sizeof lightEn);mixb(&npatch,4);mixb(&swvp,4);mixb(&palette,4);mixb(&fvfv,4);
-        auto id=[&](const void* p){const int v=p?std::atoi(ptrId(reinterpret_cast<std::uintptr_t>(p)+kRawShift).c_str()+1):0;mixb(&v,sizeof v);};   // the raw namespace the Set trace lines use
-        for(auto* t:tex)id(t);for(auto* v:sv)id(v);id(idx);id(vsv);id(psv);id(rt0);id(ds);
-        return "STATE "+std::to_string(h);
+    std::string digest(){   // one hash per component, so a mismatch names what differs
+        std::string out="STATE";std::uint64_t h=0;
+        auto part=[&](const char* name,auto fill){h=1469598103934665603ull;fill([&](const void* p,std::size_t n){for(std::size_t i=0;i<n;++i)h=(h^static_cast<const unsigned char*>(p)[i])*1099511628211ull;});out+=std::string(" ")+name+"="+std::to_string(h%100000);};
+        part("rs",[&](auto m){m(rs,sizeof rs);});part("samp",[&](auto m){m(samp,sizeof samp);});part("tss",[&](auto m){m(tss,sizeof tss);});
+        part("vp",[&](auto m){m(&vp,sizeof vp);m(&scissor,sizeof scissor);});part("xf",[&](auto m){m(xf[2].m,64);m(xf[3].m,64);});part("vsF",[&](auto m){m(vsF,sizeof vsF);});
+        part("misc",[&](auto m){m(&mat,sizeof mat);m(clip,sizeof clip);m(lightEn,sizeof lightEn);m(&npatch,4);m(&swvp,4);m(&palette,4);m(&fvfv,4);});
+        std::string list;
+        part("ids",[&](auto m){auto id=[&](const void* p){const int v=p?std::atoi(ptrId(reinterpret_cast<std::uintptr_t>(p)+kRawShift).c_str()+1):0;m(&v,sizeof v);list+=std::to_string(v)+",";};
+            for(auto* t:tex)id(t);for(auto* v:sv)id(v);id(idx);id(vsv);id(psv);id(rt0);id(ds);});   // the raw namespace the Set trace lines use
+        return out+" ["+list+"]";
     }
 };
 
@@ -268,7 +271,7 @@ struct TargetDevice:Counted<FakeDevice> {
         for(auto* b:sc->back)if(b->refs.load()>1+(b==ext.rt0?1:0))return D3DERR_INVALIDCALL;   // a held back buffer fails Reset, as in D3D9
         if(ext.rt0){ext.rt0->Release();ext.rt0=nullptr;}
         gTrace.push_back("Device::Reset "+std::to_string(p->BackBufferWidth)+"x"+std::to_string(p->BackBufferHeight));
-        sc->pp.BackBufferWidth=p->BackBufferWidth;sc->pp.BackBufferHeight=p->BackBufferHeight;sc->rebuild();ext.rt0=sc->back[0];ext.rt0->AddRef();
+        sc->pp.BackBufferWidth=p->BackBufferWidth;sc->pp.BackBufferHeight=p->BackBufferHeight;sc->pp.Windowed=p->Windowed;sc->rebuild();ext.rt0=sc->back[0];ext.rt0->AddRef();
         for(unsigned i=0;i<256;++i)ext.rs[i]=1000+i;ext.vp.Width=p->BackBufferWidth;ext.vp.Height=p->BackBufferHeight;++resets;
         for(auto& t:ext.tex)if(t){t->Release();t=nullptr;}for(auto& v:ext.sv)if(v){v->Release();v=nullptr;}if(ext.idx){ext.idx->Release();ext.idx=nullptr;}return D3D_OK;}
     HRESULT CreateTexture(UINT w,UINT h,UINT l,DWORD u,D3DFORMAT f,D3DPOOL p,IDirect3DTexture9** pp,HANDLE*) override{

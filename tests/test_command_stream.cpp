@@ -33,7 +33,9 @@ static std::string fb(const void* p,std::size_t n){if(!p)return "null";std::stri
 static std::unordered_map<std::uintptr_t,int> gPtrIds;
 static int gNextPtrId=0;
 static std::string ptrId(std::uintptr_t p){auto it=gPtrIds.find(p);if(it==gPtrIds.end())it=gPtrIds.emplace(p,++gNextPtrId).first;return "#"+std::to_string(it->second);}
-constexpr std::uintptr_t kRawShift=0x400000;   // the fake Target's raw object = its exposed object shifted by this (command_stream_targets.h)
+// The fake Target's raw object = its exposed object shifted by this (command_stream_targets.h). Far above any real address, so a raw value
+// can never equal another object's exposed one (a 4 MiB shift did under TSan's allocator, and the id maps then confused two objects).
+constexpr std::uintptr_t kRawShift=sizeof(void*)==8?(std::uintptr_t(1)<<62):std::uintptr_t(0x40000000);
 static void forgetPtr(const void* p){gPtrIds.erase(reinterpret_cast<std::uintptr_t>(p));gPtrIds.erase(reinterpret_cast<std::uintptr_t>(p)+kRawShift);}   // a freed object's address may come back as a new object
 template<bool Inner,class T> static std::string fi(T* p){if(!p)return "null";if(gNormalize)return ptrId((std::uintptr_t)p);return std::to_string((std::uintptr_t)p-(Inner?0x10000u:0u));}
 template<class T> static std::string fa(T* p){if(!p)return "null";return gNormalize?"ptr":std::to_string((std::uintptr_t)p);}

@@ -41,9 +41,9 @@ STREAM = {
         'custom': _UNK + ' Reset Present GetBackBuffer CreateAdditionalSwapChain CreateTexture CreateVolumeTexture CreateCubeTexture '
                   'CreateVertexBuffer CreateIndexBuffer CreateRenderTarget CreateDepthStencilSurface CreateOffscreenPlainSurface '
                   'CreateStateBlock BeginStateBlock EndStateBlock DrawPrimitiveUP DrawIndexedPrimitiveUP CreateVertexDeclaration '
-                  'CreateVertexShader CreatePixelShader CreateQuery',
-        'customrec': 'ShowCursor SetCursorPosition',   # ShowCursor tracks the previous value; SetCursorPosition may come from a foreign thread
-        'record': 'EvictManagedResources SetCursorProperties SetDialogBoxMode SetGammaRamp BeginScene EndScene Clear SetClipStatus '
+                  'CreateVertexShader CreatePixelShader CreateQuery ShowCursor SetCursorPosition',   # the cursor is Win32 state: the StreamDevice does it on the calling thread, nothing is recorded
+        'customrec': 'SetCursorProperties',   # a hardware cursor is built on the game thread; only the software-cursor case is forwarded (the encoder is generated)
+        'record': 'EvictManagedResources SetDialogBoxMode SetGammaRamp BeginScene EndScene Clear SetClipStatus '
                   'DrawRectPatch DrawTriPatch DeletePatch',
         # UpdateSurface/UpdateTexture/StretchRect/ColorFill/ProcessVertices write a resource on the GPU side: observed so the
         # destination's CPU-side lock/shadow knowledge is dropped.

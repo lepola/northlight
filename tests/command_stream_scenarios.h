@@ -273,15 +273,57 @@ static void resetAndShutdown(){
     rig.finish();CHECK(gLiveTargets.load()==0&&liveProxyObjects.load()==0&&!gTrace.empty());   // the final Release joined the replay thread
 }
 
-static void cursorAndForeignThread(){
-    gTrace.clear();Rig rig(true);auto& s=rig.core().q.stats;
-    CHECK(rig.dev->ShowCursor(1)==0&&rig.dev->ShowCursor(0)==1);   // the previous visibility, tracked locally
-    std::thread other([&]{rig.dev->SetCursorPosition(5,6,7);});other.join();   // a foreign thread never touches the queue
-    CHECK(get(s.foreignEntries)==1);
-    rig.dev->SetCursorPosition(1,2,3);rig.sync();   // the game thread's next entry drains the foreign one first
-    std::vector<std::string> cursor;for(auto& t:gTrace)if(t.rfind("Device::SetCursorPosition",0)==0||t.rfind("Device::ShowCursor",0)==0)cursor.push_back(t);
-    CHECK(cursor.size()==4&&cursor[0].rfind("Device::ShowCursor",0)==0&&cursor[2].find("5.000000 6.000000 7.000000")!=std::string::npos&&cursor[3].find("1.000000 2.000000 3.000000")!=std::string::npos);
+// The cursor: Win32 state of the calling thread, done at the call and never recorded (a late replay warped the mouse back and fought WM_SETCURSOR).
+static std::vector<std::string> gCursorLog;static POINT gCursorPos{0,0};static unsigned char gCursorBits[32*32*4];static int gCursorHandles=0;
+static CursorApi cursorFake(){
+    CursorApi a;
+    a.getPos=[](POINT* p){*p=gCursorPos;return BOOL(1);};
+    a.setPos=[](int x,int y){gCursorLog.push_back("setPos "+std::to_string(x)+" "+std::to_string(y));gCursorPos=POINT{x,y};return BOOL(1);};
+    a.create=[](UINT hx,UINT hy,const unsigned char* bits)->void*{std::memcpy(gCursorBits,bits,sizeof gCursorBits);gCursorLog.push_back("create "+std::to_string(hx)+" "+std::to_string(hy));return reinterpret_cast<void*>(std::uintptr_t(0x100+ ++gCursorHandles));};
+    a.destroy=[](void* h){gCursorLog.push_back("destroy "+std::to_string(reinterpret_cast<std::uintptr_t>(h)));};
+    a.set=[](void* h){gCursorLog.push_back(h?"set "+std::to_string(reinterpret_cast<std::uintptr_t>(h)):std::string("set null"));};
+    return a;
+}
+static void cursorHandling(){
+    gTrace.clear();gCursorLog.clear();gCursorPos=POINT{0,0};gCursorHandles=0;const CursorApi api=cursorFake();
+    StreamDevice::Options opt;opt.cursorApi=&api;Rig rig(true,opt);IDirect3DDevice9* d=rig.dev;auto& q=rig.core().q;auto& s=q.stats;
+    const auto seq=q.recordedSeq();
+    // SetCursorPosition: applied now, on the caller's thread, only when it differs, and never recorded
+    d->SetCursorPosition(5,6,0);d->SetCursorPosition(5,6,0);CHECK(gCursorLog==std::vector<std::string>{"setPos 5 6"});
+    std::thread other([&]{d->SetCursorPosition(9,9,0);});other.join();CHECK(gCursorLog.size()==2&&gCursorLog[1]=="setPos 9 9"&&get(s.foreignEntries)==1);
+    // ShowCursor: the previous visibility; no handle yet, so no ::SetCursor
+    CHECK(d->ShowCursor(1)==0&&d->ShowCursor(0)==1&&gCursorLog.size()==2);
+    // a hardware cursor from the surface's shadow: 32x32, pitch 128, the surface's own pixels, hidden because visibility is off
+    IDirect3DSurface9* sf=nullptr;CHECK(d->CreateOffscreenPlainSurface(16,12,(D3DFORMAT)21,(D3DPOOL)2,&sf,nullptr)==D3D_OK);
+    D3DLOCKED_RECT lr{};CHECK(sf->LockRect(&lr,nullptr,0)==D3D_OK);for(unsigned y=0;y<12;++y)for(unsigned x=0;x<64;++x)((unsigned char*)lr.pBits)[y*lr.Pitch+x]=(unsigned char)(y*5+x+1);CHECK(sf->UnlockRect()==D3D_OK);
+    const auto sync0=get(s.census[(std::size_t)Cmd::SyncLock]);
+    CHECK(d->SetCursorProperties(3,4,sf)==D3D_OK&&get(s.census[(std::size_t)Cmd::SyncLock])==sync0);   // no readback: the shadow is current
+    CHECK(gCursorLog.size()==4&&gCursorLog[2]=="create 3 4"&&gCursorLog[3]=="set null");
+    for(unsigned y=0;y<32;++y)for(unsigned x=0;x<128;++x)CHECK(gCursorBits[y*128+x]==(y<12&&x<64?(unsigned char)(y*5+x+1):0));   // only the surface's 16x12 pixels
+    CHECK(d->ShowCursor(1)==0&&gCursorLog.back()=="set 257");
+    // no valid CPU copy (a GPU write dropped the shadow): one synchronous readback, the same bytes; the old cursor goes before the new one is made
+    CHECK(d->ColorFill(sf,nullptr,0)==D3D_OK);rig.sync();
+    CHECK(d->SetCursorProperties(1,2,sf)==D3D_OK&&get(s.census[(std::size_t)Cmd::SyncLock])==sync0+1);
+    CHECK(gCursorLog[gCursorLog.size()-3]=="destroy 257"&&gCursorLog[gCursorLog.size()-2]=="create 1 2"&&gCursorLog.back()=="set 258");   // visible now: shown at once
+    for(unsigned y=0;y<12;++y)for(unsigned x=0;x<64;++x)CHECK(gCursorBits[y*128+x]==(unsigned char)(y*5+x+1));
+    // invalid: null, and a surface that is not A8R8G8B8
+    IDirect3DSurface9* x8=nullptr;CHECK(d->CreateOffscreenPlainSurface(16,16,(D3DFORMAT)22,(D3DPOOL)2,&x8,nullptr)==D3D_OK);
+    CHECK(d->SetCursorProperties(0,0,nullptr)==D3DERR_INVALIDCALL&&d->SetCursorProperties(0,0,x8)==D3DERR_INVALIDCALL);
+    // a large cursor in fullscreen is a software cursor: forwarded through the queue (the backend does nothing with it), ours untouched
+    IDirect3DSurface9* big=nullptr;CHECK(d->CreateOffscreenPlainSurface(64,64,(D3DFORMAT)21,(D3DPOOL)2,&big,nullptr)==D3D_OK);
+    const std::size_t logSize=gCursorLog.size();const auto before=q.recordedSeq();
+    CHECK(d->SetCursorProperties(0,0,big)==D3D_OK&&q.recordedSeq()==before+1&&gCursorLog.size()==logSize);rig.sync();
+    unsigned forwarded=0;for(auto& t:gTrace)if(t.rfind("Device::SetCursorProperties",0)==0)++forwarded;CHECK(forwarded==1);
+    // windowed, the same surface is a hardware cursor; Reset keeps the handle
+    D3DPRESENT_PARAMETERS pp{};pp.BackBufferWidth=640;pp.BackBufferHeight=480;pp.BackBufferFormat=(D3DFORMAT)22;pp.BackBufferCount=2;pp.Windowed=1;
+    CHECK(d->Reset(&pp)==D3D_OK);const auto afterReset=gCursorLog.size();
+    CHECK(d->SetCursorProperties(0,0,big)==D3D_OK&&gCursorLog[afterReset]=="destroy 258"&&gCursorLog[afterReset+1]=="create 0 0");   // (no destroy happened at Reset)
+    // nothing of the cursor was ever recorded
+    for(auto& t:gTrace)CHECK(t.rfind("Device::ShowCursor",0)!=0&&t.rfind("Device::SetCursorPosition",0)!=0);
+    CHECK(q.recordedSeq()>seq);
+    sf->Release();x8->Release();big->Release();
     rig.finish();checkClean();
+    CHECK(gCursorLog.back()=="destroy 259");   // the cursor handle goes with the device
 }
 // D3D9/DXVK keep the device alive while any child is publicly referenced: releasing the device first must not free the queue
 // under a later Release of a texture, a buffer or the swap chain (ASan), and the Target goes away exactly once, at the last one.
@@ -603,7 +645,8 @@ static void equivalence(int steps,std::uint64_t seed){
     for(int mode=1;mode<3;++mode){
         CHECK(out[0].size()==out[mode].size());for(std::size_t i=0;i<out[0].size();++i)if(out[0][i]!=out[mode][i]){std::fprintf(stderr,"result %zu differs (mode %d):\n direct: %s\n stream: %s\n",i,mode,out[0][i].c_str(),out[mode][i].c_str());std::abort();}
         {std::size_t i=0;auto& A=trace[0];auto& B=trace[mode];while(i<A.size()&&i<B.size()&&A[i]==B[i])++i;
-         if(i<A.size()||i<B.size()){std::fprintf(stderr,"trace differs at %zu (mode %d, sizes %zu vs %zu)\n direct: %s\n stream: %s\n",i,mode,A.size(),B.size(),i<A.size()?A[i].substr(0,300).c_str():"-",i<B.size()?B[i].substr(0,300).c_str():"-");std::abort();}}
+         if(i<A.size()||i<B.size()){std::fprintf(stderr,"trace differs at %zu (mode %d, sizes %zu vs %zu)\n direct: %s\n stream: %s\n",i,mode,A.size(),B.size(),i<A.size()?A[i].substr(0,300).c_str():"-",i<B.size()?B[i].substr(0,300).c_str():"-");
+             for(std::size_t k=i>12?i-12:0;k<i;++k)std::fprintf(stderr,"  before[%zu]: %s | %s\n",k,A[k].substr(0,110).c_str(),B[k].substr(0,110).c_str());std::abort();}}
         CHECK(pres[0].size()==pres[mode].size()&&!pres[0].empty());CHECK(pres[mode][0]==D3D_OK);for(std::size_t i=1;i<pres[mode].size();++i)CHECK(pres[mode][i]==pres[0][i-1]);   // Present returns the previous frame's real result
     }
     std::printf("equivalence seed=%llu steps=%d results=%zu trace=%zu presents=%zu\n",(unsigned long long)seed,steps,out[0].size(),trace[0].size(),pres[0].size());
@@ -643,7 +686,7 @@ static void directReplayRaw(){
     rig.finish();checkClean();
 }
 static void streamTests(bool threadsOnly){
-    lifetimeAndIdentity();stateKnownUnknown();locksPreserveBytes();shadowCap();queriesAndSyncCensus();resetAndShutdown();directReplayRaw();redundantFiltering();renderTargetResetsViewport();textureShadows();statsLine();childrenOutliveTheDevice();queryProbeAndDeadQuery();initFailureFallback();cursorAndForeignThread();nestedSyncInPump();upDrawsAndBackpressure();snapshotTriggers();
+    lifetimeAndIdentity();stateKnownUnknown();locksPreserveBytes();shadowCap();queriesAndSyncCensus();resetAndShutdown();directReplayRaw();redundantFiltering();renderTargetResetsViewport();textureShadows();statsLine();childrenOutliveTheDevice();queryProbeAndDeadQuery();initFailureFallback();cursorHandling();nestedSyncInPump();upDrawsAndBackpressure();snapshotTriggers();
     equivalence(20000,12345);equivalence(20000,987654321);
     (void)threadsOnly;
 }

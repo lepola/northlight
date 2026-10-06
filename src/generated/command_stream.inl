@@ -31,38 +31,38 @@ enum class Cmd : std::uint16_t {
     EndStateBlock, CreateAdditionalSwapChain, UnlockBuffer, UnlockRect, UnlockBox, DrawPrimitiveUP,
     DrawIndexedPrimitiveUP, SyncGetData, SyncLock, SyncUnlock, SyncCreate, SyncReset,
     SyncRelease, SyncUpDraw, SyncInit, Device_TestCooperativeLevel, Device_GetAvailableTextureMem, Device_EvictManagedResources,
-    Device_GetDirect3D, Device_GetDeviceCaps, Device_GetDisplayMode, Device_GetCreationParameters, Device_SetCursorProperties, Device_SetCursorPosition,
-    Device_ShowCursor, Device_GetSwapChain, Device_GetNumberOfSwapChains, Device_GetRasterStatus, Device_SetDialogBoxMode, Device_SetGammaRamp,
-    Device_GetGammaRamp, Device_UpdateSurface, Device_UpdateTexture, Device_GetRenderTargetData, Device_GetFrontBufferData, Device_StretchRect,
-    Device_ColorFill, Device_SetRenderTarget, Device_GetRenderTarget, Device_SetDepthStencilSurface, Device_GetDepthStencilSurface, Device_BeginScene,
-    Device_EndScene, Device_Clear, Device_SetTransform, Device_GetTransform, Device_MultiplyTransform, Device_SetViewport,
-    Device_GetViewport, Device_SetMaterial, Device_GetMaterial, Device_SetLight, Device_GetLight, Device_LightEnable,
-    Device_GetLightEnable, Device_SetClipPlane, Device_GetClipPlane, Device_SetRenderState, Device_GetRenderState, Device_SetClipStatus,
-    Device_GetClipStatus, Device_GetTexture, Device_SetTexture, Device_GetTextureStageState, Device_SetTextureStageState, Device_GetSamplerState,
-    Device_SetSamplerState, Device_ValidateDevice, Device_SetPaletteEntries, Device_GetPaletteEntries, Device_SetCurrentTexturePalette, Device_GetCurrentTexturePalette,
-    Device_SetScissorRect, Device_GetScissorRect, Device_SetSoftwareVertexProcessing, Device_GetSoftwareVertexProcessing, Device_SetNPatchMode, Device_GetNPatchMode,
-    Device_DrawPrimitive, Device_DrawIndexedPrimitive, Device_ProcessVertices, Device_SetVertexDeclaration, Device_GetVertexDeclaration, Device_SetFVF,
-    Device_GetFVF, Device_SetVertexShader, Device_GetVertexShader, Device_SetVertexShaderConstantF, Device_GetVertexShaderConstantF, Device_SetVertexShaderConstantI,
-    Device_GetVertexShaderConstantI, Device_SetVertexShaderConstantB, Device_GetVertexShaderConstantB, Device_SetStreamSource, Device_GetStreamSource, Device_SetStreamSourceFreq,
-    Device_GetStreamSourceFreq, Device_SetIndices, Device_GetIndices, Device_SetPixelShader, Device_GetPixelShader, Device_SetPixelShaderConstantF,
-    Device_GetPixelShaderConstantF, Device_SetPixelShaderConstantI, Device_GetPixelShaderConstantI, Device_SetPixelShaderConstantB, Device_GetPixelShaderConstantB, Device_DrawRectPatch,
-    Device_DrawTriPatch, Device_DeletePatch, SwapChain_GetFrontBufferData, SwapChain_GetRasterStatus, SwapChain_GetDisplayMode, SwapChain_GetDevice,
-    SwapChain_GetPresentParameters, VertexBuffer_GetDevice, VertexBuffer_SetPrivateData, VertexBuffer_GetPrivateData, VertexBuffer_FreePrivateData, VertexBuffer_SetPriority,
-    VertexBuffer_GetPriority, VertexBuffer_PreLoad, VertexBuffer_GetType, VertexBuffer_GetDesc, IndexBuffer_GetDevice, IndexBuffer_SetPrivateData,
-    IndexBuffer_GetPrivateData, IndexBuffer_FreePrivateData, IndexBuffer_SetPriority, IndexBuffer_GetPriority, IndexBuffer_PreLoad, IndexBuffer_GetType,
-    IndexBuffer_GetDesc, Surface_GetDevice, Surface_SetPrivateData, Surface_GetPrivateData, Surface_FreePrivateData, Surface_SetPriority,
-    Surface_GetPriority, Surface_PreLoad, Surface_GetType, Surface_GetDesc, Surface_GetDC, Surface_ReleaseDC,
-    Texture_GetDevice, Texture_SetPrivateData, Texture_GetPrivateData, Texture_FreePrivateData, Texture_SetPriority, Texture_GetPriority,
-    Texture_PreLoad, Texture_GetType, Texture_SetLOD, Texture_GetLOD, Texture_GetLevelCount, Texture_SetAutoGenFilterType,
-    Texture_GetAutoGenFilterType, Texture_GenerateMipSubLevels, Texture_GetLevelDesc, Texture_AddDirtyRect, CubeTexture_GetDevice, CubeTexture_SetPrivateData,
-    CubeTexture_GetPrivateData, CubeTexture_FreePrivateData, CubeTexture_SetPriority, CubeTexture_GetPriority, CubeTexture_PreLoad, CubeTexture_GetType,
-    CubeTexture_SetLOD, CubeTexture_GetLOD, CubeTexture_GetLevelCount, CubeTexture_SetAutoGenFilterType, CubeTexture_GetAutoGenFilterType, CubeTexture_GenerateMipSubLevels,
-    CubeTexture_GetLevelDesc, CubeTexture_AddDirtyRect, VolumeTexture_GetDevice, VolumeTexture_SetPrivateData, VolumeTexture_GetPrivateData, VolumeTexture_FreePrivateData,
-    VolumeTexture_SetPriority, VolumeTexture_GetPriority, VolumeTexture_PreLoad, VolumeTexture_GetType, VolumeTexture_SetLOD, VolumeTexture_GetLOD,
-    VolumeTexture_GetLevelCount, VolumeTexture_SetAutoGenFilterType, VolumeTexture_GetAutoGenFilterType, VolumeTexture_GenerateMipSubLevels, VolumeTexture_GetLevelDesc, VolumeTexture_AddDirtyBox,
-    Volume_GetDevice, Volume_SetPrivateData, Volume_GetPrivateData, Volume_FreePrivateData, Volume_GetDesc, VertexShader_GetDevice,
-    VertexShader_GetFunction, PixelShader_GetDevice, PixelShader_GetFunction, VertexDeclaration_GetDevice, VertexDeclaration_GetDeclaration, StateBlock_GetDevice,
-    StateBlock_Capture, StateBlock_Apply, Query_GetDevice, Query_GetType, Query_GetDataSize, Query_Issue,
+    Device_GetDirect3D, Device_GetDeviceCaps, Device_GetDisplayMode, Device_GetCreationParameters, Device_SetCursorProperties, Device_GetSwapChain,
+    Device_GetNumberOfSwapChains, Device_GetRasterStatus, Device_SetDialogBoxMode, Device_SetGammaRamp, Device_GetGammaRamp, Device_UpdateSurface,
+    Device_UpdateTexture, Device_GetRenderTargetData, Device_GetFrontBufferData, Device_StretchRect, Device_ColorFill, Device_SetRenderTarget,
+    Device_GetRenderTarget, Device_SetDepthStencilSurface, Device_GetDepthStencilSurface, Device_BeginScene, Device_EndScene, Device_Clear,
+    Device_SetTransform, Device_GetTransform, Device_MultiplyTransform, Device_SetViewport, Device_GetViewport, Device_SetMaterial,
+    Device_GetMaterial, Device_SetLight, Device_GetLight, Device_LightEnable, Device_GetLightEnable, Device_SetClipPlane,
+    Device_GetClipPlane, Device_SetRenderState, Device_GetRenderState, Device_SetClipStatus, Device_GetClipStatus, Device_GetTexture,
+    Device_SetTexture, Device_GetTextureStageState, Device_SetTextureStageState, Device_GetSamplerState, Device_SetSamplerState, Device_ValidateDevice,
+    Device_SetPaletteEntries, Device_GetPaletteEntries, Device_SetCurrentTexturePalette, Device_GetCurrentTexturePalette, Device_SetScissorRect, Device_GetScissorRect,
+    Device_SetSoftwareVertexProcessing, Device_GetSoftwareVertexProcessing, Device_SetNPatchMode, Device_GetNPatchMode, Device_DrawPrimitive, Device_DrawIndexedPrimitive,
+    Device_ProcessVertices, Device_SetVertexDeclaration, Device_GetVertexDeclaration, Device_SetFVF, Device_GetFVF, Device_SetVertexShader,
+    Device_GetVertexShader, Device_SetVertexShaderConstantF, Device_GetVertexShaderConstantF, Device_SetVertexShaderConstantI, Device_GetVertexShaderConstantI, Device_SetVertexShaderConstantB,
+    Device_GetVertexShaderConstantB, Device_SetStreamSource, Device_GetStreamSource, Device_SetStreamSourceFreq, Device_GetStreamSourceFreq, Device_SetIndices,
+    Device_GetIndices, Device_SetPixelShader, Device_GetPixelShader, Device_SetPixelShaderConstantF, Device_GetPixelShaderConstantF, Device_SetPixelShaderConstantI,
+    Device_GetPixelShaderConstantI, Device_SetPixelShaderConstantB, Device_GetPixelShaderConstantB, Device_DrawRectPatch, Device_DrawTriPatch, Device_DeletePatch,
+    SwapChain_GetFrontBufferData, SwapChain_GetRasterStatus, SwapChain_GetDisplayMode, SwapChain_GetDevice, SwapChain_GetPresentParameters, VertexBuffer_GetDevice,
+    VertexBuffer_SetPrivateData, VertexBuffer_GetPrivateData, VertexBuffer_FreePrivateData, VertexBuffer_SetPriority, VertexBuffer_GetPriority, VertexBuffer_PreLoad,
+    VertexBuffer_GetType, VertexBuffer_GetDesc, IndexBuffer_GetDevice, IndexBuffer_SetPrivateData, IndexBuffer_GetPrivateData, IndexBuffer_FreePrivateData,
+    IndexBuffer_SetPriority, IndexBuffer_GetPriority, IndexBuffer_PreLoad, IndexBuffer_GetType, IndexBuffer_GetDesc, Surface_GetDevice,
+    Surface_SetPrivateData, Surface_GetPrivateData, Surface_FreePrivateData, Surface_SetPriority, Surface_GetPriority, Surface_PreLoad,
+    Surface_GetType, Surface_GetDesc, Surface_GetDC, Surface_ReleaseDC, Texture_GetDevice, Texture_SetPrivateData,
+    Texture_GetPrivateData, Texture_FreePrivateData, Texture_SetPriority, Texture_GetPriority, Texture_PreLoad, Texture_GetType,
+    Texture_SetLOD, Texture_GetLOD, Texture_GetLevelCount, Texture_SetAutoGenFilterType, Texture_GetAutoGenFilterType, Texture_GenerateMipSubLevels,
+    Texture_GetLevelDesc, Texture_AddDirtyRect, CubeTexture_GetDevice, CubeTexture_SetPrivateData, CubeTexture_GetPrivateData, CubeTexture_FreePrivateData,
+    CubeTexture_SetPriority, CubeTexture_GetPriority, CubeTexture_PreLoad, CubeTexture_GetType, CubeTexture_SetLOD, CubeTexture_GetLOD,
+    CubeTexture_GetLevelCount, CubeTexture_SetAutoGenFilterType, CubeTexture_GetAutoGenFilterType, CubeTexture_GenerateMipSubLevels, CubeTexture_GetLevelDesc, CubeTexture_AddDirtyRect,
+    VolumeTexture_GetDevice, VolumeTexture_SetPrivateData, VolumeTexture_GetPrivateData, VolumeTexture_FreePrivateData, VolumeTexture_SetPriority, VolumeTexture_GetPriority,
+    VolumeTexture_PreLoad, VolumeTexture_GetType, VolumeTexture_SetLOD, VolumeTexture_GetLOD, VolumeTexture_GetLevelCount, VolumeTexture_SetAutoGenFilterType,
+    VolumeTexture_GetAutoGenFilterType, VolumeTexture_GenerateMipSubLevels, VolumeTexture_GetLevelDesc, VolumeTexture_AddDirtyBox, Volume_GetDevice, Volume_SetPrivateData,
+    Volume_GetPrivateData, Volume_FreePrivateData, Volume_GetDesc, VertexShader_GetDevice, VertexShader_GetFunction, PixelShader_GetDevice,
+    PixelShader_GetFunction, VertexDeclaration_GetDevice, VertexDeclaration_GetDeclaration, StateBlock_GetDevice, StateBlock_Capture, StateBlock_Apply,
+    Query_GetDevice, Query_GetType, Query_GetDataSize, Query_Issue,
     Count
 };
 constexpr bool kDirectReplay=NORTHLIGHT_STREAM_DIRECT!=0;   // replay the DIRECT methods on the extension device (see DIRECT in the generator)
@@ -118,8 +118,6 @@ inline const char* cmdName(Cmd c) {
     case Cmd::Device_GetDisplayMode: return "Device::GetDisplayMode";
     case Cmd::Device_GetCreationParameters: return "Device::GetCreationParameters";
     case Cmd::Device_SetCursorProperties: return "Device::SetCursorProperties";
-    case Cmd::Device_SetCursorPosition: return "Device::SetCursorPosition";
-    case Cmd::Device_ShowCursor: return "Device::ShowCursor";
     case Cmd::Device_GetSwapChain: return "Device::GetSwapChain";
     case Cmd::Device_GetNumberOfSwapChains: return "Device::GetNumberOfSwapChains";
     case Cmd::Device_GetRasterStatus: return "Device::GetRasterStatus";
@@ -371,34 +369,6 @@ inline void record_Device_SetCursorProperties(Queue& q, UINT XHotSpot, UINT YHot
     _a->XHotSpot=XHotSpot;
     _a->YHotSpot=YHotSpot;
     _a->pCursorBitmap=pCursorBitmap;
-    q.commit();
-}
-struct Args_Device_SetCursorPosition {
-    int X;
-    int Y;
-    DWORD Flags;
-};
-inline void record_Device_SetCursorPosition(Queue& q, int X, int Y, DWORD Flags) {
-    constexpr std::size_t _base=((sizeof(Args_Device_SetCursorPosition)+7u)&~7u);
-    const std::size_t _total=_base;
-    if(_total>MaxInlinePayload){own(q.stats.oversizeDrops);return;}   // a garbage count: D3D would fail the call; drop it and count
-    auto* _a=static_cast<Args_Device_SetCursorPosition*>(q.reserve((std::uint16_t)Cmd::Device_SetCursorPosition,(std::uint32_t)_total));
-    std::uint32_t _o=(std::uint32_t)_base;(void)_o;
-    _a->X=X;
-    _a->Y=Y;
-    _a->Flags=Flags;
-    q.commit();
-}
-struct Args_Device_ShowCursor {
-    WINBOOL bShow;
-};
-inline void record_Device_ShowCursor(Queue& q, WINBOOL bShow) {
-    constexpr std::size_t _base=((sizeof(Args_Device_ShowCursor)+7u)&~7u);
-    const std::size_t _total=_base;
-    if(_total>MaxInlinePayload){own(q.stats.oversizeDrops);return;}   // a garbage count: D3D would fail the call; drop it and count
-    auto* _a=static_cast<Args_Device_ShowCursor*>(q.reserve((std::uint16_t)Cmd::Device_ShowCursor,(std::uint32_t)_total));
-    std::uint32_t _o=(std::uint32_t)_base;(void)_o;
-    _a->bShow=bShow;
     q.commit();
 }
 struct Args_Device_SetDialogBoxMode {
@@ -1354,16 +1324,6 @@ template<class Tr> inline bool dispatchGenerated(const CommandHeader* h, Tr& tr)
     case Cmd::Device_SetCursorProperties: {
         const auto* _a=reinterpret_cast<const Args_Device_SetCursorProperties*>(h+1);const auto* _b=reinterpret_cast<const unsigned char*>(_a);(void)_b;
         tr.result(Cmd::Device_SetCursorProperties,tr.device()->SetCursorProperties(_a->XHotSpot, _a->YHotSpot, tr.inner(_a->pCursorBitmap)));
-        return true;
-    }
-    case Cmd::Device_SetCursorPosition: {
-        const auto* _a=reinterpret_cast<const Args_Device_SetCursorPosition*>(h+1);const auto* _b=reinterpret_cast<const unsigned char*>(_a);(void)_b;
-        tr.device()->SetCursorPosition(_a->X, _a->Y, _a->Flags);
-        return true;
-    }
-    case Cmd::Device_ShowCursor: {
-        const auto* _a=reinterpret_cast<const Args_Device_ShowCursor*>(h+1);const auto* _b=reinterpret_cast<const unsigned char*>(_a);(void)_b;
-        tr.device()->ShowCursor(_a->bShow);
         return true;
     }
     case Cmd::Device_SetDialogBoxMode: {
@@ -2337,7 +2297,6 @@ template<class Tr> inline bool executeSync(SyncCall& sc, Tr& tr) {
     HRESULT STDMETHODCALLTYPE GetDeviceCaps(D3DCAPS9* pCaps) override { return this->local(NORTHLIGHT_STREAM_TAG(Device_GetDeviceCaps), pCaps); } \
     HRESULT STDMETHODCALLTYPE GetDisplayMode(UINT iSwapChain, D3DDISPLAYMODE* pMode) override { return this->syncCall(NORTHLIGHT_STREAM_TAG(Device_GetDisplayMode), iSwapChain, pMode); } \
     HRESULT STDMETHODCALLTYPE GetCreationParameters(D3DDEVICE_CREATION_PARAMETERS* pParameters) override { return this->local(NORTHLIGHT_STREAM_TAG(Device_GetCreationParameters), pParameters); } \
-    HRESULT STDMETHODCALLTYPE SetCursorProperties(UINT XHotSpot, UINT YHotSpot, IDirect3DSurface9* pCursorBitmap) override { ::NorthlightStream::record_Device_SetCursorProperties(this->streamQueue(), XHotSpot, YHotSpot, pCursorBitmap);return D3D_OK; } \
     HRESULT STDMETHODCALLTYPE GetSwapChain(UINT iSwapChain, IDirect3DSwapChain9** pSwapChain) override { return this->local(NORTHLIGHT_STREAM_TAG(Device_GetSwapChain), iSwapChain, pSwapChain); } \
     UINT STDMETHODCALLTYPE GetNumberOfSwapChains() override { return this->local(NORTHLIGHT_STREAM_TAG(Device_GetNumberOfSwapChains)); } \
     HRESULT STDMETHODCALLTYPE GetRasterStatus(UINT iSwapChain, D3DRASTER_STATUS* pRasterStatus) override { return this->syncCall(NORTHLIGHT_STREAM_TAG(Device_GetRasterStatus), iSwapChain, pRasterStatus); } \
