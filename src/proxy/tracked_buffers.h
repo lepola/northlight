@@ -6,6 +6,7 @@
 #include <type_traits>
 #include "capture_buffer_metadata.h"
 #include "mirror_guard.h"
+#include "lock_meter.h"
 
 // Only client-created buffers are wrapped. The real device always receives
 // real resources. Unknown/unwrapped resources return revision 0 (no fast cache).
@@ -119,6 +120,8 @@ template<class T,class Forward> class Buffer final:public Forward {
     // 0.3.180 (D0): the owner device's gate, for the thread census only (buffers take no gate). The
     // buffer holds a device reference, so the gate outlives every call that reports to it.
     MirrorGate* census=nullptr;
+    // 0.3.192 (DXVK3): the size DXVK 3.x charges for a DISCARD of this buffer (DEFAULT|DYNAMIC only: direct-mapped), 0 otherwise.
+    UINT discardBytes=0;
 public:
     Buffer(T* real,IDirect3DDevice9* device,bool index,void(*unsafe)(IDirect3DDevice9*,const char*)=nullptr,MirrorGate* gate=nullptr):Forward(real),owner(device),unsafeAccess(unsafe),census(gate){
         record.raw=real;record.exposed=static_cast<T*>(this);record.object=this;record.index=index;
@@ -130,12 +133,14 @@ public:
             if(index&&SUCCEEDED(real->GetDesc(&desc))&&desc.Size){
                 record.metadata.size=desc.Size;record.metadata.usage=desc.Usage;record.metadata.format=desc.Format;
                 record.metadata.identity=identity(real,true);record.metadata.known=record.metadata.identity!=0;
+                discardBytes=desc.Pool==D3DPOOL_DEFAULT&&(desc.Usage&D3DUSAGE_DYNAMIC)?desc.Size:0;
             }
         }else{
             D3DVERTEXBUFFER_DESC desc={};
             if(!index&&SUCCEEDED(real->GetDesc(&desc))&&desc.Size){
                 record.metadata.size=desc.Size;record.metadata.usage=desc.Usage;record.metadata.format=desc.Format;
                 record.metadata.identity=identity(real,false);record.metadata.known=record.metadata.identity!=0;
+                discardBytes=desc.Pool==D3DPOOL_DEFAULT&&(desc.Usage&D3DUSAGE_DYNAMIC)?desc.Size:0;
             }
         }
         {std::lock_guard<std::mutex> guard(mutex);
@@ -180,6 +185,7 @@ public:
         if(census)census->noteBuffer();
         const bool wasUnsafe=record.revision.load()==0;
         if(!(flags&D3DLOCK_READONLY))record.revision=clock.fetch_add(1);
+        if((flags&D3DLOCK_DISCARD)&&discardBytes)NorthlightLockMeter::discard(NorthlightLockMeter::Game,discardBytes);
         record.locks.fetch_add(1);
         HRESULT hr=this->real->Lock(offset,size,data,flags);
         if(FAILED(hr)){

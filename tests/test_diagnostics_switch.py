@@ -20,6 +20,7 @@ GATES=('NorthlightDiagnostics::enabled()','diagnostics()','sampled()','captureSa
 KEEP={
  'LOGGER intervalMs':'indirect: reportLogCost() runs only in the gated MIRROR block',
  'EXTENSION fault':'error','DISABLED:':'error','Resources ':'one-off: resource (re)creation',
+ 'LOCK METER':'one-off startup line and ProcessVertices warning; the interval line runs only from the Diagnostics-gated block of WorldRenderer::endFrame (0.3.192)',
  'VIEWPORT GATE':'capped: first 8','WORLD skipped frame':'capped: first 8 (periodic tail gated)',
  'WORLD skip episode':'capped: first 32 runs of skipped world frames (tail gated; 0.3.169)','WORLD coverage hold':'capped: first 32 hold/retire episodes (tail gated; 0.3.169)',
  'FIRST EFFECT FRAME':'one-off','MIRROR mismatch':'error (the audit itself is functional and ungated)',

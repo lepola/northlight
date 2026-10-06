@@ -70,7 +70,7 @@ void allocator(){
 void partialAndOrdering(){
     IDirect3DDevice9 d;Cache cache(30*sizeof(Vertex));Owner a=triangle(10),b=triangle(20),c=triangle(30);
     std::vector<Owner> active={a,b};std::vector<uint32_t> point,directional;
-    cache.beginFrame();assert(cache.update(&d,active,admit,convert)==S_OK);assert(cache.uploadedBytes==6*sizeof(Vertex));assert(d.driver.locks==1&&d.driver.discards==1);
+    cache.beginFrame();assert(cache.update(&d,active,admit,convert)==S_OK);assert(cache.uploadedBytes==6*sizeof(Vertex));assert(d.driver.locks==1&&d.driver.discards==0); /* 0.3.192: a fresh arena's first lock is NOOVERWRITE */
     assert(cache.indices(active,1,allIndices,point,directional));assert(point==directional);verify(cache,active,point);draw(cache,point);
     cache.beginFrame();assert(cache.update(&d,active,admit,convert)==S_OK);assert(!cache.uploadedBytes&&cache.reusedVertices==6);assert(d.driver.locks==1);
     active={c,b};cache.beginFrame();assert(cache.update(&d,active,admit,convert)==S_OK);assert(cache.uploadedBytes==3*sizeof(Vertex)&&cache.reusedVertices==3);
@@ -95,13 +95,13 @@ void retirement(bool queries,bool issue=true){
     d.driver.completed=d.driver.submitted;Owner e=triangle(4);active={b,e};c.reset();
     cache.beginFrame();assert(cache.update(&d,active,admit,convert)==S_OK);assert(cache.indices(active,1,allIndices,p,q));verify(cache,active,p);
     if(queries&&issue){assert(!cache.rollovers);assert(p[3]==0);assert(cache.uploadedBytes==3*sizeof(Vertex));}
-    else{assert(cache.rollovers==1&&d.driver.discards==2);assert(cache.uploadedBytes==6*sizeof(Vertex));}
+    else{assert(cache.rollovers==1&&d.driver.discards==1);assert(cache.uploadedBytes==6*sizeof(Vertex));}
 }
 void busyRolloverAndFailure(){
     IDirect3DDevice9 d;Cache cache(9*sizeof(Vertex));Owner a=triangle(1),b=triangle(2),c=triangle(3),e=triangle(4);std::vector<Owner> active={a,b};std::vector<uint32_t> p,q;
     cache.beginFrame();assert(cache.update(&d,active,admit,convert)==S_OK);assert(cache.indices(active,1,allIndices,p,q));draw(cache,p);
     active={b,c};a.reset();cache.beginFrame();assert(cache.update(&d,active,admit,convert)==S_OK);assert(cache.indices(active,1,allIndices,p,q));draw(cache,p);
-    active={b,e};c.reset();cache.beginFrame();assert(cache.update(&d,active,admit,convert)==S_OK);assert(cache.rollovers==1&&d.driver.discards==2);assert(cache.indices(active,1,allIndices,p,q));verify(cache,active,p);
+    active={b,e};c.reset();cache.beginFrame();assert(cache.update(&d,active,admit,convert)==S_OK);assert(cache.rollovers==1&&d.driver.discards==1);assert(cache.indices(active,1,allIndices,p,q));verify(cache,active,p);
     Owner f=triangle(5);active={b,f};d.driver.failLock=true;cache.beginFrame();assert(cache.update(&d,active,admit,convert)==E_FAIL);d.driver.failLock=false;
     cache.beginFrame();assert(cache.update(&d,active,admit,convert)==S_OK);assert(cache.uploadedBytes==6*sizeof(Vertex));assert(cache.indices(active,1,allIndices,p,q));verify(cache,active,p);
     Owner g=triangle(6);active={b,g};d.driver.failUnlock=true;cache.beginFrame();assert(cache.update(&d,active,admit,convert)==E_FAIL);d.driver.failUnlock=false;
@@ -127,7 +127,7 @@ void longWalk(){
         assert(cache.indices(active,1,allIndices,p,q));verify(cache,active,p);draw(cache,p);
         assert(!cache.rollovers&&cache.bytes()==128*3*sizeof(Vertex));
     }
-    assert(d.driver.discards==1&&d.driver.queries>0);
+    assert(d.driver.discards==0&&d.driver.queries>0);
 }
 // 0.3.176 (U1a/U1b): prepare()+write() against the 0.3.175 indices() concatenation, on twin caches
 // driven identically: new owners, retirements, order changes, repeated owners, generation changes,

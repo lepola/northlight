@@ -6,6 +6,8 @@
 // It neither changes game geometry nor replays draws.
 // Caller must first identify an audited Terrain shader (not DetailDoodad).
 #include <d3d9.h>
+#include "upload_lock.h"
+#include "lock_meter_readback.h"
 #include "vertex_declaration_cache.h"
 #include <algorithm>
 #include <array>
@@ -505,7 +507,7 @@ public:
         if(chargedBytes+indexBytes>limits.maxReadBytesPerFrame)return reject(RejectReason::ByteBudget);
         scratchRawIndices.resize(size_t(indexBytes));
         auto& indices=scratchIndices;indices.resize(static_cast<std::size_t>(indexCount));
-        void* raw=nullptr;hr=ib.p->Lock(UINT(indexOffset),UINT(indexBytes),&raw,D3DLOCK_READONLY);
+        void* raw=nullptr;hr=ib.p->Lock(UINT(indexOffset),UINT(indexBytes),&raw,NorthlightUpload::readBackLock());if(!FAILED(hr))NorthlightLockMeter::readBack(ib.p,indexBytes);
         if(FAILED(hr))return reject(RejectReason::IndexLock,hr);
         if(!raw){ib.p->Unlock();return reject(RejectReason::IndexLock,E_POINTER);}
         chargedBytes+=indexBytes;readBytes+=indexBytes;
@@ -533,7 +535,7 @@ public:
         if(lastByte>vd.Size||!span)return reject(RejectReason::VertexRange);
         if(chargedBytes+span>limits.maxReadBytesPerFrame)return reject(RejectReason::ByteBudget);
         scratchRawVertices.resize(size_t(span));
-        raw=nullptr;hr=vb.p->Lock(UINT(firstByte),UINT(span),&raw,D3DLOCK_READONLY);
+        raw=nullptr;hr=vb.p->Lock(UINT(firstByte),UINT(span),&raw,NorthlightUpload::readBackLock());if(!FAILED(hr))NorthlightLockMeter::readBack(vb.p,span);
         if(FAILED(hr))return reject(RejectReason::VertexLock,hr);
         if(!raw){vb.p->Unlock();return reject(RejectReason::VertexLock,E_POINTER);}
         chargedBytes+=span;readBytes+=span;

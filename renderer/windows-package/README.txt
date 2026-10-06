@@ -180,6 +180,13 @@ The file can be saved as UTF-8, ANSI or Notepad's Unicode.
 WINDOWS TEST
 Before a test or a problem report, set Diagnostics=1 in northlight-quality.ini
 (the default is 0); the log then contains the periodic statistics and timings.
+The LOCK METER line (every 2 s) shows how much buffer data the game and the
+renderer lock per frame, which DXVK 3 counts towards its upload throttling:
+discardKiB/frame and stagingKiB/frame (avg, max), over10MiB = frames above
+10 MiB, the share of each source (replayVB, replayIB, liveIB, arena, instances,
+game), ring = the renderer's upload ring wraps (fenceReuse = no DISCARD needed),
+readback = the renderer's read-only locks of game buffers (dynamic, defaultStatic,
+other) with the lock flags used (flag=0x1010 on DXVK 3, 0x10 otherwise).
 1. Check the start of the new run's northlight-renderer.log file:
    Northlight renderer <version>; d3d9.dll proxy ... backend=dxvk ... loaded=1 error=0
    The backend path must point to renderer-backends\dxvk\dxvk_d3d9.dll.

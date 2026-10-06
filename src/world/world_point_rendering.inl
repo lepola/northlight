@@ -432,7 +432,7 @@
                    !pointCheck(d->SetStreamSource(0,liveTerrainGPU.vertices(),0,sizeof(NorthlightGI::WorldVertex)),"cube live vertices")||
                    !pointCheck(d->SetIndices(liveIndicesGPU),"cube live indices"))return false;
                 for(size_t index:pointLiveCandidates[face]){const auto& batch=pointLiveBatches[index];
-                    if(!pointCheck(d->DrawIndexedPrimitive(D3DPT_TRIANGLELIST,0,0,liveTerrainGPU.vertexCapacity(),batch.start,batch.count),"cube live draw"))return false;++pointDraws;
+                    if(!pointCheck(d->DrawIndexedPrimitive(D3DPT_TRIANGLELIST,0,0,liveTerrainGPU.vertexCapacity(),UINT(liveIndexBase+batch.start),batch.count),"cube live draw"))return false;++pointDraws;
                 }
             }
             if(withReplays){

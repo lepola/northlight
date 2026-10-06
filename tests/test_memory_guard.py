@@ -159,7 +159,7 @@ int main(){
 }
 '''
 
-gpu_stub=stub.replace('struct IDirect3DDevice9{','constexpr unsigned D3DPOOL_DEFAULT=0,D3DLOCK_NOOVERWRITE=0x1000;\nstruct IDirect3DDevice9{\nvirtual HRESULT CreateVertexBuffer(UINT,DWORD,UINT,unsigned,IDirect3DVertexBuffer9**,void*)=0;\nvirtual HRESULT CreateIndexBuffer(UINT,DWORD,D3DFORMAT,unsigned,IDirect3DIndexBuffer9**,void*)=0;')
+gpu_stub=stub.replace('struct IDirect3DDevice9{','struct IDirect3DDevice9{\nvirtual HRESULT CreateVertexBuffer(UINT,DWORD,UINT,unsigned,IDirect3DVertexBuffer9**,void*)=0;\nvirtual HRESULT CreateIndexBuffer(UINT,DWORD,D3DFORMAT,unsigned,IDirect3DIndexBuffer9**,void*)=0;')
 gpu=r'''
 #include "replay_gpu_cache.h"
 #include <chrono>

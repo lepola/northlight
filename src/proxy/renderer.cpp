@@ -27,6 +27,8 @@
 #include "world_draw_domain.h"
 #include "extension_guard.h"
 #include "backend_policy.h"
+#include "upload_lock.h"
+#include "lock_meter.h"
 #include "dxvk_compatibility.h"
 #include "backend_loader.h"
 #include "frame_intervals.h"
@@ -1153,6 +1155,8 @@ public:
     }
     HRESULT STDMETHODCALLTYPE ProcessVertices(UINT src,UINT dest,UINT count,IDirect3DVertexBuffer9* buffer,IDirect3DVertexDeclaration9* decl,DWORD flags) override { Guard mirrorLock(mirrorState.gate);
         if(buffer&&!NorthlightTrackedBuffers::isWrapped(buffer))mirrorState.disable("raw ProcessVertices buffer");
+        // 0.3.192 (DXVK3): NOOVERWRITE read-backs skip the needsReadback wait of a buffer ProcessVertices wrote; the game is not expected to use it.
+        if(NorthlightLockMeter::processVertices()&&NorthlightUpload::ReadBackNoOverwrite.load(std::memory_order_relaxed))logf("LOCK METER warning: ProcessVertices called while the NOOVERWRITE read-back flag is on (first call src=%u dest=%u count=%u)",src,dest,count);
         if(gateFrame)++gateCounts.processVertices; /* 0.3.154: up to two generations */
         NorthlightTrackedBuffers::written(buffer);
         HRESULT hr=ext->ProcessVertices(src,dest,count,NorthlightTrackedBuffers::unwrap(buffer),mirrorResources.unwrap(decl),flags);
@@ -1408,6 +1412,9 @@ static HMODULE backend() {
     logHostExecutable(sys.selfPath);
     logf("BACKEND selected=%ls runtime=%s rules=%s BackendPath=%ls fallback=%u",module?last.path.c_str():L"(none)",
          last.info.dxvk?(last.info.dxvkVersion.empty()?"DXVK (unknown version)":last.info.dxvkVersion.c_str()):"non-DXVK",NorthlightBackend::name(selectedBackend),overridden.empty()?L"(default)":overridden.c_str(),unsigned(result.fallback));
+    // 0.3.192 (DXVK3): the NOOVERWRITE read-back flag only for the backend that actually loaded and is DXVK >= 3 (see upload_lock.h).
+    NorthlightUpload::ReadBackNoOverwrite.store(module&&!result.fallback&&last.info.dxvk&&NorthlightBackend::dxvkMajor(last.info.dxvkVersion)>=3,std::memory_order_relaxed);
+    logf("LOCK METER read-back lock flags readBackLock=0x%x (NOOVERWRITE only on a loaded DXVK >= 3 backend)",unsigned(NorthlightUpload::readBackLock()));
     if(result.fallback&&module)logf("BACKEND SELF-LOAD REFUSED: the configured backend resolves to this proxy (or another Northlight build); fell back to the system d3d9 runtime. Fix northlight-renderer.ini Backend/BackendPath.");
     else if(result.fallback)logf("BACKEND SELF-LOAD REFUSED: the configured backend resolves to this proxy (or another Northlight build) and the system d3d9 fallback FAILED too (expected under Wine with d3d9=n: the system d3d9 is builtin; the fallback is Windows-only). Fix northlight-renderer.ini Backend/BackendPath.");
     if(module&&last.info.dxvk&&!NorthlightBackend::isPackagedDxvk(configured))

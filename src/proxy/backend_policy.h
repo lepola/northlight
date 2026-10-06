@@ -27,6 +27,13 @@ inline const char* name(Kind k) {
     switch(k){case Kind::Native:return "native";case Kind::Dxvk:return "dxvk";
     case Kind::Dxvk2:return "dxvk2";case Kind::Legacy:return "legacy";default:return "invalid";}
 }
+// 0.3.192 (DXVK3): the major number of a DXVK version string ("v3.1.1", "2.7.1"); unknown, empty or unparsable = 0.
+inline int dxvkMajor(const std::string& version){
+    size_t i=0;while(i<version.size()&&(version[i]==' '||version[i]=='v'||version[i]=='V'))++i;
+    int major=0;bool any=false;
+    for(;i<version.size()&&version[i]>='0'&&version[i]<='9';++i){any=true;major=major*10+(version[i]-'0');if(major>9999)return 0;}
+    return any?major:0;
+}
 // The two DXVK builds the Windows package ships (3.1.1 as dxvk, 2.7.1 as dxvk2): same compat defaults and rules.
 inline bool isPackagedDxvk(Kind k){return k==Kind::Dxvk||k==Kind::Dxvk2;}
 // Case-folded, '/'-normalised path for identity comparisons of Windows paths.

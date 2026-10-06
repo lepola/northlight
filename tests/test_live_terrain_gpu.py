@@ -11,7 +11,7 @@ import subprocess,tempfile
 HERE=Path(__file__).resolve().parent
 w=fp.src('world_renderer.h').read_text();pr=fp.src('world_point_rendering.inl').read_text()
 up=w[w.index('    bool uploadLiveTerrain(){'):w.index('    // Win32 wide-path read')]
-reset='liveTerrainIndexCount=liveDirectionalIndexCount=0;liveTerrainChunks.clear();uploadedTerrain.clear();return true;'
+reset='liveTerrainIndexCount=liveDirectionalIndexCount=0;liveIndexBase=0;liveTerrainChunks.clear();uploadedTerrain.clear();return true;'
 release=w[w.index('    void releaseGPU(){'):]
 release=release[:release.index('\n')]
 checks={
@@ -19,14 +19,14 @@ checks={
     and 'size_t liveTerrainIndexCount=0,liveDirectionalIndexCount=0;' in w,
  'S_FALSE and index-growth refusal keep the 0.3.175 reset':up.count(reset)==2
     and 'if(terrainResult==S_FALSE){' in up and 'if(!admitsGrowth("live-terrain-index-growth",ibCapacity)){\n                '+reset in up,
- 'totals before the Lock, the same Lock(DISCARD) size, lists written inside it, Unlock right after':
+ 'totals before the Lock, the same ring Lock size, lists written inside it, Unlock right after':
     'UINT ib=UINT((liveTerrainIndexCount+liveDirectionalIndexCount)*sizeof(uint32_t));' in up
-    and 'if(!check(liveIndicesGPU->Lock(0,ib,&data,D3DLOCK_DISCARD),"live index upload"))return false;\n        liveTerrainGPU.write(static_cast<uint32_t*>(data));\n        if(!check(liveIndicesGPU->Unlock(),"live index unlock"))return false;' in up
+    and 'if(!check(liveIndicesGPU->Lock(slot.offset,ib,&data,slot.flags),"live index upload"))return false;\n        liveTerrainGPU.write(static_cast<uint32_t*>(data));\n        if(!check(liveIndicesGPU->Unlock(),"live index unlock"))return false;' in up
     and up.index('liveTerrainGPU.prepare(')<up.index('->Lock('),
  'membership failure and the empty case as before':'},liveTerrainIndexCount,liveDirectionalIndexCount))return check(E_FAIL,"live terrain arena membership");' in up
     and 'if(!liveTerrainIndexCount){uploadedTerrain=frameTerrain;liveTerrainGeneration=meshGeneration;return true;}' in up,
  'readers use the counts':'if(liveTerrainIndexCount){' in pr and 'if(liveDirectionalIndexCount){' in w
-    and 'UINT(liveTerrainIndexCount),UINT(liveDirectionalIndexCount/3)),"live terrain shadow")' in w,
+    and 'UINT(liveIndexBase+liveTerrainIndexCount),UINT(liveDirectionalIndexCount/3)),"live terrain shadow")' in w,
  'bitmap filled from the committed set at the swap, dropped with the set':'std::swap(fixedTerrain,committedFixed);std::swap(uploadedStaticOwners,committedOwners);fixedTerrainBits.assign(fixedTerrain.get());' in w
     and 'fixedTerrain.reset();fixedTerrainBits.reset();' in release and w.count('fixedTerrainBits.assign(')==1,
  'bitmap only for the set it describes, the set otherwise':'const auto& fixed=fixedTerrainChunks();const bool bits=fixedTerrainBits.source()==&fixed;' in up

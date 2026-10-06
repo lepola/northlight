@@ -8,7 +8,7 @@ import ast,subprocess,tempfile
 HERE=Path(__file__).resolve().parent
 def literal(file,key):return next(ast.literal_eval(n.value) for n in ast.parse(file.read_text()).body if isinstance(n,ast.Assign) and any(getattr(t,'id','')==key for t in n.targets))
 stub=literal(HERE/'test_terrain_snapshot.py','stub')
-stub=stub.replace('struct IDirect3DDevice9{','constexpr unsigned D3DPOOL_DEFAULT=0,D3DLOCK_NOOVERWRITE=0x1000;\nstruct IDirect3DDevice9{\nvirtual HRESULT CreateVertexBuffer(UINT,DWORD,UINT,unsigned,IDirect3DVertexBuffer9**,void*)=0;\nvirtual HRESULT CreateIndexBuffer(UINT,DWORD,D3DFORMAT,unsigned,IDirect3DIndexBuffer9**,void*)=0;')
+stub=stub.replace('struct IDirect3DDevice9{','constexpr HRESULT S_OK=0;constexpr unsigned D3DLOCK_DISCARD=8192,D3DISSUE_END=1;enum D3DQUERYTYPE{D3DQUERYTYPE_EVENT=8};\nstruct IDirect3DQuery9:IRef{virtual HRESULT Issue(DWORD)=0;virtual HRESULT GetData(void*,DWORD,DWORD)=0;};\nstruct IDirect3DDevice9{\nvirtual HRESULT CreateQuery(D3DQUERYTYPE,IDirect3DQuery9**)=0;\nvirtual HRESULT CreateVertexBuffer(UINT,DWORD,UINT,unsigned,IDirect3DVertexBuffer9**,void*)=0;\nvirtual HRESULT CreateIndexBuffer(UINT,DWORD,D3DFORMAT,unsigned,IDirect3DIndexBuffer9**,void*)=0;')
 body=r'''
 #include "replay_gpu_cache.h"
 #include "replay_gpu_batches.h"
@@ -30,8 +30,11 @@ template<class T,class D>struct Buffer:T{
   *p=data.data()+o;return D3D_OK;}
  HRESULT Unlock()override{return D3D_OK;}
 };
+struct FakeQuery:IDirect3DQuery9{unsigned refs=1;unsigned AddRef()override{return ++refs;}unsigned Release()override{auto n=--refs;if(!n)delete this;return n;}
+ HRESULT Issue(DWORD)override{return D3D_OK;}HRESULT GetData(void*,DWORD,DWORD)override{return S_OK;}}; /* every issued query is already complete */
 struct Device:IDirect3DDevice9{
  unsigned calls=0,failAt=0;bool lockFail=false;
+ HRESULT CreateQuery(D3DQUERYTYPE,IDirect3DQuery9** out)override{*out=new FakeQuery;return D3D_OK;}
  HRESULT CreateVertexBuffer(UINT n,DWORD usage,UINT,unsigned,IDirect3DVertexBuffer9** out,void*)override{if(++calls==failAt)return E_POINTER;auto p=new Buffer<IDirect3DVertexBuffer9,D3DVERTEXBUFFER_DESC>(n);p->fail=lockFail;p->dynamic=usage&D3DUSAGE_DYNAMIC;*out=p;return D3D_OK;}
  HRESULT CreateIndexBuffer(UINT n,DWORD usage,D3DFORMAT,unsigned,IDirect3DIndexBuffer9** out,void*)override{if(++calls==failAt)return E_POINTER;auto p=new Buffer<IDirect3DIndexBuffer9,D3DINDEXBUFFER_DESC>(n);p->fail=lockFail;p->dynamic=usage&D3DUSAGE_DYNAMIC;*out=p;return D3D_OK;}
  HRESULT GetVertexShaderConstantF(UINT,float*,UINT)override{return E_POINTER;}HRESULT GetVertexDeclaration(IDirect3DVertexDeclaration9**)override{return E_POINTER;}HRESULT GetStreamSourceFreq(UINT,UINT*)override{return E_POINTER;}HRESULT GetStreamSource(UINT,IDirect3DVertexBuffer9**,UINT*,UINT*)override{return E_POINTER;}HRESULT GetIndices(IDirect3DIndexBuffer9**)override{return E_POINTER;}
@@ -71,7 +74,8 @@ struct LARGE_INTEGER {std::int64_t QuadPart=0;};
 bool QueryPerformanceCounter(LARGE_INTEGER* out){out->QuadPart=std::chrono::steady_clock::now().time_since_epoch().count();return true;}
 #include "capture_phase_profile.h"
 #include "streaming_phase_profile.h"
-constexpr DWORD D3DLOCK_DISCARD=8192;
+#include "dynamic_ring.h"
+#include "lock_meter.h"
 namespace NorthlightGeometryMemory {constexpr size_t MiB=1024*1024;}
 void logf(const char*,...){}
 template<class T>void drop(T*& p){if(p)p->Release();p=nullptr;}
@@ -89,7 +93,7 @@ class WorldRenderer {public:
  NorthlightReplayBulk::Layout replayBulkLayout;
  std::vector<std::unique_ptr<Replay>> replays;
  IDirect3DVertexBuffer9* replayVerticesGPU[4]={};IDirect3DIndexBuffer9* replayIndicesGPU=nullptr;
- UINT replayVertexBytes[4]={},replayIndexBytes=0;bool captureSampled=false;
+ UINT replayVertexBytes[4]={},replayIndexBytes=0;NorthlightDynamicRing::Ring replayVertexRing[4],replayIndexRing;bool captureSampled=false;
  NorthlightStreaming::PhaseProfile streamingPhases;unsigned replayCreatedPeak=0;uint64_t replayTimeDeferred=0;uint64_t replayGrowths=0,replayFallbacks=0,replayBudgetOverrides=0;std::vector<size_t> replayTimeDeferredIndices; /* 0.3.138 split timers */
  NorthlightCapturePhases::Stats<2> replayUploadPhases;
  unsigned replayUploadCalls=0,replayUploadFallbacks=0;
@@ -123,9 +127,9 @@ int main(){Device d;auto a=mesh(),b=mesh(480),c=mesh(96);
  // Every draw survives and sees its original bytes, with one shared upload.
  {WorldRenderer world(&d);for(unsigned i=0;i<4096;++i)world.add(a,true);
   assert(world.uploadReplay());world.verify();assert(world.replays.size()==4096);
-  assert(world.replayVertexBytes[0]==a->streams[0].bytes.size());
-  assert(world.replayVertexBytes[1]==a->streams[1].bytes.size());
-  assert(world.replayIndexBytes==a->indices.size()*4);
+  assert(world.replayVertexBytes[0]==(a->streams[0].bytes.empty()?0u:NorthlightDynamicRing::ringCapacity(a->streams[0].bytes.size())));
+  assert(world.replayVertexBytes[1]==(a->streams[1].bytes.empty()?0u:NorthlightDynamicRing::ringCapacity(a->streams[1].bytes.size())));
+  assert(world.replayIndexBytes==NorthlightDynamicRing::ringCapacity(a->indices.size()*4));
   for(auto& p:world.replays)assert(p->offset[0]==0&&p->start==0&&!p->gpuCached);
  }
  assert(alive==0);
@@ -138,7 +142,7 @@ int main(){Device d;auto a=mesh(),b=mesh(480),c=mesh(96);
  // Under hard memory pressure the prefix fit counts UNIQUE bytes; repeated
  // draws referencing its first mesh all survive with their original order.
  {WorldRenderer world(&d);world.add(a,false);assert(world.uploadReplay());world.replays.clear();
-  auto fresh=mesh();world.add(fresh,true);world.add(fresh,true);world.add(fresh,true);world.add(mesh(2400),false);
+  auto fresh=mesh();world.add(fresh,true);world.add(fresh,true);world.add(fresh,true);world.add(mesh(3<<20),false); /* 0.3.192: larger than the ring capacity of the first call */
   world.denyAllGrowth=true;assert(world.uploadReplay());world.verify();assert(world.replays.size()==3);
  }
  assert(alive==0);
@@ -148,7 +152,7 @@ int main(){Device d;auto a=mesh(),b=mesh(480),c=mesh(96);
   assert(world.uploadReplay());world.verify();assert(world.replays[0]->offset[0]==world.replays[2]->offset[0]);
   assert(world.replays[1]->offset[0]!=world.replays[0]->offset[0]&&world.replays[3]->offset[0]!=world.replays[0]->offset[0]);
   world.replays.clear();auto fresh=mesh(672);world.add(fresh,true);world.add(fresh,true);world.add(a,true);
-  assert(world.uploadReplay());world.verify();assert(world.replays[0]->offset[0]==0&&world.replays[1]->offset[0]==0);
+  assert(world.uploadReplay());world.verify();assert(world.replays[0]->offset[0]==world.replayVertexRing[0].current.begin&&world.replays[1]->offset[0]==world.replays[0]->offset[0]); /* 0.3.192: absolute = the ring base of this call + the layout offset 0 */
  }
  assert(alive==0);
  for(bool sampled:{false,true}){WorldRenderer world(&d);world.captureSampled=sampled;
@@ -158,7 +162,7 @@ int main(){Device d;auto a=mesh(),b=mesh(480),c=mesh(96);
   // Mutated/new immutable snapshot falls back without disturbing warm peers.
   auto changed=mesh(336);world.replays.clear();world.add(changed,true);world.add(a,true);assert(world.uploadReplay());world.verify();assert(!world.replays[0]->gpuCached&&world.replays[1]->gpuCached);
   // Optional residency is evicted before the old bulk path can drop a caster.
-  world.forceBulkPressure=true;world.replays.clear();world.add(a,true);world.add(mesh(2400),false);assert(world.uploadReplay());world.verify();assert(world.replays.size()==2&&world.replayGpuCache.bytes()==0);world.forceBulkPressure=false;
+  world.forceBulkPressure=true;world.replays.clear();world.add(a,true);world.add(mesh(3<<20),false);assert(world.uploadReplay());world.verify();assert(world.replays.size()==2&&world.replayGpuCache.bytes()==0);world.forceBulkPressure=false;
   world.replays.clear();world.add(changed,true);assert(world.uploadReplay());world.verify();
   // Optional cache partial failure: old bulk path still uploads all objects.
   world.replays.clear();world.add(changed,true);world.add(b,false);d.failAt=d.calls+2;assert(world.uploadReplay());world.verify();assert(!world.replays[0]->gpuCached);
@@ -183,7 +187,7 @@ int main(){Device d;auto a=mesh(),b=mesh(480),c=mesh(96);
   WorldRenderer world(&d);std::vector<std::shared_ptr<const NorthlightDrawSnapshot::Mesh>> ms;for(unsigned i=0;i<6;++i)ms.push_back(mesh(96+48*i));
   for(auto& m:ms)world.add(m,true);assert(world.uploadReplay());world.verify(); /* warmup: all bulk */
   const UINT capacity=world.replayVertexBytes[0],indexCapacity=world.replayIndexBytes;
-  world.replays.clear();for(auto& m:ms)world.add(m,true);auto fresh=mesh(96+48*5);world.add(fresh,true); /* new mesh: bulk this frame */
+  world.replays.clear();for(auto& m:ms)world.add(m,true);auto fresh=mesh((2u<<20)-512);world.add(fresh,true); /* new mesh: bulk this frame; fits the 0.3.192 ring capacity alone, not together with the six deferred ones */
   assert(world.uploadReplay());world.verify();
   assert(world.replayBudgetOverrides==5&&world.replayVertexBytes[0]==capacity&&world.replayIndexBytes==indexCapacity);
   for(size_t i=0;i<6;++i)assert(world.replays[i]->gpuCached);assert(!world.replays[6]->gpuCached);
@@ -196,7 +200,7 @@ int main(){Device d;auto a=mesh(),b=mesh(480),c=mesh(96);
  {const double saved=NorthlightReplayGPU::createBudgetMs();
   auto crowd=[&](double budget,std::vector<uint64_t>& growths,std::vector<unsigned>& cachedPerFrame,uint64_t& overrides){
    NorthlightReplayGPU::createBudgetMs()=budget;WorldRenderer world(&d);std::vector<std::shared_ptr<const NorthlightDrawSnapshot::Mesh>> pool;
-   for(unsigned frame=0;frame<12;++frame){for(unsigned i=0;i<9;++i)pool.push_back(mesh(96+48*((frame*9+i)%7))); /* 9 new per frame */
+   for(unsigned frame=0;frame<12;++frame){for(unsigned i=0;i<9;++i)pool.push_back(mesh((96+48*((frame*9+i)%7))*1024)); /* 9 new per frame; KiB-scale so the 0.3.192 ring capacities (>= 2 MiB) still grow */
     world.replays.clear();for(auto& m:pool)world.add(m,true);assert(world.uploadReplay());world.verify();
     unsigned cached=0;for(auto& p:world.replays)cached+=p->gpuCached;growths.push_back(world.replayGrowths);cachedPerFrame.push_back(cached);}
    overrides=world.replayBudgetOverrides;};

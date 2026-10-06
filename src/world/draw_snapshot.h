@@ -1,5 +1,7 @@
 #pragma once
 #include <d3d9.h>
+#include "upload_lock.h"
+#include "lock_meter_readback.h"
 #include <algorithm>
 #include <array>
 #include <memory>
@@ -266,12 +268,12 @@ private:
     // Locks are READONLY; any lock failure rejects the entry conservatively.
     bool revalidate(const CacheEntry& e,Ref<IDirect3DVertexBuffer9>* vertices,IDirect3DIndexBuffer9* ib,const UINT* extent){
         ++revalidated_;const Mesh& m=*e.mesh;
-        if(e.key.indexed){void* ptr=nullptr;if(!ib||FAILED(ib->Lock(UINT(e.ibBegin),UINT(e.ibBytes),&ptr,D3DLOCK_READONLY)))return false;
+        if(e.key.indexed){void* ptr=nullptr;if(!ib||FAILED(ib->Lock(UINT(e.ibBegin),UINT(e.ibBytes),&ptr,NorthlightUpload::readBackLock())))return false;NorthlightLockMeter::readBack(ib,e.ibBytes);
             const bool same=ptr&&e.rawIndices.size()==e.ibBytes&&!std::memcmp(ptr,e.rawIndices.data(),size_t(e.ibBytes));
             if(FAILED(ib->Unlock())||!same)return false;}
         for(UINT s=0;s<4;++s){if(!extent[s]||!vertices[s].p)continue;
             const auto& target=m.streams[s];const UINT stride=e.key.stride[s];void* ptr=nullptr;
-            if(FAILED(vertices[s]->Lock(UINT(e.begins[s]),UINT(e.lockBytes[s]),&ptr,D3DLOCK_READONLY)))return false;
+            if(FAILED(vertices[s]->Lock(UINT(e.begins[s]),UINT(e.lockBytes[s]),&ptr,NorthlightUpload::readBackLock())))return false;NorthlightLockMeter::readBack(vertices[s].p,e.lockBytes[s]);
             bool same=ptr!=nullptr;
             if(same){const auto* source=static_cast<const std::uint8_t*>(ptr);
                 if(!e.compacted)same=!std::memcmp(target.bytes.data(),source,size_t(e.readBytes[s]));
@@ -602,7 +604,7 @@ public:
             if(!admit(why))return false;
             if(!reserve(std::size_t(bytes),why))return false;
             rawIndexScratch_.resize(static_cast<std::size_t>(bytes));auto& raw=rawIndexScratch_;void* ptr=nullptr;
-            if(FAILED(hr=ib->Lock(UINT(begin),UINT(bytes),&ptr,D3DLOCK_READONLY)))return fail(why,Error::Lock,hr);
+            if(FAILED(hr=ib->Lock(UINT(begin),UINT(bytes),&ptr,NorthlightUpload::readBackLock())))return fail(why,Error::Lock,hr);NorthlightLockMeter::readBack(ib.p,bytes);
             if(ptr)std::memcpy(raw.data(),ptr,raw.size());HRESULT unlocked=ib->Unlock();
             if(FAILED(unlocked))return fail(why,Error::Unlock,unlocked);if(!ptr)return fail(why,Error::Lock);
             if(!decode(raw.data(),n,desc.Format,draw,mesh,low,high,why))return false;
@@ -631,7 +633,7 @@ public:
             auto& vb=vertices[s];auto& target=mesh.streams[s];UINT stride=strides[s];HRESULT hr=D3D_OK;
             target.stride=stride;target.bytes.resize(size_t(mesh.vertexCount)*stride);
             if(!reserve(size_t(readBytes[s]),why))return false;void* ptr=nullptr;
-            if(FAILED(hr=vb->Lock(UINT(begins[s]),UINT(lockBytes[s]),&ptr,D3DLOCK_READONLY)))return fail(why,Error::Lock,hr);
+            if(FAILED(hr=vb->Lock(UINT(begins[s]),UINT(lockBytes[s]),&ptr,NorthlightUpload::readBackLock())))return fail(why,Error::Lock,hr);NorthlightLockMeter::readBack(vb.p,lockBytes[s]);
             if(ptr)copyVertices(target.bytes.data(),static_cast<const std::uint8_t*>(ptr),stride,extent[s],low,mesh.vertexCount);HRESULT unlocked=vb->Unlock();
             if(FAILED(unlocked))return fail(why,Error::Unlock,unlocked);if(!ptr)return fail(why,Error::Lock);
         }

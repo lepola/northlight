@@ -3,6 +3,8 @@
 // Coordinates remain in the shader input basis. This does NOT establish a world
 // transform, interpret skinning, or acquire geometry the game has never drawn.
 #include <d3d9.h>
+#include "upload_lock.h"
+#include "lock_meter_readback.h"
 #include <vector>
 #include <cstdint>
 #include <cstring>
@@ -49,7 +51,8 @@ inline bool readIndexedPositions(IDirect3DDevice9* device,
     const std::uint64_t indexBytes=std::uint64_t(indexCount)*indexSize;
     if(indexOffset+indexBytes>id.Size)return false;
     void* raw=nullptr;
-    if(FAILED(indices.value->Lock(UINT(indexOffset),UINT(indexBytes),&raw,D3DLOCK_READONLY))||!raw)return false;
+    if(FAILED(indices.value->Lock(UINT(indexOffset),UINT(indexBytes),&raw,NorthlightUpload::readBackLock()))||!raw)return false;
+    NorthlightLockMeter::readBack(indices.value,indexBytes);
     std::vector<std::uint32_t> source(indexCount);
     bool valid=true;
     for(UINT i=0;i<indexCount;++i){
@@ -65,7 +68,8 @@ inline bool readIndexedPositions(IDirect3DDevice9* device,
     const std::uint64_t lastByte=firstByte+std::uint64_t(vertexCount-1)*stride+position->Offset+componentBytes;
     if(lastByte>vd.Size||firstByte>=lastByte)return false;
     raw=nullptr;
-    if(FAILED(vertices.value->Lock(UINT(firstByte),UINT(lastByte-firstByte),&raw,D3DLOCK_READONLY))||!raw)return false;
+    if(FAILED(vertices.value->Lock(UINT(firstByte),UINT(lastByte-firstByte),&raw,NorthlightUpload::readBackLock()))||!raw)return false;
+    NorthlightLockMeter::readBack(vertices.value,lastByte-firstByte);
     output.positions.resize(vertexCount);
     for(UINT i=0;i<vertexCount;++i){
         float values[4]={0,0,0,1};
