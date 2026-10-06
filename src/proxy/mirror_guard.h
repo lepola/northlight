@@ -38,6 +38,20 @@ static constexpr bool kMirrorOwnerFastPath=NORTHLIGHT_MIRROR_OWNER_FAST_PATH!=0;
 #ifndef NORTHLIGHT_GATE_ELISION_COUNTERFACTUAL
 #define NORTHLIGHT_GATE_ELISION_COUNTERFACTUAL 0
 #endif
+// 0.3.192 (CS): exclusive-owner mode, set by the command stream while one thread (the replay thread) runs every
+// Device call. The owner's entry then replaces the seq_cst exchange (a full barrier on every call, ~25 ns) by a
+// plain store: the Dekker pair is made asymmetric. A foreign thread (never expected; correctness does not depend on
+// that) announces itself and then forces a barrier on every core before it looks at `inside`
+// (FlushProcessWriteBuffers: the standard asymmetric-fence / biased-lock pairing), so either the owner's store is
+// visible to it or the owner's later load sees the announcement. Where no such barrier exists (hosts of the tests)
+// the owner keeps a real fence in this mode: the protocol and its races stay testable, only the saving is absent.
+#ifndef NORTHLIGHT_GATE_ASYMMETRIC
+#ifdef _WIN32
+#define NORTHLIGHT_GATE_ASYMMETRIC 1
+#else
+#define NORTHLIGHT_GATE_ASYMMETRIC 0
+#endif
+#endif
 // Tests substitute a mutex that asserts ownership on unlock and counts acquisitions.
 #ifndef NORTHLIGHT_GATE_MUTEX
 #define NORTHLIGHT_GATE_MUTEX std::recursive_mutex
@@ -62,6 +76,10 @@ struct MirrorGate {
     std::atomic<unsigned> inside{0},foreignActive{0};
     // Owner entries that took the mutex because a foreign call was in flight (owner-written, relaxed).
     std::atomic<std::uint32_t> ownerLocked{0};
+    // 0.3.192 (CS): exclusive-owner mode (see NORTHLIGHT_GATE_ASYMMETRIC). Set before the owner thread starts calling,
+    // cleared only after it is joined; foreign entries seen while it is on are counted in foreignExclusive.
+    std::atomic<bool> exclusive{false};
+    std::atomic<std::uint32_t> foreignExclusive{0};
     // Census (relaxed): foreign entries per site class; the first foreign {tid,site,frame}, claimed by
     // CAS and published by firstReady; the first Present/SwapChain::Present/draw callers.
     std::atomic<std::uint32_t> foreign[Sites]={};
@@ -91,6 +109,7 @@ struct MirrorGate {
     // call is in flight; inside is reset and the caller takes the mutex.
     enum OwnerEntry:unsigned char {Lock,Elide,Reenter};
     OwnerEntry enterOwner(){
+        if(exclusive.load(std::memory_order_relaxed))return enterOwnerExclusive();
 #if NORTHLIGHT_GATE_ELISION_COUNTERFACTUAL==1
         if(inside.load(std::memory_order_relaxed))return Reenter;
         inside.store(1,std::memory_order_relaxed);
@@ -103,8 +122,47 @@ struct MirrorGate {
         ownerLocked.store(ownerLocked.load(std::memory_order_relaxed)+1,std::memory_order_relaxed);
         return Lock;
     }
+    // 0.3.192 (CS): the same decision with a plain store of inside (only the owner writes it, so a nested entry is
+    // detected by a plain load). The compiler fence orders the store before the load of foreignActive in program
+    // order; the hardware order is supplied by the foreign side's barrier (asymmetric build) or by a real fence here.
+    OwnerEntry enterOwnerExclusive(){
+        if(inside.load(std::memory_order_relaxed))return Reenter;
+        inside.store(1,std::memory_order_relaxed);
+#if NORTHLIGHT_GATE_ASYMMETRIC
+        std::atomic_signal_fence(std::memory_order_seq_cst);
+#else
+        std::atomic_thread_fence(std::memory_order_seq_cst);
+#endif
+        if(!foreignActive.load(std::memory_order_acquire))return Elide; /* acquire: pairs with exitForeign's release (free on x86) */
+        inside.store(0,std::memory_order_release);
+        ownerLocked.store(ownerLocked.load(std::memory_order_relaxed)+1,std::memory_order_relaxed);
+        return Lock;
+    }
+    // True when the mode is now as requested. Asymmetric builds need the process-wide barrier (looked up once; a
+    // runtime without it, which no supported one lacks, keeps the symmetric protocol and reports false).
+    bool setExclusive(bool on){
+#if NORTHLIGHT_GATE_ASYMMETRIC
+        if(on&&!barrier()){return false;}
+#endif
+        exclusive.store(on,std::memory_order_seq_cst);return true;
+    }
+#if NORTHLIGHT_GATE_ASYMMETRIC
+    static void (WINAPI*& barrier())(void){
+        static void (WINAPI* fn)(void)=nullptr;static bool looked=false;
+        if(!looked){looked=true;const HMODULE kernel=GetModuleHandleW(L"kernel32.dll");
+            if(kernel)fn=reinterpret_cast<void (WINAPI*)(void)>(reinterpret_cast<void*>(GetProcAddress(kernel,"FlushProcessWriteBuffers")));}
+        return fn;
+    }
+#endif
     void exitOwner(){inside.store(0,std::memory_order_release);}
     [[gnu::cold]] [[gnu::noinline]] void enterForeign();
+    // A barrier executed on every running thread (Windows FlushProcessWriteBuffers); a plain fence elsewhere.
+    [[gnu::cold]] [[gnu::noinline]] static void processBarrier(){
+#if NORTHLIGHT_GATE_ASYMMETRIC
+        if(auto fn=barrier())fn(); /* present: setExclusive(true) only succeeds with it */
+#endif
+        std::atomic_thread_fence(std::memory_order_seq_cst);
+    }
     void exitForeign(){mutex.unlock();foreignActive.fetch_sub(1,std::memory_order_release);}
 };
 // One TLS block per thread: the gate its innermost owning MirrorGuard holds, and its cached thread id.
@@ -180,6 +238,7 @@ inline void MirrorGate::enterForeign(){
     while(inside.load(std::memory_order_relaxed)){
 #else
     foreignActive.fetch_add(1,std::memory_order_seq_cst);
+    if(exclusive.load(std::memory_order_seq_cst)){foreignExclusive.fetch_add(1,std::memory_order_relaxed);processBarrier();} /* 0.3.192 (CS): pairs with the owner's plain store */
     while(NORTHLIGHT_GATE_ELISION_COUNTERFACTUAL!=2&&inside.load(std::memory_order_seq_cst)){
 #endif
         for(unsigned i=0;i<64&&inside.load(std::memory_order_relaxed);++i){

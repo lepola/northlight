@@ -801,6 +801,7 @@ class Device final : public GuardedMirrorDevice {
 public:
     // 0.3.192 (CS): the replay thread takes over as owner thread (called on it, before its first command and before CreateDevice returns).
     void adoptOwnerThread(){mirrorState.gate.ownerTid=MirrorGuard::threadId();}
+    bool setExclusiveOwner(bool on){return mirrorState.gate.setExclusive(on);} /* 0.3.192 (CS): one thread makes every Device call (mirror_guard.h) */
     HRESULT STDMETHODCALLTYPE SetCursorProperties(UINT XHotSpot, UINT YHotSpot, IDirect3DSurface9* pCursorBitmap) override{Guard mirrorLock(mirrorState.gate);return ext->SetCursorProperties(XHotSpot, YHotSpot, mirrorResources.unwrap(pCursorBitmap));}
     HRESULT STDMETHODCALLTYPE GetBackBuffer(UINT iSwapChain, UINT iBackBuffer, D3DBACKBUFFER_TYPE Type, IDirect3DSurface9** ppBackBuffer) override{Guard mirrorLock(mirrorState.gate);HRESULT hr=ext->GetBackBuffer(iSwapChain, iBackBuffer, Type, ppBackBuffer);if(SUCCEEDED(hr)){mirrorResources.wrap(ppBackBuffer);}return hr;}
     HRESULT STDMETHODCALLTYPE CreateTexture(UINT Width, UINT Height, UINT Levels, DWORD Usage, D3DFORMAT Format, D3DPOOL Pool, IDirect3DTexture9** ppTexture, HANDLE* pSharedHandle) override{Guard mirrorLock(mirrorState.gate);HRESULT hr=ext->CreateTexture(Width, Height, Levels, Usage, Format, Pool, ppTexture, pSharedHandle);if(SUCCEEDED(hr)){NorthlightReplayDrawState::noteTextureFormat(Format);mirrorResources.wrap(ppTexture);}return hr;}
@@ -1196,10 +1197,11 @@ public:
         options.log=[](const char* line){logf("%s",line);};
         options.diagnostics=&NorthlightDiagnostics::enabled;
         NorthlightStream::StreamDevice* stream=nullptr;
+        const bool exclusiveOwner=target->setExclusiveOwner(true); /* before the replay thread exists: its calls take the cheap owner entry; a foreign call stays safe */
         try{stream=NorthlightStream::StreamDevice::make(device,this,pp,std::move(options),&reason);}catch(...){reason="exception";}
-        if(!stream){NorthlightStream::streamActive.store(false,std::memory_order_relaxed);target->adoptOwnerThread(); /* the gate owner is this thread again (a replay thread that ran has been joined) */
+        if(!stream){NorthlightStream::streamActive.store(false,std::memory_order_relaxed);target->setExclusiveOwner(false);target->adoptOwnerThread(); /* the gate owner is this thread again (a replay thread that ran has been joined) */
             logf("CSTREAM disabled reason=%s",reason);return device;}
-        logf("CSTREAM active gameTid=%lu replayTid=%lu",NorthlightStream::gameTid.load(),NorthlightStream::replayTid.load());
+        logf("CSTREAM active gameTid=%lu replayTid=%lu exclusiveGate=%d",NorthlightStream::gameTid.load(),NorthlightStream::replayTid.load(),int(exclusiveOwner));
         return stream;
     }
     HRESULT STDMETHODCALLTYPE CreateDevice(UINT adapter,D3DDEVTYPE type,HWND window,DWORD flags,D3DPRESENT_PARAMETERS* pp,IDirect3DDevice9** out) override {
