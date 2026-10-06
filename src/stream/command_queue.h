@@ -11,8 +11,8 @@
 // commands or 64 KiB, and a chunk switch publishes the closed chunk. Callers publish explicitly at BeginScene/EndScene/
 // Clear/SetRenderTarget, sync points, Present, and on every GetData / locally answered Get (no spin loop may starve).
 //
-// Threading: producer methods from one thread only (the game thread; rare foreign threads are serialized by the record
-// gate above this layer); consumer methods from one thread only (the replay thread). Counters and pressure are any-thread.
+// Threading: producer methods from one thread only (the game thread; there is no record gate: a call from any other thread
+// is a caller bug, counted only for the cursor calls); consumer methods from one thread only (the replay thread). Counters and pressure are any-thread.
 #include <atomic>
 #include <cassert>
 #include <cstddef>
