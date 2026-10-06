@@ -187,6 +187,16 @@ discardKiB/frame and stagingKiB/frame (avg, max), over10MiB = frames above
 game), ring = the renderer's upload ring wraps (fenceReuse = no DISCARD needed),
 readback = the renderer's read-only locks of game buffers (dynamic, defaultStatic,
 other) with the lock flags used (flag=0x1010 on DXVK 3, 0x10 otherwise).
+MEMMAP lines (always on, a few per device lifecycle point): when the game recreates
+the D3D9 device (for example after an MSAA change) the log gets an address-space
+snapshot at destroy-begin, destroy-end, create and at frame 300 of each device
+(device 1's is "baseline-frame300"). MEMMAP summary = committed/reserved MiB per
+type (image/mapped/private), free and largest free block; top = the 12 largest
+allocations (module= names an image); diff-new / diff-gone / diff-changed = what
+appeared, vanished or changed by 1 MiB or more since the previous snapshot;
+process, heaps, threads give the working set, heap sizes and thread/module counts;
+northlight = Northlight's own cheap tallies. Compare destroy-begin with destroy-end
+to see which allocations of the old device survive.
 1. Check the start of the new run's northlight-renderer.log file:
    Northlight renderer <version>; d3d9.dll proxy ... backend=dxvk ... loaded=1 error=0
    The backend path must point to renderer-backends\dxvk\dxvk_d3d9.dll.

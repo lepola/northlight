@@ -41,6 +41,7 @@
 #include "translucent_depth.h"
 #include "log_rotation.h"
 #include "memory_guard.h"
+#include "address_space_snapshot.h"
 #include "northlight_mem.h"
 
 // 0.3.181 (r90): the DLL's one memcmp. This strong definition overrides zig compiler_rt's weak byte
@@ -845,6 +846,21 @@ public:
     HRESULT STDMETHODCALLTYPE SetPixelShader(IDirect3DPixelShader9* pShader) override{Guard mirrorLock(mirrorState.gate);return ext->SetPixelShader(mirrorResources.unwrap(pShader));}
     HRESULT STDMETHODCALLTYPE GetPixelShader(IDirect3DPixelShader9** ppShader) override{Guard mirrorLock(mirrorState.gate);HRESULT hr=ext->GetPixelShader(ppShader);if(SUCCEEDED(hr)){mirrorResources.wrap(ppShader);}return hr;}
     HRESULT STDMETHODCALLTYPE CreateQuery(D3DQUERYTYPE Type, IDirect3DQuery9** ppQuery) override{Guard mirrorLock(mirrorState.gate);HRESULT hr=ext->CreateQuery(Type, ppQuery);if(SUCCEEDED(hr)){mirrorResources.wrap(ppQuery);}return hr;}
+    // 0.3.192 (MEMMAP): address-space snapshot at a device lifecycle point (see address_space_snapshot.h). Always on, never throws.
+    // Not reachable without new plumbing: world/geometry mesh, BVH/plan, GI and static-shadow cpu MiB (WorldRenderer privates), the stream's
+    // queue/bufShadow/texShadow memMB (replayer is owned by StreamDevice), retirement queue bytes, live proxies/tracked buffer counts.
+    void memmap(const char* point){
+        try{
+            char label[128],tally[320];
+            std::snprintf(label,sizeof label,"device=%ld point=%s frame=%u tick=%lu",diagnosticId,point,frame,(unsigned long)GetTickCount());
+            const auto& m=NorthlightLockMeter::state();
+            std::snprintf(tally,sizeof tally,"mirrorResources=%zu copyResidentMiB=%.1f copyResidentBuffers=%llu copyLargeMiB=%.1f copyCapMiB=%.1f streamActive=%d memoryPressure=%d liveDevices=%ld",
+                mirrorResources.size(),double(m.copyResidentBytes.load(std::memory_order_relaxed))/1048576.0,(unsigned long long)m.copyResidentBuffers.load(std::memory_order_relaxed),
+                double(m.copyLargeBytes.load(std::memory_order_relaxed))/1048576.0,double(m.copyCapBytes.load(std::memory_order_relaxed))/1048576.0,
+                int(NorthlightStream::streamActive.load(std::memory_order_relaxed)),int(NorthlightStream::memoryPressure.load(std::memory_order_relaxed)),(long)liveDevices);
+            NorthlightMemMap::snapshot([](const char* line){logf("%s",line);},label,tally);
+        }catch(...){}
+    }
     Device(IDirect3DDevice9* d,IDirect3D9* p):GuardedMirrorDevice(d,&mirrorState),parent(p),mirrorResources(this,mirrorState.gate,&mirrorEscape,&mirrorState,d),ext(new ExtensionDevice(d,&mirrorState)),stateBlocks(ext) {
         mirrorState.gate.ownerTid=MirrorGuard::threadId(); /* 0.3.180 (D0): the CreateDevice caller */
         mirrorState.gate.reportContext=this;mirrorState.gate.report=&gateForeignReport;
@@ -858,15 +874,18 @@ public:
         catch(...){logf("MEMORY async sampler unavailable; memory guard and periodic diagnostics skipped");}
         diagnosticId=InterlockedIncrement(&deviceSerial);
         logf("DEVICE lifetime event=create id=%ld live=%ld tick=%lu",diagnosticId,InterlockedIncrement(&liveDevices),(unsigned long)GetTickCount());
+        memmap("create");
     }
     ~Device() {
         logf("DEVICE lifetime event=destroy-begin id=%ld tick=%lu",diagnosticId,(unsigned long)GetTickCount());
+        memmap("destroy-begin");
         logGateThreads("destroy");
         memoryDiagnostics.reset();
         shadowBlobs.reset();celestialDiscs.reset();gpuProfile.reset();water.reset();world.reset();releaseResources();
         stateBlocks.clear();ext->Release();ext=nullptr;
         const ULONG backendReferences=real->Release();parent->Release();
         logf("DEVICE lifetime event=destroy-end id=%ld live=%ld backendReleaseCount=%lu tick=%lu",diagnosticId,InterlockedDecrement(&liveDevices),(unsigned long)backendReferences,(unsigned long)GetTickCount());
+        memmap("destroy-end");
     }
     HRESULT STDMETHODCALLTYPE QueryInterface(REFIID id,void** out) override { Guard mirrorLock(mirrorState.gate);
         if (!out) return E_POINTER;
@@ -1090,6 +1109,7 @@ public:
         }
         cpuPrep=cpuCapture=cpuWaterCapture=cpuEffects=0;cpuCaptureReads=0;cpuDrawHooks=0;
         ++frame;mirrorState.gate.frame.store(frame,std::memory_order_relaxed); /* 0.3.180: the census' frame */
+        if(frame==300)memmap(diagnosticId==1?"baseline-frame300":"frame300"); /* 0.3.192 (MEMMAP): allocations settled; device 1 is the baseline */
         // Per-type call counts run only through a RenderProfile sample frame.
         mirrorState.rawCounting=sampled()&&NorthlightRenderThreadProbe::profiling();
         if(mirrorState.rawCounting){std::memset(mirrorState.rawMethodCalls,0,sizeof mirrorState.rawMethodCalls);
