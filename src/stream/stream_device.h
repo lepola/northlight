@@ -305,33 +305,20 @@ public:
     void hookBlock(StreamStateBlock* p){p->hook=[this](ProxyBase&,bool apply){if(apply)st.invalidate();};}
 
     // ---- user-pointer draws: the data is copied (the game's memory is reused at once); the replay sets upIdentity to the game's pointer ----
-    unsigned vertexSize()const{
-        if(st.declKnown&&st.decl){UINT n=0;for(const auto& e:static_cast<StreamVertexDeclaration*>(st.decl)->elements){if(e.Stream==0xFF)break;if(e.Stream)continue;static const unsigned sz[]={4,8,12,16,4,4,4,8,4,4,8,4,8,4,4,4,8};
-            const unsigned s=e.Type<17?sz[e.Type]:0;if(e.Offset+s>n)n=e.Offset+s;}return n;}
-        if(st.fvf.known&&st.fvf.v)return fvfSize(st.fvf.v);
-        return 0;
-    }
-    static unsigned fvfSize(DWORD f){
-        unsigned n=0;const DWORD pos=f&0xE;
-        if(pos==0x2)n+=12;else if(pos==0x4)n+=16;else if(pos>=0x6&&pos<=0xE)n+=12+4*((pos-0x4)/2);
-        if(f&0x10)n+=12;if(f&0x20)n+=4;if(f&0x40)n+=4;if(f&0x80)n+=4;
-        const unsigned tex=(f>>8)&0xF;for(unsigned i=0;i<tex;++i){static const unsigned sz[]={8,12,16,4};n+=sz[(f>>(16+2*i))&3];}
-        return n;
-    }
-    std::size_t vertexBytes(unsigned count,unsigned stride)const{
-        if(!count)return 0;unsigned last=vertexSize();if(!last||last>stride)last=stride;
-        return std::size_t(count-1)*stride+last;
-    }
+    // Readers in the mod index UP data from the base pointer and may overread a little: whole vertices (count*stride) are copied
+    // and kUpSlack zeroed bytes follow each payload.
+    static constexpr std::size_t kUpSlack=64;
+    static std::size_t vertexBytes(unsigned count,unsigned stride){return std::size_t(count)*stride;}
     HRESULT STDMETHODCALLTYPE DrawPrimitiveUP(D3DPRIMITIVETYPE type,UINT primCount,const void* data,UINT stride) override{
         if(!data||!stride||!primCount)return D3DERR_INVALIDCALL;
         onDraw(primCount);Queue& q=streamQueue();
         const std::size_t bytes=vertexBytes(primVerts(unsigned(type),primCount),stride);
-        if(sizeof(DrawUPArgs)+bytes<=MaxInlinePayload){
-            auto* a=static_cast<DrawUPArgs*>(q.reserve((std::uint16_t)Cmd::DrawPrimitiveUP,std::uint32_t(sizeof(DrawUPArgs)+bytes)));
-            *a=DrawUPArgs{unsigned(type),primCount,stride,UINT(bytes),1,data};std::memcpy(a+1,data,bytes);q.commit();return D3D_OK;}
-        if(Block* b=q.tryAllocBlock(bytes)){
+        if(sizeof(DrawUPArgs)+bytes+kUpSlack<=MaxInlinePayload){
+            auto* a=static_cast<DrawUPArgs*>(q.reserve((std::uint16_t)Cmd::DrawPrimitiveUP,std::uint32_t(sizeof(DrawUPArgs)+bytes+kUpSlack)));
+            *a=DrawUPArgs{unsigned(type),primCount,stride,UINT(bytes),1,data};std::memcpy(a+1,data,bytes);std::memset(reinterpret_cast<unsigned char*>(a+1)+bytes,0,kUpSlack);q.commit();return D3D_OK;}
+        if(Block* b=q.tryAllocBlock(bytes+kUpSlack)){
             auto* a=static_cast<DrawUPArgs*>(q.reserveWithBlock((std::uint16_t)Cmd::DrawPrimitiveUP,sizeof(DrawUPArgs),b));
-            *a=DrawUPArgs{unsigned(type),primCount,stride,UINT(bytes),0,data};b->used=std::uint32_t(bytes);std::memcpy(b->data(),data,bytes);q.commit();return D3D_OK;}
+            *a=DrawUPArgs{unsigned(type),primCount,stride,UINT(bytes),0,data};b->used=std::uint32_t(bytes);std::memcpy(b->data(),data,bytes);std::memset(b->data()+bytes,0,kUpSlack);q.commit();return D3D_OK;}
         add(q.stats.passThrough[unsigned(PassReason::Budget)]);
         HRESULT hr=D3DERR_INVALIDCALL;
         runTask(core,[&](StreamCore& c){upIdentity=data;hr=c.target->DrawPrimitiveUP(type,primCount,data,stride);upIdentity=nullptr;});
@@ -340,8 +327,8 @@ public:
         if(!data||!indices||!stride||!primCount)return D3DERR_INVALIDCALL;
         onDraw(primCount);Queue& q=streamQueue();
         const std::size_t indexBytes=std::size_t(primVerts(unsigned(type),primCount))*(unsigned(indexFormat)==D3::kFmtIndex32?4:2),
-                          vbytes=vertexBytes(minIndex+numVertices,stride),total=((indexBytes+7u)&~std::size_t(7))+vbytes;
-        auto fill=[&](unsigned char* base){std::memcpy(base,indices,indexBytes);std::memcpy(base+((indexBytes+7u)&~std::size_t(7)),data,vbytes);};
+                          vbytes=vertexBytes(minIndex+numVertices,stride),total=((indexBytes+7u)&~std::size_t(7))+vbytes+kUpSlack;
+        auto fill=[&](unsigned char* base){std::memcpy(base,indices,indexBytes);std::memcpy(base+((indexBytes+7u)&~std::size_t(7)),data,vbytes);std::memset(base+((indexBytes+7u)&~std::size_t(7))+vbytes,0,kUpSlack);};
         DrawIUPArgs args{unsigned(type),minIndex,numVertices,primCount,unsigned(indexFormat),stride,UINT(indexBytes),UINT(vbytes),data};
         if(sizeof(DrawIUPArgs)+total<=MaxInlinePayload){
             auto* a=static_cast<DrawIUPArgs*>(q.reserve((std::uint16_t)Cmd::DrawIndexedPrimitiveUP,std::uint32_t(sizeof(DrawIUPArgs)+total)));
