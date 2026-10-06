@@ -24,10 +24,6 @@
 #include <unordered_map>
 #include <vector>
 #include "command_queue.h"
-#include "record_gate.h"
-// Every generated record/state/get/sync method of the stream classes opens the record gate first (record_gate.h); the hand-written entries below do the same.
-#undef NORTHLIGHT_STREAM_GATE   // (command_stream.inl may have been included first: its default is empty)
-#define NORTHLIGHT_STREAM_GATE ::NorthlightStream::RecordGuard nlGate_(::NorthlightStream::recordGate);
 #include "command_stream.inl"
 
 namespace NorthlightStream {
@@ -347,7 +343,7 @@ inline HRESULT ProxyBase::devGet(IDirect3DDevice9** pp){if(!pp)return D3DERR_INV
         if(iidIs<Main,##__VA_ARGS__>(id)){*out=static_cast<Main*>(this);comAddRef();return S_OK;} \
         add(core->q.stats.qiMisses);return E_NOINTERFACE;} \
     ULONG STDMETHODCALLTYPE AddRef() override{return comAddRef();} \
-    ULONG STDMETHODCALLTYPE Release() override{NORTHLIGHT_STREAM_GATE return comRelease();}
+    ULONG STDMETHODCALLTYPE Release() override{return comRelease();}
 // The local methods every resource shares (the generator classifies them local): device, private data, priority, type.
 #define NL_RES_LOCALS(S) \
     HRESULT local(CmdTag<Cmd::S##_GetDevice>,IDirect3DDevice9** pp){return devGet(pp);} \
@@ -777,9 +773,9 @@ struct StreamSurface final:IDirect3DSurface9,ProxyBase {
         if(parent)return parent->unk->QueryInterface(id,pp);
         return core->game->QueryInterface(id,pp);
     }
-    HRESULT STDMETHODCALLTYPE LockRect(D3DLOCKED_RECT* lr,const RECT* rect,DWORD flags) override{NORTHLIGHT_STREAM_GATE 
+    HRESULT STDMETHODCALLTYPE LockRect(D3DLOCKED_RECT* lr,const RECT* rect,DWORD flags) override{
         return lockImage(*this,parent?*parent:static_cast<ProxyBase&>(*this),*subp,RouteSurface,0,0,info.w,info.h,1,lr,nullptr,rect,nullptr,flags);}
-    HRESULT STDMETHODCALLTYPE UnlockRect() override{NORTHLIGHT_STREAM_GATE return unlockImage(*this,*subp,RouteSurface,0,0);}
+    HRESULT STDMETHODCALLTYPE UnlockRect() override{return unlockImage(*this,*subp,RouteSurface,0,0);}
 };
 struct StreamVolume final:IDirect3DVolume9,ProxyBase {
     SubRes* subp;
@@ -796,9 +792,9 @@ struct StreamVolume final:IDirect3DVolume9,ProxyBase {
         if(!d)return D3DERR_INVALIDCALL;
         d->Format=(D3DFORMAT)info.fmt;d->Type=D3DRTYPE_VOLUME;d->Usage=info.usage;d->Pool=(D3DPOOL)info.pool;d->Width=info.w;d->Height=info.h;d->Depth=info.d;return D3D_OK;}
     HRESULT STDMETHODCALLTYPE GetContainer(REFIID id,void** pp) override{if(!pp)return D3DERR_INVALIDCALL;*pp=nullptr;return parent?parent->unk->QueryInterface(id,pp):E_NOINTERFACE;}
-    HRESULT STDMETHODCALLTYPE LockBox(D3DLOCKED_BOX* lb,const D3DBOX* box,DWORD flags) override{NORTHLIGHT_STREAM_GATE 
+    HRESULT STDMETHODCALLTYPE LockBox(D3DLOCKED_BOX* lb,const D3DBOX* box,DWORD flags) override{
         return lockImage(*this,*parent,*subp,RouteVolume,0,0,info.w,info.h,info.d,nullptr,lb,nullptr,box,flags);}
-    HRESULT STDMETHODCALLTYPE UnlockBox() override{NORTHLIGHT_STREAM_GATE return unlockImage(*this,*subp,RouteVolume,0,0);}
+    HRESULT STDMETHODCALLTYPE UnlockBox() override{return unlockImage(*this,*subp,RouteVolume,0,0);}
 };
 
 // The derive command: the replay thread asks `parent.inner` for a child and stores it in `child.inner`.
@@ -825,7 +821,7 @@ struct StreamTexture final:IDirect3DTexture9,ProxyBase {
         if(!d||level>=info.levels)return D3DERR_INVALIDCALL;
         d->Format=(D3DFORMAT)info.fmt;d->Type=D3DRTYPE_SURFACE;d->Usage=info.usage;d->Pool=(D3DPOOL)info.pool;d->MultiSampleType=(D3DMULTISAMPLE_TYPE)0;d->MultiSampleQuality=0;
         d->Width=D3::mipDim(info.w,level);d->Height=D3::mipDim(info.h,level);return D3D_OK;}
-    HRESULT STDMETHODCALLTYPE GetSurfaceLevel(UINT level,IDirect3DSurface9** pp) override{NORTHLIGHT_STREAM_GATE 
+    HRESULT STDMETHODCALLTYPE GetSurfaceLevel(UINT level,IDirect3DSurface9** pp) override{
         if(!pp)return D3DERR_INVALIDCALL;*pp=nullptr;if(level>=info.levels)return D3DERR_INVALIDCALL;
         auto* kid=static_cast<StreamSurface*>(kids[level]);
         if(!kid){
@@ -835,10 +831,10 @@ struct StreamTexture final:IDirect3DTexture9,ProxyBase {
             recordDerive(*core,this,kid,DeriveSurfaceLevel,level,0);
         }else kid->comAddRef();
         *pp=kid;return D3D_OK;}
-    HRESULT STDMETHODCALLTYPE LockRect(UINT level,D3DLOCKED_RECT* lr,const RECT* rect,DWORD flags) override{NORTHLIGHT_STREAM_GATE 
+    HRESULT STDMETHODCALLTYPE LockRect(UINT level,D3DLOCKED_RECT* lr,const RECT* rect,DWORD flags) override{
         if(level>=info.levels)return D3DERR_INVALIDCALL;
         return lockImage(*this,*this,subs[level],RouteTexture,level,0,D3::mipDim(info.w,level),D3::mipDim(info.h,level),1,lr,nullptr,rect,nullptr,flags);}
-    HRESULT STDMETHODCALLTYPE UnlockRect(UINT level) override{NORTHLIGHT_STREAM_GATE if(level>=info.levels)return D3DERR_INVALIDCALL;return unlockImage(*this,subs[level],RouteTexture,level,0);}
+    HRESULT STDMETHODCALLTYPE UnlockRect(UINT level) override{if(level>=info.levels)return D3DERR_INVALIDCALL;return unlockImage(*this,subs[level],RouteTexture,level,0);}
 };
 struct StreamCubeTexture final:IDirect3DCubeTexture9,ProxyBase {
     std::vector<SubRes> subs;DWORD lod=0;unsigned autoGenFilter=2;
@@ -857,7 +853,7 @@ struct StreamCubeTexture final:IDirect3DCubeTexture9,ProxyBase {
         d->Format=(D3DFORMAT)info.fmt;d->Type=D3DRTYPE_SURFACE;d->Usage=info.usage;d->Pool=(D3DPOOL)info.pool;d->MultiSampleType=(D3DMULTISAMPLE_TYPE)0;d->MultiSampleQuality=0;
         d->Width=D3::mipDim(info.w,level);d->Height=D3::mipDim(info.h,level);return D3D_OK;}
     std::size_t idx(UINT face,UINT level)const{return std::size_t(face)*info.levels+level;}
-    HRESULT STDMETHODCALLTYPE GetCubeMapSurface(D3DCUBEMAP_FACES face,UINT level,IDirect3DSurface9** pp) override{NORTHLIGHT_STREAM_GATE 
+    HRESULT STDMETHODCALLTYPE GetCubeMapSurface(D3DCUBEMAP_FACES face,UINT level,IDirect3DSurface9** pp) override{
         if(!pp)return D3DERR_INVALIDCALL;*pp=nullptr;if(level>=info.levels||unsigned(face)>=6)return D3DERR_INVALIDCALL;
         const std::size_t k=idx(unsigned(face),level);auto* kid=static_cast<StreamSurface*>(kids[k]);
         if(!kid){
@@ -867,10 +863,10 @@ struct StreamCubeTexture final:IDirect3DCubeTexture9,ProxyBase {
             recordDerive(*core,this,kid,DeriveCubeFace,unsigned(face),level);
         }else kid->comAddRef();
         *pp=kid;return D3D_OK;}
-    HRESULT STDMETHODCALLTYPE LockRect(D3DCUBEMAP_FACES face,UINT level,D3DLOCKED_RECT* lr,const RECT* rect,DWORD flags) override{NORTHLIGHT_STREAM_GATE 
+    HRESULT STDMETHODCALLTYPE LockRect(D3DCUBEMAP_FACES face,UINT level,D3DLOCKED_RECT* lr,const RECT* rect,DWORD flags) override{
         if(level>=info.levels||unsigned(face)>=6)return D3DERR_INVALIDCALL;
         return lockImage(*this,*this,subs[idx(unsigned(face),level)],RouteCube,level,unsigned(face),D3::mipDim(info.w,level),D3::mipDim(info.h,level),1,lr,nullptr,rect,nullptr,flags);}
-    HRESULT STDMETHODCALLTYPE UnlockRect(D3DCUBEMAP_FACES face,UINT level) override{NORTHLIGHT_STREAM_GATE 
+    HRESULT STDMETHODCALLTYPE UnlockRect(D3DCUBEMAP_FACES face,UINT level) override{
         if(level>=info.levels||unsigned(face)>=6)return D3DERR_INVALIDCALL;return unlockImage(*this,subs[idx(unsigned(face),level)],RouteCube,level,unsigned(face));}
 };
 struct StreamVolumeTexture final:IDirect3DVolumeTexture9,ProxyBase {
@@ -888,7 +884,7 @@ struct StreamVolumeTexture final:IDirect3DVolumeTexture9,ProxyBase {
         if(!d||level>=info.levels)return D3DERR_INVALIDCALL;
         d->Format=(D3DFORMAT)info.fmt;d->Type=D3DRTYPE_VOLUME;d->Usage=info.usage;d->Pool=(D3DPOOL)info.pool;
         d->Width=D3::mipDim(info.w,level);d->Height=D3::mipDim(info.h,level);d->Depth=D3::mipDim(info.d,level);return D3D_OK;}
-    HRESULT STDMETHODCALLTYPE GetVolumeLevel(UINT level,IDirect3DVolume9** pp) override{NORTHLIGHT_STREAM_GATE 
+    HRESULT STDMETHODCALLTYPE GetVolumeLevel(UINT level,IDirect3DVolume9** pp) override{
         if(!pp)return D3DERR_INVALIDCALL;*pp=nullptr;if(level>=info.levels)return D3DERR_INVALIDCALL;
         auto* kid=static_cast<StreamVolume*>(kids[level]);
         if(!kid){
@@ -897,10 +893,10 @@ struct StreamVolumeTexture final:IDirect3DVolumeTexture9,ProxyBase {
             kids[level]=kid;adoptKid();recordDerive(*core,this,kid,DeriveVolumeLevel,level,0);
         }else kid->comAddRef();
         *pp=kid;return D3D_OK;}
-    HRESULT STDMETHODCALLTYPE LockBox(UINT level,D3DLOCKED_BOX* lb,const D3DBOX* box,DWORD flags) override{NORTHLIGHT_STREAM_GATE 
+    HRESULT STDMETHODCALLTYPE LockBox(UINT level,D3DLOCKED_BOX* lb,const D3DBOX* box,DWORD flags) override{
         if(level>=info.levels)return D3DERR_INVALIDCALL;
         return lockImage(*this,*this,subs[level],RouteVolumeTexture,level,0,D3::mipDim(info.w,level),D3::mipDim(info.h,level),D3::mipDim(info.d,level),nullptr,lb,nullptr,box,flags);}
-    HRESULT STDMETHODCALLTYPE UnlockBox(UINT level) override{NORTHLIGHT_STREAM_GATE if(level>=info.levels)return D3DERR_INVALIDCALL;return unlockImage(*this,subs[level],RouteVolumeTexture,level,0);}
+    HRESULT STDMETHODCALLTYPE UnlockBox(UINT level) override{if(level>=info.levels)return D3DERR_INVALIDCALL;return unlockImage(*this,subs[level],RouteVolumeTexture,level,0);}
 };
 
 struct StreamVertexBuffer final:IDirect3DVertexBuffer9,ProxyBase {
@@ -914,8 +910,8 @@ struct StreamVertexBuffer final:IDirect3DVertexBuffer9,ProxyBase {
     NL_RES_LOCALS(VertexBuffer)
     HRESULT local(CmdTag<Cmd::VertexBuffer_GetDesc>,D3DVERTEXBUFFER_DESC* d){
         if(!d)return D3DERR_INVALIDCALL;d->Format=(D3DFORMAT)info.fmt;d->Type=D3DRTYPE_VERTEXBUFFER;d->Usage=info.usage;d->Pool=(D3DPOOL)info.pool;d->Size=info.length;d->FVF=info.fvf;return D3D_OK;}
-    HRESULT STDMETHODCALLTYPE Lock(UINT off,UINT size,void** pp,DWORD flags) override{NORTHLIGHT_STREAM_GATE return lockBuffer(*this,buf,off,size,pp,flags);}
-    HRESULT STDMETHODCALLTYPE Unlock() override{NORTHLIGHT_STREAM_GATE return unlockBuffer(*this,buf);}
+    HRESULT STDMETHODCALLTYPE Lock(UINT off,UINT size,void** pp,DWORD flags) override{return lockBuffer(*this,buf,off,size,pp,flags);}
+    HRESULT STDMETHODCALLTYPE Unlock() override{return unlockBuffer(*this,buf);}
 };
 struct StreamIndexBuffer final:IDirect3DIndexBuffer9,ProxyBase {
     BufferState buf;
@@ -928,8 +924,8 @@ struct StreamIndexBuffer final:IDirect3DIndexBuffer9,ProxyBase {
     NL_RES_LOCALS(IndexBuffer)
     HRESULT local(CmdTag<Cmd::IndexBuffer_GetDesc>,D3DINDEXBUFFER_DESC* d){
         if(!d)return D3DERR_INVALIDCALL;d->Format=(D3DFORMAT)info.fmt;d->Type=D3DRTYPE_INDEXBUFFER;d->Usage=info.usage;d->Pool=(D3DPOOL)info.pool;d->Size=info.length;return D3D_OK;}
-    HRESULT STDMETHODCALLTYPE Lock(UINT off,UINT size,void** pp,DWORD flags) override{NORTHLIGHT_STREAM_GATE return lockBuffer(*this,buf,off,size,pp,flags);}
-    HRESULT STDMETHODCALLTYPE Unlock() override{NORTHLIGHT_STREAM_GATE return unlockBuffer(*this,buf);}
+    HRESULT STDMETHODCALLTYPE Lock(UINT off,UINT size,void** pp,DWORD flags) override{return lockBuffer(*this,buf,off,size,pp,flags);}
+    HRESULT STDMETHODCALLTYPE Unlock() override{return unlockBuffer(*this,buf);}
 };
 
 // Bytecode length in DWORDs up to and including the 0x0000FFFF end token (comment blocks skipped by their length).
@@ -996,7 +992,7 @@ struct StreamQuery final:IDirect3DQuery9,ProxyBase {
     DWORD local(CmdTag<Cmd::Query_GetDataSize>){return dataSize;}
     void observe(CmdTag<Cmd::Query_Issue>,DWORD flags){if(flags&D3::kIssueEnd)gen.fetch_add(1);}
     using ProxyBase::observe;
-    HRESULT STDMETHODCALLTYPE GetData(void* data,DWORD size,DWORD flags) override{NORTHLIGHT_STREAM_GATE 
+    HRESULT STDMETHODCALLTYPE GetData(void* data,DWORD size,DWORD flags) override{
         Queue& q=core->q;
         if(dead.load())return D3DERR_INVALIDCALL;   // the real create failed: an error, not S_FALSE forever
         if((flags&D3::kGetDataFlush)||!gen.load()){   // FLUSH, or a query never issued: the real GetData with the game's buffer, after everything recorded so far

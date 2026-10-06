@@ -49,7 +49,6 @@ struct Counters {
     Counter census[kMaxCmdIds]{};   // sync calls per command id (name via cmdName in command_stream.inl)
     // ---- Consumer (replay thread) ----
     alignas(kLine) Counter consumerSleeps{0};
-    Counter spinNs{0};        // time the consumer spent spinning before a sleep (inside the replay thread's idle time)
     Counter directCalls{0};   // replayed straight on the extension device
     Counter queryPolls{0},deadCreates{0},createFailures{0},replayFailures{0},syncOnlySlots{0},proxyMismatch{0};   // replayFailures: the game thread adds rarely too
     // ---- Both threads write: memory in flight (chunks handed to the producer and not yet recycled, live blocks, registered shadows). ----

@@ -11,8 +11,8 @@
 // commands or 64 KiB, and a chunk switch publishes the closed chunk. Callers publish explicitly at BeginScene/EndScene/
 // Clear/SetRenderTarget, sync points, Present, and on every GetData / locally answered Get (no spin loop may starve).
 //
-// Threading: producer methods from one thread only (the game thread; a rare foreign thread is serialized by the record
-// gate, record_gate.h: every game-facing recording/answering/sync entry holds a RecordGuard, so a foreign caller never reaches reserve()/commit() concurrently); consumer methods from one thread only (the replay thread). Counters and pressure are any-thread.
+// Threading: producer methods from one thread only (the game thread; rare foreign threads are serialized by the record
+// gate above this layer); consumer methods from one thread only (the replay thread). Counters and pressure are any-thread.
 #include <atomic>
 #include <cassert>
 #include <cstddef>
@@ -53,7 +53,6 @@ constexpr std::uint64_t kShadowHotFrames=60,kShadowGrowFrames=60;
 constexpr std::size_t LargeShadowBudgetBytes=std::size_t(16)<<20,kMaxLargeShadow=std::size_t(16)<<20;
 constexpr std::uint64_t kLargeIdleFrames=60;
 constexpr std::size_t kPoolMaxChunks=4,kReserveChunks=2;   // idle chunks kept at most / after a quiet window
-constexpr std::uint32_t kSpinMaxNs=20000,kSpinMinNs=2000,kSpinProbeNs=2000,kSpinProbeEvery=16;   // consumer spin budget before it sleeps (adaptive, see Queue::next)
 constexpr std::uint32_t kAutoPublishCommands=64,kAutoPublishBytes=64u<<10;
 constexpr std::uint32_t kNoPayload=0xFFFFFFFFu;   // a nullable pointer's offset in a generated Args struct
 
@@ -90,7 +89,7 @@ class Queue {
     alignas(kLine) std::atomic<std::uint64_t> recorded_{0};
     // Consumer-private.
     alignas(kLine) Chunk* rchunk_;
-    std::uint32_t rpos_=0,spinNs_=kSpinMaxNs,spinSkips_=0;   // adaptive pre-sleep spin budget (next(true))
+    std::uint32_t rpos_=0;
     // Written by the consumer at every retire.
     alignas(kLine) std::atomic<std::uint64_t> replayed_{0};
     // Written by the producer while it waits (the consumer reads it at every retire).
@@ -334,21 +333,11 @@ public:
         if(auto* h=peek())return h;
         if(!wait)return nullptr;
         for(;;){
-            // 0.3.192 (CS): ADAPTIVE spin before the sleep. A spin that finds a command within its budget saved a wakeup; one that does not burned a core that the
-            // game thread, DXVK's threads and the driver compete for. So the budget (consumer-private) doubles on a hit up to kSpinMaxNs and halves on a miss, down to
-            // 0 (sleep at once); with 0 only every kSpinProbeEvery-th wait probes again (kSpinProbeNs), so a quiet phase costs nothing and a busy one is found again.
-            std::uint32_t budget=spinNs_;
-            if(!budget&&++spinSkips_>=kSpinProbeEvery){spinSkips_=0;budget=kSpinProbeNs;}
-            if(budget){
-                const std::uint64_t t0=nowNs();
-                for(;;){
-                    for(int i=0;i<64;++i){
-                        if(auto* h=peek()){own(stats.spinNs,nowNs()-t0);spinNs_=budget*2>kSpinMaxNs?kSpinMaxNs:(budget*2<kSpinMinNs?kSpinMinNs:budget*2);return h;}
-                        if(interrupted_.load(std::memory_order_relaxed)){own(stats.spinNs,nowNs()-t0);return nullptr;}
-                        relax();}   // (a pause is far shorter under Rosetta: the clock bounds the spin)
-                    if(nowNs()-t0>budget)break;
-                }
-                own(stats.spinNs,nowNs()-t0);spinNs_=budget/2<kSpinMinNs/2?0:budget/2;
+            // Spin ~50 us by the clock (a pause is far shorter under Rosetta): a sync round trip then usually costs no wakeup.
+            const std::uint64_t t0=nowNs();
+            for(;;){
+                for(int i=0;i<64;++i){if(auto* h=peek())return h;if(interrupted_.load(std::memory_order_relaxed))return nullptr;relax();}
+                if(nowNs()-t0>50000)break;
             }
             if(interrupted_.load())return nullptr;
             sleeping_.store(true);
@@ -358,7 +347,6 @@ public:
             if(interrupted_.load()){sleeping_.store(false);return nullptr;}
             consumerEv_.wait(250);
             sleeping_.store(false);
-            if(auto* h=peek())return h;   // woken by a publish: take it without a spin that would score as a hit and undo the adaptation
         }
     }
     // next(true) for a consumer that also has timed work (pending queries to poll): the same sleeper handshake, but the wait is

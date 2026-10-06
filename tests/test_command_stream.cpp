@@ -277,27 +277,6 @@ static void memoryCapsAndPools(){
     for(int i=0;i<3;++i){Block* b=q.tryAllocBlock(1u<<20);q.freeBlock(b);}q.trim();q.poolState(chunks,blocks);CHECK(chunks==0&&blocks==0&&get(q.stats.blockPoolBytes)==0);
 }
 
-// 0.3.192 (CS): the consumer's spin before a sleep is adaptive: a quiet queue (commands far apart) decays the budget to nothing (a sleeping consumer, a free core);
-// a command arriving within the budget keeps (and grows) it. Spin time is counted on its own.
-static void adaptiveSpin(){
-    for(int attempt=0;;++attempt){
-        Queue q;const int N=40;
-        std::thread consumer([&]{for(int i=0;i<N;++i){auto* h=q.next(true);CHECK(h);q.retire(h);}});
-        for(int i=0;i<N;++i){std::this_thread::sleep_for(std::chrono::milliseconds(3));record(q,1,8,i);q.publish();}
-        consumer.join();
-        // a fixed 20 us spin per wait would be N*20 us = 800 us; the decayed budget spends a few tens of us plus the occasional probe
-        if(get(q.stats.spinNs)<N*kSpinMaxNs/2&&get(q.stats.consumerSleeps)>=N/2)break;
-        std::fprintf(stderr,"spin attempt %d spinNs=%llu sleeps=%llu\n",attempt,(unsigned long long)get(q.stats.spinNs),(unsigned long long)get(q.stats.consumerSleeps));CHECK(attempt<3);   // (a descheduled spinner may overshoot once: retry)
-    }
-    {   // a producer that is always ready: the spin finds the command, the budget stays at the cap, no sleeps
-        Queue q;const int N=2000;std::atomic<int> sent{0};
-        std::thread consumer([&]{for(int i=0;i<N;++i){auto* h=q.next(true);CHECK(h);q.retire(h);}});
-        for(int i=0;i<N;++i){record(q,1,8,i);q.publish();while(sent.load()<i-8)std::this_thread::yield();sent.store(i);}
-        consumer.join();CHECK(q.replayedSeq()==N);
-    }
-    static_assert(kSpinMaxNs<=25000,"the spin cap stays well below the old 50 us");
-}
-
 static void spscStress(){
     Queue q;const std::uint64_t N=300000;
     std::thread consumer([&]{
@@ -367,7 +346,7 @@ static void nestedSync(){
 
 int main(int argc,char** argv){
     const bool threadsOnly=argc>1&&std::string(argv[1])=="threads";
-    spscStress();wakeHandshakeStress();adaptiveSpin();memoryCapsAndPools();producerNotSerializedByShadows();
+    spscStress();wakeHandshakeStress();memoryCapsAndPools();producerNotSerializedByShadows();
     budgetRules();interruptAndEvents();publishRules();nestedSync();
     generatedSyncCases();
     if(!threadsOnly){

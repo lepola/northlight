@@ -91,7 +91,7 @@ public:
             else d->sc0->dead.store(true);
             d->st.loadDefaults(c.target);ok=!d->sc0->dead.load();},Cmd::SyncInit);
         if(!ran||!ok)return fail("init");
-        recordGate.setOwner(&d->core.q.stats.foreignEntries);gameTid.store(Replayer::currentTid());activeCore.store(&d->core,std::memory_order_release);innerOf=&innerOfActive;
+        gameTid.store(Replayer::currentTid());activeCore.store(&d->core,std::memory_order_release);innerOf=&innerOfActive;
         return d.release();
     }
     ~StreamDevice(){}
@@ -289,7 +289,6 @@ public:
         add(core.q.stats.qiMisses);return E_NOINTERFACE;}
     ULONG STDMETHODCALLTYPE AddRef() override{return ULONG(refs.fetch_add(1)+1);}
     ULONG STDMETHODCALLTYPE Release() override{
-        NORTHLIGHT_STREAM_GATE   // the last Release records and deletes the device: the gate is a global, so the guard may end after it
         const LONG n=refs.fetch_sub(1)-1;
         if(n==0)finalRelease();
         return n<0?0:ULONG(n);}
@@ -309,7 +308,7 @@ public:
         if(std::this_thread::get_id()!=gameThread)add(core.q.stats.foreignEntries);
         POINT now{};if(cursor.getPos(&now)&&now.x==x&&now.y==y)return;
         cursor.setPos(x,y);}
-    HRESULT STDMETHODCALLTYPE SetCursorProperties(UINT hotX,UINT hotY,IDirect3DSurface9* bitmap) override{NORTHLIGHT_STREAM_GATE 
+    HRESULT STDMETHODCALLTYPE SetCursorProperties(UINT hotX,UINT hotY,IDirect3DSurface9* bitmap) override{
         if(!bitmap)return D3DERR_INVALIDCALL;
         ProxyBase* b=ProxyBase::of(bitmap);if(!b||b->kind!=Kind::Surface)return D3DERR_INVALIDCALL;
         auto* sf=static_cast<StreamSurface*>(b);
@@ -336,7 +335,7 @@ public:
         if(hCursor)cursor.set(cursorVisible?hCursor:nullptr);
         return D3D_OK;}
 
-    HRESULT STDMETHODCALLTYPE Present(const RECT* src,const RECT* dst,HWND window,const RGNDATA* dirty) override{NORTHLIGHT_STREAM_GATE return presentCommon(nullptr,src,dst,window,dirty,0);}
+    HRESULT STDMETHODCALLTYPE Present(const RECT* src,const RECT* dst,HWND window,const RGNDATA* dirty) override{return presentCommon(nullptr,src,dst,window,dirty,0);}
     HRESULT presentCommon(StreamSwapChain* swap,const RECT* src,const RECT* dst,HWND window,const RGNDATA* dirty,DWORD flags){
         Queue& q=streamQueue();
         {   // the game thread's own time this frame: from the previous Present's return to here, minus the waits it spent (sync, backpressure)
@@ -369,7 +368,7 @@ public:
     // The real result of the Present command with sequence number `seq`, recorded by the replay thread.
     HRESULT presentResult(std::uint64_t seq){const auto& e=core.presentRing[seq%core.kRing];return e.seq.load()==seq?e.hr.load():D3D_OK;}
 
-    HRESULT STDMETHODCALLTYPE Reset(D3DPRESENT_PARAMETERS* p) override{NORTHLIGHT_STREAM_GATE 
+    HRESULT STDMETHODCALLTYPE Reset(D3DPRESENT_PARAMETERS* p) override{
         if(!p)return D3DERR_INVALIDCALL;
         st.clear();recording=false;
         HRESULT hr=D3DERR_INVALIDCALL;
@@ -383,23 +382,12 @@ public:
         if(SUCCEEDED(hr))pp=sc0->pp;
         return hr;
     }
-    HRESULT STDMETHODCALLTYPE GetBackBuffer(UINT swapChain,UINT index,D3DBACKBUFFER_TYPE type,IDirect3DSurface9** out) override{NORTHLIGHT_STREAM_GATE 
+    HRESULT STDMETHODCALLTYPE GetBackBuffer(UINT swapChain,UINT index,D3DBACKBUFFER_TYPE type,IDirect3DSurface9** out) override{
         if(swapChain!=0)return D3DERR_INVALIDCALL;return sc0->GetBackBuffer(index,type,out);}
-    HRESULT STDMETHODCALLTYPE CreateAdditionalSwapChain(D3DPRESENT_PARAMETERS*,IDirect3DSwapChain9** out) override{NORTHLIGHT_STREAM_GATE 
+    HRESULT STDMETHODCALLTYPE CreateAdditionalSwapChain(D3DPRESENT_PARAMETERS*,IDirect3DSwapChain9** out) override{
         if(out)*out=nullptr;add(core.q.stats.createFailures);return D3DERR_NOTAVAILABLE;}   // not supported while streaming (the game never uses it)
 
-    // ---- creates: asynchronous, the proxy is returned at once; synchronous under memory pressure, with a shared handle, or when the create can really fail ----
-    // 0.3.192 (CS): an asynchronous create always returns D3D_OK; a real failure (E_OUTOFMEMORY, D3DERR_OUTOFVIDEOMEMORY) would only mark the proxy dead and the game would
-    // never run its error handling. So the creates that can plausibly fail for lack of memory take the synchronous path and return the real HRESULT: every DEFAULT-pool render
-    // target / depth-stencil surface (or RT/DS-usage texture) and anything of an estimated kSyncCreateBytes (4 MiB) or more (all mip levels and faces). The rest (small
-    // textures, buffers, shaders, ...) stays asynchronous; a failure there is counted (createFailures) and logged by the replay thread, and the proxy renders as nothing.
-    static constexpr std::size_t kSyncCreateBytes=std::size_t(4)<<20;
-    static std::uint64_t imageCreateBytes(unsigned fmt,UINT w,UINT h,UINT d,UINT levels,UINT faces){
-        const auto fi=D3::formatInfo(fmt);const unsigned bytes=fi.ok?fi.bytes:4,bw=fi.ok?fi.bw:1,bh=fi.ok?fi.bh:1;
-        const UINT n=levels?levels:D3::fullChain(w,h,d);std::uint64_t total=0;   // 64-bit: a 32-bit size_t would wrap on a huge cube map
-        for(UINT l=0;l<n;++l)total+=std::uint64_t((D3::mipDim(w,l)+bw-1)/bw)*((D3::mipDim(h,l)+bh-1)/bh)*D3::mipDim(d,l)*bytes;
-        return total*faces;}
-    static bool riskyCreate(std::uint64_t bytes,DWORD usage,DWORD pool){return bytes>=kSyncCreateBytes||(pool==D3::kPoolDefault&&(usage&(D3::kUsageRT|D3::kUsageDS)));}
+    // ---- creates: asynchronous, the proxy is returned at once; synchronous under memory pressure or with a shared handle ----
     template<class P> HRESULT finishCreate(P* proxy,Cmd id,CreateArgs& a,const void* extra,UINT extraBytes,bool forceSync,void** out){
         Queue& q=streamQueue();
         if(forceSync||q.pressure()){
@@ -421,27 +409,27 @@ public:
     void afterSyncCreate(StreamQuery* p){if(p->inner&&!p->dataSize)p->dataSize=static_cast<IDirect3DQuery9*>(p->inner)->GetDataSize();}
     template<class P> void discard(P* p){core.reg.erase(p);delete p;}
 
-    HRESULT STDMETHODCALLTYPE CreateTexture(UINT w,UINT h,UINT levels,DWORD usage,D3DFORMAT fmt,D3DPOOL pool,IDirect3DTexture9** out,HANDLE* shared) override{NORTHLIGHT_STREAM_GATE 
+    HRESULT STDMETHODCALLTYPE CreateTexture(UINT w,UINT h,UINT levels,DWORD usage,D3DFORMAT fmt,D3DPOOL pool,IDirect3DTexture9** out,HANDLE* shared) override{
         if(!out)return D3DERR_INVALIDCALL;*out=nullptr;if(!w||!h)return D3DERR_INVALIDCALL;
         StreamTexture* p;try{p=new StreamTexture(&core,w,h,levels,usage,unsigned(fmt),DWORD(pool));}catch(...){return E_OUTOFMEMORY;}
         CreateArgs a{p,{w,h,levels,usage,unsigned(fmt),unsigned(pool),0,0},0};void* o=nullptr;
-        const HRESULT hr=finishCreate(p,Cmd::CreateTexture,a,nullptr,0,(shared&&*shared)||riskyCreate(imageCreateBytes(unsigned(fmt),w,h,1,levels,1),usage,DWORD(pool)),&o);*out=static_cast<IDirect3DTexture9*>(o);return hr;}
-    HRESULT STDMETHODCALLTYPE CreateVolumeTexture(UINT w,UINT h,UINT d,UINT levels,DWORD usage,D3DFORMAT fmt,D3DPOOL pool,IDirect3DVolumeTexture9** out,HANDLE* shared) override{NORTHLIGHT_STREAM_GATE 
+        const HRESULT hr=finishCreate(p,Cmd::CreateTexture,a,nullptr,0,shared&&*shared,&o);*out=static_cast<IDirect3DTexture9*>(o);return hr;}
+    HRESULT STDMETHODCALLTYPE CreateVolumeTexture(UINT w,UINT h,UINT d,UINT levels,DWORD usage,D3DFORMAT fmt,D3DPOOL pool,IDirect3DVolumeTexture9** out,HANDLE* shared) override{
         if(!out)return D3DERR_INVALIDCALL;*out=nullptr;if(!w||!h||!d)return D3DERR_INVALIDCALL;
         StreamVolumeTexture* p;try{p=new StreamVolumeTexture(&core,w,h,d,levels,usage,unsigned(fmt),DWORD(pool));}catch(...){return E_OUTOFMEMORY;}
         CreateArgs a{p,{w,h,d,levels,usage,unsigned(fmt),unsigned(pool),0},0};void* o=nullptr;
-        const HRESULT hr=finishCreate(p,Cmd::CreateVolumeTexture,a,nullptr,0,(shared&&*shared)||riskyCreate(imageCreateBytes(unsigned(fmt),w,h,d,levels,1),usage,DWORD(pool)),&o);*out=static_cast<IDirect3DVolumeTexture9*>(o);return hr;}
-    HRESULT STDMETHODCALLTYPE CreateCubeTexture(UINT edge,UINT levels,DWORD usage,D3DFORMAT fmt,D3DPOOL pool,IDirect3DCubeTexture9** out,HANDLE* shared) override{NORTHLIGHT_STREAM_GATE 
+        const HRESULT hr=finishCreate(p,Cmd::CreateVolumeTexture,a,nullptr,0,shared&&*shared,&o);*out=static_cast<IDirect3DVolumeTexture9*>(o);return hr;}
+    HRESULT STDMETHODCALLTYPE CreateCubeTexture(UINT edge,UINT levels,DWORD usage,D3DFORMAT fmt,D3DPOOL pool,IDirect3DCubeTexture9** out,HANDLE* shared) override{
         if(!out)return D3DERR_INVALIDCALL;*out=nullptr;if(!edge)return D3DERR_INVALIDCALL;
         StreamCubeTexture* p;try{p=new StreamCubeTexture(&core,edge,levels,usage,unsigned(fmt),DWORD(pool));}catch(...){return E_OUTOFMEMORY;}
         CreateArgs a{p,{edge,levels,usage,unsigned(fmt),unsigned(pool),0,0,0},0};void* o=nullptr;
-        const HRESULT hr=finishCreate(p,Cmd::CreateCubeTexture,a,nullptr,0,(shared&&*shared)||riskyCreate(imageCreateBytes(unsigned(fmt),edge,edge,1,levels,6),usage,DWORD(pool)),&o);*out=static_cast<IDirect3DCubeTexture9*>(o);return hr;}
-    HRESULT STDMETHODCALLTYPE CreateVertexBuffer(UINT length,DWORD usage,DWORD fvf,D3DPOOL pool,IDirect3DVertexBuffer9** out,HANDLE* shared) override{NORTHLIGHT_STREAM_GATE 
+        const HRESULT hr=finishCreate(p,Cmd::CreateCubeTexture,a,nullptr,0,shared&&*shared,&o);*out=static_cast<IDirect3DCubeTexture9*>(o);return hr;}
+    HRESULT STDMETHODCALLTYPE CreateVertexBuffer(UINT length,DWORD usage,DWORD fvf,D3DPOOL pool,IDirect3DVertexBuffer9** out,HANDLE* shared) override{
         if(!out)return D3DERR_INVALIDCALL;*out=nullptr;if(!length)return D3DERR_INVALIDCALL;
         StreamVertexBuffer* p;try{p=new StreamVertexBuffer(&core,length,usage,fvf,DWORD(pool));}catch(...){return E_OUTOFMEMORY;}
         CreateArgs a{p,{length,usage,fvf,unsigned(pool),0,0,0,0},0};void* o=nullptr;
         const HRESULT hr=finishCreate(p,Cmd::CreateVertexBuffer,a,nullptr,0,shared&&*shared,&o);*out=static_cast<IDirect3DVertexBuffer9*>(o);return hr;}
-    HRESULT STDMETHODCALLTYPE CreateIndexBuffer(UINT length,DWORD usage,D3DFORMAT fmt,D3DPOOL pool,IDirect3DIndexBuffer9** out,HANDLE* shared) override{NORTHLIGHT_STREAM_GATE 
+    HRESULT STDMETHODCALLTYPE CreateIndexBuffer(UINT length,DWORD usage,D3DFORMAT fmt,D3DPOOL pool,IDirect3DIndexBuffer9** out,HANDLE* shared) override{
         if(!out)return D3DERR_INVALIDCALL;*out=nullptr;if(!length)return D3DERR_INVALIDCALL;
         StreamIndexBuffer* p;try{p=new StreamIndexBuffer(&core,length,usage,unsigned(fmt),DWORD(pool));}catch(...){return E_OUTOFMEMORY;}
         CreateArgs a{p,{length,usage,unsigned(fmt),unsigned(pool),0,0,0,0},0};void* o=nullptr;
@@ -452,28 +440,28 @@ public:
         StreamSurface* p;try{p=new StreamSurface(&core,i);}catch(...){return E_OUTOFMEMORY;}
         CreateArgs a{p,{w,h,id==Cmd::CreateOffscreenPlainSurface?unsigned(fmt):unsigned(fmt),id==Cmd::CreateOffscreenPlainSurface?unsigned(pool):ms,msq,sixth,0,0},0};
         if(id==Cmd::CreateOffscreenPlainSurface){a.v[2]=unsigned(fmt);a.v[3]=pool;}
-        void* o=nullptr;const HRESULT hr=finishCreate(p,id,a,nullptr,0,(shared&&*shared)||riskyCreate(imageCreateBytes(unsigned(fmt),w,h,1,1,1),usage,pool),&o);*out=static_cast<IDirect3DSurface9*>(o);return hr;}
-    HRESULT STDMETHODCALLTYPE CreateRenderTarget(UINT w,UINT h,D3DFORMAT fmt,D3DMULTISAMPLE_TYPE ms,DWORD msq,WINBOOL lockable,IDirect3DSurface9** out,HANDLE* shared) override{NORTHLIGHT_STREAM_GATE 
+        void* o=nullptr;const HRESULT hr=finishCreate(p,id,a,nullptr,0,shared&&*shared,&o);*out=static_cast<IDirect3DSurface9*>(o);return hr;}
+    HRESULT STDMETHODCALLTYPE CreateRenderTarget(UINT w,UINT h,D3DFORMAT fmt,D3DMULTISAMPLE_TYPE ms,DWORD msq,WINBOOL lockable,IDirect3DSurface9** out,HANDLE* shared) override{
         return createSurface(Cmd::CreateRenderTarget,w,h,fmt,unsigned(ms),msq,lockable?1u:0u,D3::kUsageRT,D3::kPoolDefault,out,shared);}
-    HRESULT STDMETHODCALLTYPE CreateDepthStencilSurface(UINT w,UINT h,D3DFORMAT fmt,D3DMULTISAMPLE_TYPE ms,DWORD msq,WINBOOL discard,IDirect3DSurface9** out,HANDLE* shared) override{NORTHLIGHT_STREAM_GATE 
+    HRESULT STDMETHODCALLTYPE CreateDepthStencilSurface(UINT w,UINT h,D3DFORMAT fmt,D3DMULTISAMPLE_TYPE ms,DWORD msq,WINBOOL discard,IDirect3DSurface9** out,HANDLE* shared) override{
         return createSurface(Cmd::CreateDepthStencilSurface,w,h,fmt,unsigned(ms),msq,discard?1u:0u,D3::kUsageDS,D3::kPoolDefault,out,shared);}
-    HRESULT STDMETHODCALLTYPE CreateOffscreenPlainSurface(UINT w,UINT h,D3DFORMAT fmt,D3DPOOL pool,IDirect3DSurface9** out,HANDLE* shared) override{NORTHLIGHT_STREAM_GATE 
+    HRESULT STDMETHODCALLTYPE CreateOffscreenPlainSurface(UINT w,UINT h,D3DFORMAT fmt,D3DPOOL pool,IDirect3DSurface9** out,HANDLE* shared) override{
         return createSurface(Cmd::CreateOffscreenPlainSurface,w,h,fmt,0,0,0,0,DWORD(pool),out,shared);}
-    HRESULT STDMETHODCALLTYPE CreateVertexDeclaration(const D3DVERTEXELEMENT9* elements,IDirect3DVertexDeclaration9** out) override{NORTHLIGHT_STREAM_GATE 
+    HRESULT STDMETHODCALLTYPE CreateVertexDeclaration(const D3DVERTEXELEMENT9* elements,IDirect3DVertexDeclaration9** out) override{
         if(!out)return D3DERR_INVALIDCALL;*out=nullptr;if(!elements)return D3DERR_INVALIDCALL;
         UINT n=0;while(n<256&&elements[n].Stream!=0xFF)++n;if(n>=256)return D3DERR_INVALIDCALL;++n;   // including the end element
         StreamVertexDeclaration* p;try{p=new StreamVertexDeclaration(&core);p->elements.assign(elements,elements+n);}catch(...){return E_OUTOFMEMORY;}
         CreateArgs a{p,{},0};void* o=nullptr;const HRESULT hr=finishCreate(p,Cmd::CreateVertexDeclaration,a,elements,n*UINT(sizeof(D3DVERTEXELEMENT9)),false,&o);*out=static_cast<IDirect3DVertexDeclaration9*>(o);return hr;}
-    HRESULT STDMETHODCALLTYPE CreateVertexShader(const DWORD* code,IDirect3DVertexShader9** out) override{NORTHLIGHT_STREAM_GATE 
+    HRESULT STDMETHODCALLTYPE CreateVertexShader(const DWORD* code,IDirect3DVertexShader9** out) override{
         if(!out)return D3DERR_INVALIDCALL;*out=nullptr;const std::size_t tokens=shaderTokens(code);if(!tokens)return D3DERR_INVALIDCALL;
         StreamVertexShader* p;try{p=new StreamVertexShader(&core);p->code.assign(code,code+tokens);}catch(...){return E_OUTOFMEMORY;}
         p->tags=NorthlightShaderTags::triggerTagsOfBytecode(code,tokens*4);   // from the bytes the game passed: the same ones GetFunction returns
         CreateArgs a{p,{},0};void* o=nullptr;const HRESULT hr=finishCreate(p,Cmd::CreateVertexShader,a,code,UINT(tokens*4),false,&o);*out=static_cast<IDirect3DVertexShader9*>(o);return hr;}
-    HRESULT STDMETHODCALLTYPE CreatePixelShader(const DWORD* code,IDirect3DPixelShader9** out) override{NORTHLIGHT_STREAM_GATE 
+    HRESULT STDMETHODCALLTYPE CreatePixelShader(const DWORD* code,IDirect3DPixelShader9** out) override{
         if(!out)return D3DERR_INVALIDCALL;*out=nullptr;const std::size_t tokens=shaderTokens(code);if(!tokens)return D3DERR_INVALIDCALL;
         StreamPixelShader* p;try{p=new StreamPixelShader(&core);p->code.assign(code,code+tokens);}catch(...){return E_OUTOFMEMORY;}
         CreateArgs a{p,{},0};void* o=nullptr;const HRESULT hr=finishCreate(p,Cmd::CreatePixelShader,a,code,UINT(tokens*4),false,&o);*out=static_cast<IDirect3DPixelShader9*>(o);return hr;}
-    HRESULT STDMETHODCALLTYPE CreateQuery(D3DQUERYTYPE type,IDirect3DQuery9** out) override{NORTHLIGHT_STREAM_GATE 
+    HRESULT STDMETHODCALLTYPE CreateQuery(D3DQUERYTYPE type,IDirect3DQuery9** out) override{
         if(!out){   // the D3D9 support probe CreateQuery(type,NULL): the Target's own answer (D3D_OK / D3DERR_NOTAVAILABLE)
             HRESULT hr=D3DERR_INVALIDCALL;
             runTask(core,[&](StreamCore& c){hr=c.target->CreateQuery(type,nullptr);},Cmd::SyncCreate);return hr;}
@@ -481,14 +469,14 @@ public:
         StreamQuery* p;try{p=new StreamQuery(&core,unsigned(type));}catch(...){return E_OUTOFMEMORY;}
         CreateArgs a{p,{unsigned(type),0,0,0,0,0,0,0},0};void* o=nullptr;
         const HRESULT hr=finishCreate(p,Cmd::CreateQuery,a,nullptr,0,p->dataSize==0,&o);*out=static_cast<IDirect3DQuery9*>(o);return hr;}   // unknown query types create synchronously (the data size is the real one)
-    HRESULT STDMETHODCALLTYPE CreateStateBlock(D3DSTATEBLOCKTYPE type,IDirect3DStateBlock9** out) override{NORTHLIGHT_STREAM_GATE 
+    HRESULT STDMETHODCALLTYPE CreateStateBlock(D3DSTATEBLOCKTYPE type,IDirect3DStateBlock9** out) override{
         if(!out)return D3DERR_INVALIDCALL;*out=nullptr;
         StreamStateBlock* p;try{p=new StreamStateBlock(&core);}catch(...){return E_OUTOFMEMORY;}
         hookBlock(p);CreateArgs a{p,{unsigned(type),0,0,0,0,0,0,0},0};void* o=nullptr;
         const HRESULT hr=finishCreate(p,Cmd::CreateStateBlock,a,nullptr,0,false,&o);*out=static_cast<IDirect3DStateBlock9*>(o);return hr;}
-    HRESULT STDMETHODCALLTYPE BeginStateBlock() override{NORTHLIGHT_STREAM_GATE 
+    HRESULT STDMETHODCALLTYPE BeginStateBlock() override{
         if(recording)return D3DERR_INVALIDCALL;recording=true;Queue& q=streamQueue();q.reserve((std::uint16_t)Cmd::BeginStateBlock,0);q.commit();return D3D_OK;}
-    HRESULT STDMETHODCALLTYPE EndStateBlock(IDirect3DStateBlock9** out) override{NORTHLIGHT_STREAM_GATE 
+    HRESULT STDMETHODCALLTYPE EndStateBlock(IDirect3DStateBlock9** out) override{
         if(!out)return D3DERR_INVALIDCALL;*out=nullptr;if(!recording)return D3DERR_INVALIDCALL;recording=false;
         StreamStateBlock* p;try{p=new StreamStateBlock(&core);}catch(...){return E_OUTOFMEMORY;}
         hookBlock(p);CreateArgs a{p,{},0};void* o=nullptr;
@@ -500,7 +488,7 @@ public:
     // and kUpSlack zeroed bytes follow each payload.
     static constexpr std::size_t kUpSlack=64;
     static std::size_t vertexBytes(unsigned count,unsigned stride){return std::size_t(count)*stride;}
-    HRESULT STDMETHODCALLTYPE DrawPrimitiveUP(D3DPRIMITIVETYPE type,UINT primCount,const void* data,UINT stride) override{NORTHLIGHT_STREAM_GATE 
+    HRESULT STDMETHODCALLTYPE DrawPrimitiveUP(D3DPRIMITIVETYPE type,UINT primCount,const void* data,UINT stride) override{
         if(!data||!stride||!primCount)return D3DERR_INVALIDCALL;
         onDraw(primCount);Queue& q=streamQueue();
         const std::size_t bytes=vertexBytes(primVerts(unsigned(type),primCount),stride);
@@ -514,7 +502,7 @@ public:
         HRESULT hr=D3DERR_INVALIDCALL;
         runTask(core,[&](StreamCore& c){upIdentity=data;hr=c.target->DrawPrimitiveUP(type,primCount,data,stride);upIdentity=nullptr;},Cmd::SyncUpDraw);
         st.afterUserPointerDraw(false);return hr;}
-    HRESULT STDMETHODCALLTYPE DrawIndexedPrimitiveUP(D3DPRIMITIVETYPE type,UINT minIndex,UINT numVertices,UINT primCount,const void* indices,D3DFORMAT indexFormat,const void* data,UINT stride) override{NORTHLIGHT_STREAM_GATE 
+    HRESULT STDMETHODCALLTYPE DrawIndexedPrimitiveUP(D3DPRIMITIVETYPE type,UINT minIndex,UINT numVertices,UINT primCount,const void* indices,D3DFORMAT indexFormat,const void* data,UINT stride) override{
         if(!data||!indices||!stride||!primCount)return D3DERR_INVALIDCALL;
         onDraw(primCount);Queue& q=streamQueue();
         const std::size_t indexBytes=std::size_t(primVerts(unsigned(type),primCount))*(unsigned(indexFormat)==D3::kFmtIndex32?4:2),
@@ -589,7 +577,7 @@ private:
         st.clear();sc0->comRelease();   // binds and the swap chain's own reference go; the Destroys run before the Target's release
         runTask(core,[&](StreamCore& c){c.target->Release();c.target=nullptr;},Cmd::SyncRelease);   // the Device's final release happens on the replay thread
         replayer.stop();
-        innerOf=nullptr;activeCore.store(nullptr,std::memory_order_release);recordGate.clearOwner();
+        innerOf=nullptr;activeCore.store(nullptr,std::memory_order_release);
         if(hCursor){cursor.destroy(hCursor);hCursor=nullptr;}
         IDirect3D9* p=parent;
         delete this;
@@ -632,10 +620,8 @@ private:
 };
 
 inline HRESULT STDMETHODCALLTYPE StreamSwapChain::Present(const RECT* src,const RECT* dst,HWND window,const RGNDATA* dirty,DWORD flags){
-    NORTHLIGHT_STREAM_GATE
     return static_cast<StreamDevice*>(core->game)->presentCommon(this,src,dst,window,dirty,flags);}
 inline HRESULT STDMETHODCALLTYPE StreamSwapChain::GetBackBuffer(UINT index,D3DBACKBUFFER_TYPE type,IDirect3DSurface9** out){
-    NORTHLIGHT_STREAM_GATE
     if(!out)return D3DERR_INVALIDCALL;*out=nullptr;
     if(index>=kids.size()||unsigned(type)!=0)return D3DERR_INVALIDCALL;
     auto* kid=static_cast<StreamSurface*>(kids[index]);
