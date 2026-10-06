@@ -136,16 +136,17 @@ static void locksPreserveBytes(){
 
 static void shadowCap(){
     gTrace.clear();Rig rig(true);auto& q=rig.core().q;auto& s=q.stats;
+    const int n=int(ShadowBudgetBytes/(2u<<20));   // how many 2 MiB shadows fit the cap
     std::vector<IDirect3DVertexBuffer9*> v;
-    for(int i=0;i<14;++i){IDirect3DVertexBuffer9* b=nullptr;CHECK(rig.dev->CreateVertexBuffer(2u<<20,D3::kUsageDynamic,0,(D3DPOOL)0,&b,nullptr)==D3D_OK);v.push_back(b);}
-    CHECK(s.shadowBytes.load()==std::int64_t(12)*(2<<20));   // 24 MiB: the 13th and 14th are refused (never evicting a live one) but still work
+    for(int i=0;i<n+2;++i){IDirect3DVertexBuffer9* b=nullptr;CHECK(rig.dev->CreateVertexBuffer(2u<<20,D3::kUsageDynamic,0,(D3DPOOL)0,&b,nullptr)==D3D_OK);v.push_back(b);}
+    CHECK(s.shadowBytes.load()==std::int64_t(n)*(2<<20));   // the cap: the last two are refused (never evicting a live one) but still work
     CHECK(get(s.shadowRefused)==2&&get(s.shadowRefusedBytes)==2u*(2u<<20));
-    void* p=nullptr;CHECK(v[13]->Lock(0,64,&p,D3::kLockDiscard)==D3D_OK&&v[13]->Unlock()==D3D_OK&&get(s.shadowLate)==0);   // still no room
+    void* p=nullptr;CHECK(v[n+1]->Lock(0,64,&p,D3::kLockDiscard)==D3D_OK&&v[n+1]->Unlock()==D3D_OK&&get(s.shadowLate)==0);   // still no room
     v[0]->Release();v[1]->Release();rig.sync();   // room again: a refused buffer takes its shadow at its next DISCARD lock, and only there
-    CHECK(v[12]->Lock(0,64,&p,0)==D3D_OK&&v[12]->Unlock()==D3D_OK&&get(s.shadowLate)==0);
-    CHECK(v[12]->Lock(0,64,&p,D3::kLockDiscard)==D3D_OK&&v[12]->Unlock()==D3D_OK&&get(s.shadowLate)==1&&s.shadowBytes.load()==std::int64_t(11)*(2<<20));
+    CHECK(v[n]->Lock(0,64,&p,0)==D3D_OK&&v[n]->Unlock()==D3D_OK&&get(s.shadowLate)==0);
+    CHECK(v[n]->Lock(0,64,&p,D3::kLockDiscard)==D3D_OK&&v[n]->Unlock()==D3D_OK&&get(s.shadowLate)==1&&s.shadowBytes.load()==std::int64_t(n-1)*(2<<20));
     v[0]=v[1]=nullptr;
-    rig.sync();q.setPressure(true);CHECK(q.shadowCap()==ShadowBudgetBytes/2&&!q.shadowAdmit(1<<20)&&s.shadowBytes.load()==std::int64_t(11)*(2<<20));
+    rig.sync();q.setPressure(true);CHECK(q.shadowCap()==ShadowBudgetBytes/2&&!q.shadowAdmit(1<<20)&&s.shadowBytes.load()==std::int64_t(n-1)*(2<<20));
     q.setPressure(false);for(auto* b:v)if(b)b->Release();rig.sync();CHECK(s.shadowBytes.load()==0);   // freed with their proxies
     rig.finish();checkClean();
 }
@@ -374,7 +375,7 @@ static void statsLine(){
     rig.sync();
     std::vector<std::string> lines;for(auto& l:gStatLines)if(l.find(" frames=600 ")!=std::string::npos)lines.push_back(l);   // the 600th replayed frame
     CHECK(lines.size()==1&&lines[0].rfind("CSTREAM cmds=",0)==0&&lines[0].find("passPerFrame=")!=std::string::npos&&lines[0].find("census[")!=std::string::npos&&lines[0].back()==']');
-    for(const char* field:{"game[per frame]: ms=","syncMs=","presentWaitMs=","bpMs=","sleeps=","publishes=","replayBusyMs/frame=","recorded=","answered=","texShadow=","readbacks="})CHECK(lines[0].find(field)!=std::string::npos);   // per-window numbers
+    for(const char* field:{"game[per frame]: ms=","syncMs=","presentWaitMs=","bpMs=","sleeps=","publishes=","replayBusyMs/frame=","recorded=","answered=","texShadow=","readbacks=","memMB="})CHECK(lines[0].find(field)!=std::string::npos);   // per-window numbers
     CHECK(lines[0].size()<1600);
     rig.finish();checkClean();
 }
@@ -464,6 +465,40 @@ static void renderTargetResetsViewport(){
     CHECK(d->GetViewport(&g)==D3D_OK&&get(rig.core().q.stats.syncCalls)==syncs+1);   // unknown again: the Target answers
     rt->Release();rig.finish();checkClean();
 }
+// Memory pressure published by the memory guard: at the next Present the stream gives memory back (idle pools, texture shadows down to the
+// halved cap, idle buffer shadows) without ever touching what is locked, and what the game reads stays what the real resource holds.
+static void memoryPressureRelease(){
+    gTrace.clear();Rig rig(true);auto& core=rig.core();auto& q=core.q;auto& s=q.stats;IDirect3DDevice9* d=rig.dev;
+    // buffer shadows: three aged, one fresh, one locked across the Present
+    std::vector<IDirect3DVertexBuffer9*> vb;
+    for(int i=0;i<5;++i){IDirect3DVertexBuffer9* b=nullptr;CHECK(d->CreateVertexBuffer(1u<<20,D3::kUsageDynamic,0,(D3DPOOL)0,&b,nullptr)==D3D_OK);vb.push_back(b);void* p=nullptr;CHECK(b->Lock(0,0,&p,0)==D3D_OK);std::memset(p,0x40+i,1u<<20);CHECK(b->Unlock()==D3D_OK);}
+    for(int i=0;i<130;++i)d->Present(nullptr,nullptr,nullptr,nullptr);   // the first three go idle: their last lock is 130 frames old
+    {void* p=nullptr;CHECK(vb[3]->Lock(0,64,&p,0)==D3D_OK&&vb[3]->Unlock()==D3D_OK);}   // fresh
+    void* held=nullptr;CHECK(vb[4]->Lock(0,0,&held,0)==D3D_OK);std::memset(held,0x77,1u<<20);   // locked now, across the Present
+    auto shadowOf=[&](int i){return static_cast<StreamVertexBuffer*>(ProxyBase::of(vb[i]))->buf.shadowOn;};
+    // texture shadows up to the cap, one level locked across the Present
+    std::vector<IDirect3DTexture9*> tex;
+    for(int i=0;i<70;++i){IDirect3DTexture9* t=nullptr;CHECK(d->CreateTexture(256,256,1,0,(D3DFORMAT)22,(D3DPOOL)1,&t,nullptr)==D3D_OK);D3DLOCKED_RECT lr{};CHECK(t->LockRect(0,&lr,nullptr,0)==D3D_OK&&t->UnlockRect(0)==D3D_OK);tex.push_back(t);}
+    D3DLOCKED_RECT tl{};CHECK(tex[0]->LockRect(0,&tl,nullptr,0)==D3D_OK);std::memset(tl.pBits,0x5C,256*4);
+    CHECK(s.texShadowBytes.load()>std::int64_t(TextureShadowBudgetBytes/2)&&shadowOf(0)&&shadowOf(1)&&shadowOf(2)&&shadowOf(3)&&shadowOf(4));
+    rig.sync();const auto before=rig.sd->replayerOf().memory();
+    core.memoryPressure.store(true);d->Present(nullptr,nullptr,nullptr,nullptr);rig.sync();
+    CHECK(q.pressure()&&s.texShadowBytes.load()<=std::int64_t(q.texShadowCap())&&s.shadowBytes.load()<=std::int64_t(q.shadowCap()));
+    CHECK(!shadowOf(0)&&!shadowOf(1)&&!shadowOf(2));   // idle for 130 frames: dropped
+    CHECK(shadowOf(4));                                  // locked: never touched (the cap allows it)
+    CHECK(rig.sd->replayerOf().memory().total()<before.total());
+    CHECK(get(s.texShadowEvicted)>0);
+    // the locked ones keep working and the game reads what the real resource holds
+    CHECK(vb[4]->Unlock()==D3D_OK&&tex[0]->UnlockRect(0)==D3D_OK);
+    void* p=nullptr;CHECK(vb[4]->Lock(0,16,&p,D3::kLockReadOnly)==D3D_OK&&((unsigned char*)p)[0]==0x77&&((unsigned char*)p)[15]==0x77);CHECK(vb[4]->Unlock()==D3D_OK);
+    CHECK(vb[0]->Lock(0,16,&p,D3::kLockReadOnly)==D3D_OK&&((unsigned char*)p)[0]==0x40&&((unsigned char*)p)[15]==0x40);CHECK(vb[0]->Unlock()==D3D_OK);   // dropped: read from the real buffer
+    D3DLOCKED_RECT r2{};CHECK(tex[0]->LockRect(0,&r2,nullptr,D3::kLockReadOnly)==D3D_OK&&((unsigned char*)r2.pBits)[3]==0x5C&&((unsigned char*)r2.pBits)[1023]==0x5C);CHECK(tex[0]->UnlockRect(0)==D3D_OK);
+    // pressure over: caps back, and a DISCARD lock brings a dropped buffer's shadow back
+    core.memoryPressure.store(false);d->Present(nullptr,nullptr,nullptr,nullptr);CHECK(!q.pressure());
+    const auto late=get(s.shadowLate);CHECK(vb[1]->Lock(0,0,&p,D3::kLockDiscard)==D3D_OK&&vb[1]->Unlock()==D3D_OK&&get(s.shadowLate)==late+1&&shadowOf(1));
+    for(auto* t:tex)t->Release();for(auto* b:vb)b->Release();
+    rig.finish();checkClean();
+}
 static void nestedSyncInPump(){
     gTrace.clear();Rig rig(true);auto& s=rig.core().q.stats;
     static Rig* r;static HRESULT nested;static int calls;r=&rig;nested=12345;calls=0;
@@ -507,6 +542,13 @@ static void snapshotTriggers(){
     rig.finish();   // every snapshot went back to the pool
 }
 
+// At most three snapshots per frame and one frame of lag: the pool (8) is never exhausted by the trigger policy.
+static void snapshotPoolNotExhausted(){
+    gTrace.clear();gCaptures=0;StreamDevice::Options opt;opt.capture=&fakeCapture;Rig rig(true,opt);
+    for(int frame=0;frame<300;++frame){for(int i=0;i<6;++i)rig.dev->DrawPrimitive((D3DPRIMITIVETYPE)4,0,2);rig.dev->Present(nullptr,nullptr,nullptr,nullptr);}
+    rig.sync();CHECK(gCaptures.load()==300&&rig.sd->replayerOf().snapshots.allocated()<=SnapshotPool::DefaultCap);
+    rig.finish();
+}
 // ---- the equivalence run ----
 struct Game {
     IDirect3DDevice9* dev;std::uint64_t rng;std::vector<std::string>& out;std::vector<HRESULT>& presents;
@@ -743,7 +785,7 @@ static void idlePollWakes(){
 }
 static void streamTests(bool threadsOnly){
     layoutIsolation();replayTimingAccounting();diagnosticsOffSkipsAudit();idlePollWakes();
-    lifetimeAndIdentity();stateKnownUnknown();locksPreserveBytes();shadowCap();queriesAndSyncCensus();resetAndShutdown();directReplayRaw();redundantFiltering();renderTargetResetsViewport();textureShadows();statsLine();childrenOutliveTheDevice();queryProbeAndDeadQuery();initFailureFallback();cursorHandling();nestedSyncInPump();upDrawsAndBackpressure();snapshotTriggers();
+    lifetimeAndIdentity();stateKnownUnknown();locksPreserveBytes();shadowCap();queriesAndSyncCensus();resetAndShutdown();directReplayRaw();redundantFiltering();renderTargetResetsViewport();textureShadows();statsLine();childrenOutliveTheDevice();queryProbeAndDeadQuery();initFailureFallback();cursorHandling();nestedSyncInPump();upDrawsAndBackpressure();snapshotTriggers();snapshotPoolNotExhausted();memoryPressureRelease();
     equivalence(20000,12345);equivalence(20000,987654321);
     (void)threadsOnly;
 }

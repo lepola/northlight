@@ -157,7 +157,10 @@ public:
 // reads live, so a slow replay costs coherence, never memory.
 class SnapshotPool {
 public:
-    explicit SnapshotPool(std::size_t cap=48):cap_(cap){}
+    // At most 3 triggers a frame (FrameStart, World, Ui) and the game runs at most one frame ahead of the replay: 2 frames x 3 = 6, plus slack.
+    // 8 x sizeof(GameSnapshot) (~68 KiB) stays under 1 MiB of the 32-bit address space.
+    static constexpr std::size_t DefaultCap=8;
+    explicit SnapshotPool(std::size_t cap=DefaultCap):cap_(cap){}
     GameSnapshot* acquire(){
         std::lock_guard<std::mutex> lock(mutex_);
         if(!free_.empty()){GameSnapshot* s=free_.back();free_.pop_back();s->clear();return s;}
@@ -167,6 +170,7 @@ public:
     }
     void release(GameSnapshot* s){if(!s)return;std::lock_guard<std::mutex> lock(mutex_);try{free_.push_back(s);}catch(...){}}
     std::size_t allocated()const{std::lock_guard<std::mutex> lock(mutex_);return all_.size();}
+    std::size_t reservedBytes()const{return allocated()*sizeof(GameSnapshot);}
     std::size_t idle()const{std::lock_guard<std::mutex> lock(mutex_);return free_.size();}
 private:
     std::size_t cap_;mutable std::mutex mutex_;std::vector<std::unique_ptr<GameSnapshot>> all_;std::vector<GameSnapshot*> free_;

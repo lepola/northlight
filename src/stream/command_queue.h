@@ -32,9 +32,13 @@ static_assert(sizeof(CommandHeader)==8,"header is 8 bytes");
 
 constexpr std::size_t ChunkBytes=std::size_t(1)<<20;
 constexpr std::size_t MaxInlinePayload=ChunkBytes/4;   // larger payloads travel in a Block
-constexpr std::size_t BudgetBytes=std::size_t(48)<<20;
-constexpr std::size_t TextureShadowBudgetBytes=std::size_t(32)<<20;   // per-level texture shadows; halved under pressure; never evicted
-constexpr std::size_t ShadowBudgetBytes=std::size_t(24)<<20;   // CPU shadows of DYNAMIC buffers; halved under pressure; never evicted
+// 0.3.193 (CS): the stream's own memory shares a 32-bit address space with the game and the world renderer, which stalled for lack of a
+// contiguous block while the stream held ~100 MiB. Real sessions peak at ~12 MiB of queue; every cap is now 16 MiB (all four together ~64 MiB at
+// the very worst, ~20-30 MiB typically) and the idle pools are kept small (kPoolMaxChunks, kMaxPooledBlockBytes, PoolTuner).
+constexpr std::size_t BudgetBytes=std::size_t(16)<<20;
+constexpr std::size_t TextureShadowBudgetBytes=std::size_t(16)<<20;   // per-level texture shadows; halved under pressure; evictable (LRU)
+constexpr std::size_t ShadowBudgetBytes=std::size_t(16)<<20;   // CPU shadows of DYNAMIC buffers; halved under pressure; dropped when idle under pressure
+constexpr std::size_t kPoolMaxChunks=4,kReserveChunks=2;   // idle chunks kept at most / after a quiet window
 constexpr std::uint32_t kAutoPublishCommands=64,kAutoPublishBytes=64u<<10;
 constexpr std::uint32_t kNoPayload=0xFFFFFFFFu;   // a nullable pointer's offset in a generated Args struct
 
@@ -59,7 +63,7 @@ class Queue {
         alignas(8) unsigned char data[ChunkBytes];
     };
     static constexpr unsigned kMinBlockShift=12,kMaxBlockShift=27,kBlockClasses=kMaxBlockShift-kMinBlockShift+1;
-    static constexpr std::size_t kMaxPooledBlockBytes=std::size_t(16)<<20;
+    static constexpr std::size_t kMaxPooledBlockBytes=std::size_t(4)<<20;
 
     // 0.3.193 (CS): every group on its own cache line (kLine=128: Apple Silicon's line; x86's 64 divides it). The producer's private
     // fields change on every command, the consumer's on every retire, recorded_/replayed_ are each written by one side and read by the
@@ -110,7 +114,7 @@ class Queue {
             backpressure(ChunkBytes);
             Chunk* c=nullptr;
             {std::lock_guard<std::mutex> l(pool_);if(!freeChunks_.empty()){c=freeChunks_.back();freeChunks_.pop_back();}}
-            if(!c){c=new(std::nothrow) Chunk;if(c)add(stats.chunkAllocs);}
+            if(!c){c=new(std::nothrow) Chunk;if(c){add(stats.chunkAllocs);add(stats.chunksHeap);}}
             if(c){add(stats.chunksLive);noteHighWater();return c;}
             if(drained())std::abort();   // out of address space with nothing left to wait for
             publish();progress_.waitPumped(50);
@@ -127,7 +131,9 @@ class Queue {
     void wake(){if(sleeping_.load())consumerEv_.set();}
     void recycle(Chunk* c){
         c->next.store(nullptr,std::memory_order_relaxed);c->published.store(0,std::memory_order_relaxed);c->end.store(0,std::memory_order_relaxed);
-        {std::lock_guard<std::mutex> l(pool_);freeChunks_.push_back(c);}
+        bool kept=false;
+        {std::lock_guard<std::mutex> l(pool_);if(freeChunks_.size()<kPoolMaxChunks){freeChunks_.push_back(c);kept=true;}}
+        if(!kept){delete c;stats.chunksHeap.fetch_sub(1,std::memory_order_relaxed);}   // a spike's extra chunks do not stay
         stats.chunksLive.fetch_sub(1,std::memory_order_relaxed);
     }
     // Moves the consumer past a fully consumed, closed chunk.
@@ -168,7 +174,7 @@ public:
     Counters stats;
 
     explicit Queue(std::size_t budget=BudgetBytes):budget_(budget){
-        wchunk_=new Chunk;rchunk_=wchunk_;add(stats.chunkAllocs);add(stats.chunksLive);
+        wchunk_=new Chunk;rchunk_=wchunk_;add(stats.chunkAllocs);add(stats.chunksHeap);add(stats.chunksLive);
     }
     Queue(const Queue&)=delete;Queue& operator=(const Queue&)=delete;
     ~Queue(){
@@ -240,7 +246,7 @@ public:
         backpressure(cap);
         if(over(cap)){own(stats.blockRefused);return nullptr;}
         Block* b=nullptr;
-        {std::lock_guard<std::mutex> l(pool_);auto& v=freeBlocks_[k];if(!v.empty()){b=v.back();v.pop_back();pooledBlockBytes_-=cap;}}
+        {std::lock_guard<std::mutex> l(pool_);auto& v=freeBlocks_[k];if(!v.empty()){b=v.back();v.pop_back();pooledBlockBytes_-=cap;stats.blockPoolBytes.fetch_sub(cap,std::memory_order_relaxed);}}
         if(b)add(stats.blockReuses);
         else{
             void* m=::operator new(sizeof(Block)+cap,std::nothrow);if(!m){own(stats.blockRefused);return nullptr;}
@@ -256,7 +262,7 @@ public:
         const std::size_t cap=b->capacity;
         stats.blocksLive.fetch_sub(1,std::memory_order_relaxed);stats.blockBytes.fetch_sub(cap,std::memory_order_relaxed);
         bool pooled=false;
-        {std::lock_guard<std::mutex> l(pool_);if(pooledBlockBytes_+cap<=kMaxPooledBlockBytes){freeBlocks_[b->cls].push_back(b);pooledBlockBytes_+=cap;pooled=true;}}
+        {std::lock_guard<std::mutex> l(pool_);if(pooledBlockBytes_+cap<=kMaxPooledBlockBytes){freeBlocks_[b->cls].push_back(b);pooledBlockBytes_+=cap;pooled=true;stats.blockPoolBytes.fetch_add(cap,std::memory_order_relaxed);}}
         if(!pooled)::operator delete(b);
         if(bpWaiting_.load())progress_.set();
     }
@@ -275,10 +281,24 @@ public:
     std::size_t budget()const{return pressure_.load()?budget_/2:budget_;}
     void trim(){
         std::vector<Chunk*> c;std::vector<Block*> b;
-        {std::lock_guard<std::mutex> l(pool_);c.swap(freeChunks_);for(auto& v:freeBlocks_){b.insert(b.end(),v.begin(),v.end());v.clear();}pooledBlockBytes_=0;}
-        for(Chunk* x:c)delete x;
+        {std::lock_guard<std::mutex> l(pool_);c.swap(freeChunks_);for(auto& v:freeBlocks_){b.insert(b.end(),v.begin(),v.end());v.clear();}pooledBlockBytes_=0;stats.blockPoolBytes.store(0,std::memory_order_relaxed);}
+        for(Chunk* x:c){delete x;stats.chunksHeap.fetch_sub(1,std::memory_order_relaxed);}
         for(Block* x:b)::operator delete(x);
     }
+    // Idle pool memory: chunks and Block bytes sitting unused. Only the pools are touched (under their lock): live chunks and blocks never.
+    void poolState(std::size_t& chunks,std::size_t& blockBytes){std::lock_guard<std::mutex> l(pool_);chunks=freeChunks_.size();blockBytes=pooledBlockBytes_;}
+    // Frees up to `chunks` pooled chunks and about `blockBytes` of pooled Blocks (largest classes first).
+    void trimPool(std::size_t chunks,std::size_t blockBytes){
+        std::vector<Chunk*> c;std::vector<Block*> b;
+        {std::lock_guard<std::mutex> l(pool_);
+         while(chunks&&!freeChunks_.empty()){c.push_back(freeChunks_.back());freeChunks_.pop_back();--chunks;}
+         for(unsigned k=kBlockClasses;k-->0&&blockBytes;){auto& v=freeBlocks_[k];
+             while(blockBytes&&!v.empty()){Block* x=v.back();v.pop_back();const std::size_t cap=x->capacity;pooledBlockBytes_-=cap;stats.blockPoolBytes.fetch_sub(cap,std::memory_order_relaxed);blockBytes=blockBytes>cap?blockBytes-cap:0;b.push_back(x);}}}
+        for(Chunk* x:c){delete x;stats.chunksHeap.fetch_sub(1,std::memory_order_relaxed);}
+        for(Block* x:b)::operator delete(x);
+    }
+    // Every byte the queue holds from the process: chunks (in use and pooled), live and pooled Blocks. (Shadows are accounted by their owners.)
+    std::size_t reservedBytes()const{return std::size_t(get(stats.chunksHeap))*sizeof(Chunk)+std::size_t(get(stats.blockBytes))+std::size_t(get(stats.blockPoolBytes));}
 
     // ---- Consumer ----
     // The next published, unretired command, or nullptr (!wait and empty, or interrupted). The same command is returned
@@ -340,4 +360,18 @@ public:
 };
 static_assert(alignof(Queue)>=kLine,"Queue is cache-line aligned: heap objects holding one need C++17 aligned new");
 static_assert(Queue::layoutIsolated(),"Queue field groups sit on distinct cache lines");
+
+// Returns idle pool memory after a quiet window instead of keeping a spike's high-water mark forever: sampled once per frame by the producer
+// (any point where it may touch the pools); a window of kWindow frames that never drew the pool below its reserve proves the excess unused.
+struct PoolTuner {
+    static constexpr unsigned kWindow=120;
+    unsigned frames=0;std::size_t minChunks=std::size_t(-1),minBlockBytes=std::size_t(-1);
+    void sample(Queue& q){
+        std::size_t c=0,b=0;q.poolState(c,b);
+        if(c<minChunks)minChunks=c;if(b<minBlockBytes)minBlockBytes=b;
+        if(++frames<kWindow)return;
+        if(minChunks>kReserveChunks||minBlockBytes>0)q.trimPool(minChunks>kReserveChunks?minChunks-kReserveChunks:0,minBlockBytes==std::size_t(-1)?0:minBlockBytes);
+        frames=0;minChunks=minBlockBytes=std::size_t(-1);
+    }
+};
 }

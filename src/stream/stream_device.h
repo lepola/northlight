@@ -350,7 +350,13 @@ public:
         if(prev){q.waitReplayed(prev,WaitKind::Present);result=presentResult(prev);}   // one frame ahead: the previous frame's real HRESULT
         q.setPressure(core.memoryPressure.load(std::memory_order_relaxed)||NorthlightStream::memoryPressure.load(std::memory_order_relaxed));
         frameEnd=nowNs();waitsAtFrameEnd=get(q.stats.syncNs)+get(q.stats.backpressureNs);
-        if(pressureApplied!=q.pressure()){pressureApplied=q.pressure();if(pressureApplied)q.trim();}
+        ++core.frameNo;tuner.sample(q);   // idle pool memory goes back after a quiet window
+        const bool pressureNow=q.pressure();
+        if(pressureNow&&(!pressureApplied||core.frameNo%60==0))releaseUnderPressure();   // the memory guard asked: give memory back now, not only stop growing
+        if(pressureApplied!=pressureNow){
+            pressureApplied=pressureNow;
+            if(replayer.log){char b[128];std::snprintf(b,sizeof b,"CSTREAM memory pressure %s memMB=%.1f",pressureNow?"on":"off",replayer.memory().total()/1048576.0);replayer.log(b);}
+        }
         return result;
     }
     // The real result of the Present command with sequence number `seq`, recorded by the replay thread.
@@ -522,7 +528,7 @@ private:
     StreamSwapChain* sc0=nullptr;std::atomic<LONG> refs{1};
     bool recording=false,pressureApplied=false,filter=true;BOOL cursorVisible=0;void* hCursor=nullptr;std::mutex cursorMutex;CursorApi cursor=CursorApi::native();unsigned getsSincePublish=0;std::uint64_t frameEnd=0,waitsAtFrameEnd=0;std::uint64_t prevPresent=0,drawOrdinal=0;
     std::thread::id gameThread=std::this_thread::get_id();
-    TriggerPolicy policy;bool (*capture)(GameSnapshot&,Trigger,std::uint64_t)=nullptr;
+    PoolTuner tuner;TriggerPolicy policy;bool (*capture)(GameSnapshot&,Trigger,std::uint64_t)=nullptr;
 
     StreamDevice(IDirect3DDevice9* target,IDirect3D9* par,const D3DPRESENT_PARAMETERS* p,Options opt)
         :coreOwner(new StreamCore(opt.budget)),core(*coreOwner),replayer(core),parent(par),capture(opt.capture){
@@ -554,6 +560,12 @@ private:
             IDirect3DSurface9* b=nullptr;
             if(i<n&&SUCCEEDED(sc->GetBackBuffer(i,(D3DBACKBUFFER_TYPE)0,&b))&&b){c.reg.bindInner(k,b);k->dead.store(false);}else k->dead.store(true);
         }
+    }
+    // Under memory pressure (caps already halved): trim every idle chunk and Block, evict texture shadows down to the halved cap (least recently
+    // locked first, never one that is locked), and drop buffer shadows idle for 120 frames (then the least recent while over the cap).
+    // Everything here is game-thread or pool-locked state: nothing the replay thread may read.
+    void releaseUnderPressure(){
+        core.q.trim();makeRoomForShadow(core,0,true,nullptr);dropIdleBufferShadows(core,120);
     }
     void finalRelease(){
         st.clear();sc0->comRelease();   // binds and the swap chain's own reference go; the Destroys run before the Target's release

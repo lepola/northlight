@@ -23,6 +23,7 @@ struct Counters {
     // ---- Producer (game thread) ----
     alignas(kLine) Counter commands{0};   // (alignas binds to the one declarator it precedes: every group starts on its own line)
     Counter bytes{0},publishes{0},oversizeDrops{0},blockRefused{0},recordNs{0};
+    Counter chunksHeap{0},blockPoolBytes{0};   // chunks allocated from the heap right now (in use + pooled); bytes of idle pooled Blocks
     Counter chunkAllocs{0},blockAllocs{0},blockReuses{0};   // heap allocations vs pool hits: flat after warm-up
     Counter highWaterBytes{0},highWaterDepth{0};
     // Waits of the game thread: count and nanoseconds by kind. Nested syncs never wait; they are counted separately.

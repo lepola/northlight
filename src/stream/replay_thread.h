@@ -173,6 +173,13 @@ public:
     }
     void join(){if(th_.joinable()){core.q.interrupt();stopNow_.store(true);th_.join();}}
     bool running()const{return th_.joinable();}
+    // Everything the stream holds from the process, for the CSTREAM line and the memory-guard transitions: queue chunks and Blocks (in use and
+    // pooled), buffer shadows, texture shadows, snapshots.
+    struct Memory {std::size_t queue,bufferShadows,textureShadows,snapshots;std::size_t total()const{return queue+bufferShadows+textureShadows+snapshots;}};
+    Memory memory()const{
+        const auto& s=core.q.stats;const auto bs=s.shadowBytes.load(std::memory_order_relaxed),ts=s.texShadowBytes.load(std::memory_order_relaxed);
+        return {core.q.reservedBytes(),bs>0?std::size_t(bs):0,ts>0?std::size_t(ts):0,snapshots.reservedBytes()};
+    }
     // The background workers (GI, geometry builder, static shadow streamer) run BELOW_NORMAL; the replay thread is the critical path and
     // must not be preempted by them. Win32 only; one log line if it fails.
     void raisePriority(){
@@ -372,6 +379,7 @@ private:
              double(gNs-lastGameNs_-(gW-lastGameWait_))/1e6*inv2,double(sNs-lastSyncNs_)/1e6*inv2,double(pNs-lastPresentNs_)/1e6*inv2,double(bNs-lastBpNs_)/1e6*inv2,
              double(cm-lastCmds_)*inv2,double(fl-lastFiltered_)*inv2,double(an-lastAnswered_)*inv2,double(sc-lastSyncCalls_)*inv2,double(dr-lastDirect_)*inv2);
          lastGameNs_=gNs;lastGameWait_=gW;lastPresentNs_=pNs;lastSyncNs_=sNs;lastBpNs_=bNs;lastCmds_=cm;lastFiltered_=fl;lastDirect_=dr;lastAnswered_=an;lastSyncCalls_=sc;}
+        {const Memory m=memory();put(buf,n," memMB=%.1f(queue %.1f, bufShadow %.1f, texShadow %.1f, snapshots %.2f)",m.total()/1048576.0,m.queue/1048576.0,m.bufferShadows/1048576.0,m.textureShadows/1048576.0,m.snapshots/1048576.0);}
         put(buf,n," texShadow=%.1f/%.0fMB hits=%llu fresh=%llu readbacks=%llu evicted=%llu freshUseful=%llu refused=%llu/%.1fMB",double(std::max<std::int64_t>(0,s.texShadowBytes.load()))/1048576.0,double(core.q.texShadowCap())/1048576.0,
             (unsigned long long)get(s.texShadowHits),(unsigned long long)get(s.texShadowFresh),(unsigned long long)get(s.texShadowReadbacks),(unsigned long long)get(s.texShadowEvicted),(unsigned long long)get(s.texShadowFreshUseful),(unsigned long long)get(s.texShadowRefused),get(s.texShadowRefusedBytes)/1048576.0);
         put(buf,n," pass[");

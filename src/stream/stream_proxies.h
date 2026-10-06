@@ -184,6 +184,9 @@ struct StreamCore {
     std::atomic<std::uint64_t> framesReplayed{0};
     // The live level shadows (see SubRes): inserted and evicted on the game thread, removed by a proxy's destructor on the replay thread.
     std::mutex texMutex;std::vector<SubRes*> texList;std::uint64_t texClock=0;
+    struct BufEntry {ProxyBase* proxy;struct BufferState* state;};
+    std::vector<BufEntry> bufList;   // live buffer shadows, under texMutex too (the same game-thread-evicts / replay-thread-destructs rule)
+    std::uint64_t frameNo=0;         // game thread: Presents so far (the idle clock of buffer shadows)
     void (*logLine)(const char*)=nullptr;        // diagnostics sink (renderer.cpp's logf); may be null
     explicit StreamCore(std::size_t budget=BudgetBytes):q(budget){}
     void log(const char* text){if(logLine)logLine(text);}
@@ -487,24 +490,51 @@ inline HRESULT unlockImage(ProxyBase& self,SubRes& sub,UINT route,UINT level,UIN
 // ---- buffer locks ----
 struct BufferState {
     std::vector<unsigned char> shadow;bool shadowOn=false,written=false,whole=false,wantShadow=false;   // wantShadow: a DYNAMIC buffer the cap refused so far
+    std::uint64_t lastUse=0;std::size_t listIndex=0;   // lastUse: StreamCore::frameNo of its last shadow lock (idle shadows are dropped under pressure)
     enum Mode:std::uint8_t{Free,Shadow,Staged,Pass} mode=Free;UINT off=0,size=0;DWORD flags=0;Block* stage=nullptr;
 };
 // Only DYNAMIC buffers get a CPU shadow (they are locked every frame, ring-style, and keep earlier bytes), under their own
 // fixed cap and outside the queue budget; a buffer that does not fit simply has none. Everything else: the first write lock
 // and DISCARD are asynchronous (staging Block), later locks pass through.
+// A buffer shadow is game-side memory: the game thread takes it and (under pressure) drops it, the replay thread frees it when the proxy dies.
+// StreamCore::bufList (under texMutex) makes those two safe against each other.
 inline bool takeShadow(ProxyBase& p,BufferState& s){
     const std::size_t len=p.info.length;
     if(!len||!p.core->q.shadowAdmit(len))return false;
     try{s.shadow.assign(len+kLockSlack,0);}catch(...){return false;}
-    s.shadowOn=true;p.core->q.addShadowBytes(std::int64_t(len));return true;
+    s.shadowOn=true;p.core->q.addShadowBytes(std::int64_t(len));s.lastUse=p.core->frameNo;
+    std::lock_guard<std::mutex> l(p.core->texMutex);s.listIndex=p.core->bufList.size();p.core->bufList.push_back({&p,&s});
+    return true;
 }
 inline void initShadow(ProxyBase& p,BufferState& s,bool game=true){   // game=false: an implicit proxy made on the replay thread never shadows
     if(!game||!(p.info.usage&D3::kUsageDynamic))return;
     if(!takeShadow(p,s)){s.wantShadow=true;add(p.core->q.stats.shadowRefused);add(p.core->q.stats.shadowRefusedBytes,p.info.length);}
 }
-inline void dropShadow(ProxyBase& p,BufferState& s){   // a GPU-side write or the proxy's end: the shadow no longer mirrors the buffer
+inline void dropShadowLocked(ProxyBase& p,BufferState& s){
     if(!s.shadowOn)return;
-    p.core->q.addShadowBytes(-std::int64_t(p.info.length));std::vector<unsigned char>().swap(s.shadow);s.shadowOn=false;s.wantShadow=false;
+    auto& list=p.core->bufList;auto last=list.back();list[s.listIndex]=last;last.state->listIndex=s.listIndex;list.pop_back();
+    p.core->q.addShadowBytes(-std::int64_t(p.info.length));std::vector<unsigned char>().swap(s.shadow);s.shadowOn=false;
+}
+inline void dropShadow(ProxyBase& p,BufferState& s){   // a GPU-side write or the proxy's end: the shadow no longer mirrors the buffer
+    {std::lock_guard<std::mutex> l(p.core->texMutex);dropShadowLocked(p,s);}
+    s.wantShadow=false;
+}
+// Memory pressure (game thread, at a Present): drop shadows of buffers not locked for idleFrames, then, while still over the (halved) cap, the
+// least recently locked unlocked ones. A dropped buffer's next lock takes the no-shadow path (first write / DISCARD staged, the rest passes
+// through) and may earn a shadow back at a DISCARD lock when the cap allows: the correctness rule is unchanged.
+inline void dropIdleBufferShadows(StreamCore& c,unsigned idleFrames){
+    std::lock_guard<std::mutex> l(c.texMutex);
+    for(std::size_t i=0;i<c.bufList.size();){
+        auto e=c.bufList[i];
+        if(e.state->mode==BufferState::Free&&c.frameNo>=e.state->lastUse+idleFrames){dropShadowLocked(*e.proxy,*e.state);e.state->wantShadow=true;}   // (swap-removed: look at index i again)
+        else ++i;
+    }
+    while(!c.q.shadowAdmit(0)){
+        StreamCore::BufEntry* victim=nullptr;
+        for(auto& e:c.bufList)if(e.state->mode==BufferState::Free&&(!victim||e.state->lastUse<victim->state->lastUse))victim=&e;
+        if(!victim)break;
+        StreamCore::BufEntry v=*victim;dropShadowLocked(*v.proxy,*v.state);v.state->wantShadow=true;
+    }
 }
 // Range rules (our reading of DXVK, not verified against it): an offset beyond the end fails with INVALIDCALL; a size of 0 or one
 // that runs past the end becomes "to the end" instead of failing, so the staged/shadow range and the replayed Lock are the clamped one.
@@ -517,7 +547,7 @@ inline HRESULT lockBuffer(ProxyBase& self,BufferState& s,UINT off,UINT size,void
     const DWORD eff=effectiveLockFlags(flags,self.info.pool);
     // a refused DYNAMIC buffer may get its shadow now, but only where its contents are undefined anyway: a DISCARD lock (default pool)
     if(!s.shadowOn&&s.wantShadow&&(eff&D3::kLockDiscard)&&takeShadow(self,s)){s.wantShadow=false;add(q.stats.shadowLate);}
-    if(s.shadowOn){s.mode=BufferState::Shadow;*pp=s.shadow.data()+off;own(q.stats.lockAsync);return D3D_OK;}
+    if(s.shadowOn){s.mode=BufferState::Shadow;s.lastUse=self.core->frameNo;*pp=s.shadow.data()+off;own(q.stats.lockAsync);return D3D_OK;}
     PassReason why=PassReason::NoShadow;
     if(flags&D3::kLockReadOnly)why=PassReason::ReadOnly;
     else if(!s.written||(eff&D3::kLockDiscard)){

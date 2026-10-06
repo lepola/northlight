@@ -186,7 +186,7 @@ static void budgetRules(){
         CHECK(waitFor([&]{return get(q.stats.backpressureWaits)>=1;}));
         std::this_thread::sleep_for(std::chrono::milliseconds(30));CHECK(!finished.load()&&got.load()<20);
         for(int i=0;i<20;++i){auto* h=q.next(true);CHECK(h&&checkPayload(Queue::blockOf(h)->data(),8,i));q.retire(h);}
-        producer.join();CHECK(get(q.stats.blocksLive)==0&&get(q.stats.blockBytes)==0&&get(q.stats.blockAllocs)<=6);
+        producer.join();CHECK(get(q.stats.blocksLive)==0&&get(q.stats.blockBytes)==0&&get(q.stats.blockAllocs)<=20);   // (the idle Block pool keeps at most 4 MiB, so reuse is partial)
     }
 }
 static void reuseAfterWarmup(){
@@ -246,6 +246,37 @@ static void wakeHandshakeStress(){
     }
     consumer.join();CHECK(worst<100000000ull);   // no round trip waited for a timeout
 }
+// The stream shares a 32-bit address space: the caps are 16 MiB each, a spike's idle chunks do not stay, and a quiet window returns the rest.
+static void memoryCapsAndPools(){
+    static_assert(BudgetBytes==(16u<<20)&&TextureShadowBudgetBytes==(16u<<20)&&ShadowBudgetBytes==(16u<<20),"the 16 MiB caps");
+    static_assert(SnapshotPool::DefaultCap*sizeof(GameSnapshot)<=(1u<<20),"the snapshot pool reserves at most 1 MiB");
+    static_assert(SnapshotPool::DefaultCap>=2*3+2,"2 frames x 3 triggers (FrameStart, World, Ui) in flight, plus slack");
+    {SnapshotPool pool;std::vector<GameSnapshot*> held;for(std::size_t i=0;i<SnapshotPool::DefaultCap;++i){auto* x=pool.acquire();CHECK(x);held.push_back(x);}
+     CHECK(pool.acquire()==nullptr&&pool.reservedBytes()<=(1u<<20));pool.release(held[0]);CHECK(pool.acquire()==held[0]);for(std::size_t i=1;i<held.size();++i)pool.release(held[i]);}
+    // a spike of 12 chunks in flight: once consumed only kPoolMaxChunks stay pooled
+    Queue q;const std::size_t base=q.reservedBytes();
+    for(int i=0;i<12*3;++i)record(q,1,(std::uint32_t)MaxInlinePayload,i);   // 3 per chunk
+    q.publish();CHECK(get(q.stats.chunksHeap)>=12);
+    while(auto* h=q.next(false))q.retire(h);
+    std::size_t chunks=0,blocks=0;q.poolState(chunks,blocks);CHECK(chunks==kPoolMaxChunks&&get(q.stats.chunksHeap)==kPoolMaxChunks+1);   // (+1: the chunk being written)
+    // a quiet window returns the pool down to the reserve; a window that drew the pool down does not
+    PoolTuner tuner;for(unsigned i=0;i<PoolTuner::kWindow-1;++i)tuner.sample(q);
+    for(int i=0;i<4*3;++i)record(q,1,(std::uint32_t)MaxInlinePayload,i);   // the pool is used inside the window
+    while(auto* h=q.next(false))q.retire(h);q.publish();
+    {std::size_t mid=0,b=0;q.poolState(mid,b);(void)b;}
+    tuner.sample(q);   // window closes: its minimum was 0 chunks, nothing trimmed
+    std::size_t c2=0;q.poolState(c2,blocks);CHECK(c2>0);   // refilled by the retire above
+    for(unsigned i=0;i<PoolTuner::kWindow;++i)tuner.sample(q);
+    q.poolState(chunks,blocks);CHECK(chunks<=kReserveChunks&&q.reservedBytes()<base+(kReserveChunks+2)*ChunkBytes);
+    // Blocks: pooled Blocks of a quiet window go too
+    for(int i=0;i<3;++i){Block* b=q.tryAllocBlock(1u<<20);CHECK(b);q.freeBlock(b);}
+    q.poolState(chunks,blocks);CHECK(blocks>0);
+    for(unsigned i=0;i<2*PoolTuner::kWindow;++i)tuner.sample(q);
+    q.poolState(chunks,blocks);CHECK(blocks==0&&get(q.stats.blockPoolBytes)==0);
+    // trim() empties every idle pool and the accounting follows
+    for(int i=0;i<3;++i){Block* b=q.tryAllocBlock(1u<<20);q.freeBlock(b);}q.trim();q.poolState(chunks,blocks);CHECK(chunks==0&&blocks==0&&get(q.stats.blockPoolBytes)==0);
+}
+
 static void spscStress(){
     Queue q;const std::uint64_t N=300000;
     std::thread consumer([&]{
@@ -315,7 +346,7 @@ static void nestedSync(){
 
 int main(int argc,char** argv){
     const bool threadsOnly=argc>1&&std::string(argv[1])=="threads";
-    spscStress();wakeHandshakeStress();producerNotSerializedByShadows();
+    spscStress();wakeHandshakeStress();memoryCapsAndPools();producerNotSerializedByShadows();
     budgetRules();interruptAndEvents();publishRules();nestedSync();
     generatedSyncCases();
     if(!threadsOnly){
