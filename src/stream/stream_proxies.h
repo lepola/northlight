@@ -220,9 +220,12 @@ template<class F> inline bool runTask(StreamCore& c,F&& fn,Cmd label=Cmd::Quiesc
 // ---- Locks: shared bookkeeping ----
 // A texture level / cube face / volume level, or a standalone surface.
 struct SubRes {
-    bool written=false;                 // a GPU write or an earlier lock: later write locks pass through
-    enum Mode:std::uint8_t{Free,Staged,Pass} mode=Free;
+    bool written=false;                 // a GPU write or an earlier lock: later write locks need a shadow or pass through
+    enum Mode:std::uint8_t{Free,Staged,Pass,Shadowed} mode=Free;
     Block* stage=nullptr;DWORD flags=0;bool hasRect=false;RECT rect{};D3DBOX box{};UINT rows=0,slices=1,rowBytes=0,pitch=0,slicePitch=0;
+    // A CPU copy of the whole level in our own tight layout (block rows of levelRowBytes), plus slack. Locks return pointers into it
+    // and Unlock records the locked rows; shadowDead: never again (GPU-written, readback failed, ...).
+    std::vector<unsigned char> shadow;bool shadowOn=false,shadowDead=false;UINT levelRowBytes=0,levelRows=0,levelSlices=0;std::size_t shadowOffset=0;
 };
 // What a staged Unlock records (followed by nothing: the bytes are in the command's Block).
 struct UnlockImageArgs {ProxyBase* proxy;UINT level,face;DWORD flags;UINT hasRect,rows,slices,rowBytes,pitch,slicePitch;LONG l,t,r,b;UINT bf,bk;UINT route;};
@@ -230,6 +233,13 @@ struct UnlockBufferArgs {ProxyBase* proxy;UINT off,size,flags,inlineData;};
 enum ImageRoute:UINT{RouteSurface=0,RouteTexture=1,RouteCube=2,RouteVolumeTexture=3,RouteVolume=4};
 
 inline void countPass(ProxyBase& p,PassReason r){add(p.core->q.stats.passThrough[unsigned(r)]);}
+inline void dropSubShadow(StreamCore& c,SubRes& s){
+    if(!s.shadowOn)return;
+    c.q.addTexShadowBytes(-std::int64_t(std::size_t(s.levelRows)*s.levelRowBytes*s.levelSlices));
+    std::vector<unsigned char>().swap(s.shadow);s.shadowOn=false;
+}
+// A GPU-side write (StretchRect, UpdateTexture, ColorFill, mip generation, ...): the CPU copy is stale for good.
+inline void markGpuWritten(StreamCore& c,SubRes& s){s.written=true;dropSubShadow(c,s);s.shadowDead=true;}
 
 // ---- the proxies ----
 using IidType=typename std::remove_cv<typename std::remove_reference<REFIID>::type>::type;
@@ -262,6 +272,7 @@ inline HRESULT ProxyBase::devGet(IDirect3DDevice9** pp){if(!pp)return D3DERR_INV
     DWORD local(CmdTag<Cmd::S##_GetPriority>){return priority;} \
     D3DRESOURCETYPE local(CmdTag<Cmd::S##_GetType>){return (D3DRESOURCETYPE)info.type;}
 #define NL_TEX_LOCALS(S) \
+    void observe(CmdTag<Cmd::S##_GenerateMipSubLevels>){for(std::size_t i=0;i<subs.size();++i)if(i%info.levels>0)markGpuWritten(*core,subs[i]);} \
     DWORD local(CmdTag<Cmd::S##_SetLOD>,DWORD v){const DWORD o=lod;if(info.pool==D3::kPoolManaged)lod=v<info.levels?v:info.levels-1;return o;} \
     DWORD local(CmdTag<Cmd::S##_GetLOD>){return lod;} \
     DWORD local(CmdTag<Cmd::S##_GetLevelCount>){return (info.usage&D3::kUsageAutoGen)?1:info.levels;} \
@@ -295,6 +306,24 @@ inline HRESULT callUnlock(UINT route,IUnknown* in,UINT level,UINT face){
 inline DWORD effectiveLockFlags(DWORD flags,DWORD pool){return pool==D3::kPoolDefault?flags:(flags&~(D3::kLockDiscard|D3::kLockNoOverwrite));}
 constexpr std::size_t kLockSlack=4096;   // zeroed bytes past a staged range / a shadow, never replayed: a small game overrun stays inside the allocation
 constexpr std::size_t kMaxStagedImage=std::size_t(8)<<20;
+// What the replay thread does for a recorded image unlock: lock the real level with the game's flags/rect, copy rows from the
+// tight source (rows of rowBytes, `pitch` apart), unlock. Also the synchronous fallback when no Block is available.
+inline bool applyImageUnlock(StreamCore& core,const UnlockImageArgs& a,const unsigned char* src){
+    ProxyBase* p=a.proxy;
+    if(!p->inner||p->dead.load()||!src){add(core.q.stats.replayFailures);return false;}
+    D3DLOCKED_RECT lr{};D3DLOCKED_BOX lb{};RECT rect=RECT{a.l,a.t,a.r,a.b};D3DBOX box{};box.Left=UINT(a.l);box.Top=UINT(a.t);box.Right=UINT(a.r);box.Bottom=UINT(a.b);box.Front=a.bf;box.Back=a.bk;
+    const bool volume=a.route==RouteVolume||a.route==RouteVolumeTexture;
+    if(FAILED(callLock(a.route,p->inner,a.level,a.face,&lr,&lb,a.hasRect&&!volume?&rect:nullptr,a.hasRect&&volume?&box:nullptr,a.flags))){add(core.q.stats.replayFailures);return false;}
+    auto* dst=static_cast<unsigned char*>(volume?lb.pBits:lr.pBits);const INT rowPitch=volume?lb.RowPitch:lr.Pitch;const INT slicePitch=volume?lb.SlicePitch:0;
+    if(dst)for(UINT s=0;s<a.slices;++s)for(UINT r=0;r<a.rows;++r)
+        std::memcpy(dst+std::ptrdiff_t(s)*slicePitch+std::ptrdiff_t(r)*rowPitch,src+std::size_t(s)*a.slicePitch+std::size_t(r)*a.pitch,a.rowBytes);
+    callUnlock(a.route,p->inner,a.level,a.face);return true;
+}
+inline UnlockImageArgs makeUnlockArgs(ProxyBase& self,const SubRes& sub,UINT route,UINT level,UINT face){
+    UnlockImageArgs a{};a.proxy=&self;a.level=level;a.face=face;a.flags=sub.flags;a.hasRect=sub.hasRect;a.rows=sub.rows;a.slices=sub.slices;a.rowBytes=sub.rowBytes;a.pitch=sub.pitch;a.slicePitch=sub.slicePitch;
+    a.l=sub.rect.left;a.t=sub.rect.top;a.r=sub.rect.right;a.b=sub.rect.bottom;a.bf=sub.box.Front;a.bk=sub.box.Back;a.route=route;return a;
+}
+constexpr std::size_t kFreshShadowMax=std::size_t(1)<<20;   // a fresh level up to this size keeps its first-write bytes as its shadow
 // self: the object the game called (its inner receives the replayed Lock); root: where creation info and `sub` live.
 inline HRESULT lockImage(ProxyBase& self,ProxyBase& root,SubRes& sub,UINT route,UINT level,UINT face,UINT lw,UINT lh,UINT ld,
                          D3DLOCKED_RECT* lr,D3DLOCKED_BOX* lb,const RECT* rect,const D3DBOX* box,DWORD flags){
@@ -311,21 +340,63 @@ inline HRESULT lockImage(ProxyBase& self,ProxyBase& root,SubRes& sub,UINT route,
     }
     const DWORD eff=effectiveLockFlags(flags,root.info.pool);
     const auto fi=D3::formatInfo(root.info.fmt);
+    const bool rtLike=(root.info.usage&(D3::kUsageRT|D3::kUsageDS))!=0,volume=route==RouteVolume||route==RouteVolumeTexture;
+    const UINT rows=fi.ok?(b-t+fi.bh-1)/fi.bh:0,rowBytes=fi.ok?((r-l+fi.bw-1)/fi.bw)*fi.bytes:0,slices=k-f;
+    auto describe=[&]{
+        sub.flags=flags;sub.hasRect=rect!=nullptr||box!=nullptr;
+        sub.rect.left=LONG(l);sub.rect.top=LONG(t);sub.rect.right=LONG(r);sub.rect.bottom=LONG(b);
+        if(box)sub.box=*box;
+        sub.rows=rows;sub.slices=slices;sub.rowBytes=rowBytes;sub.pitch=rowBytes;sub.slicePitch=rowBytes*rows;
+    };
+    // ---- a level shadow: served from CPU memory, Unlock records the locked rows ----
+    if(!rtLike&&fi.ok){
+        const UINT lrows=(lh+fi.bh-1)/fi.bh,lrowBytes=((lw+fi.bw-1)/fi.bw)*fi.bytes;
+        const std::size_t levelBytes=std::size_t(lrows)*lrowBytes*ld;
+        if(!sub.shadowOn&&!sub.shadowDead){
+            const bool undefined=!sub.written||(eff&D3::kLockDiscard)!=0;   // nothing to preserve: a zero shadow is as good as the real bytes
+            const bool fresh=undefined&&levelBytes<=kFreshShadowMax,readback=!undefined&&!(flags&D3::kLockReadOnly)&&levelBytes<=kMaxStagedImage;
+            if(fresh||readback){
+                if(!q.texShadowAdmit(levelBytes)){add(q.stats.texShadowRefused);add(q.stats.texShadowRefusedBytes,levelBytes);}
+                else{
+                    bool ok=true;
+                    try{sub.shadow.assign(levelBytes+kLockSlack,0);}catch(...){ok=false;}
+                    if(ok&&readback){   // ONE synchronous readback: the replay thread copies the whole real level out under a READONLY lock
+                        ok=false;
+                        const bool ran=runTask(*self.core,[&](StreamCore&){
+                            if(!self.inner||self.dead.load())return;
+                            D3DLOCKED_RECT r2{};D3DLOCKED_BOX b2{};
+                            if(FAILED(callLock(route,self.inner,level,face,&r2,&b2,nullptr,nullptr,D3::kLockReadOnly)))return;
+                            const auto* src=static_cast<const unsigned char*>(volume?b2.pBits:r2.pBits);const INT rp=volume?b2.RowPitch:r2.Pitch,sp=volume?b2.SlicePitch:0;
+                            if(src){for(UINT z=0;z<ld;++z)for(UINT y=0;y<lrows;++y)std::memcpy(sub.shadow.data()+(std::size_t(z)*lrows+y)*lrowBytes,src+std::ptrdiff_t(z)*sp+std::ptrdiff_t(y)*rp,lrowBytes);ok=true;}
+                            callUnlock(route,self.inner,level,face);},Cmd::SyncLock);
+                        if(!ran)return D3DERR_INVALIDCALL;
+                        if(ok)add(q.stats.texShadowReadbacks);
+                    }else if(ok)add(q.stats.texShadowFresh);
+                    if(ok){sub.shadowOn=true;sub.levelRowBytes=lrowBytes;sub.levelRows=lrows;sub.levelSlices=ld;q.addTexShadowBytes(std::int64_t(levelBytes));}
+                    else{std::vector<unsigned char>().swap(sub.shadow);sub.shadowDead=true;}   // the real level cannot be read: pass-through as before
+                }
+            }
+        }
+        if(sub.shadowOn){
+            describe();sub.mode=SubRes::Shadowed;
+            sub.shadowOffset=std::size_t(f)*lrows*lrowBytes+std::size_t(t/fi.bh)*lrowBytes+std::size_t(l/fi.bw)*fi.bytes;
+            unsigned char* at=sub.shadow.data()+sub.shadowOffset;
+            if(lr){lr->Pitch=INT(lrowBytes);lr->pBits=at;}
+            if(lb){lb->RowPitch=INT(lrowBytes);lb->SlicePitch=INT(lrows*lrowBytes);lb->pBits=at;}
+            add(q.stats.texShadowHits);add(q.stats.lockAsync);return D3D_OK;
+        }
+    }
     PassReason why=PassReason::Other;bool candidate=false;
     if(flags&D3::kLockReadOnly)why=PassReason::ReadOnly;
-    else if(root.info.usage&(D3::kUsageRT|D3::kUsageDS))why=PassReason::RenderTarget;
+    else if(rtLike)why=PassReason::RenderTarget;
     else if(sub.written&&!(eff&D3::kLockDiscard))why=PassReason::Written;
     else if(!fi.ok)why=PassReason::Format;
     else candidate=true;
     if(candidate){
-        const UINT rows=(b-t+fi.bh-1)/fi.bh,rowBytes=((r-l+fi.bw-1)/fi.bw)*fi.bytes,slices=k-f;
         const std::size_t total=std::size_t(rows)*rowBytes*slices;
         if(total>kMaxStagedImage)why=PassReason::Size;
         else if(Block* blk=q.tryAllocBlock(total+kLockSlack)){
-            sub.mode=SubRes::Staged;sub.stage=blk;sub.flags=flags;sub.hasRect=rect!=nullptr||box!=nullptr;
-            sub.rect.left=LONG(l);sub.rect.top=LONG(t);sub.rect.right=LONG(r);sub.rect.bottom=LONG(b);
-            if(box)sub.box=*box;
-            sub.rows=rows;sub.slices=slices;sub.rowBytes=rowBytes;sub.pitch=rowBytes;sub.slicePitch=rowBytes*rows;
+            describe();sub.mode=SubRes::Staged;sub.stage=blk;
             blk->used=std::uint32_t(total);std::memset(blk->data(),0,total+kLockSlack);   // deterministic bytes for what the game leaves unwritten
             if(lr){lr->Pitch=INT(rowBytes);lr->pBits=blk->data();}
             if(lb){lb->RowPitch=INT(rowBytes);lb->SlicePitch=INT(rowBytes*rows);lb->pBits=blk->data();}
@@ -342,11 +413,30 @@ inline HRESULT lockImage(ProxyBase& self,ProxyBase& root,SubRes& sub,UINT route,
 inline HRESULT unlockImage(ProxyBase& self,SubRes& sub,UINT route,UINT level,UINT face){
     Queue& q=self.core->q;
     if(sub.mode==SubRes::Free)return D3DERR_INVALIDCALL;
+    const bool volume=route==RouteVolume||route==RouteVolumeTexture;
+    const std::uint16_t cmd=(std::uint16_t)(volume?Cmd::UnlockBox:Cmd::UnlockRect);
     if(sub.mode==SubRes::Staged){
-        auto* a=static_cast<UnlockImageArgs*>(q.reserveWithBlock((std::uint16_t)(route==RouteVolume||route==RouteVolumeTexture?Cmd::UnlockBox:Cmd::UnlockRect),sizeof(UnlockImageArgs),sub.stage));
-        a->proxy=&self;a->level=level;a->face=face;a->flags=sub.flags;a->hasRect=sub.hasRect;a->rows=sub.rows;a->slices=sub.slices;a->rowBytes=sub.rowBytes;a->pitch=sub.pitch;a->slicePitch=sub.slicePitch;
-        a->l=sub.rect.left;a->t=sub.rect.top;a->r=sub.rect.right;a->b=sub.rect.bottom;a->bf=sub.box.Front;a->bk=sub.box.Back;a->route=route;
+        auto* a=static_cast<UnlockImageArgs*>(q.reserveWithBlock(cmd,sizeof(UnlockImageArgs),sub.stage));
+        *a=makeUnlockArgs(self,sub,route,level,face);
         q.commit();sub.stage=nullptr;sub.mode=SubRes::Free;sub.written=true;return D3D_OK;
+    }
+    if(sub.mode==SubRes::Shadowed){
+        sub.mode=SubRes::Free;
+        if(sub.flags&D3::kLockReadOnly)return D3D_OK;
+        const std::size_t total=std::size_t(sub.rows)*sub.rowBytes*sub.slices,sliceBytes=std::size_t(sub.levelRows)*sub.levelRowBytes;
+        auto gather=[&](unsigned char* out){
+            for(UINT z=0;z<sub.slices;++z)for(UINT y=0;y<sub.rows;++y)
+                std::memcpy(out+(std::size_t(z)*sub.rows+y)*sub.rowBytes,sub.shadow.data()+sub.shadowOffset+z*sliceBytes+std::size_t(y)*sub.levelRowBytes,sub.rowBytes);};
+        sub.pitch=sub.rowBytes;sub.slicePitch=sub.rowBytes*sub.rows;
+        if(Block* blk=q.tryAllocBlock(total?total:1)){
+            blk->used=std::uint32_t(total);gather(blk->data());
+            auto* a=static_cast<UnlockImageArgs*>(q.reserveWithBlock(cmd,sizeof(UnlockImageArgs),blk));*a=makeUnlockArgs(self,sub,route,level,face);q.commit();
+        }else{   // no Block: the same rows written synchronously
+            std::vector<unsigned char> tmp(total?total:1);gather(tmp.data());const UnlockImageArgs a=makeUnlockArgs(self,sub,route,level,face);
+            add(self.core->q.stats.passThrough[unsigned(PassReason::Budget)]);
+            if(!runTask(*self.core,[&](StreamCore& c){applyImageUnlock(c,a,tmp.data());},Cmd::SyncUnlock))return D3DERR_INVALIDCALL;
+        }
+        sub.written=true;return D3D_OK;
     }
     HRESULT hr=D3DERR_INVALIDCALL;
     if(!runTask(*self.core,[&](StreamCore&){if(self.inner)hr=callUnlock(route,self.inner,level,face);},Cmd::SyncUnlock))return D3DERR_INVALIDCALL;
@@ -452,7 +542,7 @@ struct StreamSurface final:IDirect3DSurface9,ProxyBase {
         own.written=(i.usage&(D3::kUsageRT|D3::kUsageDS))!=0;
         ProxyInit<ProxyBase>::apply(this,static_cast<IDirect3DSurface9*>(this));
     }
-    ~StreamSurface(){liveProxyObjects.fetch_sub(1);}
+    ~StreamSurface(){dropSubShadow(*core,own);liveProxyObjects.fetch_sub(1);}
     NORTHLIGHT_STREAM_SURFACE_METHODS
     NL_PROXY_COM(IDirect3DSurface9,IDirect3DResource9)
     NL_RES_LOCALS(Surface)
@@ -503,8 +593,9 @@ struct StreamTexture final:IDirect3DTexture9,ProxyBase {
         info.w=w;info.h=h;info.levels=levels?levels:D3::fullChain(w,h,1);info.usage=usage;info.fmt=fmt;info.pool=pool;info.type=D3::kTypeTexture;
         subs.resize(info.levels);kids.assign(info.levels,nullptr);
         for(UINT i=0;i<info.levels;++i)subs[i].written=(usage&(D3::kUsageRT|D3::kUsageDS))||((usage&D3::kUsageAutoGen)&&i>0);
+        if(usage&D3::kUsageAutoGen)for(UINT i=1;i<info.levels;++i)subs[i].shadowDead=true;   // the GPU writes the mips
         ProxyInit<ProxyBase>::apply(this,static_cast<IDirect3DTexture9*>(this));}
-    ~StreamTexture(){liveProxyObjects.fetch_sub(1);}
+    ~StreamTexture(){for(auto& s:subs)dropSubShadow(*core,s);liveProxyObjects.fetch_sub(1);}
     NORTHLIGHT_STREAM_TEXTURE_METHODS
     NL_PROXY_COM(IDirect3DTexture9,IDirect3DBaseTexture9,IDirect3DResource9)
     NL_RES_LOCALS(Texture)
@@ -535,7 +626,7 @@ struct StreamCubeTexture final:IDirect3DCubeTexture9,ProxyBase {
         subs.resize(std::size_t(info.levels)*6);kids.assign(subs.size(),nullptr);
         for(std::size_t i=0;i<subs.size();++i)subs[i].written=(usage&(D3::kUsageRT|D3::kUsageDS))||((usage&D3::kUsageAutoGen)&&(i%info.levels)>0);
         ProxyInit<ProxyBase>::apply(this,static_cast<IDirect3DCubeTexture9*>(this));}
-    ~StreamCubeTexture(){liveProxyObjects.fetch_sub(1);}
+    ~StreamCubeTexture(){for(auto& s:subs)dropSubShadow(*core,s);liveProxyObjects.fetch_sub(1);}
     NORTHLIGHT_STREAM_CUBETEXTURE_METHODS
     NL_PROXY_COM(IDirect3DCubeTexture9,IDirect3DBaseTexture9,IDirect3DResource9)
     NL_RES_LOCALS(CubeTexture)
@@ -567,7 +658,7 @@ struct StreamVolumeTexture final:IDirect3DVolumeTexture9,ProxyBase {
         info.w=w;info.h=h;info.d=d;info.levels=levels?levels:D3::fullChain(w,h,d);info.usage=usage;info.fmt=fmt;info.pool=pool;info.type=D3::kTypeVolumeTexture;
         subs.resize(info.levels);kids.assign(info.levels,nullptr);
         ProxyInit<ProxyBase>::apply(this,static_cast<IDirect3DVolumeTexture9*>(this));}
-    ~StreamVolumeTexture(){liveProxyObjects.fetch_sub(1);}
+    ~StreamVolumeTexture(){for(auto& s:subs)dropSubShadow(*core,s);liveProxyObjects.fetch_sub(1);}
     NORTHLIGHT_STREAM_VOLUMETEXTURE_METHODS
     NL_PROXY_COM(IDirect3DVolumeTexture9,IDirect3DBaseTexture9,IDirect3DResource9)
     NL_RES_LOCALS(VolumeTexture)

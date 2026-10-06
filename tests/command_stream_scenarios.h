@@ -17,7 +17,7 @@ struct Rig {
     void sync(){CHECK(dev->TestCooperativeLevel()==5);}
     void finish(){dev->Release();dev=nullptr;}
 };
-static std::vector<std::string> filtered(const std::vector<std::string>& t){std::vector<std::string> r;for(auto& s:t){if(isGetName(s))continue;if(s.size()>3&&s.compare(s.size()-3,3," ro")==0&&s.compare(2,9,"::Unlock ")==0)continue;r.push_back(s);}return r;}   // a READONLY buffer lock is served from the shadow: no Target event
+static std::vector<std::string> filtered(const std::vector<std::string>& t){std::vector<std::string> r;for(auto& s:t){if(isGetName(s))continue;if(s.size()>3&&s.compare(s.size()-3,3," ro")==0&&s.find("::Unlock ")!=std::string::npos)continue;r.push_back(s);}return r;}   // READONLY locks served from a shadow (or read back once by the stream) are no Target events worth comparing: the bytes the game reads are compared as results
 
 static void lifetimeAndIdentity(){
     gTrace.clear();Rig rig(true);auto& core=rig.core();const auto base=get(core.q.stats.syncCalls);
@@ -120,8 +120,8 @@ static void locksPreserveBytes(){
     IDirect3DTexture9* dxt=nullptr;CHECK(rig.dev->CreateTexture(16,16,1,0,(D3DFORMAT)0x31545844,(D3DPOOL)1,&dxt,nullptr)==D3D_OK);
     D3DLOCKED_RECT lr{};CHECK(dxt->LockRect(0,&lr,nullptr,0)==D3D_OK&&lr.Pitch==32);   // 4 blocks of 8 bytes per block row
     for(int r=0;r<4;++r)std::memset((unsigned char*)lr.pBits+r*lr.Pitch,0x10+r,32);CHECK(dxt->UnlockRect(0)==D3D_OK);rig.sync();
-    CHECK(dxt->LockRect(0,&lr,nullptr,0)==D3D_OK&&get(s.passThrough[unsigned(PassReason::Written)])==1);CHECK(lr.Pitch==16*4+16);CHECK(dxt->UnlockRect(0)==D3D_OK);   // the Target's own pitch
-    CHECK(dxt->LockRect(0,&lr,nullptr,D3::kLockReadOnly)==D3D_OK&&get(s.passThrough[unsigned(PassReason::ReadOnly)])==2);
+    CHECK(dxt->LockRect(0,&lr,nullptr,0)==D3D_OK&&get(s.passThrough[unsigned(PassReason::Written)])==0);CHECK(lr.Pitch==32);CHECK(dxt->UnlockRect(0)==D3D_OK);   // the level's shadow: our pitch, no sync
+    CHECK(dxt->LockRect(0,&lr,nullptr,D3::kLockReadOnly)==D3D_OK&&get(s.passThrough[unsigned(PassReason::ReadOnly)])==1);   // (the one above is the big buffer's)
     unsigned char row0[32];std::memcpy(row0,lr.pBits,32);for(int i=0;i<32;++i)CHECK(row0[i]==0x10);CHECK(dxt->UnlockRect(0)==D3D_OK);
     dxt->Release();
     IDirect3DTexture9* unk=nullptr;CHECK(rig.dev->CreateTexture(8,8,1,0,(D3DFORMAT)999,(D3DPOOL)1,&unk,nullptr)==D3D_OK);   // unknown format: pass-through, counted
@@ -142,6 +142,67 @@ static void shadowCap(){
     v[0]=v[1]=nullptr;
     rig.sync();q.setPressure(true);CHECK(q.shadowCap()==ShadowBudgetBytes/2&&!q.shadowAdmit(1<<20)&&s.shadowBytes.load()==std::int64_t(11)*(2<<20));
     q.setPressure(false);for(auto* b:v)if(b)b->Release();rig.sync();CHECK(s.shadowBytes.load()==0);   // freed with their proxies
+    rig.finish();checkClean();
+}
+// Per-level texture shadows: fresh small levels keep their first-write bytes, a written level is read back once, partial rects and DXT
+// block rows land in the right place, DISCARD on a dynamic texture needs nothing, the cap refuses without breaking anything, and a GPU
+// write drops the copy.
+static void textureShadows(){
+    gTrace.clear();Rig rig(true);auto& q=rig.core().q;auto& s=q.stats;
+    auto fill=[&](unsigned char* base,INT pitch,unsigned rows,unsigned rowBytes,unsigned seed){for(unsigned y=0;y<rows;++y)for(unsigned x=0;x<rowBytes;++x)base[std::size_t(y)*pitch+x]=(unsigned char)(seed+y*7+x);};
+    {   // fresh, small: the first write lock is the shadow; later write locks, partial, never read back and never pass through
+        IDirect3DTexture9* t=nullptr;CHECK(rig.dev->CreateTexture(16,16,1,0,(D3DFORMAT)22,(D3DPOOL)1,&t,nullptr)==D3D_OK);rig.sync();TTexture* tt=gLastTexture;
+        D3DLOCKED_RECT lr{};CHECK(t->LockRect(0,&lr,nullptr,0)==D3D_OK&&lr.Pitch==64);fill((unsigned char*)lr.pBits,lr.Pitch,16,64,1);CHECK(t->UnlockRect(0)==D3D_OK&&get(s.texShadowFresh)==1);
+        const auto pass0=get(s.passThrough[unsigned(PassReason::Written)]),hits0=get(s.texShadowHits);RECT rc{4,2,8,6};
+        CHECK(t->LockRect(0,&lr,&rc,0)==D3D_OK&&lr.Pitch==64&&get(s.passThrough[unsigned(PassReason::Written)])==pass0&&get(s.texShadowReadbacks)==0&&get(s.texShadowHits)==hits0+1);
+        fill((unsigned char*)lr.pBits,lr.Pitch,4,16,100);CHECK(t->UnlockRect(0)==D3D_OK);
+        CHECK(t->LockRect(0,&lr,nullptr,D3::kLockReadOnly)==D3D_OK);   // read back through the shadow: the untouched bytes kept their content
+        const unsigned char* b=(const unsigned char*)lr.pBits;
+        for(unsigned y=0;y<16;++y)for(unsigned x=0;x<64;++x){const bool in=y>=2&&y<6&&x>=16&&x<32;const unsigned char want=in?(unsigned char)(100+(y-2)*7+(x-16)):(unsigned char)(1+y*7+x);CHECK(b[std::size_t(y)*lr.Pitch+x]==want);}
+        CHECK(t->UnlockRect(0)==D3D_OK);rig.sync();
+        for(unsigned y=0;y<16;++y)for(unsigned x=0;x<64;++x){const bool in=y>=2&&y<6&&x>=16&&x<32;const unsigned char want=in?(unsigned char)(100+(y-2)*7+(x-16)):(unsigned char)(1+y*7+x);CHECK(tt->surf[0]->mem[std::size_t(y)*tt->surf[0]->pitch+x]==want);}   // and the real level got the same bytes, at its own pitch
+        t->Release();
+    }
+    {   // DXT block rows: a partial, block-aligned rect lands on the right block rows
+        IDirect3DTexture9* t=nullptr;CHECK(rig.dev->CreateTexture(64,64,1,0,(D3DFORMAT)0x31545844,(D3DPOOL)1,&t,nullptr)==D3D_OK);rig.sync();TTexture* tt=gLastTexture;
+        D3DLOCKED_RECT lr{};CHECK(t->LockRect(0,&lr,nullptr,0)==D3D_OK&&lr.Pitch==128);std::memset(lr.pBits,0x11,128*16);CHECK(t->UnlockRect(0)==D3D_OK);
+        RECT rc{16,16,48,32};CHECK(t->LockRect(0,&lr,&rc,0)==D3D_OK&&lr.Pitch==128);   // 4 block rows of 4 blocks, inside a 16-block-wide level
+        for(unsigned y=0;y<4;++y)std::memset((unsigned char*)lr.pBits+y*lr.Pitch,0xA0+y,32);CHECK(t->UnlockRect(0)==D3D_OK);rig.sync();
+        CHECK(t->LockRect(0,&lr,nullptr,D3::kLockReadOnly)==D3D_OK);   // the shadow holds the block rows where the game put them
+        for(unsigned y=0;y<16;++y)for(unsigned x=0;x<128;++x){const bool in=y>=4&&y<8&&x>=32&&x<64;CHECK(((unsigned char*)lr.pBits)[std::size_t(y)*lr.Pitch+x]==(in?0xA0+(y-4):0x11));}
+        CHECK(t->UnlockRect(0)==D3D_OK);
+        for(unsigned y=0;y<16;++y)for(unsigned x=0;x<128;++x){const bool in=y>=4&&y<8&&x>=32&&x<64;CHECK(tt->surf[0]->mem[std::size_t(y)*tt->surf[0]->pitch+x]==(in?0xA0+(y-4):0x11));}   // the replay put the same block rows into the real level
+        t->Release();
+    }
+    {   // a written level above the fresh limit: ONE readback, then everything from the shadow
+        IDirect3DTexture9* t=nullptr;CHECK(rig.dev->CreateTexture(1024,512,1,0,(D3DFORMAT)22,(D3DPOOL)1,&t,nullptr)==D3D_OK);
+        D3DLOCKED_RECT lr{};RECT rc{0,0,64,4};CHECK(t->LockRect(0,&lr,&rc,0)==D3D_OK);fill((unsigned char*)lr.pBits,lr.Pitch,4,256,9);CHECK(t->UnlockRect(0)==D3D_OK&&get(s.texShadowFresh)==2);   // (the two small ones above); this one staged
+        const auto syncs=get(s.census[(std::size_t)Cmd::SyncLock]);
+        RECT r2{10,1,20,3};CHECK(t->LockRect(0,&lr,&r2,0)==D3D_OK&&get(s.texShadowReadbacks)==1&&get(s.census[(std::size_t)Cmd::SyncLock])==syncs+1);
+        CHECK(lr.Pitch==4096&&((unsigned char*)lr.pBits)[0]==(unsigned char)(9+1*7+0*0+40-0));   // the readback returned what was staged: row 1, x=40 (the shadow of 10 px in) 
+        fill((unsigned char*)lr.pBits,lr.Pitch,2,40,200);CHECK(t->UnlockRect(0)==D3D_OK);
+        CHECK(t->LockRect(0,&lr,&rc,0)==D3D_OK&&get(s.texShadowReadbacks)==1&&get(s.census[(std::size_t)Cmd::SyncLock])==syncs+1);CHECK(t->UnlockRect(0)==D3D_OK);   // no second readback, no sync
+        t->Release();
+    }
+    {   // DISCARD on a dynamic texture: the old bytes are undefined, so no readback is ever needed
+        IDirect3DTexture9* t=nullptr;CHECK(rig.dev->CreateTexture(256,256,1,D3::kUsageDynamic,(D3DFORMAT)22,(D3DPOOL)0,&t,nullptr)==D3D_OK);D3DLOCKED_RECT lr{};
+        const auto rb=get(s.texShadowReadbacks);
+        for(int i=0;i<3;++i){CHECK(t->LockRect(0,&lr,nullptr,D3::kLockDiscard)==D3D_OK);fill((unsigned char*)lr.pBits,lr.Pitch,256,1024,unsigned(i));CHECK(t->UnlockRect(0)==D3D_OK);}
+        CHECK(get(s.texShadowReadbacks)==rb);t->Release();
+    }
+    {   // a GPU-side write drops the copy for good: the next write lock passes through
+        IDirect3DTexture9 *a=nullptr,*b=nullptr;CHECK(rig.dev->CreateTexture(16,16,1,0,(D3DFORMAT)22,(D3DPOOL)1,&a,nullptr)==D3D_OK&&rig.dev->CreateTexture(16,16,1,0,(D3DFORMAT)22,(D3DPOOL)1,&b,nullptr)==D3D_OK);
+        D3DLOCKED_RECT lr{};CHECK(b->LockRect(0,&lr,nullptr,0)==D3D_OK&&b->UnlockRect(0)==D3D_OK);const auto bytes=s.texShadowBytes.load();
+        CHECK(rig.dev->UpdateTexture(a,b)==D3D_OK&&s.texShadowBytes.load()==bytes-16*16*4);const auto w=get(s.passThrough[unsigned(PassReason::Written)]);
+        CHECK(b->LockRect(0,&lr,nullptr,0)==D3D_OK&&get(s.passThrough[unsigned(PassReason::Written)])==w+1&&b->UnlockRect(0)==D3D_OK);a->Release();b->Release();
+    }
+    rig.sync();CHECK(s.texShadowBytes.load()>=0);
+    // the cap: never more than 32 MiB of level copies; the rest pass through and still work
+    std::vector<IDirect3DTexture9*> big;const auto refusedBefore=get(s.texShadowRefused);
+    for(int i=0;i<18;++i){IDirect3DTexture9* t=nullptr;CHECK(rig.dev->CreateTexture(1024,512,1,0,(D3DFORMAT)22,(D3DPOOL)1,&t,nullptr)==D3D_OK);D3DLOCKED_RECT lr{};RECT rc{0,0,8,2};
+        CHECK(t->LockRect(0,&lr,&rc,0)==D3D_OK&&t->UnlockRect(0)==D3D_OK&&t->LockRect(0,&lr,&rc,0)==D3D_OK&&t->UnlockRect(0)==D3D_OK);big.push_back(t);}
+    CHECK(get(s.texShadowRefused)>refusedBefore&&get(s.texShadowRefusedBytes)>=2u<<20&&s.texShadowBytes.load()<=std::int64_t(q.texShadowCap()));
+    for(auto* t:big)t->Release();rig.sync();CHECK(s.texShadowBytes.load()==0);
     rig.finish();checkClean();
 }
 static void queriesAndSyncCensus(){
@@ -242,6 +303,7 @@ static void statsLine(){
     rig.sync();
     std::vector<std::string> lines;for(auto& l:gStatLines)if(l.find(" frames=600 ")!=std::string::npos)lines.push_back(l);   // the 600th replayed frame
     CHECK(lines.size()==1&&lines[0].rfind("CSTREAM cmds=",0)==0&&lines[0].find("passPerFrame=")!=std::string::npos&&lines[0].find("census[")!=std::string::npos&&lines[0].back()==']');
+    for(const char* field:{"game[per frame]: ms=","syncMs=","presentWaitMs=","bpMs=","recorded=","answered=","texShadow=","readbacks="})CHECK(lines[0].find(field)!=std::string::npos);   // per-window numbers
     CHECK(lines[0].size()<1600);
     rig.finish();checkClean();
 }
@@ -417,7 +479,7 @@ static void equivalence(int steps,std::uint64_t seed){
     std::printf("equivalence seed=%llu steps=%d results=%zu trace=%zu presents=%zu\n",(unsigned long long)seed,steps,outA.size(),traceA.size(),presA.size());
 }
 static void streamTests(bool threadsOnly){
-    lifetimeAndIdentity();stateKnownUnknown();locksPreserveBytes();shadowCap();queriesAndSyncCensus();resetAndShutdown();statsLine();childrenOutliveTheDevice();queryProbeAndDeadQuery();initFailureFallback();cursorAndForeignThread();nestedSyncInPump();upDrawsAndBackpressure();snapshotTriggers();
+    lifetimeAndIdentity();stateKnownUnknown();locksPreserveBytes();shadowCap();queriesAndSyncCensus();resetAndShutdown();textureShadows();statsLine();childrenOutliveTheDevice();queryProbeAndDeadQuery();initFailureFallback();cursorAndForeignThread();nestedSyncInPump();upDrawsAndBackpressure();snapshotTriggers();
     equivalence(20000,12345);equivalence(20000,987654321);
     (void)threadsOnly;
 }

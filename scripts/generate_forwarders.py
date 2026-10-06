@@ -35,7 +35,7 @@ _UNK = 'QueryInterface AddRef Release'
 _PRIV = 'GetDevice SetPrivateData GetPrivateData FreePrivateData'
 _RES = _PRIV + ' SetPriority GetPriority GetType'
 _TEX_LOCAL = _RES + ' SetLOD GetLOD GetLevelCount GetAutoGenFilterType GetLevelDesc'
-_TEX_REC = 'PreLoad GenerateMipSubLevels'
+_TEX_REC = 'PreLoad'   # GenerateMipSubLevels is `state`: it writes levels on the GPU, observed so their CPU shadows are dropped
 STREAM = {
     'IDirect3DDevice9': {
         'custom': _UNK + ' Reset Present GetBackBuffer CreateAdditionalSwapChain CreateTexture CreateVolumeTexture CreateCubeTexture '
@@ -71,11 +71,11 @@ STREAM = {
     'IDirect3DSurface9': {'custom': _UNK + ' GetContainer LockRect UnlockRect', 'local': _RES + ' GetDesc', 'record': 'PreLoad',
                           'sync': 'GetDC ReleaseDC'},
     'IDirect3DTexture9': {'custom': _UNK + ' GetSurfaceLevel LockRect UnlockRect', 'local': _TEX_LOCAL,
-                          'record': _TEX_REC + ' AddDirtyRect', 'state': 'SetAutoGenFilterType'},
+                          'record': _TEX_REC + ' AddDirtyRect', 'state': 'SetAutoGenFilterType GenerateMipSubLevels'},
     'IDirect3DCubeTexture9': {'custom': _UNK + ' GetCubeMapSurface LockRect UnlockRect', 'local': _TEX_LOCAL,
-                              'record': _TEX_REC + ' AddDirtyRect', 'state': 'SetAutoGenFilterType'},
+                              'record': _TEX_REC + ' AddDirtyRect', 'state': 'SetAutoGenFilterType GenerateMipSubLevels'},
     'IDirect3DVolumeTexture9': {'custom': _UNK + ' GetVolumeLevel LockBox UnlockBox', 'local': _TEX_LOCAL,
-                                'record': _TEX_REC + ' AddDirtyBox', 'state': 'SetAutoGenFilterType'},
+                                'record': _TEX_REC + ' AddDirtyBox', 'state': 'SetAutoGenFilterType GenerateMipSubLevels'},
     'IDirect3DVolume9': {'custom': _UNK + ' GetContainer LockBox UnlockBox', 'local': _PRIV + ' GetDesc'},
     'IDirect3DVertexShader9': {'custom': _UNK, 'local': 'GetDevice GetFunction'},
     'IDirect3DPixelShader9': {'custom': _UNK, 'local': 'GetDevice GetFunction'},

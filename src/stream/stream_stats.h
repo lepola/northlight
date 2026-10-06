@@ -31,18 +31,24 @@ struct Counters {
     Counter qiMisses{0},deadCreates{0},proxyMismatch{0},foreignEntries{0},foreignPointers{0},createFailures{0},replayFailures{0};
     Counter shadowRefused{0},shadowRefusedBytes{0},shadowLate{0};   // DYNAMIC buffers refused a shadow at creation; shadows granted later at a DISCARD lock
     Counter lockRecordedBytes{0},wholeLockBytes{0};   // bytes copied into the queue by shadow/staged unlocks; the part from whole-buffer locks (size 0)
+    // Per-level texture shadows (own cap, outside the queue budget): live bytes, locks served from a shadow, shadows made from a fresh
+    // lock (nothing to read back) or from one synchronous readback, refusals by the cap.
+    std::atomic<std::int64_t> texShadowBytes{0};
+    Counter texShadowHits{0},texShadowFresh{0},texShadowReadbacks{0},texShadowRefused{0},texShadowRefusedBytes{0};
+    // The game thread's own time per frame (Present to Present, minus its sync and backpressure waits), in ns, and its frames.
+    Counter gameNs{0},gameWaitNs{0},gameFrames{0};
     Counter stateAnswered{0},stateSynced{0},syncOnlySlots{0},lockAsync{0},queryPolls{0};
     Counter census[kMaxCmdIds]{};   // sync calls per command id (name via cmdName in command_stream.inl)
 };
 
 // One CSTREAM line fragment: the queue-side numbers. The caller prefixes it and appends frame data and the census.
 inline int formatCounters(char* out,std::size_t size,const Counters& c){
-    return std::snprintf(out,size,"cmds=%llu bytes=%llu chunks=%llu/%llu blocks=%llu(%llu B) shadowB=%lld lockB=%llu wholeLockB=%llu hwB=%llu hwDepth=%llu bp=%llu/%.2fms sync=%llu/%.2fms present=%llu/%.2fms nested=%llu oversize=%llu refused=%llu",
+    return std::snprintf(out,size,"cmds=%llu bytes=%llu chunks=%llu/%llu blocks=%llu(%llu B) shadowB=%lld lockB=%llu wholeLockB=%llu hwB=%llu hwDepth=%llu bp=%llu sync=%llu present=%llu nested=%llu oversize=%llu refused=%llu",
         (unsigned long long)get(c.commands),(unsigned long long)get(c.bytes),(unsigned long long)get(c.chunksLive),(unsigned long long)get(c.chunkAllocs),
         (unsigned long long)get(c.blocksLive),(unsigned long long)get(c.blockBytes),(long long)c.shadowBytes.load(std::memory_order_relaxed),(unsigned long long)get(c.lockRecordedBytes),(unsigned long long)get(c.wholeLockBytes),
         (unsigned long long)get(c.highWaterBytes),(unsigned long long)get(c.highWaterDepth),
-        (unsigned long long)get(c.backpressureWaits),get(c.backpressureNs)/1e6,(unsigned long long)get(c.syncCalls),get(c.syncNs)/1e6,
-        (unsigned long long)get(c.presentWaits),get(c.presentNs)/1e6,(unsigned long long)get(c.nestedSyncs),
+        (unsigned long long)get(c.backpressureWaits),(unsigned long long)get(c.syncCalls),
+        (unsigned long long)get(c.presentWaits),(unsigned long long)get(c.nestedSyncs),
         (unsigned long long)get(c.oversizeDrops),(unsigned long long)get(c.blockRefused));
 }
 }

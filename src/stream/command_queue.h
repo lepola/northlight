@@ -33,6 +33,7 @@ static_assert(sizeof(CommandHeader)==8,"header is 8 bytes");
 constexpr std::size_t ChunkBytes=std::size_t(1)<<20;
 constexpr std::size_t MaxInlinePayload=ChunkBytes/4;   // larger payloads travel in a Block
 constexpr std::size_t BudgetBytes=std::size_t(48)<<20;
+constexpr std::size_t TextureShadowBudgetBytes=std::size_t(32)<<20;   // per-level texture shadows; halved under pressure; never evicted
 constexpr std::size_t ShadowBudgetBytes=std::size_t(24)<<20;   // CPU shadows of DYNAMIC buffers; halved under pressure; never evicted
 constexpr std::uint32_t kAutoPublishCommands=64,kAutoPublishBytes=64u<<10;
 constexpr std::uint32_t kNoPayload=0xFFFFFFFFu;   // a nullable pointer's offset in a generated Args struct
@@ -238,6 +239,9 @@ public:
     void addShadowBytes(std::int64_t delta){stats.shadowBytes.fetch_add(delta,std::memory_order_relaxed);}
     std::size_t shadowCap()const{return pressure_.load()?ShadowBudgetBytes/2:ShadowBudgetBytes;}
     // A new shadow of `bytes` fits the cap now (live shadows are never evicted, a new one is simply refused).
+    void addTexShadowBytes(std::int64_t delta){stats.texShadowBytes.fetch_add(delta,std::memory_order_relaxed);}
+    std::size_t texShadowCap()const{return pressure_.load()?TextureShadowBudgetBytes/2:TextureShadowBudgetBytes;}
+    bool texShadowAdmit(std::size_t bytes)const{const auto s=stats.texShadowBytes.load(std::memory_order_relaxed);return (s>0?std::size_t(s):0)+bytes<=texShadowCap();}
     bool shadowAdmit(std::size_t bytes)const{const auto s=stats.shadowBytes.load(std::memory_order_relaxed);return (s>0?std::size_t(s):0)+bytes<=shadowCap();}
     bool canAdmit(std::size_t bytes)const{return !over(bytes);}
     // Memory pressure (any thread): halves the budget. trim() (producer, at a quiet point) releases pooled idle memory.

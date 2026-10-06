@@ -186,7 +186,7 @@ private:
     DWORD auditRS_[StreamState::kRS]={},auditSamp_[StreamState::kSamplers][StreamState::kSampTypes]={},auditTss_[StreamState::kTSStages][StreamState::kTSTypes]={};
     std::vector<unsigned> touched_;std::vector<bool> touchedFlag_=std::vector<bool>(StreamState::kBits,false);
     struct Avg {double depth=0,bytes=0;unsigned n=0;std::uint64_t maxDepth=0,maxBytes=0;} avg_;
-    std::uint64_t lastBusy_=0,lastPass_=0;unsigned deadLogged_=0;
+    std::uint64_t lastBusy_=0,lastPass_=0,lastGameNs_=0,lastGameWait_=0,lastGameFrames_=0,lastPresentNs_=0,lastSyncNs_=0,lastBpNs_=0,lastCmds_=0,lastAnswered_=0,lastSyncCalls_=0;unsigned deadLogged_=0;
 
     static void captureFpu(unsigned short& cw,unsigned& csr){
         cw=0;csr=0;
@@ -258,16 +258,8 @@ private:
         return hr;
     }
     void unlockImage(const CommandHeader* h){
-        const auto* a=reinterpret_cast<const UnlockImageArgs*>(Queue::payload(h));Block* b=Queue::blockOf(h);ProxyBase* p=a->proxy;
-        if(!p->inner||p->dead.load()||!b){add(core.q.stats.replayFailures);return;}
-        D3DLOCKED_RECT lr{};D3DLOCKED_BOX lb{};RECT rect=RECT{a->l,a->t,a->r,a->b};D3DBOX box{};box.Left=UINT(a->l);box.Top=UINT(a->t);box.Right=UINT(a->r);box.Bottom=UINT(a->b);box.Front=a->bf;box.Back=a->bk;
-        const bool volume=a->route==RouteVolume||a->route==RouteVolumeTexture;
-        if(FAILED(callLock(a->route,p->inner,a->level,a->face,&lr,&lb,a->hasRect&&!volume?&rect:nullptr,a->hasRect&&volume?&box:nullptr,a->flags))){add(core.q.stats.replayFailures);return;}
-        auto* dst=static_cast<unsigned char*>(volume?lb.pBits:lr.pBits);const INT rowPitch=volume?lb.RowPitch:lr.Pitch;const INT slicePitch=volume?lb.SlicePitch:0;
-        const unsigned char* src=b->data();
-        if(dst)for(UINT s=0;s<a->slices;++s)for(UINT r=0;r<a->rows;++r)
-            std::memcpy(dst+std::ptrdiff_t(s)*slicePitch+std::ptrdiff_t(r)*rowPitch,src+std::size_t(s)*a->slicePitch+std::size_t(r)*a->pitch,a->rowBytes);
-        callUnlock(a->route,p->inner,a->level,a->face);
+        const auto* a=reinterpret_cast<const UnlockImageArgs*>(Queue::payload(h));Block* b=Queue::blockOf(h);
+        applyImageUnlock(core,*a,b?b->data():nullptr);
     }
     void unlockBuffer(const CommandHeader* h){
         const auto* a=reinterpret_cast<const UnlockBufferArgs*>(Queue::payload(h));ProxyBase* p=a->proxy;
@@ -355,6 +347,16 @@ private:
         std::uint64_t pass=0;for(unsigned r=0;r<Counters::kPassReasons;++r)pass+=get(s.passThrough[r]);
         const std::uint64_t dPass=pass-lastPass_;lastPass_=pass;
         put(buf,n," shadowRefused=%llu/%.1fMB shadowLate=%llu passPerFrame=%.2f",(unsigned long long)get(s.shadowRefused),get(s.shadowRefusedBytes)/1048576.0,(unsigned long long)get(s.shadowLate),sampleEvery?double(dPass)/sampleEvery:0.0);
+        // Per window (deltas since the previous line, per frame): the game thread's own time (Present to Present minus its waits),
+        // its waits, and how many D3D calls it made (recorded, answered locally, synchronous).
+        {const std::uint64_t gf=get(s.gameFrames)-lastGameFrames_;lastGameFrames_+=gf;const double inv2=gf?1.0/double(gf):0.0;
+         const std::uint64_t gNs=get(s.gameNs),gW=get(s.gameWaitNs),pNs=get(s.presentNs),sNs=get(s.syncNs),bNs=get(s.backpressureNs),cm=get(s.commands),an=get(s.stateAnswered),sc=get(s.syncCalls);
+         put(buf,n," game[per frame]: ms=%.3f(excl waits) syncMs=%.3f presentWaitMs=%.3f bpMs=%.3f recorded=%.1f answered=%.1f sync=%.2f",
+             double(gNs-lastGameNs_-(gW-lastGameWait_))/1e6*inv2,double(sNs-lastSyncNs_)/1e6*inv2,double(pNs-lastPresentNs_)/1e6*inv2,double(bNs-lastBpNs_)/1e6*inv2,
+             double(cm-lastCmds_)*inv2,double(an-lastAnswered_)*inv2,double(sc-lastSyncCalls_)*inv2);
+         lastGameNs_=gNs;lastGameWait_=gW;lastPresentNs_=pNs;lastSyncNs_=sNs;lastBpNs_=bNs;lastCmds_=cm;lastAnswered_=an;lastSyncCalls_=sc;}
+        put(buf,n," texShadow=%.1f/%.0fMB hits=%llu fresh=%llu readbacks=%llu refused=%llu/%.1fMB",double(std::max<std::int64_t>(0,s.texShadowBytes.load()))/1048576.0,double(core.q.texShadowCap())/1048576.0,
+            (unsigned long long)get(s.texShadowHits),(unsigned long long)get(s.texShadowFresh),(unsigned long long)get(s.texShadowReadbacks),(unsigned long long)get(s.texShadowRefused),get(s.texShadowRefusedBytes)/1048576.0);
         put(buf,n," pass[");
         for(unsigned r=0;r<Counters::kPassReasons;++r)put(buf,n,"%s%s=%llu",r?",":"",passReasonName(r),(unsigned long long)get(s.passThrough[r]));
         put(buf,n,"] census[");

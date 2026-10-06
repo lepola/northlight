@@ -10,6 +10,7 @@ struct TargetKnobs {
 };
 static TargetKnobs gKnobs;
 static std::atomic<int> gLiveTargets{0},gDeviceDeletes{0};
+struct TTexture;static TTexture* gLastTexture=nullptr;   // the Target's newest texture, for tests that look at its memory
 static std::string hexOf(const unsigned char* p,std::size_t n){return fb(p,n);}
 
 template<class B> struct Counted:B {
@@ -23,18 +24,25 @@ template<class B> struct Counted:B {
 struct TSurface;struct TTexture;
 struct TSurface:Counted<FakeSurface> {
     unsigned w=0,h=0,fmt=22,usage=0,pool=0;std::vector<unsigned char> own;unsigned char* mem=nullptr;unsigned pitch=0;TTexture* owner=nullptr;unsigned level=0;
+    unsigned bw=1,bytes=4;   // block width/height and bytes per block (unknown formats: 4 bytes a pixel)
     RECT locked{};bool isLocked=false;DWORD lockFlags=0;
-    static constexpr unsigned bpp=4;
-    TSurface(unsigned W,unsigned H,unsigned Fmt,unsigned Usage,unsigned Pool):w(W),h(H),fmt(Fmt),usage(Usage),pool(Pool){pitch=W*bpp+16;own.assign(std::size_t(pitch)*H,0);mem=own.data();}
+    TSurface(unsigned W,unsigned H,unsigned Fmt,unsigned Usage,unsigned Pool):w(W),h(H),fmt(Fmt),usage(Usage),pool(Pool){
+        const auto fi=D3::formatInfo(Fmt);if(fi.ok){bw=fi.bw;bytes=fi.bytes;}   // the real layout of the format (DXT block rows, 1/2/4/8/16 bytes a pixel)
+        pitch=((W+bw-1)/bw)*bytes+16;own.assign(std::size_t(pitch)*((H+bw-1)/bw),0);mem=own.data();}
+    std::size_t at(LONG y,LONG x)const{return std::size_t(y/LONG(bw))*pitch+std::size_t(x/LONG(bw))*bytes;}
+    // The bytes the lock covered, row by row, for the trace: block rows of the locked rect (or the pixels of an uncompressed one).
+    std::string lockedBytes()const{
+        std::string t;const LONG rows=(locked.bottom-locked.top+LONG(bw)-1)/LONG(bw);const std::size_t rb=std::size_t((locked.right-locked.left+LONG(bw)-1)/LONG(bw))*bytes;
+        for(LONG y=0;y<rows;++y)t+=hexOf(mem+at(locked.top,locked.left)+std::size_t(y)*pitch,rb);return t;}
     HRESULT QueryInterface(REFIID id,void** out) override{if(!out)return E_POINTER;*out=nullptr;if(id==__uuidof(IUnknown)||id==__uuidof(IDirect3DSurface9)||id==__uuidof(IDirect3DResource9)){*out=static_cast<IDirect3DSurface9*>(this);AddRef();return S_OK;}return E_NOINTERFACE;}
     ULONG AddRef() override;ULONG Release() override;
     HRESULT GetDesc(D3DSURFACE_DESC* d) override{d->Format=(D3DFORMAT)fmt;d->Type=(D3DRESOURCETYPE)1;d->Usage=usage;d->Pool=(D3DPOOL)pool;d->MultiSampleType=(D3DMULTISAMPLE_TYPE)0;d->MultiSampleQuality=0;d->Width=w;d->Height=h;return D3D_OK;}
     HRESULT LockRect(D3DLOCKED_RECT* lr,const RECT* r,DWORD f) override{
-        locked=r?*r:RECT{0,0,LONG(w),LONG(h)};isLocked=true;lockFlags=f;lr->Pitch=INT(pitch);lr->pBits=mem+std::size_t(locked.top)*pitch+std::size_t(locked.left)*bpp;return D3D_OK;}
+        locked=r?*r:RECT{0,0,LONG(w),LONG(h)};isLocked=true;lockFlags=f;lr->Pitch=INT(pitch);lr->pBits=mem+at(locked.top,locked.left);return D3D_OK;}
     HRESULT UnlockRect() override{
         std::string s="Surface::Unlock "+std::to_string(lockFlags&~D3::kLockReadOnly)+" ";
-        if(!(lockFlags&D3::kLockReadOnly))for(LONG y=locked.top;y<locked.bottom;++y)s+=hexOf(mem+std::size_t(y)*pitch+std::size_t(locked.left)*bpp,std::size_t(locked.right-locked.left)*bpp);
-        gTrace.push_back(s+" rect "+std::to_string(locked.left)+","+std::to_string(locked.top)+","+std::to_string(locked.right)+","+std::to_string(locked.bottom));
+        if(!(lockFlags&D3::kLockReadOnly))s+=lockedBytes();
+        gTrace.push_back(s+" rect "+std::to_string(locked.left)+","+std::to_string(locked.top)+","+std::to_string(locked.right)+","+std::to_string(locked.bottom)+((lockFlags&D3::kLockReadOnly)?" ro":""));
         isLocked=false;return D3D_OK;}
     HRESULT GetContainer(REFIID,void**) override;
 };
@@ -52,8 +60,8 @@ struct TTexture:Counted<FakeTexture> {
     HRESULT LockRect(UINT l,D3DLOCKED_RECT* lr,const RECT* r,DWORD f) override{return surf[l]->LockRect(lr,r,f);}
     HRESULT UnlockRect(UINT l) override{
         auto* s=surf[l];std::string t="Texture::Unlock level "+std::to_string(l)+" "+std::to_string(s->lockFlags&~D3::kLockReadOnly)+" ";
-        if(!(s->lockFlags&D3::kLockReadOnly))for(LONG y=s->locked.top;y<s->locked.bottom;++y)t+=hexOf(s->mem+std::size_t(y)*s->pitch+std::size_t(s->locked.left)*4,std::size_t(s->locked.right-s->locked.left)*4);
-        gTrace.push_back(t+" rect "+std::to_string(s->locked.left)+","+std::to_string(s->locked.top)+","+std::to_string(s->locked.right)+","+std::to_string(s->locked.bottom));
+        if(!(s->lockFlags&D3::kLockReadOnly))t+=s->lockedBytes();
+        gTrace.push_back(t+" rect "+std::to_string(s->locked.left)+","+std::to_string(s->locked.top)+","+std::to_string(s->locked.right)+","+std::to_string(s->locked.bottom)+((s->lockFlags&D3::kLockReadOnly)?" ro":""));
         s->isLocked=false;return D3D_OK;}
 };
 inline ULONG TSurface::AddRef(){return owner?owner->AddRef():Counted<FakeSurface>::AddRef();}   // a level's references are its texture's
@@ -182,7 +190,7 @@ struct TargetDevice:Counted<FakeDevice> {
         for(auto& t:tex)if(t){t->Release();t=nullptr;}for(auto& v:sv)if(v){v->Release();v=nullptr;}if(idx){idx->Release();idx=nullptr;}return D3D_OK;}
     HRESULT CreateTexture(UINT w,UINT h,UINT l,DWORD u,D3DFORMAT f,D3DPOOL p,IDirect3DTexture9** pp,HANDLE*) override{
         gTrace.push_back("Device::CreateTexture "+std::to_string(w)+" "+std::to_string(h)+" "+std::to_string(l)+" "+std::to_string(u)+" "+std::to_string(unsigned(f))+" "+std::to_string(unsigned(p)));
-        if(!w||!h)return D3DERR_INVALIDCALL;*pp=new TTexture(w,h,l,u,unsigned(f),unsigned(p));return D3D_OK;}
+        if(!w||!h)return D3DERR_INVALIDCALL;auto* tx=new TTexture(w,h,l,u,unsigned(f),unsigned(p));gLastTexture=tx;*pp=tx;return D3D_OK;}
     HRESULT CreateCubeTexture(UINT,UINT,DWORD,D3DFORMAT,D3DPOOL,IDirect3DCubeTexture9** pp,HANDLE*) override{gTrace.push_back("Device::CreateCubeTexture");*pp=nullptr;return D3DERR_NOTAVAILABLE;}
     HRESULT CreateVolumeTexture(UINT,UINT,UINT,UINT,DWORD,D3DFORMAT,D3DPOOL,IDirect3DVolumeTexture9** pp,HANDLE*) override{gTrace.push_back("Device::CreateVolumeTexture");*pp=nullptr;return D3DERR_NOTAVAILABLE;}
     HRESULT CreateVertexBuffer(UINT len,DWORD u,DWORD fvf,D3DPOOL p,IDirect3DVertexBuffer9** pp,HANDLE*) override{

@@ -180,6 +180,10 @@ public:
     HRESULT STDMETHODCALLTYPE Present(const RECT* src,const RECT* dst,HWND window,const RGNDATA* dirty) override{return presentCommon(nullptr,src,dst,window,dirty,0);}
     HRESULT presentCommon(StreamSwapChain* swap,const RECT* src,const RECT* dst,HWND window,const RGNDATA* dirty,DWORD flags){
         Queue& q=streamQueue();
+        {   // the game thread's own time this frame: from the previous Present's return to here, minus the waits it spent (sync, backpressure)
+            const std::uint64_t now=nowNs();auto& st2=q.stats;
+            if(frameEnd){own(st2.gameNs,now-frameEnd);own(st2.gameWaitNs,get(st2.syncNs)+get(st2.backpressureNs)-waitsAtFrameEnd);own(st2.gameFrames);}
+        }
         policy.onPresent();
         UINT dirtyBytes=0;
         if(dirty){dirtyBytes=dirty->rdh.dwSize+dirty->rdh.nCount*UINT(sizeof(RECT));if(sizeof(PresentArgs)+dirtyBytes>MaxInlinePayload)dirtyBytes=0;}
@@ -193,6 +197,7 @@ public:
         HRESULT result=D3D_OK;
         if(prev){q.waitReplayed(prev,WaitKind::Present);result=presentResult(prev);}   // one frame ahead: the previous frame's real HRESULT
         q.setPressure(core.memoryPressure.load(std::memory_order_relaxed)||NorthlightStream::memoryPressure.load(std::memory_order_relaxed));
+        frameEnd=nowNs();waitsAtFrameEnd=get(q.stats.syncNs)+get(q.stats.backpressureNs);
         if(pressureApplied!=q.pressure()){pressureApplied=q.pressure();if(pressureApplied)q.trim();}
         return result;
     }
@@ -364,7 +369,7 @@ private:
     std::unique_ptr<StreamCore> coreOwner;StreamCore& core;Replayer replayer;StreamState st;std::function<void()> restoreOwner;
     IDirect3D9* parent;D3DCAPS9 caps{};D3DDEVICE_CREATION_PARAMETERS creation{};D3DPRESENT_PARAMETERS pp{};
     StreamSwapChain* sc0=nullptr;std::atomic<LONG> refs{1};
-    bool recording=false,cursorVisible=false,pressureApplied=false;std::uint64_t prevPresent=0,drawOrdinal=0;
+    bool recording=false,cursorVisible=false,pressureApplied=false;std::uint64_t frameEnd=0,waitsAtFrameEnd=0;std::uint64_t prevPresent=0,drawOrdinal=0;
     std::thread::id gameThread=std::this_thread::get_id();
     std::mutex foreignMutex;std::vector<Foreign> foreign;std::atomic<unsigned> foreignPending{0};
     TriggerPolicy policy;bool (*capture)(GameSnapshot&,Trigger,std::uint64_t)=nullptr;
@@ -425,10 +430,10 @@ private:
     void written(ProxyBase* p){
         if(!p)return;
         switch(p->kind){
-        case Kind::Surface:{auto* s=static_cast<StreamSurface*>(p);s->subp->written=true;break;}
-        case Kind::Texture:for(auto& s:static_cast<StreamTexture*>(p)->subs)s.written=true;break;
-        case Kind::CubeTexture:for(auto& s:static_cast<StreamCubeTexture*>(p)->subs)s.written=true;break;
-        case Kind::VolumeTexture:for(auto& s:static_cast<StreamVolumeTexture*>(p)->subs)s.written=true;break;
+        case Kind::Surface:markGpuWritten(core,*static_cast<StreamSurface*>(p)->subp);break;
+        case Kind::Texture:for(auto& s:static_cast<StreamTexture*>(p)->subs)markGpuWritten(core,s);break;
+        case Kind::CubeTexture:for(auto& s:static_cast<StreamCubeTexture*>(p)->subs)markGpuWritten(core,s);break;
+        case Kind::VolumeTexture:for(auto& s:static_cast<StreamVolumeTexture*>(p)->subs)markGpuWritten(core,s);break;
         case Kind::VertexBuffer:dropShadow(*p,static_cast<StreamVertexBuffer*>(p)->buf);static_cast<StreamVertexBuffer*>(p)->buf.written=true;break;
         default:break;
         }

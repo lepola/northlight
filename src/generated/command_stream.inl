@@ -2278,7 +2278,7 @@ template<class Tr> inline bool executeSync(SyncCall& sc, Tr& tr) {
     DWORD STDMETHODCALLTYPE GetLevelCount() override { return this->local(NORTHLIGHT_STREAM_TAG(Texture_GetLevelCount)); } \
     HRESULT STDMETHODCALLTYPE SetAutoGenFilterType(D3DTEXTUREFILTERTYPE FilterType) override { this->observe(NORTHLIGHT_STREAM_TAG(Texture_SetAutoGenFilterType), FilterType);::NorthlightStream::record_Texture_SetAutoGenFilterType(this->streamQueue(), this, FilterType);return D3D_OK; } \
     D3DTEXTUREFILTERTYPE STDMETHODCALLTYPE GetAutoGenFilterType() override { return this->local(NORTHLIGHT_STREAM_TAG(Texture_GetAutoGenFilterType)); } \
-    void STDMETHODCALLTYPE GenerateMipSubLevels() override { ::NorthlightStream::record_Texture_GenerateMipSubLevels(this->streamQueue(), this); } \
+    void STDMETHODCALLTYPE GenerateMipSubLevels() override { this->observe(NORTHLIGHT_STREAM_TAG(Texture_GenerateMipSubLevels));::NorthlightStream::record_Texture_GenerateMipSubLevels(this->streamQueue(), this); } \
     HRESULT STDMETHODCALLTYPE GetLevelDesc(UINT Level, D3DSURFACE_DESC* pDesc) override { return this->local(NORTHLIGHT_STREAM_TAG(Texture_GetLevelDesc), Level, pDesc); } \
     HRESULT STDMETHODCALLTYPE AddDirtyRect(const RECT* dirty_rect) override { ::NorthlightStream::record_Texture_AddDirtyRect(this->streamQueue(), this, dirty_rect);return D3D_OK; }
 
@@ -2296,7 +2296,7 @@ template<class Tr> inline bool executeSync(SyncCall& sc, Tr& tr) {
     DWORD STDMETHODCALLTYPE GetLevelCount() override { return this->local(NORTHLIGHT_STREAM_TAG(CubeTexture_GetLevelCount)); } \
     HRESULT STDMETHODCALLTYPE SetAutoGenFilterType(D3DTEXTUREFILTERTYPE FilterType) override { this->observe(NORTHLIGHT_STREAM_TAG(CubeTexture_SetAutoGenFilterType), FilterType);::NorthlightStream::record_CubeTexture_SetAutoGenFilterType(this->streamQueue(), this, FilterType);return D3D_OK; } \
     D3DTEXTUREFILTERTYPE STDMETHODCALLTYPE GetAutoGenFilterType() override { return this->local(NORTHLIGHT_STREAM_TAG(CubeTexture_GetAutoGenFilterType)); } \
-    void STDMETHODCALLTYPE GenerateMipSubLevels() override { ::NorthlightStream::record_CubeTexture_GenerateMipSubLevels(this->streamQueue(), this); } \
+    void STDMETHODCALLTYPE GenerateMipSubLevels() override { this->observe(NORTHLIGHT_STREAM_TAG(CubeTexture_GenerateMipSubLevels));::NorthlightStream::record_CubeTexture_GenerateMipSubLevels(this->streamQueue(), this); } \
     HRESULT STDMETHODCALLTYPE GetLevelDesc(UINT Level, D3DSURFACE_DESC* pDesc) override { return this->local(NORTHLIGHT_STREAM_TAG(CubeTexture_GetLevelDesc), Level, pDesc); } \
     HRESULT STDMETHODCALLTYPE AddDirtyRect(D3DCUBEMAP_FACES face, const RECT* dirty_rect) override { ::NorthlightStream::record_CubeTexture_AddDirtyRect(this->streamQueue(), this, face, dirty_rect);return D3D_OK; }
 
@@ -2314,7 +2314,7 @@ template<class Tr> inline bool executeSync(SyncCall& sc, Tr& tr) {
     DWORD STDMETHODCALLTYPE GetLevelCount() override { return this->local(NORTHLIGHT_STREAM_TAG(VolumeTexture_GetLevelCount)); } \
     HRESULT STDMETHODCALLTYPE SetAutoGenFilterType(D3DTEXTUREFILTERTYPE FilterType) override { this->observe(NORTHLIGHT_STREAM_TAG(VolumeTexture_SetAutoGenFilterType), FilterType);::NorthlightStream::record_VolumeTexture_SetAutoGenFilterType(this->streamQueue(), this, FilterType);return D3D_OK; } \
     D3DTEXTUREFILTERTYPE STDMETHODCALLTYPE GetAutoGenFilterType() override { return this->local(NORTHLIGHT_STREAM_TAG(VolumeTexture_GetAutoGenFilterType)); } \
-    void STDMETHODCALLTYPE GenerateMipSubLevels() override { ::NorthlightStream::record_VolumeTexture_GenerateMipSubLevels(this->streamQueue(), this); } \
+    void STDMETHODCALLTYPE GenerateMipSubLevels() override { this->observe(NORTHLIGHT_STREAM_TAG(VolumeTexture_GenerateMipSubLevels));::NorthlightStream::record_VolumeTexture_GenerateMipSubLevels(this->streamQueue(), this); } \
     HRESULT STDMETHODCALLTYPE GetLevelDesc(UINT Level, D3DVOLUME_DESC* pDesc) override { return this->local(NORTHLIGHT_STREAM_TAG(VolumeTexture_GetLevelDesc), Level, pDesc); } \
     HRESULT STDMETHODCALLTYPE AddDirtyBox(const D3DBOX* dirty_box) override { ::NorthlightStream::record_VolumeTexture_AddDirtyBox(this->streamQueue(), this, dirty_box);return D3D_OK; }
 
