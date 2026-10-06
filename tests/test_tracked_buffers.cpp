@@ -227,6 +227,19 @@ static void copiesTests(){
   // out of range: an ordinary lock (the backend decides)
   const auto f0=fallback();{C::Reader<IDirect3DVertexBuffer9> r(b.raw);void* p=nullptr;assert(r.lock(4090,100,&p)==S_OK&&r.unlock()==S_OK);}assert(fallback()==f0+1&&b.raw->readLocks==1);
   freeVB(b);}
+ // the stream's own replayed write names its source bytes (UnlockSourceScope): the copy is fed from them, not read back from the mapped pointer. The two are made to
+ // differ here (a real replay writes the same bytes to both) so the test can tell which one the copy took; a pass-through write outside a scope reads the mapped pointer.
+ {VB b=makeVB(owner,4096);replayWrite(b,0,4096,D3DLOCK_DISCARD,1);assert(readSame(b,0,64)&&m.copyFills.load()>0);
+  std::vector<unsigned char> src(100,0xC3);void* p=nullptr;
+  {C::UnlockSourceScope scope(src.data(),200,100);assert(b.vb->Lock(200,100,&p,0)==S_OK);std::memset(p,0x5A,100);assert(b.vb->Unlock()==S_OK);}
+  b.raw->readLocks=0;{C::Reader<IDirect3DVertexBuffer9> r(b.raw);void* q=nullptr;assert(r.lock(200,100,&q)==S_OK);for(int i=0;i<100;++i)assert(static_cast<unsigned char*>(q)[i]==0xC3);assert(r.unlock()==S_OK);}
+  assert(b.raw->readLocks==0&&b.raw->mem[200]==0x5A); // served from the copy (no backend read), and it holds the source bytes; the backend got what the mapped pointer was written with
+  // a scope for another range does not apply: the mapped pointer is read
+  {C::UnlockSourceScope scope(src.data(),0,100);assert(b.vb->Lock(300,100,&p,0)==S_OK);std::memset(p,0x7E,100);assert(b.vb->Unlock()==S_OK);}
+  assert(readSame(b,300,100)&&b.raw->readLocks==0);
+  // outside any scope (a pass-through lock the game writes through): the mapped pointer
+  assert(b.vb->Lock(500,50,&p,0)==S_OK);std::memset(p,0x11,50);assert(b.vb->Unlock()==S_OK);assert(readSame(b,500,50)&&b.raw->readLocks==0);
+  freeVB(b);}
  // a write lock outstanding (pass-through): not served; the pointer the game writes through is mirrored at Unlock
  {VB b=makeVB(owner,1024);replayWrite(b,0,1024,0,7);assert(readSame(b,0,8));b.raw->readLocks=0;
   void* p=nullptr;assert(b.vb->Lock(100,50,&p,0)==S_OK);std::memset(p,0x5a,50);
