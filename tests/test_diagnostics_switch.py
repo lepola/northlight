@@ -84,7 +84,7 @@ checks={
  'frame interval sampling only when on':'if(diagnostics()&&QueryPerformanceCounter(&intervalTick)&&frameIntervals.sample(' in r,
  'mirror audit stays functional (ungated)':'mirrorAuditSchedule.afterWorldCapture(frame,' in r and not re.search(r'diagnostics\(\)[^;]*mirrorAuditSchedule',r),
  'command stream: the periodic CSTREAM line and the state audit only when on; the other CSTREAM lines are capped errors (via the options.log lambda, whose logf is labelled %s)':(lambda t:
-    'if(diag&&frames%sampleEvery==1)runAudit();' in t and 'if(diag&&log&&frames%sampleEvery==0)cstreamLine(frames);' in t and t.count('cstreamLine(')==2
+    'if(audit&&diag&&frames%sampleEvery==1)runAudit();' in t and 'if(diag&&log&&frames%sampleEvery==0)cstreamLine(frames);' in t and t.count('cstreamLine(')==2
     and 'const bool diag=diagnostics&&diagnostics();' in t and 'options.diagnostics=&NorthlightDiagnostics::enabled;' in r and 'deadLogged_<8' in t and 'AttachThreadInput(' not in t)(fp.src('replay_thread.h').read_text()),
  'Diagnostics read once at quality load':'NorthlightDiagnostics::configure(quality.diagnostics!=0);' in w,
  'fate tracker: Diagnostics=0 wins':'shadowFateDiagnostics=NorthlightQuality::shadowFate(quality);' in w,

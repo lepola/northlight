@@ -5,7 +5,8 @@
 struct TargetKnobs {
     std::atomic<bool> hold{false};            // BeginScene blocks while set: keeps the replay thread busy so commands queue up
     std::atomic<int> presents{0};
-    std::atomic<bool> failSwapChain{false},failQueries{false},noRaw{false};   // noRaw: the resolver proves no raw pointer (a proxy then replays through the Device)
+    std::atomic<bool> failSwapChain{false},failQueries{false},noRaw{false},holdQueries{false};   // holdQueries: a polled query stays S_FALSE
+    //   // noRaw: the resolver proves no raw pointer (a proxy then replays through the Device)
     bool failCube=true;                       // CreateCubeTexture / CreateVolumeTexture fail (the dead-create path)
 };
 static TargetKnobs gKnobs;
@@ -111,7 +112,7 @@ struct TQuery:Counted<FakeQuery> {
     D3DQUERYTYPE GetType() override{return (D3DQUERYTYPE)type;}
     DWORD GetDataSize() override{return queryDataSize(type);}
     HRESULT GetData(void* d,DWORD size,DWORD f) override{
-        if(!(f&D3::kGetDataFlush)&&++polls<3)return S_FALSE;   // the result takes a few polls
+        if(!(f&D3::kGetDataFlush)&&(++polls<3||gKnobs.holdQueries.load()))return S_FALSE;   // the result takes a few polls
         if(d&&size>=4){const DWORD v=0xABCD0000u+issued;std::memcpy(d,&v,4);}return D3D_OK;}
 };
 struct TSwapChain:Counted<FakeSwapChain> {

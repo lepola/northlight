@@ -61,13 +61,24 @@ class Queue {
     static constexpr unsigned kMinBlockShift=12,kMaxBlockShift=27,kBlockClasses=kMaxBlockShift-kMinBlockShift+1;
     static constexpr std::size_t kMaxPooledBlockBytes=std::size_t(16)<<20;
 
+    // 0.3.193 (CS): every group on its own cache line (kLine=128: Apple Silicon's line; x86's 64 divides it). The producer's private
+    // fields change on every command, the consumer's on every retire, recorded_/replayed_ are each written by one side and read by the
+    // other; sharing a line made each side's store evict the other's. The rarely written flags share one line.
     // Producer-private.
-    Chunk* wchunk_;std::uint32_t wpos_=0,pubPos_=0,sinceCmds_=0,sinceBytes_=0,openSize_=0;bool open_=false;
+    alignas(kLine) Chunk* wchunk_;
+    std::uint32_t wpos_=0,pubPos_=0,sinceCmds_=0,sinceBytes_=0,openSize_=0;bool open_=false;
+    // Written by the producer at every commit.
+    alignas(kLine) std::atomic<std::uint64_t> recorded_{0};
     // Consumer-private.
-    Chunk* rchunk_;std::uint32_t rpos_=0;
-    // Shared.
-    std::atomic<std::uint64_t> recorded_{0},replayed_{0},waitSeq_{0};
-    std::atomic<bool> sleeping_{false},interrupted_{false},bpWaiting_{false},pressure_{false};
+    alignas(kLine) Chunk* rchunk_;
+    std::uint32_t rpos_=0;
+    // Written by the consumer at every retire.
+    alignas(kLine) std::atomic<std::uint64_t> replayed_{0};
+    // Written by the producer while it waits (the consumer reads it at every retire).
+    alignas(kLine) std::atomic<std::uint64_t> waitSeq_{0};
+    // Rarely written flags (sleeping_ only when the consumer goes idle).
+    alignas(kLine) std::atomic<bool> sleeping_{false};
+    std::atomic<bool> interrupted_{false},bpWaiting_{false},pressure_{false};
     std::size_t budget_;
     Event consumerEv_{false},progress_{false};
     std::mutex pool_;std::vector<Chunk*> freeChunks_;std::vector<Block*> freeBlocks_[kBlockClasses];std::size_t pooledBlockBytes_=0;
@@ -140,6 +151,20 @@ class Queue {
     static unsigned blockClass(std::size_t bytes){unsigned s=kMinBlockShift;while(s<=kMaxBlockShift&&(std::size_t(1)<<s)<bytes)++s;return s>kMaxBlockShift?kBlockClasses:s-kMinBlockShift;}
 
 public:
+    // Layout check (static_assert below): the producer-private, consumer-private, recorded_, replayed_, waitSeq_ and flag groups each
+    // start on their own cache line, so no two of them share one.
+#if defined(__clang__)||defined(__GNUC__)
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Winvalid-offsetof"
+#endif
+    static constexpr bool layoutIsolated(){
+        constexpr std::size_t o[]={offsetof(Queue,wchunk_),offsetof(Queue,recorded_),offsetof(Queue,rchunk_),offsetof(Queue,replayed_),offsetof(Queue,waitSeq_),offsetof(Queue,sleeping_)};
+        for(std::size_t i=0;i<6;++i){if(o[i]%kLine)return false;for(std::size_t j=i+1;j<6;++j)if(o[i]/kLine==o[j]/kLine)return false;}
+        return offsetof(Queue,budget_)/kLine==offsetof(Queue,sleeping_)/kLine&&offsetof(Queue,stats)%kLine==0;   // budget_ rides with the rarely written flags
+    }
+#if defined(__clang__)||defined(__GNUC__)
+#pragma GCC diagnostic pop
+#endif
     Counters stats;
 
     explicit Queue(std::size_t budget=BudgetBytes):budget_(budget){
@@ -278,6 +303,19 @@ public:
             sleeping_.store(false);
         }
     }
+    // next(true) for a consumer that also has timed work (pending queries to poll): the same sleeper handshake, but the wait is
+    // bounded by ms and publish()/nextChunk()'s wake() ends it at once. Returns the next command, or nullptr after ms / on interrupt.
+    const CommandHeader* nextTimed(std::uint32_t ms){
+        if(auto* h=peek())return h;
+        if(interrupted_.load())return nullptr;
+        sleeping_.store(true);
+        std::atomic_thread_fence(std::memory_order_seq_cst);   // as in next(): the flag is visible before the cursor is re-read
+        if(auto* h=peek()){sleeping_.store(false);return h;}
+        own(stats.consumerSleeps);
+        if(!interrupted_.load())consumerEv_.wait(ms);
+        sleeping_.store(false);
+        return peek();
+    }
     // Marks the command returned by next() executed: releases its Block, advances replayedSeq, recycles a finished chunk.
     void retire(const CommandHeader* h){
         assert(h==reinterpret_cast<const CommandHeader*>(rchunk_->data+rpos_));
@@ -300,4 +338,6 @@ public:
 
     std::uint64_t depth()const{return recorded_.load()-replayed_.load();}
 };
+static_assert(alignof(Queue)>=kLine,"Queue is cache-line aligned: heap objects holding one need C++17 aligned new");
+static_assert(Queue::layoutIsolated(),"Queue field groups sit on distinct cache lines");
 }

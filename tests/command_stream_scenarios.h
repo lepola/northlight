@@ -374,7 +374,7 @@ static void statsLine(){
     rig.sync();
     std::vector<std::string> lines;for(auto& l:gStatLines)if(l.find(" frames=600 ")!=std::string::npos)lines.push_back(l);   // the 600th replayed frame
     CHECK(lines.size()==1&&lines[0].rfind("CSTREAM cmds=",0)==0&&lines[0].find("passPerFrame=")!=std::string::npos&&lines[0].find("census[")!=std::string::npos&&lines[0].back()==']');
-    for(const char* field:{"game[per frame]: ms=","syncMs=","presentWaitMs=","bpMs=","recorded=","answered=","texShadow=","readbacks="})CHECK(lines[0].find(field)!=std::string::npos);   // per-window numbers
+    for(const char* field:{"game[per frame]: ms=","syncMs=","presentWaitMs=","bpMs=","sleeps=","publishes=","replayBusyMs/frame=","recorded=","answered=","texShadow=","readbacks="})CHECK(lines[0].find(field)!=std::string::npos);   // per-window numbers
     CHECK(lines[0].size()<1600);
     rig.finish();checkClean();
 }
@@ -685,7 +685,64 @@ static void directReplayRaw(){
     plain->Release();cube->Release();tex->Release();vb->Release();ib->Release();vs->Release();ps->Release();dc->Release();
     rig.finish();checkClean();
 }
+// 0.3.193 (CS): queue/counter layout. The producer's, the consumer's and the shared groups sit on distinct cache lines; a heap-allocated
+// core (StreamDevice::coreOwner) must come back aligned (C++17 aligned new).
+static void layoutIsolation(){
+    static_assert(Queue::layoutIsolated(),"queue groups");
+    static_assert(offsetof(Counters,commands)/kLine!=offsetof(Counters,directCalls)/kLine&&offsetof(Counters,directCalls)/kLine!=offsetof(Counters,chunksLive)/kLine,"counters");
+    static_assert(offsetof(Counters,consumerSleeps)/kLine==offsetof(Counters,replayFailures)/kLine&&offsetof(Counters,queryPolls)/kLine==offsetof(Counters,deadCreates)/kLine,"consumer counters together");
+    auto* c=new StreamCore;CHECK(reinterpret_cast<std::uintptr_t>(c)%kLine==0&&reinterpret_cast<std::uintptr_t>(&c->q.stats)%kLine==0);delete c;
+    std::unique_ptr<Queue> q(new Queue);CHECK(reinterpret_cast<std::uintptr_t>(q.get())%kLine==0);
+}
+// Replay accounting: idle grows while the queue is empty and busy = wall - idle never exceeds wall; the line carries sleeps= and publishes=.
+static void replayTimingAccounting(){
+    gTrace.clear();Rig rig(true);Replayer& rp=rig.sd->replayerOf();
+    for(int i=0;i<200;++i){rig.dev->SetRenderState((D3DRENDERSTATETYPE)7,i);rig.dev->DrawPrimitive((D3DPRIMITIVETYPE)4,0,2);}
+    rig.dev->Present(nullptr,nullptr,nullptr,nullptr);rig.sync();
+    const auto idle0=rp.idleNs.load(),wall0=rp.wallNs();
+    std::this_thread::sleep_for(std::chrono::milliseconds(60));rig.sync();   // the replay thread waits for commands; a wait is accounted when it ends (the sync wakes it)
+    const auto idle1=rp.idleNs.load(),wall1=rp.wallNs();
+    CHECK(idle1-idle0>=40000000ull&&idle1-idle0<=wall1-wall0);   // grew by about the empty time, never more than elapsed
+    const auto idle=rp.idleNs.load();const auto wall=rp.wallNs();CHECK(idle<=wall&&rp.busyNsTotal()<=wall&&rp.busyNsTotal()>0);
+    rig.finish();checkClean();
+}
+// Diagnostics off: the replay thread keeps no audit state; switched on mid-session it starts clean at the next frame.
+static std::atomic<bool> gDiagOn{false};
+static int frameSalt(){static int n=0;return n+=1000;}
+static void diagnosticsOffSkipsAudit(){
+    gTrace.clear();gDiagOn.store(false);StreamDevice::Options opt;opt.diagnostics=[]{return gDiagOn.load();};opt.log=[](const char*){};
+    Rig rig(true,opt);Replayer& rp=rig.sd->replayerOf();
+    auto frame=[&]{for(int i=0;i<300;++i)rig.dev->SetRenderState((D3DRENDERSTATETYPE)(7+i%5),DWORD(i+frameSalt()));rig.dev->Present(nullptr,nullptr,nullptr,nullptr);rig.sync();};
+    frame();frame();CHECK(rp.auditSets()==0);
+    gDiagOn.store(true);frame();CHECK(rp.auditSets()==0);   // the frame that was running when it turned on: not recorded
+    frame();CHECK(rp.auditSets()>0);
+    gDiagOn.store(false);const auto n=rp.auditSets();frame();frame();CHECK(rp.auditSets()<=n+300);   // one more recorded frame at most (the flip is seen at the next boundary)
+    rig.finish();checkClean();
+}
+// A pending query makes the replay thread poll; publish() must still wake it at once (it used to sleep 50 us blind, which Windows rounds up to 1 ms+).
+static void idlePollWakes(){
+    {Queue q;std::atomic<int> st{0};std::atomic<std::uint64_t> wokeNs{0};
+     std::thread t([&]{st.store(1);auto* h=q.nextTimed(5000);if(h){wokeNs.store(nowNs());q.retire(h);}st.store(2);});
+     while(st.load()!=1)std::this_thread::yield();std::this_thread::sleep_for(std::chrono::milliseconds(30));   // asleep in the timed wait
+     const auto t0=nowNs();record(q,1,8,0);q.publish();
+     CHECK(waitFor([&]{return st.load()==2;},3000)&&wokeNs.load()>=t0&&wokeNs.load()-t0<1000000000ull);t.join();   // far below the 5 s timeout
+     Queue r;CHECK(r.nextTimed(2)==nullptr&&get(r.stats.consumerSleeps)==1);}   // no data: returns after the timeout
+    gTrace.clear();gKnobs.holdQueries.store(true);Rig rig(true);auto& q=rig.core().q;
+    IDirect3DQuery9* qy=nullptr;CHECK(rig.dev->CreateQuery((D3DQUERYTYPE)9,&qy)==D3D_OK);CHECK(qy->Issue(D3::kIssueEnd)==D3D_OK);rig.dev->BeginScene();   // publishes; the query stays pending
+    std::this_thread::sleep_for(std::chrono::milliseconds(30));
+    const auto sleeps0=get(q.stats.consumerSleeps);CHECK(sleeps0>=1);   // idle-polling on the timed wait
+    std::vector<std::uint64_t> lat;
+    for(int i=0;i<100;++i){
+        std::this_thread::sleep_for(std::chrono::microseconds(300));   // let it fall back into the timed wait
+        const auto t0=nowNs();rig.dev->EndScene();const auto seq=q.recordedSeq();q.publish();   // EndScene publishes by itself
+        while(q.replayedSeq()<seq)std::this_thread::yield();lat.push_back(nowNs()-t0);
+    }
+    std::sort(lat.begin(),lat.end());CHECK(lat[50]<700000ull&&lat[99]<500000000ull);   // median under the 1 ms poll period: woken, not polled
+    gKnobs.holdQueries.store(false);DWORD d=0;int spins=0;while(qy->GetData(&d,4,0)==S_FALSE&&++spins<1000000)std::this_thread::yield();CHECK(spins<1000000);
+    qy->Release();rig.finish();checkClean();
+}
 static void streamTests(bool threadsOnly){
+    layoutIsolation();replayTimingAccounting();diagnosticsOffSkipsAudit();idlePollWakes();
     lifetimeAndIdentity();stateKnownUnknown();locksPreserveBytes();shadowCap();queriesAndSyncCensus();resetAndShutdown();directReplayRaw();redundantFiltering();renderTargetResetsViewport();textureShadows();statsLine();childrenOutliveTheDevice();queryProbeAndDeadQuery();initFailureFallback();cursorHandling();nestedSyncInPump();upDrawsAndBackpressure();snapshotTriggers();
     equivalence(20000,12345);equivalence(20000,987654321);
     (void)threadsOnly;

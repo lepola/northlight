@@ -137,7 +137,14 @@ public:
     std::function<void(const char*)> log;               // diagnostics line sink; may be empty
     bool (*diagnostics)()=nullptr;                      // Diagnostics on: the CSTREAM line and the sync-only audit (asked per frame)
     unsigned sampleEvery=600;
-    std::atomic<std::uint64_t> busyNs{0},frameBusyNs{0};
+    // 0.3.193 (CS): replay time is accounted by what it is NOT doing: idleNs is the time spent waiting for commands (written by the replay
+    // thread around its blocking wait only, no clock read per command). Busy = wall - idle; the CSTREAM line's replayBusyMs/frame is that
+    // difference per window, so it now excludes the per-command timer overhead it used to include.
+    std::atomic<std::uint64_t> idleNs{0};
+    std::uint64_t wallNs()const{const auto s=startNs_.load(std::memory_order_relaxed);return s?nowNs()-s:0;}
+    std::uint64_t busyNsTotal()const{const auto w=wallNs(),i=idleNs.load(std::memory_order_relaxed);return w>i?w-i:0;}
+    // Diagnostics bookkeeping (the audit's value mirror and touched list) runs only while diagnostics were on at the last frame boundary.
+    std::uint64_t auditSets()const{return get(auditSets_);}   // audited Sets recorded by the replay thread (0 while diagnostics are off)
     explicit Replayer(StreamCore& c):core(c){}
     ~Replayer(){join();}
     Replayer(const Replayer&)=delete;Replayer& operator=(const Replayer&)=delete;
@@ -148,9 +155,10 @@ public:
         try{
             unsigned short cw=0;unsigned csr=0;captureFpu(cw,csr);
             std::atomic<int> ready{0};
+            startNs_.store(nowNs(),std::memory_order_relaxed);lastWall_=startNs_.load(std::memory_order_relaxed);
             th_=std::thread([this,cw,csr,&ready]{
                 applyFpu(cw,csr);if(threadStart)threadStart();replayTid.store(currentTid());
-                raisePriority();
+                raisePriority();diag_=diagnostics&&diagnostics();
                 ready.store(1);loop();});
             while(!ready.load())std::this_thread::yield();   // the handoff is complete before CreateDevice returns to the game
             return true;
@@ -187,11 +195,13 @@ private:
     std::vector<StreamQuery*> pending_;
     GameSnapshot* current_=nullptr;std::optional<ScopedPlayback> playback_;
     std::uint64_t draws_=0;
+    std::atomic<std::uint64_t> startNs_{0};
+    bool diag_=false;Counter auditSets_{0};   // diag_: diagnostics() as of the last frame boundary (asked once per frame, not per command)
     // audit: the values the game last set this frame, replay side
     DWORD auditRS_[StreamState::kRS]={},auditSamp_[StreamState::kSamplers][StreamState::kSampTypes]={},auditTss_[StreamState::kTSStages][StreamState::kTSTypes]={};
     std::vector<unsigned> touched_;std::vector<bool> touchedFlag_=std::vector<bool>(StreamState::kBits,false);
     struct Avg {double depth=0,bytes=0;unsigned n=0;std::uint64_t maxDepth=0,maxBytes=0;} avg_;
-    std::uint64_t lastBusy_=0,lastPass_=0,lastGameNs_=0,lastGameWait_=0,lastGameFrames_=0,lastPresentNs_=0,lastSyncNs_=0,lastBpNs_=0,lastCmds_=0,lastAnswered_=0,lastSyncCalls_=0,lastFiltered_=0,lastDirect_=0;unsigned deadLogged_=0;
+    std::uint64_t lastIdle_=0,lastPubs_=0,lastSleeps_=0,lastWall_=0,lastPass_=0,lastGameNs_=0,lastGameWait_=0,lastGameFrames_=0,lastPresentNs_=0,lastSyncNs_=0,lastBpNs_=0,lastCmds_=0,lastAnswered_=0,lastSyncCalls_=0,lastFiltered_=0,lastDirect_=0;unsigned deadLogged_=0;
 
     static void captureFpu(unsigned short& cw,unsigned& csr){
         cw=0;csr=0;
@@ -212,7 +222,7 @@ private:
         (void)cw;(void)csr;
     }
 
-    void note(unsigned bit){if(!touchedFlag_[bit]){touchedFlag_[bit]=true;touched_.push_back(bit);}}
+    void note(unsigned bit){own(auditSets_);if(!touchedFlag_[bit]){touchedFlag_[bit]=true;touched_.push_back(bit);}}
     void pollQueries(){
         for(std::size_t i=0;i<pending_.size();){
             StreamQuery* q=pending_[i];bool done=false;
@@ -313,7 +323,8 @@ private:
         const std::uint64_t depth=core.q.depth(),bytes=get(core.q.stats.highWaterBytes);
         avg_.depth+=double(depth);avg_.bytes+=double(bytes);++avg_.n;if(depth>avg_.maxDepth)avg_.maxDepth=depth;if(bytes>avg_.maxBytes)avg_.maxBytes=bytes;
         const bool diag=diagnostics&&diagnostics();
-        if(diag&&frames%sampleEvery==1)runAudit();
+        const bool audit=diag_;diag_=diag;   // the next frame records the audit state iff diagnostics are on now; switched on mid-frame: starts clean next frame
+        if(audit&&diag&&frames%sampleEvery==1)runAudit();
         if(diag&&log&&frames%sampleEvery==0)cstreamLine(frames);
         touched_.clear();std::fill(touchedFlag_.begin(),touchedFlag_.end(),false);
     }
@@ -344,9 +355,10 @@ private:
         const Counters& s=core.q.stats;char buf[kLine];int n=std::snprintf(buf,sizeof buf,"CSTREAM ");   // the prefix the log is searched by
         {char part[700];formatCounters(part,sizeof part,s);put(buf,n,"%s",part);}
         const double inv=avg_.n?1.0/avg_.n:0.0;
-        const std::uint64_t busy=busyNs.load(),dBusy=busy-lastBusy_;lastBusy_=busy;
-        put(buf,n," frames=%llu depthAvg=%.0f depthMax=%llu bytesAvg=%.0f bytesMax=%llu replayBusyMs/frame=%.3f dead=%llu answered=%llu synced=%llu syncOnly=%llu snap=%llu/%llu/%llu/%llu",
-            (unsigned long long)frames,avg_.depth*inv,(unsigned long long)avg_.maxDepth,avg_.bytes*inv,(unsigned long long)avg_.maxBytes,sampleEvery?dBusy/1e6/sampleEvery:0.0,
+        const std::uint64_t wall=nowNs(),idle=idleNs.load(std::memory_order_relaxed),dWall=wall-lastWall_,dIdle=idle-lastIdle_,dBusy=dWall>dIdle?dWall-dIdle:0;lastWall_=wall;lastIdle_=idle;
+        const std::uint64_t pubs=get(s.publishes),sleeps=get(s.consumerSleeps),dPubs=pubs-lastPubs_,dSleeps=sleeps-lastSleeps_;lastPubs_=pubs;lastSleeps_=sleeps;
+        put(buf,n," frames=%llu depthAvg=%.0f depthMax=%llu bytesAvg=%.0f bytesMax=%llu replayBusyMs/frame=%.3f sleeps=%.2f publishes=%.1f dead=%llu answered=%llu synced=%llu syncOnly=%llu snap=%llu/%llu/%llu/%llu",
+            (unsigned long long)frames,avg_.depth*inv,(unsigned long long)avg_.maxDepth,avg_.bytes*inv,(unsigned long long)avg_.maxBytes,sampleEvery?dBusy/1e6/sampleEvery:0.0,sampleEvery?double(dSleeps)/sampleEvery:0.0,sampleEvery?double(dPubs)/sampleEvery:0.0,
             (unsigned long long)get(s.deadCreates),(unsigned long long)get(s.stateAnswered),(unsigned long long)get(s.stateSynced),(unsigned long long)get(s.syncOnlySlots),
             SnapshotStats::hits.load(),SnapshotStats::misses.load(),SnapshotStats::triggers.load(),SnapshotStats::overflow.load());
         std::uint64_t pass=0;for(unsigned r=0;r<Counters::kPassReasons;++r)pass+=get(s.passThrough[r]);
@@ -380,11 +392,11 @@ private:
     void execute(const CommandHeader* h){
         Translator tr{core};
         if(dispatchGenerated(h,tr)){
-            if(h->id==(std::uint16_t)Cmd::Device_SetRenderState){const auto* a=reinterpret_cast<const Args_Device_SetRenderState*>(h+1);if(unsigned(a->State)<StreamState::kRS){auditRS_[a->State]=a->Value;note(unsigned(a->State));}}
+            if(h->id==(std::uint16_t)Cmd::Device_SetRenderState){const auto* a=reinterpret_cast<const Args_Device_SetRenderState*>(h+1);if(diag_&&unsigned(a->State)<StreamState::kRS){auditRS_[a->State]=a->Value;note(unsigned(a->State));}}
             else if(h->id==(std::uint16_t)Cmd::Device_SetSamplerState){const auto* a=reinterpret_cast<const Args_Device_SetSamplerState*>(h+1);unsigned idx;
-                if(StreamState::sampIndex(a->Sampler,idx)&&unsigned(a->Type)<StreamState::kSampTypes){auditSamp_[idx][a->Type]=a->Value;note(StreamState::bitSamp(idx,unsigned(a->Type)));}}
+                if(diag_&&StreamState::sampIndex(a->Sampler,idx)&&unsigned(a->Type)<StreamState::kSampTypes){auditSamp_[idx][a->Type]=a->Value;note(StreamState::bitSamp(idx,unsigned(a->Type)));}}
             else if(h->id==(std::uint16_t)Cmd::Device_SetTextureStageState){const auto* a=reinterpret_cast<const Args_Device_SetTextureStageState*>(h+1);
-                if(a->Stage<StreamState::kTSStages&&unsigned(a->Type)<StreamState::kTSTypes){auditTss_[a->Stage][a->Type]=a->Value;note(StreamState::bitTss(a->Stage,unsigned(a->Type)));}}
+                if(diag_&&a->Stage<StreamState::kTSStages&&unsigned(a->Type)<StreamState::kTSTypes){auditTss_[a->Stage][a->Type]=a->Value;note(StreamState::bitTss(a->Stage,unsigned(a->Type)));}}
             else if(h->id==(std::uint16_t)Cmd::Query_Issue){const auto* a=reinterpret_cast<const Args_Query_Issue*>(h+1);
                 auto* q=static_cast<StreamQuery*>(a->self);
                 if((a->dwIssueFlags&D3::kIssueEnd)&&!q->dead.load()){++q->issueSeen;if(std::find(pending_.begin(),pending_.end(),q)==pending_.end())pending_.push_back(q);}}
@@ -422,14 +434,14 @@ private:
         for(;;){
             const CommandHeader* h=q.next(false);
             if(!h){
-                if(!pending_.empty()){pollQueries();std::this_thread::sleep_for(std::chrono::microseconds(50));continue;}
-                h=q.next(true);if(!h){if(stopNow_.load())return;continue;}
+                // Idle: the only clock reads of the replay thread. Pending queries are polled every ms; publish() wakes the wait at once.
+                if(!pending_.empty()){pollQueries();const auto t0=nowNs();h=q.nextTimed(1);own(idleNs,nowNs()-t0);}
+                else{const auto t0=nowNs();h=q.next(true);own(idleNs,nowNs()-t0);}
+                if(!h){if(stopNow_.load())return;continue;}
             }
-            const std::uint64_t t0=nowNs();
             if(h->id==(std::uint16_t)Cmd::Stop){q.retire(h);return;}
             execute(h);
             q.retire(h);
-            busyNs.fetch_add(nowNs()-t0,std::memory_order_relaxed);
         }
     }
 public:
