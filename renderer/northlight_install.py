@@ -561,6 +561,12 @@ class Installer:
                          'Run the installer again to resume.')
         return (last or {}).get('event', 'done')
 
+    def archive_warnings(self, client):
+        """The archives the cache this client built could not list or open (its install-manifest's tolerated)."""
+        manifest = read_json(client / CACHE / 'install-manifest.json')
+        tolerated = manifest.get('tolerated') if isinstance(manifest, dict) else None
+        return (tolerated.get('archive_warnings') if isinstance(tolerated, dict) else None) or []
+
     # ---- art layer ----
 
     def our_shas(self, client, name):
@@ -808,7 +814,7 @@ class Installer:
             INSTALL.restore(client, backup)
         self.recover(client)
         self.drop_previous(client)
-        report = {'client': str(client), 'locale': locale, 'variant': p['variant']}
+        report = {'client': str(client), 'locale': locale, 'variant': p['variant'], 'archive_warnings': []}
         try:
             if action == 'extract':
                 self.extract(client, p['source'], p['manifest'])
@@ -816,6 +822,7 @@ class Installer:
             elif action == 'build':
                 event = self.build_cache(client, locale, jobs, p['without'])
                 report['world_cache'] = 'kept (up to date)' if event == 'up_to_date' else 'built from this client'
+                report['archive_warnings'] = self.archive_warnings(client)
             elif action == 'keep':
                 report['world_cache'] = f'kept (prebuilt {p["variant"]} cache {p["manifest"]["cache_digest"][:12]})'
             else:
@@ -857,6 +864,10 @@ class Installer:
         self.say('')
         self.say(f'Northlight renderer {self.pkg.version}: ' + ('installed.' if changed else 'already installed; nothing changed.'))
         self.say(f'  world cache: {report["world_cache"]}')
+        if report['archive_warnings']:   # shown during the build too; repeated here, where it is not scrolled away
+            import install_world_cache as iwc
+            for warning in report['archive_warnings']:
+                self.say('    ' + iwc.archive_warning_text(warning))
         self.say(f'  art layer:   {report["art_layer"]}')
         self.say(f'  renderer:    {payload}' + (f' (backend {p["backend"]})' if self.platform == 'windows' else ''))
         for b in backups:

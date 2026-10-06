@@ -19,6 +19,8 @@ from m2_visibility import hidden_batches
 ZERO=17066.666666666668
 # Windows: a virus scanner or the indexer briefly holds a just-written file; replace() is retried.
 LOCK_RETRIES=(.2,.4,.8,1.6,3.) if os.name=='nt' else ()
+CONTINENTS=['Azeroth','Kalimdor','Expansion01','Northrend']
+CUSTOM_PATCH=re.compile(r'patch(?:-[a-z]{4})?-[4-9a-z]\.mpq')   # not one Blizzard shipped (client_archives.STOCK_SUFFIXES)
 UNIT=533.3333333333334/128
 
 class DeletedAsset(ValueError):
@@ -109,28 +111,63 @@ def quaternion_matrix(q,scale):
 
 
 class Assets:
-    """The client's MPQ files by name, resolved in the game's archive order (client_archives.py)."""
+    """The client's MPQ files by name, resolved in the game's archive order (client_archives.py).
+    An archive without a readable (listfile) (private-server patches often strip it; the game does not
+    need it) cannot be listed: every name the other archives list is probed in it (SFileHasFile), so a
+    file it replaces still resolves to it, read() looks a name no listing has up in it, and the continents'
+    64x64 ADT grids are probed in it, so tiles it adds are built. Other files it adds stay out of providers:
+    a builder that enumerates them (world_lights_builder's model names) misses them. A custom patch archive
+    (patch-4..9, -a..z) StormLib cannot open is left out; any other still fails. Both are reported:
+    unlisted, unreadable, warnings(), fingerprint()."""
     def __init__(self,client=None,archives='all',locale=None,without=''):
         self.client=Path(client) if client else CLIENT;self.view=archives
         self.locale=client_archives.detect_locale(self.client,locale)
-        self.paths=client_archives.chain(self.client,archives,self.locale,without)
-        self.archives=[Archive(p) for p in self.paths]
-        self.providers={}
+        self.archives=[];self.unreadable=[]
+        for p in client_archives.chain(self.client,archives,self.locale,without):
+            try:self.archives.append(Archive(p))
+            except OSError:
+                if not CUSTOM_PATCH.fullmatch(p.name.lower()):raise   # Blizzard's archives hold the world itself
+                self.unreadable.append(p.relative_to(self.client).as_posix())
+        self.paths=[a.path for a in self.archives]
+        self.providers={};self.blind=[];self.probed={}
         for index,a in enumerate(self.archives):
-            for name in a.names():self.providers[name.lower()]=index
+            try:names=a.names()
+            except (OSError,ValueError):self.blind.append(index);continue
+            for name in names:self.providers[name.lower()]=index
+        tiles=[f'world\\maps\\{m}\\{m}_{x}_{y}.adt'.lower() for m in CONTINENTS for x in range(64) for y in range(64)]
+        for index in self.blind:   # in priority order, so the later archive still wins
+            has=self.archives[index].has
+            for name,provider in self.providers.items():
+                if provider<index and has(name):self.providers[name]=index
+            for name in tiles:
+                if name not in self.providers and has(name):self.providers[name]=index
+        self.unlisted=[self.paths[i].relative_to(self.client).as_posix() for i in self.blind]
         self.stats=collections.Counter();self.missing=set();self.unsupported=set();self.clamped=set()
     @classmethod
     def from_args(cls,args):
         return cls(args.client,args.archives,args.locale,getattr(args,'without',''))
+    def provider(self,name):
+        """Index of the archive that provides a lower-case backslash name, or None. A name no listing
+        has may still be in an unlisted archive (the highest one that holds it wins)."""
+        if name in self.providers:return self.providers[name]
+        if name not in self.probed:self.probed[name]=next((i for i in reversed(self.blind) if self.archives[i].has(name)),None)
+        return self.probed[name]
     def read(self,name):
-        name=name.lower().replace('/','\\')
-        if name not in self.providers:raise FileNotFoundError(name)
-        return self.archives[self.providers[name]].read(name)
+        name=name.lower().replace('/','\\');index=self.provider(name)
+        if index is None:raise FileNotFoundError(name)
+        return self.archives[index].read(name)
     def origin(self,name):
         """The archive that provides a name, relative to the client folder."""
-        return self.paths[self.providers[name.lower().replace('/','\\')]].relative_to(self.client).as_posix()
+        index=self.provider(name.lower().replace('/','\\'))
+        if index is None:raise FileNotFoundError(name)
+        return self.paths[index].relative_to(self.client).as_posix()
+    def warnings(self):
+        """The archives this view could not list or open, as the builders report them."""
+        return [{'archive':a,'problem':'unlisted'} for a in self.unlisted]+\
+               [{'archive':a,'problem':'unreadable'} for a in self.unreadable]
     def fingerprint(self):
-        return {'locale':self.locale,'view':self.view,**client_archives.fingerprint(self.paths,self.client)}
+        return {'locale':self.locale,'view':self.view,**client_archives.fingerprint(self.paths,self.client),
+                'unlisted':self.unlisted,'unreadable':self.unreadable}
     def close(self):
         for a in self.archives:a.close()
 
@@ -451,7 +488,8 @@ def main():
     p=argparse.ArgumentParser();p.add_argument('--map',default='Azeroth');p.add_argument('--tiles',nargs=4,type=int,metavar=('X0','Y0','X1','Y1'))
     p.add_argument('--all-continents',action='store_true');p.add_argument('--output',type=Path,help='default: <client>/world-cache');p.add_argument('--force',action='store_true');p.add_argument('--instanced',action='store_true')
     client_archives.add_arguments(p);args=p.parse_args();assets=Assets.from_args(args);args.output=args.output or assets.client/'world-cache';builder=InstancedBuilder(assets,args.output) if args.instanced else Builder(assets);start=time.time();records=[];failures=[];deleted=[]
-    maps=['Azeroth','Kalimdor','Expansion01','Northrend'] if args.all_continents else [args.map]
+    maps=CONTINENTS if args.all_continents else [args.map]
+    for warning in assets.warnings():print(json.dumps({'archive_warning':warning}),flush=True)   # install_world_cache shows these at once
     try:
         for mapname in maps:
             pattern=re.compile(r'world\\maps\\'+re.escape(mapname)+r'\\'+re.escape(mapname)+r'_(\d+)_(\d+)\.adt$',re.I)
@@ -469,7 +507,7 @@ def main():
                 except (ValueError,FileNotFoundError,IndexError,KeyError) as exc:
                     failures.append({'map':mapname,'tile':[x,y],'error':str(exc)});print('ERROR',failures[-1],flush=True)
         report={'format':'FGS3' if args.instanced else 'FGS2','generated':records,'failures':failures,'deleted_source_tiles':deleted,'missing_assets':sorted(assets.missing),
-                'unsupported_assets':sorted(assets.unsupported),'clamped_wmo_groups':sorted(assets.clamped),'statistics':dict(assets.stats),'elapsed_seconds':time.time()-start,
+                'unsupported_assets':sorted(assets.unsupported),'clamped_wmo_groups':sorted(assets.clamped),'archive_warnings':assets.warnings(),'statistics':dict(assets.stats),'elapsed_seconds':time.time()-start,
                 'limitations':['Static M2 bind pose; animated characters absent.','Terrain albedo is first-layer texture mean; terrain geometry is exact including 4x4 holes.',
                 'BLP2 selected mip up to 128px; alpha cutout threshold 0.5.','Additive/translucent batches excluded from opaque lighting geometry.',
                 'M2 active world geosets use first opaque/cutout material per submesh.','Cross-tile placed object duplicates may exist; runtime should deduplicate triangle geometry.'],

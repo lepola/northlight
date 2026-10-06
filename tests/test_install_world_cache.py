@@ -130,7 +130,16 @@ def built_with(sources, overrun=False, report=True):
     return recorded
 
 
-v183 = {n: next(iter(h)) for n, h in iwc.SOURCE_EQUIVALENTS.items()}
+v183 = {n: h for n, equal in iwc.SOURCE_EQUIVALENTS.items() for h, clamp in equal.items() if clamp}
+v191 = {n: h for n, equal in iwc.SOURCE_EQUIVALENTS.items() for h, clamp in equal.items() if not clamp}
+assert set(v183) == {'world_scene_builder.py', 'regional_fog_builder.py'} and set(v191) == {'world_scene_builder.py', 'mpq.py'}
+# 0.3.191's scene builder and mpq.py: up to date without any report check (they stopped where 0.3.192 differs).
+for kw in [{}, {'report': False}, {'overrun': True}]:
+    assert iwc.plan(base, built_with(v191, **kw), cache, False, 'z') == ('up_to_date', []), kw
+assert iwc.plan(base, built_with(dict(v191, **{'client_archives.py': 'f' * 64})), cache, False, 'z')[0] == 'full'
+mixed = dict(v191, **{'world_scene_builder.py': v183['world_scene_builder.py']})   # 0.3.183 needs clamp_free
+assert iwc.plan(base, built_with(mixed), cache, False, 'z') == ('up_to_date', [])
+assert iwc.plan(base, built_with(mixed, overrun=True), cache, False, 'z')[0] == 'full'
 assert iwc.plan(base, built_with(v183), cache, False, 'z') == ('up_to_date', [])
 assert iwc.plan(base, built_with(v183, overrun=True), cache, False, 'z')[0] == 'full'
 assert iwc.plan(base, built_with(v183, report=False), cache, False, 'z')[0] == 'full'
@@ -147,7 +156,13 @@ for unreadable, tiles, problem in [(1, 1, False), (6, 1, True), (0, 0, True)]:
         'maps': {'Azeroth': {'tiles': tiles, 'expected': 1}}, 'stats': {'wmo_roots': 100},
         'unreadable_wmos': {f'w{i}.wmo': 'Chunk exceeds file' for i in range(unreadable)}, 'clamped_wmo_groups': ['w_000.wmo']}))
     assert bool(iwc.post_problems(fog_staging, ['fog'], ['Azeroth'])) == problem, (unreadable, tiles)
-assert iwc.tolerated(fog_staging, [], ['fog']) == {'clamped_wmo_groups': ['w_000.wmo'], 'fog_unreadable_wmos': {}}
+assert iwc.tolerated(fog_staging, [], ['fog']) == {'clamped_wmo_groups': ['w_000.wmo'], 'fog_unreadable_wmos': {},
+                                                   'archive_warnings': []}
+# A run without scene steps keeps the archive warnings its installed scenes were built with.
+unlisted = {'archive': 'Data/patch-R.mpq', 'problem': 'unlisted'}
+assert iwc.tolerated(fog_staging, [], ['fog'], {'tolerated': {'archive_warnings': [unlisted]}})['archive_warnings'] == [unlisted]
+assert iwc.tolerated(fog_staging, [], ['fog'], {'tolerated': {}})['archive_warnings'] == []
+assert iwc.human({'event': 'archive_warning', **unlisted}).startswith('Warning: Data/patch-R.mpq has no (listfile)')
 shutil.rmtree(fog_staging)
 
 # 3. A run killed after its build finished completes the swap on rerun, without building.
