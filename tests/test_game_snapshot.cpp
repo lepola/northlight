@@ -130,18 +130,15 @@ static void testPeParse() {
 static void testTriggers() {
     using NorthlightShaderTags::kTerrain;using NorthlightShaderTags::kUi;using NorthlightShaderTags::kWmo;using NorthlightShaderTags::kWorld;
     TriggerPolicy t;
-    assert(t.onDraw(0,300,true)==Trigger::None&&t.onDraw(kWorld,300,false)==Trigger::None); // untagged world model draws are not the trigger
-    assert(t.onDraw(kTerrain|kWorld,500,false)==Trigger::World&&t.onDraw(kTerrain,500,false)==Trigger::None&&t.onDraw(kWmo,50,false)==Trigger::None); // first terrain/WMO only
-    for(unsigned i=0;i<TriggerPolicy::MaxSky;++i)assert(t.onDraw(0,2,true)==Trigger::Sky);
-    assert(t.onDraw(0,2,true)==Trigger::None); // capped at 8
-    assert(t.onDraw(0,5,true)==Trigger::None&&t.onDraw(0,2,false)==Trigger::None&&t.onDraw(0,4,true)==Trigger::None); // count<=4 and full viewport only (cap already hit)
-    assert(t.onDraw(kUi,2,true)==Trigger::Ui&&t.onDraw(kUi,2,true)==Trigger::None&&t.onDraw(kUi,500,false)==Trigger::None); // first UI draw; later UI quads are never sky
-    assert(t.onPresent()==Trigger::Present);
-    // a new frame starts clean
-    assert(t.onDraw(kWmo|kWorld,10,false)==Trigger::World&&t.onDraw(0,4,true)==Trigger::Sky&&t.onDraw(kUi,3,true)==Trigger::Ui);
-    t.beginFrame();assert(t.sky==0&&!t.world&&!t.ui);
-    // a world draw that is also a full-viewport quad takes the world trigger once, then counts as sky
-    assert(t.onDraw(kTerrain,2,true)==Trigger::World&&t.onDraw(kTerrain,2,true)==Trigger::Sky);
+    assert(t.onDraw(0)==Trigger::FrameStart&&t.onDraw(0)==Trigger::None&&t.onDraw(kWorld)==Trigger::None); // the first draw of the frame; untagged world model draws are not a trigger
+    assert(t.onDraw(kTerrain|kWorld)==Trigger::World&&t.onDraw(kTerrain)==Trigger::None&&t.onDraw(kWmo)==Trigger::None); // first terrain/WMO only
+    assert(t.onDraw(kUi)==Trigger::Ui&&t.onDraw(kUi)==Trigger::None&&t.onDraw(0)==Trigger::None); // first UI draw; nothing else after
+    t.onPresent(); // a new frame starts clean
+    assert(t.onDraw(kWmo|kWorld)==Trigger::World&&t.onDraw(0)==Trigger::None&&t.onDraw(kUi)==Trigger::Ui);
+    t.beginFrame();assert(!t.frame&&!t.world&&!t.ui);
+    assert(t.onDraw(kUi)==Trigger::Ui&&t.onDraw(kTerrain)==Trigger::World&&t.onDraw(0)==Trigger::None); // a UI first draw also starts the frame
+    unsigned triggers=0;t.onPresent();for(int i=0;i<500;++i)triggers+=t.onDraw(i==100?kTerrain:i==400?kUi:0)!=Trigger::None;
+    assert(triggers==3); // FrameStart, World, Ui: three captures a frame however many draws
 }
 // Reference copy of the expression Device::CreateVertexShader computed inline before 0.3.192.
 static int oldTag(std::uint64_t h){

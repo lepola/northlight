@@ -138,8 +138,12 @@ public:
     bool start(){
         try{
             unsigned short cw=0;unsigned csr=0;captureFpu(cw,csr);
-            std::atomic<int> ready{0};
-            th_=std::thread([this,cw,csr,&ready]{applyFpu(cw,csr);if(threadStart)threadStart();replayTid.store(currentTid());ready.store(1);loop();});
+            std::atomic<int> ready{0};const unsigned long creator=currentTid();
+            th_=std::thread([this,cw,csr,creator,&ready]{
+                applyFpu(cw,csr);if(threadStart)threadStart();replayTid.store(currentTid());
+                const bool attached=attachInput(creator,true);   // see attachInput
+                ready.store(1);loop();
+                if(attached)attachInput(creator,false);});
             while(!ready.load())std::this_thread::yield();   // the handoff is complete before CreateDevice returns to the game
             return true;
         }catch(...){return false;}
@@ -153,6 +157,17 @@ public:
     }
     void join(){if(th_.joinable()){core.q.interrupt();stopNow_.store(true);th_.join();}}
     bool running()const{return th_.joinable();}
+    // DXVK applies the hardware cursor (ShowCursor / SetCursorProperties) with ::SetCursor, which acts on the calling thread's
+    // input queue. Attaching the replay thread to the game thread's queue makes it the game's cursor. Win32 only; logged if it fails.
+    bool attachInput(unsigned long gameThread,bool on){
+#ifdef _WIN32
+        const BOOL ok=AttachThreadInput(DWORD(currentTid()),DWORD(gameThread),on?TRUE:FALSE);
+        if(!ok&&log){char b[96];std::snprintf(b,sizeof b,"CSTREAM AttachThreadInput(%s) failed error=%lu",on?"attach":"detach",(unsigned long)GetLastError());log(b);}
+        return ok!=FALSE;
+#else
+        (void)gameThread;(void)on;return false;
+#endif
+    }
     static unsigned long currentTid(){
 #ifdef _WIN32
         return GetCurrentThreadId();

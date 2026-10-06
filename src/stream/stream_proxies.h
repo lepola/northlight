@@ -331,12 +331,15 @@ inline HRESULT unlockImage(ProxyBase& self,SubRes& sub,UINT route,UINT level,UIN
 
 // ---- buffer locks ----
 struct BufferState {
-    std::vector<unsigned char> shadow;bool shadowOn=false,written=false;
+    std::vector<unsigned char> shadow;bool shadowOn=false,written=false,whole=false;
     enum Mode:std::uint8_t{Free,Shadow,Staged,Pass} mode=Free;UINT off=0,size=0;DWORD flags=0;Block* stage=nullptr;
 };
+// Only DYNAMIC buffers get a CPU shadow (they are locked every frame, ring-style, and keep earlier bytes), under their own
+// fixed cap and outside the queue budget; a buffer that does not fit simply has none. Everything else: the first write lock
+// and DISCARD are asynchronous (staging Block), later locks pass through.
 inline void initShadow(ProxyBase& p,BufferState& s){
     const std::size_t len=p.info.length;
-    if(!len||(!(p.info.usage&D3::kUsageDynamic)&&len>(std::size_t(4)<<20))||!p.core->q.canAdmit(len))return;
+    if(!len||!(p.info.usage&D3::kUsageDynamic)||!p.core->q.shadowAdmit(len))return;
     try{s.shadow.assign(len,0);}catch(...){return;}
     s.shadowOn=true;p.core->q.addShadowBytes(std::int64_t(len));
 }
@@ -344,16 +347,18 @@ inline void dropShadow(ProxyBase& p,BufferState& s){   // a GPU-side write or th
     if(!s.shadowOn)return;
     p.core->q.addShadowBytes(-std::int64_t(s.shadow.size()));std::vector<unsigned char>().swap(s.shadow);s.shadowOn=false;
 }
+// Range rules as in DXVK: an offset beyond the end fails, a size past the end is clamped, size 0 means to the end.
 inline HRESULT lockBuffer(ProxyBase& self,BufferState& s,UINT off,UINT size,void** pp,DWORD flags){
     Queue& q=self.core->q;const UINT length=self.info.length;
-    if(!pp||s.mode!=BufferState::Free||off>length||(off==length&&length))return D3DERR_INVALIDCALL;
-    if(!size)size=length-off;else if(std::uint64_t(off)+size>length)return D3DERR_INVALIDCALL;
+    if(!pp||s.mode!=BufferState::Free||off>length)return D3DERR_INVALIDCALL;
+    s.whole=!size||(off==0&&size>=length);
+    if(!size||std::uint64_t(off)+size>length)size=length-off;
     s.off=off;s.size=size;s.flags=flags;
     if(s.shadowOn){s.mode=BufferState::Shadow;*pp=s.shadow.data()+off;add(q.stats.lockAsync);return D3D_OK;}
     PassReason why=PassReason::NoShadow;
     if(flags&D3::kLockReadOnly)why=PassReason::ReadOnly;
     else if(!s.written||(flags&D3::kLockDiscard)){
-        if(Block* b=q.tryAllocBlock(size)){s.mode=BufferState::Staged;s.stage=b;b->used=size;std::memset(b->data(),0,size);*pp=b->data();add(q.stats.lockAsync);return D3D_OK;}
+        if(Block* b=q.tryAllocBlock(size?size:1)){s.mode=BufferState::Staged;s.stage=b;b->used=size;std::memset(b->data(),0,size);*pp=b->data();add(q.stats.lockAsync);return D3D_OK;}
         why=PassReason::Budget;
     }
     countPass(self,why);
@@ -366,13 +371,15 @@ inline HRESULT lockBuffer(ProxyBase& self,BufferState& s,UINT off,UINT size,void
     if(SUCCEEDED(hr)){s.mode=BufferState::Pass;*pp=got;}
     return hr;
 }
+inline void noteRecorded(ProxyBase& p,const BufferState& s,UINT bytes){add(p.core->q.stats.lockRecordedBytes,bytes);if(s.whole)add(p.core->q.stats.wholeLockBytes,bytes);}
 inline HRESULT unlockBuffer(ProxyBase& self,BufferState& s){
     Queue& q=self.core->q;
     switch(s.mode){
     case BufferState::Free:return D3DERR_INVALIDCALL;
     case BufferState::Shadow:
         s.mode=BufferState::Free;
-        if(s.flags&D3::kLockReadOnly)return D3D_OK;
+        if((s.flags&D3::kLockReadOnly)||!s.size)return D3D_OK;   // (a zero-length range must not be replayed: Lock(off,0) means to the end)
+        noteRecorded(self,s,s.size);
         if(s.size<=MaxInlinePayload-sizeof(UnlockBufferArgs)-16){
             auto* a=static_cast<UnlockBufferArgs*>(q.reserve((std::uint16_t)Cmd::UnlockBuffer,std::uint32_t(sizeof(UnlockBufferArgs)+s.size)));
             *a=UnlockBufferArgs{&self,s.off,s.size,s.flags,1};std::memcpy(a+1,s.shadow.data()+s.off,s.size);q.commit();
@@ -389,6 +396,7 @@ inline HRESULT unlockBuffer(ProxyBase& self,BufferState& s){
         }
         s.written=true;return D3D_OK;
     case BufferState::Staged:{
+        noteRecorded(self,s,s.size);
         auto* a=static_cast<UnlockBufferArgs*>(q.reserveWithBlock((std::uint16_t)Cmd::UnlockBuffer,sizeof(UnlockBufferArgs),s.stage));
         *a=UnlockBufferArgs{&self,s.off,s.size,s.flags,0};q.commit();s.stage=nullptr;s.mode=BufferState::Free;s.written=true;return D3D_OK;}
     default:{
@@ -645,7 +653,7 @@ struct StreamQuery final:IDirect3DQuery9,ProxyBase {
     using ProxyBase::observe;
     HRESULT STDMETHODCALLTYPE GetData(void* data,DWORD size,DWORD flags) override{
         Queue& q=core->q;
-        if(flags&D3::kGetDataFlush){   // the real GetData with the game's buffer, after everything recorded so far
+        if((flags&D3::kGetDataFlush)||!gen.load()){   // FLUSH, or a query never issued: the real GetData with the game's buffer, after everything recorded so far
             HRESULT hr=D3DERR_INVALIDCALL;
             if(!runTask(*core,[&](StreamCore&){if(inner)hr=static_cast<IDirect3DQuery9*>(inner)->GetData(data,size,flags);}))return D3DERR_INVALIDCALL;
             return hr;

@@ -158,7 +158,7 @@ static void budgetRules(){
         CHECK(q.tryAllocBlock(3u<<20)==nullptr&&get(q.stats.blockRefused)==1);
         Block* a=q.tryAllocBlock(1u<<20);CHECK(a);   // 1 chunk + 1 MiB = budget
         CHECK(q.tryAllocBlock(1u<<20)==nullptr&&get(q.stats.blockRefused)==2);   // nothing queued to wait for: refused, not blocked
-        q.freeBlock(a);CHECK(q.canAdmit(1u<<20));q.addShadowBytes(1u<<20);CHECK(!q.canAdmit(1));q.addShadowBytes(-(1<<20));
+        q.freeBlock(a);CHECK(q.canAdmit(1u<<20));q.addShadowBytes(1u<<20);CHECK(q.canAdmit(1u<<20)&&q.shadowAdmit(1u<<20)&&!q.shadowAdmit(ShadowBudgetBytes));q.addShadowBytes(-(1<<20));   // shadows have their own cap, outside the queue budget
     }
     {   // memory pressure halves the budget
         Queue q(4u<<20);Block* a=q.tryAllocBlock(1500*1024);CHECK(a);q.freeBlock(a);
@@ -209,6 +209,35 @@ static void interruptAndEvents(){
     {static int hooks;static bool sawFlag;hooks=0;sawFlag=false;pumpHook=[]{++hooks;sawFlag=inPumpedWait;};
      Event e;CHECK(!inPumpedWait);auto r=e.waitPumped(15);CHECK(!r.signaled&&r.ns>=10000000&&hooks>=1&&sawFlag&&!inPumpedWait);pumpHook=nullptr;
      e.set();CHECK(e.waitPumped(1000).signaled);}
+}
+// A shadow is memory the replay thread cannot free: registered shadows must not turn a producer within the queue budget into a
+// serialized one (it used to wait for a full drain at every chunk).
+static void producerNotSerializedByShadows(){
+    Queue q;q.addShadowBytes(40<<20);const int N=4000;std::atomic<std::uint64_t> consumerNs{0};
+    std::thread consumer([&]{const auto t0=nowNs();for(int i=0;i<N;++i){auto* h=q.next(true);CHECK(h);std::this_thread::sleep_for(std::chrono::microseconds(100));q.retire(h);}consumerNs.store(nowNs()-t0);});
+    const auto t0=nowNs();for(int i=0;i<N;++i)record(q,1,1000,i);q.publish();const auto producerNs=nowNs()-t0;
+    consumer.join();
+    CHECK(get(q.stats.backpressureWaits)==0);   // 4 MiB in flight, 48 MiB budget: never blocked
+    CHECK(producerNs<consumerNs.load()/2);       // recording ran well ahead of the slow replay
+    q.addShadowBytes(-(40<<20));
+    // a block that fits after a wait must be granted
+    Queue b(4u<<20);std::atomic<int> got{0};
+    std::thread consume2([&]{for(int i=0;i<8;++i){auto* h=b.next(true);CHECK(h);std::this_thread::sleep_for(std::chrono::milliseconds(2));b.retire(h);}});
+    for(int i=0;i<8;++i){Block* blk=b.tryAllocBlock(1500u<<10);CHECK(blk);b.reserveWithBlock(2,0,blk);b.commit();b.publish();got.fetch_add(1);}
+    consume2.join();CHECK(got.load()==8);
+}
+// A missed wake of a sleeping consumer would cost the 250 ms safety timeout: a ping-pong must never see one.
+static void wakeHandshakeStress(){
+    Queue q;std::atomic<int> acked{0};const int N=20000;
+    std::thread consumer([&]{for(int i=0;i<N;++i){auto* h=q.next(true);CHECK(h);q.retire(h);acked.store(i+1,std::memory_order_release);}});
+    std::uint64_t worst=0;
+    for(int i=0;i<N;++i){
+        if(i%7==0)std::this_thread::sleep_for(std::chrono::microseconds(150));   // let the consumer fall asleep
+        const auto t0=nowNs();record(q,1,8,i);q.publish();
+        while(acked.load(std::memory_order_acquire)<=i)std::this_thread::yield();
+        const auto d=nowNs()-t0;if(d>worst)worst=d;
+    }
+    consumer.join();CHECK(worst<100000000ull);   // no round trip waited for a timeout
 }
 static void spscStress(){
     Queue q;const std::uint64_t N=300000;
@@ -279,7 +308,7 @@ static void nestedSync(){
 
 int main(int argc,char** argv){
     const bool threadsOnly=argc>1&&std::string(argv[1])=="threads";
-    spscStress();
+    spscStress();wakeHandshakeStress();producerNotSerializedByShadows();
     budgetRules();interruptAndEvents();publishRules();nestedSync();
     generatedSyncCases();
     if(!threadsOnly){

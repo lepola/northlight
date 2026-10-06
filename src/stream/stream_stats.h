@@ -29,15 +29,16 @@ struct Counters {
     static constexpr std::size_t kPassReasons=8;
     Counter passThrough[kPassReasons]{};
     Counter qiMisses{0},deadCreates{0},proxyMismatch{0},foreignEntries{0},foreignPointers{0},createFailures{0},replayFailures{0};
+    Counter lockRecordedBytes{0},wholeLockBytes{0};   // bytes copied into the queue by shadow/staged unlocks; the part from whole-buffer locks (size 0)
     Counter stateAnswered{0},stateSynced{0},syncOnlySlots{0},lockAsync{0},queryPolls{0};
     Counter census[kMaxCmdIds]{};   // sync calls per command id (name via cmdName in command_stream.inl)
 };
 
 // One CSTREAM line fragment: the queue-side numbers. The caller prefixes it and appends frame data and the census.
 inline int formatCounters(char* out,std::size_t size,const Counters& c){
-    return std::snprintf(out,size,"cmds=%llu bytes=%llu chunks=%llu/%llu blocks=%llu(%llu B) shadowB=%lld hwB=%llu hwDepth=%llu bp=%llu/%.2fms sync=%llu/%.2fms present=%llu/%.2fms nested=%llu oversize=%llu refused=%llu",
+    return std::snprintf(out,size,"cmds=%llu bytes=%llu chunks=%llu/%llu blocks=%llu(%llu B) shadowB=%lld lockB=%llu wholeLockB=%llu hwB=%llu hwDepth=%llu bp=%llu/%.2fms sync=%llu/%.2fms present=%llu/%.2fms nested=%llu oversize=%llu refused=%llu",
         (unsigned long long)get(c.commands),(unsigned long long)get(c.bytes),(unsigned long long)get(c.chunksLive),(unsigned long long)get(c.chunkAllocs),
-        (unsigned long long)get(c.blocksLive),(unsigned long long)get(c.blockBytes),(long long)c.shadowBytes.load(std::memory_order_relaxed),
+        (unsigned long long)get(c.blocksLive),(unsigned long long)get(c.blockBytes),(long long)c.shadowBytes.load(std::memory_order_relaxed),(unsigned long long)get(c.lockRecordedBytes),(unsigned long long)get(c.wholeLockBytes),
         (unsigned long long)get(c.highWaterBytes),(unsigned long long)get(c.highWaterDepth),
         (unsigned long long)get(c.backpressureWaits),get(c.backpressureNs)/1e6,(unsigned long long)get(c.syncCalls),get(c.syncNs)/1e6,
         (unsigned long long)get(c.presentWaits),get(c.presentNs)/1e6,(unsigned long long)get(c.nestedSyncs),

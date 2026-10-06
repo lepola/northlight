@@ -76,7 +76,7 @@ static void stateKnownUnknown(){
 
 static void locksPreserveBytes(){
     gTrace.clear();Rig rig(true);auto& s=rig.core().q.stats;
-    IDirect3DVertexBuffer9* vb=nullptr;CHECK(rig.dev->CreateVertexBuffer(1024,0,0,(D3DPOOL)1,&vb,nullptr)==D3D_OK);
+    IDirect3DVertexBuffer9* vb=nullptr;CHECK(rig.dev->CreateVertexBuffer(1024,D3::kUsageDynamic,0,(D3DPOOL)1,&vb,nullptr)==D3D_OK);
     auto lockWrite=[&](UINT off,UINT size,DWORD flags,unsigned char fill){void* p=nullptr;CHECK(vb->Lock(off,size,&p,flags)==D3D_OK);std::memset(p,fill,size?size:1024-off);CHECK(vb->Unlock()==D3D_OK);};
     auto readAll=[&](std::vector<unsigned char>& out){void* p=nullptr;CHECK(vb->Lock(0,0,&p,D3::kLockReadOnly)==D3D_OK);out.assign((unsigned char*)p,(unsigned char*)p+1024);CHECK(vb->Unlock()==D3D_OK);};
     lockWrite(0,0,0,0xA1);lockWrite(100,50,0,0xB2);lockWrite(1000,24,D3::kLockNoOverwrite,0xC3);   // flags 0, a partial range, a NOOVERWRITE ring step
@@ -87,11 +87,22 @@ static void locksPreserveBytes(){
     rig.sync();
     // the Target saw the same bytes: its memory equals what the game last saw
     unsigned unlocks=0;for(auto& t:gTrace)if(t.rfind("VB::Unlock",0)==0)++unlocks;CHECK(unlocks==4);
+    CHECK(get(s.wholeLockBytes)>=2048&&get(s.lockRecordedBytes)>=2048+50+24);   // whole-buffer locks (size 0) record the whole buffer each Unlock, and are counted
+    {   // DXVK range rules: a size past the end is clamped, only an offset beyond the end fails
+        void* q=nullptr;CHECK(vb->Lock(1000,5000,&q,0)==D3D_OK&&vb->Unlock()==D3D_OK);CHECK(vb->Lock(1025,4,&q,0)==D3DERR_INVALIDCALL);CHECK(vb->Lock(1024,0,&q,0)==D3D_OK&&vb->Unlock()==D3D_OK);
+    }
     vb->Release();
+    {   // a static buffer has no shadow: the first write lock is asynchronous, the second passes through
+        IDirect3DVertexBuffer9* st=nullptr;CHECK(rig.dev->CreateVertexBuffer(256,0,0,(D3DPOOL)1,&st,nullptr)==D3D_OK);void* q=nullptr;
+        const auto pass=get(s.passThrough[unsigned(PassReason::NoShadow)]);
+        CHECK(st->Lock(0,0,&q,0)==D3D_OK&&st->Unlock()==D3D_OK&&get(s.passThrough[unsigned(PassReason::NoShadow)])==pass);
+        CHECK(st->Lock(0,0,&q,0)==D3D_OK&&st->Unlock()==D3D_OK&&get(s.passThrough[unsigned(PassReason::NoShadow)])==pass+1);
+        st->Release();
+    }
     // a big static buffer has no shadow: the first write lock is asynchronous, later ones pass through
     IDirect3DVertexBuffer9* big=nullptr;CHECK(rig.dev->CreateVertexBuffer(5u<<20,0,0,(D3DPOOL)1,&big,nullptr)==D3D_OK);
-    void* p=nullptr;CHECK(big->Lock(0,4096,&p,0)==D3D_OK);std::memset(p,0x5A,4096);CHECK(big->Unlock()==D3D_OK&&get(s.passThrough[unsigned(PassReason::NoShadow)])==0);
-    CHECK(big->Lock(0,4096,&p,0)==D3D_OK&&p&&get(s.passThrough[unsigned(PassReason::NoShadow)])==1);CHECK(((unsigned char*)p)[7]==0x5A);CHECK(big->Unlock()==D3D_OK);   // real memory, first write already there
+    void* p=nullptr;const auto np0=get(s.passThrough[unsigned(PassReason::NoShadow)]);CHECK(big->Lock(0,4096,&p,0)==D3D_OK);std::memset(p,0x5A,4096);CHECK(big->Unlock()==D3D_OK&&get(s.passThrough[unsigned(PassReason::NoShadow)])==np0);
+    CHECK(big->Lock(0,4096,&p,0)==D3D_OK&&p&&get(s.passThrough[unsigned(PassReason::NoShadow)])==np0+1);CHECK(((unsigned char*)p)[7]==0x5A);CHECK(big->Unlock()==D3D_OK);   // real memory, first write already there
     CHECK(big->Lock(0,16,&p,D3::kLockReadOnly)==D3D_OK&&get(s.passThrough[unsigned(PassReason::ReadOnly)])==1&&((unsigned char*)p)[0]==0x5A);CHECK(big->Unlock()==D3D_OK);
     CHECK(big->Lock(0,16,&p,D3::kLockDiscard)==D3D_OK&&get(s.lockAsync)>0);CHECK(big->Unlock()==D3D_OK);   // DISCARD never needs the old bytes
     big->Release();
@@ -108,8 +119,22 @@ static void locksPreserveBytes(){
     rig.finish();checkClean();
 }
 
+static void shadowCap(){
+    gTrace.clear();Rig rig(true);auto& q=rig.core().q;auto& s=q.stats;
+    std::vector<IDirect3DVertexBuffer9*> v;
+    for(int i=0;i<14;++i){IDirect3DVertexBuffer9* b=nullptr;CHECK(rig.dev->CreateVertexBuffer(2u<<20,D3::kUsageDynamic,0,(D3DPOOL)0,&b,nullptr)==D3D_OK);v.push_back(b);}
+    CHECK(s.shadowBytes.load()==std::int64_t(12)*(2<<20));   // 24 MiB: the 13th and 14th are refused (never evicting a live one) but still work
+    void* p=nullptr;CHECK(v[13]->Lock(0,64,&p,D3::kLockDiscard)==D3D_OK&&v[13]->Unlock()==D3D_OK);
+    rig.sync();q.setPressure(true);CHECK(q.shadowCap()==ShadowBudgetBytes/2&&!q.shadowAdmit(1<<20)&&s.shadowBytes.load()==std::int64_t(12)*(2<<20));
+    q.setPressure(false);for(auto* b:v)b->Release();rig.sync();CHECK(s.shadowBytes.load()==0);   // freed with their proxies
+    rig.finish();checkClean();
+}
 static void queriesAndSyncCensus(){
     gTrace.clear();Rig rig(true);auto& s=rig.core().q.stats;
+    {   // a query never issued: the real GetData, not S_FALSE forever
+        IDirect3DQuery9* nq=nullptr;CHECK(rig.dev->CreateQuery((D3DQUERYTYPE)9,&nq)==D3D_OK);DWORD d=0;const auto syncs=get(s.syncCalls);
+        nq->GetData(&d,4,0);CHECK(get(s.syncCalls)==syncs+1);nq->Release();
+    }
     IDirect3DQuery9* q=nullptr;CHECK(rig.dev->CreateQuery((D3DQUERYTYPE)9,&q)==D3D_OK&&q->GetDataSize()==4&&q->GetType()==(D3DQUERYTYPE)9);
     DWORD data=0;CHECK(q->Issue(D3::kIssueEnd)==D3D_OK);
     int spins=0;HRESULT hr;while((hr=q->GetData(&data,4,0))==S_FALSE&&++spins<2000000)std::this_thread::yield();   // terminates: every GetData publishes
@@ -187,10 +212,10 @@ static bool fakeCapture(GameSnapshot& s,Trigger,std::uint64_t draw){const unsign
 static void snapshotTriggers(){
     gTrace.clear();gCaptures=0;StreamDevice::Options opt;opt.capture=&fakeCapture;Rig rig(true,opt);
     for(int frame=0;frame<3;++frame){
-        for(int i=0;i<12;++i)rig.dev->DrawPrimitive((D3DPRIMITIVETYPE)4,0,2);   // small full-viewport draws: sky candidates, capped at 8 a frame
+        for(int i=0;i<12;++i)rig.dev->DrawPrimitive((D3DPRIMITIVETYPE)4,0,2);   // untagged draws: only the first of the frame takes a snapshot
         rig.dev->Present(nullptr,nullptr,nullptr,nullptr);
     }
-    rig.sync();CHECK(gCaptures.load()==3*(8+1));   // 8 sky + the Present trigger per frame
+    rig.sync();CHECK(gCaptures.load()==3);   // one FrameStart capture per frame, however many draws
     auto& rp=rig.sd->replayerOf();CHECK(rp.snapshots.allocated()>=1);
     rig.finish();   // every snapshot went back to the pool
 }
@@ -324,7 +349,7 @@ static void equivalence(int steps,std::uint64_t seed){
     std::printf("equivalence seed=%llu steps=%d results=%zu trace=%zu presents=%zu\n",(unsigned long long)seed,steps,outA.size(),traceA.size(),presA.size());
 }
 static void streamTests(bool threadsOnly){
-    lifetimeAndIdentity();stateKnownUnknown();locksPreserveBytes();queriesAndSyncCensus();resetAndShutdown();cursorAndForeignThread();nestedSyncInPump();upDrawsAndBackpressure();snapshotTriggers();
+    lifetimeAndIdentity();stateKnownUnknown();locksPreserveBytes();shadowCap();queriesAndSyncCensus();resetAndShutdown();cursorAndForeignThread();nestedSyncInPump();upDrawsAndBackpressure();snapshotTriggers();
     equivalence(3000,7);
     if(!threadsOnly){equivalence(20000,12345);}
 }

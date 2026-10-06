@@ -64,7 +64,7 @@ creates=[]
 for name,text in sources.items():
     for m in re.finditer(r'(?:->|\.)(Create(?:Vertex|Index)Buffer)\(',text):
         a=arguments(text,m.end()-1)
-        if len(a)!=6 or a[0]in('size','Length'):continue # the device wrappers forward the game's own arguments
+        if len(a)!=6 or a[0]in('size','Length','v[0]'):continue # the device wrappers and the stream's replay forward the game's own arguments
         pool,usage=a[3],a[1]
         if 'D3DPOOL_DEFAULT' in pool and 'D3DUSAGE_DYNAMIC' not in usage:creates.append((name,a[4]))
         else:assert 'D3DPOOL_MANAGED' in pool or 'D3DUSAGE_DYNAMIC' in usage,(name,a)

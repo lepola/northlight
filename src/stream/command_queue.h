@@ -33,6 +33,7 @@ static_assert(sizeof(CommandHeader)==8,"header is 8 bytes");
 constexpr std::size_t ChunkBytes=std::size_t(1)<<20;
 constexpr std::size_t MaxInlinePayload=ChunkBytes/4;   // larger payloads travel in a Block
 constexpr std::size_t BudgetBytes=std::size_t(48)<<20;
+constexpr std::size_t ShadowBudgetBytes=std::size_t(24)<<20;   // CPU shadows of DYNAMIC buffers; halved under pressure; never evicted
 constexpr std::uint32_t kAutoPublishCommands=64,kAutoPublishBytes=64u<<10;
 constexpr std::uint32_t kNoPayload=0xFFFFFFFFu;   // a nullable pointer's offset in a generated Args struct
 
@@ -77,10 +78,9 @@ class Queue {
         asm volatile("yield");
 #endif
     }
-    std::size_t inflight()const{
-        const auto s=stats.shadowBytes.load(std::memory_order_relaxed);
-        return std::size_t(get(stats.chunksLive))*ChunkBytes+std::size_t(get(stats.blockBytes))+(s>0?std::size_t(s):0);
-    }
+    // The queue budget: chunks in use plus live blocks. CPU shadows are accounted separately (ShadowBudgetBytes): a shadow is
+    // memory the replay thread can never free, so counting it here would turn backpressure into a full drain.
+    std::size_t inflight()const{return std::size_t(get(stats.chunksLive))*ChunkBytes+std::size_t(get(stats.blockBytes));}
     bool over(std::size_t extra)const{return inflight()+extra>budget();}
     bool drained()const{return replayed_.load()>=recorded_.load();}
     void noteHighWater(){raiseMax(stats.highWaterBytes,inflight());}
@@ -108,6 +108,7 @@ class Queue {
         Chunk* n=acquireChunk();Chunk* c=wchunk_;
         c->next.store(n,std::memory_order_relaxed);
         c->published.store(wpos_);c->end.store(wpos_);   // closing publishes everything committed so far
+        std::atomic_thread_fence(std::memory_order_seq_cst);
         wchunk_=n;wpos_=0;pubPos_=0;sinceCmds_=0;sinceBytes_=0;
         add(stats.publishes);wake();
     }
@@ -186,6 +187,7 @@ public:
     void publish(){
         if(wpos_==pubPos_)return;
         wchunk_->published.store(wpos_);pubPos_=wpos_;sinceCmds_=0;sinceBytes_=0;
+        std::atomic_thread_fence(std::memory_order_seq_cst);   // pairs with the fence in next(): the store above or the sleeper flag is seen
         own(stats.publishes);raiseMax(stats.highWaterDepth,recorded_.load(std::memory_order_relaxed)-replayed_.load(std::memory_order_relaxed));
         wake();
     }
@@ -232,11 +234,11 @@ public:
         if(!pooled)::operator delete(b);
         if(bpWaiting_.load())progress_.set();
     }
-    // Registered CPU shadow bytes (buffer shadows, staging) count against the budget.
-    void addShadowBytes(std::int64_t delta){
-        stats.shadowBytes.fetch_add(delta,std::memory_order_relaxed);
-        if(delta>0)noteHighWater();else if(bpWaiting_.load())progress_.set();
-    }
+    // Registered CPU shadow bytes: their own cap (shadowAdmit), not part of the queue budget.
+    void addShadowBytes(std::int64_t delta){stats.shadowBytes.fetch_add(delta,std::memory_order_relaxed);}
+    std::size_t shadowCap()const{return pressure_.load()?ShadowBudgetBytes/2:ShadowBudgetBytes;}
+    // A new shadow of `bytes` fits the cap now (live shadows are never evicted, a new one is simply refused).
+    bool shadowAdmit(std::size_t bytes)const{const auto s=stats.shadowBytes.load(std::memory_order_relaxed);return (s>0?std::size_t(s):0)+bytes<=shadowCap();}
     bool canAdmit(std::size_t bytes)const{return !over(bytes);}
     // Memory pressure (any thread): halves the budget. trim() (producer, at a quiet point) releases pooled idle memory.
     void setPressure(bool on){pressure_.store(on);}
@@ -259,6 +261,7 @@ public:
             for(int i=0;i<2000;++i){if(auto* h=peek())return h;if(interrupted_.load(std::memory_order_relaxed))return nullptr;relax();}
             if(interrupted_.load())return nullptr;
             sleeping_.store(true);
+            std::atomic_thread_fence(std::memory_order_seq_cst);   // the flag is visible before the cursor is re-read: publish() sees it or we see the data
             if(auto* h=peek()){sleeping_.store(false);return h;}
             own(stats.consumerSleeps);
             if(interrupted_.load()){sleeping_.store(false);return nullptr;}

@@ -14,29 +14,28 @@
 #include "shader_tags.h"
 
 namespace NorthlightStream {
-enum class Trigger:std::uint8_t{None=0,World=1,Sky=2,Ui=3,Present=4};
-inline const char* triggerName(Trigger t){return t==Trigger::World?"world":t==Trigger::Sky?"sky":t==Trigger::Ui?"ui":t==Trigger::Present?"present":"none";}
+enum class Trigger:std::uint8_t{None=0,FrameStart=1,World=2,Ui=3};
+inline const char* triggerName(Trigger t){return t==Trigger::FrameStart?"frame":t==Trigger::World?"world":t==Trigger::Ui?"ui":"none";}
 
 // Per-frame decision of whether a draw takes a snapshot, called by the StreamDevice once per draw on the game thread
-// with the draw's vertex-shader tags (shader_tags.h triggerTags), primitive count and whether the viewport covers the
-// whole back buffer. Pure state: no memory reads, no allocation.
-//   World: the first draw of the frame whose VS is terrain or WMO (the camera / view stack / sky block are valid
-//          for the whole world pass and the light and camera hooks read them at its first draw).
-//   Sky:   every draw with count<=4 and a full viewport that is not UI, up to MaxSky per frame: a sky disc or glare
-//          quad is such a draw and each re-reads the celestial identities, so each gets a fresh snapshot.
-//   Ui:    the first UI-tagged draw (renderEffects runs there).
-//   Present: once per frame, from onPresent().
+// with the draw's vertex-shader tags (shader_tags.h triggerTags). Pure state: no memory reads, no allocation. A capture
+// is about 33 reads of game memory, so a frame takes at most three, and the replay keeps the latest one active until the
+// next (the sky and glare draws of a frame replay under the FrameStart or World snapshot of that same frame):
+//   FrameStart: the first draw after Present, so the draws of frame N see frame N's game memory, not N-1's.
+//   World:      the first draw whose VS is terrain or WMO (the camera / view stack / sky block are valid for the whole
+//               world pass and the light and camera hooks read them at its first draw).
+//   Ui:         the first UI-tagged draw (renderEffects runs there).
+// A draw that is both first and World/Ui takes that one trigger (it also is the frame's start).
 struct TriggerPolicy {
-    static constexpr unsigned MaxSky=8,SkyMaxPrimitives=4;
-    unsigned sky=0;bool world=false,ui=false;
-    void beginFrame(){sky=0;world=false;ui=false;}
-    Trigger onDraw(unsigned vsTags,unsigned primitiveCount,bool fullViewport){
-        if(vsTags&unsigned(NorthlightShaderTags::kUi)){if(ui)return Trigger::None;ui=true;return Trigger::Ui;}
-        if((vsTags&NorthlightShaderTags::kTriggerWorld)&&!world){world=true;return Trigger::World;}
-        if(primitiveCount<=SkyMaxPrimitives&&fullViewport&&sky<MaxSky){++sky;return Trigger::Sky;}
+    bool frame=false,world=false,ui=false;
+    void beginFrame(){frame=false;world=false;ui=false;}
+    Trigger onDraw(unsigned vsTags){
+        if(vsTags&unsigned(NorthlightShaderTags::kUi)){if(ui)return Trigger::None;ui=true;frame=true;return Trigger::Ui;}
+        if((vsTags&NorthlightShaderTags::kTriggerWorld)&&!world){world=true;frame=true;return Trigger::World;}
+        if(!frame){frame=true;return Trigger::FrameStart;}
         return Trigger::None;
     }
-    Trigger onPresent(){beginFrame();return Trigger::Present;}
+    void onPresent(){beginFrame();}
 };
 
 // The reader sequence, with the read function injected (readSelf in production; a fake memory in tests). The

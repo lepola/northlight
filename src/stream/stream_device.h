@@ -42,7 +42,6 @@ public:
             else d->sc0->dead.store(true);
             d->st.loadDefaults(c.target);ok=!d->sc0->dead.load();});
         if(!ran||!ok){d->replayer.stop();if(reason)*reason="init";d->replayer.join();d->abandon();return nullptr;}
-        d->bbW=d->pp.BackBufferWidth;d->bbH=d->pp.BackBufferHeight;
         gameTid.store(Replayer::currentTid());activeCore.store(&d->core,std::memory_order_release);innerOf=&innerOfActive;
         return d.release();
     }
@@ -173,7 +172,7 @@ public:
     HRESULT STDMETHODCALLTYPE Present(const RECT* src,const RECT* dst,HWND window,const RGNDATA* dirty) override{return presentCommon(nullptr,src,dst,window,dirty,0);}
     HRESULT presentCommon(StreamSwapChain* swap,const RECT* src,const RECT* dst,HWND window,const RGNDATA* dirty,DWORD flags){
         Queue& q=streamQueue();
-        takeSnapshot(policy.onPresent());
+        policy.onPresent();
         UINT dirtyBytes=0;
         if(dirty){dirtyBytes=dirty->rdh.dwSize+dirty->rdh.nCount*UINT(sizeof(RECT));if(sizeof(PresentArgs)+dirtyBytes>MaxInlinePayload)dirtyBytes=0;}
         auto* a=static_cast<PresentArgs*>(q.reserve((std::uint16_t)(swap?Cmd::SwapPresent:Cmd::Present),std::uint32_t(sizeof(PresentArgs)+dirtyBytes)));
@@ -203,7 +202,7 @@ public:
             ensureBackBuffers(c);
             st.loadDefaults(c.target);c.replayFailure.store(false);});
         if(!ran)return D3DERR_INVALIDCALL;
-        if(SUCCEEDED(hr)){pp=sc0->pp;bbW=pp.BackBufferWidth;bbH=pp.BackBufferHeight;}
+        if(SUCCEEDED(hr))pp=sc0->pp;
         return hr;
     }
     HRESULT STDMETHODCALLTYPE GetBackBuffer(UINT swapChain,UINT index,D3DBACKBUFFER_TYPE type,IDirect3DSurface9** out) override{
@@ -354,7 +353,7 @@ private:
     std::unique_ptr<StreamCore> coreOwner;StreamCore& core;Replayer replayer;StreamState st;
     IDirect3D9* parent;D3DCAPS9 caps{};D3DDEVICE_CREATION_PARAMETERS creation{};D3DPRESENT_PARAMETERS pp{};
     StreamSwapChain* sc0=nullptr;std::atomic<LONG> refs{1};
-    bool recording=false,cursorVisible=false,pressureApplied=false;UINT bbW=0,bbH=0;std::uint64_t prevPresent=0,drawOrdinal=0;
+    bool recording=false,cursorVisible=false,pressureApplied=false;std::uint64_t prevPresent=0,drawOrdinal=0;
     std::thread::id gameThread=std::this_thread::get_id();
     std::mutex foreignMutex;std::vector<Foreign> foreign;std::atomic<unsigned> foreignPending{0};
     TriggerPolicy policy;bool (*capture)(GameSnapshot&,Trigger,std::uint64_t)=nullptr;
@@ -400,11 +399,10 @@ private:
         delete this;
         if(p)p->Release();
     }
-    void onDraw(unsigned primCount){
+    void onDraw(unsigned){
         ++drawOrdinal;if(!capture)return;
         const unsigned tags=st.vs?static_cast<StreamVertexShader*>(st.vs)->tags:0;
-        const bool full=st.viewport.known&&st.viewport.v.X==0&&st.viewport.v.Y==0&&st.viewport.v.Width==bbW&&st.viewport.v.Height==bbH;
-        takeSnapshot(policy.onDraw(tags,primCount,full));
+        takeSnapshot(policy.onDraw(tags));
     }
     void takeSnapshot(Trigger t){
         if(t==Trigger::None||!capture)return;
