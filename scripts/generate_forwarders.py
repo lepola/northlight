@@ -348,6 +348,11 @@ def join_args(*parts):
     return ', '.join(p for p in parts if p)
 
 
+def gate_prefix(m):
+    # every method that records, answers from StreamState or syncs enters the record gate (record_gate.h); locals only read creation data
+    return 'NORTHLIGHT_STREAM_GATE ' if m.cls in ('record', 'state', 'get', 'sync') else ''
+
+
 def macro_body(m):
     t, names = tag(m), ', '.join(p.name for p in m.params)
     this = 'this' if m.self_arg else ''
@@ -413,6 +418,8 @@ def stream_text(text):
            '// The device class also provides bool redundant(tag,args...) (true: a repeated Set the game side does not record; see REDUNDANT).',
            '#ifndef NORTHLIGHT_STREAM_DIRECT', '#define NORTHLIGHT_STREAM_DIRECT 1', '#endif',
            '#define NORTHLIGHT_STREAM_TAG(X) ::NorthlightStream::CmdTag<::NorthlightStream::Cmd::X>{}',
+           '// NORTHLIGHT_STREAM_GATE opens the record gate (a scoped guard declaration, see record_gate.h); empty unless the includer defines it.',
+           '#ifndef NORTHLIGHT_STREAM_GATE', '#define NORTHLIGHT_STREAM_GATE', '#endif',
            'namespace NorthlightStream {']
     ids = list(CUSTOM_IDS) + [m.enum for m in ided]
     assert len(set(ids)) == len(ids)
@@ -448,7 +455,7 @@ def stream_text(text):
     for interface in STREAM_IFACES:
         macro = 'NORTHLIGHT_STREAM_' + interface[len('IDirect3D'):-1].upper() + '_METHODS'
         out.append(f'#define {macro} \\')
-        out.append(' \\\n'.join(f'    {m.ret} STDMETHODCALLTYPE {m.name}({", ".join(p.decl for p in m.params)}) override {{ {macro_body(m)} }}'
+        out.append(' \\\n'.join(f'    {m.ret} STDMETHODCALLTYPE {m.name}({", ".join(p.decl for p in m.params)}) override {{ {gate_prefix(m)}{macro_body(m)} }}'
                                 for m in classes[interface] if m.cls not in ('custom', 'customrec')))
         out.append('')
     return '\n'.join(out)
