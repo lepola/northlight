@@ -634,9 +634,9 @@ static void directReplayRaw(){
     // Reset: the back buffers are derived again and their raw follows
     d->SetTexture(0,nullptr);d->SetTexture(6,nullptr);d->SetRenderTarget(1,nullptr);rt->Release();ds->Release();
     IDirect3DSurface9* bb=nullptr;CHECK(d->GetBackBuffer(0,0,(D3DBACKBUFFER_TYPE)0,&bb)==D3D_OK);bb->Release();
-    ProxyBase* kid=ProxyBase::of(bb);IUnknown* oldRaw=kid->raw;CHECK(rawOk(kid));
+    ProxyBase* kid=ProxyBase::of(bb);CHECK(rawOk(kid));
     D3DPRESENT_PARAMETERS pp{};pp.BackBufferWidth=800;pp.BackBufferHeight=600;pp.BackBufferFormat=(D3DFORMAT)22;pp.BackBufferCount=2;lvl->Release();
-    CHECK(d->Reset(&pp)==D3D_OK);CHECK(rawOk(kid)&&kid->raw!=oldRaw);
+    CHECK(d->Reset(&pp)==D3D_OK);CHECK(rawOk(kid));   // raw follows the re-derived back buffer (an address compare with the old raw is not valid: the allocator may reuse it)
     d->SetTexture(0,tex);d->SetRenderTarget(0,bb);rig.sync();   // calls on the re-derived back buffer are direct again
     d->SetRenderTarget(0,nullptr);
     plain->Release();cube->Release();tex->Release();vb->Release();ib->Release();vs->Release();ps->Release();dc->Release();
