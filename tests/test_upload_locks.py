@@ -41,10 +41,7 @@ expected={
  ('world_renderer.h','liveIndicesGPU'):('slot.flags',Dynamic,'D3DUSAGE_DYNAMIC|D3DUSAGE_WRITEONLY,D3DFMT_INDEX32,D3DPOOL_DEFAULT,&liveIndicesGPU'),
  ('world_renderer.h','replayVerticesGPU[s]'):('slot.flags',Dynamic,'D3DUSAGE_DYNAMIC|D3DUSAGE_WRITEONLY,0,D3DPOOL_DEFAULT,&replayVerticesGPU[s]'),
  ('world_renderer.h','replayIndicesGPU'):('slot.flags',Dynamic,'D3DUSAGE_DYNAMIC|D3DUSAGE_WRITEONLY,D3DFMT_INDEX32,D3DPOOL_DEFAULT,&replayIndicesGPU'),
- ('draw_snapshot.h','ib'):('NorthlightUpload::readBackLock()',Read,None),('draw_snapshot.h','vertices[s]'):('NorthlightUpload::readBackLock()',Read,None),
- ('draw_snapshot.h','vb'):('NorthlightUpload::readBackLock()',Read,None),
- ('geometry_capture.h','indices.value'):('NorthlightUpload::readBackLock()',Read,None),('geometry_capture.h','vertices.value'):('NorthlightUpload::readBackLock()',Read,None),
- ('terrain_capture_bounds.h','ib.p'):('NorthlightUpload::readBackLock()',Read,None),('terrain_capture_bounds.h','vb.p'):('NorthlightUpload::readBackLock()',Read,None),
+ ('replay_copy_reader.h','b'):('NorthlightUpload::readBackLock()',Read,None), # 0.3.192 (CS): the 8 capture read-backs go through NorthlightReplayCopies::Reader (CPU copy first, this lock otherwise)
  ('forwarders.h','real'):('Flags',Forward,None),('tracked_buffers.h','this->real'):('flags',Forward,None),
 }
 seen=set();fresh=calls=0
@@ -94,8 +91,13 @@ world_dir=fp.SRC/'world'
 bare=[(f.name,text.count('\n',0,m.start())+1) for f in sorted(world_dir.iterdir()) if f.suffix in('.h','.inl','.cpp')
       for text in [f.read_text(errors='replace')] for m in re.finditer(r'(?:->|\.)Lock\(',text) if 'D3DLOCK_READONLY' in arguments(text,m.end()-1)[-1]]
 assert not bare,f'bare D3DLOCK_READONLY buffer Lock in src/world (use NorthlightUpload::readBackLock()): {bare}'
-readers=sum(t.count('NorthlightUpload::readBackLock()') for n,t in sources.items() if n in('draw_snapshot.h','geometry_capture.h','terrain_capture_bounds.h'))
-assert readers==8,readers # 4 + 2 + 2 read-back calls
+sites=('draw_snapshot.h','geometry_capture.h','terrain_capture_bounds.h')
+assert sum(sources[n].count('NorthlightUpload::readBackLock()') for n in sites)==0 # no capture site locks a game buffer itself any more
+readers=sum(sources[n].count('NorthlightReplayCopies::Reader<') for n in sites)
+assert readers==8,readers # 4 + 2 + 2 read-back sites, every one through the reader (replay_copy_reader.h)
+reader=sources['replay_copy_reader.h']
+assert reader.count('NorthlightUpload::readBackLock()')==2 and reader.count('->Lock(')==2 # the whole-buffer fill and the ordinary fallback lock
+assert reader.index('if(enabled.load(std::memory_order_relaxed)&&b){')<reader.index('->Lock(0,slot->size') # the stream gate comes first: with it off only the fallback runs
 renderer=sources['renderer.cpp']
 gate='NorthlightUpload::ReadBackNoOverwrite.store(module&&!result.fallback&&last.info.dxvk&&NorthlightBackend::dxvkMajor(last.info.dxvkVersion)>=3,std::memory_order_relaxed);'
 stores=[n for n,t in sources.items() if re.search(r'ReadBackNoOverwrite(?:\.store\(|\s*=[^=])',t.replace('inline std::atomic<bool> ReadBackNoOverwrite{false};',''))]
@@ -103,3 +105,19 @@ assert stores==['renderer.cpp'] and renderer.count('ReadBackNoOverwrite.store(')
 # The gate runs after the BACKEND selected= log (the loaded module decides) and before CreateDevice can run.
 assert renderer.index('BACKEND selected=')<renderer.index(gate)<renderer.index('readBackLock=0x%x')
 print('PASS read-back lock: readBackLock() defined once, 8 read-back sites, no bare READONLY buffer Lock in src/world, gate stored once from the loaded DXVK >= 3 backend')
+# 0.3.192 (CS): the replay-side CPU copies (replay_copies.h): one choke point (the tracked wrapper), gated on the stream, pressure-shrunk once per frame.
+tracked=sources['tracked_buffers.h'];copies=sources['replay_copies.h']
+assert tracked.count('NorthlightReplayCopies::writeLocked(')==1 and tracked.count('NorthlightReplayCopies::beforeUnlock(')==1 # the only two write hooks: Lock records the range, Unlock copies it out of the mapped pointer
+assert tracked.index('NorthlightReplayCopies::beforeUnlock(')<tracked.index('this->real->Unlock()') # before the pointer is released
+assert tracked.count('NorthlightReplayCopies::invalidate(it->second->copy,true)')==1 and 'invalidate(entry.second->copy)' in tracked # ProcessVertices (written) and Reset (invalidateAll)
+assert tracked.count('NorthlightReplayCopies::enabled.load(')>=3 # attach, Lock and Unlock are all behind the stream gate
+assert renderer.count('NorthlightReplayCopies::enabled.store(true')==1 and renderer.index('NorthlightReplayCopies::enabled.store(true')<renderer.index('real->CreateDevice(adapter,type,window,flags,pp,out)')
+assert 'if(stream)NorthlightReplayCopies::enabled.store(true' in renderer and 'NorthlightReplayCopies::setPressure(memoryCaps==1)' in renderer
+assert [n for n,t in sources.items() if 'enabled.store(true' in t and 'NorthlightReplayCopies' in t]==['renderer.cpp']
+# every write a stream replays into a game buffer is a Lock/Unlock on the stream's inner object, which is the wrapper (Device::Create*Buffer wraps)
+replay=sources['replay_thread.h']
+assert 'static_cast<IDirect3DVertexBuffer9*>(p->inner)->Lock(a->off,a->size,&dst,flags)' in replay and 'static_cast<IDirect3DVertexBuffer9*>(p->inner)->Unlock()' in replay
+dev=renderer[renderer.index('class Device final'):renderer.index('class Factory final')]
+assert 'ext->CreateVertexBuffer(' in dev and 'NorthlightTrackedBuffers::wrap<IDirect3DVertexBuffer9' in dev and 'NorthlightTrackedBuffers::wrap<IDirect3DIndexBuffer9' in dev
+assert dev.count('NorthlightTrackedBuffers::unwrap(buffer)')==1 # ProcessVertices is the only unwrapping use of a game buffer for a write
+print('PASS replay copies wiring: gate set before the first buffer, wrapper hooks, ProcessVertices/Reset invalidation, pressure shrink')

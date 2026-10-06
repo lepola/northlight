@@ -7,6 +7,7 @@
 #include "capture_buffer_metadata.h"
 #include "mirror_guard.h"
 #include "lock_meter.h"
+#include "replay_copies.h"
 
 // Only client-created buffers are wrapped. The real device always receives
 // real resources. Unknown/unwrapped resources return revision 0 (no fast cache).
@@ -40,6 +41,7 @@ struct Record {
     std::atomic<unsigned> locks{0};
     bool index=false;
     NorthlightCaptureMetadata::Info metadata;
+    NorthlightReplayCopies::Slot copy; // 0.3.192 (CS): the replay-side CPU copy (replay_copies.h); attached only while the stream is active
 };
 inline std::unordered_map<void*,Record*> records;
 // Lock-free input resolution for our own wrappers. The first Buffer class
@@ -108,11 +110,11 @@ template<class T> void expose(T** out){
 }
 inline void written(void* p){
     std::lock_guard<std::mutex> guard(mutex);auto it=records.find(p);
-    if(it!=records.end())it->second->revision=clock.fetch_add(1);
+    if(it!=records.end()){it->second->revision=clock.fetch_add(1);NorthlightReplayCopies::invalidate(it->second->copy,true);} // 0.3.192 (CS): a GPU-side write (ProcessVertices): the CPU copy is stale for good
 }
 inline void invalidateAll(){
     std::lock_guard<std::mutex> guard(mutex);
-    for(auto& entry:records)entry.second->revision=clock.fetch_add(1);
+    for(auto& entry:records){entry.second->revision=clock.fetch_add(1);NorthlightReplayCopies::invalidate(entry.second->copy);}
 }
 template<class T,class Forward> class Buffer final:public Forward {
     LONG refs=1;IDirect3DDevice9* owner;Record record;
@@ -123,6 +125,7 @@ template<class T,class Forward> class Buffer final:public Forward {
     // 0.3.192 (DXVK3): the size DXVK 3.x charges for a DISCARD of this buffer (DEFAULT|DYNAMIC only: direct-mapped), 0 otherwise.
     UINT discardBytes=0;
 public:
+    bool hasCopySlotForTest()const{return record.copy.attached;} // the CPU copy slot exists only for buffers created while the stream is active
     Buffer(T* real,IDirect3DDevice9* device,bool index,void(*unsafe)(IDirect3DDevice9*,const char*)=nullptr,MirrorGate* gate=nullptr):Forward(real),owner(device),unsafeAccess(unsafe),census(gate){
         record.raw=real;record.exposed=static_cast<T*>(this);record.object=this;record.index=index;
         record.revision=clock.fetch_add(1);
@@ -143,9 +146,10 @@ public:
                 discardBytes=desc.Pool==D3DPOOL_DEFAULT&&(desc.Usage&D3DUSAGE_DYNAMIC)?desc.Size:0;
             }
         }
+        if(NorthlightReplayCopies::enabled.load(std::memory_order_relaxed))NorthlightReplayCopies::attach(record.copy,static_cast<T*>(this),record.metadata.size,&record.locks); // size 0 (descriptor unknown): never copied
         {std::lock_guard<std::mutex> guard(mutex);
          records.emplace(record.raw,&record);
-         try{records.emplace(record.exposed,&record);}catch(...){records.erase(record.raw);throw;}}
+         try{records.emplace(record.exposed,&record);}catch(...){records.erase(record.raw);NorthlightReplayCopies::detach(record.copy);throw;}}
         owner->AddRef();
         // Identical for every instance of this final class; first class wins.
         static const ShapeInfo shape={*reinterpret_cast<const void* const*>(static_cast<T*>(this)),
@@ -154,6 +158,7 @@ public:
     }
     ~Buffer(){
         {std::lock_guard<std::mutex> guard(mutex);records.erase(record.raw);records.erase(record.exposed);}
+        NorthlightReplayCopies::detach(record.copy);
         this->real->Release();owner->Release();
     }
     ULONG STDMETHODCALLTYPE AddRef() override{return InterlockedIncrement(&refs);}
@@ -186,8 +191,12 @@ public:
         const bool wasUnsafe=record.revision.load()==0;
         if(!(flags&D3DLOCK_READONLY))record.revision=clock.fetch_add(1);
         if((flags&D3DLOCK_DISCARD)&&discardBytes)NorthlightLockMeter::discard(NorthlightLockMeter::Game,discardBytes);
-        record.locks.fetch_add(1);
+        const unsigned lockedBefore=record.locks.fetch_add(1);
         HRESULT hr=this->real->Lock(offset,size,data,flags);
+        // 0.3.192 (CS): the write the stream replays (or a pass-through lock the game writes through) is mirrored into the CPU copy at Unlock.
+        if(record.copy.attached&&!(flags&D3DLOCK_READONLY)&&NorthlightReplayCopies::enabled.load(std::memory_order_relaxed)){
+            if(FAILED(hr))NorthlightReplayCopies::invalidate(record.copy);else NorthlightReplayCopies::writeLocked(record.copy,lockedBefore,offset,size,data?*data:nullptr);
+        }
         if(FAILED(hr)){
             // A rejected write cannot repair tracking after an earlier failed
             // unlock. Keep the legacy exact-read path until a write succeeds.
@@ -198,9 +207,12 @@ public:
     }
     HRESULT STDMETHODCALLTYPE Unlock() override{
         if(census)census->noteBuffer();
+        const bool copies=record.copy.attached&&NorthlightReplayCopies::enabled.load(std::memory_order_relaxed);
+        if(copies)NorthlightReplayCopies::beforeUnlock(record.copy,record.locks.load()); // 0.3.192 (CS): the pointer is still mapped
         HRESULT hr=this->real->Unlock();
+        if(copies&&FAILED(hr))NorthlightReplayCopies::invalidate(record.copy);
         if(SUCCEEDED(hr)&&record.locks.load())record.locks.fetch_sub(1);
-        else record.revision=0; // tracking is unsafe until a subsequent successful write
+        else{record.revision=0;if(copies)NorthlightReplayCopies::invalidate(record.copy);} // tracking is unsafe until a subsequent successful write
         return hr;
     }
 };

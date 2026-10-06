@@ -5,6 +5,7 @@
 #include <d3d9.h>
 #include "upload_lock.h"
 #include "lock_meter_readback.h"
+#include "replay_copy_reader.h"
 #include <vector>
 #include <cstdint>
 #include <cstring>
@@ -51,8 +52,8 @@ inline bool readIndexedPositions(IDirect3DDevice9* device,
     const std::uint64_t indexBytes=std::uint64_t(indexCount)*indexSize;
     if(indexOffset+indexBytes>id.Size)return false;
     void* raw=nullptr;
-    if(FAILED(indices.value->Lock(UINT(indexOffset),UINT(indexBytes),&raw,NorthlightUpload::readBackLock()))||!raw)return false;
-    NorthlightLockMeter::readBack(indices.value,indexBytes);
+    NorthlightReplayCopies::Reader<IDirect3DIndexBuffer9> readIndices(indices.value);
+    if(FAILED(readIndices.lock(UINT(indexOffset),UINT(indexBytes),&raw))||!raw)return false;
     std::vector<std::uint32_t> source(indexCount);
     bool valid=true;
     for(UINT i=0;i<indexCount;++i){
@@ -60,7 +61,7 @@ inline bool readIndexedPositions(IDirect3DDevice9* device,
         else std::memcpy(&source[i],(char*)raw+i*4,4);
         if(source[i]<minVertex||std::uint64_t(source[i])>=std::uint64_t(minVertex)+vertexCount)valid=false;
     }
-    const HRESULT unlockIndices=indices.value->Unlock();
+    const HRESULT unlockIndices=readIndices.unlock();
     if(!valid||FAILED(unlockIndices))return false;
     const std::int64_t firstVertex=std::int64_t(baseVertex)+minVertex;
     if(firstVertex<0)return false;
@@ -68,8 +69,8 @@ inline bool readIndexedPositions(IDirect3DDevice9* device,
     const std::uint64_t lastByte=firstByte+std::uint64_t(vertexCount-1)*stride+position->Offset+componentBytes;
     if(lastByte>vd.Size||firstByte>=lastByte)return false;
     raw=nullptr;
-    if(FAILED(vertices.value->Lock(UINT(firstByte),UINT(lastByte-firstByte),&raw,NorthlightUpload::readBackLock()))||!raw)return false;
-    NorthlightLockMeter::readBack(vertices.value,lastByte-firstByte);
+    NorthlightReplayCopies::Reader<IDirect3DVertexBuffer9> readVertices(vertices.value);
+    if(FAILED(readVertices.lock(UINT(firstByte),UINT(lastByte-firstByte),&raw))||!raw)return false;
     output.positions.resize(vertexCount);
     for(UINT i=0;i<vertexCount;++i){
         float values[4]={0,0,0,1};
@@ -78,7 +79,7 @@ inline bool readIndexedPositions(IDirect3DDevice9* device,
            !std::isfinite(values[3])||std::fabs(values[3]-1.f)>.0001f)valid=false;
         output.positions[i]={values[0],values[1],values[2]};
     }
-    const HRESULT unlockVertices=vertices.value->Unlock();
+    const HRESULT unlockVertices=readVertices.unlock();
     if(!valid||FAILED(unlockVertices)){output.positions.clear();return false;}
     output.indices.reserve(std::size_t(primitiveCount)*3);
     for(UINT primitive=0;primitive<primitiveCount;++primitive){

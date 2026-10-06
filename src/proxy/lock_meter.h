@@ -15,6 +15,11 @@ struct State {
     Counter frameSite[SiteCount],frameStaging;                 // since the last endFrame()
     Counter ringWraps,ringFenceReuse,ringDiscards,ringShrinks,processVertices; // interval
     Counter readLocks,readBytes,readClass[3],readClassBytes[3];                  // interval
+    // 0.3.192 (CS): the replay-side CPU copies (replay_copies.h). interval: reads served without a DXVK lock, ordinary read-back locks taken
+    // while the copies are on (fallback), whole-buffer fills, evictions (LRU/pressure), invalidations (GPU write, failed or nested lock), refused fills.
+    // gauges (not reset): bytes and buffers resident, the current cap.
+    Counter copyServed,copyServedBytes,copyFills,copyFillBytes,copyFallback,copyEvictions,copyInvalidations,copyRefused;
+    Counter copyResidentBytes,copyResidentBuffers,copyCapBytes;
     Counter frames,discardSum,discardMax,stagingSum,stagingMax,over10MiB,siteSum[SiteCount]; // interval roll-up
     std::atomic<bool> processVerticesSeen;
 };
@@ -48,6 +53,8 @@ struct Snapshot {
     std::uint64_t frames=0,discardSum=0,discardMax=0,stagingSum=0,stagingMax=0,over10MiB=0,site[SiteCount]={};
     std::uint64_t ringWraps=0,ringFenceReuse=0,ringDiscards=0,ringShrinks=0,processVertices=0;
     std::uint64_t readLocks=0,readBytes=0,readClass[3]={},readClassBytes[3]={};
+    std::uint64_t copyServed=0,copyServedBytes=0,copyFills=0,copyFillBytes=0,copyFallback=0,copyEvictions=0,copyInvalidations=0,copyRefused=0;
+    std::uint64_t copyResidentBytes=0,copyResidentBuffers=0,copyCapBytes=0;   // gauges at the end of the interval
 };
 // Returns the interval since the previous call and starts the next one.
 inline Snapshot takeInterval(){
@@ -56,6 +63,9 @@ inline Snapshot takeInterval(){
     for(int i=0;i<SiteCount;++i)r.site[i]=take(s.siteSum[i]);
     r.ringWraps=take(s.ringWraps);r.ringFenceReuse=take(s.ringFenceReuse);r.ringDiscards=take(s.ringDiscards);r.ringShrinks=take(s.ringShrinks);r.processVertices=take(s.processVertices);
     r.readLocks=take(s.readLocks);r.readBytes=take(s.readBytes);for(int i=0;i<3;++i){r.readClass[i]=take(s.readClass[i]);r.readClassBytes[i]=take(s.readClassBytes[i]);}
+    r.copyServed=take(s.copyServed);r.copyServedBytes=take(s.copyServedBytes);r.copyFills=take(s.copyFills);r.copyFillBytes=take(s.copyFillBytes);r.copyFallback=take(s.copyFallback);
+    r.copyEvictions=take(s.copyEvictions);r.copyInvalidations=take(s.copyInvalidations);r.copyRefused=take(s.copyRefused);
+    r.copyResidentBytes=s.copyResidentBytes.load(std::memory_order_relaxed);r.copyResidentBuffers=s.copyResidentBuffers.load(std::memory_order_relaxed);r.copyCapBytes=s.copyCapBytes.load(std::memory_order_relaxed);
     return r;
 }
 }

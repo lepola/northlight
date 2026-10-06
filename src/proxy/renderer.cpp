@@ -29,6 +29,7 @@
 #include "backend_policy.h"
 #include "upload_lock.h"
 #include "lock_meter.h"
+#include "replay_copies.h"
 #include "dxvk_compatibility.h"
 #include "backend_loader.h"
 #include "frame_intervals.h"
@@ -1026,6 +1027,7 @@ public:
         const bool sampledFrame=sampled(),frameApplied=applied;
         {CpuScope cpu(sampledFrame?&cleanup:nullptr);clearFrame();}
         if(memoryCaps>=0&&world)world->setMemoryPressure(memoryCaps==1);
+        if(memoryCaps>=0&&NorthlightReplayCopies::enabled.load(std::memory_order_relaxed))NorthlightReplayCopies::setPressure(memoryCaps==1); /* 0.3.192 (CS): replay thread: halves the CPU copies' cap and evicts down to it */
         if(memoryCaps>=0)NorthlightStream::memoryPressure.store(memoryCaps==1,std::memory_order_relaxed); /* 0.3.192 (CS): the stream's game side halves its queue budget at its next Present */
         if(memoryTrim)trimMemory(memorySample);
         if(NorthlightRenderThreadProbe::profiling()&&cpuFrequency.QuadPart>0){namespace P=NorthlightRenderThreadProbe;
@@ -1217,7 +1219,7 @@ public:
         NorthlightStream::StreamDevice* stream=nullptr;
         const bool exclusiveOwner=target->setExclusiveOwner(true); /* before the replay thread exists: its calls take the cheap owner entry; a foreign call stays safe */
         try{stream=NorthlightStream::StreamDevice::make(device,this,pp,std::move(options),&reason);}catch(...){reason="exception";}
-        if(!stream){NorthlightStream::streamActive.store(false,std::memory_order_relaxed);target->setExclusiveOwner(false);target->adoptOwnerThread(); /* the gate owner is this thread again (a replay thread that ran has been joined) */
+        if(!stream){NorthlightStream::streamActive.store(false,std::memory_order_relaxed);NorthlightReplayCopies::enabled.store(false,std::memory_order_relaxed);target->setExclusiveOwner(false);target->adoptOwnerThread(); /* the gate owner is this thread again (a replay thread that ran has been joined) */
             logf("CSTREAM disabled reason=%s",reason);return device;}
         logf("CSTREAM active gameTid=%lu replayTid=%lu exclusiveGate=%d",NorthlightStream::gameTid.load(),NorthlightStream::replayTid.load(),int(exclusiveOwner));
         return stream;
@@ -1242,6 +1244,7 @@ public:
         }
         const bool stream=NorthlightStream::commandStreamRequested(rootPath); /* 0.3.192 (CS): CommandStream=0 or an unreadable ini is the old path below */
         if(stream)NorthlightStream::streamActive.store(true,std::memory_order_relaxed); /* before the Device exists: worker core budgets read it once */
+        if(stream)NorthlightReplayCopies::enabled.store(true,std::memory_order_relaxed); /* 0.3.192 (CS): before the first game buffer is wrapped: the replay-side CPU copies of replay_copies.h; never on with CommandStream=0 */
         if(stream)flags|=D3DCREATE_MULTITHREADED; /* DXVK's window-proc hook may touch the swap chain on the game thread while the replay thread presents */
         HRESULT hr=real->CreateDevice(adapter,type,window,flags,pp,out);
         logf("CreateDevice HRESULT=0x%08lx flags=0x%lx",(unsigned long)hr,(unsigned long)flags);

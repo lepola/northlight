@@ -8,6 +8,7 @@
 #include <d3d9.h>
 #include "upload_lock.h"
 #include "lock_meter_readback.h"
+#include "replay_copy_reader.h"
 #include "vertex_declaration_cache.h"
 #include <algorithm>
 #include <array>
@@ -507,13 +508,13 @@ public:
         if(chargedBytes+indexBytes>limits.maxReadBytesPerFrame)return reject(RejectReason::ByteBudget);
         scratchRawIndices.resize(size_t(indexBytes));
         auto& indices=scratchIndices;indices.resize(static_cast<std::size_t>(indexCount));
-        void* raw=nullptr;hr=ib.p->Lock(UINT(indexOffset),UINT(indexBytes),&raw,NorthlightUpload::readBackLock());if(!FAILED(hr))NorthlightLockMeter::readBack(ib.p,indexBytes);
+        void* raw=nullptr;NorthlightReplayCopies::Reader<IDirect3DIndexBuffer9> readIndices(ib.p);hr=readIndices.lock(UINT(indexOffset),UINT(indexBytes),&raw);
         if(FAILED(hr))return reject(RejectReason::IndexLock,hr);
-        if(!raw){ib.p->Unlock();return reject(RejectReason::IndexLock,E_POINTER);}
+        if(!raw){readIndices.unlock();return reject(RejectReason::IndexLock,E_POINTER);}
         chargedBytes+=indexBytes;readBytes+=indexBytes;
         const bool sameIndices=cached&&cached->indices.size()==indexBytes&&!std::memcmp(raw,cached->indices.data(),size_t(indexBytes));
         if(!sameIndices)std::memcpy(scratchRawIndices.data(),raw,size_t(indexBytes));
-        hr=ib.p->Unlock();
+        hr=readIndices.unlock();
         if(FAILED(hr))return reject(RejectReason::IndexUnlock,hr);
         UINT smallest=std::numeric_limits<UINT>::max(),largest=0;bool valid=true;
         const auto decodeIndices=[&](){
@@ -535,13 +536,13 @@ public:
         if(lastByte>vd.Size||!span)return reject(RejectReason::VertexRange);
         if(chargedBytes+span>limits.maxReadBytesPerFrame)return reject(RejectReason::ByteBudget);
         scratchRawVertices.resize(size_t(span));
-        raw=nullptr;hr=vb.p->Lock(UINT(firstByte),UINT(span),&raw,NorthlightUpload::readBackLock());if(!FAILED(hr))NorthlightLockMeter::readBack(vb.p,span);
+        raw=nullptr;NorthlightReplayCopies::Reader<IDirect3DVertexBuffer9> readVertices(vb.p);hr=readVertices.lock(UINT(firstByte),UINT(span),&raw);
         if(FAILED(hr))return reject(RejectReason::VertexLock,hr);
-        if(!raw){vb.p->Unlock();return reject(RejectReason::VertexLock,E_POINTER);}
+        if(!raw){readVertices.unlock();return reject(RejectReason::VertexLock,E_POINTER);}
         chargedBytes+=span;readBytes+=span;
         const bool sameVertices=sameIndices&&cached->vertices.size()==span&&!std::memcmp(raw,cached->vertices.data(),size_t(span));
         if(!sameVertices)std::memcpy(scratchRawVertices.data(),raw,size_t(span));
-        hr=vb.p->Unlock();if(FAILED(hr))return reject(RejectReason::VertexUnlock,hr);
+        hr=readVertices.unlock();if(FAILED(hr))return reject(RejectReason::VertexUnlock,hr);
         if(sameVertices){
             // Both current buffers matched in full and both locks are released.
             // Only const ownership escapes; eviction or later buffer mutation
