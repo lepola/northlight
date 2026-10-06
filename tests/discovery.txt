@@ -25,6 +25,7 @@ test_client_archives.py
 test_client_config.py
 test_client_identity.py
 test_command_stream.py
+test_command_stream_wiring.py
 test_concurrent_geometry_build.py
 test_contact_lighting.py
 test_contact_normal_endpoints.py
@@ -40,6 +41,7 @@ test_entrypoints_isolated.py
 test_fast_memcmp.py
 test_fog_locale.py
 test_fog_motion.py
+test_game_snapshot.py
 test_geometry_handoff.py
 test_gi_quality.py
 test_horizon_haze.py
