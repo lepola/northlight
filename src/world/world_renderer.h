@@ -660,7 +660,7 @@ private:
     std::unordered_map<IDirect3DVertexShader9*,NorthlightActorDeformation::Program> actorUVPrograms;
     std::shared_ptr<NorthlightActorGeometry::ActorJob> actorJob=std::make_shared<NorthlightActorGeometry::ActorJob>();
     std::shared_ptr<const NorthlightActorGeometry::ActorJob> actorJobComplete;
-    uint64_t actorJobSerial_=0;DWORD lastActorCapture=0;bool actorCaptureDecided=false,actorCaptureDue=false;unsigned actorDeferredFrames=0,actorCaptureDeferrals=0;std::string actorSceneMap_;
+    uint64_t actorJobSerial_=0;DWORD lastActorCapture=0;bool actorCaptureDecided=false,actorCaptureDue=false;std::string actorSceneMap_;
     unsigned actorVerticesEvaluated=0,actorDraws=0,actorSkippedAlpha=0,snapshotRejects=0;
 
     LONGLONG terrainCaptureTicks=0,replayCaptureTicks=0;
@@ -2341,7 +2341,7 @@ public:
         if(sample&&NorthlightRenderThreadProbe::profiling())try{replayGiPacked.push_back(&replay);}catch(...){} /* capture waste (RenderProfile) */
     }
     void finishActorScene(){
-        if(!actorCaptureEnabled())return;{const DWORD tick=GetTickCount();lastActorCapture=NorthlightQuality::actorCaptureStamp(lastActorCapture,tick,actorDeferredFrames);}actorDeferredFrames=0;actorJob->center=vec(context.camera);
+        if(!actorCaptureEnabled())return;lastActorCapture=GetTickCount();actorJob->center=vec(context.camera);
         actorJobComplete=std::move(actorJob);actorCaptureDue=false;++actorJobSerial_;actorSceneMap_=active?active->map:std::string{};
         if(captureSampled)deferLogf("WORLD actor packets draws=%u queuedVertices=%u skippedAlpha=%u snapshotReadBytes=%zu material=actual-rgba128-or-neutral035",actorDraws,actorVerticesEvaluated,actorSkippedAlpha,replaySnapshots.bytesRead());
     }
@@ -2403,9 +2403,6 @@ public:
                 in.shadows=shadows;in.demand=captureDemand;in.diagnostic=lastRenderDebug==1;in.actorDue=actorCaptureEnabled();in.nextPass=shadowPasses+1;
                 for(int source=0;source<2;++source)in.sourceActive[source]=NorthlightGI::dot(sourceColors[source],sourceColors[source])>1e-10f;
                 in.pointDue=in.shadows&&!in.actorDue&&!in.demand&&pointRefreshPredicted();
-                if(in.actorDue){ /* 0.3.192: the GI actor capture rides a frame that captures anyway (quality_settings.h deferActorCapture) */
-                    NorthlightQuality::CaptureInputs without=in;without.actorDue=false;without.pointDue=in.shadows&&!in.demand&&pointRefreshPredicted();
-                    if(NorthlightQuality::deferActorCapture(quality,in,without,nearShadow,farShadow,actorDeferredFrames)){in=without;++actorDeferredFrames;++actorCaptureDeferrals;actorCaptureDue=false;actorJob.reset();}}
                 skip=NorthlightQuality::skipModelCapture(quality,in,nearShadow,farShadow);}
             captureMode=skip?CaptureSkipped:CaptureFresh;if(skip)++captureSkippedFrames;else captureDemand=false;}
         return captureMode==CaptureSkipped;
