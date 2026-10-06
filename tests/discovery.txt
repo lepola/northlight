@@ -24,6 +24,7 @@ test_client_archive_order.py
 test_client_archives.py
 test_client_config.py
 test_client_identity.py
+test_command_stream.py
 test_concurrent_geometry_build.py
 test_contact_lighting.py
 test_contact_normal_endpoints.py
