@@ -32,7 +32,15 @@ public:
     static StreamDevice* make(IDirect3DDevice9* target,IDirect3D9* parent,const D3DPRESENT_PARAMETERS* pp,Options opt,const char** reason){
         std::unique_ptr<StreamDevice> d;
         try{d.reset(new StreamDevice(target,parent,pp,std::move(opt)));}catch(...){if(reason)*reason="allocation";return nullptr;}
-        if(!d->replayer.start()){if(reason)*reason="thread";return nullptr;}
+        // Any failure from here: the Target's implicit objects (back buffers, depth buffer, swap chain) are released on the replay thread
+        // before it stops (no Destroy commands into a queue nobody replays), the proxies are deleted, and the owner callback runs again on
+        // this thread so the Device's gate names a live thread, not the joined replay thread.
+        auto fail=[&](const char* why)->StreamDevice*{
+            if(reason)*reason=why;
+            const bool ran=d->replayer.running();
+            if(ran){runTask(d->core,[](StreamCore& c){c.reg.releaseInners();},Cmd::SyncInit);d->replayer.stop();}
+            d->abandon();if(ran&&d->restoreOwner)d->restoreOwner();return nullptr;};
+        if(!d->replayer.start())return fail("thread");
         bool ok=false;
         const bool ran=runTask(d->core,[&](StreamCore& c){
             D3DDEVICE_CREATION_PARAMETERS cp{};c.target->GetCreationParameters(&cp);d->creation=cp;c.target->GetDeviceCaps(&d->caps);
@@ -41,7 +49,7 @@ public:
             if(SUCCEEDED(c.target->GetSwapChain(0,&sc))&&sc){c.reg.bindInner(d->sc0,sc);sc->GetPresentParameters(&d->sc0->pp);d->pp=d->sc0->pp;d->ensureBackBuffers(c);}
             else d->sc0->dead.store(true);
             d->st.loadDefaults(c.target);ok=!d->sc0->dead.load();},Cmd::SyncInit);
-        if(!ran||!ok){d->replayer.stop();if(reason)*reason="init";d->replayer.join();d->abandon();return nullptr;}
+        if(!ran||!ok)return fail("init");
         gameTid.store(Replayer::currentTid());activeCore.store(&d->core,std::memory_order_release);innerOf=&innerOfActive;
         return d.release();
     }
@@ -217,12 +225,12 @@ public:
             HRESULT hr=D3DERR_INVALIDCALL;
             const bool ran=runTask(core,[&](StreamCore&){hr=replayer.createNow(a,id,extra);if(SUCCEEDED(hr))afterSyncCreate(proxy);},Cmd::SyncCreate);
             if(!ran||FAILED(hr)){discard(proxy);*out=nullptr;return ran?hr:D3DERR_INVALIDCALL;}
-            *out=static_cast<typename std::remove_pointer<decltype(firstIface(proxy))>::type*>(proxy);return D3D_OK;
+            proxy->pinDevice();*out=static_cast<typename std::remove_pointer<decltype(firstIface(proxy))>::type*>(proxy);return D3D_OK;
         }
         a.extraBytes=extraBytes;
         auto* p=static_cast<CreateArgs*>(q.reserve((std::uint16_t)id,std::uint32_t(sizeof(CreateArgs)+((extraBytes+7u)&~7u))));
         *p=a;if(extraBytes)std::memcpy(p+1,extra,extraBytes);q.commit();
-        *out=static_cast<typename std::remove_pointer<decltype(firstIface(proxy))>::type*>(proxy);return D3D_OK;
+        proxy->pinDevice();*out=static_cast<typename std::remove_pointer<decltype(firstIface(proxy))>::type*>(proxy);return D3D_OK;
     }
     static IDirect3DTexture9* firstIface(StreamTexture*);static IDirect3DCubeTexture9* firstIface(StreamCubeTexture*);static IDirect3DVolumeTexture9* firstIface(StreamVolumeTexture*);
     static IDirect3DVertexBuffer9* firstIface(StreamVertexBuffer*);static IDirect3DIndexBuffer9* firstIface(StreamIndexBuffer*);static IDirect3DSurface9* firstIface(StreamSurface*);
@@ -285,7 +293,10 @@ public:
         StreamPixelShader* p;try{p=new StreamPixelShader(&core);p->code.assign(code,code+tokens);}catch(...){return E_OUTOFMEMORY;}
         CreateArgs a{p,{},0};void* o=nullptr;const HRESULT hr=finishCreate(p,Cmd::CreatePixelShader,a,code,UINT(tokens*4),false,&o);*out=static_cast<IDirect3DPixelShader9*>(o);return hr;}
     HRESULT STDMETHODCALLTYPE CreateQuery(D3DQUERYTYPE type,IDirect3DQuery9** out) override{
-        if(!out){return D3DERR_INVALIDCALL;}*out=nullptr;
+        if(!out){   // the D3D9 support probe CreateQuery(type,NULL): the Target's own answer (D3D_OK / D3DERR_NOTAVAILABLE)
+            HRESULT hr=D3DERR_INVALIDCALL;
+            runTask(core,[&](StreamCore& c){hr=c.target->CreateQuery(type,nullptr);},Cmd::SyncCreate);return hr;}
+        *out=nullptr;
         StreamQuery* p;try{p=new StreamQuery(&core,unsigned(type));}catch(...){return E_OUTOFMEMORY;}
         CreateArgs a{p,{unsigned(type),0,0,0,0,0,0,0},0};void* o=nullptr;
         const HRESULT hr=finishCreate(p,Cmd::CreateQuery,a,nullptr,0,p->dataSize==0,&o);*out=static_cast<IDirect3DQuery9*>(o);return hr;}   // unknown query types create synchronously (the data size is the real one)
@@ -350,7 +361,7 @@ public:
 
 private:
     struct Foreign {int x,y;DWORD flags;};
-    std::unique_ptr<StreamCore> coreOwner;StreamCore& core;Replayer replayer;StreamState st;
+    std::unique_ptr<StreamCore> coreOwner;StreamCore& core;Replayer replayer;StreamState st;std::function<void()> restoreOwner;
     IDirect3D9* parent;D3DCAPS9 caps{};D3DDEVICE_CREATION_PARAMETERS creation{};D3DPRESENT_PARAMETERS pp{};
     StreamSwapChain* sc0=nullptr;std::atomic<LONG> refs{1};
     bool recording=false,cursorVisible=false,pressureApplied=false;std::uint64_t prevPresent=0,drawOrdinal=0;
@@ -361,14 +372,15 @@ private:
     StreamDevice(IDirect3DDevice9* target,IDirect3D9* par,const D3DPRESENT_PARAMETERS* p,Options opt)
         :coreOwner(new StreamCore(opt.budget)),core(*coreOwner),replayer(core),parent(par),capture(opt.capture){
         core.target=target;core.game=this;core.logLine=nullptr;st.core=&core;
-        replayer.threadStart=std::move(opt.threadStart);replayer.log=opt.log;replayer.diagnostics=opt.diagnostics;
+        restoreOwner=opt.threadStart;replayer.threadStart=std::move(opt.threadStart);replayer.log=opt.log;replayer.diagnostics=opt.diagnostics;
         if(p)pp=*p;
-        sc0=new StreamSwapChain(&core);sc0->pp=pp;
+        sc0=new StreamSwapChain(&core);sc0->baseline=1;sc0->pp=pp;
         const UINT n=pp.BackBufferCount?pp.BackBufferCount:1;sc0->kids.assign(n,nullptr);
         parent->AddRef();
     }
-    void abandon(){   // init failed after the thread ran: tear down without the Target
-        st.clear();delete sc0;sc0=nullptr;if(parent)parent->Release();parent=nullptr;
+    void abandon(){   // init failed and the thread is gone: free every proxy (their Target objects were released) without a queue
+        st.clear();std::vector<ProxyBase*> all;core.reg.takeAll(all);for(ProxyBase* p:all)delete p;sc0=nullptr;
+        if(parent)parent->Release();parent=nullptr;
     }
     // Replay thread: the swap chain's back-buffer proxies exist from the start (so a Get of the default render target returns
     // the same object GetBackBuffer does) and follow every Reset: cached, unreferenced (use 0) until the game or a bind takes one.
@@ -444,7 +456,7 @@ inline HRESULT STDMETHODCALLTYPE StreamSwapChain::GetBackBuffer(UINT index,D3DBA
     if(!kid){
         Info i;i.w=pp.BackBufferWidth;i.h=pp.BackBufferHeight;i.fmt=unsigned(pp.BackBufferFormat);i.usage=D3::kUsageRT;i.pool=D3::kPoolDefault;i.ms=unsigned(pp.MultiSampleType);i.msq=pp.MultiSampleQuality;
         try{kid=new StreamSurface(core,i,this,nullptr);}catch(...){return E_OUTOFMEMORY;}
-        kids[index]=kid;comAddRef();recordDerive(*core,this,kid,DeriveBackBuffer,index,unsigned(type));
+        kids[index]=kid;adoptKid();recordDerive(*core,this,kid,DeriveBackBuffer,index,unsigned(type));
     }else kid->comAddRef();
     *out=kid;return D3D_OK;
 }

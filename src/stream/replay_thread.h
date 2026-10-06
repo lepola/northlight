@@ -34,7 +34,7 @@ template<class T> inline ProxyBase* StreamCore::proxyFor(T* r,bool bound){
         return b;
     }
     ProxyBase* p=makeImplicit(u);
-    if(!bound)return p;
+    if(!bound){p->pinDevice();return p;}   // handed to the game with its one public reference
     p->refs.store(0);p->use.store(0);   // no game reference and no use yet: StreamState::bind adds the bind
     return p;
 }

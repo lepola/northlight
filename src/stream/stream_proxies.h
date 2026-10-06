@@ -84,9 +84,25 @@ struct ProxyBase {
     virtual ~ProxyBase();
     ProxyBase(const ProxyBase&)=delete;ProxyBase& operator=(const ProxyBase&)=delete;
     Queue& streamQueue();
-    ULONG comAddRef(){const LONG n=refs.fetch_add(1)+1;useInc();return ULONG(n);}
-    ULONG comRelease(){const LONG n=refs.fetch_sub(1)-1;useDec();return n<0?0:ULONG(n);}
-    void useInc(){if(use.fetch_add(1)==0&&parent)parent->comAddRef();}   // a child in use keeps its container alive
+    // The DXVK model for the device's lifetime: a top-level proxy with public references (refs above `baseline`) holds one
+    // reference on the StreamDevice, so the device, the queue and the replay thread outlive every object the game still holds.
+    // StreamState binds count in `use` only: they never pin the device (or it would never die). A child's public reference
+    // is its parent's public reference; a child in use keeps its parent in use.
+    LONG baseline=0;   // refs the proxy holds itself without pinning (the swap chain's own)
+    void pinDevice();
+    void unpinDevice();
+    ULONG comAddRef(){
+        const LONG n=refs.fetch_add(1)+1;const bool pin=!parent&&n==baseline+1;
+        if(n==1&&parent)parent->comAddRef();
+        useInc();if(pin)pinDevice();return ULONG(n);}
+    ULONG comRelease(){
+        const LONG n=refs.fetch_sub(1)-1;const bool unpin=!parent&&n==baseline,up=n==0&&parent!=nullptr;
+        useDec();   // may record the Destroy: while the queue still exists
+        if(up)parent->comRelease();
+        if(unpin)unpinDevice();   // last: this may be the device's final release
+        return n<0?0:ULONG(n);}
+    void adoptKid(){comAddRef();useInc();}   // a new child starts with one public reference and one use: the same on this parent
+    void useInc(){if(use.fetch_add(1)==0&&parent)parent->useInc();}
     void useDec();                                                        // game thread: 1->0 records Destroy (or releases the container)
     void bindAdd(){useInc();}                                             // StreamState bind
     void bindRelease(){useDec();}
@@ -140,6 +156,9 @@ public:
     void erase(ProxyBase* p){std::lock_guard<std::mutex> l(m_);byProxy_.erase(p->unk);if(p->inner){auto i=byInner_.find(p->inner);if(i!=byInner_.end()&&i->second==p)byInner_.erase(i);}}
     // The Target-level object behind a proxy pointer the game stored in its own memory (an opaque value, never dereferenced).
     const void* innerOf(const void* maybeProxy){std::lock_guard<std::mutex> l(m_);auto i=byProxy_.find(maybeProxy);return i==byProxy_.end()||!i->second->inner?maybeProxy:static_cast<const void*>(i->second->inner);}
+    // Init failure only (the replay thread is gone or about to be): release every Target object the proxies hold, and hand the proxies out to be deleted.
+    void releaseInners(){std::lock_guard<std::mutex> l(m_);for(auto& e:byProxy_)if(e.second->inner){e.second->inner->Release();e.second->inner=nullptr;e.second->dead.store(true);}byInner_.clear();}
+    void takeAll(std::vector<ProxyBase*>& out){std::lock_guard<std::mutex> l(m_);for(auto& e:byProxy_)out.push_back(e.second);byProxy_.clear();byInner_.clear();}
     std::size_t proxies(){std::lock_guard<std::mutex> l(m_);return byProxy_.size();}
 };
 
@@ -174,10 +193,12 @@ struct StreamCore {
     }
 };
 inline Queue& ProxyBase::streamQueue(){return core->q;}
+inline void ProxyBase::pinDevice(){if(core->game)core->game->AddRef();}
+inline void ProxyBase::unpinDevice(){if(core->game)core->game->Release();}
 inline ProxyBase::~ProxyBase(){dropPrivate();}
 inline void ProxyBase::useDec(){
     if(use.fetch_sub(1)!=1)return;
-    if(parent){parent->comRelease();return;}
+    if(parent){parent->useDec();return;}
     pendingDestroy.fetch_add(1);
     Queue& q=core->q;
     auto* p=static_cast<ProxyBase**>(q.reserve((std::uint16_t)Cmd::Destroy,sizeof(ProxyBase*)));*p=this;q.commit();
@@ -498,7 +519,7 @@ struct StreamTexture final:IDirect3DTexture9,ProxyBase {
         if(!kid){
             Info i=info;i.w=D3::mipDim(info.w,level);i.h=D3::mipDim(info.h,level);i.levels=1;
             try{kid=new StreamSurface(core,i,this,&subs[level]);}catch(...){return E_OUTOFMEMORY;}
-            kids[level]=kid;comAddRef();   // the new kid's one game reference keeps this texture alive
+            kids[level]=kid;adoptKid();   // the new kid's one game reference keeps this texture alive
             recordDerive(*core,this,kid,DeriveSurfaceLevel,level,0);
         }else kid->comAddRef();
         *pp=kid;return D3D_OK;}
@@ -530,7 +551,7 @@ struct StreamCubeTexture final:IDirect3DCubeTexture9,ProxyBase {
         if(!kid){
             Info i=info;i.w=D3::mipDim(info.w,level);i.h=D3::mipDim(info.h,level);i.levels=1;
             try{kid=new StreamSurface(core,i,this,&subs[k]);}catch(...){return E_OUTOFMEMORY;}
-            kids[k]=kid;comAddRef();
+            kids[k]=kid;adoptKid();
             recordDerive(*core,this,kid,DeriveCubeFace,unsigned(face),level);
         }else kid->comAddRef();
         *pp=kid;return D3D_OK;}
@@ -561,7 +582,7 @@ struct StreamVolumeTexture final:IDirect3DVolumeTexture9,ProxyBase {
         if(!kid){
             Info i=info;i.w=D3::mipDim(info.w,level);i.h=D3::mipDim(info.h,level);i.d=D3::mipDim(info.d,level);i.levels=1;
             try{kid=new StreamVolume(core,i,this,&subs[level]);}catch(...){return E_OUTOFMEMORY;}
-            kids[level]=kid;comAddRef();recordDerive(*core,this,kid,DeriveVolumeLevel,level,0);
+            kids[level]=kid;adoptKid();recordDerive(*core,this,kid,DeriveVolumeLevel,level,0);
         }else kid->comAddRef();
         *pp=kid;return D3D_OK;}
     HRESULT STDMETHODCALLTYPE LockBox(UINT level,D3DLOCKED_BOX* lb,const D3DBOX* box,DWORD flags) override{
@@ -665,6 +686,7 @@ struct StreamQuery final:IDirect3DQuery9,ProxyBase {
     using ProxyBase::observe;
     HRESULT STDMETHODCALLTYPE GetData(void* data,DWORD size,DWORD flags) override{
         Queue& q=core->q;
+        if(dead.load())return D3DERR_INVALIDCALL;   // the real create failed: an error, not S_FALSE forever
         if((flags&D3::kGetDataFlush)||!gen.load()){   // FLUSH, or a query never issued: the real GetData with the game's buffer, after everything recorded so far
             HRESULT hr=D3DERR_INVALIDCALL;
             if(!runTask(*core,[&](StreamCore&){if(inner)hr=static_cast<IDirect3DQuery9*>(inner)->GetData(data,size,flags);},Cmd::SyncGetData))return D3DERR_INVALIDCALL;   // e.g. WoW's event-query wait: shows as SyncGetData in the census

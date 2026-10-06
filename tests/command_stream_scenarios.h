@@ -193,6 +193,45 @@ static void cursorAndForeignThread(){
     CHECK(cursor.size()==4&&cursor[0].rfind("Device::ShowCursor",0)==0&&cursor[2].find("5.000000 6.000000 7.000000")!=std::string::npos&&cursor[3].find("1.000000 2.000000 3.000000")!=std::string::npos);
     rig.finish();checkClean();
 }
+// D3D9/DXVK keep the device alive while any child is publicly referenced: releasing the device first must not free the queue
+// under a later Release of a texture, a buffer or the swap chain (ASan), and the Target goes away exactly once, at the last one.
+static void childrenOutliveTheDevice(){
+    gTrace.clear();const int deletes=gDeviceDeletes.load();Rig rig(true);
+    IDirect3DTexture9* tex=nullptr;IDirect3DVertexBuffer9* vb=nullptr;IDirect3DSwapChain9* sc=nullptr;IDirect3DSurface9 *lvl=nullptr,*bb=nullptr;IDirect3DDevice9* back=nullptr;
+    CHECK(rig.dev->CreateTexture(32,32,0,0,(D3DFORMAT)22,(D3DPOOL)1,&tex,nullptr)==D3D_OK&&rig.dev->CreateVertexBuffer(256,D3::kUsageDynamic,0,(D3DPOOL)0,&vb,nullptr)==D3D_OK);
+    CHECK(rig.dev->GetSwapChain(0,&sc)==D3D_OK&&tex->GetSurfaceLevel(1,&lvl)==D3D_OK&&rig.dev->GetBackBuffer(0,0,(D3DBACKBUFFER_TYPE)0,&bb)==D3D_OK);
+    rig.dev->SetTexture(0,tex);   // a bind pins nothing
+    void* p=nullptr;CHECK(vb->Lock(0,0,&p,0)==D3D_OK&&vb->Unlock()==D3D_OK);
+    rig.dev->Release();   // the game's reference: the device lives on for the objects it handed out
+    CHECK(gDeviceDeletes.load()==deletes&&tex->GetDevice(&back)==D3D_OK&&back==rig.sd);back->Release();
+    D3DSURFACE_DESC d{};CHECK(lvl->GetDesc(&d)==D3D_OK&&d.Width==16);
+    tex->Release();vb->Release();sc->Release();CHECK(gDeviceDeletes.load()==deletes);   // the level and the back buffer still hold it
+    lvl->Release();CHECK(gDeviceDeletes.load()==deletes);
+    bb->Release();   // the last public reference: the device, the queue and the replay thread go
+    CHECK(gDeviceDeletes.load()==deletes+1);checkClean();
+    // and without the game keeping a bound proxy alive: a bound texture does not keep the device
+    Rig again(true);IDirect3DTexture9* t2=nullptr;CHECK(again.dev->CreateTexture(8,8,1,0,(D3DFORMAT)22,(D3DPOOL)1,&t2,nullptr)==D3D_OK);
+    again.dev->SetTexture(0,t2);t2->Release();again.dev->Release();CHECK(gDeviceDeletes.load()==deletes+2);checkClean();
+}
+static void queryProbeAndDeadQuery(){
+    gTrace.clear();Rig rig(true);
+    CHECK(rig.dev->CreateQuery((D3DQUERYTYPE)9,nullptr)==D3D_OK&&rig.dev->CreateQuery((D3DQUERYTYPE)77,nullptr)==D3DERR_NOTAVAILABLE);   // the Target's own answer
+    gKnobs.failQueries.store(true);IDirect3DQuery9* q=nullptr;CHECK(rig.dev->CreateQuery((D3DQUERYTYPE)9,&q)==D3D_OK&&q);   // asynchronous: the proxy is returned, the real create fails
+    rig.sync();DWORD v=0;CHECK(q->Issue(D3::kIssueEnd)==D3D_OK);CHECK(q->GetData(&v,4,0)==D3DERR_INVALIDCALL&&get(rig.core().q.stats.deadCreates)>=1);
+    q->Release();gKnobs.failQueries.store(false);rig.finish();checkClean();
+}
+// An init failure after the replay thread ran the owner callback: the implicit objects bound so far are released, no proxy or
+// Target object leaks, the callback runs again on this thread, and the caller keeps its device.
+static void initFailureFallback(){
+    gTrace.clear();gKnobs.failSwapChain.store(true);auto* t=new TargetDevice;FakeD3D parent;
+    std::vector<std::thread::id> ids;StreamDevice::Options opt;opt.threadStart=[&]{ids.push_back(std::this_thread::get_id());};
+    D3DPRESENT_PARAMETERS pp{};pp.BackBufferWidth=640;pp.BackBufferHeight=480;pp.BackBufferFormat=(D3DFORMAT)22;pp.BackBufferCount=2;const char* reason=nullptr;
+    StreamDevice* d=StreamDevice::make(t,&parent,&pp,std::move(opt),&reason);
+    CHECK(!d&&reason&&std::string(reason)=="init");
+    CHECK(ids.size()==2&&ids[1]==std::this_thread::get_id()&&ids[0]!=ids[1]);
+    CHECK(t->refs.load()==1&&liveProxyObjects.load()==0);   // the device is the caller's alone again; the default render target and depth buffer proxies are gone
+    gKnobs.failSwapChain.store(false);t->Release();checkClean();
+}
 static void nestedSyncInPump(){
     gTrace.clear();Rig rig(true);auto& s=rig.core().q.stats;
     static Rig* r;static HRESULT nested;static int calls;r=&rig;nested=12345;calls=0;
@@ -365,7 +404,7 @@ static void equivalence(int steps,std::uint64_t seed){
     std::printf("equivalence seed=%llu steps=%d results=%zu trace=%zu presents=%zu\n",(unsigned long long)seed,steps,outA.size(),traceA.size(),presA.size());
 }
 static void streamTests(bool threadsOnly){
-    lifetimeAndIdentity();stateKnownUnknown();locksPreserveBytes();shadowCap();queriesAndSyncCensus();resetAndShutdown();cursorAndForeignThread();nestedSyncInPump();upDrawsAndBackpressure();snapshotTriggers();
-    equivalence(3000,7);
-    if(!threadsOnly){equivalence(20000,12345);}
+    lifetimeAndIdentity();stateKnownUnknown();locksPreserveBytes();shadowCap();queriesAndSyncCensus();resetAndShutdown();childrenOutliveTheDevice();queryProbeAndDeadQuery();initFailureFallback();cursorAndForeignThread();nestedSyncInPump();upDrawsAndBackpressure();snapshotTriggers();
+    equivalence(20000,12345);equivalence(20000,987654321);
+    (void)threadsOnly;
 }

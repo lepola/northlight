@@ -5,10 +5,11 @@
 struct TargetKnobs {
     std::atomic<bool> hold{false};            // BeginScene blocks while set: keeps the replay thread busy so commands queue up
     std::atomic<int> presents{0};
+    std::atomic<bool> failSwapChain{false},failQueries{false};
     bool failCube=true;                       // CreateCubeTexture / CreateVolumeTexture fail (the dead-create path)
 };
 static TargetKnobs gKnobs;
-static std::atomic<int> gLiveTargets{0};
+static std::atomic<int> gLiveTargets{0},gDeviceDeletes{0};
 static std::string hexOf(const unsigned char* p,std::size_t n){return fb(p,n);}
 
 template<class B> struct Counted:B {
@@ -126,6 +127,7 @@ struct TargetDevice:Counted<FakeDevice> {
         rt0=sc->back[0];rt0->AddRef();ds=new TSurface(640,480,75,D3::kUsageDS,0);
     }
     ~TargetDevice() override{
+        gDeviceDeletes.fetch_add(1);
         if(rt0)rt0->Release();if(ds)ds->Release();sc->Release();
         for(auto& t:tex)if(t)t->Release();for(auto& v:sv)if(v)v->Release();if(idx)idx->Release();if(vsv)vsv->Release();if(psv)psv->Release();
     }
@@ -164,7 +166,7 @@ struct TargetDevice:Counted<FakeDevice> {
     HRESULT BeginScene() override{FakeDevice::BeginScene();while(gKnobs.hold.load())std::this_thread::sleep_for(std::chrono::microseconds(100));return D3D_OK;}
     // -- custom methods --
     HRESULT QueryInterface(REFIID id,void** out) override{if(!out)return E_POINTER;*out=nullptr;if(id==__uuidof(IUnknown)||id==__uuidof(IDirect3DDevice9)){*out=static_cast<IDirect3DDevice9*>(this);AddRef();return S_OK;}return E_NOINTERFACE;}
-    HRESULT GetSwapChain(UINT i,IDirect3DSwapChain9** pp) override{if(i)return D3DERR_INVALIDCALL;sc->AddRef();*pp=sc;return D3D_OK;}
+    HRESULT GetSwapChain(UINT i,IDirect3DSwapChain9** pp) override{if(i||gKnobs.failSwapChain.load())return D3DERR_INVALIDCALL;sc->AddRef();*pp=sc;return D3D_OK;}
     HRESULT GetBackBuffer(UINT,UINT i,D3DBACKBUFFER_TYPE t,IDirect3DSurface9** pp) override{return sc->GetBackBuffer(i,t,pp);}
     HRESULT GetCreationParameters(D3DDEVICE_CREATION_PARAMETERS* p) override{p->AdapterOrdinal=0;p->DeviceType=1;p->hFocusWindow=nullptr;p->BehaviorFlags=0x40;return D3D_OK;}
     UINT GetAvailableTextureMem() override{return 1234;}
@@ -196,7 +198,10 @@ struct TargetDevice:Counted<FakeDevice> {
         auto* d=new TDecl;UINT n=0;while(e[n].Stream!=0xFF)++n;d->el.assign(e,e+n+1);gTrace.push_back("Device::CreateVertexDeclaration "+std::to_string(n+1)+" "+fb(e,(n+1)*sizeof(D3DVERTEXELEMENT9)));*pp=d;return D3D_OK;}
     HRESULT CreateVertexShader(const DWORD* c,IDirect3DVertexShader9** pp) override{auto* v=new TVertexShader;const auto n=shaderTokens(c);v->code.assign(c,c+n);gTrace.push_back("Device::CreateVertexShader "+fb(c,n*4));*pp=v;return D3D_OK;}
     HRESULT CreatePixelShader(const DWORD* c,IDirect3DPixelShader9** pp) override{auto* v=new TPixelShader;const auto n=shaderTokens(c);v->code.assign(c,c+n);gTrace.push_back("Device::CreatePixelShader "+fb(c,n*4));*pp=v;return D3D_OK;}
-    HRESULT CreateQuery(D3DQUERYTYPE t,IDirect3DQuery9** pp) override{gTrace.push_back("Device::CreateQuery "+std::to_string(unsigned(t)));auto* q=new TQuery;q->type=unsigned(t);*pp=q;return D3D_OK;}
+    HRESULT CreateQuery(D3DQUERYTYPE t,IDirect3DQuery9** pp) override{
+        if(!pp)return (unsigned(t)==9||unsigned(t)==8)?D3D_OK:D3DERR_NOTAVAILABLE;   // the support probe
+        if(gKnobs.failQueries.load()){*pp=nullptr;return D3DERR_NOTAVAILABLE;}
+        gTrace.push_back("Device::CreateQuery "+std::to_string(unsigned(t)));auto* q=new TQuery;q->type=unsigned(t);*pp=q;return D3D_OK;}
     HRESULT CreateStateBlock(D3DSTATEBLOCKTYPE t,IDirect3DStateBlock9** pp) override{gTrace.push_back("Device::CreateStateBlock "+std::to_string(unsigned(t)));*pp=new TStateBlock;return D3D_OK;}
     HRESULT BeginStateBlock() override{gTrace.push_back("Device::BeginStateBlock");inBlock=true;return D3D_OK;}
     HRESULT EndStateBlock(IDirect3DStateBlock9** pp) override{gTrace.push_back("Device::EndStateBlock");inBlock=false;*pp=new TStateBlock;return D3D_OK;}

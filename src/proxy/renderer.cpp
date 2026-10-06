@@ -1197,7 +1197,8 @@ public:
         options.diagnostics=&NorthlightDiagnostics::enabled;
         NorthlightStream::StreamDevice* stream=nullptr;
         try{stream=NorthlightStream::StreamDevice::make(device,this,pp,std::move(options),&reason);}catch(...){reason="exception";}
-        if(!stream){NorthlightStream::streamActive.store(false,std::memory_order_relaxed);logf("CSTREAM disabled reason=%s",reason);return device;}
+        if(!stream){NorthlightStream::streamActive.store(false,std::memory_order_relaxed);target->adoptOwnerThread(); /* the gate owner is this thread again (a replay thread that ran has been joined) */
+            logf("CSTREAM disabled reason=%s",reason);return device;}
         logf("CSTREAM active gameTid=%lu replayTid=%lu",NorthlightStream::gameTid.load(),NorthlightStream::replayTid.load());
         return stream;
     }
