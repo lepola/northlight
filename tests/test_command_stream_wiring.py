@@ -36,6 +36,17 @@ dllmain=r[r.index('BOOL WINAPI DllMain('):]
 dllmain=dllmain[:dllmain.index('\n}\n')]
 checks['DllMain creates no thread (loader lock)']=not any(x in dllmain for x in ('CreateThread','std::thread','_beginthread','CreateRemoteThread','QueueUserWorkItem'))
 checks['stream_hooks.h starts no thread']=not any(x in hooks for x in ('CreateThread','std::thread t','_beginthread','std::async'))
+create=r[r.index('HRESULT STDMETHODCALLTYPE CreateDevice(UINT adapter'):];create=create[:create.index('\n};')]
+device=r[r.index('class Device final'):r.index('class Factory final')]
+checks['CreateDevice: stream flag read before the real create, streamActive before the Device, MULTITHREADED added only when streaming']=(
+    'const bool stream=NorthlightStream::commandStreamRequested(rootPath);' in create
+    and create.index('streamActive.store(true')<create.index('real->CreateDevice(adapter,type,window,flags,pp,out)')<create.index('new Device(*out,this)')
+    and 'if(stream)flags|=D3DCREATE_MULTITHREADED;' in create)
+checks['CreateDevice: any stream failure logs CSTREAM disabled and returns the Device unchanged']=(
+    'logf("CSTREAM disabled reason=%s",reason);return device;' in r and 'streamActive.store(false' in r and 'catch(...){reason="exception";}' in r)
+checks['the Device has no CommandStream branch (the stream sits in front of it)']=('commandStream' not in device.lower() and 'NorthlightStream::StreamDevice' not in device)
+checks['the owner handoff runs on the replay thread through the one Device method']=('options.threadStart=[target]{target->adoptOwnerThread();};' in r and r.count('void adoptOwnerThread(){mirrorState.gate.ownerTid=MirrorGuard::threadId();}')==1)
+checks['memory pressure reaches the stream only through the hook atomic']=('NorthlightStream::memoryPressure.store(memoryCaps==1' in r and 'inline std::atomic<bool> memoryPressure{false};' in hooks)
 for name,ok in checks.items():print(('PASS ' if ok else 'FAIL ')+name)
 assert all(checks.values())
 print('PASS command stream wiring: key, docs, banner, GATE fields, inert hooks, no DllMain thread')

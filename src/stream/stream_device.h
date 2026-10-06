@@ -14,6 +14,10 @@
 #include "shader_tags.h"
 
 namespace NorthlightStream {
+// The stream the process runs, for the opaque-pointer hook (celestial identities the game stored in its own memory).
+inline std::atomic<StreamCore*> activeCore{nullptr};
+inline const void* innerOfActive(const void* p){StreamCore* c=activeCore.load(std::memory_order_acquire);return c?c->reg.innerOf(p):p;}
+
 class StreamDevice final:public IDirect3DDevice9 {
 public:
     struct Options {
@@ -21,7 +25,7 @@ public:
         bool (*capture)(GameSnapshot&,Trigger,std::uint64_t)=nullptr;   // game_snapshot.h capture() in the DLL; null = no snapshots
         std::function<void()> threadStart;                              // runs on the replay thread first (owner handoff)
         std::function<void(const char*)> log;
-        bool diagnostics=false;
+        bool (*diagnostics)()=nullptr;                                  // NorthlightDiagnostics::enabled in the DLL
     };
     // Builds the stream around `target` (the Device). On success the replay thread owns the target; on failure nothing
     // was handed over (nullptr, reason filled) and the caller keeps using the target directly.
@@ -39,6 +43,7 @@ public:
             d->st.loadDefaults(c.target);ok=!d->sc0->dead.load();});
         if(!ran||!ok){d->replayer.stop();if(reason)*reason="init";d->replayer.join();d->abandon();return nullptr;}
         d->bbW=d->pp.BackBufferWidth;d->bbH=d->pp.BackBufferHeight;
+        gameTid.store(Replayer::currentTid());activeCore.store(&d->core,std::memory_order_release);innerOf=&innerOfActive;
         return d.release();
     }
     ~StreamDevice(){}
@@ -180,7 +185,7 @@ public:
         const std::uint64_t seq=q.recordedSeq(),prev=prevPresent;prevPresent=seq;
         HRESULT result=D3D_OK;
         if(prev){q.waitReplayed(prev,WaitKind::Present);result=presentResult(prev);}   // one frame ahead: the previous frame's real HRESULT
-        q.setPressure(core.memoryPressure.load(std::memory_order_relaxed));
+        q.setPressure(core.memoryPressure.load(std::memory_order_relaxed)||NorthlightStream::memoryPressure.load(std::memory_order_relaxed));
         if(pressureApplied!=q.pressure()){pressureApplied=q.pressure();if(pressureApplied)q.trim();}
         return result;
     }
@@ -370,7 +375,7 @@ private:
     StreamDevice(IDirect3DDevice9* target,IDirect3D9* par,const D3DPRESENT_PARAMETERS* p,Options opt)
         :coreOwner(new StreamCore(opt.budget)),core(*coreOwner),replayer(core),parent(par),capture(opt.capture){
         core.target=target;core.game=this;core.logLine=nullptr;st.core=&core;
-        replayer.threadStart=std::move(opt.threadStart);replayer.log=opt.log;replayer.diagnostics=opt.diagnostics;replayer.setAudit(opt.diagnostics);
+        replayer.threadStart=std::move(opt.threadStart);replayer.log=opt.log;replayer.diagnostics=opt.diagnostics;
         if(p)pp=*p;
         sc0=new StreamSwapChain(&core);sc0->pp=pp;
         const UINT n=pp.BackBufferCount?pp.BackBufferCount:1;sc0->kids.assign(n,nullptr);
@@ -403,6 +408,7 @@ private:
         st.clear();sc0->comRelease();   // binds and the swap chain's own reference go; the Destroys run before the Target's release
         runTask(core,[&](StreamCore& c){c.target->Release();c.target=nullptr;});   // the Device's final release happens on the replay thread
         replayer.stop();
+        innerOf=nullptr;activeCore.store(nullptr,std::memory_order_release);
         IDirect3D9* p=parent;
         delete this;
         if(p)p->Release();

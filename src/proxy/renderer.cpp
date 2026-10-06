@@ -21,6 +21,7 @@
 #include "signatures.h"
 #include "shader_tags.h"
 #include "stream_hooks.h"
+#include "stream_device.h"
 #include "compiled_shaders.h"
 #include "projection.h"
 #include "world_draw_domain.h"
@@ -798,6 +799,8 @@ class Device final : public GuardedMirrorDevice {
         }
     }
 public:
+    // 0.3.192 (CS): the replay thread takes over as owner thread (called on it, before its first command and before CreateDevice returns).
+    void adoptOwnerThread(){mirrorState.gate.ownerTid=MirrorGuard::threadId();}
     HRESULT STDMETHODCALLTYPE SetCursorProperties(UINT XHotSpot, UINT YHotSpot, IDirect3DSurface9* pCursorBitmap) override{Guard mirrorLock(mirrorState.gate);return ext->SetCursorProperties(XHotSpot, YHotSpot, mirrorResources.unwrap(pCursorBitmap));}
     HRESULT STDMETHODCALLTYPE GetBackBuffer(UINT iSwapChain, UINT iBackBuffer, D3DBACKBUFFER_TYPE Type, IDirect3DSurface9** ppBackBuffer) override{Guard mirrorLock(mirrorState.gate);HRESULT hr=ext->GetBackBuffer(iSwapChain, iBackBuffer, Type, ppBackBuffer);if(SUCCEEDED(hr)){mirrorResources.wrap(ppBackBuffer);}return hr;}
     HRESULT STDMETHODCALLTYPE CreateTexture(UINT Width, UINT Height, UINT Levels, DWORD Usage, D3DFORMAT Format, D3DPOOL Pool, IDirect3DTexture9** ppTexture, HANDLE* pSharedHandle) override{Guard mirrorLock(mirrorState.gate);HRESULT hr=ext->CreateTexture(Width, Height, Levels, Usage, Format, Pool, ppTexture, pSharedHandle);if(SUCCEEDED(hr)){NorthlightReplayDrawState::noteTextureFormat(Format);mirrorResources.wrap(ppTexture);}return hr;}
@@ -1008,6 +1011,7 @@ public:
         const bool sampledFrame=sampled(),frameApplied=applied;
         {CpuScope cpu(sampledFrame?&cleanup:nullptr);clearFrame();}
         if(memoryCaps>=0&&world)world->setMemoryPressure(memoryCaps==1);
+        if(memoryCaps>=0)NorthlightStream::memoryPressure.store(memoryCaps==1,std::memory_order_relaxed); /* 0.3.192 (CS): the stream's game side halves its queue budget at its next Present */
         if(memoryTrim)trimMemory(memorySample);
         if(NorthlightRenderThreadProbe::profiling()&&cpuFrequency.QuadPart>0){namespace P=NorthlightRenderThreadProbe;
             // Windows: the probe's (flushed when it changes), else 600 kept frames. Sample frames are excluded.
@@ -1182,6 +1186,21 @@ public:
     }
     ULONG STDMETHODCALLTYPE AddRef() override{return InterlockedIncrement(&refs);}
     ULONG STDMETHODCALLTYPE Release() override{auto n=InterlockedDecrement(&refs);if(!n)delete this;return n;}
+    // 0.3.192 (CS): wraps the Device in the command stream; on any failure the game keeps the Device directly (the worker core
+    // budgets were read with the stream flag set, a harmless one core less).
+    IDirect3DDevice9* startStream(IDirect3DDevice9* device,D3DPRESENT_PARAMETERS* pp){
+        Device* target=static_cast<Device*>(device);const char* reason="unknown";
+        NorthlightStream::StreamDevice::Options options;
+        options.capture=&NorthlightStream::capture;
+        options.threadStart=[target]{target->adoptOwnerThread();};
+        options.log=[](const char* line){logf("%s",line);};
+        options.diagnostics=&NorthlightDiagnostics::enabled;
+        NorthlightStream::StreamDevice* stream=nullptr;
+        try{stream=NorthlightStream::StreamDevice::make(device,this,pp,std::move(options),&reason);}catch(...){reason="exception";}
+        if(!stream){NorthlightStream::streamActive.store(false,std::memory_order_relaxed);logf("CSTREAM disabled reason=%s",reason);return device;}
+        logf("CSTREAM active gameTid=%lu replayTid=%lu",NorthlightStream::gameTid.load(),NorthlightStream::replayTid.load());
+        return stream;
+    }
     HRESULT STDMETHODCALLTYPE CreateDevice(UINT adapter,D3DDEVTYPE type,HWND window,DWORD flags,D3DPRESENT_PARAMETERS* pp,IDirect3DDevice9** out) override {
         if(selectedBackend!=NorthlightBackend::Kind::Legacy){
             D3DDISPLAYMODE mode={};D3DCAPS9 caps={};D3DADAPTER_IDENTIFIER9 id={};
@@ -1200,9 +1219,13 @@ public:
                 return D3DERR_NOTAVAILABLE;
             }
         }
+        const bool stream=NorthlightStream::commandStreamRequested(rootPath); /* 0.3.192 (CS): CommandStream=0 or an unreadable ini is the old path below */
+        if(stream)NorthlightStream::streamActive.store(true,std::memory_order_relaxed); /* before the Device exists: worker core budgets read it once */
+        if(stream)flags|=D3DCREATE_MULTITHREADED; /* DXVK's window-proc hook may touch the swap chain on the game thread while the replay thread presents */
         HRESULT hr=real->CreateDevice(adapter,type,window,flags,pp,out);
         logf("CreateDevice HRESULT=0x%08lx flags=0x%lx",(unsigned long)hr,(unsigned long)flags);
         if(SUCCEEDED(hr)&&out&&*out)*out=new Device(*out,this);
+        if(SUCCEEDED(hr)&&out&&*out&&stream)*out=startStream(*out,pp);
         return hr;
     }
 };

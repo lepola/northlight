@@ -126,7 +126,7 @@ public:
     SnapshotPool snapshots;
     std::function<void()> threadStart;                  // runs on the replay thread before the first command (owner handoff)
     std::function<void(const char*)> log;               // diagnostics line sink; may be empty
-    bool diagnostics=false;                             // CSTREAM line and the sync-only audit
+    bool (*diagnostics)()=nullptr;                      // Diagnostics on: the CSTREAM line and the sync-only audit (asked per frame)
     unsigned sampleEvery=600;
     std::atomic<std::uint64_t> busyNs{0},frameBusyNs{0};
     explicit Replayer(StreamCore& c):core(c){}
@@ -153,7 +153,6 @@ public:
     }
     void join(){if(th_.joinable()){core.q.interrupt();stopNow_.store(true);th_.join();}}
     bool running()const{return th_.joinable();}
-    void setAudit(bool on){audit_.store(on);}
     static unsigned long currentTid(){
 #ifdef _WIN32
         return GetCurrentThreadId();
@@ -163,7 +162,7 @@ public:
     }
 
 private:
-    std::thread th_;std::atomic<bool> stopNow_{false},audit_{false};
+    std::thread th_;std::atomic<bool> stopNow_{false};
     std::vector<StreamQuery*> pending_;
     GameSnapshot* current_=nullptr;std::optional<ScopedPlayback> playback_;
     std::uint64_t draws_=0;
@@ -300,8 +299,9 @@ private:
         const std::uint64_t frames=core.framesReplayed.fetch_add(1)+1;
         const std::uint64_t depth=core.q.depth(),bytes=get(core.q.stats.highWaterBytes);
         avg_.depth+=double(depth);avg_.bytes+=double(bytes);++avg_.n;if(depth>avg_.maxDepth)avg_.maxDepth=depth;if(bytes>avg_.maxBytes)avg_.maxBytes=bytes;
-        if(audit_.load()&&frames%sampleEvery==1)runAudit();
-        if(diagnostics&&log&&frames%sampleEvery==0)cstreamLine(frames);
+        const bool diag=diagnostics&&diagnostics();
+        if(diag&&frames%sampleEvery==1)runAudit();
+        if(diag&&log&&frames%sampleEvery==0)cstreamLine(frames);
         touched_.clear();std::fill(touchedFlag_.begin(),touchedFlag_.end(),false);
     }
     // Scalar slots set this frame must read back from the Target as set; a mismatch (a backend that normalizes) makes the slot sync-only for good.

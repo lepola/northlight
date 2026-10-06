@@ -25,6 +25,9 @@ inline const void* inner(const void* p){return innerOf&&p?innerOf(p):p;}
 // before WorldRenderer / StaticShadowGpu are constructed (their core budgets read it once). A plain atomic with
 // relaxed loads: written once on the game thread during Factory::CreateDevice, never cleared.
 inline std::atomic<bool> streamActive{false};
+// The memory guard's pressure decision (published by the Device's finishFrameImpl, which runs on the replay thread while
+// streaming); the game side reads it at its next Present and halves the queue budget. Written only on a change.
+inline std::atomic<bool> memoryPressure{false};
 // Thread ids for the GATE line (0 = direct path / not started).
 inline std::atomic<unsigned long> gameTid{0},replayTid{0};
 // hardware_concurrency() minus the replay thread's core while the stream runs (0 = unknown stays 0). The game thread
