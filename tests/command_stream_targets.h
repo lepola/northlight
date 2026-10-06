@@ -21,6 +21,8 @@ template<class B> struct Counted:B {
     ULONG Release() override{const int n=--refs;if(!n)delete this;return ULONG(n);}
 };
 
+static void traceDigest();   // appends the Target's effective state (defined after TargetDevice)
+struct TargetDevice;static TargetDevice* gActiveTarget=nullptr;
 struct TSurface;struct TTexture;
 struct TSurface:Counted<FakeSurface> {
     unsigned w=0,h=0,fmt=22,usage=0,pool=0;std::vector<unsigned char> own;unsigned char* mem=nullptr;unsigned pitch=0;TTexture* owner=nullptr;unsigned level=0;
@@ -43,7 +45,7 @@ struct TSurface:Counted<FakeSurface> {
         std::string s="Surface::Unlock "+std::to_string(lockFlags&~D3::kLockReadOnly)+" ";
         if(!(lockFlags&D3::kLockReadOnly))s+=lockedBytes();
         gTrace.push_back(s+" rect "+std::to_string(locked.left)+","+std::to_string(locked.top)+","+std::to_string(locked.right)+","+std::to_string(locked.bottom)+((lockFlags&D3::kLockReadOnly)?" ro":""));
-        isLocked=false;return D3D_OK;}
+        if(!(lockFlags&D3::kLockReadOnly))traceDigest();isLocked=false;return D3D_OK;}
     HRESULT GetContainer(REFIID,void**) override;
 };
 struct TTexture:Counted<FakeTexture> {
@@ -62,7 +64,7 @@ struct TTexture:Counted<FakeTexture> {
         auto* s=surf[l];std::string t="Texture::Unlock level "+std::to_string(l)+" "+std::to_string(s->lockFlags&~D3::kLockReadOnly)+" ";
         if(!(s->lockFlags&D3::kLockReadOnly))t+=s->lockedBytes();
         gTrace.push_back(t+" rect "+std::to_string(s->locked.left)+","+std::to_string(s->locked.top)+","+std::to_string(s->locked.right)+","+std::to_string(s->locked.bottom)+((s->lockFlags&D3::kLockReadOnly)?" ro":""));
-        s->isLocked=false;return D3D_OK;}
+        if(!(s->lockFlags&D3::kLockReadOnly))traceDigest();s->isLocked=false;return D3D_OK;}
 };
 inline ULONG TSurface::AddRef(){return owner?owner->AddRef():Counted<FakeSurface>::AddRef();}   // a level's references are its texture's
 inline ULONG TSurface::Release(){return owner?owner->Release():Counted<FakeSurface>::Release();}
@@ -77,7 +79,7 @@ template<class Base,Kind K> struct TBuffer:Counted<Base> {
         lockOff=off;lockSize=size;lockFlags=f;isLocked=true;*pp=mem.data()+off;return D3D_OK;}
     HRESULT Unlock() override{
         gTrace.push_back(std::string(K==Kind::VertexBuffer?"VB":"IB")+"::Unlock "+std::to_string(lockOff)+" "+std::to_string(lockSize)+" "+std::to_string(lockFlags&~D3::kLockReadOnly)+" "+((lockFlags&D3::kLockReadOnly)?std::string("ro"):hexOf(mem.data()+lockOff,lockSize)));
-        isLocked=false;return D3D_OK;}
+        if(!(lockFlags&D3::kLockReadOnly))traceDigest();isLocked=false;return D3D_OK;}
 };
 struct TVertexBuffer:TBuffer<FakeVertexBuffer,Kind::VertexBuffer> {
     HRESULT GetDesc(D3DVERTEXBUFFER_DESC* d) override{d->Format=(D3DFORMAT)100;d->Type=(D3DRESOURCETYPE)6;d->Usage=usage;d->Pool=(D3DPOOL)pool;d->Size=length;d->FVF=fvf;return D3D_OK;}
@@ -127,7 +129,9 @@ struct TargetDevice:Counted<FakeDevice> {
     TSurface* rt0=nullptr;TSurface* ds=nullptr;IDirect3DBaseTexture9* tex[21]{};IDirect3DVertexBuffer9* sv[16]{};IDirect3DIndexBuffer9* idx=nullptr;
     IDirect3DVertexShader9* vsv=nullptr;IDirect3DPixelShader9* psv=nullptr;TSwapChain* sc=nullptr;bool inBlock=false;int resets=0;
     const void* lastUpData=nullptr;const void* lastUpIdentity=nullptr;
+    D3DMATERIAL9 mat{};float clip[32][4]{};WINBOOL lightEn[16]{};float npatch=0;WINBOOL swvp=0;UINT palette=0;
     TargetDevice(){
+        gActiveTarget=this;
         for(unsigned i=0;i<256;++i)rs[i]=1000+i;for(unsigned i=0;i<21;++i)for(unsigned t=0;t<16;++t)samp[i][t]=2000+i*16+t;
         for(unsigned s=0;s<8;++s)for(unsigned t=0;t<33;++t)tss[s][t]=3000+s*33+t;
         vp.X=0;vp.Y=0;vp.Width=640;vp.Height=480;vp.MinZ=0;vp.MaxZ=1;scissor=RECT{0,0,640,480};
@@ -135,7 +139,7 @@ struct TargetDevice:Counted<FakeDevice> {
         rt0=sc->back[0];rt0->AddRef();ds=new TSurface(640,480,75,D3::kUsageDS,0);
     }
     ~TargetDevice() override{
-        gDeviceDeletes.fetch_add(1);
+        gDeviceDeletes.fetch_add(1);if(gActiveTarget==this)gActiveTarget=nullptr;
         if(rt0)rt0->Release();if(ds)ds->Release();sc->Release();
         for(auto& t:tex)if(t)t->Release();for(auto& v:sv)if(v)v->Release();if(idx)idx->Release();if(vsv)vsv->Release();if(psv)psv->Release();
     }
@@ -171,7 +175,29 @@ struct TargetDevice:Counted<FakeDevice> {
     HRESULT GetVertexShader(IDirect3DVertexShader9** pp) override{if(vsv)vsv->AddRef();*pp=vsv;return D3D_OK;}
     HRESULT SetPixelShader(IDirect3DPixelShader9* v) override{FakeDevice::SetPixelShader(v);if(inBlock)return D3D_OK;rep(psv,v);return D3D_OK;}
     HRESULT GetPixelShader(IDirect3DPixelShader9** pp) override{if(psv)psv->AddRef();*pp=psv;return D3D_OK;}
-    HRESULT BeginScene() override{FakeDevice::BeginScene();while(gKnobs.hold.load())std::this_thread::sleep_for(std::chrono::microseconds(100));return D3D_OK;}
+    HRESULT BeginScene() override{FakeDevice::BeginScene();while(gKnobs.hold.load())std::this_thread::sleep_for(std::chrono::microseconds(100));gTrace.push_back(digest());return D3D_OK;}
+    // state the filtered Sets would have written: stored here so the digest sees it
+    HRESULT SetMaterial(const D3DMATERIAL9* m) override{FakeDevice::SetMaterial(m);if(!inBlock&&m)mat=*m;return D3D_OK;}
+    HRESULT SetClipPlane(DWORD i,const float* p) override{FakeDevice::SetClipPlane(i,p);if(!inBlock&&i<32&&p)std::memcpy(clip[i],p,16);return D3D_OK;}
+    HRESULT LightEnable(DWORD i,WINBOOL e) override{FakeDevice::LightEnable(i,e);if(!inBlock&&i<16)lightEn[i]=e;return D3D_OK;}
+    HRESULT SetNPatchMode(float n) override{FakeDevice::SetNPatchMode(n);if(!inBlock)npatch=n;return D3D_OK;}
+    HRESULT SetSoftwareVertexProcessing(WINBOOL b) override{FakeDevice::SetSoftwareVertexProcessing(b);if(!inBlock)swvp=b;return D3D_OK;}
+    HRESULT SetCurrentTexturePalette(UINT n) override{FakeDevice::SetCurrentTexturePalette(n);if(!inBlock)palette=n;return D3D_OK;}
+    // the points where the Target's state matters: every draw, clear, copy and present logs a digest of it
+    std::string digest(){
+        std::uint64_t h=1469598103934665603ull;auto mixb=[&](const void* p,std::size_t n){for(std::size_t i=0;i<n;++i)h=(h^static_cast<const unsigned char*>(p)[i])*1099511628211ull;};
+        mixb(rs,sizeof rs);mixb(samp,sizeof samp);mixb(tss,sizeof tss);mixb(&vp,sizeof vp);mixb(&scissor,sizeof scissor);mixb(xf[2].m,64);mixb(xf[3].m,64);mixb(vsF,sizeof vsF);
+        mixb(&mat,sizeof mat);mixb(clip,sizeof clip);mixb(lightEn,sizeof lightEn);mixb(&npatch,4);mixb(&swvp,4);mixb(&palette,4);mixb(&fvfv,4);
+        auto id=[&](const void* p){const int v=p?std::atoi(ptrId((std::uintptr_t)p).c_str()+1):0;mixb(&v,sizeof v);};
+        for(auto* t:tex)id(t);for(auto* v:sv)id(v);id(idx);id(vsv);id(psv);id(rt0);id(ds);
+        return "STATE "+std::to_string(h);
+    }
+    HRESULT DrawPrimitive(D3DPRIMITIVETYPE t,UINT a,UINT b) override{FakeDevice::DrawPrimitive(t,a,b);gTrace.push_back(digest());return D3D_OK;}
+    HRESULT DrawIndexedPrimitive(D3DPRIMITIVETYPE t,INT a,UINT b,UINT c,UINT d,UINT e) override{FakeDevice::DrawIndexedPrimitive(t,a,b,c,d,e);gTrace.push_back(digest());return D3D_OK;}
+    HRESULT Clear(DWORD n,const D3DRECT* r,DWORD f,D3DCOLOR c,float z,DWORD st) override{FakeDevice::Clear(n,r,f,c,z,st);gTrace.push_back(digest());return D3D_OK;}
+    HRESULT StretchRect(IDirect3DSurface9* a,const RECT* b,IDirect3DSurface9* c,const RECT* d,D3DTEXTUREFILTERTYPE f) override{FakeDevice::StretchRect(a,b,c,d,f);gTrace.push_back(digest());return D3D_OK;}
+    HRESULT ColorFill(IDirect3DSurface9* a,const RECT* b,D3DCOLOR c) override{FakeDevice::ColorFill(a,b,c);gTrace.push_back(digest());return D3D_OK;}
+    HRESULT UpdateTexture(IDirect3DBaseTexture9* a,IDirect3DBaseTexture9* b) override{FakeDevice::UpdateTexture(a,b);gTrace.push_back(digest());return D3D_OK;}
     // -- custom methods --
     HRESULT QueryInterface(REFIID id,void** out) override{if(!out)return E_POINTER;*out=nullptr;if(id==__uuidof(IUnknown)||id==__uuidof(IDirect3DDevice9)){*out=static_cast<IDirect3DDevice9*>(this);AddRef();return S_OK;}return E_NOINTERFACE;}
     HRESULT GetSwapChain(UINT i,IDirect3DSwapChain9** pp) override{if(i||gKnobs.failSwapChain.load())return D3DERR_INVALIDCALL;sc->AddRef();*pp=sc;return D3D_OK;}
@@ -179,7 +205,7 @@ struct TargetDevice:Counted<FakeDevice> {
     HRESULT GetCreationParameters(D3DDEVICE_CREATION_PARAMETERS* p) override{p->AdapterOrdinal=0;p->DeviceType=1;p->hFocusWindow=nullptr;p->BehaviorFlags=0x40;return D3D_OK;}
     UINT GetAvailableTextureMem() override{return 1234;}
     HRESULT Present(const RECT* s,const RECT* d,HWND,const RGNDATA* dirty) override{
-        gTrace.push_back(std::string("Device::Present ")+(s?"src":"nosrc")+" "+(d?"dst":"nodst")+" "+(dirty?"dirty":"nodirty"));
+        gTrace.push_back(std::string("Device::Present ")+(s?"src":"nosrc")+" "+(d?"dst":"nodst")+" "+(dirty?"dirty":"nodirty"));gTrace.push_back(digest());
         const int n=gKnobs.presents.fetch_add(1);return n%5==4?S_FALSE:D3D_OK;}
     HRESULT Reset(D3DPRESENT_PARAMETERS* p) override{
         for(auto* b:sc->back)if(b->refs.load()>1+(b==rt0?1:0))return D3DERR_INVALIDCALL;   // a held back buffer fails Reset, as in D3D9
@@ -215,9 +241,11 @@ struct TargetDevice:Counted<FakeDevice> {
     HRESULT EndStateBlock(IDirect3DStateBlock9** pp) override{gTrace.push_back("Device::EndStateBlock");inBlock=false;*pp=new TStateBlock;return D3D_OK;}
     HRESULT DrawPrimitiveUP(D3DPRIMITIVETYPE t,UINT n,const void* d,UINT stride) override{
         lastUpData=d;lastUpIdentity=upIdentity;
-        gTrace.push_back("Device::DrawPrimitiveUP "+std::to_string(unsigned(t))+" "+std::to_string(n)+" "+std::to_string(stride)+" "+fb(d,std::size_t(StreamDevice::primVerts(unsigned(t),n))*stride));return D3D_OK;}
+        gTrace.push_back("Device::DrawPrimitiveUP "+std::to_string(unsigned(t))+" "+std::to_string(n)+" "+std::to_string(stride)+" "+fb(d,std::size_t(StreamDevice::primVerts(unsigned(t),n))*stride));gTrace.push_back(digest());return D3D_OK;}
     HRESULT DrawIndexedPrimitiveUP(D3DPRIMITIVETYPE t,UINT mn,UINT nv,UINT pc,const void* ix,D3DFORMAT f,const void* d,UINT stride) override{
         lastUpData=d;lastUpIdentity=upIdentity;
         const std::size_t ib=std::size_t(StreamDevice::primVerts(unsigned(t),pc))*(unsigned(f)==102?4:2);
-        gTrace.push_back("Device::DrawIndexedPrimitiveUP "+std::to_string(unsigned(t))+" "+std::to_string(mn)+" "+std::to_string(nv)+" "+std::to_string(pc)+" "+std::to_string(unsigned(f))+" "+std::to_string(stride)+" "+fb(ix,ib)+" "+fb(d,std::size_t(mn+nv)*stride));return D3D_OK;}
+        gTrace.push_back("Device::DrawIndexedPrimitiveUP "+std::to_string(unsigned(t))+" "+std::to_string(mn)+" "+std::to_string(nv)+" "+std::to_string(pc)+" "+std::to_string(unsigned(f))+" "+std::to_string(stride)+" "+fb(ix,ib)+" "+fb(d,std::size_t(mn+nv)*stride));gTrace.push_back(digest());return D3D_OK;}
 };
+
+static void traceDigest(){if(gActiveTarget)gTrace.push_back(gActiveTarget->digest());}

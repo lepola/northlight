@@ -111,6 +111,14 @@ SPECS = {
     ('IDirect3DCubeTexture9', 'AddDirtyRect'): {'dirty_rect': _RECT},
     ('IDirect3DVolumeTexture9', 'AddDirtyBox'): {'dirty_box': 'sizeof(D3DBOX)'},
 }
+# `state` methods whose repeat with the current value is a no-op in D3D9: the game-facing body first asks redundant(tag,args...) and
+# returns at once when the StreamDevice knows the value came from a game Set (see the safety audit in stream_device.h). Never listed:
+# SetRenderTarget, SetDepthStencilSurface, SetViewport, SetLight, draws, anything with a side effect.
+REDUNDANT = {('IDirect3DDevice9', n) for n in (
+    'SetRenderState', 'SetSamplerState', 'SetTextureStageState', 'SetTexture', 'SetStreamSource', 'SetStreamSourceFreq', 'SetIndices',
+    'SetVertexShader', 'SetPixelShader', 'SetVertexDeclaration', 'SetFVF', 'SetVertexShaderConstantF', 'SetVertexShaderConstantI',
+    'SetVertexShaderConstantB', 'SetPixelShaderConstantF', 'SetPixelShaderConstantI', 'SetPixelShaderConstantB', 'SetTransform', 'SetMaterial',
+    'LightEnable', 'SetScissorRect', 'SetClipPlane', 'SetNPatchMode', 'SetSoftwareVertexProcessing', 'SetCurrentTexturePalette')}
 PUBLISH = {('IDirect3DDevice9', n) for n in ('BeginScene', 'EndScene', 'Clear', 'SetRenderTarget')}
 # Ids of commands the hand-written stream code records (no generated encoder). Append here; ids are regenerated with
 # the file and nothing persists them.
@@ -190,6 +198,8 @@ def classify(text):
         m = next(x for x in result[interface] if x.name == name)
         assert m.cls in ('record', 'state', 'customrec'), (interface, name, 'spec on a method that does not copy')
         assert set(spec) <= {p.name for p in m.params}, (interface, name, spec)
+    for interface, name in REDUNDANT:
+        assert any(m.name == name and m.cls == 'state' for m in result[interface]), (interface, name)
     for interface, name in PUBLISH:
         assert any(m.name == name and m.cls in ('record', 'state') for m in result[interface]), (interface, name)
     return result
@@ -306,6 +316,9 @@ def macro_body(m):
     q = 'this->streamQueue()'
     if m.cls in ('record', 'state'):
         obs = f'this->observe({join_args(t, names)});' if m.cls == 'state' else ''
+        if (m.iface, m.name) in REDUNDANT:
+            assert m.cls == 'state' and m.ret == 'HRESULT'
+            obs = f'if(this->redundant({join_args(t, names)}))return D3D_OK;' + obs
         pub = f'{q}.publish();' if (m.iface, m.name) in PUBLISH else ''
         return f'{obs}::NorthlightStream::record_{m.enum}({join_args(q, this, names)});{pub}{"" if m.is_void else "return D3D_OK;"}'
     if m.cls == 'get':
@@ -326,9 +339,9 @@ template<> struct SyncFallback<HRESULT> { static HRESULT value() { return D3DERR
 // a pumped wait (a message handler DXVK's pump dispatched) never blocks: it returns D3DERR_INVALIDCALL / a zero value.
 template<Cmd C, class... A> inline typename MethodTraits<C>::Ret runSync(Queue& q, CmdTag<C>, A... a) {
     using M = MethodTraits<C>; using Ret = typename M::Ret;
-    add(q.stats.census[(std::size_t)C]);
+    own(q.stats.census[(std::size_t)C]);   // game thread only
     if(inPumpedWait) { add(q.stats.nestedSyncs); return SyncFallback<Ret>::value(); }
-    add(q.stats.syncCalls);
+    own(q.stats.syncCalls);
     typename M::Tuple t(a...);
     std::conditional_t<std::is_void<Ret>::value, char, Ret> r{};
     SyncCall sc{C, &t, &r, {0}};
@@ -356,6 +369,7 @@ def stream_text(text):
            '//   void skipped(Cmd id);                        a call dropped because its receiver proxy is dead',
            '// The game-facing class using NORTHLIGHT_STREAM_<IFACE>_METHODS provides streamQueue(), observe(tag,args...), answer(tag,args...,ret&),',
            '// syncGet(tag,[proxy,]args...), local(tag,args...), syncCall(tag,[proxy,]args...); the proxy argument is passed for non-device interfaces.',
+           '// The device class also provides bool redundant(tag,args...) (true: a repeated Set the game side does not record; see REDUNDANT).',
            '#define NORTHLIGHT_STREAM_TAG(X) ::NorthlightStream::CmdTag<::NorthlightStream::Cmd::X>{}',
            'namespace NorthlightStream {']
     ids = list(CUSTOM_IDS) + [m.enum for m in ided]

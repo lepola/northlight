@@ -137,7 +137,8 @@ struct ProxyBase {
     void dropPrivate(){for(auto& e:priv)if(e.unk)e.unk->Release();priv.clear();}
     // The proxy behind an interface pointer the game passed (a virtual QueryInterface with a private IID: no lock, no lookup);
     // nullptr for an object that is not a stream proxy. No reference is taken.
-    static ProxyBase* of(IUnknown* u);
+    static ProxyBase* of(IUnknown* u);        // lock-free shape check (below the proxy classes)
+    static ProxyBase* ofSlow(IUnknown* u);    // a virtual QueryInterface with a private IID: any pointer, however unknown its shape
     template<class... T> static bool iidIs(REFIID id){return id==__uuidof(IUnknown)||((id==__uuidof(T))||...);}
     HRESULT devGet(IDirect3DDevice9** pp);
     // Helpers every resource macro class needs: generic hooks with nothing to do, and the sync forwarder.
@@ -214,7 +215,7 @@ template<class F> inline bool runTask(StreamCore& c,F&& fn,Cmd label=Cmd::Quiesc
     if(inPumpedWait){add(c.q.stats.nestedSyncs);return false;}
     using Fn=typename std::remove_reference<F>::type;
     Task t{[](void* a,StreamCore& core){(*static_cast<Fn*>(a))(core);},&fn};
-    Task* p=&t;add(c.q.stats.census[(std::size_t)label]);add(c.q.stats.syncCalls);
+    Task* p=&t;own(c.q.stats.census[(std::size_t)label]);own(c.q.stats.syncCalls);
     std::memcpy(c.q.reserve((std::uint16_t)Cmd::Quiesce,sizeof p),&p,sizeof p);c.q.commit();
     c.q.waitReplayed(c.q.recordedSeq(),WaitKind::Sync);
     return true;
@@ -238,7 +239,7 @@ struct UnlockImageArgs {ProxyBase* proxy;UINT level,face;DWORD flags;UINT hasRec
 struct UnlockBufferArgs {ProxyBase* proxy;UINT off,size,flags,inlineData;};
 enum ImageRoute:UINT{RouteSurface=0,RouteTexture=1,RouteCube=2,RouteVolumeTexture=3,RouteVolume=4};
 
-inline void countPass(ProxyBase& p,PassReason r){add(p.core->q.stats.passThrough[unsigned(r)]);}
+inline void countPass(ProxyBase& p,PassReason r){own(p.core->q.stats.passThrough[unsigned(r)]);}   // game thread only
 // Both need StreamCore::texMutex held. A shadow is game-side memory and no queued command refers to it (Unlock copies the rows into a Block).
 inline void dropShadowLocked(StreamCore& c,SubRes& s){
     if(!s.shadowOn)return;
@@ -273,7 +274,7 @@ template<class T> inline T makeProxyIid(){
     else return T{0x8a1c2e0du,0x4f10,0x4d5e,{0x91,0xa3,0x6c,0x2b,0x77,0x1e,0x5d,0x09}};
 }
 inline const IidType& proxyIid(){static const IidType iid=makeProxyIid<IidType>();return iid;}
-inline ProxyBase* ProxyBase::of(IUnknown* u){
+inline ProxyBase* ProxyBase::ofSlow(IUnknown* u){
     if(!u)return nullptr;void* out=nullptr;
     return u->QueryInterface(proxyIid(),&out)==S_OK?static_cast<ProxyBase*>(out):nullptr;
 }
@@ -414,7 +415,7 @@ inline HRESULT lockImage(ProxyBase& self,ProxyBase& root,SubRes& sub,UINT route,
             unsigned char* at=sub.shadow.data()+sub.shadowOffset;
             if(lr){lr->Pitch=INT(lrowBytes);lr->pBits=at;}
             if(lb){lb->RowPitch=INT(lrowBytes);lb->SlicePitch=INT(lrows*lrowBytes);lb->pBits=at;}
-            add(q.stats.texShadowHits);add(q.stats.lockAsync);return D3D_OK;
+            add(q.stats.texShadowHits);own(q.stats.lockAsync);return D3D_OK;
         }
     }
     PassReason why=PassReason::Other;bool candidate=false;
@@ -431,7 +432,7 @@ inline HRESULT lockImage(ProxyBase& self,ProxyBase& root,SubRes& sub,UINT route,
             blk->used=std::uint32_t(total);std::memset(blk->data(),0,total+kLockSlack);   // deterministic bytes for what the game leaves unwritten
             if(lr){lr->Pitch=INT(rowBytes);lr->pBits=blk->data();}
             if(lb){lb->RowPitch=INT(rowBytes);lb->SlicePitch=INT(rowBytes*rows);lb->pBits=blk->data();}
-            add(q.stats.lockAsync);return D3D_OK;
+            own(q.stats.lockAsync);return D3D_OK;
         }else why=PassReason::Budget;
     }
     countPass(self,why);
@@ -508,11 +509,11 @@ inline HRESULT lockBuffer(ProxyBase& self,BufferState& s,UINT off,UINT size,void
     const DWORD eff=effectiveLockFlags(flags,self.info.pool);
     // a refused DYNAMIC buffer may get its shadow now, but only where its contents are undefined anyway: a DISCARD lock (default pool)
     if(!s.shadowOn&&s.wantShadow&&(eff&D3::kLockDiscard)&&takeShadow(self,s)){s.wantShadow=false;add(q.stats.shadowLate);}
-    if(s.shadowOn){s.mode=BufferState::Shadow;*pp=s.shadow.data()+off;add(q.stats.lockAsync);return D3D_OK;}
+    if(s.shadowOn){s.mode=BufferState::Shadow;*pp=s.shadow.data()+off;own(q.stats.lockAsync);return D3D_OK;}
     PassReason why=PassReason::NoShadow;
     if(flags&D3::kLockReadOnly)why=PassReason::ReadOnly;
     else if(!s.written||(eff&D3::kLockDiscard)){
-        if(Block* b=q.tryAllocBlock(size+kLockSlack)){s.mode=BufferState::Staged;s.stage=b;b->used=size;std::memset(b->data(),0,size+kLockSlack);*pp=b->data();add(q.stats.lockAsync);return D3D_OK;}
+        if(Block* b=q.tryAllocBlock(size+kLockSlack)){s.mode=BufferState::Staged;s.stage=b;b->used=size;std::memset(b->data(),0,size+kLockSlack);*pp=b->data();own(q.stats.lockAsync);return D3D_OK;}
         why=PassReason::Budget;
     }
     countPass(self,why);
@@ -562,8 +563,10 @@ inline HRESULT unlockBuffer(ProxyBase& self,BufferState& s){
 inline void releaseStage(ProxyBase& p,BufferState& s){if(s.stage){p.core->q.freeBlock(s.stage);s.stage=nullptr;}}
 
 // ---- concrete proxies ----
+// The vtable pointer of each concrete proxy class, learned when the first one is constructed: ProxyBase::of recognizes a stream proxy by it.
+inline std::atomic<const void*> proxyShape[13];
 template<class D> struct ProxyInit {   // registers a freshly constructed proxy
-    static void apply(D* d,IUnknown* u){d->unk=u;d->core->reg.addProxy(d);liveProxyObjects.fetch_add(1);}
+    static void apply(D* d,IUnknown* u){proxyShape[unsigned(d->kind)].store(*reinterpret_cast<const void* const*>(u),std::memory_order_relaxed);d->unk=u;d->core->reg.addProxy(d);liveProxyObjects.fetch_add(1);}
 };
 
 struct StreamSurface final:IDirect3DSurface9,ProxyBase {
@@ -832,4 +835,30 @@ struct StreamSwapChain final:IDirect3DSwapChain9,ProxyBase {
     HRESULT STDMETHODCALLTYPE Present(const RECT* src,const RECT* dst,HWND window,const RGNDATA* dirty,DWORD flags) override;   // stream_device.h
     HRESULT STDMETHODCALLTYPE GetBackBuffer(UINT index,D3DBACKBUFFER_TYPE type,IDirect3DSurface9** out) override;
 };
+
+// A game-held interface pointer to its proxy without a call or an atomic: compare the object's vtable pointer with the known proxy classes
+// (mirror_resources.h does the same for its wrappers) and cast by kind. Anything else (a foreign object) takes the QueryInterface path.
+inline ProxyBase* ProxyBase::of(IUnknown* u){
+    if(!u)return nullptr;
+    const void* vp=*reinterpret_cast<const void* const*>(u);
+    for(unsigned k=0;k<13;++k){
+        if(vp!=proxyShape[k].load(std::memory_order_relaxed))continue;
+        switch(Kind(k)){
+        case Kind::Surface:return static_cast<StreamSurface*>(static_cast<IDirect3DSurface9*>(u));
+        case Kind::Texture:return static_cast<StreamTexture*>(static_cast<IDirect3DTexture9*>(u));
+        case Kind::CubeTexture:return static_cast<StreamCubeTexture*>(static_cast<IDirect3DCubeTexture9*>(u));
+        case Kind::VolumeTexture:return static_cast<StreamVolumeTexture*>(static_cast<IDirect3DVolumeTexture9*>(u));
+        case Kind::Volume:return static_cast<StreamVolume*>(static_cast<IDirect3DVolume9*>(u));
+        case Kind::VertexBuffer:return static_cast<StreamVertexBuffer*>(static_cast<IDirect3DVertexBuffer9*>(u));
+        case Kind::IndexBuffer:return static_cast<StreamIndexBuffer*>(static_cast<IDirect3DIndexBuffer9*>(u));
+        case Kind::VertexShader:return static_cast<StreamVertexShader*>(static_cast<IDirect3DVertexShader9*>(u));
+        case Kind::PixelShader:return static_cast<StreamPixelShader*>(static_cast<IDirect3DPixelShader9*>(u));
+        case Kind::VertexDeclaration:return static_cast<StreamVertexDeclaration*>(static_cast<IDirect3DVertexDeclaration9*>(u));
+        case Kind::StateBlock:return static_cast<StreamStateBlock*>(static_cast<IDirect3DStateBlock9*>(u));
+        case Kind::Query:return static_cast<StreamQuery*>(static_cast<IDirect3DQuery9*>(u));
+        case Kind::SwapChain:return static_cast<StreamSwapChain*>(static_cast<IDirect3DSwapChain9*>(u));
+        }
+    }
+    return ofSlow(u);
+}
 }

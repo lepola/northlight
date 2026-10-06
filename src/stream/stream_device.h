@@ -13,7 +13,14 @@
 #include "game_snapshot.h"
 #include "shader_tags.h"
 
+// Redundant-state filtering (a repeated Set of the value the game last set is not recorded) can be compiled out for the tests that need
+// the exact backend trace: -DNORTHLIGHT_STREAM_FILTER=0.
+#ifndef NORTHLIGHT_STREAM_FILTER
+#define NORTHLIGHT_STREAM_FILTER 1
+#endif
+
 namespace NorthlightStream {
+constexpr bool kFilterRedundantState=NORTHLIGHT_STREAM_FILTER!=0;
 // The stream the process runs, for the opaque-pointer hook (celestial identities the game stored in its own memory).
 inline std::atomic<StreamCore*> activeCore{nullptr};
 inline const void* innerOfActive(const void* p){StreamCore* c=activeCore.load(std::memory_order_acquire);return c?c->reg.innerOf(p):p;}
@@ -25,6 +32,7 @@ public:
         bool (*capture)(GameSnapshot&,Trigger,std::uint64_t)=nullptr;   // game_snapshot.h capture() in the DLL; null = no snapshots
         std::function<void()> threadStart;                              // runs on the replay thread first (owner handoff)
         std::function<void(const char*)> log;
+        bool filterRedundant=true;                                      // see redundant(); off: every Set is recorded
         bool (*diagnostics)()=nullptr;                                  // NorthlightDiagnostics::enabled in the DLL
     };
     // Builds the stream around `target` (the Device). On success the replay thread owns the target; on failure nothing
@@ -61,10 +69,80 @@ public:
     Queue& streamQueue(){if(foreignPending.load(std::memory_order_relaxed))drainForeign();return core.q;}
     template<Cmd C,class... A> void observe(CmdTag<C>,A&&...){}
     template<Cmd C,class... A> typename MethodTraits<C>::Ret syncCall(CmdTag<C> t,A... a){noteSync(t,a...);return runSync(streamQueue(),t,a...);}
-    template<Cmd C,class... A> typename MethodTraits<C>::Ret syncGet(CmdTag<C> t,A... a){add(core.q.stats.stateSynced);return runSync(streamQueue(),t,a...);}
+    template<Cmd C,class... A> typename MethodTraits<C>::Ret syncGet(CmdTag<C> t,A... a){own(core.q.stats.stateSynced);return runSync(streamQueue(),t,a...);}
 
+
+    // ---- redundant-state filtering ----
+    // A repeated Set of the value the game last SET is not recorded (and not observed): D3D9 treats it as a no-op. Filtered only when the
+    // slot is known AND its value came from a game Set (never from the defaults batch or a Get), the call is not between Begin/EndStateBlock,
+    // and the value is bit-identical. Never filtered: SetRenderTarget, SetDepthStencilSurface, SetViewport, SetLight, draws, and the vendor
+    // trigger states D3DRS_POINTSIZE (154) and D3DRS_ADAPTIVETESS_Y (181), whose every Set acts.
+    //
+    // SAFETY AUDIT. Filtering is correct only while the real device state equals StreamState at every point where the game could Set, i.e.
+    // while Northlight's own work on the replay thread leaves no state changed. Audited (0.3.192):
+    //  * every multi-state mod pass runs inside a SavedState scope (D3DSBT_ALL block captured at entry and Applied at exit, plus the render
+    //    targets, depth buffer and viewport restored explicitly): resolveDepth (renderer.cpp, RESZ and its dummy draw), renderEffects (AO,
+    //    composite, water, sky discs, glare, veil), the static/terrain shadow pass (world_renderer.h shadow render), celestial_disc_renderer,
+    //    water_renderer, world_replay_probe. replay_draw_state.h (model replay), world_point_rendering.inl, static_shadow_draw_state.h and
+    //    RestoreFrequency (static_shadow_gpu.h) are only called inside those scopes.
+    //  * terrainShadowDraw swaps the pixel shader around one draw and sets the original back at once (renderer.cpp:669).
+    //  * Device::SetStreamSource forwards the game's call; the remaining ext->Set* sites are the passes above.
+    //  * The WoW engine itself caches state and only sets changes, so the mod already has to restore everything for the direct path.
+    // Safety net: the Diagnostics audit at Present compares the last game-set render/sampler/stage values with the Target; a mismatch sets the
+    // slot's sync-only bit, and a sync-only slot is never filtered. Anything that changes device state behind the stream's back must either
+    // run inside a SavedState scope or call core.replayFailure.store(true) (which drops every fromSet bit through invalidate()).
+    bool filterOn()const{return kFilterRedundantState&&filter&&!recording;}
+    bool filtered(){own(core.q.stats.filteredCalls);return true;}
+    template<Cmd C,class... A> bool redundant(CmdTag<C>,A&&...){return false;}
+    bool redundant(CmdTag<Cmd::Device_SetRenderState>,D3DRENDERSTATETYPE s,DWORD v){
+        if(!filterOn()||unsigned(s)>=StreamState::kRS||s==154||s==181)return false;const auto& x=st.rs[s];
+        return x.known&&x.fromSet&&x.v==v&&!syncOnly(StreamState::bitRS(unsigned(s)))&&filtered();}
+    bool redundant(CmdTag<Cmd::Device_SetSamplerState>,DWORD s,D3DSAMPLERSTATETYPE t,DWORD v){
+        unsigned idx;if(!filterOn()||!StreamState::sampIndex(s,idx)||unsigned(t)>=StreamState::kSampTypes)return false;const auto& x=st.samp[idx][t];
+        return x.known&&x.fromSet&&x.v==v&&!syncOnly(StreamState::bitSamp(idx,unsigned(t)))&&filtered();}
+    bool redundant(CmdTag<Cmd::Device_SetTextureStageState>,DWORD s,D3DTEXTURESTAGESTATETYPE t,DWORD v){
+        if(!filterOn()||s>=StreamState::kTSStages||unsigned(t)>=StreamState::kTSTypes)return false;const auto& x=st.tss[s][t];
+        return x.known&&x.fromSet&&x.v==v&&!syncOnly(StreamState::bitTss(s,unsigned(t)))&&filtered();}
+    bool redundant(CmdTag<Cmd::Device_SetTexture>,DWORD stage,IDirect3DBaseTexture9* t){
+        unsigned idx;if(!filterOn()||!StreamState::sampIndex(stage,idx))return false;
+        return st.texKnown[idx]&&st.texSet[idx]&&st.tex[idx]==ProxyBase::of(t)&&filtered();}
+    bool redundant(CmdTag<Cmd::Device_SetStreamSource>,UINT i,IDirect3DVertexBuffer9* vb,UINT off,UINT stride){
+        if(!filterOn()||i>=StreamState::kStreams)return false;const auto& s=st.streams[i];
+        return s.known&&s.fromSet&&s.vb==ProxyBase::of(vb)&&s.offset==off&&s.stride==stride&&filtered();}
+    bool redundant(CmdTag<Cmd::Device_SetStreamSourceFreq>,UINT i,UINT f){
+        if(!filterOn()||i>=StreamState::kStreams)return false;const auto& x=st.streams[i].freq;return x.known&&x.fromSet&&x.v==f&&filtered();}
+    bool redundant(CmdTag<Cmd::Device_SetIndices>,IDirect3DIndexBuffer9* ib){return filterOn()&&st.indicesKnown&&st.indicesSet&&st.indices==ProxyBase::of(ib)&&filtered();}
+    bool redundant(CmdTag<Cmd::Device_SetVertexShader>,IDirect3DVertexShader9* s){return filterOn()&&st.vsKnown&&st.vsSet&&st.vs==ProxyBase::of(s)&&filtered();}
+    bool redundant(CmdTag<Cmd::Device_SetPixelShader>,IDirect3DPixelShader9* s){return filterOn()&&st.psKnown&&st.psSet&&st.ps==ProxyBase::of(s)&&filtered();}
+    bool redundant(CmdTag<Cmd::Device_SetVertexDeclaration>,IDirect3DVertexDeclaration9* d){return filterOn()&&st.declKnown&&st.declSet&&st.decl==ProxyBase::of(d)&&filtered();}
+    bool redundant(CmdTag<Cmd::Device_SetFVF>,DWORD f){return filterOn()&&st.fvf.known&&st.fvf.fromSet&&st.fvf.v==f&&filtered();}
+    bool redundant(CmdTag<Cmd::Device_SetVertexShaderConstantF>,UINT r,const float* d,UINT n){return sameConstants(st.vsF,256,r,d,n);}
+    bool redundant(CmdTag<Cmd::Device_SetPixelShaderConstantF>,UINT r,const float* d,UINT n){return sameConstants(st.psF,256,r,d,n);}
+    bool redundant(CmdTag<Cmd::Device_SetVertexShaderConstantI>,UINT r,const int* d,UINT n){return sameConstants(st.vsI,16,r,d,n);}
+    bool redundant(CmdTag<Cmd::Device_SetPixelShaderConstantI>,UINT r,const int* d,UINT n){return sameConstants(st.psI,16,r,d,n);}
+    bool redundant(CmdTag<Cmd::Device_SetVertexShaderConstantB>,UINT r,const WINBOOL* d,UINT n){return sameBools(st.vsB,r,d,n);}
+    bool redundant(CmdTag<Cmd::Device_SetPixelShaderConstantB>,UINT r,const WINBOOL* d,UINT n){return sameBools(st.psB,r,d,n);}
+    bool redundant(CmdTag<Cmd::Device_SetTransform>,D3DTRANSFORMSTATETYPE s,const D3DMATRIX* m){
+        if(!filterOn()||!m||unsigned(s)>=StreamState::kXforms)return false;const auto& x=st.xf[s];return x.known&&x.fromSet&&!std::memcmp(&x.v,m,sizeof *m)&&filtered();}
+    bool redundant(CmdTag<Cmd::Device_SetMaterial>,const D3DMATERIAL9* m){return filterOn()&&m&&st.material.known&&st.material.fromSet&&!std::memcmp(&st.material.v,m,sizeof *m)&&filtered();}
+    bool redundant(CmdTag<Cmd::Device_LightEnable>,DWORD i,WINBOOL e){
+        if(!filterOn()||i>=st.lights.size())return false;const auto& x=st.lights[i].enabled;return x.known&&x.fromSet&&x.v==e&&filtered();}
+    bool redundant(CmdTag<Cmd::Device_SetScissorRect>,const RECT* r){return filterOn()&&r&&st.scissor.known&&st.scissor.fromSet&&!std::memcmp(&st.scissor.v,r,sizeof *r)&&filtered();}
+    bool redundant(CmdTag<Cmd::Device_SetClipPlane>,DWORD i,const float* p){
+        if(!filterOn()||!p||i>=StreamState::kClip)return false;const auto& c=st.clip[i];return c.known&&!std::memcmp(c.p,p,16)&&filtered();}
+    bool redundant(CmdTag<Cmd::Device_SetNPatchMode>,float n){return filterOn()&&st.npatch.known&&st.npatch.fromSet&&!std::memcmp(&st.npatch.v,&n,sizeof n)&&filtered();}
+    bool redundant(CmdTag<Cmd::Device_SetSoftwareVertexProcessing>,WINBOOL b){return filterOn()&&st.swvp.known&&st.swvp.fromSet&&st.swvp.v==b&&filtered();}
+    bool redundant(CmdTag<Cmd::Device_SetCurrentTexturePalette>,UINT n){return filterOn()&&st.palette.known&&st.palette.fromSet&&st.palette.v==n&&filtered();}
+    template<class Reg,class T> bool sameConstants(const Reg* regs,UINT count,UINT r,const T* d,UINT n){
+        if(!filterOn()||!d||r+n>count||!n)return false;
+        for(UINT i=0;i<n;++i)if(!regs[r+i].known||std::memcmp(regs[r+i].v,d+4*i,16))return false;   // known only ever comes from a game Set for constants
+        return filtered();}
+    bool sameBools(const Slot<BOOL>* regs,UINT r,const WINBOOL* d,UINT n){
+        if(!filterOn()||!d||r+n>16||!n)return false;
+        for(UINT i=0;i<n;++i)if(!regs[r+i].known||!regs[r+i].fromSet||regs[r+i].v!=d[i])return false;
+        return filtered();}
     // state class: StreamState follows the game's calls (not while a state block records)
-    void observe(CmdTag<Cmd::Device_SetRenderTarget>,DWORD i,IDirect3DSurface9* s){if(recording||i>=StreamState::kRTs)return;StreamState::bind(st.rt[i],ProxyBase::of(s));st.rtKnown[i]=true;}
+    void observe(CmdTag<Cmd::Device_SetRenderTarget>,DWORD i,IDirect3DSurface9* s){if(recording||i>=StreamState::kRTs)return;StreamState::bind(st.rt[i],ProxyBase::of(s));st.rtKnown[i]=true;st.afterRenderTarget();}
     void observe(CmdTag<Cmd::Device_SetDepthStencilSurface>,IDirect3DSurface9* s){if(recording)return;StreamState::bind(st.ds,ProxyBase::of(s));st.dsKnown=true;}
     void observe(CmdTag<Cmd::Device_SetTransform>,D3DTRANSFORMSTATETYPE s,const D3DMATRIX* m){if(recording||unsigned(s)>=StreamState::kXforms)return;if(m)st.xf[s].set(*m);else st.xf[s].known=false;}
     void observe(CmdTag<Cmd::Device_MultiplyTransform>,D3DTRANSFORMSTATETYPE s,const D3DMATRIX*){if(!recording&&unsigned(s)<StreamState::kXforms)st.xf[s].known=false;}
@@ -75,17 +153,17 @@ public:
     void observe(CmdTag<Cmd::Device_SetClipPlane>,DWORD i,const float* p){if(recording||i>=StreamState::kClip||!p)return;st.clip[i].known=true;std::memcpy(st.clip[i].p,p,16);}
     void observe(CmdTag<Cmd::Device_SetRenderState>,D3DRENDERSTATETYPE s,DWORD v){if(!recording&&unsigned(s)<StreamState::kRS)st.rs[s].set(v);}
     void observe(CmdTag<Cmd::Device_SetTexture>,DWORD stage,IDirect3DBaseTexture9* t){
-        unsigned idx;if(recording||!StreamState::sampIndex(stage,idx))return;StreamState::bind(st.tex[idx],ProxyBase::of(t));st.texKnown[idx]=true;}
+        unsigned idx;if(recording||!StreamState::sampIndex(stage,idx))return;StreamState::bind(st.tex[idx],ProxyBase::of(t));st.texKnown[idx]=true;st.texSet[idx]=true;}
     void observe(CmdTag<Cmd::Device_SetTextureStageState>,DWORD stage,D3DTEXTURESTAGESTATETYPE t,DWORD v){if(!recording&&stage<StreamState::kTSStages&&unsigned(t)<StreamState::kTSTypes)st.tss[stage][t].set(v);}
     void observe(CmdTag<Cmd::Device_SetSamplerState>,DWORD s,D3DSAMPLERSTATETYPE t,DWORD v){unsigned idx;if(!recording&&StreamState::sampIndex(s,idx)&&unsigned(t)<StreamState::kSampTypes)st.samp[idx][t].set(v);}
     void observe(CmdTag<Cmd::Device_SetCurrentTexturePalette>,UINT n){if(!recording)st.palette.set(n);}
     void observe(CmdTag<Cmd::Device_SetScissorRect>,const RECT* r){if(recording)return;if(r)st.scissor.set(*r);else st.scissor.known=false;}
     void observe(CmdTag<Cmd::Device_SetSoftwareVertexProcessing>,WINBOOL b){if(!recording)st.swvp.set(b);}
     void observe(CmdTag<Cmd::Device_SetNPatchMode>,float n){if(!recording)st.npatch.set(n);}
-    void observe(CmdTag<Cmd::Device_SetVertexDeclaration>,IDirect3DVertexDeclaration9* d){if(recording)return;StreamState::bind(st.decl,ProxyBase::of(d));st.declKnown=true;st.fvf.known=false;}
-    void observe(CmdTag<Cmd::Device_SetFVF>,DWORD f){if(recording)return;st.fvf.set(f);st.declKnown=false;}   // the Target builds an implicit declaration: a Get of it syncs
-    void observe(CmdTag<Cmd::Device_SetVertexShader>,IDirect3DVertexShader9* s){if(recording)return;StreamState::bind(st.vs,ProxyBase::of(s));st.vsKnown=true;}
-    void observe(CmdTag<Cmd::Device_SetPixelShader>,IDirect3DPixelShader9* s){if(recording)return;StreamState::bind(st.ps,ProxyBase::of(s));st.psKnown=true;}
+    void observe(CmdTag<Cmd::Device_SetVertexDeclaration>,IDirect3DVertexDeclaration9* d){if(recording)return;StreamState::bind(st.decl,ProxyBase::of(d));st.declKnown=true;st.declSet=true;st.fvf.known=false;}
+    void observe(CmdTag<Cmd::Device_SetFVF>,DWORD f){if(recording)return;st.fvf.set(f);st.declKnown=false;st.declSet=false;}   // the Target builds an implicit declaration: a Get of it syncs
+    void observe(CmdTag<Cmd::Device_SetVertexShader>,IDirect3DVertexShader9* s){if(recording)return;StreamState::bind(st.vs,ProxyBase::of(s));st.vsKnown=true;st.vsSet=true;}
+    void observe(CmdTag<Cmd::Device_SetPixelShader>,IDirect3DPixelShader9* s){if(recording)return;StreamState::bind(st.ps,ProxyBase::of(s));st.psKnown=true;st.psSet=true;}
     void observe(CmdTag<Cmd::Device_SetVertexShaderConstantF>,UINT r,const float* d,UINT n){constF(st.vsF,r,d,n);}
     void observe(CmdTag<Cmd::Device_SetPixelShaderConstantF>,UINT r,const float* d,UINT n){constF(st.psF,r,d,n);}
     void observe(CmdTag<Cmd::Device_SetVertexShaderConstantI>,UINT r,const int* d,UINT n){constI(st.vsI,r,d,n);}
@@ -93,9 +171,9 @@ public:
     void observe(CmdTag<Cmd::Device_SetVertexShaderConstantB>,UINT r,const WINBOOL* d,UINT n){constB(st.vsB,r,d,n);}
     void observe(CmdTag<Cmd::Device_SetPixelShaderConstantB>,UINT r,const WINBOOL* d,UINT n){constB(st.psB,r,d,n);}
     void observe(CmdTag<Cmd::Device_SetStreamSource>,UINT i,IDirect3DVertexBuffer9* vb,UINT off,UINT stride){
-        if(recording||i>=StreamState::kStreams)return;auto& s=st.streams[i];StreamState::bind(s.vb,ProxyBase::of(vb));s.offset=off;s.stride=stride;s.known=true;}
+        if(recording||i>=StreamState::kStreams)return;auto& s=st.streams[i];StreamState::bind(s.vb,ProxyBase::of(vb));s.offset=off;s.stride=stride;s.known=true;s.fromSet=true;}
     void observe(CmdTag<Cmd::Device_SetStreamSourceFreq>,UINT i,UINT f){if(!recording&&i<StreamState::kStreams)st.streams[i].freq.set(f);}
-    void observe(CmdTag<Cmd::Device_SetIndices>,IDirect3DIndexBuffer9* ib){if(recording)return;StreamState::bind(st.indices,ProxyBase::of(ib));st.indicesKnown=true;}
+    void observe(CmdTag<Cmd::Device_SetIndices>,IDirect3DIndexBuffer9* ib){if(recording)return;StreamState::bind(st.indices,ProxyBase::of(ib));st.indicesKnown=true;st.indicesSet=true;}
     void observe(CmdTag<Cmd::Device_DrawPrimitive>,D3DPRIMITIVETYPE,UINT,UINT n){onDraw(n);}
     void observe(CmdTag<Cmd::Device_DrawIndexedPrimitive>,D3DPRIMITIVETYPE,INT,UINT,UINT,UINT,UINT n){onDraw(n);}
     // GPU-side writes: the destination's CPU-side lock knowledge no longer holds
@@ -109,8 +187,13 @@ public:
     void noteSync(CmdTag<Cmd::Device_GetFrontBufferData>,UINT,IDirect3DSurface9* dst){written(ProxyBase::of(dst));}
 
     // get class: answered from StreamState when the slot is known (and not sync-only); false = sync call
-    bool begin(){streamQueue().publish();if(core.replayFailure.exchange(false)){st.invalidate();add(core.q.stats.replayFailures);}return true;}
-    bool hit(){add(core.q.stats.stateAnswered);return true;}
+    // A locally answered Get needs nothing from the replay thread; it still publishes now and then so a game that polls Gets never leaves
+    // commands unpublished for long (GetData publishes on every call). The failure flag is read before the (locked) exchange.
+    bool begin(){
+        if((++getsSincePublish&7)==0)streamQueue().publish();
+        if(core.replayFailure.load(std::memory_order_relaxed)&&core.replayFailure.exchange(false)){st.invalidate();add(core.q.stats.replayFailures);}
+        return true;}
+    bool hit(){own(core.q.stats.stateAnswered);return true;}
     template<class I> static void give(ProxyBase* p,I** out){if(!p){*out=nullptr;return;}p->comAddRef();*out=static_cast<I*>(p->unk);}
     bool syncOnly(unsigned bit){return core.syncOnly[bit/64].load(std::memory_order_relaxed)&(1ull<<(bit%64));}
     bool answer(CmdTag<Cmd::Device_GetRenderState>,D3DRENDERSTATETYPE s,DWORD* v,HRESULT& hr){
@@ -330,14 +413,14 @@ public:
         const std::size_t bytes=vertexBytes(primVerts(unsigned(type),primCount),stride);
         if(sizeof(DrawUPArgs)+bytes+kUpSlack<=MaxInlinePayload){
             auto* a=static_cast<DrawUPArgs*>(q.reserve((std::uint16_t)Cmd::DrawPrimitiveUP,std::uint32_t(sizeof(DrawUPArgs)+bytes+kUpSlack)));
-            *a=DrawUPArgs{unsigned(type),primCount,stride,UINT(bytes),1,data};std::memcpy(a+1,data,bytes);std::memset(reinterpret_cast<unsigned char*>(a+1)+bytes,0,kUpSlack);q.commit();return D3D_OK;}
+            *a=DrawUPArgs{unsigned(type),primCount,stride,UINT(bytes),1,data};std::memcpy(a+1,data,bytes);std::memset(reinterpret_cast<unsigned char*>(a+1)+bytes,0,kUpSlack);q.commit();st.afterUserPointerDraw(false);return D3D_OK;}
         if(Block* b=q.tryAllocBlock(bytes+kUpSlack)){
             auto* a=static_cast<DrawUPArgs*>(q.reserveWithBlock((std::uint16_t)Cmd::DrawPrimitiveUP,sizeof(DrawUPArgs),b));
-            *a=DrawUPArgs{unsigned(type),primCount,stride,UINT(bytes),0,data};b->used=std::uint32_t(bytes);std::memcpy(b->data(),data,bytes);std::memset(b->data()+bytes,0,kUpSlack);q.commit();return D3D_OK;}
+            *a=DrawUPArgs{unsigned(type),primCount,stride,UINT(bytes),0,data};b->used=std::uint32_t(bytes);std::memcpy(b->data(),data,bytes);std::memset(b->data()+bytes,0,kUpSlack);q.commit();st.afterUserPointerDraw(false);return D3D_OK;}
         add(q.stats.passThrough[unsigned(PassReason::Budget)]);
         HRESULT hr=D3DERR_INVALIDCALL;
         runTask(core,[&](StreamCore& c){upIdentity=data;hr=c.target->DrawPrimitiveUP(type,primCount,data,stride);upIdentity=nullptr;},Cmd::SyncUpDraw);
-        return hr;}
+        st.afterUserPointerDraw(false);return hr;}
     HRESULT STDMETHODCALLTYPE DrawIndexedPrimitiveUP(D3DPRIMITIVETYPE type,UINT minIndex,UINT numVertices,UINT primCount,const void* indices,D3DFORMAT indexFormat,const void* data,UINT stride) override{
         if(!data||!indices||!stride||!primCount)return D3DERR_INVALIDCALL;
         onDraw(primCount);Queue& q=streamQueue();
@@ -347,14 +430,14 @@ public:
         DrawIUPArgs args{unsigned(type),minIndex,numVertices,primCount,unsigned(indexFormat),stride,UINT(indexBytes),UINT(vbytes),data};
         if(sizeof(DrawIUPArgs)+total<=MaxInlinePayload){
             auto* a=static_cast<DrawIUPArgs*>(q.reserve((std::uint16_t)Cmd::DrawIndexedPrimitiveUP,std::uint32_t(sizeof(DrawIUPArgs)+total)));
-            *a=args;fill(reinterpret_cast<unsigned char*>(a+1));q.commit();return D3D_OK;}
+            *a=args;fill(reinterpret_cast<unsigned char*>(a+1));q.commit();st.afterUserPointerDraw(true);return D3D_OK;}
         if(Block* b=q.tryAllocBlock(total)){
             auto* a=static_cast<DrawIUPArgs*>(q.reserveWithBlock((std::uint16_t)Cmd::DrawIndexedPrimitiveUP,sizeof(DrawIUPArgs),b));
-            *a=args;b->used=std::uint32_t(total);fill(b->data());q.commit();return D3D_OK;}
+            *a=args;b->used=std::uint32_t(total);fill(b->data());q.commit();st.afterUserPointerDraw(true);return D3D_OK;}
         add(q.stats.passThrough[unsigned(PassReason::Budget)]);
         HRESULT hr=D3DERR_INVALIDCALL;
         runTask(core,[&](StreamCore& c){upIdentity=data;hr=c.target->DrawIndexedPrimitiveUP(type,minIndex,numVertices,primCount,indices,indexFormat,data,stride);upIdentity=nullptr;},Cmd::SyncUpDraw);
-        return hr;}
+        st.afterUserPointerDraw(true);return hr;}
     static unsigned primVerts(unsigned type,unsigned n){switch(type){case 1:return n;case 2:return n*2;case 3:return n+1;case 4:return n*3;default:return n+2;}}
 
     // ---- accessors for the DLL wiring and the tests ----
@@ -369,7 +452,7 @@ private:
     std::unique_ptr<StreamCore> coreOwner;StreamCore& core;Replayer replayer;StreamState st;std::function<void()> restoreOwner;
     IDirect3D9* parent;D3DCAPS9 caps{};D3DDEVICE_CREATION_PARAMETERS creation{};D3DPRESENT_PARAMETERS pp{};
     StreamSwapChain* sc0=nullptr;std::atomic<LONG> refs{1};
-    bool recording=false,cursorVisible=false,pressureApplied=false;std::uint64_t frameEnd=0,waitsAtFrameEnd=0;std::uint64_t prevPresent=0,drawOrdinal=0;
+    bool recording=false,cursorVisible=false,pressureApplied=false,filter=true;unsigned getsSincePublish=0;std::uint64_t frameEnd=0,waitsAtFrameEnd=0;std::uint64_t prevPresent=0,drawOrdinal=0;
     std::thread::id gameThread=std::this_thread::get_id();
     std::mutex foreignMutex;std::vector<Foreign> foreign;std::atomic<unsigned> foreignPending{0};
     TriggerPolicy policy;bool (*capture)(GameSnapshot&,Trigger,std::uint64_t)=nullptr;
@@ -377,7 +460,7 @@ private:
     StreamDevice(IDirect3DDevice9* target,IDirect3D9* par,const D3DPRESENT_PARAMETERS* p,Options opt)
         :coreOwner(new StreamCore(opt.budget)),core(*coreOwner),replayer(core),parent(par),capture(opt.capture){
         core.target=target;core.game=this;core.logLine=nullptr;st.core=&core;
-        restoreOwner=opt.threadStart;replayer.threadStart=std::move(opt.threadStart);replayer.log=opt.log;replayer.diagnostics=opt.diagnostics;
+        restoreOwner=opt.threadStart;replayer.threadStart=std::move(opt.threadStart);replayer.log=opt.log;replayer.diagnostics=opt.diagnostics;filter=opt.filterRedundant;
         if(p)pp=*p;
         sc0=new StreamSwapChain(&core);sc0->baseline=1;sc0->pp=pp;
         const UINT n=pp.BackBufferCount?pp.BackBufferCount:1;sc0->kids.assign(n,nullptr);

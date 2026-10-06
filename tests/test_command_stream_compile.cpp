@@ -9,6 +9,7 @@ using namespace NorthlightStream;
 struct HostBase {
     Queue q;
     Queue& streamQueue(){return q;}
+    template<Cmd C,class... A> bool redundant(CmdTag<C>,A&&...){return false;}
     template<Cmd C,class... A> void observe(CmdTag<C>,A&&...){}
     template<Cmd C,class... A> bool answer(CmdTag<C>,A&&...){return false;}
     template<Cmd C,class... A> typename MethodTraits<C>::Ret local(CmdTag<C>,A&&...){return typename MethodTraits<C>::Ret();}

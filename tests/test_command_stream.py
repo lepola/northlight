@@ -149,6 +149,8 @@ def generated_cpp():
     # Names of the get-class methods: a Get is answered locally by the stream, so traces compare without them.
     gets = ', '.join(f'"{m.short}::{m.name}"' for i in gf.STREAM_IFACES for m in CLASSES[i] if m.cls == 'get')
     out.append(f'static bool isGetName(const std::string& s) {{ static const char* names[]={{{gets}}}; for(auto n:names){{const std::size_t l=std::strlen(n);if(s.compare(0,l,n)==0&&(s.size()==l||s[l]==\' \'))return true;}}return false; }}')
+    filt = ', '.join(f'"{m.short}::{m.name}"' for i in gf.STREAM_IFACES for m in CLASSES[i] if (i, m.name) in gf.REDUNDANT)
+    out.append(f'static bool isFilterableName(const std::string& s) {{ static const char* names[]={{{filt}}}; for(auto n:names){{const std::size_t l=std::strlen(n);if(s.compare(0,l,n)==0&&(s.size()==l||s[l]==\' \'))return true;}}return false; }}')
     # Round-trip cases.
     out.append('static void generatedRecordCases() {')
     for m in replay:
@@ -223,6 +225,8 @@ with tempfile.TemporaryDirectory(prefix='command-stream-') as tmp:
     (Path(tmp) / 'cs_generated.inc').write_text(generated_cpp())
     compile_run(tmp, 'o2', ['-O2'])
     compile_run(tmp, 'asan', ['-O1', '-g', '-fsanitize=address,undefined', '-fno-omit-frame-pointer'])
+    # Redundant-state filtering compiled out: the Target sees every Set, and the equivalence run requires the exact trace again.
+    compile_run(tmp, 'nofilter', ['-O2', '-DNORTHLIGHT_STREAM_FILTER=0'])
     compile_run(tmp, 'tsan', ['-O1', '-g', '-fsanitize=thread'], ['threads'])
     # The same generated code against the real d3d9.h, 32-bit Windows: compile only (the DLL's own toolchain).
     zig = fp.zig()

@@ -59,6 +59,7 @@ struct TestTr {
 struct HostBase {
     Queue q;unsigned observed=0,answered=0;bool answerYes=false;
     Queue& streamQueue(){return q;}
+    template<Cmd C,class... A> bool redundant(CmdTag<C>,A&&...){return false;}
     template<Cmd C,class... A> void observe(CmdTag<C>,A&&...){++observed;}
     template<Cmd C,class... A> bool answer(CmdTag<C>,A&&...){++answered;return answerYes;}
     template<Cmd C,class... A> typename MethodTraits<C>::Ret local(CmdTag<C>,A&&...){return typename MethodTraits<C>::Ret();}

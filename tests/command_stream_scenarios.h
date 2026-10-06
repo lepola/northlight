@@ -17,7 +17,9 @@ struct Rig {
     void sync(){CHECK(dev->TestCooperativeLevel()==5);}
     void finish(){dev->Release();dev=nullptr;}
 };
-static std::vector<std::string> filtered(const std::vector<std::string>& t){std::vector<std::string> r;for(auto& s:t){if(isGetName(s))continue;if(s.size()>3&&s.compare(s.size()-3,3," ro")==0&&s.find("::Unlock ")!=std::string::npos)continue;r.push_back(s);}return r;}   // READONLY locks served from a shadow (or read back once by the stream) are no Target events worth comparing: the bytes the game reads are compared as results
+// With filtering on the Target sees fewer Sets: the filterable ones are dropped from both traces and the STATE digests (logged at every draw,
+// clear, copy, present and write unlock) carry the effective device state instead. With it compiled out the traces must be identical.
+static std::vector<std::string> filtered(const std::vector<std::string>& t){std::vector<std::string> r;for(auto& s:t){if(isGetName(s))continue;if(kFilterRedundantState&&isFilterableName(s))continue;if(s.size()>3&&s.compare(s.size()-3,3," ro")==0&&s.find("::Unlock ")!=std::string::npos)continue;r.push_back(s);}return r;}   // READONLY locks served from a shadow (or read back once by the stream) are no Target events worth comparing: the bytes the game reads are compared as results
 
 static void lifetimeAndIdentity(){
     gTrace.clear();Rig rig(true);auto& core=rig.core();const auto base=get(core.q.stats.syncCalls);
@@ -331,6 +333,92 @@ static void statsLine(){
     CHECK(lines[0].size()<1600);
     rig.finish();checkClean();
 }
+// Redundant-state filtering: a repeated Set of the value the game last set is not recorded; anything else is.
+static void redundantFiltering(){
+    gTrace.clear();Rig rig(true);auto& q=rig.core().q;auto& st=rig.sd->stateOf();
+    // recorded(f): did f put a command in the queue?
+    auto recorded=[&](auto f){const auto before=q.recordedSeq();f();return q.recordedSeq()!=before;};
+    // twice(f): the first call is always recorded; the second only when filtering is off
+    auto twice=[&](auto f,const char* what){const bool a=recorded(f),b=recorded(f);if(!a||b==kFilterRedundantState){std::fprintf(stderr,"redundancy: %s first=%d second=%d\n",what,a,b);std::abort();}};
+    auto differs=[&](auto f,const char* what){if(!recorded(f)){std::fprintf(stderr,"redundancy: %s with a new value was not recorded\n",what);std::abort();}};
+    auto never=[&](auto f,const char* what){if(!recorded(f)||!recorded(f)){std::fprintf(stderr,"redundancy: %s must always be recorded\n",what);std::abort();}};
+    IDirect3DDevice9* d=rig.dev;
+    // a default read by the defaults batch is not a game Set: the first Set of the same value is recorded, only then it is filtered
+    twice([&]{d->SetRenderState((D3DRENDERSTATETYPE)8,1008);},"render state at its default");
+    differs([&]{d->SetRenderState((D3DRENDERSTATETYPE)8,1);},"render state");
+    never([&]{d->SetRenderState((D3DRENDERSTATETYPE)154,0x7fa05000);},"D3DRS_POINTSIZE (a vendor trigger)");
+    never([&]{d->SetRenderState((D3DRENDERSTATETYPE)181,7);},"D3DRS_ADAPTIVETESS_Y");
+    twice([&]{d->SetSamplerState(2,(D3DSAMPLERSTATETYPE)5,3);},"sampler state");twice([&]{d->SetSamplerState(258,(D3DSAMPLERSTATETYPE)5,3);},"vertex sampler state");
+    differs([&]{d->SetSamplerState(2,(D3DSAMPLERSTATETYPE)5,4);},"sampler state");
+    twice([&]{d->SetTextureStageState(1,(D3DTEXTURESTAGESTATETYPE)4,9);},"texture stage state");
+    IDirect3DTexture9 *ta=nullptr,*tb=nullptr;CHECK(d->CreateTexture(8,8,1,0,(D3DFORMAT)22,(D3DPOOL)1,&ta,nullptr)==D3D_OK&&d->CreateTexture(8,8,1,0,(D3DFORMAT)22,(D3DPOOL)1,&tb,nullptr)==D3D_OK);
+    twice([&]{d->SetTexture(3,ta);},"texture");differs([&]{d->SetTexture(3,tb);},"texture");twice([&]{d->SetTexture(3,nullptr);},"texture null");
+    {   // a redundant bind changes no use count (no atomic), and a different one does
+        ProxyBase* pa=ProxyBase::of(ta);d->SetTexture(4,ta);const auto use=pa->use.load();recorded([&]{d->SetTexture(4,ta);});CHECK(pa->use.load()==use);
+        d->SetTexture(4,tb);CHECK(pa->use.load()==use-1);
+        if(!kFilterRedundantState){d->SetTexture(4,tb);const auto u2=ProxyBase::of(tb)->use.load();d->SetTexture(4,tb);CHECK(ProxyBase::of(tb)->use.load()==u2);}   // unfiltered, the same proxy again still binds nothing twice
+    }
+    IDirect3DVertexBuffer9* vb=nullptr;IDirect3DIndexBuffer9* ib=nullptr;CHECK(d->CreateVertexBuffer(256,0,0,(D3DPOOL)0,&vb,nullptr)==D3D_OK&&d->CreateIndexBuffer(64,0,(D3DFORMAT)101,(D3DPOOL)0,&ib,nullptr)==D3D_OK);
+    twice([&]{d->SetStreamSource(0,vb,0,20);},"stream source");differs([&]{d->SetStreamSource(0,vb,4,20);},"stream source offset");differs([&]{d->SetStreamSource(0,vb,4,24);},"stream source stride");
+    twice([&]{d->SetStreamSourceFreq(1,1);},"stream frequency");twice([&]{d->SetIndices(ib);},"indices");
+    {   // DrawPrimitiveUP unbinds stream 0, DrawIndexedPrimitiveUP also the indices: the same Set after them is not redundant
+        unsigned char v[200]={};d->SetStreamSource(0,vb,4,24);d->SetIndices(ib);
+        CHECK(d->DrawPrimitiveUP((D3DPRIMITIVETYPE)4,1,v,20)==D3D_OK);CHECK(recorded([&]{d->SetStreamSource(0,vb,4,24);})&&(!recorded([&]{d->SetIndices(ib);}))==kFilterRedundantState);   // stream 0 was unbound; the indices were not
+        unsigned short ix[8]={};CHECK(d->DrawIndexedPrimitiveUP((D3DPRIMITIVETYPE)4,0,3,1,ix,(D3DFORMAT)101,v,20)==D3D_OK);CHECK(recorded([&]{d->SetIndices(ib);})&&recorded([&]{d->SetStreamSource(0,vb,4,24);})&&(!recorded([&]{d->SetIndices(ib);}))==kFilterRedundantState);
+    }
+    DWORD code[]={0xFFFE0200u,0x0000FFFFu};IDirect3DVertexShader9* vs=nullptr;IDirect3DPixelShader9* ps=nullptr;D3DVERTEXELEMENT9 el[2]={{0,0,2,0,0,0},{0xFF,0,17,0,0,0}};IDirect3DVertexDeclaration9* dc=nullptr;
+    CHECK(d->CreateVertexShader(code,&vs)==D3D_OK&&d->CreatePixelShader(code,&ps)==D3D_OK&&d->CreateVertexDeclaration(el,&dc)==D3D_OK);
+    twice([&]{d->SetVertexShader(vs);},"vertex shader");twice([&]{d->SetPixelShader(ps);},"pixel shader");twice([&]{d->SetVertexDeclaration(dc);},"vertex declaration");
+    twice([&]{d->SetFVF(0x112);},"FVF");differs([&]{d->SetVertexDeclaration(dc);},"declaration after an FVF");
+    {   // constants: filtered only when EVERY register in range is known from a game Set and equal; otherwise the whole call is recorded
+        float c[16];for(int i=0;i<16;++i)c[i]=float(i);
+        twice([&]{d->SetVertexShaderConstantF(10,c,2);},"vs float constants");
+        CHECK(!recorded([&]{d->SetVertexShaderConstantF(10,c,1);})==kFilterRedundantState);   // a subset of what was set
+        CHECK(recorded([&]{d->SetVertexShaderConstantF(11,c+4,2);}));                         // overlap: register 12 was never set
+        CHECK(recorded([&]{d->SetVertexShaderConstantF(10,c+4,1);}));                         // a different value
+        twice([&]{d->SetPixelShaderConstantF(0,c,4);},"ps float constants");
+        int ic[8]={1,2,3,4,5,6,7,8};twice([&]{d->SetVertexShaderConstantI(1,ic,2);},"vs int constants");twice([&]{d->SetPixelShaderConstantI(1,ic,1);},"ps int constants");
+        WINBOOL bc[3]={1,0,1};twice([&]{d->SetVertexShaderConstantB(0,bc,3);},"vs bool constants");twice([&]{d->SetPixelShaderConstantB(2,bc,1);},"ps bool constants");
+        CHECK(recorded([&]{d->SetVertexShaderConstantF(300,c,1);}));                          // out of range: always recorded
+    }
+    D3DMATRIX m{};m.m[0]=2;D3DMATERIAL9 mt{};mt.b[0]=1;RECT rc{0,0,10,10};float plane[4]={1,0,0,0};
+    twice([&]{d->SetTransform((D3DTRANSFORMSTATETYPE)2,&m);},"transform");twice([&]{d->SetMaterial(&mt);},"material");twice([&]{d->LightEnable(1,1);},"light enable");
+    twice([&]{d->SetScissorRect(&rc);},"scissor");twice([&]{d->SetClipPlane(0,plane);},"clip plane");twice([&]{d->SetNPatchMode(1.f);},"npatch");
+    twice([&]{d->SetSoftwareVertexProcessing(1);},"software vertex processing");twice([&]{d->SetCurrentTexturePalette(3);},"texture palette");
+    // never filtered
+    IDirect3DSurface9* rt=nullptr;CHECK(d->CreateRenderTarget(64,64,(D3DFORMAT)22,(D3DMULTISAMPLE_TYPE)0,0,0,&rt,nullptr)==D3D_OK);
+    never([&]{d->SetRenderTarget(1,rt);},"SetRenderTarget");never([&]{d->SetDepthStencilSurface(nullptr);},"SetDepthStencilSurface");
+    D3DVIEWPORT9 vpt{0,0,64,64,0,1};never([&]{d->SetViewport(&vpt);},"SetViewport");D3DLIGHT9 lt{};never([&]{d->SetLight(0,&lt);},"SetLight");
+    never([&]{d->DrawPrimitive((D3DPRIMITIVETYPE)4,0,1);},"DrawPrimitive");never([&]{d->Clear(0,nullptr,1,0,1.f,0);},"Clear");
+    // a state block's Apply makes everything unknown; Reset too; a replay failure invalidates at the next Get
+    IDirect3DStateBlock9* sb=nullptr;CHECK(d->CreateStateBlock((D3DSTATEBLOCKTYPE)1,&sb)==D3D_OK);
+    d->SetRenderState((D3DRENDERSTATETYPE)20,2);sb->Apply();CHECK(recorded([&]{d->SetRenderState((D3DRENDERSTATETYPE)20,2);}));
+    d->SetRenderState((D3DRENDERSTATETYPE)21,2);rig.core().replayFailure.store(true);DWORD gv=0;d->GetRenderState((D3DRENDERSTATETYPE)22,&gv);CHECK(recorded([&]{d->SetRenderState((D3DRENDERSTATETYPE)21,2);}));
+    // a value learned by a sync Get is not a game Set
+    d->GetRenderState((D3DRENDERSTATETYPE)30,&gv);CHECK(recorded([&]{d->SetRenderState((D3DRENDERSTATETYPE)30,gv);}));
+    // a slot the audit declared sync-only is never filtered
+    d->SetRenderState((D3DRENDERSTATETYPE)40,1);rig.core().syncOnly[0].fetch_or(1ull<<40);CHECK(recorded([&]{d->SetRenderState((D3DRENDERSTATETYPE)40,1);}));
+    // recording a state block records every Set and leaves StreamState alone
+    d->SetRenderState((D3DRENDERSTATETYPE)50,7);CHECK(d->BeginStateBlock()==D3D_OK);
+    CHECK(recorded([&]{d->SetRenderState((D3DRENDERSTATETYPE)50,7);})&&recorded([&]{d->SetRenderState((D3DRENDERSTATETYPE)50,7);}));
+    IDirect3DStateBlock9* made=nullptr;CHECK(d->EndStateBlock(&made)==D3D_OK);CHECK(!recorded([&]{d->SetRenderState((D3DRENDERSTATETYPE)50,7);})==kFilterRedundantState);
+    D3DPRESENT_PARAMETERS pp{};pp.BackBufferWidth=640;pp.BackBufferHeight=480;pp.BackBufferFormat=(D3DFORMAT)22;pp.BackBufferCount=2;
+    IDirect3DSurface9* bb=nullptr;d->GetBackBuffer(0,0,(D3DBACKBUFFER_TYPE)0,&bb);bb->Release();
+    CHECK(d->Reset(&pp)==D3D_OK);CHECK(recorded([&]{d->SetRenderState((D3DRENDERSTATETYPE)50,7);}));
+    if(kFilterRedundantState)CHECK(get(q.stats.filteredCalls)>30);else CHECK(get(q.stats.filteredCalls)==0);
+    (void)st;
+    sb->Release();made->Release();rt->Release();dc->Release();vs->Release();ps->Release();vb->Release();ib->Release();ta->Release();tb->Release();
+    rig.finish();checkClean();
+}
+// D3D9 side effects the stream mirrors: SetRenderTarget resets the viewport and scissor (a Get must not answer the old one).
+static void renderTargetResetsViewport(){
+    gTrace.clear();Rig rig(true);IDirect3DDevice9* d=rig.dev;
+    D3DVIEWPORT9 v{0,0,100,100,0,1};d->SetViewport(&v);D3DVIEWPORT9 g{};const auto syncs=get(rig.core().q.stats.syncCalls);
+    CHECK(d->GetViewport(&g)==D3D_OK&&g.Width==100&&get(rig.core().q.stats.syncCalls)==syncs);
+    IDirect3DSurface9* rt=nullptr;CHECK(d->CreateRenderTarget(64,64,(D3DFORMAT)22,(D3DMULTISAMPLE_TYPE)0,0,0,&rt,nullptr)==D3D_OK);d->SetRenderTarget(0,rt);
+    CHECK(d->GetViewport(&g)==D3D_OK&&get(rig.core().q.stats.syncCalls)==syncs+1);   // unknown again: the Target answers
+    rt->Release();rig.finish();checkClean();
+}
 static void nestedSyncInPump(){
     gTrace.clear();Rig rig(true);auto& s=rig.core().q.stats;
     static Rig* r;static HRESULT nested;static int calls;r=&rig;nested=12345;calls=0;
@@ -418,18 +506,18 @@ struct Game {
             else{IDirect3DPixelShader9* p=nullptr;if(dev->CreatePixelShader(code,&p)==D3D_OK&&p&&ps.size()<8){reg(p);ps.push_back(p);}else if(p)p->Release();}break;}
         case 5:{D3DVERTEXELEMENT9 el[3]={{0,0,2,0,0,0},{0,12,1,0,5,0},{0xFF,0,17,0,0,0}};IDirect3DVertexDeclaration9* d=nullptr;
             if(dev->CreateVertexDeclaration(el,&d)==D3D_OK&&d&&decl.size()<6){reg(d);decl.push_back(d);D3DVERTEXELEMENT9 back[4]={};UINT c=0;d->GetDeclaration(back,&c);log("decl "+std::to_string(c));}else if(d)d->Release();break;}
-        case 6:dev->SetRenderState((D3DRENDERSTATETYPE)(1+r(250)),r(100000));break;
-        case 7:dev->SetSamplerState(r(2)?r(16):257+r(4),(D3DSAMPLERSTATETYPE)(1+r(13)),r(100));break;
-        case 8:dev->SetTextureStageState(r(8),(D3DTEXTURESTAGESTATETYPE)(1+r(32)),r(100));break;
+        case 6:dev->SetRenderState((D3DRENDERSTATETYPE)(1+r(250)),r(3));break;
+        case 7:dev->SetSamplerState(r(2)?r(16):257+r(4),(D3DSAMPLERSTATETYPE)(1+r(13)),r(3));break;
+        case 8:dev->SetTextureStageState(r(8),(D3DTEXTURESTAGESTATETYPE)(1+r(32)),r(3));break;
         case 9:{DWORD s=r(250)+1;DWORD v=0;HRESULT hr=dev->GetRenderState((D3DRENDERSTATETYPE)s,&v);log("rs "+std::to_string(hr)+" "+std::to_string(v));
             DWORD sv=0;hr=dev->GetSamplerState(r(16),(D3DSAMPLERSTATETYPE)(1+r(13)),&sv);log("ss "+std::to_string(hr)+" "+std::to_string(sv));
             hr=dev->GetTextureStageState(r(8),(D3DTEXTURESTAGESTATETYPE)(1+r(32)),&sv);log("tss "+std::to_string(hr)+" "+std::to_string(sv));break;}
-        case 10:{D3DMATRIX m{};for(int i=0;i<16;++i)m.m[i]=float(r(1000));dev->SetTransform((D3DTRANSFORMSTATETYPE)(r(2)?2:3),&m);D3DMATRIX g{};dev->GetTransform((D3DTRANSFORMSTATETYPE)(r(2)?2:3),&g);log("xf "+hx((unsigned char*)&g,64));break;}
+        case 10:{D3DMATRIX m{};{const float mv=float(r(3));for(int i=0;i<16;++i)m.m[i]=mv;}dev->SetTransform((D3DTRANSFORMSTATETYPE)(r(2)?2:3),&m);D3DMATRIX g{};dev->GetTransform((D3DTRANSFORMSTATETYPE)(r(2)?2:3),&g);log("xf "+hx((unsigned char*)&g,64));break;}
         case 11:{D3DVIEWPORT9 v{};v.X=r(10);v.Y=r(10);v.Width=64+r(500);v.Height=64+r(400);v.MaxZ=1;dev->SetViewport(&v);D3DVIEWPORT9 g{};dev->GetViewport(&g);log("vp "+hx((unsigned char*)&g,sizeof g));
-            RECT sc{LONG(r(5)),LONG(r(5)),LONG(50+r(100)),LONG(50+r(100))};dev->SetScissorRect(&sc);RECT g2{};dev->GetScissorRect(&g2);log("sc "+hx((unsigned char*)&g2,sizeof g2));break;}
-        case 12:{float c[16];for(float& x:c)x=float(r(500));const UINT reg0=r(200),cnt=1+r(4);dev->SetVertexShaderConstantF(reg0,c,cnt);float g[16]={};HRESULT hr=dev->GetVertexShaderConstantF(reg0+r(cnt),g,1);log("vsf "+std::to_string(hr)+" "+hx((unsigned char*)g,16));break;}
+            RECT sc{LONG(r(2)),LONG(r(2)),LONG(50+r(2)),LONG(50+r(2))};dev->SetScissorRect(&sc);RECT g2{};dev->GetScissorRect(&g2);log("sc "+hx((unsigned char*)&g2,sizeof g2));break;}
+        case 12:{float c[16];{const float cv=float(r(2));for(float& x:c)x=cv;}const UINT reg0=r(6),cnt=1+r(4);dev->SetVertexShaderConstantF(reg0,c,cnt);float g[16]={};HRESULT hr=dev->GetVertexShaderConstantF(reg0+r(cnt),g,1);log("vsf "+std::to_string(hr)+" "+hx((unsigned char*)g,16));break;}
         case 13:{if(auto* t=any(tex)){const DWORD st=r(2)?r(16):257+r(4);dev->SetTexture(st,t);IDirect3DBaseTexture9* g=nullptr;dev->GetTexture(st,&g);log("gtex "+std::to_string(idOf(g)));if(g)g->Release();}break;}
-        case 14:{if(auto* b=any(vb)){const UINT i=r(4);dev->SetStreamSource(i,b,r(8),20);IDirect3DVertexBuffer9* g=nullptr;UINT o=0,st=0;dev->GetStreamSource(i,&g,&o,&st);log("gsv "+std::to_string(idOf(g)));if(g)g->Release();}
+        case 14:{if(auto* b=any(vb)){const UINT i=r(4);dev->SetStreamSource(i,b,r(2),20);IDirect3DVertexBuffer9* g=nullptr;UINT o=0,st=0;dev->GetStreamSource(i,&g,&o,&st);log("gsv "+std::to_string(idOf(g)));if(g)g->Release();}
             if(auto* b=any(ib)){dev->SetIndices(b);IDirect3DIndexBuffer9* g=nullptr;dev->GetIndices(&g);log("gib "+std::to_string(idOf(g)));if(g)g->Release();}break;}
         case 15:{if(auto* v=any(vs)){dev->SetVertexShader(v);IDirect3DVertexShader9* g=nullptr;dev->GetVertexShader(&g);log("gvs "+std::to_string(idOf(g)));if(g)g->Release();}
             if(auto* p=any(ps)){dev->SetPixelShader(p);IDirect3DPixelShader9* g=nullptr;dev->GetPixelShader(&g);log("gps "+std::to_string(idOf(g)));if(g)g->Release();}
@@ -466,9 +554,18 @@ struct Game {
             else if(!blocks.empty()){auto* sb=blocks[r(unsigned(blocks.size()))];if(r(2))sb->Apply();else sb->Capture();DWORD v=0;dev->GetRenderState((D3DRENDERSTATETYPE)(1+r(250)),&v);log("ap "+std::to_string(v));}break;}
         case 29:{log("tcl "+std::to_string(dev->TestCooperativeLevel()));DWORD np=0;log("val "+std::to_string(dev->ValidateDevice(&np)));break;}
         case 30:{IDirect3DSurface9* g=nullptr;dev->GetDepthStencilSurface(&g);D3DSURFACE_DESC d{};if(g){g->GetDesc(&d);g->Release();}log("ds "+std::to_string(d.Width));dev->GetRenderTarget(0,&g);if(g){g->GetDesc(&d);log("rt0 "+std::to_string(d.Width)+" "+std::to_string(idOf(g)));g->Release();}break;}
-        case 31:dev->SetViewport(nullptr);break;
+        case 31:{if(r(2)){D3DVIEWPORT9 v{};v.X=r(2);v.Width=100;v.Height=100;v.MaxZ=1;dev->SetViewport(&v);}else dev->SetViewport(nullptr);break;}
         case 32:{if(r(4)==0)dropOne();break;}
-        default:break;
+        default:{   // the less common filterable Sets, with values from a tiny set
+            switch(r(6)){
+            case 0:{D3DMATERIAL9 m{};std::memset(&m,int(r(2)),sizeof m);dev->SetMaterial(&m);break;}
+            case 1:dev->LightEnable(r(3),r(2));break;
+            case 2:{float p[4]={float(r(2)),0,0,0};dev->SetClipPlane(r(2),p);break;}
+            case 3:dev->SetNPatchMode(float(r(2)));break;
+            case 4:dev->SetSoftwareVertexProcessing(r(2));break;
+            default:dev->SetCurrentTexturePalette(r(2));break;
+            }
+            break;}
         }
     }
     void releaseAll(){
@@ -503,7 +600,7 @@ static void equivalence(int steps,std::uint64_t seed){
     std::printf("equivalence seed=%llu steps=%d results=%zu trace=%zu presents=%zu\n",(unsigned long long)seed,steps,outA.size(),traceA.size(),presA.size());
 }
 static void streamTests(bool threadsOnly){
-    lifetimeAndIdentity();stateKnownUnknown();locksPreserveBytes();shadowCap();queriesAndSyncCensus();resetAndShutdown();textureShadows();statsLine();childrenOutliveTheDevice();queryProbeAndDeadQuery();initFailureFallback();cursorAndForeignThread();nestedSyncInPump();upDrawsAndBackpressure();snapshotTriggers();
+    lifetimeAndIdentity();stateKnownUnknown();locksPreserveBytes();shadowCap();queriesAndSyncCensus();resetAndShutdown();redundantFiltering();renderTargetResetsViewport();textureShadows();statsLine();childrenOutliveTheDevice();queryProbeAndDeadQuery();initFailureFallback();cursorAndForeignThread();nestedSyncInPump();upDrawsAndBackpressure();snapshotTriggers();
     equivalence(20000,12345);equivalence(20000,987654321);
     (void)threadsOnly;
 }
