@@ -25,6 +25,11 @@ struct Counters {
     // Waits of the game thread: count and nanoseconds by kind. Nested syncs never wait; they are counted separately.
     Counter backpressureWaits{0},backpressureNs{0},syncCalls{0},syncNs{0},presentWaits{0},presentNs{0},nestedSyncs{0};
     Counter consumerSleeps{0};
+    // Stream proxies / state / locks (0.3.192 CS, M2). Pass-through locks by reason; see PassReason in stream_proxies.h.
+    static constexpr std::size_t kPassReasons=8;
+    Counter passThrough[kPassReasons]{};
+    Counter qiMisses{0},deadCreates{0},proxyMismatch{0},foreignEntries{0},foreignPointers{0},createFailures{0},replayFailures{0};
+    Counter stateAnswered{0},stateSynced{0},syncOnlySlots{0},lockAsync{0},queryPolls{0};
     Counter census[kMaxCmdIds]{};   // sync calls per command id (name via cmdName in command_stream.inl)
 };
 

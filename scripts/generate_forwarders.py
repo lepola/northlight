@@ -42,10 +42,12 @@ STREAM = {
                   'CreateVertexBuffer CreateIndexBuffer CreateRenderTarget CreateDepthStencilSurface CreateOffscreenPlainSurface '
                   'CreateStateBlock BeginStateBlock EndStateBlock DrawPrimitiveUP DrawIndexedPrimitiveUP CreateVertexDeclaration '
                   'CreateVertexShader CreatePixelShader CreateQuery',
-        'customrec': 'ShowCursor',
-        'record': 'EvictManagedResources SetCursorProperties SetCursorPosition SetDialogBoxMode SetGammaRamp UpdateSurface UpdateTexture '
-                  'StretchRect ColorFill BeginScene EndScene Clear SetClipStatus ProcessVertices DrawRectPatch DrawTriPatch DeletePatch',
-        'state': 'SetRenderTarget SetDepthStencilSurface SetTransform MultiplyTransform SetViewport SetMaterial SetLight LightEnable '
+        'customrec': 'ShowCursor SetCursorPosition',   # ShowCursor tracks the previous value; SetCursorPosition may come from a foreign thread
+        'record': 'EvictManagedResources SetCursorProperties SetDialogBoxMode SetGammaRamp BeginScene EndScene Clear SetClipStatus '
+                  'DrawRectPatch DrawTriPatch DeletePatch',
+        # UpdateSurface/UpdateTexture/StretchRect/ColorFill/ProcessVertices write a resource on the GPU side: observed so the
+        # destination's CPU-side lock/shadow knowledge is dropped.
+        'state': 'UpdateSurface UpdateTexture StretchRect ColorFill ProcessVertices SetRenderTarget SetDepthStencilSurface SetTransform MultiplyTransform SetViewport SetMaterial SetLight LightEnable '
                  'SetClipPlane SetRenderState SetTexture SetTextureStageState SetSamplerState SetPaletteEntries SetCurrentTexturePalette '
                  'SetScissorRect SetSoftwareVertexProcessing SetNPatchMode DrawPrimitive DrawIndexedPrimitive SetVertexDeclaration SetFVF '
                  'SetVertexShader SetVertexShaderConstantF SetVertexShaderConstantI SetVertexShaderConstantB SetStreamSource '
@@ -79,7 +81,7 @@ STREAM = {
     'IDirect3DPixelShader9': {'custom': _UNK, 'local': 'GetDevice GetFunction'},
     'IDirect3DVertexDeclaration9': {'custom': _UNK, 'local': 'GetDevice GetDeclaration'},
     'IDirect3DStateBlock9': {'custom': _UNK, 'local': 'GetDevice', 'state': 'Capture Apply'},
-    'IDirect3DQuery9': {'custom': _UNK + ' GetData', 'local': 'GetDevice GetType GetDataSize', 'record': 'Issue'},
+    'IDirect3DQuery9': {'custom': _UNK + ' GetData', 'local': 'GetDevice GetType GetDataSize', 'state': 'Issue'},   # observed: counts the END issue the polled result belongs to
 }
 _RECT = 'sizeof(RECT)'
 SPECS = {
@@ -364,6 +366,10 @@ def stream_text(text):
     out += [f'    case Cmd::{n}: return "{n}";' for n in CUSTOM_IDS]
     out += [f'    case Cmd::{m.enum}: return "{m.short}::{m.name}";' for m in ided]
     out += ['    default: return "?";', '    }', '}']
+    sets = [m for m in ided if m.cls == 'state' and (m.name.startswith('Set') or m.name in ('LightEnable', 'MultiplyTransform'))]
+    out += ['// A failed replay of one of these leaves the game thread\'s StreamState wrong: it invalidates itself.', 'inline bool cmdSetsState(Cmd c) {', '    switch(c) {']
+    out += [f'    case Cmd::{m.enum}: return true;' for m in sets]
+    out += ['    default: return false;', '    }', '}']
     recs = [m for m in ided if m.cls in ('record', 'state', 'customrec')]
     for m in recs:
         out += encoder(m)

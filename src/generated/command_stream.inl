@@ -291,6 +291,46 @@ inline const char* cmdName(Cmd c) {
     default: return "?";
     }
 }
+// A failed replay of one of these leaves the game thread's StreamState wrong: it invalidates itself.
+inline bool cmdSetsState(Cmd c) {
+    switch(c) {
+    case Cmd::Device_SetRenderTarget: return true;
+    case Cmd::Device_SetDepthStencilSurface: return true;
+    case Cmd::Device_SetTransform: return true;
+    case Cmd::Device_MultiplyTransform: return true;
+    case Cmd::Device_SetViewport: return true;
+    case Cmd::Device_SetMaterial: return true;
+    case Cmd::Device_SetLight: return true;
+    case Cmd::Device_LightEnable: return true;
+    case Cmd::Device_SetClipPlane: return true;
+    case Cmd::Device_SetRenderState: return true;
+    case Cmd::Device_SetTexture: return true;
+    case Cmd::Device_SetTextureStageState: return true;
+    case Cmd::Device_SetSamplerState: return true;
+    case Cmd::Device_SetPaletteEntries: return true;
+    case Cmd::Device_SetCurrentTexturePalette: return true;
+    case Cmd::Device_SetScissorRect: return true;
+    case Cmd::Device_SetSoftwareVertexProcessing: return true;
+    case Cmd::Device_SetNPatchMode: return true;
+    case Cmd::Device_SetVertexDeclaration: return true;
+    case Cmd::Device_SetFVF: return true;
+    case Cmd::Device_SetVertexShader: return true;
+    case Cmd::Device_SetVertexShaderConstantF: return true;
+    case Cmd::Device_SetVertexShaderConstantI: return true;
+    case Cmd::Device_SetVertexShaderConstantB: return true;
+    case Cmd::Device_SetStreamSource: return true;
+    case Cmd::Device_SetStreamSourceFreq: return true;
+    case Cmd::Device_SetIndices: return true;
+    case Cmd::Device_SetPixelShader: return true;
+    case Cmd::Device_SetPixelShaderConstantF: return true;
+    case Cmd::Device_SetPixelShaderConstantI: return true;
+    case Cmd::Device_SetPixelShaderConstantB: return true;
+    case Cmd::Texture_SetAutoGenFilterType: return true;
+    case Cmd::CubeTexture_SetAutoGenFilterType: return true;
+    case Cmd::VolumeTexture_SetAutoGenFilterType: return true;
+    default: return false;
+    }
+}
 struct Args_Device_EvictManagedResources {
 };
 inline void record_Device_EvictManagedResources(Queue& q) {
@@ -2087,19 +2127,18 @@ template<class Tr> inline bool executeSync(SyncCall& sc, Tr& tr) {
     HRESULT STDMETHODCALLTYPE GetDisplayMode(UINT iSwapChain, D3DDISPLAYMODE* pMode) override { return this->syncCall(NORTHLIGHT_STREAM_TAG(Device_GetDisplayMode), iSwapChain, pMode); } \
     HRESULT STDMETHODCALLTYPE GetCreationParameters(D3DDEVICE_CREATION_PARAMETERS* pParameters) override { return this->local(NORTHLIGHT_STREAM_TAG(Device_GetCreationParameters), pParameters); } \
     HRESULT STDMETHODCALLTYPE SetCursorProperties(UINT XHotSpot, UINT YHotSpot, IDirect3DSurface9* pCursorBitmap) override { ::NorthlightStream::record_Device_SetCursorProperties(this->streamQueue(), XHotSpot, YHotSpot, pCursorBitmap);return D3D_OK; } \
-    void STDMETHODCALLTYPE SetCursorPosition(int X, int Y, DWORD Flags) override { ::NorthlightStream::record_Device_SetCursorPosition(this->streamQueue(), X, Y, Flags); } \
     HRESULT STDMETHODCALLTYPE GetSwapChain(UINT iSwapChain, IDirect3DSwapChain9** pSwapChain) override { return this->local(NORTHLIGHT_STREAM_TAG(Device_GetSwapChain), iSwapChain, pSwapChain); } \
     UINT STDMETHODCALLTYPE GetNumberOfSwapChains() override { return this->local(NORTHLIGHT_STREAM_TAG(Device_GetNumberOfSwapChains)); } \
     HRESULT STDMETHODCALLTYPE GetRasterStatus(UINT iSwapChain, D3DRASTER_STATUS* pRasterStatus) override { return this->syncCall(NORTHLIGHT_STREAM_TAG(Device_GetRasterStatus), iSwapChain, pRasterStatus); } \
     HRESULT STDMETHODCALLTYPE SetDialogBoxMode(WINBOOL bEnableDialogs) override { ::NorthlightStream::record_Device_SetDialogBoxMode(this->streamQueue(), bEnableDialogs);return D3D_OK; } \
     void STDMETHODCALLTYPE SetGammaRamp(UINT swapchain_idx, DWORD flags, const D3DGAMMARAMP* ramp) override { ::NorthlightStream::record_Device_SetGammaRamp(this->streamQueue(), swapchain_idx, flags, ramp); } \
     void STDMETHODCALLTYPE GetGammaRamp(UINT iSwapChain, D3DGAMMARAMP* pRamp) override { return this->syncCall(NORTHLIGHT_STREAM_TAG(Device_GetGammaRamp), iSwapChain, pRamp); } \
-    HRESULT STDMETHODCALLTYPE UpdateSurface(IDirect3DSurface9* src_surface, const RECT* src_rect, IDirect3DSurface9* dst_surface, const POINT* dst_point) override { ::NorthlightStream::record_Device_UpdateSurface(this->streamQueue(), src_surface, src_rect, dst_surface, dst_point);return D3D_OK; } \
-    HRESULT STDMETHODCALLTYPE UpdateTexture(IDirect3DBaseTexture9* pSourceTexture, IDirect3DBaseTexture9* pDestinationTexture) override { ::NorthlightStream::record_Device_UpdateTexture(this->streamQueue(), pSourceTexture, pDestinationTexture);return D3D_OK; } \
+    HRESULT STDMETHODCALLTYPE UpdateSurface(IDirect3DSurface9* src_surface, const RECT* src_rect, IDirect3DSurface9* dst_surface, const POINT* dst_point) override { this->observe(NORTHLIGHT_STREAM_TAG(Device_UpdateSurface), src_surface, src_rect, dst_surface, dst_point);::NorthlightStream::record_Device_UpdateSurface(this->streamQueue(), src_surface, src_rect, dst_surface, dst_point);return D3D_OK; } \
+    HRESULT STDMETHODCALLTYPE UpdateTexture(IDirect3DBaseTexture9* pSourceTexture, IDirect3DBaseTexture9* pDestinationTexture) override { this->observe(NORTHLIGHT_STREAM_TAG(Device_UpdateTexture), pSourceTexture, pDestinationTexture);::NorthlightStream::record_Device_UpdateTexture(this->streamQueue(), pSourceTexture, pDestinationTexture);return D3D_OK; } \
     HRESULT STDMETHODCALLTYPE GetRenderTargetData(IDirect3DSurface9* pRenderTarget, IDirect3DSurface9* pDestSurface) override { return this->syncCall(NORTHLIGHT_STREAM_TAG(Device_GetRenderTargetData), pRenderTarget, pDestSurface); } \
     HRESULT STDMETHODCALLTYPE GetFrontBufferData(UINT iSwapChain, IDirect3DSurface9* pDestSurface) override { return this->syncCall(NORTHLIGHT_STREAM_TAG(Device_GetFrontBufferData), iSwapChain, pDestSurface); } \
-    HRESULT STDMETHODCALLTYPE StretchRect(IDirect3DSurface9* src_surface, const RECT* src_rect, IDirect3DSurface9* dst_surface, const RECT* dst_rect, D3DTEXTUREFILTERTYPE filter) override { ::NorthlightStream::record_Device_StretchRect(this->streamQueue(), src_surface, src_rect, dst_surface, dst_rect, filter);return D3D_OK; } \
-    HRESULT STDMETHODCALLTYPE ColorFill(IDirect3DSurface9* surface, const RECT* rect, D3DCOLOR color) override { ::NorthlightStream::record_Device_ColorFill(this->streamQueue(), surface, rect, color);return D3D_OK; } \
+    HRESULT STDMETHODCALLTYPE StretchRect(IDirect3DSurface9* src_surface, const RECT* src_rect, IDirect3DSurface9* dst_surface, const RECT* dst_rect, D3DTEXTUREFILTERTYPE filter) override { this->observe(NORTHLIGHT_STREAM_TAG(Device_StretchRect), src_surface, src_rect, dst_surface, dst_rect, filter);::NorthlightStream::record_Device_StretchRect(this->streamQueue(), src_surface, src_rect, dst_surface, dst_rect, filter);return D3D_OK; } \
+    HRESULT STDMETHODCALLTYPE ColorFill(IDirect3DSurface9* surface, const RECT* rect, D3DCOLOR color) override { this->observe(NORTHLIGHT_STREAM_TAG(Device_ColorFill), surface, rect, color);::NorthlightStream::record_Device_ColorFill(this->streamQueue(), surface, rect, color);return D3D_OK; } \
     HRESULT STDMETHODCALLTYPE SetRenderTarget(DWORD RenderTargetIndex, IDirect3DSurface9* pRenderTarget) override { this->observe(NORTHLIGHT_STREAM_TAG(Device_SetRenderTarget), RenderTargetIndex, pRenderTarget);::NorthlightStream::record_Device_SetRenderTarget(this->streamQueue(), RenderTargetIndex, pRenderTarget);this->streamQueue().publish();return D3D_OK; } \
     HRESULT STDMETHODCALLTYPE GetRenderTarget(DWORD RenderTargetIndex, IDirect3DSurface9** ppRenderTarget) override { HRESULT _r{};if(this->answer(NORTHLIGHT_STREAM_TAG(Device_GetRenderTarget), RenderTargetIndex, ppRenderTarget, _r))return _r;return this->syncGet(NORTHLIGHT_STREAM_TAG(Device_GetRenderTarget), RenderTargetIndex, ppRenderTarget); } \
     HRESULT STDMETHODCALLTYPE SetDepthStencilSurface(IDirect3DSurface9* pNewZStencil) override { this->observe(NORTHLIGHT_STREAM_TAG(Device_SetDepthStencilSurface), pNewZStencil);::NorthlightStream::record_Device_SetDepthStencilSurface(this->streamQueue(), pNewZStencil);return D3D_OK; } \
@@ -2143,7 +2182,7 @@ template<class Tr> inline bool executeSync(SyncCall& sc, Tr& tr) {
     float STDMETHODCALLTYPE GetNPatchMode() override { float _r{};if(this->answer(NORTHLIGHT_STREAM_TAG(Device_GetNPatchMode), _r))return _r;return this->syncGet(NORTHLIGHT_STREAM_TAG(Device_GetNPatchMode)); } \
     HRESULT STDMETHODCALLTYPE DrawPrimitive(D3DPRIMITIVETYPE PrimitiveType, UINT StartVertex, UINT PrimitiveCount) override { this->observe(NORTHLIGHT_STREAM_TAG(Device_DrawPrimitive), PrimitiveType, StartVertex, PrimitiveCount);::NorthlightStream::record_Device_DrawPrimitive(this->streamQueue(), PrimitiveType, StartVertex, PrimitiveCount);return D3D_OK; } \
     HRESULT STDMETHODCALLTYPE DrawIndexedPrimitive(D3DPRIMITIVETYPE arg0, INT BaseVertexIndex, UINT MinVertexIndex, UINT NumVertices, UINT startIndex, UINT primCount) override { this->observe(NORTHLIGHT_STREAM_TAG(Device_DrawIndexedPrimitive), arg0, BaseVertexIndex, MinVertexIndex, NumVertices, startIndex, primCount);::NorthlightStream::record_Device_DrawIndexedPrimitive(this->streamQueue(), arg0, BaseVertexIndex, MinVertexIndex, NumVertices, startIndex, primCount);return D3D_OK; } \
-    HRESULT STDMETHODCALLTYPE ProcessVertices(UINT SrcStartIndex, UINT DestIndex, UINT VertexCount, IDirect3DVertexBuffer9* pDestBuffer, IDirect3DVertexDeclaration9* pVertexDecl, DWORD Flags) override { ::NorthlightStream::record_Device_ProcessVertices(this->streamQueue(), SrcStartIndex, DestIndex, VertexCount, pDestBuffer, pVertexDecl, Flags);return D3D_OK; } \
+    HRESULT STDMETHODCALLTYPE ProcessVertices(UINT SrcStartIndex, UINT DestIndex, UINT VertexCount, IDirect3DVertexBuffer9* pDestBuffer, IDirect3DVertexDeclaration9* pVertexDecl, DWORD Flags) override { this->observe(NORTHLIGHT_STREAM_TAG(Device_ProcessVertices), SrcStartIndex, DestIndex, VertexCount, pDestBuffer, pVertexDecl, Flags);::NorthlightStream::record_Device_ProcessVertices(this->streamQueue(), SrcStartIndex, DestIndex, VertexCount, pDestBuffer, pVertexDecl, Flags);return D3D_OK; } \
     HRESULT STDMETHODCALLTYPE SetVertexDeclaration(IDirect3DVertexDeclaration9* pDecl) override { this->observe(NORTHLIGHT_STREAM_TAG(Device_SetVertexDeclaration), pDecl);::NorthlightStream::record_Device_SetVertexDeclaration(this->streamQueue(), pDecl);return D3D_OK; } \
     HRESULT STDMETHODCALLTYPE GetVertexDeclaration(IDirect3DVertexDeclaration9** ppDecl) override { HRESULT _r{};if(this->answer(NORTHLIGHT_STREAM_TAG(Device_GetVertexDeclaration), ppDecl, _r))return _r;return this->syncGet(NORTHLIGHT_STREAM_TAG(Device_GetVertexDeclaration), ppDecl); } \
     HRESULT STDMETHODCALLTYPE SetFVF(DWORD FVF) override { this->observe(NORTHLIGHT_STREAM_TAG(Device_SetFVF), FVF);::NorthlightStream::record_Device_SetFVF(this->streamQueue(), FVF);return D3D_OK; } \
@@ -2298,4 +2337,4 @@ template<class Tr> inline bool executeSync(SyncCall& sc, Tr& tr) {
     HRESULT STDMETHODCALLTYPE GetDevice(struct IDirect3DDevice9** ppDevice) override { return this->local(NORTHLIGHT_STREAM_TAG(Query_GetDevice), ppDevice); } \
     D3DQUERYTYPE STDMETHODCALLTYPE GetType() override { return this->local(NORTHLIGHT_STREAM_TAG(Query_GetType)); } \
     DWORD STDMETHODCALLTYPE GetDataSize() override { return this->local(NORTHLIGHT_STREAM_TAG(Query_GetDataSize)); } \
-    HRESULT STDMETHODCALLTYPE Issue(DWORD dwIssueFlags) override { ::NorthlightStream::record_Query_Issue(this->streamQueue(), this, dwIssueFlags);return D3D_OK; }
+    HRESULT STDMETHODCALLTYPE Issue(DWORD dwIssueFlags) override { this->observe(NORTHLIGHT_STREAM_TAG(Query_Issue), dwIssueFlags);::NorthlightStream::record_Query_Issue(this->streamQueue(), this, dwIssueFlags);return D3D_OK; }
