@@ -32,6 +32,10 @@ checks['core budgets read NorthlightStream::cores() at the three sites, no raw h
     and 'NorthlightStaticPlanJob::Async&&NorthlightStream::cores()>2;' in gpu
     and sum(p.read_text().count('std::thread::hardware_concurrency()') for p in fp.sources({'.h','.inl','.cpp'}))==1)
 checks['UP identity: the stream value only replaces the vertex pointer in the shadow-fate key']=(w.count('NorthlightStream::upIdentity')==2 and 'NorthlightStream::upIdentity?NorthlightStream::upIdentity:userVertices' in w)
+checks['frame phase: the GI actor capture defers to a frame that captures anyway (pure helper, nominal-rate stamp), decision inside modelCaptureSkipped']=(
+    'NorthlightQuality::deferActorCapture(quality,in,without,nearShadow,farShadow,actorDeferredFrames)' in w and 'in.actorDue=actorCaptureEnabled();' in w
+    and 'NorthlightQuality::actorCaptureStamp(lastActorCapture,tick,actorDeferredFrames)' in w and 'waited<s.nearShadowInterval&&skipModelCapture(s,without,nearMaps,farMaps)' in q
+    and w.count('actorDeferredFrames=0;')==1)
 dllmain=r[r.index('BOOL WINAPI DllMain('):]
 dllmain=dllmain[:dllmain.index('\n}\n')]
 checks['DllMain creates no thread (loader lock)']=not any(x in dllmain for x in ('CreateThread','std::thread','_beginthread','CreateRemoteThread','QueueUserWorkItem'))

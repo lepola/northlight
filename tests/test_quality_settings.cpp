@@ -58,7 +58,47 @@ template<class S> static void sameAsOld(const S& n,const OldSelection& o){
     assert(direct==(o.count+7)/8&&fog==(o.count+3)/4);
 }
 static bool oldDue(const NorthlightPointShadow::RefreshSchedule& s,uint32_t now,size_t replays){return replays<256||uint32_t(now-s.updatedAt)>=33;}
+// 0.3.192 frame phase: the GI actor capture (every >=200 ms) rides a frame that captures anyway. Steady state of
+// source 0 under Balanced (near 2 / far 5) and Performance, a 16 ms frame; with and without deferActorCapture.
+struct PhaseResult {unsigned frames=0,captures=0,actorCaptures=0,actorOnSkipFrame=0,maxActorGapMs=0,farOnNearOnly=0;};
+static PhaseResult phaseRun(const Settings& q,bool defer,unsigned frameMs){
+    PhaseResult r;ShadowMapReuse nearR[2],farR[2];unsigned passes=0,waited=0;unsigned now=1000,lastActor=0;bool demand=false;
+    for(unsigned frame=0;frame<6000;++frame){now+=frameMs;++r.frames;
+        const bool actorDue=!lastActor||now-lastActor>=200;
+        CaptureInputs in;in.shadows=true;in.demand=demand;in.actorDue=actorDue;in.nextPass=passes+1;in.sourceActive[0]=true;
+        CaptureInputs without=in;without.actorDue=false;
+        bool skip=skipModelCapture(q,in,nearR,farR);
+        const bool wouldSkipWithoutActor=skipModelCapture(q,without,nearR,farR);
+        if(defer&&actorDue&&deferActorCapture(q,in,without,nearR,farR,waited)){++waited;skip=true;}
+        const bool actorThis=actorDue&&!skip,fresh=!skip;
+        if(fresh){demand=false;++r.captures;}
+        if(actorThis){if(lastActor)r.maxActorGapMs=std::max(r.maxActorGapMs,now-lastActor);lastActor=actorCaptureStamp(lastActor,now,waited);waited=0;++r.actorCaptures;if(wouldSkipWithoutActor)++r.actorOnSkipFrame;}
+        ++passes;bool nearRendered=false;
+        for(int cascade=0;cascade<2;++cascade){auto& m=cascade?farR[0]:nearR[0];const unsigned interval=cascade?q.farShadowInterval:q.nearShadowInterval;
+            const bool pull=cascade==1&&pullFar(q.nearShadowInterval,interval,passes,m,nearRendered);
+            const auto action=cascadeAction(m,interval,passes,!pull,false,fresh);
+            if(action==CascadeAction::Defer){demand=true;continue;}if(action==CascadeAction::Reuse)continue;
+            m.begin(interval);if(cascade==0)nearRendered=fresh&&interval>1;const float mat[16]={float(passes)};if(fresh)m.commit(interval,passes,mat);else demand=true;
+            if(cascade==1&&!nearRendered)++r.farOnNearOnly;}
+    }
+    return r;
+}
+static void testActorPhase(){
+    for(Preset p:{Preset::Balanced,Preset::Performance})for(unsigned ms:{7u,11u,16u,33u}){
+        const Settings q=preset(p);const auto base=phaseRun(q,false,ms),moved=phaseRun(q,true,ms);
+        if(false)std::printf("  p%d %ums caps %u/%u actor %u/%u gap %u/%u onSkip %u/%u\n",int(p),ms,base.captures,moved.captures,base.actorCaptures,moved.actorCaptures,base.maxActorGapMs,moved.maxActorGapMs,base.actorOnSkipFrame,moved.actorOnSkipFrame);
+        assert(base.frames==moved.frames);
+        assert(moved.captures<=base.captures&&moved.actorOnSkipFrame==0);                 /* no extra capture frame for the actor, none worse */
+        assert(moved.actorCaptures>=base.actorCaptures); /* the actor rate is kept (nominal 200 ms schedule), never fewer */
+        assert(moved.maxActorGapMs<=base.maxActorGapMs+q.nearShadowInterval*ms+ms);       /* a frame or two late at most */
+    }
+    const Settings q=preset(Preset::Balanced);const auto base=phaseRun(q,false,16),moved=phaseRun(q,true,16);
+    assert(moved.captures<base.captures&&base.actorOnSkipFrame>0);                          /* the actor really did add capture frames before */
+    std::printf("actor phase (Balanced 16 ms, %u frames): capture frames %u -> %u, actor captures %u -> %u, actor-only capture frames %u -> %u\n",
+        base.frames,base.captures,moved.captures,base.actorCaptures,moved.actorCaptures,base.actorOnSkipFrame,moved.actorOnSkipFrame);
+}
 int main(){
+    testActorPhase();
     /* Defaults: absent files, empty file and Preset=Quality are the 0.3.136 constants, except the 0.3.167 FarShadowInterval 4
        and the 0.3.176 PointShadows 0 (off in every preset). */
     const Settings d{};

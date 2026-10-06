@@ -270,6 +270,22 @@ inline bool skipModelCapture(const Settings& s,const CaptureInputs& in,const Sha
         (!nearMaps[source].fresh(s.nearShadowInterval,in.nextPass)||!farMaps[source].fresh(s.farShadowInterval,in.nextPass)))return false;
     return true;
 }
+// 0.3.192 frame phase. The cascades and the model capture cannot be put on different frames: a cascade renders
+// only from fresh replays, so near, far and capture share the frames where a map is due (pullFar aligns far to
+// near for exactly that reason; splitting them adds capture frames). The one periodic consumer that is free to
+// move is the GI actor capture (wall clock, every 200 ms): when it falls on a frame that would otherwise skip the
+// capture it would turn a light frame into a capture frame. It waits for the next capture frame instead, at most
+// NearShadowInterval frames (a frame of capture is due at least that often while a light is active; the cap covers
+// the night/no-source case), so it still runs once per >=200 ms, merely a few frames later. Deterministic: a pure
+// function of the frame's inputs and the number of frames already waited. `due` has actorDue set; `without` is
+// the same frame with actorDue=false (and the point-shadow prediction taken without the actor).
+inline bool deferActorCapture(const Settings& s,const CaptureInputs& due,const CaptureInputs& without,const ShadowMapReuse* nearMaps,const ShadowMapReuse* farMaps,unsigned waited){
+    return due.actorDue&&due.shadows&&!due.demand&&!due.diagnostic&&waited<s.nearShadowInterval&&skipModelCapture(s,without,nearMaps,farMaps);
+}
+// The timestamp a finished actor capture leaves behind. After a deferral it advances the nominal 200 ms schedule
+// instead of taking the (later) frame time, so the capture rate stays exactly one per 200 ms on average.
+inline unsigned actorCaptureStamp(unsigned last,unsigned now,unsigned deferredFrames){
+    return deferredFrames&&last&&now-last>=200?last+200:now;}
 inline std::string describe(const Settings& s){
     std::ostringstream o;o<<"preset="<<name(s.preset);
     unsigned i=0;for(const auto& k:Keys){const char c=s.origin[i++];
