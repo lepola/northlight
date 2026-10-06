@@ -232,6 +232,19 @@ static void initFailureFallback(){
     CHECK(t->refs.load()==1&&liveProxyObjects.load()==0);   // the device is the caller's alone again; the default render target and depth buffer proxies are gone
     gKnobs.failSwapChain.store(false);t->Release();checkClean();
 }
+// The periodic stats line: >600 presents with Diagnostics on give exactly one line, and it carries the CSTREAM tag the log is searched by.
+static std::vector<std::string> gStatLines;
+static void statsLine(){
+    gTrace.clear();gStatLines.clear();StreamDevice::Options opt;
+    opt.log=[](const char* l){gStatLines.push_back(l);};opt.diagnostics=[]{return true;};
+    Rig rig(true,opt);
+    for(int i=0;i<610;++i){rig.dev->DrawPrimitive((D3DPRIMITIVETYPE)4,0,2);rig.dev->Present(nullptr,nullptr,nullptr,nullptr);}
+    rig.sync();
+    std::vector<std::string> lines;for(auto& l:gStatLines)if(l.find(" frames=600 ")!=std::string::npos)lines.push_back(l);   // the 600th replayed frame
+    CHECK(lines.size()==1&&lines[0].rfind("CSTREAM cmds=",0)==0&&lines[0].find("passPerFrame=")!=std::string::npos&&lines[0].find("census[")!=std::string::npos&&lines[0].back()==']');
+    CHECK(lines[0].size()<1600);
+    rig.finish();checkClean();
+}
 static void nestedSyncInPump(){
     gTrace.clear();Rig rig(true);auto& s=rig.core().q.stats;
     static Rig* r;static HRESULT nested;static int calls;r=&rig;nested=12345;calls=0;
@@ -404,7 +417,7 @@ static void equivalence(int steps,std::uint64_t seed){
     std::printf("equivalence seed=%llu steps=%d results=%zu trace=%zu presents=%zu\n",(unsigned long long)seed,steps,outA.size(),traceA.size(),presA.size());
 }
 static void streamTests(bool threadsOnly){
-    lifetimeAndIdentity();stateKnownUnknown();locksPreserveBytes();shadowCap();queriesAndSyncCensus();resetAndShutdown();childrenOutliveTheDevice();queryProbeAndDeadQuery();initFailureFallback();cursorAndForeignThread();nestedSyncInPump();upDrawsAndBackpressure();snapshotTriggers();
+    lifetimeAndIdentity();stateKnownUnknown();locksPreserveBytes();shadowCap();queriesAndSyncCensus();resetAndShutdown();statsLine();childrenOutliveTheDevice();queryProbeAndDeadQuery();initFailureFallback();cursorAndForeignThread();nestedSyncInPump();upDrawsAndBackpressure();snapshotTriggers();
     equivalence(20000,12345);equivalence(20000,987654321);
     (void)threadsOnly;
 }

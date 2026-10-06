@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <atomic>
 #include <chrono>
+#include <cstdarg>
 #include <cstdint>
 #include <cstdio>
 #include <functional>
@@ -336,25 +337,32 @@ private:
             }
         }
     }
+    // Appends to the CSTREAM line, never past the buffer (n stays below kLine).
+    static constexpr int kLine=1600;
+    __attribute__((format(printf,3,4))) static void put(char* buf,int& n,const char* fmt,...){
+        if(n<0||n>=kLine-1)return;va_list ap;va_start(ap,fmt);const int w=std::vsnprintf(buf+n,size_t(kLine-n),fmt,ap);va_end(ap);
+        if(w>0)n=n+w<kLine-1?n+w:kLine-1;
+    }
     void cstreamLine(std::uint64_t frames){
-        const Counters& s=core.q.stats;char buf[1400];int n=formatCounters(buf,sizeof buf,s);
+        const Counters& s=core.q.stats;char buf[kLine];int n=std::snprintf(buf,sizeof buf,"CSTREAM ");   // the prefix the log is searched by
+        {char part[700];formatCounters(part,sizeof part,s);put(buf,n,"%s",part);}
         const double inv=avg_.n?1.0/avg_.n:0.0;
         const std::uint64_t busy=busyNs.load(),dBusy=busy-lastBusy_;lastBusy_=busy;
-        n+=std::snprintf(buf+n,sizeof buf-size_t(n)," frames=%llu depthAvg=%.0f depthMax=%llu bytesAvg=%.0f bytesMax=%llu replayBusyMs/frame=%.3f dead=%llu answered=%llu synced=%llu syncOnly=%llu snap=%llu/%llu/%llu/%llu",
+        put(buf,n," frames=%llu depthAvg=%.0f depthMax=%llu bytesAvg=%.0f bytesMax=%llu replayBusyMs/frame=%.3f dead=%llu answered=%llu synced=%llu syncOnly=%llu snap=%llu/%llu/%llu/%llu",
             (unsigned long long)frames,avg_.depth*inv,(unsigned long long)avg_.maxDepth,avg_.bytes*inv,(unsigned long long)avg_.maxBytes,sampleEvery?dBusy/1e6/sampleEvery:0.0,
             (unsigned long long)get(s.deadCreates),(unsigned long long)get(s.stateAnswered),(unsigned long long)get(s.stateSynced),(unsigned long long)get(s.syncOnlySlots),
             SnapshotStats::hits.load(),SnapshotStats::misses.load(),SnapshotStats::triggers.load(),SnapshotStats::overflow.load());
         std::uint64_t pass=0;for(unsigned r=0;r<Counters::kPassReasons;++r)pass+=get(s.passThrough[r]);
         const std::uint64_t dPass=pass-lastPass_;lastPass_=pass;
-        n+=std::snprintf(buf+n,sizeof buf-size_t(n)," shadowRefused=%llu/%.1fMB shadowLate=%llu passPerFrame=%.2f",(unsigned long long)get(s.shadowRefused),get(s.shadowRefusedBytes)/1048576.0,(unsigned long long)get(s.shadowLate),sampleEvery?double(dPass)/sampleEvery:0.0);
-        n+=std::snprintf(buf+n,sizeof buf-size_t(n)," pass[");
-        for(unsigned r=0;r<Counters::kPassReasons;++r)n+=std::snprintf(buf+n,sizeof buf-size_t(n),"%s%s=%llu",r?",":"",passReasonName(r),(unsigned long long)get(s.passThrough[r]));
-        n+=std::snprintf(buf+n,sizeof buf-size_t(n),"] census[");
+        put(buf,n," shadowRefused=%llu/%.1fMB shadowLate=%llu passPerFrame=%.2f",(unsigned long long)get(s.shadowRefused),get(s.shadowRefusedBytes)/1048576.0,(unsigned long long)get(s.shadowLate),sampleEvery?double(dPass)/sampleEvery:0.0);
+        put(buf,n," pass[");
+        for(unsigned r=0;r<Counters::kPassReasons;++r)put(buf,n,"%s%s=%llu",r?",":"",passReasonName(r),(unsigned long long)get(s.passThrough[r]));
+        put(buf,n,"] census[");
         std::vector<std::pair<std::uint64_t,unsigned>> top;
         for(unsigned i=0;i<(unsigned)Cmd::Count;++i)if(get(s.census[i]))top.push_back({get(s.census[i]),i});
         std::sort(top.rbegin(),top.rend());
-        for(std::size_t i=0;i<top.size()&&i<8;++i)n+=std::snprintf(buf+n,sizeof buf-size_t(n),"%s%s=%llu",i?",":"",cmdName((Cmd)top[i].second),(unsigned long long)top[i].first);
-        std::snprintf(buf+n,sizeof buf-size_t(n),"]");
+        for(std::size_t i=0;i<top.size()&&i<8;++i)put(buf,n,"%s%s=%llu",i?",":"",cmdName((Cmd)top[i].second),(unsigned long long)top[i].first);
+        put(buf,n,"]");
         log(buf);avg_=Avg();
     }
     void activateSnapshot(GameSnapshot* s){
