@@ -50,6 +50,7 @@ fixture=r'''
 #include "world_streaming.h"
 #include "gi_solve_pool.h"
 #include "quality_settings.h"
+#include "stream_hooks.h"
 #include "geometry_memory.h"
 #include "terrain_reach_fallback.h"
 #include "memory_admission_probe.h"
