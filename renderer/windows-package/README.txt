@@ -162,6 +162,7 @@ Individual settings (Quality / Balanced / Performance):
   DiagReplayProbe       0 / 0 / 0      measurement: the near-shadow character draws a second time, hidden, in 10 s periods, and the timing in the log (needs RenderProfile=1; the image does not change)
   FrameDrawGates        1 / 1 / 1      per-frame draw checks (0 = check every draw as before 0.3.187, for comparisons; the image does not change)
   ShadowPivotCorrection 1 / 1 / 1      near shadow detail follows camera zoom and collisions (0 = the distance of the sharp shadow area is only estimated while orbiting, as before 0.3.190, for comparisons)
+  CommandStream         1 / 1 / 1      the game records its graphics calls and a second thread runs the renderer (0 = everything on the game's thread as before 0.3.192, for comparisons; read at game start)
 When both NearShadowInterval and FarShadowInterval are at least 2, frames that
 draw neither shadow also skip copying the character geometry (about 1–1.5 ms
 of CPU per skipped frame). Light and normal frames alternate: the average FPS
@@ -179,6 +180,23 @@ The file can be saved as UTF-8, ANSI or Notepad's Unicode.
 WINDOWS TEST
 Before a test or a problem report, set Diagnostics=1 in northlight-quality.ini
 (the default is 0); the log then contains the periodic statistics and timings.
+The LOCK METER line (every 2 s) shows how much buffer data the game and the
+renderer lock per frame, which DXVK 3 counts towards its upload throttling:
+discardKiB/frame and stagingKiB/frame (avg, max), over10MiB = frames above
+10 MiB, the share of each source (replayVB, replayIB, liveIB, arena, instances,
+game), ring = the renderer's upload ring wraps (fenceReuse = no DISCARD needed),
+readback = the renderer's read-only locks of game buffers (dynamic, defaultStatic,
+other) with the lock flags used (flag=0x1010 on DXVK 3, 0x10 otherwise).
+MEMMAP lines (always on, a few per device lifecycle point): when the game recreates
+the D3D9 device (for example after an MSAA change) the log gets an address-space
+snapshot at destroy-begin, destroy-end, create and at frame 300 of each device
+(device 1's is "baseline-frame300"). MEMMAP summary = committed/reserved MiB per
+type (image/mapped/private), free and largest free block; top = the 12 largest
+allocations (module= names an image); diff-new / diff-gone / diff-changed = what
+appeared, vanished or changed by 1 MiB or more since the previous snapshot;
+process, heaps, threads give the working set, heap sizes and thread/module counts;
+northlight = Northlight's own cheap tallies. Compare destroy-begin with destroy-end
+to see which allocations of the old device survive.
 1. Check the start of the new run's northlight-renderer.log file:
    Northlight renderer <version>; d3d9.dll proxy ... backend=dxvk ... loaded=1 error=0
    The backend path must point to renderer-backends\dxvk\dxvk_d3d9.dll.

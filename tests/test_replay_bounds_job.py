@@ -138,7 +138,8 @@ struct FakeDecl:IDirect3DVertexDeclaration9 {
     unsigned AddRef()override{return 1;}unsigned Release()override{return 1;}
     HRESULT GetDeclaration(D3DVERTEXELEMENT9*,UINT*)override{return D3D_OK;}
 };
-namespace NorthlightDiagnostics {inline bool flag=false;inline bool enabled(){return flag;}}
+#include "diagnostics_switch.h" /* 0.3.192: draw_snapshot.h includes it (LOCK METER read-back classes); off until a frame turns it on */
+static const bool diagnosticsOff=(NorthlightDiagnostics::configure(false),true);
 struct Packet {
     IDirect3DVertexShader9* originalShader=nullptr;IDirect3DVertexDeclaration9* decl=nullptr;
     NorthlightReplayBounds::Bounds pointBounds;WorkInfo boundsWork;std::shared_ptr<const Prepared> boundsPrepared;
@@ -239,7 +240,7 @@ int main(int argc,char** argv){
         size_t packets=0,valid=0,budgetFrames=0,cancelled=0,violations=0,enclosedVertices=0,lateJoins=0,differentValid=0,unsupported=0;std::mt19937 pick(5);
         for(unsigned f=0;f<frames;++f){
             const size_t count=400+(size_t(f)*7919)%601;scene.frame(f,count,stress,{&legacy,&async});packets+=count;
-            NorthlightDiagnostics::flag=true;const bool sampled=f%7==0;TestClock::step=200+std::int64_t((f*2654435761u)%3800);
+            NorthlightDiagnostics::configure(true);const bool sampled=f%7==0;TestClock::step=200+std::int64_t((f*2654435761u)%3800);
             legacy.legacyPass();
             async.replayBoundsKick();assert(async.replayBoundsWorker.pending());
             for(auto& p:async.replays)assert(!p->pointBounds.valid&&p->boundsWork.kind==NorthlightReplayBounds::WorkKind::Unknown);
@@ -284,7 +285,7 @@ int main(int argc,char** argv){
             /* mix 1: half the meshes on the general interval evaluator with up to 12 bone tuples each (budget-bound, like the game logs) */
             Scene scene(skin,260,mix?12:3,mix?4:2);World legacy(scene.programs),async(scene.programs);warm(legacy,scene);warm(async,scene);
             std::vector<double> legacyMs,kickMs,immediateMs,overlapMs,workerMs,lagMs;size_t legacyValid=0,asyncValid=0;
-            for(unsigned n=0;n<330;++n,++f){scene.frame(f,count,false,{&legacy,&async});NorthlightDiagnostics::flag=false;
+            for(unsigned n=0;n<330;++n,++f){scene.frame(f,count,false,{&legacy,&async});NorthlightDiagnostics::configure(false);
                 auto t=now();legacy.legacyPass();const double l=Ms(now()-t).count();
                 t=now();async.replayBoundsKick();const double k=Ms(now()-t).count();
                 const bool overlap=n&1;if(overlap)spin(1000);

@@ -59,7 +59,11 @@ struct Settings {
     // 0.3.190 ShadowPivotCorrection: 1 = the cascade pivot's distance follows a camera zoom or collision snap and
     // the player's own position (shadow_pivot.h); 0 = the orbit estimate alone, as before 0.3.190.
     unsigned shadowPivotCorrection=1;
-    char origin[33]={'d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d'};
+    // 0.3.192 CommandStream: 1 = the game thread records every D3D9 call into a bounded queue and a replay thread runs
+    // the renderer (src/stream/); 0 = the direct path, bit-identical to 0.3.191. Read before the device exists
+    // (stream_hooks.h commandStreamRequested), so it is a creation-time key.
+    unsigned commandStream=1;
+    char origin[34]={'d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d'};
 };
 struct Key { const char* name; unsigned Settings::*field; unsigned low,high; unsigned preset[3]; };
 // preset[] = Quality, Balanced, Performance. Quality must equal Settings{}.
@@ -97,6 +101,7 @@ inline const Key Keys[]={
     {"ActorShadows",&Settings::actorShadows,0,1,{1,1,1}},
     {"FrameDrawGates",&Settings::frameDrawGates,0,1,{1,1,1}},
     {"ShadowPivotCorrection",&Settings::shadowPivotCorrection,0,1,{1,1,1}},
+    {"CommandStream",&Settings::commandStream,0,1,{1,1,1}},
 };
 inline bool operator==(const Settings& a,const Settings& b){for(const auto& k:Keys)if(a.*k.field!=b.*k.field)return false;return true;}
 inline bool operator!=(const Settings& a,const Settings& b){return !(a==b);}

@@ -140,7 +140,8 @@ template<class Read> inline bool verifyCode(Read read) {
 }
 template<class Read> inline bool readSnapshot(Read read,Snapshot& out) {
     // Includes the render clock, sky camera and all three adjacent body records.
-    // Two identical copies reject concurrent updates. Call on the render thread.
+    // Two identical copies reject concurrent updates. Call on the render thread (0.3.192 CS: with the command stream on,
+    // the replay thread reads this from the game thread's snapshot, which holds the same two copies in order).
     unsigned char a[0x388],b[sizeof a];
     if(!read(0xd38b00,a,sizeof a)||!read(0xd38b00,b,sizeof b)||std::memcmp(a,b,sizeof a))return false;
     Snapshot s;std::memcpy(&s.dayFraction,a+4,4);

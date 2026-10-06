@@ -1,4 +1,5 @@
 #pragma once
+#include "stream_hooks.h"
 #include "world_context.h"
 #include "effect_switches.h"
 #include "world_camera.h"
@@ -62,6 +63,9 @@
 #include "replay_gpu_cache.h"
 #include "replay_gpu_batches.h"
 #include "replay_bulk_layout.h"
+#include "dynamic_ring.h"
+#include "lock_meter.h"
+#include "replay_copies.h"
 #include "vertex_declaration_cache.h"
 #include "replay_draw_state.h"
 #include "render_thread_probe.h"
@@ -500,6 +504,9 @@ private:
     std::string uploadedMap;
     IDirect3DIndexBuffer9* liveIndicesGPU=nullptr;
     UINT liveIndexBytes=0;
+    NorthlightDynamicRing::FrameFence frameFence; /* 0.3.192 (DXVK3): ONE EVENT query per frame for every upload ring, issued in endFrame() */
+    NorthlightDynamicRing::FrameFence& fence(){frameFence.device=d;return frameFence;}
+    NorthlightDynamicRing::Ring liveIndexRing;UINT liveIndexBase=0; /* 0.3.192 (DXVK3): liveIndexBytes = the ring capacity; liveIndexBase = the ring offset of the current lists, in indices */
     struct PendingMesh {
         std::shared_ptr<NorthlightGI::BVH> bvh;
         std::shared_ptr<NorthlightWorldMesh::WorldMeshUploadPlan> plan;
@@ -652,7 +659,8 @@ private:
     NorthlightReplayBulk::Layout replayBulkLayout;
     IDirect3DVertexBuffer9* replayVerticesGPU[4]={};
     IDirect3DIndexBuffer9* replayIndicesGPU=nullptr;
-    UINT replayVertexBytes[4]={},replayIndexBytes=0;
+    UINT replayVertexBytes[4]={},replayIndexBytes=0; /* 0.3.192 (DXVK3): the ring capacities */
+    NorthlightDynamicRing::Ring replayVertexRing[4],replayIndexRing;
     // 0.3.177 (r83): shared handles: a replay captured with a program keeps it for the frame even if
     // registerShader() erases the entry (the prepare worker reads it without the map).
     std::unordered_map<IDirect3DVertexShader9*,std::shared_ptr<const NorthlightActorDeformation::Program>> actorPrograms;
@@ -907,9 +915,9 @@ private:
       try {
         // GIThreads>1: helpers at the same below-normal priority; probe values are scheduling-independent.
         std::unique_ptr<NorthlightGI::SolvePool> solvePool;
-        const unsigned solverThreads=NorthlightQuality::giSolverThreads(quality,std::thread::hardware_concurrency());
+        const unsigned solverThreads=NorthlightQuality::giSolverThreads(quality,NorthlightStream::cores());
         if(solverThreads>1)solvePool=std::make_unique<NorthlightGI::SolvePool>(solverThreads-1,[]{SetThreadPriority(GetCurrentThread(),THREAD_PRIORITY_BELOW_NORMAL);});
-        if(quality.giThreads>1)logf("QUALITY GI solver threads requested=%u effective=%u cores=%u priority=below-normal",quality.giThreads,solverThreads,std::thread::hardware_concurrency());
+        if(quality.giThreads>1)logf("QUALITY GI solver threads requested=%u effective=%u cores=%u priority=below-normal",quality.giThreads,solverThreads,NorthlightStream::cores());
         // 0.3.153: geometry regions are built on their own below-normal thread
         // while this worker keeps solving camera moves against the published
         // previous generation. The builder alone owns the local geometry cache,
@@ -1652,6 +1660,13 @@ private:
         try{std::vector<const void*> a,b;for(const auto& s:now)a.push_back(s.get());for(const auto& s:before)b.push_back(s.get());
             std::sort(a.begin(),a.end());std::sort(b.begin(),b.end());return a==b?"order":"membership";}catch(...){return "unknown";}
     }
+    // 0.3.192 (DXVK3): (re)creates the live IB at the given ring capacity; on failure no buffer and no ring.
+    bool recreateLiveIndices(UINT capacity){
+        auto& queries=fence();
+        drop(liveIndicesGPU);liveIndexBytes=0;NorthlightDynamicRing::reset(liveIndexRing,0,queries);liveIndexBase=0;
+        if(!check(d->CreateIndexBuffer(capacity,D3DUSAGE_DYNAMIC|D3DUSAGE_WRITEONLY,D3DFMT_INDEX32,D3DPOOL_DEFAULT,&liveIndicesGPU,nullptr),"live index buffer"))return false;
+        liveIndexBytes=capacity;NorthlightDynamicRing::reset(liveIndexRing,capacity,queries);return true;
+    }
     bool uploadLiveTerrain(){
         terrainUploadBytes=0;terrainUploadReused=false;terrainTriangleTests=0;for(auto& ms:terrainPartMs)ms=-1;
         liveTerrainGPU.beginFrame();
@@ -1659,7 +1674,10 @@ private:
         auto part=[&](int k){if(!timedParts)return;const auto now=std::chrono::steady_clock::now();terrainPartMs[k]=std::chrono::duration<double,std::milli>(now-partStart).count();partStart=now;};
         const bool reuse=liveTerrainGeneration==meshGeneration&&frameTerrain==uploadedTerrain && (frameTerrain.empty()||(liveTerrainGPU.vertices()&&liveIndicesGPU));
         if(captureSampled)terrainChange=classifyTerrain(frameTerrain,uploadedTerrain,reuse);
-        if(reuse){terrainUploadReused=true;return true;}
+        // 0.3.192 (DXVK3): a reuse frame draws the live IB slice again without a place(): re-tag its span with this frame's
+        // fence so it stays pending (no NOOVERWRITE overwrite of a slice still drawn) until this frame's draws are submitted.
+        // The newest span is the current lists (place() appends, the older spans are earlier lists); liveIndexBase is untouched.
+        if(reuse){terrainUploadReused=true;if(liveTerrainIndexCount||liveDirectionalIndexCount)NorthlightDynamicRing::touch(liveIndexRing,fence());return true;}
         NorthlightGeometryMemory::Sample arenaMemory;bool arenaSampled=false;
         std::optional<NorthlightStreaming::PhaseProfile::Scope> arenaPhase;arenaPhase.emplace(streamingPhases.peaks[NorthlightStreaming::PhaseProfile::TerrainArena]);
         const HRESULT terrainResult=liveTerrainGPU.update(d,frameTerrain,
@@ -1678,7 +1696,7 @@ private:
         if(terrainResult==S_FALSE){
             // Preserve the existing memory-pressure fallback: the complete
             // cached terrain covers this frame; do not advertise absent live chunks.
-            liveTerrainIndexCount=liveDirectionalIndexCount=0;liveTerrainChunks.clear();uploadedTerrain.clear();return true;
+            liveTerrainIndexCount=liveDirectionalIndexCount=0;liveIndexBase=0;liveTerrainChunks.clear();uploadedTerrain.clear();return true;
         }
         if(!check(terrainResult,"live terrain arena upload"))return false;
         std::optional<NorthlightStreaming::PhaseProfile::Scope> indexPhase;indexPhase.emplace(streamingPhases.peaks[NorthlightStreaming::PhaseProfile::TerrainIndices]);
@@ -1693,17 +1711,27 @@ private:
         auto indexUpload=streamingPhases.measure(NorthlightStreaming::PhaseProfile::TerrainIndexUpload);
         UINT ib=UINT((liveTerrainIndexCount+liveDirectionalIndexCount)*sizeof(uint32_t));
         if(ib>liveIndexBytes){
-            const UINT ibCapacity=roundBuffer(ib,8*NorthlightGeometryMemory::MiB);
+            const UINT ibCapacity=NorthlightDynamicRing::ringCapacity(ib);
             if(!admitsGrowth("live-terrain-index-growth",ibCapacity)){
-                liveTerrainIndexCount=liveDirectionalIndexCount=0;liveTerrainChunks.clear();uploadedTerrain.clear();return true;
+                liveTerrainIndexCount=liveDirectionalIndexCount=0;liveIndexBase=0;liveTerrainChunks.clear();uploadedTerrain.clear();return true;
             }
-            drop(liveIndicesGPU);liveIndexBytes=ibCapacity;
-            if(!check(d->CreateIndexBuffer(liveIndexBytes,D3DUSAGE_DYNAMIC|D3DUSAGE_WRITEONLY,D3DFMT_INDEX32,D3DPOOL_DEFAULT,&liveIndicesGPU,nullptr),"live index buffer"))return false;
+            if(!recreateLiveIndices(ibCapacity))return false;
         }
+        // 0.3.192 (DXVK3): the lists are appended to a fence-checked ring (dynamic_ring.h): no DISCARD, so no
+        // full-buffer charge on DXVK 3.x, while an earlier frame's draws may still read their slice.
+        auto& queries=fence();
+        auto slot=NorthlightDynamicRing::place(liveIndexRing,ib,4,queries);
+        if(slot.discarded&&NorthlightDynamicRing::oversized(liveIndexRing,liveIndexRing.peak)){
+            if(!recreateLiveIndices(NorthlightDynamicRing::ringCapacity(liveIndexRing.peak)))return false;
+            slot=NorthlightDynamicRing::place(liveIndexRing,ib,4,queries);NorthlightLockMeter::ringShrink();
+        }
+        if(slot.wrapped)NorthlightLockMeter::ringWrap(slot.fenceReuse,slot.discarded);
+        if(slot.discarded)NorthlightLockMeter::discard(NorthlightLockMeter::LiveIB,liveIndexBytes);
         void* data=nullptr;
-        if(!check(liveIndicesGPU->Lock(0,ib,&data,D3DLOCK_DISCARD),"live index upload"))return false;
+        if(!check(liveIndicesGPU->Lock(slot.offset,ib,&data,slot.flags),"live index upload"))return false;
         liveTerrainGPU.write(static_cast<uint32_t*>(data));
         if(!check(liveIndicesGPU->Unlock(),"live index unlock"))return false;
+        liveIndexBase=slot.offset/sizeof(uint32_t);
         part(2);
         uploadedTerrain=frameTerrain;liveTerrainGeneration=meshGeneration;terrainUploadBytes=liveTerrainGPU.uploadedBytes+ib;
         return true;
@@ -1764,7 +1792,7 @@ public:
     ~WorldRenderer(){prepareWorker.join(); /* 0.3.179: first: an abandoned worker may still be inside a record */
         logSnapshotAb(); /* 0.3.181: the SNAPSHOT ab window at device destroy */
         {std::lock_guard<std::mutex> lock(mutex);stopping=true;}wake.notify_one();if(worker.joinable())worker.join();releaseGPU();for(auto& p:captureShaders)drop(p.second.replacement);for(auto& p:terrainShadowShaders)drop(p.second);}
-    void releaseGPU(){replayBoundsAbandon();releaseReplayProbe();staticCasters.settle();rigidMemoryClear();prepareQuiesce();neutralShadowMaps=false;prepareCaches->sampled.clear();prepareCaches->bones.clear();prepareCachesStale=false;if(replays.empty()&&heldShadowReplays.empty())prepareFrameRelease(); /* 0.3.179: no replay left to point at them */actorShadowHistory.clear();actorShadowOriginValid=false;replayBoundsMetadata.clear();replayBoundsCache.clear();declarationCache.clear();uploadedStaticOwners.reset();staticOwnerGeneration=UINT64_MAX;staticCasters.reset();staticMatcher.clear();staticScene.reset();staticRetryTick=0;stateBlocks.clear();uploadedTerrain.clear();liveTerrainIndexCount=liveDirectionalIndexCount=0;fixedTerrain.reset();fixedTerrainBits.reset();liveTerrainGeneration=0;drop(regionalFogTexture);drop(neutralAO);uploadedFogField.reset();releasePointGPU();probeActivation.reset();drop(baselineSurface);drop(baselineLight);releaseReplayGPU();liveTerrainGPU.clear();drop(liveIndicesGPU);liveIndexBytes=0;pendingMesh.reset();clearMesh();retiredMaterials.clear();releaseMeshPool();uploadedMap.clear();for(auto& t:shadow)drop(t);for(auto& s:shadowSurface)drop(s);for(auto& t:shadowCache)drop(t);for(auto& s:shadowCacheSurface)drop(s);drop(shadowCacheDepth);drop(shadowVerifySurface);drop(shadowVerify);for(auto& r:shadowVerifyRead)drop(r);drop(shadowScratch);drop(shadowScratchSurface);drop(unionPS);invalidateShadowCache();for(auto& t:probe)drop(t);drop(shadowDepth);drop(lightSurface);drop(smoothSurface);drop(fogSurface);drop(fogBlurredSurface);drop(colorSurface);drop(light);drop(smoothLight);drop(fog);drop(fogBlurred);drop(color);drop(lightingPS);drop(giPS);drop(fogPS);drop(fogBlurPS);drop(localDirectPS);drop(removalPS);drop(temporalPS);drop(localFogPS);drop(normalsPS);drop(normalBuffer);drop(normalSurface);drop(sourceVisPS);for(int a=0;a<2;++a)for(int b=0;b<2;++b){drop(sourceVis[a][b]);drop(sourceVisSurface[a][b]);}sourceVisValid=false;for(int i=0;i<2;++i){drop(temporalLight[i]);drop(temporalLightSurface[i]);drop(temporalDepth[i]);drop(temporalDepthSurface[i]);}temporalValid=false;drop(finalPS);drop(shadowPS);drop(replayPS);drop(shadowVS);drop(cachedShadowVS);drop(cachedShadowPS);drop(cachedFastPS);drop(cachedOpaqueFastPS);drop(cachedOpaquePS);drop(shadowDecl);width=height=0;uploadedSerial=0;}
+    void releaseGPU(){replayBoundsAbandon();releaseReplayProbe();staticCasters.settle();rigidMemoryClear();prepareQuiesce();neutralShadowMaps=false;prepareCaches->sampled.clear();prepareCaches->bones.clear();prepareCachesStale=false;if(replays.empty()&&heldShadowReplays.empty())prepareFrameRelease(); /* 0.3.179: no replay left to point at them */actorShadowHistory.clear();actorShadowOriginValid=false;replayBoundsMetadata.clear();replayBoundsCache.clear();declarationCache.clear();uploadedStaticOwners.reset();staticOwnerGeneration=UINT64_MAX;staticCasters.reset();staticMatcher.clear();staticScene.reset();staticRetryTick=0;stateBlocks.clear();uploadedTerrain.clear();liveTerrainIndexCount=liveDirectionalIndexCount=0;fixedTerrain.reset();fixedTerrainBits.reset();liveTerrainGeneration=0;drop(regionalFogTexture);drop(neutralAO);uploadedFogField.reset();releasePointGPU();probeActivation.reset();drop(baselineSurface);drop(baselineLight);releaseReplayGPU();liveTerrainGPU.clear();{auto& queries=fence();NorthlightDynamicRing::reset(liveIndexRing,0,queries);queries.drop();}drop(liveIndicesGPU);liveIndexBytes=0;liveIndexBase=0;pendingMesh.reset();clearMesh();retiredMaterials.clear();releaseMeshPool();uploadedMap.clear();for(auto& t:shadow)drop(t);for(auto& s:shadowSurface)drop(s);for(auto& t:shadowCache)drop(t);for(auto& s:shadowCacheSurface)drop(s);drop(shadowCacheDepth);drop(shadowVerifySurface);drop(shadowVerify);for(auto& r:shadowVerifyRead)drop(r);drop(shadowScratch);drop(shadowScratchSurface);drop(unionPS);invalidateShadowCache();for(auto& t:probe)drop(t);drop(shadowDepth);drop(lightSurface);drop(smoothSurface);drop(fogSurface);drop(fogBlurredSurface);drop(colorSurface);drop(light);drop(smoothLight);drop(fog);drop(fogBlurred);drop(color);drop(lightingPS);drop(giPS);drop(fogPS);drop(fogBlurPS);drop(localDirectPS);drop(removalPS);drop(temporalPS);drop(localFogPS);drop(normalsPS);drop(normalBuffer);drop(normalSurface);drop(sourceVisPS);for(int a=0;a<2;++a)for(int b=0;b<2;++b){drop(sourceVis[a][b]);drop(sourceVisSurface[a][b]);}sourceVisValid=false;for(int i=0;i<2;++i){drop(temporalLight[i]);drop(temporalLightSurface[i]);drop(temporalDepth[i]);drop(temporalDepthSurface[i]);}temporalValid=false;drop(finalPS);drop(shadowPS);drop(replayPS);drop(shadowVS);drop(cachedShadowVS);drop(cachedShadowPS);drop(cachedFastPS);drop(cachedOpaqueFastPS);drop(cachedOpaquePS);drop(shadowDecl);width=height=0;uploadedSerial=0;}
     // Explicit enable/retry only, called after the wrapper's clearFrame(). This
     // never calls endFrame(), so packet capture and cleanup run exactly once.
     void recover(){meshRetry.clear();if(!failed)return;releaseGPU();failed=false;valid=false;streamingReports=0;logf("WORLD explicit recovery requested");}
@@ -1791,8 +1819,27 @@ public:
         if(n>=0)try{std::string line(size_t(n),'\0');std::vsnprintf(&line[0],size_t(n)+1,format,b);deferredLines.push_back(std::move(line));}catch(...){}
         va_end(b);}
     void flushDeferredLogs(){for(const auto& line:deferredLines)logf("%s",line.c_str());deferredLines.clear();}
+    // 0.3.192 (DXVK3): the per-interval lock volume (lock_meter.h); runs on the Diagnostics 2000 ms tick of endFrame.
+    DWORD lockMeterTick=0;
+    void logLockMeter(){
+        const auto m=NorthlightLockMeter::takeInterval();const double frames=m.frames?double(m.frames):1.0,kib=1024.0;
+        logf("LOCK METER frames=%u discardKiB/frame avg=%.0f max=%.0f stagingKiB/frame avg=%.0f max=%.0f over10MiB=%u | replayVB=%.0f replayIB=%.0f liveIB=%.0f arena=%.0f instances=%.0f game=%.0f | ring wraps=%u fenceReuse=%u discards=%u shrinks=%u | readback/frame locks=%.1f KiB=%.0f dynamic=%u/%.0fKiB defaultStatic=%u/%.0fKiB other=%u/%.0fKiB per frame flag=0x%x processVertices=%u | copies/frame served=%.1f/%.0fKiB fallbackLocks=%.1f fills=%u/%.0fKiB evictions=%u invalidations=%u refused=%u resident=%.0fKiB/%ubuffers cap=%.0fKiB large=%.0fKiB/%u/%u",
+             unsigned(m.frames),m.discardSum/frames/kib,double(m.discardMax)/kib,m.stagingSum/frames/kib,double(m.stagingMax)/kib,unsigned(m.over10MiB),
+             m.site[NorthlightLockMeter::ReplayVB]/frames/kib,m.site[NorthlightLockMeter::ReplayIB]/frames/kib,m.site[NorthlightLockMeter::LiveIB]/frames/kib,
+             m.site[NorthlightLockMeter::Arena]/frames/kib,m.site[NorthlightLockMeter::Instances]/frames/kib,m.site[NorthlightLockMeter::Game]/frames/kib,
+             unsigned(m.ringWraps),unsigned(m.ringFenceReuse),unsigned(m.ringDiscards),unsigned(m.ringShrinks),
+             m.readLocks/frames,m.readBytes/frames/kib,unsigned(m.readClass[NorthlightLockMeter::ReadDynamic]),m.readClassBytes[NorthlightLockMeter::ReadDynamic]/frames/kib,unsigned(m.readClass[NorthlightLockMeter::ReadDefaultStatic]),m.readClassBytes[NorthlightLockMeter::ReadDefaultStatic]/frames/kib,unsigned(m.readClass[NorthlightLockMeter::ReadOther]),m.readClassBytes[NorthlightLockMeter::ReadOther]/frames/kib,
+             unsigned(NorthlightUpload::readBackLock()),unsigned(m.processVertices),
+             m.copyServed/frames,m.copyServedBytes/frames/kib,m.copyFallback/frames,unsigned(m.copyFills),m.copyFillBytes/kib,unsigned(m.copyEvictions),unsigned(m.copyInvalidations),unsigned(m.copyRefused),m.copyResidentBytes/kib,unsigned(m.copyResidentBuffers),m.copyCapBytes/kib,m.copyLargeBytes/kib,unsigned(m.copyLargeGrants),unsigned(m.copyLargeDrops));
+    }
     void endFrame(bool retainPool=true){
         flushDeferredLogs(); /* 0.3.176 (U0/S0): after every bucketed span of the frame */
+        frameFence.endFrame(); /* 0.3.192 (DXVK3): the one Issue of the frame's fence, after every replay/terrain draw, before any early return; reset() calls endFrame() too */
+        NorthlightLockMeter::endFrame();
+        if(NorthlightReplayCopies::enabled.load(std::memory_order_relaxed))NorthlightReplayCopies::advanceFrame(); /* 0.3.192 (CS): the CPU copies' thrash/fill time base, once per frame on the replay thread */
+        if(NorthlightDiagnostics::enabled()){const DWORD tick=GetTickCount();
+            if(!lockMeterTick){lockMeterTick=tick?tick:1;NorthlightLockMeter::takeInterval();}
+            else if(DWORD(tick-lockMeterTick)>=2000){lockMeterTick=tick;logLockMeter();}}
         prepareQuiesce();prepareEndFrame(); /* 0.3.177: before the replays are recycled */
         replayBoundsAbandon(); /* render() joined it; packets are recycled below */
         paletteFrameValid=false;staticPivotReady=false;rigidMemory.clearDrawn(); /* 0.3.173: drawn marks are per capture frame */
@@ -1882,6 +1929,7 @@ public:
     unsigned capturePhaseReadsLastFrame()const{return lastCapturePhaseReads;} /* 0.3.150: clock reads of the capture-phase subset (inside the capture timers), likewise */
     bool hasContext()const{return valid&&!failed&&!workerFault();}
     bool actorShadowsEnabled()const{return quality.actorShadows!=0;}
+    bool commandStream()const{return quality.commandStream!=0;} /* 0.3.192 (CS): the replay-thread stream was requested; creation-time key, see stream_hooks.h */
     bool frameDrawGates()const{return quality.frameDrawGates!=0;} /* 0.3.187: read once at device creation */ /* 0.3.158: ActorShadows=0 leaves actor shadows to the game's blobs */
     const float* legacyFogParameters()const{return legacyFog.parameters;}
     const NorthlightCelestialProfiles::Profile& celestialPalette(const char* map,const float* camera){
@@ -2188,7 +2236,7 @@ public:
         }
         captureModel(type,base,min,vertexTotal,start,count,indexed,current,sample,nullptr,D3DFMT_INDEX16,nullptr,0);
     }
-    void releaseReplayGPU(){replayGpuCache.clear();for(auto& buffer:replayVerticesGPU)drop(buffer);drop(replayIndicesGPU);for(auto& bytes:replayVertexBytes)bytes=0;replayIndexBytes=0;}
+    void releaseReplayGPU(){replayGpuCache.clear();auto& queries=fence();for(auto& ring:replayVertexRing)NorthlightDynamicRing::reset(ring,0,queries);NorthlightDynamicRing::reset(replayIndexRing,0,queries);queries.drop();for(auto& buffer:replayVerticesGPU)drop(buffer);drop(replayIndicesGPU);for(auto& bytes:replayVertexBytes)bytes=0;replayIndexBytes=0;}
     bool uploadReplay(bool allowCache=true){
         NorthlightCapturePhases::Scope<2> phase(captureSampled?&replayUploadPhases:nullptr);
         if(captureSampled)++replayUploadCalls;
@@ -2229,8 +2277,8 @@ public:
         {const auto& cache=replayGpuCache.stats();streamingPhases.record(NorthlightStreaming::PhaseProfile::ReplayCreate,cache.createMs);
          replayCreatedPeak=std::max(replayCreatedPeak,cache.created);replayTimeDeferred+=cache.timeDeferred;}
         {bool grow=totalIndices*4>replayIndexBytes;uint64_t capacity=0;
-         for(unsigned s=0;s<4;++s){if(totals[s]>replayVertexBytes[s])grow=true;capacity+=totals[s]>replayVertexBytes[s]?roundBuffer(totals[s],8*NorthlightGeometryMemory::MiB):replayVertexBytes[s];}
-         capacity+=totalIndices*4>replayIndexBytes?roundBuffer(totalIndices*4,8*NorthlightGeometryMemory::MiB):replayIndexBytes;
+         for(unsigned s=0;s<4;++s){if(totals[s]>replayVertexBytes[s])grow=true;capacity+=totals[s]>replayVertexBytes[s]?NorthlightDynamicRing::ringCapacity(totals[s]):replayVertexBytes[s];}
+         capacity+=totalIndices*4>replayIndexBytes?NorthlightDynamicRing::ringCapacity(totalIndices*4):replayIndexBytes;
          if(grow&&!admitsGrowth("replay-growth",capacity)){
              // Optional residency must not displace casters that the original
              // bulk path could fit. Reclaim it before applying the old fallback.
@@ -2250,22 +2298,46 @@ public:
              if(prepareUnsettled())for(size_t i=fit;i<replays.size();++i)recycleReplay(replays[i].release()); /* 0.3.177: quarantined */
              replays.resize(fit);if(!layout(fit))return false;
          }}
+        // 0.3.192 (DXVK3): each bulk buffer is a fence-checked ring (dynamic_ring.h): this call's streams are appended at
+        // slot.offset (NOOVERWRITE; DISCARD only while an earlier frame's draws may still read the slice), so a frame
+        // is no longer charged the full 8 MiB buffer as a DXVK 3.x DISCARD. layout() stays relative to 0 and the
+        // ring base is added to the replays once, right before the bindings.
+        auto& queries=fence();UINT vertexBase[4]={},indexBase=0;
+        auto ringSlot=[&](NorthlightDynamicRing::Ring& ring,UINT& capacity,UINT bytes,UINT align,NorthlightLockMeter::Site site,auto&& recreate,NorthlightDynamicRing::Slot& slot){
+            if(capacity<bytes){auto grow=streamingPhases.measure(NorthlightStreaming::PhaseProfile::ReplayGrow);++replayGrowths;
+                const UINT bigger=NorthlightDynamicRing::ringCapacity(bytes);NorthlightDynamicRing::reset(ring,0,queries);capacity=0;
+                if(!recreate(bigger))return false;capacity=bigger;NorthlightDynamicRing::reset(ring,bigger,queries);}
+            slot=NorthlightDynamicRing::place(ring,bytes,align,queries);
+            if(slot.discarded&&NorthlightDynamicRing::oversized(ring,ring.peak)){ // would DISCARD an oversized buffer: a right-sized new one charges nothing
+                const UINT smaller=NorthlightDynamicRing::ringCapacity(ring.peak);NorthlightDynamicRing::reset(ring,0,queries);capacity=0;
+                if(!recreate(smaller))return false;capacity=smaller;NorthlightDynamicRing::reset(ring,smaller,queries);
+                slot=NorthlightDynamicRing::place(ring,bytes,align,queries);NorthlightLockMeter::ringShrink();}
+            if(slot.wrapped)NorthlightLockMeter::ringWrap(slot.fenceReuse,slot.discarded);
+            if(slot.discarded)NorthlightLockMeter::discard(site,capacity);
+            return true;};
         for(unsigned s=0;s<4;++s){if(!totals[s])continue;
-            if(replayVertexBytes[s]<totals[s]){auto grow=streamingPhases.measure(NorthlightStreaming::PhaseProfile::ReplayGrow);++replayGrowths;drop(replayVerticesGPU[s]);replayVertexBytes[s]=roundBuffer(totals[s],8*NorthlightGeometryMemory::MiB);
-                if(!check(d->CreateVertexBuffer(replayVertexBytes[s],D3DUSAGE_DYNAMIC|D3DUSAGE_WRITEONLY,0,D3DPOOL_DEFAULT,&replayVerticesGPU[s],nullptr),"model snapshot vertex buffer"))return false;}
+            NorthlightDynamicRing::Slot slot;
+            if(!ringSlot(replayVertexRing[s],replayVertexBytes[s],totals[s],16,NorthlightLockMeter::ReplayVB,[&](UINT capacity){drop(replayVerticesGPU[s]);
+                    return check(d->CreateVertexBuffer(capacity,D3DUSAGE_DYNAMIC|D3DUSAGE_WRITEONLY,0,D3DPOOL_DEFAULT,&replayVerticesGPU[s],nullptr),"model snapshot vertex buffer");},slot))return false;
             auto copy=streamingPhases.measure(NorthlightStreaming::PhaseProfile::ReplayCopy);
-            void* memory=nullptr;if(!check(replayVerticesGPU[s]->Lock(0,totals[s],&memory,D3DLOCK_DISCARD),"model snapshot vertex lock"))return false;
+            void* memory=nullptr;if(!check(replayVerticesGPU[s]->Lock(slot.offset,totals[s],&memory,slot.flags),"model snapshot vertex lock"))return false;
             for(size_t i=0;i<replays.size();++i){auto& p=replays[i];if(p->gpuCached||!replayBulkLayout.unique(i))continue;auto& source=p->mesh().streams[s];if(!source.bytes.empty())std::memcpy(static_cast<std::uint8_t*>(memory)+p->offset[s],source.bytes.data(),source.bytes.size());}
             if(!check(replayVerticesGPU[s]->Unlock(),"model snapshot vertex unlock"))return false;
+            vertexBase[s]=slot.offset;
         }
         UINT indexBytes=UINT(totalIndices*4);
-        if(indexBytes){if(replayIndexBytes<indexBytes){auto grow=streamingPhases.measure(NorthlightStreaming::PhaseProfile::ReplayGrow);++replayGrowths;drop(replayIndicesGPU);replayIndexBytes=roundBuffer(indexBytes,8*NorthlightGeometryMemory::MiB);
-                if(!check(d->CreateIndexBuffer(replayIndexBytes,D3DUSAGE_DYNAMIC|D3DUSAGE_WRITEONLY,D3DFMT_INDEX32,D3DPOOL_DEFAULT,&replayIndicesGPU,nullptr),"model snapshot index buffer"))return false;}
+        if(indexBytes){NorthlightDynamicRing::Slot slot;
+            if(!ringSlot(replayIndexRing,replayIndexBytes,indexBytes,4,NorthlightLockMeter::ReplayIB,[&](UINT capacity){drop(replayIndicesGPU);
+                    return check(d->CreateIndexBuffer(capacity,D3DUSAGE_DYNAMIC|D3DUSAGE_WRITEONLY,D3DFMT_INDEX32,D3DPOOL_DEFAULT,&replayIndicesGPU,nullptr),"model snapshot index buffer");},slot))return false;
             auto copy=streamingPhases.measure(NorthlightStreaming::PhaseProfile::ReplayCopy);
-            void* memory=nullptr;if(!check(replayIndicesGPU->Lock(0,indexBytes,&memory,D3DLOCK_DISCARD),"model snapshot index lock"))return false;
+            void* memory=nullptr;if(!check(replayIndicesGPU->Lock(slot.offset,indexBytes,&memory,slot.flags),"model snapshot index lock"))return false;
             for(size_t i=0;i<replays.size();++i){auto& p=replays[i];if(!p->gpuCached&&replayBulkLayout.unique(i)&&!p->mesh().indices.empty())std::memcpy(static_cast<std::uint32_t*>(memory)+p->start,p->mesh().indices.data(),p->mesh().indices.size()*4);}
             if(!check(replayIndicesGPU->Unlock(),"model snapshot index unlock"))return false;
+            indexBase=slot.offset/4;
         }
+        // The copies are done: from here on offset/start are absolute in the ring buffers (shared duplicates included;
+        // gpuCached replays carry their own batch offsets and are never touched).
+        for(auto& p:replays){if(p->gpuCached)continue;for(unsigned s=0;s<4;++s)if(!p->mesh().streams[s].bytes.empty())p->offset[s]+=vertexBase[s];if(p->indexed)p->start+=indexBase;}
         // 0.3.176 (U3'): a binding already held keeps its reference (no Release/AddRef pair).
         for(auto& p:replays){if(p->gpuCached)continue;for(unsigned s=0;s<4;++s){IDirect3DVertexBuffer9* const stream=p->mesh().streams[s].bytes.empty()?nullptr:replayVerticesGPU[s];
                 if(p->stream[s]!=stream){drop(p->stream[s]);if(stream){p->stream[s]=stream;stream->AddRef();}}}
@@ -2442,7 +2514,7 @@ public:
             ~FateScope(){tracker.record(slot,reason,false);}} fate{shadowFate};
         if(shadowFate.active()){NorthlightShadowFate::Key key;IDirect3DVertexBuffer9* vb=nullptr;UINT offset=0,stride=0;IDirect3DIndexBuffer9* ib=nullptr;
             if(!userVertices&&SUCCEEDED(d->GetStreamSource(0,&vb,&offset,&stride))&&vb){key.vb=reinterpret_cast<std::uintptr_t>(vb);vb->Release();}
-            else key.vb=reinterpret_cast<std::uintptr_t>(userVertices);
+            else key.vb=reinterpret_cast<std::uintptr_t>(NorthlightStream::upIdentity?NorthlightStream::upIdentity:userVertices); /* 0.3.192 (CS): the game's pointer, not the recorded copy's (identity only; the data is read from userVertices) */
             if(indexed&&!userIndices&&SUCCEEDED(d->GetIndices(&ib))&&ib){key.ib=reinterpret_cast<std::uintptr_t>(ib);ib->Release();}
             key.shader=current;key.base=base;key.start=start;key.count=count;key.minimum=minimum;
             // Per instance: the palette root (identical models share buffers and ranges).
@@ -2875,8 +2947,8 @@ public:
             }))return false;
             if(liveDirectionalIndexCount){
                 float opaque[]={1,1,1,-1};d->SetPixelShaderConstantF(0,opaque,1);d->SetTexture(0,nullptr);
-                d->SetStreamSource(0,liveTerrainGPU.vertices(),0,sizeof(NorthlightGI::WorldVertex));d->SetIndices(liveIndicesGPU);
-                if(!check(d->DrawIndexedPrimitive(D3DPT_TRIANGLELIST,0,0,liveTerrainGPU.vertexCapacity(),UINT(liveTerrainIndexCount),UINT(liveDirectionalIndexCount/3)),"live terrain shadow"))return false;
+                d->SetStreamSource(0,liveTerrainGPU.vertices(),0,sizeof(NorthlightGI::WorldVertex));d->SetIndices(liveIndicesGPU);NorthlightDynamicRing::touch(liveIndexRing,fence()); /* 0.3.192 (DXVK3): drawn this frame */
+                if(!check(d->DrawIndexedPrimitive(D3DPT_TRIANGLELIST,0,0,liveTerrainGPU.vertexCapacity(),UINT(liveIndexBase+liveTerrainIndexCount),UINT(liveDirectionalIndexCount/3)),"live terrain shadow"))return false;
             }
             // Original model transforms and bone palette survive; replace view->clip only.
             if(diagnosticCapture){

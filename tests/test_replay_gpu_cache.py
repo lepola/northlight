@@ -8,7 +8,7 @@ import ast,subprocess,tempfile
 HERE=Path(__file__).resolve().parent
 def literal(file,key):return next(ast.literal_eval(n.value) for n in ast.parse(file.read_text()).body if isinstance(n,ast.Assign) and any(getattr(t,'id','')==key for t in n.targets))
 stub=literal(HERE/'test_terrain_snapshot.py','stub')
-stub=stub.replace('struct IDirect3DDevice9{','constexpr unsigned D3DPOOL_DEFAULT=0,D3DLOCK_NOOVERWRITE=0x1000;\nstruct IDirect3DDevice9{\nvirtual HRESULT CreateVertexBuffer(UINT,DWORD,UINT,unsigned,IDirect3DVertexBuffer9**,void*)=0;\nvirtual HRESULT CreateIndexBuffer(UINT,DWORD,D3DFORMAT,unsigned,IDirect3DIndexBuffer9**,void*)=0;')
+stub=stub.replace('struct IDirect3DDevice9{','struct IDirect3DDevice9{\nvirtual HRESULT CreateVertexBuffer(UINT,DWORD,UINT,unsigned,IDirect3DVertexBuffer9**,void*)=0;\nvirtual HRESULT CreateIndexBuffer(UINT,DWORD,D3DFORMAT,unsigned,IDirect3DIndexBuffer9**,void*)=0;')
 body=r'''
 #include "replay_gpu_cache.h"
 #include <cassert>

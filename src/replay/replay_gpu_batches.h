@@ -108,7 +108,7 @@ private:
     }
     template<class Buffer> static bool write(Buffer* b,UINT offset,const void* data,size_t bytes){
         void* out=nullptr;if(FAILED(b->Lock(offset,UINT(bytes),&out,NorthlightUpload::FreshBufferLock)))return false;
-        if(out)std::memcpy(out,data,bytes);const HRESULT hr=b->Unlock();return out&&!FAILED(hr);
+        if(out)std::memcpy(out,data,bytes);NorthlightLockMeter::staging(bytes);const HRESULT hr=b->Unlock();return out&&!FAILED(hr);
     }
     bool storeSeparate(IDirect3DDevice9* device,Entry& e,const NorthlightDrawSnapshot::Mesh& mesh){
         auto built=std::make_unique<Entry>();
@@ -144,10 +144,10 @@ private:
            (indexBytes&&(FAILED(device_->CreateIndexBuffer(UINT(indexBytes),D3DUSAGE_WRITEONLY,D3DFMT_INDEX32,D3DPOOL_DEFAULT,&batch->indices,nullptr))||!batch->indices))){fail();return;}
         {void* out=nullptr;if(FAILED(batch->vertices->Lock(0,UINT(vertexBytes),&out,NorthlightUpload::FreshBufferLock))){fail();return;}
          if(out)for(size_t i=0;i<members.size();++i){const auto& v=meshes[i]->streams[0];std::memcpy(static_cast<uint8_t*>(out)+size_t(members[i]->at.vertexBase)*v.stride,v.bytes.data(),v.bytes.size());}
-         const HRESULT hr=batch->vertices->Unlock();if(!out||FAILED(hr)){fail();return;}}
+         NorthlightLockMeter::staging(vertexBytes);const HRESULT hr=batch->vertices->Unlock();if(!out||FAILED(hr)){fail();return;}}
         if(indexBytes){void* out=nullptr;if(FAILED(batch->indices->Lock(0,UINT(indexBytes),&out,NorthlightUpload::FreshBufferLock))){fail();return;}
          if(out)for(size_t i=0;i<members.size();++i)if(!meshes[i]->indices.empty())std::memcpy(static_cast<uint8_t*>(out)+size_t(members[i]->at.indexStart)*4,meshes[i]->indices.data(),meshes[i]->indices.size()*4);
-         const HRESULT hr=batch->indices->Unlock();if(!out||FAILED(hr)){fail();return;}}
+         NorthlightLockMeter::staging(indexBytes);const HRESULT hr=batch->indices->Unlock();if(!out||FAILED(hr)){fail();return;}}
         Batch* b=batch.get();batches_.push_back(std::move(batch));bytes_+=b->capacity;
         for(size_t i=0;i<members.size();++i){Entry& e=*members[i];const size_t bytes=meshes[i]->byteSize();
             e.batch=b;e.bytes=bytes;++b->live;b->liveBytes+=bytes;live_+=bytes;uploaded_+=bytes;++created_;++stats_.created;++batchStats_.batchedUploads;}

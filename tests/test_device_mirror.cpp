@@ -178,8 +178,8 @@ static void ownerIdentity(){
 }
 // Nesting: an elided outer guard; nested device, state-block, RawScope (and its raw bypass) and second-
 // gate entries keep held and inside exact; the mutex is never taken; exceptions unwind the entry.
-static void ownerNesting(){
- Backend b;DeviceMirror m;MirrorDevice game(&b,&m);ExtensionDevice ext(&b,&m);MirrorGate& g=m.gate;
+static void ownerNesting(bool exclusive=false){
+ Backend b;DeviceMirror m;MirrorDevice game(&b,&m);ExtensionDevice ext(&b,&m);MirrorGate& g=m.gate;if(exclusive)assert(g.setExclusive(true)&&g.exclusive); /* 0.3.192 (CS) */
  IDirect3DStateBlock9* block=nullptr;assert(SUCCEEDED(game.CreateStateBlock(D3DSBT_ALL,&block)));
  g.counting=true;for(unsigned s=0;s<MirrorGate::Sites;++s)g.takeAcquired(MirrorSite(s));const unsigned long locks=gateLocks();
  {MirrorGuard outer(g);assert(outer.elided()&&g.inside==1&&MirrorGuard::heldByThisThread(g));
@@ -205,8 +205,8 @@ static void ownerNesting(){
 // call while a foreign one runs takes the mutex (ownerLocked) and waits; afterwards the owner elides
 // again (not sticky). Each exit acts on its recorded mode: the owner's elided exit while a foreign call
 // is waiting must not unlock the mutex it never took.
-static void foreignWaits(){
- Backend b;DeviceMirror m;MirrorDevice game(&b,&m);MirrorGate& g=m.gate;
+static void foreignWaits(bool exclusive=false){
+ Backend b;DeviceMirror m;MirrorDevice game(&b,&m);MirrorGate& g=m.gate;if(exclusive)assert(g.setExclusive(true)&&g.exclusive); /* 0.3.192 (CS): the foreign call must still wait, then lock */
  std::atomic<bool> entered{false},holding{false},done{false};const unsigned long locks=gateLocks();
  std::thread foreign;
  {MirrorGuard outer(g);assert(outer.elided());
@@ -224,16 +224,18 @@ static void foreignWaits(){
  foreign.join();
  const unsigned long after=gateLocks();{MirrorGuard again(g);assert(again.elided());DWORD v=0;assert(SUCCEEDED(game.GetRenderState(40,&v)));}assert(gateLocks()==after);
  assert(after==locks+3); // two foreign calls and one owner fallback
+ assert(g.foreignExclusive==(exclusive?2u:0u)); // counted only in exclusive mode
  std::puts("PASS foreign waits: an announced foreign call waits for the elided owner call; an owner call during a foreign one locks and waits; elision resumes; exits act on the recorded mode.");
 }
 // Exclusion stress: the owner loops over elided calls of random length (outer guards with nested calls,
 // and bare device calls) while 1-3 foreign threads call device, state-block, raw-scope and guarded
 // bodies. A shared body counter never exceeds 1, the plain shared word is TSan's race target, and the
 // backend's own guard asserts no two calls overlap. Afterwards the owner takes the mutex 0 times.
-static void ownerStress(unsigned rounds){
+static void ownerStress(unsigned rounds,bool exclusive=false){
  unsigned long foreignTotal=0,fallbackTotal=0,elidedTotal=0;
  for(unsigned threads=1;threads<=3;++threads){
   Backend b;DeviceMirror m;MirrorDevice game(&b,&m);ExtensionDevice ext(&b,&m);MirrorGate& g=m.gate;
+  if(exclusive)assert(g.setExclusive(true));
   IDirect3DStateBlock9* block=nullptr;assert(SUCCEEDED(game.CreateStateBlock(D3DSBT_ALL,&block)));
   std::atomic<int> body{0};unsigned long shared=0,elided=0;std::atomic<bool> stop{false};std::atomic<unsigned long> foreignCalls{0};
   auto inBody=[&](unsigned spin){assert(body.fetch_add(1)==0);++shared;for(volatile unsigned i=0;i<spin;++i){}assert(body.fetch_sub(1)==1);};
@@ -262,6 +264,7 @@ static void ownerStress(unsigned rounds){
   const unsigned long locks=gateLocks();
   for(unsigned r=0;r<1000;++r){{MirrorGuard call(g);assert(call.elided());inBody(0);}DWORD v=0;assert(SUCCEEDED(game.GetRenderState(40,&v)));}
   assert(gateLocks()==locks);
+  assert(exclusive==(g.foreignExclusive>0)); /* every foreign entry under exclusive mode went through the barrier path */
   foreignTotal+=foreignCalls;fallbackTotal+=g.ownerLocked-fallbacks;elidedTotal+=elided;
   block->Release();
  }
@@ -978,6 +981,7 @@ int main(int argc,char** argv){
  if(mode("nesting")){ownerNesting();return 0;}
  if(mode("waits")){foreignWaits();return 0;}
  if(mode("stress")){ownerStress(rounds);return 0;}
- if(mode("owner")){ownerIdentity();ownerNesting();foreignWaits();ownerStress(rounds);assert(!liveObjects);return 0;}
- if(mode("threads")){singleGate();gateCensus();rawScopeConcurrency();concurrency();ownerNesting();foreignWaits();ownerStress(rounds);std::puts("PASS threads");return 0;}
- ownerIdentity();assert(!liveObjects);ownerNesting();assert(!liveObjects);foreignWaits();assert(!liveObjects);ownerStress(rounds);assert(!liveObjects);gateCensus();assert(!liveObjects);knownScan();assert(!liveObjects);singleGate();writeThroughLearning();assert(!liveObjects);writeThroughImplicitState();assert(!liveObjects);writeThroughDifferential();assert(!liveObjects);rawScopeDispatchArguments();assert(!liveObjects);rawScopeBanksAndReentry();assert(!liveObjects);rawScopeRestoreAndControls();assert(!liveObjects);rawScopeConcurrency();assert(!liveObjects);rawScopeShadowWorkload();assert(!liveObjects);constantCertificates();assert(!liveObjects);auditCoverageAndSchedule();assert(!liveObjects);static_assert(!std::is_copy_constructible<DeviceMirror>::value,"mirror cannot copy mutex/state");bindingsAndScalars();assert(!liveObjects);constantBanks();assert(!liveObjects);constantCapabilities();assert(!liveObjects);recordingFailures();assert(!liveObjects);savedStateIntegration();assert(!liveObjects);crowdedWorkload();assert(!liveObjects);stateBlocks();assert(!liveObjects);implicitAndDisabled();assert(!liveObjects);auditChecks();assert(!liveObjects);auditEveryField();assert(!liveObjects);concurrency();assert(!liveObjects);std::puts("PASS actual device_mirror.h: authoritative cached queries; COM refs; normalized/failed setters; partial exact-bit banks; ALL/partial/recorded stateblocks including failed Apply; UP and Reset failures; target/FVF implicit changes; two proxies; disabled raw bypass; 30000 randomized banks; 8 threads x5000 iterations, serialized backend calls (80072 with learned write-through, 120008 read-through).");}
+ if(mode("exclusive")){ownerNesting(true);foreignWaits(true);ownerStress(rounds,true);std::puts("PASS exclusive owner mode");return 0;}
+ if(mode("owner")){ownerIdentity();ownerNesting();foreignWaits();ownerStress(rounds);ownerNesting(true);foreignWaits(true);ownerStress(rounds,true);assert(!liveObjects);return 0;}
+ if(mode("threads")){singleGate();gateCensus();rawScopeConcurrency();concurrency();ownerNesting();foreignWaits();ownerStress(rounds);ownerNesting(true);foreignWaits(true);ownerStress(rounds,true);std::puts("PASS threads");return 0;}
+ ownerIdentity();assert(!liveObjects);ownerNesting();assert(!liveObjects);foreignWaits();assert(!liveObjects);ownerStress(rounds);assert(!liveObjects);ownerNesting(true);foreignWaits(true);ownerStress(rounds,true);assert(!liveObjects);gateCensus();assert(!liveObjects);knownScan();assert(!liveObjects);singleGate();writeThroughLearning();assert(!liveObjects);writeThroughImplicitState();assert(!liveObjects);writeThroughDifferential();assert(!liveObjects);rawScopeDispatchArguments();assert(!liveObjects);rawScopeBanksAndReentry();assert(!liveObjects);rawScopeRestoreAndControls();assert(!liveObjects);rawScopeConcurrency();assert(!liveObjects);rawScopeShadowWorkload();assert(!liveObjects);constantCertificates();assert(!liveObjects);auditCoverageAndSchedule();assert(!liveObjects);static_assert(!std::is_copy_constructible<DeviceMirror>::value,"mirror cannot copy mutex/state");bindingsAndScalars();assert(!liveObjects);constantBanks();assert(!liveObjects);constantCapabilities();assert(!liveObjects);recordingFailures();assert(!liveObjects);savedStateIntegration();assert(!liveObjects);crowdedWorkload();assert(!liveObjects);stateBlocks();assert(!liveObjects);implicitAndDisabled();assert(!liveObjects);auditChecks();assert(!liveObjects);auditEveryField();assert(!liveObjects);concurrency();assert(!liveObjects);std::puts("PASS actual device_mirror.h: authoritative cached queries; COM refs; normalized/failed setters; partial exact-bit banks; ALL/partial/recorded stateblocks including failed Apply; UP and Reset failures; target/FVF implicit changes; two proxies; disabled raw bypass; 30000 randomized banks; 8 threads x5000 iterations, serialized backend calls (80072 with learned write-through, 120008 read-through).");}

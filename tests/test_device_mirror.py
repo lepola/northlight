@@ -84,8 +84,14 @@ checks.update({
  'the destructor restores held first and acts on the recorded mode':dtor.index('thread_.held=previous_;')<dtor.index('switch(mode_){')
    and 'foreignActive' not in dtor[:dtor.index('#if NORTHLIGHT_GATE_ELISION_COUNTERFACTUAL==4')]+dtor[dtor.index('#endif'):],
  'elision sets held like a lock (nested sites skip)':ctor.index('thread_.held=&gate;')<ctor.index('gate.entered(') and ctor.count('thread_.held=&gate;')==1,
- 'no FlushProcessWriteBuffers, no runtime A/B, GetCurrentThreadId only on first use':all('FlushProcessWriteBuffers' not in t and 'fastAllowed' not in t for t in proxy.values())
+ 'FlushProcessWriteBuffers only as the exclusive-mode foreign-side barrier (mirror_guard.h), no runtime A/B, GetCurrentThreadId only on first use':all(('FlushProcessWriteBuffers' not in t or n=='mirror_guard.h') and 'fastAllowed' not in t for n,t in proxy.items()) and guard.count('GetProcAddress(kernel,"FlushProcessWriteBuffers")')==1 and 'FlushProcessWriteBuffers(' not in guard
    and guard.count('GetCurrentThreadId()')==1 and 'if(!t.tid){' in guard,
+ 'exclusive owner mode (0.3.192 CS): plain store + acquire load on the owner, announce + process barrier on the foreign side, off unless the stream sets it':(lambda ex,fe:
+    'if(inside.load(std::memory_order_relaxed))return Reenter;\n        inside.store(1,std::memory_order_relaxed);' in ex and 'if(!foreignActive.load(std::memory_order_acquire))return Elide;' in ex and 'inside.exchange' not in ex
+    and 'std::atomic_signal_fence(std::memory_order_seq_cst);' in ex and 'std::atomic<bool> exclusive{false};' in guard and 'if(exclusive.load(std::memory_order_relaxed))return enterOwnerExclusive();' in guard
+    and 'if(exclusive.load(std::memory_order_seq_cst)){foreignExclusive.fetch_add(1,std::memory_order_relaxed);processBarrier();}' in fe
+    and fe.index('foreignActive.fetch_add(1,std::memory_order_seq_cst);')<fe.index('processBarrier();')<fe.index('inside.load(std::memory_order_seq_cst)')
+    and proxy['renderer.cpp'].count('setExclusiveOwner(true)')==1 and proxy['renderer.cpp'].count('setExclusiveOwner(false)')==1)(guard[guard.index('OwnerEntry enterOwnerExclusive(){'):guard.index('bool setExclusive(bool on){')],foreignEntry),
  'compile-time switch on, counterfactuals off by default':'#define NORTHLIGHT_MIRROR_OWNER_FAST_PATH 1' in guard and 'static constexpr bool kMirrorOwnerFastPath=NORTHLIGHT_MIRROR_OWNER_FAST_PATH!=0;' in guard
    and '#define NORTHLIGHT_GATE_ELISION_COUNTERFACTUAL 0' in guard and '#define NORTHLIGHT_GATE_CENSUS_BY_HELD 0' in guard,
  'ownerNs benches the real guard; GATE threads logs ownerLocked':'{MirrorGuard probe(gateBenchGate);}' in proxy['renderer.cpp'] and 'ownerProbe' not in guard+proxy['renderer.cpp']

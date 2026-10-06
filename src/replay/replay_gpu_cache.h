@@ -1,6 +1,7 @@
 #pragma once
 #include "draw_snapshot.h"
 #include "upload_lock.h"
+#include "lock_meter.h"
 
 #include <chrono>
 
@@ -147,13 +148,13 @@ public:
                 for(unsigned s=0;s<4;++s){const auto& data=mesh->streams[s].bytes;if(data.empty())continue;
                     if(FAILED(device->CreateVertexBuffer(UINT(data.size()),D3DUSAGE_WRITEONLY,0,D3DPOOL_DEFAULT,&built->vertices[s],nullptr))||!built->vertices[s])return false;
                     void* out=nullptr;if(FAILED(built->vertices[s]->Lock(0,UINT(data.size()),&out,NorthlightUpload::FreshBufferLock)))return false;
-                    if(out)std::memcpy(out,data.data(),data.size());HRESULT hr=built->vertices[s]->Unlock();if(!out||FAILED(hr))return false;
+                    if(out)std::memcpy(out,data.data(),data.size());NorthlightLockMeter::staging(data.size());HRESULT hr=built->vertices[s]->Unlock();if(!out||FAILED(hr))return false;
                 }
                 if(!mesh->indices.empty()){
                     const UINT count=UINT(mesh->indices.size()*4);
                     if(FAILED(device->CreateIndexBuffer(count,D3DUSAGE_WRITEONLY,D3DFMT_INDEX32,D3DPOOL_DEFAULT,&built->indices,nullptr))||!built->indices)return false;
                     void* out=nullptr;if(FAILED(built->indices->Lock(0,count,&out,NorthlightUpload::FreshBufferLock)))return false;
-                    if(out)std::memcpy(out,mesh->indices.data(),count);HRESULT hr=built->indices->Unlock();if(!out||FAILED(hr))return false;
+                    if(out)std::memcpy(out,mesh->indices.data(),count);NorthlightLockMeter::staging(count);HRESULT hr=built->indices->Unlock();if(!out||FAILED(hr))return false;
                 }
                 // Keep the linked node stable. Publish only after every GPU
                 // buffer succeeds; the temporary owns partial-failure cleanup.
