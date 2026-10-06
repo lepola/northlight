@@ -25,6 +25,50 @@ for methods in CLASSES.values():
         by_class[m.cls] = by_class.get(m.cls, 0) + 1
 print('freshness ok:', classified, 'methods classified', by_class, flush=True)
 
+
+# ---- direct replay audit: the DIRECT list is exactly the audited allowlist, and the Device's own code for each is absent or a pure unwrap ----
+AUDITED_DIRECT = set('SetRenderState SetSamplerState SetTextureStageState SetTransform MultiplyTransform SetMaterial SetLight LightEnable SetClipPlane '
+                     'SetScissorRect SetViewport SetFVF SetStreamSourceFreq SetVertexShaderConstantF SetVertexShaderConstantI SetVertexShaderConstantB '
+                     'SetPixelShaderConstantF SetPixelShaderConstantI SetPixelShaderConstantB SetNPatchMode SetSoftwareVertexProcessing '
+                     'SetCurrentTexturePalette SetPaletteEntries SetTexture SetVertexShader SetPixelShader SetVertexDeclaration SetStreamSource '
+                     'SetIndices SetRenderTarget SetDepthStencilSurface'.split())
+assert {n for _, n in gf.DIRECT} == AUDITED_DIRECT, sorted({n for _, n in gf.DIRECT} ^ AUDITED_DIRECT)
+assert all(i == 'IDirect3DDevice9' for i, _ in gf.DIRECT)
+for never in ('DrawPrimitive', 'DrawIndexedPrimitive', 'DrawPrimitiveUP', 'DrawIndexedPrimitiveUP', 'Clear', 'Present', 'Reset', 'BeginScene', 'EndScene',
+              'CreateVertexShader', 'CreatePixelShader', 'CreateTexture', 'CreateVertexBuffer', 'CreateIndexBuffer', 'ProcessVertices', 'StretchRect',
+              'ColorFill', 'UpdateSurface', 'UpdateTexture', 'BeginStateBlock', 'EndStateBlock', 'ShowCursor', 'SetCursorPosition', 'SetCursorProperties'):
+    assert ('IDirect3DDevice9', never) not in gf.DIRECT, never
+RENDERER = fp.src('renderer.cpp').read_text()
+DEVICE_SRC = RENDERER[RENDERER.index('class Device final'):RENDERER.index('class Factory final')]
+GUARDED = fp.src('mirror_guarded_device.h').read_text()
+MIRROR_SRC = fp.src('device_mirror.h').read_text()
+
+
+def override_body(name):
+    m = re.search(r'STDMETHODCALLTYPE ' + name + r'\([^)]*\)\s*override\s*\{', DEVICE_SRC)
+    if not m:
+        return None
+    depth, i = 1, m.end()
+    while depth:
+        depth += {'{': 1, '}': -1}.get(DEVICE_SRC[i], 0)
+        i += 1
+    return ''.join(DEVICE_SRC[m.end() - 1:i].split())   # whitespace-free
+
+
+for _, name in sorted(gf.DIRECT):
+    body = override_body(name)
+    if body is None:   # no override in Device: the method that runs is MirrorDevice::X, the one ext->X runs (GuardedMirrorDevice only adds the gate)
+        wrapped = re.search(r'STDMETHODCALLTYPE ' + name + r'\([^)]*\) override \{ MirrorGuard lock\(m->gate,MirrorSite::Device\);return MirrorDevice::' + name + r'\(', GUARDED)
+        selfGuarded = re.search(r'STDMETHODCALLTYPE ' + name + r'\([^)]*\)\s*override\s*\{\s*(?:const [^;]*;)?\s*(?:Guard|MirrorGuard) lock\(m->gate', MIRROR_SRC) and 'STDMETHODCALLTYPE ' + name + '(' not in GUARDED
+        assert wrapped or selfGuarded, name
+        continue
+    unwrap = r'(?:\w+|mirrorResources\.unwrap\(\w+\))'
+    pure = r'\{GuardmirrorLock\(mirrorState\.gate\);returnext->' + name + r'\(' + unwrap + r'(?:,' + unwrap + r')*\);\}'
+    buffer = (r'\{GuardmirrorLock\(mirrorState\.gate\);boolwrapped=false;auto\*raw=NorthlightTrackedBuffers::resolveInput\(buffer,wrapped\);'
+              r'if\(buffer&&!wrapped\)mirrorState\.disable\("raw(?:vertex|index)bufferinput"\);returnext->' + name + r'\([\w,]*\);\}')
+    assert re.fullmatch(pure, body) or re.fullmatch(buffer, body), (name, body)   # anything more than unwrap + forward must not be direct
+print('direct audit ok:', len(gf.DIRECT), 'methods')
+
 # ---- the SDK stub: every type the 14 interfaces mention, and the interfaces with default (non-pure) methods ----
 SCALARS = {'LONG': 'int32_t', 'WORD': 'uint16_t', 'BYTE': 'uint8_t', 'BOOL': 'int32_t', 'HRESULT': 'int32_t', 'ULONG': 'uint32_t', 'DWORD': 'uint32_t', 'UINT': 'uint32_t', 'INT': 'int32_t', 'WINBOOL': 'int32_t',
            'D3DCOLOR': 'uint32_t', 'HANDLE': 'void*', 'HWND': 'void*', 'HDC': 'void*', 'float': 'float'}
@@ -227,6 +271,7 @@ with tempfile.TemporaryDirectory(prefix='command-stream-') as tmp:
     compile_run(tmp, 'asan', ['-O1', '-g', '-fsanitize=address,undefined', '-fno-omit-frame-pointer'])
     # Redundant-state filtering compiled out: the Target sees every Set, and the equivalence run requires the exact trace again.
     compile_run(tmp, 'nofilter', ['-O2', '-DNORTHLIGHT_STREAM_FILTER=0'])
+    compile_run(tmp, 'nodirect', ['-O2', '-DNORTHLIGHT_STREAM_DIRECT=0'])   # every call replayed through the Device: the same traces
     compile_run(tmp, 'tsan', ['-O1', '-g', '-fsanitize=thread'], ['threads'])
     # The same generated code against the real d3d9.h, 32-bit Windows: compile only (the DLL's own toolchain).
     zig = fp.zig()

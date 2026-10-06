@@ -5,7 +5,7 @@
 struct TargetKnobs {
     std::atomic<bool> hold{false};            // BeginScene blocks while set: keeps the replay thread busy so commands queue up
     std::atomic<int> presents{0};
-    std::atomic<bool> failSwapChain{false},failQueries{false};
+    std::atomic<bool> failSwapChain{false},failQueries{false},noRaw{false};   // noRaw: the resolver proves no raw pointer (a proxy then replays through the Device)
     bool failCube=true;                       // CreateCubeTexture / CreateVolumeTexture fail (the dead-create path)
 };
 static TargetKnobs gKnobs;
@@ -123,28 +123,25 @@ struct TSwapChain:Counted<FakeSwapChain> {
     ~TSwapChain() override{for(auto* b:back)b->Release();}
 };
 
-// The device itself: state storage with distinctive defaults, creates, and the custom methods.
-struct TargetDevice:Counted<FakeDevice> {
+// The ExtensionDevice's role in the fake: RAW (unwrapped) pointers in, the backend state, and the trace. In the real code a Device-level
+// exposed object wraps a raw backend object; here raw = exposed shifted by a constant, so a wrong or missing unwrap shows as another id.
+template<class T> static T* unwrapFake(T* e){return e?reinterpret_cast<T*>(reinterpret_cast<std::uintptr_t>(e)+kRawShift):nullptr;}
+template<class T> static T* wrapFake(T* r){return r?reinterpret_cast<T*>(reinterpret_cast<std::uintptr_t>(r)-kRawShift):nullptr;}
+struct TargetExt:FakeDevice {
     DWORD rs[256],samp[21][16],tss[8][33];D3DVIEWPORT9 vp{};RECT scissor{};D3DMATRIX xf[512]{};DWORD fvfv=0;float vsF[256][4]{};
     TSurface* rt0=nullptr;TSurface* ds=nullptr;IDirect3DBaseTexture9* tex[21]{};IDirect3DVertexBuffer9* sv[16]{};IDirect3DIndexBuffer9* idx=nullptr;
-    IDirect3DVertexShader9* vsv=nullptr;IDirect3DPixelShader9* psv=nullptr;TSwapChain* sc=nullptr;bool inBlock=false;int resets=0;
-    const void* lastUpData=nullptr;const void* lastUpIdentity=nullptr;
+    IDirect3DVertexShader9* vsv=nullptr;IDirect3DPixelShader9* psv=nullptr;bool inBlock=false;
     D3DMATERIAL9 mat{};float clip[32][4]{};WINBOOL lightEn[16]{};float npatch=0;WINBOOL swvp=0;UINT palette=0;
-    TargetDevice(){
-        gActiveTarget=this;
+    TargetExt(){
         for(unsigned i=0;i<256;++i)rs[i]=1000+i;for(unsigned i=0;i<21;++i)for(unsigned t=0;t<16;++t)samp[i][t]=2000+i*16+t;
         for(unsigned s=0;s<8;++s)for(unsigned t=0;t<33;++t)tss[s][t]=3000+s*33+t;
         vp.X=0;vp.Y=0;vp.Width=640;vp.Height=480;vp.MinZ=0;vp.MaxZ=1;scissor=RECT{0,0,640,480};
-        sc=new TSwapChain;sc->pp.BackBufferWidth=640;sc->pp.BackBufferHeight=480;sc->pp.BackBufferFormat=(D3DFORMAT)22;sc->pp.BackBufferCount=2;sc->rebuild();
-        rt0=sc->back[0];rt0->AddRef();ds=new TSurface(640,480,75,D3::kUsageDS,0);
     }
-    ~TargetDevice() override{
-        gDeviceDeletes.fetch_add(1);if(gActiveTarget==this)gActiveTarget=nullptr;
-        if(rt0)rt0->Release();if(ds)ds->Release();sc->Release();
+    ~TargetExt() override{
+        if(rt0)rt0->Release();if(ds)ds->Release();
         for(auto& t:tex)if(t)t->Release();for(auto& v:sv)if(v)v->Release();if(idx)idx->Release();if(vsv)vsv->Release();if(psv)psv->Release();
     }
     template<class T> static void rep(T*& slot,T* np){if(np)np->AddRef();if(slot)slot->Release();slot=np;}
-    // -- state: logged by the generated fake, stored here --
     HRESULT SetRenderState(D3DRENDERSTATETYPE s,DWORD v) override{FakeDevice::SetRenderState(s,v);if(inBlock)return D3D_OK;if(unsigned(s)<256)rs[s]=v;return D3D_OK;}
     HRESULT GetRenderState(D3DRENDERSTATETYPE s,DWORD* v) override{if(unsigned(s)>=256||!v)return D3DERR_INVALIDCALL;*v=rs[s];return D3D_OK;}
     HRESULT SetSamplerState(DWORD s,D3DSAMPLERSTATETYPE t,DWORD v) override{FakeDevice::SetSamplerState(s,t,v);if(inBlock)return D3D_OK;unsigned i;if(StreamState::sampIndex(s,i)&&unsigned(t)<16)samp[i][t]=v;return D3D_OK;}
@@ -161,22 +158,20 @@ struct TargetDevice:Counted<FakeDevice> {
     HRESULT GetFVF(DWORD* f) override{*f=fvfv;return D3D_OK;}
     HRESULT SetVertexShaderConstantF(UINT r,const float* d,UINT n) override{FakeDevice::SetVertexShaderConstantF(r,d,n);if(inBlock)return D3D_OK;for(UINT i=0;i<n&&r+i<256;++i)std::memcpy(vsF[r+i],d+4*i,16);return D3D_OK;}
     HRESULT GetVertexShaderConstantF(UINT r,float* d,UINT n) override{if(r+n>256)return D3DERR_INVALIDCALL;for(UINT i=0;i<n;++i)std::memcpy(d+4*i,vsF[r+i],16);return D3D_OK;}
-    HRESULT SetRenderTarget(DWORD i,IDirect3DSurface9* s) override{FakeDevice::SetRenderTarget(i,s);if(inBlock)return D3D_OK;if(i==0)rep(rt0,static_cast<TSurface*>(s));return D3D_OK;}
+    HRESULT SetRenderTarget(DWORD i,IDirect3DSurface9* s) override{FakeDevice::SetRenderTarget(i,s);if(inBlock)return D3D_OK;if(i==0)rep(rt0,static_cast<TSurface*>(wrapFake(s)));return D3D_OK;}
     HRESULT GetRenderTarget(DWORD i,IDirect3DSurface9** pp) override{if(i!=0||!rt0)return D3DERR_NOTFOUND;rt0->AddRef();*pp=rt0;return D3D_OK;}
-    HRESULT SetDepthStencilSurface(IDirect3DSurface9* s) override{FakeDevice::SetDepthStencilSurface(s);if(inBlock)return D3D_OK;rep(ds,static_cast<TSurface*>(s));return D3D_OK;}
+    HRESULT SetDepthStencilSurface(IDirect3DSurface9* s) override{FakeDevice::SetDepthStencilSurface(s);if(inBlock)return D3D_OK;rep(ds,static_cast<TSurface*>(wrapFake(s)));return D3D_OK;}
     HRESULT GetDepthStencilSurface(IDirect3DSurface9** pp) override{if(!ds)return D3DERR_NOTFOUND;ds->AddRef();*pp=ds;return D3D_OK;}
-    HRESULT SetTexture(DWORD s,IDirect3DBaseTexture9* t) override{FakeDevice::SetTexture(s,t);if(inBlock)return D3D_OK;unsigned i;if(StreamState::sampIndex(s,i))rep(tex[i],t);return D3D_OK;}
+    HRESULT SetTexture(DWORD s,IDirect3DBaseTexture9* t) override{FakeDevice::SetTexture(s,t);if(inBlock)return D3D_OK;unsigned i;if(StreamState::sampIndex(s,i))rep(tex[i],wrapFake(t));return D3D_OK;}
     HRESULT GetTexture(DWORD s,IDirect3DBaseTexture9** pp) override{unsigned i;if(!StreamState::sampIndex(s,i))return D3DERR_INVALIDCALL;if(tex[i])tex[i]->AddRef();*pp=tex[i];return D3D_OK;}
-    HRESULT SetStreamSource(UINT i,IDirect3DVertexBuffer9* v,UINT o,UINT st) override{FakeDevice::SetStreamSource(i,v,o,st);if(inBlock)return D3D_OK;if(i<16)rep(sv[i],v);return D3D_OK;}
+    HRESULT SetStreamSource(UINT i,IDirect3DVertexBuffer9* v,UINT o,UINT st) override{FakeDevice::SetStreamSource(i,v,o,st);if(inBlock)return D3D_OK;if(i<16)rep(sv[i],wrapFake(v));return D3D_OK;}
     HRESULT GetStreamSource(UINT i,IDirect3DVertexBuffer9** pp,UINT* o,UINT* st) override{if(i>=16)return D3DERR_INVALIDCALL;if(sv[i])sv[i]->AddRef();*pp=sv[i];*o=0;*st=0;return D3D_OK;}
-    HRESULT SetIndices(IDirect3DIndexBuffer9* v) override{FakeDevice::SetIndices(v);if(inBlock)return D3D_OK;rep(idx,v);return D3D_OK;}
+    HRESULT SetIndices(IDirect3DIndexBuffer9* v) override{FakeDevice::SetIndices(v);if(inBlock)return D3D_OK;rep(idx,wrapFake(v));return D3D_OK;}
     HRESULT GetIndices(IDirect3DIndexBuffer9** pp) override{if(idx)idx->AddRef();*pp=idx;return D3D_OK;}
-    HRESULT SetVertexShader(IDirect3DVertexShader9* v) override{FakeDevice::SetVertexShader(v);if(inBlock)return D3D_OK;rep(vsv,v);return D3D_OK;}
+    HRESULT SetVertexShader(IDirect3DVertexShader9* v) override{FakeDevice::SetVertexShader(v);if(inBlock)return D3D_OK;rep(vsv,wrapFake(v));return D3D_OK;}
     HRESULT GetVertexShader(IDirect3DVertexShader9** pp) override{if(vsv)vsv->AddRef();*pp=vsv;return D3D_OK;}
-    HRESULT SetPixelShader(IDirect3DPixelShader9* v) override{FakeDevice::SetPixelShader(v);if(inBlock)return D3D_OK;rep(psv,v);return D3D_OK;}
+    HRESULT SetPixelShader(IDirect3DPixelShader9* v) override{FakeDevice::SetPixelShader(v);if(inBlock)return D3D_OK;rep(psv,wrapFake(v));return D3D_OK;}
     HRESULT GetPixelShader(IDirect3DPixelShader9** pp) override{if(psv)psv->AddRef();*pp=psv;return D3D_OK;}
-    HRESULT BeginScene() override{FakeDevice::BeginScene();while(gKnobs.hold.load())std::this_thread::sleep_for(std::chrono::microseconds(100));gTrace.push_back(digest());return D3D_OK;}
-    // state the filtered Sets would have written: stored here so the digest sees it
     HRESULT SetMaterial(const D3DMATERIAL9* m) override{FakeDevice::SetMaterial(m);if(!inBlock&&m)mat=*m;return D3D_OK;}
     HRESULT SetClipPlane(DWORD i,const float* p) override{FakeDevice::SetClipPlane(i,p);if(!inBlock&&i<32&&p)std::memcpy(clip[i],p,16);return D3D_OK;}
     HRESULT LightEnable(DWORD i,WINBOOL e) override{FakeDevice::LightEnable(i,e);if(!inBlock&&i<16)lightEn[i]=e;return D3D_OK;}
@@ -188,10 +183,72 @@ struct TargetDevice:Counted<FakeDevice> {
         std::uint64_t h=1469598103934665603ull;auto mixb=[&](const void* p,std::size_t n){for(std::size_t i=0;i<n;++i)h=(h^static_cast<const unsigned char*>(p)[i])*1099511628211ull;};
         mixb(rs,sizeof rs);mixb(samp,sizeof samp);mixb(tss,sizeof tss);mixb(&vp,sizeof vp);mixb(&scissor,sizeof scissor);mixb(xf[2].m,64);mixb(xf[3].m,64);mixb(vsF,sizeof vsF);
         mixb(&mat,sizeof mat);mixb(clip,sizeof clip);mixb(lightEn,sizeof lightEn);mixb(&npatch,4);mixb(&swvp,4);mixb(&palette,4);mixb(&fvfv,4);
-        auto id=[&](const void* p){const int v=p?std::atoi(ptrId((std::uintptr_t)p).c_str()+1):0;mixb(&v,sizeof v);};
+        auto id=[&](const void* p){const int v=p?std::atoi(ptrId(reinterpret_cast<std::uintptr_t>(p)+kRawShift).c_str()+1):0;mixb(&v,sizeof v);};   // the raw namespace the Set trace lines use
         for(auto* t:tex)id(t);for(auto* v:sv)id(v);id(idx);id(vsv);id(psv);id(rt0);id(ds);
         return "STATE "+std::to_string(h);
     }
+};
+
+// The Device fake: like the real Device it forwards the state calls to the extension device after unwrapping; creates, draws, Present,
+// Reset and the rest are its own.
+struct TargetDevice:Counted<FakeDevice> {
+    TargetExt ext;TSwapChain* sc=nullptr;int resets=0;
+    const void* lastUpData=nullptr;const void* lastUpIdentity=nullptr;
+    TargetDevice(){
+        gActiveTarget=this;
+        sc=new TSwapChain;sc->pp.BackBufferWidth=640;sc->pp.BackBufferHeight=480;sc->pp.BackBufferFormat=(D3DFORMAT)22;sc->pp.BackBufferCount=2;sc->rebuild();
+        ext.rt0=sc->back[0];ext.rt0->AddRef();ext.ds=new TSurface(640,480,75,D3::kUsageDS,0);
+    }
+    ~TargetDevice() override{gDeviceDeletes.fetch_add(1);if(gActiveTarget==this)gActiveTarget=nullptr;sc->Release();}
+    std::string digest(){return ext.digest();}
+    // -- state: Device -> unwrap -> ext (a Get reads what ext holds) --
+    HRESULT SetRenderState(D3DRENDERSTATETYPE s,DWORD v) override{return ext.SetRenderState(s,v);}
+    HRESULT GetRenderState(D3DRENDERSTATETYPE s,DWORD* v) override{return ext.GetRenderState(s,v);}
+    HRESULT SetSamplerState(DWORD s,D3DSAMPLERSTATETYPE t,DWORD v) override{return ext.SetSamplerState(s,t,v);}
+    HRESULT GetSamplerState(DWORD s,D3DSAMPLERSTATETYPE t,DWORD* v) override{return ext.GetSamplerState(s,t,v);}
+    HRESULT SetTextureStageState(DWORD s,D3DTEXTURESTAGESTATETYPE t,DWORD v) override{return ext.SetTextureStageState(s,t,v);}
+    HRESULT GetTextureStageState(DWORD s,D3DTEXTURESTAGESTATETYPE t,DWORD* v) override{return ext.GetTextureStageState(s,t,v);}
+    HRESULT SetViewport(const D3DVIEWPORT9* v) override{return ext.SetViewport(v);}
+    HRESULT GetViewport(D3DVIEWPORT9* v) override{return ext.GetViewport(v);}
+    HRESULT SetScissorRect(const RECT* r) override{return ext.SetScissorRect(r);}
+    HRESULT GetScissorRect(RECT* r) override{return ext.GetScissorRect(r);}
+    HRESULT SetTransform(D3DTRANSFORMSTATETYPE s,const D3DMATRIX* m) override{return ext.SetTransform(s,m);}
+    HRESULT GetTransform(D3DTRANSFORMSTATETYPE s,D3DMATRIX* m) override{return ext.GetTransform(s,m);}
+    HRESULT MultiplyTransform(D3DTRANSFORMSTATETYPE s,const D3DMATRIX* m) override{return ext.MultiplyTransform(s,m);}
+    HRESULT SetFVF(DWORD f) override{return ext.SetFVF(f);}
+    HRESULT GetFVF(DWORD* f) override{return ext.GetFVF(f);}
+    HRESULT SetVertexShaderConstantF(UINT r,const float* d,UINT n) override{return ext.SetVertexShaderConstantF(r,d,n);}
+    HRESULT GetVertexShaderConstantF(UINT r,float* d,UINT n) override{return ext.GetVertexShaderConstantF(r,d,n);}
+    HRESULT SetVertexShaderConstantI(UINT r,const int* d,UINT n) override{return ext.SetVertexShaderConstantI(r,d,n);}
+    HRESULT SetVertexShaderConstantB(UINT r,const WINBOOL* d,UINT n) override{return ext.SetVertexShaderConstantB(r,d,n);}
+    HRESULT SetPixelShaderConstantF(UINT r,const float* d,UINT n) override{return ext.SetPixelShaderConstantF(r,d,n);}
+    HRESULT SetPixelShaderConstantI(UINT r,const int* d,UINT n) override{return ext.SetPixelShaderConstantI(r,d,n);}
+    HRESULT SetPixelShaderConstantB(UINT r,const WINBOOL* d,UINT n) override{return ext.SetPixelShaderConstantB(r,d,n);}
+    HRESULT SetRenderTarget(DWORD i,IDirect3DSurface9* s) override{return ext.SetRenderTarget(i,unwrapFake(s));}
+    HRESULT GetRenderTarget(DWORD i,IDirect3DSurface9** pp) override{return ext.GetRenderTarget(i,pp);}
+    HRESULT SetDepthStencilSurface(IDirect3DSurface9* s) override{return ext.SetDepthStencilSurface(unwrapFake(s));}
+    HRESULT GetDepthStencilSurface(IDirect3DSurface9** pp) override{return ext.GetDepthStencilSurface(pp);}
+    HRESULT SetTexture(DWORD s,IDirect3DBaseTexture9* t) override{return ext.SetTexture(s,unwrapFake(t));}
+    HRESULT GetTexture(DWORD s,IDirect3DBaseTexture9** pp) override{return ext.GetTexture(s,pp);}
+    HRESULT SetStreamSource(UINT i,IDirect3DVertexBuffer9* v,UINT o,UINT st) override{return ext.SetStreamSource(i,unwrapFake(v),o,st);}
+    HRESULT GetStreamSource(UINT i,IDirect3DVertexBuffer9** pp,UINT* o,UINT* st) override{return ext.GetStreamSource(i,pp,o,st);}
+    HRESULT SetStreamSourceFreq(UINT i,UINT f) override{return ext.SetStreamSourceFreq(i,f);}
+    HRESULT SetIndices(IDirect3DIndexBuffer9* v) override{return ext.SetIndices(unwrapFake(v));}
+    HRESULT GetIndices(IDirect3DIndexBuffer9** pp) override{return ext.GetIndices(pp);}
+    HRESULT SetVertexShader(IDirect3DVertexShader9* v) override{return ext.SetVertexShader(unwrapFake(v));}
+    HRESULT GetVertexShader(IDirect3DVertexShader9** pp) override{return ext.GetVertexShader(pp);}
+    HRESULT SetPixelShader(IDirect3DPixelShader9* v) override{return ext.SetPixelShader(unwrapFake(v));}
+    HRESULT GetPixelShader(IDirect3DPixelShader9** pp) override{return ext.GetPixelShader(pp);}
+    HRESULT SetVertexDeclaration(IDirect3DVertexDeclaration9* v) override{return ext.SetVertexDeclaration(unwrapFake(v));}
+    HRESULT SetMaterial(const D3DMATERIAL9* m) override{return ext.SetMaterial(m);}
+    HRESULT SetLight(DWORD i,const D3DLIGHT9* l) override{return ext.SetLight(i,l);}
+    HRESULT SetClipPlane(DWORD i,const float* p) override{return ext.SetClipPlane(i,p);}
+    HRESULT LightEnable(DWORD i,WINBOOL e) override{return ext.LightEnable(i,e);}
+    HRESULT SetNPatchMode(float n) override{return ext.SetNPatchMode(n);}
+    HRESULT SetSoftwareVertexProcessing(WINBOOL b) override{return ext.SetSoftwareVertexProcessing(b);}
+    HRESULT SetCurrentTexturePalette(UINT n) override{return ext.SetCurrentTexturePalette(n);}
+    HRESULT SetPaletteEntries(UINT n,const PALETTEENTRY* e) override{return ext.SetPaletteEntries(n,e);}
+    HRESULT BeginScene() override{FakeDevice::BeginScene();while(gKnobs.hold.load())std::this_thread::sleep_for(std::chrono::microseconds(100));gTrace.push_back(digest());return D3D_OK;}
     HRESULT DrawPrimitive(D3DPRIMITIVETYPE t,UINT a,UINT b) override{FakeDevice::DrawPrimitive(t,a,b);gTrace.push_back(digest());return D3D_OK;}
     HRESULT DrawIndexedPrimitive(D3DPRIMITIVETYPE t,INT a,UINT b,UINT c,UINT d,UINT e) override{FakeDevice::DrawIndexedPrimitive(t,a,b,c,d,e);gTrace.push_back(digest());return D3D_OK;}
     HRESULT Clear(DWORD n,const D3DRECT* r,DWORD f,D3DCOLOR c,float z,DWORD st) override{FakeDevice::Clear(n,r,f,c,z,st);gTrace.push_back(digest());return D3D_OK;}
@@ -208,12 +265,12 @@ struct TargetDevice:Counted<FakeDevice> {
         gTrace.push_back(std::string("Device::Present ")+(s?"src":"nosrc")+" "+(d?"dst":"nodst")+" "+(dirty?"dirty":"nodirty"));gTrace.push_back(digest());
         const int n=gKnobs.presents.fetch_add(1);return n%5==4?S_FALSE:D3D_OK;}
     HRESULT Reset(D3DPRESENT_PARAMETERS* p) override{
-        for(auto* b:sc->back)if(b->refs.load()>1+(b==rt0?1:0))return D3DERR_INVALIDCALL;   // a held back buffer fails Reset, as in D3D9
-        if(rt0){rt0->Release();rt0=nullptr;}
+        for(auto* b:sc->back)if(b->refs.load()>1+(b==ext.rt0?1:0))return D3DERR_INVALIDCALL;   // a held back buffer fails Reset, as in D3D9
+        if(ext.rt0){ext.rt0->Release();ext.rt0=nullptr;}
         gTrace.push_back("Device::Reset "+std::to_string(p->BackBufferWidth)+"x"+std::to_string(p->BackBufferHeight));
-        sc->pp.BackBufferWidth=p->BackBufferWidth;sc->pp.BackBufferHeight=p->BackBufferHeight;sc->rebuild();rt0=sc->back[0];rt0->AddRef();
-        for(unsigned i=0;i<256;++i)rs[i]=1000+i;vp.Width=p->BackBufferWidth;vp.Height=p->BackBufferHeight;++resets;
-        for(auto& t:tex)if(t){t->Release();t=nullptr;}for(auto& v:sv)if(v){v->Release();v=nullptr;}if(idx){idx->Release();idx=nullptr;}return D3D_OK;}
+        sc->pp.BackBufferWidth=p->BackBufferWidth;sc->pp.BackBufferHeight=p->BackBufferHeight;sc->rebuild();ext.rt0=sc->back[0];ext.rt0->AddRef();
+        for(unsigned i=0;i<256;++i)ext.rs[i]=1000+i;ext.vp.Width=p->BackBufferWidth;ext.vp.Height=p->BackBufferHeight;++resets;
+        for(auto& t:ext.tex)if(t){t->Release();t=nullptr;}for(auto& v:ext.sv)if(v){v->Release();v=nullptr;}if(ext.idx){ext.idx->Release();ext.idx=nullptr;}return D3D_OK;}
     HRESULT CreateTexture(UINT w,UINT h,UINT l,DWORD u,D3DFORMAT f,D3DPOOL p,IDirect3DTexture9** pp,HANDLE*) override{
         gTrace.push_back("Device::CreateTexture "+std::to_string(w)+" "+std::to_string(h)+" "+std::to_string(l)+" "+std::to_string(u)+" "+std::to_string(unsigned(f))+" "+std::to_string(unsigned(p)));
         if(!w||!h)return D3DERR_INVALIDCALL;auto* tx=new TTexture(w,h,l,u,unsigned(f),unsigned(p));gLastTexture=tx;*pp=tx;return D3D_OK;}
@@ -237,8 +294,8 @@ struct TargetDevice:Counted<FakeDevice> {
         if(gKnobs.failQueries.load()){*pp=nullptr;return D3DERR_NOTAVAILABLE;}
         gTrace.push_back("Device::CreateQuery "+std::to_string(unsigned(t)));auto* q=new TQuery;q->type=unsigned(t);*pp=q;return D3D_OK;}
     HRESULT CreateStateBlock(D3DSTATEBLOCKTYPE t,IDirect3DStateBlock9** pp) override{gTrace.push_back("Device::CreateStateBlock "+std::to_string(unsigned(t)));*pp=new TStateBlock;return D3D_OK;}
-    HRESULT BeginStateBlock() override{gTrace.push_back("Device::BeginStateBlock");inBlock=true;return D3D_OK;}
-    HRESULT EndStateBlock(IDirect3DStateBlock9** pp) override{gTrace.push_back("Device::EndStateBlock");inBlock=false;*pp=new TStateBlock;return D3D_OK;}
+    HRESULT BeginStateBlock() override{gTrace.push_back("Device::BeginStateBlock");ext.inBlock=true;return D3D_OK;}
+    HRESULT EndStateBlock(IDirect3DStateBlock9** pp) override{gTrace.push_back("Device::EndStateBlock");ext.inBlock=false;*pp=new TStateBlock;return D3D_OK;}
     HRESULT DrawPrimitiveUP(D3DPRIMITIVETYPE t,UINT n,const void* d,UINT stride) override{
         lastUpData=d;lastUpIdentity=upIdentity;
         gTrace.push_back("Device::DrawPrimitiveUP "+std::to_string(unsigned(t))+" "+std::to_string(n)+" "+std::to_string(stride)+" "+fb(d,std::size_t(StreamDevice::primVerts(unsigned(t),n))*stride));gTrace.push_back(digest());return D3D_OK;}
@@ -248,4 +305,4 @@ struct TargetDevice:Counted<FakeDevice> {
         gTrace.push_back("Device::DrawIndexedPrimitiveUP "+std::to_string(unsigned(t))+" "+std::to_string(mn)+" "+std::to_string(nv)+" "+std::to_string(pc)+" "+std::to_string(unsigned(f))+" "+std::to_string(stride)+" "+fb(ix,ib)+" "+fb(d,std::size_t(mn+nv)*stride));gTrace.push_back(digest());return D3D_OK;}
 };
 
-static void traceDigest(){if(gActiveTarget)gTrace.push_back(gActiveTarget->digest());}
+static void traceDigest(){if(gActiveTarget)gTrace.push_back(gActiveTarget->ext.digest());}

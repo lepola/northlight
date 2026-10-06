@@ -85,6 +85,14 @@ struct Translator {
     template<class T> T* toProxy(T* p){return c.toProxy(p);}
     void result(Cmd id,HRESULT hr){if(FAILED(hr)&&cmdSetsState(id)){add(c.q.stats.replayFailures);c.replayFailure.store(true);}}
     void skipped(Cmd){add(c.q.stats.deadCreates);}
+    IDirect3DDevice9* ext(){return c.ext;}
+    template<class T> T* raw(T* proxy,bool& ok){
+        if(!proxy)return nullptr;
+        ProxyBase* b=ProxyBase::of(static_cast<IUnknown*>(proxy));
+        if(!b||b->dead.load(std::memory_order_relaxed)||!b->raw){ok=false;return nullptr;}
+        return static_cast<T*>(b->raw);
+    }
+    void direct(){own(c.q.stats.directCalls);}
 };
 
 inline void StreamState::loadDefaults(IDirect3DDevice9* dev){
@@ -194,7 +202,7 @@ private:
     DWORD auditRS_[StreamState::kRS]={},auditSamp_[StreamState::kSamplers][StreamState::kSampTypes]={},auditTss_[StreamState::kTSStages][StreamState::kTSTypes]={};
     std::vector<unsigned> touched_;std::vector<bool> touchedFlag_=std::vector<bool>(StreamState::kBits,false);
     struct Avg {double depth=0,bytes=0;unsigned n=0;std::uint64_t maxDepth=0,maxBytes=0;} avg_;
-    std::uint64_t lastBusy_=0,lastPass_=0,lastGameNs_=0,lastGameWait_=0,lastGameFrames_=0,lastPresentNs_=0,lastSyncNs_=0,lastBpNs_=0,lastCmds_=0,lastAnswered_=0,lastSyncCalls_=0,lastFiltered_=0;unsigned deadLogged_=0;
+    std::uint64_t lastBusy_=0,lastPass_=0,lastGameNs_=0,lastGameWait_=0,lastGameFrames_=0,lastPresentNs_=0,lastSyncNs_=0,lastBpNs_=0,lastCmds_=0,lastAnswered_=0,lastSyncCalls_=0,lastFiltered_=0,lastDirect_=0;unsigned deadLogged_=0;
 
     static void captureFpu(unsigned short& cw,unsigned& csr){
         cw=0;csr=0;
@@ -358,11 +366,11 @@ private:
         // Per window (deltas since the previous line, per frame): the game thread's own time (Present to Present minus its waits),
         // its waits, and how many D3D calls it made (recorded, answered locally, synchronous).
         {const std::uint64_t gf=get(s.gameFrames)-lastGameFrames_;lastGameFrames_+=gf;const double inv2=gf?1.0/double(gf):0.0;
-         const std::uint64_t gNs=get(s.gameNs),gW=get(s.gameWaitNs),pNs=get(s.presentNs),sNs=get(s.syncNs),bNs=get(s.backpressureNs),cm=get(s.commands),fl=get(s.filteredCalls),an=get(s.stateAnswered),sc=get(s.syncCalls);
-         put(buf,n," game[per frame]: ms=%.3f(excl waits) syncMs=%.3f presentWaitMs=%.3f bpMs=%.3f recorded=%.1f filtered=%.1f answered=%.1f sync=%.2f",
+         const std::uint64_t gNs=get(s.gameNs),gW=get(s.gameWaitNs),pNs=get(s.presentNs),sNs=get(s.syncNs),bNs=get(s.backpressureNs),cm=get(s.commands),fl=get(s.filteredCalls),dr=get(s.directCalls),an=get(s.stateAnswered),sc=get(s.syncCalls);
+         put(buf,n," game[per frame]: ms=%.3f(excl waits) syncMs=%.3f presentWaitMs=%.3f bpMs=%.3f recorded=%.1f filtered=%.1f answered=%.1f sync=%.2f direct=%.1f",
              double(gNs-lastGameNs_-(gW-lastGameWait_))/1e6*inv2,double(sNs-lastSyncNs_)/1e6*inv2,double(pNs-lastPresentNs_)/1e6*inv2,double(bNs-lastBpNs_)/1e6*inv2,
-             double(cm-lastCmds_)*inv2,double(fl-lastFiltered_)*inv2,double(an-lastAnswered_)*inv2,double(sc-lastSyncCalls_)*inv2);
-         lastGameNs_=gNs;lastGameWait_=gW;lastPresentNs_=pNs;lastSyncNs_=sNs;lastBpNs_=bNs;lastCmds_=cm;lastFiltered_=fl;lastAnswered_=an;lastSyncCalls_=sc;}
+             double(cm-lastCmds_)*inv2,double(fl-lastFiltered_)*inv2,double(an-lastAnswered_)*inv2,double(sc-lastSyncCalls_)*inv2,double(dr-lastDirect_)*inv2);
+         lastGameNs_=gNs;lastGameWait_=gW;lastPresentNs_=pNs;lastSyncNs_=sNs;lastBpNs_=bNs;lastCmds_=cm;lastFiltered_=fl;lastDirect_=dr;lastAnswered_=an;lastSyncCalls_=sc;}
         put(buf,n," texShadow=%.1f/%.0fMB hits=%llu fresh=%llu readbacks=%llu evicted=%llu freshUseful=%llu refused=%llu/%.1fMB",double(std::max<std::int64_t>(0,s.texShadowBytes.load()))/1048576.0,double(core.q.texShadowCap())/1048576.0,
             (unsigned long long)get(s.texShadowHits),(unsigned long long)get(s.texShadowFresh),(unsigned long long)get(s.texShadowReadbacks),(unsigned long long)get(s.texShadowEvicted),(unsigned long long)get(s.texShadowFreshUseful),(unsigned long long)get(s.texShadowRefused),get(s.texShadowRefusedBytes)/1048576.0);
         put(buf,n," pass[");

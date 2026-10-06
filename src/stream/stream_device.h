@@ -32,6 +32,9 @@ public:
         bool (*capture)(GameSnapshot&,Trigger,std::uint64_t)=nullptr;   // game_snapshot.h capture() in the DLL; null = no snapshots
         std::function<void()> threadStart;                              // runs on the replay thread first (owner handoff)
         std::function<void(const char*)> log;
+        // Direct replay: the ExtensionDevice (same real device and mirror as the Device) and the resolver of a Device-level object to the backend
+        // object the Device would unwrap it to (null: not provably a pure unwrap). Both null / directReplay off: everything goes through the Device.
+        IDirect3DDevice9* extension=nullptr;std::function<IUnknown*(IUnknown*,unsigned)> rawOf;bool directReplay=true;
         bool filterRedundant=true;                                      // see redundant(); off: every Set is recorded
         bool (*diagnostics)()=nullptr;                                  // NorthlightDiagnostics::enabled in the DLL
     };
@@ -461,6 +464,7 @@ private:
         :coreOwner(new StreamCore(opt.budget)),core(*coreOwner),replayer(core),parent(par),capture(opt.capture){
         core.target=target;core.game=this;core.logLine=nullptr;st.core=&core;
         restoreOwner=opt.threadStart;replayer.threadStart=std::move(opt.threadStart);replayer.log=opt.log;replayer.diagnostics=opt.diagnostics;filter=opt.filterRedundant;
+        if(kDirectReplay&&opt.directReplay&&opt.extension&&opt.rawOf){core.ext=opt.extension;auto f=opt.rawOf;core.reg.rawOf=[f](IUnknown* e,Kind k){return f(e,unsigned(k));};}
         if(p)pp=*p;
         sc0=new StreamSwapChain(&core);sc0->baseline=1;sc0->pp=pp;
         const UINT n=pp.BackBufferCount?pp.BackBufferCount:1;sc0->kids.assign(n,nullptr);

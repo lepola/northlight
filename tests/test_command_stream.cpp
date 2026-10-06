@@ -33,7 +33,8 @@ static std::string fb(const void* p,std::size_t n){if(!p)return "null";std::stri
 static std::unordered_map<std::uintptr_t,int> gPtrIds;
 static int gNextPtrId=0;
 static std::string ptrId(std::uintptr_t p){auto it=gPtrIds.find(p);if(it==gPtrIds.end())it=gPtrIds.emplace(p,++gNextPtrId).first;return "#"+std::to_string(it->second);}
-static void forgetPtr(const void* p){gPtrIds.erase(reinterpret_cast<std::uintptr_t>(p));}   // a freed object's address may come back as a new object
+constexpr std::uintptr_t kRawShift=0x400000;   // the fake Target's raw object = its exposed object shifted by this (command_stream_targets.h)
+static void forgetPtr(const void* p){gPtrIds.erase(reinterpret_cast<std::uintptr_t>(p));gPtrIds.erase(reinterpret_cast<std::uintptr_t>(p)+kRawShift);}   // a freed object's address may come back as a new object
 template<bool Inner,class T> static std::string fi(T* p){if(!p)return "null";if(gNormalize)return ptrId((std::uintptr_t)p);return std::to_string((std::uintptr_t)p-(Inner?0x10000u:0u));}
 template<class T> static std::string fa(T* p){if(!p)return "null";return gNormalize?"ptr":std::to_string((std::uintptr_t)p);}
 template<class T> static std::string fo(T* p){return p?"out":"null";}
@@ -54,6 +55,9 @@ struct TestTr {
     template<class T> T* toProxy(T* p){return p?reinterpret_cast<T*>((std::uintptr_t)p+0x20000):nullptr;}
     void result(Cmd,HRESULT hr){results.push_back(hr);}
     void skipped(Cmd){++skips;}
+    IDirect3DDevice9* ext(){return nullptr;}   // the generated cases run through the Device path; direct replay is covered by the stream tests
+    template<class T> T* raw(T* p,bool& ok){ok=false;(void)p;return nullptr;}
+    void direct(){}
 };
 // The class hosting NORTHLIGHT_STREAM_*_METHODS in the real code provides these; here the minimum that records its use.
 struct HostBase {

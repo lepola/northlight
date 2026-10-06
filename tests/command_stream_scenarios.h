@@ -6,9 +6,12 @@ struct FakeD3D:IDirect3D9 {};
 static void checkClean(){if(gLiveTargets.load()||liveProxyObjects.load()){std::fprintf(stderr,"leak: targets=%d proxies=%ld\n",gLiveTargets.load(),liveProxyObjects.load());std::abort();}}
 struct Rig {
     TargetDevice* target=nullptr;IDirect3DDevice9* dev=nullptr;StreamDevice* sd=nullptr;FakeD3D parent;const char* reason=nullptr;
-    explicit Rig(bool streamed,StreamDevice::Options opt={}){
+    // direct: replay the DIRECT methods on the fake extension device with raw pointers (the fake's raw = its exposed object shifted, see unwrapFake)
+    explicit Rig(bool streamed,StreamDevice::Options opt={},bool direct=true){
         target=new TargetDevice;
         if(streamed){
+            opt.extension=&target->ext;opt.directReplay=direct;
+            opt.rawOf=[](IUnknown* e,unsigned){return gKnobs.noRaw.load()?nullptr:unwrapFake(e);};
             D3DPRESENT_PARAMETERS pp{};pp.BackBufferWidth=640;pp.BackBufferHeight=480;pp.BackBufferFormat=(D3DFORMAT)22;pp.BackBufferCount=2;
             sd=StreamDevice::make(target,&parent,&pp,std::move(opt),&reason);CHECK(sd);dev=sd;
         }else dev=target;
@@ -577,30 +580,70 @@ struct Game {
     }
 };
 static void equivalence(int steps,std::uint64_t seed){
-    std::vector<std::string> outA,outB,traceA,traceB;std::vector<HRESULT> presA,presB;
-    for(int mode=0;mode<2;++mode){
-        gTrace.clear();gKnobs.presents.store(0);gNormalize=true;gPtrIds.clear();gNextPtrId=0;Rig rig(mode==1);auto& out=mode?outB:outA;auto& pres=mode?presB:presA;
-        Game g(rig.dev,seed,out,pres);
+    // mode 0: the game on the Device directly; 1: through the stream, every call replayed on the Device; 2: through the stream with the DIRECT
+    // methods replayed on the extension device with raw pointers. All three must leave identical Target traces and game-visible results.
+    std::vector<std::string> out[3],trace[3];std::vector<HRESULT> pres[3];
+    for(int mode=0;mode<3;++mode){
+        gTrace.clear();gKnobs.presents.store(0);gNormalize=true;gPtrIds.clear();gNextPtrId=0;Rig rig(mode>0,{},mode==2);
+        Game g(rig.dev,seed,out[mode],pres[mode]);
         for(int i=0;i<steps;++i){
             g.step(i);
             if(i==steps/2){   // a Reset in the middle: the game released nothing the Target holds
                 g.releaseAll();D3DPRESENT_PARAMETERS pp{};pp.BackBufferWidth=700;pp.BackBufferHeight=500;pp.BackBufferFormat=(D3DFORMAT)22;pp.BackBufferCount=2;
-                out.push_back("reset "+std::to_string(rig.dev->Reset(&pp)));
+                out[mode].push_back("reset "+std::to_string(rig.dev->Reset(&pp)));
             }
         }
         g.releaseAll();rig.sync();
-        (mode?traceB:traceA)=filtered(gTrace);
+        if(mode&&kFilterRedundantState)CHECK(get(rig.core().q.stats.filteredCalls)>100);   // the scenario repeats Sets on purpose
+        if(mode==2&&kDirectReplay)CHECK(get(rig.core().q.stats.directCalls)>1000);
+        if(mode==1||(mode==2&&!kDirectReplay))CHECK(get(rig.core().q.stats.directCalls)==0);
+        trace[mode]=filtered(gTrace);
         rig.finish();checkClean();gNormalize=false;
     }
-    CHECK(outA.size()==outB.size());for(std::size_t i=0;i<outA.size();++i)if(outA[i]!=outB[i]){std::fprintf(stderr,"result %zu differs:\n direct: %s\n stream: %s\n",i,outA[i].c_str(),outB[i].c_str());std::abort();}
-    {std::size_t i=0;while(i<traceA.size()&&i<traceB.size()&&traceA[i]==traceB[i])++i;
-     if(i<traceA.size()||i<traceB.size()){std::fprintf(stderr,"trace differs at %zu (sizes %zu vs %zu)\n direct: %s\n stream: %s\n",i,traceA.size(),traceB.size(),i<traceA.size()?traceA[i].substr(0,300).c_str():"-",i<traceB.size()?traceB[i].substr(0,300).c_str():"-");std::abort();}}
-    for(std::size_t i=0;i<traceA.size();++i)if(traceA[i]!=traceB[i]){std::fprintf(stderr,"trace %zu differs:\n direct: %s\n stream: %s\n",i,traceA[i].substr(0,300).c_str(),traceB[i].substr(0,300).c_str());std::abort();}
-    CHECK(presA.size()==presB.size()&&!presA.empty());CHECK(presB[0]==D3D_OK);for(std::size_t i=1;i<presB.size();++i)CHECK(presB[i]==presA[i-1]);   // Present returns the previous frame's real result
-    std::printf("equivalence seed=%llu steps=%d results=%zu trace=%zu presents=%zu\n",(unsigned long long)seed,steps,outA.size(),traceA.size(),presA.size());
+    for(int mode=1;mode<3;++mode){
+        CHECK(out[0].size()==out[mode].size());for(std::size_t i=0;i<out[0].size();++i)if(out[0][i]!=out[mode][i]){std::fprintf(stderr,"result %zu differs (mode %d):\n direct: %s\n stream: %s\n",i,mode,out[0][i].c_str(),out[mode][i].c_str());std::abort();}
+        {std::size_t i=0;auto& A=trace[0];auto& B=trace[mode];while(i<A.size()&&i<B.size()&&A[i]==B[i])++i;
+         if(i<A.size()||i<B.size()){std::fprintf(stderr,"trace differs at %zu (mode %d, sizes %zu vs %zu)\n direct: %s\n stream: %s\n",i,mode,A.size(),B.size(),i<A.size()?A[i].substr(0,300).c_str():"-",i<B.size()?B[i].substr(0,300).c_str():"-");std::abort();}}
+        CHECK(pres[0].size()==pres[mode].size()&&!pres[0].empty());CHECK(pres[mode][0]==D3D_OK);for(std::size_t i=1;i<pres[mode].size();++i)CHECK(pres[mode][i]==pres[0][i-1]);   // Present returns the previous frame's real result
+    }
+    std::printf("equivalence seed=%llu steps=%d results=%zu trace=%zu presents=%zu\n",(unsigned long long)seed,steps,out[0].size(),trace[0].size(),pres[0].size());
+}
+// Direct replay: a proxy caches the backend object behind its inner right when the create/derive/first-sight bound it, a proxy without one
+// replays through the Device, and the cache follows Reset.
+static void directReplayRaw(){
+    if(!kDirectReplay)return;
+    gTrace.clear();Rig rig(true);auto& s=rig.core().q.stats;IDirect3DDevice9* d=rig.dev;
+    auto rawOk=[&](ProxyBase* p){return p&&p->inner&&p->raw&&p->raw==static_cast<IUnknown*>(unwrapFake(p->inner));};
+    IDirect3DTexture9* tex=nullptr;IDirect3DVertexBuffer9* vb=nullptr;IDirect3DIndexBuffer9* ib=nullptr;IDirect3DVertexShader9* vs=nullptr;IDirect3DPixelShader9* ps=nullptr;IDirect3DVertexDeclaration9* dc=nullptr;
+    CHECK(d->CreateTexture(32,32,2,0,(D3DFORMAT)22,(D3DPOOL)1,&tex,nullptr)==D3D_OK&&d->CreateVertexBuffer(64,0,0,(D3DPOOL)0,&vb,nullptr)==D3D_OK&&d->CreateIndexBuffer(64,0,(D3DFORMAT)101,(D3DPOOL)0,&ib,nullptr)==D3D_OK);
+    DWORD code[]={0xFFFE0200u,0x0000FFFFu};D3DVERTEXELEMENT9 el[2]={{0,0,2,0,0,0},{0xFF,0,17,0,0,0}};
+    CHECK(d->CreateVertexShader(code,&vs)==D3D_OK&&d->CreatePixelShader(code,&ps)==D3D_OK&&d->CreateVertexDeclaration(el,&dc)==D3D_OK);
+    IDirect3DSurface9* lvl=nullptr;CHECK(tex->GetSurfaceLevel(1,&lvl)==D3D_OK);rig.sync();
+    for(IUnknown* o:{(IUnknown*)tex,(IUnknown*)vb,(IUnknown*)ib,(IUnknown*)vs,(IUnknown*)ps,(IUnknown*)dc,(IUnknown*)lvl})CHECK(rawOk(ProxyBase::of(o)));   // create and derive
+    IDirect3DSurface9 *rt=nullptr,*ds=nullptr;CHECK(d->GetRenderTarget(0,&rt)==D3D_OK&&d->GetDepthStencilSurface(&ds)==D3D_OK);CHECK(rawOk(ProxyBase::of(rt))&&rawOk(ProxyBase::of(ds)));   // implicit objects
+    // the direct calls count, and the Target saw what it would have through the Device
+    const auto d0=get(s.directCalls);
+    d->SetRenderState((D3DRENDERSTATETYPE)7,3);d->SetTexture(0,tex);d->SetStreamSource(0,vb,0,20);d->SetIndices(ib);d->SetVertexShader(vs);d->SetPixelShader(ps);d->SetVertexDeclaration(dc);d->SetRenderTarget(1,lvl);rig.sync();
+    CHECK(get(s.directCalls)==d0+8);
+    // a dead create has no raw and its calls are not direct (they go through the Device, which drops them)
+    IDirect3DCubeTexture9* cube=nullptr;CHECK(d->CreateCubeTexture(8,1,0,(D3DFORMAT)22,(D3DPOOL)1,&cube,nullptr)==D3D_OK);rig.sync();CHECK(!ProxyBase::of(cube)->raw);
+    const auto d1=get(s.directCalls);d->SetTexture(5,cube);rig.sync();CHECK(get(s.directCalls)==d1);d->SetTexture(5,nullptr);
+    // a resolver that proves nothing: that proxy's Sets replay through the Device, the rest stay direct
+    gKnobs.noRaw.store(true);IDirect3DTexture9* plain=nullptr;CHECK(d->CreateTexture(8,8,1,0,(D3DFORMAT)22,(D3DPOOL)1,&plain,nullptr)==D3D_OK);rig.sync();gKnobs.noRaw.store(false);
+    CHECK(!ProxyBase::of(plain)->raw);const auto d2=get(s.directCalls);d->SetTexture(6,plain);d->SetRenderState((D3DRENDERSTATETYPE)8,3);rig.sync();CHECK(get(s.directCalls)==d2+1);
+    // Reset: the back buffers are derived again and their raw follows
+    d->SetTexture(0,nullptr);d->SetTexture(6,nullptr);d->SetRenderTarget(1,nullptr);rt->Release();ds->Release();
+    IDirect3DSurface9* bb=nullptr;CHECK(d->GetBackBuffer(0,0,(D3DBACKBUFFER_TYPE)0,&bb)==D3D_OK);bb->Release();
+    ProxyBase* kid=ProxyBase::of(bb);IUnknown* oldRaw=kid->raw;CHECK(rawOk(kid));
+    D3DPRESENT_PARAMETERS pp{};pp.BackBufferWidth=800;pp.BackBufferHeight=600;pp.BackBufferFormat=(D3DFORMAT)22;pp.BackBufferCount=2;lvl->Release();
+    CHECK(d->Reset(&pp)==D3D_OK);CHECK(rawOk(kid)&&kid->raw!=oldRaw);
+    d->SetTexture(0,tex);d->SetRenderTarget(0,bb);rig.sync();   // calls on the re-derived back buffer are direct again
+    d->SetRenderTarget(0,nullptr);
+    plain->Release();cube->Release();tex->Release();vb->Release();ib->Release();vs->Release();ps->Release();dc->Release();
+    rig.finish();checkClean();
 }
 static void streamTests(bool threadsOnly){
-    lifetimeAndIdentity();stateKnownUnknown();locksPreserveBytes();shadowCap();queriesAndSyncCensus();resetAndShutdown();redundantFiltering();renderTargetResetsViewport();textureShadows();statsLine();childrenOutliveTheDevice();queryProbeAndDeadQuery();initFailureFallback();cursorAndForeignThread();nestedSyncInPump();upDrawsAndBackpressure();snapshotTriggers();
+    lifetimeAndIdentity();stateKnownUnknown();locksPreserveBytes();shadowCap();queriesAndSyncCensus();resetAndShutdown();directReplayRaw();redundantFiltering();renderTargetResetsViewport();textureShadows();statsLine();childrenOutliveTheDevice();queryProbeAndDeadQuery();initFailureFallback();cursorAndForeignThread();nestedSyncInPump();upDrawsAndBackpressure();snapshotTriggers();
     equivalence(20000,12345);equivalence(20000,987654321);
     (void)threadsOnly;
 }

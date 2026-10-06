@@ -119,6 +119,24 @@ REDUNDANT = {('IDirect3DDevice9', n) for n in (
     'SetVertexShader', 'SetPixelShader', 'SetVertexDeclaration', 'SetFVF', 'SetVertexShaderConstantF', 'SetVertexShaderConstantI',
     'SetVertexShaderConstantB', 'SetPixelShaderConstantF', 'SetPixelShaderConstantI', 'SetPixelShaderConstantB', 'SetTransform', 'SetMaterial',
     'LightEnable', 'SetScissorRect', 'SetClipPlane', 'SetNPatchMode', 'SetSoftwareVertexProcessing', 'SetCurrentTexturePalette')}
+# Device methods the replay thread may call on the ExtensionDevice (`ext`) with RAW backend pointers instead of through the Device. The rule:
+# the Device's code for the method is either absent (GuardedMirrorDevice -> MirrorDevice::X, the very method ext->X runs) or `Guard; return
+# ext->X(<unwrap of the interface arguments>)` and nothing else. Audit (renderer.cpp class Device, 0.3.192):
+#   not overridden by Device: SetRenderState SetSamplerState SetTextureStageState SetTransform MultiplyTransform SetMaterial SetLight LightEnable
+#     SetClipPlane SetScissorRect SetViewport SetFVF SetStreamSourceFreq Set{Vertex,Pixel}ShaderConstant{F,I,B} SetNPatchMode
+#     SetSoftwareVertexProcessing SetCurrentTexturePalette SetPaletteEntries (GuardedMirrorDevice takes only the gate)
+#   pure unwrap + forward to ext: SetTexture SetVertexShader SetPixelShader SetVertexDeclaration SetRenderTarget SetDepthStencilSurface
+#     (mirrorResources.unwrap), SetStreamSource SetIndices (NorthlightTrackedBuffers::resolveInput; its one side effect, disabling the mirror for
+#     an unwrapped input, cannot fire for a stream proxy whose raw was resolved as wrapped: a proxy without a proven raw replays through the Device)
+# NEVER direct: draws (hooks, counters, census), Clear, Present, Reset, Begin/EndScene, every Create*, CreateVertexShader/PixelShader
+# (registration), ProcessVertices, StretchRect/ColorFill/UpdateSurface/UpdateTexture, queries, state blocks, cursor, Get*.
+# tests/test_command_stream.py checks this set against the audited list and against renderer.cpp's Device source.
+DIRECT = {('IDirect3DDevice9', n) for n in (
+    'SetRenderState', 'SetSamplerState', 'SetTextureStageState', 'SetTransform', 'MultiplyTransform', 'SetMaterial', 'SetLight', 'LightEnable',
+    'SetClipPlane', 'SetScissorRect', 'SetViewport', 'SetFVF', 'SetStreamSourceFreq', 'SetVertexShaderConstantF', 'SetVertexShaderConstantI',
+    'SetVertexShaderConstantB', 'SetPixelShaderConstantF', 'SetPixelShaderConstantI', 'SetPixelShaderConstantB', 'SetNPatchMode',
+    'SetSoftwareVertexProcessing', 'SetCurrentTexturePalette', 'SetPaletteEntries', 'SetTexture', 'SetVertexShader', 'SetPixelShader',
+    'SetVertexDeclaration', 'SetStreamSource', 'SetIndices', 'SetRenderTarget', 'SetDepthStencilSurface')}
 PUBLISH = {('IDirect3DDevice9', n) for n in ('BeginScene', 'EndScene', 'Clear', 'SetRenderTarget')}
 # Ids of commands the hand-written stream code records (no generated encoder). Append here; ids are regenerated with
 # the file and nothing persists them.
@@ -198,6 +216,8 @@ def classify(text):
         m = next(x for x in result[interface] if x.name == name)
         assert m.cls in ('record', 'state', 'customrec'), (interface, name, 'spec on a method that does not copy')
         assert set(spec) <= {p.name for p in m.params}, (interface, name, spec)
+    for interface, name in DIRECT:
+        assert any(m.name == name and m.cls in ('state', 'record') and m.ret == 'HRESULT' for m in result[interface]), (interface, name)
     for interface, name in REDUNDANT:
         assert any(m.name == name and m.cls == 'state' for m in result[interface]), (interface, name)
     for interface, name in PUBLISH:
@@ -272,6 +292,24 @@ def dispatch_case(m):
     else:
         out.append(f'        auto* _t=tr.inner(_a->self);if(!_t){{tr.skipped(Cmd::{m.enum});return true;}}')
         target = '_t'
+    if (m.iface, m.name) in DIRECT:
+        # Direct replay: ext->X with the proxies' cached raw pointers; any interface argument without one sends the call through the Device.
+        raws = [p for p in m.params if p.iface]
+        out.append('        if constexpr(kDirectReplay) {')
+        out.append('            if(IDirect3DDevice9* _e=tr.ext()) {')
+        out.append('                bool _ok=true;')
+        parts = []
+        for p in m.params:
+            if p.name in m.spec:
+                parts.append(f'_a->{p.name}==kNoPayload?({p.type})nullptr:({p.type})(_b+_a->{p.name})')
+            elif p.iface:
+                out.append(f'                auto* _r_{p.name}=tr.raw(_a->{p.name},_ok);')
+                parts.append(f'_r_{p.name}')
+            else:
+                parts.append(f'_a->{p.name}')
+        out.append(f'                if(_ok) {{ tr.direct(); tr.result(Cmd::{m.enum},_e->{m.name}({", ".join(parts)})); return true; }}')
+        out.append('            }')
+        out.append('        }')
     call = f'{target}->{m.name}({decode_args(m)})'
     out.append(f'        tr.result(Cmd::{m.enum},{call});' if m.ret == 'HRESULT' else f'        {call};')
     return out + ['        return true;', '    }']
@@ -367,16 +405,20 @@ def stream_text(text):
            '//   template<class T> T* toProxy(T* innerRef);   sync out-parameter: takes the reference the Target returned, yields the game-facing proxy',
            '//   void result(Cmd id, HRESULT hr);             HRESULT of a replayed record/state call',
            '//   void skipped(Cmd id);                        a call dropped because its receiver proxy is dead',
+           '//   IDirect3DDevice9* ext();                     the extension device for direct replay (null: through device())',
+           '//   template<class T> T* raw(T* proxy,bool& ok); the proxy\'s cached backend pointer (null proxy: null; ok=false when it has none)',
+           '//   void direct();                               counts a call replayed on ext()',
            '// The game-facing class using NORTHLIGHT_STREAM_<IFACE>_METHODS provides streamQueue(), observe(tag,args...), answer(tag,args...,ret&),',
            '// syncGet(tag,[proxy,]args...), local(tag,args...), syncCall(tag,[proxy,]args...); the proxy argument is passed for non-device interfaces.',
            '// The device class also provides bool redundant(tag,args...) (true: a repeated Set the game side does not record; see REDUNDANT).',
+           '#ifndef NORTHLIGHT_STREAM_DIRECT', '#define NORTHLIGHT_STREAM_DIRECT 1', '#endif',
            '#define NORTHLIGHT_STREAM_TAG(X) ::NorthlightStream::CmdTag<::NorthlightStream::Cmd::X>{}',
            'namespace NorthlightStream {']
     ids = list(CUSTOM_IDS) + [m.enum for m in ided]
     assert len(set(ids)) == len(ids)
     out.append('enum class Cmd : std::uint16_t {')
     out += ['    ' + ', '.join(ids[i:i + 6]) + ',' for i in range(0, len(ids), 6)]
-    out += ['    Count', '};', f'constexpr std::uint16_t kFirstGeneratedCmd={len(CUSTOM_IDS)};',
+    out += ['    Count', '};', 'constexpr bool kDirectReplay=NORTHLIGHT_STREAM_DIRECT!=0;   // replay the DIRECT methods on the extension device (see DIRECT in the generator)', f'constexpr std::uint16_t kFirstGeneratedCmd={len(CUSTOM_IDS)};',
             'static_assert((std::size_t)Cmd::Count<=kMaxCmdIds,"grow kMaxCmdIds in stream_stats.h");',
             'template<Cmd C> struct CmdTag {};', 'inline const char* cmdName(Cmd c) {', '    switch(c) {']
     out += [f'    case Cmd::{n}: return "{n}";' for n in CUSTOM_IDS]

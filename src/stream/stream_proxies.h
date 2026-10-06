@@ -77,6 +77,7 @@ struct PrivEntry {std::string key;std::vector<unsigned char> bytes;IUnknown* unk
 struct ProxyBase {
     StreamCore* core;Kind kind;IUnknown* unk=nullptr;   // unk: the proxy as the interface pointer the game holds (registry key)
     IUnknown* inner=nullptr;                            // the Target-level object: replay thread only, set when the create ran
+    IUnknown* raw=nullptr;                              // the backend object behind `inner` (what Device would unwrap it to), cached with it; null = not provably a pure unwrap: replay through the Device
     std::atomic<LONG> refs{1},use{1},pendingDestroy{0};  // refs: what Release reports; use = refs + StreamState binds
     std::atomic<bool> dead{false};                       // the real create failed: commands on it are dropped
     ProxyBase* parent=nullptr;std::vector<ProxyBase*> kids;   // children (levels, faces, back buffers): owned by the parent
@@ -151,8 +152,14 @@ class Registry {
 public:
     void addProxy(ProxyBase* p){std::lock_guard<std::mutex> l(m_);byProxy_[p->unk]=p;}
     ProxyBase* findProxy(const void* iface){std::lock_guard<std::mutex> l(m_);auto i=byProxy_.find(iface);return i==byProxy_.end()?nullptr:i->second;}
-    void bindInner(ProxyBase* p,IUnknown* inner){std::lock_guard<std::mutex> l(m_);p->inner=inner;byInner_[inner]=p;}   // the newest proxy of an object wins identity
-    void unbindInner(ProxyBase* p){std::lock_guard<std::mutex> l(m_);if(p->inner){auto i=byInner_.find(p->inner);if(i!=byInner_.end()&&i->second==p)byInner_.erase(i);}}
+    // Direct replay: Registry::rawOf resolves the backend object behind a Device-level one, once, right here (replay thread, outside the lock).
+    std::function<IUnknown*(IUnknown*,Kind)> rawOf;
+    static bool takesRaw(Kind k){return k==Kind::Surface||k==Kind::Texture||k==Kind::CubeTexture||k==Kind::VolumeTexture||k==Kind::VertexBuffer||k==Kind::IndexBuffer||k==Kind::VertexShader||k==Kind::PixelShader||k==Kind::VertexDeclaration;}
+    void bindInner(ProxyBase* p,IUnknown* inner){
+        {std::lock_guard<std::mutex> l(m_);p->inner=inner;byInner_[inner]=p;}
+        p->raw=rawOf&&inner&&takesRaw(p->kind)?rawOf(inner,p->kind):nullptr;
+    }   // the newest proxy of an object wins identity
+    void unbindInner(ProxyBase* p){p->raw=nullptr;std::lock_guard<std::mutex> l(m_);if(p->inner){auto i=byInner_.find(p->inner);if(i!=byInner_.end()&&i->second==p)byInner_.erase(i);}}
     ProxyBase* findInner(const void* inner){std::lock_guard<std::mutex> l(m_);auto i=byInner_.find(inner);return i==byInner_.end()?nullptr:i->second;}
     // Replay thread (destroy): forget the proxy; the inner entry only if it still names this proxy.
     void erase(ProxyBase* p){std::lock_guard<std::mutex> l(m_);byProxy_.erase(p->unk);if(p->inner){auto i=byInner_.find(p->inner);if(i!=byInner_.end()&&i->second==p)byInner_.erase(i);}}
@@ -169,6 +176,7 @@ struct StreamCore {
     Queue q;Registry reg;
     IDirect3DDevice9* target=nullptr;   // the Device (Target): replay thread only after the handoff
     IDirect3DDevice9* game=nullptr;     // the StreamDevice, for GetDevice
+    IDirect3DDevice9* ext=nullptr;      // the ExtensionDevice (same real device, same mirror): direct replay calls it with raw pointers; null = through the Device
     std::atomic<bool> replayFailure{false};      // a replayed setter failed: StreamState invalidates itself at its next Get
     std::atomic<bool> memoryPressure{false};     // published by the replay side (Device's memory guard), consumed at Present
     std::atomic<unsigned> availableTextureMem{0};

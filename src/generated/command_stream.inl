@@ -12,9 +12,15 @@
 //   template<class T> T* toProxy(T* innerRef);   sync out-parameter: takes the reference the Target returned, yields the game-facing proxy
 //   void result(Cmd id, HRESULT hr);             HRESULT of a replayed record/state call
 //   void skipped(Cmd id);                        a call dropped because its receiver proxy is dead
+//   IDirect3DDevice9* ext();                     the extension device for direct replay (null: through device())
+//   template<class T> T* raw(T* proxy,bool& ok); the proxy's cached backend pointer (null proxy: null; ok=false when it has none)
+//   void direct();                               counts a call replayed on ext()
 // The game-facing class using NORTHLIGHT_STREAM_<IFACE>_METHODS provides streamQueue(), observe(tag,args...), answer(tag,args...,ret&),
 // syncGet(tag,[proxy,]args...), local(tag,args...), syncCall(tag,[proxy,]args...); the proxy argument is passed for non-device interfaces.
 // The device class also provides bool redundant(tag,args...) (true: a repeated Set the game side does not record; see REDUNDANT).
+#ifndef NORTHLIGHT_STREAM_DIRECT
+#define NORTHLIGHT_STREAM_DIRECT 1
+#endif
 #define NORTHLIGHT_STREAM_TAG(X) ::NorthlightStream::CmdTag<::NorthlightStream::Cmd::X>{}
 namespace NorthlightStream {
 enum class Cmd : std::uint16_t {
@@ -59,6 +65,7 @@ enum class Cmd : std::uint16_t {
     StateBlock_Capture, StateBlock_Apply, Query_GetDevice, Query_GetType, Query_GetDataSize, Query_Issue,
     Count
 };
+constexpr bool kDirectReplay=NORTHLIGHT_STREAM_DIRECT!=0;   // replay the DIRECT methods on the extension device (see DIRECT in the generator)
 constexpr std::uint16_t kFirstGeneratedCmd=39;
 static_assert((std::size_t)Cmd::Count<=kMaxCmdIds,"grow kMaxCmdIds in stream_stats.h");
 template<Cmd C> struct CmdTag {};
@@ -1391,11 +1398,25 @@ template<class Tr> inline bool dispatchGenerated(const CommandHeader* h, Tr& tr)
     }
     case Cmd::Device_SetRenderTarget: {
         const auto* _a=reinterpret_cast<const Args_Device_SetRenderTarget*>(h+1);const auto* _b=reinterpret_cast<const unsigned char*>(_a);(void)_b;
+        if constexpr(kDirectReplay) {
+            if(IDirect3DDevice9* _e=tr.ext()) {
+                bool _ok=true;
+                auto* _r_pRenderTarget=tr.raw(_a->pRenderTarget,_ok);
+                if(_ok) { tr.direct(); tr.result(Cmd::Device_SetRenderTarget,_e->SetRenderTarget(_a->RenderTargetIndex, _r_pRenderTarget)); return true; }
+            }
+        }
         tr.result(Cmd::Device_SetRenderTarget,tr.device()->SetRenderTarget(_a->RenderTargetIndex, tr.inner(_a->pRenderTarget)));
         return true;
     }
     case Cmd::Device_SetDepthStencilSurface: {
         const auto* _a=reinterpret_cast<const Args_Device_SetDepthStencilSurface*>(h+1);const auto* _b=reinterpret_cast<const unsigned char*>(_a);(void)_b;
+        if constexpr(kDirectReplay) {
+            if(IDirect3DDevice9* _e=tr.ext()) {
+                bool _ok=true;
+                auto* _r_pNewZStencil=tr.raw(_a->pNewZStencil,_ok);
+                if(_ok) { tr.direct(); tr.result(Cmd::Device_SetDepthStencilSurface,_e->SetDepthStencilSurface(_r_pNewZStencil)); return true; }
+            }
+        }
         tr.result(Cmd::Device_SetDepthStencilSurface,tr.device()->SetDepthStencilSurface(tr.inner(_a->pNewZStencil)));
         return true;
     }
@@ -1414,41 +1435,89 @@ template<class Tr> inline bool dispatchGenerated(const CommandHeader* h, Tr& tr)
     }
     case Cmd::Device_SetTransform: {
         const auto* _a=reinterpret_cast<const Args_Device_SetTransform*>(h+1);const auto* _b=reinterpret_cast<const unsigned char*>(_a);(void)_b;
+        if constexpr(kDirectReplay) {
+            if(IDirect3DDevice9* _e=tr.ext()) {
+                bool _ok=true;
+                if(_ok) { tr.direct(); tr.result(Cmd::Device_SetTransform,_e->SetTransform(_a->state, _a->matrix==kNoPayload?(const D3DMATRIX*)nullptr:(const D3DMATRIX*)(_b+_a->matrix))); return true; }
+            }
+        }
         tr.result(Cmd::Device_SetTransform,tr.device()->SetTransform(_a->state, _a->matrix==kNoPayload?(const D3DMATRIX*)nullptr:(const D3DMATRIX*)(_b+_a->matrix)));
         return true;
     }
     case Cmd::Device_MultiplyTransform: {
         const auto* _a=reinterpret_cast<const Args_Device_MultiplyTransform*>(h+1);const auto* _b=reinterpret_cast<const unsigned char*>(_a);(void)_b;
+        if constexpr(kDirectReplay) {
+            if(IDirect3DDevice9* _e=tr.ext()) {
+                bool _ok=true;
+                if(_ok) { tr.direct(); tr.result(Cmd::Device_MultiplyTransform,_e->MultiplyTransform(_a->state, _a->matrix==kNoPayload?(const D3DMATRIX*)nullptr:(const D3DMATRIX*)(_b+_a->matrix))); return true; }
+            }
+        }
         tr.result(Cmd::Device_MultiplyTransform,tr.device()->MultiplyTransform(_a->state, _a->matrix==kNoPayload?(const D3DMATRIX*)nullptr:(const D3DMATRIX*)(_b+_a->matrix)));
         return true;
     }
     case Cmd::Device_SetViewport: {
         const auto* _a=reinterpret_cast<const Args_Device_SetViewport*>(h+1);const auto* _b=reinterpret_cast<const unsigned char*>(_a);(void)_b;
+        if constexpr(kDirectReplay) {
+            if(IDirect3DDevice9* _e=tr.ext()) {
+                bool _ok=true;
+                if(_ok) { tr.direct(); tr.result(Cmd::Device_SetViewport,_e->SetViewport(_a->viewport==kNoPayload?(const D3DVIEWPORT9*)nullptr:(const D3DVIEWPORT9*)(_b+_a->viewport))); return true; }
+            }
+        }
         tr.result(Cmd::Device_SetViewport,tr.device()->SetViewport(_a->viewport==kNoPayload?(const D3DVIEWPORT9*)nullptr:(const D3DVIEWPORT9*)(_b+_a->viewport)));
         return true;
     }
     case Cmd::Device_SetMaterial: {
         const auto* _a=reinterpret_cast<const Args_Device_SetMaterial*>(h+1);const auto* _b=reinterpret_cast<const unsigned char*>(_a);(void)_b;
+        if constexpr(kDirectReplay) {
+            if(IDirect3DDevice9* _e=tr.ext()) {
+                bool _ok=true;
+                if(_ok) { tr.direct(); tr.result(Cmd::Device_SetMaterial,_e->SetMaterial(_a->material==kNoPayload?(const D3DMATERIAL9*)nullptr:(const D3DMATERIAL9*)(_b+_a->material))); return true; }
+            }
+        }
         tr.result(Cmd::Device_SetMaterial,tr.device()->SetMaterial(_a->material==kNoPayload?(const D3DMATERIAL9*)nullptr:(const D3DMATERIAL9*)(_b+_a->material)));
         return true;
     }
     case Cmd::Device_SetLight: {
         const auto* _a=reinterpret_cast<const Args_Device_SetLight*>(h+1);const auto* _b=reinterpret_cast<const unsigned char*>(_a);(void)_b;
+        if constexpr(kDirectReplay) {
+            if(IDirect3DDevice9* _e=tr.ext()) {
+                bool _ok=true;
+                if(_ok) { tr.direct(); tr.result(Cmd::Device_SetLight,_e->SetLight(_a->index, _a->light==kNoPayload?(const D3DLIGHT9*)nullptr:(const D3DLIGHT9*)(_b+_a->light))); return true; }
+            }
+        }
         tr.result(Cmd::Device_SetLight,tr.device()->SetLight(_a->index, _a->light==kNoPayload?(const D3DLIGHT9*)nullptr:(const D3DLIGHT9*)(_b+_a->light)));
         return true;
     }
     case Cmd::Device_LightEnable: {
         const auto* _a=reinterpret_cast<const Args_Device_LightEnable*>(h+1);const auto* _b=reinterpret_cast<const unsigned char*>(_a);(void)_b;
+        if constexpr(kDirectReplay) {
+            if(IDirect3DDevice9* _e=tr.ext()) {
+                bool _ok=true;
+                if(_ok) { tr.direct(); tr.result(Cmd::Device_LightEnable,_e->LightEnable(_a->Index, _a->Enable)); return true; }
+            }
+        }
         tr.result(Cmd::Device_LightEnable,tr.device()->LightEnable(_a->Index, _a->Enable));
         return true;
     }
     case Cmd::Device_SetClipPlane: {
         const auto* _a=reinterpret_cast<const Args_Device_SetClipPlane*>(h+1);const auto* _b=reinterpret_cast<const unsigned char*>(_a);(void)_b;
+        if constexpr(kDirectReplay) {
+            if(IDirect3DDevice9* _e=tr.ext()) {
+                bool _ok=true;
+                if(_ok) { tr.direct(); tr.result(Cmd::Device_SetClipPlane,_e->SetClipPlane(_a->index, _a->plane==kNoPayload?(const float*)nullptr:(const float*)(_b+_a->plane))); return true; }
+            }
+        }
         tr.result(Cmd::Device_SetClipPlane,tr.device()->SetClipPlane(_a->index, _a->plane==kNoPayload?(const float*)nullptr:(const float*)(_b+_a->plane)));
         return true;
     }
     case Cmd::Device_SetRenderState: {
         const auto* _a=reinterpret_cast<const Args_Device_SetRenderState*>(h+1);const auto* _b=reinterpret_cast<const unsigned char*>(_a);(void)_b;
+        if constexpr(kDirectReplay) {
+            if(IDirect3DDevice9* _e=tr.ext()) {
+                bool _ok=true;
+                if(_ok) { tr.direct(); tr.result(Cmd::Device_SetRenderState,_e->SetRenderState(_a->State, _a->Value)); return true; }
+            }
+        }
         tr.result(Cmd::Device_SetRenderState,tr.device()->SetRenderState(_a->State, _a->Value));
         return true;
     }
@@ -1459,41 +1528,90 @@ template<class Tr> inline bool dispatchGenerated(const CommandHeader* h, Tr& tr)
     }
     case Cmd::Device_SetTexture: {
         const auto* _a=reinterpret_cast<const Args_Device_SetTexture*>(h+1);const auto* _b=reinterpret_cast<const unsigned char*>(_a);(void)_b;
+        if constexpr(kDirectReplay) {
+            if(IDirect3DDevice9* _e=tr.ext()) {
+                bool _ok=true;
+                auto* _r_pTexture=tr.raw(_a->pTexture,_ok);
+                if(_ok) { tr.direct(); tr.result(Cmd::Device_SetTexture,_e->SetTexture(_a->Stage, _r_pTexture)); return true; }
+            }
+        }
         tr.result(Cmd::Device_SetTexture,tr.device()->SetTexture(_a->Stage, tr.inner(_a->pTexture)));
         return true;
     }
     case Cmd::Device_SetTextureStageState: {
         const auto* _a=reinterpret_cast<const Args_Device_SetTextureStageState*>(h+1);const auto* _b=reinterpret_cast<const unsigned char*>(_a);(void)_b;
+        if constexpr(kDirectReplay) {
+            if(IDirect3DDevice9* _e=tr.ext()) {
+                bool _ok=true;
+                if(_ok) { tr.direct(); tr.result(Cmd::Device_SetTextureStageState,_e->SetTextureStageState(_a->Stage, _a->Type, _a->Value)); return true; }
+            }
+        }
         tr.result(Cmd::Device_SetTextureStageState,tr.device()->SetTextureStageState(_a->Stage, _a->Type, _a->Value));
         return true;
     }
     case Cmd::Device_SetSamplerState: {
         const auto* _a=reinterpret_cast<const Args_Device_SetSamplerState*>(h+1);const auto* _b=reinterpret_cast<const unsigned char*>(_a);(void)_b;
+        if constexpr(kDirectReplay) {
+            if(IDirect3DDevice9* _e=tr.ext()) {
+                bool _ok=true;
+                if(_ok) { tr.direct(); tr.result(Cmd::Device_SetSamplerState,_e->SetSamplerState(_a->Sampler, _a->Type, _a->Value)); return true; }
+            }
+        }
         tr.result(Cmd::Device_SetSamplerState,tr.device()->SetSamplerState(_a->Sampler, _a->Type, _a->Value));
         return true;
     }
     case Cmd::Device_SetPaletteEntries: {
         const auto* _a=reinterpret_cast<const Args_Device_SetPaletteEntries*>(h+1);const auto* _b=reinterpret_cast<const unsigned char*>(_a);(void)_b;
+        if constexpr(kDirectReplay) {
+            if(IDirect3DDevice9* _e=tr.ext()) {
+                bool _ok=true;
+                if(_ok) { tr.direct(); tr.result(Cmd::Device_SetPaletteEntries,_e->SetPaletteEntries(_a->palette_idx, _a->entries==kNoPayload?(const PALETTEENTRY*)nullptr:(const PALETTEENTRY*)(_b+_a->entries))); return true; }
+            }
+        }
         tr.result(Cmd::Device_SetPaletteEntries,tr.device()->SetPaletteEntries(_a->palette_idx, _a->entries==kNoPayload?(const PALETTEENTRY*)nullptr:(const PALETTEENTRY*)(_b+_a->entries)));
         return true;
     }
     case Cmd::Device_SetCurrentTexturePalette: {
         const auto* _a=reinterpret_cast<const Args_Device_SetCurrentTexturePalette*>(h+1);const auto* _b=reinterpret_cast<const unsigned char*>(_a);(void)_b;
+        if constexpr(kDirectReplay) {
+            if(IDirect3DDevice9* _e=tr.ext()) {
+                bool _ok=true;
+                if(_ok) { tr.direct(); tr.result(Cmd::Device_SetCurrentTexturePalette,_e->SetCurrentTexturePalette(_a->PaletteNumber)); return true; }
+            }
+        }
         tr.result(Cmd::Device_SetCurrentTexturePalette,tr.device()->SetCurrentTexturePalette(_a->PaletteNumber));
         return true;
     }
     case Cmd::Device_SetScissorRect: {
         const auto* _a=reinterpret_cast<const Args_Device_SetScissorRect*>(h+1);const auto* _b=reinterpret_cast<const unsigned char*>(_a);(void)_b;
+        if constexpr(kDirectReplay) {
+            if(IDirect3DDevice9* _e=tr.ext()) {
+                bool _ok=true;
+                if(_ok) { tr.direct(); tr.result(Cmd::Device_SetScissorRect,_e->SetScissorRect(_a->rect==kNoPayload?(const RECT*)nullptr:(const RECT*)(_b+_a->rect))); return true; }
+            }
+        }
         tr.result(Cmd::Device_SetScissorRect,tr.device()->SetScissorRect(_a->rect==kNoPayload?(const RECT*)nullptr:(const RECT*)(_b+_a->rect)));
         return true;
     }
     case Cmd::Device_SetSoftwareVertexProcessing: {
         const auto* _a=reinterpret_cast<const Args_Device_SetSoftwareVertexProcessing*>(h+1);const auto* _b=reinterpret_cast<const unsigned char*>(_a);(void)_b;
+        if constexpr(kDirectReplay) {
+            if(IDirect3DDevice9* _e=tr.ext()) {
+                bool _ok=true;
+                if(_ok) { tr.direct(); tr.result(Cmd::Device_SetSoftwareVertexProcessing,_e->SetSoftwareVertexProcessing(_a->bSoftware)); return true; }
+            }
+        }
         tr.result(Cmd::Device_SetSoftwareVertexProcessing,tr.device()->SetSoftwareVertexProcessing(_a->bSoftware));
         return true;
     }
     case Cmd::Device_SetNPatchMode: {
         const auto* _a=reinterpret_cast<const Args_Device_SetNPatchMode*>(h+1);const auto* _b=reinterpret_cast<const unsigned char*>(_a);(void)_b;
+        if constexpr(kDirectReplay) {
+            if(IDirect3DDevice9* _e=tr.ext()) {
+                bool _ok=true;
+                if(_ok) { tr.direct(); tr.result(Cmd::Device_SetNPatchMode,_e->SetNPatchMode(_a->nSegments)); return true; }
+            }
+        }
         tr.result(Cmd::Device_SetNPatchMode,tr.device()->SetNPatchMode(_a->nSegments));
         return true;
     }
@@ -1514,66 +1632,149 @@ template<class Tr> inline bool dispatchGenerated(const CommandHeader* h, Tr& tr)
     }
     case Cmd::Device_SetVertexDeclaration: {
         const auto* _a=reinterpret_cast<const Args_Device_SetVertexDeclaration*>(h+1);const auto* _b=reinterpret_cast<const unsigned char*>(_a);(void)_b;
+        if constexpr(kDirectReplay) {
+            if(IDirect3DDevice9* _e=tr.ext()) {
+                bool _ok=true;
+                auto* _r_pDecl=tr.raw(_a->pDecl,_ok);
+                if(_ok) { tr.direct(); tr.result(Cmd::Device_SetVertexDeclaration,_e->SetVertexDeclaration(_r_pDecl)); return true; }
+            }
+        }
         tr.result(Cmd::Device_SetVertexDeclaration,tr.device()->SetVertexDeclaration(tr.inner(_a->pDecl)));
         return true;
     }
     case Cmd::Device_SetFVF: {
         const auto* _a=reinterpret_cast<const Args_Device_SetFVF*>(h+1);const auto* _b=reinterpret_cast<const unsigned char*>(_a);(void)_b;
+        if constexpr(kDirectReplay) {
+            if(IDirect3DDevice9* _e=tr.ext()) {
+                bool _ok=true;
+                if(_ok) { tr.direct(); tr.result(Cmd::Device_SetFVF,_e->SetFVF(_a->FVF)); return true; }
+            }
+        }
         tr.result(Cmd::Device_SetFVF,tr.device()->SetFVF(_a->FVF));
         return true;
     }
     case Cmd::Device_SetVertexShader: {
         const auto* _a=reinterpret_cast<const Args_Device_SetVertexShader*>(h+1);const auto* _b=reinterpret_cast<const unsigned char*>(_a);(void)_b;
+        if constexpr(kDirectReplay) {
+            if(IDirect3DDevice9* _e=tr.ext()) {
+                bool _ok=true;
+                auto* _r_pShader=tr.raw(_a->pShader,_ok);
+                if(_ok) { tr.direct(); tr.result(Cmd::Device_SetVertexShader,_e->SetVertexShader(_r_pShader)); return true; }
+            }
+        }
         tr.result(Cmd::Device_SetVertexShader,tr.device()->SetVertexShader(tr.inner(_a->pShader)));
         return true;
     }
     case Cmd::Device_SetVertexShaderConstantF: {
         const auto* _a=reinterpret_cast<const Args_Device_SetVertexShaderConstantF*>(h+1);const auto* _b=reinterpret_cast<const unsigned char*>(_a);(void)_b;
+        if constexpr(kDirectReplay) {
+            if(IDirect3DDevice9* _e=tr.ext()) {
+                bool _ok=true;
+                if(_ok) { tr.direct(); tr.result(Cmd::Device_SetVertexShaderConstantF,_e->SetVertexShaderConstantF(_a->reg_idx, _a->data==kNoPayload?(const float*)nullptr:(const float*)(_b+_a->data), _a->count)); return true; }
+            }
+        }
         tr.result(Cmd::Device_SetVertexShaderConstantF,tr.device()->SetVertexShaderConstantF(_a->reg_idx, _a->data==kNoPayload?(const float*)nullptr:(const float*)(_b+_a->data), _a->count));
         return true;
     }
     case Cmd::Device_SetVertexShaderConstantI: {
         const auto* _a=reinterpret_cast<const Args_Device_SetVertexShaderConstantI*>(h+1);const auto* _b=reinterpret_cast<const unsigned char*>(_a);(void)_b;
+        if constexpr(kDirectReplay) {
+            if(IDirect3DDevice9* _e=tr.ext()) {
+                bool _ok=true;
+                if(_ok) { tr.direct(); tr.result(Cmd::Device_SetVertexShaderConstantI,_e->SetVertexShaderConstantI(_a->reg_idx, _a->data==kNoPayload?(const int*)nullptr:(const int*)(_b+_a->data), _a->count)); return true; }
+            }
+        }
         tr.result(Cmd::Device_SetVertexShaderConstantI,tr.device()->SetVertexShaderConstantI(_a->reg_idx, _a->data==kNoPayload?(const int*)nullptr:(const int*)(_b+_a->data), _a->count));
         return true;
     }
     case Cmd::Device_SetVertexShaderConstantB: {
         const auto* _a=reinterpret_cast<const Args_Device_SetVertexShaderConstantB*>(h+1);const auto* _b=reinterpret_cast<const unsigned char*>(_a);(void)_b;
+        if constexpr(kDirectReplay) {
+            if(IDirect3DDevice9* _e=tr.ext()) {
+                bool _ok=true;
+                if(_ok) { tr.direct(); tr.result(Cmd::Device_SetVertexShaderConstantB,_e->SetVertexShaderConstantB(_a->reg_idx, _a->data==kNoPayload?(const WINBOOL*)nullptr:(const WINBOOL*)(_b+_a->data), _a->count)); return true; }
+            }
+        }
         tr.result(Cmd::Device_SetVertexShaderConstantB,tr.device()->SetVertexShaderConstantB(_a->reg_idx, _a->data==kNoPayload?(const WINBOOL*)nullptr:(const WINBOOL*)(_b+_a->data), _a->count));
         return true;
     }
     case Cmd::Device_SetStreamSource: {
         const auto* _a=reinterpret_cast<const Args_Device_SetStreamSource*>(h+1);const auto* _b=reinterpret_cast<const unsigned char*>(_a);(void)_b;
+        if constexpr(kDirectReplay) {
+            if(IDirect3DDevice9* _e=tr.ext()) {
+                bool _ok=true;
+                auto* _r_pStreamData=tr.raw(_a->pStreamData,_ok);
+                if(_ok) { tr.direct(); tr.result(Cmd::Device_SetStreamSource,_e->SetStreamSource(_a->StreamNumber, _r_pStreamData, _a->OffsetInBytes, _a->Stride)); return true; }
+            }
+        }
         tr.result(Cmd::Device_SetStreamSource,tr.device()->SetStreamSource(_a->StreamNumber, tr.inner(_a->pStreamData), _a->OffsetInBytes, _a->Stride));
         return true;
     }
     case Cmd::Device_SetStreamSourceFreq: {
         const auto* _a=reinterpret_cast<const Args_Device_SetStreamSourceFreq*>(h+1);const auto* _b=reinterpret_cast<const unsigned char*>(_a);(void)_b;
+        if constexpr(kDirectReplay) {
+            if(IDirect3DDevice9* _e=tr.ext()) {
+                bool _ok=true;
+                if(_ok) { tr.direct(); tr.result(Cmd::Device_SetStreamSourceFreq,_e->SetStreamSourceFreq(_a->StreamNumber, _a->Divider)); return true; }
+            }
+        }
         tr.result(Cmd::Device_SetStreamSourceFreq,tr.device()->SetStreamSourceFreq(_a->StreamNumber, _a->Divider));
         return true;
     }
     case Cmd::Device_SetIndices: {
         const auto* _a=reinterpret_cast<const Args_Device_SetIndices*>(h+1);const auto* _b=reinterpret_cast<const unsigned char*>(_a);(void)_b;
+        if constexpr(kDirectReplay) {
+            if(IDirect3DDevice9* _e=tr.ext()) {
+                bool _ok=true;
+                auto* _r_pIndexData=tr.raw(_a->pIndexData,_ok);
+                if(_ok) { tr.direct(); tr.result(Cmd::Device_SetIndices,_e->SetIndices(_r_pIndexData)); return true; }
+            }
+        }
         tr.result(Cmd::Device_SetIndices,tr.device()->SetIndices(tr.inner(_a->pIndexData)));
         return true;
     }
     case Cmd::Device_SetPixelShader: {
         const auto* _a=reinterpret_cast<const Args_Device_SetPixelShader*>(h+1);const auto* _b=reinterpret_cast<const unsigned char*>(_a);(void)_b;
+        if constexpr(kDirectReplay) {
+            if(IDirect3DDevice9* _e=tr.ext()) {
+                bool _ok=true;
+                auto* _r_pShader=tr.raw(_a->pShader,_ok);
+                if(_ok) { tr.direct(); tr.result(Cmd::Device_SetPixelShader,_e->SetPixelShader(_r_pShader)); return true; }
+            }
+        }
         tr.result(Cmd::Device_SetPixelShader,tr.device()->SetPixelShader(tr.inner(_a->pShader)));
         return true;
     }
     case Cmd::Device_SetPixelShaderConstantF: {
         const auto* _a=reinterpret_cast<const Args_Device_SetPixelShaderConstantF*>(h+1);const auto* _b=reinterpret_cast<const unsigned char*>(_a);(void)_b;
+        if constexpr(kDirectReplay) {
+            if(IDirect3DDevice9* _e=tr.ext()) {
+                bool _ok=true;
+                if(_ok) { tr.direct(); tr.result(Cmd::Device_SetPixelShaderConstantF,_e->SetPixelShaderConstantF(_a->reg_idx, _a->data==kNoPayload?(const float*)nullptr:(const float*)(_b+_a->data), _a->count)); return true; }
+            }
+        }
         tr.result(Cmd::Device_SetPixelShaderConstantF,tr.device()->SetPixelShaderConstantF(_a->reg_idx, _a->data==kNoPayload?(const float*)nullptr:(const float*)(_b+_a->data), _a->count));
         return true;
     }
     case Cmd::Device_SetPixelShaderConstantI: {
         const auto* _a=reinterpret_cast<const Args_Device_SetPixelShaderConstantI*>(h+1);const auto* _b=reinterpret_cast<const unsigned char*>(_a);(void)_b;
+        if constexpr(kDirectReplay) {
+            if(IDirect3DDevice9* _e=tr.ext()) {
+                bool _ok=true;
+                if(_ok) { tr.direct(); tr.result(Cmd::Device_SetPixelShaderConstantI,_e->SetPixelShaderConstantI(_a->reg_idx, _a->data==kNoPayload?(const int*)nullptr:(const int*)(_b+_a->data), _a->count)); return true; }
+            }
+        }
         tr.result(Cmd::Device_SetPixelShaderConstantI,tr.device()->SetPixelShaderConstantI(_a->reg_idx, _a->data==kNoPayload?(const int*)nullptr:(const int*)(_b+_a->data), _a->count));
         return true;
     }
     case Cmd::Device_SetPixelShaderConstantB: {
         const auto* _a=reinterpret_cast<const Args_Device_SetPixelShaderConstantB*>(h+1);const auto* _b=reinterpret_cast<const unsigned char*>(_a);(void)_b;
+        if constexpr(kDirectReplay) {
+            if(IDirect3DDevice9* _e=tr.ext()) {
+                bool _ok=true;
+                if(_ok) { tr.direct(); tr.result(Cmd::Device_SetPixelShaderConstantB,_e->SetPixelShaderConstantB(_a->reg_idx, _a->data==kNoPayload?(const WINBOOL*)nullptr:(const WINBOOL*)(_b+_a->data), _a->count)); return true; }
+            }
+        }
         tr.result(Cmd::Device_SetPixelShaderConstantB,tr.device()->SetPixelShaderConstantB(_a->reg_idx, _a->data==kNoPayload?(const WINBOOL*)nullptr:(const WINBOOL*)(_b+_a->data), _a->count));
         return true;
     }

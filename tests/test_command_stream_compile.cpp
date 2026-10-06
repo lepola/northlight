@@ -39,6 +39,9 @@ struct Tr {
     template<class T> T* toProxy(T* p){return p;}
     void result(Cmd,HRESULT){}
     void skipped(Cmd){}
+    IDirect3DDevice9* ext(){return nullptr;}
+    template<class T> T* raw(T* p,bool& ok){ok=true;return p;}
+    void direct(){}
 };
 // The whole stream (proxies, StreamState, StreamDevice, replay thread) instantiates against the real SDK header.
 NorthlightStream::StreamDevice* buildStream(IDirect3DDevice9* target,IDirect3D9* parent,const D3DPRESENT_PARAMETERS* pp){
