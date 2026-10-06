@@ -24,6 +24,10 @@
 #include <unordered_map>
 #include <vector>
 #include "command_queue.h"
+#include "record_gate.h"
+// Every generated record/state/get/sync method of the stream classes opens the record gate first (record_gate.h); the hand-written entries below do the same.
+#undef NORTHLIGHT_STREAM_GATE   // (command_stream.inl may have been included first: its default is empty)
+#define NORTHLIGHT_STREAM_GATE ::NorthlightStream::RecordGuard nlGate_(::NorthlightStream::recordGate);
 #include "command_stream.inl"
 
 namespace NorthlightStream {
@@ -68,6 +72,8 @@ inline std::atomic<long> liveProxyObjects{0};
 struct Info {
     UINT w=0,h=0,d=1,levels=1,length=0;DWORD usage=0,pool=0,fvf=0,msq=0;unsigned fmt=0,ms=0,type=0;
 };
+
+constexpr std::size_t kLockSlack=4096;   // bytes past a staged range / a shadow, never replayed: a small game overrun stays inside the allocation (shadows zero them, staging does not need to)
 
 // A Task runs on the replay thread while the game thread waits (pumped): pass-through locks, creates under memory
 // pressure, GetData(FLUSH), Reset, the defaults batch, final release. fn executes with the replay-side core.
@@ -172,6 +178,41 @@ public:
     std::size_t proxies(){std::lock_guard<std::mutex> l(m_);return byProxy_.size();}
 };
 
+// 0.3.192 (CS): intrusive LRU list (the CPU shadows' victim order). head = least recently used, pushBack = most recent; every mutation under StreamCore::texMutex
+// (the game thread touches and evicts, the replay thread removes a dying proxy's shadow). T has a member `lru`. Eviction is O(victims), a touch O(1); a touch of the
+// element that is already the tail needs no lock (only the owning game thread appends, and a replay-thread removal never concerns a shadow that is being locked).
+template<class T> struct LruNode {T* prev=nullptr;T* next=nullptr;bool linked=false;};
+template<class T> struct LruList {
+    T* head=nullptr;std::atomic<T*> tail{nullptr};
+    void pushBack(T* x){auto& n=x->lru;n.prev=tail.load(std::memory_order_relaxed);n.next=nullptr;if(n.prev)n.prev->lru.next=x;else head=x;tail.store(x,std::memory_order_relaxed);n.linked=true;}
+    void remove(T* x){
+        auto& n=x->lru;if(!n.linked)return;
+        if(n.prev)n.prev->lru.next=n.next;else head=n.next;
+        if(n.next)n.next->lru.prev=n.prev;else tail.store(n.prev,std::memory_order_relaxed);
+        n.prev=n.next=nullptr;n.linked=false;
+    }
+    bool isTail(const T* x)const{return tail.load(std::memory_order_relaxed)==x;}
+};
+struct BufferState;
+// 0.3.192 (CS): game-side scratch for SMALL staged buffer locks (first write / DISCARD without a shadow): a handful of slots, taken and given back without a lock
+// or a Block (the pooled Blocks share a mutex with the replay thread's retire). Game thread takes; give() may run on the replay thread (a buffer destroyed while locked).
+struct LockScratch {
+    static constexpr std::size_t kMaxBytes=std::size_t(64)<<10,kSlots=4;
+    std::vector<unsigned char> slot[kSlots];std::atomic<bool> busy[kSlots]{};
+    unsigned char* take(std::size_t bytes,unsigned char& idx){
+        if(bytes>kMaxBytes)return nullptr;
+        for(unsigned i=0;i<kSlots;++i){
+            if(busy[i].load(std::memory_order_acquire))continue;
+            const std::size_t need=((bytes+kLockSlack)+4095)&~std::size_t(4095);   // the slack: a small game overrun stays inside the allocation (never replayed, so not zeroed)
+            if(slot[i].size()<need){try{slot[i].resize(need);}catch(...){return nullptr;}}
+            busy[i].store(true,std::memory_order_relaxed);idx=(unsigned char)i;return slot[i].data();
+        }
+        return nullptr;
+    }
+    void give(unsigned char idx){busy[idx].store(false,std::memory_order_release);}
+    void trim(){for(unsigned i=0;i<kSlots;++i)if(!busy[i].load(std::memory_order_acquire))std::vector<unsigned char>().swap(slot[i]);}   // game thread (pressure)
+};
+
 // Everything the game thread and the replay thread share. One per stream.
 struct StreamCore {
     Queue q;Registry reg;
@@ -184,9 +225,9 @@ struct StreamCore {
     std::atomic<std::uint64_t> syncOnly[14]{};    // bit per audited scalar slot, see StreamState
     std::atomic<std::uint64_t> framesReplayed{0};
     // The live level shadows (see SubRes): inserted and evicted on the game thread, removed by a proxy's destructor on the replay thread.
-    std::mutex texMutex;std::vector<SubRes*> texList;std::uint64_t texClock=0;
-    struct BufEntry {ProxyBase* proxy;struct BufferState* state;};
-    std::vector<BufEntry> bufList;   // live buffer shadows, under texMutex too (the same game-thread-evicts / replay-thread-destructs rule)
+    // Live level shadows in LRU order (never re-locked "fresh" ones are evicted before re-locked ones) and live buffer shadows (the large allowance apart): all under texMutex.
+    std::mutex texMutex;LruList<SubRes> texFresh,texRelocked;LruList<BufferState> bufRegular,bufLarge;
+    LockScratch scratch;             // game thread: small staged buffer locks
     std::uint64_t frameNo=0;         // game thread: Presents so far (the idle clock of buffer shadows)
     DWORD (*readBackLock)()=nullptr;             // flags of the stream's own READONLY read-backs of buffers (NorthlightUpload::readBackLock in the DLL); null = READONLY
     void (*logLine)(const char*)=nullptr;        // diagnostics sink (renderer.cpp's logf); may be null
@@ -243,9 +284,9 @@ struct SubRes {
     // A CPU copy of the whole level in our own tight layout (block rows of levelRowBytes), plus slack. Locks return pointers into it
     // and Unlock records the locked rows; shadowDead: never again (GPU-written, readback failed, ...).
     std::vector<unsigned char> shadow;bool shadowOn=false,shadowDead=false;UINT levelRowBytes=0,levelRows=0,levelSlices=0;std::size_t shadowOffset=0;
-    // Eviction bookkeeping (StreamCore::texList): the shadow may be evicted at any time it is not locked; the level then simply takes
+    // Eviction bookkeeping (StreamCore::texFresh/texRelocked): the shadow may be evicted at any time it is not locked; the level then simply takes
     // the readback path at its next re-lock. relocked: served a second lock (or made by a readback): evicted last. fromFresh: kept from a first write.
-    std::uint64_t lastUse=0;std::size_t listIndex=0;bool relocked=false,fromFresh=false;
+    LruNode<SubRes> lru;bool relocked=false,fromFresh=false;   // lru: StreamCore::texFresh (never re-locked) or texRelocked, least recently locked first
 };
 // What a staged Unlock records (followed by nothing: the bytes are in the command's Block).
 struct UnlockImageArgs {ProxyBase* proxy;UINT level,face;DWORD flags;UINT hasRect,rows,slices,rowBytes,pitch,slicePitch;LONG l,t,r,b;UINT bf,bk;UINT route;};
@@ -254,29 +295,35 @@ enum ImageRoute:UINT{RouteSurface=0,RouteTexture=1,RouteCube=2,RouteVolumeTextur
 
 inline void countPass(ProxyBase& p,PassReason r){own(p.core->q.stats.passThrough[unsigned(r)]);}   // game thread only
 // Both need StreamCore::texMutex held. A shadow is game-side memory and no queued command refers to it (Unlock copies the rows into a Block).
+inline LruList<SubRes>& texListOf(StreamCore& c,const SubRes& s){return s.relocked?c.texRelocked:c.texFresh;}
 inline void dropShadowLocked(StreamCore& c,SubRes& s){
     if(!s.shadowOn)return;
-    SubRes* last=c.texList.back();c.texList[s.listIndex]=last;last->listIndex=s.listIndex;c.texList.pop_back();
+    texListOf(c,s).remove(&s);
     c.q.addTexShadowBytes(-std::int64_t(std::size_t(s.levelRows)*s.levelRowBytes*s.levelSlices));
     std::vector<unsigned char>().swap(s.shadow);s.shadowOn=false;
 }
 inline void dropSubShadow(StreamCore& c,SubRes& s){std::lock_guard<std::mutex> l(c.texMutex);dropShadowLocked(c,s);}
 // Game thread: makes `bytes` fit the texture-shadow cap by evicting least-recently-locked shadows, never-re-locked ones (fresh keeps) first,
 // never one that is locked now or `keep`. mayEvictRelocked=false (a fresh keep) leaves the re-locked ones alone. false = still no room.
+// The victim is the first eligible entry of the LRU list (fresh list, then the re-locked one): O(victims), not a rescan of every level.
 inline bool makeRoomForShadow(StreamCore& c,std::size_t bytes,bool mayEvictRelocked,const SubRes* keep){
     while(!c.q.texShadowAdmit(bytes)){
         std::lock_guard<std::mutex> l(c.texMutex);
         SubRes* victim=nullptr;
-        for(SubRes* s:c.texList){
-            if(s==keep||s->mode==SubRes::Shadowed||(s->relocked&&!mayEvictRelocked))continue;
-            if(!victim||(victim->relocked&&!s->relocked)||(victim->relocked==s->relocked&&s->lastUse<victim->lastUse))victim=s;
-        }
+        for(SubRes* s=c.texFresh.head;s&&!victim;s=s->lru.next)if(s!=keep&&s->mode!=SubRes::Shadowed)victim=s;
+        if(!victim&&mayEvictRelocked)for(SubRes* s=c.texRelocked.head;s&&!victim;s=s->lru.next)if(s!=keep&&s->mode!=SubRes::Shadowed)victim=s;
         if(!victim)return false;
         dropShadowLocked(c,*victim);add(c.q.stats.texShadowEvicted);
     }
     return true;
 }
-inline void listShadow(StreamCore& c,SubRes& s){std::lock_guard<std::mutex> l(c.texMutex);s.listIndex=c.texList.size();c.texList.push_back(&s);}
+inline void listShadow(StreamCore& c,SubRes& s){std::lock_guard<std::mutex> l(c.texMutex);texListOf(c,s).pushBack(&s);}
+// Game thread: the level's shadow was locked again: most recently used now; the first re-lock moves it to the re-locked list (evicted last).
+inline void touchTexShadow(StreamCore& c,SubRes& s,bool becomesRelocked){
+    if(!becomesRelocked&&texListOf(c,s).isTail(&s))return;
+    std::lock_guard<std::mutex> l(c.texMutex);
+    texListOf(c,s).remove(&s);if(becomesRelocked)s.relocked=true;texListOf(c,s).pushBack(&s);
+}
 // A GPU-side write (StretchRect, UpdateTexture, ColorFill, mip generation, ...): the CPU copy is stale for good.
 inline void markGpuWritten(StreamCore& c,SubRes& s){s.written=true;dropSubShadow(c,s);s.shadowDead=true;}
 
@@ -300,7 +347,7 @@ inline HRESULT ProxyBase::devGet(IDirect3DDevice9** pp){if(!pp)return D3DERR_INV
         if(iidIs<Main,##__VA_ARGS__>(id)){*out=static_cast<Main*>(this);comAddRef();return S_OK;} \
         add(core->q.stats.qiMisses);return E_NOINTERFACE;} \
     ULONG STDMETHODCALLTYPE AddRef() override{return comAddRef();} \
-    ULONG STDMETHODCALLTYPE Release() override{return comRelease();}
+    ULONG STDMETHODCALLTYPE Release() override{NORTHLIGHT_STREAM_GATE return comRelease();}
 // The local methods every resource shares (the generator classifies them local): device, private data, priority, type.
 #define NL_RES_LOCALS(S) \
     HRESULT local(CmdTag<Cmd::S##_GetDevice>,IDirect3DDevice9** pp){return devGet(pp);} \
@@ -343,7 +390,6 @@ inline HRESULT callUnlock(UINT route,IUnknown* in,UINT level,UINT face){
 }
 // DISCARD and NOOVERWRITE only mean something in the default pool; elsewhere the old bytes stay, so such a lock is a plain lock.
 inline DWORD effectiveLockFlags(DWORD flags,DWORD pool){return pool==D3::kPoolDefault?flags:(flags&~(D3::kLockDiscard|D3::kLockNoOverwrite));}
-constexpr std::size_t kLockSlack=4096;   // zeroed bytes past a staged range / a shadow, never replayed: a small game overrun stays inside the allocation
 constexpr std::size_t kMaxStagedImage=std::size_t(8)<<20;
 // What the replay thread does for a recorded image unlock: lock the real level with the game's flags/rect, copy rows from the
 // tight source (rows of rowBytes, `pitch` apart), unlock. Also the synchronous fallback when no Block is available.
@@ -421,8 +467,7 @@ inline HRESULT lockImage(ProxyBase& self,ProxyBase& root,SubRes& sub,UINT route,
             }
         }
         if(sub.shadowOn){
-            sub.lastUse=++self.core->texClock;
-            if(!justMade&&!sub.relocked){sub.relocked=true;if(sub.fromFresh)add(q.stats.texShadowFreshUseful);}   // a kept first write that was locked again was worth keeping
+            if(!justMade){const bool first=!sub.relocked;touchTexShadow(*self.core,sub,first);if(first&&sub.fromFresh)add(q.stats.texShadowFreshUseful);}   // a kept first write that was locked again was worth keeping
             describe();sub.mode=SubRes::Shadowed;
             sub.shadowOffset=std::size_t(f)*lrows*lrowBytes+std::size_t(t/fi.bh)*lrowBytes+std::size_t(l/fi.bw)*fi.bytes;
             unsigned char* at=sub.shadow.data()+sub.shadowOffset;
@@ -494,8 +539,10 @@ inline HRESULT unlockImage(ProxyBase& self,SubRes& sub,UINT route,UINT level,UIN
 constexpr std::size_t kMaxStaticShadow=std::size_t(4)<<20;
 struct BufferState {
     std::vector<unsigned char> shadow;bool shadowOn=false,written=false,whole=false;
-    std::uint64_t lastUse=0,tick=0;std::size_t listIndex=0;   // lastUse: StreamCore::frameNo of its last shadow lock; tick: StreamCore::texClock then (LRU order across all buffer shadows)
-    enum Mode:std::uint8_t{Free,Shadow,Staged,Pass} mode=Free;UINT off=0,size=0;DWORD flags=0;Block* stage=nullptr;
+    // lastUse: StreamCore::frameNo of its last shadow lock. lru: StreamCore::bufRegular / bufLarge, least recently locked first, so lastUse never decreases from the head
+    // (an eviction scan stops at the first entry locked in the current frame). proxy: the owner, set when the shadow is registered.
+    std::uint64_t lastUse=0;LruNode<BufferState> lru;ProxyBase* proxy=nullptr;
+    enum Mode:std::uint8_t{Free,Shadow,Staged,Pass,Scratch} mode=Free;UINT off=0,size=0;DWORD flags=0;Block* stage=nullptr;unsigned char scratchSlot=0;   // Scratch: a small staged lock in StreamCore::scratch
     // canShadow: made by the game and shadow-able (DYNAMIC of any size, or non-DYNAMIC <= kMaxStaticShadow). shadowDead: never a shadow again
     // (GPU-written by ProcessVertices, or the readback failed). A buffer without a shadow (refused at creation, evicted, dropped under pressure) is not
     // "refused for good": it gets one at its next write re-lock (one readback) or, DYNAMIC, at a DISCARD lock, whenever room can be made.
@@ -508,36 +555,39 @@ struct BufferState {
 // thread frees one when the proxy dies; StreamCore::bufList (under texMutex) makes those safe against each other. No queued command refers to a
 // shadow, so dropping an unlocked one is always safe.
 inline bool dynamicBuffer(const ProxyBase& p){return (p.info.usage&D3::kUsageDynamic)!=0;}
+inline LruList<BufferState>& bufListOf(StreamCore& c,const BufferState& s){return s.large?c.bufLarge:c.bufRegular;}
 inline void registerShadow(ProxyBase& p,BufferState& s,bool large=false){
-    s.shadowOn=true;s.large=large;if(large){p.core->q.addLargeBytes(std::int64_t(p.info.length));add(p.core->q.stats.largeShadowGrants);}else p.core->q.addShadowBytes(std::int64_t(p.info.length));s.lastUse=p.core->frameNo;s.tick=++p.core->texClock;
-    std::lock_guard<std::mutex> l(p.core->texMutex);s.listIndex=p.core->bufList.size();p.core->bufList.push_back({&p,&s});
+    s.shadowOn=true;s.large=large;s.proxy=&p;if(large){p.core->q.addLargeBytes(std::int64_t(p.info.length));add(p.core->q.stats.largeShadowGrants);}else p.core->q.addShadowBytes(std::int64_t(p.info.length));s.lastUse=p.core->frameNo;
+    std::lock_guard<std::mutex> l(p.core->texMutex);bufListOf(*p.core,s).pushBack(&s);
 }
 inline void dropShadowLocked(ProxyBase& p,BufferState& s){
     if(!s.shadowOn)return;
-    auto& list=p.core->bufList;auto last=list.back();list[s.listIndex]=last;last.state->listIndex=s.listIndex;list.pop_back();
+    bufListOf(*p.core,s).remove(&s);
     if(s.large){p.core->q.addLargeBytes(-std::int64_t(p.info.length));add(p.core->q.stats.largeShadowDrops);s.large=false;}else p.core->q.addShadowBytes(-std::int64_t(p.info.length));
     std::vector<unsigned char>().swap(s.shadow);s.shadowOn=false;
 }
 inline void noteShadowEvicted(StreamCore& c,const ProxyBase& p){add(dynamicBuffer(p)?c.q.stats.dynShadowEvicted:c.q.stats.stShadowEvicted);}
-// Game thread: makes `bytes` fit the cap by evicting shadows, least recently locked first (one tick for all buffer shadows), never a locked one, `keep`,
-// or one locked in the CURRENT frame (anti-thrash: it is in use now; the requester is refused instead). Thrash signal for the adaptive cap: evicting
-// a HOT shadow (locked within kShadowHotFrames) or, for a re-lock (`relock`), finding no victim at all grows the cap one step if allowed (no pressure,
-// interval) and then re-checks before evicting anything. A request above a quarter of the cap never evicts (one buffer must not flush the rest).
-// false = still no room.
+// Game thread: the shadow was locked: most recently used now (frame and list position). A repeated lock of the one at the tail takes no lock.
+inline void touchBufferShadow(StreamCore& c,BufferState& s){
+    s.lastUse=c.frameNo;
+    if(bufListOf(c,s).isTail(&s))return;
+    std::lock_guard<std::mutex> l(c.texMutex);auto& list=bufListOf(c,s);list.remove(&s);list.pushBack(&s);
+}
+// Game thread: makes `bytes` fit the cap by evicting shadows, least recently locked first (the head of the LRU list), never a locked one, `keep`,
+// or one locked in the CURRENT frame (anti-thrash: it is in use now; the requester is refused instead; the list is in lastUse order, so the scan ends there).
+// Thrash signal for the adaptive cap: evicting a HOT shadow (locked within kShadowHotFrames) or, for a re-lock (`relock`), finding no victim at all grows the
+// cap one step if allowed (no pressure, interval) and then re-checks before evicting anything. A request above a quarter of the cap never evicts (one buffer
+// must not flush the rest). The large allowance is a list of its own (a large shadow frees nothing of the regular cap). false = still no room.
 inline bool makeRoomForBufferShadow(StreamCore& c,std::size_t bytes,bool relock,const BufferState* keep){
     while(!c.q.shadowAdmit(bytes)){
         if(bytes>c.q.shadowCap()/4)return false;
         std::lock_guard<std::mutex> l(c.texMutex);
-        const StreamCore::BufEntry* victim=nullptr;
-        for(const auto& e:c.bufList){
-            const BufferState* s=e.state;
-            if(s==keep||s->large||s->mode!=BufferState::Free||s->lastUse>=c.frameNo)continue;   // (a large shadow frees nothing of the regular cap)
-            if(!victim||s->tick<victim->state->tick)victim=&e;
-        }
+        BufferState* victim=nullptr;
+        for(BufferState* s=c.bufRegular.head;s&&s->lastUse<c.frameNo;s=s->lru.next)if(s!=keep&&s->mode==BufferState::Free){victim=s;break;}
         if(!victim){if(relock&&c.q.growShadowCap(c.frameNo))continue;return false;}
-        const bool hot=c.frameNo-victim->state->lastUse<kShadowHotFrames;
+        const bool hot=c.frameNo-victim->lastUse<kShadowHotFrames;
         if(hot&&c.q.growShadowCap(c.frameNo))continue;
-        const StreamCore::BufEntry v=*victim;noteShadowEvicted(c,*v.proxy);if(hot)add(c.q.stats.hotShadowEvicted);dropShadowLocked(*v.proxy,*v.state);
+        ProxyBase& vp=*victim->proxy;noteShadowEvicted(c,vp);if(hot)add(c.q.stats.hotShadowEvicted);dropShadowLocked(vp,*victim);
     }
     return true;
 }
@@ -548,14 +598,10 @@ inline bool makeRoomForLarge(StreamCore& c,std::size_t bytes,bool mayEvict,const
     while(!c.q.largeAdmit(bytes)){
         if(!mayEvict||c.q.pressure()||bytes>kMaxLargeShadow)return false;
         std::lock_guard<std::mutex> l(c.texMutex);
-        const StreamCore::BufEntry* victim=nullptr;
-        for(const auto& e:c.bufList){
-            const BufferState* s=e.state;
-            if(!s->large||s==keep||s->mode!=BufferState::Free||c.frameNo<s->lastUse+kLargeIdleFrames)continue;
-            if(!victim||s->tick<victim->state->tick)victim=&e;
-        }
+        BufferState* victim=nullptr;
+        for(BufferState* s=c.bufLarge.head;s&&c.frameNo>=s->lastUse+kLargeIdleFrames;s=s->lru.next)if(s!=keep&&s->mode==BufferState::Free){victim=s;break;}   // (at most a few entries)
         if(!victim)return false;
-        const StreamCore::BufEntry v=*victim;noteShadowEvicted(c,*v.proxy);dropShadowLocked(*v.proxy,*v.state);
+        ProxyBase& vp=*victim->proxy;noteShadowEvicted(c,vp);dropShadowLocked(vp,*victim);
     }
     return true;
 }
@@ -605,20 +651,20 @@ inline int readBackShadow(ProxyBase& self,BufferState& s){
 // DYNAMIC one makes a zero-filled shadow) when the cap allows: the correctness rule is unchanged.
 inline void dropIdleBufferShadows(StreamCore& c,unsigned idleFrames){
     std::lock_guard<std::mutex> l(c.texMutex);
-    for(std::size_t i=0;i<c.bufList.size();){   // the large allowance goes first and whole (never a locked one: its unlock or the next tick, see unlockBuffer)
-        auto e=c.bufList[i];
-        if(e.state->large&&e.state->mode==BufferState::Free){noteShadowEvicted(c,*e.proxy);dropShadowLocked(*e.proxy,*e.state);}else ++i;
+    for(BufferState* s=c.bufLarge.head;s;){   // the large allowance goes first and whole (never a locked one: its unlock or the next tick, see unlockBuffer)
+        BufferState* n=s->lru.next;ProxyBase& p=*s->proxy;
+        if(s->mode==BufferState::Free){noteShadowEvicted(c,p);dropShadowLocked(p,*s);}
+        s=n;
     }
-    for(std::size_t i=0;i<c.bufList.size();){
-        auto e=c.bufList[i];
-        if(e.state->mode==BufferState::Free&&c.frameNo>=e.state->lastUse+idleFrames){noteShadowEvicted(c,*e.proxy);dropShadowLocked(*e.proxy,*e.state);}   // (swap-removed: look at index i again)
-        else ++i;
+    for(BufferState* s=c.bufRegular.head;s&&c.frameNo>=s->lastUse+idleFrames;){   // least recent first: the scan ends at the first one used within idleFrames
+        BufferState* n=s->lru.next;ProxyBase& p=*s->proxy;
+        if(s->mode==BufferState::Free){noteShadowEvicted(c,p);dropShadowLocked(p,*s);}
+        s=n;
     }
     while(!c.q.shadowAdmit(0)){
-        StreamCore::BufEntry* victim=nullptr;
-        for(auto& e:c.bufList)if(!e.state->large&&e.state->mode==BufferState::Free&&(!victim||e.state->tick<victim->state->tick))victim=&e;
+        BufferState* victim=c.bufRegular.head;while(victim&&victim->mode!=BufferState::Free)victim=victim->lru.next;
         if(!victim)break;
-        StreamCore::BufEntry v=*victim;noteShadowEvicted(c,*v.proxy);dropShadowLocked(*v.proxy,*v.state);
+        ProxyBase& p=*victim->proxy;noteShadowEvicted(c,p);dropShadowLocked(p,*victim);
     }
 }
 // Range rules (our reading of DXVK, not verified against it): an offset beyond the end fails with INVALIDCALL; a size of 0 or one
@@ -639,11 +685,14 @@ inline HRESULT lockBuffer(ProxyBase& self,BufferState& s,UINT off,UINT size,void
             if(readBackShadow(self,s)<0)return D3DERR_INVALIDCALL;
         }
     }
-    if(s.shadowOn){s.mode=BufferState::Shadow;s.lastUse=self.core->frameNo;s.tick=++self.core->texClock;*pp=s.shadow.data()+off;own(q.stats.lockAsync);return D3D_OK;}
+    if(s.shadowOn){s.mode=BufferState::Shadow;touchBufferShadow(*self.core,s);*pp=s.shadow.data()+off;own(q.stats.lockAsync);return D3D_OK;}
     PassReason why=PassReason::NoShadow;
     if(flags&D3::kLockReadOnly)why=PassReason::ReadOnly;
     else if(!s.written||(eff&D3::kLockDiscard)){
-        if(Block* b=q.tryAllocBlock(size+kLockSlack)){s.mode=BufferState::Staged;s.stage=b;b->used=size;std::memset(b->data(),0,size+kLockSlack);*pp=b->data();own(q.stats.lockAsync);return D3D_OK;}
+        // 0.3.192 (CS): a small lock stages in game-side scratch and unlocks as an inline record (like the shadow path): no pooled Block, no cross-thread pool mutex.
+        // The range is zeroed (bytes the game leaves unwritten replay deterministically); the slack past it is never replayed and stays as it was.
+        if(unsigned char* sp=self.core->scratch.take(size,s.scratchSlot)){s.mode=BufferState::Scratch;std::memset(sp,0,size);*pp=sp;own(q.stats.lockAsync);return D3D_OK;}
+        if(Block* b=q.tryAllocBlock(size+kLockSlack)){s.mode=BufferState::Staged;s.stage=b;b->used=size;std::memset(b->data(),0,size);*pp=b->data();own(q.stats.lockAsync);return D3D_OK;}
         why=PassReason::Budget;
     }
     countPass(self,why);
@@ -683,6 +732,11 @@ inline HRESULT unlockBuffer(ProxyBase& self,BufferState& s){
         s.written=true;
         if(s.large&&q.pressure()){std::lock_guard<std::mutex> l(self.core->texMutex);noteShadowEvicted(*self.core,self);dropShadowLocked(self,s);}   // pressure began under the lock: the large shadow goes now
         return D3D_OK;
+    case BufferState::Scratch:{
+        noteRecorded(self,s,s.size);
+        auto* a=static_cast<UnlockBufferArgs*>(q.reserve((std::uint16_t)Cmd::UnlockBuffer,std::uint32_t(sizeof(UnlockBufferArgs)+s.size)));
+        *a=UnlockBufferArgs{&self,s.off,s.size,s.flags,1};std::memcpy(a+1,self.core->scratch.slot[s.scratchSlot].data(),s.size);q.commit();
+        self.core->scratch.give(s.scratchSlot);s.mode=BufferState::Free;s.written=true;return D3D_OK;}
     case BufferState::Staged:{
         noteRecorded(self,s,s.size);
         auto* a=static_cast<UnlockBufferArgs*>(q.reserveWithBlock((std::uint16_t)Cmd::UnlockBuffer,sizeof(UnlockBufferArgs),s.stage));
@@ -693,7 +747,7 @@ inline HRESULT unlockBuffer(ProxyBase& self,BufferState& s){
         s.mode=BufferState::Free;if(!(s.flags&D3::kLockReadOnly))s.written=true;return hr;}
     }
 }
-inline void releaseStage(ProxyBase& p,BufferState& s){if(s.stage){p.core->q.freeBlock(s.stage);s.stage=nullptr;}}
+inline void releaseStage(ProxyBase& p,BufferState& s){if(s.stage){p.core->q.freeBlock(s.stage);s.stage=nullptr;}if(s.mode==BufferState::Scratch){p.core->scratch.give(s.scratchSlot);s.mode=BufferState::Free;}}
 
 // ---- concrete proxies ----
 // The vtable pointer of each concrete proxy class, learned when the first one is constructed: ProxyBase::of recognizes a stream proxy by it.
@@ -723,9 +777,9 @@ struct StreamSurface final:IDirect3DSurface9,ProxyBase {
         if(parent)return parent->unk->QueryInterface(id,pp);
         return core->game->QueryInterface(id,pp);
     }
-    HRESULT STDMETHODCALLTYPE LockRect(D3DLOCKED_RECT* lr,const RECT* rect,DWORD flags) override{
+    HRESULT STDMETHODCALLTYPE LockRect(D3DLOCKED_RECT* lr,const RECT* rect,DWORD flags) override{NORTHLIGHT_STREAM_GATE 
         return lockImage(*this,parent?*parent:static_cast<ProxyBase&>(*this),*subp,RouteSurface,0,0,info.w,info.h,1,lr,nullptr,rect,nullptr,flags);}
-    HRESULT STDMETHODCALLTYPE UnlockRect() override{return unlockImage(*this,*subp,RouteSurface,0,0);}
+    HRESULT STDMETHODCALLTYPE UnlockRect() override{NORTHLIGHT_STREAM_GATE return unlockImage(*this,*subp,RouteSurface,0,0);}
 };
 struct StreamVolume final:IDirect3DVolume9,ProxyBase {
     SubRes* subp;
@@ -742,9 +796,9 @@ struct StreamVolume final:IDirect3DVolume9,ProxyBase {
         if(!d)return D3DERR_INVALIDCALL;
         d->Format=(D3DFORMAT)info.fmt;d->Type=D3DRTYPE_VOLUME;d->Usage=info.usage;d->Pool=(D3DPOOL)info.pool;d->Width=info.w;d->Height=info.h;d->Depth=info.d;return D3D_OK;}
     HRESULT STDMETHODCALLTYPE GetContainer(REFIID id,void** pp) override{if(!pp)return D3DERR_INVALIDCALL;*pp=nullptr;return parent?parent->unk->QueryInterface(id,pp):E_NOINTERFACE;}
-    HRESULT STDMETHODCALLTYPE LockBox(D3DLOCKED_BOX* lb,const D3DBOX* box,DWORD flags) override{
+    HRESULT STDMETHODCALLTYPE LockBox(D3DLOCKED_BOX* lb,const D3DBOX* box,DWORD flags) override{NORTHLIGHT_STREAM_GATE 
         return lockImage(*this,*parent,*subp,RouteVolume,0,0,info.w,info.h,info.d,nullptr,lb,nullptr,box,flags);}
-    HRESULT STDMETHODCALLTYPE UnlockBox() override{return unlockImage(*this,*subp,RouteVolume,0,0);}
+    HRESULT STDMETHODCALLTYPE UnlockBox() override{NORTHLIGHT_STREAM_GATE return unlockImage(*this,*subp,RouteVolume,0,0);}
 };
 
 // The derive command: the replay thread asks `parent.inner` for a child and stores it in `child.inner`.
@@ -771,7 +825,7 @@ struct StreamTexture final:IDirect3DTexture9,ProxyBase {
         if(!d||level>=info.levels)return D3DERR_INVALIDCALL;
         d->Format=(D3DFORMAT)info.fmt;d->Type=D3DRTYPE_SURFACE;d->Usage=info.usage;d->Pool=(D3DPOOL)info.pool;d->MultiSampleType=(D3DMULTISAMPLE_TYPE)0;d->MultiSampleQuality=0;
         d->Width=D3::mipDim(info.w,level);d->Height=D3::mipDim(info.h,level);return D3D_OK;}
-    HRESULT STDMETHODCALLTYPE GetSurfaceLevel(UINT level,IDirect3DSurface9** pp) override{
+    HRESULT STDMETHODCALLTYPE GetSurfaceLevel(UINT level,IDirect3DSurface9** pp) override{NORTHLIGHT_STREAM_GATE 
         if(!pp)return D3DERR_INVALIDCALL;*pp=nullptr;if(level>=info.levels)return D3DERR_INVALIDCALL;
         auto* kid=static_cast<StreamSurface*>(kids[level]);
         if(!kid){
@@ -781,10 +835,10 @@ struct StreamTexture final:IDirect3DTexture9,ProxyBase {
             recordDerive(*core,this,kid,DeriveSurfaceLevel,level,0);
         }else kid->comAddRef();
         *pp=kid;return D3D_OK;}
-    HRESULT STDMETHODCALLTYPE LockRect(UINT level,D3DLOCKED_RECT* lr,const RECT* rect,DWORD flags) override{
+    HRESULT STDMETHODCALLTYPE LockRect(UINT level,D3DLOCKED_RECT* lr,const RECT* rect,DWORD flags) override{NORTHLIGHT_STREAM_GATE 
         if(level>=info.levels)return D3DERR_INVALIDCALL;
         return lockImage(*this,*this,subs[level],RouteTexture,level,0,D3::mipDim(info.w,level),D3::mipDim(info.h,level),1,lr,nullptr,rect,nullptr,flags);}
-    HRESULT STDMETHODCALLTYPE UnlockRect(UINT level) override{if(level>=info.levels)return D3DERR_INVALIDCALL;return unlockImage(*this,subs[level],RouteTexture,level,0);}
+    HRESULT STDMETHODCALLTYPE UnlockRect(UINT level) override{NORTHLIGHT_STREAM_GATE if(level>=info.levels)return D3DERR_INVALIDCALL;return unlockImage(*this,subs[level],RouteTexture,level,0);}
 };
 struct StreamCubeTexture final:IDirect3DCubeTexture9,ProxyBase {
     std::vector<SubRes> subs;DWORD lod=0;unsigned autoGenFilter=2;
@@ -803,7 +857,7 @@ struct StreamCubeTexture final:IDirect3DCubeTexture9,ProxyBase {
         d->Format=(D3DFORMAT)info.fmt;d->Type=D3DRTYPE_SURFACE;d->Usage=info.usage;d->Pool=(D3DPOOL)info.pool;d->MultiSampleType=(D3DMULTISAMPLE_TYPE)0;d->MultiSampleQuality=0;
         d->Width=D3::mipDim(info.w,level);d->Height=D3::mipDim(info.h,level);return D3D_OK;}
     std::size_t idx(UINT face,UINT level)const{return std::size_t(face)*info.levels+level;}
-    HRESULT STDMETHODCALLTYPE GetCubeMapSurface(D3DCUBEMAP_FACES face,UINT level,IDirect3DSurface9** pp) override{
+    HRESULT STDMETHODCALLTYPE GetCubeMapSurface(D3DCUBEMAP_FACES face,UINT level,IDirect3DSurface9** pp) override{NORTHLIGHT_STREAM_GATE 
         if(!pp)return D3DERR_INVALIDCALL;*pp=nullptr;if(level>=info.levels||unsigned(face)>=6)return D3DERR_INVALIDCALL;
         const std::size_t k=idx(unsigned(face),level);auto* kid=static_cast<StreamSurface*>(kids[k]);
         if(!kid){
@@ -813,10 +867,10 @@ struct StreamCubeTexture final:IDirect3DCubeTexture9,ProxyBase {
             recordDerive(*core,this,kid,DeriveCubeFace,unsigned(face),level);
         }else kid->comAddRef();
         *pp=kid;return D3D_OK;}
-    HRESULT STDMETHODCALLTYPE LockRect(D3DCUBEMAP_FACES face,UINT level,D3DLOCKED_RECT* lr,const RECT* rect,DWORD flags) override{
+    HRESULT STDMETHODCALLTYPE LockRect(D3DCUBEMAP_FACES face,UINT level,D3DLOCKED_RECT* lr,const RECT* rect,DWORD flags) override{NORTHLIGHT_STREAM_GATE 
         if(level>=info.levels||unsigned(face)>=6)return D3DERR_INVALIDCALL;
         return lockImage(*this,*this,subs[idx(unsigned(face),level)],RouteCube,level,unsigned(face),D3::mipDim(info.w,level),D3::mipDim(info.h,level),1,lr,nullptr,rect,nullptr,flags);}
-    HRESULT STDMETHODCALLTYPE UnlockRect(D3DCUBEMAP_FACES face,UINT level) override{
+    HRESULT STDMETHODCALLTYPE UnlockRect(D3DCUBEMAP_FACES face,UINT level) override{NORTHLIGHT_STREAM_GATE 
         if(level>=info.levels||unsigned(face)>=6)return D3DERR_INVALIDCALL;return unlockImage(*this,subs[idx(unsigned(face),level)],RouteCube,level,unsigned(face));}
 };
 struct StreamVolumeTexture final:IDirect3DVolumeTexture9,ProxyBase {
@@ -834,7 +888,7 @@ struct StreamVolumeTexture final:IDirect3DVolumeTexture9,ProxyBase {
         if(!d||level>=info.levels)return D3DERR_INVALIDCALL;
         d->Format=(D3DFORMAT)info.fmt;d->Type=D3DRTYPE_VOLUME;d->Usage=info.usage;d->Pool=(D3DPOOL)info.pool;
         d->Width=D3::mipDim(info.w,level);d->Height=D3::mipDim(info.h,level);d->Depth=D3::mipDim(info.d,level);return D3D_OK;}
-    HRESULT STDMETHODCALLTYPE GetVolumeLevel(UINT level,IDirect3DVolume9** pp) override{
+    HRESULT STDMETHODCALLTYPE GetVolumeLevel(UINT level,IDirect3DVolume9** pp) override{NORTHLIGHT_STREAM_GATE 
         if(!pp)return D3DERR_INVALIDCALL;*pp=nullptr;if(level>=info.levels)return D3DERR_INVALIDCALL;
         auto* kid=static_cast<StreamVolume*>(kids[level]);
         if(!kid){
@@ -843,10 +897,10 @@ struct StreamVolumeTexture final:IDirect3DVolumeTexture9,ProxyBase {
             kids[level]=kid;adoptKid();recordDerive(*core,this,kid,DeriveVolumeLevel,level,0);
         }else kid->comAddRef();
         *pp=kid;return D3D_OK;}
-    HRESULT STDMETHODCALLTYPE LockBox(UINT level,D3DLOCKED_BOX* lb,const D3DBOX* box,DWORD flags) override{
+    HRESULT STDMETHODCALLTYPE LockBox(UINT level,D3DLOCKED_BOX* lb,const D3DBOX* box,DWORD flags) override{NORTHLIGHT_STREAM_GATE 
         if(level>=info.levels)return D3DERR_INVALIDCALL;
         return lockImage(*this,*this,subs[level],RouteVolumeTexture,level,0,D3::mipDim(info.w,level),D3::mipDim(info.h,level),D3::mipDim(info.d,level),nullptr,lb,nullptr,box,flags);}
-    HRESULT STDMETHODCALLTYPE UnlockBox(UINT level) override{if(level>=info.levels)return D3DERR_INVALIDCALL;return unlockImage(*this,subs[level],RouteVolumeTexture,level,0);}
+    HRESULT STDMETHODCALLTYPE UnlockBox(UINT level) override{NORTHLIGHT_STREAM_GATE if(level>=info.levels)return D3DERR_INVALIDCALL;return unlockImage(*this,subs[level],RouteVolumeTexture,level,0);}
 };
 
 struct StreamVertexBuffer final:IDirect3DVertexBuffer9,ProxyBase {
@@ -860,8 +914,8 @@ struct StreamVertexBuffer final:IDirect3DVertexBuffer9,ProxyBase {
     NL_RES_LOCALS(VertexBuffer)
     HRESULT local(CmdTag<Cmd::VertexBuffer_GetDesc>,D3DVERTEXBUFFER_DESC* d){
         if(!d)return D3DERR_INVALIDCALL;d->Format=(D3DFORMAT)info.fmt;d->Type=D3DRTYPE_VERTEXBUFFER;d->Usage=info.usage;d->Pool=(D3DPOOL)info.pool;d->Size=info.length;d->FVF=info.fvf;return D3D_OK;}
-    HRESULT STDMETHODCALLTYPE Lock(UINT off,UINT size,void** pp,DWORD flags) override{return lockBuffer(*this,buf,off,size,pp,flags);}
-    HRESULT STDMETHODCALLTYPE Unlock() override{return unlockBuffer(*this,buf);}
+    HRESULT STDMETHODCALLTYPE Lock(UINT off,UINT size,void** pp,DWORD flags) override{NORTHLIGHT_STREAM_GATE return lockBuffer(*this,buf,off,size,pp,flags);}
+    HRESULT STDMETHODCALLTYPE Unlock() override{NORTHLIGHT_STREAM_GATE return unlockBuffer(*this,buf);}
 };
 struct StreamIndexBuffer final:IDirect3DIndexBuffer9,ProxyBase {
     BufferState buf;
@@ -874,8 +928,8 @@ struct StreamIndexBuffer final:IDirect3DIndexBuffer9,ProxyBase {
     NL_RES_LOCALS(IndexBuffer)
     HRESULT local(CmdTag<Cmd::IndexBuffer_GetDesc>,D3DINDEXBUFFER_DESC* d){
         if(!d)return D3DERR_INVALIDCALL;d->Format=(D3DFORMAT)info.fmt;d->Type=D3DRTYPE_INDEXBUFFER;d->Usage=info.usage;d->Pool=(D3DPOOL)info.pool;d->Size=info.length;return D3D_OK;}
-    HRESULT STDMETHODCALLTYPE Lock(UINT off,UINT size,void** pp,DWORD flags) override{return lockBuffer(*this,buf,off,size,pp,flags);}
-    HRESULT STDMETHODCALLTYPE Unlock() override{return unlockBuffer(*this,buf);}
+    HRESULT STDMETHODCALLTYPE Lock(UINT off,UINT size,void** pp,DWORD flags) override{NORTHLIGHT_STREAM_GATE return lockBuffer(*this,buf,off,size,pp,flags);}
+    HRESULT STDMETHODCALLTYPE Unlock() override{NORTHLIGHT_STREAM_GATE return unlockBuffer(*this,buf);}
 };
 
 // Bytecode length in DWORDs up to and including the 0x0000FFFF end token (comment blocks skipped by their length).
@@ -942,7 +996,7 @@ struct StreamQuery final:IDirect3DQuery9,ProxyBase {
     DWORD local(CmdTag<Cmd::Query_GetDataSize>){return dataSize;}
     void observe(CmdTag<Cmd::Query_Issue>,DWORD flags){if(flags&D3::kIssueEnd)gen.fetch_add(1);}
     using ProxyBase::observe;
-    HRESULT STDMETHODCALLTYPE GetData(void* data,DWORD size,DWORD flags) override{
+    HRESULT STDMETHODCALLTYPE GetData(void* data,DWORD size,DWORD flags) override{NORTHLIGHT_STREAM_GATE 
         Queue& q=core->q;
         if(dead.load())return D3DERR_INVALIDCALL;   // the real create failed: an error, not S_FALSE forever
         if((flags&D3::kGetDataFlush)||!gen.load()){   // FLUSH, or a query never issued: the real GetData with the game's buffer, after everything recorded so far

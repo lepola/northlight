@@ -601,7 +601,7 @@ static void statsLine(){
     rig.sync();
     std::vector<std::string> lines;for(auto& l:gStatLines)if(l.find(" frames=600 ")!=std::string::npos)lines.push_back(l);   // the 600th replayed frame
     CHECK(lines.size()==1&&lines[0].rfind("CSTREAM cmds=",0)==0&&lines[0].find("passPerFrame=")!=std::string::npos&&lines[0].find("census[")!=std::string::npos&&lines[0].back()==']');
-    for(const char* field:{"game[per frame]: ms=","syncMs=","presentWaitMs=","bpMs=","sleeps=","publishes=","replayBusyMs/frame=","recorded=","answered=","texShadow=","readbacks=","bufShadow=","readbacks/frame=","evicted/frame=","(hot ","refused/frame=","grows=","large=","memMB="})CHECK(lines[0].find(field)!=std::string::npos);   // per-window numbers
+    for(const char* field:{"game[per frame]: ms=","syncMs=","presentWaitMs=","bpMs=","sleeps=","publishes=","replayBusyMs/frame=","spinMs/frame=","createFailed=","recorded=","answered=","texShadow=","readbacks=","bufShadow=","readbacks/frame=","evicted/frame=","(hot ","refused/frame=","grows=","large=","memMB="})CHECK(lines[0].find(field)!=std::string::npos);   // per-window numbers
     CHECK(lines[0].size()<1600);
     rig.finish();checkClean();
 }
@@ -666,6 +666,10 @@ static void redundantFiltering(){
     IDirect3DStateBlock9* sb=nullptr;CHECK(d->CreateStateBlock((D3DSTATEBLOCKTYPE)1,&sb)==D3D_OK);
     d->SetRenderState((D3DRENDERSTATETYPE)20,2);sb->Apply();CHECK(recorded([&]{d->SetRenderState((D3DRENDERSTATETYPE)20,2);}));
     d->SetRenderState((D3DRENDERSTATETYPE)21,2);rig.core().replayFailure.store(true);DWORD gv=0;d->GetRenderState((D3DRENDERSTATETYPE)22,&gv);CHECK(recorded([&]{d->SetRenderState((D3DRENDERSTATETYPE)21,2);}));
+    // the same without any Get in between: the failure flag is consumed where filtering is decided
+    d->SetRenderState((D3DRENDERSTATETYPE)23,2);CHECK(!recorded([&]{d->SetRenderState((D3DRENDERSTATETYPE)23,2);})==kFilterRedundantState);
+    {const auto f0=get(q.stats.replayFailures);rig.core().replayFailure.store(true);CHECK(recorded([&]{d->SetRenderState((D3DRENDERSTATETYPE)23,2);})&&!rig.core().replayFailure.load()&&get(q.stats.replayFailures)==f0+1);}
+    d->SetRenderState((D3DRENDERSTATETYPE)24,2);rig.core().replayFailure.store(true);d->Present(nullptr,nullptr,nullptr,nullptr);CHECK(!rig.core().replayFailure.load()&&recorded([&]{d->SetRenderState((D3DRENDERSTATETYPE)24,2);}));   // Present consumes it too
     // a value learned by a sync Get is not a game Set
     d->GetRenderState((D3DRENDERSTATETYPE)30,&gv);CHECK(recorded([&]{d->SetRenderState((D3DRENDERSTATETYPE)30,gv);}));
     // a slot the audit declared sync-only is never filtered
@@ -688,7 +692,7 @@ static void renderTargetResetsViewport(){
     D3DVIEWPORT9 v{0,0,100,100,0,1};d->SetViewport(&v);D3DVIEWPORT9 g{};const auto syncs=get(rig.core().q.stats.syncCalls);
     CHECK(d->GetViewport(&g)==D3D_OK&&g.Width==100&&get(rig.core().q.stats.syncCalls)==syncs);
     IDirect3DSurface9* rt=nullptr;CHECK(d->CreateRenderTarget(64,64,(D3DFORMAT)22,(D3DMULTISAMPLE_TYPE)0,0,0,&rt,nullptr)==D3D_OK);d->SetRenderTarget(0,rt);
-    CHECK(d->GetViewport(&g)==D3D_OK&&get(rig.core().q.stats.syncCalls)==syncs+1);   // unknown again: the Target answers
+    CHECK(d->GetViewport(&g)==D3D_OK&&get(rig.core().q.stats.syncCalls)==syncs+2);   // (the DEFAULT-pool render target's create is synchronous) unknown again: the Target answers
     rt->Release();rig.finish();checkClean();
 }
 // Memory pressure published by the memory guard: at the next Present the stream gives memory back (idle pools, texture shadows down to the
@@ -953,7 +957,7 @@ static void directReplayRaw(){
     plain->Release();cube->Release();tex->Release();vb->Release();ib->Release();vs->Release();ps->Release();dc->Release();
     rig.finish();checkClean();
 }
-// 0.3.193 (CS): queue/counter layout. The producer's, the consumer's and the shared groups sit on distinct cache lines; a heap-allocated
+// 0.3.192 (CS): queue/counter layout. The producer's, the consumer's and the shared groups sit on distinct cache lines; a heap-allocated
 // core (StreamDevice::coreOwner) must come back aligned (C++17 aligned new).
 static void layoutIsolation(){
     static_assert(Queue::layoutIsolated(),"queue groups");
@@ -1009,9 +1013,113 @@ static void idlePollWakes(){
     gKnobs.holdQueries.store(false);DWORD d=0;int spins=0;while(qy->GetData(&d,4,0)==S_FALSE&&++spins<1000000)std::this_thread::yield();CHECK(spins<1000000);
     qy->Release();rig.finish();checkClean();
 }
+
+// 0.3.192 (CS) review fixes ------------------------------------------------------------------------------------------------------------------
+// Creates that can really fail (DEFAULT-pool render targets / depth surfaces, anything of >= 4 MiB) are synchronous and return the Target's HRESULT; the rest stays
+// asynchronous, but every failure is counted (createFailures) and logged (one line a second, with the count since the last).
+static void createFailuresReachTheGame(){
+    gTrace.clear();gStatLines.clear();StreamDevice::Options opt;opt.log=[](const char* l){gStatLines.push_back(l);};Rig rig(true,opt);auto& s=rig.core().q.stats;IDirect3DDevice9* d=rig.dev;
+    const auto deadLines=[&]{unsigned n=0;for(auto& l:gStatLines)if(l.find("dead create")!=std::string::npos)++n;return n;};
+    // a failing Target: the synchronous kinds return the real error and no object
+    gKnobs.failCreates.store(true);
+    IDirect3DSurface9* rt=nullptr;CHECK(d->CreateRenderTarget(64,64,(D3DFORMAT)22,(D3DMULTISAMPLE_TYPE)0,0,0,&rt,nullptr)==E_OUTOFMEMORY&&!rt);
+    IDirect3DSurface9* ds=nullptr;CHECK(d->CreateDepthStencilSurface(64,64,(D3DFORMAT)75,(D3DMULTISAMPLE_TYPE)0,0,1,&ds,nullptr)==E_OUTOFMEMORY&&!ds);
+    IDirect3DTexture9* big=nullptr;CHECK(d->CreateTexture(1024,1024,1,0,(D3DFORMAT)22,(D3DPOOL)1,&big,nullptr)==E_OUTOFMEMORY&&!big);   // 4 MiB: the threshold
+    IDirect3DTexture9* rtTex=nullptr;CHECK(d->CreateTexture(8,8,1,D3::kUsageRT,(D3DFORMAT)22,(D3DPOOL)0,&rtTex,nullptr)==E_OUTOFMEMORY&&!rtTex);   // a DEFAULT-pool render-target texture
+    IDirect3DCubeTexture9* cube=nullptr;CHECK(d->CreateCubeTexture(512,1,0,(D3DFORMAT)22,(D3DPOOL)1,&cube,nullptr)==D3DERR_NOTAVAILABLE&&!cube);   // 6 faces x 1 MiB: synchronous (the fake refuses cubes)
+    IDirect3DVolumeTexture9* vol=nullptr;CHECK(d->CreateVolumeTexture(128,128,128,1,0,(D3DFORMAT)22,(D3DPOOL)1,&vol,nullptr)==D3DERR_NOTAVAILABLE&&!vol);
+    CHECK(get(s.createFailures)==6&&get(s.syncCalls)>=6&&deadLines()==1);   // every failure counted; the log line is rate-limited
+    // below the threshold the create is asynchronous: D3D_OK at once, the failure shows up only in the counters and the log
+    const auto sync0=get(s.syncCalls);
+    IDirect3DTexture9* small=nullptr;CHECK(d->CreateTexture(1023,1023,1,0,(D3DFORMAT)22,(D3DPOOL)1,&small,nullptr)==D3D_OK&&small);   // 4 MiB - 7 KiB
+    IDirect3DTexture9* tiny=nullptr;CHECK(d->CreateTexture(16,16,1,0,(D3DFORMAT)22,(D3DPOOL)1,&tiny,nullptr)==D3D_OK&&tiny);
+    CHECK(get(s.syncCalls)==sync0);rig.sync();CHECK(get(s.createFailures)==8&&get(s.deadCreates)>=2&&deadLines()==1);   // two more failures: counted, inside the same second: not logged again
+    std::this_thread::sleep_for(std::chrono::milliseconds(1100));
+    IDirect3DTexture9* later=nullptr;CHECK(d->CreateTexture(16,16,1,0,(D3DFORMAT)22,(D3DPOOL)1,&later,nullptr)==D3D_OK&&later);rig.sync();
+    CHECK(get(s.createFailures)==9&&deadLines()==2);{const std::string& last=gStatLines.back();CHECK(last.find("dead create")!=std::string::npos&&last.find("failed=8 since the last line")!=std::string::npos&&last.find("total=9")!=std::string::npos);}
+    // a healthy Target: the same creates succeed, synchronous or not
+    gKnobs.failCreates.store(false);
+    CHECK(d->CreateRenderTarget(64,64,(D3DFORMAT)22,(D3DMULTISAMPLE_TYPE)0,0,0,&rt,nullptr)==D3D_OK&&rt);CHECK(d->CreateDepthStencilSurface(64,64,(D3DFORMAT)75,(D3DMULTISAMPLE_TYPE)0,0,1,&ds,nullptr)==D3D_OK&&ds);
+    CHECK(d->CreateTexture(1024,1024,1,0,(D3DFORMAT)22,(D3DPOOL)1,&big,nullptr)==D3D_OK&&big);
+    D3DSURFACE_DESC dd{};CHECK(big->GetLevelDesc(0,&dd)==D3D_OK&&dd.Width==1024);
+    rt->Release();ds->Release();big->Release();small->Release();tiny->Release();later->Release();
+    {const auto f=get(s.createFailures);IDirect3DSurface9* o=nullptr;CHECK(d->CreateOffscreenPlainSurface(2048,2048,(D3DFORMAT)22,(D3DPOOL)2,&o,nullptr)==D3D_OK&&o&&get(s.createFailures)==f);o->Release();}   // 16 MiB offscreen: synchronous, fine
+    rig.finish();checkClean();
+}
+// A Block that cannot fit beside the open write chunk is refused up front: a 10 MiB unlock with the 16 MiB budget neither waits for a drain nor stalls the game thread.
+static void impossibleBlockIsRefusedAtOnce(){
+    gTrace.clear();Rig rig(true);auto& q=rig.core().q;auto& s=q.stats;IDirect3DDevice9* d=rig.dev;
+    const UINT len=10u<<20;IDirect3DVertexBuffer9* vb=nullptr;CHECK(d->CreateVertexBuffer(len,D3::kUsageDynamic,0,(D3DPOOL)0,&vb,nullptr)==D3D_OK&&vb);CHECK(shadowOn(vb));   // the large allowance
+    gKnobs.hold.store(true);d->BeginScene();for(int i=0;i<10;++i)d->SetRenderState((D3DRENDERSTATETYPE)(60+i),unsigned(i+1));   // the replay thread is stuck: the queue is not drained
+    const auto refused0=get(s.blockRefused),bp0=get(s.backpressureWaits);
+    CHECK(q.tryAllocBlock(len)==nullptr&&get(s.blockRefused)==refused0+1&&get(s.backpressureWaits)==bp0);   // would have waited for a drain that cannot come
+    gKnobs.hold.store(false);
+    void* p=nullptr;CHECK(vb->Lock(0,0,&p,D3::kLockDiscard)==D3D_OK);std::memset(p,0x6B,len);((unsigned char*)p)[len-1]=0x11;
+    CHECK(vb->Unlock()==D3D_OK);   // the 128 KiB inline pieces: no Block, no stall
+    CHECK(get(s.blockRefused)>=refused0+2&&get(s.backpressureWaits)==bp0);
+    rig.sync();{const unsigned char* c=targetBytes(vb);CHECK(c[0]==0x6B&&c[len/2]==0x6B&&c[len-1]==0x11);}
+    // the same for a big staged lock (a 9 MiB first write without a shadow): the budget refusal sends it to the synchronous pass-through, still without a backpressure wait
+    IDirect3DVertexBuffer9* st=nullptr;CHECK(d->CreateVertexBuffer(9u<<20,0,0,(D3DPOOL)0,&st,nullptr)==D3D_OK&&st);
+    CHECK(st->Lock(0,0,&p,0)==D3D_OK&&p&&get(s.passThrough[unsigned(PassReason::Budget)])>=1);std::memset(p,0x22,9u<<20);CHECK(st->Unlock()==D3D_OK);
+    CHECK(get(s.backpressureWaits)==bp0);rig.sync();CHECK(targetBytes(st)[(9u<<20)-1]==0x22);
+    vb->Release();st->Release();rig.finish();checkClean();
+}
+// Small staged locks (first write / DISCARD without a shadow) use the game-side scratch: no pooled Block (no cross-thread pool mutex), the bytes still arrive, an overrun
+// stays inside the allocation (ASan), and when every slot is taken (or the lock is large) the Block path takes over.
+static void smallStagedLocksUseScratch(){
+    gTrace.clear();Rig rig(true);auto& s=rig.core().q.stats;IDirect3DDevice9* d=rig.dev;
+    const auto blocks=[&]{return get(s.blockAllocs)+get(s.blockReuses);};
+    IDirect3DVertexBuffer9* a=nullptr;CHECK(d->CreateVertexBuffer(1u<<20,0,0,(D3DPOOL)0,&a,nullptr)==D3D_OK);   // no shadow: static, DEFAULT pool
+    const auto b0=blocks();void* p=nullptr;
+    CHECK(a->Lock(100,64,&p,0)==D3D_OK);CHECK(((unsigned char*)p)[0]==0&&((unsigned char*)p)[63]==0);std::memset(p,0x77,64+300);CHECK(a->Unlock()==D3D_OK);   // zeroed range, overrun tolerated
+    CHECK(blocks()==b0&&get(s.lockAsync)>=1);rig.sync();{const unsigned char* c=targetBytes(a);CHECK(c[99]==0&&c[100]==0x77&&c[163]==0x77&&c[164]==0);}
+    CHECK(a->Lock(0,64u<<10,&p,D3::kLockDiscard)==D3D_OK);std::memset(p,0x33,64u<<10);CHECK(a->Unlock()==D3D_OK);CHECK(blocks()==b0);   // the largest scratch lock: 64 KiB
+    CHECK(a->Lock(0,(64u<<10)+1,&p,D3::kLockDiscard)==D3D_OK);std::memset(p,0x44,(64u<<10)+1);CHECK(a->Unlock()==D3D_OK);CHECK(blocks()==b0+1);   // above: a pooled Block
+    rig.sync();{const unsigned char* c=targetBytes(a);CHECK(c[0]==0x44&&c[(64u<<10)]==0x44&&c[(64u<<10)+1]==0);}
+    // five buffers locked at the same time: four scratch slots, the fifth takes a Block
+    std::vector<IDirect3DVertexBuffer9*> v;const auto b1=blocks();
+    for(int i=0;i<5;++i){IDirect3DVertexBuffer9* b=nullptr;CHECK(d->CreateVertexBuffer(4096,0,0,(D3DPOOL)0,&b,nullptr)==D3D_OK);v.push_back(b);CHECK(b->Lock(0,32,&p,0)==D3D_OK);std::memset(p,0xA0+i,32);}
+    CHECK(blocks()==b1+1);for(auto* b:v)CHECK(b->Unlock()==D3D_OK);rig.sync();
+    for(int i=0;i<5;++i)CHECK(targetBytes(v[i])[31]==0xA0+i&&targetBytes(v[i])[32]==0);
+    // the slots came back: the next small lock needs no Block
+    CHECK(v[0]->Lock(0,32,&p,D3::kLockDiscard)==D3D_OK&&blocks()==b1+1);CHECK(v[0]->Unlock()==D3D_OK);
+    // a buffer released while locked gives its slot back
+    {IDirect3DVertexBuffer9* r=nullptr;CHECK(d->CreateVertexBuffer(256,0,0,(D3DPOOL)0,&r,nullptr)==D3D_OK);CHECK(r->Lock(0,16,&p,0)==D3D_OK);r->Release();rig.sync();}
+    for(int i=0;i<4;++i){CHECK(v[i]->Lock(0,16,&p,D3::kLockDiscard)==D3D_OK);}
+    CHECK(blocks()==b1+1);for(int i=0;i<4;++i)CHECK(v[i]->Unlock()==D3D_OK);
+    for(auto* b:v)b->Release();a->Release();rig.finish();checkClean();
+}
+// The record gate: the owner pays a compare, a foreign thread is serialized (plain data under the guards must not race: TSan) and counted.
+static void recordGateSerializesForeignThreads(){
+    {   // the gate itself
+        Counter foreign{0};long plain=0;std::atomic<bool> go{false};const int N=100000;
+        recordGate.setOwner(&foreign);
+        std::thread other([&]{while(!go.load())std::this_thread::yield();for(int i=0;i<N;++i){RecordGuard g(recordGate);{RecordGuard inner(recordGate);++plain;}}});
+        go.store(true);for(int i=0;i<N;++i){RecordGuard g(recordGate);++plain;}
+        other.join();CHECK(plain==2L*N&&get(foreign)==N);   // nested guards on one thread count once; only the foreign thread's entries count
+        recordGate.clearOwner();
+        {RecordGuard g(recordGate);}CHECK(get(foreign)==N);   // no owner: nothing is gated or counted
+    }
+    gTrace.clear();Rig rig(true);auto& s=rig.core().q.stats;IDirect3DDevice9* d=rig.dev;const auto cmds0=get(s.commands);
+    std::atomic<bool> go{false};const int N=2500;
+    std::thread other([&]{
+        while(!go.load())std::this_thread::yield();
+        for(int i=0;i<N;++i){
+            d->SetRenderState((D3DRENDERSTATETYPE)(60+i%5),unsigned(i)+1000);DWORD v=0;d->GetRenderState((D3DRENDERSTATETYPE)(60+i%5),&v);CHECK(v==unsigned(i)+1000);   // state + answer from StreamState
+            if(i%500==0)CHECK(d->TestCooperativeLevel()==5);   // sync
+            if(i%250==0){D3DVIEWPORT9 vp{0,0,16,16,0,1};d->SetViewport(&vp);}
+        }
+    });
+    go.store(true);
+    for(int i=0;i<N;++i){d->SetRenderState((D3DRENDERSTATETYPE)(100+i%5),unsigned(i)+5);DWORD v=0;d->GetRenderState((D3DRENDERSTATETYPE)(100+i%5),&v);CHECK(v==unsigned(i)+5);if(i%500==0)CHECK(d->TestCooperativeLevel()==5);}
+    other.join();rig.sync();
+    CHECK(get(s.foreignEntries)>=unsigned(2*N)&&get(s.commands)-cmds0>=unsigned(2*N));   // (every Set, Get and sync of the second thread entered through the gate)
+    rig.finish();checkClean();
+}
+
 static void streamTests(bool threadsOnly){
     layoutIsolation();replayTimingAccounting();diagnosticsOffSkipsAudit();idlePollWakes();
-    lifetimeAndIdentity();stateKnownUnknown();locksPreserveBytes();staticBufferShadows();dynamicBufferShadows();largeBufferAllowance();adaptiveShadowCap();shadowCap();queriesAndSyncCensus();resetAndShutdown();directReplayRaw();redundantFiltering();renderTargetResetsViewport();textureShadows();statsLine();childrenOutliveTheDevice();queryProbeAndDeadQuery();initFailureFallback();cursorHandling();nestedSyncInPump();upDrawsAndBackpressure();snapshotTriggers();snapshotPoolNotExhausted();memoryPressureRelease();
+    lifetimeAndIdentity();stateKnownUnknown();locksPreserveBytes();staticBufferShadows();dynamicBufferShadows();largeBufferAllowance();adaptiveShadowCap();shadowCap();queriesAndSyncCensus();resetAndShutdown();directReplayRaw();redundantFiltering();renderTargetResetsViewport();textureShadows();statsLine();childrenOutliveTheDevice();queryProbeAndDeadQuery();initFailureFallback();cursorHandling();nestedSyncInPump();upDrawsAndBackpressure();snapshotTriggers();snapshotPoolNotExhausted();memoryPressureRelease();createFailuresReachTheGame();impossibleBlockIsRefusedAtOnce();smallStagedLocksUseScratch();recordGateSerializesForeignThreads();
     equivalence(20000,12345);equivalence(20000,987654321);
     (void)threadsOnly;
 }

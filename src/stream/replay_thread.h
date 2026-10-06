@@ -20,6 +20,7 @@
 #include "stream_state.h"
 #include "snapshot_store.h"
 #include "stream_hooks.h"
+#include "unlock_source.h"
 
 namespace NorthlightStream {
 // ---- implicit proxies: objects the game never created (back buffers, the default depth buffer, objects the mod bound) ----
@@ -137,7 +138,7 @@ public:
     std::function<void(const char*)> log;               // diagnostics line sink; may be empty
     bool (*diagnostics)()=nullptr;                      // Diagnostics on: the CSTREAM line and the sync-only audit (asked per frame)
     unsigned sampleEvery=600;
-    // 0.3.193 (CS): replay time is accounted by what it is NOT doing: idleNs is the time spent waiting for commands (written by the replay
+    // 0.3.192 (CS): replay time is accounted by what it is NOT doing: idleNs is the time spent waiting for commands, spinning before a sleep included (written by the replay
     // thread around its blocking wait only, no clock read per command). Busy = wall - idle; the CSTREAM line's replayBusyMs/frame is that
     // difference per window, so it now excludes the per-command timer overhead it used to include.
     std::atomic<std::uint64_t> idleNs{0};
@@ -157,9 +158,12 @@ public:
             std::atomic<int> ready{0};
             startNs_.store(nowNs(),std::memory_order_relaxed);lastWall_=startNs_.load(std::memory_order_relaxed);
             th_=std::thread([this,cw,csr,&ready]{
-                applyFpu(cw,csr);if(threadStart)threadStart();replayTid.store(currentTid());
+                applyFpu(cw,csr);if(threadStart)threadStart();replayTid.store(currentTid());recordGate.setExempt();
                 raisePriority();diag_=diagnostics&&diagnostics();
-                ready.store(1);loop();});
+                ready.store(1);loop();
+                // 0.3.192 (CS): the playback scope writes this thread's thread_local activeSnapshot and reads current_'s counters: it ends here, on the thread that began it,
+                // before stop() releases current_ to the pool (the destructor, on the game thread, must find nothing to run)
+                playback_.reset();recordGate.clearExempt();});
             while(!ready.load())std::this_thread::yield();   // the handoff is complete before CreateDevice returns to the game
             return true;
         }catch(...){return false;}
@@ -208,7 +212,7 @@ private:
     DWORD auditRS_[StreamState::kRS]={},auditSamp_[StreamState::kSamplers][StreamState::kSampTypes]={},auditTss_[StreamState::kTSStages][StreamState::kTSTypes]={};
     std::vector<unsigned> touched_;std::vector<bool> touchedFlag_=std::vector<bool>(StreamState::kBits,false);
     struct Avg {double depth=0,bytes=0;unsigned n=0;std::uint64_t maxDepth=0,maxBytes=0;} avg_;
-    std::uint64_t lastIdle_=0,lastPubs_=0,lastSleeps_=0,lastWall_=0,lastPass_=0,lastGameNs_=0,lastGameWait_=0,lastGameFrames_=0,lastPresentNs_=0,lastSyncNs_=0,lastBpNs_=0,lastCmds_=0,lastAnswered_=0,lastSyncCalls_=0,lastFiltered_=0,lastDirect_=0,lastBufRbD_=0,lastBufRbS_=0,lastBufEv_=0,lastBufHot_=0,lastBufRef_=0;unsigned deadLogged_=0;
+    std::uint64_t lastIdle_=0,lastPubs_=0,lastSleeps_=0,lastWall_=0,lastPass_=0,lastGameNs_=0,lastGameWait_=0,lastGameFrames_=0,lastPresentNs_=0,lastSyncNs_=0,lastBpNs_=0,lastCmds_=0,lastAnswered_=0,lastSyncCalls_=0,lastFiltered_=0,lastDirect_=0,lastBufRbD_=0,lastBufRbS_=0,lastBufEv_=0,lastBufHot_=0,lastBufRef_=0;unsigned deadLogged_=0,deadSinceLog_=0;std::uint64_t lastSpin_=0;std::uint64_t lastDeadLogNs_=0;
 
     static void captureFpu(unsigned short& cw,unsigned& csr){
         cw=0;csr=0;
@@ -275,7 +279,11 @@ private:
         if(SUCCEEDED(hr)&&made){c.reg.bindInner(p,made);verify(p);}
         else{
             p->dead.store(true);add(c.q.stats.deadCreates);add(c.q.stats.createFailures);
-            if(log&&deadLogged_<8){++deadLogged_;char b[128];std::snprintf(b,sizeof b,"CSTREAM dead create %s hr=0x%08lx",cmdName(id),(unsigned long)hr);log(b);}
+            // 0.3.192 (CS): none is silent: every failure is counted (createFailures, in the CSTREAM line), the log gets one line a second with the count since the last
+            ++deadSinceLog_;const std::uint64_t now=nowNs();
+            if(log&&(!lastDeadLogNs_||now-lastDeadLogNs_>=1000000000ull)){
+                char b[160];std::snprintf(b,sizeof b,"CSTREAM dead create %s hr=0x%08lx failed=%u since the last line, total=%llu",cmdName(id),(unsigned long)hr,deadSinceLog_,(unsigned long long)get(c.q.stats.createFailures));
+                log(b);lastDeadLogNs_=now;deadSinceLog_=0;}
         }
         return hr;
     }
@@ -288,6 +296,7 @@ private:
         const unsigned char* data=a->inlineData?reinterpret_cast<const unsigned char*>(a+1):Queue::blockOf(h)->data();
         if(!p->inner||p->dead.load()){add(core.q.stats.replayFailures);return;}
         void* dst=nullptr;const DWORD flags=a->flags&~D3::kLockReadOnly;
+        NorthlightReplayCopies::UnlockSourceScope source(data,a->off,a->size);   // the replay-side CPU copy is fed from these bytes, not read back from the mapped pointer
         const HRESULT hr=p->kind==Kind::VertexBuffer?static_cast<IDirect3DVertexBuffer9*>(p->inner)->Lock(a->off,a->size,&dst,flags):static_cast<IDirect3DIndexBuffer9*>(p->inner)->Lock(a->off,a->size,&dst,flags);
         if(FAILED(hr)||!dst){add(core.q.stats.replayFailures);return;}
         std::memcpy(dst,data,a->size);
@@ -363,10 +372,11 @@ private:
         {char part[700];formatCounters(part,sizeof part,s);put(buf,n,"%s",part);}
         const double inv=avg_.n?1.0/avg_.n:0.0;
         const std::uint64_t wall=nowNs(),idle=idleNs.load(std::memory_order_relaxed),dWall=wall-lastWall_,dIdle=idle-lastIdle_,dBusy=dWall>dIdle?dWall-dIdle:0;lastWall_=wall;lastIdle_=idle;
+        const std::uint64_t spin=get(s.spinNs),dSpin=spin-lastSpin_;lastSpin_=spin;   // spinning is part of the idle time (busy excludes it); reported on its own
         const std::uint64_t pubs=get(s.publishes),sleeps=get(s.consumerSleeps),dPubs=pubs-lastPubs_,dSleeps=sleeps-lastSleeps_;lastPubs_=pubs;lastSleeps_=sleeps;
-        put(buf,n," frames=%llu depthAvg=%.0f depthMax=%llu bytesAvg=%.0f bytesMax=%llu replayBusyMs/frame=%.3f sleeps=%.2f publishes=%.1f dead=%llu answered=%llu synced=%llu syncOnly=%llu snap=%llu/%llu/%llu/%llu",
-            (unsigned long long)frames,avg_.depth*inv,(unsigned long long)avg_.maxDepth,avg_.bytes*inv,(unsigned long long)avg_.maxBytes,sampleEvery?dBusy/1e6/sampleEvery:0.0,sampleEvery?double(dSleeps)/sampleEvery:0.0,sampleEvery?double(dPubs)/sampleEvery:0.0,
-            (unsigned long long)get(s.deadCreates),(unsigned long long)get(s.stateAnswered),(unsigned long long)get(s.stateSynced),(unsigned long long)get(s.syncOnlySlots),
+        put(buf,n," frames=%llu depthAvg=%.0f depthMax=%llu bytesAvg=%.0f bytesMax=%llu replayBusyMs/frame=%.3f spinMs/frame=%.3f sleeps=%.2f publishes=%.1f dead=%llu createFailed=%llu answered=%llu synced=%llu syncOnly=%llu snap=%llu/%llu/%llu/%llu",
+            (unsigned long long)frames,avg_.depth*inv,(unsigned long long)avg_.maxDepth,avg_.bytes*inv,(unsigned long long)avg_.maxBytes,sampleEvery?dBusy/1e6/sampleEvery:0.0,sampleEvery?dSpin/1e6/sampleEvery:0.0,sampleEvery?double(dSleeps)/sampleEvery:0.0,sampleEvery?double(dPubs)/sampleEvery:0.0,
+            (unsigned long long)get(s.deadCreates),(unsigned long long)get(s.createFailures),(unsigned long long)get(s.stateAnswered),(unsigned long long)get(s.stateSynced),(unsigned long long)get(s.syncOnlySlots),
             SnapshotStats::hits.load(),SnapshotStats::misses.load(),SnapshotStats::triggers.load(),SnapshotStats::overflow.load());
         std::uint64_t pass=0;for(unsigned r=0;r<Counters::kPassReasons;++r)pass+=get(s.passThrough[r]);
         const std::uint64_t dPass=pass-lastPass_;lastPass_=pass;

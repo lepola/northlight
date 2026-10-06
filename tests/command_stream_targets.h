@@ -7,6 +7,7 @@ struct TargetKnobs {
     std::atomic<int> presents{0};
     std::atomic<bool> failSwapChain{false},failQueries{false},noRaw{false},holdQueries{false};   // holdQueries: a polled query stays S_FALSE
     //   // noRaw: the resolver proves no raw pointer (a proxy then replays through the Device)
+    std::atomic<bool> failCreates{false};     // CreateTexture / CreateRenderTarget / CreateDepthStencilSurface fail with E_OUTOFMEMORY (the real-failure path of the creates)
     bool failCube=true;                       // CreateCubeTexture / CreateVolumeTexture fail (the dead-create path)
 };
 static TargetKnobs gKnobs;
@@ -277,6 +278,7 @@ struct TargetDevice:Counted<FakeDevice> {
         for(auto& t:ext.tex)if(t){t->Release();t=nullptr;}for(auto& v:ext.sv)if(v){v->Release();v=nullptr;}if(ext.idx){ext.idx->Release();ext.idx=nullptr;}return D3D_OK;}
     HRESULT CreateTexture(UINT w,UINT h,UINT l,DWORD u,D3DFORMAT f,D3DPOOL p,IDirect3DTexture9** pp,HANDLE*) override{
         gTrace.push_back("Device::CreateTexture "+std::to_string(w)+" "+std::to_string(h)+" "+std::to_string(l)+" "+std::to_string(u)+" "+std::to_string(unsigned(f))+" "+std::to_string(unsigned(p)));
+        if(gKnobs.failCreates.load()){*pp=nullptr;return E_OUTOFMEMORY;}
         if(!w||!h)return D3DERR_INVALIDCALL;auto* tx=new TTexture(w,h,l,u,unsigned(f),unsigned(p));gLastTexture=tx;*pp=tx;return D3D_OK;}
     HRESULT CreateCubeTexture(UINT,UINT,DWORD,D3DFORMAT,D3DPOOL,IDirect3DCubeTexture9** pp,HANDLE*) override{gTrace.push_back("Device::CreateCubeTexture");*pp=nullptr;return D3DERR_NOTAVAILABLE;}
     HRESULT CreateVolumeTexture(UINT,UINT,UINT,UINT,DWORD,D3DFORMAT,D3DPOOL,IDirect3DVolumeTexture9** pp,HANDLE*) override{gTrace.push_back("Device::CreateVolumeTexture");*pp=nullptr;return D3DERR_NOTAVAILABLE;}
@@ -286,8 +288,8 @@ struct TargetDevice:Counted<FakeDevice> {
     HRESULT CreateIndexBuffer(UINT len,DWORD u,D3DFORMAT f,D3DPOOL p,IDirect3DIndexBuffer9** pp,HANDLE*) override{
         gTrace.push_back("Device::CreateIndexBuffer "+std::to_string(len)+" "+std::to_string(u)+" "+std::to_string(unsigned(f))+" "+std::to_string(unsigned(p)));
         auto* b=new TIndexBuffer;b->length=len;b->usage=u;b->fmt=unsigned(f);b->pool=unsigned(p);b->mem.assign(len,0);*pp=b;return D3D_OK;}
-    HRESULT CreateRenderTarget(UINT w,UINT h,D3DFORMAT f,D3DMULTISAMPLE_TYPE,DWORD,WINBOOL,IDirect3DSurface9** pp,HANDLE*) override{gTrace.push_back("Device::CreateRenderTarget "+std::to_string(w)+" "+std::to_string(h));*pp=new TSurface(w,h,unsigned(f),D3::kUsageRT,0);return D3D_OK;}
-    HRESULT CreateDepthStencilSurface(UINT w,UINT h,D3DFORMAT f,D3DMULTISAMPLE_TYPE,DWORD,WINBOOL,IDirect3DSurface9** pp,HANDLE*) override{gTrace.push_back("Device::CreateDepthStencilSurface "+std::to_string(w)+" "+std::to_string(h));*pp=new TSurface(w,h,unsigned(f),D3::kUsageDS,0);return D3D_OK;}
+    HRESULT CreateRenderTarget(UINT w,UINT h,D3DFORMAT f,D3DMULTISAMPLE_TYPE,DWORD,WINBOOL,IDirect3DSurface9** pp,HANDLE*) override{gTrace.push_back("Device::CreateRenderTarget "+std::to_string(w)+" "+std::to_string(h));if(gKnobs.failCreates.load()){*pp=nullptr;return E_OUTOFMEMORY;}*pp=new TSurface(w,h,unsigned(f),D3::kUsageRT,0);return D3D_OK;}
+    HRESULT CreateDepthStencilSurface(UINT w,UINT h,D3DFORMAT f,D3DMULTISAMPLE_TYPE,DWORD,WINBOOL,IDirect3DSurface9** pp,HANDLE*) override{gTrace.push_back("Device::CreateDepthStencilSurface "+std::to_string(w)+" "+std::to_string(h));if(gKnobs.failCreates.load()){*pp=nullptr;return E_OUTOFMEMORY;}*pp=new TSurface(w,h,unsigned(f),D3::kUsageDS,0);return D3D_OK;}
     HRESULT CreateOffscreenPlainSurface(UINT w,UINT h,D3DFORMAT f,D3DPOOL p,IDirect3DSurface9** pp,HANDLE*) override{gTrace.push_back("Device::CreateOffscreenPlainSurface "+std::to_string(w)+" "+std::to_string(h)+" "+std::to_string(unsigned(p)));*pp=new TSurface(w,h,unsigned(f),0,unsigned(p));return D3D_OK;}
     HRESULT CreateVertexDeclaration(const D3DVERTEXELEMENT9* e,IDirect3DVertexDeclaration9** pp) override{
         auto* d=new TDecl;UINT n=0;while(e[n].Stream!=0xFF)++n;d->el.assign(e,e+n+1);gTrace.push_back("Device::CreateVertexDeclaration "+std::to_string(n+1)+" "+fb(e,(n+1)*sizeof(D3DVERTEXELEMENT9)));*pp=d;return D3D_OK;}
