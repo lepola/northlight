@@ -2,7 +2,7 @@
 
 // The owner borrows the REAL device and must clear this pool before Reset and
 // before releasing that device. D3DSBT_ALL blocks retain captured resource refs.
-// Render-thread only; owner lifetime must enclose every SavedState scope.
+// Render-thread only (0.3.192 CS: the replay thread when the command stream runs); owner lifetime must enclose every SavedState scope.
 class NorthlightStateBlockPool {
     struct Slot { IDirect3DStateBlock9* block=nullptr; bool busy=false; };
     IDirect3DDevice9* device;

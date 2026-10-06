@@ -19,6 +19,8 @@
 #include "mirror_resources.h"
 #include "tracked_buffers.h"
 #include "signatures.h"
+#include "shader_tags.h"
+#include "stream_hooks.h"
 #include "compiled_shaders.h"
 #include "projection.h"
 #include "world_draw_domain.h"
@@ -180,10 +182,7 @@ template<class T> static uint64_t shaderHash(T* shader, std::vector<DWORD>& word
     if (!shader || FAILED(shader->GetFunction(nullptr, &size)) || size > 1024 * 1024) return 0;
     words.assign((size + 3) / 4, 0);
     if (FAILED(shader->GetFunction(words.data(), &size))) { words.clear(); return 0; }
-    const unsigned char* bytes = reinterpret_cast<const unsigned char*>(words.data());
-    uint64_t h = 14695981039346656037ULL;
-    for (UINT i = 0; i < size; ++i) h = (h ^ bytes[i]) * 1099511628211ULL;
-    return h;
+    return NorthlightShaderTags::fnv1a(words.data(), size); // 0.3.192 (CS): shader_tags.h, shared with the stream's triggers
 }
 
 #include "saved_state.h"
@@ -255,10 +254,10 @@ class Device final : public GuardedMirrorDevice {
         const MirrorGate& g=mirrorState.gate;const bool first=g.firstReady.load(std::memory_order_acquire);
         auto foreign=[&](MirrorSite s){return unsigned(g.foreign[unsigned(s)].load(std::memory_order_relaxed));};
         auto tid=[](const std::atomic<std::uint32_t>& t){return (unsigned long)t.load(std::memory_order_relaxed);};
-        if(NorthlightDiagnostics::enabled())logf("GATE threads device=%ld owner=%lu presentTid=%lu swapPresentTid=%lu drawTid=%lu foreignDevice=%u foreignRegistry=%u foreignResource=%u foreignStateBlock=%u foreignSwapChain=%u foreignRaw=%u foreignBuffer=%u ownerLocked=%u first=%lu/%s/%u frame=%u event=%s",
+        if(NorthlightDiagnostics::enabled())logf("GATE threads device=%ld owner=%lu presentTid=%lu swapPresentTid=%lu drawTid=%lu foreignDevice=%u foreignRegistry=%u foreignResource=%u foreignStateBlock=%u foreignSwapChain=%u foreignRaw=%u foreignBuffer=%u ownerLocked=%u first=%lu/%s/%u frame=%u gameTid=%lu replayTid=%lu event=%s",
             diagnosticId,(unsigned long)g.ownerTid,tid(g.presentTid),tid(g.swapPresentTid),tid(g.drawTid),foreign(MirrorSite::Device),foreign(MirrorSite::Registry),foreign(MirrorSite::Resource),
             foreign(MirrorSite::StateBlock),foreign(MirrorSite::SwapChain),foreign(MirrorSite::Raw),foreign(MirrorSite::Buffer),unsigned(g.ownerLocked.load(std::memory_order_relaxed)),
-            first?(unsigned long)g.firstTid:0ul,mirrorSiteName(first?g.firstSite:MirrorGate::Sites),first?unsigned(g.firstFrame):0u,unsigned(g.frame.load(std::memory_order_relaxed)),event);
+            first?(unsigned long)g.firstTid:0ul,mirrorSiteName(first?g.firstSite:MirrorGate::Sites),first?unsigned(g.firstFrame):0u,unsigned(g.frame.load(std::memory_order_relaxed)),NorthlightStream::gameTid.load(std::memory_order_relaxed),NorthlightStream::replayTid.load(std::memory_order_relaxed),event); /* 0.3.192 (CS): 0/0 on the direct path */
     }
 
     std::unique_ptr<WorldRenderer> world;
@@ -1145,7 +1144,7 @@ public:
     }
     HRESULT STDMETHODCALLTYPE CreateVertexShader(const DWORD* code,IDirect3DVertexShader9** out) override { Guard mirrorLock(mirrorState.gate);
         HRESULT hr=ext->CreateVertexShader(code,out);
-        if(SUCCEEDED(hr)&&out&&*out)extensionWork("vertex shader registration",[&]{std::vector<DWORD> words;auto h=shaderHash(*out,words);int tag=contains(kTerrainVS,h)?1:contains(kUiVS,h)?2:0;vsHashes[*out]=h;if(world)world->registerShader(*out,h);if(water)water->registerVertex(*out,h,words.data(),words.size());vsTags[*out]=tag|(water&&water->hasVertex(*out)?kWaterTag:0);if(tag==1)++matchedTerrain;else if(tag==2)++matchedUI;});
+        if(SUCCEEDED(hr)&&out&&*out)extensionWork("vertex shader registration",[&]{std::vector<DWORD> words;auto h=shaderHash(*out,words);int tag=NorthlightShaderTags::deviceTag(h);vsHashes[*out]=h;if(world)world->registerShader(*out,h);if(water)water->registerVertex(*out,h,words.data(),words.size());vsTags[*out]=tag|(water&&water->hasVertex(*out)?kWaterTag:0);if(tag==1)++matchedTerrain;else if(tag==2)++matchedUI;});
         if(SUCCEEDED(hr))mirrorResources.wrap(out);return hr;
     }
     HRESULT STDMETHODCALLTYPE CreatePixelShader(const DWORD* code,IDirect3DPixelShader9** out) override { Guard mirrorLock(mirrorState.gate);

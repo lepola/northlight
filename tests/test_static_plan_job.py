@@ -41,7 +41,7 @@ check('draw joins only its matrix (prepare), never the whole job','const auto& p
 check('reset drops finished builds (exact old identity); others install',"void reset(){mutate(true);" in gpu and 'else if(discard){slot=Plan{};slot.occupied=item.savedOccupied;slot.valid=item.savedValid;' in gpu)
 check('worker never touches plans_/stats_/D3D',all(x not in gpu[gpu.index('    void runItem(unsigned i)const{'):gpu.index('    bool joinMatrix(')] for x in ('plans_','stats_','->Lock','SetRenderState','device_','canInstance_','epoch_')))
 check('pinned slots are never LRU victims','if(plan.pinned)continue;' in gpu and 'if(!plan.pinned)return plan;' in gpu)
-check('two cores or fewer: always synchronous','bool asyncPlans_=NorthlightStaticPlanJob::Async&&std::thread::hardware_concurrency()>2;' in gpu and 'if(!asyncPlans_||!lruPlans_||' in gpu)
+check('two cores or fewer: always synchronous','bool asyncPlans_=NorthlightStaticPlanJob::Async&&NorthlightStream::cores()>2;' in gpu and 'if(!asyncPlans_||!lruPlans_||' in gpu)
 check('failed or stolen items get their exact old entry back','if(state==NorthlightStaticPlanJob::State::Stolen||item.failed){slot=std::move(item.saved);if(item.evicted)--stats_.planEvictions;' in gpu
       and 'catch(...){returnNodes(ctx,previous,next);for(const auto& move:ctx.chunkMoves)previous.chunks[move.from]=std::move(next.chunks[move.to]);' in gpu)
 check('worker: one thread, claims under the mutex, steal-back of pending items','if(states_[i]==State::Pending){states_[i]=State::Stolen;return State::Stolen;}' in job and 'states_[i]=State::Running;}' in job and job.count('std::thread(')==1)

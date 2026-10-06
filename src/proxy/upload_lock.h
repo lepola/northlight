@@ -1,5 +1,6 @@
 #pragma once
 #include <d3d9.h>
+// 0.3.192 (CS): these Locks run on the replay thread in stream mode; the flags and ranges are the ones below, unchanged.
 
 namespace NorthlightUpload {
 /* 0.3.151: the Lock flags of our fresh DEFAULT|WRITEONLY buffers (replay_gpu_cache.h,

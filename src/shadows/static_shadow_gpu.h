@@ -10,6 +10,7 @@
 #include "cpu_retirement.h"
 #include "static_shadow_owners.h"
 #include "static_plan_job.h"
+#include "stream_hooks.h"
 #include <deque>
 #include <algorithm>
 #include <chrono>
@@ -847,7 +848,7 @@ private:
     bool validPlan(const float* matrix)const{for(const auto& plan:plans_)if(plan.occupied&&plan.valid&&std::memcmp(plan.matrix,matrix,sizeof(plan.matrix))==0)return true;return false;}
     struct AsyncItem {Plan* slot=nullptr;Plan saved,built;float matrix[16]{},savedMatrix[16]{};uint64_t savedUsed=0;bool savedOccupied=false,savedValid=false,reuseMatrix=false,evicted=false,failed=false;double ms=0;BuildCounters counters;};
     mutable AsyncItem async_[NorthlightStaticPlanJob::MaxItems];mutable unsigned asyncCount_=0;mutable BuildContext workerContext_;
-    bool asyncPlans_=NorthlightStaticPlanJob::Async&&std::thread::hardware_concurrency()>2; /* 2 cores or fewer: always synchronous */
+    bool asyncPlans_=NorthlightStaticPlanJob::Async&&NorthlightStream::cores()>2; /* 2 cores or fewer: always synchronous (0.3.192: the replay thread takes one while the stream runs) */
     bool asyncInstancing_=false;uint64_t asyncEpoch_=0,mutations_=0,asyncMutations_=0;
     mutable std::function<void(unsigned,const DetachedView&)> after_;
     void mutate(bool discard=false){settle(discard);++mutations_;} /* first in every mutator */

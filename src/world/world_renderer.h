@@ -1,4 +1,5 @@
 #pragma once
+#include "stream_hooks.h"
 #include "world_context.h"
 #include "effect_switches.h"
 #include "world_camera.h"
@@ -907,9 +908,9 @@ private:
       try {
         // GIThreads>1: helpers at the same below-normal priority; probe values are scheduling-independent.
         std::unique_ptr<NorthlightGI::SolvePool> solvePool;
-        const unsigned solverThreads=NorthlightQuality::giSolverThreads(quality,std::thread::hardware_concurrency());
+        const unsigned solverThreads=NorthlightQuality::giSolverThreads(quality,NorthlightStream::cores());
         if(solverThreads>1)solvePool=std::make_unique<NorthlightGI::SolvePool>(solverThreads-1,[]{SetThreadPriority(GetCurrentThread(),THREAD_PRIORITY_BELOW_NORMAL);});
-        if(quality.giThreads>1)logf("QUALITY GI solver threads requested=%u effective=%u cores=%u priority=below-normal",quality.giThreads,solverThreads,std::thread::hardware_concurrency());
+        if(quality.giThreads>1)logf("QUALITY GI solver threads requested=%u effective=%u cores=%u priority=below-normal",quality.giThreads,solverThreads,NorthlightStream::cores());
         // 0.3.153: geometry regions are built on their own below-normal thread
         // while this worker keeps solving camera moves against the published
         // previous generation. The builder alone owns the local geometry cache,
@@ -2443,7 +2444,7 @@ public:
             ~FateScope(){tracker.record(slot,reason,false);}} fate{shadowFate};
         if(shadowFate.active()){NorthlightShadowFate::Key key;IDirect3DVertexBuffer9* vb=nullptr;UINT offset=0,stride=0;IDirect3DIndexBuffer9* ib=nullptr;
             if(!userVertices&&SUCCEEDED(d->GetStreamSource(0,&vb,&offset,&stride))&&vb){key.vb=reinterpret_cast<std::uintptr_t>(vb);vb->Release();}
-            else key.vb=reinterpret_cast<std::uintptr_t>(userVertices);
+            else key.vb=reinterpret_cast<std::uintptr_t>(NorthlightStream::upIdentity?NorthlightStream::upIdentity:userVertices); /* 0.3.192 (CS): the game's pointer, not the recorded copy's (identity only; the data is read from userVertices) */
             if(indexed&&!userIndices&&SUCCEEDED(d->GetIndices(&ib))&&ib){key.ib=reinterpret_cast<std::uintptr_t>(ib);ib->Release();}
             key.shader=current;key.base=base;key.start=start;key.count=count;key.minimum=minimum;
             // Per instance: the palette root (identical models share buffers and ranges).

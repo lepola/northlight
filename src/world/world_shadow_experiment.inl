@@ -92,7 +92,7 @@
     // inline windows (every other 10 s).
     enum class PrepareFrame : unsigned char {None,Worker,Inline,Joined};
     PrepareFrame prepareFrame=PrepareFrame::None;bool prepareOutputsReady=false,prepareOpened=false,prepareTimed=false;std::uint32_t prepareCount=0;
-    const unsigned prepareCores=std::thread::hardware_concurrency();
+    const unsigned prepareCores=NorthlightStream::cores(); /* 0.3.192 (CS): one core fewer while the replay thread runs */
     std::atomic<bool> prepareCachesStale{false}; /* registerShader(): the owner clears the caches at its next open */
     // RenderProfile diagnostics of the frame (appended to MODEL shadow actors); -1: not measured.
     struct PrepareStats {const char* mode="inline";std::uint32_t published=0,workerRecords=0,joinInline=0,wakes=0,mismatch=0,staleClears=0,resync=0;

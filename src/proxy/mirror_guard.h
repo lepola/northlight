@@ -52,6 +52,10 @@ struct MirrorGate {
     NORTHLIGHT_GATE_MUTEX mutex;
     // The CreateDevice caller: the constructing thread (DeviceMirror is a Device member; the Device
     // constructor also sets it explicitly). Written before the gate is shared, read-only afterwards.
+    // 0.3.192 (CS): with CommandStream=1 the Device is constructed on the game thread but every call into it runs on
+    // the replay thread, which is therefore the real owner: the replay thread must store its own MirrorGuard::threadId()
+    // here before it executes its first command (the game thread never calls the Device, so nothing races the write).
+    // Left as constructed, every replayed call would count as foreign and take the mutex.
     std::uint32_t ownerTid;
     // 0.3.182 (D1): 1 while the owner runs an elided call (written by the owner only), and the number of
     // foreign calls between their announcement and their exit.

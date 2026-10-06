@@ -7,6 +7,8 @@
 // statement of the selection) stops it and finishes the rest inline with the same prepareRecord(),
 // resuming from the state the last output carries. Inline (no worker) is prepareRecord() over the
 // same records in the same order: every output is bit-identical either way.
+// 0.3.192 (CS): "the render thread" below is the thread that runs the Device; with the command stream on that is the
+// replay thread, which also owns the 5 ms watchdog's clock. Nothing here depends on it being the game thread.
 #include "sampled_vertex_cache.h"
 #include "replay_bounds.h"
 #include <atomic>
