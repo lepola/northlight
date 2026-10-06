@@ -13,10 +13,12 @@
 #include <string>
 #include <thread>
 #include <type_traits>
+#include <unordered_map>
 #include <vector>
 #include "d3d9_stub.h"
 #include "command_queue.h"
 #include "command_stream.inl"
+#include "stream_device.h"
 using namespace NorthlightStream;
 
 #define CHECK(c) do{if(!(c)){std::fprintf(stderr,"CHECK failed %s:%d: %s\n",__FILE__,__LINE__,#c);std::abort();}}while(0)
@@ -24,10 +26,16 @@ using namespace NorthlightStream;
 // ---- trace helpers shared by the generated formatters, fakes and cases ----
 static std::vector<std::string> gTrace;
 static std::atomic<unsigned> gSyncDelayMs{0};
-template<class T> static std::string fv(T v){if constexpr(std::is_pointer<T>::value)return std::to_string((std::uintptr_t)v);else return std::to_string((double)v);}
+static bool gNormalize=false;
+template<class T> static std::string fv(T v){if constexpr(std::is_pointer<T>::value)return gNormalize?(v?"ptr":"null"):std::to_string((std::uintptr_t)v);else return std::to_string((double)v);}
 static std::string fb(const void* p,std::size_t n){if(!p)return "null";std::string s="[";char b[4];for(std::size_t i=0;i<n;++i){std::snprintf(b,sizeof b,"%02x",((const unsigned char*)p)[i]);s+=b;}return s+"]";}
-template<bool Inner,class T> static std::string fi(T* p){return p?std::to_string((std::uintptr_t)p-(Inner?0x10000u:0u)):"null";}
-template<class T> static std::string fa(T* p){return p?std::to_string((std::uintptr_t)p):"null";}
+// gNormalize: pointers print as ids by first appearance (two runs allocate differently); otherwise the TestTr arithmetic is visible.
+static std::unordered_map<std::uintptr_t,int> gPtrIds;
+static int gNextPtrId=0;
+static std::string ptrId(std::uintptr_t p){auto it=gPtrIds.find(p);if(it==gPtrIds.end())it=gPtrIds.emplace(p,++gNextPtrId).first;return "#"+std::to_string(it->second);}
+static void forgetPtr(const void* p){gPtrIds.erase(reinterpret_cast<std::uintptr_t>(p));}   // a freed object's address may come back as a new object
+template<bool Inner,class T> static std::string fi(T* p){if(!p)return "null";if(gNormalize)return ptrId((std::uintptr_t)p);return std::to_string((std::uintptr_t)p-(Inner?0x10000u:0u));}
+template<class T> static std::string fa(T* p){if(!p)return "null";return gNormalize?"ptr":std::to_string((std::uintptr_t)p);}
 template<class T> static std::string fo(T* p){return p?"out":"null";}
 static const std::string dummy_unused;
 
@@ -226,7 +234,7 @@ static void spscStress(){
 static void gameFacing(){
     ProxyDevice dev;TestTr tr;
     dev.SetRenderState((D3DRENDERSTATETYPE)7,9);CHECK(dev.observed==1);
-    dev.SetCursorPosition(1,2,3);
+    dev.SetDialogBoxMode(1);
     CHECK(!dev.q.next(false));   // plain records are not published yet
     dev.Clear(0,nullptr,1,2,3.0f,4);
     auto* h=dev.q.next(false);CHECK(h&&h->id==(std::uint16_t)Cmd::Device_SetRenderState);   // Clear published the lot
@@ -266,6 +274,9 @@ static void nestedSync(){
     rp.stop();
 }
 
+#include "command_stream_targets.h"
+#include "command_stream_scenarios.h"
+
 int main(int argc,char** argv){
     const bool threadsOnly=argc>1&&std::string(argv[1])=="threads";
     spscStress();
@@ -274,6 +285,7 @@ int main(int argc,char** argv){
     if(!threadsOnly){
         orderingAcrossChunks();blocksAndInline();reuseAfterWarmup();counters();generatedRecordCases();gameFacing();
     }
+    streamTests(threadsOnly);
     std::puts("test_command_stream: all passed");
     return 0;
 }

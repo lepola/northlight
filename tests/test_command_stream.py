@@ -26,12 +26,28 @@ for methods in CLASSES.values():
 print('freshness ok:', classified, 'methods classified', by_class, flush=True)
 
 # ---- the SDK stub: every type the 14 interfaces mention, and the interfaces with default (non-pure) methods ----
-SCALARS = {'HRESULT': 'int32_t', 'ULONG': 'uint32_t', 'DWORD': 'uint32_t', 'UINT': 'uint32_t', 'INT': 'int32_t', 'WINBOOL': 'int32_t',
+SCALARS = {'LONG': 'int32_t', 'WORD': 'uint16_t', 'BYTE': 'uint8_t', 'BOOL': 'int32_t', 'HRESULT': 'int32_t', 'ULONG': 'uint32_t', 'DWORD': 'uint32_t', 'UINT': 'uint32_t', 'INT': 'int32_t', 'WINBOOL': 'int32_t',
            'D3DCOLOR': 'uint32_t', 'HANDLE': 'void*', 'HWND': 'void*', 'HDC': 'void*', 'float': 'float'}
 ENUMS = ('D3DTRANSFORMSTATETYPE D3DRENDERSTATETYPE D3DSTATEBLOCKTYPE D3DTEXTURESTAGESTATETYPE D3DSAMPLERSTATETYPE D3DPRIMITIVETYPE '
          'D3DFORMAT D3DPOOL D3DMULTISAMPLE_TYPE D3DBACKBUFFER_TYPE D3DTEXTUREFILTERTYPE D3DCUBEMAP_FACES D3DQUERYTYPE D3DRESOURCETYPE').split()
-SIZES = {'D3DMATRIX': 64, 'D3DVIEWPORT9': 28, 'D3DMATERIAL9': 68, 'D3DLIGHT9': 104, 'D3DCLIPSTATUS9': 8, 'RECT': 16, 'POINT': 8, 'PALETTEENTRY': 4,
-         'D3DGAMMARAMP': 1536, 'D3DRECT': 16, 'D3DBOX': 24, 'D3DRECTPATCH_INFO': 20, 'D3DTRIPATCH_INFO': 16}
+SIZES = {'D3DMATRIX': 64, 'D3DMATERIAL9': 68, 'D3DLIGHT9': 104, 'D3DCLIPSTATUS9': 8, 'PALETTEENTRY': 4,
+         'D3DGAMMARAMP': 1536, 'D3DRECTPATCH_INFO': 20, 'D3DTRIPATCH_INFO': 16, 'D3DCAPS9': 304}
+# Types the stream reads fields of: real layouts (the same field names as d3d9types.h).
+BODIES = {
+    'D3DSURFACE_DESC': 'D3DFORMAT Format;D3DRESOURCETYPE Type;DWORD Usage;D3DPOOL Pool;D3DMULTISAMPLE_TYPE MultiSampleType;DWORD MultiSampleQuality;UINT Width;UINT Height;',
+    'D3DVOLUME_DESC': 'D3DFORMAT Format;D3DRESOURCETYPE Type;DWORD Usage;D3DPOOL Pool;UINT Width;UINT Height;UINT Depth;',
+    'D3DVERTEXBUFFER_DESC': 'D3DFORMAT Format;D3DRESOURCETYPE Type;DWORD Usage;D3DPOOL Pool;UINT Size;DWORD FVF;',
+    'D3DINDEXBUFFER_DESC': 'D3DFORMAT Format;D3DRESOURCETYPE Type;DWORD Usage;D3DPOOL Pool;UINT Size;',
+    'D3DLOCKED_RECT': 'INT Pitch;void* pBits;', 'D3DLOCKED_BOX': 'INT RowPitch;INT SlicePitch;void* pBits;',
+    'D3DBOX': 'UINT Left;UINT Top;UINT Right;UINT Bottom;UINT Front;UINT Back;',
+    'RECT': 'LONG left;LONG top;LONG right;LONG bottom;', 'POINT': 'LONG x;LONG y;', 'D3DRECT': 'LONG x1;LONG y1;LONG x2;LONG y2;',
+    'D3DVIEWPORT9': 'DWORD X;DWORD Y;DWORD Width;DWORD Height;float MinZ;float MaxZ;',
+    'D3DVERTEXELEMENT9': 'WORD Stream;WORD Offset;BYTE Type;BYTE Method;BYTE Usage;BYTE UsageIndex;',
+    'D3DPRESENT_PARAMETERS': 'UINT BackBufferWidth;UINT BackBufferHeight;D3DFORMAT BackBufferFormat;UINT BackBufferCount;D3DMULTISAMPLE_TYPE MultiSampleType;DWORD MultiSampleQuality;DWORD pad[8];',
+    'D3DDEVICE_CREATION_PARAMETERS': 'UINT AdapterOrdinal;unsigned DeviceType;HWND hFocusWindow;DWORD BehaviorFlags;',
+    'RGNDATAHEADER': 'DWORD dwSize;DWORD iType;DWORD nCount;DWORD nRgnSize;RECT rcBound;', 'RGNDATA': 'RGNDATAHEADER rdh;char Buffer[1];',
+}
+BODIES['D3DMATRIX'] = 'float m[16];'
 KEYWORDS = {'const', 'struct', 'void', 'int', 'unsigned', 'char', 'long', 'double'}
 EXTRA_IFACES = ('IDirect3DResource9', 'IDirect3DBaseTexture9')
 
@@ -47,15 +63,31 @@ def stub():
     for _, ret, _, params in all_methods():
         tokens |= set(re.findall(r'\w+', ret + ' ' + ' '.join(p.type for p in params)))
     out = ['#pragma once', '#include <cstdint>', '#define STDMETHODCALLTYPE', 'using REFIID=const int&;using REFGUID=const int&;',
-           'constexpr int32_t S_OK=0,D3D_OK=0,E_NOINTERFACE=-2,D3DERR_INVALIDCALL=-3;']
+           'constexpr int32_t S_OK=0,D3D_OK=0,S_FALSE=1,E_POINTER=-1,E_NOINTERFACE=-2,D3DERR_INVALIDCALL=-3,E_OUTOFMEMORY=-4,D3DERR_NOTFOUND=-5,D3DERR_MOREDATA=-6,D3DERR_NOTAVAILABLE=-7;',
+           '#define SUCCEEDED(hr) ((hr)>=0)', '#define FAILED(hr) ((hr)<0)', 'template<class T>struct IID;', '#define __uuidof(T) IID<T>::value',
+           'constexpr unsigned D3DRTYPE_SURFACE=1,D3DRTYPE_VOLUME=2,D3DRTYPE_TEXTURE=3,D3DRTYPE_VOLUMETEXTURE=4,D3DRTYPE_CUBETEXTURE=5,D3DRTYPE_VERTEXBUFFER=6,D3DRTYPE_INDEXBUFFER=7;']
     out += [f'using {k}={v};' for k, v in SCALARS.items() if k != 'float']
+    out.append('using D3DDEVTYPE=unsigned;')
     out += [f'using {e}=unsigned;' for e in ENUMS]
     known = set(SCALARS) | set(ENUMS) | KEYWORDS | {'REFIID', 'REFGUID', 'IUnknown'}
     ifaces = set(EXTRA_IFACES + gf.STREAM_IFACES) | {'IDirect3D9'}
+    tokens |= set(BODIES)
+    done = []
+    def emit(t):
+        if t in done:
+            return
+        done.append(t)
+        for dep in re.findall(r'\b(\w+)\b', BODIES.get(t, '')):
+            if dep in BODIES and dep != t:
+                emit(dep)
+        out.append(f'struct {t} {{{BODIES[t] if t in BODIES else (f"unsigned char b[{SIZES[t]}];" if t in SIZES else "")}}};')
     for t in sorted(tokens - known - ifaces):
-        out.append(f'struct {t} {{{f"unsigned char b[{SIZES[t]}];" if t in SIZES else ""}}};')
+        emit(t)
     out += [f'struct {i};' for i in sorted(ifaces)]
+    out.append('struct IUnknown;')
     out.append('struct IUnknown {virtual int32_t QueryInterface(REFIID,void**){return 0;}virtual uint32_t AddRef(){return 1;}virtual uint32_t Release(){return 1;}virtual ~IUnknown()=default;};')
+    out.append('struct IDirect3D9:IUnknown{};')
+    out += [f'constexpr int iid_{n}={i};template<>struct IID<{n}>{{static constexpr int value=iid_{n};}};' for i, n in enumerate(['IUnknown', 'IDirect3D9'] + list(EXTRA_IFACES + gf.STREAM_IFACES), 1)]
     for iface in EXTRA_IFACES + gf.STREAM_IFACES:
         base = SDK_TEXT.split('DECLARE_INTERFACE_IID_(' + iface + ',')[1].split('};')[0].split(',')[0].strip()
         out.append(f'struct {iface}:{base} {{')
@@ -109,11 +141,14 @@ def generated_cpp():
         out.append(fmt_function(m))
     for iface in gf.STREAM_IFACES:
         short = iface[len('IDirect3D'):-1]
-        out.append(f'struct Fake{short} final:{iface} {{')
+        out.append(f'struct Fake{short}:{iface} {{')
         out += [fake_method(m, 0) for m in CLASSES[iface] if m.cls in ('record', 'state', 'customrec', 'get', 'sync')]
         out.append('};')
         out.append(f'template<> struct SelfOf<{iface}> {{ static {iface}* proxy() {{ return ({iface}*)(uintptr_t)(0x7000+{gf.STREAM_IFACES.index(iface)}); }} static {iface}* fake() {{ static Fake{short} f; return &f; }} }};')
         out.append(f'struct Proxy{short}:{iface},HostBase {{ NORTHLIGHT_STREAM_{short.upper()}_METHODS }};')
+    # Names of the get-class methods: a Get is answered locally by the stream, so traces compare without them.
+    gets = ', '.join(f'"{m.short}::{m.name}"' for i in gf.STREAM_IFACES for m in CLASSES[i] if m.cls == 'get')
+    out.append(f'static bool isGetName(const std::string& s) {{ static const char* names[]={{{gets}}}; for(auto n:names){{const std::size_t l=std::strlen(n);if(s.compare(0,l,n)==0&&(s.size()==l||s[l]==\' \'))return true;}}return false; }}')
     # Round-trip cases.
     out.append('static void generatedRecordCases() {')
     for m in replay:

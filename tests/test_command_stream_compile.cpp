@@ -3,6 +3,7 @@
 #include <d3d9.h>
 #include "command_queue.h"
 #include "command_stream.inl"
+#include "stream_device.h"
 using namespace NorthlightStream;
 
 struct HostBase {
@@ -38,6 +39,10 @@ struct Tr {
     void result(Cmd,HRESULT){}
     void skipped(Cmd){}
 };
+// The whole stream (proxies, StreamState, StreamDevice, replay thread) instantiates against the real SDK header.
+NorthlightStream::StreamDevice* buildStream(IDirect3DDevice9* target,IDirect3D9* parent,const D3DPRESENT_PARAMETERS* pp){
+    StreamDevice::Options options;const char* reason=nullptr;return StreamDevice::make(target,parent,pp,options,&reason);
+}
 bool instantiate(const CommandHeader* h,SyncCall& sc){
     Tr tr;
     return dispatchGenerated(h,tr)||executeSync(sc,tr);
