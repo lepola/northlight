@@ -94,6 +94,13 @@ with tempfile.TemporaryDirectory(prefix='northlight-0.3.152-') as tmp:
         got=re.search(r'HASH (\d+)',subprocess.run([str(exe)],capture_output=True,text=True).stdout) if not b.returncode else None
         want=BASE_0_3_151.get(arch)
         check(f'plan bytes and draw records identical to base 0.3.151 [{arch}]',got and want is not None and int(got.group(1))==want,f'hash {got.group(1) if got else b.stderr.strip()[-200:]} base {want}')
+# 0.3.192 (DXVK3): the GpuCache lifecycle test also proves the Instances LOCK METER charge (instanceDiscards x buffer bytes).
+check('instance DISCARD is metered at the whole buffer',"if(flags==D3DLOCK_DISCARD)NorthlightLockMeter::discard(NorthlightLockMeter::Instances,std::uint64_t(instanceCapacity_)*sizeof(Instance));" in gpu)
+with tempfile.TemporaryDirectory(prefix='northlight-static-gpu-') as tmp:
+    exe=Path(tmp)/'static_shadow_gpu'
+    b=subprocess.run(['clang++','-std=c++17','-Wall','-Wextra','-Werror','-UNDEBUG','-O2',*fp.test_include_flags(),'-I',str(fp.SUPPORT),str(HERE/'test_static_shadow_gpu.cpp'),str(fp.src('world_gi.cpp')),'-o',str(exe)],capture_output=True,text=True)
+    r=subprocess.run([str(exe)],capture_output=True,text=True) if not b.returncode else b
+    check('static shadow GPU cache incl. Instances meter == instanceDiscards x capacity x 48',r.returncode==0 and 'tests passed' in r.stdout,(r.stdout+r.stderr).strip()[-300:])
 failed=[n for n,ok in results if not ok]
 print(f'\n{len(results)} checks, {len(failed)} failed')
 if failed:sys.exit(1)

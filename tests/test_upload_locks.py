@@ -86,3 +86,20 @@ assert separate.rindex('write(')<separate.index('std::swap(e.vertices[s],built->
 cache=body(sources['replay_gpu_cache.h'],'auto built=std::make_unique<Entry>();','}else{reused_+=e.bytes;++hits_;}')
 assert cache.count('->Lock(')==2 and cache.rindex('->Unlock()')<cache.index('std::swap(e.vertices[s],built->vertices[s]);')
 print('PASS fresh buffers: replay batches/meshes are published only after their last Unlock and never re-locked')
+# 0.3.192 (DXVK3): every READONLY buffer read-back goes through readBackLock(); the definition, the gate and the absence of bare flags.
+assert 'inline std::atomic<bool> ReadBackNoOverwrite{false};' in upload
+assert 'inline DWORD readBackLock(){return DWORD(D3DLOCK_READONLY)|(ReadBackNoOverwrite.load(std::memory_order_relaxed)?DWORD(D3DLOCK_NOOVERWRITE):0u);}' in upload
+assert upload.count('readBackLock()')>=1 and upload.count('D3DLOCK_READONLY)|')==1 # READONLY is always kept: tracked_buffers.h keys the revision on it
+world_dir=fp.SRC/'world'
+bare=[(f.name,text.count('\n',0,m.start())+1) for f in sorted(world_dir.iterdir()) if f.suffix in('.h','.inl','.cpp')
+      for text in [f.read_text(errors='replace')] for m in re.finditer(r'(?:->|\.)Lock\(',text) if 'D3DLOCK_READONLY' in arguments(text,m.end()-1)[-1]]
+assert not bare,f'bare D3DLOCK_READONLY buffer Lock in src/world (use NorthlightUpload::readBackLock()): {bare}'
+readers=sum(t.count('NorthlightUpload::readBackLock()') for n,t in sources.items() if n in('draw_snapshot.h','geometry_capture.h','terrain_capture_bounds.h'))
+assert readers==8,readers # 4 + 2 + 2 read-back calls
+renderer=sources['renderer.cpp']
+gate='NorthlightUpload::ReadBackNoOverwrite.store(module&&!result.fallback&&last.info.dxvk&&NorthlightBackend::dxvkMajor(last.info.dxvkVersion)>=3,std::memory_order_relaxed);'
+stores=[n for n,t in sources.items() if re.search(r'ReadBackNoOverwrite(?:\.store\(|\s*=[^=])',t.replace('inline std::atomic<bool> ReadBackNoOverwrite{false};',''))]
+assert stores==['renderer.cpp'] and renderer.count('ReadBackNoOverwrite.store(')==1 and renderer.count(gate)==1,stores
+# The gate runs after the BACKEND selected= log (the loaded module decides) and before CreateDevice can run.
+assert renderer.index('BACKEND selected=')<renderer.index(gate)<renderer.index('readBackLock=0x%x')
+print('PASS read-back lock: readBackLock() defined once, 8 read-back sites, no bare READONLY buffer Lock in src/world, gate stored once from the loaded DXVK >= 3 backend')

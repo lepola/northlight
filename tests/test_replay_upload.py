@@ -8,7 +8,7 @@ import ast,subprocess,tempfile
 HERE=Path(__file__).resolve().parent
 def literal(file,key):return next(ast.literal_eval(n.value) for n in ast.parse(file.read_text()).body if isinstance(n,ast.Assign) and any(getattr(t,'id','')==key for t in n.targets))
 stub=literal(HERE/'test_terrain_snapshot.py','stub')
-stub=stub.replace('struct IDirect3DDevice9{','constexpr HRESULT S_OK=0;constexpr unsigned D3DLOCK_DISCARD=8192,D3DISSUE_END=1;enum D3DQUERYTYPE{D3DQUERYTYPE_EVENT=8};\nstruct IDirect3DQuery9:IRef{virtual HRESULT Issue(DWORD)=0;virtual HRESULT GetData(void*,DWORD,DWORD)=0;};\nstruct IDirect3DDevice9{\nvirtual HRESULT CreateQuery(D3DQUERYTYPE,IDirect3DQuery9**)=0;\nvirtual HRESULT CreateVertexBuffer(UINT,DWORD,UINT,unsigned,IDirect3DVertexBuffer9**,void*)=0;\nvirtual HRESULT CreateIndexBuffer(UINT,DWORD,D3DFORMAT,unsigned,IDirect3DIndexBuffer9**,void*)=0;')
+stub=stub.replace('struct IDirect3DDevice9{','constexpr HRESULT S_OK=0,S_FALSE=1;constexpr unsigned D3DLOCK_DISCARD=8192,D3DISSUE_END=1;enum D3DQUERYTYPE{D3DQUERYTYPE_EVENT=8};\nstruct IDirect3DQuery9:IRef{virtual HRESULT Issue(DWORD)=0;virtual HRESULT GetData(void*,DWORD,DWORD)=0;};\nstruct IDirect3DDevice9{\nvirtual HRESULT CreateQuery(D3DQUERYTYPE,IDirect3DQuery9**)=0;\nvirtual HRESULT CreateVertexBuffer(UINT,DWORD,UINT,unsigned,IDirect3DVertexBuffer9**,void*)=0;\nvirtual HRESULT CreateIndexBuffer(UINT,DWORD,D3DFORMAT,unsigned,IDirect3DIndexBuffer9**,void*)=0;')
 body=r'''
 #include "replay_gpu_cache.h"
 #include "replay_gpu_batches.h"
@@ -16,22 +16,33 @@ body=r'''
 #include <cassert>
 #include <cstdio>
 #include <random>
+#include <climits>
 static size_t alive=0;static unsigned freshLocks=0,plainLocks=0,overlaps=0; /* resident uploads; asserted by main only: fixture users run archived flags-0 caches */
 #include <map>
+struct DynLock{const void* buffer;UINT first,bytes;DWORD flags;};static std::vector<DynLock> dynLog; /* 0.3.192: every Lock of a dynamic (ring) buffer */
+static bool raceCheck=false;static unsigned frameNow=0,queryLatency=0;static const unsigned Never=1u<<30; /* fake GPU: a span of call N is reusable from frame N+1+queryLatency */
 static std::map<const void*,const unsigned*> registry;static unsigned long long addRefs=0; /* 0.3.176 (U3'): every live buffer's count */
 template<class T,class D>struct Buffer:T{
- unsigned refs=1;std::vector<unsigned char> data;D desc;bool fail=false;bool dynamic=false;std::vector<std::pair<UINT,UINT>> written;
+ unsigned refs=1;std::vector<unsigned char> data;D desc;bool fail=false;bool dynamic=false;std::vector<std::pair<UINT,UINT>> written;struct Busy{UINT first,bytes,frame;};std::vector<Busy> busy;unsigned dynLocks=0;
  Buffer(size_t n):data(n){desc.Size=UINT(n);alive+=n;registry[static_cast<T*>(this)]=&refs;}~Buffer(){alive-=data.size();registry.erase(static_cast<T*>(this));}
  unsigned AddRef()override{++addRefs;return ++refs;}unsigned Release()override{auto n=--refs;if(!n)delete this;return n;}
  HRESULT GetDesc(D* d)override{*d=desc;return D3D_OK;}
  HRESULT Lock(UINT o,UINT n,void** p,DWORD flags)override{if(fail||o+n>data.size())return E_POINTER;
+  if(dynamic){ // 0.3.192 ring buffers: DISCARD or NOOVERWRITE only, a fresh buffer starts with NOOVERWRITE, and the fake GPU model below
+   assert(flags==D3DLOCK_DISCARD||flags==D3DLOCK_NOOVERWRITE);assert(dynLocks||flags==D3DLOCK_NOOVERWRITE);
+   if(raceCheck){bool pending=false;
+    for(auto it=busy.begin();it!=busy.end();){if(it->frame+1+queryLatency<=frameNow)it=busy.erase(it);else{pending=pending||(o<it->first+it->bytes&&it->first<o+n);++it;}}
+    if(flags==D3DLOCK_NOOVERWRITE)assert(!pending); /* the race check: never write over a region whose draws may still be reading it */
+    else{assert(pending);busy.clear();} /* a DISCARD renames the buffer (the old slice stays with in-flight draws) and is only legal while something overlaps */
+    busy.push_back({o,n,frameNow});}
+   ++dynLocks;dynLog.push_back({this,o,n,flags});*p=data.data()+o;return D3D_OK;}
   // Resident buffers are fresh and written once: NOOVERWRITE (upload_lock.h), disjoint ranges. Test readbacks are READONLY.
   if(!dynamic&&flags!=D3DLOCK_READONLY){(flags==D3DLOCK_NOOVERWRITE?freshLocks:plainLocks)+=1;for(auto r:written)overlaps+=!(o+n<=r.first||o>=r.second);written.push_back({o,o+n});}
   *p=data.data()+o;return D3D_OK;}
  HRESULT Unlock()override{return D3D_OK;}
 };
-struct FakeQuery:IDirect3DQuery9{unsigned refs=1;unsigned AddRef()override{return ++refs;}unsigned Release()override{auto n=--refs;if(!n)delete this;return n;}
- HRESULT Issue(DWORD)override{return D3D_OK;}HRESULT GetData(void*,DWORD,DWORD)override{return S_OK;}}; /* every issued query is already complete */
+struct FakeQuery:IDirect3DQuery9{unsigned refs=1,issued=frameNow;unsigned AddRef()override{return ++refs;}unsigned Release()override{auto n=--refs;if(!n)delete this;return n;}
+ HRESULT Issue(DWORD)override{issued=frameNow;return D3D_OK;}HRESULT GetData(void* out,DWORD bytes,DWORD flags)override{assert(!out&&!bytes&&!flags);return frameNow>=issued+queryLatency?S_OK:S_FALSE;}}; /* complete queryLatency frames after Issue; 0 (default): at once */
 struct Device:IDirect3DDevice9{
  unsigned calls=0,failAt=0;bool lockFail=false;
  HRESULT CreateQuery(D3DQUERYTYPE,IDirect3DQuery9** out)override{*out=new FakeQuery;return D3D_OK;}
@@ -227,6 +238,64 @@ int main(){Device d;auto a=mesh(),b=mesh(480),c=mesh(96);
      if(repeat==2&&allowCache){assert(addRefs==before);++steady;}}
    }}
   assert(steady>200&&alive==0&&registry.empty());std::printf("refcount balance: %u steady re-uploads took no reference\n",steady);}
+
+ // 0.3.192 (DXVK3): multi-frame behaviour of the bulk rings against a fake GPU. A span of call N is reusable again
+ // queryLatency+1 frames later (FakeQuery); the dynamic fakes check every flag: DISCARD or NOOVERWRITE only, NOOVERWRITE
+ // on a fresh buffer, never a NOOVERWRITE over a region whose draws are still in flight, DISCARD only while one is.
+ raceCheck=true;
+ struct Roles{unsigned discards[5]={},locks[5]={};UINT first[5]={};bool seen[5]={};};
+ auto roles=[&](WorldRenderer& world,size_t from){Roles r;std::map<const void*,unsigned> perBuffer;
+  for(size_t i=from;i<dynLog.size();++i){const auto& l=dynLog[i];++perBuffer[l.buffer];assert(perBuffer[l.buffer]==1); /* one Lock, so at most one DISCARD, per buffer and call */
+   int role=-1;for(unsigned s=0;s<4;++s)if(l.buffer==world.replayVerticesGPU[s])role=int(s);if(l.buffer==world.replayIndicesGPU)role=4;
+   assert(role>=0);++r.locks[role];r.discards[role]+=l.flags==D3DLOCK_DISCARD;r.first[role]=l.first;r.seen[role]=true;assert(l.first%(role==4?4u:16u)==0);}
+  return r;};
+ // The same non-cached set for 50 frames, the Replay objects kept: verify() every frame, offsets advance and wrap, no DISCARD
+ // while the 2 MiB ring (three ~600 KiB sets) has its old span done by the time the cursor wraps back.
+ for(unsigned late:{0u,1u}){
+  WorldRenderer world(&d);dynLog.clear();queryLatency=late;frameNow=0;world.add(mesh(600*1024),false);world.add(mesh(),false);
+  unsigned advances=0,wraps=0;UINT previous=0;
+  for(unsigned f=0;f<50;++f){frameNow=f;const size_t from=dynLog.size();assert(world.uploadReplay());world.verify();world.balance();
+   const auto r=roles(world,from);assert(r.seen[0]&&r.seen[4]&&!r.discards[0]&&!r.discards[1]&&!r.discards[4]);
+   const UINT base=world.replays[0]->offset[0];assert(base==r.first[0]&&world.replays[1]->offset[0]==base+614400&&base+614640<=world.replayVertexBytes[0]);
+   advances+=base>previous;wraps+=f&&!base;previous=base;}
+  assert(advances>=30&&wraps>=10&&world.replayGrowths==1+(SINGLE_STREAM?0u:1u)+1); /* streams 0 (and 1) and the index buffer, created once */
+ }
+ // Queries still pending in the first frames, then the GPU catches up: exactly one DISCARD per stream overall (the first wrap),
+ // none afterwards, every later wrap reuses the start after the fence.
+ {WorldRenderer world(&d);dynLog.clear();queryLatency=Never;frameNow=0;world.add(mesh(600*1024),false);world.add(mesh(),false);
+  unsigned discards[5]={},lastDiscard=0;
+  for(unsigned f=0;f<50;++f){frameNow=f;if(f==5)queryLatency=0;const size_t from=dynLog.size();assert(world.uploadReplay());world.verify();
+   const auto r=roles(world,from);for(unsigned k=0;k<5;++k){discards[k]+=r.discards[k];if(r.discards[k])lastDiscard=f;}}
+  assert(discards[0]==1&&lastDiscard==3&&!discards[1]&&!discards[2]&&!discards[3]&&!discards[4]);
+  queryLatency=0;}
+ // Shared duplicates with a non-zero ring base: every duplicate carries the owner's absolute offset and index start.
+ {WorldRenderer world(&d);dynLog.clear();queryLatency=0;frameNow=0;auto shared=mesh(64*1024),equal=mesh(64*1024);
+  world.add(mesh(100*1024),false);assert(world.uploadReplay());world.verify();assert(world.replayVertexRing[0].cursor==100*1024&&world.replayIndexRing.cursor==12);
+  frameNow=1;world.replays.clear();world.add(shared,true);world.add(shared,true);world.add(equal,true);world.add(shared,true);world.add(a,false);
+  assert(world.uploadReplay());world.verify();world.balance();
+  const UINT base=world.replayVertexRing[0].current.begin,ibBase=world.replayIndexRing.current.begin;assert(base==100*1024&&ibBase==12);
+  assert(!world.replays[0]->gpuCached&&!world.replays[2]->gpuCached);
+  assert(world.replays[0]->offset[0]==base&&world.replays[1]->offset[0]==base&&world.replays[3]->offset[0]==base&&world.replays[2]->offset[0]==base+64*1024&&world.replays[4]->offset[0]==base+128*1024);
+  assert(world.replays[0]->start==3&&world.replays[1]->start==3&&world.replays[3]->start==3&&world.replays[2]->start==6&&world.replays[4]->start==9);
+  for(const auto& l:dynLog)assert(l.flags==D3DLOCK_NOOVERWRITE);}
+ // Pressure-fit prefix (growth refused) with a non-zero base, then a wrap that reuses the start after the fence.
+ {WorldRenderer world(&d);dynLog.clear();queryLatency=0;frameNow=0;world.add(mesh(1536*1024),false);assert(world.uploadReplay());world.verify();
+  const UINT capacity=world.replayVertexBytes[0];assert(capacity==NorthlightDynamicRing::ringCapacity(1536*1024)&&capacity==(5u<<20));
+  frameNow=1;world.replays.clear();auto fresh=mesh(4096);world.add(fresh,true);world.add(fresh,true);world.add(fresh,true);world.add(mesh(6<<20),false);world.denyAllGrowth=true;
+  assert(world.uploadReplay());world.verify();assert(world.replays.size()==3&&world.replayVertexBytes[0]==capacity);
+  assert(world.replays[0]->offset[0]==1536*1024&&world.replays[1]->offset[0]==1536*1024&&world.replays[2]->offset[0]==1536*1024&&world.replays[0]->start>0);
+  frameNow=2;world.replays.clear();world.add(mesh(4<<20),false);assert(world.uploadReplay());world.verify();assert(world.replays[0]->offset[0]==0&&world.replayVertexBytes[0]==capacity);
+  for(const auto& l:dynLog)assert(l.flags==D3DLOCK_NOOVERWRITE);}
+ // gpuCached replays keep their batch/entry offsets, starts and bases untouched while a bulk replay moves with the ring.
+ {WorldRenderer world(&d);dynLog.clear();queryLatency=0;frameNow=0;world.add(mesh(),true);world.add(mesh(96),true);world.add(mesh(300*1024),false);
+  struct Snap{IDirect3DVertexBuffer9* stream[4];IDirect3DIndexBuffer9* index;UINT offset[4],start;INT base;};std::vector<Snap> kept;UINT bulkOffset=0;unsigned bulkMoves=0;
+  for(unsigned f=0;f<14;++f){frameNow=f;assert(world.uploadReplay());world.verify();world.balance();
+   for(size_t i=0;i<2&&f>=4;++i){auto& p=*world.replays[i];assert(p.gpuCached);
+    Snap now{};for(unsigned k=0;k<4;++k){now.stream[k]=p.stream[k];now.offset[k]=p.offset[k];}now.index=p.index;now.start=p.start;now.base=p.base;
+    if(f==4)kept.push_back(now);else{const auto& was=kept[i];for(unsigned k=0;k<4;++k)assert(now.stream[k]==was.stream[k]&&now.offset[k]==was.offset[k]);assert(now.index==was.index&&now.start==was.start&&now.base==was.base);}}
+   assert(!world.replays[2]->gpuCached);bulkMoves+=world.replays[2]->offset[0]!=bulkOffset;bulkOffset=world.replays[2]->offset[0];}
+  assert(kept.size()==2&&bulkMoves>=2);}
+ raceCheck=false;queryLatency=0;frameNow=0;
  assert(alive==0&&freshLocks>0&&!plainLocks&&!overlaps);puts("PASS production uploadReplay: mixed cache/bulk offsets, reordered draws, all-cached zero upload, modified geometry, allocation-failure fallback and COM cleanup; creation time bound keeps bulk bytes identical and never forces bulk growth");
 }
 """

@@ -34,6 +34,7 @@ test_diagnostics_switch.py
 test_dll_memcmp.py
 test_draw_gates.py
 test_draw_snapshot.py
+test_dxvk3_lock_flags.py
 test_effect_switches.py
 test_effects_buckets.py
 test_emitter_pin_report.py

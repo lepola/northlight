@@ -161,6 +161,28 @@ static void mirrorExposure(){
  p->Release();assert(owner.refs==1&&records.empty());
  puts("PASS mirror escape before game private-data access, raw extension metadata unaffected");
 }
+// 0.3.192 (DXVK3): only a DISCARD lock of a DEFAULT|DYNAMIC (direct-mapped) wrapper is charged to the Game meter, at the buffer size.
+static void discardMeterTests(){
+ using namespace NorthlightTrackedBuffers;Device owner;auto& frame=NorthlightLockMeter::state().frameSite[NorthlightLockMeter::Game];
+ for(bool index:{false,true}){
+  struct Case {D3DPOOL pool;DWORD usage;DWORD flags;bool charged;};
+  const Case cases[]={{D3DPOOL_DEFAULT,D3DUSAGE_DYNAMIC,D3DLOCK_DISCARD,true},{D3DPOOL_DEFAULT,D3DUSAGE_DYNAMIC,D3DLOCK_DISCARD|D3DLOCK_NOOVERWRITE,true},
+   {D3DPOOL_DEFAULT,D3DUSAGE_DYNAMIC,0,false},{D3DPOOL_DEFAULT,D3DUSAGE_DYNAMIC,D3DLOCK_NOOVERWRITE,false},{D3DPOOL_DEFAULT,D3DUSAGE_DYNAMIC,D3DLOCK_READONLY,false},
+   {D3DPOOL_MANAGED,D3DUSAGE_DYNAMIC,D3DLOCK_DISCARD,false},{D3DPOOL_MANAGED,0,D3DLOCK_DISCARD,false},{D3DPOOL_DEFAULT,0,D3DLOCK_DISCARD,false}}; // DEFAULT without DYNAMIC is BUFFER mode: no direct-mapped charge
+  for(const auto& c:cases){
+   frame.store(0);void* data=nullptr;
+   if(index){auto* raw=new Raw<IDirect3DIndexBuffer9>;raw->desc.Size=2048;raw->desc.Pool=c.pool;raw->desc.Usage=c.usage;IDirect3DIndexBuffer9* ib=raw;wrap<IDirect3DIndexBuffer9,ForwardIDirect3DIndexBuffer9>(&ib,&owner,true);
+    assert(ib->Lock(0,4,&data,c.flags)==S_OK);assert(ib->Unlock()==S_OK);assert(ib->Lock(0,4,&data,c.flags)==S_OK);assert(ib->Unlock()==S_OK);ib->Release();}
+   else{auto* raw=new Raw<IDirect3DVertexBuffer9>;raw->desc.Size=4096;raw->desc.Pool=c.pool;raw->desc.Usage=c.usage;IDirect3DVertexBuffer9* vb=raw;wrap<IDirect3DVertexBuffer9,ForwardIDirect3DVertexBuffer9>(&vb,&owner,false);
+    assert(vb->Lock(0,4,&data,c.flags)==S_OK);assert(vb->Unlock()==S_OK);assert(vb->Lock(0,4,&data,c.flags)==S_OK);assert(vb->Unlock()==S_OK);vb->Release();}
+   assert(frame.load()==(c.charged?2u*(index?2048u:4096u):0u));
+  }
+ }
+ // A failed GetDesc leaves the size unknown: nothing to charge.
+ {frame.store(0);auto* raw=new Raw<IDirect3DVertexBuffer9>;raw->failDesc=true;raw->desc.Usage=D3DUSAGE_DYNAMIC;IDirect3DVertexBuffer9* vb=raw;wrap<IDirect3DVertexBuffer9,ForwardIDirect3DVertexBuffer9>(&vb,&owner,false);
+  void* data=nullptr;assert(vb->Lock(0,4,&data,D3DLOCK_DISCARD)==S_OK&&vb->Unlock()==S_OK);vb->Release();assert(frame.load()==0);}
+ assert(owner.refs==1);puts("PASS Game DISCARD meter: charged only for DISCARD of DEFAULT|DYNAMIC wrappers, at the buffer size");
+}
 int main(){using namespace NorthlightTrackedBuffers;Device owner;
  auto* raw=new Raw<IDirect3DVertexBuffer9>;IDirect3DVertexBuffer9* vb=raw;wrap<IDirect3DVertexBuffer9,ForwardIDirect3DVertexBuffer9>(&vb,&owner,false);
  assert(vb!=raw&&unwrap(vb)==raw&&unwrap(raw)==raw&&owner.refs==2);uint64_t start=version(raw,false);assert(start&&version(raw,true)==0);
@@ -176,5 +198,5 @@ int main(){using namespace NorthlightTrackedBuffers;Device owner;
  raw->AddRef();vb->Release();assert(owner.refs==1&&version(raw,false)==0&&unwrap(raw)==raw);raw->Release();
  auto* ri=new Raw<IDirect3DIndexBuffer9>;IDirect3DIndexBuffer9* ib=ri;wrap<IDirect3DIndexBuffer9,ForwardIDirect3DIndexBuffer9>(&ib,&owner,true);assert(version(ri,true)&&!version(ri,false));ib->Release();assert(owner.refs==1&&records.empty());
  puts("PASS buffer COM ownership, VB/IB identity, normal/DISCARD/NOOVERWRITE writes, READONLY, nested failed lock, failed unlock, ProcessVertices invalidation and reset");
- metadataTests();mirrorExposure();
+ metadataTests();mirrorExposure();discardMeterTests();
 }

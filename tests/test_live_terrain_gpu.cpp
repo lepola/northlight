@@ -15,7 +15,7 @@ constexpr DWORD D3DUSAGE_DYNAMIC=1,D3DUSAGE_WRITEONLY=2,D3DLOCK_DISCARD=1,D3DLOC
 constexpr unsigned D3DPOOL_DEFAULT=0,D3DQUERYTYPE_EVENT=0,D3DISSUE_END=1;
 struct Driver {
     uint64_t submitted=0,completed=0;unsigned locks=0,discards=0,queries=0,waits=0;
-    size_t uploaded=0;bool querySupport=true,failIssue=false,failLock=false,failUnlock=false;
+    size_t uploaded=0;std::vector<DWORD> flagLog;bool querySupport=true,failIssue=false,failLock=false,failUnlock=false;
 };
 struct IDirect3DQuery9 {
     Driver* driver;uint64_t serial=0;
@@ -30,6 +30,7 @@ struct IDirect3DVertexBuffer9 {
     IDirect3DVertexBuffer9(Driver* d,UINT bytes):driver(d),data(bytes,0xEE){}
     HRESULT Lock(UINT first,UINT bytes,void** out,DWORD flags){
         assert(size_t(first)+bytes<=data.size());assert(flags==D3DLOCK_DISCARD||flags==D3DLOCK_NOOVERWRITE);
+        driver->flagLog.push_back(flags);
         if(driver->failLock)return E_FAIL;
         if(flags==D3DLOCK_DISCARD){std::fill(data.begin(),data.end(),0xEE);readers.clear();++driver->discards;}
         else for(auto r:readers)assert(r.serial<=driver->completed||first+bytes<=r.first||r.first+r.bytes<=first);
@@ -190,4 +191,37 @@ void prepareMatchesIndices(){
     std::printf("prepare/write == indices(): frames=%zu prepared=%zu missingOwner=%zu unrecorded=%zu thrownBuilds=%zu failedUpdates=%zu rollovers=%u\n",
         frames,prepared,missing,unrecorded,thrown,failedUpdates,rollovers);
 }
-int main(){allocator();partialAndOrdering();retirement(true);retirement(false);retirement(true,false);busyRolloverAndFailure();admissionAndBounds();longWalk();prepareMatchesIndices();std::puts("live terrain GPU: geometry/order/LOD, incremental writes, fence-safe reuse, 500-frame bounded walk, busy/unsupported rollover, pressure/failure/reset, prepare/write == indices() passed");}
+// 0.3.192 (DXVK3): a freshly created arena has nothing in flight, so its first Lock is NOOVERWRITE (no full-buffer DISCARD charge);
+// a rollover and every failure reset keep DISCARD (the contents are unknown), and clear() makes the next creation fresh again.
+std::uint64_t arenaCharge(){return NorthlightLockMeter::state().frameSite[NorthlightLockMeter::Arena].exchange(0);}
+void freshArenaFlags(){
+    arenaCharge();
+    const size_t arena=9*sizeof(Vertex);
+    {IDirect3DDevice9 d;Cache cache(arena);Owner a=triangle(1),b=triangle(2),c=triangle(3),e=triangle(4);std::vector<Owner> active={a,b};std::vector<uint32_t> p,q;
+     // First upload after creation: NOOVERWRITE, nothing charged.
+     cache.beginFrame();assert(cache.update(&d,active,admit,convert)==S_OK);assert(d.driver.flagLog.size()==1&&d.driver.flagLog[0]==D3DLOCK_NOOVERWRITE&&!arenaCharge());
+     assert(cache.indices(active,1,allIndices,p,q));draw(cache,p);
+     // Later appends stay NOOVERWRITE.
+     active={b,c};a.reset();cache.beginFrame();assert(cache.update(&d,active,admit,convert)==S_OK);assert(d.driver.flagLog.back()==D3DLOCK_NOOVERWRITE&&!arenaCharge());assert(cache.indices(active,1,allIndices,p,q));draw(cache,p);
+     // Rollover while the fake GPU is busy: DISCARD, charged at the whole arena.
+     active={b,e};c.reset();cache.beginFrame();assert(cache.update(&d,active,admit,convert)==S_OK);assert(cache.rollovers==1&&d.driver.flagLog.back()==D3DLOCK_DISCARD&&d.driver.discards==1);
+     assert(arenaCharge()==arena);assert(cache.indices(active,1,allIndices,p,q));draw(cache,p);
+     // A failed Lock resets the contents: the retry is a DISCARD again.
+     Owner f=triangle(5);active={b,f};d.driver.failLock=true;cache.beginFrame();assert(cache.update(&d,active,admit,convert)==E_FAIL);d.driver.failLock=false;arenaCharge();
+     cache.beginFrame();assert(cache.update(&d,active,admit,convert)==S_OK);assert(d.driver.flagLog.back()==D3DLOCK_DISCARD&&arenaCharge()==arena);
+     // A failed Unlock likewise.
+     Owner g=triangle(6);active={b,g};d.driver.failUnlock=true;cache.beginFrame();assert(cache.update(&d,active,admit,convert)==E_FAIL);d.driver.failUnlock=false;arenaCharge();
+     cache.beginFrame();assert(cache.update(&d,active,admit,convert)==S_OK);assert(d.driver.flagLog.back()==D3DLOCK_DISCARD&&arenaCharge()==arena);
+     // clear() resets fresh_: the next creation's first Lock is NOOVERWRITE again, even though the previous arena ended in DISCARD state.
+     cache.clear();assert(!cache.vertices());const size_t before=d.driver.flagLog.size();
+     cache.beginFrame();assert(cache.update(&d,active,admit,convert)==S_OK);assert(d.driver.flagLog.size()==before+1&&d.driver.flagLog.back()==D3DLOCK_NOOVERWRITE&&!arenaCharge());
+    }
+    // A failure on the very first Lock of a fresh arena also forgets fresh_: the retry is a DISCARD.
+    {IDirect3DDevice9 d;Cache cache(arena);Owner a=triangle(1);std::vector<Owner> active={a};
+     d.driver.failLock=true;cache.beginFrame();assert(cache.update(&d,active,admit,convert)==E_FAIL);d.driver.failLock=false;assert(d.driver.flagLog.size()==1&&d.driver.flagLog[0]==D3DLOCK_NOOVERWRITE);arenaCharge();
+     cache.beginFrame();assert(cache.update(&d,active,admit,convert)==S_OK);assert(d.driver.flagLog.back()==D3DLOCK_DISCARD&&arenaCharge()==arena);
+    }
+    // A pressure-refused creation (S_FALSE) never locks.
+    {IDirect3DDevice9 d;Cache cache(arena);Owner a=triangle(1);std::vector<Owner> active={a};cache.beginFrame();assert(cache.update(&d,active,[](size_t){return false;},convert)==S_FALSE);assert(d.driver.flagLog.empty()&&!arenaCharge());}
+}
+int main(){allocator();freshArenaFlags();partialAndOrdering();retirement(true);retirement(false);retirement(true,false);busyRolloverAndFailure();admissionAndBounds();longWalk();prepareMatchesIndices();std::puts("live terrain GPU: geometry/order/LOD, incremental writes, fence-safe reuse, 500-frame bounded walk, busy/unsupported rollover, pressure/failure/reset, prepare/write == indices() passed");}

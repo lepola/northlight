@@ -25,7 +25,9 @@ namespace NorthlightDynamicRing {
 inline constexpr std::uint64_t MiB=1ull<<20;
 inline constexpr size_t MaxPending=8;
 inline UINT ringCapacity(std::uint64_t bytes){
-    const std::uint64_t headroom=std::min<std::uint64_t>(std::max<std::uint64_t>(bytes,MiB),8*MiB);
+    // Headroom of two more sets (at least 1 MiB, at most 8 MiB): a span is reusable only once its query, issued at the next call,
+    // has completed (typically 2 calls later), so a ring holding 3 sets of up to 4 MiB never needs a DISCARD in a steady state.
+    const std::uint64_t headroom=std::min<std::uint64_t>(std::max<std::uint64_t>(2*bytes,MiB),8*MiB);
     return UINT(((bytes+headroom)+MiB-1)/MiB*MiB);
 }
 struct Span {UINT begin=0,end=0;IDirect3DQuery9* query=nullptr;}; // query==nullptr: pending until a DISCARD clears it

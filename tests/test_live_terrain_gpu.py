@@ -27,6 +27,18 @@ checks={
     and 'if(!liveTerrainIndexCount){uploadedTerrain=frameTerrain;liveTerrainGeneration=meshGeneration;return true;}' in up,
  'readers use the counts':'if(liveTerrainIndexCount){' in pr and 'if(liveDirectionalIndexCount){' in w
     and 'UINT(liveIndexBase+liveTerrainIndexCount),UINT(liveDirectionalIndexCount/3)),"live terrain shadow")' in w,
+ 'liveIndexBase added at both draw sites that bind liveIndicesGPU (0.3.192 ring offset, in indices)':
+    w.count('SetIndices(liveIndicesGPU)')==1 and pr.count('SetIndices(liveIndicesGPU)')==1
+    and 'UINT(liveIndexBase+liveTerrainIndexCount),UINT(liveDirectionalIndexCount/3)),"live terrain shadow")' in w
+    and 'UINT(liveIndexBase+batch.start),batch.count),"cube live draw")' in pr
+    and w.count('liveIndexBase+')==1 and pr.count('liveIndexBase+')==1,
+ 'liveIndexBase set from the ring slot after the Unlock, reset with the ring':
+    'liveIndexBase=slot.offset/sizeof(uint32_t);' in up and up.index('liveIndicesGPU->Unlock()')<up.index('liveIndexBase=slot.offset')
+    and w.count('liveIndexBase=slot.offset')==1
+    and 'NorthlightDynamicRing::reset(liveIndexRing,0,queries);liveIndexBase=0;' in w[w.index('    bool recreateLiveIndices('):w.index('    bool uploadLiveTerrain(){')]
+    and 'liveIndexBase=0;' in release and 'NorthlightDynamicRing::reset(liveIndexRing,0,' in release,
+ 'every other write of liveIndexBase is a reset to 0 (releaseGPU, recreate, S_FALSE, growth refusal)':
+    w.count('liveIndexBase=')==6 and w.count('liveIndexBase=0;')==5, # the member, recreateLiveIndices, S_FALSE, growth refusal, releaseGPU; the one non-zero write is the slot
  'bitmap filled from the committed set at the swap, dropped with the set':'std::swap(fixedTerrain,committedFixed);std::swap(uploadedStaticOwners,committedOwners);fixedTerrainBits.assign(fixedTerrain.get());' in w
     and 'fixedTerrain.reset();fixedTerrainBits.reset();' in release and w.count('fixedTerrainBits.assign(')==1,
  'bitmap only for the set it describes, the set otherwise':'const auto& fixed=fixedTerrainChunks();const bool bits=fixedTerrainBits.source()==&fixed;' in up
