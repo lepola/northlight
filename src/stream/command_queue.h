@@ -258,7 +258,12 @@ public:
         if(auto* h=peek())return h;
         if(!wait)return nullptr;
         for(;;){
-            for(int i=0;i<2000;++i){if(auto* h=peek())return h;if(interrupted_.load(std::memory_order_relaxed))return nullptr;relax();}
+            // Spin ~50 us by the clock (a pause is far shorter under Rosetta): a sync round trip then usually costs no wakeup.
+            const std::uint64_t t0=nowNs();
+            for(;;){
+                for(int i=0;i<64;++i){if(auto* h=peek())return h;if(interrupted_.load(std::memory_order_relaxed))return nullptr;relax();}
+                if(nowNs()-t0>50000)break;
+            }
             if(interrupted_.load())return nullptr;
             sleeping_.store(true);
             std::atomic_thread_fence(std::memory_order_seq_cst);   // the flag is visible before the cursor is re-read: publish() sees it or we see the data

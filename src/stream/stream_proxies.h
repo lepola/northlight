@@ -186,11 +186,11 @@ template<Cmd C,class... A> typename MethodTraits<C>::Ret ProxyBase::syncCall(Cmd
 
 // Runs fn(StreamCore&) on the replay thread after everything recorded so far; returns once it ran. false when it could
 // not wait (nested in a pumped wait): fn did not run. fn must not throw.
-template<class F> inline bool runTask(StreamCore& c,F&& fn){
+template<class F> inline bool runTask(StreamCore& c,F&& fn,Cmd label=Cmd::Quiesce){   // label: the census name of this sync call
     if(inPumpedWait){add(c.q.stats.nestedSyncs);return false;}
     using Fn=typename std::remove_reference<F>::type;
     Task t{[](void* a,StreamCore& core){(*static_cast<Fn*>(a))(core);},&fn};
-    Task* p=&t;add(c.q.stats.census[(std::size_t)Cmd::Quiesce]);add(c.q.stats.syncCalls);
+    Task* p=&t;add(c.q.stats.census[(std::size_t)label]);add(c.q.stats.syncCalls);
     std::memcpy(c.q.reserve((std::uint16_t)Cmd::Quiesce,sizeof p),&p,sizeof p);c.q.commit();
     c.q.waitReplayed(c.q.recordedSeq(),WaitKind::Sync);
     return true;
@@ -270,6 +270,9 @@ inline HRESULT callUnlock(UINT route,IUnknown* in,UINT level,UINT face){
     default:return static_cast<IDirect3DVolume9*>(in)->UnlockBox();
     }
 }
+// DISCARD and NOOVERWRITE only mean something in the default pool; elsewhere the old bytes stay, so such a lock is a plain lock.
+inline DWORD effectiveLockFlags(DWORD flags,DWORD pool){return pool==D3::kPoolDefault?flags:(flags&~(D3::kLockDiscard|D3::kLockNoOverwrite));}
+constexpr std::size_t kLockSlack=4096;   // zeroed bytes past a staged range / a shadow, never replayed: a small game overrun stays inside the allocation
 constexpr std::size_t kMaxStagedImage=std::size_t(8)<<20;
 // self: the object the game called (its inner receives the replayed Lock); root: where creation info and `sub` live.
 inline HRESULT lockImage(ProxyBase& self,ProxyBase& root,SubRes& sub,UINT route,UINT level,UINT face,UINT lw,UINT lh,UINT ld,
@@ -285,23 +288,24 @@ inline HRESULT lockImage(ProxyBase& self,ProxyBase& root,SubRes& sub,UINT route,
         if(box->Right>lw||box->Bottom>lh||box->Back>ld||box->Left>=box->Right||box->Top>=box->Bottom||box->Front>=box->Back)return D3DERR_INVALIDCALL;
         l=box->Left;t=box->Top;r=box->Right;b=box->Bottom;f=box->Front;k=box->Back;
     }
+    const DWORD eff=effectiveLockFlags(flags,root.info.pool);
     const auto fi=D3::formatInfo(root.info.fmt);
     PassReason why=PassReason::Other;bool candidate=false;
     if(flags&D3::kLockReadOnly)why=PassReason::ReadOnly;
     else if(root.info.usage&(D3::kUsageRT|D3::kUsageDS))why=PassReason::RenderTarget;
-    else if(sub.written&&!(flags&D3::kLockDiscard))why=PassReason::Written;
+    else if(sub.written&&!(eff&D3::kLockDiscard))why=PassReason::Written;
     else if(!fi.ok)why=PassReason::Format;
     else candidate=true;
     if(candidate){
         const UINT rows=(b-t+fi.bh-1)/fi.bh,rowBytes=((r-l+fi.bw-1)/fi.bw)*fi.bytes,slices=k-f;
         const std::size_t total=std::size_t(rows)*rowBytes*slices;
         if(total>kMaxStagedImage)why=PassReason::Size;
-        else if(Block* blk=q.tryAllocBlock(total?total:1)){
+        else if(Block* blk=q.tryAllocBlock(total+kLockSlack)){
             sub.mode=SubRes::Staged;sub.stage=blk;sub.flags=flags;sub.hasRect=rect!=nullptr||box!=nullptr;
             sub.rect.left=LONG(l);sub.rect.top=LONG(t);sub.rect.right=LONG(r);sub.rect.bottom=LONG(b);
             if(box)sub.box=*box;
             sub.rows=rows;sub.slices=slices;sub.rowBytes=rowBytes;sub.pitch=rowBytes;sub.slicePitch=rowBytes*rows;
-            blk->used=std::uint32_t(total);std::memset(blk->data(),0,total);   // deterministic bytes for what the game leaves unwritten
+            blk->used=std::uint32_t(total);std::memset(blk->data(),0,total+kLockSlack);   // deterministic bytes for what the game leaves unwritten
             if(lr){lr->Pitch=INT(rowBytes);lr->pBits=blk->data();}
             if(lb){lb->RowPitch=INT(rowBytes);lb->SlicePitch=INT(rowBytes*rows);lb->pBits=blk->data();}
             add(q.stats.lockAsync);return D3D_OK;
@@ -309,7 +313,7 @@ inline HRESULT lockImage(ProxyBase& self,ProxyBase& root,SubRes& sub,UINT route,
     }
     countPass(self,why);
     HRESULT hr=D3DERR_INVALIDCALL;
-    const bool ran=runTask(*self.core,[&](StreamCore&){if(self.inner&&!self.dead.load())hr=callLock(route,self.inner,level,face,lr,lb,rect,box,flags);});
+    const bool ran=runTask(*self.core,[&](StreamCore&){if(self.inner&&!self.dead.load())hr=callLock(route,self.inner,level,face,lr,lb,rect,box,flags);},Cmd::SyncLock);
     if(!ran)return D3DERR_INVALIDCALL;
     if(SUCCEEDED(hr)){sub.mode=SubRes::Pass;sub.flags=flags;}
     return hr;
@@ -324,41 +328,49 @@ inline HRESULT unlockImage(ProxyBase& self,SubRes& sub,UINT route,UINT level,UIN
         q.commit();sub.stage=nullptr;sub.mode=SubRes::Free;sub.written=true;return D3D_OK;
     }
     HRESULT hr=D3DERR_INVALIDCALL;
-    if(!runTask(*self.core,[&](StreamCore&){if(self.inner)hr=callUnlock(route,self.inner,level,face);}))return D3DERR_INVALIDCALL;
+    if(!runTask(*self.core,[&](StreamCore&){if(self.inner)hr=callUnlock(route,self.inner,level,face);},Cmd::SyncUnlock))return D3DERR_INVALIDCALL;
     sub.mode=SubRes::Free;if(!(sub.flags&D3::kLockReadOnly))sub.written=true;
     return hr;
 }
 
 // ---- buffer locks ----
 struct BufferState {
-    std::vector<unsigned char> shadow;bool shadowOn=false,written=false,whole=false;
+    std::vector<unsigned char> shadow;bool shadowOn=false,written=false,whole=false,wantShadow=false;   // wantShadow: a DYNAMIC buffer the cap refused so far
     enum Mode:std::uint8_t{Free,Shadow,Staged,Pass} mode=Free;UINT off=0,size=0;DWORD flags=0;Block* stage=nullptr;
 };
 // Only DYNAMIC buffers get a CPU shadow (they are locked every frame, ring-style, and keep earlier bytes), under their own
 // fixed cap and outside the queue budget; a buffer that does not fit simply has none. Everything else: the first write lock
 // and DISCARD are asynchronous (staging Block), later locks pass through.
-inline void initShadow(ProxyBase& p,BufferState& s){
+inline bool takeShadow(ProxyBase& p,BufferState& s){
     const std::size_t len=p.info.length;
-    if(!len||!(p.info.usage&D3::kUsageDynamic)||!p.core->q.shadowAdmit(len))return;
-    try{s.shadow.assign(len,0);}catch(...){return;}
-    s.shadowOn=true;p.core->q.addShadowBytes(std::int64_t(len));
+    if(!len||!p.core->q.shadowAdmit(len))return false;
+    try{s.shadow.assign(len+kLockSlack,0);}catch(...){return false;}
+    s.shadowOn=true;p.core->q.addShadowBytes(std::int64_t(len));return true;
+}
+inline void initShadow(ProxyBase& p,BufferState& s,bool game=true){   // game=false: an implicit proxy made on the replay thread never shadows
+    if(!game||!(p.info.usage&D3::kUsageDynamic))return;
+    if(!takeShadow(p,s)){s.wantShadow=true;add(p.core->q.stats.shadowRefused);add(p.core->q.stats.shadowRefusedBytes,p.info.length);}
 }
 inline void dropShadow(ProxyBase& p,BufferState& s){   // a GPU-side write or the proxy's end: the shadow no longer mirrors the buffer
     if(!s.shadowOn)return;
-    p.core->q.addShadowBytes(-std::int64_t(s.shadow.size()));std::vector<unsigned char>().swap(s.shadow);s.shadowOn=false;
+    p.core->q.addShadowBytes(-std::int64_t(p.info.length));std::vector<unsigned char>().swap(s.shadow);s.shadowOn=false;s.wantShadow=false;
 }
-// Range rules as in DXVK: an offset beyond the end fails, a size past the end is clamped, size 0 means to the end.
+// Range rules (our reading of DXVK, not verified against it): an offset beyond the end fails with INVALIDCALL; a size of 0 or one
+// that runs past the end becomes "to the end" instead of failing, so the staged/shadow range and the replayed Lock are the clamped one.
 inline HRESULT lockBuffer(ProxyBase& self,BufferState& s,UINT off,UINT size,void** pp,DWORD flags){
     Queue& q=self.core->q;const UINT length=self.info.length;
     if(!pp||s.mode!=BufferState::Free||off>length)return D3DERR_INVALIDCALL;
     s.whole=!size||(off==0&&size>=length);
     if(!size||std::uint64_t(off)+size>length)size=length-off;
     s.off=off;s.size=size;s.flags=flags;
+    const DWORD eff=effectiveLockFlags(flags,self.info.pool);
+    // a refused DYNAMIC buffer may get its shadow now, but only where its contents are undefined anyway: a DISCARD lock (default pool)
+    if(!s.shadowOn&&s.wantShadow&&(eff&D3::kLockDiscard)&&takeShadow(self,s)){s.wantShadow=false;add(q.stats.shadowLate);}
     if(s.shadowOn){s.mode=BufferState::Shadow;*pp=s.shadow.data()+off;add(q.stats.lockAsync);return D3D_OK;}
     PassReason why=PassReason::NoShadow;
     if(flags&D3::kLockReadOnly)why=PassReason::ReadOnly;
-    else if(!s.written||(flags&D3::kLockDiscard)){
-        if(Block* b=q.tryAllocBlock(size?size:1)){s.mode=BufferState::Staged;s.stage=b;b->used=size;std::memset(b->data(),0,size);*pp=b->data();add(q.stats.lockAsync);return D3D_OK;}
+    else if(!s.written||(eff&D3::kLockDiscard)){
+        if(Block* b=q.tryAllocBlock(size+kLockSlack)){s.mode=BufferState::Staged;s.stage=b;b->used=size;std::memset(b->data(),0,size+kLockSlack);*pp=b->data();add(q.stats.lockAsync);return D3D_OK;}
         why=PassReason::Budget;
     }
     countPass(self,why);
@@ -366,7 +378,7 @@ inline HRESULT lockBuffer(ProxyBase& self,BufferState& s,UINT off,UINT size,void
     const bool ran=runTask(*self.core,[&](StreamCore&){
         if(!self.inner||self.dead.load())return;
         hr=self.kind==Kind::VertexBuffer?static_cast<IDirect3DVertexBuffer9*>(self.inner)->Lock(off,size,&got,flags)
-                                         :static_cast<IDirect3DIndexBuffer9*>(self.inner)->Lock(off,size,&got,flags);});
+                                         :static_cast<IDirect3DIndexBuffer9*>(self.inner)->Lock(off,size,&got,flags);},Cmd::SyncLock);
     if(!ran)return D3DERR_INVALIDCALL;
     if(SUCCEEDED(hr)){s.mode=BufferState::Pass;*pp=got;}
     return hr;
@@ -401,7 +413,7 @@ inline HRESULT unlockBuffer(ProxyBase& self,BufferState& s){
         *a=UnlockBufferArgs{&self,s.off,s.size,s.flags,0};q.commit();s.stage=nullptr;s.mode=BufferState::Free;s.written=true;return D3D_OK;}
     default:{
         HRESULT hr=D3DERR_INVALIDCALL;
-        if(!runTask(*self.core,[&](StreamCore&){if(self.inner)hr=self.kind==Kind::VertexBuffer?static_cast<IDirect3DVertexBuffer9*>(self.inner)->Unlock():static_cast<IDirect3DIndexBuffer9*>(self.inner)->Unlock();}))return D3DERR_INVALIDCALL;
+        if(!runTask(*self.core,[&](StreamCore&){if(self.inner)hr=self.kind==Kind::VertexBuffer?static_cast<IDirect3DVertexBuffer9*>(self.inner)->Unlock():static_cast<IDirect3DIndexBuffer9*>(self.inner)->Unlock();},Cmd::SyncUnlock))return D3DERR_INVALIDCALL;
         s.mode=BufferState::Free;if(!(s.flags&D3::kLockReadOnly))s.written=true;return hr;}
     }
 }
@@ -560,9 +572,9 @@ struct StreamVolumeTexture final:IDirect3DVolumeTexture9,ProxyBase {
 
 struct StreamVertexBuffer final:IDirect3DVertexBuffer9,ProxyBase {
     BufferState buf;
-    StreamVertexBuffer(StreamCore* c,UINT length,DWORD usage,DWORD fvf,DWORD pool):ProxyBase(c,Kind::VertexBuffer){
+    StreamVertexBuffer(StreamCore* c,UINT length,DWORD usage,DWORD fvf,DWORD pool,bool game=true):ProxyBase(c,Kind::VertexBuffer){
         info.length=length;info.usage=usage;info.fvf=fvf;info.pool=pool;info.fmt=D3::kFmtVertexData;info.type=D3::kTypeVB;
-        initShadow(*this,buf);ProxyInit<ProxyBase>::apply(this,static_cast<IDirect3DVertexBuffer9*>(this));}
+        initShadow(*this,buf,game);ProxyInit<ProxyBase>::apply(this,static_cast<IDirect3DVertexBuffer9*>(this));}
     ~StreamVertexBuffer(){dropShadow(*this,buf);releaseStage(*this,buf);liveProxyObjects.fetch_sub(1);}
     NORTHLIGHT_STREAM_VERTEXBUFFER_METHODS
     NL_PROXY_COM(IDirect3DVertexBuffer9,IDirect3DResource9)
@@ -574,9 +586,9 @@ struct StreamVertexBuffer final:IDirect3DVertexBuffer9,ProxyBase {
 };
 struct StreamIndexBuffer final:IDirect3DIndexBuffer9,ProxyBase {
     BufferState buf;
-    StreamIndexBuffer(StreamCore* c,UINT length,DWORD usage,unsigned fmt,DWORD pool):ProxyBase(c,Kind::IndexBuffer){
+    StreamIndexBuffer(StreamCore* c,UINT length,DWORD usage,unsigned fmt,DWORD pool,bool game=true):ProxyBase(c,Kind::IndexBuffer){
         info.length=length;info.usage=usage;info.fmt=fmt;info.pool=pool;info.type=D3::kTypeIB;
-        initShadow(*this,buf);ProxyInit<ProxyBase>::apply(this,static_cast<IDirect3DIndexBuffer9*>(this));}
+        initShadow(*this,buf,game);ProxyInit<ProxyBase>::apply(this,static_cast<IDirect3DIndexBuffer9*>(this));}
     ~StreamIndexBuffer(){dropShadow(*this,buf);releaseStage(*this,buf);liveProxyObjects.fetch_sub(1);}
     NORTHLIGHT_STREAM_INDEXBUFFER_METHODS
     NL_PROXY_COM(IDirect3DIndexBuffer9,IDirect3DResource9)
@@ -655,7 +667,7 @@ struct StreamQuery final:IDirect3DQuery9,ProxyBase {
         Queue& q=core->q;
         if((flags&D3::kGetDataFlush)||!gen.load()){   // FLUSH, or a query never issued: the real GetData with the game's buffer, after everything recorded so far
             HRESULT hr=D3DERR_INVALIDCALL;
-            if(!runTask(*core,[&](StreamCore&){if(inner)hr=static_cast<IDirect3DQuery9*>(inner)->GetData(data,size,flags);}))return D3DERR_INVALIDCALL;
+            if(!runTask(*core,[&](StreamCore&){if(inner)hr=static_cast<IDirect3DQuery9*>(inner)->GetData(data,size,flags);},Cmd::SyncGetData))return D3DERR_INVALIDCALL;   // e.g. WoW's event-query wait: shows as SyncGetData in the census
             return hr;
         }
         q.publish();   // the replay thread must see the Issue this GetData polls for, or a spin on S_FALSE would never end

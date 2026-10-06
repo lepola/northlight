@@ -22,42 +22,43 @@ enum class Cmd : std::uint16_t {
     CreateCubeTexture, CreateVertexBuffer, CreateIndexBuffer, CreateRenderTarget, CreateDepthStencilSurface, CreateOffscreenPlainSurface,
     CreateVertexDeclaration, CreateVertexShader, CreatePixelShader, CreateQuery, CreateStateBlock, BeginStateBlock,
     EndStateBlock, CreateAdditionalSwapChain, UnlockBuffer, UnlockRect, UnlockBox, DrawPrimitiveUP,
-    DrawIndexedPrimitiveUP, Device_TestCooperativeLevel, Device_GetAvailableTextureMem, Device_EvictManagedResources, Device_GetDirect3D, Device_GetDeviceCaps,
-    Device_GetDisplayMode, Device_GetCreationParameters, Device_SetCursorProperties, Device_SetCursorPosition, Device_ShowCursor, Device_GetSwapChain,
-    Device_GetNumberOfSwapChains, Device_GetRasterStatus, Device_SetDialogBoxMode, Device_SetGammaRamp, Device_GetGammaRamp, Device_UpdateSurface,
-    Device_UpdateTexture, Device_GetRenderTargetData, Device_GetFrontBufferData, Device_StretchRect, Device_ColorFill, Device_SetRenderTarget,
-    Device_GetRenderTarget, Device_SetDepthStencilSurface, Device_GetDepthStencilSurface, Device_BeginScene, Device_EndScene, Device_Clear,
-    Device_SetTransform, Device_GetTransform, Device_MultiplyTransform, Device_SetViewport, Device_GetViewport, Device_SetMaterial,
-    Device_GetMaterial, Device_SetLight, Device_GetLight, Device_LightEnable, Device_GetLightEnable, Device_SetClipPlane,
-    Device_GetClipPlane, Device_SetRenderState, Device_GetRenderState, Device_SetClipStatus, Device_GetClipStatus, Device_GetTexture,
-    Device_SetTexture, Device_GetTextureStageState, Device_SetTextureStageState, Device_GetSamplerState, Device_SetSamplerState, Device_ValidateDevice,
-    Device_SetPaletteEntries, Device_GetPaletteEntries, Device_SetCurrentTexturePalette, Device_GetCurrentTexturePalette, Device_SetScissorRect, Device_GetScissorRect,
-    Device_SetSoftwareVertexProcessing, Device_GetSoftwareVertexProcessing, Device_SetNPatchMode, Device_GetNPatchMode, Device_DrawPrimitive, Device_DrawIndexedPrimitive,
-    Device_ProcessVertices, Device_SetVertexDeclaration, Device_GetVertexDeclaration, Device_SetFVF, Device_GetFVF, Device_SetVertexShader,
-    Device_GetVertexShader, Device_SetVertexShaderConstantF, Device_GetVertexShaderConstantF, Device_SetVertexShaderConstantI, Device_GetVertexShaderConstantI, Device_SetVertexShaderConstantB,
-    Device_GetVertexShaderConstantB, Device_SetStreamSource, Device_GetStreamSource, Device_SetStreamSourceFreq, Device_GetStreamSourceFreq, Device_SetIndices,
-    Device_GetIndices, Device_SetPixelShader, Device_GetPixelShader, Device_SetPixelShaderConstantF, Device_GetPixelShaderConstantF, Device_SetPixelShaderConstantI,
-    Device_GetPixelShaderConstantI, Device_SetPixelShaderConstantB, Device_GetPixelShaderConstantB, Device_DrawRectPatch, Device_DrawTriPatch, Device_DeletePatch,
-    SwapChain_GetFrontBufferData, SwapChain_GetRasterStatus, SwapChain_GetDisplayMode, SwapChain_GetDevice, SwapChain_GetPresentParameters, VertexBuffer_GetDevice,
-    VertexBuffer_SetPrivateData, VertexBuffer_GetPrivateData, VertexBuffer_FreePrivateData, VertexBuffer_SetPriority, VertexBuffer_GetPriority, VertexBuffer_PreLoad,
-    VertexBuffer_GetType, VertexBuffer_GetDesc, IndexBuffer_GetDevice, IndexBuffer_SetPrivateData, IndexBuffer_GetPrivateData, IndexBuffer_FreePrivateData,
-    IndexBuffer_SetPriority, IndexBuffer_GetPriority, IndexBuffer_PreLoad, IndexBuffer_GetType, IndexBuffer_GetDesc, Surface_GetDevice,
-    Surface_SetPrivateData, Surface_GetPrivateData, Surface_FreePrivateData, Surface_SetPriority, Surface_GetPriority, Surface_PreLoad,
-    Surface_GetType, Surface_GetDesc, Surface_GetDC, Surface_ReleaseDC, Texture_GetDevice, Texture_SetPrivateData,
-    Texture_GetPrivateData, Texture_FreePrivateData, Texture_SetPriority, Texture_GetPriority, Texture_PreLoad, Texture_GetType,
-    Texture_SetLOD, Texture_GetLOD, Texture_GetLevelCount, Texture_SetAutoGenFilterType, Texture_GetAutoGenFilterType, Texture_GenerateMipSubLevels,
-    Texture_GetLevelDesc, Texture_AddDirtyRect, CubeTexture_GetDevice, CubeTexture_SetPrivateData, CubeTexture_GetPrivateData, CubeTexture_FreePrivateData,
-    CubeTexture_SetPriority, CubeTexture_GetPriority, CubeTexture_PreLoad, CubeTexture_GetType, CubeTexture_SetLOD, CubeTexture_GetLOD,
-    CubeTexture_GetLevelCount, CubeTexture_SetAutoGenFilterType, CubeTexture_GetAutoGenFilterType, CubeTexture_GenerateMipSubLevels, CubeTexture_GetLevelDesc, CubeTexture_AddDirtyRect,
-    VolumeTexture_GetDevice, VolumeTexture_SetPrivateData, VolumeTexture_GetPrivateData, VolumeTexture_FreePrivateData, VolumeTexture_SetPriority, VolumeTexture_GetPriority,
-    VolumeTexture_PreLoad, VolumeTexture_GetType, VolumeTexture_SetLOD, VolumeTexture_GetLOD, VolumeTexture_GetLevelCount, VolumeTexture_SetAutoGenFilterType,
-    VolumeTexture_GetAutoGenFilterType, VolumeTexture_GenerateMipSubLevels, VolumeTexture_GetLevelDesc, VolumeTexture_AddDirtyBox, Volume_GetDevice, Volume_SetPrivateData,
-    Volume_GetPrivateData, Volume_FreePrivateData, Volume_GetDesc, VertexShader_GetDevice, VertexShader_GetFunction, PixelShader_GetDevice,
-    PixelShader_GetFunction, VertexDeclaration_GetDevice, VertexDeclaration_GetDeclaration, StateBlock_GetDevice, StateBlock_Capture, StateBlock_Apply,
-    Query_GetDevice, Query_GetType, Query_GetDataSize, Query_Issue,
+    DrawIndexedPrimitiveUP, SyncGetData, SyncLock, SyncUnlock, SyncCreate, SyncReset,
+    SyncRelease, SyncUpDraw, SyncInit, Device_TestCooperativeLevel, Device_GetAvailableTextureMem, Device_EvictManagedResources,
+    Device_GetDirect3D, Device_GetDeviceCaps, Device_GetDisplayMode, Device_GetCreationParameters, Device_SetCursorProperties, Device_SetCursorPosition,
+    Device_ShowCursor, Device_GetSwapChain, Device_GetNumberOfSwapChains, Device_GetRasterStatus, Device_SetDialogBoxMode, Device_SetGammaRamp,
+    Device_GetGammaRamp, Device_UpdateSurface, Device_UpdateTexture, Device_GetRenderTargetData, Device_GetFrontBufferData, Device_StretchRect,
+    Device_ColorFill, Device_SetRenderTarget, Device_GetRenderTarget, Device_SetDepthStencilSurface, Device_GetDepthStencilSurface, Device_BeginScene,
+    Device_EndScene, Device_Clear, Device_SetTransform, Device_GetTransform, Device_MultiplyTransform, Device_SetViewport,
+    Device_GetViewport, Device_SetMaterial, Device_GetMaterial, Device_SetLight, Device_GetLight, Device_LightEnable,
+    Device_GetLightEnable, Device_SetClipPlane, Device_GetClipPlane, Device_SetRenderState, Device_GetRenderState, Device_SetClipStatus,
+    Device_GetClipStatus, Device_GetTexture, Device_SetTexture, Device_GetTextureStageState, Device_SetTextureStageState, Device_GetSamplerState,
+    Device_SetSamplerState, Device_ValidateDevice, Device_SetPaletteEntries, Device_GetPaletteEntries, Device_SetCurrentTexturePalette, Device_GetCurrentTexturePalette,
+    Device_SetScissorRect, Device_GetScissorRect, Device_SetSoftwareVertexProcessing, Device_GetSoftwareVertexProcessing, Device_SetNPatchMode, Device_GetNPatchMode,
+    Device_DrawPrimitive, Device_DrawIndexedPrimitive, Device_ProcessVertices, Device_SetVertexDeclaration, Device_GetVertexDeclaration, Device_SetFVF,
+    Device_GetFVF, Device_SetVertexShader, Device_GetVertexShader, Device_SetVertexShaderConstantF, Device_GetVertexShaderConstantF, Device_SetVertexShaderConstantI,
+    Device_GetVertexShaderConstantI, Device_SetVertexShaderConstantB, Device_GetVertexShaderConstantB, Device_SetStreamSource, Device_GetStreamSource, Device_SetStreamSourceFreq,
+    Device_GetStreamSourceFreq, Device_SetIndices, Device_GetIndices, Device_SetPixelShader, Device_GetPixelShader, Device_SetPixelShaderConstantF,
+    Device_GetPixelShaderConstantF, Device_SetPixelShaderConstantI, Device_GetPixelShaderConstantI, Device_SetPixelShaderConstantB, Device_GetPixelShaderConstantB, Device_DrawRectPatch,
+    Device_DrawTriPatch, Device_DeletePatch, SwapChain_GetFrontBufferData, SwapChain_GetRasterStatus, SwapChain_GetDisplayMode, SwapChain_GetDevice,
+    SwapChain_GetPresentParameters, VertexBuffer_GetDevice, VertexBuffer_SetPrivateData, VertexBuffer_GetPrivateData, VertexBuffer_FreePrivateData, VertexBuffer_SetPriority,
+    VertexBuffer_GetPriority, VertexBuffer_PreLoad, VertexBuffer_GetType, VertexBuffer_GetDesc, IndexBuffer_GetDevice, IndexBuffer_SetPrivateData,
+    IndexBuffer_GetPrivateData, IndexBuffer_FreePrivateData, IndexBuffer_SetPriority, IndexBuffer_GetPriority, IndexBuffer_PreLoad, IndexBuffer_GetType,
+    IndexBuffer_GetDesc, Surface_GetDevice, Surface_SetPrivateData, Surface_GetPrivateData, Surface_FreePrivateData, Surface_SetPriority,
+    Surface_GetPriority, Surface_PreLoad, Surface_GetType, Surface_GetDesc, Surface_GetDC, Surface_ReleaseDC,
+    Texture_GetDevice, Texture_SetPrivateData, Texture_GetPrivateData, Texture_FreePrivateData, Texture_SetPriority, Texture_GetPriority,
+    Texture_PreLoad, Texture_GetType, Texture_SetLOD, Texture_GetLOD, Texture_GetLevelCount, Texture_SetAutoGenFilterType,
+    Texture_GetAutoGenFilterType, Texture_GenerateMipSubLevels, Texture_GetLevelDesc, Texture_AddDirtyRect, CubeTexture_GetDevice, CubeTexture_SetPrivateData,
+    CubeTexture_GetPrivateData, CubeTexture_FreePrivateData, CubeTexture_SetPriority, CubeTexture_GetPriority, CubeTexture_PreLoad, CubeTexture_GetType,
+    CubeTexture_SetLOD, CubeTexture_GetLOD, CubeTexture_GetLevelCount, CubeTexture_SetAutoGenFilterType, CubeTexture_GetAutoGenFilterType, CubeTexture_GenerateMipSubLevels,
+    CubeTexture_GetLevelDesc, CubeTexture_AddDirtyRect, VolumeTexture_GetDevice, VolumeTexture_SetPrivateData, VolumeTexture_GetPrivateData, VolumeTexture_FreePrivateData,
+    VolumeTexture_SetPriority, VolumeTexture_GetPriority, VolumeTexture_PreLoad, VolumeTexture_GetType, VolumeTexture_SetLOD, VolumeTexture_GetLOD,
+    VolumeTexture_GetLevelCount, VolumeTexture_SetAutoGenFilterType, VolumeTexture_GetAutoGenFilterType, VolumeTexture_GenerateMipSubLevels, VolumeTexture_GetLevelDesc, VolumeTexture_AddDirtyBox,
+    Volume_GetDevice, Volume_SetPrivateData, Volume_GetPrivateData, Volume_FreePrivateData, Volume_GetDesc, VertexShader_GetDevice,
+    VertexShader_GetFunction, PixelShader_GetDevice, PixelShader_GetFunction, VertexDeclaration_GetDevice, VertexDeclaration_GetDeclaration, StateBlock_GetDevice,
+    StateBlock_Capture, StateBlock_Apply, Query_GetDevice, Query_GetType, Query_GetDataSize, Query_Issue,
     Count
 };
-constexpr std::uint16_t kFirstGeneratedCmd=31;
+constexpr std::uint16_t kFirstGeneratedCmd=39;
 static_assert((std::size_t)Cmd::Count<=kMaxCmdIds,"grow kMaxCmdIds in stream_stats.h");
 template<Cmd C> struct CmdTag {};
 inline const char* cmdName(Cmd c) {
@@ -93,6 +94,14 @@ inline const char* cmdName(Cmd c) {
     case Cmd::UnlockBox: return "UnlockBox";
     case Cmd::DrawPrimitiveUP: return "DrawPrimitiveUP";
     case Cmd::DrawIndexedPrimitiveUP: return "DrawIndexedPrimitiveUP";
+    case Cmd::SyncGetData: return "SyncGetData";
+    case Cmd::SyncLock: return "SyncLock";
+    case Cmd::SyncUnlock: return "SyncUnlock";
+    case Cmd::SyncCreate: return "SyncCreate";
+    case Cmd::SyncReset: return "SyncReset";
+    case Cmd::SyncRelease: return "SyncRelease";
+    case Cmd::SyncUpDraw: return "SyncUpDraw";
+    case Cmd::SyncInit: return "SyncInit";
     case Cmd::Device_TestCooperativeLevel: return "Device::TestCooperativeLevel";
     case Cmd::Device_GetAvailableTextureMem: return "Device::GetAvailableTextureMem";
     case Cmd::Device_EvictManagedResources: return "Device::EvictManagedResources";

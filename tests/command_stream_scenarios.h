@@ -104,8 +104,18 @@ static void locksPreserveBytes(){
     void* p=nullptr;const auto np0=get(s.passThrough[unsigned(PassReason::NoShadow)]);CHECK(big->Lock(0,4096,&p,0)==D3D_OK);std::memset(p,0x5A,4096);CHECK(big->Unlock()==D3D_OK&&get(s.passThrough[unsigned(PassReason::NoShadow)])==np0);
     CHECK(big->Lock(0,4096,&p,0)==D3D_OK&&p&&get(s.passThrough[unsigned(PassReason::NoShadow)])==np0+1);CHECK(((unsigned char*)p)[7]==0x5A);CHECK(big->Unlock()==D3D_OK);   // real memory, first write already there
     CHECK(big->Lock(0,16,&p,D3::kLockReadOnly)==D3D_OK&&get(s.passThrough[unsigned(PassReason::ReadOnly)])==1&&((unsigned char*)p)[0]==0x5A);CHECK(big->Unlock()==D3D_OK);
-    CHECK(big->Lock(0,16,&p,D3::kLockDiscard)==D3D_OK&&get(s.lockAsync)>0);CHECK(big->Unlock()==D3D_OK);   // DISCARD never needs the old bytes
+    {   // MANAGED pool: DXVK ignores DISCARD there and keeps the old bytes, so it is a plain lock, never the zero-filled staging path
+        const auto async=get(s.lockAsync),pass=get(s.passThrough[unsigned(PassReason::NoShadow)]);
+        CHECK(big->Lock(0,16,&p,D3::kLockDiscard)==D3D_OK&&((unsigned char*)p)[7]==0x5A&&get(s.lockAsync)==async&&get(s.passThrough[unsigned(PassReason::NoShadow)])==pass+1);CHECK(big->Unlock()==D3D_OK);
+    }
     big->Release();
+    {   // DEFAULT pool: DISCARD needs no old bytes, so it is asynchronous; a small overrun of the staged range stays inside the allocation (ASan)
+        IDirect3DVertexBuffer9* d=nullptr;CHECK(rig.dev->CreateVertexBuffer(256,0,0,(D3DPOOL)0,&d,nullptr)==D3D_OK);void* q=nullptr;
+        CHECK(d->Lock(0,0,&q,0)==D3D_OK&&d->Unlock()==D3D_OK);const auto async=get(s.lockAsync);
+        CHECK(d->Lock(0,64,&q,D3::kLockDiscard)==D3D_OK&&get(s.lockAsync)==async+1);std::memset(q,0x33,64+100);CHECK(d->Unlock()==D3D_OK);d->Release();
+        IDirect3DVertexBuffer9* f=nullptr;CHECK(rig.dev->CreateVertexBuffer(100,D3::kUsageDynamic,0,(D3DPOOL)0,&f,nullptr)==D3D_OK);   // shadowed: the same tolerance
+        CHECK(f->Lock(0,0,&q,0)==D3D_OK);std::memset(q,0x44,100+100);CHECK(f->Unlock()==D3D_OK);f->Release();
+    }
     // textures: first write lock staged with our pitch (DXT block rows), later write locks and READONLY pass through
     IDirect3DTexture9* dxt=nullptr;CHECK(rig.dev->CreateTexture(16,16,1,0,(D3DFORMAT)0x31545844,(D3DPOOL)1,&dxt,nullptr)==D3D_OK);
     D3DLOCKED_RECT lr{};CHECK(dxt->LockRect(0,&lr,nullptr,0)==D3D_OK&&lr.Pitch==32);   // 4 blocks of 8 bytes per block row
@@ -124,9 +134,14 @@ static void shadowCap(){
     std::vector<IDirect3DVertexBuffer9*> v;
     for(int i=0;i<14;++i){IDirect3DVertexBuffer9* b=nullptr;CHECK(rig.dev->CreateVertexBuffer(2u<<20,D3::kUsageDynamic,0,(D3DPOOL)0,&b,nullptr)==D3D_OK);v.push_back(b);}
     CHECK(s.shadowBytes.load()==std::int64_t(12)*(2<<20));   // 24 MiB: the 13th and 14th are refused (never evicting a live one) but still work
-    void* p=nullptr;CHECK(v[13]->Lock(0,64,&p,D3::kLockDiscard)==D3D_OK&&v[13]->Unlock()==D3D_OK);
-    rig.sync();q.setPressure(true);CHECK(q.shadowCap()==ShadowBudgetBytes/2&&!q.shadowAdmit(1<<20)&&s.shadowBytes.load()==std::int64_t(12)*(2<<20));
-    q.setPressure(false);for(auto* b:v)b->Release();rig.sync();CHECK(s.shadowBytes.load()==0);   // freed with their proxies
+    CHECK(get(s.shadowRefused)==2&&get(s.shadowRefusedBytes)==2u*(2u<<20));
+    void* p=nullptr;CHECK(v[13]->Lock(0,64,&p,D3::kLockDiscard)==D3D_OK&&v[13]->Unlock()==D3D_OK&&get(s.shadowLate)==0);   // still no room
+    v[0]->Release();v[1]->Release();rig.sync();   // room again: a refused buffer takes its shadow at its next DISCARD lock, and only there
+    CHECK(v[12]->Lock(0,64,&p,0)==D3D_OK&&v[12]->Unlock()==D3D_OK&&get(s.shadowLate)==0);
+    CHECK(v[12]->Lock(0,64,&p,D3::kLockDiscard)==D3D_OK&&v[12]->Unlock()==D3D_OK&&get(s.shadowLate)==1&&s.shadowBytes.load()==std::int64_t(11)*(2<<20));
+    v[0]=v[1]=nullptr;
+    rig.sync();q.setPressure(true);CHECK(q.shadowCap()==ShadowBudgetBytes/2&&!q.shadowAdmit(1<<20)&&s.shadowBytes.load()==std::int64_t(11)*(2<<20));
+    q.setPressure(false);for(auto* b:v)if(b)b->Release();rig.sync();CHECK(s.shadowBytes.load()==0);   // freed with their proxies
     rig.finish();checkClean();
 }
 static void queriesAndSyncCensus(){
@@ -140,6 +155,7 @@ static void queriesAndSyncCensus(){
     int spins=0;HRESULT hr;while((hr=q->GetData(&data,4,0))==S_FALSE&&++spins<2000000)std::this_thread::yield();   // terminates: every GetData publishes
     CHECK(hr==D3D_OK&&data==0xABCD0000u);(void)spins;
     data=0;CHECK(q->Issue(D3::kIssueEnd)==D3D_OK&&q->GetData(&data,4,D3::kGetDataFlush)==D3D_OK&&data==0xABCD0000u);   // FLUSH: the real GetData after everything recorded
+    CHECK(get(s.census[(std::size_t)Cmd::SyncGetData])==2&&std::string(cmdName(Cmd::SyncGetData))=="SyncGetData");   // the flush wait and the never-issued query show by name
     q->Release();
     // every sync class drains and is counted by name
     rig.dev->SetRenderState((D3DRENDERSTATETYPE)7,1);DWORD n=0;D3DDISPLAYMODE dm{};D3DRASTER_STATUS rs{};D3DGAMMARAMP ramp{};D3DCLIPSTATUS9 cs{};

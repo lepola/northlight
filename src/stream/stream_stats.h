@@ -29,6 +29,7 @@ struct Counters {
     static constexpr std::size_t kPassReasons=8;
     Counter passThrough[kPassReasons]{};
     Counter qiMisses{0},deadCreates{0},proxyMismatch{0},foreignEntries{0},foreignPointers{0},createFailures{0},replayFailures{0};
+    Counter shadowRefused{0},shadowRefusedBytes{0},shadowLate{0};   // DYNAMIC buffers refused a shadow at creation; shadows granted later at a DISCARD lock
     Counter lockRecordedBytes{0},wholeLockBytes{0};   // bytes copied into the queue by shadow/staged unlocks; the part from whole-buffer locks (size 0)
     Counter stateAnswered{0},stateSynced{0},syncOnlySlots{0},lockAsync{0},queryPolls{0};
     Counter census[kMaxCmdIds]{};   // sync calls per command id (name via cmdName in command_stream.inl)

@@ -48,10 +48,10 @@ inline ProxyBase* StreamCore::makeImplicit(IUnknown* u){
         p=new StreamSurface(this,i);static_cast<StreamSurface*>(p)->own.written=true;
     }else if(has(static_cast<IDirect3DVertexBuffer9*>(nullptr))){
         D3DVERTEXBUFFER_DESC d{};static_cast<IDirect3DVertexBuffer9*>(u)->GetDesc(&d);
-        auto* v=new StreamVertexBuffer(this,d.Size,d.Usage,d.FVF,unsigned(d.Pool));dropShadow(*v,v->buf);v->buf.written=true;p=v;
+        auto* v=new StreamVertexBuffer(this,d.Size,d.Usage,d.FVF,unsigned(d.Pool),false);v->buf.written=true;p=v;
     }else if(has(static_cast<IDirect3DIndexBuffer9*>(nullptr))){
         D3DINDEXBUFFER_DESC d{};static_cast<IDirect3DIndexBuffer9*>(u)->GetDesc(&d);
-        auto* v=new StreamIndexBuffer(this,d.Size,d.Usage,unsigned(d.Format),unsigned(d.Pool));dropShadow(*v,v->buf);v->buf.written=true;p=v;
+        auto* v=new StreamIndexBuffer(this,d.Size,d.Usage,unsigned(d.Format),unsigned(d.Pool),false);v->buf.written=true;p=v;
     }else if(has(static_cast<IDirect3DTexture9*>(nullptr))){
         auto* t=static_cast<IDirect3DTexture9*>(u);D3DSURFACE_DESC d{};t->GetLevelDesc(0,&d);
         auto* v=new StreamTexture(this,d.Width,d.Height,t->GetLevelCount(),d.Usage,unsigned(d.Format),unsigned(d.Pool));for(auto& s:v->subs)s.written=true;p=v;
@@ -185,7 +185,7 @@ private:
     DWORD auditRS_[StreamState::kRS]={},auditSamp_[StreamState::kSamplers][StreamState::kSampTypes]={},auditTss_[StreamState::kTSStages][StreamState::kTSTypes]={};
     std::vector<unsigned> touched_;std::vector<bool> touchedFlag_=std::vector<bool>(StreamState::kBits,false);
     struct Avg {double depth=0,bytes=0;unsigned n=0;std::uint64_t maxDepth=0,maxBytes=0;} avg_;
-    std::uint64_t lastBusy_=0;unsigned deadLogged_=0;
+    std::uint64_t lastBusy_=0,lastPass_=0;unsigned deadLogged_=0;
 
     static void captureFpu(unsigned short& cw,unsigned& csr){
         cw=0;csr=0;
@@ -344,6 +344,9 @@ private:
             (unsigned long long)frames,avg_.depth*inv,(unsigned long long)avg_.maxDepth,avg_.bytes*inv,(unsigned long long)avg_.maxBytes,sampleEvery?dBusy/1e6/sampleEvery:0.0,
             (unsigned long long)get(s.deadCreates),(unsigned long long)get(s.stateAnswered),(unsigned long long)get(s.stateSynced),(unsigned long long)get(s.syncOnlySlots),
             SnapshotStats::hits.load(),SnapshotStats::misses.load(),SnapshotStats::triggers.load(),SnapshotStats::overflow.load());
+        std::uint64_t pass=0;for(unsigned r=0;r<Counters::kPassReasons;++r)pass+=get(s.passThrough[r]);
+        const std::uint64_t dPass=pass-lastPass_;lastPass_=pass;
+        n+=std::snprintf(buf+n,sizeof buf-size_t(n)," shadowRefused=%llu/%.1fMB shadowLate=%llu passPerFrame=%.2f",(unsigned long long)get(s.shadowRefused),get(s.shadowRefusedBytes)/1048576.0,(unsigned long long)get(s.shadowLate),sampleEvery?double(dPass)/sampleEvery:0.0);
         n+=std::snprintf(buf+n,sizeof buf-size_t(n)," pass[");
         for(unsigned r=0;r<Counters::kPassReasons;++r)n+=std::snprintf(buf+n,sizeof buf-size_t(n),"%s%s=%llu",r?",":"",passReasonName(r),(unsigned long long)get(s.passThrough[r]));
         n+=std::snprintf(buf+n,sizeof buf-size_t(n),"] census[");

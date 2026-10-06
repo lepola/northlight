@@ -40,7 +40,7 @@ public:
             IDirect3DSwapChain9* sc=nullptr;
             if(SUCCEEDED(c.target->GetSwapChain(0,&sc))&&sc){c.reg.bindInner(d->sc0,sc);sc->GetPresentParameters(&d->sc0->pp);d->pp=d->sc0->pp;d->ensureBackBuffers(c);}
             else d->sc0->dead.store(true);
-            d->st.loadDefaults(c.target);ok=!d->sc0->dead.load();});
+            d->st.loadDefaults(c.target);ok=!d->sc0->dead.load();},Cmd::SyncInit);
         if(!ran||!ok){d->replayer.stop();if(reason)*reason="init";d->replayer.join();d->abandon();return nullptr;}
         gameTid.store(Replayer::currentTid());activeCore.store(&d->core,std::memory_order_release);innerOf=&innerOfActive;
         return d.release();
@@ -200,7 +200,7 @@ public:
             hr=c.target->Reset(p);
             if(SUCCEEDED(hr)){IDirect3DSwapChain9* sc=nullptr;if(SUCCEEDED(c.target->GetSwapChain(0,&sc))&&sc){sc->GetPresentParameters(&sc0->pp);sc->Release();}}
             ensureBackBuffers(c);
-            st.loadDefaults(c.target);c.replayFailure.store(false);});
+            st.loadDefaults(c.target);c.replayFailure.store(false);},Cmd::SyncReset);
         if(!ran)return D3DERR_INVALIDCALL;
         if(SUCCEEDED(hr))pp=sc0->pp;
         return hr;
@@ -215,7 +215,7 @@ public:
         Queue& q=streamQueue();
         if(forceSync||q.pressure()){
             HRESULT hr=D3DERR_INVALIDCALL;
-            const bool ran=runTask(core,[&](StreamCore&){hr=replayer.createNow(a,id,extra);if(SUCCEEDED(hr))afterSyncCreate(proxy);});
+            const bool ran=runTask(core,[&](StreamCore&){hr=replayer.createNow(a,id,extra);if(SUCCEEDED(hr))afterSyncCreate(proxy);},Cmd::SyncCreate);
             if(!ran||FAILED(hr)){discard(proxy);*out=nullptr;return ran?hr:D3DERR_INVALIDCALL;}
             *out=static_cast<typename std::remove_pointer<decltype(firstIface(proxy))>::type*>(proxy);return D3D_OK;
         }
@@ -320,7 +320,7 @@ public:
             *a=DrawUPArgs{unsigned(type),primCount,stride,UINT(bytes),0,data};b->used=std::uint32_t(bytes);std::memcpy(b->data(),data,bytes);std::memset(b->data()+bytes,0,kUpSlack);q.commit();return D3D_OK;}
         add(q.stats.passThrough[unsigned(PassReason::Budget)]);
         HRESULT hr=D3DERR_INVALIDCALL;
-        runTask(core,[&](StreamCore& c){upIdentity=data;hr=c.target->DrawPrimitiveUP(type,primCount,data,stride);upIdentity=nullptr;});
+        runTask(core,[&](StreamCore& c){upIdentity=data;hr=c.target->DrawPrimitiveUP(type,primCount,data,stride);upIdentity=nullptr;},Cmd::SyncUpDraw);
         return hr;}
     HRESULT STDMETHODCALLTYPE DrawIndexedPrimitiveUP(D3DPRIMITIVETYPE type,UINT minIndex,UINT numVertices,UINT primCount,const void* indices,D3DFORMAT indexFormat,const void* data,UINT stride) override{
         if(!data||!indices||!stride||!primCount)return D3DERR_INVALIDCALL;
@@ -337,7 +337,7 @@ public:
             *a=args;b->used=std::uint32_t(total);fill(b->data());q.commit();return D3D_OK;}
         add(q.stats.passThrough[unsigned(PassReason::Budget)]);
         HRESULT hr=D3DERR_INVALIDCALL;
-        runTask(core,[&](StreamCore& c){upIdentity=data;hr=c.target->DrawIndexedPrimitiveUP(type,minIndex,numVertices,primCount,indices,indexFormat,data,stride);upIdentity=nullptr;});
+        runTask(core,[&](StreamCore& c){upIdentity=data;hr=c.target->DrawIndexedPrimitiveUP(type,minIndex,numVertices,primCount,indices,indexFormat,data,stride);upIdentity=nullptr;},Cmd::SyncUpDraw);
         return hr;}
     static unsigned primVerts(unsigned type,unsigned n){switch(type){case 1:return n;case 2:return n*2;case 3:return n+1;case 4:return n*3;default:return n+2;}}
 
@@ -392,7 +392,7 @@ private:
     }
     void finalRelease(){
         st.clear();sc0->comRelease();   // binds and the swap chain's own reference go; the Destroys run before the Target's release
-        runTask(core,[&](StreamCore& c){c.target->Release();c.target=nullptr;});   // the Device's final release happens on the replay thread
+        runTask(core,[&](StreamCore& c){c.target->Release();c.target=nullptr;},Cmd::SyncRelease);   // the Device's final release happens on the replay thread
         replayer.stop();
         innerOf=nullptr;activeCore.store(nullptr,std::memory_order_release);
         IDirect3D9* p=parent;
