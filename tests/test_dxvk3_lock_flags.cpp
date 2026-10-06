@@ -4,7 +4,8 @@
 //   NOOVERWRITE and DISCARD are stripped for every non-DEFAULT pool;
 //   :5564  skipWait = (!needsReadback && (readOnly || !direct)) || noOverwrite, with direct = DEFAULT|DYNAMIC;
 //   :5526  a DISCARD of a direct buffer adds the FULL buffer size to the discard counter (allocation throttle).
-// Fake event queries complete a controllable number of frames after they are issued, and a byte-level buffer
+// The production FrameFence (ONE event query per frame, issued at the end of the frame) runs against a fake device: its query completes
+// `latency` frames after the frame ended (0 = at the start of the next frame), and a byte-level buffer
 // model (a DISCARD renames the buffer: in-flight draws keep the old slice) checks the fence-checked rings of
 // dynamic_ring.h against races and against the expected flag decision.
 #include <algorithm>
@@ -90,31 +91,28 @@ static bool readsBack(const Draw& d){ // byte-exact for small regions; head, tai
     for(std::size_t k=0;k<words;k+=(k<512||k+512>=words)?1:stride)if(!same(k))return false;
     return true;
 }
-struct Sim {long frame=0;std::mt19937 rng{20260};std::mt19937 latencyRng{7};int fixedLatency=-1;bool failQueries=false;long liveQueries=0;} sim;
+struct Sim {long frame=0;std::mt19937 rng{20260};std::mt19937 latencyRng{7};int fixedLatency=-1;long frameLatency=0;bool failQueries=false;long liveQueries=0,created=0,issued=0;} sim;
 struct FakeQuery final:IDirect3DQuery9 {
-    long doneFrame=0;
-    HRESULT Issue(DWORD)override{return S_OK;}HRESULT GetData(void*,DWORD,DWORD)override{return S_OK;}unsigned long Release()override{return 0;}
+    long doneFrame=LONG_MAX;bool isIssued=false;unsigned long refs=1;
+    HRESULT Issue(DWORD)override{isIssued=true;doneFrame=sim.frame+1+sim.frameLatency;++sim.issued;return S_OK;} // the frame ended: complete `latency` frames after the next frame starts
+    HRESULT GetData(void*,DWORD,DWORD)override{return isIssued&&doneFrame<=sim.frame?S_OK:S_FALSE;}
+    unsigned long AddRef()override{return ++refs;}
+    unsigned long Release()override{const unsigned long r=--refs;if(!r){--sim.liveQueries;delete this;}return r;}
 };
+struct FakeDevice final:IDirect3DDevice9 {
+    HRESULT CreateQuery(D3DQUERYTYPE,IDirect3DQuery9** q)override{if(sim.failQueries)return -1;*q=new FakeQuery;++sim.liveQueries;++sim.created;return S_OK;}
+};
+static FakeDevice gDevice;static Ring::FrameFence gFence;
+static Ring::FrameFence& fence(){gFence.device=&gDevice;return gFence;}
+static void resetSim(){gFence.drop();sim=Sim();}
 struct Stream {
     const char* name="";UINT align=16;Ring::Ring ring;UINT capacity=0;std::shared_ptr<Slice> slice;Dxvk311Buffer dev;
     std::vector<std::shared_ptr<Draw>> draws,flight; // draws on the CURRENT slice (race model); every draw not yet verified-complete
-    std::shared_ptr<Draw> open;                      // the previous call's draw: the next place() issues its query
     unsigned discards=0,fenceReuse=0,wraps=0,shrinks=0,grows=0,creates=0,calls=0;std::uint64_t discardBytes=0,frameCharge=0,maxFrameCharge=0;
-};
-struct Hooks { // the ring's query hooks: the fake event completes `latency` frames after it was issued; the draw it follows completes with it
-    Stream* st;
-    IDirect3DQuery9* issue(){
-        if(sim.failQueries)return nullptr; // CreateQuery/Issue failed: the span stays pending until a DISCARD
-        const long latency=sim.fixedLatency>=0?sim.fixedLatency:long(sim.latencyRng()%4);
-        if(st->open)st->open->doneFrame=sim.frame+latency;
-        auto* q=new FakeQuery;q->doneFrame=sim.frame+latency;++sim.liveQueries;return q;
-    }
-    bool done(IDirect3DQuery9* q){return static_cast<FakeQuery*>(q)->doneFrame<=sim.frame;}
-    void release(IDirect3DQuery9* q){--sim.liveQueries;delete static_cast<FakeQuery*>(q);}
 };
 static UINT roundUp(UINT v,UINT a){return (v+a-1)/a*a;}
 // The buffer is dropped or renamed: draws whose query was never issued are assumed finished within a few frames (they still read the old slice).
-static void orphan(Stream& st){for(auto& d:st.draws)if(d->doneFrame==LONG_MAX)d->doneFrame=sim.frame+4;st.draws.clear();st.open.reset();}
+static void orphan(Stream& st){for(auto& d:st.draws)if(d->doneFrame==LONG_MAX)d->doneFrame=sim.frame+4;st.draws.clear();}
 struct Outcome {Ring::Slot slot;bool shrunk=false,grew=false;};
 static void checkDecision(Stream& st,const Ring::Slot& slot,UINT cursorBefore,UINT bytes,bool freshBefore){
     const UINT need=roundUp(bytes,st.align),at=roundUp(cursorBefore,st.align);
@@ -129,7 +127,7 @@ static void checkDecision(Stream& st,const Ring::Slot& slot,UINT cursorBefore,UI
     CHECK(slot.offset%st.align==0&&std::uint64_t(slot.offset)+bytes<=st.capacity);
 }
 static Outcome upload(Stream& st,UINT bytes,std::uint64_t seed){
-    Hooks h{&st};Outcome out;
+    auto& h=fence();Outcome out;
     auto recreate=[&](UINT capacity){orphan(st);st.slice=std::make_shared<Slice>(capacity);st.capacity=capacity;st.dev=Dxvk311Buffer{Default,UsageDynamic,capacity,false,st.dev.discardCounter};++st.creates;};
     if(st.capacity<bytes){Ring::reset(st.ring,0,h);recreate(Ring::ringCapacity(bytes));Ring::reset(st.ring,st.capacity,h);++st.grows;out.grew=true;}
     UINT cursorBefore=st.ring.cursor;bool freshBefore=st.ring.fresh;
@@ -154,7 +152,7 @@ static Outcome upload(Stream& st,UINT bytes,std::uint64_t seed){
     }
     fill(*st.slice,slot.offset,bytes,seed);
     auto d=std::make_shared<Draw>();d->slice=st.slice;d->offset=slot.offset;d->bytes=bytes;d->seed=seed;
-    st.draws.push_back(d);st.flight.push_back(d);st.open=d;
+    st.draws.push_back(d);st.flight.push_back(d);
     return out;
 }
 // End of frame: every draw still in flight reads back what was written; finished draws leave the list.
@@ -164,7 +162,12 @@ static void verifyFlight(Stream& st){
         else{CHECK(readsBack(**it));++it;}
     }
 }
-static void release(Stream& st){Hooks h{&st};Ring::reset(st.ring,0,h);st.draws.clear();st.flight.clear();st.open.reset();st.slice.reset();}
+// The frame ends (WorldRenderer::endFrame): the draws of the frame complete when the frame fence's query does; the fence is issued here.
+static void endOfFrame(Stream& a,Stream* b=nullptr){
+    for(Stream* st:{&a,b})if(st&&!sim.failQueries)for(auto& d:st->flight)if(d->doneFrame==LONG_MAX)d->doneFrame=sim.frame+1+sim.frameLatency;
+    fence().endFrame();
+}
+static void release(Stream& st){auto& h=fence();Ring::reset(st.ring,0,h);st.draws.clear();st.flight.clear();st.slice.reset();}
 
 // 400-frame blocks, four kinds: a peak (12-20 MiB; 20 MiB at frame 0) at the start of each, then
 //   0: small sizes only (1-49 KiB), a long stretch after the peak;
@@ -182,10 +185,10 @@ static UINT sizeFor(unsigned f,UINT capacity){
     return roundUp(UINT(KiB+r(48*KiB)),16);
 }
 static void longRun(unsigned frames){
-    sim=Sim();Stream vb,ib;vb.name="vb";vb.align=16;ib.name="ib";ib.align=4;
+    resetSim();Stream vb,ib;vb.name="vb";vb.align=16;ib.name="ib";ib.align=4;
     std::uint64_t oldCharge=0,newCharge=0;UINT runningMax[2]={};unsigned oversizedSeen=0,simulatedShrinks=0,shrinkWhenSmall=0;std::uint64_t maxCharge=0;
     for(unsigned f=0;f<frames;++f){
-        sim.frame=long(f);vb.frameCharge=ib.frameCharge=0;
+        sim.frame=long(f);sim.frameLatency=sim.fixedLatency>=0?sim.fixedLatency:long(sim.latencyRng()%4);vb.frameCharge=ib.frameCharge=0;
         const UINT vbBytes=sizeFor(f,vb.capacity),ibBytes=std::max<UINT>(1024,roundUp(vbBytes/3,16));
         // 0.3.192 evidence: before the peak the ring is right-sized; right after a peak the decayed peak keeps it from looking oversized.
         if(f%400==1)CHECK(!Ring::oversized(vb.ring,vb.ring.peak));
@@ -205,12 +208,13 @@ static void longRun(unsigned frames){
             CHECK(over||vb.capacity<=4*MiB||vb.capacity<=2*std::uint64_t(Ring::ringCapacity(vb.ring.peak)));
             if(over){
                 const UINT peak=vb.ring.peak,old=vb.capacity,smaller=Ring::ringCapacity(peak);CHECK(smaller<old);
-                Hooks h{&vb};Ring::reset(vb.ring,0,h);orphan(vb);vb.slice=std::make_shared<Slice>(smaller);vb.capacity=smaller;vb.dev=Dxvk311Buffer{Default,UsageDynamic,smaller,false,vb.dev.discardCounter};
+                auto& h=fence();Ring::reset(vb.ring,0,h);orphan(vb);vb.slice=std::make_shared<Slice>(smaller);vb.capacity=smaller;vb.dev=Dxvk311Buffer{Default,UsageDynamic,smaller,false,vb.dev.discardCounter};
                 Ring::reset(vb.ring,smaller,h);CHECK(vb.ring.fresh&&vb.ring.cursor==0&&vb.ring.capacity==smaller&&!Ring::oversized(vb.ring,peak));++simulatedShrinks;
             }else ++shrinkWhenSmall;
         }
+        endOfFrame(vb,&ib);
     }
-    CHECK(sim.liveQueries>=0);release(vb);release(ib);CHECK(sim.liveQueries==0); // every query is released
+    CHECK(sim.liveQueries>=0);release(vb);release(ib);gFence.drop();CHECK(sim.liveQueries==0); // every query is released
     const unsigned total=vb.discards+ib.discards;
     CHECK(newCharge<oldCharge/3); // the point of the rings: well under the old 8 MiB-per-stream-per-call charge
     CHECK(vb.fenceReuse>0&&ib.fenceReuse>0&&vb.wraps>=vb.fenceReuse&&vb.shrinks+simulatedShrinks>0);
@@ -219,40 +223,88 @@ static void longRun(unsigned frames){
         frames,vb.discards,vb.fenceReuse,vb.wraps,vb.shrinks,simulatedShrinks,oversizedSeen,vb.grows,ib.discards,ib.fenceReuse,double(newCharge)/MiB,double(maxCharge)/MiB,double(oldCharge)/MiB,total);
 }
 
-// Constant per-frame size, queries done `late` frames after they were issued: a span is reusable late+1 frames after its call, so a ring holding
-// at least late+1 sets never needs a DISCARD, not even while it fills. A ring holding fewer (ringCapacity = bytes + 2x bytes headroom capped
-// at 1..8 MiB, so 3 sets up to 4 MiB, 2 sets up to 8 MiB and 1 set above) can only DISCARD at a wrap, and only while the old span is still pending.
+// Constant per-frame size, the frame fence completing `late` frames after the frame ended (0 = at the start of the next frame): a span of frame f is
+// reusable from frame f+1+late, so a ring holding at least late+1 sets never needs a DISCARD, not even while it fills. A ring holding fewer
+// (ringCapacity = bytes + 3x bytes headroom clamped to 1..8 MiB, so 4 sets up to ~2.67 MiB, 3 sets up to 4 MiB, 2 sets up to 6 MiB and 1 set
+// above 8 MiB) can only DISCARD at a wrap, and only while the old span is still pending.
 static unsigned steady(UINT bytes,int late,unsigned frames,unsigned* setsOut=nullptr){
-    sim=Sim();sim.fixedLatency=late;Stream vb,ib;vb.align=16;ib.align=4;
-    for(unsigned f=0;f<frames;++f){sim.frame=long(f);upload(vb,bytes,0x77+f);upload(ib,std::max<UINT>(1024,roundUp(bytes/3,16)),0x99+f);verifyFlight(vb);verifyFlight(ib);}
+    resetSim();sim.fixedLatency=late;Stream vb,ib;vb.align=16;ib.align=4;
+    for(unsigned f=0;f<frames;++f){sim.frame=long(f);sim.frameLatency=late;upload(vb,bytes,0x77+f);upload(ib,std::max<UINT>(1024,roundUp(bytes/3,16)),0x99+f);verifyFlight(vb);verifyFlight(ib);endOfFrame(vb,&ib);}
     const unsigned sets=Ring::ringCapacity(bytes)/bytes;if(setsOut)*setsOut=sets;
     const unsigned discards=vb.discards;
     if(int(sets)>=late+1)CHECK(vb.discards==0&&ib.discards==0&&vb.grows==1&&vb.shrinks==0);
     else CHECK(vb.discards<=frames/std::max(1u,sets)+1&&vb.discards>0);
-    release(vb);release(ib);CHECK(sim.liveQueries==0);return discards;
+    release(vb);release(ib);gFence.drop();CHECK(sim.liveQueries==0);return discards;
 }
 static void steadyStates(unsigned frames){
-    // Small sets: no DISCARD at all, queries 2 frames late (after warm-up and during it).
+    // Small sets: no DISCARD at all, the fence 2 frames late (after warm-up and during it).
     for(UINT bytes:{4*KiB,64*KiB,256*KiB,512*KiB,640*KiB}){unsigned sets=0;CHECK(steady(bytes,2,frames,&sets)==0&&sets>=3);}
     for(int late:{0,1,3})CHECK(steady(100*KiB,late,frames)==0);
-    // Larger sets: up to 4 MiB the ring holds 3 sets (no DISCARD with queries 2 frames late); above, 2 sets (1 above 8 MiB): with a late
-    // query every wrap DISCARDs, but never more than one per wrap and only while a span overlaps (the model in upload() checks both); with
-    // instantly completing queries there is none.
+    for(UINT bytes:{MiB,2*MiB})CHECK(steady(bytes,3,frames)==0); // four sets: a GPU-bound lag of 3 frames still reuses
+    // Larger sets: up to 4 MiB the ring holds 3 sets (no DISCARD with a fence 2 frames late); above, 2 sets (1 above 8 MiB): with a late
+    // fence every wrap DISCARDs, but never more than one per wrap and only while a span overlaps (the model in upload() checks both); with
+    // a fence completing at the next frame there is none.
     unsigned sets=0;for(UINT bytes:{MiB,2*MiB,4*MiB,6*MiB,20*MiB}){CHECK(steady(bytes,0,frames,&sets)==0);const unsigned late=steady(bytes,2,frames);
         CHECK(bytes<=4*MiB?(sets>=3&&late==0):(late>0&&late<=frames/sets+1));
-        std::printf("  steady %2u MiB: ring holds %u set(s); discards over %u frames: 0 (instant queries), %u (2 frames late)\n",unsigned(bytes/MiB),sets,frames,late);}
-    std::puts("PASS steady state: constant sizes, queries 0-3 frames late: zero DISCARDs whenever the ring holds more sets than the query latency");
+        std::printf("  steady %2u MiB: ring holds %u set(s); discards over %u frames: 0 (fence at next frame), %u (2 frames late)\n",unsigned(bytes/MiB),sets,frames,late);}
+    std::puts("PASS steady state: constant sizes, fence 0-3 frames late: zero DISCARDs whenever the ring holds more sets than the fence latency");
 }
 static void failedQueries(){
     // CreateQuery/Issue failing makes every span pending forever: the old DISCARD-on-wrap behaviour, and still never a NOOVERWRITE over a pending region.
-    sim=Sim();sim.failQueries=true;Stream vb;vb.align=16;const UINT bytes=300*KiB;
-    for(unsigned f=0;f<200;++f){sim.frame=long(f);upload(vb,bytes,f);verifyFlight(vb);}
-    CHECK(vb.fenceReuse==0&&vb.discards>=200*bytes/Ring::ringCapacity(bytes)-1&&vb.discards<=vb.wraps&&sim.liveQueries==0);release(vb);
+    resetSim();sim.failQueries=true;Stream vb;vb.align=16;const UINT bytes=300*KiB;
+    for(unsigned f=0;f<200;++f){sim.frame=long(f);upload(vb,bytes,f);verifyFlight(vb);endOfFrame(vb);}
+    CHECK(vb.fenceReuse==0&&vb.discards>=200*bytes/Ring::ringCapacity(bytes)-1&&vb.discards<=vb.wraps&&sim.liveQueries==0&&sim.issued==0);release(vb);
     std::puts("PASS failed queries: spans stay pending, every wrap DISCARDs, no write over an in-flight region");
+}
+// ONE CreateQuery+Issue per frame regardless of the placements, none on frames without any, and a span of the current frame is never done
+// before endFrame issued the fence (the later frames see it complete only after its latency).
+static void frameFence(){
+    resetSim();Ring::Ring a,b;auto& h=fence();Ring::reset(a,4*MiB,h);Ring::reset(b,4*MiB,h);
+    for(int f=0;f<6;++f){
+        sim.frame=f;sim.frameLatency=1;const long created=sim.created,issued=sim.issued;
+        if(f%2==0){ // placements on both rings, many per frame, a touch as well
+            for(int i=0;i<7;++i){Ring::place(a,4*KiB,16,h);Ring::place(b,8*KiB,16,h);}
+            Ring::touch(b,h);
+            CHECK(sim.created==created+1&&sim.issued==issued);          // one lazily created query, nothing issued mid-frame
+            for(const auto& s:a.spans)CHECK(s.query&&!h.done(s.query)); // pending within the frame, even when the fake GPU is idle
+            for(const auto& s:b.spans)CHECK(s.query&&!h.done(s.query));
+            Ring::place(a,4*KiB,16,h);CHECK(!a.spans.empty()&&sim.created==created+1&&a.spans.size()==1); // same fence and contiguous: one span
+            h.endFrame();CHECK(sim.created==created+1&&sim.issued==issued+1);
+        }else{h.endFrame();CHECK(sim.created==created&&sim.issued==issued);} // no placement: no query, no Issue
+    }
+    // The spans of frame 4 (issued at its end, latency 1) are done at frame 6 but not at frame 5.
+    sim.frame=5;CHECK(!h.done(a.spans.back().query));sim.frame=6;CHECK(h.done(a.spans.back().query));
+    Ring::reset(a,0,h);Ring::reset(b,0,h);gFence.drop();CHECK(sim.liveQueries==0);
+    // A failed CreateQuery: spans are pending forever, and retried creation is not attempted twice within a frame.
+    resetSim();sim.failQueries=true;Ring::Ring c;Ring::reset(c,MiB,h);Ring::place(c,KiB,16,h);Ring::place(c,KiB,16,h);
+    CHECK(sim.created==0&&c.spans.size()>=1&&!c.spans.back().query);h.endFrame();Ring::reset(c,0,h);
+    std::puts("PASS frame fence: one CreateQuery and one Issue per frame with placements, none otherwise, same-frame spans never done");
+}
+// The live terrain IB is drawn again on reuse frames without a place(): touch() re-tags its newest span with the current frame's fence, so a later
+// place() that wraps onto it cannot NOOVERWRITE a slice whose draws of the last reuse frame are still in flight. Without the touch it does.
+static bool liveReuseViolates(bool useTouch,int late){
+    resetSim();sim.fixedLatency=late;auto& h=fence();Ring::Ring r;Ring::reset(r,MiB,h);const UINT bytes=600*KiB;
+    long lastDrawn=-1;UINT drawnOffset=0;bool violated=false,discarded=false;
+    for(long f=0;f<5;++f){sim.frame=f;sim.frameLatency=late;
+        if(f==0||f==4){ // a new upload: frame 0 the first lists, frame 4 the terrain changed after three reuse frames (the second place() wraps)
+            const auto slot=Ring::place(r,bytes,4,h);discarded=slot.discarded;
+            if(slot.flags==DWORD(D3DLOCK_NOOVERWRITE)&&lastDrawn>=0&&slot.offset<drawnOffset+bytes&&drawnOffset<slot.offset+bytes&&lastDrawn+1+late>f)violated=true; // overwrote a slice an unfinished frame still reads
+            drawnOffset=slot.offset;
+        }else if(useTouch)Ring::touch(r,h); // a reuse frame (the production uploadLiveTerrain reuse path)
+        lastDrawn=f;                          // the slice is drawn in every frame
+        fence().endFrame();
+    }
+    if(useTouch&&late>0)CHECK(discarded); // the touched span is pending: the wrap falls back to DISCARD (a rename), never NOOVERWRITE
+    Ring::reset(r,0,h);gFence.drop();CHECK(sim.liveQueries==0);return violated;
+}
+static void liveReuse(){
+    for(int late:{1,2,3}){CHECK(!liveReuseViolates(true,late));CHECK(liveReuseViolates(false,late));} // without the touch the f0 fence is done while f3 still reads
+    CHECK(!liveReuseViolates(true,0)&&!liveReuseViolates(false,0));
+    std::puts("PASS live IB: a reuse frame keeps the span pending (touch), no NOOVERWRITE over a slice drawn that frame or still in flight");
 }
 int main(int argc,char** argv){
     readBackFlags();majors();
     longRun(argc>1?unsigned(std::atoi(argv[1])):2000);
-    steadyStates(argc>2?unsigned(std::atoi(argv[2])):500);failedQueries();
+    steadyStates(argc>2?unsigned(std::atoi(argv[2])):500);failedQueries();frameFence();liveReuse();
     std::puts("dxvk3 lock flags: read-back gate, version parse, fence-checked rings vs the DXVK 3.1.1 lock model passed");
 }

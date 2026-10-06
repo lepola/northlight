@@ -39,6 +39,14 @@ checks={
     and 'liveIndexBase=0;' in release and 'NorthlightDynamicRing::reset(liveIndexRing,0,' in release,
  'every other write of liveIndexBase is a reset to 0 (releaseGPU, recreate, S_FALSE, growth refusal)':
     w.count('liveIndexBase=')==6 and w.count('liveIndexBase=0;')==5, # the member, recreateLiveIndices, S_FALSE, growth refusal, releaseGPU; the one non-zero write is the slot
+ '0.3.192 frame fence: one member, endFrame() first in WorldRenderer::endFrame, drop() in the release paths, touch() on the reuse path and at both live IB draw sites':
+    w.count('NorthlightDynamicRing::FrameFence frameFence;')==1 and w.count('DeviceQueries')==0
+    and 'void endFrame(bool retainPool=true){\n        flushDeferredLogs(); /* 0.3.176 (U0/S0): after every bucketed span of the frame */\n        frameFence.endFrame();' in w
+    and 'queries.drop();' in release and w.count('queries.drop();')==2
+    and 'if(reuse){terrainUploadReused=true;if(liveTerrainIndexCount||liveDirectionalIndexCount)NorthlightDynamicRing::touch(liveIndexRing,fence());return true;}' in up
+    and w.count('NorthlightDynamicRing::touch(')==2 and pr.count('NorthlightDynamicRing::touch(liveIndexRing,fence());')==1
+    and 'd->SetIndices(liveIndicesGPU);NorthlightDynamicRing::touch(liveIndexRing,fence());' in w
+    and 'void reset(){' in w and 'cascadeAnchor.reset();endFrame();' in w,
  'bitmap filled from the committed set at the swap, dropped with the set':'std::swap(fixedTerrain,committedFixed);std::swap(uploadedStaticOwners,committedOwners);fixedTerrainBits.assign(fixedTerrain.get());' in w
     and 'fixedTerrain.reset();fixedTerrainBits.reset();' in release and w.count('fixedTerrainBits.assign(')==1,
  'bitmap only for the set it describes, the set otherwise':'const auto& fixed=fixedTerrainChunks();const bool bits=fixedTerrainBits.source()==&fixed;' in up

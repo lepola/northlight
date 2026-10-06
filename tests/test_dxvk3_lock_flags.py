@@ -17,11 +17,11 @@ constexpr HRESULT S_OK=0,S_FALSE=1;
 inline bool FAILED(HRESULT h){return h<0;}
 constexpr DWORD D3DLOCK_READONLY=0x10,D3DLOCK_NOOVERWRITE=0x1000,D3DLOCK_DISCARD=0x2000,D3DISSUE_END=1;
 enum D3DQUERYTYPE{D3DQUERYTYPE_EVENT=8};
-struct IDirect3DQuery9{virtual HRESULT Issue(DWORD)=0;virtual HRESULT GetData(void*,DWORD,DWORD)=0;virtual unsigned long Release()=0;};
+struct IDirect3DQuery9{virtual HRESULT Issue(DWORD)=0;virtual HRESULT GetData(void*,DWORD,DWORD)=0;virtual unsigned long AddRef()=0;virtual unsigned long Release()=0;};
 struct IDirect3DDevice9{virtual HRESULT CreateQuery(D3DQUERYTYPE,IDirect3DQuery9**)=0;};
 '''
 # The sources under test are the production headers, not copies.
-for name,needle in [('upload_lock.h','inline DWORD readBackLock()'),('dynamic_ring.h','inline UINT ringCapacity('),('backend_policy.h','inline int dxvkMajor(')]:
+for name,needle in [('upload_lock.h','inline DWORD readBackLock()'),('dynamic_ring.h','inline UINT ringCapacity('),('dynamic_ring.h','struct FrameFence'),('backend_policy.h','inline int dxvkMajor(')]:
     assert needle in fp.src(name).read_text(),f'{name}: {needle} moved'
 with tempfile.TemporaryDirectory(prefix='northlight-dxvk3-lock-') as tmp:
     tmp=Path(tmp);(tmp/'d3d9.h').write_text(STUB)

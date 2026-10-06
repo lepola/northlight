@@ -14,7 +14,7 @@ using Counter=std::atomic<std::uint64_t>;
 struct State {
     Counter frameSite[SiteCount],frameStaging;                 // since the last endFrame()
     Counter ringWraps,ringFenceReuse,ringDiscards,ringShrinks,processVertices; // interval
-    Counter readLocks,readBytes,readClass[3];                  // interval
+    Counter readLocks,readBytes,readClass[3],readClassBytes[3];                  // interval
     Counter frames,discardSum,discardMax,stagingSum,stagingMax,over10MiB,siteSum[SiteCount]; // interval roll-up
     std::atomic<bool> processVerticesSeen;
 };
@@ -29,7 +29,10 @@ inline void ringShrink(){state().ringShrinks.fetch_add(1,std::memory_order_relax
 // Returns true on the very first call (the caller logs the one-time warning when the read-back flag is on).
 inline bool processVertices(){auto& s=state();s.processVertices.fetch_add(1,std::memory_order_relaxed);return !s.processVerticesSeen.exchange(true,std::memory_order_relaxed);}
 inline void readBack(ReadClass cls,std::uint64_t bytes){auto& s=state();s.readLocks.fetch_add(1,std::memory_order_relaxed);
-    s.readBytes.fetch_add(bytes,std::memory_order_relaxed);s.readClass[cls].fetch_add(1,std::memory_order_relaxed);}
+    s.readBytes.fetch_add(bytes,std::memory_order_relaxed);s.readClass[cls].fetch_add(1,std::memory_order_relaxed);s.readClassBytes[cls].fetch_add(bytes,std::memory_order_relaxed);
+    // On DXVK 3.x the Unlock of a BUFFER-mode (DEFAULT, non-DYNAMIC) buffer copies the locked range through staging, so these bytes
+    // feed the same throttle as an upload. The class is known only with Diagnostics=1 (lock_meter_readback.h), the only time the tally is read.
+    if(cls==ReadDefaultStatic)s.frameStaging.fetch_add(bytes,std::memory_order_relaxed);}
 // Classification (dynamic / defaultStatic / other) of the read-back sites: lock_meter_readback.h.
 inline ReadClass classify(unsigned usage,unsigned pool){return pool!=0/*D3DPOOL_DEFAULT*/?ReadOther:(usage&0x200/*D3DUSAGE_DYNAMIC*/)?ReadDynamic:ReadDefaultStatic;}
 inline void raiseMax(Counter& c,std::uint64_t v){std::uint64_t cur=c.load(std::memory_order_relaxed);while(v>cur&&!c.compare_exchange_weak(cur,v,std::memory_order_relaxed)){}}
@@ -44,7 +47,7 @@ inline void endFrame(){
 struct Snapshot {
     std::uint64_t frames=0,discardSum=0,discardMax=0,stagingSum=0,stagingMax=0,over10MiB=0,site[SiteCount]={};
     std::uint64_t ringWraps=0,ringFenceReuse=0,ringDiscards=0,ringShrinks=0,processVertices=0;
-    std::uint64_t readLocks=0,readBytes=0,readClass[3]={};
+    std::uint64_t readLocks=0,readBytes=0,readClass[3]={},readClassBytes[3]={};
 };
 // Returns the interval since the previous call and starts the next one.
 inline Snapshot takeInterval(){
@@ -52,7 +55,7 @@ inline Snapshot takeInterval(){
     r.frames=take(s.frames);r.discardSum=take(s.discardSum);r.discardMax=take(s.discardMax);r.stagingSum=take(s.stagingSum);r.stagingMax=take(s.stagingMax);r.over10MiB=take(s.over10MiB);
     for(int i=0;i<SiteCount;++i)r.site[i]=take(s.siteSum[i]);
     r.ringWraps=take(s.ringWraps);r.ringFenceReuse=take(s.ringFenceReuse);r.ringDiscards=take(s.ringDiscards);r.ringShrinks=take(s.ringShrinks);r.processVertices=take(s.processVertices);
-    r.readLocks=take(s.readLocks);r.readBytes=take(s.readBytes);for(int i=0;i<3;++i)r.readClass[i]=take(s.readClass[i]);
+    r.readLocks=take(s.readLocks);r.readBytes=take(s.readBytes);for(int i=0;i<3;++i){r.readClass[i]=take(s.readClass[i]);r.readClassBytes[i]=take(s.readClassBytes[i]);}
     return r;
 }
 }
