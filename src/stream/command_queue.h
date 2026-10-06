@@ -37,7 +37,14 @@ constexpr std::size_t MaxInlinePayload=ChunkBytes/4;   // larger payloads travel
 // the very worst, ~20-30 MiB typically) and the idle pools are kept small (kPoolMaxChunks, kMaxPooledBlockBytes, PoolTuner).
 constexpr std::size_t BudgetBytes=std::size_t(16)<<20;
 constexpr std::size_t TextureShadowBudgetBytes=std::size_t(16)<<20;   // per-level texture shadows; halved under pressure; evictable (LRU)
-constexpr std::size_t ShadowBudgetBytes=std::size_t(16)<<20;   // CPU shadows of DYNAMIC buffers; halved under pressure; dropped when idle under pressure
+// 0.3.192 (CS): CPU shadows of buffers (DYNAMIC and re-locked non-DYNAMIC ones; evictable LRU, never while locked). The cap is ADAPTIVE: ShadowBudgetBytes is
+// the base/start value; it grows by kShadowGrowStep (up to kShadowBudgetMaxBytes) only when the shadows thrash AND there is no memory pressure: the LRU had
+// to evict a HOT shadow (locked within kShadowHotFrames Presents) or a re-lock found no victim at all. At most one step per kShadowGrowFrames Presents
+// (and none in the first interval). Under pressure the cap never grows, is halved (the pressure path evicts LRU down to it) and the adaptive part is
+// forgotten (back to the base); after the pressure it can grow again only by the thrash rule. Growth is game-thread; the cap is read by any thread.
+constexpr std::size_t ShadowBudgetBytes=std::size_t(16)<<20;
+constexpr std::size_t kShadowBudgetMaxBytes=std::size_t(32)<<20,kShadowGrowStep=std::size_t(4)<<20;
+constexpr std::uint64_t kShadowHotFrames=60,kShadowGrowFrames=60;
 constexpr std::size_t kPoolMaxChunks=4,kReserveChunks=2;   // idle chunks kept at most / after a quiet window
 constexpr std::uint32_t kAutoPublishCommands=64,kAutoPublishBytes=64u<<10;
 constexpr std::uint32_t kNoPayload=0xFFFFFFFFu;   // a nullable pointer's offset in a generated Args struct
@@ -83,6 +90,7 @@ class Queue {
     // Rarely written flags (sleeping_ only when the consumer goes idle).
     alignas(kLine) std::atomic<bool> sleeping_{false};
     std::atomic<bool> interrupted_{false},bpWaiting_{false},pressure_{false};
+    std::atomic<std::size_t> shadowCapCur_{ShadowBudgetBytes};std::uint64_t shadowGrowAt_=kShadowGrowFrames;   // adaptive buffer-shadow cap; first frame it may grow
     std::size_t budget_;
     Event consumerEv_{false},progress_{false};
     std::mutex pool_;std::vector<Chunk*> freeChunks_;std::vector<Block*> freeBlocks_[kBlockClasses];std::size_t pooledBlockBytes_=0;
@@ -268,9 +276,15 @@ public:
     }
     // Registered CPU shadow bytes: their own cap (shadowAdmit), not part of the queue budget.
     void addShadowBytes(std::int64_t delta){stats.shadowBytes.fetch_add(delta,std::memory_order_relaxed);}
-    void addStaticShadowBytes(std::int64_t delta){stats.stShadowBytes.fetch_add(delta,std::memory_order_relaxed);}
-    std::size_t shadowCap()const{return pressure_.load()?ShadowBudgetBytes/2:ShadowBudgetBytes;}
-    // A new shadow of `bytes` fits the cap now (live shadows are never evicted, a new one is simply refused).
+    std::size_t shadowCap()const{const std::size_t c=shadowCapCur_.load(std::memory_order_relaxed);return pressure_.load()?c/2:c;}   // adaptive (see ShadowBudgetBytes), halved under pressure
+    // Thrash signal (game thread, `frame` = Presents so far): one more step, if no pressure, below the maximum and past the interval. true = grew.
+    bool growShadowCap(std::uint64_t frame){
+        const std::size_t c=shadowCapCur_.load(std::memory_order_relaxed);
+        if(pressure_.load()||c+kShadowGrowStep>kShadowBudgetMaxBytes||frame<shadowGrowAt_)return false;
+        shadowCapCur_.store(c+kShadowGrowStep,std::memory_order_relaxed);shadowGrowAt_=frame+kShadowGrowFrames;add(stats.shadowCapGrows);return true;
+    }
+    void resetShadowCap(std::uint64_t frame){shadowCapCur_.store(ShadowBudgetBytes,std::memory_order_relaxed);shadowGrowAt_=frame+kShadowGrowFrames;}   // pressure: the adaptive part goes
+    // A new shadow of `bytes` fits the cap now (shadowAdmit; making room by evicting is the game thread's job, see makeRoomForBufferShadow).
     void addTexShadowBytes(std::int64_t delta){stats.texShadowBytes.fetch_add(delta,std::memory_order_relaxed);}
     std::size_t texShadowCap()const{return pressure_.load()?TextureShadowBudgetBytes/2:TextureShadowBudgetBytes;}
     bool texShadowAdmit(std::size_t bytes)const{const auto s=stats.texShadowBytes.load(std::memory_order_relaxed);return (s>0?std::size_t(s):0)+bytes<=texShadowCap();}
