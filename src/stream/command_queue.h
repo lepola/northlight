@@ -11,8 +11,8 @@
 // commands or 64 KiB, and a chunk switch publishes the closed chunk. Callers publish explicitly at BeginScene/EndScene/
 // Clear/SetRenderTarget, sync points, Present, and on every GetData / locally answered Get (no spin loop may starve).
 //
-// Threading: producer methods from one thread only (the game thread; rare foreign threads are serialized by the record
-// gate above this layer); consumer methods from one thread only (the replay thread). Counters and pressure are any-thread.
+// Threading: producer methods from one thread only (the game thread; there is no record gate: a call from any other thread
+// is a caller bug, counted only for the cursor calls); consumer methods from one thread only (the replay thread). Counters and pressure are any-thread.
 #include <atomic>
 #include <cassert>
 #include <cstddef>
@@ -32,9 +32,9 @@ static_assert(sizeof(CommandHeader)==8,"header is 8 bytes");
 
 constexpr std::size_t ChunkBytes=std::size_t(1)<<20;
 constexpr std::size_t MaxInlinePayload=ChunkBytes/4;   // larger payloads travel in a Block
-// 0.3.193 (CS): the stream's own memory shares a 32-bit address space with the game and the world renderer, which stalled for lack of a
-// contiguous block while the stream held ~100 MiB. Real sessions peak at ~12 MiB of queue; every cap is now 16 MiB (all four together ~64 MiB at
-// the very worst, ~20-30 MiB typically) and the idle pools are kept small (kPoolMaxChunks, kMaxPooledBlockBytes, PoolTuner).
+// 0.3.192 (CS): the stream's own memory shares a 32-bit address space with the game and the world renderer, which stalled for lack of a
+// contiguous block while the stream held ~100 MiB. Real sessions peak at ~12 MiB of queue; every cap is now 16 MiB (queue, texture shadows, buffer shadows, large allowance; worst case ~64 MiB
+// plus the replay-side copies' own 16+16 MiB, see replay_copies.h; ~20-30 MiB typically) and the idle pools are kept small (kPoolMaxChunks, kMaxPooledBlockBytes, PoolTuner).
 constexpr std::size_t BudgetBytes=std::size_t(16)<<20;
 constexpr std::size_t TextureShadowBudgetBytes=std::size_t(16)<<20;   // per-level texture shadows; halved under pressure; evictable (LRU)
 // 0.3.192 (CS): CPU shadows of buffers (DYNAMIC and re-locked non-DYNAMIC ones; evictable LRU, never while locked). The cap is ADAPTIVE: ShadowBudgetBytes is
@@ -79,7 +79,7 @@ class Queue {
     static constexpr unsigned kMinBlockShift=12,kMaxBlockShift=27,kBlockClasses=kMaxBlockShift-kMinBlockShift+1;
     static constexpr std::size_t kMaxPooledBlockBytes=std::size_t(4)<<20;
 
-    // 0.3.193 (CS): every group on its own cache line (kLine=128: Apple Silicon's line; x86's 64 divides it). The producer's private
+    // 0.3.192 (CS): every group on its own cache line (kLine=128: Apple Silicon's line; x86's 64 divides it). The producer's private
     // fields change on every command, the consumer's on every retire, recorded_/replayed_ are each written by one side and read by the
     // other; sharing a line made each side's store evict the other's. The rarely written flags share one line.
     // Producer-private.
@@ -256,7 +256,8 @@ public:
     // exceeds the budget, or still does not fit once the consumer has drained: the caller takes the sync pass-through.
     Block* tryAllocBlock(std::size_t bytes){
         const unsigned k=blockClass(bytes?bytes:1);
-        if(k>=kBlockClasses||(std::size_t(1)<<(k+kMinBlockShift))>budget()){own(stats.blockRefused);return nullptr;}
+        // The open write chunk is always in flight (inflight() counts it): a class that cannot fit beside it never fits, so refuse now instead of draining the whole queue first.
+        if(k>=kBlockClasses||(std::size_t(1)<<(k+kMinBlockShift))+ChunkBytes>budget()){own(stats.blockRefused);return nullptr;}
         const std::size_t cap=std::size_t(1)<<(k+kMinBlockShift);
         backpressure(cap);
         if(over(cap)){own(stats.blockRefused);return nullptr;}

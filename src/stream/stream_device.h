@@ -121,10 +121,15 @@ public:
     //  * terrainShadowDraw swaps the pixel shader around one draw and sets the original back at once (renderer.cpp:669).
     //  * Device::SetStreamSource forwards the game's call; the remaining ext->Set* sites are the passes above.
     //  * The WoW engine itself caches state and only sets changes, so the mod already has to restore everything for the direct path.
+    // In the default configuration (Diagnostics=0) filter correctness rests on this SavedState audit alone: the sync-only audit below runs only
+    // with Diagnostics=1 (replay_thread.h, at Present).
     // Safety net: the Diagnostics audit at Present compares the last game-set render/sampler/stage values with the Target; a mismatch sets the
     // slot's sync-only bit, and a sync-only slot is never filtered. Anything that changes device state behind the stream's back must either
     // run inside a SavedState scope or call core.replayFailure.store(true) (which drops every fromSet bit through invalidate()).
-    bool filterOn()const{return kFilterRedundantState&&filter&&!recording;}
+    // 0.3.192 (CS): a replay failure (a setter the Target rejected) leaves the real device state unknown: the flag is consumed where filtering is
+    // decided (one relaxed load per Set), not only at a Get, so a game that never Gets still records the next identical Set. Present consumes it too.
+    void takeReplayFailure(){if(core.replayFailure.load(std::memory_order_relaxed)&&core.replayFailure.exchange(false)){st.invalidate();add(core.q.stats.replayFailures);}}
+    bool filterOn(){takeReplayFailure();return kFilterRedundantState&&filter&&!recording;}
     bool filtered(){own(core.q.stats.filteredCalls);return true;}
     template<Cmd C,class... A> bool redundant(CmdTag<C>,A&&...){return false;}
     bool redundant(CmdTag<Cmd::Device_SetRenderState>,D3DRENDERSTATETYPE s,DWORD v){
@@ -224,7 +229,7 @@ public:
     // commands unpublished for long (GetData publishes on every call). The failure flag is read before the (locked) exchange.
     bool begin(){
         if((++getsSincePublish&7)==0)streamQueue().publish();
-        if(core.replayFailure.load(std::memory_order_relaxed)&&core.replayFailure.exchange(false)){st.invalidate();add(core.q.stats.replayFailures);}
+        takeReplayFailure();
         return true;}
     bool hit(){own(core.q.stats.stateAnswered);return true;}
     template<class I> static void give(ProxyBase* p,I** out){if(!p){*out=nullptr;return;}p->comAddRef();*out=static_cast<I*>(p->unk);}
@@ -337,7 +342,7 @@ public:
             const std::uint64_t now=nowNs();auto& st2=q.stats;
             if(frameEnd){own(st2.gameNs,now-frameEnd);own(st2.gameWaitNs,get(st2.syncNs)+get(st2.backpressureNs)-waitsAtFrameEnd);own(st2.gameFrames);}
         }
-        policy.onPresent();
+        policy.onPresent();takeReplayFailure();
         UINT dirtyBytes=0;
         if(dirty){dirtyBytes=dirty->rdh.dwSize+dirty->rdh.nCount*UINT(sizeof(RECT));if(sizeof(PresentArgs)+dirtyBytes>MaxInlinePayload)dirtyBytes=0;}
         auto* a=static_cast<PresentArgs*>(q.reserve((std::uint16_t)(swap?Cmd::SwapPresent:Cmd::Present),std::uint32_t(sizeof(PresentArgs)+dirtyBytes)));
@@ -566,7 +571,7 @@ private:
     // locked first, never one that is locked), and drop buffer shadows idle for 120 frames (then the least recent while over the cap).
     // Everything here is game-thread or pool-locked state: nothing the replay thread may read.
     void releaseUnderPressure(){
-        core.q.trim();core.q.resetShadowCap(core.frameNo);makeRoomForShadow(core,0,true,nullptr);dropIdleBufferShadows(core,120);   // (the adaptive buffer-shadow cap goes back to its base first; both kinds of buffer shadow go LRU)
+        core.q.trim();core.scratch.trim();core.q.resetShadowCap(core.frameNo);makeRoomForShadow(core,0,true,nullptr);dropIdleBufferShadows(core,120);   // (the adaptive buffer-shadow cap goes back to its base first; both kinds of buffer shadow go LRU)
     }
     void finalRelease(){
         st.clear();sc0->comRelease();   // binds and the swap chain's own reference go; the Destroys run before the Target's release

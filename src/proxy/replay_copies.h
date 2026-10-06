@@ -7,6 +7,7 @@
 #include <unordered_map>
 #include <vector>
 #include "lock_meter.h"
+#include "unlock_source.h"
 /* 0.3.192 (CS): REPLAY-side CPU copies of game buffers. With the command stream active, geometry capture (draw_snapshot.h,
    geometry_capture.h, terrain_capture_bounds.h) reads these bytes instead of locking a DXVK buffer READONLY, so it no longer depends on how a
    DXVK version treats a read lock (3.x marks the range dirty, then Unlock stages + GPU-copies it; see upload_lock.h readBackLock()).
@@ -16,7 +17,8 @@
    through the tracked wrapper NorthlightTrackedBuffers::Buffer on the replay thread (Device::CreateVertexBuffer/CreateIndexBuffer wrap, the
    stream's inner object IS the wrapper): UnlockBuffer payloads (Lock, memcpy, Unlock), first-lock/DISCARD staging (same command), and
    pass-through locks (Lock .. game writes .. Unlock). At a write Lock the wrapper remembers (offset, size, pointer); at Unlock, before it
-   forwards, it copies that range out of the still-mapped pointer. ProcessVertices (the only GPU-side writer of a buffer) calls written(): the
+   forwards, it copies that range out of the still-mapped pointer, or, for the stream's own UnlockBuffer replay, out of the command's source bytes
+   (UnlockSourceScope, unlock_source.h: the mapped pointer may be uncached write-combined memory). ProcessVertices (the only GPU-side writer of a buffer) calls written(): the
    copy is dropped for good. Device Reset (invalidateAll) drops every copy. Nothing else writes a game buffer.
    While a write lock is outstanding (pending), a nested lock, or any lock, the copy is not served (the capture falls back to its lock).
    DISCARD: the new contents outside the written range are undefined in D3D9; the copy keeps the old bytes there. A real lock would return
@@ -135,7 +137,10 @@ inline void beforeUnlock(Slot& c,unsigned before){
     Store& s=store();std::lock_guard<std::mutex> g(s.m);
     if(c.state.load()!=Slot::Valid||!c.pending)return;   // a READONLY lock's Unlock: nothing was written
     if(before>1){detail::drop(s,c,detail::Why::Invalidate);return;}   // which lock does this Unlock close? unknown: drop
-    if(c.pEnd>c.pOff)std::memcpy(c.data.data()+c.pOff,c.pPtr,c.pEnd-c.pOff);
+    if(c.pEnd>c.pOff){   // the stream's own replayed write names its source bytes (cached memory, see unlock_source.h); a pass-through lock is read back from the mapped pointer
+        const UnlockSource& u=unlockSource;
+        const unsigned char* from=u.bytes&&u.off==c.pOff&&u.size==c.pEnd-c.pOff?u.bytes:c.pPtr;
+        std::memcpy(c.data.data()+c.pOff,from,c.pEnd-c.pOff);}
     c.pending=false;c.pPtr=nullptr;
 }
 // ---- reader side (replay_copy_reader.h) ----

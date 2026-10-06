@@ -14,7 +14,7 @@ inline void own(Counter& c,std::uint64_t n=1){c.store(c.load(std::memory_order_r
 inline void raiseMax(Counter& c,std::uint64_t v){auto o=c.load(std::memory_order_relaxed);while(v>o&&!c.compare_exchange_weak(o,v,std::memory_order_relaxed)){}}
 inline std::uint64_t get(const Counter& c){return c.load(std::memory_order_relaxed);}
 
-// 0.3.193 (CS): three groups on separate cache lines (kLine: 128 B covers Apple Silicon's 128 and x86's 64): the game thread's
+// 0.3.192 (CS): three groups on separate cache lines (kLine: 128 B covers Apple Silicon's 128 and x86's 64): the game thread's
 // counters, the replay thread's, and the few both threads write. A counter that one thread bumps per call used to share a line with
 // the other thread's, so every bump of one stole the line from the other. A counter belongs to the group of its HOT writer; the
 // rare cross-thread writers (add()) stay correct because add() is atomic.

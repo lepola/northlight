@@ -666,6 +666,10 @@ static void redundantFiltering(){
     IDirect3DStateBlock9* sb=nullptr;CHECK(d->CreateStateBlock((D3DSTATEBLOCKTYPE)1,&sb)==D3D_OK);
     d->SetRenderState((D3DRENDERSTATETYPE)20,2);sb->Apply();CHECK(recorded([&]{d->SetRenderState((D3DRENDERSTATETYPE)20,2);}));
     d->SetRenderState((D3DRENDERSTATETYPE)21,2);rig.core().replayFailure.store(true);DWORD gv=0;d->GetRenderState((D3DRENDERSTATETYPE)22,&gv);CHECK(recorded([&]{d->SetRenderState((D3DRENDERSTATETYPE)21,2);}));
+    // the same without any Get in between: the failure flag is consumed where filtering is decided
+    d->SetRenderState((D3DRENDERSTATETYPE)23,2);CHECK(!recorded([&]{d->SetRenderState((D3DRENDERSTATETYPE)23,2);})==kFilterRedundantState);
+    {const auto f0=get(q.stats.replayFailures);rig.core().replayFailure.store(true);CHECK(recorded([&]{d->SetRenderState((D3DRENDERSTATETYPE)23,2);})&&!rig.core().replayFailure.load()&&get(q.stats.replayFailures)==f0+1);}
+    d->SetRenderState((D3DRENDERSTATETYPE)24,2);rig.core().replayFailure.store(true);d->Present(nullptr,nullptr,nullptr,nullptr);CHECK(!rig.core().replayFailure.load()&&recorded([&]{d->SetRenderState((D3DRENDERSTATETYPE)24,2);}));   // Present consumes it too
     // a value learned by a sync Get is not a game Set
     d->GetRenderState((D3DRENDERSTATETYPE)30,&gv);CHECK(recorded([&]{d->SetRenderState((D3DRENDERSTATETYPE)30,gv);}));
     // a slot the audit declared sync-only is never filtered
@@ -953,7 +957,7 @@ static void directReplayRaw(){
     plain->Release();cube->Release();tex->Release();vb->Release();ib->Release();vs->Release();ps->Release();dc->Release();
     rig.finish();checkClean();
 }
-// 0.3.193 (CS): queue/counter layout. The producer's, the consumer's and the shared groups sit on distinct cache lines; a heap-allocated
+// 0.3.192 (CS): queue/counter layout. The producer's, the consumer's and the shared groups sit on distinct cache lines; a heap-allocated
 // core (StreamDevice::coreOwner) must come back aligned (C++17 aligned new).
 static void layoutIsolation(){
     static_assert(Queue::layoutIsolated(),"queue groups");
@@ -1009,9 +1013,54 @@ static void idlePollWakes(){
     gKnobs.holdQueries.store(false);DWORD d=0;int spins=0;while(qy->GetData(&d,4,0)==S_FALSE&&++spins<1000000)std::this_thread::yield();CHECK(spins<1000000);
     qy->Release();rig.finish();checkClean();
 }
+
+// 0.3.192 (CS) review fixes ------------------------------------------------------------------------------------------------------------------
+// A Block that cannot fit beside the open write chunk is refused up front: a 10 MiB unlock with the 16 MiB budget neither waits for a drain nor stalls the game thread.
+static void impossibleBlockIsRefusedAtOnce(){
+    gTrace.clear();Rig rig(true);auto& q=rig.core().q;auto& s=q.stats;IDirect3DDevice9* d=rig.dev;
+    const UINT len=10u<<20;IDirect3DVertexBuffer9* vb=nullptr;CHECK(d->CreateVertexBuffer(len,D3::kUsageDynamic,0,(D3DPOOL)0,&vb,nullptr)==D3D_OK&&vb);CHECK(shadowOn(vb));   // the large allowance
+    gKnobs.hold.store(true);d->BeginScene();for(int i=0;i<10;++i)d->SetRenderState((D3DRENDERSTATETYPE)(60+i),unsigned(i+1));   // the replay thread is stuck: the queue is not drained
+    const auto refused0=get(s.blockRefused),bp0=get(s.backpressureWaits);
+    CHECK(q.tryAllocBlock(len)==nullptr&&get(s.blockRefused)==refused0+1&&get(s.backpressureWaits)==bp0);   // would have waited for a drain that cannot come
+    gKnobs.hold.store(false);
+    void* p=nullptr;CHECK(vb->Lock(0,0,&p,D3::kLockDiscard)==D3D_OK);std::memset(p,0x6B,len);((unsigned char*)p)[len-1]=0x11;
+    CHECK(vb->Unlock()==D3D_OK);   // the 128 KiB inline pieces: no Block, no stall
+    CHECK(get(s.blockRefused)>=refused0+2&&get(s.backpressureWaits)==bp0);
+    rig.sync();{const unsigned char* c=targetBytes(vb);CHECK(c[0]==0x6B&&c[len/2]==0x6B&&c[len-1]==0x11);}
+    // the same for a big staged lock (a 9 MiB first write without a shadow): the budget refusal sends it to the synchronous pass-through, still without a backpressure wait
+    IDirect3DVertexBuffer9* st=nullptr;CHECK(d->CreateVertexBuffer(9u<<20,0,0,(D3DPOOL)0,&st,nullptr)==D3D_OK&&st);
+    CHECK(st->Lock(0,0,&p,0)==D3D_OK&&p&&get(s.passThrough[unsigned(PassReason::Budget)])>=1);std::memset(p,0x22,9u<<20);CHECK(st->Unlock()==D3D_OK);
+    CHECK(get(s.backpressureWaits)==bp0);rig.sync();CHECK(targetBytes(st)[(9u<<20)-1]==0x22);
+    vb->Release();st->Release();rig.finish();checkClean();
+}
+// Small staged locks (first write / DISCARD without a shadow) use the game-side scratch: no pooled Block (no cross-thread pool mutex), the bytes still arrive, an overrun
+// stays inside the allocation (ASan), and when every slot is taken (or the lock is large) the Block path takes over.
+static void smallStagedLocksUseScratch(){
+    gTrace.clear();Rig rig(true);auto& s=rig.core().q.stats;IDirect3DDevice9* d=rig.dev;
+    const auto blocks=[&]{return get(s.blockAllocs)+get(s.blockReuses);};
+    IDirect3DVertexBuffer9* a=nullptr;CHECK(d->CreateVertexBuffer(1u<<20,0,0,(D3DPOOL)0,&a,nullptr)==D3D_OK);   // no shadow: static, DEFAULT pool
+    const auto b0=blocks();void* p=nullptr;
+    CHECK(a->Lock(100,64,&p,0)==D3D_OK);CHECK(((unsigned char*)p)[0]==0&&((unsigned char*)p)[63]==0);std::memset(p,0x77,64+300);CHECK(a->Unlock()==D3D_OK);   // zeroed range, overrun tolerated
+    CHECK(blocks()==b0&&get(s.lockAsync)>=1);rig.sync();{const unsigned char* c=targetBytes(a);CHECK(c[99]==0&&c[100]==0x77&&c[163]==0x77&&c[164]==0);}
+    CHECK(a->Lock(0,64u<<10,&p,D3::kLockDiscard)==D3D_OK);std::memset(p,0x33,64u<<10);CHECK(a->Unlock()==D3D_OK);CHECK(blocks()==b0);   // the largest scratch lock: 64 KiB
+    CHECK(a->Lock(0,(64u<<10)+1,&p,D3::kLockDiscard)==D3D_OK);std::memset(p,0x44,(64u<<10)+1);CHECK(a->Unlock()==D3D_OK);CHECK(blocks()==b0+1);   // above: a pooled Block
+    rig.sync();{const unsigned char* c=targetBytes(a);CHECK(c[0]==0x44&&c[(64u<<10)]==0x44&&c[(64u<<10)+1]==0);}
+    // five buffers locked at the same time: four scratch slots, the fifth takes a Block
+    std::vector<IDirect3DVertexBuffer9*> v;const auto b1=blocks();
+    for(int i=0;i<5;++i){IDirect3DVertexBuffer9* b=nullptr;CHECK(d->CreateVertexBuffer(4096,0,0,(D3DPOOL)0,&b,nullptr)==D3D_OK);v.push_back(b);CHECK(b->Lock(0,32,&p,0)==D3D_OK);std::memset(p,0xA0+i,32);}
+    CHECK(blocks()==b1+1);for(auto* b:v)CHECK(b->Unlock()==D3D_OK);rig.sync();
+    for(int i=0;i<5;++i)CHECK(targetBytes(v[i])[31]==0xA0+i&&targetBytes(v[i])[32]==0);
+    // the slots came back: the next small lock needs no Block
+    CHECK(v[0]->Lock(0,32,&p,D3::kLockDiscard)==D3D_OK&&blocks()==b1+1);CHECK(v[0]->Unlock()==D3D_OK);
+    // a buffer released while locked gives its slot back
+    {IDirect3DVertexBuffer9* r=nullptr;CHECK(d->CreateVertexBuffer(256,0,0,(D3DPOOL)0,&r,nullptr)==D3D_OK);CHECK(r->Lock(0,16,&p,0)==D3D_OK);r->Release();rig.sync();}
+    for(int i=0;i<4;++i){CHECK(v[i]->Lock(0,16,&p,D3::kLockDiscard)==D3D_OK);}
+    CHECK(blocks()==b1+1);for(int i=0;i<4;++i)CHECK(v[i]->Unlock()==D3D_OK);
+    for(auto* b:v)b->Release();a->Release();rig.finish();checkClean();
+}
 static void streamTests(bool threadsOnly){
     layoutIsolation();replayTimingAccounting();diagnosticsOffSkipsAudit();idlePollWakes();
-    lifetimeAndIdentity();stateKnownUnknown();locksPreserveBytes();staticBufferShadows();dynamicBufferShadows();largeBufferAllowance();adaptiveShadowCap();shadowCap();queriesAndSyncCensus();resetAndShutdown();directReplayRaw();redundantFiltering();renderTargetResetsViewport();textureShadows();statsLine();childrenOutliveTheDevice();queryProbeAndDeadQuery();initFailureFallback();cursorHandling();nestedSyncInPump();upDrawsAndBackpressure();snapshotTriggers();snapshotPoolNotExhausted();memoryPressureRelease();
+    lifetimeAndIdentity();stateKnownUnknown();locksPreserveBytes();staticBufferShadows();dynamicBufferShadows();largeBufferAllowance();adaptiveShadowCap();shadowCap();queriesAndSyncCensus();resetAndShutdown();directReplayRaw();redundantFiltering();renderTargetResetsViewport();textureShadows();statsLine();childrenOutliveTheDevice();queryProbeAndDeadQuery();initFailureFallback();cursorHandling();nestedSyncInPump();upDrawsAndBackpressure();snapshotTriggers();snapshotPoolNotExhausted();memoryPressureRelease();impossibleBlockIsRefusedAtOnce();smallStagedLocksUseScratch();
     equivalence(20000,12345);equivalence(20000,987654321);
     (void)threadsOnly;
 }

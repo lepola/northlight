@@ -20,6 +20,7 @@
 #include "stream_state.h"
 #include "snapshot_store.h"
 #include "stream_hooks.h"
+#include "unlock_source.h"
 
 namespace NorthlightStream {
 // ---- implicit proxies: objects the game never created (back buffers, the default depth buffer, objects the mod bound) ----
@@ -137,7 +138,7 @@ public:
     std::function<void(const char*)> log;               // diagnostics line sink; may be empty
     bool (*diagnostics)()=nullptr;                      // Diagnostics on: the CSTREAM line and the sync-only audit (asked per frame)
     unsigned sampleEvery=600;
-    // 0.3.193 (CS): replay time is accounted by what it is NOT doing: idleNs is the time spent waiting for commands (written by the replay
+    // 0.3.192 (CS): replay time is accounted by what it is NOT doing: idleNs is the time spent waiting for commands (written by the replay
     // thread around its blocking wait only, no clock read per command). Busy = wall - idle; the CSTREAM line's replayBusyMs/frame is that
     // difference per window, so it now excludes the per-command timer overhead it used to include.
     std::atomic<std::uint64_t> idleNs{0};
@@ -159,7 +160,10 @@ public:
             th_=std::thread([this,cw,csr,&ready]{
                 applyFpu(cw,csr);if(threadStart)threadStart();replayTid.store(currentTid());
                 raisePriority();diag_=diagnostics&&diagnostics();
-                ready.store(1);loop();});
+                ready.store(1);loop();
+                // 0.3.192 (CS): the playback scope writes this thread's thread_local activeSnapshot and reads current_'s counters: it ends here, on the thread that began it,
+                // before stop() releases current_ to the pool (the destructor, on the game thread, must find nothing to run)
+                playback_.reset();});
             while(!ready.load())std::this_thread::yield();   // the handoff is complete before CreateDevice returns to the game
             return true;
         }catch(...){return false;}
@@ -288,6 +292,7 @@ private:
         const unsigned char* data=a->inlineData?reinterpret_cast<const unsigned char*>(a+1):Queue::blockOf(h)->data();
         if(!p->inner||p->dead.load()){add(core.q.stats.replayFailures);return;}
         void* dst=nullptr;const DWORD flags=a->flags&~D3::kLockReadOnly;
+        NorthlightReplayCopies::UnlockSourceScope source(data,a->off,a->size);   // the replay-side CPU copy is fed from these bytes, not read back from the mapped pointer
         const HRESULT hr=p->kind==Kind::VertexBuffer?static_cast<IDirect3DVertexBuffer9*>(p->inner)->Lock(a->off,a->size,&dst,flags):static_cast<IDirect3DIndexBuffer9*>(p->inner)->Lock(a->off,a->size,&dst,flags);
         if(FAILED(hr)||!dst){add(core.q.stats.replayFailures);return;}
         std::memcpy(dst,data,a->size);
