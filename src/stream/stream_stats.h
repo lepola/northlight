@@ -37,6 +37,9 @@ struct Counters {
     // Per-level texture shadows (own cap, outside the queue budget): locks served from a shadow, shadows made from a fresh
     // lock (nothing to read back) or from one synchronous readback, refusals by the cap.
     Counter texShadowEvicted{0},texShadowFreshUseful{0},texShadowHits{0},texShadowFresh{0},texShadowReadbacks{0},texShadowRefused{0},texShadowRefusedBytes{0};
+    // 0.3.192 (CS): evictable shadows of NON-DYNAMIC buffers (they share the buffer-shadow cap, see BufferState): locks served from one,
+    // shadows made from a fresh first write or from one synchronous readback, evictions, kept first writes locked again, refusals by the cap.
+    Counter stShadowHits{0},stShadowFresh{0},stShadowReadbacks{0},stShadowEvicted{0},stShadowFreshUseful{0},stShadowRefused{0},stShadowRefusedBytes{0};
     // The game thread's own time per frame (Present to Present, minus its sync and backpressure waits), in ns, and its frames.
     Counter gameNs{0},gameWaitNs{0},gameFrames{0};
     Counter filteredCalls{0};   // redundant Sets the game side did not record
@@ -49,7 +52,7 @@ struct Counters {
     // ---- Both threads write: memory in flight (chunks handed to the producer and not yet recycled, live blocks, registered shadows). ----
     alignas(kLine) Counter chunksLive{0};
     Counter blocksLive{0},blockBytes{0};
-    std::atomic<std::int64_t> shadowBytes{0},texShadowBytes{0};
+    std::atomic<std::int64_t> shadowBytes{0},texShadowBytes{0},stShadowBytes{0};   // stShadowBytes: the evictable non-DYNAMIC part of shadowBytes
 };
 static_assert(alignof(Counters)==kLine&&sizeof(Counters)%kLine==0,"Counters groups are line-aligned");
 static_assert(offsetof(Counters,commands)/kLine!=offsetof(Counters,consumerSleeps)/kLine&&offsetof(Counters,consumerSleeps)/kLine!=offsetof(Counters,chunksLive)/kLine,"counter groups on distinct lines");

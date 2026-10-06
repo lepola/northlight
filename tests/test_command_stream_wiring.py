@@ -47,6 +47,7 @@ checks['CreateDevice: any stream failure logs CSTREAM disabled and returns the D
 checks['the Device has no CommandStream branch (the stream sits in front of it)']=('commandStream' not in device.lower() and 'NorthlightStream::StreamDevice' not in device)
 checks['the owner handoff runs on the replay thread through the one Device method']=('options.threadStart=[target]{target->adoptOwnerThread();};' in r and r.count('void adoptOwnerThread(){mirrorState.gate.ownerTid=MirrorGuard::threadId();}')==1)
 checks['memory pressure reaches the stream only through the hook atomic']=('NorthlightStream::memoryPressure.store(memoryCaps==1' in r and 'inline std::atomic<bool> memoryPressure{false};' in hooks)
+checks['the stream\'s buffer read-backs use NorthlightUpload::readBackLock (NOOVERWRITE only on DXVK >= 3) and keep READONLY as the fallback']=('options.readBackLock=&NorthlightUpload::readBackLock;' in r and 'c.readBackLock?c.readBackLock():D3::kLockReadOnly' in ''.join(fp.src('stream_proxies.h').read_text().split()))
 for name,ok in checks.items():print(('PASS ' if ok else 'FAIL ')+name)
 assert all(checks.values())
 print('PASS command stream wiring: key, docs, banner, GATE fields, inert hooks, no DllMain thread')

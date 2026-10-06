@@ -97,14 +97,14 @@ static void locksPreserveBytes(){
         void* q=nullptr;CHECK(vb->Lock(1000,5000,&q,0)==D3D_OK&&vb->Unlock()==D3D_OK);CHECK(vb->Lock(1025,4,&q,0)==D3DERR_INVALIDCALL);CHECK(vb->Lock(1024,0,&q,0)==D3D_OK&&vb->Unlock()==D3D_OK);
     }
     vb->Release();
-    {   // a static buffer has no shadow: the first write lock is asynchronous, the second passes through
+    {   // a small static buffer keeps its first write as an evictable shadow (0.3.192 CS): the second lock is served from it, no pass-through
         IDirect3DVertexBuffer9* st=nullptr;CHECK(rig.dev->CreateVertexBuffer(256,0,0,(D3DPOOL)1,&st,nullptr)==D3D_OK);void* q=nullptr;
         const auto pass=get(s.passThrough[unsigned(PassReason::NoShadow)]);
         CHECK(st->Lock(0,0,&q,0)==D3D_OK&&st->Unlock()==D3D_OK&&get(s.passThrough[unsigned(PassReason::NoShadow)])==pass);
-        CHECK(st->Lock(0,0,&q,0)==D3D_OK&&st->Unlock()==D3D_OK&&get(s.passThrough[unsigned(PassReason::NoShadow)])==pass+1);
+        CHECK(st->Lock(0,0,&q,0)==D3D_OK&&st->Unlock()==D3D_OK&&get(s.passThrough[unsigned(PassReason::NoShadow)])==pass);
         st->Release();
     }
-    // a big static buffer has no shadow: the first write lock is asynchronous, later ones pass through
+    // a static buffer above kMaxStaticShadow has no shadow: the first write lock is asynchronous, later ones pass through
     IDirect3DVertexBuffer9* big=nullptr;CHECK(rig.dev->CreateVertexBuffer(5u<<20,0,0,(D3DPOOL)1,&big,nullptr)==D3D_OK);
     void* p=nullptr;const auto np0=get(s.passThrough[unsigned(PassReason::NoShadow)]);CHECK(big->Lock(0,4096,&p,0)==D3D_OK);std::memset(p,0x5A,4096);CHECK(big->Unlock()==D3D_OK&&get(s.passThrough[unsigned(PassReason::NoShadow)])==np0);
     CHECK(big->Lock(0,4096,&p,0)==D3D_OK&&p&&get(s.passThrough[unsigned(PassReason::NoShadow)])==np0+1);CHECK(((unsigned char*)p)[7]==0x5A);CHECK(big->Unlock()==D3D_OK);   // real memory, first write already there
@@ -132,6 +132,87 @@ static void locksPreserveBytes(){
     IDirect3DTexture9* unk=nullptr;CHECK(rig.dev->CreateTexture(8,8,1,0,(D3DFORMAT)999,(D3DPOOL)1,&unk,nullptr)==D3D_OK);   // unknown format: pass-through, counted
     CHECK(unk->LockRect(0,&lr,nullptr,0)==D3D_OK&&get(s.passThrough[unsigned(PassReason::Format)])==1);CHECK(unk->UnlockRect(0)==D3D_OK);unk->Release();
     rig.finish();checkClean();
+}
+
+// 0.3.192 (CS): re-locked NON-DYNAMIC buffers. A small fresh first write is kept as an evictable shadow; a larger or already written one is read back
+// ONCE (whole buffer, READONLY|NOOVERWRITE through Options::readBackLock) at its first re-lock; every later lock is served from the shadow and
+// its Unlock records only the locked range. Static shadows share the buffer cap (evicted LRU, never a locked one, DYNAMIC outranks them) and a
+// GPU write (ProcessVertices) drops them for good.
+static unsigned char* targetBytes(IDirect3DVertexBuffer9* b){return static_cast<TVertexBuffer*>(static_cast<IDirect3DVertexBuffer9*>(ProxyBase::of(b)->inner))->mem.data();}
+static bool lastReadBackUnlock(const char* tail){for(std::size_t i=gTrace.size();i-->0;)if(gTrace[i].rfind("VB::Unlock ",0)==0&&gTrace[i].size()>=3&&gTrace[i].compare(gTrace[i].size()-3,3," ro")==0)return gTrace[i].find(tail)!=std::string::npos;return false;}
+static void staticBufferShadows(){
+    gTrace.clear();StreamDevice::Options opt;opt.readBackLock=[]()->DWORD{return D3::kLockReadOnly|D3::kLockNoOverwrite;};
+    Rig rig(true,opt);auto& q=rig.core().q;auto& s=q.stats;IDirect3DDevice9* d=rig.dev;
+    const auto noshadow=[&]{return get(s.passThrough[unsigned(PassReason::NoShadow)]);};
+    {   // N re-locks of a written 1 MiB MANAGED buffer: exactly one synchronous readback, then none; partial writes keep the untouched bytes
+        IDirect3DVertexBuffer9* vb=nullptr;CHECK(d->CreateVertexBuffer(1u<<20,0,0,(D3DPOOL)1,&vb,nullptr)==D3D_OK);void* p=nullptr;
+        CHECK(vb->Lock(100,4096,&p,0)==D3D_OK);std::memset(p,0xA5,4096);CHECK(vb->Unlock()==D3D_OK);   // above kFreshShadowMax: staged, no shadow yet
+        auto& st=static_cast<StreamVertexBuffer*>(ProxyBase::of(vb))->buf;CHECK(!st.shadowOn&&get(s.stShadowFresh)==0);
+        rig.sync();const auto sync0=get(s.syncCalls),pass0=noshadow();
+        for(int i=0;i<6;++i){
+            CHECK(vb->Lock(8192+i*64,64,&p,0)==D3D_OK);std::memset(p,0xB0+i,64);CHECK(vb->Unlock()==D3D_OK);
+            if(i==0)CHECK(get(s.syncCalls)==sync0+1&&get(s.stShadowReadbacks)==1&&st.shadowOn&&st.isStatic);   // the one readback
+        }
+        CHECK(get(s.syncCalls)==sync0+1&&get(s.stShadowReadbacks)==1&&noshadow()==pass0&&get(s.stShadowHits)==6);   // then zero syncs
+        CHECK(lastReadBackUnlock(" 1048576 4096 ro"));   // whole buffer, READONLY|NOOVERWRITE
+        CHECK(vb->Lock(0,0,&p,D3::kLockReadOnly)==D3D_OK);   // READONLY: served from the shadow, no sync
+        {const unsigned char* c=(const unsigned char*)p;for(unsigned i=0;i<(1u<<20);++i){unsigned char want=0;if(i>=100&&i<4196)want=0xA5;else if(i>=8192&&i<8192+6*64)want=(unsigned char)(0xB0+(i-8192)/64);CHECK(c[i]==want);}}
+        CHECK(vb->Unlock()==D3D_OK&&get(s.syncCalls)==sync0+1&&get(s.passThrough[unsigned(PassReason::ReadOnly)])==0);
+        rig.sync();   // the Target holds exactly what the game saw
+        {const unsigned char* c=targetBytes(vb);for(unsigned i=0;i<(1u<<20);++i){unsigned char want=0;if(i>=100&&i<4196)want=0xA5;else if(i>=8192&&i<8192+6*64)want=(unsigned char)(0xB0+(i-8192)/64);CHECK(c[i]==want);}}
+        // a GPU write: the shadow goes for good, the buffer is real memory again
+        CHECK(d->ProcessVertices(0,0,1,vb,nullptr,0)==D3D_OK);CHECK(!st.shadowOn&&st.shadowDead&&s.stShadowBytes.load()==0);
+        const auto rb=get(s.stShadowReadbacks);CHECK(vb->Lock(0,16,&p,0)==D3D_OK&&noshadow()==pass0+1&&((unsigned char*)p)[100]==0xA5);CHECK(vb->Unlock()==D3D_OK);
+        CHECK(get(s.stShadowReadbacks)==rb);
+        vb->Release();rig.sync();
+    }
+    {   // a small fresh buffer keeps its first write (partial: the rest is zero like the real one); later locks never sync; an index buffer too
+        IDirect3DVertexBuffer9* vb=nullptr;CHECK(d->CreateVertexBuffer(1000,0,0,(D3DPOOL)0,&vb,nullptr)==D3D_OK);void* p=nullptr;
+        const auto fresh=get(s.stShadowFresh),sync0=get(s.syncCalls),rb=get(s.stShadowReadbacks);
+        CHECK(vb->Lock(10,20,&p,0)==D3D_OK&&get(s.stShadowFresh)==fresh+1);std::memset(p,0x61,20);CHECK(vb->Unlock()==D3D_OK);
+        CHECK(vb->Lock(30,10,&p,D3::kLockNoOverwrite)==D3D_OK);std::memset(p,0x62,10);CHECK(vb->Unlock()==D3D_OK);
+        CHECK(vb->Lock(0,0,&p,D3::kLockReadOnly)==D3D_OK);CHECK(((unsigned char*)p)[9]==0&&((unsigned char*)p)[10]==0x61&&((unsigned char*)p)[29]==0x61&&((unsigned char*)p)[30]==0x62&&((unsigned char*)p)[40]==0);CHECK(vb->Unlock()==D3D_OK);
+        CHECK(get(s.syncCalls)==sync0&&get(s.stShadowReadbacks)==rb&&get(s.stShadowFreshUseful)>=1);
+        rig.sync();{const unsigned char* c=targetBytes(vb);CHECK(c[9]==0&&c[10]==0x61&&c[29]==0x61&&c[30]==0x62&&c[40]==0);}
+        vb->Release();
+        IDirect3DIndexBuffer9* ib=nullptr;CHECK(d->CreateIndexBuffer(2u<<20,0,(D3DFORMAT)101,(D3DPOOL)0,&ib,nullptr)==D3D_OK);
+        CHECK(ib->Lock(0,64,&p,0)==D3D_OK&&ib->Unlock()==D3D_OK);const auto r0=get(s.stShadowReadbacks);   // 2 MiB: staged first
+        CHECK(ib->Lock(0,64,&p,0)==D3D_OK&&ib->Unlock()==D3D_OK&&get(s.stShadowReadbacks)==r0+1);
+        CHECK(ib->Lock(64,64,&p,0)==D3D_OK&&ib->Unlock()==D3D_OK&&get(s.stShadowReadbacks)==r0+1);ib->Release();rig.sync();
+    }
+    {   // the cap: 4 MiB shadows share the 16 MiB buffer cap; the LRU one goes, a locked one never; the evicted buffer reads back again; DYNAMIC outranks
+        const UINT sz=4u<<20;const int n=int(ShadowBudgetBytes/sz);std::vector<IDirect3DVertexBuffer9*> v;void* p=nullptr;
+        auto prime=[&](IDirect3DVertexBuffer9* b,unsigned char fill){CHECK(b->Lock(0,64,&p,0)==D3D_OK);std::memset(p,fill,64);CHECK(b->Unlock()==D3D_OK);CHECK(b->Lock(64,64,&p,0)==D3D_OK);std::memset(p,fill+1,64);CHECK(b->Unlock()==D3D_OK);};   // first staged, second the readback
+        auto shadowed=[&](int i){return static_cast<StreamVertexBuffer*>(ProxyBase::of(v[i]))->buf.shadowOn;};
+        const auto ev0=get(s.stShadowEvicted);
+        for(int i=0;i<n;++i){IDirect3DVertexBuffer9* b=nullptr;CHECK(d->CreateVertexBuffer(sz,0,0,(D3DPOOL)1,&b,nullptr)==D3D_OK);v.push_back(b);prime(b,0x10*(i+1));}
+        CHECK(s.stShadowBytes.load()==std::int64_t(n)*sz&&s.shadowBytes.load()==std::int64_t(n)*sz&&get(s.stShadowEvicted)==ev0);
+        void* held=nullptr;CHECK(v[0]->Lock(0,64,&held,0)==D3D_OK);   // v[0] locked...
+        for(int i=1;i<n;++i){CHECK(v[i]->Lock(0,16,&p,0)==D3D_OK&&v[i]->Unlock()==D3D_OK);}   // ...and the oldest: the others are all newer
+        {IDirect3DVertexBuffer9* b=nullptr;CHECK(d->CreateVertexBuffer(sz,0,0,(D3DPOOL)1,&b,nullptr)==D3D_OK);v.push_back(b);prime(b,0x70);}
+        CHECK(get(s.stShadowEvicted)==ev0+1&&shadowed(0)&&!shadowed(1)&&shadowed(n)&&s.shadowBytes.load()<=std::int64_t(ShadowBudgetBytes));   // v[1] (LRU unlocked) went; the locked v[0] stayed
+        std::memset(held,0x7E,64);CHECK(v[0]->Unlock()==D3D_OK);
+        const auto rb=get(s.stShadowReadbacks);   // the evicted buffer: readback again, bytes intact
+        CHECK(v[1]->Lock(0,0,&p,0)==D3D_OK&&get(s.stShadowReadbacks)==rb+1&&((unsigned char*)p)[0]==0x20&&((unsigned char*)p)[63]==0x20&&((unsigned char*)p)[64]==0x21&&((unsigned char*)p)[127]==0x21&&((unsigned char*)p)[128]==0);CHECK(v[1]->Unlock()==D3D_OK);
+        // memory pressure: the cap halves; static shadows are evicted down to it, the locked one is never touched
+        void* heldAgain=nullptr;CHECK(v[0]->Lock(0,64,&heldAgain,0)==D3D_OK);
+        rig.sync();rig.core().memoryPressure.store(true);d->Present(nullptr,nullptr,nullptr,nullptr);rig.sync();
+        CHECK(q.pressure()&&s.shadowBytes.load()<=std::int64_t(q.shadowCap())&&shadowed(0)&&((unsigned char*)heldAgain)[0]==0x7E);
+        CHECK(v[0]->Unlock()==D3D_OK);CHECK(v[0]->Lock(0,0,&p,D3::kLockReadOnly)==D3D_OK&&((unsigned char*)p)[0]==0x7E&&((unsigned char*)p)[64]==0x11);CHECK(v[0]->Unlock()==D3D_OK);
+        rig.core().memoryPressure.store(false);d->Present(nullptr,nullptr,nullptr,nullptr);rig.sync();CHECK(!q.pressure());
+        // DYNAMIC outranks static: the cap is full of static shadows, a new DYNAMIC buffer evicts one instead of being refused
+        for(int i=0;i<=n;++i){if(!shadowed(i)){CHECK(v[i]->Lock(0,16,&p,0)==D3D_OK&&v[i]->Unlock()==D3D_OK);}}   // refill (readbacks) up to the cap
+        const auto ev=get(s.stShadowEvicted),refused=get(s.shadowRefused);IDirect3DVertexBuffer9* dyn=nullptr;
+        CHECK(d->CreateVertexBuffer(sz,D3::kUsageDynamic,0,(D3DPOOL)0,&dyn,nullptr)==D3D_OK);
+        CHECK(static_cast<StreamVertexBuffer*>(ProxyBase::of(dyn))->buf.shadowOn&&get(s.shadowRefused)==refused&&get(s.stShadowEvicted)>ev&&s.shadowBytes.load()<=std::int64_t(ShadowBudgetBytes));
+        dyn->Release();for(auto* b:v)b->Release();rig.sync();CHECK(s.shadowBytes.load()==0&&s.stShadowBytes.load()==0);
+    }
+    rig.finish();checkClean();
+    {   // without the DXVK 3 hook the readback is plain READONLY
+        gTrace.clear();Rig r2(true);IDirect3DVertexBuffer9* vb=nullptr;void* p=nullptr;
+        CHECK(r2.dev->CreateVertexBuffer(1u<<20,0,0,(D3DPOOL)0,&vb,nullptr)==D3D_OK);CHECK(vb->Lock(0,64,&p,0)==D3D_OK&&vb->Unlock()==D3D_OK&&vb->Lock(64,64,&p,0)==D3D_OK&&vb->Unlock()==D3D_OK);
+        r2.sync();CHECK(get(r2.core().q.stats.stShadowReadbacks)==1&&lastReadBackUnlock(" 1048576 0 ro"));vb->Release();r2.finish();checkClean();
+    }
 }
 
 static void shadowCap(){
@@ -375,7 +456,7 @@ static void statsLine(){
     rig.sync();
     std::vector<std::string> lines;for(auto& l:gStatLines)if(l.find(" frames=600 ")!=std::string::npos)lines.push_back(l);   // the 600th replayed frame
     CHECK(lines.size()==1&&lines[0].rfind("CSTREAM cmds=",0)==0&&lines[0].find("passPerFrame=")!=std::string::npos&&lines[0].find("census[")!=std::string::npos&&lines[0].back()==']');
-    for(const char* field:{"game[per frame]: ms=","syncMs=","presentWaitMs=","bpMs=","sleeps=","publishes=","replayBusyMs/frame=","recorded=","answered=","texShadow=","readbacks=","memMB="})CHECK(lines[0].find(field)!=std::string::npos);   // per-window numbers
+    for(const char* field:{"game[per frame]: ms=","syncMs=","presentWaitMs=","bpMs=","sleeps=","publishes=","replayBusyMs/frame=","recorded=","answered=","texShadow=","readbacks=","bufStatic=","memMB="})CHECK(lines[0].find(field)!=std::string::npos);   // per-window numbers
     CHECK(lines[0].size()<1600);
     rig.finish();checkClean();
 }
@@ -785,7 +866,7 @@ static void idlePollWakes(){
 }
 static void streamTests(bool threadsOnly){
     layoutIsolation();replayTimingAccounting();diagnosticsOffSkipsAudit();idlePollWakes();
-    lifetimeAndIdentity();stateKnownUnknown();locksPreserveBytes();shadowCap();queriesAndSyncCensus();resetAndShutdown();directReplayRaw();redundantFiltering();renderTargetResetsViewport();textureShadows();statsLine();childrenOutliveTheDevice();queryProbeAndDeadQuery();initFailureFallback();cursorHandling();nestedSyncInPump();upDrawsAndBackpressure();snapshotTriggers();snapshotPoolNotExhausted();memoryPressureRelease();
+    lifetimeAndIdentity();stateKnownUnknown();locksPreserveBytes();staticBufferShadows();shadowCap();queriesAndSyncCensus();resetAndShutdown();directReplayRaw();redundantFiltering();renderTargetResetsViewport();textureShadows();statsLine();childrenOutliveTheDevice();queryProbeAndDeadQuery();initFailureFallback();cursorHandling();nestedSyncInPump();upDrawsAndBackpressure();snapshotTriggers();snapshotPoolNotExhausted();memoryPressureRelease();
     equivalence(20000,12345);equivalence(20000,987654321);
     (void)threadsOnly;
 }

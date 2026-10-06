@@ -268,6 +268,7 @@ public:
     }
     // Registered CPU shadow bytes: their own cap (shadowAdmit), not part of the queue budget.
     void addShadowBytes(std::int64_t delta){stats.shadowBytes.fetch_add(delta,std::memory_order_relaxed);}
+    void addStaticShadowBytes(std::int64_t delta){stats.stShadowBytes.fetch_add(delta,std::memory_order_relaxed);}
     std::size_t shadowCap()const{return pressure_.load()?ShadowBudgetBytes/2:ShadowBudgetBytes;}
     // A new shadow of `bytes` fits the cap now (live shadows are never evicted, a new one is simply refused).
     void addTexShadowBytes(std::int64_t delta){stats.texShadowBytes.fetch_add(delta,std::memory_order_relaxed);}

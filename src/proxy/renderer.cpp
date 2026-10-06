@@ -1212,6 +1212,7 @@ public:
         options.threadStart=[target]{target->adoptOwnerThread();};
         options.log=[](const char* line){logf("%s",line);};
         options.diagnostics=&NorthlightDiagnostics::enabled;
+        options.readBackLock=&NorthlightUpload::readBackLock;
         options.extension=target->extensionDevice();options.rawOf=[target](IUnknown* exposed,unsigned kind){return target->rawOfExposed(exposed,NorthlightStream::Kind(kind));};
         NorthlightStream::StreamDevice* stream=nullptr;
         const bool exclusiveOwner=target->setExclusiveOwner(true); /* before the replay thread exists: its calls take the cheap owner entry; a foreign call stays safe */

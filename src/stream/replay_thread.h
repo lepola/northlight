@@ -382,6 +382,8 @@ private:
         {const Memory m=memory();put(buf,n," memMB=%.1f(queue %.1f, bufShadow %.1f, texShadow %.1f, snapshots %.2f)",m.total()/1048576.0,m.queue/1048576.0,m.bufferShadows/1048576.0,m.textureShadows/1048576.0,m.snapshots/1048576.0);}
         put(buf,n," texShadow=%.1f/%.0fMB hits=%llu fresh=%llu readbacks=%llu evicted=%llu freshUseful=%llu refused=%llu/%.1fMB",double(std::max<std::int64_t>(0,s.texShadowBytes.load()))/1048576.0,double(core.q.texShadowCap())/1048576.0,
             (unsigned long long)get(s.texShadowHits),(unsigned long long)get(s.texShadowFresh),(unsigned long long)get(s.texShadowReadbacks),(unsigned long long)get(s.texShadowEvicted),(unsigned long long)get(s.texShadowFreshUseful),(unsigned long long)get(s.texShadowRefused),get(s.texShadowRefusedBytes)/1048576.0);
+        put(buf,n," bufStatic=%.1f/%.0fMB hits=%llu fresh=%llu readbacks=%llu evicted=%llu freshUseful=%llu refused=%llu/%.1fMB",double(std::max<std::int64_t>(0,s.stShadowBytes.load()))/1048576.0,double(core.q.shadowCap())/1048576.0,
+            (unsigned long long)get(s.stShadowHits),(unsigned long long)get(s.stShadowFresh),(unsigned long long)get(s.stShadowReadbacks),(unsigned long long)get(s.stShadowEvicted),(unsigned long long)get(s.stShadowFreshUseful),(unsigned long long)get(s.stShadowRefused),get(s.stShadowRefusedBytes)/1048576.0);
         put(buf,n," pass[");
         for(unsigned r=0;r<Counters::kPassReasons;++r)put(buf,n,"%s%s=%llu",r?",":"",passReasonName(r),(unsigned long long)get(s.passThrough[r]));
         put(buf,n,"] census[");

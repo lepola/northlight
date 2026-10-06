@@ -65,6 +65,7 @@ public:
         IDirect3DDevice9* extension=nullptr;std::function<IUnknown*(IUnknown*,unsigned)> rawOf;bool directReplay=true;
         const CursorApi* cursorApi=nullptr;                             // null: the real Win32 calls
         bool filterRedundant=true;                                      // see redundant(); off: every Set is recorded
+        DWORD (*readBackLock)()=nullptr;                                // NorthlightUpload::readBackLock in the DLL: READONLY, plus NOOVERWRITE on DXVK >= 3
         bool (*diagnostics)()=nullptr;                                  // NorthlightDiagnostics::enabled in the DLL
     };
     // Builds the stream around `target` (the Device). On success the replay thread owns the target; on failure nothing
@@ -532,7 +533,7 @@ private:
 
     StreamDevice(IDirect3DDevice9* target,IDirect3D9* par,const D3DPRESENT_PARAMETERS* p,Options opt)
         :coreOwner(new StreamCore(opt.budget)),core(*coreOwner),replayer(core),parent(par),capture(opt.capture){
-        core.target=target;core.game=this;core.logLine=nullptr;st.core=&core;
+        core.target=target;core.game=this;core.logLine=nullptr;core.readBackLock=opt.readBackLock;st.core=&core;
         if(opt.cursorApi)cursor=*opt.cursorApi;
         restoreOwner=opt.threadStart;replayer.threadStart=std::move(opt.threadStart);replayer.log=opt.log;replayer.diagnostics=opt.diagnostics;filter=opt.filterRedundant;
         if(kDirectReplay&&opt.directReplay&&opt.extension&&opt.rawOf){core.ext=opt.extension;auto f=opt.rawOf;core.reg.rawOf=[f](IUnknown* e,Kind k){return f(e,unsigned(k));};}
@@ -565,7 +566,7 @@ private:
     // locked first, never one that is locked), and drop buffer shadows idle for 120 frames (then the least recent while over the cap).
     // Everything here is game-thread or pool-locked state: nothing the replay thread may read.
     void releaseUnderPressure(){
-        core.q.trim();makeRoomForShadow(core,0,true,nullptr);dropIdleBufferShadows(core,120);
+        core.q.trim();makeRoomForShadow(core,0,true,nullptr);dropIdleBufferShadows(core,120);   // (the evictable static buffer shadows go with the idle drop and the cap loop, before any DYNAMIC one)
     }
     void finalRelease(){
         st.clear();sc0->comRelease();   // binds and the swap chain's own reference go; the Destroys run before the Target's release
@@ -595,7 +596,7 @@ private:
         case Kind::Texture:for(auto& s:static_cast<StreamTexture*>(p)->subs)markGpuWritten(core,s);break;
         case Kind::CubeTexture:for(auto& s:static_cast<StreamCubeTexture*>(p)->subs)markGpuWritten(core,s);break;
         case Kind::VolumeTexture:for(auto& s:static_cast<StreamVolumeTexture*>(p)->subs)markGpuWritten(core,s);break;
-        case Kind::VertexBuffer:dropShadow(*p,static_cast<StreamVertexBuffer*>(p)->buf);static_cast<StreamVertexBuffer*>(p)->buf.written=true;break;
+        case Kind::VertexBuffer:markBufferGpuWritten(*p,static_cast<StreamVertexBuffer*>(p)->buf);break;
         default:break;
         }
     }
