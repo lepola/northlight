@@ -417,16 +417,6 @@ class Installer:
             raise Refusal(f'Cannot write into {client}. Check the folder permissions.')
         return locale
 
-    def marker_matches_package(self, marker):
-        """The proxy honours the marker only when it names the sha256 of the current dxvk_d3d9.dll."""
-        manifest = read_json(self.pkg.root / 'payload-manifest.json') or []
-        current = next((e['sha256'] for e in manifest if e['path'] == INSTALL.DXVK), None)
-        try:
-            text = marker.read_text(encoding='utf-8', errors='replace')
-        except OSError:
-            return False
-        return current is not None and 'sha256=' + current in text
-
     def check_payload(self, backend='dxvk'):
         """The package's own files match its manifest (a damaged download is refused). The files of a DXVK
         backend other than the selected one may be missing or damaged (antivirus products remove DXVK builds):
@@ -730,20 +720,17 @@ class Installer:
     def plan_install(self, client, locale, cache, backend, art, world_cache):
         """Every check, read-only: returns what apply_install does. Raises Refusal."""
         self.say(f'Northlight renderer {self.pkg.version} installer; game folder: {client}')
-        explicit = backend is not None
         backend = INSTALL.resolve_backend(client, backend)   # called once; payload_plan takes the result
         locale = self.preflight(client, locale)
         self.check_payload(backend)
-        marker = INSTALL.safe_path(client, INSTALL.DXVK3_MARKER)
-        if self.platform == 'windows' and backend == 'dxvk' and not explicit and marker.is_file() and \
-                self.marker_matches_package(marker):
-            self.say('Note: DXVK 2.7.1 (dxvk2) is in use because DXVK 3 failed to start earlier. To try DXVK 3 again '
-                     'run Install.cmd --backend dxvk (or delete renderer-backends\\dxvk\\northlight-dxvk3-init.pending).')
-        elif self.platform == 'windows' and backend == 'dxvk':
-            if marker.is_file() and not explicit:   # written for another DXVK 3 build: the proxy ignores it
-                self.say('Note: this package has a new DXVK 3 build; it will be tried again at the next start.')
+        marker = INSTALL.safe_path(client, INSTALL.LEGACY_DXVK3_MARKER)   # a linked renderer-backends folder is refused here
+        if self.platform == 'windows' and marker.is_file():
+            self.say('Note: Northlight no longer switches to DXVK 2.7.1 by itself; the leftover '
+                     'renderer-backends\\dxvk\\northlight-dxvk3-init.pending will be removed by this install.')
+        if self.platform == 'windows' and backend == 'dxvk':
             self.say('Graphics backend: DXVK 3.1.1. On AMD RX 5000/6000 cards or drivers DXVK 3 does not support, '
-                     'run Install.cmd --backend dxvk2 (DXVK 2.7.1).')
+                     'run Install.cmd --backend dxvk2 (DXVK 2.7.1). If the game closes at start with DXVK 3, choose '
+                     '--backend dxvk2 yourself; Northlight does not switch by itself.')
         if self.platform == 'windows' and backend == 'legacy':
             proxy = client / INSTALL.PROXY
             if not ((proxy.is_file() and not INSTALL.is_ours(client)) or (client / INSTALL.LEGACY).is_file()):
@@ -803,7 +790,7 @@ class Installer:
                 raise Refusal(refusal[0].upper() + refusal[1:] + '. Run again with --no-world-cache to install the '
                               'renderer without static world shadows and GI.')
         self.say('Checks passed.')
-        return {'client': client, 'locale': locale, 'backend': backend, 'retry_dxvk3': explicit and backend == 'dxvk', 'art': art, 'old': old, 'foreign': foreign,
+        return {'client': client, 'locale': locale, 'backend': backend, 'art': art, 'old': old, 'foreign': foreign,
                 'without': without, 'variant': variant, 'manifest': manifest, 'source': source, 'action': action}
 
     def apply_install(self, p, jobs):
@@ -857,8 +844,8 @@ class Installer:
             backups.append(INSTALL.commit(client, plan, staged, self.pkg.payload, self.pkg.version))
             if files:
                 payload = ('installed: ' if payload.startswith('kept') else payload + '; ') + ', '.join(files)
-        if self.platform == 'windows' and p['retry_dxvk3']:   # an explicit --backend dxvk tries DXVK 3 again, once installed
-            INSTALL.safe_path(client, INSTALL.DXVK3_MARKER).unlink(missing_ok=True)
+        if self.platform == 'windows':   # the leftover of 0.3.189-0.3.194, whatever the backend; only after the commit
+            INSTALL.safe_path(client, INSTALL.LEGACY_DXVK3_MARKER).unlink(missing_ok=True)
         report.update(payload=payload, backups=[str(b) for b in backups])
         changed = backups or not report['world_cache'].startswith(('kept', 'not'))
         self.say('')
@@ -881,7 +868,7 @@ class Installer:
         if busy:
             raise Refusal('Close these first, then run the uninstaller again: ' + ', '.join(busy))
         try:
-            INSTALL.safe_path(client, INSTALL.DXVK3_MARKER)   # a linked renderer-backends folder is refused before any restore
+            INSTALL.safe_path(client, INSTALL.LEGACY_DXVK3_MARKER)   # a linked renderer-backends folder is refused before any restore
         except ValueError as e:
             raise Refusal(str(e))
         found = self.all_transactions(client)
@@ -909,7 +896,7 @@ class Installer:
                                       (leftover / 'install-manifest.json').exists()):
                 remove_tree(leftover)
         if self.platform == 'windows':
-            INSTALL.safe_path(client, INSTALL.DXVK3_MARKER).unlink(missing_ok=True)   # the renderer's own marker; no record holds it
+            INSTALL.safe_path(client, INSTALL.LEGACY_DXVK3_MARKER).unlink(missing_ok=True)   # leftover of 0.3.189-0.3.194; no record holds it
             for folder in ('renderer-backends/dxvk', 'renderer-backends/dxvk2', 'renderer-backends/legacy', 'renderer-backends'):
                 try:
                     (client / folder).rmdir()   # only when empty

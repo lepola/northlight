@@ -32,7 +32,7 @@ KEEP={
  'Effects retry':'user-triggered','MIRROR fallback':'one-off error','SHADOWBLOB draw signature':'capped: first 4',
  'Backend capabilities':'start-up','UNSUPPORTED BACKEND':'error','CreateDevice HRESULT':'start-up','DXVK compatibility':'start-up',
  'Northlight renderer':'start-up version line','Direct3D9Ex requested':'start-up',
- 'BACKEND candidate':'start-up: one line per backend load attempt','BACKEND selected':'start-up: loaded backend','BACKEND FALLBACK':'one-off: dxvk -> dxvk2 fallback by marker (start-up) or marker write failure','BACKEND DXVK 3':'one-off: DXVK 3 start failed / stale or unwritable marker (at most once per process)','BACKEND SELF-LOAD REFUSED':'start-up error',
+ 'BACKEND candidate':'start-up: one line per backend load attempt','BACKEND selected':'start-up: loaded backend','BACKEND SELF-LOAD REFUSED':'start-up error',
  'BACKEND RECURSION':'one-off: first re-entered export','HOST exe':'start-up: wow.exe identity','PROXY module':'start-up: proxy location',
  'PROXY WARNING':'start-up warning','GAME d3d9.dll':'start-up: game-folder d3d9.dll identity','GAME WARNING':'start-up warning',
  'WORLD shadow cache VERIFY MISMATCH':'error (debug verify)','GEOMETRY MEMORY':'warning: allocation deferral',

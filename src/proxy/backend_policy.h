@@ -5,7 +5,7 @@
 #include <string>
 #include <vector>
 namespace NorthlightBackend {
-// 0.3.189: Dxvk2 = the package's DXVK 2.7.1 fallback (dxvk2_d3d9.dll), treated as Dxvk everywhere (isPackagedDxvk).
+// 0.3.189: Dxvk2 = the package's DXVK 2.7.1 alternative backend, chosen by the user (dxvk2_d3d9.dll), treated as Dxvk everywhere (isPackagedDxvk).
 enum class Kind { Legacy, Native, Dxvk, Dxvk2, Invalid };
 // Missing file retains the pre-0.3.98 installation. A present but incomplete
 // config must never accidentally select a different renderer.
@@ -99,10 +99,6 @@ inline std::wstring defaultPath(Kind k,const std::wstring& root,const std::wstri
     case Kind::Legacy:return root+L"renderer-backends\\legacy\\legacy_d3d9.dll";
     default:return std::wstring();}
 }
-// 0.3.189: DXVK 3 throws (process dies) when it cannot initialise Vulkan. The proxy writes this marker
-// around the default-path dxvk Direct3DCreate9 and deletes it on return; a surviving marker = the
-// previous start died inside it, so later starts use dxvk2 until the marker is removed.
-inline std::wstring dxvkInitMarker(const std::wstring& root){return root+L"renderer-backends\\dxvk\\northlight-dxvk3-init.pending";}
 // [Renderer] BackendPath: absolute (X:\..., \\server\...) or relative to the
 // client folder; optional quotes, '/' accepted. Empty = the kind's default.
 inline std::wstring overridePath(const wchar_t* text,const std::wstring& root){
