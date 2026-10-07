@@ -266,7 +266,7 @@ template<class F> inline bool runTask(StreamCore& c,F&& fn,Cmd label=Cmd::Quiesc
     using Fn=typename std::remove_reference<F>::type;
     Task t{[](void* a,StreamCore& core){(*static_cast<Fn*>(a))(core);},&fn};
     Task* p=&t;own(c.q.stats.census[(std::size_t)label]);own(c.q.stats.syncCalls);
-    std::memcpy(c.q.reserve((std::uint16_t)Cmd::Quiesce,sizeof p),&p,sizeof p);c.q.commit();
+    std::memcpy(c.q.reserve((std::uint16_t)Cmd::Quiesce,sizeof p,kFlagWaitTarget),&p,sizeof p);c.q.commit();   // 0.3.196 (task 12): flagged, the wait below targets it
     c.q.waitReplayed(c.q.recordedSeq(),WaitKind::Sync);
     return true;
 }

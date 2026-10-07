@@ -345,7 +345,7 @@ public:
         policy.onPresent();takeReplayFailure();
         UINT dirtyBytes=0;
         if(dirty){dirtyBytes=dirty->rdh.dwSize+dirty->rdh.nCount*UINT(sizeof(RECT));if(sizeof(PresentArgs)+dirtyBytes>MaxInlinePayload)dirtyBytes=0;}
-        auto* a=static_cast<PresentArgs*>(q.reserve((std::uint16_t)(swap?Cmd::SwapPresent:Cmd::Present),std::uint32_t(sizeof(PresentArgs)+dirtyBytes)));
+        auto* a=static_cast<PresentArgs*>(q.reserve((std::uint16_t)(swap?Cmd::SwapPresent:Cmd::Present),std::uint32_t(sizeof(PresentArgs)+dirtyBytes),kFlagWaitTarget));   // 0.3.196 (task 12): the next Present waits for this one's seq
         a->swapChain=swap;a->window=window;a->flags=flags;a->hasSrc=src!=nullptr;a->hasDst=dst!=nullptr;a->dirtyBytes=dirtyBytes;
         if(src)a->src=*src;else a->src=RECT{};
         if(dst)a->dst=*dst;else a->dst=RECT{};

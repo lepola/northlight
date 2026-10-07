@@ -384,7 +384,7 @@ template<Cmd C, class... A> inline typename MethodTraits<C>::Ret runSync(Queue& 
     std::conditional_t<std::is_void<Ret>::value, char, Ret> r{};
     SyncCall sc{C, &t, &r, {0}};
     SyncCall* p = &sc;
-    std::memcpy(q.reserve((std::uint16_t)Cmd::Sync, sizeof p), &p, sizeof p);
+    std::memcpy(q.reserve((std::uint16_t)Cmd::Sync, sizeof p, kFlagWaitTarget), &p, sizeof p);   // 0.3.196 (task 12): the wait below targets this command
     q.commit();
     q.waitReplayed(q.recordedSeq(), WaitKind::Sync);
     if constexpr(!std::is_void<Ret>::value) return r;

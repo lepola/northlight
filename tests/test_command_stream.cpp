@@ -1,6 +1,8 @@
 // Native tests of src/stream/command_queue.h, stream_wait.h and the generated src/generated/command_stream.inl.
 // Built by test_command_stream.py against a generated D3D9 stub (d3d9_stub.h) and generated cases (cs_generated.inc).
 // Modes: no argument = everything; "threads" = only the threaded cases (the TSan build).
+// 0.3.196 (task 12): count waitReplayed() targets that were not recorded with kFlagWaitTarget (Queue::unflaggedWaits)
+#define NORTHLIGHT_STREAM_CHECK_WAIT 1
 #include <algorithm>
 #include <atomic>
 #include <chrono>
@@ -101,6 +103,7 @@ static std::uint64_t mix(std::uint64_t x){x^=x<<13;x^=x>>7;x^=x<<17;return x;}
 static void fillPayload(void* p,std::size_t n,std::uint64_t seq){auto* b=static_cast<unsigned char*>(p);std::memcpy(b,&seq,8);for(std::size_t i=8;i<n;++i)b[i]=(unsigned char)(seq*31+i);}
 static bool checkPayload(const void* p,std::size_t n,std::uint64_t seq){auto* b=static_cast<const unsigned char*>(p);std::uint64_t s;std::memcpy(&s,b,8);if(s!=seq)return false;for(std::size_t i=8;i<n;++i)if(b[i]!=(unsigned char)(seq*31+i))return false;return true;}
 static void record(Queue& q,std::uint16_t id,std::uint32_t n,std::uint64_t seq){void* p=q.reserve(id,n);CHECK(((std::uintptr_t)p&7)==0);fillPayload(p,n,seq);q.commit();}
+static void recordFlagged(Queue& q,std::uint16_t id,std::uint32_t n,std::uint64_t seq){void* p=q.reserve(id,n,kFlagWaitTarget);CHECK(((std::uintptr_t)p&7)==0);fillPayload(p,n,seq);q.commit();}
 static bool waitFor(const std::function<bool()>& c,int ms=10000){for(int i=0;i<ms;++i){if(c())return true;std::this_thread::sleep_for(std::chrono::milliseconds(1));}return false;}
 
 static void orderingAcrossChunks(){
@@ -245,6 +248,71 @@ static void wakeHandshakeStress(){
         const auto d=nowNs()-t0;if(d>worst)worst=d;
     }
     consumer.join();CHECK(worst<100000000ull);   // no round trip waited for a timeout
+    // 0.3.196 (task 12): the same ping-pong through waitReplayed on a kFlagWaitTarget command, with retire() fencing only for flagged commands: no single WAIT may take the 50 ms timeout
+    {Queue w;const int M=20000;std::thread cons([&]{for(int i=0;i<M+M/5;++i){auto* h=w.next(true);CHECK(h);w.retire(h);}});   // M flagged + M/5 unflagged (i%5==1)
+     std::uint64_t worstWait=0;
+     for(int i=0;i<M;++i){
+         if(i%7==0)std::this_thread::sleep_for(std::chrono::microseconds(150));   // the consumer falls asleep after retiring the last waited command
+         recordFlagged(w,1,8,i);const auto seq=w.recordedSeq();
+         const auto t0=nowNs();w.waitReplayed(seq);const auto d=nowNs()-t0;if(d>worstWait)worstWait=d;
+         if(i%5==1){record(w,2,8,i);w.publish();}   // an unflagged command in between: never waited for
+     }
+     w.publish();cons.join();CHECK(worstWait<40000000ull&&w.unflaggedWaits()==0);}   // no single wait took >= 40 ms
+}
+// 0.3.196 (task 12): wait scenarios of the lighter retire(). (a) Present-style: wait on an OLDER flagged command while the consumer keeps executing slow commands after it.
+static void presentStyleWait(){
+    Queue q;const int rounds=40,tail=30;std::atomic<int> run{0};
+    std::thread cons([&]{for(int r=0;r<rounds;++r)for(int i=0;i<1+tail;++i){auto* h=q.next(true);CHECK(h);if(i>0)std::this_thread::sleep_for(std::chrono::milliseconds(2));q.retire(h);run.fetch_add(1);}});
+    std::uint64_t worst=0;
+    for(int r=0;r<rounds;++r){
+        while(q.replayedSeq()<q.recordedSeq())std::this_thread::sleep_for(std::chrono::milliseconds(1));   // the previous round's tail has run: the flagged command is the next to execute
+        recordFlagged(q,1,8,r);const auto seq=q.recordedSeq();
+        for(int i=0;i<tail;++i)record(q,2,8,i);   // slow unflagged commands behind it
+        q.publish();
+        if(r%3==0)std::this_thread::sleep_for(std::chrono::microseconds(100*(r%7)));
+        const auto t0=nowNs();q.waitReplayed(seq,WaitKind::Present);const auto d=nowNs()-t0;if(d>worst)worst=d;
+        CHECK(q.replayedSeq()>=seq);
+    }
+    q.publish();cons.join();CHECK(worst<40000000ull&&q.unflaggedWaits()==0&&q.depth()==0);   // the tail alone is ~60 ms per round: the wake came at the flagged retire
+}
+// (b) the consumer retires the waited command and goes to sleep at once; (c) backpressure waits (chunk freed by advance(), and a drain by an unflagged last command).
+static void retireThenSleepAndBackpressure(){
+    {Queue q;const int N=3000;std::thread cons([&]{for(int i=0;i<N;++i){auto* h=q.next(true);CHECK(h);q.retire(h);if(i%3==0)std::this_thread::sleep_for(std::chrono::microseconds(300));}});   // idle at once: next(true) sleeps
+     std::uint64_t worst=0;
+     for(int i=0;i<N;++i){recordFlagged(q,1,8,i);const auto seq=q.recordedSeq();if(i%2)std::this_thread::sleep_for(std::chrono::microseconds(20*(i%9)));const auto t0=nowNs();q.waitReplayed(seq);const auto d=nowNs()-t0;if(d>worst)worst=d;}
+     cons.join();CHECK(worst<40000000ull&&q.unflaggedWaits()==0);}
+    {   // a chunk freed by the consumer's advance() wakes a producer blocked in backpressure
+     Queue b(2u<<20);
+     for(int i=0;i<4;++i)record(b,1,(std::uint32_t)MaxInlinePayload,i);   // 3 fill chunk 1, the 4th opens chunk 2: 2 MiB in flight
+     b.publish();
+     std::thread cons([&]{for(int i=0;i<4;++i){auto* h=b.next(true);CHECK(h);std::this_thread::sleep_for(std::chrono::milliseconds(3));b.retire(h);}});
+     const auto t0=nowNs();Block* blk=b.tryAllocBlock(1u<<20);const auto d=nowNs()-t0;   // needs chunk 1 back: 1 MiB + 2 MiB in flight > 2 MiB until then
+     cons.join();CHECK(blk&&d<40000000ull&&get(b.stats.backpressureWaits)>=1);b.freeBlock(blk);}
+    {   // the drain: the consumer retires the LAST command (unflagged) and the producer, blocked on bytes only the drain makes irrelevant, must come out at once
+     Queue b(2560u<<10);Block* held=b.tryAllocBlock(1u<<20);CHECK(held);   // 1 MiB of live Block + the open chunk
+     record(b,1,64,0);b.publish();
+     std::thread cons([&]{auto* h=b.next(true);CHECK(h);std::this_thread::sleep_for(std::chrono::milliseconds(5));b.retire(h);});
+     const auto t0=nowNs();Block* blk=b.tryAllocBlock(1u<<20);const auto d=nowNs()-t0;   // over budget until drained; refused when it still does not fit
+     cons.join();CHECK(d<40000000ull);if(blk)b.freeBlock(blk);b.freeBlock(held);}
+}
+// The idle backstop signals progress at most once per waited seq while the consumer spins (and once more, forced, before it sleeps).
+static void backstopSignalsOncePerSeq(){
+    Queue q;q.testArmWait(1);   // a producer 'waits' for seq 1 and never wakes
+    std::thread cons([&]{auto* h=q.next(true);CHECK(h);q.retire(h);CHECK(q.next(true)==nullptr);});
+    record(q,1,8,0);q.publish();
+    CHECK(waitFor([&]{return q.replayedSeq()==1;}));
+    std::this_thread::sleep_for(std::chrono::milliseconds(30));   // the consumer spins ~50 us, then sleeps
+    q.interrupt();cons.join();
+    CHECK(q.backstopSignals()>=1&&q.backstopSignals()<=3);   // not one per 64-spin batch
+}
+// A wait on a command that was not recorded with kFlagWaitTarget is caught (and, in a build without the check, rescued by the idle backstop / the 50 ms timeout).
+static void unflaggedWaitIsCaught(){
+    Queue q;std::thread cons([&]{for(int i=0;i<3;++i){auto* h=q.next(true);CHECK(h);q.retire(h);}});
+    recordFlagged(q,1,8,0);const auto a=q.recordedSeq();record(q,2,8,1);const auto b=q.recordedSeq();recordFlagged(q,1,8,2);const auto c=q.recordedSeq();q.publish();
+    q.waitReplayed(a);CHECK(q.unflaggedWaits()==0);q.waitReplayed(c);CHECK(q.unflaggedWaits()==0);q.waitReplayed(b);CHECK(q.unflaggedWaits()==1);   // the middle one is unflagged
+    q.waitReplayed(0);CHECK(q.unflaggedWaits()==1);cons.join();
+    // the flagged-only helpers of production are flagged: a Sync command and a Quiesce are what runSync/runTask record
+    CHECK((kFlagWaitTarget&kFlagBlock)==0);
 }
 // The stream shares a 32-bit address space: the caps are 16 MiB each, a spike's idle chunks do not stay, and a quiet window returns the rest.
 static void memoryCapsAndPools(){
@@ -290,11 +358,11 @@ static void spscStress(){
     std::uint64_t r=1234567;
     for(std::uint64_t i=0;i<N;++i){
         r=mix(r);std::uint32_t n=8+std::uint32_t(r%200);if(r%97==0)n=8+std::uint32_t(r%30000);n=(n+7)&~7u;
-        auto* p=static_cast<unsigned char*>(q.reserve(1,n));fillPayload(p,n>16?16:n,i);if(n>16){const std::uint32_t tail=(std::uint32_t)(i^n);std::memcpy(p+n-4,&tail,4);}q.commit();
+        auto* p=static_cast<unsigned char*>(q.reserve(1,n,i%20011==0?kFlagWaitTarget:0));fillPayload(p,n>16?16:n,i);if(n>16){const std::uint32_t tail=(std::uint32_t)(i^n);std::memcpy(p+n-4,&tail,4);}q.commit();
         if(i%997==0)q.publish();
         if(i%20011==0){const auto seq=q.recordedSeq();q.waitReplayed(seq);CHECK(q.replayedSeq()>=seq);}
     }
-    q.publish();consumer.join();CHECK(q.replayedSeq()==N&&q.depth()==0);
+    q.publish();consumer.join();CHECK(q.replayedSeq()==N&&q.depth()==0&&q.unflaggedWaits()==0);
 }
 
 // ---- generated code, game-facing methods through the macros ----
@@ -346,7 +414,7 @@ static void nestedSync(){
 
 int main(int argc,char** argv){
     const bool threadsOnly=argc>1&&std::string(argv[1])=="threads";
-    spscStress();wakeHandshakeStress();memoryCapsAndPools();producerNotSerializedByShadows();
+    spscStress();wakeHandshakeStress();presentStyleWait();retireThenSleepAndBackpressure();unflaggedWaitIsCaught();backstopSignalsOncePerSeq();memoryCapsAndPools();producerNotSerializedByShadows();
     budgetRules();interruptAndEvents();publishRules();nestedSync();
     generatedSyncCases();
     if(!threadsOnly){
