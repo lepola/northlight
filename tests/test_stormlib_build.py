@@ -5,7 +5,7 @@ AMD64, the 9 exports mpq.py binds, only KERNEL32/USER32/WININET/UCRT imports, Cr
 file calls; macOS: arm64 @rpath dylib linking only libSystem; neither embeds a build path) and equal
 the pinned bytes when rebuilt from an empty zig cache. On an arm64 Mac the dylib writes and reads back an
 MPQ through ctypes. With a client configured, the art layer built with the new dylib equals our known
-layers (0.3.198, storm bands and weather textures: the dev HD client 9388d875..., the stock client 89fd3c93...); its game-derived output is deleted
+layers (0.3.199, storm bands and weather textures with rain alpha .35: the dev HD client 8f6fbefe..., the stock client f2e38013...); its game-derived output is deleted
 after hashing. The Windows DLL is never loaded or run."""
 import sys; from pathlib import Path; sys.path.insert(0, str(Path(__file__).resolve().parents[1]))  # repo root
 import northlight_paths as fp
@@ -23,8 +23,8 @@ import unittest
 import build_stormlib as bs  # noqa: E402
 
 PINS = json.loads((fp.RENDERER / 'package-pins.json').read_text())['stormlib']
-KNOWN_ART = {'9388d875b4838804464ce5767f1677f5686ac85a847d54fef278b06f07befac6',   # 0.3.198 storm bands + weather textures: HD-2
-             '89fd3c93f97261e1aa306f5530d4ce5d792659d6c530f3b1400f214b322bc1cd'}   # stock
+KNOWN_ART = {'8f6fbefe5de3f7b7c77319898c9460a94b55d786b679f32e6808d133ba8e2ffb',   # 0.3.199 storm bands + weather textures (rain alpha .35): HD-2
+             'f2e38013f9f03a51548bc785e40351959d1959191d69bbc478bd89056708d182'}   # stock
 OUT = fp.output_dir()
 built = {}
 
