@@ -156,6 +156,8 @@ Individual settings (Quality / Balanced / Performance):
   Weather               1 / 1 / 1      Northlight's haze, fog, light shafts, sun and moon, shadows, sky light and lamps follow rain and snow shown by the art layer's weather textures (0 = nothing reacts; needs the art layer; no extra passes)
   RainFog               1 / 1 / 1      how strongly rain and snow thicken the fog and haze and dim shafts, sun and moon (0..2; 0 = no change, 2 = twice as strong; snow acts at 60 percent)
   RainWetness           1 / 1 / 0      wet ground under open sky while it rains (0..2; 0 = dry; needs GI=1 (the probes, not the F8 toggle); half resolution; snow does not wet)
+  FogClouds             1 / 1 / 0      low fog banks that drift with the wind, thicker and faster in rain, few or none in clear daylight (0 = none; its own half-resolution pass; Ctrl+Shift+F7 and F10 turn them off with the rest)
+  FogCloudDensity       100 / 100 / 100 how much of the ground the fog clouds cover, in percent (0..200; 0 = none, 200 = twice as much)
 When both NearShadowInterval and FarShadowInterval are at least 2, frames that
 draw neither shadow also skip copying the character geometry (about 1–1.5 ms
 of CPU per skipped frame). Light and normal frames alternate: the average FPS

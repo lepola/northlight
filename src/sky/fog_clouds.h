@@ -1,0 +1,131 @@
+#pragma once
+// 0.3.199 (fog clouds): the CPU side of the moving low fog banks. The GPU pass (a half-resolution raymarch) samples a tileable 3D
+// noise volume (N^3 L8) at two world-space scales offset by the wind and weights the result near the ground; this header makes the
+// volume, advances the wind, derives the per-frame constants from the settings and the weather, and mirrors one GPU sample
+// (sigma/sigmaAt) so the shader maths is testable. Pure: no D3D, no game data, no platform-dependent functions.
+#include <algorithm>
+#include <cmath>
+#include <cstdint>
+#include <vector>
+
+namespace NorthlightFogClouds {
+constexpr unsigned N=64;                            /* noise volume edge, L8 voxels, index x+N*(y+N*z) */
+constexpr float LargePeriod=192.f,SmallPeriod=48.f; /* world units per noise tile */
+constexpr uint32_t Seed=0x4e4c4643u;
+constexpr float kDry=0.12f,kNight=0.18f,kSigmaMax=0.03f,kBaseHeight=7,kRainHeight=7;
+
+namespace detail {
+inline uint32_t hash(uint32_t a,uint32_t b,uint32_t c,uint32_t d){ /* integer mix, same result everywhere */
+    uint32_t h=a*0x9e3779b1u^(b+0x7f4a7c15u)*0x85ebca6bu^(c+0x165667b1u)*0xc2b2ae35u^(d+0x27d4eb2fu)*0x9e3779b9u;
+    h^=h>>16;h*=0x7feb352du;h^=h>>15;h*=0x846ca68bu;h^=h>>16;return h;}
+inline float unit(uint32_t h){return float(h>>8)*(1.f/16777216.f);}
+inline float fade(float t){return t*t*t*(t*(t*6-15)+10);}
+inline float lerp(float a,float b,float t){return a+(b-a)*t;}
+// periodic gradient noise, P cells per tile, evaluated at voxel (x,y,z); about -1..1
+inline float perlin(unsigned P,uint32_t seed,unsigned oct,float x,float y,float z){
+    static const int G[12][3]={{1,1,0},{-1,1,0},{1,-1,0},{-1,-1,0},{1,0,1},{-1,0,1},{1,0,-1},{-1,0,-1},{0,1,1},{0,-1,1},{0,1,-1},{0,-1,-1}};
+    const float s=float(P)/float(N);x*=s;y*=s;z*=s;
+    const int ix=int(std::floor(x)),iy=int(std::floor(y)),iz=int(std::floor(z));
+    const float fx=x-float(ix),fy=y-float(iy),fz=z-float(iz);
+    float v[8];
+    for(int k=0;k<8;++k){
+        const int dx=k&1,dy=(k>>1)&1,dz=(k>>2)&1;
+        const uint32_t cx=uint32_t(ix+dx)%P,cy=uint32_t(iy+dy)%P,cz=uint32_t(iz+dz)%P;
+        const int* g=G[hash(cx,cy,cz,seed+oct*0x9e37u)%12];
+        v[k]=float(g[0])*(fx-float(dx))+float(g[1])*(fy-float(dy))+float(g[2])*(fz-float(dz));}
+    const float u=fade(fx),vv=fade(fy),w=fade(fz);
+    return lerp(lerp(lerp(v[0],v[1],u),lerp(v[2],v[3],u),vv),lerp(lerp(v[4],v[5],u),lerp(v[6],v[7],u),vv),w);}
+// periodic cellular F1 distance in cell units, P cells per tile
+inline float worley(unsigned P,uint32_t seed,float x,float y,float z){
+    const float s=float(P)/float(N);x*=s;y*=s;z*=s;
+    const int ix=int(std::floor(x)),iy=int(std::floor(y)),iz=int(std::floor(z));
+    float best=4.f;
+    for(int dz=-1;dz<=1;++dz)for(int dy=-1;dy<=1;++dy)for(int dx=-1;dx<=1;++dx){
+        const int cx=ix+dx,cy=iy+dy,cz=iz+dz;
+        const uint32_t hx=uint32_t((cx%int(P)+int(P))%int(P)),hy=uint32_t((cy%int(P)+int(P))%int(P)),hz=uint32_t((cz%int(P)+int(P))%int(P));
+        const uint32_t h=hash(hx,hy,hz,seed^0xabcdu);
+        const float px=float(cx)+unit(h),py=float(cy)+unit(h*0x2545f491u+1),pz=float(cz)+unit(h*0x9e3779b1u+7);
+        const float ex=px-x,ey=py-y,ez=pz-z;best=std::min(best,ex*ex+ey*ey+ez*ez);}
+    return std::sqrt(best);}
+}
+
+// N*N*N bytes, deterministic, tileable (periodic in all axes): 3-octave Perlin FBM (4, 8, 16 cells over the tile) blended with an
+// inverted Worley term (8 cells) for a billowy look, normalised min..max to 0..255.
+inline std::vector<uint8_t> generate(uint32_t seed=Seed){
+    std::vector<float> f(size_t(N)*N*N);float lo=1e9f,hi=-1e9f;
+    for(unsigned z=0;z<N;++z)for(unsigned y=0;y<N;++y)for(unsigned x=0;x<N;++x){
+        const float fx=float(x),fy=float(y),fz=float(z);
+        float p=0,a=1,sum=0;unsigned P=4;
+        for(unsigned o=0;o<3;++o,P*=2,a*=.5f){p+=a*detail::perlin(P,seed,o,fx,fy,fz);sum+=a;}
+        const float pn=std::clamp(.5f+.5f*(p/sum)*1.4f,0.f,1.f);
+        const float w=1.f-std::min(detail::worley(8,seed,fx,fy,fz),1.f);
+        const float v=.6f*pn+.4f*w;
+        f[x+N*(y+size_t(N)*z)]=v;lo=std::min(lo,v);hi=std::max(hi,v);}
+    std::vector<uint8_t> out(f.size());const float k=hi>lo?255.f/(hi-lo):0.f;
+    for(size_t i=0;i<f.size();++i)out[i]=uint8_t(std::clamp(std::floor((f[i]-lo)*k+.5f),0.f,255.f));
+    return out;}
+
+// trilinear with WRAP, matching D3D LINEAR+WRAP: texel coordinate u*N-.5; 0..1
+inline float sample(const uint8_t* volume,float u,float v,float w){
+    const float c[3]={u,v,w};int i0[3],i1[3];float fr[3];
+    for(int a=0;a<3;++a){
+        const float x=c[a]-std::floor(c[a]);const float t=x*float(N)-.5f;const float fl=std::floor(t);
+        fr[a]=t-fl;const int i=int(fl);i0[a]=((i%int(N))+int(N))%int(N);i1[a]=(i0[a]+1)%int(N);}
+    auto at=[&](int x,int y,int z){return float(volume[x+N*(y+N*z)]);};
+    auto l=[](float a,float b,float t){return a+(b-a)*t;};
+    const float r=l(l(l(at(i0[0],i0[1],i0[2]),at(i1[0],i0[1],i0[2]),fr[0]),l(at(i0[0],i1[1],i0[2]),at(i1[0],i1[1],i0[2]),fr[0]),fr[1]),
+                    l(l(at(i0[0],i0[1],i1[2]),at(i1[0],i0[1],i1[2]),fr[0]),l(at(i0[0],i1[1],i1[2]),at(i1[0],i1[1],i1[2]),fr[0]),fr[1]),fr[2]);
+    return r*(1.f/255.f);}
+
+struct Wind {
+    double large[3]={},small[3]={}; /* accumulated wind offsets in world units, wrapped modulo the periods to stay small */
+    double clock=0;                 /* seconds of advanced time (drives the slow veer) */
+    float speed=0;                  /* current large-scale speed, units/s (for the log) */
+    float dir[2]={1,0};             /* current large-scale direction (for the log) */
+    void advance(float dt,float fog){
+        const double d=std::isfinite(dt)?std::clamp(double(dt),0.0,0.1):0.0;
+        const double f=std::isfinite(fog)?std::clamp(double(fog),0.0,1.0):0.0;
+        const double sp=0.6+1.8*f,a=0.35+0.436*std::sin(2*3.14159265358979323846*clock/600.0); /* slow +-25 degree veer over ~10 min */
+        const double sa=a+0.35,ss=sp*1.6;
+        speed=float(sp);dir[0]=float(std::cos(a));dir[1]=float(std::sin(a));
+        large[0]+=sp*std::cos(a)*d;large[1]+=sp*std::sin(a)*d;
+        small[0]+=ss*std::cos(sa)*d;small[1]+=ss*std::sin(sa)*d;small[2]+=0.12*d;
+        for(int i=0;i<3;++i){large[i]=std::fmod(large[i],double(LargePeriod));if(large[i]<0)large[i]+=LargePeriod;
+                             small[i]=std::fmod(small[i],double(SmallPeriod));if(small[i]<0)small[i]+=SmallPeriod;}
+        clock+=d;}
+};
+struct Frame {
+    bool active=false;float coverage=0,height=0,sigmaMax=0;
+    float largeOrigin[3]={},smallOrigin[3]={};float invLarge=0,invSmall=0;
+};
+namespace detail {
+inline float finite0(float x){return std::isfinite(x)?x:0.f;}
+inline float origin(double cam,double wind,double inv){double v=(cam-wind)*inv;v-=std::floor(v);const float f=float(v);return f>=1.f?0.f:f;}
+}
+// fogClouds: setting 0/1; density: setting percent 0..200; fog: NorthlightWeatherEffects::Frame::fog (0 dry .. ~2); night: regional
+// nightFactor 0..1; camera: world eye position. The shader computes noise coords as (p-camera)*inv+origin, so world-fixed noise moves with +wind.
+inline Frame derive(unsigned fogClouds,unsigned density,float fog,float night,const Wind& wind,const float camera[3]){
+    Frame f;
+    const float fg=std::clamp(detail::finite0(fog),0.f,1.f),ng=std::clamp(detail::finite0(night),0.f,1.f);
+    const float cov=std::clamp((float(std::min(density,100000u))/100.f)*(kDry+kNight*ng+(1-kDry)*fg),0.f,1.f);
+    if(!fogClouds||!(cov>0))return f;
+    f.active=true;f.coverage=cov;f.height=kBaseHeight+kRainHeight*fg;f.sigmaMax=kSigmaMax;
+    f.invLarge=1.f/LargePeriod;f.invSmall=1.f/SmallPeriod;
+    for(int i=0;i<3;++i){const double c=detail::finite0(camera[i]);
+        f.largeOrigin[i]=detail::origin(c,wind.large[i],1.0/double(LargePeriod));f.smallOrigin[i]=detail::origin(c,wind.small[i],1.0/double(SmallPeriod));}
+    return f;}
+// the per-sample density, identical to the shader: nL, nS noise values 0..1; tag = regional field .w (0 indoors/unknown)
+inline float sigma(float nL,float nS,float altitude,float coverage,float height,float tag,float sigmaMax){
+    auto sat=[](float x){return std::clamp(x,0.f,1.f);};
+    const float n=.65f*nL+.35f*nS,c=sat((n-(1-coverage))*3);
+    float v=sat(1-altitude/std::max(height,.001f));v*=v;
+    const float zone=1+(.7f-1)*sat((tag-1.25f)/3.75f);
+    return altitude>=0&&tag>0?c*v*zone*sigmaMax:0.f;}
+// CPU mirror of one GPU sample at world point p (ground = regional field ground height at p, tag = field .w, fieldCoverage = 0..1 valid weight)
+inline float sigmaAt(const uint8_t* volume,const Frame& f,const float camera[3],const float p[3],float ground,float tag,float fieldCoverage){
+    if(!f.active)return 0.f;
+    float l[3],s[3];
+    for(int i=0;i<3;++i){const float d=p[i]-camera[i];l[i]=d*f.invLarge+f.largeOrigin[i];s[i]=d*f.invSmall+f.smallOrigin[i];}
+    const float nL=sample(volume,l[0],l[1],l[2]),nS=sample(volume,s[0],s[1],s[2]);
+    return sigma(nL,nS,p[2]-ground,f.coverage,f.height,tag,f.sigmaMax)*fieldCoverage;}
+}

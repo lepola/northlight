@@ -71,7 +71,10 @@ struct Settings {
     // RainFog 0..2 scales the haze/fog/shafts/sun/shadow/GI/lamp couplings (1 = the tuned look); RainWetness 0..2 scales the wet
     // ground under open sky (needs the GI pass; 0 = dry).
     unsigned weather=1,rainFog=1,rainWetness=1;
-    char origin[38]={'d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d'};
+    // 0.3.199 (fog clouds): FogClouds 1 = low fog banks that drift with the wind (own half-resolution raymarch pass, sky/fog_clouds.h);
+    // 0 = none. FogCloudDensity 0..200 percent scales how much of the ground they cover (100 = the tuned look; thicker and faster in rain).
+    unsigned fogClouds=1,fogCloudDensity=100;
+    char origin[40]={'d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d'};
 };
 struct Key { const char* name; unsigned Settings::*field; unsigned low,high; unsigned preset[3]; };
 // preset[] = Quality, Balanced, Performance. Quality must equal Settings{}.
@@ -114,6 +117,8 @@ inline const Key Keys[]={
     {"Weather",&Settings::weather,0,1,{1,1,1}},
     {"RainFog",&Settings::rainFog,0,2,{1,1,1}},
     {"RainWetness",&Settings::rainWetness,0,2,{1,1,0}},
+    {"FogClouds",&Settings::fogClouds,0,1,{1,1,0}},
+    {"FogCloudDensity",&Settings::fogCloudDensity,0,200,{100,100,100}},
 };
 inline bool operator==(const Settings& a,const Settings& b){for(const auto& k:Keys)if(a.*k.field!=b.*k.field)return false;return true;}
 inline bool operator!=(const Settings& a,const Settings& b){return !(a==b);}
