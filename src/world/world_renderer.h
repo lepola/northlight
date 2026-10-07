@@ -3118,7 +3118,7 @@ public:
         const double selectDt=localLightQpc&&captureFrequency.QuadPart>0?double(selectT0-localLightQpc)/double(captureFrequency.QuadPart):0;
         const bool selectContinuous=active&&localLightQpc&&selectDt<=NorthlightLocalLightSelection::MaxGapSeconds&&active->map==localLightMap&&!different(vec(context.camera),localLightCamera,40)&&debug==0;
         auto localLights=active?localLightTracker.update(active->localLights,context.camera,quality.localLightLimit,float(selectDt),selectContinuous):NorthlightLocalLightSelection::Selection{};
-        {const double us=double(QpcClock::now()-selectT0)*1e6/(captureFrequency.QuadPart>0?double(captureFrequency.QuadPart):1.);localSelectUsSum+=us;localSelectUsMax=std::max(localSelectUsMax,us);++localSelectFrames;}
+        if(NorthlightDiagnostics::enabled()){const double us=double(QpcClock::now()-selectT0)*1e6/(captureFrequency.QuadPart>0?double(captureFrequency.QuadPart):1.);localSelectUsSum+=us;localSelectUsMax=std::max(localSelectUsMax,us);++localSelectFrames;} /* selectUs on LOCAL direct */
         localLightQpc=selectT0;localLightCamera=vec(context.camera);if(active&&localLightMap!=active->map)localLightMap=active->map;
         localDirectCount=localLights.count;localDirectNearest=localLights.nearest;
         c[52][0]=float(std::min(localDirectCount,NorthlightLocalLightSelection::DirectBatchSize));c[52][1]=.9f*lampGain;
