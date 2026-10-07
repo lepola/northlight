@@ -1,5 +1,5 @@
 {
-  "source_sha256": "033ed0fae2662d15ae4d4a48aa54c721c9f38e00cc3dbfd2e786a9e905b6ed65",
+  "source_sha256": "319489542b8391f2070367e1f79f994b69aca032409040766736a3fe4c3c1480",
   "compiler": "Wine d3dcompiler_47 D3DCompile",
   "game_launched": false,
   "shaders": {
@@ -209,6 +209,43 @@
         "abs": 3,
         "exp": 1,
         "endrep": 1
+      }
+    },
+    "FogClouds": {
+      "target": "ps_3_0",
+      "bytes": 8720,
+      "sha256": "f96060ddad041e7f2f837f7730076e12bc3d668aa952bf61ea9ea231db9992f0",
+      "static_instruction_slots": 512,
+      "temporary_registers": 31,
+      "samplers": [
+        1,
+        3,
+        11,
+        13,
+        14
+      ],
+      "instructions": {
+        "add": 100,
+        "cmp": 33,
+        "mov": 135,
+        "if": 7,
+        "mul": 114,
+        "frc": 5,
+        "max": 22,
+        "min": 9,
+        "texldl": 9,
+        "rcp": 12,
+        "else": 7,
+        "endif": 7,
+        "dp3": 2,
+        "rsq": 2,
+        "abs": 3,
+        "rep": 2,
+        "break": 3,
+        "dp4": 5,
+        "mad": 2,
+        "exp": 2,
+        "endrep": 2
       }
     },
     "LocalDirect": {

@@ -70,6 +70,11 @@ float4 LocalLightFog[8] : register(c59); // x extinction at the light (LocalFog 
 // every use below reduces to the old math then (w is the exception by design: it carries the old literal .0017, see WorldFog). Written once per
 // frame in the bank, read before the lamp fog batch overwrites c59..c62.
 float4 WeatherInfo : register(c59); // y wetness (WorldWet), z direct shadow softening (WorldLighting), w the shared air extinction .0017 + the extra (WorldFog)
+// 0.3.199 (fog clouds): FogClouds only. c60..c63 .x belong to LocalLightFog[1..3].x (LocalFog, a later pass); only .yzw are read here and the host
+// writes them only while the clouds are active (zero otherwise, as before). c60.yzw large-noise origin, c61.yzw small-noise origin,
+// c62.yzw coverage, height, sigmaMax, c63.yzw 1/large period, 1/small period, unused (reserved for an interleaved-gradient-noise phase flag: dropped for the slot budget).
+float4 CloudInfo[4] : register(c60);
+sampler3D CloudNoise : register(s14); // tileable N^3 L8 volume (LINEAR, WRAP); s14 is NormalBuffer/LightHistory in other passes, never bound together with this one
 
 float2 depthUV(float2 uv) {
     // D3D9 raster centers are integer pixels; texture centers are pixel+.5.
@@ -828,6 +833,71 @@ float4 FogBlur(float2 uv:TEXCOORD0):COLOR0 {
         sum+=tex2Dlod(FogBuffer,float4(q,0,0))*w;total+=w;
     }
     return sum/max(total,1e-5);
+}
+// 0.3.199 (fog clouds): moving low fog banks. A second half-resolution raymarch of the same world-fixed intervals as WorldFog (40, no jitter:
+// fog has no temporal history) through two scales of tileable 3D noise scrolled by the wind (origins in c60/c61). Returns the cloud
+// scattering (rgb) and the cloud transmittance (a); drawn with ONE, SRCALPHA so it adds to the fog buffer and attenuates what is there.
+// Exactly (0,0,0,1) where no cloud is met. The base fog only attenuates the cloud light (Tbase, never written to alpha); its density is a cut-down
+// copy of WorldFog's (the full lines do not fit the 512-slot budget next to the field fetch and the shadow filter), see the comments below.
+float4 FogClouds(float2 uv:TEXCOORD0):COLOR0 {
+    if(FogInfo.x<.5)return float4(0,0,0,1);
+    uv=depthUV(uv);
+    float depth=normalizedDepth(uv);float3 view=viewPositionDistance(uv,receiverDistance(uv,min(depth,.99999)));
+    float3 ray=view.x*InverseView[0].xyz+view.y*InverseView[1].xyz+view.z*InverseView[2].xyz;
+    float surface=min(length(ray),FogInfo.w);
+    ray*=rsqrt(max(dot(ray,ray),1e-12));
+    float tBase=1,tCloud=1,directWeight=0,ambientWeight=0; // scalar sums: the sun and sky colours multiply once after the loop
+    float3 axis=abs(ray);
+    float2 major=axis.x>=axis.y?float2(ray.x,Camera.x):float2(ray.y,Camera.y);
+    major=abs(major.x)>=axis.z?major:float2(ray.z,Camera.z);
+    float spacing=FogInfo.w/40;
+    float stepLength=spacing/abs(major.x);
+    float offset=frac(major.y*(major.x<0?-1:1)/spacing);
+    [loop]for(int i=0;i<41;++i){
+        float start=max(0,(i-offset)*stepLength);
+        if(start>=surface)break;
+        float end=min((i+1-offset)*stepLength,surface);
+        float stepSize=end-start;
+        float mid=(start+end)*.5;
+        float3 rel=ray*mid;
+        float3 p=Camera.xyz+rel;
+        float2 fieldUV=(p.xy-RegionalFogInfo.xy)*RegionalFogInfo.z+.5/64;
+        float coverage;
+        float4 field=regionalFogAt(fieldUV,coverage);
+        float altitude=p.z-field.x;
+        float valid=altitude>=0?coverage:0;
+        float nearFade=saturate((mid-FogRange.x)*FogRange.y);nearFade*=nearFade*(3-2*nearFade);
+        // 0.3.199 (fog clouds): the ground term of WorldFog, copied exactly (thick Duskwood/STV ground fog must hide the clouds behind it).
+        float profile=saturate((field.w-2.5)/2.5);
+        float groundHeight=lerp(field.w,6,RegionalFogInfo.w*(1-profile));
+        float vertical=saturate(1-altitude/max(groundHeight,.001));
+        float groundSigma=max(field.y+field.z*RegionalFogInfo.w,0)*vertical*vertical;
+        // Air term reduced to its constant floor for the slot budget (no vertical profile, no forest policy).
+        float airSigma=WeatherInfo.w;
+        float baseSigma=max(groundSigma+airSigma,0)*valid*nearFade;
+        float nL=tex3Dlod(CloudNoise,float4(rel*CloudInfo[3].y+CloudInfo[0].yzw,0)).r;
+        float nS=tex3Dlod(CloudNoise,float4(rel*CloudInfo[3].z+CloudInfo[1].yzw,0)).r;
+        float density=saturate((mad(.65,nL,.35*nS)-(1-CloudInfo[2].y))*3);
+        float low=saturate(1-altitude/max(CloudInfo[2].z,.001));
+        float zone=lerp(1,.7,saturate((field.w-1.25)/3.75));
+        float sigma=density*low*low*zone*CloudInfo[2].w*valid*nearFade; // valid > 0 only above ground (altitude >= 0) in a node with a layer height tag
+        [branch]if(sigma>0){
+            float absorb=1-exp(-sigma*stepSize);
+            float heightFade=saturate(altitude*(1.0/12));heightFade*=heightFade*(3-2*heightFade);
+            float weight=tBase*tCloud*absorb;
+            // No DirectLight guard and no Tbase*Tcloud early out in this loop: both were cut for the 512-slot budget (the sun term is multiplied by DirectLight after the loop, so no sun = 0).
+            directWeight+=weight*fogShadow(p)*heightFade;
+            ambientWeight+=weight;
+            tCloud*=1-absorb;
+        }
+        tBase*=exp(-baseSigma*stepSize);
+    }
+    // The narrow forward aureole of WorldFog is dropped here (register/slot budget): the broad phase alone.
+    float3 directScatter=max(DirectLight.rgb,0)*mad(.033,dot(ray,SunDirection.xyz),.22)*saturate(FogColor.rgb)*(max(FogInfo.y,0)*directWeight);
+    float peak=max(directScatter.r,max(directScatter.g,directScatter.b));
+    float cap=max(FogInfo.z,.0001);
+    directScatter*=cap/(cap+peak);
+    return float4(max(AmbientLight.rgb,0)*saturate(FogColor.rgb)*(SourcePolicy.x*.35*ambientWeight)+directScatter,tCloud);
 }
 // Distant haze toward the WORLD horizon: in front of the scene, behind local
 // scattering. Terrain weight is 0 at or nearer than the start view Z (the
