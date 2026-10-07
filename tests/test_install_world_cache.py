@@ -131,13 +131,13 @@ def built_with(sources, overrun=False, report=True):
 
 
 v183 = {n: h for n, equal in iwc.SOURCE_EQUIVALENTS.items() for h, clamp in equal.items() if clamp}
-v192 = {n: h for n, equal in iwc.SOURCE_EQUIVALENTS.items() for h, clamp in equal.items() if not clamp}
-assert set(v183) == {'world_scene_builder.py', 'regional_fog_builder.py'} and set(v192) == {'world_scene_builder.py', 'mpq.py'}
-# 0.3.192's scene builder and mpq.py: up to date without any report check (they stopped where 0.3.193 differs).
+v193 = {n: h for n, equal in iwc.SOURCE_EQUIVALENTS.items() for h, clamp in equal.items() if not clamp}
+assert set(v183) == {'world_scene_builder.py', 'regional_fog_builder.py'} and set(v193) == {'world_scene_builder.py', 'mpq.py'}
+# 0.3.193's scene builder and mpq.py: up to date without any report check (they stopped where 0.3.194 differs).
 for kw in [{}, {'report': False}, {'overrun': True}]:
-    assert iwc.plan(base, built_with(v192, **kw), cache, False, 'z') == ('up_to_date', []), kw
-assert iwc.plan(base, built_with(dict(v192, **{'client_archives.py': 'f' * 64})), cache, False, 'z')[0] == 'full'
-mixed = dict(v192, **{'world_scene_builder.py': v183['world_scene_builder.py']})   # 0.3.183 needs clamp_free
+    assert iwc.plan(base, built_with(v193, **kw), cache, False, 'z') == ('up_to_date', []), kw
+assert iwc.plan(base, built_with(dict(v193, **{'client_archives.py': 'f' * 64})), cache, False, 'z')[0] == 'full'
+mixed = dict(v193, **{'world_scene_builder.py': v183['world_scene_builder.py']})   # 0.3.183 needs clamp_free
 assert iwc.plan(base, built_with(mixed), cache, False, 'z') == ('up_to_date', [])
 assert iwc.plan(base, built_with(mixed, overrun=True), cache, False, 'z')[0] == 'full'
 assert iwc.plan(base, built_with(v183), cache, False, 'z') == ('up_to_date', [])
