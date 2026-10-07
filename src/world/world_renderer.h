@@ -3111,11 +3111,13 @@ public:
         // the first lighting pass is the sun's (with real shadows) only then: its visibility is in the
         // baseline alpha. The renderer's own orbit gives the sun weight; without it (game light only) no dimming.
         const float lampSunlitCut=NorthlightLocalLightSelection::sunlitCut(celestialValid?sourceWeights[0]:0.f,sourceActive[0]&&effects.shadows);
-        // 0.3.197: tracked selection; a different map, a camera jump, a long gap or F10 restart it without fades.
+        // 0.3.197: tracked selection. A camera jump (teleport), a long gap (F10 off, loading) or F12 debug snap the
+        // factors without fades; a different map (and a rebuilt device, releasePointGPU) forgets the tracker.
+        if(!active||active->map!=localLightMap)localLightTracker.reset();
         const int64_t selectT0=QpcClock::now();
         const double selectDt=localLightQpc&&captureFrequency.QuadPart>0?double(selectT0-localLightQpc)/double(captureFrequency.QuadPart):0;
         const bool selectContinuous=active&&localLightQpc&&selectDt<=NorthlightLocalLightSelection::MaxGapSeconds&&active->map==localLightMap&&!different(vec(context.camera),localLightCamera,40)&&debug==0;
-        auto localLights=active?localLightTracker.update(active->localLights,context.camera,quality.localLightLimit,float(selectDt),selectContinuous):(localLightTracker.reset(),NorthlightLocalLightSelection::Selection{});
+        auto localLights=active?localLightTracker.update(active->localLights,context.camera,quality.localLightLimit,float(selectDt),selectContinuous):NorthlightLocalLightSelection::Selection{};
         {const double us=double(QpcClock::now()-selectT0)*1e6/(captureFrequency.QuadPart>0?double(captureFrequency.QuadPart):1.);localSelectUsSum+=us;localSelectUsMax=std::max(localSelectUsMax,us);++localSelectFrames;}
         localLightQpc=selectT0;localLightCamera=vec(context.camera);if(active&&localLightMap!=active->map)localLightMap=active->map;
         localDirectCount=localLights.count;localDirectNearest=localLights.nearest;

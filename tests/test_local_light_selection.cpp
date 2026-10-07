@@ -37,6 +37,7 @@ static float motion(unsigned frames,unsigned maxId,unsigned limit,bool continuou
     Tracker t;float worst=0;std::vector<float> previous(maxId+1,0.f);
     for(unsigned f=0;f<frames;++f){
         const Scene sc=scene(f);
+        if(!continuous)t.reset(); // a fresh tracker every frame: the pure target, without incumbents
         const Selection out=t.update(sc.lights,sc.camera,limit,dt,continuous&&f>0);
         assert(out.count<=Slots&&out.count>=t.fading&&t.fading<=Spare);
         const unsigned selected=out.count-t.fading;assert(selected<=limit);
@@ -109,6 +110,13 @@ static void trackerTests(){
      auto out=t.update(lights,camera,32,1.f/60,false);assert(t.fading==0&&out.count==10&&shownOf(t,11)==1&&shownOf(t,1)==0);
      Tracker u;u.update(lights,camera,32,1.f/60,true);assert(std::fabs(shownOf(u,11)-Step60)<1e-6f); // a continuous first frame fades in from zero
      t.update(lights,camera,0,1.f/60,true);assert(t.count==0&&t.fading==0);}
+    // 3b. A gap (hitch, F10 off, loading) at the same camera snaps without fades but keeps the incumbents: nothing moves.
+    //     Lamps packed .25 apart around the cap edge, where forgetting the StickyBias used to drop a lamp from .79 to .04.
+    for(const float spacing:{.25f,1.f,3.f}){const float camera[3]={};std::vector<Light> lights;
+        for(unsigned i=1;i<=48;++i)lights.push_back(lampScore(i,100+spacing*float(i)));
+        Tracker t;const Selection before=stepFrames(t,lights,camera,32,1.f/60,120);
+        const Selection after=t.update(lights,camera,32,.3f,false);assert(sameSelection(before,after)&&t.fading==0);
+        const Selection next=t.update(lights,camera,32,1.f/60,true);assert(sameSelection(before,next));}
     // 4. Under the cap the output is select()'s, bit for bit, from the first frame and across a smooth walk.
     {unsigned seed=12345;const auto rnd=[&]{seed=seed*1664525u+1013904223u;return float(seed>>8)/16777216.f;};
      for(unsigned limit:{8u,16u,24u,32u,64u})for(unsigned n=0;n<=limit;++n){
@@ -192,5 +200,5 @@ int main(){
         assert(std::fabs(night-day*.8)<1e-10);
     }
     trackerTests();benchmark();
-    std::puts("PASS local lights: 0..64 candidates, nearest 32, stable ties/order, partial 8/4 batches zero-filled with no dropped/duplicated lights, out-of-range/invalid rejection, smooth 20% night dimming including saturated fog glow; tracker: soft cap continuity, linear time fades, resets, under-cap identity with select(), tie determinism, fog over fading lamps");
+    std::puts("PASS local lights: 0..64 candidates, nearest 32, stable ties/order, partial 8/4 batches zero-filled with no dropped/duplicated lights, out-of-range/invalid rejection, smooth 20% night dimming including saturated fog glow; tracker: soft cap continuity, linear time fades, resets, gaps keep incumbents, under-cap identity with select(), tie determinism, fog over fading lamps");
 }

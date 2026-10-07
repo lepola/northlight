@@ -24,7 +24,7 @@ static_assert(Slots%DirectBatchSize==0&&Slots%FogBatchSize==0,"whole batches");
 inline constexpr float FadeSeconds=.4f;    // full 0<->1 change
 inline constexpr float StickyBias=4.f;     // world units subtracted from an incumbent's score
 inline constexpr float MinBandWidth=1.f;   // score width guard for exact ties
-inline constexpr float MaxGapSeconds=.25f; // a longer gap (F10 off, loading, hitch) restarts without fades
+inline constexpr float MaxGapSeconds=.25f; // a longer gap (F10 off, loading, hitch) snaps the factors to their targets
 inline unsigned capBand(unsigned limit){return std::max(1u,limit/4);}  // 32->8, 64->16, 8->2
 inline float nightGain(float night){return 1.f-.20f*std::clamp(night,0.f,1.f);}
 // Lamps in the sun (30%, no key): LocalDirect lamp light keeps SunlitGain where the
@@ -81,6 +81,9 @@ inline Selection select(const std::vector<NorthlightLocalLights::Light>& lights,
 // and every factor moves at most dt/FadeSeconds per update, keyed by sourceId. Lights that lose a slot stay
 // at the tail of the output (at most Spare) until their factor reaches 0, so the 8-/4-light batches of the
 // selected lights never change. No heap allocation: fixed arrays only.
+// continuous=false snaps every factor to its target and drops the fading lights, but keeps which lights were
+// selected (their StickyBias shapes the band: forgetting it on a hitch would drop the lamps at the cap at once).
+// reset() forgets everything (map change, rebuilt device).
 struct Tracker {
     struct Entry {std::uint64_t id;float shown;bool selected;NorthlightLocalLights::Light light;};
     std::array<Entry,Slots> entries{};unsigned count=0; // sorted by id
@@ -93,7 +96,7 @@ struct Tracker {
     }
     Selection update(const std::vector<NorthlightLocalLights::Light>& lights,const float* camera,unsigned limit,float dtSeconds,bool continuous){
         limit=std::min(limit,Capacity);
-        if(!continuous||!limit)reset();
+        if(!limit)reset();
         Selection out;fading=0;if(!limit)return out;
         const float dt=dtSeconds>0.f?std::min(dtSeconds,MaxGapSeconds):0.f,step=dt/FadeSeconds;
         struct Pick {float score,biased;const NorthlightLocalLights::Light* light;};
@@ -130,13 +133,13 @@ struct Tracker {
         const auto leaving=[&](unsigned index){const Entry& e=entries[index];
             float d2=0;for(unsigned i=0;i<3;++i){const float d=e.light.position[i]-camera[i];d2+=d*d;}
             const float score=std::sqrt(d2)-e.light.attenuationEnd,shown=e.shown-step;
-            if(score<VisibilityEnd&&shown>1e-6f)fade[fades++]={index,score,shown};}; // 1e-6: float residue of 1-k*step is gone, not fading
+            if(continuous&&score<VisibilityEnd&&shown>1e-6f)fade[fades++]={index,score,shown};}; // 1e-6: float residue of 1-k*step is gone, not fading
         unsigned old=0;
         for(unsigned i=0;i<selected;++i){
             while(old<count&&entries[old].id<sel[i].id)leaving(old++);
             const float target=sel[i].shown;
-            const float prev=old<count&&entries[old].id==sel[i].id?entries[old++].shown:continuous?0.f:target;
-            sel[i].shown=std::fabs(target-prev)<=step?target:target>prev?prev+step:prev-step;
+            const bool known=old<count&&entries[old].id==sel[i].id;const float prev=known?entries[old++].shown:0.f;
+            sel[i].shown=!continuous||std::fabs(target-prev)<=step?target:target>prev?prev+step:prev-step;
         }
         while(old<count)leaving(old++);
         if(fades>Spare){ // keep the brightest, then restore id order
