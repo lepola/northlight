@@ -227,7 +227,8 @@ struct MockBlobs{Env* env=nullptr;MockExt* ext=nullptr;bool faintMode=false;unsi
         return {C::Faint,original};}
     IDirect3DTexture9* faintTexture(){return env->bit("faint texture",8)?nullptr:&faint;}};
 struct Gate{int drawTid=7;void noteFirst(int){}};
-struct MirrorStateMock{Gate gate;};
+struct MirrorStateMock{Gate gate;bool textureKnown[1]={};void* textures[1]={};};
+struct WeatherDetectMock{const void* hot=nullptr;};struct WeatherSampleMock{unsigned primitives=0,draws=0;}; /* 0.3.198 (rain): drawHook's one comparison; hot stays null here (test_weather_detect drives it) */
 struct Guard{explicit Guard(Gate&){}};
 namespace NorthlightRenderThreadProbe{inline bool sampleFrame(unsigned f){return f%3==0;}inline bool profiling(){return true;}}
 namespace NorthlightWaterRenderer{enum UserPointer:unsigned{NoUserPointer,UserVertices,UserVerticesAndIndices};}
@@ -247,7 +248,7 @@ struct Base{
     std::unordered_map<IDirect3DVertexShader9*,std::uint64_t> vsHashes;std::unordered_map<IDirect3DPixelShader9*,std::uint64_t> psHashes;
     unsigned blobSignatureReports=0,terrainShadowDraws=0,frame=0,drawCalls=0;
     IDirect3DPixelShader9 *shadowSwapOriginal=nullptr,*shadowSwapReplacement=nullptr;
-    Keys effectKeys;GateCounts gateCounts;
+    Keys effectKeys;GateCounts gateCounts;WeatherDetectMock weatherDetect;WeatherSampleMock weatherSample;void weatherProbeDraw(UINT){}
     Base(){blobsObj.ext=&extObj;env.trace=&trace;blobsObj.faint.id=6;blobsObj.faint.env=extObj.original.env=&env;extObj.original.id=5;extObj.env=worldObj.env=skyObj.env=blobsObj.env=&env;extObj.ps[0].env=extObj.ps[1].env=extObj.vs.env=worldObj.replacement.env=&env;}
     bool sampledDrawTimers()const{return frame%2==0;}
     void logf(const char* format,...){char b[512];va_list a;va_start(a,format);std::vsnprintf(b,sizeof b,format,a);va_end(a);trace.push_back(std::string("log ")+b);}

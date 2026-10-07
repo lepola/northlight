@@ -135,7 +135,10 @@ test_water_geometry.py
 test_water_mask_state.py
 test_water_shader_patch.py
 test_water_shaders.py
+test_weather_detect.py
+test_weather_state.py
 test_weather_textures.py
+test_weather_wiring.py
 test_windows_installer.py
 test_wmo_group_tolerance.py
 test_world_cache_diff.py

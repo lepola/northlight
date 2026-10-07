@@ -38,6 +38,8 @@
 #include "render_thread_probe.h"
 #include "effects_buckets.h"
 #include "draw_gates.h"
+#include "weather_state.h"
+#include "weather_detect.h"
 #include "translucent_depth.h"
 #include "log_rotation.h"
 #include "memory_guard.h"
@@ -709,6 +711,20 @@ class Device final : public GuardedMirrorDevice {
     // texture (skipped when the game's blend cannot be lightened). Applies only while the mod draws actor shadows: effects (F10) and shadows (F9) on, a world
     // context, and 0.3.158 ActorShadows=1 (with 0 the game's blobs are the actor shadows).
     bool blobFilterActive()const{return shadowBlobs&&shadowBlobs->active()&&enabled&&effectKeys.settings.shadows&&!applied&&terrain&&!failed&&world&&world->hasContext()&&world->actorShadowsEnabled();}
+    // 0.3.198 (rain): weather detection. weatherDetect.hot is the one candidate texture the draw hook compares
+    // stage 0 with (weather_detect.h); the sample is what that comparison counted this frame. Both are touched
+    // under the gate only, on whichever thread makes the draw (stream: replay thread; fallback: game thread).
+    static_assert(NorthlightWeatherDetect::kFmtA8R8G8B8==D3DFMT_A8R8G8B8,"weather signature format");
+    NorthlightWeatherDetect::Detector weatherDetect;NorthlightWeather::Tracker weatherTracker;NorthlightWeather::Sample weatherSample;
+    LONGLONG weatherTick=0;double weatherLogClock=0;NorthlightWeather::Kind weatherLoggedKind=NorthlightWeather::Kind::None;bool weatherLoggedBlendHigh=false,weatherLoggedBlendLow=false,weatherOffReported=false;
+    // RenderProfile sample frames only: the largest draw before the effects (WEATHER probe), to calibrate detection.
+    struct WeatherProbe {UINT count=0;const void* texture=nullptr;bool known=false,candidate=false,vs=false,ps=false;} weatherProbe;
+    void weatherProbeDraw(UINT count){
+        if(applied||count<=weatherProbe.count)return;
+        weatherProbe.count=count;weatherProbe.known=mirrorState.textureKnown[0];weatherProbe.texture=weatherProbe.known?mirrorState.textures[0]:nullptr; /* borrowed: never dereferenced */
+        weatherProbe.candidate=weatherProbe.texture&&weatherDetect.isCandidate(weatherProbe.texture);weatherProbe.vs=mirrorState.vertexShaderKnown&&mirrorState.vertexShader;weatherProbe.ps=mirrorState.pixelShaderKnown&&mirrorState.pixelShader;
+    }
+    static void weatherLog(const char* line){logf("%s",line);}
     // 0.3.187 per-frame draw gates (draw_gates.h, FrameDrawGates=1): latched where every input can
     // rise, never inside a frame: at the end of finishFrameImpl (after F9/F10/F12, setEffects and the
     // retry's failed=false; clearFrame runs before that retry, so it is not the place), in Reset
@@ -771,6 +787,9 @@ class Device final : public GuardedMirrorDevice {
     // so it keeps a region of its own. Gates off: the 0.3.184 regions one by one.
     template<class Capture,class Draw> HRESULT drawHook(D3DPRIMITIVETYPE t,UINT count,Capture capture,Draw draw){
         bool claimed=false;
+        // 0.3.198 (rain): the whole per-draw cost of weather detection, before any other work and in both gate paths: one pointer comparison.
+        if(weatherDetect.hot&&!applied&&mirrorState.textureKnown[0]&&mirrorState.textures[0]==weatherDetect.hot){weatherSample.primitives+=count;++weatherSample.draws;}
+        if(gateFrame)weatherProbeDraw(count); /* RenderProfile sample frames only */
         if(!frameDrawGates){
             dropBlobFaint();prepareDraw(capture);
             {CpuScope hooks(sampledHookTimer());
@@ -877,9 +896,9 @@ public:
     bool setExclusiveOwner(bool on){return mirrorState.gate.setExclusive(on);} /* 0.3.192 (CS): one thread makes every Device call (mirror_guard.h) */
     HRESULT STDMETHODCALLTYPE SetCursorProperties(UINT XHotSpot, UINT YHotSpot, IDirect3DSurface9* pCursorBitmap) override{Guard mirrorLock(mirrorState.gate);return ext->SetCursorProperties(XHotSpot, YHotSpot, mirrorResources.unwrap(pCursorBitmap));}
     HRESULT STDMETHODCALLTYPE GetBackBuffer(UINT iSwapChain, UINT iBackBuffer, D3DBACKBUFFER_TYPE Type, IDirect3DSurface9** ppBackBuffer) override{Guard mirrorLock(mirrorState.gate);HRESULT hr=ext->GetBackBuffer(iSwapChain, iBackBuffer, Type, ppBackBuffer);if(SUCCEEDED(hr)){mirrorResources.wrap(ppBackBuffer);}return hr;}
-    HRESULT STDMETHODCALLTYPE CreateTexture(UINT Width, UINT Height, UINT Levels, DWORD Usage, D3DFORMAT Format, D3DPOOL Pool, IDirect3DTexture9** ppTexture, HANDLE* pSharedHandle) override{Guard mirrorLock(mirrorState.gate);HRESULT hr=ext->CreateTexture(Width, Height, Levels, Usage, Format, Pool, ppTexture, pSharedHandle);if(SUCCEEDED(hr)){NorthlightReplayDrawState::noteTextureFormat(Format);mirrorResources.wrap(ppTexture);}return hr;}
-    HRESULT STDMETHODCALLTYPE CreateVolumeTexture(UINT Width, UINT Height, UINT Depth, UINT Levels, DWORD Usage, D3DFORMAT Format, D3DPOOL Pool, IDirect3DVolumeTexture9** ppVolumeTexture, HANDLE* pSharedHandle) override{Guard mirrorLock(mirrorState.gate);HRESULT hr=ext->CreateVolumeTexture(Width, Height, Depth, Levels, Usage, Format, Pool, ppVolumeTexture, pSharedHandle);if(SUCCEEDED(hr)){NorthlightReplayDrawState::noteTextureFormat(Format);mirrorResources.wrap(ppVolumeTexture);}return hr;}
-    HRESULT STDMETHODCALLTYPE CreateCubeTexture(UINT EdgeLength, UINT Levels, DWORD Usage, D3DFORMAT Format, D3DPOOL Pool, IDirect3DCubeTexture9** ppCubeTexture, HANDLE* pSharedHandle) override{Guard mirrorLock(mirrorState.gate);HRESULT hr=ext->CreateCubeTexture(EdgeLength, Levels, Usage, Format, Pool, ppCubeTexture, pSharedHandle);if(SUCCEEDED(hr)){NorthlightReplayDrawState::noteTextureFormat(Format);mirrorResources.wrap(ppCubeTexture);}return hr;}
+    HRESULT STDMETHODCALLTYPE CreateTexture(UINT Width, UINT Height, UINT Levels, DWORD Usage, D3DFORMAT Format, D3DPOOL Pool, IDirect3DTexture9** ppTexture, HANDLE* pSharedHandle) override{Guard mirrorLock(mirrorState.gate);HRESULT hr=ext->CreateTexture(Width, Height, Levels, Usage, Format, Pool, ppTexture, pSharedHandle);if(SUCCEEDED(hr)){NorthlightReplayDrawState::noteTextureFormat(Format);weatherDetect.noteCreate(static_cast<IDirect3DBaseTexture9*>(*ppTexture),Width,Height,Levels,Format); /* 0.3.198 (rain): the raw pointer, before wrap */mirrorResources.wrap(ppTexture);}return hr;}
+    HRESULT STDMETHODCALLTYPE CreateVolumeTexture(UINT Width, UINT Height, UINT Depth, UINT Levels, DWORD Usage, D3DFORMAT Format, D3DPOOL Pool, IDirect3DVolumeTexture9** ppVolumeTexture, HANDLE* pSharedHandle) override{Guard mirrorLock(mirrorState.gate);HRESULT hr=ext->CreateVolumeTexture(Width, Height, Depth, Levels, Usage, Format, Pool, ppVolumeTexture, pSharedHandle);if(SUCCEEDED(hr)){NorthlightReplayDrawState::noteTextureFormat(Format);weatherDetect.forget(static_cast<IDirect3DBaseTexture9*>(*ppVolumeTexture)); /* 0.3.198 (rain): address reuse */mirrorResources.wrap(ppVolumeTexture);}return hr;}
+    HRESULT STDMETHODCALLTYPE CreateCubeTexture(UINT EdgeLength, UINT Levels, DWORD Usage, D3DFORMAT Format, D3DPOOL Pool, IDirect3DCubeTexture9** ppCubeTexture, HANDLE* pSharedHandle) override{Guard mirrorLock(mirrorState.gate);HRESULT hr=ext->CreateCubeTexture(EdgeLength, Levels, Usage, Format, Pool, ppCubeTexture, pSharedHandle);if(SUCCEEDED(hr)){NorthlightReplayDrawState::noteTextureFormat(Format);weatherDetect.forget(static_cast<IDirect3DBaseTexture9*>(*ppCubeTexture)); /* 0.3.198 (rain): address reuse */mirrorResources.wrap(ppCubeTexture);}return hr;}
     HRESULT STDMETHODCALLTYPE CreateRenderTarget(UINT Width, UINT Height, D3DFORMAT Format, D3DMULTISAMPLE_TYPE MultiSample, DWORD MultisampleQuality, WINBOOL Lockable, IDirect3DSurface9** ppSurface, HANDLE* pSharedHandle) override{Guard mirrorLock(mirrorState.gate);HRESULT hr=ext->CreateRenderTarget(Width, Height, Format, MultiSample, MultisampleQuality, Lockable, ppSurface, pSharedHandle);if(SUCCEEDED(hr)){mirrorResources.wrap(ppSurface);}return hr;}
     HRESULT STDMETHODCALLTYPE CreateDepthStencilSurface(UINT Width, UINT Height, D3DFORMAT Format, D3DMULTISAMPLE_TYPE MultiSample, DWORD MultisampleQuality, WINBOOL Discard, IDirect3DSurface9** ppSurface, HANDLE* pSharedHandle) override{Guard mirrorLock(mirrorState.gate);HRESULT hr=ext->CreateDepthStencilSurface(Width, Height, Format, MultiSample, MultisampleQuality, Discard, ppSurface, pSharedHandle);if(SUCCEEDED(hr)){mirrorResources.wrap(ppSurface);}return hr;}
     HRESULT STDMETHODCALLTYPE UpdateSurface(IDirect3DSurface9 *src_surface, const RECT *src_rect, IDirect3DSurface9 *dst_surface, const POINT *dst_point) override{Guard mirrorLock(mirrorState.gate);return ext->UpdateSurface(mirrorResources.unwrap(src_surface), src_rect, mirrorResources.unwrap(dst_surface), dst_point);}
@@ -925,6 +944,7 @@ public:
         world->setConstantEpochSource({&mirrorState.constantEpoch,&mirrorState}); /* 0.3.180 (C1): read in place under the draw's gate */
         char skyRoot[MAX_PATH*3];WideCharToMultiByte(CP_UTF8,0,rootPath,-1,skyRoot,sizeof skyRoot,nullptr,nullptr);celestialDiscs=std::make_unique<NorthlightCelestialDiscRenderer>(ext,std::string(skyRoot)+"world-cache/celestial");celestialDiscs->setTerrainSource([this]{return world->celestialTerrainGeneration();},[this](unsigned body,const float* matrix){return world->drawCelestialTerrain(body,matrix);},[this](unsigned body){world->noteCelestialTerrainReuse(body);});celestialDiscs->setIdentityMap([this](std::uintptr_t exposed){return mirrorResources.rawOf(exposed,!mirrorState.enabled);});shadowBlobs=std::make_unique<NorthlightShadowBlobFilter>(ext,world->blobShadowStrength());shadowBlobs->setTexturePeek([](void* e,DWORD stage,IDirect3DBaseTexture9*& out){return static_cast<ExtensionDevice*>(e)->peekTexture(stage,out);},ext); /* 0.3.196 (task 12): borrowed stage-0 identity */water=std::make_unique<NorthlightWaterRenderer>(ext); logf("D3D9 device wrapped. Ctrl+Shift+F7 fog; F8 GI; F9 shadows; F10 all effects; F12 world debug (all with Ctrl+Shift). F11 unassigned. Components start ON; GI cache stays warm.");
         frameDrawGates=world->frameDrawGates();latchDrawGates(); /* 0.3.187: after the renderers exist */
+        weatherDetect.sink=&weatherLog; /* 0.3.198 (rain) */
         // The async sweep feeds the memory guard (always) and the periodic MEMORY line
         // (Diagnostics only). Allocation admission stays synchronous in WorldRenderer.
         try{memoryDiagnostics=std::make_unique<NorthlightMemoryDiagnostics::Sampler>(&queryAddressSpace);}
@@ -954,7 +974,7 @@ public:
     HRESULT STDMETHODCALLTYPE GetDirect3D(IDirect3D9** out) override { Guard mirrorLock(mirrorState.gate);if(!out)return D3DERR_INVALIDCALL;*out=parent;parent->AddRef();return D3D_OK;}
     HRESULT STDMETHODCALLTYPE Reset(D3DPRESENT_PARAMETERS* pp) override { Guard mirrorLock(mirrorState.gate);
         frameIntervals.reset();frameCost.reset();backDescKnown=false;backSurface=nullptr;
-        NorthlightTrackedBuffers::invalidateAll();gpuProfile->reset(); releaseResources(); if(world)world->reset();if(water)water->reset();if(celestialDiscs)celestialDiscs->reset();if(shadowBlobs)shadowBlobs->reset(); failed=false;latchDrawGates();
+        NorthlightTrackedBuffers::invalidateAll();gpuProfile->reset(); releaseResources(); if(world)world->reset();if(water)water->reset();if(celestialDiscs)celestialDiscs->reset();if(shadowBlobs)shadowBlobs->reset(); weatherDetect.reset();weatherSample={}; /* 0.3.198 (rain) */failed=false;latchDrawGates();
         HRESULT hr=ext->Reset(pp); logf("Reset HRESULT=0x%08lx",(unsigned long)hr); return hr;
     }
     // Frame boundary only (after clearFrame()): no draw of the finished frame
@@ -986,7 +1006,7 @@ public:
     // 0.3.154 microbenchmark (DRAWGATE lines, at log time): GateBenchIters x each per-draw primitive,
     // ns per op including the loop. The gate is held here, so the lock is a private recursive_mutex.
     static constexpr unsigned GateBenchIters=256;
-    struct GateBench {double lockNs=-1,findNs=-1,getVsNs=-1,qpcNs=-1,ownerNs=-1;unsigned findHits=0;};
+    struct GateBench {double lockNs=-1,findNs=-1,getVsNs=-1,qpcNs=-1,ownerNs=-1,weatherNs=-1;unsigned findHits=0;};
     GateBench gateBench(){
         GateBench b;if(cpuFrequency.QuadPart<=0)return b;const double ns=1e9/double(cpuFrequency.QuadPart);
         LARGE_INTEGER t0={},t1={},t={};
@@ -1004,6 +1024,10 @@ public:
         b.getVsNs=double(t1.QuadPart-t0.QuadPart)*ns/GateBenchIters;mirrorState.answered=answered;mirrorState.forwarded=forwarded;
         QueryPerformanceCounter(&t0);for(unsigned i=0;i<GateBenchIters;++i)QueryPerformanceCounter(&t);QueryPerformanceCounter(&t1);
         b.qpcNs=double(t1.QuadPart-t0.QuadPart)*ns/(GateBenchIters+1);
+        // 0.3.198 (rain): the draw hook's weather comparison, hot set and matching (the worst case), on a throwaway sample.
+        {const void* volatile benchHot=&b;const void* volatile benchTexture=&b;NorthlightWeather::Sample sample;
+            QueryPerformanceCounter(&t0);for(unsigned i=0;i<GateBenchIters;++i){const void* hot=benchHot;if(hot&&!applied&&benchTexture==hot){sample.primitives+=i;++sample.draws;}}QueryPerformanceCounter(&t1);
+            b.weatherNs=double(t1.QuadPart-t0.QuadPart)*ns/GateBenchIters;}
         b.findHits=unsigned(hits);return b;
     }
     // 0.3.154: one DRAWGATE ab line per RenderProfile sample frame; -1 = not measured.
@@ -1020,19 +1044,43 @@ public:
         const GateBench b=gateBench();const GateCounts& n=gateCounts;
         if(NorthlightRenderThreadProbe::profiling())logf("DRAWGATE ab frame=%u mode=%c perDrawTimers=%u applied=%u far=%u captureSkipped=%u draws=%u sceneDraws=%u sceneMs=%.4f sceneReads=%llu frameReads=%llu qpcNs=%.1f "
             "drawGateMs=%.4f prepMs=%.4f captureMs=%.4f waterMs=%.4f effectsMs=%.4f p=%u c=%u w=%u missingVS=%u terrain=%u wmo=%u ui=%u fullPasses=%u shadowSwaps=%u audits=%u "
-            "blobCalls=%u blobTextures=%u blobClaimed=%u gameCalls=%u perfCalls=%u bufferGenerations=%llu bufferCreates=%u processVertices=%u benchIters=%u lockNs=%.1f findNs=%.1f findHits=%u getVsNs=%.1f qpcBackNs=%.1f ownerNs=%.1f acqDevice=%u acqRegistry=%u acqResource=%u acqOther=%u vsCacheHits=%llu vsCacheMisses=%llu",
+            "blobCalls=%u blobTextures=%u blobClaimed=%u gameCalls=%u perfCalls=%u bufferGenerations=%llu bufferCreates=%u processVertices=%u benchIters=%u lockNs=%.1f findNs=%.1f findHits=%u getVsNs=%.1f qpcBackNs=%.1f ownerNs=%.1f acqDevice=%u acqRegistry=%u acqResource=%u acqOther=%u vsCacheHits=%llu vsCacheMisses=%llu weatherDraws=%u weatherPrims=%u weatherNs=%.1f",
             sampleFrame,timed?'T':'U',unsigned(timed),unsigned(frameApplied),unsigned(world&&world->lastFarDrawn()),unsigned(world&&world->captureSkippedLastFrame()),drawCalls-frameStartDrawCalls,scene?gateSceneDraws-frameStartDrawCalls:0u,
             scene?double(gateSceneEnd.QuadPart-gatePresentDone)*ms:-1.0,scene?gateSceneReads-frameStartScopeReads:0ull,frameReads,qpcNs,
             timed?std::max(0.0,double(cpuPrep-cpuCapture-cpuEffects)*ms):-1.0,timed?cpuPrep*ms:-1.0,timed?cpuCapture*ms:-1.0,timed?cpuWaterCapture*ms:-1.0,cpuEffects*ms,
             n.prep,n.capture,n.water,missingVS-gateStart.missingVS,terrainDraws-gateStart.terrain,n.wmo,uiDraws-gateStart.ui,n.fullPasses,terrainShadowDraws-gateStart.shadowSwaps,n.audits,
             n.blobCalls,n.blobTextures,n.blobClaimed,gameCalls,perf,generations,n.bufferCreates,n.processVertices,GateBenchIters,b.lockNs,b.findNs,b.findHits,b.getVsNs,b.qpcNs,
-            b.ownerNs,acqDevice,acqRegistry,acqResource,acqOther,vsCacheHits-gateStart.vsHits,vsCacheMisses-gateStart.vsMisses);
+            b.ownerNs,acqDevice,acqRegistry,acqResource,acqOther,vsCacheHits-gateStart.vsHits,vsCacheMisses-gateStart.vsMisses,weatherSample.draws,weatherSample.primitives,b.weatherNs); /* 0.3.198 (rain): derived from the sample, no per-draw counter */
     }
     void finishFrame() {
         Guard mirrorLock(mirrorState.gate);
         struct InvalidateOnReturn {DeviceMirror& state;~InvalidateOnReturn(){state.invalidate();}} invalidate{mirrorState};
         if(extensionFault){clearFrame();return;}
         extensionWork("frame finish",[&]{finishFrameImpl();});
+    }
+    // 0.3.198 (rain): frame end, on the finishing thread, under the gate: the frame's sample into the tracker, the state to the
+    // world, the hot candidate rotated while nothing is active, and the WEATHER lines.
+    void weatherFrame(unsigned sampleFrame){
+        namespace W=NorthlightWeather;
+        if(gateFrame){logWeatherProbe(sampleFrame);weatherProbe={};}
+        LARGE_INTEGER now={};double dt=0;
+        if(cpuFrequency.QuadPart>0&&QueryPerformanceCounter(&now)){if(weatherTick)dt=double(now.QuadPart-weatherTick)/double(cpuFrequency.QuadPart);weatherTick=now.QuadPart;}
+        if(!mirrorState.enabled){weatherDetect.setOff(true);if(!weatherOffReported){weatherOffReported=true;logf("WEATHER detect=off (mirror inactive)");}}
+        weatherSample.kind=weatherSample.draws?weatherDetect.hotKind:W::Kind::None;
+        weatherTracker.frame(weatherSample,float(dt));const W::State& st=weatherTracker.state();
+        const bool counted=weatherSample.draws!=0;const W::Sample frameSample=weatherSample;weatherSample={};
+        if(!counted&&st.kind==W::Kind::None)weatherDetect.rotate(); /* idle: look at the next candidate */
+        if(world)world->setWeather(st);
+        const bool high=st.blend>=W::kBlendLogHigh,low=st.blend>=W::kBlendLogLow;
+        weatherLogClock+=dt;
+        const bool change=st.kind!=weatherLoggedKind||high!=weatherLoggedBlendHigh||low!=weatherLoggedBlendLow;
+        if(change||(diagnostics()&&st.kind!=W::Kind::None&&weatherLogClock>=10.0)){
+            weatherLogClock=0;weatherLoggedKind=st.kind;weatherLoggedBlendHigh=high;weatherLoggedBlendLow=low;
+            logf("WEATHER kind=%s prims=%u draws=%u intensity=%.3f blend=%.3f wet=%.3f candidates=%u generation=%u hot=%p",W::kindName(st.kind),frameSample.primitives,frameSample.draws,st.intensity,st.blend,st.wetness,weatherDetect.count(),weatherDetect.generation,weatherDetect.hot);
+        }
+    }
+    void logWeatherProbe(unsigned sampleFrame){
+        logf("WEATHER probe frame=%u maxDrawPrims=%u tex=%p known=%d candidate=%d vs=%d ps=%d hot=%p hotDraws=%u tall=%u overflows=%u",sampleFrame,weatherProbe.count,weatherProbe.texture,int(weatherProbe.known),int(weatherProbe.candidate),int(weatherProbe.vs),int(weatherProbe.ps),weatherDetect.hot,weatherSample.draws,weatherDetect.tallSeen,weatherDetect.overflows);
     }
     void finishFrameImpl() {
         const auto frameEffects=effectKeys.settings;const bool frameEnabled=enabled;
@@ -1164,6 +1212,7 @@ public:
             logGateThreads("periodic");
             reportLogCost();
         }
+        weatherFrame(sampleFrame);
         cpuPrep=cpuCapture=cpuWaterCapture=cpuEffects=0;cpuCaptureReads=0;cpuDrawHooks=0;
         ++frame;mirrorState.gate.frame.store(frame,std::memory_order_relaxed); /* 0.3.180: the census' frame */
         if(frame==300)memmap(diagnosticId==1?"baseline-frame300":"frame300"); /* 0.3.192 (MEMMAP): allocations settled; device 1 is the baseline */
