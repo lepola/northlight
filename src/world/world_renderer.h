@@ -723,6 +723,17 @@ private:
         std::shared_ptr<const NorthlightActorDeformation::Program> program; /* 0.3.179 (T1): actorPrograms' object (null: none) */
     };
     std::unordered_map<IDirect3DVertexShader9*,CaptureShader> captureShaders;
+    // 0.3.196 (task 12): one-entry lookup cache for repeated draws of the same shader. terrainShaders/captureShaders change only in
+    // registerShader (a freed address can be re-registered), which bumps worldShaderGen first, so a stale entry never matches.
+    // The cached CaptureShader pointer is a map node (stable across rehash) and is dropped with the generation on any erase.
+    std::uint32_t worldShaderGen=0;
+    struct ShaderLookup{IDirect3DVertexShader9* shader=nullptr;std::uint32_t gen=~0u;bool terrain=false;const CaptureShader* capture=nullptr;};
+    ShaderLookup lastShader;unsigned long long shaderLookupHits=0,shaderLookupMisses=0;
+    const ShaderLookup& lookupShader(IDirect3DVertexShader9* shader){
+        if(lastShader.shader==shader&&lastShader.gen==worldShaderGen){++shaderLookupHits;return lastShader;}
+        ++shaderLookupMisses;auto it=captureShaders.find(shader);
+        lastShader.shader=shader;lastShader.gen=worldShaderGen;lastShader.terrain=terrainShaders.count(shader)!=0;lastShader.capture=it==captureShaders.end()?nullptr:&it->second;return lastShader;
+    }
     // 0.3.179 (T1): programs erased by registerShader while replays may still point at them; released after
     // endFrame's recycle (0.3.183: an abandoned worker reads the copies pinned in prepareQuarantinedPrograms).
     std::vector<std::shared_ptr<const NorthlightActorDeformation::Program>> retiredPrograms;
@@ -2167,6 +2178,7 @@ public:
         info.colorRegister=NorthlightLegacyFog::ps3FogColorRegister(code.data(),code.size());info.verified=info.colorRegister>=0;fogShaders[shader]=info;
     }
     void registerShader(IDirect3DVertexShader9* shader,uint64_t hash){
+        ++worldShaderGen; /* 0.3.196 (task 12): before any map changes */
         replayBoundsMetadata.invalidateShader(shader);
         wmoShaders.erase(shader);if(auto* info=NorthlightWmoContext::signature(hash))wmoShaders[shader]=info;
         terrainShaders.erase(shader);if(contains(kTerrainVS,hash))terrainShaders.insert(shader);
@@ -2212,7 +2224,7 @@ public:
     void captureUP(D3DPRIMITIVETYPE type,UINT minimum,UINT vertexTotal,UINT count,const void* indexData,D3DFORMAT format,const void* vertexData,UINT stride,bool indexed,IDirect3DVertexShader9* shader,bool selfCheck,bool sample){
         constantSelfCheck=selfCheck;sample=sample&&NorthlightDiagnostics::enabled();
         if(!ready())return;
-        if(!terrainShaders.count(shader)){captureSampled|=sample;captureModel(type,0,minimum,vertexTotal,0,count,indexed,shader,sample,indexData,format,vertexData,stride);return;}
+        if(!lookupShader(shader).terrain){captureSampled|=sample;captureModel(type,0,minimum,vertexTotal,0,count,indexed,shader,sample,indexData,format,vertexData,stride);return;}
         captureSampled|=sample;if(sample){++terrainCaptureCalls;++terrainUPCalls;}CpuScope cpu(sample?&terrainCaptureTicks:nullptr);
         ++terrainAttempts;NorthlightTerrainCapture::MeshSnapshot snapshot;NorthlightTerrainCapture::Diagnostics why;
         bool ok=indexed?terrainBoundsCache.readMeshUP(d,type,minimum,vertexTotal,count,indexData,format,vertexData,stride,context.view,snapshot,&why):
@@ -2223,7 +2235,7 @@ public:
     void capture(D3DPRIMITIVETYPE type,INT base,UINT min,UINT vertexTotal,UINT start,UINT count,bool indexed,IDirect3DVertexShader9* current,bool selfCheck,bool sample){
         constantSelfCheck=selfCheck;sample=sample&&NorthlightDiagnostics::enabled();
         if(!ready()||replays.size()>=4096||(type!=D3DPT_TRIANGLELIST&&type!=D3DPT_TRIANGLESTRIP))return;
-        captureSampled|=sample;bool isTerrain=terrainShaders.count(current)!=0;
+        captureSampled|=sample;bool isTerrain=lookupShader(current).terrain;
         if(isTerrain){
             if(sample)++terrainCaptureCalls;CpuScope cpu(sample?&terrainCaptureTicks:nullptr);
             ++terrainAttempts;
@@ -2506,8 +2518,8 @@ public:
         return priority&&replaySnapshots.nearReserve()&&!replaySnapshots.countExhausted(priority)&&nearDraw(shader);}
     void captureModel(D3DPRIMITIVETYPE type,INT base,UINT minimum,UINT vertexTotal,UINT start,UINT count,bool indexed,IDirect3DVertexShader9* current,bool sample,const void* userIndices,D3DFORMAT userFormat,const void* userVertices,UINT userStride){
         if(modelCaptureSkipped())return; /* previous replays/actor packets are not needed this frame */
-        auto it=captureShaders.find(current);if(it==captureShaders.end()){if(sample)++unknownCaptureCalls;return;}
-        const auto& metadata=it->second;
+        const CaptureShader* found=lookupShader(current).capture;if(!found){if(sample)++unknownCaptureCalls;return;}
+        const auto& metadata=*found;
         // 0.3.173 rigid memory: did the game draw a remembered prop? Before every capture rejection.
         if(!rigidDrawKeys.empty()&&rigidDrawKeys.contains(current,count))rigidMemoryDrawn(current,count);
         // Shadow fate (diagnostic window only): the outcome recorded at return.

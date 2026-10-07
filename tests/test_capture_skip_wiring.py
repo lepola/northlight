@@ -15,7 +15,7 @@ w=fp.src('world_renderer.h').read_text();pt=fp.src('world_point_rendering.inl').
 def once(text,needle,what):assert text.count(needle)==1,f'{what}: expected exactly one {needle!r}'
 render=w[w.index('    bool render(IDirect3DSurface9* targetSurface'):]
 # Skip only model capture, inside WorldRenderer: terrain branch, water mask and mirror audit untouched.
-once(w,'        if(modelCaptureSkipped())return; /* previous replays/actor packets are not needed this frame */\n        auto it=captureShaders.find(current);','model skip at captureModel entry')
+once(w,'        if(modelCaptureSkipped())return; /* previous replays/actor packets are not needed this frame */\n        const CaptureShader* found=lookupShader(current).capture;if(!found){if(sample)++unknownCaptureCalls;return;}','model skip at captureModel entry')
 cap=w[w.index('    void capture(D3DPRIMITIVETYPE type'):w.index('    void releaseReplayGPU()')]
 assert cap.index('if(isTerrain)')<cap.index('captureModel('),'terrain capture precedes (and is independent of) the model skip'
 assert 'modelCaptureSkipped' not in r and len(re.findall(r'world->capture(?:UP)?\([^;]*\);captureWater\(vs,',r))==4,'renderer.cpp: every draw still captures water right after world capture'

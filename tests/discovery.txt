@@ -126,6 +126,7 @@ test_translucent_actor_depth.py
 test_translucent_depth_census.py
 test_unlisted_archive.py
 test_upload_locks.py
+test_vs_class_cache.py
 test_water_antialias.py
 test_water_geometry.py
 test_water_mask_state.py

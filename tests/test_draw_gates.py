@@ -80,6 +80,7 @@ def member(text,signature):
 assert renderer.count('    // 0.3.187 per-frame draw gates')==1
 gates_block=renderer[renderer.index('    // 0.3.187 per-frame draw gates'):renderer.index('    // 0.3.154: blob shadow claim')]
 new_members='\n'.join([member(renderer,'template<class Work> bool extensionWork('),member(renderer,'template<class Capture> void prepareDraw(Capture capture)'),
+    renderer[renderer.index('    // 0.3.196 (task 12): one-entry per-draw vertex shader classification'):renderer.index('    std::unordered_map<IDirect3DPixelShader9*, uint64_t> psHashes;')],
     member(renderer,'void planTerrainShadowSwap('),member(renderer,'void dropTerrainShadowSwap('),member(renderer,'template<class Draw> HRESULT terrainShadowDraw('),
     gates_block,member(renderer,'bool blobFilterActive()const'),member(renderer,'NorthlightShadowBlobFilter::Result blobClaim(UINT count)'),
     member(renderer,'HRESULT STDMETHODCALLTYPE DrawPrimitive(D3DPRIMITIVETYPE t,UINT start,UINT count) override')])
@@ -198,6 +199,7 @@ struct MockWorld{
     bool shadowsRequested()const{return shadows;}
     bool terrainShadowActive()const{return shadows&&composited;}
     bool frameDrawGates()const{return true;}
+    bool recognizesWmo(IDirect3DVertexShader9*)const{return false;}bool isWorldShader(IDirect3DVertexShader9*)const{return false;}bool isSkinnedShader(IDirect3DVertexShader9*)const{return false;}
     IDirect3DPixelShader9* terrainShadowReplacement(IDirect3DPixelShader9* p){env->call("terrainShadowReplacement "+psName(p),"fault replacement");return env->bit("replacement")?&replacement:nullptr;}
     void capture(D3DPRIMITIVETYPE t,INT base,UINT min,UINT vertices,UINT start,UINT count,bool indexed,IDirect3DVertexShader9*,bool a,bool b){
         env->call("capture "+drawName(t,start,count)+" "+std::to_string(base+min+vertices)+std::to_string(indexed)+std::to_string(a)+std::to_string(b),"fault capture");}
@@ -258,7 +260,7 @@ struct Base{
         ++drawCalls;env.call("prepare","fault prepare"); \
         if(failed||!enabled)return; \
         if(applied)return; \
-        IDirect3DVertexShader9* vs=&extObj.vs;vsTags[vs]=env.bit("terrain tag")?1:2; \
+        IDirect3DVertexShader9* vs=&extObj.vs;setTag(vs,env.bit("terrain tag")?1:2); \
         if(env.bit("finds terrain",5))terrain=true; \
         if(env.bit("fails",60))failed=true; \
         if(env.bit("applies",30)){applied=true;trace.push_back("renderEffects");} \
@@ -266,10 +268,13 @@ struct Base{
         if(env.bit("world domain"))capture(vs); \
     }
 struct OldDevice final:Base{
+    void setTag(IDirect3DVertexShader9* vs,int t){vsTags[vs]=t;}
     PREPARE_IMPL
 @OLD@
 };
 struct NewDevice final:Base{
+    // A registration: the generation moves when the tag at an address changes (the real CreateVertexShader bumps it before every registration).
+    void setTag(IDirect3DVertexShader9* vs,int t){auto it=vsTags.find(vs);if(it==vsTags.end()||it->second!=t)++vsGeneration;vsTags[vs]=t;}
     PREPARE_IMPL
 @NEW@
 };
