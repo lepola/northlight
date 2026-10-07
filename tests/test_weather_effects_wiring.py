@@ -28,8 +28,8 @@ checks['cpp: c23 untouched']=w.count('memcpy(c[23],context.camera,12);')==1 and 
 checks['cpp: GridInfo.z (c20.z) unchanged']='c[20][2]=.85f;' in w and re.findall(r'c\[20\]\[2\]=[^;]*;',w)==['c[20][2]=.85f;']
 # identity at zero weather
 checks['cpp: every coupling is a gain (x1) or an addend (+0) from the one derived Frame']=all(s in w for s in (
-    'const auto wx=weatherEffects();','c[58][2]=13.f*lampGain*wx.lampFogGain();','c[58][3]=.156f*lampGain*wx.lampFogGain();','c[18][3]+=wx.ambientLift();',
-    'c[21][1]=1.2f*wx.shaftGain();','c[21][1]=1.2f*volumePalette.fogGain[source]*wx.shaftGain();','hazeLift,wx.hazeTauScale());','const float airFloor=.0017f+wx.airExtinction();'))
+    'const auto wx=weatherEffects();','c[58][2]=10.f*lampGain*wx.lampFogGain();','c[58][3]=.12f*lampGain*wx.lampFogGain();','c[18][3]+=wx.ambientLift();',
+    'c[21][1]=1.2f*wx.shaftGain();','c[21][1]=1.2f*volumePalette.fogGain[source]*wx.shaftGain();','hazeLift,wx.hazeTauScale());','const float airFloor=.0017f+wx.airExtinction()*denseDamp;'))
 checks['cpp: no other 1.2f volume gain site']=w.count('c[21][1]=')==2
 checks['haze: tauScale defaults to 1 and multiplies the optical depth only']=('float tauScale=1.f)' in hz and '*.01f*scale*(std::isfinite(tauScale)&&tauScale>0?tauScale:1.f);' in hz)
 checks['hlsl: WorldFog takes the air floor from c59.w (the old literal .0017 moved into the constant)']=('airBase=WeatherInfo.w+airBase*saturate(mad(field.w,1.6,-1));' in h and '.0017+airBase' not in h)
@@ -78,7 +78,7 @@ checks['renderer.cpp: the gain is set once per frame next to the disc render, fr
 # settings
 checks['WorldRenderer: settings accessors and the derived frame']=all(s in w for s in ('unsigned weatherSetting()const{return quality.weather;}','unsigned rainFogSetting()const{return quality.rainFog;}',
     'unsigned rainWetnessSetting()const{return quality.rainWetness;}','derive(weatherState,quality.weather,quality.rainFog,quality.rainWetness)'))
-checks['weather_effects.h: coefficient table']=all(s in we for s in ('kSnowFog=0.6f','kHazeTau=0.75f','kAirExtinction=0.0012f','kShafts=0.75f','kDisc=0.85f','kShadowSoften=0.5f','kLampFog=0.5f','kAmbientLift=0.25f'))
+checks['weather_effects.h: coefficient table']=all(s in we for s in ('kSnowFog=0.6f','kHazeTau=0.75f','kAirExtinction=0.0012f','kShafts=0.75f','kDisc=0.85f','kShadowSoften=0.5f','kLampFog=0.f','kAmbientLift=0.25f'))
 checks['probe radiance is not touched (no GI re-solve: skyRadiance sites as before)']='skyRadiance' not in we and w.count('skyRadiance')==3
 for k,ok in checks.items():print(('PASS ' if ok else 'FAIL ')+k)
 sys.exit(0 if all(checks.values()) else 1)

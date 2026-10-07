@@ -36,7 +36,7 @@ int main(){
         auto f=WE::derive(st(Kind::Rain,1,1,1),1,1,1);
         assert(f.fog==1.0f&&f.rain==1.0f&&f.wet==1.0f);
         assert(near(f.hazeTauScale(),1.75f)&&near(f.airExtinction(),0.0012f)&&near(f.shaftGain(),0.25f)&&near(f.discGain(),0.15f)
-            &&near(f.shadowSoften(),0.5f)&&near(f.lampFogGain(),1.5f)&&near(f.ambientLift(),0.25f));
+            &&near(f.shadowSoften(),0.5f)&&near(f.lampFogGain(),1.0f)&&near(f.ambientLift(),0.25f));
         auto h=WE::derive(st(Kind::Rain,0.5f,0.5f,0.2f),1,1,1);const float lv=0.5f*(0.35f+0.65f*0.5f);assert(near(h.fog,lv)&&near(h.rain,lv)&&near(h.wet,0.2f)&&near(h.shaftGain(),1-0.75f*lv));
     }
     {   // intensity floor: faint rain (intensity 0) still acts at 35 percent; blend 0 stays exactly dry whatever the intensity
@@ -55,7 +55,7 @@ int main(){
     }
     {   // RainFog=2 at full rain: gains stay in range
         auto f=WE::derive(st(Kind::Rain,1,1,1),1,2,2);
-        assert(f.fog==2.0f&&f.shaftGain()==0.0f&&f.discGain()==0.0f&&near(f.shadowSoften(),0.95f)&&near(f.hazeTauScale(),2.5f)&&near(f.lampFogGain(),2.0f));
+        assert(f.fog==2.0f&&f.shaftGain()==0.0f&&f.discGain()==0.0f&&near(f.shadowSoften(),0.95f)&&near(f.hazeTauScale(),2.5f)&&near(f.lampFogGain(),1.0f));
         assert(WE::derive(st(Kind::Rain,1,1,1),1,9,9).fog==2.0f); /* settings past the parser's range clamp */
     }
     {   // inputs outside 0..1 or non-finite are clamped or dry, never NaN

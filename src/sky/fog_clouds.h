@@ -140,6 +140,14 @@ inline void colour(const float game[3],bool gameValid,float night,float out[4]){
     const float n=std::isfinite(night)?std::clamp(night,0.f,1.f):0.f;
     for(int i=0;i<3;++i){const float g=gameValid&&std::isfinite(game[i])?std::max(game[i],0.f):0.f;out[i]=std::max(g,kNightGrey[i]*n);}
     out[3]=0;}
+// 0.3.199 (fog clouds): dense-zone damping (game test: Duskwood in night rain was all fog). profile: the regional field's dense-zone tag at
+// the camera (0 ordinary air, 1 Duskwood), smoothed by smoothDense over kDenseSeconds. The rain's extra air extinction and the cloud density
+// setting are multiplied by denseZoneDamp: 1 - kDenseDamp at full profile, exactly 1 outside dense zones.
+constexpr float kDenseDamp=0.6f,kDenseSeconds=3.f;
+inline float denseZoneDamp(float profile){return std::isfinite(profile)?1-kDenseDamp*std::clamp(profile,0.f,1.f):1.f;}
+inline float smoothDense(float current,float target,float dt){
+    if(!std::isfinite(current))current=0;if(!std::isfinite(target))target=0;
+    const float d=std::isfinite(dt)?std::clamp(dt,0.f,.1f):0.f;return current+(target-current)*(1-std::exp(-d/kDenseSeconds));}
 // the per-sample density, identical to the shader: nL, nS noise values 0..1; tag = regional field .w (0 indoors/unknown)
 inline float sigma(float nL,float nS,float altitude,float threshold,float sharpness,float height,float tag,float sigmaMax){
     auto sat=[](float x){return std::clamp(x,0.f,1.f);};

@@ -17,6 +17,11 @@ namespace FC=NorthlightFogClouds;
 static bool near(float a,float b,float e=1e-5f){return std::fabs(a-b)<=e;}
 int main(){
     const unsigned N=FC::N;
+    {   // dense zones: damping 1 outside, 1-kDenseDamp in Duskwood; the smoothing moves toward the target, clamps dt, never overshoots
+        assert(FC::denseZoneDamp(0)==1&&near(FC::denseZoneDamp(1),1-FC::kDenseDamp)&&FC::denseZoneDamp(std::numeric_limits<float>::quiet_NaN())==1);
+        float z=0;for(int i=0;i<300;++i)z=FC::smoothDense(z,1,.1f);assert(z>.99f&&z<=1);
+        assert(FC::smoothDense(0,1,5)==FC::smoothDense(0,1,.1f)&&FC::smoothDense(.5f,.5f,.1f)==.5f&&FC::smoothDense(0,1,0)==0);
+    }
     {   // colour: by day the game fog colour exactly; at night raised per channel to the grey floor; invalid game fog -> floor only
         const float game[3]={.3f,.05f,.4f};float o[4];
         FC::colour(game,true,0,o);assert(o[0]==.3f&&o[1]==.05f&&o[2]==.4f&&o[3]==0);

@@ -435,7 +435,7 @@ private:
     };
     static FogCloudNoise& fogCloudNoise(){static FogCloudNoise* noise=new FogCloudNoise;return *noise;}
     IDirect3DPixelShader9* fogCloudsPS=nullptr;IDirect3DVolumeTexture9* cloudNoise=nullptr;bool cloudNoiseFailed=false;
-    NorthlightFogClouds::Wind cloudWind;int64_t cloudQpc=0;
+    NorthlightFogClouds::Wind cloudWind;int64_t cloudQpc=0;float cloudDenseZone=0; /* smoothed dense-zone profile at the camera (Duskwood 1), see denseZoneDamp */
     // The N^3 volume as L8 (A8R8G8B8 with the value in every channel where L8 volumes are missing); one failure disables the clouds for good, nothing else.
     bool ensureCloudNoise(){
         if(cloudNoise)return true;
@@ -3179,8 +3179,21 @@ public:
         c[52][0]=float(std::min(localDirectCount,NorthlightLocalLightSelection::DirectBatchSize));c[52][1]=.9f*lampGain;
         // Near fade: no added fog within 3.5 units of the viewer, full at 15.5.
         // Same soft ramp, shifted 0.5 world units closer.
-        c[58][0]=3.5f;c[58][1]=1.f/12;c[58][2]=13.f*lampGain*wx.lampFogGain();c[58][3]=.156f*lampGain*wx.lampFogGain(); /* 0.3.198 (rain): lamps glow more in fog; x1 when dry */
-        const float airFloor=.0017f+wx.airExtinction(); /* the shared outdoor air extinction (the shader's old literal .0017) plus the rain's extra: exactly .0017f when dry */
+        c[58][0]=3.5f;c[58][1]=1.f/12;c[58][2]=10.f*lampGain*wx.lampFogGain();c[58][3]=.12f*lampGain*wx.lampFogGain(); /* 0.3.198 (rain): lamp fog gain (x1 since 0.3.199); 0.3.199 (fog clouds): 10 / .12 (were 13 / .156): the glow read too strong in the game test */
+        // 0.3.199 (fog clouds): the frame clock of the clouds (a gap or the first frame counts as 0; advance() clamps) and the dense-zone damping: where the
+        // regional fog is already thick (the field's profile tag at the camera, Duskwood 1) the rain's extra air and the clouds thin out, the profile
+        // smoothed over ~3 s so a zone border never pops. A dry frame's air floor stays exactly .0017f (the extra is 0 whatever the damping).
+        const int64_t cloudNow=QpcClock::now();
+        const float cloudDt=cloudQpc&&captureFrequency.QuadPart>0?float(double(cloudNow-cloudQpc)/double(captureFrequency.QuadPart)):0.f;
+        cloudQpc=cloudNow;
+        {float denseTarget=0;
+         if(uploadedFogField){const auto& f=*uploadedFogField;
+             const float fx=(context.camera[0]-f.originX)/NorthlightRegionalFog::Spacing,fy=(context.camera[1]-f.originY)/NorthlightRegionalFog::Spacing;
+             if(fx>=0&&fy>=0&&fx<NorthlightRegionalFog::N-1&&fy<NorthlightRegionalFog::N-1){const auto& t=f.texels[unsigned(fy)*NorthlightRegionalFog::N+unsigned(fx)];
+                 if(t.height>0)denseTarget=std::clamp((t.height-2.5f)/2.5f,0.f,1.f);}}
+         cloudDenseZone=NorthlightFogClouds::smoothDense(cloudDenseZone,denseTarget,cloudDt);}
+        const float denseDamp=NorthlightFogClouds::denseZoneDamp(cloudDenseZone);
+        const float airFloor=.0017f+wx.airExtinction()*denseDamp; /* the shared outdoor air extinction (the shader's old literal .0017) plus the rain's extra (thinned in dense zones): exactly .0017f when dry */
         c[59][1]=wx.wet;c[59][2]=wx.shadowSoften();c[59][3]=airFloor; /* 0.3.198 (rain): wetness, direct shadow softening (0 when dry), air extinction floor (WorldFog) */
         // Same camera, projection, near plane and glow start as c0..c6/c58.
         localScissorView=NorthlightLocalLightScissor::view(context.inverseView,projection,nearZ,c[58][0],w,h);
@@ -3203,14 +3216,11 @@ public:
         // 0.3.199 (fog clouds): the wind advances on the render thread's own clock (a gap or the first frame counts as 0, advance() clamps), the frame's
         // constants come from the settings and the weather. Inactive (off, no coverage, fog effect off, debug view, noise or shader missing):
         // c60..c63 keep their zeros, the pass is not drawn and sigmaAt below adds nothing.
-        const int64_t cloudNow=QpcClock::now();
-        const float cloudDt=cloudQpc&&captureFrequency.QuadPart>0?float(double(cloudNow-cloudQpc)/double(captureFrequency.QuadPart)):0.f;
-        cloudQpc=cloudNow;
         if(quality.fogClouds)cloudWind.advance(cloudDt,wx.fog);
         // The noise (and its quantile table) is requested from the settings alone: derive() cannot be active before the table exists, so a
         // request gated on cf.active would never start it. One background generation per process; FogClouds=0 or density 0 still does nothing.
         if(quality.fogClouds&&quality.fogCloudDensity&&effects.fog&&debug==0&&!fogCloudNoise().ready.load(std::memory_order_acquire))fogCloudNoise().request();
-        auto cf=NorthlightFogClouds::derive(quality.fogClouds,quality.fogCloudDensity,wx.fog,c[31][3],cloudWind,context.camera,fogCloudNoise().ready.load(std::memory_order_acquire)?&fogCloudNoise().quantiles:nullptr);
+        auto cf=NorthlightFogClouds::derive(quality.fogClouds,unsigned(std::lround(float(quality.fogCloudDensity)*denseDamp)),wx.fog,c[31][3],cloudWind,context.camera,fogCloudNoise().ready.load(std::memory_order_acquire)?&fogCloudNoise().quantiles:nullptr);
         cf.active=cf.active&&effects.fog&&debug==0&&fogCloudsPS&&ensureCloudNoise();
         const uint8_t* cloudData=cf.active?fogCloudNoise().data.data():nullptr;
         if(cf.active){
@@ -3221,7 +3231,7 @@ public:
         skyTransmittanceFrame=1;
         if(effects.fog&&active&&uploadedFogField){
             const auto& field=*uploadedFogField;const float night=c[31][3];
-            auto sigmaAt=[&](float lx,float ly,float lz){
+            auto sigmaAt=[&](float lx,float ly,float lz,bool clouds){
                 const float fx=(lx-field.originX)/NorthlightRegionalFog::Spacing,fy=(ly-field.originY)/NorthlightRegionalFog::Spacing;
                 float sigma=0;
                 if(fx>=0&&fy>=0&&fx<NorthlightRegionalFog::N-1&&fy<NorthlightRegionalFog::N-1){
@@ -3237,19 +3247,19 @@ public:
                         const float airHeight=c[32][3]+(c[32][2]-c[32][3])*profile;
                         const float airVertical=std::clamp(1-altitude/std::max(airHeight,.001f),0.f,1.f);
                         sigma=altitude>=0?ground+airBase*airVertical*airVertical:0;
-                        if(cf.active){const float point[3]={lx,ly,lz};sigma+=NorthlightFogClouds::sigmaAt(cloudData,cf,context.camera,point,t.ground,t.height,1.f);} /* 0.3.199 (fog clouds): lamp glow and the sun-ray veil follow the clouds */
+                        if(clouds&&cf.active){const float point[3]={lx,ly,lz};sigma+=NorthlightFogClouds::sigmaAt(cloudData,cf,context.camera,point,t.ground,t.height,1.f);} /* 0.3.199 (fog clouds): the sun-ray veil follows the clouds; the lamp glow does not (it read too strong) */
                     }
                 }
                 return sigma;
             };
-            for(unsigned i=0;i<localDirectCount;++i)localLights.fog[i][0]=sigmaAt(localLights.position[i][0],localLights.position[i][1],localLights.position[i][2]);
+            for(unsigned i=0;i<localDirectCount;++i)localLights.fog[i][0]=sigmaAt(localLights.position[i][0],localLights.position[i][1],localLights.position[i][2],false);
             // the veil's estimate of the composite's fog.a on a sky pixel toward the sun: the
             // 128-unit volume along the sun ray from the eye, with the shader's near fade.
             if(field.fogCells||field.airCells){
                 float depth=0;const V ray=sourceDirections[0];
                 for(unsigned i=0;i<16;++i){const float t=(float(i)+.5f)*8;
                     const float fade=std::clamp((t-3.5f)/12.f,0.f,1.f);
-                    depth+=sigmaAt(context.camera[0]+ray.x*t,context.camera[1]+ray.y*t,context.camera[2]+ray.z*t)*fade*fade*(3-2*fade)*8;}
+                    depth+=sigmaAt(context.camera[0]+ray.x*t,context.camera[1]+ray.y*t,context.camera[2]+ray.z*t,true)*fade*fade*(3-2*fade)*8;}
                 skyTransmittanceFrame=std::exp(-depth);
             }
         }

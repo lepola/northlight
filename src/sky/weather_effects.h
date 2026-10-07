@@ -16,7 +16,7 @@ constexpr float kAirExtinction=0.0012f; /* extra air extinction beside the shade
 constexpr float kShafts=0.75f;        /* direct volume gain (c21.y) x (1 - kShafts f) */
 constexpr float kDisc=0.85f;          /* sun and moon disc opacity, glare weights and veil x (1 - kDisc f) */
 constexpr float kShadowSoften=0.5f;   /* direct shadowing weakened by kShadowSoften f (c59.z; 0 = untouched) */
-constexpr float kLampFog=0.5f;        /* lamp glow in fog (c58.z, c58.w) x (1 + kLampFog f) */
+constexpr float kLampFog=0.f;         /* lamp glow in fog (c58.z, c58.w) x (1 + kLampFog f); 0.3.199: 0 (was .5): the denser rain air already brightens the glow */
 constexpr float kAmbientLift=0.25f;   /* AmbientLight.w (GI sky ambient boost) += kAmbientLift r, rain only */
 constexpr float kIntensityFloor=0.35f; /* light rain still shows: the effect amount is blend x (floor + (1-floor) x intensity) */
 constexpr float kMaxShadowSoften=0.95f; /* RainFog=2 never removes sun shadows altogether */

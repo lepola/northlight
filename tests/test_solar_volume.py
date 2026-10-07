@@ -222,7 +222,7 @@ def main():
             assert density((0., 0., 148.), lambda x, y: node(zone), night=night) == (0., 0.)
             assert density((0., 0., 108.), lambda x, y: node(zone, indoor=True), night=night) == (0., 0.)
     assert 'airBase=WeatherInfo.w+airBase*saturate(mad(field.w,1.6,-1))' in shader  # 0.3.198 (rain): c59.w = .0017 + the rain's extra extinction
-    assert 'airBase=airFloor+airBase*std::clamp((t.height-.625f)/.625f,0.f,1.f)' in cpu and 'const float airFloor=.0017f+wx.airExtinction();' in cpu
+    assert 'airBase=airFloor+airBase*std::clamp((t.height-.625f)/.625f,0.f,1.f)' in cpu and 'const float airFloor=.0017f+wx.airExtinction()*denseDamp;' in cpu
     # Stormwind has ~90% of Elwynn daytime air at any shared height;
     # indoor/unknown regions remain empty, with no city ground blanket.
     for night in (0., .25, .5, .75, 1.):

@@ -56,7 +56,7 @@ checks['cpp: volume created lazily, L8 with an A8R8G8B8 fallback, honours the pi
 checks['cpp: shader created non-fatally, shader and volume released with the others']=(
     'CreatePixelShader(kFogCloudsShader,&fogCloudsPS)' in w and 'drop(fogCloudsPS);drop(cloudNoise);' in w)
 checks['cpp: frame derived from the settings; active only with the fog effect, no debug view, noise and shader ready']=(
-    'NorthlightFogClouds::derive(quality.fogClouds,quality.fogCloudDensity,wx.fog,c[31][3],cloudWind,context.camera,fogCloudNoise().ready.load(std::memory_order_acquire)?&fogCloudNoise().quantiles:nullptr)' in w and
+    'NorthlightFogClouds::derive(quality.fogClouds,unsigned(std::lround(float(quality.fogCloudDensity)*denseDamp)),wx.fog,c[31][3],cloudWind,context.camera,fogCloudNoise().ready.load(std::memory_order_acquire)?&fogCloudNoise().quantiles:nullptr)' in w and
     'cf.active=cf.active&&effects.fog&&debug==0&&fogCloudsPS&&ensureCloudNoise();' in w and w.index('c[31][3]=NorthlightRegionalFog::nightFactor')<w.index('NorthlightFogClouds::derive('))
 checks['cpp: c60..c63 written only while active, .yzw only']=(
     w.count('if(cf.active){\n            for(int i=0;i<3;++i){c[60][1+i]=cf.largeOrigin[i];c[61][1+i]=cf.smallOrigin[i];}')==1 and
@@ -77,7 +77,7 @@ checks['cpp: profile marks FogMarch / FogClouds only with the pass (<= 20 marks 
 # sigmaAt mirror
 mirror=[l for l in w.splitlines() if 'NorthlightFogClouds::sigmaAt(' in l]
 checks['cpp: sigmaAt adds the cloud term only under cf.active, to the base value, inside the t.height>0 branch']=(
-    len(mirror)==1 and mirror[0].strip().startswith('if(cf.active){') and 'sigma+=NorthlightFogClouds::sigmaAt(cloudData,cf,context.camera,point,t.ground,t.height,1.f)' in mirror[0] and
+    len(mirror)==1 and mirror[0].strip().startswith('if(clouds&&cf.active){') and 'sigma+=NorthlightFogClouds::sigmaAt(cloudData,cf,context.camera,point,t.ground,t.height,1.f)' in mirror[0] and
     w.index('if(t.height>0){')<w.index(mirror[0])<w.index('return sigma;'))
 checks['cpp: measurement line only on profile-sampled frames']='if(profileSampled())logf("WORLD fog clouds active=%d coverage=%.3f threshold=%.3f height=%.1f speed=%.2f dir=(%.2f %.2f) sigmaMax=%.4f noiseReady=%d"' in w
 
@@ -96,5 +96,9 @@ cp=w.split('if(cf.active&&c[21][0]>=.5f){',1)[1].split('d->SetPixelShaderConstan
 checks['colour: c25/c26 set for the cloud pass from NorthlightFogClouds::colour, restored from the bank (c[25], 2 registers) after it']=(
     'NorthlightFogClouds::colour(c[26],c[25][3]>=.5f,c[31][3],cloudColour)' in cp and 'd->SetPixelShaderConstantF(26,cloudColour,1)' in cp
     and cp.index('fog clouds raymarch')<cp.index('d->SetPixelShaderConstantF(25,c[25],2)'))
+# Duskwood/lamp game test: the rain's extra air and the cloud density thin out in dense zones; the lamp glow ignores the clouds
+checks['dense zones: airFloor = .0017f + rain extra x denseDamp, cloud density x denseDamp, lamps sigmaAt without clouds']=(
+    'const float airFloor=.0017f+wx.airExtinction()*denseDamp;' in w and 'unsigned(std::lround(float(quality.fogCloudDensity)*denseDamp))' in w
+    and 'localLights.position[i][2],false);' in w and 'ray.z*t,true)' in w and 'if(clouds&&cf.active)' in w)
 for k,ok in checks.items():print(('PASS ' if ok else 'FAIL ')+k)
 sys.exit(0 if all(checks.values()) else 1)
