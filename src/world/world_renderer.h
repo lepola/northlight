@@ -3207,8 +3207,10 @@ public:
         const float cloudDt=cloudQpc&&captureFrequency.QuadPart>0?float(double(cloudNow-cloudQpc)/double(captureFrequency.QuadPart)):0.f;
         cloudQpc=cloudNow;
         if(quality.fogClouds)cloudWind.advance(cloudDt,wx.fog);
+        // The noise (and its quantile table) is requested from the settings alone: derive() cannot be active before the table exists, so a
+        // request gated on cf.active would never start it. One background generation per process; FogClouds=0 or density 0 still does nothing.
+        if(quality.fogClouds&&quality.fogCloudDensity&&effects.fog&&debug==0&&!fogCloudNoise().ready.load(std::memory_order_acquire))fogCloudNoise().request();
         auto cf=NorthlightFogClouds::derive(quality.fogClouds,quality.fogCloudDensity,wx.fog,c[31][3],cloudWind,context.camera,fogCloudNoise().ready.load(std::memory_order_acquire)?&fogCloudNoise().quantiles:nullptr);
-        if(cf.active&&!fogCloudNoise().ready.load(std::memory_order_acquire))fogCloudNoise().request();
         cf.active=cf.active&&effects.fog&&debug==0&&fogCloudsPS&&ensureCloudNoise();
         const uint8_t* cloudData=cf.active?fogCloudNoise().data.data():nullptr;
         if(cf.active){

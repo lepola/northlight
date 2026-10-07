@@ -85,5 +85,9 @@ checks['cpp: measurement line only on profile-sampled frames']='if(profileSample
 import os
 stream=[fp.src('stream_device.h'),fp.src('stream_proxies.h'),fp.src('game_snapshot.h')]
 checks['game thread untouched: no FogClouds / fog_clouds in stream_device.h, stream_proxies.h, game_snapshot.h']=all(('FogClouds' not in t.read_text() and 'fog_clouds' not in t.read_text() and 'fogClouds' not in t.read_text()) for t in stream)
+# review fix: derive() is inactive until the quantile table exists, so the generation request must not depend on cf.active (it never started)
+req=[l for l in w.splitlines() if 'fogCloudNoise().request()' in l]
+checks['noise request: gated by the settings only (never by cf.active), before derive']=(len(req)==1 and 'cf.active' not in req[0] and 'quality.fogClouds&&quality.fogCloudDensity&&effects.fog&&debug==0' in req[0]
+    and w.index('fogCloudNoise().request()')<w.index('NorthlightFogClouds::derive('))
 for k,ok in checks.items():print(('PASS ' if ok else 'FAIL ')+k)
 sys.exit(0 if all(checks.values()) else 1)
