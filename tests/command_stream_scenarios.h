@@ -18,7 +18,9 @@ struct Rig {
     }
     StreamCore& core(){return sd->streamCore();}
     void sync(){CHECK(dev->TestCooperativeLevel()==5);}
-    void finish(){dev->Release();dev=nullptr;}
+    // 0.3.196 (task 12): every wait of the real StreamDevice paths (generated runSync, runTask, Present/SwapPresent) targeted a kFlagWaitTarget command.
+    void checkFlagged(){if(sd)CHECK(core().q.unflaggedWaits()==0);}
+    void finish(){checkFlagged();dev->Release();dev=nullptr;}
 };
 // With filtering on the Target sees fewer Sets: the filterable ones are dropped from both traces and the STATE digests (logged at every draw,
 // clear, copy, present and write unlock) carry the effective device state instead. With it compiled out the traces must be identical.
@@ -605,7 +607,7 @@ static void childrenOutliveTheDevice(){
     CHECK(rig.dev->GetSwapChain(0,&sc)==D3D_OK&&tex->GetSurfaceLevel(1,&lvl)==D3D_OK&&rig.dev->GetBackBuffer(0,0,(D3DBACKBUFFER_TYPE)0,&bb)==D3D_OK);
     rig.dev->SetTexture(0,tex);   // a bind pins nothing
     void* p=nullptr;CHECK(vb->Lock(0,0,&p,0)==D3D_OK&&vb->Unlock()==D3D_OK);
-    rig.dev->Release();   // the game's reference: the device lives on for the objects it handed out
+    rig.checkFlagged();rig.dev->Release();   // the game's reference: the device lives on for the objects it handed out
     CHECK(gDeviceDeletes.load()==deletes&&tex->GetDevice(&back)==D3D_OK&&back==rig.sd);back->Release();
     D3DSURFACE_DESC d{};CHECK(lvl->GetDesc(&d)==D3D_OK&&d.Width==16);
     tex->Release();vb->Release();sc->Release();CHECK(gDeviceDeletes.load()==deletes);   // the level and the back buffer still hold it
@@ -614,7 +616,7 @@ static void childrenOutliveTheDevice(){
     CHECK(gDeviceDeletes.load()==deletes+1);checkClean();
     // and without the game keeping a bound proxy alive: a bound texture does not keep the device
     Rig again(true);IDirect3DTexture9* t2=nullptr;CHECK(again.dev->CreateTexture(8,8,1,0,(D3DFORMAT)22,(D3DPOOL)1,&t2,nullptr)==D3D_OK);
-    again.dev->SetTexture(0,t2);t2->Release();again.dev->Release();CHECK(gDeviceDeletes.load()==deletes+2);checkClean();
+    again.dev->SetTexture(0,t2);t2->Release();again.checkFlagged();again.dev->Release();CHECK(gDeviceDeletes.load()==deletes+2);checkClean();
 }
 static void queryProbeAndDeadQuery(){
     gTrace.clear();Rig rig(true);

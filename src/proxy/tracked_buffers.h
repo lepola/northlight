@@ -212,6 +212,7 @@ public:
         if(census)census->noteBuffer();
         const bool copies=record.copy.attached&&NorthlightReplayCopies::enabled.load(std::memory_order_relaxed);
         if(copies)NorthlightReplayCopies::beforeUnlock(record.copy,pendingWrite,record.locks.load(std::memory_order_relaxed)); // 0.3.192 (CS): the pointer is still mapped
+        else pendingWrite=NorthlightReplayCopies::PendingWrite{}; // 0.3.196 (task 12): copies turned off since the Lock: the record goes, so the next Lock is not taken for a nested one
         HRESULT hr=this->real->Unlock();
         if(copies&&FAILED(hr))NorthlightReplayCopies::invalidate(record.copy);
         if(SUCCEEDED(hr)&&record.locks.load(std::memory_order_relaxed))record.locks.fetch_sub(1,std::memory_order_release);

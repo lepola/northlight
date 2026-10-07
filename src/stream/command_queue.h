@@ -323,7 +323,7 @@ public:
         bool pooled=false;
         {std::lock_guard<std::mutex> l(pool_);if(pooledBlockBytes_+cap<=kMaxPooledBlockBytes){freeBlocks_[b->cls].push_back(b);pooledBlockBytes_+=cap;pooled=true;stats.blockPoolBytes.fetch_add(cap,std::memory_order_relaxed);}}
         if(!pooled)::operator delete(b);
-        std::atomic_thread_fence(std::memory_order_seq_cst);   // 0.3.196 (task 12): the Block is returned before bpWaiting_ is read (the producer may be on the producer side of this handshake)
+        std::atomic_thread_fence(std::memory_order_seq_cst);   // 0.3.196 (task 12): the Block is returned before bpWaiting_ is read (the producer may be on the producer side of this handshake). One fence per Block command (payloads above MaxInlinePayload), not only per flagged command
         if(bpWaiting_.load())progress_.set();
     }
     // Registered CPU shadow bytes: their own cap (shadowAdmit), not part of the queue budget.
