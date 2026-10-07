@@ -80,7 +80,7 @@ def image(width, height, colour, alpha_max, shape):
     return bytes(out)
 
 
-STREAK_SIGMA_PX, STREAK_FADE = .9, .08   # thin crisp core ~2.1 px wide (FWHM) at 32 px (0.3.199 game test: was 1.1, ~2.6 px); the streak fades only over the last 8% at each end
+STREAK_SIGMA_PX, STREAK_FADE = .75, .08   # thin crisp core ~1.8 px wide (FWHM) at 32 px (0.3.199 game tests: 1.1 ~2.6 px, then .9); the streak fades only over the last 8% at each end
 STREAK_MIN_SIGMA_TEXELS = .75                # no mip level narrows the core below this: a streak must not break up or vanish at small mips
 
 
@@ -133,8 +133,8 @@ def flake(u, v):
 
 RAIN, RAIN_RED, SNOW = (.90, .90, .90), (.75, .22, .18), (.97, .97, .97)   # Forever-style rain is near-white, not blue
 TEXTURES = {   # archive name -> (width, height, colour, alpha max, mip levels builder)
-    'textures\\Weather\\RainDrop01.blp': (32, 512, RAIN, .35, streak_chain),
-    'Textures\\WEATHER\\RAINDROPRED01.BLP': (32, 512, RAIN_RED, .35, streak_chain),
+    'textures\\Weather\\RainDrop01.blp': (32, 512, RAIN, .55, streak_chain),
+    'Textures\\WEATHER\\RAINDROPRED01.BLP': (32, 512, RAIN_RED, .55, streak_chain),
     'textures\\Weather\\SnowFlake01.blp': (32, 64, SNOW, .8, lambda w, h, colour, alpha_max: mip_chain(w, h, image(w, h, colour, alpha_max, flake))),
 }
 
