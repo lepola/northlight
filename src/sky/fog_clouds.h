@@ -12,7 +12,8 @@ namespace NorthlightFogClouds {
 constexpr unsigned N=64;                            /* noise volume edge, L8 voxels, index x+N*(y+N*z) */
 constexpr float LargePeriod=192.f,SmallPeriod=48.f; /* world units per noise tile */
 constexpr uint32_t Seed=0x4e4c4643u;
-constexpr float kDry=0.12f,kNight=0.18f,kSigmaMax=0.03f,kBaseHeight=7,kRainHeight=7;
+constexpr float kDry=0.05f,kNight=0.18f,kSigmaMax=0.03f,kBaseHeight=7,kRainHeight=7;
+constexpr float kMaxCoverage=0.7f,kDense=0.35f,kMinCoverage=0.01f; /* coverage cap (rain keeps gaps), fully dense share of the covered area, below it the pass is skipped */
 
 namespace detail {
 inline uint32_t hash(uint32_t a,uint32_t b,uint32_t c,uint32_t d){ /* integer mix, same result everywhere */
@@ -94,8 +95,21 @@ struct Wind {
                              small[i]=std::fmod(small[i],double(SmallPeriod));if(small[i]<0)small[i]+=SmallPeriod;}
         clock+=d;}
 };
+// 257 quantiles of the mixed two-scale noise value (.65 nL + .35 nS at world points spread over the tiles as the GPU sees them: the small scale
+// repeats 4x per large tile), so a coverage fraction maps to a threshold whatever the volume's value distribution is. q[i] = value at fraction i/256.
+struct Quantiles{float q[257];};
+inline Quantiles quantiles(const uint8_t* volume){
+    constexpr unsigned count=8192;std::vector<float> v(count);
+    for(unsigned i=0;i<count;++i){
+        const float x=detail::unit(detail::hash(i,1,0,Seed)),y=detail::unit(detail::hash(i,2,0,Seed)),z=detail::unit(detail::hash(i,3,0,Seed));
+        v[i]=.65f*sample(volume,x,y,z)+.35f*sample(volume,x*4+.37f,y*4+.61f,z*4+.13f);}
+    std::sort(v.begin(),v.end());
+    Quantiles t;for(unsigned i=0;i<=256;++i)t.q[i]=v[size_t(std::lround(double(i)/256.0*double(count-1)))];
+    return t;}
+inline float quantile(const Quantiles& t,float x){
+    const float f=std::clamp(x,0.f,1.f)*256.f;const unsigned i=std::min(unsigned(f),255u);const float k=f-float(i);return t.q[i]+(t.q[i+1]-t.q[i])*k;}
 struct Frame {
-    bool active=false;float coverage=0,height=0,sigmaMax=0;
+    bool active=false;float coverage=0,height=0,sigmaMax=0,threshold=0,sharpness=0;
     float largeOrigin[3]={},smallOrigin[3]={};float invLarge=0,invSmall=0;
 };
 namespace detail {
@@ -104,20 +118,21 @@ inline float origin(double cam,double wind,double inv){double v=(cam-wind)*inv;v
 }
 // fogClouds: setting 0/1; density: setting percent 0..200; fog: NorthlightWeatherEffects::Frame::fog (0 dry .. ~2); night: regional
 // nightFactor 0..1; camera: world eye position. The shader computes noise coords as (p-camera)*inv+origin, so world-fixed noise moves with +wind.
-inline Frame derive(unsigned fogClouds,unsigned density,float fog,float night,const Wind& wind,const float camera[3]){
+inline Frame derive(unsigned fogClouds,unsigned density,float fog,float night,const Wind& wind,const float camera[3],const Quantiles* table){
     Frame f;
     const float fg=std::clamp(detail::finite0(fog),0.f,1.f),ng=std::clamp(detail::finite0(night),0.f,1.f);
-    const float cov=std::clamp((float(std::min(density,100000u))/100.f)*(kDry+kNight*ng+(1-kDry)*fg),0.f,1.f);
-    if(!fogClouds||!(cov>0))return f;
-    f.active=true;f.coverage=cov;f.height=kBaseHeight+kRainHeight*fg;f.sigmaMax=kSigmaMax;
+    const float cov=std::clamp((float(std::min(density,100000u))/100.f)*(kDry+kNight*ng+(1-kDry)*fg),0.f,kMaxCoverage);
+    if(!fogClouds||!table||!(cov>=kMinCoverage))return f;
+    f.active=true;f.coverage=cov;f.threshold=quantile(*table,1-cov);
+    f.sharpness=1.f/std::max(quantile(*table,1-kDense*cov)-f.threshold,.02f);f.height=kBaseHeight+kRainHeight*fg;f.sigmaMax=kSigmaMax;
     f.invLarge=1.f/LargePeriod;f.invSmall=1.f/SmallPeriod;
     for(int i=0;i<3;++i){const double c=detail::finite0(camera[i]);
         f.largeOrigin[i]=detail::origin(c,wind.large[i],1.0/double(LargePeriod));f.smallOrigin[i]=detail::origin(c,wind.small[i],1.0/double(SmallPeriod));}
     return f;}
 // the per-sample density, identical to the shader: nL, nS noise values 0..1; tag = regional field .w (0 indoors/unknown)
-inline float sigma(float nL,float nS,float altitude,float coverage,float height,float tag,float sigmaMax){
+inline float sigma(float nL,float nS,float altitude,float threshold,float sharpness,float height,float tag,float sigmaMax){
     auto sat=[](float x){return std::clamp(x,0.f,1.f);};
-    const float n=.65f*nL+.35f*nS,c=sat((n-(1-coverage))*3);
+    const float n=.65f*nL+.35f*nS,c=sat((n-threshold)*sharpness);
     float v=sat(1-altitude/std::max(height,.001f));v*=v;
     const float zone=1+(.7f-1)*sat((tag-1.25f)/3.75f);
     return altitude>=0&&tag>0?c*v*zone*sigmaMax:0.f;}
@@ -127,5 +142,5 @@ inline float sigmaAt(const uint8_t* volume,const Frame& f,const float camera[3],
     float l[3],s[3];
     for(int i=0;i<3;++i){const float d=p[i]-camera[i];l[i]=d*f.invLarge+f.largeOrigin[i];s[i]=d*f.invSmall+f.smallOrigin[i];}
     const float nL=sample(volume,l[0],l[1],l[2]),nS=sample(volume,s[0],s[1],s[2]);
-    return sigma(nL,nS,p[2]-ground,f.coverage,f.height,tag,f.sigmaMax)*fieldCoverage;}
+    return sigma(nL,nS,p[2]-ground,f.threshold,f.sharpness,f.height,tag,f.sigmaMax)*fieldCoverage;}
 }

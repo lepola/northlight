@@ -1,5 +1,5 @@
 {
-  "source_sha256": "319489542b8391f2070367e1f79f994b69aca032409040766736a3fe4c3c1480",
+  "source_sha256": "a0623227f9973a1503624be582f363146db6365e2fc498c465e72ae1604ecef5",
   "compiler": "Wine d3dcompiler_47 D3DCompile",
   "game_launched": false,
   "shaders": {
@@ -213,9 +213,9 @@
     },
     "FogClouds": {
       "target": "ps_3_0",
-      "bytes": 8720,
-      "sha256": "f96060ddad041e7f2f837f7730076e12bc3d668aa952bf61ea9ea231db9992f0",
-      "static_instruction_slots": 512,
+      "bytes": 8704,
+      "sha256": "bba23d44b694441ed8510aa7a0275625037b0b3dbbd74905b1137f8d7e916e6b",
+      "static_instruction_slots": 511,
       "temporary_registers": 31,
       "samplers": [
         1,
@@ -225,7 +225,7 @@
         14
       ],
       "instructions": {
-        "add": 100,
+        "add": 99,
         "cmp": 33,
         "mov": 135,
         "if": 7,

@@ -72,7 +72,7 @@ float4 LocalLightFog[8] : register(c59); // x extinction at the light (LocalFog 
 float4 WeatherInfo : register(c59); // y wetness (WorldWet), z direct shadow softening (WorldLighting), w the shared air extinction .0017 + the extra (WorldFog)
 // 0.3.199 (fog clouds): FogClouds only. c60..c63 .x belong to LocalLightFog[1..3].x (LocalFog, a later pass); only .yzw are read here and the host
 // writes them only while the clouds are active (zero otherwise, as before). c60.yzw large-noise origin, c61.yzw small-noise origin,
-// c62.yzw coverage, height, sigmaMax, c63.yzw 1/large period, 1/small period, unused (reserved for an interleaved-gradient-noise phase flag: dropped for the slot budget).
+// c62.yzw coverage threshold (a quantile of the mixed noise), height, sigmaMax, c63.yzw 1/large period, 1/small period, 1/(threshold to fully dense).
 float4 CloudInfo[4] : register(c60);
 sampler3D CloudNoise : register(s14); // tileable N^3 L8 volume (LINEAR, WRAP); s14 is NormalBuffer/LightHistory in other passes, never bound together with this one
 
@@ -877,16 +877,16 @@ float4 FogClouds(float2 uv:TEXCOORD0):COLOR0 {
         float baseSigma=max(groundSigma+airSigma,0)*valid*nearFade;
         float nL=tex3Dlod(CloudNoise,float4(rel*CloudInfo[3].y+CloudInfo[0].yzw,0)).r;
         float nS=tex3Dlod(CloudNoise,float4(rel*CloudInfo[3].z+CloudInfo[1].yzw,0)).r;
-        float density=saturate((mad(.65,nL,.35*nS)-(1-CloudInfo[2].y))*3);
+        float density=saturate((mad(.65,nL,.35*nS)-CloudInfo[2].y)*CloudInfo[3].w);
         float low=saturate(1-altitude/max(CloudInfo[2].z,.001));
         float zone=lerp(1,.7,saturate((field.w-1.25)/3.75));
         float sigma=density*low*low*zone*CloudInfo[2].w*valid*nearFade; // valid > 0 only above ground (altitude >= 0) in a node with a layer height tag
         [branch]if(sigma>0){
             float absorb=1-exp(-sigma*stepSize);
             float heightFade=saturate(altitude*(1.0/12));heightFade*=heightFade*(3-2*heightFade);
-            float weight=tBase*tCloud*absorb;
+            float weight=tCloud*absorb; // the ambient: the pass blend already multiplies the base fog by tCloud, tBase must not enter twice (S*(1-Tb*Tc) in either order)
             // No DirectLight guard and no Tbase*Tcloud early out in this loop: both were cut for the 512-slot budget (the sun term is multiplied by DirectLight after the loop, so no sun = 0).
-            directWeight+=weight*fogShadow(p)*heightFade;
+            directWeight+=tBase*weight*fogShadow(p)*heightFade; // the sun light is dimmed by the base fog in front of the cloud
             ambientWeight+=weight;
             tCloud*=1-absorb;
         }

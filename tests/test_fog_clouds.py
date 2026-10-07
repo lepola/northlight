@@ -48,29 +48,53 @@ int main(){
         assert(near(seam0,(float(vol[N-1])+float(vol[0]))*.5f/255.f,1e-5f));
     }
     {   // sigma
-        for(float n:{0.f,.4f,1.f})assert(FC::sigma(n,n,2,0,10,1,.03f)==0.f);
-        assert(FC::sigma(1,1,-.01f,1,10,1,.03f)==0.f&&FC::sigma(1,1,2,1,10,0,.03f)==0.f&&FC::sigma(1,1,2,1,10,-1,.03f)==0.f);
-        float prev=-1;for(int i=0;i<=20;++i){const float s=FC::sigma(.6f,.5f,2,float(i)/20,10,1,.03f);assert(s>=prev);prev=s;}
+        for(float n:{0.f,.4f,1.f})assert(FC::sigma(n,n,2,1,3,10,1,.03f)==0.f);
+        assert(FC::sigma(1,1,-.01f,0,3,10,1,.03f)==0.f&&FC::sigma(1,1,2,0,3,10,0,.03f)==0.f&&FC::sigma(1,1,2,0,3,10,-1,.03f)==0.f);
+        float prev=-1;for(int i=0;i<=20;++i){const float s=FC::sigma(.6f,.5f,2,1-float(i)/20,3,10,1,.03f);assert(s>=prev);prev=s;}
         assert(prev>0);
-        assert(near(FC::sigma(1,1,0,1,10,1,.03f),.03f)&&FC::sigma(1,1,10,1,10,1,.03f)==0.f&&FC::sigma(1,1,20,1,10,1,.03f)==0.f);
-        const float t1=FC::sigma(1,1,1,1,10,1,.03f),t5=FC::sigma(1,1,1,1,10,5,.03f);assert(near(t5,.7f*t1,1e-7f)&&t1>0);
-        assert(FC::sigma(1,1,1,1,10,9,.03f)==t5); /* zone saturates */
+        assert(near(FC::sigma(1,1,0,0,3,10,1,.03f),.03f)&&FC::sigma(1,1,10,0,3,10,1,.03f)==0.f&&FC::sigma(1,1,20,0,3,10,1,.03f)==0.f);
+        const float t1=FC::sigma(1,1,1,0,3,10,1,.03f),t5=FC::sigma(1,1,1,0,3,10,5,.03f);assert(near(t5,.7f*t1,1e-7f)&&t1>0);
+        assert(FC::sigma(1,1,1,0,3,10,9,.03f)==t5); /* zone saturates */
     }
     const float cam[3]={1234.5f,-987.25f,40.f};FC::Wind w0;
+    const auto Q=FC::quantiles(vol.data());
+    {   // quantiles: monotonic, within [0,1], deterministic, the table interpolates
+        for(unsigned i=0;i<=256;++i){assert(Q.q[i]>=0&&Q.q[i]<=1);if(i)assert(Q.q[i]>=Q.q[i-1]);}
+        assert(Q.q[256]>Q.q[0]+.3f);const auto Q2=FC::quantiles(vol.data());for(unsigned i=0;i<=256;++i)assert(Q.q[i]==Q2.q[i]);
+        assert(near(FC::quantile(Q,0),Q.q[0])&&near(FC::quantile(Q,1),Q.q[256])&&near(FC::quantile(Q,.5f),Q.q[128])&&near(FC::quantile(Q,-3),Q.q[0])&&near(FC::quantile(Q,9),Q.q[256]));
+        assert(near(FC::quantile(Q,.5f+.5f/256),(Q.q[128]+Q.q[129])*.5f,1e-6f));
+    }
     {   // derive
-        for(auto f:{FC::derive(0,100,1,1,w0,cam),FC::derive(1,0,1,1,w0,cam)}){
-            assert(!f.active&&f.coverage==0&&f.height==0&&f.sigmaMax==0&&f.invLarge==0&&f.invSmall==0);
+        for(auto f:{FC::derive(0,100,1,1,w0,cam,&Q),FC::derive(1,0,1,1,w0,cam,&Q),FC::derive(1,100,1,1,w0,cam,nullptr)}){
+            assert(!f.active&&f.coverage==0&&f.height==0&&f.sigmaMax==0&&f.invLarge==0&&f.invSmall==0&&f.threshold==0&&f.sharpness==0);
             for(int i=0;i<3;++i)assert(f.largeOrigin[i]==0&&f.smallOrigin[i]==0);}
-        const auto dry=FC::derive(1,100,0,0,w0,cam),night=FC::derive(1,100,0,1,w0,cam),rain=FC::derive(1,100,1,0,w0,cam);
-        assert(dry.active&&near(dry.coverage,.12f)&&near(night.coverage,.30f)&&near(rain.coverage,1.f));
-        assert(dry.coverage<night.coverage&&night.coverage<rain.coverage);
+        const auto dry=FC::derive(1,100,0,0,w0,cam,&Q),night=FC::derive(1,100,0,1,w0,cam,&Q),rain=FC::derive(1,100,1,0,w0,cam,&Q);
+        assert(dry.active&&near(dry.coverage,.05f)&&near(night.coverage,.23f)&&near(rain.coverage,FC::kMaxCoverage));
+        assert(dry.coverage<night.coverage&&night.coverage<rain.coverage&&dry.threshold>night.threshold&&night.threshold>rain.threshold&&dry.sharpness>0);
+        assert(near(dry.threshold,FC::quantile(Q,.95f))&&dry.sharpness<=50.f+1e-3f);
         assert(near(dry.height,7)&&near(rain.height,14)&&dry.sigmaMax==.03f&&near(dry.invLarge,1.f/192)&&near(dry.invSmall,1.f/48));
-        assert(near(FC::derive(1,200,0,0,w0,cam).coverage,.24f)&&near(FC::derive(1,50,0,0,w0,cam).coverage,.06f)&&FC::derive(1,200,1,1,w0,cam).coverage==1.f);
+        assert(near(FC::derive(1,200,0,0,w0,cam,&Q).coverage,.10f)&&near(FC::derive(1,50,0,0,w0,cam,&Q).coverage,.025f)&&near(FC::derive(1,200,1,1,w0,cam,&Q).coverage,FC::kMaxCoverage));
+        assert(!FC::derive(1,10,0,0,w0,cam,&Q).active); /* .005 < kMinCoverage: the pass is skipped */
         const float nan=std::numeric_limits<float>::quiet_NaN();
-        const auto bad=FC::derive(1,100,nan,nan,w0,cam);assert(bad.active&&near(bad.coverage,.12f)&&near(bad.height,7));
+        const auto bad=FC::derive(1,100,nan,nan,w0,cam,&Q);assert(bad.active&&near(bad.coverage,.05f)&&near(bad.height,7));
         FC::Wind w;for(int i=0;i<500;++i)w.advance(.05f,.5f);
         const float far[3]={-1e5f,3.3e5f,-17.f};
-        for(const float* c:{cam,far}){const auto f=FC::derive(1,100,.3f,.2f,w,c);for(int i=0;i<3;++i)assert(f.largeOrigin[i]>=0&&f.largeOrigin[i]<1&&f.smallOrigin[i]>=0&&f.smallOrigin[i]<1);}
+        for(const float* c:{cam,far}){const auto f=FC::derive(1,100,.3f,.2f,w,c,&Q);for(int i=0;i<3;++i)assert(f.largeOrigin[i]>=0&&f.largeOrigin[i]<1&&f.smallOrigin[i]>=0&&f.smallOrigin[i]<1);}
+    }
+    {   // coverage: the fraction of world points with density>0 follows the setting (default wind, random points over 4 large tiles); the fully dense share ~ kDense*coverage
+        struct Case{float fog,night;float want;};
+        for(const Case& k:{Case{0,0,.05f},Case{0,1,.23f},Case{1,0,FC::kMaxCoverage},Case{.5f,.2f,.5f*.95f+.05f+.036f}}){
+            const auto f=FC::derive(1,100,k.fog,k.night,w0,cam,&Q);assert(f.active);
+            unsigned any=0,dense=0,total=20000;uint32_t h=12345;
+            auto rnd=[&]{h=h*1664525u+1013904223u;return float(h>>8)*(1.f/16777216.f);};
+            for(unsigned i=0;i<total;++i){
+                const float p[3]={rnd()*768.f,rnd()*768.f,rnd()*768.f};float l[3],s[3];
+                for(int a=0;a<3;++a){l[a]=p[a]*f.invLarge+f.largeOrigin[a];s[a]=p[a]*f.invSmall+f.smallOrigin[a];}
+                const float n=.65f*FC::sample(vol.data(),l[0],l[1],l[2])+.35f*FC::sample(vol.data(),s[0],s[1],s[2]);
+                const float c=std::clamp((n-f.threshold)*f.sharpness,0.f,1.f);if(c>0)++any;if(c>=.9999f)++dense;}
+            const float cover=float(any)/float(total),full=float(dense)/float(total);
+            std::printf("coverage fog=%.2f night=%.2f set=%.3f measured=%.3f dense=%.3f (want ~%.3f)\n",k.fog,k.night,f.coverage,cover,full,FC::kDense*f.coverage);
+            assert(std::fabs(cover-f.coverage)<.05f&&std::fabs(full-FC::kDense*f.coverage)<.05f);}
     }
     {   // wind: dt clamp, speeds, no jump on a fog change, offsets stay in range
         FC::Wind a,b;a.advance(5,0.5f);b.advance(.1f,0.5f);
@@ -89,7 +113,7 @@ int main(){
     }
     {   // sigmaAt mirrors sigma(sample(..)) built by hand
         FC::Wind w;for(int i=0;i<300;++i)w.advance(.1f,.4f);
-        const auto f=FC::derive(1,150,.6f,.1f,w,cam);assert(f.active);
+        const auto f=FC::derive(1,150,.6f,.1f,w,cam,&Q);assert(f.active);
         const float zero[3]={0,0,0};assert(FC::sigmaAt(vol.data(),FC::Frame{},cam,zero,0,1,1)==0.f);
         unsigned nonzero=0;
         for(int i=0;i<400;++i){
@@ -97,12 +121,12 @@ int main(){
             const float ground=cam[2]-2.f,tag=float(i%6),fc=float(i%5)/4;
             float l[3],s[3];for(int k=0;k<3;++k){l[k]=(p[k]-cam[k])*f.invLarge+f.largeOrigin[k];s[k]=(p[k]-cam[k])*f.invSmall+f.smallOrigin[k];}
             const float nL=FC::sample(vol.data(),l[0],l[1],l[2]),nS=FC::sample(vol.data(),s[0],s[1],s[2]);
-            const float want=FC::sigma(nL,nS,p[2]-ground,f.coverage,f.height,tag,f.sigmaMax)*fc;
+            const float want=FC::sigma(nL,nS,p[2]-ground,f.threshold,f.sharpness,f.height,tag,f.sigmaMax)*fc;
             const float got=FC::sigmaAt(vol.data(),f,cam,p,ground,tag,fc);assert(got==want&&got>=0&&got<=f.sigmaMax);if(got>0)++nonzero;}
         assert(nonzero>20);
         // world-fixed noise moves with the wind: advancing by dt shifts the pattern downwind (the same world point sees the old value at p - offset)
         const float p[3]={cam[0],cam[1],cam[2]},g=cam[2]-.5f;
-        FC::Wind w2=w;w2.advance(.1f,.4f);const auto f2=FC::derive(1,150,.6f,.1f,w2,cam);
+        FC::Wind w2=w;w2.advance(.1f,.4f);const auto f2=FC::derive(1,150,.6f,.1f,w2,cam,&Q);
         const float s1=FC::sigmaAt(vol.data(),f,cam,p,g,1,1),s2=FC::sigmaAt(vol.data(),f2,cam,p,g,1,1);assert(s1>=0&&s2>=0);
     }
     std::printf("PASS fog clouds\n");

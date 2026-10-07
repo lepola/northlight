@@ -37,8 +37,8 @@ i=h.index('float4 FogBlur(');j=h.index('float4 FogClouds(');k=h.index('// Distan
 checks['hlsl: FogClouds sits after FogBlur and before the horizon haze section (WorldFog slice for test_fog_motion unchanged)']=i<j<k and h.index('float4 WorldFog(')<h.index('// Glow of')<i
 body=h[j:k]
 checks['hlsl: no jitter or history, 40 world-fixed intervals, returns (0,0,0,1) with no cloud']=('FogInfo.w/40' in body and 'i<41' in body and 'if(FogInfo.x<.5)return float4(0,0,0,1);' in body and 'jitter' not in body and 'frac(major.y*(major.x<0?-1:1)/spacing)' in body)
-checks['hlsl: the cloud sigma matches the CPU sigma (.65/.35 mix, *3 coverage ramp, squared height falloff, zone .7, sigmaMax, field coverage x near fade)']=all(s in body for s in (
-    'mad(.65,nL,.35*nS)-(1-CloudInfo[2].y))*3','saturate(1-altitude/max(CloudInfo[2].z,.001))','lerp(1,.7,saturate((field.w-1.25)/3.75))','CloudInfo[2].w*valid*nearFade','tex3Dlod(CloudNoise,float4(rel*CloudInfo[3].y+CloudInfo[0].yzw,0))','tex3Dlod(CloudNoise,float4(rel*CloudInfo[3].z+CloudInfo[1].yzw,0))'))
+checks['hlsl: the cloud sigma matches the CPU sigma (.65/.35 mix, quantile threshold x sharpness ramp, squared height falloff, zone .7, sigmaMax, field coverage x near fade)']=all(s in body for s in (
+    'mad(.65,nL,.35*nS)-CloudInfo[2].y)*CloudInfo[3].w','saturate(1-altitude/max(CloudInfo[2].z,.001))','lerp(1,.7,saturate((field.w-1.25)/3.75))','CloudInfo[2].w*valid*nearFade','tex3Dlod(CloudNoise,float4(rel*CloudInfo[3].y+CloudInfo[0].yzw,0))','tex3Dlod(CloudNoise,float4(rel*CloudInfo[3].z+CloudInfo[1].yzw,0))'))
 checks['hlsl: direct part soft-capped by FogInfo.z, shadowed by fogShadow, branch only inside a cloud']=('cap=max(FogInfo.z,.0001)' in body and 'fogShadow(p)' in body and '[branch]if(sigma>0)' in body)
 
 wf=h[h.index('float4 WorldFog('):h.index('// Glow of')]
@@ -46,8 +46,8 @@ exact=['float profile=saturate((field.w-2.5)/2.5);','float groundHeight=lerp(fie
     'float groundSigma=max(field.y+field.z*RegionalFogInfo.w,0)*vertical*vertical;','float altitude=p.z-field.x;','float valid=altitude>=0?coverage:0;',
     'float nearFade=saturate(((start+end)*.5-FogRange.x)*FogRange.y);nearFade*=nearFade*(3-2*nearFade);'.replace('((start+end)*.5-FogRange.x)','(mid-FogRange.x)')]
 checks['hlsl: FogClouds copies WorldFog\'s groundSigma lines (profile, groundHeight, vertical, groundSigma), altitude and valid exactly; nearFade with mid for (start+end)*.5']=all(l in body and l.replace('(mid-FogRange.x)','((start+end)*.5-FogRange.x)') in wf for l in exact)
-checks['hlsl: base fog only attenuates the cloud light (tBase), alpha out stays tCloud; air term is the documented constant floor WeatherInfo.w (slot budget)']=(
-    'tBase*=exp(-baseSigma*stepSize);' in body and 'float weight=tBase*tCloud*absorb;' in body and 'float airSigma=WeatherInfo.w;' in body and 'for the slot budget' in body and body.rstrip().endswith('directScatter,tCloud);\n}'.rstrip()))
+checks['hlsl: base fog only attenuates the cloud light (tBase; the ambient does not carry it: the blend already multiplies the fog by tCloud), alpha out stays tCloud; air term is the documented constant floor WeatherInfo.w (slot budget)']=(
+    'tBase*=exp(-baseSigma*stepSize);' in body and 'float weight=tCloud*absorb;' in body and 'directWeight+=tBase*weight*fogShadow(p)*heightFade;' in body and 'ambientWeight+=weight;' in body and 'float airSigma=WeatherInfo.w;' in body and 'for the slot budget' in body and body.rstrip().endswith('directScatter,tCloud);\n}'.rstrip()))
 # renderer wiring
 checks['cpp: noise generated off the game and render threads on first need (std::thread, detached, leaked holder), logged once']=(
     'std::thread([this]' in w and '.detach()' in w and 'new FogCloudNoise' in w and 'WORLD fog clouds noise ms=%.1f' in w and 'fogCloudNoise().request()' in w)
@@ -56,7 +56,7 @@ checks['cpp: volume created lazily, L8 with an A8R8G8B8 fallback, honours the pi
 checks['cpp: shader created non-fatally, shader and volume released with the others']=(
     'CreatePixelShader(kFogCloudsShader,&fogCloudsPS)' in w and 'drop(fogCloudsPS);drop(cloudNoise);' in w)
 checks['cpp: frame derived from the settings; active only with the fog effect, no debug view, noise and shader ready']=(
-    'NorthlightFogClouds::derive(quality.fogClouds,quality.fogCloudDensity,wx.fog,c[31][3],cloudWind,context.camera)' in w and
+    'NorthlightFogClouds::derive(quality.fogClouds,quality.fogCloudDensity,wx.fog,c[31][3],cloudWind,context.camera,fogCloudNoise().ready.load(std::memory_order_acquire)?&fogCloudNoise().quantiles:nullptr)' in w and
     'cf.active=cf.active&&effects.fog&&debug==0&&fogCloudsPS&&ensureCloudNoise();' in w and w.index('c[31][3]=NorthlightRegionalFog::nightFactor')<w.index('NorthlightFogClouds::derive('))
 checks['cpp: c60..c63 written only while active, .yzw only']=(
     w.count('if(cf.active){\n            for(int i=0;i<3;++i){c[60][1+i]=cf.largeOrigin[i];c[61][1+i]=cf.smallOrigin[i];}')==1 and
@@ -79,7 +79,7 @@ mirror=[l for l in w.splitlines() if 'NorthlightFogClouds::sigmaAt(' in l]
 checks['cpp: sigmaAt adds the cloud term only under cf.active, to the base value, inside the t.height>0 branch']=(
     len(mirror)==1 and mirror[0].strip().startswith('if(cf.active){') and 'sigma+=NorthlightFogClouds::sigmaAt(cloudData,cf,context.camera,point,t.ground,t.height,1.f)' in mirror[0] and
     w.index('if(t.height>0){')<w.index(mirror[0])<w.index('return sigma;'))
-checks['cpp: measurement line only on profile-sampled frames']='if(profileSampled())logf("WORLD fog clouds active=%d coverage=%.3f height=%.1f speed=%.2f dir=(%.2f %.2f) sigmaMax=%.4f noiseReady=%d"' in w
+checks['cpp: measurement line only on profile-sampled frames']='if(profileSampled())logf("WORLD fog clouds active=%d coverage=%.3f threshold=%.3f height=%.1f speed=%.2f dir=(%.2f %.2f) sigmaMax=%.4f noiseReady=%d"' in w
 
 # nothing on the game thread
 import os

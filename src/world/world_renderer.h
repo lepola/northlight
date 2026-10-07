@@ -422,12 +422,12 @@ private:
     // generated once per process on a worker thread (first active frame, never DllMain) and shared by every device; the holder is leaked on
     // purpose and the worker detached, so neither DLL unload nor process exit waits on a thread under the loader lock.
     struct FogCloudNoise{
-        std::vector<uint8_t> data;std::atomic<bool> ready{false},started{false};
+        std::vector<uint8_t> data;NorthlightFogClouds::Quantiles quantiles{};std::atomic<bool> ready{false},started{false};
         void request(){
             if(started.exchange(true))return;
             try{std::thread([this]{
                 const auto t0=std::chrono::steady_clock::now();
-                try{data=NorthlightFogClouds::generate();}catch(...){return;} /* allocation failure: never ready, no retry */
+                try{data=NorthlightFogClouds::generate();quantiles=NorthlightFogClouds::quantiles(data.data());}catch(...){return;} /* allocation failure: never ready, no retry */
                 const double ms=std::chrono::duration<double,std::milli>(std::chrono::steady_clock::now()-t0).count();
                 ready.store(true,std::memory_order_release);logf("WORLD fog clouds noise ms=%.1f",ms);
             }).detach();}catch(...){}
@@ -3207,15 +3207,15 @@ public:
         const float cloudDt=cloudQpc&&captureFrequency.QuadPart>0?float(double(cloudNow-cloudQpc)/double(captureFrequency.QuadPart)):0.f;
         cloudQpc=cloudNow;
         if(quality.fogClouds)cloudWind.advance(cloudDt,wx.fog);
-        auto cf=NorthlightFogClouds::derive(quality.fogClouds,quality.fogCloudDensity,wx.fog,c[31][3],cloudWind,context.camera);
+        auto cf=NorthlightFogClouds::derive(quality.fogClouds,quality.fogCloudDensity,wx.fog,c[31][3],cloudWind,context.camera,fogCloudNoise().ready.load(std::memory_order_acquire)?&fogCloudNoise().quantiles:nullptr);
         if(cf.active&&!fogCloudNoise().ready.load(std::memory_order_acquire))fogCloudNoise().request();
         cf.active=cf.active&&effects.fog&&debug==0&&fogCloudsPS&&ensureCloudNoise();
         const uint8_t* cloudData=cf.active?fogCloudNoise().data.data():nullptr;
         if(cf.active){
             for(int i=0;i<3;++i){c[60][1+i]=cf.largeOrigin[i];c[61][1+i]=cf.smallOrigin[i];}
-            c[62][1]=cf.coverage;c[62][2]=cf.height;c[62][3]=cf.sigmaMax;c[63][1]=cf.invLarge;c[63][2]=cf.invSmall;c[63][3]=0;
+            c[62][1]=cf.threshold;c[62][2]=cf.height;c[62][3]=cf.sigmaMax;c[63][1]=cf.invLarge;c[63][2]=cf.invSmall;c[63][3]=cf.sharpness;
         }
-        if(profileSampled())logf("WORLD fog clouds active=%d coverage=%.3f height=%.1f speed=%.2f dir=(%.2f %.2f) sigmaMax=%.4f noiseReady=%d",cf.active?1:0,cf.coverage,cf.height,cloudWind.speed,cloudWind.dir[0],cloudWind.dir[1],cf.sigmaMax,fogCloudNoise().ready.load(std::memory_order_acquire)?1:0);
+        if(profileSampled())logf("WORLD fog clouds active=%d coverage=%.3f threshold=%.3f height=%.1f speed=%.2f dir=(%.2f %.2f) sigmaMax=%.4f noiseReady=%d",cf.active?1:0,cf.coverage,cf.threshold,cf.height,cloudWind.speed,cloudWind.dir[0],cloudWind.dir[1],cf.sigmaMax,fogCloudNoise().ready.load(std::memory_order_acquire)?1:0);
         skyTransmittanceFrame=1;
         if(effects.fog&&active&&uploadedFogField){
             const auto& field=*uploadedFogField;const float night=c[31][3];
