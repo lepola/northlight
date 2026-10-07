@@ -1,10 +1,10 @@
 {
-  "source_sha256": "ee636f38f0ece8c6aab3e2c6fc6d5aa592c3eca66cdee425cfa04d81775a1815",
+  "source_sha256": "ce5a650e5b9cedf2943492218f78a401844aeee3837d7a25c7e57be8ff9a8dc1",
   "target": "ps_3_0",
   "shaders": {
     "AO": {
       "bytes": 7884,
-      "sha256": "1d9b6be99c344bb30364602d7dfa849014afbdd5a7a162ecd100d3c28b3acd4f",
+      "sha256": "778be1ea3b147c4bd34bed3e8b13536506fea805acf6660e85119f8cbb4a9bb9",
       "static_instruction_slots": 482,
       "temporary_registers": 14,
       "instructions": {
@@ -32,7 +32,7 @@
     },
     "AOContactBloom": {
       "bytes": 8332,
-      "sha256": "abac5ea353651c87f557952789ebc6f5ec40c91c3c71c6a52f45cfc4edf927a3",
+      "sha256": "15618e0c53efdbe986b4ff74e34ef7d2c3e93e5847ac3b85bdd8c637a24eeeda",
       "static_instruction_slots": 501,
       "temporary_registers": 13,
       "instructions": {

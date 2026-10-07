@@ -110,8 +110,13 @@ float4 AOImpl(float2 uv, bool colorBounce)
     // (hands, shoulders) onto the ground at each tap offset as faint ghost
     // shadows; rotation turns those copies into fine noise the composite's
     // depth/normal filter averages away.
-    float2 pixel = uv * size; // the snapped texel's centre
-    float2 rot = frac(float2(52.9829189, 37.4136) * frac(dot(pixel, float2(0.06711056, 0.00583715)))) * 2.0 - 1.0;
+    // 0.3.198 (stripes): IGN is built for integer pixel steps, and this pass is half resolution: uv*size is
+    // the snapped FULL-res texel (2i+1.5, a step of 2 per AO texel), which advanced the phase by only .11 (x)
+    // and .02 (hash y) per texel along a row but by the golden ratio .62 per row: the rotation, and so the
+    // occlusion, was constant along each row and different on every row (screen-fixed horizontal bands wherever
+    // the AO occludes). Half the coefficients = the AO texel index (+ a constant .75): a step of 1 in each axis.
+    float2 pixel = uv * size;
+    float2 rot = frac(float2(52.9829189, 37.4136) * frac(dot(pixel, float2(0.03355528, 0.002918575)))) * 2.0 - 1.0;
     rot *= rsqrt(max(dot(rot, rot), 1e-4));
     float2 axisX = rot * uvRadius, axisY = float2(-rot.y, rot.x) * uvRadius;
 

@@ -5,6 +5,7 @@ test_actor_shadow_selection.py
 test_actor_shadows_wiring.py
 test_actor_texture_worker.py
 test_ao_fold.py
+test_ao_rotation_stripes.py
 test_ao_texel_snap.py
 test_art_layer.py
 test_async_memory_diagnostics.py
