@@ -89,7 +89,7 @@ int main(){
         assert(near(FC::derive(1,200,0,0,w0,cam,&Q).coverage,.10f)&&near(FC::derive(1,50,0,0,w0,cam,&Q).coverage,.025f)&&near(FC::derive(1,200,1,1,w0,cam,&Q).coverage,FC::kMaxCoverage));
         assert(!FC::derive(1,10,0,0,w0,cam,&Q).active); /* .005 < kMinCoverage: the pass is skipped */
         const float nan=std::numeric_limits<float>::quiet_NaN();
-        const auto bad=FC::derive(1,100,nan,nan,w0,cam,&Q);assert(bad.active&&near(bad.coverage,.05f)&&near(bad.height,7));
+        const auto bad=FC::derive(1,100,nan,nan,w0,cam,&Q);assert(bad.active&&near(bad.coverage,.05f)&&near(bad.height,FC::kBaseHeight));
         FC::Wind w;for(int i=0;i<500;++i)w.advance(.05f,.5f);
         const float far[3]={-1e5f,3.3e5f,-17.f};
         for(const float* c:{cam,far}){const auto f=FC::derive(1,100,.3f,.2f,w,c,&Q);for(int i=0;i<3;++i)assert(f.largeOrigin[i]>=0&&f.largeOrigin[i]<1&&f.smallOrigin[i]>=0&&f.smallOrigin[i]<1);}
