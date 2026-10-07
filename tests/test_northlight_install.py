@@ -681,7 +681,7 @@ class WindowsInstall(Install):
     MARKER = 'renderer-backends/dxvk/northlight-dxvk3-init.pending'
 
     def marker(self):
-        """A leftover of the 0.3.189-0.3.192 proxies; a plain file."""
+        """A leftover of the 0.3.189-0.3.194 proxies; a plain file."""
         m = self.client / self.MARKER
         m.parent.mkdir(parents=True, exist_ok=True); m.write_bytes(b'pending')
         return m

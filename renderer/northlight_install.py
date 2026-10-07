@@ -844,7 +844,7 @@ class Installer:
             backups.append(INSTALL.commit(client, plan, staged, self.pkg.payload, self.pkg.version))
             if files:
                 payload = ('installed: ' if payload.startswith('kept') else payload + '; ') + ', '.join(files)
-        if self.platform == 'windows':   # the leftover of 0.3.189-0.3.192, whatever the backend; only after the commit
+        if self.platform == 'windows':   # the leftover of 0.3.189-0.3.194, whatever the backend; only after the commit
             INSTALL.safe_path(client, INSTALL.LEGACY_DXVK3_MARKER).unlink(missing_ok=True)
         report.update(payload=payload, backups=[str(b) for b in backups])
         changed = backups or not report['world_cache'].startswith(('kept', 'not'))
@@ -896,7 +896,7 @@ class Installer:
                                       (leftover / 'install-manifest.json').exists()):
                 remove_tree(leftover)
         if self.platform == 'windows':
-            INSTALL.safe_path(client, INSTALL.LEGACY_DXVK3_MARKER).unlink(missing_ok=True)   # leftover of 0.3.189-0.3.192; no record holds it
+            INSTALL.safe_path(client, INSTALL.LEGACY_DXVK3_MARKER).unlink(missing_ok=True)   # leftover of 0.3.189-0.3.194; no record holds it
             for folder in ('renderer-backends/dxvk', 'renderer-backends/dxvk2', 'renderer-backends/legacy', 'renderer-backends'):
                 try:
                     (client / folder).rmdir()   # only when empty

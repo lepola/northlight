@@ -87,7 +87,7 @@ game folder, says "Failed to initialize DXVK" or "Device does not support
 required feature"). Northlight does not switch backends by itself: choose
 with Install.cmd --backend dxvk2 or Backend=dxvk2 in northlight-renderer.ini.
 If DXVK 2.7.1 fails too (the driver has no Vulkan 1.3), use --backend native.
-A northlight-dxvk3-init.pending left by 0.3.189-0.3.192 has no effect and the
+A northlight-dxvk3-init.pending left by 0.3.189-0.3.194 has no effect and the
 installer removes it.
 A reinstall without --backend keeps an installed dxvk2 or native choice;
 --backend dxvk switches back to DXVK 3.
