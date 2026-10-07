@@ -1,5 +1,6 @@
 #pragma once
 // 0.3.149 render-thread instrumentation, RenderProfile=1 only (northlight-quality.ini;
+// 0.3.192 CS: "render thread" is the thread that runs the Device: the replay thread when the command stream is on;
 // needs Diagnostics=1). Never a rendering decision. Portable: no Win32 or device
 // calls; clocks are template parameters (int64 ticks from now()) so the tests
 // drive them with a fake clock.

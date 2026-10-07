@@ -24,6 +24,8 @@ test_client_archive_order.py
 test_client_archives.py
 test_client_config.py
 test_client_identity.py
+test_command_stream.py
+test_command_stream_wiring.py
 test_concurrent_geometry_build.py
 test_contact_lighting.py
 test_contact_normal_endpoints.py
@@ -32,6 +34,7 @@ test_diagnostics_switch.py
 test_dll_memcmp.py
 test_draw_gates.py
 test_draw_snapshot.py
+test_dxvk3_lock_flags.py
 test_effect_switches.py
 test_effects_buckets.py
 test_emitter_pin_report.py
@@ -39,6 +42,7 @@ test_entrypoints_isolated.py
 test_fast_memcmp.py
 test_fog_locale.py
 test_fog_motion.py
+test_game_snapshot.py
 test_geometry_handoff.py
 test_gi_quality.py
 test_horizon_haze.py
@@ -52,6 +56,7 @@ test_log_format_literals.py
 test_log_rotation.py
 test_logger_cost.py
 test_m2_visibility.py
+test_memmap_diagnostics.py
 test_memory_admission_probe.py
 test_memory_guard.py
 test_migrate_mac_proxy.py

@@ -81,9 +81,9 @@ SOURCES = sorted({n for names in STEP_SOURCES.values() for n in names} | {'valid
 # - 0.3.183's scene and fog builders (unchanged since 0.3.166): 0.3.184 clamps an oversized top-level
 #   MOGP of a WMO group file, so its output differs only where 0.3.183 hit such an overrun
 #   (clamp_free() checks the cache's reports for one).
-# - 0.3.191's world_scene_builder.py (since 0.3.184) and mpq.py (since 0.3.166): 0.3.192 builds where
+# - 0.3.192's world_scene_builder.py (since 0.3.184) and mpq.py (since 0.3.166): 0.3.193 builds where
 #   they stopped (an archive without a (listfile), an unopenable custom patch, an unreadable file), so
-#   every cache they finished is what 0.3.192 builds.
+#   every cache they finished is what 0.3.193 builds.
 # Revisit whenever one of these files changes again.
 SOURCE_EQUIVALENTS = {
     'world_scene_builder.py': {'a54e08fe2774cd79702c04cf6e3dfd17854a12da4b6305ca38a4ade0545f0484': True,

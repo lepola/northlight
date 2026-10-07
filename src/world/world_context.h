@@ -4,6 +4,7 @@
 #include <cstdint>
 #include <atomic>
 #include <cstring>
+#include "snapshot_store.h"
 #ifdef _WIN32
 #include <windows.h>
 #endif
@@ -66,7 +67,7 @@ struct SelfReadStats {
     static inline std::atomic<long long> ticks{0};
     static inline std::atomic<bool> timed{false};
 };
-inline bool readSelf(uintptr_t address,void* output,size_t size) {
+inline bool readSelfLive(uintptr_t address,void* output,size_t size) {
     SelfReadStats::calls.fetch_add(1,std::memory_order_relaxed);
     SelfReadStats::bytes.fetch_add(size,std::memory_order_relaxed);
     const bool timed=SelfReadStats::timed.load(std::memory_order_relaxed);
@@ -77,6 +78,13 @@ inline bool readSelf(uintptr_t address,void* output,size_t size) {
     if(timed){QueryPerformanceCounter(&end);SelfReadStats::ticks.fetch_add(end.QuadPart-begin.QuadPart,std::memory_order_relaxed);}
     if(!ok)SelfReadStats::failures.fetch_add(1,std::memory_order_relaxed);
     return ok;
+}
+// 0.3.192 (CS): with a snapshot active on this thread (capture on the game thread, replay of a snapshot command on the
+// replay thread) the read goes through it (snapshot_store.h); otherwise exactly the live read above, one null check apart.
+inline bool readSelf(uintptr_t address,void* output,size_t size) {
+    if(NorthlightStream::GameSnapshot* snapshot=NorthlightStream::activeSnapshot)
+        return NorthlightStream::snapshotRead(*snapshot,address,output,size,readSelfLive,NorthlightStream::codeRange());
+    return readSelfLive(address,output,size);
 }
 
 inline bool supportedClient() {

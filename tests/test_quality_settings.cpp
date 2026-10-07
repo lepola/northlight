@@ -444,6 +444,16 @@ int main(){
         std::vector<std::string> p;assert(parse("[Quality]\nShadowPivotCorrection=2\n",nullptr,p)==d&&p.size()==1);
         assert(effective(off).shadowPivotCorrection==0&&effective(parse("[Quality]\nActorShadows=0\n")).shadowPivotCorrection==1);
         assert(describe(d).find(" FrameDrawGates=1(default) ShadowPivotCorrection=1(default)")!=std::string::npos&&describe(off).find(" ShadowPivotCorrection=0(file)")!=std::string::npos);}
+    // 0.3.192 CommandStream: 1 (the replay-thread command stream) in the code default and every preset, 0..1, own last
+    // origin slot; a creation-time key, so ActorShadows=0 does not force it. 0 is the direct path.
+    assert(d.commandStream==1&&preset(Preset::Balanced).commandStream==1&&preset(Preset::Performance).commandStream==1);
+    assert(std::string(Keys[33].name)=="CommandStream"&&Keys[33].field==&Settings::commandStream&&Keys[33].low==0&&Keys[33].high==1&&sizeof(Keys)/sizeof(Keys[0])==34);
+    {auto off=parse("[Quality]\nCommandStream=0\n");assert(off.commandStream==0&&off!=d&&parse("[Quality]\nCommandStream=1\n")==d);
+        unsigned i=0;for(const auto& k:Keys){assert(off.origin[i]==(std::string(k.name)=="CommandStream"?'f':'d'));++i;}
+        std::vector<std::string> p;assert(parse("[Quality]\nCommandStream=2\n",nullptr,p)==d&&p.size()==1);
+        assert(effective(off).commandStream==0&&effective(parse("[Quality]\nActorShadows=0\n")).commandStream==1);
+        assert(parse("[Quality]\nPreset=Performance\n").commandStream==1);
+        assert(describe(d).find(" ShadowPivotCorrection=1(default) CommandStream=1(default)")!=std::string::npos&&describe(off).find(" CommandStream=0(file)")!=std::string::npos);}
     { /* effective(): the identity with ActorShadows=1 (any value of every key), with 0 only the two replay keys drop. */
       std::mt19937 er(158);
       for(int round=0;round<4000;++round){Settings s;s.preset=Preset(er()%3);unsigned i=0;

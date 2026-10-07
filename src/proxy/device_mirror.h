@@ -456,6 +456,8 @@ private:
     static inline thread_local RawScope* currentRaw=nullptr;
     bool rawActive()const;
 public:
+    // 0.3.192 (CS): "raw" callers (the renderer's own work) run on the thread that executes the Device: the game
+    // thread on the direct path, the replay thread in stream mode. The gate's owner is that same thread either way.
     class RawScope {
         friend class ExtensionDevice;
         ExtensionDevice* device;

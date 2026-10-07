@@ -20,6 +20,7 @@ GATES=('NorthlightDiagnostics::enabled()','diagnostics()','sampled()','captureSa
 KEEP={
  'LOGGER intervalMs':'indirect: reportLogCost() runs only in the gated MIRROR block',
  'EXTENSION fault':'error','DISABLED:':'error','Resources ':'one-off: resource (re)creation',
+ 'LOCK METER':'one-off startup line and ProcessVertices warning; the interval line runs only from the Diagnostics-gated block of WorldRenderer::endFrame (0.3.192)',
  'VIEWPORT GATE':'capped: first 8','WORLD skipped frame':'capped: first 8 (periodic tail gated)',
  'WORLD skip episode':'capped: first 32 runs of skipped world frames (tail gated; 0.3.169)','WORLD coverage hold':'capped: first 32 hold/retire episodes (tail gated; 0.3.169)',
  'FIRST EFFECT FRAME':'one-off','MIRROR mismatch':'error (the audit itself is functional and ungated)',
@@ -36,6 +37,7 @@ KEEP={
  'PROXY WARNING':'start-up warning','GAME d3d9.dll':'start-up: game-folder d3d9.dll identity','GAME WARNING':'start-up warning',
  'WORLD shadow cache VERIFY MISMATCH':'error (debug verify)','GEOMETRY MEMORY':'warning: allocation deferral',
  'STATIC SHADOW request deferred':'warning: allocation failure','STATIC SHADOW upload deferred':'warning: allocation failure',
+ 'CSTREAM active':'start-up one-off: the replay thread runs (0.3.192)','CSTREAM disabled':'start-up one-off: why the command stream is off (0.3.192)',
  'QUALITY':'settings','WORLD replacement deferred':'warning','WORLD pending mesh released':'event: orphaned staged upload released (0.3.156), at most once per geometry snapshot','WORLD geometry stalled':'warning: once per generation-admission stall episode (0.3.156 watchdog)','WORLD terrain allocation requestMiB':'warning: allocation deferred',
  'WORLD shadow terrain reach':'warning: terrain shadow reach reduced/restored under address-space pressure (0.3.190), at most one pair per 30 s backoff','WORLD geometry memory stall':'warning: one begin/end pair per geometry-memory stall episode (0.3.190)',
  'GI actor BVH rejected':'warning','WORLD DISABLED':'error','WORLD streaming retry':'capped: first 12','SHADOW experiment':'settings / error',
@@ -82,6 +84,9 @@ checks={
  'async memory sampler always on (memory guard), periodic line only when on':'try{memoryDiagnostics=std::make_unique<NorthlightMemoryDiagnostics::Sampler>(&queryAddressSpace);}' in r and 'if(diagnostics())try{memoryDiagnostics=' not in r and 'if(decision.report&&diagnostics())logf("MEMORY frame=' in r and 'else if(diagnostics())logf("MEMORY sample failed' in r,
  'frame interval sampling only when on':'if(diagnostics()&&QueryPerformanceCounter(&intervalTick)&&frameIntervals.sample(' in r,
  'mirror audit stays functional (ungated)':'mirrorAuditSchedule.afterWorldCapture(frame,' in r and not re.search(r'diagnostics\(\)[^;]*mirrorAuditSchedule',r),
+ 'command stream: the periodic CSTREAM line and the state audit only when on; the other CSTREAM lines are capped errors (via the options.log lambda, whose logf is labelled %s)':(lambda t:
+    'if(audit&&diag&&frames%sampleEvery==1)runAudit();' in t and 'if(diag&&log&&frames%sampleEvery==0)cstreamLine(frames);' in t and t.count('cstreamLine(')==2
+    and 'const bool diag=diagnostics&&diagnostics();' in t and 'options.diagnostics=&NorthlightDiagnostics::enabled;' in r and 'deadLogged_<8' in t and 'AttachThreadInput(' not in t)(fp.src('replay_thread.h').read_text()),
  'Diagnostics read once at quality load':'NorthlightDiagnostics::configure(quality.diagnostics!=0);' in w,
  'fate tracker: Diagnostics=0 wins':'shadowFateDiagnostics=NorthlightQuality::shadowFate(quality);' in w,
  'streaming phase clocks gated':'const bool on=NorthlightDiagnostics::enabled();' in fp.src('streaming_phase_profile.h').read_text(),

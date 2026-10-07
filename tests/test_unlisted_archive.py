@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # northlight-test: requires=stormlib
-"""0.3.192: a patch archive without a (listfile) (private-server patches often strip it; the game does not
+"""0.3.193: a patch archive without a (listfile) (private-server patches often strip it; the game does not
 need it), a custom patch StormLib cannot open or a damaged file no longer fails the world cache build. On a
 synthetic client of real StormLib archives (made here; no game bytes): common.MPQ, patch.MPQ, patch-R.MPQ
 without a (listfile), patch-S.MPQ, patch-T.MPQ that is not an MPQ and patch-U.MPQ with a damaged texture.

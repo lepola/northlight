@@ -22,6 +22,7 @@
 //     at the join; (0.3.183) every replay held while unsettled, only the published ones held, the programs
 //     not pinned.
 // Built by test_prepare_worker.py (O2, ASan+UBSan, TSan). Native, no game or GPU.
+#include "stream_hooks.h"
 #include "prepare_worker.h"
 #include "vertex_declaration_cache.h"
 #include "actor_client_programs.h"

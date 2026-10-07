@@ -131,14 +131,18 @@ public:
 #include <functional>
 #include "world_context.h"
 #include "celestial_context.h"
+#include "stream_hooks.h"
 namespace NorthlightCelestialDisc {
 class NativeObserver {
     IdentityFrame frame_;bool ready_=false,secondary_=false;unsigned reads_=0;
     std::function<std::uintptr_t(std::uintptr_t)> map_;
-    Identities read(){auto ids=readIdentities(NorthlightWorldContext::readSelf);return map_?mapIdentities(ids,map_):ids;}
+    // 0.3.192 (CS): the game stores a stream proxy; innerOf (null when the stream is inactive: identity) gives the
+    // Device-level pointer the registry's rawOf knows, so the proxy is unwrapped before rawOf.
+    static std::uintptr_t inner(std::uintptr_t exposed){return reinterpret_cast<std::uintptr_t>(NorthlightStream::inner(reinterpret_cast<const void*>(exposed)));}
+    Identities read(){auto ids=readIdentities(NorthlightWorldContext::readSelf);return map_?mapIdentities(ids,[&](std::uintptr_t exposed){return map_(inner(exposed));}):ids;}
 public:
     void setIdentityMap(std::function<std::uintptr_t(std::uintptr_t)> map){map_=std::move(map);}
-    std::uintptr_t mapIdentity(std::uintptr_t exposed)const{return map_&&exposed?map_(exposed):exposed;}
+    std::uintptr_t mapIdentity(std::uintptr_t exposed)const{return map_&&exposed?map_(inner(exposed)):exposed;}
     bool load(const std::string&){
         static const bool supported=NorthlightWorldContext::supportedClient()&&verifyIdentityCode(NorthlightWorldContext::readSelf);
         // moon02's record address comes from the sky code signatures (moon2Init, moon2Position).

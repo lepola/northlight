@@ -10,6 +10,7 @@
 #include <memory>
 #include <unordered_map>
 #include <vector>
+#include "lock_meter.h"
 
 namespace NorthlightLiveTerrainGPU {
 struct Range {uint32_t first=0,count=0;};
@@ -49,14 +50,14 @@ template<class Snapshot,class Vertex> class Cache {
     std::unordered_map<const Snapshot*,Entry> entries_;
     std::vector<std::unique_ptr<Retired>> retired_;
     size_t indexBytes_=0;
-    bool discard_=false;
+    bool discard_=false,fresh_=false; /* 0.3.192 (DXVK3): fresh_ = the buffer was just created: its first Lock is NOOVERWRITE (nothing in flight, no 16 MiB DISCARD charge); rollover and failure resets keep DISCARD */
     static constexpr size_t IndexLimit=32u*1024u*1024u;
     // 0.3.176 (U1b): update() records the entry of each active owner (after its weak_ptr check; null:
     // none), for the owner list and frame it saw; prepare() uses it. Entries are map nodes, so the
     // pointers survive inserts; resetContents() and retirement drop only entries not recorded.
     std::vector<Entry*> active_;const void* activeSource_=nullptr;uint64_t activeFrame_=UINT64_MAX;
     std::vector<const Entry*> prepared_; /* 0.3.176 (U1a): prepare()'s entries, in order, for write() */
-    void resetContents(){entries_.clear();retired_.clear();indexBytes_=0;free_.reset(capacity_);discard_=true;std::fill(active_.begin(),active_.end(),nullptr);prepared_.clear();}
+    void resetContents(){entries_.clear();retired_.clear();indexBytes_=0;free_.reset(capacity_);discard_=true;fresh_=false;std::fill(active_.begin(),active_.end(),nullptr);prepared_.clear();}
     void collect(IDirect3DDevice9* d){
         for(auto it=retired_.begin();it!=retired_.end();){
             // flags=0: never D3DGETDATA_FLUSH, never a blocking poll loop.
@@ -88,7 +89,7 @@ public:
     explicit Cache(uint32_t limitBytes=16u*1024u*1024u):limit_(limitBytes/sizeof(Vertex)){}
     ~Cache(){clear();}
     Cache(const Cache&)=delete;Cache& operator=(const Cache&)=delete;
-    void clear(){entries_.clear();retired_.clear();indexBytes_=0;free_.reset(0);capacity_=0;frame_=0;discard_=false;if(vertices_)vertices_->Release();vertices_=nullptr;
+    void clear(){entries_.clear();retired_.clear();indexBytes_=0;free_.reset(0);capacity_=0;frame_=0;discard_=false;fresh_=false;if(vertices_)vertices_->Release();vertices_=nullptr;
         active_.clear();activeSource_=nullptr;activeFrame_=UINT64_MAX;prepared_.clear();}
     IDirect3DVertexBuffer9* vertices()const{return vertices_;}
     uint32_t vertexCapacity()const{return capacity_;}
@@ -114,7 +115,7 @@ public:
                 if(!admit(size_t(capacity)*sizeof(Vertex))){capacity=std::max(uint32_t(required),limit_/2);if(!admit(size_t(capacity)*sizeof(Vertex)))return S_FALSE;}
                 HRESULT hr=d->CreateVertexBuffer(UINT(size_t(capacity)*sizeof(Vertex)),D3DUSAGE_DYNAMIC|D3DUSAGE_WRITEONLY,0,D3DPOOL_DEFAULT,&vertices_,nullptr);
                 if(FAILED(hr)||!vertices_){if(vertices_)vertices_->Release();vertices_=nullptr;return FAILED(hr)?hr:E_FAIL;}
-                capacity_=capacity;resetContents();
+                capacity_=capacity;resetContents();fresh_=true;
             }
             // A pressure-sized arena always accommodates the renderer's active
             // cap. Tests may choose a smaller arena, so reject impossible sets.
@@ -149,13 +150,14 @@ public:
                 size_t end=first+1;uint32_t count=pending[first].entry->range.count;
                 while(end<pending.size()&&pending[first].entry->range.first+count==pending[end].entry->range.first){count+=pending[end].entry->range.count;++end;}
                 const UINT offset=UINT(size_t(pending[first].entry->range.first)*sizeof(Vertex));const UINT bytes=UINT(size_t(count)*sizeof(Vertex));
-                void* target=nullptr;HRESULT hr=vertices_->Lock(offset,bytes,&target,discard_?D3DLOCK_DISCARD:D3DLOCK_NOOVERWRITE);
+                void* target=nullptr;const bool discarding=discard_&&!fresh_;HRESULT hr=vertices_->Lock(offset,bytes,&target,discarding?D3DLOCK_DISCARD:D3DLOCK_NOOVERWRITE);
+                if(discarding)NorthlightLockMeter::discard(NorthlightLockMeter::Arena,std::uint64_t(capacity_)*sizeof(Vertex));
                 if(FAILED(hr)){resetContents();return hr;}
                 if(!target){vertices_->Unlock();resetContents();return E_FAIL;}
                 Vertex* output=static_cast<Vertex*>(target);
                 for(size_t i=first;i<end;++i)for(const auto& position:pending[i].owner->positions)*output++=convert(position);
                 hr=vertices_->Unlock();if(FAILED(hr)){resetContents();return hr;}
-                discard_=false;uploadedBytes+=bytes;first=end;
+                discard_=false;fresh_=false;uploadedBytes+=bytes;first=end;
             }
             return S_OK;
         }catch(...){resetContents();activeSource_=nullptr;return E_OUTOFMEMORY;}

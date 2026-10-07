@@ -47,5 +47,5 @@ assert 'const unsigned owned=drawnEarly|drawnLate|offscreenOwned|suppressed|supp
 assert '!owning()' in glare and 'NorthlightCelestialGlare::claim(glareIdentities,current,bound,owned)' in glare
 assert 'claimNoBody=%u' in host and 'suppressedDraws=%u suppressedGlares=%u' in host
 native_h=fp.src('celestial_disc_native.h').read_text()
-assert 'Identities read(){auto ids=readIdentities(NorthlightWorldContext::readSelf);return map_?mapIdentities(ids,map_):ids;}' in native_h
+assert 'Identities read(){auto ids=readIdentities(NorthlightWorldContext::readSelf);return map_?mapIdentities(ids,[&](std::uintptr_t exposed){return map_(inner(exposed));}):ids;}' in native_h
 print(json.dumps({'status':'PASS','native':native,'claim_hooks':len(hooks),'game_or_gpu_launched':False},indent=2))
