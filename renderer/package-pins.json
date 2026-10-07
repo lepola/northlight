@@ -117,7 +117,7 @@
     "license": "zlib"
   },
   "dxvk2": {
-    "name": "DXVK 2.x (fallback backend dxvk2)",
+    "name": "DXVK 2.x (alternative backend dxvk2)",
     "version": "2.7.1",
     "file": "dxvk-2.7.1-download/dxvk-2.7.1.tar.gz",
     "url": "https://github.com/doitsujin/dxvk/releases/download/v2.7.1/dxvk-2.7.1.tar.gz",
