@@ -13,6 +13,7 @@ constexpr unsigned N=64;                            /* noise volume edge, L8 vox
 constexpr float LargePeriod=576.f,SmallPeriod=144.f; /* world units per noise tile (0.3.199 game tests: 192/48, then 384/96; the reference banks are larger still) */
 constexpr uint32_t Seed=0x4e4c4643u;
 constexpr float kDry=0.05f,kNight=0.18f,kSigmaMax=0.013f,kBaseHeight=7,kRainHeight=7;
+constexpr double kWindDry=1.05,kWindRain=4.2; /* large-scale wind, units/s, dry and full rain (0.3.199 game test: was .6/2.4; the larger banks read as too slow) */
 constexpr float kMaxCoverage=0.45f,kDense=0.2f,kMinCoverage=0.01f; /* coverage cap (rain keeps gaps), fully dense share of the covered area, below it the pass is skipped.
     game tests: was .7/.35 with sigmaMax .03, then sigmaMax .018; now .013: the reference banks are fainter and sparser */
 
@@ -87,11 +88,11 @@ struct Wind {
     void advance(float dt,float fog){
         const double d=std::isfinite(dt)?std::clamp(double(dt),0.0,0.1):0.0;
         const double f=std::isfinite(fog)?std::clamp(double(fog),0.0,1.0):0.0;
-        const double sp=0.6+1.8*f,a=0.35+0.436*std::sin(2*3.14159265358979323846*clock/600.0); /* slow +-25 degree veer over ~10 min */
+        const double sp=kWindDry+(kWindRain-kWindDry)*f,a=0.35+0.436*std::sin(2*3.14159265358979323846*clock/600.0); /* slow +-25 degree veer over ~10 min */
         const double sa=a+0.35,ss=sp*1.6;
         speed=float(sp);dir[0]=float(std::cos(a));dir[1]=float(std::sin(a));
         large[0]+=sp*std::cos(a)*d;large[1]+=sp*std::sin(a)*d;
-        small[0]+=ss*std::cos(sa)*d;small[1]+=ss*std::sin(sa)*d;small[2]+=0.12*d;
+        small[0]+=ss*std::cos(sa)*d;small[1]+=ss*std::sin(sa)*d;small[2]+=0.21*d;
         for(int i=0;i<3;++i){large[i]=std::fmod(large[i],double(LargePeriod));if(large[i]<0)large[i]+=LargePeriod;
                              small[i]=std::fmod(small[i],double(SmallPeriod));if(small[i]<0)small[i]+=SmallPeriod;}
         clock+=d;}

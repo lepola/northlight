@@ -101,11 +101,11 @@ int main(){
         for(int i=0;i<3;++i)assert(a.large[i]==b.large[i]&&a.small[i]==b.small[i]);assert(a.clock==b.clock);
         FC::Wind c;c.advance(-1,.5f);assert(c.clock==0&&c.large[0]==0);
         c.advance(std::numeric_limits<float>::quiet_NaN(),.5f);assert(c.clock==0);
-        FC::Wind d;d.advance(.1f,std::numeric_limits<float>::infinity());assert(near(d.speed,.6f));
-        FC::Wind e;e.advance(.1f,0);assert(near(e.speed,.6f)&&near(e.dir[0],std::cos(.35f))&&near(e.dir[1],std::sin(.35f),1e-5f));
-        FC::Wind r;r.advance(.1f,3);assert(near(r.speed,2.4f));
+        FC::Wind d;d.advance(.1f,std::numeric_limits<float>::infinity());assert(near(d.speed,float(FC::kWindDry)));
+        FC::Wind e;e.advance(.1f,0);assert(near(e.speed,float(FC::kWindDry))&&near(e.dir[0],std::cos(.35f))&&near(e.dir[1],std::sin(.35f),1e-5f));
+        FC::Wind r;r.advance(.1f,3);assert(near(r.speed,float(FC::kWindRain)));
         FC::Wind j;j.advance(.1f,0);const double before[2]={j.large[0],j.large[1]};j.advance(.1f,1);
-        assert(std::hypot(j.large[0]-before[0],j.large[1]-before[1])<=2.4*.1+1e-9); /* one frame moves at most speed*dt */
+        assert(std::hypot(j.large[0]-before[0],j.large[1]-before[1])<=FC::kWindRain*.1+1e-9); /* one frame moves at most speed*dt */
         FC::Wind m;for(int i=0;i<200000;++i){m.advance(.1f,i%7<3?1.f:0.f);
             for(int k=0;k<3;++k)assert(m.large[k]>=0&&m.large[k]<FC::LargePeriod&&m.small[k]>=0&&m.small[k]<FC::SmallPeriod);}
         assert(near(float(m.clock),20000.f,1.f));
