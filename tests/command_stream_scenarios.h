@@ -428,13 +428,56 @@ static void textureShadows(){
         CHECK(rig.dev->UpdateTexture(a,b)==D3D_OK&&s.texShadowBytes.load()==bytes-16*16*4);const auto w=get(s.passThrough[unsigned(PassReason::Written)]);
         CHECK(b->LockRect(0,&lr,nullptr,0)==D3D_OK&&get(s.passThrough[unsigned(PassReason::Written)])==w+1&&b->UnlockRect(0)==D3D_OK);a->Release();b->Release();
     }
+    {   // 0.3.196 (task 12): a fresh keep takes free room or evicts only fresh keeps that are >= kFreshEvictAgeFrames old, never a re-locked shadow; with none it is skipped, the lock stages (no sync) and the real level still gets the bytes.
+        // The readbacks that follow are split by cause: a fresh keep that was evicted, a re-locked shadow that was evicted, a level that never had a shadow.
+        std::vector<IDirect3DTexture9*> v;const auto skip0=get(s.texShadowFreshSkipped),ev0=get(s.texShadowEvicted),sl0=get(s.census[(std::size_t)Cmd::SyncLock]),rf0=get(s.texShadowRefused);
+        TTexture* last=nullptr;
+        for(int i=0;i<100&&get(s.texShadowFreshSkipped)==skip0;++i){
+            IDirect3DTexture9* t=nullptr;CHECK(rig.dev->CreateTexture(256,256,1,0,(D3DFORMAT)22,(D3DPOOL)1,&t,nullptr)==D3D_OK);rig.sync();last=gLastTexture;
+            D3DLOCKED_RECT lr{};CHECK(t->LockRect(0,&lr,nullptr,0)==D3D_OK);fill((unsigned char*)lr.pBits,lr.Pitch,256,1024,77);CHECK(t->UnlockRect(0)==D3D_OK);v.push_back(t);}
+        CHECK(get(s.texShadowFreshSkipped)==skip0+1&&v.size()>=2&&s.texShadowBytes.load()<=std::int64_t(q.texShadowCap()));   // the cap filled with fresh keeps, the next one was skipped
+        CHECK(get(s.texShadowEvicted)==ev0&&get(s.census[(std::size_t)Cmd::SyncLock])==sl0&&get(s.texShadowRefused)==rf0);   // ... without evicting, without a synchronous lock, and not as a refusal
+        rig.sync();for(unsigned y=0;y<256;++y)for(unsigned x=0;x<1024;++x)CHECK(last->surf[0]->mem[std::size_t(y)*last->surf[0]->pitch+x]==(unsigned char)(77+y*7+x));   // the staged Block reached the device
+        const auto rb0=get(s.texShadowReadbacks),nv0=get(s.readbackNeverShadowed),fd0=get(s.readbackAfterFreshDrop),re0=get(s.readbackAfterRelockedEvict),fs0=get(s.readbackAfterFreshSkip);
+        auto causes=[&]{return get(s.readbackAfterFreshSkip)-fs0+get(s.readbackNeverShadowed)-nv0+get(s.readbackAfterFreshDrop)-fd0+get(s.readbackAfterRelockedEvict)-re0;};
+        {D3DLOCKED_RECT lr{};IDirect3DTexture9* t=v.back();CHECK(t->LockRect(0,&lr,nullptr,0)==D3D_OK&&t->UnlockRect(0)==D3D_OK);}   // the skipped level, written now: one readback, its fresh keep was skipped
+        CHECK(get(s.texShadowReadbacks)==rb0+1&&get(s.readbackAfterFreshSkip)==fs0+1&&causes()==1&&get(s.texShadowEvicted)>ev0);
+        for(auto* t:v){D3DLOCKED_RECT lr{};CHECK(t->LockRect(0,&lr,nullptr,0)==D3D_OK&&t->UnlockRect(0)==D3D_OK);}   // the fresh keeps the readback evicted come back through a readback each
+        CHECK(get(s.readbackAfterFreshDrop)>fd0&&causes()==get(s.texShadowReadbacks)-rb0);
+        std::vector<IDirect3DTexture9*> hot;   // re-locked 2 MiB levels push the re-locked shadows out too
+        for(int i=0;i<10;++i){IDirect3DTexture9* t=nullptr;CHECK(rig.dev->CreateTexture(1024,512,1,0,(D3DFORMAT)22,(D3DPOOL)1,&t,nullptr)==D3D_OK);D3DLOCKED_RECT lr{};RECT rc{0,0,8,2};
+            CHECK(t->LockRect(0,&lr,&rc,0)==D3D_OK&&t->UnlockRect(0)==D3D_OK&&t->LockRect(0,&lr,&rc,0)==D3D_OK&&t->UnlockRect(0)==D3D_OK);hot.push_back(t);}
+        for(auto* t:v){D3DLOCKED_RECT lr{};CHECK(t->LockRect(0,&lr,nullptr,0)==D3D_OK&&t->UnlockRect(0)==D3D_OK);}
+        CHECK(get(s.readbackAfterRelockedEvict)>re0&&causes()==get(s.texShadowReadbacks)-rb0&&s.texShadowBytes.load()<=std::int64_t(q.texShadowCap()));   // every readback has exactly one cause
+        for(auto* t:v)t->Release();for(auto* t:hot)t->Release();rig.sync();CHECK(s.texShadowBytes.load()==0);
+    }
+    {   // 0.3.196 (task 12) cooldown: 80 write-once levels fill the cap; a new level written and re-locked at once is skipped (young keeps) and costs one readback, counted as freshSkip;
+        // after kFreshEvictAgeFrames Presents the stale keeps make room, and new write-then-re-lock levels are served from their shadow without any SyncLock.
+        std::vector<IDirect3DTexture9*> v;const auto skip0=get(s.texShadowFreshSkipped);
+        auto writeOnce=[&](bool relock){IDirect3DTexture9* t=nullptr;CHECK(rig.dev->CreateTexture(256,256,1,0,(D3DFORMAT)22,(D3DPOOL)1,&t,nullptr)==D3D_OK);D3DLOCKED_RECT lr{};
+            CHECK(t->LockRect(0,&lr,nullptr,0)==D3D_OK&&t->UnlockRect(0)==D3D_OK);
+            if(relock){RECT rc{0,0,8,2};CHECK(t->LockRect(0,&lr,&rc,0)==D3D_OK&&t->UnlockRect(0)==D3D_OK);}
+            return t;};
+        for(int i=0;i<80;++i)v.push_back(writeOnce(false));
+        CHECK(get(s.texShadowFreshSkipped)>skip0);
+        const auto fs0=get(s.readbackAfterFreshSkip),sl0=get(s.census[(std::size_t)Cmd::SyncLock]),ev0=get(s.texShadowEvicted);
+        v.push_back(writeOnce(true));
+        CHECK(get(s.readbackAfterFreshSkip)==fs0+1&&get(s.census[(std::size_t)Cmd::SyncLock])==sl0+1);   // before the cooldown
+        for(unsigned i=0;i<kFreshEvictAgeFrames+1;++i)rig.dev->Present(nullptr,nullptr,nullptr,nullptr);
+        const auto sl1=get(s.census[(std::size_t)Cmd::SyncLock]),rb1=get(s.texShadowReadbacks),hits1=get(s.texShadowHits);
+        for(int i=0;i<10;++i)v.push_back(writeOnce(true));
+        CHECK(get(s.census[(std::size_t)Cmd::SyncLock])==sl1&&get(s.texShadowReadbacks)==rb1&&get(s.texShadowHits)>=hits1+10&&get(s.texShadowEvicted)>ev0);   // after it: no sync, stale keeps were evicted
+        CHECK(s.texShadowBytes.load()<=std::int64_t(q.texShadowCap()));
+        for(auto* t:v)t->Release();rig.sync();CHECK(s.texShadowBytes.load()==0);
+    }
     rig.sync();CHECK(s.texShadowBytes.load()>=0);
     // The cap fills with fresh keeps (levels WoW loads once and never locks again); the levels that ARE re-locked must still end up shadowed:
     // shadows are evictable, never-re-locked ones first, and each hot level costs one readback and then no sync at all.
     std::vector<IDirect3DTexture9*> fresh;const auto evicted0=get(s.texShadowEvicted);
     for(int i=0;i<140;++i){IDirect3DTexture9* t=nullptr;CHECK(rig.dev->CreateTexture(256,256,1,0,(D3DFORMAT)22,(D3DPOOL)1,&t,nullptr)==D3D_OK);D3DLOCKED_RECT lr{};   // 256 KiB: the largest fresh keep
         CHECK(t->LockRect(0,&lr,nullptr,0)==D3D_OK&&t->UnlockRect(0)==D3D_OK);fresh.push_back(t);}
-    CHECK(s.texShadowBytes.load()<=std::int64_t(q.texShadowCap())&&get(s.texShadowEvicted)>evicted0);   // 140 x 256 KiB > 32 MiB: older fresh keeps were evicted, nothing refused
+    const auto skipped0=get(s.texShadowFreshSkipped);
+    CHECK(s.texShadowBytes.load()<=std::int64_t(q.texShadowCap())&&get(s.texShadowEvicted)==evicted0&&skipped0>0);   // 140 x 256 KiB > 16 MiB: the keeps that did not fit were skipped (0.3.196: a fresh keep evicts nothing), nothing refused
     std::vector<IDirect3DTexture9*> hot;
     for(int i=0;i<4;++i){IDirect3DTexture9* t=nullptr;CHECK(rig.dev->CreateTexture(1024,512,1,0,(D3DFORMAT)22,(D3DPOOL)1,&t,nullptr)==D3D_OK);D3DLOCKED_RECT lr{};RECT rc{0,0,8,2};
         CHECK(t->LockRect(0,&lr,&rc,0)==D3D_OK&&t->UnlockRect(0)==D3D_OK);hot.push_back(t);}   // first write: staged (the level is above the fresh limit)
@@ -443,7 +486,8 @@ static void textureShadows(){
     CHECK(get(s.texShadowReadbacks)==rb0+4&&get(s.census[(std::size_t)Cmd::SyncLock])==sl0+4);   // one readback per hot level, then nothing synchronous
     CHECK(s.texShadowBytes.load()<=std::int64_t(q.texShadowCap()));
     // a kept first write that is locked again was worth keeping (counted once), and a re-locked shadow outlives never-re-locked ones
-    const auto useful0=get(s.texShadowFreshUseful);{D3DLOCKED_RECT lr{};IDirect3DTexture9* t=fresh.back();CHECK(t->LockRect(0,&lr,nullptr,0)==D3D_OK&&t->UnlockRect(0)==D3D_OK&&t->LockRect(0,&lr,nullptr,0)==D3D_OK&&t->UnlockRect(0)==D3D_OK);}
+    const auto useful0=get(s.texShadowFreshUseful);{D3DLOCKED_RECT lr{};IDirect3DTexture9* t=fresh[48];   // (a kept one: the first ~64 fit, the readbacks above evicted the oldest 32)
+       CHECK(t->LockRect(0,&lr,nullptr,0)==D3D_OK&&t->UnlockRect(0)==D3D_OK&&t->LockRect(0,&lr,nullptr,0)==D3D_OK&&t->UnlockRect(0)==D3D_OK);}
     CHECK(get(s.texShadowFreshUseful)==useful0+1);
     for(int i=0;i<140;++i){IDirect3DTexture9* t=nullptr;CHECK(rig.dev->CreateTexture(256,256,1,0,(D3DFORMAT)22,(D3DPOOL)1,&t,nullptr)==D3D_OK);D3DLOCKED_RECT lr{};CHECK(t->LockRect(0,&lr,nullptr,0)==D3D_OK&&t->UnlockRect(0)==D3D_OK);fresh.push_back(t);}   // more fresh keeps churn
     const auto sl1=get(s.census[(std::size_t)Cmd::SyncLock]);
@@ -453,11 +497,11 @@ static void textureShadows(){
     for(auto* t:fresh)t->Release();fresh.clear();rig.sync();
     std::vector<IDirect3DTexture9*> warm;
     for(int i=0;i<16;++i){IDirect3DTexture9* t=nullptr;CHECK(rig.dev->CreateTexture(1024,512,1,0,(D3DFORMAT)22,(D3DPOOL)1,&t,nullptr)==D3D_OK);D3DLOCKED_RECT lr{};RECT rc{0,0,8,2};
-        CHECK(t->LockRect(0,&lr,&rc,0)==D3D_OK&&t->UnlockRect(0)==D3D_OK&&t->LockRect(0,&lr,&rc,0)==D3D_OK&&t->UnlockRect(0)==D3D_OK);warm.push_back(t);}   // 20 re-locked 2 MiB levels > the 32 MiB cap: the oldest were evicted
+        CHECK(t->LockRect(0,&lr,&rc,0)==D3D_OK&&t->UnlockRect(0)==D3D_OK&&t->LockRect(0,&lr,&rc,0)==D3D_OK&&t->UnlockRect(0)==D3D_OK);warm.push_back(t);}   // 20 re-locked 2 MiB levels > the 16 MiB cap: the oldest were evicted
     CHECK(s.texShadowBytes.load()<=std::int64_t(q.texShadowCap()));
-    const auto refused0=get(s.texShadowRefused);{IDirect3DTexture9* t=nullptr;CHECK(rig.dev->CreateTexture(64,64,1,0,(D3DFORMAT)22,(D3DPOOL)1,&t,nullptr)==D3D_OK);D3DLOCKED_RECT lr{};
+    const auto skipped1=get(s.texShadowFreshSkipped),refused0=get(s.texShadowRefused);{IDirect3DTexture9* t=nullptr;CHECK(rig.dev->CreateTexture(64,64,1,0,(D3DFORMAT)22,(D3DPOOL)1,&t,nullptr)==D3D_OK);D3DLOCKED_RECT lr{};
         const auto size0=s.texShadowBytes.load();CHECK(size0+64*64*4>std::int64_t(q.texShadowCap()));   // the cap is full of re-locked levels
-        CHECK(t->LockRect(0,&lr,nullptr,0)==D3D_OK&&t->UnlockRect(0)==D3D_OK&&get(s.texShadowRefused)==refused0+1&&s.texShadowBytes.load()==size0);t->Release();}
+        CHECK(t->LockRect(0,&lr,nullptr,0)==D3D_OK&&t->UnlockRect(0)==D3D_OK&&get(s.texShadowFreshSkipped)==skipped1+1&&get(s.texShadowRefused)==refused0&&s.texShadowBytes.load()==size0);t->Release();}   // skipped (it stages), not refused
     for(auto* t:hot)t->Release();for(auto* t:warm)t->Release();rig.sync();CHECK(s.texShadowBytes.load()==0);
     rig.finish();checkClean();
 }
@@ -601,8 +645,8 @@ static void statsLine(){
     rig.sync();
     std::vector<std::string> lines;for(auto& l:gStatLines)if(l.find(" frames=600 ")!=std::string::npos)lines.push_back(l);   // the 600th replayed frame
     CHECK(lines.size()==1&&lines[0].rfind("CSTREAM cmds=",0)==0&&lines[0].find("passPerFrame=")!=std::string::npos&&lines[0].find("census[")!=std::string::npos&&lines[0].back()==']');
-    for(const char* field:{"game[per frame]: ms=","syncMs=","presentWaitMs=","bpMs=","sleeps=","publishes=","replayBusyMs/frame=","recorded=","answered=","texShadow=","readbacks=","bufShadow=","readbacks/frame=","evicted/frame=","(hot ","refused/frame=","grows=","large=","memMB="})CHECK(lines[0].find(field)!=std::string::npos);   // per-window numbers
-    CHECK(lines[0].size()<1600);
+    for(const char* field:{"game[per frame]: ms=","syncMs=","presentWaitMs=","bpMs=","sleeps=","publishes=","replayBusyMs/frame=","recorded=","answered=","texShadow=","readbacks=","bufShadow=","readbacks/frame=","evicted/frame=","(hot ","refused/frame=","grows=","large=","memMB=","texFreshSkipped=","texReadbackCause[freshDrop=","relockedEvict=","neverShadowed=","freshSkip="})CHECK(lines[0].find(field)!=std::string::npos);   // per-window numbers
+    CHECK(lines[0].size()<2000);
     rig.finish();checkClean();
 }
 // Redundant-state filtering: a repeated Set of the value the game last set is not recorded; anything else is.
@@ -974,7 +1018,7 @@ static void replayTimingAccounting(){
     const auto idle0=rp.idleNs.load(),wall0=rp.wallNs();
     std::this_thread::sleep_for(std::chrono::milliseconds(60));rig.sync();   // the replay thread waits for commands; a wait is accounted when it ends (the sync wakes it)
     const auto idle1=rp.idleNs.load(),wall1=rp.wallNs();
-    CHECK(idle1-idle0>=40000000ull&&idle1-idle0<=wall1-wall0);   // grew by about the empty time, never more than elapsed
+    CHECK(idle1-idle0>=40000000ull&&idle1-idle0<=wall1-wall0+2000000ull);   // grew by about the empty time, never more than elapsed (+2 ms: 0.3.196 (task 12): the replay thread may already have begun this wait when wall0 was sampled, a few us of slack seen in ~1 run of 20)
     const auto idle=rp.idleNs.load();const auto wall=rp.wallNs();CHECK(idle<=wall&&rp.busyNsTotal()<=wall&&rp.busyNsTotal()>0);
     rig.finish();checkClean();
 }

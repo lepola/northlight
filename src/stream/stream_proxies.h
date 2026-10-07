@@ -283,6 +283,9 @@ struct SubRes {
     // Eviction bookkeeping (StreamCore::texFresh/texRelocked): the shadow may be evicted at any time it is not locked; the level then simply takes
     // the readback path at its next re-lock. relocked: served a second lock (or made by a readback): evicted last. fromFresh: kept from a first write.
     LruNode<SubRes> lru;bool relocked=false,fromFresh=false;   // lru: StreamCore::texFresh (never re-locked) or texRelocked, least recently locked first
+    // 0.3.196 (task 12): the list this level's shadow was on when makeRoomForShadow evicted it (None: never shadowed, or shadowed again since); only for the readback-cause counters.
+    enum Gone:std::uint8_t{GoneNone,GoneFresh,GoneRelocked,GoneSkipped} gone=GoneNone;
+    std::uint64_t lastLockFrame=0;   // StreamCore::frameNo of the shadow's creation or last lock: a fresh keep may be evicted for a new one only once this is kFreshEvictAgeFrames old
 };
 // What a staged Unlock records (followed by nothing: the bytes are in the command's Block).
 struct UnlockImageArgs {ProxyBase* proxy;UINT level,face;DWORD flags;UINT hasRect,rows,slices,rowBytes,pitch,slicePitch;LONG l,t,r,b;UINT bf,bk;UINT route;};
@@ -300,7 +303,8 @@ inline void dropShadowLocked(StreamCore& c,SubRes& s){
 }
 inline void dropSubShadow(StreamCore& c,SubRes& s){std::lock_guard<std::mutex> l(c.texMutex);dropShadowLocked(c,s);}
 // Game thread: makes `bytes` fit the texture-shadow cap by evicting least-recently-locked shadows, never-re-locked ones (fresh keeps) first,
-// never one that is locked now or `keep`. mayEvictRelocked=false (a fresh keep) leaves the re-locked ones alone. false = still no room.
+// never one that is locked now or `keep`. mayEvictRelocked=false leaves the re-locked ones alone (no caller: 0.3.196 (task 12): a fresh keep no longer evicts anything,
+// it is taken only into free room, see lockImage). false = still no room.
 // The victim is the first eligible entry of the LRU list (fresh list, then the re-locked one): O(victims), not a rescan of every level.
 inline bool makeRoomForShadow(StreamCore& c,std::size_t bytes,bool mayEvictRelocked,const SubRes* keep){
     while(!c.q.texShadowAdmit(bytes)){
@@ -309,15 +313,29 @@ inline bool makeRoomForShadow(StreamCore& c,std::size_t bytes,bool mayEvictReloc
         for(SubRes* s=c.texFresh.head;s&&!victim;s=s->lru.next)if(s!=keep&&s->mode!=SubRes::Shadowed)victim=s;
         if(!victim&&mayEvictRelocked)for(SubRes* s=c.texRelocked.head;s&&!victim;s=s->lru.next)if(s!=keep&&s->mode!=SubRes::Shadowed)victim=s;
         if(!victim)return false;
+        victim->gone=victim->relocked?SubRes::GoneRelocked:SubRes::GoneFresh;   // which list it was on: the cause of the readback its next write lock costs
         dropShadowLocked(c,*victim);add(c.q.stats.texShadowEvicted);
     }
     return true;
 }
-inline void listShadow(StreamCore& c,SubRes& s){std::lock_guard<std::mutex> l(c.texMutex);texListOf(c,s).pushBack(&s);}
+// 0.3.196 (task 12): a FRESH keep may evict never-re-locked shadows, but only ones not locked for kFreshEvictAgeFrames Presents (the list head is the oldest, so a young head ends it): the
+// cap never freezes on stale write-once levels, and a level written and re-locked within the window keeps its shadow. false = skip the keep.
+constexpr std::uint64_t kFreshEvictAgeFrames=60;
+inline bool makeRoomForFreshKeep(StreamCore& c,std::size_t bytes,const SubRes* keep){
+    while(!c.q.texShadowAdmit(bytes)){
+        std::lock_guard<std::mutex> l(c.texMutex);
+        SubRes* victim=nullptr;
+        for(SubRes* s=c.texFresh.head;s&&!victim;s=s->lru.next)if(s!=keep&&s->mode!=SubRes::Shadowed)victim=s;
+        if(!victim||c.frameNo-victim->lastLockFrame<kFreshEvictAgeFrames)return false;
+        victim->gone=SubRes::GoneFresh;dropShadowLocked(c,*victim);add(c.q.stats.texShadowEvicted);
+    }
+    return true;
+}
+inline void listShadow(StreamCore& c,SubRes& s){std::lock_guard<std::mutex> l(c.texMutex);s.lastLockFrame=c.frameNo;texListOf(c,s).pushBack(&s);}
 // Game thread: the level's shadow was locked again: most recently used now; the first re-lock moves it to the re-locked list (evicted last).
 inline void touchTexShadow(StreamCore& c,SubRes& s,bool becomesRelocked){
-    if(!becomesRelocked&&texListOf(c,s).isTail(&s))return;
-    std::lock_guard<std::mutex> l(c.texMutex);
+    if(!becomesRelocked&&texListOf(c,s).isTail(&s)){s.lastLockFrame=c.frameNo;return;}
+    std::lock_guard<std::mutex> l(c.texMutex);s.lastLockFrame=c.frameNo;
     texListOf(c,s).remove(&s);if(becomesRelocked)s.relocked=true;texListOf(c,s).pushBack(&s);
 }
 // A GPU-side write (StretchRect, UpdateTexture, ColorFill, mip generation, ...): the CPU copy is stale for good.
@@ -438,7 +456,14 @@ inline HRESULT lockImage(ProxyBase& self,ProxyBase& root,SubRes& sub,UINT route,
             const bool undefined=!sub.written||(eff&D3::kLockDiscard)!=0;   // nothing to preserve: a zero shadow is as good as the real bytes
             const bool fresh=undefined&&levelBytes<=kFreshShadowMax,readback=!undefined&&!(flags&D3::kLockReadOnly)&&levelBytes<=kMaxStagedImage;
             if(fresh||readback){
-                if(!makeRoomForShadow(*self.core,levelBytes,readback,&sub)){add(q.stats.texShadowRefused);add(q.stats.texShadowRefusedBytes,levelBytes);}
+                // 0.3.196 (task 12): a FRESH keep (a level WoW writes once and may never lock again) takes free room, or evicts never-re-locked keeps that are at least kFreshEvictAgeFrames
+                // old (never a re-locked shadow); otherwise it is skipped: not made, and the lock takes the staged path below (a Block recorded with the same bytes, no sync).
+                // A readback may still evict (fresh keeps first, then re-locked ones).
+                const bool room=readback?makeRoomForShadow(*self.core,levelBytes,true,&sub):makeRoomForFreshKeep(*self.core,levelBytes,&sub);
+                if(!room){
+                    if(readback){add(q.stats.texShadowRefused);add(q.stats.texShadowRefusedBytes,levelBytes);}
+                    else{add(q.stats.texShadowFreshSkipped);sub.gone=SubRes::GoneSkipped;}
+                }
                 else{
                     bool ok=true;
                     try{sub.shadow.assign(levelBytes+kLockSlack,0);}catch(...){ok=false;}
@@ -452,9 +477,10 @@ inline HRESULT lockImage(ProxyBase& self,ProxyBase& root,SubRes& sub,UINT route,
                             if(src){for(UINT z=0;z<ld;++z)for(UINT y=0;y<lrows;++y)std::memcpy(sub.shadow.data()+(std::size_t(z)*lrows+y)*lrowBytes,src+std::ptrdiff_t(z)*sp+std::ptrdiff_t(y)*rp,lrowBytes);ok=true;}
                             callUnlock(route,self.inner,level,face);},Cmd::SyncLock);
                         if(!ran)return D3DERR_INVALIDCALL;
-                        if(ok)add(q.stats.texShadowReadbacks);
+                        if(ok){add(q.stats.texShadowReadbacks);
+                            add(sub.gone==SubRes::GoneFresh?q.stats.readbackAfterFreshDrop:sub.gone==SubRes::GoneRelocked?q.stats.readbackAfterRelockedEvict:sub.gone==SubRes::GoneSkipped?q.stats.readbackAfterFreshSkip:q.stats.readbackNeverShadowed);}
                     }else if(ok)add(q.stats.texShadowFresh);
-                    if(ok){
+                    if(ok){sub.gone=SubRes::GoneNone;
                         sub.shadowOn=true;sub.levelRowBytes=lrowBytes;sub.levelRows=lrows;sub.levelSlices=ld;q.addTexShadowBytes(std::int64_t(levelBytes));
                         sub.relocked=readback;sub.fromFresh=fresh;listShadow(*self.core,sub);justMade=true;   // a readback is a re-lock by definition: evicted last
                     }

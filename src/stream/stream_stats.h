@@ -37,6 +37,9 @@ struct Counters {
     // Per-level texture shadows (own cap, outside the queue budget): locks served from a shadow, shadows made from a fresh
     // lock (nothing to read back) or from one synchronous readback, refusals by the cap.
     Counter texShadowEvicted{0},texShadowFreshUseful{0},texShadowHits{0},texShadowFresh{0},texShadowReadbacks{0},texShadowRefused{0},texShadowRefusedBytes{0};
+    // 0.3.196 (task 12): fresh keeps skipped for lack of free room (they stage instead), and the readbacks split by why the level had no shadow: its fresh keep was evicted, its
+    // re-locked shadow was evicted, or it never had one (a first write above the fresh limit, a skipped fresh keep, a refused or dropped shadow).
+    Counter texShadowFreshSkipped{0},readbackAfterFreshDrop{0},readbackAfterRelockedEvict{0},readbackNeverShadowed{0},readbackAfterFreshSkip{0};   // ...Skip: the level's fresh keep was skipped (no room)
     // 0.3.192 (CS): buffer shadows made by ONE synchronous whole-buffer readback at a write re-lock (DYNAMIC late shadows / non-DYNAMIC shadows), LRU evictions
     // by kind (hot = locked within kShadowHotFrames), re-locks refused (too big for the cap / no victim qualified), and adaptive cap growths.
     Counter dynShadowReadbacks{0},stShadowReadbacks{0},dynShadowEvicted{0},stShadowEvicted{0},hotShadowEvicted{0},relockRefused{0},relockRefusedBytes{0},shadowCapGrows{0};
