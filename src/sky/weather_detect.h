@@ -2,30 +2,34 @@
 // 0.3.198 (rain): finds the game's weather particle textures without touching the game thread. Every game
 // texture is created through the wrapped Device (stream mode: the replay thread's Device::CreateTexture), so
 // the creation signature is all the detection needs: the art layer's procedural rain/snow textures are
-// A8R8G8B8 strips (RainDrop01/RainDropRed01 32x512 = 1:16, SnowFlake01 32x128 = 1:4; texture-quality settings
-// may halve the dimensions, the aspect stays). The draw hook then compares the bound stage-0 texture (the
-// mirror's raw pointer) with `hot` - one pointer comparison, no peek, lock, Get* or hash lookup.
-// Table <= 4 entries, no allocation. All members are touched under the Device's gate only.
+// A8R8G8B8 strips (RainDrop01/RainDropRed01 32x512 = 1:16, SnowFlake01 32x1024 = 1:32; texture-quality settings
+// may halve the dimensions, the aspect stays). Both aspects are rare among decoded game textures (palette and
+// uncompressed BLPs also become A8R8G8B8). The draw hook compares the bound stage-0 texture (the mirror's raw
+// pointer) with `hot` - one pointer comparison, no peek, lock, Get* or hash lookup.
+// Table: kPerKind slots per kind (a new candidate can only replace an entry of its own kind, preferring one
+// that never drew), no allocation. `hot` rotates on every frame in which it counted no draws, so a lookalike
+// that draws nothing never holds it. All members are touched under the Device's gate only.
 #include <cstdint>
 #include <cstdio>
 #include "weather_state.h"
 
 namespace NorthlightWeatherDetect {
 using NorthlightWeather::Kind;
-constexpr unsigned kCandidates=4,kTallLogs=8;
+constexpr unsigned kPerKind=2,kCandidates=2*kPerKind,kTallLogs=8;
 constexpr std::uint32_t kFmtA8R8G8B8=21; /* D3DFMT_A8R8G8B8 (static_assert in renderer.cpp) */
 constexpr std::uint32_t kMaxWidth=32;
 
 inline Kind classify(std::uint32_t w,std::uint32_t h,std::uint32_t fmt){
     if(fmt!=kFmtA8R8G8B8||!w||w>kMaxWidth)return Kind::None;
+    if(w!=8&&w!=16&&w!=32)return Kind::None;
     if(h==16*w)return Kind::Rain;
-    if(h==4*w)return Kind::Snow;
+    if(h==32*w)return Kind::Snow;
     return Kind::None;
 }
 
 class Detector{
 public:
-    struct Candidate{const void* raw=nullptr;Kind kind=Kind::None;};
+    struct Candidate{const void* raw=nullptr;Kind kind=Kind::None;bool drawn=false;};
     using Sink=void(*)(const char* line);
     const void* hot=nullptr;Kind hotKind=Kind::None; /* the per-draw comparison target */
     std::uint32_t generation=0,overflows=0,tallSeen=0;
@@ -42,14 +46,21 @@ public:
         remove(raw);
         if(w&&h>=4*w){if(tallSeen<kTallLogs)say("WEATHER tall w=%u h=%u fmt=%u levels=%u",w,h,fmt,levels);++tallSeen;}
         const Kind kind=classify(w,h,fmt);if(kind==Kind::None)return;
-        if(n==kCandidates){++overflows;dropAt(0);} /* the new candidate replaces the oldest */
-        table[n++]={raw,kind};++generation;
+        unsigned same=0,victim=n;
+        for(unsigned i=0;i<n;++i)if(table[i].kind==kind){++same;if(victim==n||(table[victim].drawn&&!table[i].drawn))victim=i;} /* oldest never-drawn of the kind, else the oldest */
+        if(same>=kPerKind){++overflows;dropAt(victim);}
+        table[n++]={raw,kind,false};++generation;
         if(!hot&&!off){hot=raw;hotKind=kind;}
         say("WEATHER candidate kind=%s %ux%u fmt=%u levels=%u raw=%p generation=%u",NorthlightWeather::kindName(kind),w,h,fmt,levels,raw,generation);
     }
     void forget(const void* raw){if(raw)remove(raw);}
     void reset(){if(n)++generation;n=0;hot=nullptr;hotKind=Kind::None;}
-    // Frame end while no weather draw was counted and nothing is active: try the next candidate.
+    // Frame end: hot counted draws -> it stays and is marked drawn; otherwise try the next candidate.
+    void endFrame(bool counted){
+        if(counted&&hot){for(unsigned i=0;i<n;++i)if(table[i].raw==hot)table[i].drawn=true;return;}
+        rotate();
+    }
+    // Next candidate (hot's slot + 1, wrapping).
     void rotate(){
         if(off||!n){hot=nullptr;hotKind=Kind::None;return;}
         unsigned at=n; /* hot's slot, or n when it has none: the next slot is then 0 */

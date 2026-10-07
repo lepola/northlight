@@ -18,10 +18,11 @@ constexpr float kDisc=0.85f;          /* sun and moon disc opacity, glare weight
 constexpr float kShadowSoften=0.5f;   /* direct shadowing weakened by kShadowSoften f (c59.z; 0 = untouched) */
 constexpr float kLampFog=0.5f;        /* lamp glow in fog (c58.z, c58.w) x (1 + kLampFog f) */
 constexpr float kAmbientLift=0.25f;   /* AmbientLight.w (GI sky ambient boost) += kAmbientLift r, rain only */
+constexpr float kIntensityFloor=0.35f; /* light rain still shows: the effect amount is blend x (floor + (1-floor) x intensity) */
 constexpr float kMaxShadowSoften=0.95f; /* RainFog=2 never removes sun shadows altogether */
 
 struct Frame {
-    float fog=0;  /* f: rain r or snow s, blend x intensity x RainFog (x kSnowFog for snow) */
+    float fog=0;  /* f: rain r or snow s, blend x (floor + (1-floor) intensity) x RainFog (x kSnowFog for snow) */
     float rain=0; /* r: rain only, the same product (0 for snow) */
     float wet=0;  /* w: the tracker's slow wetness x RainWetness (not snow) */
     float hazeTauScale()const{return 1+kHazeTau*fog;}
@@ -38,7 +39,7 @@ inline Frame derive(const NorthlightWeather::State& s,unsigned weather,unsigned 
     using NorthlightWeather::Kind;
     Frame f;
     if(!weather)return f;
-    const float level=std::isfinite(s.blend)&&std::isfinite(s.intensity)?std::clamp(s.blend,0.f,1.f)*std::clamp(s.intensity,0.f,1.f):0.f;
+    const float level=std::isfinite(s.blend)&&std::isfinite(s.intensity)?std::clamp(s.blend,0.f,1.f)*(kIntensityFloor+(1-kIntensityFloor)*std::clamp(s.intensity,0.f,1.f)):0.f; /* exactly 0 when blend is 0 */
     if(s.kind==Kind::Rain){f.fog=f.rain=level*float(std::min(rainFog,2u));}
     else if(s.kind==Kind::Snow)f.fog=kSnowFog*level*float(std::min(rainFog,2u));
     // wetness is the tracker's own slow scalar (rises while it rains, dries over ~90 s after it, so it outlives kind None);

@@ -1060,7 +1060,7 @@ public:
         extensionWork("frame finish",[&]{finishFrameImpl();});
     }
     // 0.3.198 (rain): frame end, on the finishing thread, under the gate: the frame's sample into the tracker, the state to the
-    // world, the hot candidate rotated while nothing is active, and the WEATHER lines.
+    // world, the hot candidate rotated on every frame it counted no draws, and the WEATHER lines.
     void weatherFrame(unsigned sampleFrame){
         namespace W=NorthlightWeather;
         if(gateFrame){logWeatherProbe(sampleFrame);weatherProbe={};}
@@ -1070,7 +1070,7 @@ public:
         weatherSample.kind=weatherSample.draws?weatherDetect.hotKind:W::Kind::None;
         weatherTracker.frame(weatherSample,float(dt));const W::State& st=weatherTracker.state();
         const bool counted=weatherSample.draws!=0;const W::Sample frameSample=weatherSample;weatherSample={};
-        if(!counted&&st.kind==W::Kind::None)weatherDetect.rotate(); /* idle: look at the next candidate */
+        weatherDetect.endFrame(counted); /* hot drew: it stays; otherwise the next candidate (the tracker's hold bridges the rotation) */
         if(world)world->setWeather(st);
         const bool high=st.blend>=W::kBlendLogHigh,low=st.blend>=W::kBlendLogLow;
         weatherLogClock+=dt;

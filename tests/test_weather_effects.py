@@ -2,7 +2,7 @@
 # northlight-test: requires=cxx
 """0.3.198 (rain): NorthlightWeatherEffects (src/sky/weather_effects.h), the real header compiled natively.
 All-zero state, Weather=0 and RainFog=0 give exactly the identity (gains 1, addends 0, wetness 0); rain vs snow (snow at 60 percent, no
-wetness); the coefficient table; RainFog=2 never goes negative or removes shadows altogether; non-finite input is dry. Native clang++, plain
+wetness); the intensity floor (0.35); the coefficient table; RainFog=2 never goes negative or removes shadows altogether; non-finite input is dry. Native clang++, plain
 -O2 and ASan/UBSan. No device or game."""
 import sys; from pathlib import Path; sys.path.insert(0, str(Path(__file__).resolve().parents[1]))  # repo root
 import northlight_paths as fp
@@ -37,7 +37,12 @@ int main(){
         assert(f.fog==1.0f&&f.rain==1.0f&&f.wet==1.0f);
         assert(near(f.hazeTauScale(),2.5f)&&near(f.airExtinction(),0.0025f)&&near(f.shaftGain(),0.25f)&&near(f.discGain(),0.15f)
             &&near(f.shadowSoften(),0.5f)&&near(f.lampFogGain(),1.5f)&&near(f.ambientLift(),0.25f));
-        auto h=WE::derive(st(Kind::Rain,0.5f,0.5f,0.2f),1,1,1);assert(near(h.fog,0.25f)&&near(h.rain,0.25f)&&near(h.wet,0.2f)&&near(h.shaftGain(),1-0.75f*0.25f));
+        auto h=WE::derive(st(Kind::Rain,0.5f,0.5f,0.2f),1,1,1);const float lv=0.5f*(0.35f+0.65f*0.5f);assert(near(h.fog,lv)&&near(h.rain,lv)&&near(h.wet,0.2f)&&near(h.shaftGain(),1-0.75f*lv));
+    }
+    {   // intensity floor: faint rain (intensity 0) still acts at 35 percent; blend 0 stays exactly dry whatever the intensity
+        auto f=WE::derive(st(Kind::Rain,0,1,0),1,1,1);assert(near(f.fog,0.35f)&&near(f.rain,0.35f)&&f.any());
+        assert(near(WE::derive(st(Kind::Rain,0,0.5f,0),1,1,1).fog,0.175f)&&near(WE::derive(st(Kind::Snow,0,1,0),1,1,1).fog,0.6f*0.35f));
+        for(float i:{0.f,0.5f,1.f})assert(identity(WE::derive(st(Kind::Rain,i,0,0),1,2,2))&&identity(WE::derive(st(Kind::Snow,i,0,0),1,2,2)));
     }
     {   // snow: fog-like effects at 60 percent, no GI ambient lift, never wet (even with leftover wetness)
         auto s=WE::derive(st(Kind::Snow,1,1,0.7f),1,1,1);
