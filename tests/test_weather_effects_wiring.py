@@ -50,12 +50,15 @@ wet=h[h.index('float4 WorldWet('):h.index('// Four POINT reads work')]
 checks['hlsl WorldGI: no weather code (it is at 31 temps)']='WeatherInfo' not in gi
 checks['hlsl WorldWet: reads WeatherInfo.y, and only y']=re.findall(r'WeatherInfo\.(\w)',wet)==['y']
 checks['hlsl WorldWet: sky, water and no-depth return 0 like WorldGI']='if(d>=.99999||waterDistance(uv,d)>0)return 0;' in wet
-checks['hlsl WorldWet: sky openness is the +Z moment of a metadata-validated probe, dry when invalid']=(
-    'tex2Dlod(ProbeVisibility,float4(uvp.x,(wrapped.y+4*GridInfo.x+.5)/(GridInfo.x*6),0,0))' in wet
-    and 'GridInfo.w>=.5&&all(metadata.xyz==cell)&&metadata.w>=0)?saturate((moment.x-24)/48)*moment.z:0;' in wet)
-checks['hlsl WorldWet: confidence-weighted, up-facing, rgb only (alpha 0), no irradiance read']=(
-    'float wet=WeatherInfo.y*up*open*smoothNormal.w;' in wet and 'saturate((n.z-.55)/.35)' in wet and 'return float4(' in wet and ',0);' in wet.splitlines()[-2]
-    and 'ProbeR' not in wet and 'probeIrradiance' not in wet)
+checks['hlsl WorldWet: openness is the +Z moment of metadata-validated probes of the layer above, blended bilinearly over the 2x2 neighbours with the residency fade']=(
+    '(wrapped.y+4*GridInfo.x+.5)/(GridInfo.x*6)' in wet and 'if(all(metadata.xyz==cell)&&metadata.w>=0){' in wet and 'saturate((above.x-24)/48)*above.z*weight' in wet
+    and 'saturate((PassInfo.w-metadata.w)*(1/.45))' in wet and 'lerp(1-fraction,fraction,bit)' in wet and 'base.z+=1' in wet and 'GridInfo.w>=.5' in wet
+    and 'open=total>.00001?open/total:0;' in wet)
+checks['hlsl WorldWet: a probe counts only if its -Z first hit reaches the surface (low ceilings, walls), Chebyshev-weighted']=(
+    '(wrapped.y+5*GridInfo.x+.5)/(GridInfo.x*6)' in wet and 'float need=cell.z*GridOrigin.w-p.z;' in wet and 'weight*=sees*sees*below.z;' in wet)
+checks['hlsl WorldWet: wet clamped to 0..1, confidence-weighted, up-facing; darkens the ambient only (no direct term); rgb only (alpha 0); no irradiance read']=(
+    'float wet=saturate(WeatherInfo.y*up*open*smoothNormal.w);' in wet and 'saturate((n.z-.55)/.35)' in wet and 'wet*AmbientLight.rgb*(fresnel*.15-.35)' in wet
+    and 'LegacyDirect' not in wet and 'return float4(wet*AmbientLight.rgb*(fresnel*.15-.35),0);' in wet and 'ProbeR' not in wet and 'probeIrradiance' not in wet)
 # no new passes beyond the wet pass
 checks['render: exactly one pass added by 0.3.198 rain (WorldWet: quad count 14 -> 15, shader creations 19 -> 20)']=(w.count('quad(')==15 and w.count('CreatePixelShader')==20)
 wd=w[w.index('if(wx.wet>0&&debug==0'):]
