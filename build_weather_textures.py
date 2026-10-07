@@ -133,8 +133,8 @@ def flake(u, v):
 
 RAIN, RAIN_RED, SNOW = (.90, .90, .90), (.75, .22, .18), (.97, .97, .97)   # Forever-style rain is near-white, not blue
 TEXTURES = {   # archive name -> (width, height, colour, alpha max, mip levels builder)
-    'textures\\Weather\\RainDrop01.blp': (32, 512, RAIN, .7, streak_chain),
-    'Textures\\WEATHER\\RAINDROPRED01.BLP': (32, 512, RAIN_RED, .7, streak_chain),
+    'textures\\Weather\\RainDrop01.blp': (32, 512, RAIN, .55, streak_chain),
+    'Textures\\WEATHER\\RAINDROPRED01.BLP': (32, 512, RAIN_RED, .55, streak_chain),
     'textures\\Weather\\SnowFlake01.blp': (32, 64, SNOW, .8, lambda w, h, colour, alpha_max: mip_chain(w, h, image(w, h, colour, alpha_max, flake))),
 }
 
