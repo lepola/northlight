@@ -897,7 +897,11 @@ float4 FogClouds(float2 uv:TEXCOORD0):COLOR0 {
     float peak=max(directScatter.r,max(directScatter.g,directScatter.b));
     float cap=max(FogInfo.z,.0001);
     directScatter*=cap/(cap+peak);
-    return float4(max(AmbientLight.rgb,0)*saturate(FogColor.rgb)*(SourcePolicy.x*.35*ambientWeight)+directScatter,tCloud);
+    // 0.3.199 (fog clouds): the banks take the game's own fog colour (c26, the colour the distant world already fades to; the storm bands
+    // make it grey in rain), not WorldFog's ambient*.35 air radiance: that is near black under a rain sky, and a bank that hides the scene
+    // behind it then reads as a dark smear. Without a validated game fog (c25.w 0) the air radiance stays (FogColor.rgb, the scattering
+    // albedo, is always 1 on the host: left out for the slot budget).
+    return float4(lerp(max(AmbientLight.rgb,0)*.35,LegacyFogColor.rgb,LegacyFog.w)*ambientWeight+directScatter,tCloud);
 }
 // Distant haze toward the WORLD horizon: in front of the scene, behind local
 // scattering. Terrain weight is 0 at or nearer than the start view Z (the

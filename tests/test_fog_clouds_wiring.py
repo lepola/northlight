@@ -89,5 +89,7 @@ checks['game thread untouched: no FogClouds / fog_clouds in stream_device.h, str
 req=[l for l in w.splitlines() if 'fogCloudNoise().request()' in l]
 checks['noise request: gated by the settings only (never by cf.active), before derive']=(len(req)==1 and 'cf.active' not in req[0] and 'quality.fogClouds&&quality.fogCloudDensity&&effects.fog&&debug==0' in req[0]
     and w.index('fogCloudNoise().request()')<w.index('NorthlightFogClouds::derive('))
+# game test fix: the banks take the game's fog colour (c26) when it is validated (c25.w), not the near-black ambient*.35 air radiance
+checks['colour: cloud ambient follows LegacyFogColor under LegacyFog.w']=('lerp(max(AmbientLight.rgb,0)*.35,LegacyFogColor.rgb,LegacyFog.w)*ambientWeight' in h.split('float4 FogClouds(',1)[1].split('\n}\n',1)[0])
 for k,ok in checks.items():print(('PASS ' if ok else 'FAIL ')+k)
 sys.exit(0 if all(checks.values()) else 1)
