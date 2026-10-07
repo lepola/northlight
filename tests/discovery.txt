@@ -72,6 +72,7 @@ test_pending_release_wiring.py
 test_point_light_shadow.py
 test_point_shadow_schedule.py
 test_prepare_worker.py
+test_probe_blend.py
 test_progressive_gi_worker.py
 test_quality_settings.py
 test_raster_reconstruction.py

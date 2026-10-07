@@ -9,6 +9,7 @@ sampler2D ProbeG : register(s5);
 sampler2D ProbeB : register(s6);
 sampler2D ProbeVisibility : register(s7);
 sampler2D LightingBuffer : register(s8);
+sampler2D ProbePrevious : register(s8); // 0.3.197: WorldGI only: previous SH R|G|B in three horizontal thirds of a 3n*n x n texture
 sampler2D FogBuffer : register(s9);
 sampler2D WaterMask : register(s11);
 sampler2D BaselineLighting : register(s12);
@@ -259,6 +260,11 @@ float4 probeIrradiance(float3 p,float3 n) {
         float visibility=variance/(variance+excess*excess);
         weight*=visibility*visibility*moment.z;
         float3 irradiance=float3(dot(tex2Dlod(ProbeR,float4(uv,0,0)),basis),dot(tex2Dlod(ProbeG,float4(uv,0,0)),basis),dot(tex2Dlod(ProbeB,float4(uv,0,0)),basis));
+        // 0.3.197: a same-key re-publication blends from what was on screen over .3 s (moment.w = start, -1000 = none); first residency keeps born's fade.
+        float blend=saturate((PassInfo.w-moment.w)*(1/.3));
+        [branch]if(blend<1){float2 third=float2(uv.x*(1/3.),uv.y);
+            float3 previous=float3(dot(tex2Dlod(ProbePrevious,float4(third,0,0)),basis),dot(tex2Dlod(ProbePrevious,float4(third+float2(1/3.,0),0,0)),basis),dot(tex2Dlod(ProbePrevious,float4(third+float2(2/3.,0),0,0)),basis));
+            irradiance=lerp(previous,irradiance,blend);}
         result+=max(irradiance,0)*weight;total+=weight;
         }
     }

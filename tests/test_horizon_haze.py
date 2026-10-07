@@ -389,10 +389,11 @@ def main():
             # WorldLighting (baseline alpha) and LocalDirect (daylight sunlit factor) change on purpose.
             # 0.3.175: WorldNormals' wide-sample threshold .85 -> .95 (r76) and both-or-neither wide pair (r77).
             # 0.3.185: RemovalSmooth is new (the removal smoothing's own half-res pass; TemporalLight shrinks).
-            if name not in ('WorldComposite', 'TemporalLight', 'SourceVisibilityPS', 'WorldLighting', 'LocalDirect', 'WorldNormals', 'RemovalSmooth'):
+            # 0.3.197: WorldGI blends a same-key probe re-publication from the previous SH (task 13).
+            if name not in ('WorldComposite', 'TemporalLight', 'SourceVisibilityPS', 'WorldLighting', 'LocalDirect', 'WorldNormals', 'RemovalSmooth', 'WorldGI'):
                 assert info['sha256'] == BEFORE[name], name
                 unchanged.append(name)
-        assert sorted(unchanged) == sorted(k for k in BEFORE if k not in ('TemporalLight', 'SourceVisibilityPS', 'WorldLighting', 'LocalDirect', 'WorldNormals'))
+        assert sorted(unchanged) == sorted(k for k in BEFORE if k not in ('TemporalLight', 'SourceVisibilityPS', 'WorldLighting', 'LocalDirect', 'WorldNormals', 'WorldGI'))
         assert manifest['shaders']['WorldNormals']['static_instruction_slots'] == 434  # r77: both wide samples or neither
         assert manifest['shaders']['WorldFog']['sha256'] == BEFORE['WorldFog'] and manifest['shaders']['WorldFog']['static_instruction_slots'] == 512
         assert SOURCE_VISIBILITY_SLOTS is not None, 'TODO(lead): pin SOURCE_VISIBILITY_SLOTS to the compiled count (%d)' % manifest['shaders']['SourceVisibilityPS']['static_instruction_slots']
