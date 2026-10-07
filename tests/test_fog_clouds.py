@@ -72,7 +72,7 @@ int main(){
         assert(dry.active&&near(dry.coverage,.05f)&&near(night.coverage,.23f)&&near(rain.coverage,FC::kMaxCoverage));
         assert(dry.coverage<night.coverage&&night.coverage<rain.coverage&&dry.threshold>night.threshold&&night.threshold>rain.threshold&&dry.sharpness>0);
         assert(near(dry.threshold,FC::quantile(Q,.95f))&&dry.sharpness<=50.f+1e-3f);
-        assert(near(dry.height,7)&&near(rain.height,14)&&dry.sigmaMax==.03f&&near(dry.invLarge,1.f/192)&&near(dry.invSmall,1.f/48));
+        assert(near(dry.height,7)&&near(rain.height,14)&&dry.sigmaMax==FC::kSigmaMax&&near(dry.invLarge,1.f/FC::LargePeriod)&&near(dry.invSmall,1.f/FC::SmallPeriod));
         assert(near(FC::derive(1,200,0,0,w0,cam,&Q).coverage,.10f)&&near(FC::derive(1,50,0,0,w0,cam,&Q).coverage,.025f)&&near(FC::derive(1,200,1,1,w0,cam,&Q).coverage,FC::kMaxCoverage));
         assert(!FC::derive(1,10,0,0,w0,cam,&Q).active); /* .005 < kMinCoverage: the pass is skipped */
         const float nan=std::numeric_limits<float>::quiet_NaN();
@@ -83,7 +83,7 @@ int main(){
     }
     {   // coverage: the fraction of world points with density>0 follows the setting (default wind, random points over 4 large tiles); the fully dense share ~ kDense*coverage
         struct Case{float fog,night;float want;};
-        for(const Case& k:{Case{0,0,.05f},Case{0,1,.23f},Case{1,0,FC::kMaxCoverage},Case{.5f,.2f,.5f*.95f+.05f+.036f}}){
+        for(const Case& k:{Case{0,0,.05f},Case{0,1,.23f},Case{1,0,FC::kMaxCoverage},Case{.5f,.2f,std::min(.5f*.95f+.05f+.036f,FC::kMaxCoverage)}}){
             const auto f=FC::derive(1,100,k.fog,k.night,w0,cam,&Q);assert(f.active);
             unsigned any=0,dense=0,total=20000;uint32_t h=12345;
             auto rnd=[&]{h=h*1664525u+1013904223u;return float(h>>8)*(1.f/16777216.f);};

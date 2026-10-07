@@ -10,10 +10,11 @@
 
 namespace NorthlightFogClouds {
 constexpr unsigned N=64;                            /* noise volume edge, L8 voxels, index x+N*(y+N*z) */
-constexpr float LargePeriod=192.f,SmallPeriod=48.f; /* world units per noise tile */
+constexpr float LargePeriod=384.f,SmallPeriod=96.f; /* world units per noise tile (0.3.199 game test: was 192/48; the reference banks are larger) */
 constexpr uint32_t Seed=0x4e4c4643u;
-constexpr float kDry=0.05f,kNight=0.18f,kSigmaMax=0.03f,kBaseHeight=7,kRainHeight=7;
-constexpr float kMaxCoverage=0.7f,kDense=0.35f,kMinCoverage=0.01f; /* coverage cap (rain keeps gaps), fully dense share of the covered area, below it the pass is skipped */
+constexpr float kDry=0.05f,kNight=0.18f,kSigmaMax=0.018f,kBaseHeight=7,kRainHeight=7;
+constexpr float kMaxCoverage=0.45f,kDense=0.2f,kMinCoverage=0.01f; /* coverage cap (rain keeps gaps), fully dense share of the covered area, below it the pass is skipped.
+    game test: was .7/.35 with sigmaMax .03, the reference banks are fainter and sparser */
 
 namespace detail {
 inline uint32_t hash(uint32_t a,uint32_t b,uint32_t c,uint32_t d){ /* integer mix, same result everywhere */
