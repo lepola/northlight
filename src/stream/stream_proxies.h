@@ -320,6 +320,8 @@ inline bool makeRoomForShadow(StreamCore& c,std::size_t bytes,bool mayEvictReloc
 }
 // 0.3.196 (task 12): a FRESH keep may evict never-re-locked shadows, but only ones not locked for kFreshEvictAgeFrames Presents (the list head is the oldest, so a young head ends it): the
 // cap never freezes on stale write-once levels, and a level written and re-locked within the window keeps its shadow. false = skip the keep.
+// Chosen over "fresh keeps only into free room": that rule left the cap full of stale write-once keeps, so a newly written level that is locked again paid a SyncLock
+// readback (a queue drain) every time (0 -> 1 per level in tests). The age limit bounds the keep churn to about one cap turnover per 60 Presents instead of removing it.
 constexpr std::uint64_t kFreshEvictAgeFrames=60;
 inline bool makeRoomForFreshKeep(StreamCore& c,std::size_t bytes,const SubRes* keep){
     while(!c.q.texShadowAdmit(bytes)){
