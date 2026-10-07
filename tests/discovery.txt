@@ -52,6 +52,7 @@ test_lamp_daylight.py
 test_live_terrain_gpu.py
 test_local_fog_profile.py
 test_local_ini.py
+test_local_light_selection.py
 test_log_format_literals.py
 test_log_rotation.py
 test_logger_cost.py
