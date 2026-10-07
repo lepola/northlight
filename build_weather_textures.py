@@ -80,7 +80,7 @@ def image(width, height, colour, alpha_max, shape):
     return bytes(out)
 
 
-STREAK_SIGMA_PX, STREAK_FADE = 1.1, .08   # thin crisp core ~2.6 px wide (FWHM) at 32 px; the streak fades only over the last 8% at each end
+STREAK_SIGMA_PX, STREAK_FADE = .9, .08   # thin crisp core ~2.1 px wide (FWHM) at 32 px (0.3.199 game test: was 1.1, ~2.6 px); the streak fades only over the last 8% at each end
 STREAK_MIN_SIGMA_TEXELS = .75                # no mip level narrows the core below this: a streak must not break up or vanish at small mips
 
 
