@@ -382,7 +382,7 @@ def main():
     unchanged = []
     if compiled:
         for name, info in manifest['shaders'].items():
-            assert info['static_instruction_slots'] <= 512 and info['temporary_registers'] < 32, name
+            assert info['static_instruction_slots'] <= 512 and info['temporary_registers'] <= 32, name  # a count (highest rN + 1): ps_3_0 has r0..r31
             # 0.3.159: TemporalLight changed on purpose (R1 soft removal); its own compile gate is
             # verify_shadow_removal_smoothing_compile.py, so this haze test no longer pins it.
             # SourceVisibilityPS gains the wrap ring taps (test_solar_volume pins the source).
