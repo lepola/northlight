@@ -50,8 +50,9 @@ struct Settings {
     // 0 = sky band only.
     unsigned horizonHaze=50,horizonHazeStart=75,horizonHazeBand=6,horizonHazeTerrain=1;
     // 0.3.158 ActorShadows: 0 = static mod shadows only (terrain, world-cache models): no replay
-    // (character, creature, server object) shadows, the game's blob shadows return, and model
-    // capture runs only for GI actor packets. Forces the replay-derived keys off (effective()).
+    // (character, creature, server object) shadows, and model capture runs only for GI actor
+    // packets (0.3.193: the game's blob shadows show with both values). Forces the replay-derived
+    // keys off (effective()).
     unsigned actorShadows=1;
     // 0.3.187 FrameDrawGates: 1 = the draw hooks skip the sky, blob and terrain shadow work in frames
     // where its per-frame preconditions are off (draw_gates.h); 0 = the 0.3.184 per-draw work. Same image.
@@ -63,7 +64,10 @@ struct Settings {
     // the renderer (src/stream/); 0 = the direct path, bit-identical to 0.3.191. Read before the device exists
     // (stream_hooks.h commandStreamRequested), so it is a creation-time key.
     unsigned commandStream=1;
-    char origin[34]={'d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d'};
+    // 0.3.193 BlobShadowStrength: how strongly the game's own round blob shadow under characters shows while the mod draws
+    // actor shadows: 100 = the game's texture unchanged (no filter work), 0 = hidden, 1..99 = drawn with a lighter texture.
+    unsigned blobShadowStrength=50;
+    char origin[35]={'d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d'};
 };
 struct Key { const char* name; unsigned Settings::*field; unsigned low,high; unsigned preset[3]; };
 // preset[] = Quality, Balanced, Performance. Quality must equal Settings{}.
@@ -102,6 +106,7 @@ inline const Key Keys[]={
     {"FrameDrawGates",&Settings::frameDrawGates,0,1,{1,1,1}},
     {"ShadowPivotCorrection",&Settings::shadowPivotCorrection,0,1,{1,1,1}},
     {"CommandStream",&Settings::commandStream,0,1,{1,1,1}},
+    {"BlobShadowStrength",&Settings::blobShadowStrength,0,100,{50,50,50}},
 };
 inline bool operator==(const Settings& a,const Settings& b){for(const auto& k:Keys)if(a.*k.field!=b.*k.field)return false;return true;}
 inline bool operator!=(const Settings& a,const Settings& b){return !(a==b);}

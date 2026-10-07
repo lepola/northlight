@@ -15,13 +15,15 @@ ini=(ROOT/'renderer/windows-package/northlight-quality.ini').read_text();readme=
 gpu=fp.src('static_shadow_gpu.h').read_text();exp=fp.src('world_shadow_experiment.inl').read_text()
 keys=q[q.index('inline const Key Keys[]={'):q.index('inline bool operator==(const Settings')]
 checks={}
-checks['quality key: last in Keys, 0..1, presets 1/1/1, default 1, own origin slot']=(keys.rstrip().endswith('    {"CommandStream",&Settings::commandStream,0,1,{1,1,1}},\n};')
-    and 'unsigned commandStream=1;' in q and 'char origin[34]=' in q and len(re.findall(r"'d'",q[q.index('char origin[34]='):].split('\n')[0]))==34)
+# 0.3.193: BlobShadowStrength is appended after it (origin[35]); test_quality_settings checks the order.
+checks['quality key: in Keys before BlobShadowStrength, 0..1, presets 1/1/1, default 1, own origin slot']=(keys.rstrip().endswith('    {"CommandStream",&Settings::commandStream,0,1,{1,1,1}},\n    {"BlobShadowStrength",&Settings::blobShadowStrength,0,100,{50,50,50}},\n};')
+    and 'unsigned commandStream=1;' in q and 'char origin[35]=' in q and len(re.findall(r"'d'",q[q.index('char origin[35]='):].split('\n')[0]))==35)
 checks['documented in the ini template (commented, with default) and the README table']=(';CommandStream=1' in ini and re.search(r'^  CommandStream +1 / 1 / 1 ',readme,re.M) is not None)
 checks['WorldRenderer exposes the loaded value; the early reader uses the same loader']=('bool commandStream()const{return quality.commandStream!=0;}' in w
     and 'NorthlightQuality::load(hasFile?&in:nullptr,nullptr,problems).commandStream!=0' in hooks and 'northlight-quality.ini' in hooks)
 checks['early reader is Win32-only and falls back to the direct path on any failure']=('inline bool commandStreamRequested(const wchar_t* rootPath){' in hooks and hooks.count('catch(...){return false;}')==2)
-checks['banner: 0.3.192 with the stream at the end of the feature list']=('logf("Northlight renderer 0.3.192;' in r and 'reduced terrain shadow reach under address-space pressure; command-stream replay thread; backend=%s' in r and '0.3.191' not in r[r.index('logf("Northlight renderer'):][:200])
+# 0.3.193: the faint blob shadows bump the version; the stream stays at the end of the feature list.
+checks['banner: 0.3.193 with the stream at the end of the feature list']=('logf("Northlight renderer 0.3.193;' in r and 'reduced terrain shadow reach under address-space pressure; command-stream replay thread; backend=%s' in r and '0.3.191' not in r[r.index('logf("Northlight renderer'):][:200])
 checks['GATE threads logs gameTid and replayTid from the hook atomics']=('frame=%u gameTid=%lu replayTid=%lu event=%s' in r and 'NorthlightStream::gameTid.load(std::memory_order_relaxed),NorthlightStream::replayTid.load(std::memory_order_relaxed),event);' in r
     and 'inline std::atomic<unsigned long> gameTid{0},replayTid{0};' in hooks)
 checks['inactive: every hook defaults to off']=all(x in hooks for x in ('inline thread_local const void* upIdentity=nullptr;','inline const void* (*innerOf)(const void*)=nullptr;','inline std::atomic<bool> streamActive{false};','return innerOf&&p?innerOf(p):p;'))

@@ -81,12 +81,22 @@ assert renderer.count('    // 0.3.187 per-frame draw gates')==1
 gates_block=renderer[renderer.index('    // 0.3.187 per-frame draw gates'):renderer.index('    // 0.3.154: blob shadow claim')]
 new_members='\n'.join([member(renderer,'template<class Work> bool extensionWork('),member(renderer,'template<class Capture> void prepareDraw(Capture capture)'),
     member(renderer,'void planTerrainShadowSwap('),member(renderer,'void dropTerrainShadowSwap('),member(renderer,'template<class Draw> HRESULT terrainShadowDraw('),
-    gates_block,member(renderer,'bool blobFilterActive()const'),member(renderer,'bool blobClaim(UINT count)'),
+    gates_block,member(renderer,'bool blobFilterActive()const'),member(renderer,'NorthlightShadowBlobFilter::Result blobClaim(UINT count)'),
     member(renderer,'HRESULT STDMETHODCALLTYPE DrawPrimitive(D3DPRIMITIVETYPE t,UINT start,UINT count) override')])
 old_draws=[l for l in OLD_DRAWS.strip('\n').split('\n')]
 assert len(old_draws)==4
 
 checks={}
+checkflag=fp.src('shadow_blob_filter.h').read_text()
+checks['real source: no compile-time switch left; BlobShadowStrength gates blobFilterActive and the latch (the equivalence runs use strength 0 = skip)']=('HidesNativeBlobs' not in checkflag and 'HidesNativeBlobs' not in renderer
+    and 'bool blobFilterActive()const{return shadowBlobs&&shadowBlobs->active()&&' in renderer and 'in.blobs=shadowBlobs!=nullptr&&shadowBlobs->active();' in renderer)
+# 0.3.193 faint swap: planned in the guarded claim, applied around the real draw outside every extension region, texture 0 restored.
+swap_src=member(renderer,'template<class Draw> HRESULT blobFaintDraw(')
+checks['faint swap: SetTexture(faint), the draw, SetTexture(original), then Release; no extensionWork around it']=(
+    'ext->SetTexture(0,faint);' in swap_src and 'shadowBlobs->faintTexture()' in swap_src and swap_src.index('ext->SetTexture(0,faint);')<swap_src.index('draw();')<swap_src.index('ext->SetTexture(0,original);')<swap_src.rindex('original->Release();')
+    and 'extensionWork' not in swap_src and 'return terrainShadowDraw(claimed,draw)' in swap_src)
+checks['the plan keeps only the original (no second GetTexture, no faint pointer member)']=('GetTexture' not in member(renderer,'void planBlobFaint(') and 'blobFaint;' not in renderer and 'blobFaint=' not in renderer)
+checks['faint plan dropped at the start of every draw on both paths']=(renderer.count('dropBlobFaint();prepareDraw(capture);')==1 and renderer.count('dropTerrainShadowSwap();dropBlobFaint();')==1 and renderer.count('blobFaintDraw(claimed,draw)')==2)
 # The other three overrides: 0.3.184's capture call and real draw, passed to drawHook unchanged.
 def old_parts(line):
     cap=re.search(r'prepareDraw\(\[&\]\(IDirect3DVertexShader9\* vs\)\{(.*?)captureWater\(vs,(\w+::\w+),\[&\]\{return (ext->\w+\([^)]*\));\}\);\}\);',line)
@@ -167,12 +177,17 @@ struct Env{
 };
 struct IDirect3DVertexShader9{int id;Env* env;void Release(){env->trace->push_back("Release vs"+std::to_string(id));}};
 struct IDirect3DPixelShader9{int id;Env* env;void Release(){env->trace->push_back("Release ps"+std::to_string(id));}};
+struct IDirect3DBaseTexture9{int id;Env* env;void Release(){env->trace->push_back("Release tex"+std::to_string(id));}};
+struct IDirect3DTexture9:IDirect3DBaseTexture9{};
 static std::string psName(IDirect3DPixelShader9* p){return p?"ps"+std::to_string(p->id):"null";}
 static std::string drawName(D3DPRIMITIVETYPE t,UINT a,UINT c){return std::to_string(int(t))+","+std::to_string(a)+","+std::to_string(c);}
 struct MockExt{
     Env* env=nullptr;IDirect3DPixelShader9 ps[2]={{1,nullptr},{2,nullptr}};IDirect3DVertexShader9 vs{1,nullptr};
     HRESULT GetPixelShader(IDirect3DPixelShader9** out){env->call("GetPixelShader");const unsigned w=unsigned(env->h("ps")%3);*out=w<2?&ps[w]:nullptr;return D3D_OK;}
     HRESULT SetPixelShader(IDirect3DPixelShader9* p){env->call("SetPixelShader "+psName(p));return D3D_OK;}
+    IDirect3DTexture9 original;
+    HRESULT GetTexture(unsigned stage,IDirect3DBaseTexture9** out){env->call("GetTexture "+std::to_string(stage),"fault gettexture");*out=env->bit("no texture",8)?nullptr:&original;if(!*out)env->trace->push_back("GetTexture null");return *out?D3D_OK:HRESULT(-1);}
+    HRESULT SetTexture(unsigned stage,IDirect3DBaseTexture9* t){env->call("SetTexture "+std::to_string(stage)+(t==&original?" orig":" faint"));return D3D_OK;}
     HRESULT GetVertexShader(IDirect3DVertexShader9** out){env->call("GetVertexShader");*out=&vs;return D3D_OK;}
     HRESULT DrawPrimitive(D3DPRIMITIVETYPE t,UINT s,UINT c){env->call("DrawPrimitive "+drawName(t,s,c));return env->bit("draw failure",6)?HRESULT(-2005530516):D3D_OK;}
 };
@@ -196,7 +211,19 @@ struct MockSky{
     bool nativeObservePossible(HRESULT hr,D3DPRIMITIVETYPE,UINT){env->call("nativeObservePossible "+std::to_string(hr));return SUCCEEDED(hr)&&env->bit("observe possible");}
     void observeNativeDraw(HRESULT hr,D3DPRIMITIVETYPE,UINT,bool){env->call("observeNativeDraw "+std::to_string(hr),"fault observe");}
 };
-struct MockBlobs{Env* env=nullptr;bool claim(UINT c){env->call("blob claim "+std::to_string(c),"fault blob");return env->bit("blob",3);}};
+// Result converts to bool (Skip) for the 0.3.184 code; the current code reads claim and original.
+struct NorthlightShadowBlobFilter{enum class Claim{None,Skip,Faint};struct Result{Claim claim=Claim::None;IDirect3DBaseTexture9* original=nullptr;operator bool()const{return claim==Claim::Skip;}};};
+using ClaimResult=NorthlightShadowBlobFilter::Result;
+// faintMode off (old-vs-new runs): Skip or None as before 0.3.193. On: None, Skip or Faint (Faint = GetTexture(0) taken inside the claim and
+// handed back AddRef'd, None when that fails, like the real claim()), and a null faint texture now and then.
+struct MockBlobs{Env* env=nullptr;MockExt* ext=nullptr;bool faintMode=false;unsigned strengthValue=0;IDirect3DTexture9 faint;
+    bool active()const{return strengthValue<100;}
+    ClaimResult claim(UINT c){env->call("blob claim "+std::to_string(c),"fault blob");using C=NorthlightShadowBlobFilter::Claim;
+        if(!faintMode)return {env->bit("blob",3)?C::Skip:C::None};
+        const unsigned r=unsigned(env->h("blob")%4);if(r==0)return {C::Skip};if(r==1)return {};
+        IDirect3DBaseTexture9* original=nullptr;if(FAILED(ext->GetTexture(0,&original))||!original)return {};   /* claim() returns None when its GetTexture fails */
+        return {C::Faint,original};}
+    IDirect3DTexture9* faintTexture(){return env->bit("faint texture",8)?nullptr:&faint;}};
 struct Gate{int drawTid=7;void noteFirst(int){}};
 struct MirrorStateMock{Gate gate;};
 struct Guard{explicit Guard(Gate&){}};
@@ -219,7 +246,7 @@ struct Base{
     unsigned blobSignatureReports=0,terrainShadowDraws=0,frame=0,drawCalls=0;
     IDirect3DPixelShader9 *shadowSwapOriginal=nullptr,*shadowSwapReplacement=nullptr;
     Keys effectKeys;GateCounts gateCounts;
-    Base(){env.trace=&trace;extObj.env=worldObj.env=skyObj.env=blobsObj.env=&env;extObj.ps[0].env=extObj.ps[1].env=extObj.vs.env=worldObj.replacement.env=&env;}
+    Base(){blobsObj.ext=&extObj;env.trace=&trace;blobsObj.faint.id=6;blobsObj.faint.env=extObj.original.env=&env;extObj.original.id=5;extObj.env=worldObj.env=skyObj.env=blobsObj.env=&env;extObj.ps[0].env=extObj.ps[1].env=extObj.vs.env=worldObj.replacement.env=&env;}
     bool sampledDrawTimers()const{return frame%2==0;}
     void logf(const char* format,...){char b[512];va_list a;va_start(a,format);std::vsnprintf(b,sizeof b,format,a);va_end(a);trace.push_back(std::string("log ")+b);}
     bool fullViewport(D3DSURFACE_DESC& d){env.call("fullViewport","fault viewport");d.Width=1;return !env.bit("small viewport",4);}
@@ -252,7 +279,7 @@ struct Coverage{unsigned draws=0,claims=0,blobs=0,swaps=0,observes=0,faults=0,ca
 static bool run(std::uint64_t seed,bool gates,unsigned faultOneIn,bool mutate,Coverage& cover){
     OldDevice o;NewDevice n;Base* both[2]={&o,&n};
     for(Base* d:both){d->env.seed=seed;d->env.faultOneIn=faultOneIn;d->celestialDiscs=seed&1?&d->skyObj:nullptr;d->shadowBlobs=seed&2?&d->blobsObj:nullptr;d->worldObj.actorShadows=(seed&4)!=0;}
-    n.frameDrawGates=gates;n.latchDrawGates();
+    n.frameDrawGates=gates;n.blobsObj.strengthValue=0;n.latchDrawGates();
     std::mt19937 r(unsigned(seed*2654435761u+gates));
     for(unsigned f=0;f<24;++f){
         const bool f10=r()%6==0,f9=r()%4==0,f12=r()%6==0,effects=r()%5==0,retry=r()%5==0;
@@ -288,11 +315,50 @@ static bool run(std::uint64_t seed,bool gates,unsigned faultOneIn,bool mutate,Co
     }
     const bool same=o.trace==n.trace&&o.extensionFault==n.extensionFault&&o.failed==n.failed&&o.enabled==n.enabled&&o.terrainShadowDraws==n.terrainShadowDraws
         &&o.blobSignatureReports==n.blobSignatureReports&&o.drawCalls==n.drawCalls&&o.skyObj.claimGate==n.skyObj.claimGate&&o.gateCounts.blobCalls==n.gateCounts.blobCalls
-        &&o.gateCounts.blobTextures==n.gateCounts.blobTextures&&o.gateCounts.blobClaimed==n.gateCounts.blobClaimed&&!n.shadowSwapOriginal&&!o.shadowSwapOriginal;
+        &&o.gateCounts.blobTextures==n.gateCounts.blobTextures&&o.gateCounts.blobClaimed==n.gateCounts.blobClaimed&&!n.shadowSwapOriginal&&!o.shadowSwapOriginal&&!n.blobOriginal;
     if(!same&&!mutate){std::fprintf(stderr,"END STATE MISMATCH seed=%llu gates=%d\n",(unsigned long long)seed,int(gates));std::abort();}
     return same;
 }
+// 0.3.193 faint blobs (strength 50): per draw, texture 0 is the faint disc only around the real draw, the original comes back right
+// after it (also when the extension work faults before or inside the claim: then nothing was planned), every GetTexture is released,
+// and a swap composes with the terrain pixel shader swap. Only the current code runs here: the 0.3.184 code never swapped textures.
+struct FaintCoverage{unsigned draws=0,swaps=0,composed=0,faults=0,noPlan=0;};
+static void runFaint(std::uint64_t seed,bool gates,unsigned faultOneIn,FaintCoverage& cover){
+    NewDevice n;n.env.seed=seed;n.env.faultOneIn=faultOneIn;n.shadowBlobs=&n.blobsObj;n.blobsObj.faintMode=true;n.worldObj.actorShadows=true;
+    n.frameDrawGates=gates;n.blobsObj.strengthValue=50;n.latchDrawGates();
+    std::mt19937 r(unsigned(seed*2654435761u+gates+17));
+    for(unsigned f=0;f<24;++f){
+        n.applied=n.terrain=false;n.frame=f;n.gateFrame=f%2;if(r()%6==0)n.failed=false;
+        n.latchDrawGates();
+        const unsigned draws=8+r()%24;
+        for(unsigned i=0;i<draws;++i){
+            if(r()%20==0)n.applied=true;if(r()%4==0)n.terrain=!n.terrain;if(r()%6==0)n.worldObj.context=!n.worldObj.context;if(r()%5==0)n.worldObj.composited=!n.worldObj.composited;
+            n.env.frame=f;n.env.draw=i;n.env.ord.clear();
+            const std::size_t before=n.trace.size();
+            n.DrawPrimitive(D3DPT_TRIANGLELIST,r()%100,r()%3?1+r()%5:1+r()%400);
+            const Trace t(n.trace.begin()+before,n.trace.end());
+            unsigned gets=0,thrownGets=0,faintSets=0,origSets=0,releases=0,draws1=0;
+            for(std::size_t k=0;k<t.size();++k){const std::string& l=t[k];
+                gets+=l=="GetTexture 0";thrownGets+=l=="throw fault gettexture"||l=="GetTexture null";releases+=l=="Release tex5";draws1+=l.rfind("DrawPrimitive",0)==0;
+                if(l=="SetTexture 0 faint"){++faintSets;
+                    assert(k+2<t.size()&&t[k+1].rfind("DrawPrimitive",0)==0&&t[k+2]=="SetTexture 0 orig");   /* the draw is bracketed */
+                    if(k&&t[k-1]=="SetPixelShader ps9")++cover.composed;}
+                origSets+=l=="SetTexture 0 orig";
+                if(l.rfind("log EXTENSION fault",0)==0)++cover.faults;}
+            assert(faintSets==origSets&&faintSets<=1&&(faintSets==0||draws1>=1));
+            assert(gets-thrownGets==releases);          /* every texture taken is released */
+            assert(faintSets<=gets-thrownGets);         /* a swap needs a plan, which holds the original */
+            if(thrownGets)++cover.noPlan;   /* GetTexture failed or threw: nothing planned, the draw ran unchanged */
+            assert(!n.blobOriginal&&!n.shadowSwapOriginal);
+            cover.swaps+=faintSets;++cover.draws;
+        }
+    }
+}
 int main(){
+    {FaintCoverage fc[2];
+     for(std::uint64_t seed=0;seed<3000;++seed)for(int gates=0;gates<2;++gates)runFaint(seed,gates,seed%4==3?0u:unsigned(40+seed%200),fc[gates]);
+     for(int g=0;g<2;++g){std::fprintf(stderr,"faint gates=%d draws=%u swaps=%u composedWithTerrainSwap=%u faults=%u getTextureFailed=%u\n",g,fc[g].draws,fc[g].swaps,fc[g].composed,fc[g].faults,fc[g].noPlan);std::fflush(stdout);
+        assert(fc[g].swaps>200&&fc[g].composed>5&&fc[g].faults>100&&fc[g].noPlan>5);}}
     Coverage cover[2];unsigned caught=0;
     for(std::uint64_t seed=0;seed<4000;++seed)for(int gates=0;gates<2;++gates)run(seed,gates,seed%4==3?0u:unsigned(40+seed%200),false,cover[gates]);
     for(std::uint64_t seed=0;seed<400;++seed)caught+=!run(seed|7,true,0,true,cover[1]);

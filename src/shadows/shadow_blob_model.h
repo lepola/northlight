@@ -24,6 +24,42 @@ inline std::vector<std::uint8_t> referencePixels(){
     }
     return rgba;
 }
+// 0.3.193 BlobShadowStrength: the same disc, lighter. The game draws the blob with a modulate blend
+// (destination * texture colour), so only the colour matters and a lighter blob is a lighter colour:
+// grey' = 255 - round(strength*(255-grey)/100), alpha unchanged, colour 255 where alpha is 0.
+// strength 100 = the reference, 0 = white everywhere (no darkening). Bytes are B,G,R,A (A8R8G8B8 on
+// little-endian); the grey is the same in all three colour channels, so they equal R,G,B,A.
+inline std::vector<std::uint8_t> faintPixels(unsigned strength){
+    if(strength>100)strength=100;
+    std::vector<std::uint8_t> out=referencePixels();
+    for(std::size_t i=0;i<out.size();i+=4){
+        const unsigned darkness=255u-out[i];   // 0 where the colour is 255, so the outside stays 255
+        const std::uint8_t grey=std::uint8_t(255u-(strength*darkness*2u+100u)/200u);
+        out[i]=out[i+1]=out[i+2]=grey;
+    }
+    return out;
+}
+// Full mip chain (32,16,8,4,2,1), each level a 2x2 box filter of the one above (rounded). Straight
+// (not alpha-premultiplied) filtering: under modulate the texel's colour is what darkens the
+// target, and the outside is colour 255 (no darkening), so averaging the colour channels as
+// stored gives exactly the average of what the full-size texels would draw; premultiplying would
+// drop the white outside and darken every edge texel at distance. Alpha is thresholded to binary at
+// every level (average >= 128 -> 255, else 0): the game's texture has 1-bit alpha, so its mips are
+// 0/255 and an alpha-tested edge (ALPHATESTENABLE/ALPHAREF) must flip at the same coverage as the
+// original, not stay partly transparent at a distance.
+inline std::vector<std::vector<std::uint8_t>> faintMipChain(unsigned strength){
+    std::vector<std::vector<std::uint8_t>> levels{faintPixels(strength)};
+    for(unsigned size=Width/2;size>=1;size/=2){
+        const std::vector<std::uint8_t>& above=levels.back();const unsigned aboveSize=size*2;
+        std::vector<std::uint8_t> level(std::size_t(size)*size*4);
+        for(unsigned y=0;y<size;++y)for(unsigned x=0;x<size;++x)for(unsigned c=0;c<4;++c){
+            unsigned sum=0;for(unsigned dy=0;dy<2;++dy)for(unsigned dx=0;dx<2;++dx)sum+=above[(std::size_t(y*2+dy)*aboveSize+x*2+dx)*4+c];
+            const unsigned mean=(sum+2)/4;level[(std::size_t(y)*size+x)*4+c]=std::uint8_t(c==3?(mean>=128?255u:0u):mean);
+        }
+        levels.push_back(std::move(level));
+    }
+    return levels;
+}
 // Decoded pixels of a Width x Height texture against the reference. The blob
 // is a flat grey disc with a hard alpha edge: alpha must match almost exactly;
 // colour is compared loosely (channel order irrelevant).
