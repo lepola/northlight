@@ -84,10 +84,10 @@ class InstallerTests(unittest.TestCase):
         self.assertEqual(self.read('northlight-renderer.ini'),b'[Renderer]\r\nBackend=dxvk\r\n')
         m.restore(self.client,second);m.restore(self.client,first)
     def test_dxvk3_marker_is_not_a_package_file(self):
-        marker=self.client/m.DXVK3_MARKER;marker.parent.mkdir(parents=True);marker.write_bytes(b'pending')
+        marker=self.client/m.LEGACY_DXVK3_MARKER;marker.parent.mkdir(parents=True);marker.write_bytes(b'pending')
         backup=m.install(self.client,self.pkg,backend='dxvk2')
         self.assertTrue(marker.is_file())
-        self.assertNotIn(m.DXVK3_MARKER,[e['path'] for e in json.loads((backup/'transaction.json').read_text())['files']])
+        self.assertNotIn(m.LEGACY_DXVK3_MARKER,[e['path'] for e in json.loads((backup/'transaction.json').read_text())['files']])
         m.restore(self.client,backup)
         self.assertTrue(marker.is_file())
     DXVK_FILE='renderer-backends/dxvk/dxvk_d3d9.dll';DXVK2_FILE='renderer-backends/dxvk2/dxvk2_d3d9.dll'
@@ -190,11 +190,11 @@ class InstallerTests(unittest.TestCase):
     def test_dxvk_folder_link_refused(self):
         (self.client/'renderer-backends').mkdir();other=self.base/'elsewhere';other.mkdir()
         (self.client/'renderer-backends/dxvk').symlink_to(other,target_is_directory=True)
-        with self.assertRaises(ValueError):m.safe_path(self.client,m.DXVK3_MARKER)
+        with self.assertRaises(ValueError):m.safe_path(self.client,m.LEGACY_DXVK3_MARKER)
         with self.assertRaises(ValueError):m.install(self.client,self.pkg)
         self.assertEqual(list(other.iterdir()),[])
     def test_safe_path_of_a_missing_file_is_allowed(self):
-        self.assertEqual(m.safe_path(self.client,m.DXVK3_MARKER),self.client/m.DXVK3_MARKER)
+        self.assertEqual(m.safe_path(self.client,m.LEGACY_DXVK3_MARKER),self.client/m.LEGACY_DXVK3_MARKER)
     def test_use_existing_selects_legacy_and_is_kept_on_update(self):
         self.foreign();first=m.install(self.client,self.pkg,use_existing=True)
         self.assertEqual(self.read('northlight-renderer.ini'),b'[Renderer]\r\nBackend=legacy\r\n')
