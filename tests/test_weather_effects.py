@@ -35,7 +35,7 @@ int main(){
     {   // the coefficient table at full rain, RainFog=1, RainWetness=1
         auto f=WE::derive(st(Kind::Rain,1,1,1),1,1,1);
         assert(f.fog==1.0f&&f.rain==1.0f&&f.wet==1.0f);
-        assert(near(f.hazeTauScale(),2.5f)&&near(f.airExtinction(),0.0025f)&&near(f.shaftGain(),0.25f)&&near(f.discGain(),0.15f)
+        assert(near(f.hazeTauScale(),1.75f)&&near(f.airExtinction(),0.0012f)&&near(f.shaftGain(),0.25f)&&near(f.discGain(),0.15f)
             &&near(f.shadowSoften(),0.5f)&&near(f.lampFogGain(),1.5f)&&near(f.ambientLift(),0.25f));
         auto h=WE::derive(st(Kind::Rain,0.5f,0.5f,0.2f),1,1,1);const float lv=0.5f*(0.35f+0.65f*0.5f);assert(near(h.fog,lv)&&near(h.rain,lv)&&near(h.wet,0.2f)&&near(h.shaftGain(),1-0.75f*lv));
     }
@@ -46,7 +46,7 @@ int main(){
     }
     {   // snow: fog-like effects at 60 percent, no GI ambient lift, never wet (even with leftover wetness)
         auto s=WE::derive(st(Kind::Snow,1,1,0.7f),1,1,1);
-        assert(near(s.fog,0.6f)&&s.rain==0&&s.wet==0&&s.ambientLift()==0.0f&&near(s.discGain(),1-0.85f*0.6f)&&near(s.hazeTauScale(),1+1.5f*0.6f));
+        assert(near(s.fog,0.6f)&&s.rain==0&&s.wet==0&&s.ambientLift()==0.0f&&near(s.discGain(),1-0.85f*0.6f)&&near(s.hazeTauScale(),1+0.75f*0.6f));
         assert(WE::derive(st(Kind::Snow,1,1,0),1,2,2).fog<=1.2f+1e-6f);
     }
     {   // wetness outlives the rain (kind None, blend 0) and is dried by RainWetness=0
@@ -55,7 +55,7 @@ int main(){
     }
     {   // RainFog=2 at full rain: gains stay in range
         auto f=WE::derive(st(Kind::Rain,1,1,1),1,2,2);
-        assert(f.fog==2.0f&&f.shaftGain()==0.0f&&f.discGain()==0.0f&&near(f.shadowSoften(),0.95f)&&near(f.hazeTauScale(),4.0f)&&near(f.lampFogGain(),2.0f));
+        assert(f.fog==2.0f&&f.shaftGain()==0.0f&&f.discGain()==0.0f&&near(f.shadowSoften(),0.95f)&&near(f.hazeTauScale(),2.5f)&&near(f.lampFogGain(),2.0f));
         assert(WE::derive(st(Kind::Rain,1,1,1),1,9,9).fog==2.0f); /* settings past the parser's range clamp */
     }
     {   // inputs outside 0..1 or non-finite are clamped or dry, never NaN

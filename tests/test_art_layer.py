@@ -50,7 +50,7 @@ for target in r['targets']:
         for n, data in blps.items():   # the generated textures, ARGB at the aspect ratios the renderer detects
             assert a.read(n) == data
             w, h = decode_blp(data, 4096)[:2]
-            assert data[8:10] == bytes((3, 8)) and w <= 32 and h == (2*w if 'snow' in n.lower() else 16*w), (n, w, h)
+            assert data[8:11] == bytes((1, 8, 8)) and w <= 32 and h == (2*w if 'snow' in n.lower() else 16*w), (n, w, h)
 def storm_checks(view, folder, r):
     """The storm profiles of one built view, on its real tables (new ids have no `before`, so check them here)."""
     assets = Assets(client, view, r['locale'], without='z')

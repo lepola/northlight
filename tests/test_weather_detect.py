@@ -25,7 +25,7 @@ using namespace NorthlightWeatherDetect;using NorthlightWeather::Kind;
 typedef unsigned UINT;
 static std::vector<std::string> lines;
 static void sink(const char* l){lines.push_back(l);}
-static int A=21,X8=22,DXT5=0x35545844;
+static int A=21,X8=22,A1=25,A4=26,R5G6B5=23,DXT5=0x35545844;
 static int cell[64];static const void* P(int i){return &cell[i];}
 static unsigned count(const char* prefix){unsigned n=0;for(auto& l:lines)if(l.rfind(prefix,0)==0)++n;return n;}
 // The hook: the line extracted from Device::drawHook over a mock mirror.
@@ -39,11 +39,13 @@ struct Hook{
     void bind(unsigned stage,int i,bool known=true){mirrorState.textures[stage]=const_cast<void*>(P(i));mirrorState.textureKnown[stage]=known;}
 };
 int main(){
-    {   // classification: ARGB only, rain 1:16, snow 1:2, widths 8/16/32 only
+    {   // classification: the ARGB family (21, 22, 25, 26) only, rain 1:16, snow 1:2, widths 8/16/32 only
         assert(classify(32,512,A)==Kind::Rain&&classify(16,256,A)==Kind::Rain&&classify(8,128,A)==Kind::Rain);
         assert(classify(32,64,A)==Kind::Snow&&classify(16,32,A)==Kind::Snow&&classify(8,16,A)==Kind::Snow);
         assert(classify(32,128,A)==Kind::None&&classify(16,64,A)==Kind::None&&classify(32,256,A)==Kind::None&&classify(32,32,A)==Kind::None&&classify(32,1024,A)==Kind::None); /* 1:4, 1:8, 1:1, old 1:32 */
-        assert(classify(32,512,X8)==Kind::None&&classify(32,512,DXT5)==Kind::None&&classify(32,64,X8)==Kind::None&&classify(32,64,DXT5)==Kind::None);
+        assert(classify(32,512,X8)==Kind::Rain&&classify(32,512,A1)==Kind::Rain&&classify(32,512,A4)==Kind::Rain&&classify(32,64,X8)==Kind::Snow&&classify(32,64,A1)==Kind::Snow&&classify(16,32,A4)==Kind::Snow);
+        assert(classify(32,512,DXT5)==Kind::None&&classify(32,512,R5G6B5)==Kind::None&&classify(32,64,DXT5)==Kind::None&&classify(32,512,0)==Kind::None&&classify(32,512,20)==Kind::None&&classify(32,512,27)==Kind::None);
+        assert(shapeOf(32,512)==Kind::Rain&&shapeOf(64,1024)==Kind::Rain&&shapeOf(1,16)==Kind::Rain&&shapeOf(32,64)==Kind::Snow&&shapeOf(64,128)==Kind::None&&shapeOf(32,128)==Kind::None&&shapeOf(0,0)==Kind::None);
         assert(classify(64,128,A)==Kind::None&&classify(33,66,A)==Kind::None&&classify(0,0,A)==Kind::None&&classify(32,0,A)==Kind::None);
         assert(classify(4,8,A)==Kind::None&&classify(24,48,A)==Kind::None&&classify(4,64,A)==Kind::None&&classify(64,1024,A)==Kind::None);
     }
@@ -51,7 +53,7 @@ int main(){
     {   // candidates, generation, hot
         d.noteCreate(P(0),32,512,1,A);assert(d.count()==1&&d.hot==P(0)&&d.hotKind==Kind::Rain&&d.generation==1&&count("WEATHER candidate kind=rain 32x512")==1);
         d.noteCreate(P(1),32,64,1,A);assert(d.count()==2&&d.hot==P(0)&&d.generation==2&&count("WEATHER candidate kind=snow 32x64")==1);
-        d.noteCreate(P(2),256,256,1,A);d.noteCreate(P(3),32,512,1,X8);d.noteCreate(nullptr,32,512,1,A);d.noteCreate(P(6),32,128,1,A);assert(d.count()==2&&d.generation==2);
+        d.noteCreate(P(2),256,256,1,A);d.noteCreate(P(3),32,512,1,DXT5);d.noteCreate(nullptr,32,512,1,A);d.noteCreate(P(6),32,128,1,A);assert(d.count()==2&&d.generation==2);
     }
     {   // address reuse: P(0) re-created with another signature stops being a candidate; hot cleared
         d.noteCreate(P(0),256,256,1,A);assert(d.count()==1&&d.hot==nullptr&&d.hotKind==Kind::None&&d.generation==3&&!d.isCandidate(P(0))&&d.isCandidate(P(1)));
@@ -116,6 +118,20 @@ int main(){
         for(int i=0;i<12;++i)t.noteCreate(P(i),16,64+i,1,DXT5);t.noteCreate(P(20),64,64,1,A);t.noteCreate(P(21),32,128,1,A);
         assert(t.tallSeen==13&&count("WEATHER tall ")==8&&count("WEATHER tall w=16 h=64 fmt=894720068 levels=1")==1&&t.count()==0);
         Detector n;n.noteCreate(P(1),32,512,1,A);assert(n.count()==1); /* no sink: silent */
+    }
+    {   // shape log: every rain/snow aspect create in any format, capped per kind, independent of the tall log
+        lines.clear();Detector t;t.sink=&sink;
+        t.noteCreate(P(0),32,512,1,DXT5);t.noteCreate(P(1),32,512,1,X8);t.noteCreate(P(2),64,1024,1,A);t.noteCreate(P(3),32,64,1,DXT5);t.noteCreate(P(4),128,256,1,A);t.noteCreate(P(5),32,128,1,A);
+        assert(count("WEATHER shape kind=rain w=32 h=512 fmt=894720068 levels=1 matched=0")==1&&count("WEATHER shape kind=rain w=32 h=512 fmt=22 levels=1 matched=1")==1);
+        assert(count("WEATHER shape kind=rain w=64 h=1024 fmt=21 levels=1 matched=0")==1&&count("WEATHER shape kind=snow w=32 h=64 fmt=894720068 levels=1 matched=0")==1);
+        assert(count("WEATHER shape kind=snow")==1&&count("WEATHER shape ")==4); /* 128x256 is 1:2 but wider than 32; 32x128 is neither */
+        assert(count("WEATHER tall ")==4&&t.tallSeen==4); /* the 3 rain-aspect creates and 32x128 are tall (h>=4w) */
+        lines.clear();Detector c;c.sink=&sink;
+        for(int i=0;i<100;++i){c.noteCreate(P(i%60),16,256,1,DXT5);c.noteCreate(P(i%60),16,32,1,DXT5);}
+        assert(count("WEATHER shape kind=rain")==kShapeLogs&&count("WEATHER shape kind=snow")==kShapeLogs&&c.rainShapeSeen==100&&c.snowShapeSeen==100);
+        lines.clear();Detector k;k.sink=&sink; /* tall flood does not eat the shape logs */
+        for(int i=0;i<20;++i)k.noteCreate(P(i),16,100+i,1,DXT5);k.noteCreate(P(30),32,512,1,A);
+        assert(count("WEATHER tall ")==kTallLogs&&count("WEATHER shape kind=rain")==1);
     }
     {   // the draw hook
         Hook h;h.weatherDetect.noteCreate(P(50),32,512,1,A);h.weatherDetect.noteCreate(P(51),32,64,1,A);

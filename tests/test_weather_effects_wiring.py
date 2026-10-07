@@ -78,7 +78,7 @@ checks['renderer.cpp: the gain is set once per frame next to the disc render, fr
 # settings
 checks['WorldRenderer: settings accessors and the derived frame']=all(s in w for s in ('unsigned weatherSetting()const{return quality.weather;}','unsigned rainFogSetting()const{return quality.rainFog;}',
     'unsigned rainWetnessSetting()const{return quality.rainWetness;}','derive(weatherState,quality.weather,quality.rainFog,quality.rainWetness)'))
-checks['weather_effects.h: coefficient table']=all(s in we for s in ('kSnowFog=0.6f','kHazeTau=1.5f','kAirExtinction=0.0025f','kShafts=0.75f','kDisc=0.85f','kShadowSoften=0.5f','kLampFog=0.5f','kAmbientLift=0.25f'))
+checks['weather_effects.h: coefficient table']=all(s in we for s in ('kSnowFog=0.6f','kHazeTau=0.75f','kAirExtinction=0.0012f','kShafts=0.75f','kDisc=0.85f','kShadowSoften=0.5f','kLampFog=0.5f','kAmbientLift=0.25f'))
 checks['probe radiance is not touched (no GI re-solve: skyRadiance sites as before)']='skyRadiance' not in we and w.count('skyRadiance')==3
 for k,ok in checks.items():print(('PASS ' if ok else 'FAIL ')+k)
 sys.exit(0 if all(checks.values()) else 1)

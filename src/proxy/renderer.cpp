@@ -716,6 +716,7 @@ class Device final : public GuardedMirrorDevice {
     // stage 0 with (weather_detect.h); the sample is what that comparison counted this frame. Both are touched
     // under the gate only, on whichever thread makes the draw (stream: replay thread; fallback: game thread).
     static_assert(NorthlightWeatherDetect::kFmtA8R8G8B8==D3DFMT_A8R8G8B8,"weather signature format");
+    static_assert(NorthlightWeatherDetect::kFmtX8R8G8B8==D3DFMT_X8R8G8B8&&NorthlightWeatherDetect::kFmtA1R5G5B5==D3DFMT_A1R5G5B5&&NorthlightWeatherDetect::kFmtA4R4G4B4==D3DFMT_A4R4G4B4,"weather signature format family");
     NorthlightWeatherDetect::Detector weatherDetect;NorthlightWeather::Tracker weatherTracker;NorthlightWeather::Sample weatherSample;
     LONGLONG weatherTick=0;double weatherLogClock=0;NorthlightWeather::Kind weatherLoggedKind=NorthlightWeather::Kind::None;bool weatherLoggedBlendHigh=false,weatherLoggedBlendLow=false,weatherOffReported=false;
     // RenderProfile sample frames only: the largest draw before the effects (WEATHER probe), to calibrate detection.

@@ -268,22 +268,22 @@ def retime(tables, profiles):
     return report
 
 # 0.3.198 (rain): a private storm profile (Light.dbc column 9) for every outdoor row, so the
-# "Forever-style" rain has a dark, grey, short-fog sky of its own. Only the storm slot changes; the
+# "Forever-style" rain has a light, luminous warm-grey overcast of its own (low contrast, fog as bright as the sky
+# and brighter than the ground, no dark wall: fog end x.70 with a 300 yard floor, fog start ratio kept). Only the storm slot changes; the
 # clear, underwater and storm-underwater slots (7, 8, 10) stay as they are.
 STORM_SLOT = 9
 FOG_UNITS_PER_YARD = 36.                                  # Light fog values: 3600 units = 100 yards (see relight)
-STORM_FOG_END_SCALE, STORM_FOG_END_FLOOR_YARDS = .40, 220.   # fog end x.40 (like relight, only >= 3600), never below 220 yards
-STORM_FOG_END_FLOOR = STORM_FOG_END_FLOOR_YARDS*FOG_UNITS_PER_YARD   # 7920 units; the rule never raises a value above its source
-STORM_FOG_START_MAX = .15                                # fog start ratio cap
-STORM_DIRECT_SCALE, STORM_DIRECT_DESAT = .55, .50        # ch0 direct light
-STORM_AMBIENT_SCALE, STORM_AMBIENT_DESAT = 1.05, .40     # ch1 ambient
-STORM_SKY_LERP, STORM_SKY_SCALE = .70, .60               # ch2-6 sky toward grey-blue, then darker
-STORM_FOG_LERP = .70                                     # ch7 fog colour toward the same grey
-STORM_GREY = (.42, .45, .50)                             # grey-blue chroma; scaled to keep each key's luminance
+STORM_FOG_END_SCALE, STORM_FOG_END_FLOOR_YARDS = .70, 300.   # fog end x.70 (like relight, only >= 3600), never below 300 yards
+STORM_FOG_END_FLOOR = STORM_FOG_END_FLOOR_YARDS*FOG_UNITS_PER_YARD   # 10800 units; the rule never raises a value above its source
+STORM_DIRECT_SCALE, STORM_DIRECT_DESAT = .60, .50        # ch0 direct light: weak under overcast
+STORM_AMBIENT_SCALE, STORM_AMBIENT_DESAT = 1.15, .25     # ch1 ambient: more diffuse
+STORM_SKY_LERP, STORM_SKY_SCALE = .55, .95               # ch2-6 sky toward the light warm grey, then barely darker
+STORM_FOG_LERP = .55                                     # ch7 fog colour toward the same grey, luminance kept (never darkened)
+STORM_GREY = (.62, .60, .56)                             # light warm grey-beige chroma; scaled to keep each key's luminance
 STORM_SHADOW_SCALE = .5                                  # ch8 terrain shadow opacity
-STORM_SUN_SCALE, STORM_HALO_SCALE = .35, .25             # ch9 sun, ch10 halo
-STORM_CLOUD_SCALE = .70                                  # ch12 clouds: grey, then darker
-STORM_GLOW_SCALE = .5                                    # LightParams column 3
+STORM_SUN_SCALE, STORM_HALO_SCALE = .4, .3               # ch9 sun, ch10 halo
+STORM_CLOUD_SCALE = .90                                  # ch12 clouds: the same warm grey, then slightly darker
+STORM_GLOW_SCALE = .6                                    # LightParams column 3
 STORM_WATER = range(14, 18)                              # untouched
 
 def storm_color(ch, original):
@@ -297,7 +297,7 @@ def storm_color(ch, original):
     elif ch == 8: c = [v*STORM_SHADOW_SCALE for v in c]
     elif ch == 9: c = [v*STORM_SUN_SCALE for v in c]
     elif ch == 10: c = [v*STORM_HALO_SCALE for v in c]
-    elif ch == 12: c = [v*STORM_CLOUD_SCALE for v in [L]*3]
+    elif ch == 12: c = [v*STORM_CLOUD_SCALE for v in grey]
     return pack(c, original)
 
 def storm_profile(tables, pid):
@@ -309,12 +309,10 @@ def storm_profile(tables, pid):
         if ch in STORM_WATER: continue
         row = ints.index[(pid-1)*18+ch+1]
         for i in range(u(row, 1)): putu(row, 18+i, storm_color(ch, u(row, 18+i)))
-    for ch in (0, 1):
-        row = floats.index[(pid-1)*6+ch+1]
-        for i in range(u(row, 1)):
-            value = f(row, 18+i)
-            if ch == 0 and value >= 3600: putf(row, 18+i, min(value, max(value*STORM_FOG_END_SCALE, STORM_FOG_END_FLOOR)))
-            elif ch == 1: putf(row, 18+i, min(value, STORM_FOG_START_MAX))
+    row = floats.index[(pid-1)*6+1]   # fog end (channel 0); the fog start ratio (channel 1) stays as in the source
+    for i in range(u(row, 1)):
+        value = f(row, 18+i)
+        if value >= 3600: putf(row, 18+i, min(value, max(value*STORM_FOG_END_SCALE, STORM_FOG_END_FLOOR)))
 
 def copy_profile(tables, old, new):
     """Add profile `new` to `tables` as a plain copy of `old`."""

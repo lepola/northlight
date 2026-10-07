@@ -1,7 +1,7 @@
 """Procedural weather textures for the art layer, generated at build time (no client bytes).
 
-# 0.3.198 (rain): replaces the client's rain streaks and snow flake with uncompressed BLP2
-(encoding 3, BGRA, full mip chain). The aspect ratios are the runtime's identity signature:
+# 0.3.198 (rain): replaces the client's rain streaks and snow flake with BLP2 in the client's own
+palettized layout (encoding 1, alpha depth 8; the 3.3.5a client never uses encoding 3), full mip chain. The aspect ratios are the runtime's identity signature:
 rain 1:16 (stock 1:8), snow 1:2 (stock 1:1), both at most 32 wide.
 """
 import math
@@ -20,6 +20,24 @@ def write_blp_bgra(width, height, levels):
         w, h = max(1, w//2), max(1, h//2)
     assert (w, h) == (1, 1) and len(levels) == len(list(mip_sizes(width, height)))
     return struct.pack('<4sI4B2I32I', b'BLP2', 1, 3, 8, 0, 1, width, height, *offsets, *sizes)+data
+
+
+def write_blp_paletted_alpha(width, height, levels):
+    """A BLP2 in the layout the 3.3.5a client reads (encoding 1, alpha depth 8, alpha type 8: the client's stock files
+    are palettized or DXT, never encoding 3) from `levels`: BGRA bytes of each mip, largest first, down to 1x1, of
+    one constant colour. Palette: 256 BGRA entries, entry 0 = the colour, the rest zero; then per mip `w*h` palette
+    indices (all 0) followed by `w*h` alpha bytes, which carry the shape."""
+    colour = levels[0][:3]
+    assert all(level[i:i+3] == colour for level in levels for i in range(0, len(level), 4)), 'one constant colour'
+    offsets, sizes, data, w, h = [0]*16, [0]*16, bytearray(colour+b'\xff'+bytes(1020)), width, height
+    for i, level in enumerate(levels):
+        assert len(level) == w*h*4 and i < 16
+        offsets[i], sizes[i] = HEADER+len(data), 2*w*h
+        data.extend(bytes(w*h))
+        data.extend(level[3::4])
+        w, h = max(1, w//2), max(1, h//2)
+    assert (w, h) == (1, 1) and len(levels) == len(list(mip_sizes(width, height)))
+    return struct.pack('<4sI4B2I32I', b'BLP2', 1, 1, 8, 8, 1, width, height, *offsets, *sizes)+data
 
 
 def mip_sizes(width, height):
@@ -62,9 +80,47 @@ def image(width, height, colour, alpha_max, shape):
     return bytes(out)
 
 
-def streak(u, v):
-    # Thin vertical line (gaussian sigma 1.5 px of 32) fading in and out over the first/last fifth.
-    return math.exp(-((u-.5)*32)**2/(2*1.5**2))*smoothstep(0, .2, v)*smoothstep(1, .8, v)
+STREAK_SIGMA_PX, STREAK_FADE = 1.1, .08   # thin crisp core ~2.6 px wide (FWHM) at 32 px; the streak fades only over the last 8% at each end
+STREAK_MIN_SIGMA_TEXELS = .75                # no mip level narrows the core below this: a streak must not break up or vanish at small mips
+
+
+def streak_x(u, sigma):
+    return math.exp(-((u-.5)/sigma)**2/2)
+
+
+def streak_y(v):
+    return smoothstep(0, STREAK_FADE, v)*smoothstep(1, 1-STREAK_FADE, v)
+
+
+def texel_average(fn, count, samples=16):
+    """Mean of fn over each of `count` equal cells of 0..1, `samples` points per cell."""
+    return [sum(fn((i+(k+.5)/samples)/count) for k in range(samples))/samples for i in range(count)]
+
+
+def streak_chain(width, height, colour, alpha_max):
+    """Mip levels (BGRA bytes) of the streak, each computed from the analytic shape (the area average of the same
+    line over every texel of the level) instead of box-filtering 8-bit texels. A box filter keeps the mean alpha, so
+    the peak falls to a third by level 2 and ~0.06 at 1 px wide, and 8-bit rounding drops the thin tails to 0: far
+    rain breaks into faint dots. Here the across-sigma stays >= .75 texel (one soft continuous line at every level)
+    and the amplitude follows sqrt(mean alpha at level 0 / mean alpha of this level): the geometric midpoint between
+    keeping the peak (a 1 px level would be a ~0.57 mean slab, 2.7x the stock texture's ~0.21) and keeping the mean
+    (invisible). The line is separable (across x along), so the texel mean is the product of the 1-D means; all
+    levels share the level-0 normalisation (alpha peak = alpha_max there)."""
+    mean0 = sum(texel_average(lambda u: streak_x(u, STREAK_SIGMA_PX/width), width))/width
+    scale = alpha_max/(max(texel_average(lambda u: streak_x(u, STREAK_SIGMA_PX/width), width))*max(texel_average(streak_y, height)))
+    b, g, r = [round(c*255) for c in colour[::-1]]
+    levels, w, h = [], width, height
+    while True:
+        ax = texel_average(lambda u: streak_x(u, max(STREAK_SIGMA_PX/width, STREAK_MIN_SIGMA_TEXELS/w)), w)
+        ay = texel_average(streak_y, h)
+        gain = scale*min(1., math.sqrt(mean0/(sum(ax)/w)))
+        out = bytearray()
+        for y in range(h):
+            for x in range(w):
+                out += bytes((b, g, r, min(255, round(ax[x]*ay[y]*gain*255))))
+        levels.append(bytes(out))
+        if (w, h) == (1, 1): return levels
+        w, h = max(1, w//2), max(1, h//2)
 
 
 def flake(u, v):
@@ -75,20 +131,17 @@ def flake(u, v):
     return (1-smoothstep(0, 1, r))**1.5
 
 
-RAIN, RAIN_RED, SNOW = (.86, .90, 1.), (.75, .22, .18), (.96, .97, 1.)
-TEXTURES = {   # archive name -> (width, height, colour, alpha max, shape)
-    'textures\\Weather\\RainDrop01.blp': (32, 512, RAIN, .35, streak),
-    'Textures\\WEATHER\\RAINDROPRED01.BLP': (32, 512, RAIN_RED, .35, streak),
-    'textures\\Weather\\SnowFlake01.blp': (32, 64, SNOW, .8, flake),
+RAIN, RAIN_RED, SNOW = (.90, .90, .90), (.75, .22, .18), (.97, .97, .97)   # Forever-style rain is near-white, not blue
+TEXTURES = {   # archive name -> (width, height, colour, alpha max, mip levels builder)
+    'textures\\Weather\\RainDrop01.blp': (32, 512, RAIN, .7, streak_chain),
+    'Textures\\WEATHER\\RAINDROPRED01.BLP': (32, 512, RAIN_RED, .7, streak_chain),
+    'textures\\Weather\\SnowFlake01.blp': (32, 64, SNOW, .8, lambda w, h, colour, alpha_max: mip_chain(w, h, image(w, h, colour, alpha_max, flake))),
 }
 
 
 def weather_textures():
     """{archive name: BLP2 bytes}; deterministic."""
-    result = {}
-    for name, (w, h, colour, alpha_max, shape) in TEXTURES.items():
-        result[name] = write_blp_bgra(w, h, mip_chain(w, h, image(w, h, colour, alpha_max, shape)))
-    return result
+    return {name: write_blp_paletted_alpha(w, h, levels(w, h, colour, alpha_max)) for name, (w, h, colour, alpha_max, levels) in TEXTURES.items()}
 
 
 if __name__ == '__main__':

@@ -17,7 +17,7 @@ installed art layer). Steps, each on the previous step's archive, as the HD chai
 6. outdoor_moon HD outdoor skies without lunar batches + transparent moon02          (HD skies only)
 7. storm        a private storm profile (Light column 9) per outdoor row, made after the sky steps:
    a copy of the row's final clear profile when its stock storm profile is its clear profile, else the
-   stock storm profile relit and retimed; then the dark, grey, short-fog storm look (build_lighting.stormify)
+   stock storm profile relit and retimed; then the grey, readable storm look (fog end x0.7, 300 yard floor) (build_lighting.stormify)
 8. weather_textures  procedural rain streak (1:16), red rain and snow flake (1:2) BLPs
    (build_weather_textures), replacing the client's; generated, no client bytes
 

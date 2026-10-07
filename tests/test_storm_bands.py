@@ -112,19 +112,19 @@ checks['row 1: key times equal the final clear bands (already retimed)'] = all([
 def expected(ch, pid, i): return bl.storm_color(ch, u(Int(pid, ch), 18+i))
 checks['row 1: colour channels are the storm transform of the clear'] = all(u(Int(dst, ch), 18+i) == (u(Int(src, ch), 18+i) if ch in (11, 13, 14, 15, 16, 17) else expected(ch, src, i)) for ch in range(18) for i in range(u(Int(src, ch), 1)))
 checks['row 1: water channels 14-17 byte-identical to the clear\'s'] = all(bytes(Int(dst, ch))[4:] == bytes(Int(src, ch))[4:] for ch in bl.STORM_WATER)
-checks['row 1: glow x0.5'] = abs(f(P(dst), 3)-f(P(src), 3)*.5) < 1e-6
+checks['row 1: glow x0.6'] = abs(f(P(dst), 3)-f(P(src), 3)*.6) < 1e-6
 
 # The look, with hand-checked values (a grey key (100,100,100), a saturated one).
 grey, red = c((100, 100, 100)), c((200, 100, 50))
 look = {
-    'sun x0.35': bl.storm_color(9, grey) == c((35, 35, 35)), 'halo x0.25': bl.storm_color(10, grey) == c((25, 25, 25)),
+    'sun x0.4': bl.storm_color(9, grey) == c((40, 40, 40)), 'halo x0.3': bl.storm_color(10, grey) == c((30, 30, 30)),
     'shadow x0.5': bl.storm_color(8, grey) == c((50, 50, 50)),
-    'direct: x0.55, half desaturated': rgb(bl.storm_color(0, red)) == [round(v*.55) for v in bl.mix([200, 100, 50], [bl.lum([200, 100, 50])]*3, .5)],
-    'ambient: 40% desaturated, x1.05': rgb(bl.storm_color(1, red)) == [round(v*1.05) for v in bl.mix([200, 100, 50], [bl.lum([200, 100, 50])]*3, .4)],
-    'clouds: grey, x0.7': len(set(rgb(bl.storm_color(12, red)))) == 1 and rgb(bl.storm_color(12, red))[0] == round(bl.lum([200, 100, 50])*.7),
-    'sky: luminance kept by the grey, then x0.6': abs(bl.lum(rgb(bl.storm_color(3, red)))-bl.lum([200, 100, 50])*(.3+.7*1)*.6) < 6,
-    'sky: bluer than the clear key': rgb(bl.storm_color(3, red))[2] > rgb(bl.storm_color(3, red))[0]*.5,
-    'fog colour: 70% to the grey-blue, no darkening': abs(bl.lum(rgb(bl.storm_color(7, red)))-bl.lum([200, 100, 50])) < 3,
+    'direct: x0.6, 50% desaturated': rgb(bl.storm_color(0, red)) == [round(v*.6) for v in bl.mix([200, 100, 50], [bl.lum([200, 100, 50])]*3, .5)],
+    'ambient: 25% desaturated, x1.15': rgb(bl.storm_color(1, red)) == [round(v*1.15) for v in bl.mix([200, 100, 50], [bl.lum([200, 100, 50])]*3, .25)],
+    'clouds: the warm grey at the key luminance, x0.9': abs(bl.lum(rgb(bl.storm_color(12, red)))-bl.lum([200, 100, 50])*.9) < 3 and rgb(bl.storm_color(12, red))[0] > rgb(bl.storm_color(12, red))[2],
+    'sky: luminance kept by the grey, then x0.95': abs(bl.lum(rgb(bl.storm_color(3, red)))-bl.lum([200, 100, 50])*.95) < 6,
+    'sky: light warm grey on a neutral key (R >= G >= B, spread under 25%)': (lambda k: k[0] >= k[1] >= k[2] and (k[0]-k[2]) < .25*k[0])(rgb(bl.storm_color(3, grey))),
+    'fog colour: 55% to the warm grey, luminance kept (x1.0)': abs(bl.lum(rgb(bl.storm_color(7, red)))-bl.lum([200, 100, 50])) < 3,
     'alpha byte kept': bl.storm_color(3, red) >> 24 == 0xff,
     'channels 11 and 13-17 are not touched': all(bl.storm_color(ch, red) == red for ch in (11, 13, 14, 15, 16, 17)),
 }
@@ -137,8 +137,8 @@ checks['row 3: a different stock storm sky is kept'] = u(P(ids[3]), 2) == SKY_ST
 checks['row 2: relit then stormed (direct light, first night key)'] = u(Int(s2, 0), 18) == bl.storm_color(0, bl.transform_color(0, u(stock['LightIntBand'].index[(2-1)*18+1], 18), 0, 5, bl.sample_color(stock['LightIntBand'].index[(2-1)*18+10], 0)))
 checks['row 2: retimed (night by 21:00 in the colour bands, sunset at 20:15)'] = [u(Int(s2, 0), 2+i) for i in range(u(Int(s2, 0), 1))][-2:] == [bl.SUNSET_KEY, bl.NIGHT_KEY]
 fog = [(u(Flt(s2, 0), 2+i), f(Flt(s2, 0), 18+i)) for i in range(u(Flt(s2, 0), 1))]
-checks['row 2: fog end: 2000 (below 3600) kept, the relit 4000 below the 7920 floor stays'] = {v for _, v in fog if v == 2000} == {2000} and all(2000 == v or 4000*.94-1 <= v <= 4000*1.1+1 for _, v in fog)
-checks['row 2: fog start ratio capped at 0.15'] = all(abs(f(Flt(s2, 1), 18+i)-.15) < 1e-6 for i in range(u(Flt(s2, 1), 1)))
+checks['row 2: fog end: 2000 (below 3600) kept, the relit 4000 below the 10800 floor stays'] = {v for _, v in fog if v == 2000} == {2000} and all(2000 == v or 4000*.94-1 <= v <= 4000*1.1+1 for _, v in fog)
+checks['row 2: fog start ratio kept from the relit source (stock .3 x0.88), not capped'] = all(abs(f(Flt(s2, 1), 18+i)-.3*.88) < 1e-6 for i in range(u(Flt(s2, 1), 1)))
 checks['row 2: water channels are the relit stock ones, not stormed'] = all(u(Int(s2, ch), 18) == bl.transform_color(ch, u(stock['LightIntBand'].index[(2-1)*18+ch+1], 18), 0, 5, None) for ch in bl.STORM_WATER)
 
 # Fog: never thicker than the clear's, key-wise; the floor.
@@ -147,15 +147,15 @@ for i in (1, 2, 3, 4):
     if clear == 1: continue
     end, clear_end = Flt(pid, 0), Flt(clear, 0)
     checks[f'row {i}: storm fog end <= clear fog end at every storm key'] = all(f(end, 18+k) <= bl.band_value(bl.band_pairs(clear_end, True), True, u(end, 2+k))+1e-3 for k in range(u(end, 1)))
-checks['fog end floor: x0.4 never below 220 yards = 7920 units (>= 3600 only)'] = (bl.STORM_FOG_END_FLOOR, bl.STORM_FOG_END_FLOOR_YARDS, bl.STORM_FOG_END_SCALE) == (7920., 220., .4)
+checks['fog end floor: x0.7 never below 300 yards = 10800 units (>= 3600 only)'] = (bl.STORM_FOG_END_FLOOR, bl.STORM_FOG_END_FLOOR_YARDS, bl.STORM_FOG_END_SCALE) == (10800., 300., .7)
 fogs = copy.deepcopy(final)
 probe = fogs['LightFloatBand'].index[(ids[1]-1)*6+1]   # one value per key; the first five keys carry the probes
 for k, v in enumerate((12000., 6000., 36000., 3000., 3600.)): bl.putf(probe, 18+k, v)
 bl.storm_profile(fogs, ids[1]); fend = fogs['LightFloatBand'].index[(ids[1]-1)*6+1]
-checks['fog end: 12000 -> 7920 (floor), 6000 kept (never raised), 36000 -> 14400 (x0.4), <3600 untouched, 3600 -> 3600'] = [round(f(fend, 18+k), 1) for k in range(5)] == [7920., 6000., 14400., 3000., 3600.]
+checks['fog end: 12000 -> 10800 (floor), 6000 kept (never raised), 36000 -> 25200 (x0.7), <3600 untouched, 3600 -> 3600'] = [round(f(fend, 18+k), 1) for k in range(5)] == [10800., 6000., 25200., 3000., 3600.]
 
-# Glow: only 0 < glow <= 1 is halved (as relit_profile); anything else stays.
-for g, want_g in ((.4, .2), (1., .5), (0., 0.), (2.5, 2.5), (-1., -1.)):
+# Glow: only 0 < glow <= 1 is scaled x0.6 (as relit_profile); anything else stays.
+for g, want_g in ((.4, .24), (1., .6), (0., 0.), (2.5, 2.5), (-1., -1.)):
     gl = copy.deepcopy(final); bl.putf(gl['LightParams'].index[ids[1]], 3, g); bl.storm_profile(gl, ids[1])
     checks[f'glow {g}: {want_g}'] = abs(f(gl['LightParams'].index[ids[1]], 3)-want_g) < 1e-6
 

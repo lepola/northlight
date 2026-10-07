@@ -11,8 +11,8 @@
 namespace NorthlightWeatherEffects {
 // Coefficients, all per unit of f (the fog factor below) unless named otherwise.
 constexpr float kSnowFog=0.6f;        /* snow acts on the fog-like effects at 60 percent of rain, and never wets */
-constexpr float kHazeTau=1.5f;        /* horizon haze optical depth x (1 + kHazeTau f) */
-constexpr float kAirExtinction=0.0025f; /* extra air extinction beside the shader's literal .0017 (WorldFog c59.w, mirrored in sigmaAt) */
+constexpr float kHazeTau=0.75f;       /* horizon haze optical depth x (1 + kHazeTau f); moderate, the DBC storm bands already fog the game */
+constexpr float kAirExtinction=0.0012f; /* extra air extinction beside the shader's literal .0017 (WorldFog c59.w, mirrored in sigmaAt) */
 constexpr float kShafts=0.75f;        /* direct volume gain (c21.y) x (1 - kShafts f) */
 constexpr float kDisc=0.85f;          /* sun and moon disc opacity, glare weights and veil x (1 - kDisc f) */
 constexpr float kShadowSoften=0.5f;   /* direct shadowing weakened by kShadowSoften f (c59.z; 0 = untouched) */
