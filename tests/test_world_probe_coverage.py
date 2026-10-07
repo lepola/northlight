@@ -70,6 +70,17 @@ def main():
     body=source.split('float4 probeIrradiance(',1)[1].split('float4 WorldLighting(',1)[0]
     assert 'GridOrigin.xyz' not in body and 'float3 edge=' not in body
 
+    # 0.3.197: same-key re-publication blends on the GPU from the previous SH (task 13); born's fade stays as is.
+    assert 'sampler2D ProbePrevious : register(s8)' in source
+    assert 'float blend=saturate((PassInfo.w-moment.w)*(1/.3));' in body and '[branch]if(blend<1)' in body
+    assert 'weight*=saturate((PassInfo.w-metadata.w)*(1/.45));' in body
+    blend_header=fp.src('probe_blend.h').read_text()
+    assert 'BlendSeconds=.3f' in blend_header and '(1/.3)' in body
+    renderer=fp.src('world_renderer.h').read_text()
+    gi_pass=renderer.index('"world GI pass"')
+    assert renderer.index('SetTexture(8,probePrev)')<gi_pass<renderer.index('SetTexture(8,textures[8])')
+    assert renderer[gi_pass:].split('SetTexture(8,textures[8])',1)[0].count('\n')<=2  # restored right after the GI quad
+
     atlas={}
     for key in itertools.product(range(-20,-12),range(-4,4),range(-2,6)):
         insert(atlas,key)
