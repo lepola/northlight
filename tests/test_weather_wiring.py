@@ -19,9 +19,9 @@ a=r.index('template<class Capture,class Draw> HRESULT drawHook(');b=r.index('   
 hook=r[a:b]
 cmp_line='if(weatherDetect.hot&&!applied&&mirrorState.textureKnown[0]&&mirrorState.textures[0]==weatherDetect.hot){weatherSample.primitives+=count;++weatherSample.draws;}'
 checks['drawHook: the single comparison, once']=hook.count(cmp_line)==1 and hook.count('weatherDetect')==2 and hook.count('weatherSample')==2
-checks['drawHook: before the gate split and any other work']=0<=hook.index(cmp_line)<hook.index('if(!frameDrawGates){')<hook.index('prepareDraw(capture)')<hook.index('prepareDrawImpl(capture)') and hook.index(cmp_line)<hook.index('noteFirst')
-checks['drawHook: no Get*, peek, lock or lookup in the weather lines']=not re.search(r'weather[^\n]*(Get|peek|lock|find|unordered_map|CpuScope)',hook.replace('weatherProbeDraw(count)',''))
-checks['drawHook: probe only on RenderProfile sample frames']='if(gateFrame)weatherProbeDraw(count);' in hook
+checks['drawHook: before the gate split and any other work']=0<=hook.index(cmp_line)<hook.index('if(!frameDrawGates){')<hook.index('prepareDraw(capture,count)')<hook.index('prepareDrawImpl(capture,count)') and hook.index(cmp_line)<hook.index('noteFirst')
+checks['drawHook: no Get*, peek, lock or lookup in the weather lines']=not re.search(r'weather[^\n]*(Get|peek|lock|find|unordered_map|CpuScope)',hook)
+checks['drawHook: no gateFrame weather branch; the probe sits in prepareDrawImpl\'s existing gateFrame branch']='weatherProbeDraw' not in hook and 'gateFrame' not in hook.split(cmp_line)[0] and 'if(gateFrame){++gateCounts.prep;weatherProbeDraw(count);}' in r
 
 ct=next(l for l in r.split('\n') if 'STDMETHODCALLTYPE CreateTexture(' in l)
 checks['CreateTexture: noteCreate with the raw pointer before wrap']=('weatherDetect.noteCreate(static_cast<IDirect3DBaseTexture9*>(*ppTexture),Width,Height,Levels,Format)' in ct and ct.index('noteCreate')<ct.index('mirrorResources.wrap(ppTexture)'))

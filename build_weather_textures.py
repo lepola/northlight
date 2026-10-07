@@ -2,7 +2,7 @@
 
 # 0.3.198 (rain): replaces the client's rain streaks and snow flake with uncompressed BLP2
 (encoding 3, BGRA, full mip chain). The aspect ratios are the runtime's identity signature:
-rain 1:16 (stock 1:8), snow 1:32 (stock 1:1), both at most 32 wide.
+rain 1:16 (stock 1:8), snow 1:2 (stock 1:1), both at most 32 wide.
 """
 import math
 import struct
@@ -68,8 +68,9 @@ def streak(u, v):
 
 
 def flake(u, v):
-    # Round in uv space: the 1:32 texture is squashed on a square quad, so a circle of radius .4 in
-    # uv is round on screen. Bright core, soft edge.
+    # Round in uv space: the 1:2 texture (32x64) is stretched over a square quad, so a circle of radius .4 in
+    # uv is round on screen (and a 2:1 ellipse in texel space). 1:2 costs at most one mip level of horizontal
+    # sharpness (the mip follows the larger derivative); 1:32 would collapse to a 1x16 bar by ~16 px. Bright core, soft edge.
     r = math.hypot(u-.5, v-.5)/.4
     return (1-smoothstep(0, 1, r))**1.5
 
@@ -78,7 +79,7 @@ RAIN, RAIN_RED, SNOW = (.86, .90, 1.), (.75, .22, .18), (.96, .97, 1.)
 TEXTURES = {   # archive name -> (width, height, colour, alpha max, shape)
     'textures\\Weather\\RainDrop01.blp': (32, 512, RAIN, .35, streak),
     'Textures\\WEATHER\\RAINDROPRED01.BLP': (32, 512, RAIN_RED, .35, streak),
-    'textures\\Weather\\SnowFlake01.blp': (32, 1024, SNOW, .8, flake),
+    'textures\\Weather\\SnowFlake01.blp': (32, 64, SNOW, .8, flake),
 }
 
 

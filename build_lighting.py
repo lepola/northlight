@@ -271,7 +271,9 @@ def retime(tables, profiles):
 # "Forever-style" rain has a dark, grey, short-fog sky of its own. Only the storm slot changes; the
 # clear, underwater and storm-underwater slots (7, 8, 10) stay as they are.
 STORM_SLOT = 9
-STORM_FOG_END_SCALE, STORM_FOG_END_FLOOR = .40, 220.   # fog end x.40 (like relight, only >= 3600), never below 220
+FOG_UNITS_PER_YARD = 36.                                  # Light fog values: 3600 units = 100 yards (see relight)
+STORM_FOG_END_SCALE, STORM_FOG_END_FLOOR_YARDS = .40, 220.   # fog end x.40 (like relight, only >= 3600), never below 220 yards
+STORM_FOG_END_FLOOR = STORM_FOG_END_FLOOR_YARDS*FOG_UNITS_PER_YARD   # 7920 units; the rule never raises a value above its source
 STORM_FOG_START_MAX = .15                                # fog start ratio cap
 STORM_DIRECT_SCALE, STORM_DIRECT_DESAT = .55, .50        # ch0 direct light
 STORM_AMBIENT_SCALE, STORM_AMBIENT_DESAT = 1.05, .40     # ch1 ambient
@@ -302,7 +304,7 @@ def storm_profile(tables, pid):
     """The storm look, in place on profile `pid` (a private copy): colour and fog bands, glow."""
     params, ints, floats = tables['LightParams'], tables['LightIntBand'], tables['LightFloatBand']
     glow = f(params.index[pid], 3)
-    putf(params.index[pid], 3, glow*STORM_GLOW_SCALE)
+    if 0 < glow <= 1: putf(params.index[pid], 3, glow*STORM_GLOW_SCALE)   # same validity range as relit_profile; other values stay
     for ch in range(18):
         if ch in STORM_WATER: continue
         row = ints.index[(pid-1)*18+ch+1]
@@ -311,7 +313,7 @@ def storm_profile(tables, pid):
         row = floats.index[(pid-1)*6+ch+1]
         for i in range(u(row, 1)):
             value = f(row, 18+i)
-            if ch == 0 and value >= 3600: putf(row, 18+i, max(value*STORM_FOG_END_SCALE, STORM_FOG_END_FLOOR))
+            if ch == 0 and value >= 3600: putf(row, 18+i, min(value, max(value*STORM_FOG_END_SCALE, STORM_FOG_END_FLOOR)))
             elif ch == 1: putf(row, 18+i, min(value, STORM_FOG_START_MAX))
 
 def copy_profile(tables, old, new):

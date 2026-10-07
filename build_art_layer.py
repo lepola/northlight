@@ -18,7 +18,7 @@ installed art layer). Steps, each on the previous step's archive, as the HD chai
 7. storm        a private storm profile (Light column 9) per outdoor row, made after the sky steps:
    a copy of the row's final clear profile when its stock storm profile is its clear profile, else the
    stock storm profile relit and retimed; then the dark, grey, short-fog storm look (build_lighting.stormify)
-8. weather_textures  procedural rain streak (1:16), red rain and snow flake (1:32) BLPs
+8. weather_textures  procedural rain streak (1:16), red rain and snow flake (1:2) BLPs
    (build_weather_textures), replacing the client's; generated, no client bytes
 
 Steps 2-6 hold the HD sky cleanup: a step whose HD sky ids, profiles or textures are absent is

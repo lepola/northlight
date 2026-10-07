@@ -2,20 +2,22 @@
 // 0.3.198 (rain): finds the game's weather particle textures without touching the game thread. Every game
 // texture is created through the wrapped Device (stream mode: the replay thread's Device::CreateTexture), so
 // the creation signature is all the detection needs: the art layer's procedural rain/snow textures are
-// A8R8G8B8 strips (RainDrop01/RainDropRed01 32x512 = 1:16, SnowFlake01 32x1024 = 1:32; texture-quality settings
-// may halve the dimensions, the aspect stays). Both aspects are rare among decoded game textures (palette and
-// uncompressed BLPs also become A8R8G8B8). The draw hook compares the bound stage-0 texture (the mirror's raw
+// A8R8G8B8 strips (RainDrop01/RainDropRed01 32x512 = 1:16, SnowFlake01 32x64 = 1:2; texture-quality settings
+// may halve the dimensions, the aspect stays). Rain 1:16 is rare among decoded game textures; 1:2 ARGB (palette and
+// uncompressed BLPs also become A8R8G8B8) is common, hence the larger snow table. The draw hook compares the bound stage-0 texture (the mirror's raw
 // pointer) with `hot` - one pointer comparison, no peek, lock, Get* or hash lookup.
-// Table: kPerKind slots per kind (a new candidate can only replace an entry of its own kind, preferring one
-// that never drew), no allocation. `hot` rotates on every frame in which it counted no draws, so a lookalike
-// that draws nothing never holds it. All members are touched under the Device's gate only.
+// Table: kRainSlots/kSnowSlots slots per kind (a new candidate can only replace an entry of its own kind, preferring
+// one that never drew), fixed array, no allocation. `hot` rotates on every frame in which it counted no draws, so a
+// lookalike that draws nothing never holds it. Known limitation: a lookalike of the same signature that draws every
+// frame can hold `hot`; mitigated by the rare rain aspect and the WEATHER candidate log. All members are touched
+// under the Device's gate only.
 #include <cstdint>
 #include <cstdio>
 #include "weather_state.h"
 
 namespace NorthlightWeatherDetect {
 using NorthlightWeather::Kind;
-constexpr unsigned kPerKind=2,kCandidates=2*kPerKind,kTallLogs=8;
+constexpr unsigned kRainSlots=2,kSnowSlots=4,kCandidates=kRainSlots+kSnowSlots,kTallLogs=8;
 constexpr std::uint32_t kFmtA8R8G8B8=21; /* D3DFMT_A8R8G8B8 (static_assert in renderer.cpp) */
 constexpr std::uint32_t kMaxWidth=32;
 
@@ -23,7 +25,7 @@ inline Kind classify(std::uint32_t w,std::uint32_t h,std::uint32_t fmt){
     if(fmt!=kFmtA8R8G8B8||!w||w>kMaxWidth)return Kind::None;
     if(w!=8&&w!=16&&w!=32)return Kind::None;
     if(h==16*w)return Kind::Rain;
-    if(h==32*w)return Kind::Snow;
+    if(h==2*w)return Kind::Snow;
     return Kind::None;
 }
 
@@ -48,7 +50,7 @@ public:
         const Kind kind=classify(w,h,fmt);if(kind==Kind::None)return;
         unsigned same=0,victim=n;
         for(unsigned i=0;i<n;++i)if(table[i].kind==kind){++same;if(victim==n||(table[victim].drawn&&!table[i].drawn))victim=i;} /* oldest never-drawn of the kind, else the oldest */
-        if(same>=kPerKind){++overflows;dropAt(victim);}
+        if(same>=(kind==Kind::Rain?kRainSlots:kSnowSlots)){++overflows;dropAt(victim);}
         table[n++]={raw,kind,false};++generation;
         if(!hot&&!off){hot=raw;hotKind=kind;}
         say("WEATHER candidate kind=%s %ux%u fmt=%u levels=%u raw=%p generation=%u",NorthlightWeather::kindName(kind),w,h,fmt,levels,raw,generation);

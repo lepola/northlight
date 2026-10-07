@@ -137,7 +137,7 @@ checks['row 3: a different stock storm sky is kept'] = u(P(ids[3]), 2) == SKY_ST
 checks['row 2: relit then stormed (direct light, first night key)'] = u(Int(s2, 0), 18) == bl.storm_color(0, bl.transform_color(0, u(stock['LightIntBand'].index[(2-1)*18+1], 18), 0, 5, bl.sample_color(stock['LightIntBand'].index[(2-1)*18+10], 0)))
 checks['row 2: retimed (night by 21:00 in the colour bands, sunset at 20:15)'] = [u(Int(s2, 0), 2+i) for i in range(u(Int(s2, 0), 1))][-2:] == [bl.SUNSET_KEY, bl.NIGHT_KEY]
 fog = [(u(Flt(s2, 0), 2+i), f(Flt(s2, 0), 18+i)) for i in range(u(Flt(s2, 0), 1))]
-checks['row 2: fog end: 2000 (below 3600) kept, the relit 4000 x0.4'] = {v for _, v in fog if v == 2000} == {2000} and all(2000 == v or 4000*.94*.4-1 <= v <= 4000*1.1*.4+1 for _, v in fog)
+checks['row 2: fog end: 2000 (below 3600) kept, the relit 4000 below the 7920 floor stays'] = {v for _, v in fog if v == 2000} == {2000} and all(2000 == v or 4000*.94-1 <= v <= 4000*1.1+1 for _, v in fog)
 checks['row 2: fog start ratio capped at 0.15'] = all(abs(f(Flt(s2, 1), 18+i)-.15) < 1e-6 for i in range(u(Flt(s2, 1), 1)))
 checks['row 2: water channels are the relit stock ones, not stormed'] = all(u(Int(s2, ch), 18) == bl.transform_color(ch, u(stock['LightIntBand'].index[(2-1)*18+ch+1], 18), 0, 5, None) for ch in bl.STORM_WATER)
 
@@ -147,13 +147,17 @@ for i in (1, 2, 3, 4):
     if clear == 1: continue
     end, clear_end = Flt(pid, 0), Flt(clear, 0)
     checks[f'row {i}: storm fog end <= clear fog end at every storm key'] = all(f(end, 18+k) <= bl.band_value(bl.band_pairs(clear_end, True), True, u(end, 2+k))+1e-3 for k in range(u(end, 1)))
-checks['fog end floor: x0.4 never below 220 (>= 3600 only)'] = (bl.STORM_FOG_END_FLOOR, bl.STORM_FOG_END_SCALE) == (220., .4)
-tiny = copy.deepcopy(final); old_scale = bl.STORM_FOG_END_SCALE; bl.STORM_FOG_END_SCALE = .001
-try:
-    bl.storm_profile(tiny, ids[1]); end = tiny['LightFloatBand'].index[(ids[1]-1)*6+1]
-    checks['fog end floor 220 applies when x0.4 would go below it'] = all(f(end, 18+k) == 220. for k in range(u(end, 1)) if f(Flt(ids[1], 0), 18+k) >= 3600)
-finally:
-    bl.STORM_FOG_END_SCALE = old_scale
+checks['fog end floor: x0.4 never below 220 yards = 7920 units (>= 3600 only)'] = (bl.STORM_FOG_END_FLOOR, bl.STORM_FOG_END_FLOOR_YARDS, bl.STORM_FOG_END_SCALE) == (7920., 220., .4)
+fogs = copy.deepcopy(final)
+probe = fogs['LightFloatBand'].index[(ids[1]-1)*6+1]   # one value per key; the first five keys carry the probes
+for k, v in enumerate((12000., 6000., 36000., 3000., 3600.)): bl.putf(probe, 18+k, v)
+bl.storm_profile(fogs, ids[1]); fend = fogs['LightFloatBand'].index[(ids[1]-1)*6+1]
+checks['fog end: 12000 -> 7920 (floor), 6000 kept (never raised), 36000 -> 14400 (x0.4), <3600 untouched, 3600 -> 3600'] = [round(f(fend, 18+k), 1) for k in range(5)] == [7920., 6000., 14400., 3000., 3600.]
+
+# Glow: only 0 < glow <= 1 is halved (as relit_profile); anything else stays.
+for g, want_g in ((.4, .2), (1., .5), (0., 0.), (2.5, 2.5), (-1., -1.)):
+    gl = copy.deepcopy(final); bl.putf(gl['LightParams'].index[ids[1]], 3, g); bl.storm_profile(gl, ids[1])
+    checks[f'glow {g}: {want_g}'] = abs(f(gl['LightParams'].index[ids[1]], 3)-want_g) < 1e-6
 
 # Key limit and invariants over every new band.
 checks['<= 16 keys, increasing times in every new band'] = all(0 <= u(r, 1) <= 16 and all(u(r, 2+k) < u(r, 3+k) for k in range(u(r, 1)-1)) for n, t in after.items() if n.endswith('Band') for i, b in t.items() if i not in before[n] for r in [bytearray(b)])

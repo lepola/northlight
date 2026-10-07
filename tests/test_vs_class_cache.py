@@ -203,7 +203,7 @@ with tempfile.TemporaryDirectory(prefix='northlight-phase3-') as tmp:
         subprocess.run(['clang++','-std=c++17','-Wall','-Wextra','-Werror','-Wno-unused-parameter','-Wno-unused-private-field',*flags,str(Path(tmp)/'t.cpp'),'-o',str(exe)],check=True)
         print(label,subprocess.check_output([str(exe)],text=True),end='',flush=True)
 
-dm=member(r,'template<class Capture> void prepareDrawImpl(Capture capture)');bd=member(r,'    void beforeDraw(IDirect3DVertexShader9* vs)');cw=member(r,'template<class Draw> void captureWater(');fv=member(r,'bool fullViewport(D3DSURFACE_DESC& desc');bw=member(r,'bool bindWorldDepth(const D3DSURFACE_DESC& desc)')
+dm=member(r,'template<class Capture> void prepareDrawImpl(Capture capture,UINT count)');bd=member(r,'    void beforeDraw(IDirect3DVertexShader9* vs)');cw=member(r,'template<class Draw> void captureWater(');fv=member(r,'bool fullViewport(D3DSURFACE_DESC& desc');bw=member(r,'bool bindWorldDepth(const D3DSURFACE_DESC& desc)')
 checks={
  'prepareDrawImpl: peekVertexShader with the GetVertexShader fallback, released only when not borrowed':
     'const bool borrowedVS=ext->peekVertexShader(vs);' in dm and 'if(!borrowedVS&&(FAILED(ext->GetVertexShader(&vs))||!vs))' in dm

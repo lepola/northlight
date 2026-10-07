@@ -615,12 +615,12 @@ class Device final : public GuardedMirrorDevice {
         if (appliedFrames==1) logf("FIRST EFFECT FRAME: near=%.5f far=%.2f scale=%.4f,%.4f depthRange=%.9g..%.9g (before UI)",nearZ,farZ,scaleX,scaleY,worldMinDepth,worldMaxDepth);
     }
     // One shader query/reference per original draw, shared with shadow capture.
-    template<class Capture> void prepareDraw(Capture capture) {
+    template<class Capture> void prepareDraw(Capture capture,UINT count) {
         mirrorState.gate.noteFirst(mirrorState.gate.drawTid); /* 0.3.180 (D0): the census' first draw */
         dropTerrainShadowSwap();
-        extensionWork("draw capture/effects",[&]{prepareDrawImpl(capture);});
+        extensionWork("draw capture/effects",[&]{prepareDrawImpl(capture,count);});
     }
-    template<class Capture> void prepareDrawImpl(Capture capture) {
+    template<class Capture> void prepareDrawImpl(Capture capture,UINT count) {
         ++drawCalls;
         if(failed||!enabled)return;
         if(applied){
@@ -632,7 +632,7 @@ class Device final : public GuardedMirrorDevice {
                 }if(!borrowed)drop(late);
             }return;
         }
-        CpuScope cpu(sampledDrawTimers()?&cpuPrep:nullptr);if(gateFrame)++gateCounts.prep;
+        CpuScope cpu(sampledDrawTimers()?&cpuPrep:nullptr);if(gateFrame){++gateCounts.prep;weatherProbeDraw(count);} /* 0.3.198 (rain): RenderProfile sample frames only, pre-effects draws */
         IDirect3DVertexShader9* vs=nullptr;
         // 0.3.196 (task 12): borrowed (no reference). The shader stays bound through this hook (the game's draw is issued after it); capture AddRefs whatever it keeps,
         // after renderEffects applied=true stops further use of vs, and resolveDepth's SavedState restores the binding. Released only when not borrowed.
@@ -790,9 +790,8 @@ class Device final : public GuardedMirrorDevice {
         bool claimed=false;
         // 0.3.198 (rain): the whole per-draw cost of weather detection, before any other work and in both gate paths: one pointer comparison.
         if(weatherDetect.hot&&!applied&&mirrorState.textureKnown[0]&&mirrorState.textures[0]==weatherDetect.hot){weatherSample.primitives+=count;++weatherSample.draws;}
-        if(gateFrame)weatherProbeDraw(count); /* RenderProfile sample frames only */
         if(!frameDrawGates){
-            dropBlobFaint();prepareDraw(capture);
+            dropBlobFaint();prepareDraw(capture,count);
             {CpuScope hooks(sampledHookTimer());
                 extensionWork("native sky claim",[&]{skyClaim(t,count,claimed);});
                 if(!claimed&&blobFilterActive())extensionWork("blob shadow filter",[&]{blobFilter(count,claimed);});}
@@ -805,7 +804,7 @@ class Device final : public GuardedMirrorDevice {
         const bool sky=count<=4&&drawGates.sky;
         const char* stage="draw capture/effects";
         extensionWork(stage,[&]{
-            prepareDrawImpl(capture);
+            prepareDrawImpl(capture,count);
             CpuScope hooks(sampledHookTimer());
             if(sky){stage="native sky claim";skyClaim(t,count,claimed);}
             if(!claimed&&drawGates.blob){stage="blob shadow filter";if(blobFilterActive())blobFilter(count,claimed);}
