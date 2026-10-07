@@ -108,6 +108,13 @@ def chain(client, archives='all', locale=None, without=''):
     return [folder[n] for folder, n in names if n in folder and folder[n].is_file()]
 
 
+def is_custom_patch(path):
+    """True for a patch-<x>.mpq or patch-<locale>-<x>.mpq whose suffix Blizzard never shipped (not in
+    STOCK_SUFFIXES): a mod's or a private server's archive, not one the world itself depends on."""
+    match = re.fullmatch(r'patch(?:-[a-z]{4})?-([0-9a-z])\.mpq', Path(path).name.lower())
+    return bool(match) and match.group(1) in SUFFIXES and match.group(1) not in STOCK_SUFFIXES
+
+
 def fingerprint(paths, client=None):
     """Identity of an archive chain: relative names, sizes and mtimes in priority order."""
     rows = []

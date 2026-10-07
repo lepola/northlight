@@ -8,7 +8,9 @@ without a (listfile), patch-S.MPQ, patch-T.MPQ that is not an MPQ and patch-U.MP
   Light.dbc and Map.dbc as the art layer reads them) and loses to the later patch-S; a name no listing has
   is read from it and origin() names it; a tile only it adds is listed; patch-T is left out; both are in
   warnings() and fingerprint(); an unopenable common.MPQ or stock patch-3.MPQ still fails; the damaged
-  file raises mpq.ReadError (an OSError and a ValueError).
+  file raises mpq.ReadError (an OSError and a ValueError); an archive that opens on a lock retry is kept;
+  with no unlisted archive a missing name is not memoised; client_archives.is_custom_patch spares every
+  archive Blizzard shipped.
 - the real world_scene_builder on the synthetic tiles (32_48 replaced by patch-R, 33_48 only in patch-R,
   both textured with the damaged texture): exit 0, the terrain comes from patch-R, the texture is
   unsupported, one archive_warning line per archive, the report's archive_warnings.
@@ -18,7 +20,7 @@ without a (listfile), patch-S.MPQ, patch-T.MPQ that is not an MPQ and patch-U.MP
 import sys; from pathlib import Path; sys.path.insert(0, str(Path(__file__).resolve().parents[1]))  # repo root
 import northlight_paths as fp; fp.use_source_modules()
 import contextlib, io, json, shutil, struct, subprocess
-import install_world_cache as iwc
+import client_archives, install_world_cache as iwc, world_scene_builder
 from mpq import Archive, ReadError
 from world_scene_builder import Assets
 
@@ -116,6 +118,36 @@ for broken in ['common.MPQ', 'patch-3.MPQ']:   # Blizzard's own archives: the cl
     except OSError as e:
         assert broken in str(e), e
 
+# A custom patch a virus scanner holds for a moment is retried (LOCK_RETRIES is Windows only), not left out.
+failed, real_archive, real_retries = set(), world_scene_builder.Archive, world_scene_builder.LOCK_RETRIES
+def flaky(path):
+    if path.name == 'patch-S.MPQ' and path not in failed:
+        failed.add(path)
+        raise OSError(f'Cannot open MPQ: {path}')
+    return real_archive(path)
+world_scene_builder.Archive, world_scene_builder.LOCK_RETRIES = flaky, (0.,)
+try:
+    assets = Assets(client, 'all', 'enUS')
+    assert failed and assets.unreadable == ['Data/patch-T.MPQ'] and assets.read('DBFilesClient\\Light.dbc') == b'patch-S'
+    assets.close()
+finally:
+    world_scene_builder.Archive, world_scene_builder.LOCK_RETRIES = real_archive, real_retries
+# The stock view has no unlisted archive: nothing to probe, nothing memoised.
+assets = Assets(client, 'stock', 'enUS')
+try:
+    assert not assets.blind and assets.read(ADT) == adt(0.)
+    try:
+        assets.read('World\\Generic\\new.m2')
+        raise AssertionError('new.m2 was read without patch-R')
+    except FileNotFoundError:
+        assert assets.probed == {}
+finally:
+    assets.close()
+for name, custom in [('patch.mpq', False), ('patch-2.MPQ', False), ('patch-3.mpq', False), ('patch-enUS.MPQ', False),
+                     ('patch-enus-2.mpq', False), ('patch-enUS-3.mpq', False), ('common.mpq', False), ('locale-enUS.MPQ', False),
+                     ('patch-4.mpq', True), ('patch-R.MPQ', True), ('patch-enUS-x.mpq', True), ('patch-custom.mpq', False)]:
+    assert client_archives.is_custom_patch(Path('Data') / name) == custom, name
+
 # 2. The real scene builder on the synthetic tile.
 scene = out / 'scene'
 shutil.rmtree(scene, ignore_errors=True)
@@ -181,6 +213,7 @@ try:
     assert str(out) not in text.split('World cache: ')[1].split('World cache ready')[0], 'a client path in a warning'
     assert text.count(unlisted) == 1 and text.count(unopened) == 1, text
     assert 'new files only it adds may be missing from the static shadows and GI' in text
+    assert 'to try it again, delete the world-cache folder and run the installer again' in text
     manifest = json.loads((cache / 'install-manifest.json').read_text())
     assert [w['archive'] for w in manifest['tolerated']['archive_warnings']] == ['Data/patch-R.MPQ', 'Data/patch-T.MPQ']
     assert not manifest['problems'] and (cache / 'Azeroth/33_48.fg3').is_file()

@@ -20,7 +20,6 @@ ZERO=17066.666666666668
 # Windows: a virus scanner or the indexer briefly holds a just-written file; replace() is retried.
 LOCK_RETRIES=(.2,.4,.8,1.6,3.) if os.name=='nt' else ()
 CONTINENTS=['Azeroth','Kalimdor','Expansion01','Northrend']
-CUSTOM_PATCH=re.compile(r'patch(?:-[a-z]{4})?-[4-9a-z]\.mpq')   # not one Blizzard shipped (client_archives.STOCK_SUFFIXES)
 UNIT=533.3333333333334/128
 
 class DeletedAsset(ValueError):
@@ -33,6 +32,14 @@ def retry(fn,*args):
         try:return fn(*args)
         except PermissionError:time.sleep(delay)
     return fn(*args)
+
+
+def open_archive(path):
+    """Archive(path); on Windows retried after each LOCK_RETRIES delay, as a virus scanner may briefly hold it."""
+    for delay in LOCK_RETRIES:
+        try:return Archive(path)
+        except OSError:time.sleep(delay)
+    return Archive(path)
 
 
 def unpack(fmt,b,offset=0):
@@ -117,16 +124,16 @@ class Assets:
     file it replaces still resolves to it, read() looks a name no listing has up in it, and the continents'
     64x64 ADT grids are probed in it, so tiles it adds are built. Other files it adds stay out of providers:
     a builder that enumerates them (world_lights_builder's model names) misses them. A custom patch archive
-    (patch-4..9, -a..z) StormLib cannot open is left out; any other still fails. Both are reported:
-    unlisted, unreadable, warnings(), fingerprint()."""
+    (client_archives.is_custom_patch) StormLib cannot open is left out, after the Windows lock retries; any
+    other still fails. Both are reported: unlisted, unreadable, warnings(), fingerprint()."""
     def __init__(self,client=None,archives='all',locale=None,without=''):
         self.client=Path(client) if client else CLIENT;self.view=archives
         self.locale=client_archives.detect_locale(self.client,locale)
         self.archives=[];self.unreadable=[]
         for p in client_archives.chain(self.client,archives,self.locale,without):
-            try:self.archives.append(Archive(p))
+            try:self.archives.append(open_archive(p))
             except OSError:
-                if not CUSTOM_PATCH.fullmatch(p.name.lower()):raise   # Blizzard's archives hold the world itself
+                if not client_archives.is_custom_patch(p):raise   # Blizzard's archives hold the world itself
                 self.unreadable.append(p.relative_to(self.client).as_posix())
         self.paths=[a.path for a in self.archives]
         self.providers={};self.blind=[];self.probed={}
@@ -134,7 +141,7 @@ class Assets:
             try:names=a.names()
             except (OSError,ValueError):self.blind.append(index);continue
             for name in names:self.providers[name.lower()]=index
-        tiles=[f'world\\maps\\{m}\\{m}_{x}_{y}.adt'.lower() for m in CONTINENTS for x in range(64) for y in range(64)]
+        tiles=[f'world\\maps\\{m}\\{m}_{x}_{y}.adt'.lower() for m in CONTINENTS for x in range(64) for y in range(64)] if self.blind else []
         for index in self.blind:   # in priority order, so the later archive still wins
             has=self.archives[index].has
             for name,provider in self.providers.items():
@@ -150,6 +157,7 @@ class Assets:
         """Index of the archive that provides a lower-case backslash name, or None. A name no listing
         has may still be in an unlisted archive (the highest one that holds it wins)."""
         if name in self.providers:return self.providers[name]
+        if not self.blind:return None
         if name not in self.probed:self.probed[name]=next((i for i in reversed(self.blind) if self.archives[i].has(name)),None)
         return self.probed[name]
     def read(self,name):

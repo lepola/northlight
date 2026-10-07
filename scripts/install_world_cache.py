@@ -81,15 +81,17 @@ SOURCES = sorted({n for names in STEP_SOURCES.values() for n in names} | {'valid
 # - 0.3.183's scene and fog builders (unchanged since 0.3.166): 0.3.184 clamps an oversized top-level
 #   MOGP of a WMO group file, so its output differs only where 0.3.183 hit such an overrun
 #   (clamp_free() checks the cache's reports for one).
-# - 0.3.193's world_scene_builder.py (since 0.3.184) and mpq.py (since 0.3.166): 0.3.194 builds where
-#   they stopped (an archive without a (listfile), an unopenable custom patch, an unreadable file), so
-#   every cache they finished is what 0.3.194 builds.
+# - 0.3.193's world_scene_builder.py (since 0.3.184), mpq.py and client_archives.py (since 0.3.166):
+#   0.3.194 builds where they stopped (an archive without a (listfile), an unopenable custom patch, an
+#   unreadable file) and adds is_custom_patch() beside an unchanged chain(), so every cache they
+#   finished is what 0.3.194 builds.
 # Revisit whenever one of these files changes again.
 SOURCE_EQUIVALENTS = {
     'world_scene_builder.py': {'a54e08fe2774cd79702c04cf6e3dfd17854a12da4b6305ca38a4ade0545f0484': True,
                                '9c7c13d16fab67e4d65d81c8faf88fd20a129f6b02e1faa6734501885434ad4a': False},
     'regional_fog_builder.py': {'30a2af943dd0f758c1bd6067b9d58bd6b6e2f64b85af2394f2f9e6fc01daa7e3': True},
     'mpq.py': {'0b949fc438e1b71433242cd580848c7cf14281696e409903710f4191ac4b4d7a': False},
+    'client_archives.py': {'efebb6a31dd00ebb73fe6fe40e1e1d2ecf4e749a6dd5d96457d8842ed1798e6c': False},
 }
 PGOM_OVERRUN = "Chunk exceeds file: b'PGOM'"   # 0.3.183's error for an oversized top-level MOGP
 # Memory budget of one world_scene_builder process per continent (the builder keeps every mesh and
@@ -121,7 +123,8 @@ def archive_warning_text(w):
     if w.get('problem') == 'unreadable':
         return (f"Warning: {w['archive']} could not be opened as an MPQ archive, so the world cache is built "
                 'without it: its files are missing from the static shadows and GI, and models it changes may look '
-                'wrong there.')
+                'wrong there. Later installs keep this cache until the archive changes; to try it again, delete '
+                'the world-cache folder and run the installer again.')
     return (f"Warning: {w['archive']} has no (listfile), so its files could not be listed. Files it replaces are "
             'still used, but new files only it adds may be missing from the static shadows and GI, and models it '
             'changes may look wrong there.')
