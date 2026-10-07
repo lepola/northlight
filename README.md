@@ -48,8 +48,8 @@ Every effect below is on by default and is drawn on top of the game's own frame.
   the largest part in crowds (about 4-5 ms per frame): `ActorShadows=0` in `northlight-quality.ini`
   keeps only the static shadows, and the Balanced and Performance presets trade small details for speed.
 - **Platforms and install.** macOS with WoWSilicon (preloaded as `mods/d3d9.dll`) and Windows (a
-  game-folder `d3d9.dll` on the bundled DXVK 3.1.1, with DXVK 2.7.1 as the `dxvk2` fallback backend for AMD RX 5000/6000 and
-  older drivers (`Install.cmd --backend dxvk2`; if DXVK 3 cannot start on a driver, that start closes and the next starts use `dxvk2` by themselves; a reinstall without `--backend` keeps `dxvk2` or `native`), the system D3D9, or an existing `d3d9.dll`). The
+  game-folder `d3d9.dll` on the bundled DXVK 3.1.1, with DXVK 2.7.1 as the `dxvk2` alternative backend for AMD RX 5000/6000 and
+  older drivers (`Install.cmd --backend dxvk2`; on a driver DXVK 3 does not support, install with `--backend dxvk2`, Northlight never switches by itself; a reinstall without `--backend` keeps `dxvk2` or `native`), the system D3D9, or an existing `d3d9.dll`). The
   installer never writes `wow.exe`. It builds the world cache (terrain, models, lamps and fog
   regions) and the lighting art layer from your own client on your machine, about 10-40 minutes and
   at least 8 GB of RAM; nothing from the game is shipped. The packages bundle their own Python and StormLib, and uninstall restores every change.

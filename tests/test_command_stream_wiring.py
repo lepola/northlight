@@ -22,8 +22,9 @@ checks['documented in the ini template (commented, with default) and the README 
 checks['WorldRenderer exposes the loaded value; the early reader uses the same loader']=('bool commandStream()const{return quality.commandStream!=0;}' in w
     and 'NorthlightQuality::load(hasFile?&in:nullptr,nullptr,problems).commandStream!=0' in hooks and 'northlight-quality.ini' in hooks)
 checks['early reader is Win32-only and falls back to the direct path on any failure']=('inline bool commandStreamRequested(const wchar_t* rootPath){' in hooks and hooks.count('catch(...){return false;}')==2)
-# 0.3.193: the faint blob shadows bump the version; the stream stays at the end of the feature list.
-checks['banner: 0.3.194 with the stream at the end of the feature list']=('logf("Northlight renderer 0.3.194;' in r and 'reduced terrain shadow reach under address-space pressure; command-stream replay thread; backend=%s' in r and '0.3.191' not in r[r.index('logf("Northlight renderer'):][:200])
+# 0.3.193: the faint blob shadows bump the version; 0.3.195: the removed DXVK 3 start-marker fallback bumps it;
+# the stream stays at the end of the feature list.
+checks['banner: 0.3.195 with the stream at the end of the feature list']=('logf("Northlight renderer 0.3.195;' in r and 'reduced terrain shadow reach under address-space pressure; command-stream replay thread; backend=%s' in r and '0.3.191' not in r[r.index('logf("Northlight renderer'):][:200])
 checks['GATE threads logs gameTid and replayTid from the hook atomics']=('frame=%u gameTid=%lu replayTid=%lu event=%s' in r and 'NorthlightStream::gameTid.load(std::memory_order_relaxed),NorthlightStream::replayTid.load(std::memory_order_relaxed),event);' in r
     and 'inline std::atomic<unsigned long> gameTid{0},replayTid{0};' in hooks)
 checks['inactive: every hook defaults to off']=all(x in hooks for x in ('inline thread_local const void* upIdentity=nullptr;','inline const void* (*innerOf)(const void*)=nullptr;','inline std::atomic<bool> streamActive{false};','return innerOf&&p?innerOf(p):p;'))

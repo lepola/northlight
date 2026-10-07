@@ -13,7 +13,7 @@ Northlight-<v>-<macOS|Windows>.zip holds one folder of the same name:
                 embed-amd64) and StormLib (scripts/build_stormlib.py; the bytes must equal the pin)
   payload/      d3d9.dll (the renderer), the profile .ini files, northlight-quality.ini (kept when the
                 player has one); Windows: DXVK 3.1.1 as renderer-backends/dxvk/dxvk_d3d9.dll
-                and DXVK 2.7.1 (the fallback backend dxvk2) as renderer-backends/dxvk2/dxvk2_d3d9.dll
+                and DXVK 2.7.1 (the alternative backend dxvk2) as renderer-backends/dxvk2/dxvk2_d3d9.dll
   variants/     the prebuilt cache manifests the installer matches (from --variant-manifest)
   LICENSES/     third-party licences; macOS also python-third-party/ (the libraries linked into its python3)
   BUILD-INFO.json, payload-manifest.json, README.txt and the launchers

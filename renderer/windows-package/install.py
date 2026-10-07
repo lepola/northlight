@@ -18,8 +18,10 @@ from datetime import datetime
 PROXY = 'd3d9.dll'
 LEGACY = 'renderer-backends/legacy/legacy_d3d9.dll'
 DXVK = 'renderer-backends/dxvk/dxvk_d3d9.dll'
-DXVK2 = 'renderer-backends/dxvk2/dxvk2_d3d9.dll'   # DXVK 2.7.1, the fallback backend
-DXVK3_MARKER = 'renderer-backends/dxvk/northlight-dxvk3-init.pending'   # the renderer's crash marker; never packaged or recorded
+DXVK2 = 'renderer-backends/dxvk2/dxvk2_d3d9.dll'   # DXVK 2.7.1, the alternative backend
+# Written by the 0.3.189-0.3.194 proxies; the current proxy ignores it. The installer removes it as a leftover;
+# never packaged or recorded.
+LEGACY_DXVK3_MARKER = 'renderer-backends/dxvk/northlight-dxvk3-init.pending'
 DXVK_FOLDERS = {'dxvk': 'renderer-backends/dxvk/', 'dxvk2': 'renderer-backends/dxvk2/'}
 CONFIG = 'northlight-renderer.ini'
 MARKER = b'Northlight renderer '

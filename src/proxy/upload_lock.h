@@ -38,8 +38,8 @@ inline constexpr DWORD FreshBufferLock=NoOverwriteFreshBuffers?DWORD(D3DLOCK_NOO
    DXVK 2.7.1 and 1.10.3 keep READONLY (so skipWait is already true and no dirty range is set): the
    flag would only add the skip of the needsReadback wait of a buffer that ProcessVertices wrote, so it
    is enabled only when the backend that actually loaded is DXVK >= 3 (renderer.cpp, after the
-   BACKEND selected= log; a fallback to the system d3d9, a non-DXVK BackendPath or the dxvk -> dxvk2
-   marker fallback leave it off). MANAGED buffers strip NOOVERWRITE: harmless. A direct-mapped Unlock returns
+   BACKEND selected= log; a fallback to the system d3d9, a non-DXVK BackendPath or Backend=dxvk2
+   leaves it off). MANAGED buffers strip NOOVERWRITE: harmless. A direct-mapped Unlock returns
    before SetMapFlags(0), so the OR-ed map flags are never read. The NOOVERWRITE promise (no write
    through the pointer) holds trivially: these locks only read. The READONLY bit stays, tracked_buffers.h
    keys the revision on it. Set once before CreateDevice, relaxed loads afterwards. */

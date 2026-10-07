@@ -680,21 +680,11 @@ class WindowsInstall(Install):
 
     MARKER = 'renderer-backends/dxvk/northlight-dxvk3-init.pending'
 
-    def marker(self, sha=None):
-        """The proxy's marker line; by default for the package's current DXVK 3 build."""
-        sha = sha or hashlib.sha256(b'MZ DXVK: \0v3.1.1\0').hexdigest()
+    def marker(self):
+        """A leftover of the 0.3.189-0.3.194 proxies; a plain file."""
         m = self.client / self.MARKER
-        m.parent.mkdir(parents=True, exist_ok=True); m.write_bytes(f'Northlight 0.3.189 DXVK3 init sha256={sha}\r\n'.encode())
+        m.parent.mkdir(parents=True, exist_ok=True); m.write_bytes(b'pending')
         return m
-
-    def test_marker_for_another_dxvk3_build_gets_a_retry_note(self):
-        self.installer().install(self.client)
-        m = self.marker('0' * 64)
-        inst = self.installer()
-        inst.install(self.client)
-        self.assertTrue(m.is_file())
-        self.assertNotIn('failed to start earlier', inst.out.getvalue())
-        self.assertIn('new DXVK 3 build; it will be tried again', inst.out.getvalue())
 
     def test_backend_path_survives_a_plain_reinstall_and_explicit_switch_rewrites(self):
         self.installer().install(self.client)
@@ -710,37 +700,29 @@ class WindowsInstall(Install):
         self.installer().install(self.client)
         self.assertEqual(ini.read_bytes(), custom2)
 
-    def test_dxvk3_marker_kept_without_backend_with_a_notice(self):
+    def test_leftover_marker_is_removed_by_every_install_with_a_note(self):
         self.installer().install(self.client)
-        m = self.marker()
-        inst = self.installer()
-        inst.install(self.client)
-        self.assertTrue(m.is_file())
-        self.assertIn('DXVK 3 failed to start earlier', inst.out.getvalue())
-        self.assertIn('--backend dxvk', inst.out.getvalue())
+        for backend in (None, 'dxvk2', 'native', 'dxvk'):
+            m = self.marker()
+            inst = self.installer()
+            inst.install(self.client, backend=backend)
+            self.assertFalse(m.exists(), backend)
+            out = inst.out.getvalue()
+            self.assertIn('no longer switches to DXVK 2.7.1 by itself', out)
+            self.assertNotIn('failed to start earlier', out)
+            self.assertNotIn('tried again', out)
 
-    def test_dxvk3_marker_cleared_only_by_an_explicit_dxvk(self):
-        self.installer().install(self.client)
-        m = self.marker()
-        for backend in ('dxvk2', 'native'):
-            self.installer().install(self.client, backend=backend)
-            self.assertTrue(m.is_file(), backend)
-        inst = self.installer()
-        inst.install(self.client, backend='dxvk')
-        self.assertFalse(m.exists())
-        self.assertNotIn('failed to start earlier', inst.out.getvalue())
-
-    def test_dxvk3_marker_is_unlinked_only_after_a_successful_commit(self):
+    def test_leftover_marker_is_unlinked_only_after_a_successful_commit(self):
         self.installer().install(self.client, backend='dxvk2')
         m = self.marker()
         with patch.object(fi.INSTALL, 'commit', side_effect=OSError('disk full')):
             with self.assertRaises(OSError):
-                self.installer().install(self.client, backend='dxvk')
+                self.installer().install(self.client, backend='native')
         self.assertTrue(m.is_file())
-        self.installer().install(self.client, backend='dxvk')
+        self.installer().install(self.client, backend='native')
         self.assertFalse(m.exists())
 
-    def test_dxvk3_marker_is_unlinked_when_nothing_else_changes(self):
+    def test_leftover_marker_is_unlinked_when_nothing_else_changes(self):
         self.installer().install(self.client, backend='dxvk')
         m = self.marker()
         self.installer().install(self.client, backend='dxvk')
@@ -758,7 +740,7 @@ class WindowsInstall(Install):
             self.installer().uninstall(self.client)
         self.assertTrue((elsewhere / 'northlight-dxvk3-init.pending').is_file())
 
-    def test_dxvk3_marker_does_not_block_install_or_uninstall(self):
+    def test_uninstall_removes_the_leftover_marker_and_the_folder(self):
         self.installer().install(self.client)
         self.marker()
         self.installer().uninstall(self.client)

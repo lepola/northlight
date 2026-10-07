@@ -17,8 +17,8 @@ REQUIREMENTS
   still asks for Vulkan 1.3 but also needs extra device features (for example
   maintenance6, 8/16-bit storage and scalarBlockLayout), so an old driver or
   GPU (some AMD Polaris/Vega and Intel Gen9 graphics) may not be supported.
-  On such a driver the first start ends (see below) and the following starts
-  use DXVK 2.7.1 (the dxvk2 backend) by themselves.
+  On such a driver the game closes at start (see below); install with
+  Install.cmd --backend dxvk2 (DXVK 2.7.1).
 - AMD RX 5000/6000 (RDNA 1/2): DXVK's own release notes say DXVK 3 performs
   badly on them on Windows. Install with Install.cmd --backend dxvk2.
 - Only ASCII characters in the game folder path (no ä, ö, å or other special
@@ -84,24 +84,13 @@ The backend is chosen in northlight-renderer.ini: Backend=dxvk.
 On a driver DXVK 3.1.1 does not support, DXVK usually throws an error while
 the game starts, and the game closes (DXVK's own log, Wow_d3d9.log in the
 game folder, says "Failed to initialize DXVK" or "Device does not support
-required feature"). The renderer marks that start in
-renderer-backends\dxvk\northlight-dxvk3-init.pending. The renderer does not
-switch backends within a start: when the DXVK 3 start fails or finds no
-adapter, the next start uses DXVK 2.7.1 (the log says BACKEND DXVK 3 start
-failed reason=...; the next start uses dxvk2, and later starts say BACKEND
-FALLBACK dxvk -> dxvk2). So the first start can fail and the next one works.
-The marker is tied to the DXVK 3 build it was written for: a package with a
-new DXVK 3 build tries DXVK 3 again by itself. To try DXVK 3 again on the same
-build after a driver update, delete the .pending file or run
-Install.cmd --backend dxvk (the file is removed once that install succeeded).
-To avoid the failed first start, install with --backend dxvk2. If DXVK 2.7.1
-fails too (the driver has no Vulkan 1.3), use --backend native.
-Known limitation: if the game is closed or crashes during the short DXVK 3
-start (for example an overlay or Vulkan layer crashes), the next starts also
-use DXVK 2.7.1 until the .pending file is deleted or Install.cmd --backend dxvk
-is run.
-A reinstall without --backend keeps an installed dxvk2 or native choice and a
-pending marker; --backend dxvk switches back to DXVK 3 and clears the marker.
+required feature"). Northlight does not switch backends by itself: choose
+with Install.cmd --backend dxvk2 or Backend=dxvk2 in northlight-renderer.ini.
+If DXVK 2.7.1 fails too (the driver has no Vulkan 1.3), use --backend native.
+A northlight-dxvk3-init.pending left by 0.3.189-0.3.194 has no effect and the
+installer removes it.
+A reinstall without --backend keeps an installed dxvk2 or native choice;
+--backend dxvk switches back to DXVK 3.
 Some antivirus products flag 32-bit DXVK builds as a false positive. If one
 removes a DXVK file of the package, the installer still installs the backend you
 use and says which one is not available; an older copy of that file in the game
@@ -204,8 +193,8 @@ to see which allocations of the old device survive.
    The BACKEND selected=... runtime=v3.1.1 line (v2.7.1 with dxvk2) gives the loaded DXVK version and
    the HOST line the path of the wow.exe used.
    The Backend capabilities line is expected to show INTZ=1 RESZ=1 floatRT=1 SM3=1.
-   If the log has BACKEND FALLBACK dxvk -> dxvk2, DXVK 2.7.1 is in use because
-   DXVK 3 found no supported adapter or an earlier start ended while it started.
+   The BACKEND selected=... runtime=... line tells which DXVK is in use
+   (v3.1.1 or v2.7.1).
    The first launches compile shaders (cached under %LOCALAPPDATA%), so they
    stutter more. To locate a GPU hang, start the game with the environment
    variable DXVK_DEBUG=hang set and send the log.
