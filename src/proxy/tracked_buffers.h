@@ -78,14 +78,14 @@ inline void captureMetadata(const NorthlightCaptureMetadata::Request* requests,N
         const auto& record=*found->second;
         if(record.index!=requests[i].index||!record.metadata.known)continue;
         output[i]=record.metadata;
-        output[i].revision=record.locks.load()?0:record.revision.load();
+        output[i].revision=record.locks.load(std::memory_order_acquire)?0:record.revision.load(std::memory_order_relaxed);   // 0.3.196 (task 12): acquire pairs with the unlock's release
     }
 }
 inline uint64_t version(void* raw,bool index){
     std::lock_guard<std::mutex> guard(mutex);
     auto it=records.find(raw);
-    if(it==records.end()||it->second->index!=index||it->second->locks.load())return 0;
-    return it->second->revision.load();
+    if(it==records.end()||it->second->index!=index||it->second->locks.load(std::memory_order_acquire))return 0;   // 0.3.196 (task 12): acquire pairs with the unlock's release
+    return it->second->revision.load(std::memory_order_relaxed);
 }
 template<class T> T* unwrap(T* p){
     std::lock_guard<std::mutex> guard(mutex);auto it=records.find(p);
@@ -124,6 +124,7 @@ template<class T,class Forward> class Buffer final:public Forward {
     MirrorGate* census=nullptr;
     // 0.3.192 (DXVK3): the size DXVK 3.x charges for a DISCARD of this buffer (DEFAULT|DYNAMIC only: direct-mapped), 0 otherwise.
     UINT discardBytes=0;
+    NorthlightReplayCopies::PendingWrite pendingWrite; // 0.3.196 (task 12): this wrapper's outstanding write lock (Lock records, Unlock consumes; touched by the locking thread only)
 public:
     bool hasCopySlotForTest()const{return record.copy.attached;} // the CPU copy slot exists only for buffers created while the stream is active
     Buffer(T* real,IDirect3DDevice9* device,bool index,void(*unsafe)(IDirect3DDevice9*,const char*)=nullptr,MirrorGate* gate=nullptr):Forward(real),owner(device),unsafeAccess(unsafe),census(gate){
@@ -188,31 +189,33 @@ public:
         // Mark before entering the driver. Even failed writes conservatively
         // invalidate the old generation. READONLY never advances a generation.
         if(census)census->noteBuffer();
-        const bool wasUnsafe=record.revision.load()==0;
-        if(!(flags&D3DLOCK_READONLY))record.revision=clock.fetch_add(1);
+        // 0.3.196 (task 12): revision is relaxed: Lock/Unlock and the copy hooks run on one thread per mode (the replay thread with the stream on, else the game thread, see replay_copies.h
+        // "Threads"); the readers (version/captureMetadata) take the registry mutex and check `locks` (acquire) first, which pairs with the release of locks.fetch_sub below.
+        const bool wasUnsafe=record.revision.load(std::memory_order_relaxed)==0;
+        if(!(flags&D3DLOCK_READONLY))record.revision.store(clock.fetch_add(1),std::memory_order_relaxed);
         if((flags&D3DLOCK_DISCARD)&&discardBytes)NorthlightLockMeter::discard(NorthlightLockMeter::Game,discardBytes);
         const unsigned lockedBefore=record.locks.fetch_add(1);
         HRESULT hr=this->real->Lock(offset,size,data,flags);
         // 0.3.192 (CS): the write the stream replays (or a pass-through lock the game writes through) is mirrored into the CPU copy at Unlock.
         if(record.copy.attached&&!(flags&D3DLOCK_READONLY)&&NorthlightReplayCopies::enabled.load(std::memory_order_relaxed)){
-            if(FAILED(hr))NorthlightReplayCopies::invalidate(record.copy);else NorthlightReplayCopies::writeLocked(record.copy,lockedBefore,offset,size,data?*data:nullptr);
+            if(FAILED(hr))NorthlightReplayCopies::invalidate(record.copy);else NorthlightReplayCopies::writeLocked(record.copy,pendingWrite,lockedBefore,offset,size,data?*data:nullptr);
         }
         if(FAILED(hr)){
             // A rejected write cannot repair tracking after an earlier failed
             // unlock. Keep the legacy exact-read path until a write succeeds.
-            if(wasUnsafe)record.revision=0;
-            record.locks.fetch_sub(1);
+            if(wasUnsafe)record.revision.store(0,std::memory_order_relaxed);
+            record.locks.fetch_sub(1,std::memory_order_release);
         }
         return hr;
     }
     HRESULT STDMETHODCALLTYPE Unlock() override{
         if(census)census->noteBuffer();
         const bool copies=record.copy.attached&&NorthlightReplayCopies::enabled.load(std::memory_order_relaxed);
-        if(copies)NorthlightReplayCopies::beforeUnlock(record.copy,record.locks.load()); // 0.3.192 (CS): the pointer is still mapped
+        if(copies)NorthlightReplayCopies::beforeUnlock(record.copy,pendingWrite,record.locks.load(std::memory_order_relaxed)); // 0.3.192 (CS): the pointer is still mapped
         HRESULT hr=this->real->Unlock();
         if(copies&&FAILED(hr))NorthlightReplayCopies::invalidate(record.copy);
-        if(SUCCEEDED(hr)&&record.locks.load())record.locks.fetch_sub(1);
-        else{record.revision=0;if(copies)NorthlightReplayCopies::invalidate(record.copy);} // tracking is unsafe until a subsequent successful write
+        if(SUCCEEDED(hr)&&record.locks.load(std::memory_order_relaxed))record.locks.fetch_sub(1,std::memory_order_release);
+        else{record.revision.store(0,std::memory_order_relaxed);if(copies)NorthlightReplayCopies::invalidate(record.copy);} // tracking is unsafe until a subsequent successful write
         return hr;
     }
 };
