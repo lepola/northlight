@@ -10,12 +10,12 @@
 
 namespace NorthlightFogClouds {
 constexpr unsigned N=64;                            /* noise volume edge, L8 voxels, index x+N*(y+N*z) */
-constexpr float LargePeriod=576.f,SmallPeriod=144.f; /* world units per noise tile (0.3.199 game tests: 192/48, then 384/96; the reference banks are larger still) */
+constexpr float LargePeriod=480.f,SmallPeriod=120.f; /* world units per noise tile (0.3.199 game tests: 192/48, 384/96, 576/144 (too large); the middle of the last two) */
 constexpr uint32_t Seed=0x4e4c4643u;
-constexpr float kDry=0.05f,kNight=0.18f,kSigmaMax=0.013f,kBaseHeight=7,kRainHeight=7;
+constexpr float kDry=0.05f,kNight=0.18f,kSigmaMax=0.0155f,kBaseHeight=7,kRainHeight=7;
 constexpr double kWindDry=1.05,kWindRain=4.2; /* large-scale wind, units/s, dry and full rain (0.3.199 game test: was .6/2.4; the larger banks read as too slow) */
 constexpr float kMaxCoverage=0.45f,kDense=0.2f,kMinCoverage=0.01f; /* coverage cap (rain keeps gaps), fully dense share of the covered area, below it the pass is skipped.
-    game tests: was .7/.35 with sigmaMax .03, then sigmaMax .018; now .013: the reference banks are fainter and sparser */
+    game tests: was .7/.35 with sigmaMax .03, then sigmaMax .018, .013 (too faint); now .0155: the reference banks are fainter and sparser */
 
 namespace detail {
 inline uint32_t hash(uint32_t a,uint32_t b,uint32_t c,uint32_t d){ /* integer mix, same result everywhere */
