@@ -391,7 +391,7 @@ def main():
             # 0.3.185: RemovalSmooth is new (the removal smoothing's own half-res pass; TemporalLight shrinks).
             # 0.3.197: WorldGI blends a same-key probe re-publication from the previous SH (task 13).
             # 0.3.198 (rain): WorldWet is new (wet ground, its own pass after WorldGI); WorldFog (air floor from c59.w) changes on purpose.
-            if name not in ('WorldComposite', 'TemporalLight', 'SourceVisibilityPS', 'WorldLighting', 'LocalDirect', 'WorldNormals', 'RemovalSmooth', 'WorldGI', 'WorldFog', 'WorldWet'):  # WorldWet is new (0.3.198 rain), not in BEFORE
+            if name not in ('WorldComposite', 'TemporalLight', 'SourceVisibilityPS', 'WorldLighting', 'LocalDirect', 'WorldNormals', 'RemovalSmooth', 'WorldGI', 'WorldFog', 'WorldWet', 'FogClouds'):  # WorldWet (0.3.198 rain) and FogClouds (0.3.199) are new, not in BEFORE
                 assert info['sha256'] == BEFORE[name], name
                 unchanged.append(name)
         assert sorted(unchanged) == sorted(k for k in BEFORE if k not in ('TemporalLight', 'SourceVisibilityPS', 'WorldLighting', 'LocalDirect', 'WorldNormals', 'WorldGI', 'WorldFog'))

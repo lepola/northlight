@@ -54,7 +54,7 @@ checks={
    and 'if constexpr(!Split::Calls)return poseConstants.prepare(*p,rows);' in submit and 'if constexpr(Split::Draws)hr=p->indexed?' in submit,
  'Split reads the clock only when timed':'void start(){if(timed)last=Clock::now();}' in probeH and 'void mark(Bucket b){if(!timed)return;const int64_t now=Clock::now();' in probeH,
  'no clock read in the replay loop or submitReplay':not any(c in loop or c in submit for c in CLOCKS),
- 'whole-loop timing only when the probe records':'const int64_t loopStart=probeRecord?QpcClock::now():0;' in w and w.count('QpcClock::now()')==8, # 0.3.197: +2 for the local-light tracker: its frame time (functional, every frame) and selectUs (Diagnostics only)
+ 'whole-loop timing only when the probe records':'const int64_t loopStart=probeRecord?QpcClock::now():0;' in w and w.count('QpcClock::now()')==9, # 0.3.199 (fog clouds): +1 the wind clock (functional, every frame). 0.3.197: +2 for the local-light tracker: its frame time (functional, every frame) and selectUs (Diagnostics only)
  # 0.3.175: the celestial mask draw's pair, RenderProfile only
  'celestial mask timer only with RenderProfile':'const int64_t started=NorthlightRenderThreadProbe::profiling()?QpcClock::now():0;' in w and 'if(started&&captureFrequency.QuadPart>0){m.ms=double(QpcClock::now()-started)' in w,
  # 0.3.152: the other two reads are the upload window timer, RenderProfile sample frames only

@@ -20,10 +20,10 @@ checks={}
 checks['hlsl: WeatherInfo at c59, documented (y wetness, z shadows, w air extinction), LocalLightFog still read only through .x']=(
     'float4 WeatherInfo : register(c59);' in h and 'y wetness (WorldWet), z direct shadow softening (WorldLighting), w the shared air extinction' in h
     and 'free: only .x is read' in h and re.findall(r'LocalLightFog\[[^\]]*\]\.(\w+)',re.sub(r'//[^\n]*','',h))==['x'] and 'LocalLightFog[i].x' in h)
-checks['hlsl: no other register c59..c66 reader']=not re.search(r'register\(c6[0-6]\)',h) and h.count('register(c59)')==2
+checks['hlsl: no other register c59..c66 reader']=re.findall(r'register\(c6[0-6]\)',h)==['register(c60)'] and h.count('register(c59)')==2 # 0.3.199 (fog clouds): CloudInfo[4] at c60 (.yzw only), see test_fog_clouds_wiring
 checks['hlsl: WorldLighting and WorldFog read WeatherInfo (z, w); y is read by WorldWet only']=all(
     ('WeatherInfo.'+c) in h for c in 'zw') and len(re.findall(r'WeatherInfo\.x',h))==0
-checks['cpp: c59.yzw set in the bank, c59.x and c60..c66 not']=('c[59][1]=wx.wet;c[59][2]=wx.shadowSoften();c[59][3]=airFloor;' in w and 'c[59][0]' not in w and not re.search(r'c\[6[0-6]\]',w))
+checks['cpp: c59.yzw set in the bank, c59.x and c60..c66 not']=('c[59][1]=wx.wet;c[59][2]=wx.shadowSoften();c[59][3]=airFloor;' in w and 'c[59][0]' not in w and set(re.findall(r'c\[(6[0-6])\]',w))<={'60','61','62','63'}) # 0.3.199 (fog clouds): c60..c63 .yzw belong to CloudInfo
 checks['cpp: c23 untouched']=w.count('memcpy(c[23],context.camera,12);')==1 and 'c[23][' not in w
 checks['cpp: GridInfo.z (c20.z) unchanged']='c[20][2]=.85f;' in w and re.findall(r'c\[20\]\[2\]=[^;]*;',w)==['c[20][2]=.85f;']
 # identity at zero weather
@@ -60,7 +60,7 @@ checks['hlsl WorldWet: wet clamped to 0..1, confidence-weighted, up-facing; dark
     'float wet=saturate(WeatherInfo.y*up*open*smoothNormal.w);' in wet and 'saturate((n.z-.55)/.35)' in wet and 'wet*AmbientLight.rgb*(fresnel*.15-.35)' in wet
     and 'LegacyDirect' not in wet and 'return float4(wet*AmbientLight.rgb*(fresnel*.15-.35),0);' in wet and 'ProbeR' not in wet and 'probeIrradiance' not in wet)
 # no new passes beyond the wet pass
-checks['render: exactly one pass added by 0.3.198 rain (WorldWet: quad count 14 -> 15, shader creations 19 -> 20)']=(w.count('quad(')==15 and w.count('CreatePixelShader')==20)
+checks['render: exactly one pass added by 0.3.198 rain (WorldWet: quad count 14 -> 15, shader creations 19 -> 20; 0.3.199 fog clouds then 16 and 21)']=(w.count('quad(')==16 and w.count('CreatePixelShader')==21) # 0.3.199 (fog clouds): +1 pass (FogClouds), +1 shader
 wd=w[w.index('if(wx.wet>0&&debug==0'):]
 wd=wd[:wd.index('        if(localDirectCount')]
 checks['cpp: the wet pass is drawn only when wx.wet>0, debug==0 and the probe grid is active (not gated on effects.gi)']=(
