@@ -59,6 +59,7 @@ class Base(unittest.TestCase):
                 z.writestr(n, d)
             z.writestr('northlight-cache.json', json.dumps(self.manifest))
         self.calls, self.answers, self.variant, self.identified = [], [], 'stock', []
+        self.archive_warnings = []   # what the fake install_world_cache records as tolerated
         self.patches = [patch.object(mig, 'VERSIONS', self.base / 'no-versions.json'),
                         patch.object(mig, 'running', lambda: []),
                         # The scratch path is long; the Windows limit is kept relative to it.
@@ -139,7 +140,8 @@ class Base(unittest.TestCase):
         if Path(script).name == 'install_world_cache.py':
             out = Path(opt('--output'))
             (out / 'fog').mkdir(parents=True, exist_ok=True)
-            (out / 'install-manifest.json').write_text(json.dumps({'format': fi.LOCAL_FORMAT, 'fingerprint': 'f'}))
+            (out / 'install-manifest.json').write_text(json.dumps({'format': fi.LOCAL_FORMAT, 'fingerprint': 'f',
+                                                                   'tolerated': {'archive_warnings': self.archive_warnings}}))
             return 0, {'event': 'done'}
         raise AssertionError(script)
 
@@ -296,6 +298,23 @@ class Install(Base):
         self.assertEqual(Path(args[args.index('--output') + 1]), self.client / 'world-cache')
         self.assertEqual(report['world_cache'], 'built from this client')
         self.assertEqual((self.client / 'Data/patch-z.mpq').read_bytes(), ART)
+
+    def test_unlisted_archive_warning_is_repeated_in_the_summary(self):
+        # A private-server patch without a (listfile): the build passes, the summary names the archive.
+        self.variant = None
+        self.archive_warnings = [{'archive': 'Data/patch-R.mpq', 'problem': 'unlisted'}]
+        inst = self.installer()
+        with (self.base / 'install.log').open('w') as inst.log:
+            report = inst.install(self.client)
+        self.assertEqual(report['archive_warnings'], self.archive_warnings)
+        warning = 'Warning: Data/patch-R.mpq has no (listfile), so its files could not be listed.'
+        console = inst.out.getvalue()
+        self.assertIn('    ' + warning, console)
+        self.assertIn(warning, (self.base / 'install.log').read_text())
+        self.assertLess(console.index(warning), console.index('Start WoW yourself'))
+        self.assertEqual((self.client / 'Data/patch-z.mpq').read_bytes(), ART)   # the installation went on
+        self.archive_warnings = []
+        self.assertEqual(self.installer().install(self.client)['archive_warnings'], [])
 
     def test_summary_reports_a_new_cache_although_the_renderer_was_current(self):
         self.installer().install(self.client)

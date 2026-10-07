@@ -22,10 +22,14 @@ folder and swapped in folder by folder. <output>/install-manifest.json is writte
 from before the per-step digests is migrated: its recorded chain and sources give the digests it
 was built with (our art letter in its chain is ignored). A rerun with the same digests does
 nothing (--force rebuilds). A cache built with a builder source listed in SOURCE_EQUIVALENTS counts
-as built with today's when its reports show that the change made no difference there (clamp_free).
+as built with today's when the change made no difference there (for 0.3.183's, when its reports
+show no oversized MOGP: clamp_free).
 
 What the builders tolerated (a WMO group's oversized MOGP clamped, a WMO fog could not read) goes to
 the manifest's 'tolerated' and one 'tolerated' progress line; more than 5% unreadable WMOs fails.
+An archive the builders could not list (no (listfile)) or open (a patch archive only) does not fail
+the build: each gets one 'archive_warning' progress line as soon as a scene builder reports it, and
+the manifest's tolerated 'archive_warnings' (world_scene_builder.Assets).
 
 A killed run resumes from its staging folder when the digests still match (stale *.tmp files are
 swept first), and a staging folder whose build had finished completes its swap. On Windows,
@@ -73,12 +77,21 @@ STEP_SOURCES = {
 TOP_LEVEL = ['client_archives.py', 'mpq.py']   # at the repository root, outside fp.tracked()'s namespace
 SOURCES = sorted({n for names in STEP_SOURCES.values() for n in names} | {'validate_world_cache.py'})
 # Earlier bytes of a source whose output equals the current one's: a cache built with them is not
-# stale for that source. These are 0.3.183's (unchanged since 0.3.166); 0.3.184 clamps an oversized
-# top-level MOGP of a WMO group file, so its output differs only where 0.3.183 hit such an overrun
-# (clamp_free() checks the cache's reports for one). Revisit whenever either file changes again.
+# stale for that source. {source: {sha256: True when the cache must also be clamp_free()}}.
+# - 0.3.183's scene and fog builders (unchanged since 0.3.166): 0.3.184 clamps an oversized top-level
+#   MOGP of a WMO group file, so its output differs only where 0.3.183 hit such an overrun
+#   (clamp_free() checks the cache's reports for one).
+# - 0.3.193's world_scene_builder.py (since 0.3.184), mpq.py and client_archives.py (since 0.3.166):
+#   0.3.194 builds where they stopped (an archive without a (listfile), an unopenable custom patch, an
+#   unreadable file) and adds is_custom_patch() beside an unchanged chain(), so every cache they
+#   finished is what 0.3.194 builds.
+# Revisit whenever one of these files changes again.
 SOURCE_EQUIVALENTS = {
-    'world_scene_builder.py': {'a54e08fe2774cd79702c04cf6e3dfd17854a12da4b6305ca38a4ade0545f0484'},
-    'regional_fog_builder.py': {'30a2af943dd0f758c1bd6067b9d58bd6b6e2f64b85af2394f2f9e6fc01daa7e3'},
+    'world_scene_builder.py': {'a54e08fe2774cd79702c04cf6e3dfd17854a12da4b6305ca38a4ade0545f0484': True,
+                               '9c7c13d16fab67e4d65d81c8faf88fd20a129f6b02e1faa6734501885434ad4a': False},
+    'regional_fog_builder.py': {'30a2af943dd0f758c1bd6067b9d58bd6b6e2f64b85af2394f2f9e6fc01daa7e3': True},
+    'mpq.py': {'0b949fc438e1b71433242cd580848c7cf14281696e409903710f4191ac4b4d7a': False},
+    'client_archives.py': {'efebb6a31dd00ebb73fe6fe40e1e1d2ecf4e749a6dd5d96457d8842ed1798e6c': False},
 }
 PGOM_OVERRUN = "Chunk exceeds file: b'PGOM'"   # 0.3.183's error for an oversized top-level MOGP
 # Memory budget of one world_scene_builder process per continent (the builder keeps every mesh and
@@ -92,6 +105,7 @@ TMP = re.compile(r'\.\d+\.tmp$')
 ART_LETTER = re.compile(r'patch(?:-[a-z]{4})?-([0-9a-z])\.mpq$')
 PROGRESS = 'json'
 print_lock = threading.Lock()
+warned, warned_lock = set(), threading.Lock()   # archives this run has shown an archive_warning for
 
 
 def emit(**fields):
@@ -102,6 +116,27 @@ def emit(**fields):
             text = human(fields)
             if text:
                 print(text, flush=True)
+
+
+def archive_warning_text(w):
+    """The installer's words for a world_scene_builder archive warning {archive, problem}."""
+    if w.get('problem') == 'unreadable':
+        return (f"Warning: {w['archive']} could not be opened as an MPQ archive, so the world cache is built "
+                'without it: its files are missing from the static shadows and GI, and models it changes may look '
+                'wrong there. Later installs keep this cache until the archive changes; to try it again, delete '
+                'the world-cache folder and run the installer again.')
+    return (f"Warning: {w['archive']} has no (listfile), so its files could not be listed. Files it replaces are "
+            'still used, but new files only it adds may be missing from the static shadows and GI, and models it '
+            'changes may look wrong there.')
+
+
+def warn_archive(warning):
+    """One 'archive_warning' event per archive and run: every builder process reports the same chain."""
+    with warned_lock:
+        if warning['archive'] in warned:
+            return
+        warned.add(warning['archive'])
+    emit(event='archive_warning', **warning)
 
 
 def human(f):
@@ -129,6 +164,8 @@ def human(f):
         return f"Removed {f['path']} left by an interrupted swap"
     if event == 'recovered_previous_cache':
         return f"Restored {f['path']} after an interrupted swap"
+    if event == 'archive_warning':
+        return archive_warning_text(f)
     if event == 'tolerated':
         return (f"Tolerated: {f['clamped_wmo_groups']} WMO groups with an oversized MOGP (clamped), "
                 f"{f['fog_unreadable_wmos']} unreadable WMOs left out of the fog")
@@ -248,21 +285,22 @@ def clamp_free(output, built):
 
 def equivalent_digests(recorded, digests, output, without, built):
     """The recorded inputs' digests with SOURCE_EQUIVALENTS sources taken as today's, or None when that
-    changes nothing, their scenes still differ, or the cache is not provably clamp free."""
+    changes nothing, their scenes still differ, or a source that needs it is not provably clamp free."""
     inputs = recorded.get('inputs')
     try:
         if not isinstance(inputs, dict) or step_digests(inputs, without) != recorded_digests(recorded, without):
             return None
-        sources = dict(inputs['sources'])
+        sources, clamp = dict(inputs['sources']), False
         for n, equal in SOURCE_EQUIVALENTS.items():
             if sources.get(n) in equal:
+                clamp |= equal[sources[n]]
                 sources[n] = hashlib.sha256(source_path(n).read_bytes()).hexdigest()
         if sources == inputs['sources']:
             return None
         new = step_digests(dict(inputs, sources=sources), without)
     except (KeyError, TypeError, AttributeError):
         return None
-    if any(new.get(k) != v for k, v in digests.items() if k.startswith('scene:')) or not clamp_free(output, built):
+    if any(new.get(k) != v for k, v in digests.items() if k.startswith('scene:')) or (clamp and not clamp_free(output, built)):
         return None
     return new
 
@@ -380,7 +418,9 @@ class Step:
                     event = json.loads(line)
                 except ValueError:
                     continue
-                if 'tiles_total' in event:
+                if 'archive_warning' in event:
+                    warn_archive(event['archive_warning'])
+                elif 'tiles_total' in event:
                     self.total += event['tiles_total']
                 elif 'tile' in event:
                     self.done += 1
@@ -463,16 +503,23 @@ def post_problems(staging, steps, built):
     return problems
 
 
-def tolerated(staging, scene_steps, steps):
+def tolerated(staging, scene_steps, steps, recorded=None):
     """What this run's builders tolerated: WMO groups whose oversized MOGP was clamped (scene reports and
-    the fog manifest) and the WMOs fog could not read (their buildings may have fog inside)."""
-    clamped = set()
+    the fog manifest), the WMOs fog could not read (their buildings may have fog inside) and the archives
+    the scene builders could not list or open. A run without scene steps keeps the recorded archive
+    warnings: its chain is the one the installed scenes were built from."""
+    clamped, archives = set(), {}
     for step in scene_steps:
         for report in staging.glob(f'build-{step.map}-*-{step.proc.pid}.json'):
-            clamped.update((read_json(report) or {}).get('clamped_wmo_groups', []))
+            data = read_json(report) or {}
+            clamped.update(data.get('clamped_wmo_groups', []))
+            archives.update((w['archive'], w) for w in data.get('archive_warnings', []))
+    if not scene_steps:
+        archives.update((w['archive'], w) for w in ((recorded or {}).get('tolerated') or {}).get('archive_warnings', []))
     fog = (read_json(staging / 'fog' / 'manifest.json') or {}) if 'fog' in steps else {}
     clamped.update(fog.get('clamped_wmo_groups', []))
-    return {'clamped_wmo_groups': sorted(clamped), 'fog_unreadable_wmos': fog.get('unreadable_wmos', {})}
+    return {'clamped_wmo_groups': sorted(clamped), 'fog_unreadable_wmos': fog.get('unreadable_wmos', {}),
+            'archive_warnings': list(archives.values())}
 
 
 def swap(staging, output, keep_previous):
@@ -575,6 +622,7 @@ def post_specs(steps, cache, staging, built, common):
 
 def main(argv=None):
     global PROGRESS
+    warned.clear()
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     client_archives.add_arguments(ap)
     ap.set_defaults(without='z')
@@ -658,9 +706,11 @@ def main(argv=None):
     problems = [f'{s.name} exit {s.proc.returncode}' for s in ran if s.proc.returncode]
     problems += post_problems(staging, steps, built)
     problems += [f'scene {m}: {len(f)} tile failures' for m, f in tile_failures.items()]
-    tolerance = tolerated(staging, scene_steps, steps)
-    if any(tolerance.values()):
-        emit(event='tolerated', **{k: len(v) for k, v in tolerance.items()})
+    tolerance = tolerated(staging, scene_steps, steps, recorded)
+    if tolerance['clamped_wmo_groups'] or tolerance['fog_unreadable_wmos']:
+        emit(event='tolerated', **{k: len(tolerance[k]) for k in ('clamped_wmo_groups', 'fog_unreadable_wmos')})
+    for warning in tolerance['archive_warnings']:
+        warn_archive(warning)
     manifest = {'format': FORMAT, 'fingerprint': digest, 'digests': digests, 'inputs': inputs, 'maps_built': built,
                 'swap': 'full' if mode == 'full' else steps, 'built_unix': time.time(),
                 'seconds': round(time.time() - started, 1), 'jobs': jobs,
