@@ -17,6 +17,14 @@ namespace FC=NorthlightFogClouds;
 static bool near(float a,float b,float e=1e-5f){return std::fabs(a-b)<=e;}
 int main(){
     const unsigned N=FC::N;
+    {   // colour: by day the game fog colour exactly; at night raised per channel to the grey floor; invalid game fog -> floor only
+        const float game[3]={.3f,.05f,.4f};float o[4];
+        FC::colour(game,true,0,o);assert(o[0]==.3f&&o[1]==.05f&&o[2]==.4f&&o[3]==0);
+        FC::colour(game,true,1,o);assert(o[0]==.3f&&o[1]==FC::kNightGrey[1]&&o[2]==.4f);
+        FC::colour(game,false,0,o);assert(o[0]==0&&o[1]==0&&o[2]==0);
+        FC::colour(game,false,.5f,o);assert(o[0]==FC::kNightGrey[0]*.5f&&o[2]==FC::kNightGrey[2]*.5f);
+        const float bad[3]={std::numeric_limits<float>::quiet_NaN(),-1,.2f};FC::colour(bad,true,std::numeric_limits<float>::quiet_NaN(),o);assert(o[0]==0&&o[1]==0&&o[2]==.2f);
+    }
     const auto vol=FC::generate();
     {   // generate: size, determinism, range, mean
         assert(vol.size()==size_t(N)*N*N&&vol==FC::generate()&&vol!=FC::generate(1234u));

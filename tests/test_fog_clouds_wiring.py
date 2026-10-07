@@ -91,5 +91,10 @@ checks['noise request: gated by the settings only (never by cf.active), before d
     and w.index('fogCloudNoise().request()')<w.index('NorthlightFogClouds::derive('))
 # game test fix: the banks take the game's fog colour (c26) when it is validated (c25.w), not the near-black ambient*.35 air radiance
 checks['colour: cloud ambient is the brighter of the air radiance and the validated game fog colour (never darker than the fog it hides)']=('max(max(AmbientLight.rgb,0)*.35,LegacyFogColor.rgb*LegacyFog.w)*ambientWeight' in h.split('float4 FogClouds(',1)[1].split('\n}\n',1)[0])
+# night game test: the banks' colour goes in c25.w/c26 for the cloud pass only and the bank's values come back before the lamp fog
+cp=w.split('if(cf.active&&c[21][0]>=.5f){',1)[1].split('d->SetPixelShaderConstantF(17,c[17],2);',1)[0]
+checks['colour: c25/c26 set for the cloud pass from NorthlightFogClouds::colour, restored from the bank (c[25], 2 registers) after it']=(
+    'NorthlightFogClouds::colour(c[26],c[25][3]>=.5f,c[31][3],cloudColour)' in cp and 'd->SetPixelShaderConstantF(26,cloudColour,1)' in cp
+    and cp.index('fog clouds raymarch')<cp.index('d->SetPixelShaderConstantF(25,c[25],2)'))
 for k,ok in checks.items():print(('PASS ' if ok else 'FAIL ')+k)
 sys.exit(0 if all(checks.values()) else 1)

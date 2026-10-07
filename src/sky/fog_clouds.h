@@ -131,6 +131,15 @@ inline Frame derive(unsigned fogClouds,unsigned density,float fog,float night,co
     for(int i=0;i<3;++i){const double c=detail::finite0(camera[i]);
         f.largeOrigin[i]=detail::origin(c,wind.large[i],1.0/double(LargePeriod));f.smallOrigin[i]=detail::origin(c,wind.small[i],1.0/double(SmallPeriod));}
     return f;}
+// 0.3.199 (fog clouds): the banks' environment colour, uploaded as c26 (with c25.w=1) for the cloud pass only: the game's validated fog
+// colour, raised per channel to a moonlit grey floor at night (nightFactor 1). At night the game colour and the air radiance are both near
+// black and the banks read as dark smears instead of grey fog (game tests); by day the floor is 0 and the game colour stands as before.
+// The shader still takes the brighter of this and its own ambient*.35 air radiance. Without a validated game fog only the floor remains.
+constexpr float kNightGrey[3]={.15f,.16f,.18f};
+inline void colour(const float game[3],bool gameValid,float night,float out[4]){
+    const float n=std::isfinite(night)?std::clamp(night,0.f,1.f):0.f;
+    for(int i=0;i<3;++i){const float g=gameValid&&std::isfinite(game[i])?std::max(game[i],0.f):0.f;out[i]=std::max(g,kNightGrey[i]*n);}
+    out[3]=0;}
 // the per-sample density, identical to the shader: nL, nS noise values 0..1; tag = regional field .w (0 indoors/unknown)
 inline float sigma(float nL,float nS,float altitude,float threshold,float sharpness,float height,float tag,float sigmaMax){
     auto sat=[](float x){return std::clamp(x,0.f,1.f);};

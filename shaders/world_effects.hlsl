@@ -897,11 +897,12 @@ float4 FogClouds(float2 uv:TEXCOORD0):COLOR0 {
     float peak=max(directScatter.r,max(directScatter.g,directScatter.b));
     float cap=max(FogInfo.z,.0001);
     directScatter*=cap/(cap+peak);
-    // 0.3.199 (fog clouds): the banks take the brighter of the game's own fog colour (c26, the colour the distant world already fades to;
-    // the storm bands make it grey in rain) and WorldFog's ambient*.35 air radiance, per channel. By day in rain the air radiance is near
+    // 0.3.199 (fog clouds): the banks take the brighter of the host's cloud colour (c26/c25.w for this pass only: the game's fog colour, the colour
+    // the distant world already fades to, raised to a moonlit grey at night; NorthlightFogClouds::colour)
+    // and WorldFog's ambient*.35 air radiance, per channel; the storm bands make the game colour grey in rain. By day in rain the air radiance is near
     // black under the storm sky and the game colour wins; at night the game colour is near black while the air WorldFog lit around it
-    // is brighter, and a bank that hides that air behind a darker colour reads as a black smear (game tests). Without a validated game
-    // fog (c25.w 0) only the air radiance remains (FogColor.rgb, the scattering albedo, is always 1 on the host: left out for the slot budget).
+    // is brighter, and a bank that hides that air behind a darker colour reads as a black smear (game tests). The host always sets c25.w 1 here
+    // (without a validated game fog its colour is the grey floor alone); FogColor.rgb, the scattering albedo, is always 1: left out for the slots.
     return float4(max(max(AmbientLight.rgb,0)*.35,LegacyFogColor.rgb*LegacyFog.w)*ambientWeight+directScatter,tCloud);
 }
 // Distant haze toward the WORLD horizon: in front of the scene, behind local

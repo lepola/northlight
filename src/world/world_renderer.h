@@ -3432,6 +3432,10 @@ public:
             if(FAILED(d->GetRenderState(D3DRS_DESTBLENDALPHA,&savedDstA)))savedDstA=D3DBLEND_ZERO;
             if(FAILED(d->GetRenderState(D3DRS_BLENDOPALPHA,&savedOpA)))savedOpA=D3DBLENDOP_ADD;
             setSource(firstSource,true,true);
+            { /* 0.3.199 (fog clouds): the banks' colour (the game fog colour raised to a moonlit grey at night) in c25.w/c26 for this pass only; restored below */
+                float cloudColour[4],cloudFog[4]={c[25][0],c[25][1],c[25][2],1};
+                NorthlightFogClouds::colour(c[26],c[25][3]>=.5f,c[31][3],cloudColour);
+                d->SetPixelShaderConstantF(25,cloudFog,1);d->SetPixelShaderConstantF(26,cloudColour,1);}
             d->SetTexture(14,cloudNoise);d->SetSamplerState(14,D3DSAMP_ADDRESSU,D3DTADDRESS_WRAP);d->SetSamplerState(14,D3DSAMP_ADDRESSV,D3DTADDRESS_WRAP);d->SetSamplerState(14,D3DSAMP_ADDRESSW,D3DTADDRESS_WRAP);
             const DWORD cloudFilter=D3DTEXF_LINEAR;d->SetSamplerState(14,D3DSAMP_MINFILTER,cloudFilter);d->SetSamplerState(14,D3DSAMP_MAGFILTER,cloudFilter);d->SetSamplerState(14,D3DSAMP_MIPFILTER,D3DTEXF_NONE);d->SetSamplerState(14,D3DSAMP_SRGBTEXTURE,FALSE);
             d->SetRenderState(D3DRS_ALPHABLENDENABLE,TRUE);d->SetRenderState(D3DRS_SRCBLEND,D3DBLEND_ONE);d->SetRenderState(D3DRS_DESTBLEND,D3DBLEND_SRCALPHA);d->SetRenderState(D3DRS_BLENDOP,D3DBLENDOP_ADD);
@@ -3439,6 +3443,7 @@ public:
             d->SetRenderState(D3DRS_COLORWRITEENABLE,15);d->SetPixelShader(fogCloudsPS);
             const bool cloudsDrawn=check(quad(w/2,h/2),"fog clouds raymarch");
             setSource(lastFogSource,lastFogFirst,true);
+            d->SetPixelShaderConstantF(25,c[25],2); /* 0.3.199 (fog clouds): the bank's game fog parameters and colour back for the lamp fog, blur and composite */
             d->SetRenderState(D3DRS_SRCBLEND,D3DBLEND_ONE);d->SetRenderState(D3DRS_DESTBLEND,D3DBLEND_ONE);d->SetRenderState(D3DRS_BLENDOP,D3DBLENDOP_ADD);
             d->SetRenderState(D3DRS_SEPARATEALPHABLENDENABLE,FALSE);d->SetRenderState(D3DRS_SRCBLENDALPHA,savedSrcA);d->SetRenderState(D3DRS_DESTBLENDALPHA,savedDstA);d->SetRenderState(D3DRS_BLENDOPALPHA,savedOpA);
             d->SetRenderState(D3DRS_ALPHABLENDENABLE,!lastFogFirst);d->SetRenderState(D3DRS_COLORWRITEENABLE,lastFogFirst?15:7);d->SetPixelShader(fogPS);
