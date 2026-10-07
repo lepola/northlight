@@ -1,5 +1,5 @@
 {
-  "source_sha256": "5b3753feb83adbcdfcbde36c7b78ed5e50be90fcc3df82679716a04c23dac493",
+  "source_sha256": "5709f35c3c8cf09f1930fd4471b48ee9de82e1163ffb8f4f4dd0539ae4597848",
   "compiler": "Wine d3dcompiler_47 D3DCompile",
   "game_launched": false,
   "shaders": {
@@ -104,6 +104,39 @@
         "rsq": 1,
         "dp4": 6,
         "endrep": 1
+      }
+    },
+    "WorldWet": {
+      "target": "ps_3_0",
+      "bytes": 3972,
+      "sha256": "43ceaa44c35c58fb2ba15b001e14980b3a53999fdbd1657d92b24e32a69a14f8",
+      "static_instruction_slots": 193,
+      "temporary_registers": 7,
+      "samplers": [
+        1,
+        7,
+        10,
+        11,
+        14
+      ],
+      "instructions": {
+        "mov": 39,
+        "texldl": 5,
+        "mul": 41,
+        "frc": 3,
+        "add": 45,
+        "max": 5,
+        "min": 7,
+        "cmp": 13,
+        "if": 2,
+        "rcp": 13,
+        "else": 2,
+        "endif": 2,
+        "abs": 1,
+        "dp3": 3,
+        "rsq": 1,
+        "log": 1,
+        "exp": 1
       }
     },
     "WorldFog": {

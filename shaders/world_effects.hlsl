@@ -69,7 +69,7 @@ float4 LocalLightFog[8] : register(c59); // x extinction at the light (LocalFog 
 // 0.3.198 (rain): c59.yzw are the weather scalars (LocalLightFog[0].yzw, free: only .x is read); y and z are 0 without weather and
 // every use below reduces to the old math then (w is the exception by design: it carries the old literal .0017, see WorldFog). Written once per
 // frame in the bank, read before the lamp fog batch overwrites c59..c62.
-float4 WeatherInfo : register(c59); // y wetness w (reserved: 0 until the wet pass reads it), z direct shadow softening (WorldLighting), w the shared air extinction .0017 + the extra (WorldFog)
+float4 WeatherInfo : register(c59); // y wetness (WorldWet), z direct shadow softening (WorldLighting), w the shared air extinction .0017 + the extra (WorldFog)
 
 float2 depthUV(float2 uv) {
     // D3D9 raster centers are integer pixels; texture centers are pixel+.5.
@@ -408,6 +408,31 @@ float4 WorldGI(float2 uv:TEXCOORD0):COLOR0 {
     // multiplier or brightened sky/fog. Missing probes retain native ambient.
     correction+=max(AmbientLight.rgb+correction,0)*AmbientLight.w;
     return float4(correction,0);
+}
+// 0.3.198 (rain): wet ground, its own half-resolution pass drawn right after WorldGI into the same lighting buffer
+// (additive, rgb only). It reads only probe VISIBILITY and metadata (no irradiance, so no effects.gi need): the +Z first-hit
+// distance of the lattice probe half a spacing above the surface says whether the sky is open overhead, which keeps
+// roofs, canopies and interiors dry. An unvalidated probe (no grid, other world cell, not yet resident) reads dry.
+// Wet surfaces darken (less diffuse albedo response to the painted ambient and sun) and gain a faint sky sheen at grazing angles.
+// Limits: half resolution, runs through RemovalSmooth/TemporalLight like every correction (RemovalSmooth clamps at -.45),
+// the sheen is scaled by the albedo in the composite, real reflections are later phases.
+float4 WorldWet(float2 uv:TEXCOORD0):COLOR0 {
+    float4 smoothNormal=tex2Dlod(NormalBuffer,float4(uv,0,0));
+    uv=depthUV(uv);
+    float d=normalizedDepth(uv);if(d>=.99999||waterDistance(uv,d)>0)return 0;
+    float3 p=worldPosition(uv,d);float3 n=smoothNormal.xyz;
+    float up=saturate((n.z-.55)/.35);
+    float3 cell=floor((p+float3(0,0,.5*GridOrigin.w))/GridOrigin.w+.5); // nearest lattice probe to the point half a spacing above the surface
+    float3 wrapped=cell-GridInfo.x*floor(cell/GridInfo.x);
+    float2 uvp=probeUV(wrapped);
+    float4 metadata=tex2Dlod(ProbeMetadata,float4(uvp,0,0));
+    float4 moment=tex2Dlod(ProbeVisibility,float4(uvp.x,(wrapped.y+4*GridInfo.x+.5)/(GridInfo.x*6),0,0));
+    float open=(GridInfo.w>=.5&&all(metadata.xyz==cell)&&metadata.w>=0)?saturate((moment.x-24)/48)*moment.z:0;
+    float wet=WeatherInfo.y*up*open*smoothNormal.w;
+    float3 eye=normalize(Camera.xyz-p);
+    float fresnel=pow(1-saturate(dot(n,eye)),5)*.96+.04;
+    float3 darken=AmbientLight.rgb+LegacyDirect.rgb*saturate(dot(n,LegacyDirection.xyz));
+    return float4(wet*(fresnel*.15*AmbientLight.rgb-.35*darken),0);
 }
 // Four POINT reads work on float32 textures without optional linear filtering.
 // Empty metadata nodes must never interpolate their dummy ground=0 into real

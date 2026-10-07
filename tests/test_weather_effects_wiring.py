@@ -3,7 +3,7 @@
 The new shader constants live in c59.yzw (LocalLightFog[0].yzw: only .x of c59..c66 is read anywhere) and are documented in the register
 block; c23 (LightCenter, copied from the camera) and GridInfo.z (a divisor in LocalDirect and smoothRemoval) are untouched; the CPU copy of
 the air extinction (sigmaAt) mirrors the shader's; the lighting alpha and the baseline alpha keep the true visibility; no new pass is added
-to render(); every coupling multiplies by a gain that is exactly 1 (or adds exactly 0) without weather; the settings reach the derivation."""
+to render() except the wet-ground pass; every coupling multiplies by a gain that is exactly 1 (or adds exactly 0) without weather; the settings reach the derivation."""
 import sys; from pathlib import Path; sys.path.insert(0, str(Path(__file__).resolve().parents[1]))  # repo root
 import northlight_paths as fp
 import re
@@ -18,10 +18,10 @@ checks={}
 
 # c59.yzw
 checks['hlsl: WeatherInfo at c59, documented (y wetness, z shadows, w air extinction), LocalLightFog still read only through .x']=(
-    'float4 WeatherInfo : register(c59);' in h and 'y wetness w (reserved: 0 until the wet pass reads it), z direct shadow softening (WorldLighting), w the shared air extinction' in h
+    'float4 WeatherInfo : register(c59);' in h and 'y wetness (WorldWet), z direct shadow softening (WorldLighting), w the shared air extinction' in h
     and 'free: only .x is read' in h and re.findall(r'LocalLightFog\[[^\]]*\]\.(\w+)',re.sub(r'//[^\n]*','',h))==['x'] and 'LocalLightFog[i].x' in h)
 checks['hlsl: no other register c59..c66 reader']=not re.search(r'register\(c6[0-6]\)',h) and h.count('register(c59)')==2
-checks['hlsl: WorldLighting and WorldFog read WeatherInfo (z, w); y is reserved for the wet pass']=all(
+checks['hlsl: WorldLighting and WorldFog read WeatherInfo (z, w); y is read by WorldWet only']=all(
     ('WeatherInfo.'+c) in h for c in 'zw') and len(re.findall(r'WeatherInfo\.x',h))==0
 checks['cpp: c59.yzw set in the bank, c59.x and c60..c66 not']=('c[59][1]=wx.wet;c[59][2]=wx.shadowSoften();c[59][3]=airFloor;' in w and 'c[59][0]' not in w and not re.search(r'c\[6[0-6]\]',w))
 checks['cpp: c23 untouched']=w.count('memcpy(c[23],context.camera,12);')==1 and 'c[23][' not in w
@@ -44,12 +44,29 @@ checks['hlsl WorldLighting: correction.a and baseline.a keep the true visibility
     and 'o.baseline=float4(max(old+AmbientLight.rgb,.15),lerp(visibility,shadow,SunDirection.w)*known);' in lt and 'float visibility=lerp(1,shadow,GridInfo.z);' in lt)
 checks['hlsl: GridInfo.z still the divisor of the removal']=('/GridInfo.z' in h and 'max(GridInfo.z,.001)' in h)
 checks['hlsl: c24.y (softness) still unread']='PassInfo.y' not in h.replace('softness,debug','')
-# wetness: none in the existing passes (0.3.198 rebase onto task 13: WorldGI is at 31 temps; the wet pass follows)
-gi=h[h.index('float4 WorldGI('):h.index('// Four POINT reads work')]
+# wetness: its own pass after WorldGI (0.3.198 rebase onto task 13: WorldGI is at 31 temps, WorldLighting at 460/512 slots)
+gi=h[h.index('float4 WorldGI('):h.index('float4 WorldWet(')]
+wet=h[h.index('float4 WorldWet('):h.index('// Four POINT reads work')]
 checks['hlsl WorldGI: no weather code (it is at 31 temps)']='WeatherInfo' not in gi
-# no new passes
-r=w[w.index('bool render('):] if 'bool render(' in w else w
-checks['render: no pass added (quad count and shader creations as before 0.3.198 rain effects)']=(w.count('quad(')==14 and w.count('CreatePixelShader')==19)
+checks['hlsl WorldWet: reads WeatherInfo.y, and only y']=re.findall(r'WeatherInfo\.(\w)',wet)==['y']
+checks['hlsl WorldWet: sky, water and no-depth return 0 like WorldGI']='if(d>=.99999||waterDistance(uv,d)>0)return 0;' in wet
+checks['hlsl WorldWet: sky openness is the +Z moment of a metadata-validated probe, dry when invalid']=(
+    'tex2Dlod(ProbeVisibility,float4(uvp.x,(wrapped.y+4*GridInfo.x+.5)/(GridInfo.x*6),0,0))' in wet
+    and 'GridInfo.w>=.5&&all(metadata.xyz==cell)&&metadata.w>=0)?saturate((moment.x-24)/48)*moment.z:0;' in wet)
+checks['hlsl WorldWet: confidence-weighted, up-facing, rgb only (alpha 0), no irradiance read']=(
+    'float wet=WeatherInfo.y*up*open*smoothNormal.w;' in wet and 'saturate((n.z-.55)/.35)' in wet and 'return float4(' in wet and ',0);' in wet.splitlines()[-2]
+    and 'ProbeR' not in wet and 'probeIrradiance' not in wet)
+# no new passes beyond the wet pass
+checks['render: exactly one pass added by 0.3.198 rain (WorldWet: quad count 14 -> 15, shader creations 19 -> 20)']=(w.count('quad(')==15 and w.count('CreatePixelShader')==20)
+wd=w[w.index('if(wx.wet>0&&debug==0'):]
+wd=wd[:wd.index('        if(localDirectCount')]
+checks['cpp: the wet pass is drawn only when wx.wet>0, debug==0 and the probe grid is active (not gated on effects.gi)']=(
+    'if(wx.wet>0&&debug==0&&c[20][3]>=.5f){' in wd and 'effects.gi' not in wd.split('{',1)[1] and 'SetPixelShader(wetPS)' in wd and 'world wet pass' in wd)
+gp=w[w.index('d->SetPixelShader(giPS);'):w.index('if(wx.wet>0&&debug==0')]
+checks['cpp: the wet pass follows the GI pass and inherits its additive RGB blend (ALPHABLENDENABLE TRUE, COLORWRITEENABLE 7)']=(
+    'D3DRS_ALPHABLENDENABLE,TRUE);d->SetRenderState(D3DRS_COLORWRITEENABLE,7);d->SetPixelShader(giPS)' in w and 'world GI pass' in gp
+    and 'D3DRS_ALPHABLENDENABLE' not in wd and 'D3DRS_COLORWRITEENABLE' not in wd)
+checks['cpp: wetPS created and released with the other shaders']=('kWorldWetShader,&wetPS' in w and 'drop(wetPS);' in w)
 # disc and veil
 checks['discs: gain atomic, default 1, opacity and glare weights only, veil inherits']=(
     'std::atomic<float> weatherGain{1.f};' in dr and 'c[9][3]=glare?disc.opacity:disc.opacity*weatherGain.load(std::memory_order_relaxed);' in dr
