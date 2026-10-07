@@ -49,7 +49,7 @@ PLATFORMS = {'mac': 'macOS', 'windows': 'Windows'}
 APP_FILES = [
     'northlight_paths.py', 'mpq.py', 'client_archives.py',
     'build_art_layer.py', 'build_lighting.py', 'build_mulgore_lighting.py', 'build_stormwind_single_sun.py',
-    'build_outdoor_single_sun.py', 'build_outdoor_single_moon.py',
+    'build_outdoor_single_sun.py', 'build_outdoor_single_moon.py', 'build_weather_textures.py',  # 0.3.198 (rain): the art layer's procedural weather textures
     'scripts/install_world_cache.py', 'scripts/client_identity.py',
     'renderer/northlight_install.py', 'renderer/migrate_mac_proxy.py', 'renderer/windows-package/install.py',
     'renderer/world_scene_builder.py', 'renderer/m2_visibility.py', 'renderer/world_lights_builder.py',
