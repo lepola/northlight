@@ -14,8 +14,8 @@ SRC=r'''
 #include <cstdio>
 #include <cstring>
 using namespace NorthlightWeather;
-static Sample rain(unsigned prims=3000,unsigned draws=4){Sample s;s.kind=Kind::Rain;s.primitives=prims;s.draws=draws;return s;}
-static Sample snow(unsigned prims=3000){Sample s;s.kind=Kind::Snow;s.primitives=prims;s.draws=2;return s;}
+static Sample rain(unsigned prims=21000,unsigned draws=4){Sample s;s.kind=Kind::Rain;s.primitives=prims;s.draws=draws;return s;}
+static Sample snow(unsigned prims=21000){Sample s;s.kind=Kind::Snow;s.primitives=prims;s.draws=2;return s;}
 static const Sample none;
 static void run(Tracker& t,const Sample& s,float seconds,float dt=1.0f/60){for(float x=0;x<seconds;x+=dt)t.frame(s,dt);}
 static bool near(float a,float b,float e){return std::fabs(a-b)<=e;}
@@ -48,10 +48,10 @@ int main(){
     {   // loading screen with no draws shorter than the hold keeps wetness rising as before and the state intact
         Tracker t;run(t,rain(),10);const State a=t.state();for(int i=0;i<10;++i)t.frame(none,1.0f);assert(t.state().kind==Kind::Rain&&t.state().blend==a.blend);
     }
-    {   // intensity EMA: first sample seeds, then tau 1.5 s towards primitives/6000, clamped to 1
-        Tracker t;t.frame(rain(3000),1.0f/60);assert(near(t.state().intensity,0.5f,1e-4f));
-        run(t,rain(6000),kIntensityTau,0.05f);const float i1=t.state().intensity;assert(near(i1,0.5f+0.5f*(1-std::exp(-1.0f)),0.03f));
-        run(t,rain(60000),10);assert(t.state().intensity>0.99f&&t.state().intensity<=1.0f&&t.state().primitives==60000);
+    {   // intensity EMA: first sample seeds, then tau 1.5 s towards primitives/42000, clamped to 1
+        Tracker t;t.frame(rain(21000),1.0f/60);assert(near(t.state().intensity,0.5f,1e-4f));
+        run(t,rain(42000),kIntensityTau,0.05f);const float i1=t.state().intensity;assert(near(i1,0.5f+0.5f*(1-std::exp(-1.0f)),0.03f));
+        run(t,rain(420000),10);assert(t.state().intensity>0.99f&&t.state().intensity<=1.0f&&t.state().primitives==420000);
         run(t,rain(0,1),20);assert(t.state().intensity<0.01f);
     }
     {   // wetness: rain only, ~20 s up, ~90 s dry; it outlives kind; snow never wets

@@ -55,9 +55,9 @@ def light(id, map, clear, storm, water=0, storm_water=0):
     return r
 
 
-def stock_tables(keys2=None):
+def stock_tables(keys2=None, shared=False):
     # P1 clear (sky 10); P2 a storm of its own (sky 10, same as the clear's); P3 a storm with sky 20; P4 underwater.
-    profiles = [profile(1, 1., SKY_CLEAR), profile(2, .6, SKY_CLEAR, fog=(2000., 4000.), keys=keys2), profile(3, .5, SKY_STORM), profile(4, .3, 30)]
+    profiles = [profile(1, 1., SKY_CLEAR), profile(2, .6, SKY_CLEAR, fog=(40000., 40000.) if shared else (2000., 4000.), keys=keys2), profile(3, .5, SKY_STORM), profile(4, .3, 30)] + ([profile(5, 1., SKY_CLEAR, fog=(1000., 1000.))] if shared else [])
     rows = [
         light(1, 0, 1, 1, 4, 4),     # storm == clear
         light(2, 1, 1, 2),           # separate storm, same sky
@@ -65,7 +65,7 @@ def stock_tables(keys2=None):
         light(4, 530, 1, 2),         # shares row 2's stock storm
         light(5, 99, 1, 3),          # not outdoor
         light(6, 571, 7, 1),         # clear profile 7 does not exist: skipped
-    ]
+    ] + ([light(7, 0, 5, 2)] if shared else [])   # shared: row 7 has a tiny clear fog (profile 5) and shares row 2's stock storm
     return {'Light': table(rows, 15), 'LightParams': table([p for p, _, _ in profiles], 12),
             'LightIntBand': table([b for _, i, _ in profiles for b in i], 34), 'LightFloatBand': table([b for _, _, fl in profiles for b in fl], 34)}
 
@@ -137,22 +137,30 @@ checks['row 3: a different stock storm sky is kept'] = u(P(ids[3]), 2) == SKY_ST
 checks['row 2: relit then stormed (direct light, first night key)'] = u(Int(s2, 0), 18) == bl.storm_color(0, bl.transform_color(0, u(stock['LightIntBand'].index[(2-1)*18+1], 18), 0, 5, bl.sample_color(stock['LightIntBand'].index[(2-1)*18+10], 0)))
 checks['row 2: retimed (night by 21:00 in the colour bands, sunset at 20:15)'] = [u(Int(s2, 0), 2+i) for i in range(u(Int(s2, 0), 1))][-2:] == [bl.SUNSET_KEY, bl.NIGHT_KEY]
 fog = [(u(Flt(s2, 0), 2+i), f(Flt(s2, 0), 18+i)) for i in range(u(Flt(s2, 0), 1))]
-checks['row 2: fog end: 2000 (below 3600) kept, the relit 4000 below the 10800 floor stays'] = {v for _, v in fog if v == 2000} == {2000} and all(2000 == v or 4000*.94-1 <= v <= 4000*1.1+1 for _, v in fog)
+checks['row 2: fog end: the stock storm\'s own 2000..4000 (below 350 yards, no relight fog rule), kept'] = all(2000 <= v <= 4000 for _, v in fog) and {v for _, v in fog} >= {2000., 4000.}
 checks['row 2: fog start ratio kept from the relit source (stock .3 x0.88), not capped'] = all(abs(f(Flt(s2, 1), 18+i)-.3*.88) < 1e-6 for i in range(u(Flt(s2, 1), 1)))
 checks['row 2: water channels are the relit stock ones, not stormed'] = all(u(Int(s2, ch), 18) == bl.transform_color(ch, u(stock['LightIntBand'].index[(2-1)*18+ch+1], 18), 0, 5, None) for ch in bl.STORM_WATER)
 
-# Fog: never thicker than the clear's, key-wise; the floor.
-for i in (1, 2, 3, 4):
-    pid, clear = ids[i], u(L[i], 7)
-    if clear == 1: continue
-    end, clear_end = Flt(pid, 0), Flt(clear, 0)
-    checks[f'row {i}: storm fog end <= clear fog end at every storm key'] = all(f(end, 18+k) <= bl.band_value(bl.band_pairs(clear_end, True), True, u(end, 2+k))+1e-3 for k in range(u(end, 1)))
-checks['fog end floor: x0.7 never below 300 yards = 10800 units (>= 3600 only)'] = (bl.STORM_FOG_END_FLOOR, bl.STORM_FOG_END_FLOOR_YARDS, bl.STORM_FOG_END_SCALE) == (10800., 300., .7)
+# Fog: derived from the source storm's own fog end only, never from a row's clear fog.
+checks['fog end rule: x0.85, never below 350 yards = 12600 units, unless the source is shorter'] = (bl.STORM_FOG_END_FLOOR, bl.STORM_FOG_END_FLOOR_YARDS, bl.STORM_FOG_END_SCALE) == (12600., 350., .85)
 fogs = copy.deepcopy(final)
 probe = fogs['LightFloatBand'].index[(ids[1]-1)*6+1]   # one value per key; the first five keys carry the probes
-for k, v in enumerate((12000., 6000., 36000., 3000., 3600.)): bl.putf(probe, 18+k, v)
+for k, v in enumerate((40000., 20000., 15000., 12600., 6000., 3000.)): bl.putf(probe, 18+k, v)
 bl.storm_profile(fogs, ids[1]); fend = fogs['LightFloatBand'].index[(ids[1]-1)*6+1]
-checks['fog end: 12000 -> 10800 (floor), 6000 kept (never raised), 36000 -> 25200 (x0.7), <3600 untouched, 3600 -> 3600'] = [round(f(fend, 18+k), 1) for k in range(5)] == [10800., 6000., 25200., 3000., 3600.]
+checks['fog end: 40000 -> 34000 (x0.85), 20000 -> 17000, 15000 -> 12750, 12600 kept, shorter sources (6000, 3000) kept'] = [round(f(fend, 18+k), 1) for k in range(6)] == [34000., 17000., 12750., 12600., 6000., 3000.]
+bl_rule = [bl.storm_fog_end(v) for v in (20000., 13000., 12000., 100.)]
+checks['fog end rule: <= source and >= min(source, 12600) for any source'] = all(min(v, 12600) <= e <= v for v, e in zip((20000., 13000., 12000., 100.), bl_rule))
+
+# Regression: one stock storm profile shared by two rows with very different clear fogs (5000 vs 1000): the storm keeps the stock
+# fog end (40000 -> 34000), it is not pulled down to the tighter row's clear fog.
+sh_stock = stock_tables(shared=True)
+sh_final, sh_changes = final_tables(sh_stock)
+bl.stormify(sh_final, sh_stock)
+sh_L = sh_final['Light'].index
+sh_ids = {i: u(sh_L[i], 9) for i in (2, 7)}
+sh_fog = sh_final['LightFloatBand'].index[(sh_ids[2]-1)*6+1]
+checks['shared storm: rows 2 and 7 (clear fog 5000 vs 1000) share one profile'] = sh_ids[2] == sh_ids[7] and u(sh_L[7], 7) != u(sh_L[2], 7)
+checks['shared storm: fog end at every key = 34000 (stock 40000 x0.85), not the tight row\'s clear fog'] = u(sh_fog, 1) >= 5 and all(abs(f(sh_fog, 18+k)-34000.) < 1e-2 for k in range(u(sh_fog, 1)))
 
 # Glow: only 0 < glow <= 1 is scaled x0.6 (as relit_profile); anything else stays.
 for g, want_g in ((.4, .24), (1., .6), (0., 0.), (2.5, 2.5), (-1., -1.)):

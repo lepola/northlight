@@ -23,7 +23,7 @@ constexpr float kMaxDt=0.1f;            /* Alt+Tab and loading screens are one s
 constexpr float kHoldSeconds=2.5f;      /* no weather draws for this long keeps the state, then ramps out */
 constexpr float kBlendInSeconds=4.0f,kBlendOutSeconds=6.0f;
 constexpr float kIntensityTau=1.5f;     /* EMA time constant of primitives / kFullPrimitives */
-constexpr float kFullPrimitives=6000.0f; /* intensity 1: to be calibrated from the WEATHER log lines */
+constexpr float kFullPrimitives=42000.0f; /* intensity 1: heavy rain (.wchange 1 1) measured at 7 draws x 6143 = ~43k primitives per frame */
 constexpr float kWetRiseSeconds=20.0f,kWetDrySeconds=90.0f;
 constexpr float kBlendLogLow=0.01f,kBlendLogHigh=0.99f;
 

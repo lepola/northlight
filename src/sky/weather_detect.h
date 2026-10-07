@@ -2,12 +2,12 @@
 // 0.3.198 (rain): finds the game's weather particle textures without touching the game thread. Every game
 // texture is created through the wrapped Device (stream mode: the replay thread's Device::CreateTexture), so
 // the creation signature is all the detection needs: the art layer's procedural rain/snow textures are
-// uncompressed ARGB strips (RainDrop01/RainDropRed01 32x512 = 1:16, SnowFlake01 32x64 = 1:2; texture-quality settings
-// may halve the dimensions, the aspect stays). The client may create an uncompressed BLP as any of the ARGB family
-// (A8R8G8B8, X8R8G8B8, A1R5G5B5, A4R4G4B4), so all are accepted; a game test showed the 32x512 texture was never
-// matched as A8R8G8B8. Rain 1:16 is rare among decoded game textures; 1:2 ARGB (palette and
-// uncompressed BLPs too) is common, hence the larger snow table. `WEATHER shape` lines log every create of the rain or
-// snow aspect in any format (capped per kind), so a miss shows the real format and size. The draw hook compares the bound stage-0 texture (the mirror's raw
+// palettized strips with 8-bit alpha (RainDrop01/RainDropRed01 32x512 = 1:16, SnowFlake01 32x64 = 1:2; texture-quality
+// settings may halve the dimensions, the aspect stays), which the client creates as A8R8G8B8 (game test: fmt=21, 10 levels).
+// Only A8R8G8B8 matches: A4R4G4B4 32x64 textures are common and matched the snow shape (it churned the snow slots).
+// Rain 1:16 is rare among decoded game textures; 1:2 A8R8G8B8 is common, hence the larger snow table. `WEATHER shape`
+// lines log every create of the rain or snow aspect in any format (capped per kind), so a miss shows the real format and size.
+// The draw hook compares the bound stage-0 texture (the mirror's raw
 // pointer) with `hot` - one pointer comparison, no peek, lock, Get* or hash lookup.
 // Table: kRainSlots/kSnowSlots slots per kind (a new candidate can only replace an entry of its own kind, preferring
 // one that never drew), fixed array, no allocation. `hot` rotates on every frame in which it counted no draws, so a
@@ -21,11 +21,9 @@
 namespace NorthlightWeatherDetect {
 using NorthlightWeather::Kind;
 constexpr unsigned kRainSlots=2,kSnowSlots=4,kCandidates=kRainSlots+kSnowSlots,kTallLogs=8,kShapeLogs=32;
-/* D3DFMT_* of the uncompressed ARGB family (static_asserts in renderer.cpp) */
-constexpr std::uint32_t kFmtA8R8G8B8=21,kFmtX8R8G8B8=22,kFmtA1R5G5B5=25,kFmtA4R4G4B4=26;
+constexpr std::uint32_t kFmtA8R8G8B8=21; /* D3DFMT_A8R8G8B8 (static_assert in renderer.cpp): the client expands our palettized BLPs to it */
 constexpr std::uint32_t kMaxWidth=32;
 
-inline bool isArgbFamily(std::uint32_t fmt){return fmt==kFmtA8R8G8B8||fmt==kFmtX8R8G8B8||fmt==kFmtA1R5G5B5||fmt==kFmtA4R4G4B4;}
 // The aspect alone (any format, any width): the diagnostic log's filter.
 inline Kind shapeOf(std::uint32_t w,std::uint32_t h){
     if(!w)return Kind::None;
@@ -35,7 +33,7 @@ inline Kind shapeOf(std::uint32_t w,std::uint32_t h){
 }
 
 inline Kind classify(std::uint32_t w,std::uint32_t h,std::uint32_t fmt){
-    if(!isArgbFamily(fmt)||!w||w>kMaxWidth)return Kind::None;
+    if(fmt!=kFmtA8R8G8B8||!w||w>kMaxWidth)return Kind::None;
     if(w!=8&&w!=16&&w!=32)return Kind::None;
     if(h==16*w)return Kind::Rain;
     if(h==2*w)return Kind::Snow;

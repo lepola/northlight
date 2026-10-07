@@ -112,8 +112,9 @@ def profile_complete(tables, pid):
     light, params, ints, floats = [tables[n] for n in TABLES]
     return pid in params.index and all((pid-1)*18+c+1 in ints.index for c in range(18)) and all((pid-1)*6+c+1 in floats.index for c in range(6))
 
-def relit_profile(source, tables, old, new):
-    """Add profile `new` to `tables`: `source`'s profile `old` with the relight colour and fog transform; returns the changed key count."""
+def relit_profile(source, tables, old, new, fog=True):
+    """Add profile `new` to `tables`: `source`'s profile `old` with the relight colour and fog transform (`fog`: the fog end rule; a
+    storm source skips it, the storm derives its fog end from the stock value); returns the changed key count."""
     params, ints, floats = tables['LightParams'], tables['LightIntBand'], tables['LightFloatBand']
     row = copy.copy(source['LightParams'].index[old]); putu(row,0,new)
     # Preserve skybox references and opaque flags, including this pack's
@@ -140,7 +141,7 @@ def relit_profile(source, tables, old, new):
         row=copy.copy(source['LightFloatBand'].index[(old-1)*6+ch+1]); putu(row,0,(new-1)*6+ch+1)
         for i in range(u(row,1)):
             value=f(row,18+i); day=daylight(u(row,2+i)) if u(row,1)>1 else 1.0
-            if ch==0 and value>=3600: # >=100 yards; retain tight local fog volumes.
+            if ch==0 and fog and value>=3600: # >=100 yards; retain tight local fog volumes.
                 putf(row,18+i,value*(.94+.16*day))
             elif ch==1 and 0<value<1:
                 putf(row,18+i,clamp(value*.88,0,.95))
@@ -269,12 +270,12 @@ def retime(tables, profiles):
 
 # 0.3.198 (rain): a private storm profile (Light.dbc column 9) for every outdoor row, so the
 # "Forever-style" rain has a light, luminous warm-grey overcast of its own (low contrast, fog as bright as the sky
-# and brighter than the ground, no dark wall: fog end x.70 with a 300 yard floor, fog start ratio kept). Only the storm slot changes; the
+# and brighter than the ground, no dark wall: fog end x.85, never below 350 yards, fog start ratio kept). Only the storm slot changes; the
 # clear, underwater and storm-underwater slots (7, 8, 10) stay as they are.
 STORM_SLOT = 9
 FOG_UNITS_PER_YARD = 36.                                  # Light fog values: 3600 units = 100 yards (see relight)
-STORM_FOG_END_SCALE, STORM_FOG_END_FLOOR_YARDS = .70, 300.   # fog end x.70 (like relight, only >= 3600), never below 300 yards
-STORM_FOG_END_FLOOR = STORM_FOG_END_FLOOR_YARDS*FOG_UNITS_PER_YARD   # 10800 units; the rule never raises a value above its source
+STORM_FOG_END_SCALE, STORM_FOG_END_FLOOR_YARDS = .85, 350.   # fog end = max(source x.85, min(source, 350 yards)): never above the source, never below 350 yards unless the source is shorter
+STORM_FOG_END_FLOOR = STORM_FOG_END_FLOOR_YARDS*FOG_UNITS_PER_YARD   # 12600 units
 STORM_DIRECT_SCALE, STORM_DIRECT_DESAT = .60, .50        # ch0 direct light: weak under overcast
 STORM_AMBIENT_SCALE, STORM_AMBIENT_DESAT = 1.15, .25     # ch1 ambient: more diffuse
 STORM_SKY_LERP, STORM_SKY_SCALE = .55, .95               # ch2-6 sky toward the light warm grey, then barely darker
@@ -300,6 +301,9 @@ def storm_color(ch, original):
     elif ch == 12: c = [v*STORM_CLOUD_SCALE for v in grey]
     return pack(c, original)
 
+def storm_fog_end(source):
+    return max(source*STORM_FOG_END_SCALE, min(source, STORM_FOG_END_FLOOR))
+
 def storm_profile(tables, pid):
     """The storm look, in place on profile `pid` (a private copy): colour and fog bands, glow."""
     params, ints, floats = tables['LightParams'], tables['LightIntBand'], tables['LightFloatBand']
@@ -310,9 +314,7 @@ def storm_profile(tables, pid):
         row = ints.index[(pid-1)*18+ch+1]
         for i in range(u(row, 1)): putu(row, 18+i, storm_color(ch, u(row, 18+i)))
     row = floats.index[(pid-1)*6+1]   # fog end (channel 0); the fog start ratio (channel 1) stays as in the source
-    for i in range(u(row, 1)):
-        value = f(row, 18+i)
-        if value >= 3600: putf(row, 18+i, min(value, max(value*STORM_FOG_END_SCALE, STORM_FOG_END_FLOOR)))
+    for i in range(u(row, 1)): putf(row, 18+i, storm_fog_end(f(row, 18+i)))
 
 def copy_profile(tables, old, new):
     """Add profile `new` to `tables` as a plain copy of `old`."""
@@ -348,37 +350,30 @@ def stormify(tables, stock):
         kind, source, sky = key
         made[key] = next_id; next_id += 1
         if kind == 'clear': copy_profile(tables, source, made[key])
-        else: relit_profile(stock, tables, source, made[key])
+        else: relit_profile(stock, tables, source, made[key], fog=False)   # the stock storm's own fog end, no relight fog rule
         putu(params.index[made[key]], 2, sky)
     stock_made = [made[k] for k in made if k[0] == 'stock']
     retimed = retime(tables, stock_made) if stock_made else None
-    clamped = 0
     for key, pid in made.items():
         water = {ch: bytes(ints.index[(pid-1)*18+ch+1])[4:] for ch in STORM_WATER}
+        end = floats.index[(pid-1)*6+1]
+        source_fog = [f(end, 18+i) for i in range(u(end, 1))]
         storm_profile(tables, pid)
         assert all(bytes(ints.index[(pid-1)*18+ch+1])[4:] == v for ch, v in water.items())
-        # Never thicker than the clear fog: key-wise at the storm's key times, against every row of the group.
-        end, clears = floats.index[(pid-1)*6+1], [floats.index[(u(r, 7)-1)*6+1] for r in groups[key]]
-        for i in range(u(end, 1)):
-            limit = min(band_value(band_pairs(c, True), True, u(end, 2+i)) for c in clears)
-            if f(end, 18+i) > limit: putf(end, 18+i, limit); clamped += 1
+        # At every key <= the source fog end and >= min(source, 350 yards); never pulled down by a row's clear fog.
+        assert all(min(v, STORM_FOG_END_FLOOR)-1e-3 <= f(end, 18+i) <= v+1e-3 for i, v in enumerate(source_fog)), pid
     for key, members in groups.items():
         for row in members: putu(row, STORM_SLOT, made[key])
-    # Validation: private, grouped, not shared with any other slot, short fog, <= 16 keys, water untouched.
+    # Validation: private, grouped, not shared with any other slot, <= 16 keys, water untouched.
     others = {u(r, c) for r in light.rows for c in range(7, 15) if c != STORM_SLOT}
     for key, members in groups.items():
         pid = made[key]
         assert pid >= first and pid not in others and pid not in {u(r, STORM_SLOT) for r in light.rows if r not in members}
-        end = floats.index[(pid-1)*6+1]
-        for r in members:
-            clear_end = floats.index[(u(r, 7)-1)*6+1]
-            assert u(r, STORM_SLOT) == pid
-            for i in range(u(end, 1)):
-                assert f(end, 18+i) <= band_value(band_pairs(clear_end, True), True, u(end, 2+i))+1e-3, (u(r, 0), pid)
+        for r in members: assert u(r, STORM_SLOT) == pid
         for table, n in ((ints, 18), (floats, 6)):
             assert all(0 <= u(table.index[(pid-1)*n+c+1], 1) <= 16 for c in range(n))
     return {'profiles': len(made), 'rows': sum(map(len, groups.values())), 'rows_skipped': skipped, 'first_id': first,
-            'from_clear': sum(k[0] == 'clear' for k in made), 'from_stock': len(stock_made), 'fog_keys_clamped_to_clear': clamped,
+            'from_clear': sum(k[0] == 'clear' for k in made), 'from_stock': len(stock_made),
             'retime': {k: v for k, v in (retimed or {}).items() if k != 'rows'}}
 
 def build():

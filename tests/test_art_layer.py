@@ -14,7 +14,7 @@ the test output):
   created, every band holds <= 16 keys after all steps, and every band the retime moved without a
   skipped insert is night-like at 21:30 and 03:30.
 - every view: each outdoor row's storm profile is private, unshared with any other slot, has <= 16
-  keys, a fog end no thicker than the clear's and untouched water bands, and the skybox rule holds;
+  keys, a fog end within the source storm's (x0.85, never below 350 yards unless shorter) and untouched water bands, and the skybox rule holds;
   the three BLPs in both archives are the generated ones (uncompressed, 1:16 rain, 1:2 snow).
 - the client's own chain: when the client has our art layer installed (Data/patch-z.mpq), the
   rebuild without it is byte-identical to it, so the installer step reproduces the HD chain, and
@@ -74,16 +74,21 @@ def storm_checks(view, folder, r):
         assert u(row, 8) == u(stock_row, 8) and u(row, 10) == u(stock_row, 10)
         for table, n in ((ints, 18), (floats, 6)):
             assert all(0 <= u(table.index[(pid-1)*n+c+1], 1) <= 16 for c in range(n)), pid
-        end, clear_end = floats.index[(pid-1)*6+1], floats.index[(clear-1)*6+1]
+        # Fog end: derived from the source storm only (a stock storm profile's own values, or the final clear's when stock storm == stock
+        # clear), never from the row's clear: <= source at every key and >= min(source, 350 yards) x0.85-ish (bounds over the source's keys).
+        end = floats.index[(pid-1)*6+1]
+        if u(stock_row, 9) == u(stock_row, 7): src = [v for _, v in build_lighting.band_pairs(floats.index[(clear-1)*6+1], True)]
+        else: src = [v for _, v in build_lighting.band_pairs(original['LightFloatBand'].index[(u(stock_row, 9)-1)*6+1], True)]
+        lo, hi = min(min(src), build_lighting.STORM_FOG_END_FLOOR), max(src)
         for i in range(u(end, 1)):
-            assert f(end, 18+i) <= build_lighting.band_value(build_lighting.band_pairs(clear_end, True), True, u(end, 2+i))+1e-3, (u(row, 0), pid)
+            assert lo-1e-3 <= f(end, 18+i) <= hi+1e-3, (u(row, 0), pid, f(end, 18+i), lo, hi)
         if u(stock_row, 9) == u(stock_row, 7):   # a copy of the final clear profile
             assert u(params.index[pid], 2) == u(params.index[clear], 2)
             for ch in build_lighting.STORM_WATER:
                 assert bytes(ints.index[(pid-1)*18+ch+1])[4:] == bytes(ints.index[(clear-1)*18+ch+1])[4:]
             sky_rule += 1
     return {'profiles': len(storm_ids), 'rows': len(outdoor), 'first_id': step['first_id'], 'from_clear_rows': sky_rule,
-            'from_clear': step['from_clear'], 'from_stock': step['from_stock'], 'fog_keys_clamped_to_clear': step['fog_keys_clamped_to_clear']}
+            'from_clear': step['from_clear'], 'from_stock': step['from_stock']}
 
 
 # The relighting alone, from the same stock view, against the archive: only the two zones' bands.
