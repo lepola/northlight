@@ -67,7 +67,11 @@ struct Settings {
     // 0.3.193 BlobShadowStrength: how strongly the game's own round blob shadow under characters shows while the mod draws
     // actor shadows: 100 = the game's texture unchanged (no filter work), 0 = hidden, 1..99 = drawn with a lighter texture.
     unsigned blobShadowStrength=50;
-    char origin[35]={'d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d'};
+    // 0.3.198 (rain): Weather 1 = Northlight's own effects follow detected rain or snow (sky/weather_effects.h); 0 = nothing reacts.
+    // RainFog 0..2 scales the haze/fog/shafts/sun/shadow/GI/lamp couplings (1 = the tuned look); RainWetness 0..2 scales the wet
+    // ground under open sky (needs the GI pass; 0 = dry).
+    unsigned weather=1,rainFog=1,rainWetness=1;
+    char origin[38]={'d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d'};
 };
 struct Key { const char* name; unsigned Settings::*field; unsigned low,high; unsigned preset[3]; };
 // preset[] = Quality, Balanced, Performance. Quality must equal Settings{}.
@@ -107,6 +111,9 @@ inline const Key Keys[]={
     {"ShadowPivotCorrection",&Settings::shadowPivotCorrection,0,1,{1,1,1}},
     {"CommandStream",&Settings::commandStream,0,1,{1,1,1}},
     {"BlobShadowStrength",&Settings::blobShadowStrength,0,100,{50,50,50}},
+    {"Weather",&Settings::weather,0,1,{1,1,1}},
+    {"RainFog",&Settings::rainFog,0,2,{1,1,1}},
+    {"RainWetness",&Settings::rainWetness,0,2,{1,1,0}},
 };
 inline bool operator==(const Settings& a,const Settings& b){for(const auto& k:Keys)if(a.*k.field!=b.*k.field)return false;return true;}
 inline bool operator!=(const Settings& a,const Settings& b){return !(a==b);}

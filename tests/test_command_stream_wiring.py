@@ -15,9 +15,9 @@ ini=(ROOT/'renderer/windows-package/northlight-quality.ini').read_text();readme=
 gpu=fp.src('static_shadow_gpu.h').read_text();exp=fp.src('world_shadow_experiment.inl').read_text()
 keys=q[q.index('inline const Key Keys[]={'):q.index('inline bool operator==(const Settings')]
 checks={}
-# 0.3.193: BlobShadowStrength is appended after it (origin[35]); test_quality_settings checks the order.
-checks['quality key: in Keys before BlobShadowStrength, 0..1, presets 1/1/1, default 1, own origin slot']=(keys.rstrip().endswith('    {"CommandStream",&Settings::commandStream,0,1,{1,1,1}},\n    {"BlobShadowStrength",&Settings::blobShadowStrength,0,100,{50,50,50}},\n};')
-    and 'unsigned commandStream=1;' in q and 'char origin[35]=' in q and len(re.findall(r"'d'",q[q.index('char origin[35]='):].split('\n')[0]))==35)
+# 0.3.193: BlobShadowStrength is appended after it (origin[38]); test_quality_settings checks the order.
+checks['quality key: in Keys before BlobShadowStrength, 0..1, presets 1/1/1, default 1, own origin slot']=(keys.rstrip().endswith('    {"CommandStream",&Settings::commandStream,0,1,{1,1,1}},\n    {"BlobShadowStrength",&Settings::blobShadowStrength,0,100,{50,50,50}},\n    {"Weather",&Settings::weather,0,1,{1,1,1}},\n    {"RainFog",&Settings::rainFog,0,2,{1,1,1}},\n    {"RainWetness",&Settings::rainWetness,0,2,{1,1,0}},\n};')
+    and 'unsigned commandStream=1;' in q and 'char origin[38]=' in q and len(re.findall(r"'d'",q[q.index('char origin[38]='):].split('\n')[0]))==38)
 checks['documented in the ini template (commented, with default) and the README table']=(';CommandStream=1' in ini and re.search(r'^  CommandStream +1 / 1 / 1 ',readme,re.M) is not None)
 checks['WorldRenderer exposes the loaded value; the early reader uses the same loader']=('bool commandStream()const{return quality.commandStream!=0;}' in w
     and 'NorthlightQuality::load(hasFile?&in:nullptr,nullptr,problems).commandStream!=0' in hooks and 'northlight-quality.ini' in hooks)

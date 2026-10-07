@@ -9,7 +9,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
 shader = fp.src('world_effects.hlsl').read_text()
-assert 'float3 sun=DirectLight.rgb*saturate(dot(n,LegacyDirection.xyz))*visibility;' in shader
+assert 'float3 sun=DirectLight.rgb*saturate(dot(n,LegacyDirection.xyz))*sunVisibility;' in shader and 'float visibility=lerp(1,shadow,GridInfo.z);' in shader # 0.3.198 (rain): sunVisibility = visibility unless c59.z softens it
 assert 'lerp(sun,moon,SunDirection.w)' in shader
 assert 'if(dot(DirectLight.rgb,1)>0)shadow=directionalShadow' in shader
 # 0.3.170: near cascade 5x5 tent (radius 2.5), far cascade unchanged 4x4 (radius 2).

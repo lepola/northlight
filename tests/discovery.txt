@@ -136,6 +136,8 @@ test_water_mask_state.py
 test_water_shader_patch.py
 test_water_shaders.py
 test_weather_detect.py
+test_weather_effects.py
+test_weather_effects_wiring.py
 test_weather_state.py
 test_weather_textures.py
 test_weather_wiring.py

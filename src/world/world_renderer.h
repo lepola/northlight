@@ -51,6 +51,7 @@
 #include "legacy_fog.h"
 #include "horizon_haze.h"
 #include "weather_state.h"
+#include "weather_effects.h"
 #include "sun_hue.h"
 #include "replay_constant_ranges.h"
 #include "replay_pose_groups.h"
@@ -1958,6 +1959,12 @@ public:
     NorthlightWeather::State weatherState{};
     void setWeather(const NorthlightWeather::State& s){weatherState=s;}
     const NorthlightWeather::State& weather()const{return weatherState;}
+    // 0.3.198 (rain): the settings (Weather 0/1, RainFog and RainWetness 0..2) and the per-frame scalars derived from them and weather():
+    // render() and the celestial renderers read this one place; all zero (identity) with Weather=0 or no weather.
+    unsigned weatherSetting()const{return quality.weather;}
+    unsigned rainFogSetting()const{return quality.rainFog;}
+    unsigned rainWetnessSetting()const{return quality.rainWetness;}
+    NorthlightWeatherEffects::Frame weatherEffects()const{return NorthlightWeatherEffects::derive(weatherState,quality.weather,quality.rainFog,quality.rainWetness);}
     bool frameDrawGates()const{return quality.frameDrawGates!=0;} /* 0.3.187: read once at device creation */ /* 0.3.158: ActorShadows=0 leaves actor shadows to the game's blobs */
     const float* legacyFogParameters()const{return legacyFog.parameters;}
     const NorthlightCelestialProfiles::Profile& celestialPalette(const char* map,const float* camera){
@@ -3104,6 +3111,10 @@ public:
         d->SetVertexShader(nullptr);d->SetFVF(D3DFVF_XYZRHW|D3DFVF_TEX1);d->SetStreamSourceFreq(0,1);d->SetRenderState(D3DRS_ZENABLE,FALSE);d->SetRenderState(D3DRS_ZWRITEENABLE,FALSE);
         d->SetTextureStageState(0,D3DTSS_TEXCOORDINDEX,0);d->SetTextureStageState(0,D3DTSS_TEXTURETRANSFORMFLAGS,D3DTTFF_DISABLE);d->SetRenderState(D3DRS_WRAP0,0);
         float c[68][4]={};c[0][0]=1.f/w;c[0][1]=1.f/h;c[0][2]=nearZ;c[0][3]=farZ;
+        // 0.3.198 (rain): the frame's weather scalars (all 0 and every gain exactly 1 without weather: the bank below is then unchanged).
+        // The new constants live in c59.yzw (LocalLightFog[0].yzw; only .x of c59..c66 is read, by LocalFog) and are read by WorldLighting (z),
+        // WorldGI (y) and WorldFog (w); the lamp fog batch overwrites c59..c62 after all three have run, the bank is uploaded whole each frame.
+        const auto wx=weatherEffects();
         c[67][0]=celestialValid?std::max(celestial.sun.angularRadius,celestial.moon.angularRadius):.03f;c[67][1]=sourceVisValid?.85f:0.f;
         // Temporal history is valid only for the same map, a continuous camera
         // and normal rendering; teleports, F10 and diagnostics restart it.
@@ -3129,7 +3140,9 @@ public:
         c[52][0]=float(std::min(localDirectCount,NorthlightLocalLightSelection::DirectBatchSize));c[52][1]=.9f*lampGain;
         // Near fade: no added fog within 3.5 units of the viewer, full at 15.5.
         // Same soft ramp, shifted 0.5 world units closer.
-        c[58][0]=3.5f;c[58][1]=1.f/12;c[58][2]=13.f*lampGain;c[58][3]=.156f*lampGain;
+        c[58][0]=3.5f;c[58][1]=1.f/12;c[58][2]=13.f*lampGain*wx.lampFogGain();c[58][3]=.156f*lampGain*wx.lampFogGain(); /* 0.3.198 (rain): lamps glow more in fog; x1 when dry */
+        const float airFloor=.0017f+wx.airExtinction(); /* the shared outdoor air extinction (the shader's old literal .0017) plus the rain's extra: exactly .0017f when dry */
+        c[59][1]=wx.wet;c[59][2]=wx.shadowSoften();c[59][3]=airFloor; /* 0.3.198 (rain): wetness, direct shadow softening (0 when dry), air extinction floor (WorldFog) */
         // Same camera, projection, near plane and glow start as c0..c6/c58.
         localScissorView=NorthlightLocalLightScissor::view(context.inverseView,projection,nearZ,c[58][0],w,h);
         if(uploadedFogField){c[31][0]=uploadedFogField->originX;c[31][1]=uploadedFogField->originY;}
@@ -3163,7 +3176,7 @@ public:
                         const float vertical=std::clamp(1-altitude/std::max(groundHeight,.001f),0.f,1.f);
                         const float ground=altitude>=0?std::max(t.day+t.nightExtra*night,0.f)*vertical*vertical:0;
                         float airBase=c[32][1]+(c[32][0]-c[32][1])*profile;airBase=airBase+(c[22][3]-airBase)*generalForest;
-                        airBase=.0017f+airBase*std::clamp((t.height-.625f)/.625f,0.f,1.f);
+                        airBase=airFloor+airBase*std::clamp((t.height-.625f)/.625f,0.f,1.f); /* 0.3.198 (rain): mirrors the shader (+0 when dry) */
                         const float airHeight=c[32][3]+(c[32][2]-c[32][3])*profile;
                         const float airVertical=std::clamp(1-altitude/std::max(airHeight,.001f),0.f,1.f);
                         sigma=altitude>=0?ground+airBase*airVertical*airVertical:0;
@@ -3189,10 +3202,11 @@ public:
         memcpy(c[15],context.camera,12);memcpy(c[16],context.lightDirection,12);memcpy(c[17],context.direct,12);memcpy(c[18],context.ambient,12);
         c[18][3]=NorthlightTwilightFill::gain(celestialValid,celestialValid?celestial.dayFraction:-1.,
             celestialValid?celestialLight.sun.direction[2]:0.f,celestialValid?celestialLight.moon.direction[2]:0.f);
+        c[18][3]+=wx.ambientLift(); /* 0.3.198 (rain): a little more sky ambient from the GI pass in rain (+0 when dry; the probes themselves are untouched) */
         c[19][0]=active->origin.x;c[19][1]=active->origin.y;c[19][2]=active->origin.z;c[19][3]=8;
         c[20][0]=float(NorthlightGI::probeLayout().atlas);c[20][1]=NorthlightQuality::giIntensity(quality);c[20][2]=.85f;c[20][3]=active->serial?1.f:0.f;
         DWORD now=GetTickCount();
-        c[21][0]=uploadedFogField&&(uploadedFogField->fogCells||uploadedFogField->airCells)?1.f:0.f;c[21][1]=1.2f;c[21][2]=.38f;c[21][3]=128;
+        c[21][0]=uploadedFogField&&(uploadedFogField->fogCells||uploadedFogField->airCells)?1.f:0.f;c[21][1]=1.2f*wx.shaftGain();c[21][2]=.38f;c[21][3]=128; /* 0.3.198 (rain): shafts fade in rain, x1 when dry */
         memcpy(c[23],context.camera,12);c[24][0]=NorthlightWorldMath::ShadowBiasWorld*NorthlightWorldMath::InverseShadowDepth;c[24][1]=2;c[24][2]=float(debug);c[24][3]=float(DWORD(now-animationEpoch))*.001f;
         memcpy(c[25],legacyFog.parameters,16);memcpy(c[26],legacyFog.color,16);
         memcpy(c[28],context.lightDirection,12);memcpy(c[29],context.direct,12);
@@ -3207,7 +3221,7 @@ public:
         const float hazeZone=NorthlightCelestialProfiles::horizonHaze(volumePalette,c[31][3]);
         float hazeLift[3];NorthlightSunHue::horizonLift(glowHueFrame,hazeLift);
         const auto haze=NorthlightHorizonHaze::constants(horizonHazeState,{quality.horizonHaze,quality.horizonHazeStart,quality.horizonHazeBand,quality.horizonHazeTerrain},
-            farZ,hazeZone,effects.fog,celestialValid,hazeSun,sourceWeights[0],hazeLift);
+            farZ,hazeZone,effects.fog,celestialValid,hazeSun,sourceWeights[0],hazeLift,wx.hazeTauScale());
         c[57][1]=haze.shape[0];c[57][2]=haze.shape[1];c[57][3]=haze.shape[2];c[67][2]=haze.sun[0];c[67][3]=haze.sun[1];
         c[35][1]=haze.lift[0];c[35][2]=haze.lift[1];c[35][3]=haze.lift[2]; /* lift colour = the glow hue (WorldComposite reads c35.yzw) */
         hazeFrame=haze;
@@ -3242,7 +3256,7 @@ public:
             // rises so the aureole brightens toward the sun. c17/c18 are restored after the fog loop.
             if(volume&&source==0)NorthlightSunHue::fogDirect(rgb,glowHueFrame,rgb);
             d->SetPixelShaderConstantF(16,dir,1);d->SetPixelShaderConstantF(17,rgb,1);
-            if(volume){c[21][1]=1.2f*volumePalette.fogGain[source];c[21][2]=source==0?NorthlightSunHue::SunForwardCap:NorthlightSunHue::MoonForwardCap;d->SetPixelShaderConstantF(21,c[21],1);d->SetTexture(15,sourceVis[source][1-sourceVisIndex]);}
+            if(volume){c[21][1]=1.2f*volumePalette.fogGain[source]*wx.shaftGain();c[21][2]=source==0?NorthlightSunHue::SunForwardCap:NorthlightSunHue::MoonForwardCap;d->SetPixelShaderConstantF(21,c[21],1);d->SetTexture(15,sourceVis[source][1-sourceVisIndex]);}
             c[27][0]=first?(volume?1.f:1.f-authoredFill):0.f;c[27][1]=sourceWeights[source];d->SetPixelShaderConstantF(27,c[27],1);
         };
         d->SetRenderState(D3DRS_SRCBLEND,D3DBLEND_ONE);d->SetRenderState(D3DRS_DESTBLEND,D3DBLEND_ONE);d->SetRenderState(D3DRS_BLENDOP,D3DBLENDOP_ADD);

@@ -153,6 +153,9 @@ Individual settings (Quality / Balanced / Performance):
   FrameDrawGates        1 / 1 / 1      per-frame draw checks (0 = check every draw as before 0.3.187, for comparisons; the image does not change)
   ShadowPivotCorrection 1 / 1 / 1      near shadow detail follows camera zoom and collisions (0 = the distance of the sharp shadow area is only estimated while orbiting, as before 0.3.190, for comparisons)
   CommandStream         1 / 1 / 1      the game records its graphics calls and a second thread runs the renderer (0 = everything on the game's thread as before 0.3.192, for comparisons; read at game start)
+  Weather               1 / 1 / 1      Northlight's haze, fog, light shafts, sun and moon, shadows, sky light and lamps follow rain and snow shown by the art layer's weather textures (0 = nothing reacts; needs the art layer; no extra passes)
+  RainFog               1 / 1 / 1      how strongly rain and snow thicken the fog and haze and dim shafts, sun and moon (0..2; 0 = no change, 2 = twice as strong; snow acts at 60 percent)
+  RainWetness           1 / 1 / 0      wet ground under open sky while it rains (0..2; 0 = dry; needs GI; half resolution; snow does not wet)
 When both NearShadowInterval and FarShadowInterval are at least 2, frames that
 draw neither shadow also skip copying the character geometry (about 1–1.5 ms
 of CPU per skipped frame). Light and normal frames alternate: the average FPS

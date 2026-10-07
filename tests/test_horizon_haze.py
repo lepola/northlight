@@ -369,7 +369,7 @@ def main():
     assert cpu.index('c[57][1]=haze.shape[0];c[57][2]=haze.shape[1];c[57][3]=haze.shape[2];c[67][2]=haze.sun[0];c[67][3]=haze.sun[1];') < upload
     blur_end = cpu.index('"volume blur vertical"))return false;}')
     assert blur_end < cpu.index('d->SetPixelShaderConstantF(34,haze.haze,1);') < cpu.index('"world composite"')
-    assert 'farZ,hazeZone,effects.fog,celestialValid,hazeSun,sourceWeights[0],hazeLift);' in cpu
+    assert 'farZ,hazeZone,effects.fog,celestialValid,hazeSun,sourceWeights[0],hazeLift,wx.hazeTauScale());' in cpu
     assert 'float hazeLift[3];NorthlightSunHue::horizonLift(glowHueFrame,hazeLift);' in cpu
     assert cpu.index('c[35][1]=haze.lift[0];c[35][2]=haze.lift[1];c[35][3]=haze.lift[2];') < upload
     assert 'horizonHazeState.update(active->map,legacyFog.parameters,legacyFog.color,projection[2],' in cpu
@@ -390,12 +390,13 @@ def main():
             # 0.3.175: WorldNormals' wide-sample threshold .85 -> .95 (r76) and both-or-neither wide pair (r77).
             # 0.3.185: RemovalSmooth is new (the removal smoothing's own half-res pass; TemporalLight shrinks).
             # 0.3.197: WorldGI blends a same-key probe re-publication from the previous SH (task 13).
-            if name not in ('WorldComposite', 'TemporalLight', 'SourceVisibilityPS', 'WorldLighting', 'LocalDirect', 'WorldNormals', 'RemovalSmooth', 'WorldGI'):
+            # 0.3.198 (rain): WorldGI (wet ground) and WorldFog (air floor from c59.w) change on purpose.
+            if name not in ('WorldComposite', 'TemporalLight', 'SourceVisibilityPS', 'WorldLighting', 'LocalDirect', 'WorldNormals', 'RemovalSmooth', 'WorldGI', 'WorldFog'):
                 assert info['sha256'] == BEFORE[name], name
                 unchanged.append(name)
-        assert sorted(unchanged) == sorted(k for k in BEFORE if k not in ('TemporalLight', 'SourceVisibilityPS', 'WorldLighting', 'LocalDirect', 'WorldNormals', 'WorldGI'))
+        assert sorted(unchanged) == sorted(k for k in BEFORE if k not in ('TemporalLight', 'SourceVisibilityPS', 'WorldLighting', 'LocalDirect', 'WorldNormals', 'WorldGI', 'WorldFog'))
         assert manifest['shaders']['WorldNormals']['static_instruction_slots'] == 434  # r77: both wide samples or neither
-        assert manifest['shaders']['WorldFog']['sha256'] == BEFORE['WorldFog'] and manifest['shaders']['WorldFog']['static_instruction_slots'] == 512
+        assert manifest['shaders']['WorldFog']['static_instruction_slots'] == 512  # 0.3.198 (rain): the same 512 slots (the literal .0017 became c59.w)
         assert SOURCE_VISIBILITY_SLOTS is not None, 'TODO(lead): pin SOURCE_VISIBILITY_SLOTS to the compiled count (%d)' % manifest['shaders']['SourceVisibilityPS']['static_instruction_slots']
         assert manifest['shaders']['SourceVisibilityPS']['static_instruction_slots'] == SOURCE_VISIBILITY_SLOTS <= 512
         assert manifest['shaders']['WorldComposite']['sha256'] != '772d438995ed33d36db7e26f9b169a5effd94a876ce5d8b8af9fd8aad5381990'

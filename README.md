@@ -35,8 +35,14 @@ Every effect below is on by default and is drawn on top of the game's own frame.
   turns them on): only lights inside buildings cast faint shadows, at dusk and night; street lamps,
   lanterns and torches never do.
 - **Lighting art layer.** An MPQ patch (`patch-z`) built from your client's own `Light*.dbc`: retuned
-  outdoor clear-weather light and fog colours, warmer Mulgore, denser Stormwind day fog. Sky models
+  outdoor clear-weather light and fog colours, warmer Mulgore, denser Stormwind day fog. Storm weather
+  gets darker light and fog bands. Sky models
   that paint their own sun or moon into the clear-weather sky lose it.
+- **Weather.** A heavy-rain look: procedural rain and snow textures in the art layer, darker storm light
+  and fog bands, and Northlight's own haze, fog, light shafts, sun and moon, shadows, GI and lamps follow
+  detected rain or snow; with GI on, the ground under open sky turns wet in rain. Detection reads only the
+  textures the art layer ships, no game memory, so it needs the Northlight art layer (`Weather`, `RainFog`,
+  `RainWetness`).
 - **Water.** The game's water is drawn unchanged; a liquid mask keeps the relighting and AO off the
   surface, and fog is measured to the water surface.
 - **Settings.** `northlight-quality.ini` has three presets (Quality, the default, Balanced and

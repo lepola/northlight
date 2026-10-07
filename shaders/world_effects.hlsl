@@ -65,7 +65,11 @@ row_major float4x4 PreviousView : register(c53);
 float4 TemporalInfo : register(c57); // history weight (0 disables), horizon shape (yzw)
 float4 HorizonShape : register(c57); // yzw: terrain start view Z, 1/ramp (0 = sky only), log2(e)/sin(band) (WorldComposite only)
 float4 FogRange : register(c58); // near fade start, 1/(fade length), lamp glow strength, lamp glow soft cap
-float4 LocalLightFog[8] : register(c59); // x extinction at the light, unused
+float4 LocalLightFog[8] : register(c59); // x extinction at the light (LocalFog reads only .x of c59..c66), yzw unused there
+// 0.3.198 (rain): c59.yzw are the weather scalars (LocalLightFog[0].yzw, free: only .x is read); y and z are 0 without weather and
+// every use below reduces to the old math then (w is the exception by design: it carries the old literal .0017, see WorldFog). Written once per
+// frame in the bank, read before the lamp fog batch overwrites c59..c62.
+float4 WeatherInfo : register(c59); // y wetness w (reserved: 0 until the wet pass reads it), z direct shadow softening (WorldLighting), w the shared air extinction .0017 + the extra (WorldFog)
 
 float2 depthUV(float2 uv) {
     // D3D9 raster centers are integer pixels; texture centers are pixel+.5.
@@ -367,8 +371,12 @@ LightingOutput WorldLighting(float2 uv:TEXCOORD0) {
     // native direct light. A fully occluded moon contributes zero new light.
     float3 old=LegacyDirect.rgb*saturate(dot(n,LegacyDirection.xyz));
     float3 painted=old*SourcePolicy.y;
-    float3 moon=DirectLight.rgb*saturate(dot(n,SunDirection.xyz))*shadow;
-    float3 sun=DirectLight.rgb*saturate(dot(n,LegacyDirection.xyz))*visibility;
+    // 0.3.198 (rain): rain softens the DIRECT shadowing only (z = the share removed; 0 = exactly as before: the branch is not taken). The alpha
+    // below, the baseline alpha and GridInfo.z (a divisor elsewhere) keep the true visibility, so the removal and the lamps see the real shadow.
+    float moonShadow=shadow,sunVisibility=visibility;
+    if(WeatherInfo.z>0){moonShadow=lerp(1,shadow,1-WeatherInfo.z);sunVisibility=lerp(1,shadow,GridInfo.z*(1-WeatherInfo.z));}
+    float3 moon=DirectLight.rgb*saturate(dot(n,SunDirection.xyz))*moonShadow;
+    float3 sun=DirectLight.rgb*saturate(dot(n,LegacyDirection.xyz))*sunVisibility;
     float3 replacement=lerp(sun,moon,SunDirection.w);
     o.correction=float4(replacement-painted,lerp(visibility,shadow,SunDirection.w)*SourcePolicy.y);
     // Mode 2 isolates GI: the shared buffer must contain no direct correction.
@@ -673,7 +681,7 @@ float4 WorldFog(float2 uv:TEXCOORD0):COLOR0 {
         float airBase=lerp(VolumeAir.y,VolumeAir.x,profile);
         airBase=lerp(airBase,FogColor.w,generalForest);
         // Shared outdoor haze doubled; regional additions stay independent.
-        airBase=.0017+airBase*saturate(mad(field.w,1.6,-1));
+        airBase=WeatherInfo.w+airBase*saturate(mad(field.w,1.6,-1)); // 0.3.198 (rain): c59.w = .0017 + extra air extinction (the literal moved into the constant: no extra slot), mirrored by sigmaAt on the CPU
         float airSigma=airBase*airVertical*airVertical;
         // Fog is thin at the viewer and thickens with distance: density ramps
         // from zero at FogRange.x to full one fade length later, so the player
