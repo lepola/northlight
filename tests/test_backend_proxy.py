@@ -81,7 +81,7 @@ def audit():
     assert 'dxvkFallback' not in src and 'dxvkFallbackModule' not in src and 'dxvkFallbackArmed' not in src
     proc=src[src.index('template<class T> static T procedure'):src.index('#define NORTHLIGHT_EXPORT')]
     assert proc.count('backend()')==1 and 'GetModuleHandle' not in proc and 'Module' not in proc.replace('HMODULE','')
-    # 0.3.193: no automatic dxvk -> dxvk2 fallback: no crash marker is written, read or honoured; the configured backend always loads.
+    # 0.3.195: no automatic dxvk -> dxvk2 fallback: no crash marker is written, read or honoured; the configured backend always loads.
     for gone in ['dxvkInitProbe','dxvkInitMarker','dxvk3Probe','dxvk3Sha','northlight-dxvk3-init','loadDxvk2','BACKEND FALLBACK','FILE_ATTRIBUTE_REPARSE_POINT','GENERIC_WRITE','CREATE_ALWAYS']:
         assert gone not in src,gone
     assert 'dxvkInitMarker' not in policy and '.pending' not in policy
