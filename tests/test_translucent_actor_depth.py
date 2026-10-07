@@ -138,7 +138,7 @@ cf=r[r.index('void clearFrame() {'):r.index('void releaseResources()')]
 checks['clearFrame resets the latch and the census']='earlyDepth.reset()' in cf and 'resetTranslucentCensus()' in cf
 fin=r[r.index('void finishFrameImpl() {'):r.index('++frame;mirrorState.gate.frame')]
 checks['TRANSLUCENT logged before clearFrame in finishFrameImpl']=fin.index('TRANSLUCENT frame=')<fin.index('clearFrame();')
-terr=r[r.index('if(!sameDepth){drop(worldDepth);'):][:400]
+terr=r[r.index('if(!bindWorldDepth(desc))return;'):][:400]
 checks['terrain draw undo uses earlyCaptured, counted before captured=false']=terr.index('captured&&earlyDepth.earlyCaptured')<terr.index('++earlyResolveUndone')<terr.index('terrain=true; captured=false;')
 clr=r[r.index('HRESULT STDMETHODCALLTYPE Clear('):][:900]
 checks['Clear(Z) after the early resolve freezes it instead of resolving']='earlyDepth.earlyCaptured' in clr and 'earlyDepth.freeze()' in clr and 'resolveDepth()' in clr

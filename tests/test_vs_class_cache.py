@@ -123,7 +123,87 @@ with tempfile.TemporaryDirectory(prefix='northlight-vs-cache-') as tmp:
         subprocess.run(['clang++','-std=c++17','-Wall','-Wextra','-Werror','-Wno-unused-parameter','-Wno-unused-private-field',*flags,str(Path(tmp)/'t.cpp'),'-o',str(exe)],check=True)
         print(label,subprocess.check_output([str(exe)],text=True),end='',flush=True)
 
-dm=member(r,'template<class Capture> void prepareDrawImpl(Capture capture)');bd=member(r,'    void beforeDraw(IDirect3DVertexShader9* vs)');cw=member(r,'template<class Draw> void captureWater(');fv=member(r,'bool fullViewport(D3DSURFACE_DESC& desc')
+
+# Behavioural: the real fullViewport (with its back buffer cache) and bindWorldDepth (beforeDraw's depth step) over mocks.
+vp_start=r.index("    // Swap chain 0's back buffer description only changes through Reset.")
+vp_block=r[vp_start:r.index('\n    bool readProjection(',vp_start)]
+bw_block=member(r,'    bool bindWorldDepth(const D3DSURFACE_DESC& desc)')
+clear_frame=member(r,'void clearFrame() {')
+assert 'drop(worldDepth);worldDepthDescKnown=false;' in clear_frame and 'backDescKnown=false;backSurface=nullptr;' in member(r,'HRESULT STDMETHODCALLTYPE Reset(D3DPRESENT_PARAMETERS* pp) override')
+HARNESS2=r"""
+#include <cassert>
+#include <cmath>
+#include <cstdarg>
+#include <cstdio>
+typedef int HRESULT;typedef unsigned UINT;typedef unsigned DWORD;
+#define FAILED(h) ((h)<0)
+#define SUCCEEDED(h) ((h)>=0)
+#define MAKEFOURCC(a,b,c,d) (unsigned(a)|unsigned(b)<<8|unsigned(c)<<16|unsigned(d)<<24)
+constexpr HRESULT D3D_OK=0,D3DERR_NOTFOUND=-2;
+enum D3DFORMAT{D3DFMT_UNKNOWN=0,D3DFMT_A8R8G8B8=21,D3DFMT_D24S8=75,D3DFMT_D24X8=77,D3DFMT_D16=80};
+enum D3DMULTISAMPLE_TYPE{D3DMULTISAMPLE_NONE=0};
+enum D3DBACKBUFFER_TYPE{D3DBACKBUFFER_TYPE_MONO=0};
+struct D3DSURFACE_DESC{D3DFORMAT Format=D3DFMT_UNKNOWN;D3DMULTISAMPLE_TYPE MultiSampleType=D3DMULTISAMPLE_NONE;UINT Width=0,Height=0;};
+struct D3DVIEWPORT9{DWORD X=0,Y=0,Width=0,Height=0;float MinZ=0,MaxZ=1;};
+struct IDirect3DSurface9{int refs=1;unsigned getDescCalls=0;D3DSURFACE_DESC desc;
+    void AddRef(){++refs;}void Release(){--refs;}HRESULT GetDesc(D3DSURFACE_DESC* d){++getDescCalls;*d=desc;return D3D_OK;}};
+template<class T> static void drop(T*& p){if(p){p->Release();p=nullptr;}}
+struct Ext{
+    IDirect3DSurface9 *rt0=nullptr,*back=nullptr,*depth=nullptr;bool peekRt=true,peekDepth=true;unsigned getRt=0,getBack=0,getDepth=0;
+    bool peekRenderTarget(DWORD,IDirect3DSurface9*& out){if(!peekRt||!rt0)return false;out=rt0;return true;}
+    HRESULT GetRenderTarget(DWORD,IDirect3DSurface9** out){++getRt;if(!rt0)return D3DERR_NOTFOUND;rt0->AddRef();*out=rt0;return D3D_OK;}
+    HRESULT GetBackBuffer(UINT,UINT,D3DBACKBUFFER_TYPE,IDirect3DSurface9** out){++getBack;back->AddRef();*out=back;return D3D_OK;}
+    HRESULT GetViewport(D3DVIEWPORT9* v){v->X=0;v->Y=0;v->Width=1920;v->Height=1080;v->MinZ=0;v->MaxZ=1;return D3D_OK;}
+    bool peekDepthStencilSurface(IDirect3DSurface9*& out){if(!peekDepth||!depth)return false;out=depth;return true;}
+    HRESULT GetDepthStencilSurface(IDirect3DSurface9** out){++getDepth;if(!depth)return D3DERR_NOTFOUND;depth->AddRef();*out=depth;return D3D_OK;}
+};
+struct Dev{
+    Ext extObj;Ext* ext=&extObj;unsigned viewportRejects=0,viewportReports=0,depthRejects=0;bool failed=false;
+    IDirect3DSurface9* worldDepth=nullptr;D3DSURFACE_DESC worldDepthDesc;bool worldDepthDescKnown=false;
+    void logf(const char*,...){}
+@VP@
+@BW@
+    void clearFrame(){@CLEAR@}
+    void resetBack(){backDescKnown=false;backSurface=nullptr;}
+};
+static IDirect3DSurface9 surface(UINT w,UINT h,D3DFORMAT f){IDirect3DSurface9 s;s.desc.Width=w;s.desc.Height=h;s.desc.Format=f;return s;}
+int main(){
+    {   // fullViewport
+        Dev d;IDirect3DSurface9 back=surface(1920,1080,D3DFMT_A8R8G8B8),other=surface(1920,1080,D3DFMT_A8R8G8B8);d.ext->back=&back;d.ext->rt0=&back;D3DSURFACE_DESC desc;
+        assert(d.fullViewport(desc)&&desc.Width==1920&&d.ext->getBack==1&&back.getDescCalls==2&&d.backSurface==&back);   // first call: rt desc, then back buffer desc
+        back.desc.Width=1920;assert(d.fullViewport(desc)&&desc.Width==1920&&desc.Height==1080&&desc.Format==D3DFMT_A8R8G8B8);
+        assert(back.getDescCalls==2&&d.ext->getBack==1);                                                              // (a) RT0 is the back buffer: no GetDesc, no GetBackBuffer
+        d.ext->rt0=&other;assert(d.fullViewport(desc)&&other.getDescCalls==1);                                         // (b) another target: GetDesc
+        d.ext->rt0=&back;d.resetBack();assert(d.fullViewport(desc)&&d.ext->getBack==2&&d.backSurface==&back);          // (c) Reset cleared: GetBackBuffer again
+        d.ext->peekRt=false;const unsigned before=back.getDescCalls;assert(d.fullViewport(desc)&&d.ext->getRt==1&&back.getDescCalls==before+1);   // no peek: old Get path, desc read
+        assert(back.refs==1&&other.refs==1);                                                                           // every reference released
+        d.ext->peekRt=true;other.desc.Width=1280;d.ext->rt0=&other;assert(!d.fullViewport(desc)&&desc.Width==1280&&d.viewportRejects==1);   // a smaller target is still rejected
+    }
+    {   // bindWorldDepth
+        Dev d;IDirect3DSurface9 a=surface(1920,1080,D3DFMT_D24S8),b=surface(1920,1080,D3DFMT_D24X8);D3DSURFACE_DESC want;want.Width=1920;want.Height=1080;
+        d.ext->depth=&a;assert(d.bindWorldDepth(want)&&d.worldDepth==&a&&a.refs==2&&a.getDescCalls==1&&d.ext->getDepth==1&&d.worldDepthDescKnown);   // first: Get + GetDesc, the frame holds a reference
+        assert(d.bindWorldDepth(want)&&a.refs==2&&a.getDescCalls==1&&d.ext->getDepth==1);                              // (d) same surface, known desc: no Get/GetDesc, refcount unchanged
+        d.ext->depth=&b;assert(d.bindWorldDepth(want)&&d.worldDepth==&b&&a.refs==1&&b.refs==2&&b.getDescCalls==1&&d.ext->getDepth==2);   // (e) other surface: old path, replaced, counts right
+        assert(d.worldDepthDesc.Format==D3DFMT_D24X8);
+        d.clearFrame();assert(!d.worldDepth&&b.refs==1&&!d.worldDepthDescKnown);
+        assert(d.bindWorldDepth(want)&&b.getDescCalls==2&&d.ext->getDepth==3&&b.refs==2);                              // (f) after clearFrame the cached desc is not reused
+        d.ext->peekDepth=false;assert(d.bindWorldDepth(want)&&d.ext->getDepth==4&&b.refs==2&&b.getDescCalls==3);       // peek fails: old path, still one held reference
+        IDirect3DSurface9 small=surface(640,480,D3DFMT_D24S8);d.ext->depth=&small;assert(!d.bindWorldDepth(want)&&d.depthRejects==1&&small.refs==1&&d.worldDepth==&b&&b.refs==2);   // size mismatch: rejected, nothing leaks, worldDepth kept
+        IDirect3DSurface9 bad=surface(1920,1080,D3DFMT_D16);d.ext->depth=&bad;assert(!d.bindWorldDepth(want)&&d.failed&&bad.refs==1&&d.worldDepth==&b);   // unsupported format: disabled
+        d.ext->depth=nullptr;d.failed=false;assert(!d.bindWorldDepth(want)&&d.depthRejects==2);                         // no depth bound
+    }
+    std::printf("PASS fullViewport back buffer cache and bindWorldDepth cache\n");
+}
+"""
+src2=HARNESS2.replace('@VP@',vp_block).replace('@BW@',bw_block).replace('@CLEAR@','drop(worldDepth);worldDepthDescKnown=false;')
+with tempfile.TemporaryDirectory(prefix='northlight-phase3-') as tmp:
+    (Path(tmp)/'t.cpp').write_text(src2)
+    for label,flags in [('O2',['-O2']),('asan',['-O1','-g','-fsanitize=address,undefined','-fno-sanitize-recover=all'])]:
+        exe=Path(tmp)/('test-'+label)
+        subprocess.run(['clang++','-std=c++17','-Wall','-Wextra','-Werror','-Wno-unused-parameter','-Wno-unused-private-field',*flags,str(Path(tmp)/'t.cpp'),'-o',str(exe)],check=True)
+        print(label,subprocess.check_output([str(exe)],text=True),end='',flush=True)
+
+dm=member(r,'template<class Capture> void prepareDrawImpl(Capture capture)');bd=member(r,'    void beforeDraw(IDirect3DVertexShader9* vs)');cw=member(r,'template<class Draw> void captureWater(');fv=member(r,'bool fullViewport(D3DSURFACE_DESC& desc');bw=member(r,'bool bindWorldDepth(const D3DSURFACE_DESC& desc)')
 checks={
  'prepareDrawImpl: peekVertexShader with the GetVertexShader fallback, released only when not borrowed':
     'const bool borrowedVS=ext->peekVertexShader(vs);' in dm and 'if(!borrowedVS&&(FAILED(ext->GetVertexShader(&vs))||!vs))' in dm
@@ -142,7 +222,7 @@ checks={
  'fullViewport: back buffer desc reused only when the render target is the back buffer itself; cleared in Reset':
     'rt==backSurface' in fv and 'backSurface=back;drop(back);' in fv and 'backDescKnown=false;backSurface=nullptr;' in r,
  'beforeDraw: cached world depth desc reused only for the held surface; invalidated when it is dropped':
-    'worldDepth&&worldDepthDescKnown&&ext->peekDepthStencilSurface(ds)&&ds==worldDepth' in bd and 'if(!sameDepth){drop(worldDepth);worldDepthDescKnown=false;worldDepth=ds;worldDepthDesc=dd;worldDepthDescKnown=true;}' in bd
+    'worldDepth&&worldDepthDescKnown&&ext->peekDepthStencilSurface(ds)&&ds==worldDepth' in bw and 'if(!sameDepth){drop(worldDepth);worldDepthDescKnown=false;worldDepth=ds;worldDepthDesc=dd;worldDepthDescKnown=true;}' in bw and 'if(!bindWorldDepth(desc))return;' in bd
     and 'drop(worldDepth);worldDepthDescKnown=false;' in r and r.count('drop(worldDepth)')==2,
  'blob filter: borrowed peek, AddRef only for a Faint verdict, per-draw level desc guard kept':
     'peekTexture(peekContext,0,bound)' in claim and 'if(borrowed)bound->AddRef();guard.p=nullptr;' in claim and 'GetLevelDesc(0,&desc)' in claim and 'shadowBlobs->setTexturePeek(' in r,

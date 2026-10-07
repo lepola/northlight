@@ -799,6 +799,24 @@ class Device final : public GuardedMirrorDevice {
         if(gateFrame){++gateCounts.blobCalls;if(count&&count<=256)++gateCounts.blobTextures;}
         const auto verdict=shadowBlobs->claim(count);if(gateFrame&&verdict.claim==NorthlightShadowBlobFilter::Claim::Skip)++gateCounts.blobClaimed;return verdict;
     }
+    // 0.3.196 (task 12): beforeDraw's world depth step (extracted unchanged for testing). False: the draw is rejected (beforeDraw returns).
+    bool bindWorldDepth(const D3DSURFACE_DESC& desc){
+        IDirect3DSurface9* ds=nullptr;D3DSURFACE_DESC dd;
+        // 0.3.196 (task 12): the bound depth is the one worldDepth already holds (a reference, so same object and desc): reuse its cached desc, keep the reference.
+        const bool sameDepth=worldDepth&&worldDepthDescKnown&&ext->peekDepthStencilSurface(ds)&&ds==worldDepth;
+        if(sameDepth){ds=nullptr;dd=worldDepthDesc;}
+        else{
+            ds=nullptr;
+            if (FAILED(ext->GetDepthStencilSurface(&ds)) || !ds) {++depthRejects;return false;}
+            ds->GetDesc(&dd);
+        }
+        if (dd.Width!=desc.Width || dd.Height!=desc.Height) {++depthRejects;drop(ds);return false;}
+        if (dd.Format!=D3DFMT_D24S8 && dd.Format!=D3DFMT_D24X8 && dd.Format!=(D3DFORMAT)MAKEFOURCC('I','N','T','Z')) {
+            logf("DISABLED: unsupported world depth format %u",unsigned(dd.Format));failed=true;drop(ds);return false;
+        }
+        if(!sameDepth){drop(worldDepth);worldDepthDescKnown=false;worldDepth=ds;worldDepthDesc=dd;worldDepthDescKnown=true;}
+        return true;
+    }
     void beforeDraw(IDirect3DVertexShader9* vs) {
         const VsClass& vc=classifyVs(vs); const int entry=vc.entry; int tag=entry&kTagMask;
         drawWaterVS=(entry&kWaterTag)!=0;
@@ -818,20 +836,7 @@ class Device final : public GuardedMirrorDevice {
             if(wmo&&!world->wmoContext(vs))return;
             if(!wmo&&world)world->terrainContext();
             projectionValid=true;
-            IDirect3DSurface9* ds=nullptr;D3DSURFACE_DESC dd;
-            // 0.3.196 (task 12): the bound depth is the one worldDepth already holds (a reference, so same object and desc): reuse its cached desc, keep the reference.
-            const bool sameDepth=worldDepth&&worldDepthDescKnown&&ext->peekDepthStencilSurface(ds)&&ds==worldDepth;
-            if(sameDepth){ds=nullptr;dd=worldDepthDesc;}
-            else{
-                ds=nullptr;
-                if (FAILED(ext->GetDepthStencilSurface(&ds)) || !ds) {++depthRejects;return;}
-                ds->GetDesc(&dd);
-            }
-            if (dd.Width!=desc.Width || dd.Height!=desc.Height) {++depthRejects;drop(ds);return;}
-            if (dd.Format!=D3DFMT_D24S8 && dd.Format!=D3DFMT_D24X8 && dd.Format!=(D3DFORMAT)MAKEFOURCC('I','N','T','Z')) {
-                logf("DISABLED: unsupported world depth format %u",unsigned(dd.Format));failed=true;drop(ds);return;
-            }
-            if(!sameDepth){drop(worldDepth);worldDepthDescKnown=false;worldDepth=ds;worldDepthDesc=dd;worldDepthDescKnown=true;}
+            if(!bindWorldDepth(desc))return;
             if(captured&&earlyDepth.earlyCaptured){earlyDepth.undo();++earlyResolveUndone;++earlyResolveUndoneTotal;} /* 0.3.188 (2A): a terrain draw after the early resolve: the UI-time resolve redoes it */
             terrain=true; captured=false;
             resources(desc.Width,desc.Height,desc.Format);
