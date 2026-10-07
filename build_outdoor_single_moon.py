@@ -7,6 +7,7 @@ import argparse, hashlib, json, struct
 from pathlib import Path
 from mpq import Archive
 from build_lighting import DBC, u, putu, require
+from build_weather_textures import write_blp_bgra, mip_sizes
 from build_outdoor_single_sun import texture_names, batch_names, sky_name
 import sys
 sys.path.insert(0,str(Path(__file__).resolve().parent/'renderer'))
@@ -22,13 +23,7 @@ MOON_TEXTURES = {
 def transparent_moon():
     # Valid uncompressed BLP2, complete 64x64 mip chain. Zero color also
     # suppresses additive draws. Only the dedicated native secondary moon.
-    offsets=[0]*16;sizes=[0]*16;data=bytearray();size=64;level=0
-    while True:
-        offsets[level]=148+len(data);sizes[level]=size*size*4
-        data.extend(bytes(sizes[level]));level+=1
-        if size==1:break
-        size//=2
-    return struct.pack('<4sI4B2I32I',b'BLP2',1,3,8,0,1,64,64,*offsets,*sizes)+data
+    return write_blp_bgra(64,64,[bytes(w*h*4) for w,h in mip_sizes(64,64)])
 
 def build(source,output,assets=None):
     """assets: an Assets of the client (default: the configured client). Raises

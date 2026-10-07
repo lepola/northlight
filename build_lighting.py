@@ -108,6 +108,45 @@ def transform_color(ch, original, time, count, sun):
         c = [v*.80 for v in c]
     return pack(c,original)
 
+def profile_complete(tables, pid):
+    light, params, ints, floats = [tables[n] for n in TABLES]
+    return pid in params.index and all((pid-1)*18+c+1 in ints.index for c in range(18)) and all((pid-1)*6+c+1 in floats.index for c in range(6))
+
+def relit_profile(source, tables, old, new):
+    """Add profile `new` to `tables`: `source`'s profile `old` with the relight colour and fog transform; returns the changed key count."""
+    params, ints, floats = tables['LightParams'], tables['LightIntBand'], tables['LightFloatBand']
+    row = copy.copy(source['LightParams'].index[old]); putu(row,0,new)
+    # Preserve skybox references and opaque flags, including this pack's
+    # nonstandard last field. Tune only documented opacity/glow floats.
+    glow=f(row,3)
+    if 0<glow<=1: putf(row,3,min(glow*.8,.28))
+    for col in (4,6):
+        value=f(row,col)
+        if 0<value<=1: putf(row,col,max(.12,value*.78))
+    for col in (5,7):
+        value=f(row,col)
+        if 0<value<=1: putf(row,col,min(.92,value+.08))
+    params.add(row)
+    modifications=0
+    sun=source['LightIntBand'].index[(old-1)*18+10]
+    for ch in range(18):
+        row=copy.copy(source['LightIntBand'].index[(old-1)*18+ch+1]); putu(row,0,(new-1)*18+ch+1)
+        for i in range(u(row,1)):
+            t=u(row,2+i); before=u(row,18+i)
+            after=transform_color(ch,before,t,u(row,1),sample_color(sun,t))
+            putu(row,18+i,after); modifications += before!=after
+        sort_band(row); ints.add(row)
+    for ch in range(6):
+        row=copy.copy(source['LightFloatBand'].index[(old-1)*6+ch+1]); putu(row,0,(new-1)*6+ch+1)
+        for i in range(u(row,1)):
+            value=f(row,18+i); day=daylight(u(row,2+i)) if u(row,1)>1 else 1.0
+            if ch==0 and value>=3600: # >=100 yards; retain tight local fog volumes.
+                putf(row,18+i,value*(.94+.16*day))
+            elif ch==1 and 0<value<1:
+                putf(row,18+i,clamp(value*.88,0,.95))
+        sort_band(row); floats.add(row)
+    return modifications
+
 def relight(tables):
     """The outdoor relighting, in place on {name: DBC} for TABLES; returns (changes, skipped, zones)."""
     light, params, ints, floats = [tables[n] for n in TABLES]
@@ -119,36 +158,7 @@ def relight(tables):
         if old not in params.index or any((old-1)*18+c+1 not in ints.index for c in range(18)) or any((old-1)*6+c+1 not in floats.index for c in range(6)):
             skipped.append(old); continue
         new = next_id; next_id += 1; mapping[old] = new
-        row = copy.copy(params.index[old]); putu(row,0,new)
-        # Preserve skybox references and opaque flags, including this pack's
-        # nonstandard last field. Tune only documented opacity/glow floats.
-        glow=f(row,3)
-        if 0<glow<=1: putf(row,3,min(glow*.8,.28))
-        for col in (4,6):
-            value=f(row,col)
-            if 0<value<=1: putf(row,col,max(.12,value*.78))
-        for col in (5,7):
-            value=f(row,col)
-            if 0<value<=1: putf(row,col,min(.92,value+.08))
-        params.add(row)
-        modifications=0
-        sun=ints.index[(old-1)*18+10]
-        for ch in range(18):
-            row=copy.copy(ints.index[(old-1)*18+ch+1]); putu(row,0,(new-1)*18+ch+1)
-            for i in range(u(row,1)):
-                t=u(row,2+i); before=u(row,18+i)
-                after=transform_color(ch,before,t,u(row,1),sample_color(sun,t))
-                putu(row,18+i,after); modifications += before!=after
-            sort_band(row); ints.add(row)
-        for ch in range(6):
-            row=copy.copy(floats.index[(old-1)*6+ch+1]); putu(row,0,(new-1)*6+ch+1)
-            for i in range(u(row,1)):
-                value=f(row,18+i); day=daylight(u(row,2+i)) if u(row,1)>1 else 1.0
-                if ch==0 and value>=3600: # >=100 yards; retain tight local fog volumes.
-                    putf(row,18+i,value*(.94+.16*day))
-                elif ch==1 and 0<value<1:
-                    putf(row,18+i,clamp(value*.88,0,.95))
-            sort_band(row); floats.add(row)
+        modifications = relit_profile(tables, tables, old, new)
         changes[old]={'new':new,'color_keys_changed':modifications}
     zones={name:0 for name in MAPS.values()}
     for row in light.rows:
@@ -256,6 +266,120 @@ def retime(tables, profiles):
                 entry['retimed'] = entry.get('retimed', 0)+1
                 report['rows'][f'{name}:{u(row,0)}'] = {'before': [t for t, _ in before], 'after': [t for t, _ in result]}
     return report
+
+# 0.3.198 (rain): a private storm profile (Light.dbc column 9) for every outdoor row, so the
+# "Forever-style" rain has a dark, grey, short-fog sky of its own. Only the storm slot changes; the
+# clear, underwater and storm-underwater slots (7, 8, 10) stay as they are.
+STORM_SLOT = 9
+STORM_FOG_END_SCALE, STORM_FOG_END_FLOOR = .40, 220.   # fog end x.40 (like relight, only >= 3600), never below 220
+STORM_FOG_START_MAX = .15                                # fog start ratio cap
+STORM_DIRECT_SCALE, STORM_DIRECT_DESAT = .55, .50        # ch0 direct light
+STORM_AMBIENT_SCALE, STORM_AMBIENT_DESAT = 1.05, .40     # ch1 ambient
+STORM_SKY_LERP, STORM_SKY_SCALE = .70, .60               # ch2-6 sky toward grey-blue, then darker
+STORM_FOG_LERP = .70                                     # ch7 fog colour toward the same grey
+STORM_GREY = (.42, .45, .50)                             # grey-blue chroma; scaled to keep each key's luminance
+STORM_SHADOW_SCALE = .5                                  # ch8 terrain shadow opacity
+STORM_SUN_SCALE, STORM_HALO_SCALE = .35, .25             # ch9 sun, ch10 halo
+STORM_CLOUD_SCALE = .70                                  # ch12 clouds: grey, then darker
+STORM_GLOW_SCALE = .5                                    # LightParams column 3
+STORM_WATER = range(14, 18)                              # untouched
+
+def storm_color(ch, original):
+    c = rgb(original)
+    L = lum(c)
+    grey = [L*k/lum(STORM_GREY) for k in STORM_GREY]
+    if ch == 0: c = [v*STORM_DIRECT_SCALE for v in mix(c, [L]*3, STORM_DIRECT_DESAT)]
+    elif ch == 1: c = [v*STORM_AMBIENT_SCALE for v in mix(c, [L]*3, STORM_AMBIENT_DESAT)]
+    elif 2 <= ch <= 6: c = [v*STORM_SKY_SCALE for v in mix(c, grey, STORM_SKY_LERP)]
+    elif ch == 7: c = mix(c, grey, STORM_FOG_LERP)
+    elif ch == 8: c = [v*STORM_SHADOW_SCALE for v in c]
+    elif ch == 9: c = [v*STORM_SUN_SCALE for v in c]
+    elif ch == 10: c = [v*STORM_HALO_SCALE for v in c]
+    elif ch == 12: c = [v*STORM_CLOUD_SCALE for v in [L]*3]
+    return pack(c, original)
+
+def storm_profile(tables, pid):
+    """The storm look, in place on profile `pid` (a private copy): colour and fog bands, glow."""
+    params, ints, floats = tables['LightParams'], tables['LightIntBand'], tables['LightFloatBand']
+    glow = f(params.index[pid], 3)
+    putf(params.index[pid], 3, glow*STORM_GLOW_SCALE)
+    for ch in range(18):
+        if ch in STORM_WATER: continue
+        row = ints.index[(pid-1)*18+ch+1]
+        for i in range(u(row, 1)): putu(row, 18+i, storm_color(ch, u(row, 18+i)))
+    for ch in (0, 1):
+        row = floats.index[(pid-1)*6+ch+1]
+        for i in range(u(row, 1)):
+            value = f(row, 18+i)
+            if ch == 0 and value >= 3600: putf(row, 18+i, max(value*STORM_FOG_END_SCALE, STORM_FOG_END_FLOOR))
+            elif ch == 1: putf(row, 18+i, min(value, STORM_FOG_START_MAX))
+
+def copy_profile(tables, old, new):
+    """Add profile `new` to `tables` as a plain copy of `old`."""
+    params, ints, floats = tables['LightParams'], tables['LightIntBand'], tables['LightFloatBand']
+    row = copy.copy(params.index[old]); putu(row, 0, new); params.add(row)
+    for table, channels in ((ints, 18), (floats, 6)):
+        for ch in range(channels):
+            row = copy.copy(table.index[(old-1)*channels+ch+1]); putu(row, 0, (new-1)*channels+ch+1); table.add(row)
+
+def stormify(tables, stock):
+    """Private storm profiles for the outdoor rows, in place on the final `tables` (after relight, retime and
+    the sky steps); `stock` is the same tables as the client's own chain has them. Returns the report."""
+    light, params, ints, floats = [tables[n] for n in TABLES]
+    stock_rows = stock['Light'].index
+    # Above every existing id, also a Light slot's dangling one.
+    first = next_id = max(max(params.index), (max(ints.index)+17)//18, (max(floats.index)+5)//6, max(u(r, c) for r in light.rows for c in range(7, 15)))+1
+    groups, skipped, rows = {}, [], []
+    for row in light.rows:
+        if u(row, 1) not in MAPS: continue
+        clear = u(row, 7)
+        if not clear or not profile_complete(tables, clear): skipped.append(u(row, 0)); continue
+        before = stock_rows.get(u(row, 0))
+        old_clear, old_storm = (u(before, 7), u(before, STORM_SLOT)) if before is not None else (clear, clear)
+        if old_storm == old_clear or not profile_complete(stock, old_storm):
+            kind, source, sky = 'clear', clear, u(params.index[clear], 2)
+        else:
+            kind, source = 'stock', old_storm
+            same = old_clear in stock['LightParams'].index and u(stock['LightParams'].index[old_storm], 2) == u(stock['LightParams'].index[old_clear], 2)
+            sky = u(params.index[clear], 2) if same else u(stock['LightParams'].index[old_storm], 2)
+        groups.setdefault((kind, source, sky), []).append(row)
+    made = {}
+    for key, members in groups.items():
+        kind, source, sky = key
+        made[key] = next_id; next_id += 1
+        if kind == 'clear': copy_profile(tables, source, made[key])
+        else: relit_profile(stock, tables, source, made[key])
+        putu(params.index[made[key]], 2, sky)
+    stock_made = [made[k] for k in made if k[0] == 'stock']
+    retimed = retime(tables, stock_made) if stock_made else None
+    clamped = 0
+    for key, pid in made.items():
+        water = {ch: bytes(ints.index[(pid-1)*18+ch+1])[4:] for ch in STORM_WATER}
+        storm_profile(tables, pid)
+        assert all(bytes(ints.index[(pid-1)*18+ch+1])[4:] == v for ch, v in water.items())
+        # Never thicker than the clear fog: key-wise at the storm's key times, against every row of the group.
+        end, clears = floats.index[(pid-1)*6+1], [floats.index[(u(r, 7)-1)*6+1] for r in groups[key]]
+        for i in range(u(end, 1)):
+            limit = min(band_value(band_pairs(c, True), True, u(end, 2+i)) for c in clears)
+            if f(end, 18+i) > limit: putf(end, 18+i, limit); clamped += 1
+    for key, members in groups.items():
+        for row in members: putu(row, STORM_SLOT, made[key])
+    # Validation: private, grouped, not shared with any other slot, short fog, <= 16 keys, water untouched.
+    others = {u(r, c) for r in light.rows for c in range(7, 15) if c != STORM_SLOT}
+    for key, members in groups.items():
+        pid = made[key]
+        assert pid >= first and pid not in others and pid not in {u(r, STORM_SLOT) for r in light.rows if r not in members}
+        end = floats.index[(pid-1)*6+1]
+        for r in members:
+            clear_end = floats.index[(u(r, 7)-1)*6+1]
+            assert u(r, STORM_SLOT) == pid
+            for i in range(u(end, 1)):
+                assert f(end, 18+i) <= band_value(band_pairs(clear_end, True), True, u(end, 2+i))+1e-3, (u(r, 0), pid)
+        for table, n in ((ints, 18), (floats, 6)):
+            assert all(0 <= u(table.index[(pid-1)*n+c+1], 1) <= 16 for c in range(n))
+    return {'profiles': len(made), 'rows': sum(map(len, groups.values())), 'rows_skipped': skipped, 'first_id': first,
+            'from_clear': sum(k[0] == 'clear' for k in made), 'from_stock': len(stock_made), 'fog_keys_clamped_to_clear': clamped,
+            'retime': {k: v for k, v in (retimed or {}).items() if k != 'rows'}}
 
 def build():
     tables = {n: DBC((SOURCE/(n+'.dbc')).read_bytes()) for n in TABLES}

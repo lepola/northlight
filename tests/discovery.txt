@@ -108,6 +108,7 @@ test_snapshot_prediction.py
 test_solar_volume.py
 test_static_cache_dirty_rect.py
 test_static_plan_job.py
+test_storm_bands.py
 test_stormlib_build.py
 test_sun_hue.py
 test_sun_rim.py
@@ -134,6 +135,7 @@ test_water_geometry.py
 test_water_mask_state.py
 test_water_shader_patch.py
 test_water_shaders.py
+test_weather_textures.py
 test_windows_installer.py
 test_wmo_group_tolerance.py
 test_world_cache_diff.py

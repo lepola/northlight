@@ -86,7 +86,9 @@ KNOWN_OURS = {'a6362b62564d8b0e9bbc71e1e8e8420b4b66557c021ea0656c3c7d34a30ac4a2'
               '51571ec6380f3cc5a88f50158cc9f857dbe584a48e127de5a01b927aa8242fa8',
               '672163c83848cbb7cb9aff4870557789032b0a1d7987b864d78035dfd08b375f',
               '7169280ab24f38a60ed23f27745c5c2eedeecfb2d04dabb935e0bcbcd6ee600a',   # 0.3.178 dev HD (retimed bands)
-              '019f5231a95bb67f6e6c868752dda86c05abf9cae95ba7e6b01ae48cc78392e9'}   # 0.3.178 stock (retimed bands)
+              '019f5231a95bb67f6e6c868752dda86c05abf9cae95ba7e6b01ae48cc78392e9',   # 0.3.178 stock (retimed bands)
+              '26e824f399da10175d605dd676448f3a672892f14b9e17e7fb1b60cd45041748',   # 0.3.198 dev HD (storm bands, weather textures)
+              '15d9f53cc84870817e90e0f294f6263bdfaf8f955e5824f3bbdbeefe051680ad'}   # 0.3.198 stock (storm bands, weather textures)
 BASE_ARCHIVES = ('common', 'common-2', 'expansion', 'lichking', 'patch', 'patch-2', 'patch-3')
 GIB = 1 << 30
 LOCAL_BUILD_BYTES = 13 * GIB   # 1.2 x the ~11 GB cache
