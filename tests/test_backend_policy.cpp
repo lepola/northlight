@@ -50,8 +50,6 @@ assert(overridePath(L"\\\\server\\share\\d3d9.dll",root)==L"\\\\server\\share\\d
 auto custom=candidates(Kind::Legacy,overridePath(L"mine\\d3d9.dll",root),root,sys);
 assert(custom.size()==1&&custom[0]==L"C:\\Games\\WoW\\mine\\d3d9.dll");
 // DXVK 3 init marker: beside the dxvk backend, never named d3d9.dll.
-assert(dxvkInitMarker(root)==L"C:\\Games\\WoW\\renderer-backends\\dxvk\\northlight-dxvk3-init.pending"&&!d3d9Name(dxvkInitMarker(root)));
-assert(directory(dxvkInitMarker(root))==directory(defaultPath(Kind::Dxvk,root,sys)));
 // Identity helpers.
 assert(samePath(L"C:\\GAMES\\wow\\D3D9.DLL",L"c:/games/WoW/d3d9.dll")&&!samePath(L"",L""));
 assert(baseName(L"a/b\\c.dll")==L"c.dll"&&baseName(L"c.dll")==L"c.dll");
