@@ -75,6 +75,9 @@ float4 WeatherInfo : register(c59); // z direct shadow softening (WorldLighting)
 // c60.yzw large-noise origin; c61.x the large noise below which no bank can be, c61.yzw small-noise origin; c62.x the tallest bank top (5.5 height),
 // c62.y -threshold x sharpness, c62.z 8 height, c62.w sigmaMax; c63.x .35 sharpness, c63.yz 1/large and 1/small period, c63.w .65 sharpness.
 float4 CloudInfo[4] : register(c60);
+// 0.3.200 (gpu budget): c60.x (free in the cloud pass) and c64.z (FogTemporal reads only c64.y) lengthen the clouds' and WorldFog's world-fixed
+// intervals at reduced GpuBudgetMs levels (fewer steps over the same 128 units); both 0 at full level, where mad(w,1/N,0) is the old w/N exactly.
+float4 FogStepInfo : register(c64);
 sampler3D CloudNoise : register(s14); // tileable N^3 L8 volume (LINEAR, WRAP); s14 is NormalBuffer/LightHistory in other passes, never bound together with this one
 
 float2 depthUV(float2 uv) {
@@ -653,7 +656,7 @@ float4 WorldFog(float2 uv:TEXCOORD0):COLOR0 {
     float3 axis=abs(ray);
     float2 major=axis.x>=axis.y?float2(ray.x,Camera.x):float2(ray.y,Camera.y);
     major=abs(major.x)>=axis.z?major:float2(ray.z,Camera.z);
-    float spacing=FogInfo.w/48;
+    float spacing=mad(FogInfo.w,1.0/48,FogStepInfo.z); // 0.3.200 (gpu budget): c64.z 0 = the 48 intervals; reduced levels fewer (host: 128*(1/N-1/48))
     float stepLength=spacing/abs(major.x);
     float offset=frac(major.y*(major.x<0?-1:1)/spacing);
     [loop]for(int i=0;i<49;++i){
@@ -809,7 +812,7 @@ float4 FogClouds(float2 uv:TEXCOORD0):COLOR0 {
     float3 axis=abs(ray);
     float2 major=axis.x>=axis.y?float2(ray.x,Camera.x):float2(ray.y,Camera.y);
     major=abs(major.x)>=axis.z?major:float2(ray.z,Camera.z);
-    float spacing=FogInfo.w/40;
+    float spacing=mad(FogInfo.w,1.0/40,CloudInfo[0].x); // 0.3.200 (gpu budget): c60.x 0 = the 40 intervals; reduced levels fewer (host: 128*(1/N-1/40))
     float stepLength=spacing/abs(major.x);
     float offset=frac(major.y*(major.x<0?-1:1)/spacing);
     [loop]for(int i=0;i<41;++i){

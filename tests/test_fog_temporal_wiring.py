@@ -23,7 +23,7 @@ checks['build: FogTemporal is an ENTRIES member right after FogClouds']=('FogClo
 checks['manifest: FogTemporal ps_3_0, <= 512 slots, < 32 temporaries']=(ft.get('target')=='ps_3_0' and ft.get('static_instruction_slots',999)<=512 and ft.get('temporary_registers',99)<32)
 checks['compiled: FogTemporal.bin and generated kFogTemporalShader']=((fp.COMPILED/'FogTemporal.bin').exists() and 'static const DWORD kFogTemporalShader[]' in fp.src('world_compiled_shaders.h').read_text())
 # WorldFog stays the 0.3.198 bytecode (the working tree state is not a test input: a git-status check failed on any other uncommitted shader edit)
-checks['compiled: WorldFog bytecode unchanged (512 slots)']=json.loads((fp.SHADERS/'world-shader-build.json').read_text())['shaders']['WorldFog']['sha256']=='58b53917f682aef3cb86b53d7a91d6f5cfd2ddba556ef711ee9a8056ff41c0d7'
+checks['compiled: WorldFog bytecode as of 0.3.200 (gpu budget: the interval as mad with c64.z; 512 slots)']=json.loads((fp.SHADERS/'world-shader-build.json').read_text())['shaders']['WorldFog']['sha256']=='0436709c5843d1179287da4efc946f4a448f7d233e81ac2068fe54bc47432f6c'
 
 body=h[h.index('float4 FogTemporal('):]
 body=body[:body.index('\n}\n')]
@@ -31,13 +31,14 @@ checks['HLSL: placed after FogBlur and FogClouds']=(h.index('float4 FogBlur(')<h
 checks['HLSL: c64 is the only new constant, only .y read; s14 history, s15 depth history']=(
     'float4 FogTemporalInfo : register(c64);' in h and 'FogTemporalInfo.y' in body and len(re.findall(r'FogTemporalInfo\.[xzw]',body))==0
     and 'sampler2D FogHistory : register(s14);' in h and 'DepthHistory' in body)
-checks['HLSL: no other shader reads c64 (only the declaration and this entry)']=len(re.findall(r'register\(c64\)',h))==1 and 'LocalLightFog[5].' not in h
+checks['HLSL: no other shader reads c64.y (0.3.200: FogStepInfo, c64.z, only in WorldFog\'s interval)']=(len(re.findall(r'register\(c64\)',h))==2 and 'LocalLightFog[5].' not in h
+    and re.findall(r'FogStepInfo\.\w+',re.sub(r'//[^\n]*','',h))==['FogStepInfo.z'] and 'mad(FogInfo.w,1.0/48,FogStepInfo.z)' in h[h.index('float4 WorldFog('):h.index('float4 FogBlur(')])
 checks['HLSL: sky reprojects the direction only, clamp over the neighbourhood, lerp by the weight, passthrough at 0']=(
     'sky' in body and 'PreviousView[0].xyz' in body and 'min(lo,s)' in body and 'clamp(history,lo,hi)' in body and 'lerp(current,' in body
     and 'if(FogTemporalInfo.y<=0)return current;' in body and 'max(.25,w*.03)' in body)
 
-checks['setting: no key (always on since the game tests), FogCloudDensity the last key']=(
-    'FogTemporal' not in q and 'fogTemporal' not in q and '{"FogCloudDensity",&Settings::fogCloudDensity,0,200,{100,100,100}},\n};' in q and 'char origin[39]=' in q)
+checks['setting: no key (always on since the game tests), FogCloudDensity then 0.3.200 GpuBudgetMs the last keys']=(
+    'FogTemporal' not in q and 'fogTemporal' not in q and '{"FogCloudDensity",&Settings::fogCloudDensity,0,200,{100,100,100}},\n    {"GpuBudgetMs",&Settings::gpuBudgetMs,0,20,{4,3,2}},\n};' in q and 'char origin[40]=' in q)
 ini=(fp.REPO/'renderer'/'windows-package'/'northlight-quality.ini').read_text()
 checks['docs: no key in the ini or the readmes']=('FogTemporal' not in ini and 'FogTemporal' not in (fp.REPO/'README.md').read_text() and 'FogTemporal' not in (fp.REPO/'renderer'/'windows-package'/'README.txt').read_text())
 
@@ -47,7 +48,7 @@ checks['host: pass and swap guarded by the setting, the shader, the history targ
     'std::swap(fogBlurred,fogHistory);std::swap(fogBlurredSurface,fogHistorySurface)' in pas and pas.count('std::swap')==2 and 'else fogHistoryValid=false;' in pas)
 checks['host: history weight 0 unless fogHistoryValid&&useHistory; weight constant is c64 only, previous view c53 from the bank']=(
     'fogHistoryValid&&useHistory?FogTemporalWeight:0.f' in pas and 'SetPixelShaderConstantF(64,info,1)' in pas and 'SetPixelShaderConstantF(53,c[53],4)' in pas
-    and len(re.findall(r'SetPixelShaderConstantF\(6[4-9]',w))==1)
+    and len(re.findall(r'SetPixelShaderConstantF\(6[4-9]',w))==3 and w.count('d->SetPixelShaderConstantF(64,copy,1);')==1 and w.count('d->SetPixelShaderConstantF(64,c[64],1);')==1) # 0.3.200 (gpu budget): the amortised clouds' copy sets c64 (y=0) and puts the bank back
 checks['host: reads raw fog s9 + fogHistory s14 + previous depth temporalDepth[temporalIndex] s15, writes fogBlurred; s14/s15 put back']=(
     'SetRenderTarget(0,fogBlurredSurface)' in pas and 'SetTexture(9,fog)' in pas and 'SetTexture(14,fogHistory)' in pas and 'SetTexture(15,temporalDepth[temporalIndex])' in pas
     and 'SetTexture(14,nullptr)' in pas and 'SetTexture(15,nullptr)' in pas and 'D3DSAMP_MINFILTER,D3DTEXF_POINT' in pas)

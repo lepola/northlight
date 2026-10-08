@@ -49,6 +49,8 @@ test_fog_motion.py
 test_game_snapshot.py
 test_geometry_handoff.py
 test_gi_quality.py
+test_gpu_budget.py
+test_gpu_budget_wiring.py
 test_horizon_haze.py
 test_index_working_set.py
 test_install_world_cache.py
