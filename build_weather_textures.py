@@ -143,10 +143,10 @@ def flake(u, v):
     return (1-smoothstep(0, 1, r))**1.5
 
 
-RAIN, RAIN_RED, SNOW = (.90, .90, .90), (.75, .22, .18), (.97, .97, .97)   # Forever-style rain is near-white, not blue
+RAIN, RAIN_RED, SNOW = (.80, .80, .80), (.67, .20, .16), (.97, .97, .97)   # Forever-style rain is light grey, not blue (0.3.199 game test: .90 a little too bright)
 TEXTURES = {   # archive name -> (width, height, colour, alpha max, mip levels builder)
-    'textures\\Weather\\RainDrop01.blp': (32, 512, RAIN, .8, streak_chain),
-    'Textures\\WEATHER\\RAINDROPRED01.BLP': (32, 512, RAIN_RED, .8, streak_chain),
+    'textures\\Weather\\RainDrop01.blp': (32, 512, RAIN, .65, streak_chain),
+    'Textures\\WEATHER\\RAINDROPRED01.BLP': (32, 512, RAIN_RED, .65, streak_chain),
     'textures\\Weather\\SnowFlake01.blp': (32, 64, SNOW, .8, lambda w, h, colour, alpha_max: mip_chain(w, h, image(w, h, colour, alpha_max, flake))),
 }
 
