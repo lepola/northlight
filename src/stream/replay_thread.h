@@ -146,7 +146,7 @@ public:
     std::uint64_t busyNsTotal()const{const auto w=wallNs(),i=idleNs.load(std::memory_order_relaxed);return w>i?w-i:0;}
     // Diagnostics bookkeeping (the audit's value mirror and touched list) runs only while diagnostics were on at the last frame boundary.
     std::uint64_t auditSets()const{return get(auditSets_);}   // audited Sets recorded by the replay thread (0 while diagnostics are off)
-    explicit Replayer(StreamCore& c):core(c){}
+    explicit Replayer(StreamCore& c,std::size_t snapshotCap=SnapshotPool::DefaultCap):core(c),snapshots(snapshotCap){}   // 0.3.200 (pipeline): SnapshotPool::capFor(StreamFramesAhead)
     ~Replayer(){join();}
     Replayer(const Replayer&)=delete;Replayer& operator=(const Replayer&)=delete;
 
@@ -325,7 +325,7 @@ private:
         if(swap){IDirect3DSwapChain9* s=a->swapChain->dead.load()?nullptr:static_cast<IDirect3DSwapChain9*>(a->swapChain->inner);
                  hr=s?s->Present(a->hasSrc?&a->src:nullptr,a->hasDst?&a->dst:nullptr,a->window,dirty,a->flags):D3DERR_INVALIDCALL;}
         else hr=core.target->Present(a->hasSrc?&a->src:nullptr,a->hasDst?&a->dst:nullptr,a->window,dirty);
-        core.presentResult.store(hr);{const std::uint64_t seq=core.q.replayedSeq()+1;auto& e=core.presentRing[seq%StreamCore::kRing];e.hr.store(hr);e.seq.store(seq);}
+        core.presentResult.store(hr);{const std::uint64_t seq=core.q.replayedSeq()+1;auto& e=core.presentRing[core.framesReplayed.load(std::memory_order_relaxed)%StreamCore::kRing];e.hr.store(hr);e.seq.store(seq);}   // 0.3.200 (pipeline): by ordinal (endFrame counts it next)
         endFrame();
     }
     void endFrame(){

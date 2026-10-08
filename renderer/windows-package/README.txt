@@ -157,6 +157,7 @@ Individual settings (Quality / Balanced / Performance):
   RainFog               1 / 1 / 1      how strongly rain and snow thicken the fog and haze and dim shafts, sun and moon (0..2; 0 = no change, 2 = twice as strong; snow acts at 60 percent)
   FogClouds             1 / 1 / 0      low fog banks that drift with the wind, thicker and faster in rain, few and faint in clear weather and then only in forest and grass zones (0 = none; its own half-resolution pass; Ctrl+Shift+F7 and F10 turn them off with the rest)
   FogCloudDensity       100 / 100 / 100 how much of the ground the fog clouds cover, in percent (0..200; 0 = none, 200 = twice as much)
+  StreamFramesAhead     2 / 2 / 2      with CommandStream=1, how many frames the game may record before the renderer thread has drawn them (1..3; 1 = as in 0.3.199; more smooths out spikes, the picture can lag by that many frames and the stream may use up to 16 MiB more memory; read at game start)
 When both NearShadowInterval and FarShadowInterval are at least 2, frames that
 draw neither shadow also skip copying the character geometry (about 1–1.5 ms
 of CPU per skipped frame). Light and normal frames alternate: the average FPS

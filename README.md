@@ -56,6 +56,8 @@ Every effect below is on by default and is drawn on top of the game's own frame.
 - **Cost.** Northlight costs frame time, mostly on the game's main CPU thread. Character shadows are
   the largest part in crowds (about 4-5 ms per frame): `ActorShadows=0` in `northlight-quality.ini`
   keeps only the static shadows, and the Balanced and Performance presets trade small details for speed.
+  With the command stream (`CommandStream=1`) the game records its graphics calls and a second thread draws them;
+  `StreamFramesAhead` (1..3, default 2) sets how many frames the game may run ahead of that thread (1 = as in 0.3.199).
 - **Platforms and install.** macOS with WoWSilicon (preloaded as `mods/d3d9.dll`) and Windows (a
   game-folder `d3d9.dll` on the bundled DXVK 3.1.1, with DXVK 2.7.1 as the `dxvk2` alternative backend for AMD RX 5000/6000 and
   older drivers (`Install.cmd --backend dxvk2`; on a driver DXVK 3 does not support, install with `--backend dxvk2`, Northlight never switches by itself; a reinstall without `--backend` keeps `dxvk2` or `native`), the system D3D9, or an existing `d3d9.dll`). The

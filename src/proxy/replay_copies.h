@@ -12,7 +12,7 @@
    geometry_capture.h, terrain_capture_bounds.h) reads these bytes instead of locking a DXVK buffer READONLY, so it no longer depends on how a
    DXVK version treats a read lock (3.x marks the range dirty, then Unlock stages + GPU-copies it; see upload_lock.h readBackLock()).
 
-   Position: a copy equals the real buffer AT THE REPLAY POSITION, never the game thread's (the game is up to a frame ahead and has already
+   Position: a copy equals the real buffer AT THE REPLAY POSITION, never the game thread's (the game is up to StreamFramesAhead frames ahead and has already
    overwritten ring ranges). It is kept current in stream order at ONE choke point: every write the stream replays into a game buffer goes
    through the tracked wrapper NorthlightTrackedBuffers::Buffer on the replay thread (Device::CreateVertexBuffer/CreateIndexBuffer wrap, the
    stream's inner object IS the wrapper): UnlockBuffer payloads (Lock, memcpy, Unlock), first-lock/DISCARD staging (same command), and

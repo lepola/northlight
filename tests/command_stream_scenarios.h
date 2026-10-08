@@ -939,12 +939,12 @@ struct Game {
         tex.clear();vb.clear();ib.clear();surf.clear();vs.clear();ps.clear();decl.clear();queries.clear();blocks.clear();
     }
 };
-static void equivalence(int steps,std::uint64_t seed){
+static void equivalence(int steps,std::uint64_t seed,unsigned framesAhead=1){
     // mode 0: the game on the Device directly; 1: through the stream, every call replayed on the Device; 2: through the stream with the DIRECT
     // methods replayed on the extension device with raw pointers. All three must leave identical Target traces and game-visible results.
     std::vector<std::string> out[3],trace[3];std::vector<HRESULT> pres[3];
     for(int mode=0;mode<3;++mode){
-        gTrace.clear();gKnobs.presents.store(0);gNormalize=true;gPtrIds.clear();gNextPtrId=0;Rig rig(mode>0,{},mode==2);
+        gTrace.clear();gKnobs.presents.store(0);gNormalize=true;gPtrIds.clear();gNextPtrId=0;StreamDevice::Options opt;opt.framesAhead=framesAhead;Rig rig(mode>0,opt,mode==2);
         Game g(rig.dev,seed,out[mode],pres[mode]);
         for(int i=0;i<steps;++i){
             g.step(i);
@@ -965,9 +965,10 @@ static void equivalence(int steps,std::uint64_t seed){
         {std::size_t i=0;auto& A=trace[0];auto& B=trace[mode];while(i<A.size()&&i<B.size()&&A[i]==B[i])++i;
          if(i<A.size()||i<B.size()){std::fprintf(stderr,"trace differs at %zu (mode %d, sizes %zu vs %zu)\n direct: %s\n stream: %s\n",i,mode,A.size(),B.size(),i<A.size()?A[i].substr(0,300).c_str():"-",i<B.size()?B[i].substr(0,300).c_str():"-");
              for(std::size_t k=i>12?i-12:0;k<i;++k)std::fprintf(stderr,"  before[%zu]: %s | %s\n",k,A[k].substr(0,110).c_str(),B[k].substr(0,110).c_str());std::abort();}}
-        CHECK(pres[0].size()==pres[mode].size()&&!pres[0].empty());CHECK(pres[mode][0]==D3D_OK);for(std::size_t i=1;i<pres[mode].size();++i)CHECK(pres[mode][i]==pres[0][i-1]);   // Present returns the previous frame's real result
+        // Present returns the real result of the Present framesAhead frames back (0.3.200 (pipeline); 1 = the previous frame's), D3D_OK before there is one
+        CHECK(pres[0].size()==pres[mode].size()&&!pres[0].empty());for(std::size_t i=0;i<pres[mode].size();++i)CHECK(pres[mode][i]==(i>=framesAhead?pres[0][i-framesAhead]:D3D_OK));
     }
-    std::printf("equivalence seed=%llu steps=%d results=%zu trace=%zu presents=%zu\n",(unsigned long long)seed,steps,out[0].size(),trace[0].size(),pres[0].size());
+    std::printf("equivalence seed=%llu steps=%d framesAhead=%u results=%zu trace=%zu presents=%zu\n",(unsigned long long)seed,steps,framesAhead,out[0].size(),trace[0].size(),pres[0].size());
 }
 // Direct replay: a proxy caches the backend object behind its inner right when the create/derive/first-sight bound it, a proxy without one
 // replays through the Device, and the cache follows Reset.
@@ -1104,6 +1105,25 @@ static void smallStagedLocksUseScratch(){
     CHECK(blocks()==b1+1);for(int i=0;i<4;++i)CHECK(v[i]->Unlock()==D3D_OK);
     for(auto* b:v)b->Release();a->Release();rig.finish();checkClean();
 }
+// 0.3.200 (pipeline): StreamFramesAhead n: with the replay thread stuck, n Presents return at once and the next one waits (n=1: the 0.3.199 pacing, the
+// second Present waits); the snapshot pool and the clamp follow n.
+static void framesAheadPacing(){
+    static_assert(SnapshotPool::capFor(1)==SnapshotPool::DefaultCap&&SnapshotPool::capFor(3)*sizeof(GameSnapshot)<=(1u<<20),"pool per framesAhead, under 1 MiB");
+    static_assert(budgetForFramesAhead(1)==BudgetBytes&&budgetForFramesAhead(2)==(32u<<20)&&budgetForFramesAhead(3)==(32u<<20)&&budgetForFramesAhead(0)==BudgetBytes&&budgetForFramesAhead(9)==kMaxBudgetBytes,"budget: +16 MiB per extra frame, 32 MiB at most");
+    for(unsigned n:{1u,2u,3u,7u}){
+        const unsigned want=clampFramesAhead(n);
+        gTrace.clear();StreamDevice::Options opt;opt.framesAhead=n;Rig rig(true,opt);auto& q=rig.core().q;
+        CHECK(rig.sd->framesAhead()==want&&rig.sd->replayerOf().snapshots.allocated()==0);
+        rig.dev->Present(nullptr,nullptr,nullptr,nullptr);rig.sync();   // P0 has run
+        gKnobs.hold.store(true);rig.dev->BeginScene();   // the replay thread is stuck: nothing after this runs
+        std::atomic<unsigned> returned{0};const auto waits0=get(q.stats.presentWaits);
+        std::thread game([&]{for(unsigned i=0;i<want+1;++i){rig.dev->Present(nullptr,nullptr,nullptr,nullptr);returned.fetch_add(1);}});   // (the producer for now; joined before the main thread records again)
+        CHECK(waitFor([&]{return returned.load()==want;}));
+        std::this_thread::sleep_for(std::chrono::milliseconds(40));CHECK(returned.load()==want);   // Present want+1 waits for the stuck one want frames back
+        gKnobs.hold.store(false);game.join();CHECK(returned.load()==want+1&&get(q.stats.presentWaits)>=waits0+1);
+        rig.dev->EndScene();rig.sync();rig.finish();checkClean();
+    }
+}
 // 0.3.200 (pipeline): an evicted level shadow's allocation serves the next one (no free + malloc pair); the reused shadow is zero-filled like a new one; pressure drops the spares.
 static void textureShadowSpares(){
     gTrace.clear();Rig rig(true);auto& core=rig.core();auto& s=core.q.stats;IDirect3DDevice9* d=rig.dev;
@@ -1130,7 +1150,7 @@ static void textureShadowSpares(){
 static void streamTests(bool threadsOnly){
     layoutIsolation();replayTimingAccounting();diagnosticsOffSkipsAudit();idlePollWakes();
     lifetimeAndIdentity();stateKnownUnknown();locksPreserveBytes();staticBufferShadows();dynamicBufferShadows();largeBufferAllowance();adaptiveShadowCap();shadowCap();queriesAndSyncCensus();resetAndShutdown();directReplayRaw();redundantFiltering();renderTargetResetsViewport();textureShadows();statsLine();childrenOutliveTheDevice();queryProbeAndDeadQuery();initFailureFallback();cursorHandling();nestedSyncInPump();upDrawsAndBackpressure();snapshotTriggers();snapshotPoolNotExhausted();memoryPressureRelease();impossibleBlockIsRefusedAtOnce();smallStagedLocksUseScratch();
-    textureShadowSpares();
-    equivalence(20000,12345);equivalence(20000,987654321);
+    framesAheadPacing();textureShadowSpares();
+    equivalence(20000,12345);equivalence(20000,987654321);equivalence(20000,24680,2);equivalence(20000,13579,3);   // 0.3.200 (pipeline): 2 and 3 frames ahead
     (void)threadsOnly;
 }

@@ -74,7 +74,10 @@ struct Settings {
     // 0 = none. FogCloudDensity 0..200 percent scales how much of the ground they cover (100 = the tuned look; thicker and faster in rain).
     unsigned fogClouds=1,fogCloudDensity=100;
     // 0.3.199: the fog's temporal accumulation and the rain's alpha blend (with the rain-only mist skip) are always on (game-tested; no keys).
-    char origin[39]={'d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d'};
+    // 0.3.200 (pipeline): StreamFramesAhead 1..3 = how many frames the game thread may record ahead of the replay thread (CommandStream=1): Present
+    // waits for the Present that many frames back. 1 = the 0.3.199 behaviour. Read with CommandStream before the device exists (creation-time key).
+    unsigned streamFramesAhead=2;
+    char origin[40]={'d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d'};
 };
 struct Key { const char* name; unsigned Settings::*field; unsigned low,high; unsigned preset[3]; };
 // preset[] = Quality, Balanced, Performance. Quality must equal Settings{}.
@@ -118,6 +121,7 @@ inline const Key Keys[]={
     {"RainFog",&Settings::rainFog,0,2,{1,1,1}},
     {"FogClouds",&Settings::fogClouds,0,1,{1,1,0}},
     {"FogCloudDensity",&Settings::fogCloudDensity,0,200,{100,100,100}},
+    {"StreamFramesAhead",&Settings::streamFramesAhead,1,3,{2,2,2}}, /* 0.3.200 (pipeline) */
 };
 inline bool operator==(const Settings& a,const Settings& b){for(const auto& k:Keys)if(a.*k.field!=b.*k.field)return false;return true;}
 inline bool operator!=(const Settings& a,const Settings& b){return !(a==b);}

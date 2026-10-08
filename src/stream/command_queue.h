@@ -35,8 +35,14 @@ constexpr std::size_t ChunkBytes=std::size_t(1)<<20;
 constexpr std::size_t MaxInlinePayload=ChunkBytes/4;   // larger payloads travel in a Block
 // 0.3.192 (CS): the stream's own memory shares a 32-bit address space with the game and the world renderer, which stalled for lack of a
 // contiguous block while the stream held ~100 MiB. Real sessions peak at ~12 MiB of queue; every cap is now 16 MiB (queue, texture shadows, buffer shadows, large allowance; worst case ~64 MiB
-// plus the replay-side copies' own 16+16 MiB, see replay_copies.h; ~20-30 MiB typically) and the idle pools are kept small (kPoolMaxChunks, kMaxPooledBlockBytes, PoolTuner).
+// plus the replay-side copies' own 16+16 MiB, see replay_copies.h; ~20-30 MiB typically) and the idle pools are kept small (kPoolMaxChunks, kMaxPooledBlockBytes, PoolTuner). 0.3.200 (pipeline): the queue may take 32 MiB with StreamFramesAhead >= 2 (budgetForFramesAhead below): worst case +16 MiB.
 constexpr std::size_t BudgetBytes=std::size_t(16)<<20;
+// 0.3.200 (pipeline): StreamFramesAhead (1..kMaxFramesAhead) frames may be in flight; the queue budget grows by BudgetBytes per extra frame up to
+// kMaxBudgetBytes (32 MiB: the address-space rule above; still halved under memory pressure). 1 = BudgetBytes, the 0.3.199 queue.
+constexpr unsigned kMaxFramesAhead=3;
+constexpr std::size_t kMaxBudgetBytes=std::size_t(32)<<20;
+constexpr unsigned clampFramesAhead(unsigned n){return n<1?1:n>kMaxFramesAhead?kMaxFramesAhead:n;}
+constexpr std::size_t budgetForFramesAhead(unsigned n){return BudgetBytes*clampFramesAhead(n)<kMaxBudgetBytes?BudgetBytes*clampFramesAhead(n):kMaxBudgetBytes;}
 constexpr std::size_t TextureShadowBudgetBytes=std::size_t(16)<<20;   // per-level texture shadows; halved under pressure; evictable (LRU)
 // 0.3.192 (CS): CPU shadows of buffers (DYNAMIC and re-locked non-DYNAMIC ones; evictable LRU, never while locked). The cap is ADAPTIVE: ShadowBudgetBytes is
 // the base/start value; it grows by kShadowGrowStep (up to kShadowBudgetMaxBytes) only when the shadows thrash AND there is no memory pressure: the LRU had

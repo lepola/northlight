@@ -67,6 +67,9 @@ public:
         bool filterRedundant=true;                                      // see redundant(); off: every Set is recorded
         DWORD (*readBackLock)()=nullptr;                                // NorthlightUpload::readBackLock in the DLL: READONLY, plus NOOVERWRITE on DXVK >= 3
         bool (*diagnostics)()=nullptr;                                  // NorthlightDiagnostics::enabled in the DLL
+        // 0.3.200 (pipeline): StreamFramesAhead (clamped to 1..kMaxFramesAhead): Present waits for the Present this many frames back; the snapshot pool follows
+        // (SnapshotPool::capFor). 1 = the 0.3.199 pacing. The queue budget is `budget` (the DLL passes budgetForFramesAhead).
+        unsigned framesAhead=1;
     };
     // Builds the stream around `target` (the Device). On success the replay thread owns the target; on failure nothing
     // was handed over (nullptr, reason filled) and the caller keeps using the target directly.
@@ -351,9 +354,11 @@ public:
         if(dst)a->dst=*dst;else a->dst=RECT{};
         if(dirtyBytes)std::memcpy(a+1,dirty,dirtyBytes);
         q.commit();q.publish();
-        const std::uint64_t seq=q.recordedSeq(),prev=prevPresent;prevPresent=seq;
+        // 0.3.200 (pipeline): presentHist holds the last framesAhead_ Presents (seq, ordinal = frameNo when recorded); the slot reused now is the one framesAhead_ back
+        // (framesAhead_=1: always slot 0, the previous Present, as before)
+        PresentMark& slot=presentHist[core.frameNo%framesAhead_];const PresentMark prev=slot;slot=PresentMark{q.recordedSeq(),core.frameNo};
         HRESULT result=D3D_OK;
-        if(prev){q.waitReplayed(prev,WaitKind::Present);result=presentResult(prev);}   // one frame ahead: the previous frame's real HRESULT
+        if(prev.seq){q.waitReplayed(prev.seq,WaitKind::Present);result=presentResult(prev);}   // framesAhead_ frames ahead: that frame's real HRESULT
         q.setPressure(core.memoryPressure.load(std::memory_order_relaxed)||NorthlightStream::memoryPressure.load(std::memory_order_relaxed));
         frameEnd=nowNs();waitsAtFrameEnd=get(q.stats.syncNs)+get(q.stats.backpressureNs);
         ++core.frameNo;tuner.sample(q);   // idle pool memory goes back after a quiet window
@@ -365,8 +370,10 @@ public:
         }
         return result;
     }
-    // The real result of the Present command with sequence number `seq`, recorded by the replay thread.
-    HRESULT presentResult(std::uint64_t seq){const auto& e=core.presentRing[seq%core.kRing];return e.seq.load()==seq?e.hr.load():D3D_OK;}
+    // The real result of a recorded Present (its command sequence number and ordinal), recorded by the replay thread.
+    struct PresentMark {std::uint64_t seq=0,ordinal=0;};
+    HRESULT presentResult(const PresentMark& m){const auto& e=core.presentRing[m.ordinal%core.kRing];return e.seq.load()==m.seq?e.hr.load():D3D_OK;}
+    unsigned framesAhead()const{return framesAhead_;}
 
     HRESULT STDMETHODCALLTYPE Reset(D3DPRESENT_PARAMETERS* p) override{
         if(!p)return D3DERR_INVALIDCALL;
@@ -532,12 +539,13 @@ private:
     std::unique_ptr<StreamCore> coreOwner;StreamCore& core;Replayer replayer;StreamState st;std::function<void()> restoreOwner;
     IDirect3D9* parent;D3DCAPS9 caps{};D3DDEVICE_CREATION_PARAMETERS creation{};D3DPRESENT_PARAMETERS pp{};
     StreamSwapChain* sc0=nullptr;std::atomic<LONG> refs{1};
-    bool recording=false,pressureApplied=false,filter=true;BOOL cursorVisible=0;void* hCursor=nullptr;std::mutex cursorMutex;CursorApi cursor=CursorApi::native();unsigned getsSincePublish=0;std::uint64_t frameEnd=0,waitsAtFrameEnd=0;std::uint64_t prevPresent=0,drawOrdinal=0;
+    bool recording=false,pressureApplied=false,filter=true;BOOL cursorVisible=0;void* hCursor=nullptr;std::mutex cursorMutex;CursorApi cursor=CursorApi::native();unsigned getsSincePublish=0;std::uint64_t frameEnd=0,waitsAtFrameEnd=0;std::uint64_t drawOrdinal=0;
+    unsigned framesAhead_=1;PresentMark presentHist[kMaxFramesAhead];   // 0.3.200 (pipeline): see presentCommon
     std::thread::id gameThread=std::this_thread::get_id();
     PoolTuner tuner;TriggerPolicy policy;bool (*capture)(GameSnapshot&,Trigger,std::uint64_t)=nullptr;
 
     StreamDevice(IDirect3DDevice9* target,IDirect3D9* par,const D3DPRESENT_PARAMETERS* p,Options opt)
-        :coreOwner(new StreamCore(opt.budget)),core(*coreOwner),replayer(core),parent(par),capture(opt.capture){
+        :coreOwner(new StreamCore(opt.budget)),core(*coreOwner),replayer(core,SnapshotPool::capFor(clampFramesAhead(opt.framesAhead))),parent(par),framesAhead_(clampFramesAhead(opt.framesAhead)),capture(opt.capture){
         core.target=target;core.game=this;core.logLine=nullptr;core.readBackLock=opt.readBackLock;st.core=&core;
         if(opt.cursorApi)cursor=*opt.cursorApi;
         restoreOwner=opt.threadStart;replayer.threadStart=std::move(opt.threadStart);replayer.log=opt.log;replayer.diagnostics=opt.diagnostics;filter=opt.filterRedundant;

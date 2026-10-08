@@ -239,7 +239,11 @@ struct StreamCore {
     template<class T> ProxyBase* proxyFor(T* innerRef,bool bound);
     ProxyBase* makeImplicit(IUnknown* inner);
     std::atomic<HRESULT> presentResult{D3D_OK};
-    static constexpr unsigned kRing=8;   // real HRESULT of the last Present commands by command sequence number (the game reads frame N-1's)
+    // Real HRESULT of the last Present commands (the game reads the one StreamFramesAhead frames back). 0.3.200 (pipeline): the slot is the Present's ordinal
+    // (the replay's framesReplayed before it counts this one = the game's frameNo when it recorded it), seq still checked: with at most kMaxFramesAhead+1
+    // Presents in flight no newer one can take the slot first (keyed by seq%kRing it could, and the game then read D3D_OK).
+    static constexpr unsigned kRing=8;
+    static_assert(kRing>kMaxFramesAhead+1,"every Present in flight has its own slot");
     struct PresentEntry {std::atomic<std::uint64_t> seq{0};std::atomic<HRESULT> hr{D3D_OK};};
     PresentEntry presentRing[kRing];
     void replayFailureOnFail(HRESULT hr){if(FAILED(hr)){add(q.stats.replayFailures);replayFailure.store(true);}}
