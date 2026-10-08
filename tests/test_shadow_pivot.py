@@ -26,7 +26,7 @@ checks['WORLD camera line extended, on the existing periodic line only']=(w.coun
     and 'NorthlightDiagnostics::enabled()&&now-diagnosticTick>=250' in w[:w.index('pivotSource=%s')][-600:]
     and 'pivotCorrection.nearBlendAtSelf(sourceMatrices[0][0])' in w)
 # 0.3.192: CommandStream and 0.3.193 BlobShadowStrength are appended after it (origin[41]); test_quality_settings checks the order.
-checks['quality key: 0..1, presets 1/1/1, default 1, own origin slot']=('{"ShadowPivotCorrection",&Settings::shadowPivotCorrection,0,1,{1,1,1}},' in q and 'unsigned shadowPivotCorrection=1;' in q and 'char origin[41]=' in q)
+checks['quality key: 0..1, presets 1/1/1, default 1, own origin slot']=('{"ShadowPivotCorrection",&Settings::shadowPivotCorrection,0,1,{1,1,1}},' in q and 'unsigned shadowPivotCorrection=1;' in q and 'char origin[42]=' in q)
 checks['documented in the ini template and the README']=(';ShadowPivotCorrection=1' in ini and 'ShadowPivotCorrection' in readme)
 checks['portable: no D3D or Win32, no allocation']=all(x not in h for x in ('d3d9','windows.h','#include <vector>','new ','malloc','push_back'))
 checks['rules: 1 yd along, .35 across, .9995 forward, impulse (previous move < .5 yd and < .25 of this), 1 yd deadband, 8 yd jump, 0.5..80']=all(x in h for x in (

@@ -80,7 +80,12 @@ struct Settings {
     // 0.3.200 (pipeline): StreamFramesAhead 1..3 = how many frames the game thread may record ahead of the replay thread (CommandStream=1): Present
     // waits for the Present that many frames back. 1 = the 0.3.199 behaviour. Read with CommandStream before the device exists (creation-time key).
     unsigned streamFramesAhead=2;
-    char origin[41]={'d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d'};
+    // 0.3.200 (jobs): ReplayJobs 1 = the renderer thread hands its D3D-free per-frame CPU work (local light selection and scissor rects,
+    // fog clouds and the veil's fog samples, terrain shadow candidates, the later cascades' replay culling) to a small worker pool and
+    // joins each result right before the D3D calls that need it (core/job_system.h); the same code, the same results. 0 = all of it
+    // inline on the renderer thread, exactly as before.
+    unsigned replayJobs=1;
+    char origin[42]={'d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d'};
 };
 struct Key { const char* name; unsigned Settings::*field; unsigned low,high; unsigned preset[3]; };
 // preset[] = Quality, Balanced, Performance. Quality must equal Settings{}.
@@ -126,6 +131,7 @@ inline const Key Keys[]={
     {"FogCloudDensity",&Settings::fogCloudDensity,0,200,{100,100,100}},
     {"GpuBudgetMs",&Settings::gpuBudgetMs,0,20,{4,3,2}},
     {"StreamFramesAhead",&Settings::streamFramesAhead,1,3,{2,2,2}}, /* 0.3.200 (pipeline) */
+    {"ReplayJobs",&Settings::replayJobs,0,1,{1,1,1}},
 };
 inline bool operator==(const Settings& a,const Settings& b){for(const auto& k:Keys)if(a.*k.field!=b.*k.field)return false;return true;}
 inline bool operator!=(const Settings& a,const Settings& b){return !(a==b);}
