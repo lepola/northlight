@@ -3,6 +3,7 @@
 // stream is inactive (CommandStream=0, or the replay thread failed to start): null pointers and zero thread ids.
 // Header-only and portable except the Win32 file read; the stream sets these, nothing here starts a thread.
 #include <atomic>
+#include <cstdint>
 #include <string>
 #include <thread>
 #include <vector>
@@ -25,6 +26,10 @@ inline const void* inner(const void* p){return innerOf&&p?innerOf(p):p;}
 // before WorldRenderer / StaticShadowGpu are constructed (their core budgets read it once). A plain atomic with
 // relaxed loads: written once on the game thread during Factory::CreateDevice, never cleared.
 inline std::atomic<bool> streamActive{false};
+/* 0.3.201 (task 17): FNV-1a hash of the vertex shader the UI boundary fallback learned (a font mod replaces the stock UI shaders), 0 = none.
+   Written by the renderer (replay thread, or the game thread in direct mode) when the fallback arms; read relaxed by StreamDevice::onDraw
+   on the game thread, which then treats that VS as kUi for the snapshot trigger. */
+inline std::atomic<std::uint64_t> learnedUiVsHash{0};
 // The memory guard's pressure decision (published by the Device's finishFrameImpl, which runs on the replay thread while
 // streaming); the game side reads it at its next Present and halves the queue budget. Written only on a change.
 inline std::atomic<bool> memoryPressure{false};

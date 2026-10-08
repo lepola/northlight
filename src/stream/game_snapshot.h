@@ -24,8 +24,12 @@ inline const char* triggerName(Trigger t){return t==Trigger::FrameStart?"frame":
 //   FrameStart: the first draw after Present, so the draws of frame N see frame N's game memory, not N-1's.
 //   World:      the first draw whose VS is terrain or WMO (the camera / view stack / sky block are valid for the whole
 //               world pass and the light and camera hooks read them at its first draw).
-//   Ui:         the first UI-tagged draw (renderEffects runs there).
+//   Ui:         the first UI-tagged draw (renderEffects runs there). 0.3.201 (task 17): the tag can also come from the learned
+//               VS (the UI boundary fallback of renderer.cpp, see drawTags); as before it may fire before World, and the
+//               later World snapshot covers the world draws.
 // A draw that is both first and World/Ui takes that one trigger (it also is the frame's start).
+/* 0.3.201 (task 17): the draw's trigger tags, plus kUi when its VS is the one the UI boundary fallback learned (0 = none learned). */
+inline unsigned drawTags(unsigned tags,std::uint64_t hash,std::uint64_t learned){return learned&&hash==learned?tags|unsigned(NorthlightShaderTags::kUi):tags;}
 struct TriggerPolicy {
     bool frame=false,world=false,ui=false;
     void beginFrame(){frame=false;world=false;ui=false;}
