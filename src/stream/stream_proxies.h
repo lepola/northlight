@@ -246,6 +246,13 @@ struct StreamCore {
     static_assert(kRing>kMaxFramesAhead+1,"every Present in flight has its own slot");
     struct PresentEntry {std::atomic<std::uint64_t> seq{0};std::atomic<HRESULT> hr{D3D_OK};};
     PresentEntry presentRing[kRing];
+    // 0.3.200 (frame skip): StreamFrameSkip. The game thread classifies every frame it records: frameHazards collects why it must be drawn (FrameHazard), and at
+    // its Present the bits go to frameRing[ordinal%kRing] (tag = ordinal+1, stored last), then presentsRecorded = ordinal+1 (after the Present is published,
+    // before the game waits). The replay thread reads both at a frame's first command (Replayer::beginFrame); a slot is reused only kRing frames later.
+    enum FrameHazard:std::uint32_t{kHazardTarget=1,kHazardQuery=2,kHazardCopy=4};   // offscreen render target / depth texture bound; a non-event query issued; a copy from the back buffer or a depth surface
+    struct FrameEntry {std::atomic<std::uint64_t> tag{0};std::atomic<std::uint32_t> hazards{0};};
+    FrameEntry frameRing[kRing];std::atomic<std::uint64_t> presentsRecorded{0};
+    std::uint32_t frameHazards=0;   // game thread: the frame being recorded
     void replayFailureOnFail(HRESULT hr){if(FAILED(hr)){add(q.stats.replayFailures);replayFailure.store(true);}}
     template<class T> T* inner(T* proxy){
         if(!proxy)return nullptr;
@@ -1044,7 +1051,7 @@ struct StreamQuery final:IDirect3DQuery9,ProxyBase {
     HRESULT local(CmdTag<Cmd::Query_GetDevice>,IDirect3DDevice9** pp){return devGet(pp);}
     D3DQUERYTYPE local(CmdTag<Cmd::Query_GetType>){return (D3DQUERYTYPE)type;}
     DWORD local(CmdTag<Cmd::Query_GetDataSize>){return dataSize;}
-    void observe(CmdTag<Cmd::Query_Issue>,DWORD flags){if(flags&D3::kIssueEnd)gen.fetch_add(1);}
+    void observe(CmdTag<Cmd::Query_Issue>,DWORD flags){if(type!=8)core->frameHazards|=StreamCore::kHazardQuery;if(flags&D3::kIssueEnd)gen.fetch_add(1);}   // 0.3.200 (frame skip): only an event query's frame may be skipped (its Issue still runs)
     using ProxyBase::observe;
     HRESULT STDMETHODCALLTYPE GetData(void* data,DWORD size,DWORD flags) override{
         Queue& q=core->q;

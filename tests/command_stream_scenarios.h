@@ -647,7 +647,7 @@ static void statsLine(){
     rig.sync();
     std::vector<std::string> lines;for(auto& l:gStatLines)if(l.find(" frames=600 ")!=std::string::npos)lines.push_back(l);   // the 600th replayed frame
     CHECK(lines.size()==1&&lines[0].rfind("CSTREAM cmds=",0)==0&&lines[0].find("passPerFrame=")!=std::string::npos&&lines[0].find("census[")!=std::string::npos&&lines[0].back()==']');
-    for(const char* field:{"game[per frame]: ms=","syncMs=","presentWaitMs=","bpMs=","sleeps=","publishes=","replayBusyMs/frame=","recorded=","answered=","texShadow=","readbacks=","bufShadow=","readbacks/frame=","evicted/frame=","(hot ","refused/frame=","grows=","large=","memMB=","texFreshSkipped=","texReadbackCause[freshDrop=","relockedEvict=","neverShadowed=","freshSkip="})CHECK(lines[0].find(field)!=std::string::npos);   // per-window numbers
+    for(const char* field:{"game[per frame]: ms=","syncMs=","presentWaitMs=","bpMs=","sleeps=","publishes=","replayBusyMs/frame=","recorded=","answered=","texShadow=","readbacks=","bufShadow=","readbacks/frame=","evicted/frame=","(hot ","refused/frame=","grows=","large=","memMB=","texFreshSkipped=","texReadbackCause[freshDrop=","relockedEvict=","neverShadowed=","freshSkip="," skipped="})CHECK(lines[0].find(field)!=std::string::npos);   // per-window numbers
     CHECK(lines[0].size()<2000);
     rig.finish();checkClean();
 }
@@ -1147,10 +1147,91 @@ static void textureShadowSpares(){
     core.memoryPressure.store(false);d->Present(nullptr,nullptr,nullptr,nullptr);rig.sync();
     for(auto* t:v)t->Release();rig.sync();CHECK(s.texShadowBytes.load()==0);rig.finish();checkClean();
 }
+// 0.3.200 (frame skip): StreamFrameSkip. A lagging replay (stuck in frame 0 while the game records frames 1 and 2, three frames ahead) skips frame 1:
+// its draws, Clears and real Present are dropped, everything else runs. The same script with StreamFrameSkip=0 is the reference: the trace without draws,
+// Clears and Presents, the Target's resource bytes, its final state and the Present results must be equal. Frames that issue an occlusion query, draw into
+// a texture (set in the frame or carried over from the previous one) or copy the back buffer are drawn; an event query's frame is skipped and still completes.
+enum class SkipCase{Plain,Event,Occlusion,RenderToTexture,CarriedTarget,BackBufferCopy};
+struct SkipRun {std::vector<std::string> trace;std::vector<unsigned char> tex,vb;std::string state;std::vector<HRESULT> presents;std::uint64_t skipped=0,dropped=0;unsigned draws=0,realPresents=0;};
+static bool droppedBySkip(const std::string& t){return t.rfind("Device::Draw",0)==0||t.rfind("Device::Clear",0)==0||t.rfind("Device::Present",0)==0;}
+static SkipRun skipScript(unsigned frameSkip,SkipCase c,bool lag=true){
+    gTrace.clear();gCaptures=0;gNormalize=true;gPtrIds.clear();gNextPtrId=0;gKnobs.presents.store(0);gKnobs.noDigest.store(true);
+    StreamDevice::Options opt;opt.framesAhead=3;opt.frameSkip=frameSkip;opt.capture=&fakeCapture;Rig rig(true,opt);IDirect3DDevice9* d=rig.dev;SkipRun r;
+    IDirect3DTexture9* tex=nullptr;CHECK(d->CreateTexture(16,16,1,0,(D3DFORMAT)22,(D3DPOOL)1,&tex,nullptr)==D3D_OK);
+    IDirect3DVertexBuffer9* vb=nullptr;CHECK(d->CreateVertexBuffer(256,D3::kUsageDynamic,0,(D3DPOOL)0,&vb,nullptr)==D3D_OK);
+    IDirect3DTexture9* rtt=nullptr;CHECK(d->CreateTexture(32,32,1,D3::kUsageRT,(D3DFORMAT)22,(D3DPOOL)0,&rtt,nullptr)==D3D_OK);
+    IDirect3DSurface9 *rts=nullptr,*bb=nullptr;CHECK(rtt->GetSurfaceLevel(0,&rts)==D3D_OK&&d->GetBackBuffer(0,0,(D3DBACKBUFFER_TYPE)0,&bb)==D3D_OK);
+    IDirect3DQuery9* q=nullptr;CHECK(d->CreateQuery((D3DQUERYTYPE)(c==SkipCase::Event?8:9),&q)==D3D_OK);
+    const unsigned char up[3*16]={1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31,32,33,34,35,36,37,38,39,40,41,42,43,44,45,46,47,48};
+    auto frame=[&](int f){
+        d->SetRenderState((D3DRENDERSTATETYPE)7,100+f);d->SetTexture(0,tex);const float k[4]={float(f),1,2,3};d->SetVertexShaderConstantF(4,k,1);
+        D3DLOCKED_RECT lr{};RECT rc{0,f,16,f+1};CHECK(tex->LockRect(0,&lr,&rc,0)==D3D_OK);std::memset(lr.pBits,0x10+f,64);CHECK(tex->UnlockRect(0)==D3D_OK);   // one row per frame
+        void* p=nullptr;CHECK(vb->Lock(UINT(f)*16,16,&p,D3::kLockNoOverwrite)==D3D_OK);std::memset(p,0x40+f,16);CHECK(vb->Unlock()==D3D_OK);
+        d->BeginScene();d->Clear(0,nullptr,1,0,1.f,0);d->DrawPrimitive((D3DPRIMITIVETYPE)4,0,2);d->DrawPrimitiveUP((D3DPRIMITIVETYPE)4,1,up,16);
+        if(f==1)switch(c){
+            case SkipCase::Event:case SkipCase::Occlusion:q->Issue(D3::kIssueBegin);d->DrawPrimitive((D3DPRIMITIVETYPE)4,0,2);q->Issue(D3::kIssueEnd);break;
+            case SkipCase::RenderToTexture:d->SetRenderTarget(0,rts);d->DrawPrimitive((D3DPRIMITIVETYPE)4,0,2);d->SetRenderTarget(0,bb);break;
+            case SkipCase::CarriedTarget:d->DrawPrimitive((D3DPRIMITIVETYPE)4,0,2);d->SetRenderTarget(0,bb);break;   // frame 0 left the texture bound
+            case SkipCase::BackBufferCopy:d->StretchRect(bb,nullptr,rts,nullptr,(D3DTEXTUREFILTERTYPE)0);break;
+            default:break;}
+        if(f==0&&c==SkipCase::CarriedTarget)d->SetRenderTarget(0,rts);
+        d->EndScene();r.presents.push_back(d->Present(nullptr,nullptr,nullptr,nullptr));
+    };
+    rig.sync();   // the replay has opened frame 0 (nothing recorded ahead of it: drawn)
+    if(lag)gKnobs.hold.store(true);   // frame 0's BeginScene keeps the replay thread there while frames 1 and 2 are recorded (three frames ahead: no Present waits)
+    for(int f=0;f<3;++f){frame(f);if(!lag)rig.sync();}
+    gKnobs.hold.store(false);rig.sync();   // frame 1 opened with frames 1 and 2 complete: skipped if allowed; frame 2 had no later frame: drawn
+    for(int f=3;f<6;++f){frame(f);rig.sync();}   // drained after each: no later frame is complete when one opens; Present 4 waits for Present 1 (the skipped one when it was skipped)
+    rig.sync();
+    if(c==SkipCase::Event){HRESULT hr=S_FALSE;CHECK(waitFor([&]{hr=q->GetData(nullptr,0,0);return hr!=S_FALSE;})&&hr==D3D_OK);}   // the skipped frame's event query still completes
+    rig.sync();
+    auto& rp=rig.sd->replayerOf();CHECK(rp.snapshots.allocated()>=1&&rp.snapshots.idle()+1==rp.snapshots.allocated());   // every snapshot but the active one is back in the pool
+    r.skipped=rp.skippedFrames();r.dropped=get(rig.core().q.stats.skippedCommands);r.trace=gTrace;
+    for(auto& t:gTrace){if(t.rfind("Device::Draw",0)==0)++r.draws;if(t.rfind("Device::Present",0)==0)++r.realPresents;}
+    {auto* t=static_cast<TTexture*>(static_cast<IDirect3DTexture9*>(ProxyBase::of(tex)->inner));r.tex.assign(t->surf[0]->mem,t->surf[0]->mem+t->surf[0]->own.size());}
+    r.vb.assign(targetBytes(vb),targetBytes(vb)+256);
+    gKnobs.noDigest.store(false);r.state=rig.target->digest();
+    CHECK(rig.target->ext.tex[0]==ProxyBase::of(tex)->inner&&rig.target->ext.rt0==static_cast<TSurface*>(static_cast<IDirect3DSurface9*>(ProxyBase::of(bb)->inner)));   // the Target binds the game's objects
+    q->Release();rts->Release();bb->Release();rtt->Release();vb->Release();tex->Release();rig.finish();checkClean();gNormalize=false;
+    return r;
+}
+static std::vector<std::string> withoutDropped(const std::vector<std::string>& t){std::vector<std::string> r;for(auto& s:t)if(!droppedBySkip(s)&&s!="STATE")r.push_back(s);return r;}
+static void frameSkipping(){
+    for(SkipCase c:{SkipCase::Plain,SkipCase::Event,SkipCase::Occlusion,SkipCase::RenderToTexture,SkipCase::CarriedTarget,SkipCase::BackBufferCopy}){
+        const SkipRun ref=skipScript(0,c),run=skipScript(1,c);
+        const bool skippable=c==SkipCase::Plain||c==SkipCase::Event;
+        CHECK(ref.skipped==0&&ref.realPresents==6);   // StreamFrameSkip=0: every frame drawn and presented
+        CHECK(run.skipped==(skippable?1u:0u)&&run.realPresents==(skippable?5u:6u));
+        if(skippable){
+            const unsigned frameDraws=c==SkipCase::Event?3u:2u;   // frame 1: the indexed draw, the UP draw (and the query's draw)
+            CHECK(run.draws+frameDraws==ref.draws&&run.dropped==frameDraws+1);   // + its Clear
+            CHECK(withoutDropped(run.trace)==withoutDropped(ref.trace));   // every other call: the same, in the same order, with the same bytes
+        }else CHECK(run.trace==ref.trace&&run.dropped==0);   // drawn: exactly the reference
+        CHECK(run.tex==ref.tex&&run.vb==ref.vb&&run.state==ref.state&&run.presents==ref.presents);   // resources, final state and Present results as the full replay
+        for(int f=0;f<6;++f){CHECK(run.tex[std::size_t(f)*(16*4+16)]==0x10+f);CHECK(run.vb[std::size_t(f)*16]==0x40+f);}   // the skipped frame's uploads are there
+        std::printf("frame skip case=%d skipped=%llu dropped=%llu draws=%u/%u presents=%u/%u\n",int(c),(unsigned long long)run.skipped,(unsigned long long)run.dropped,run.draws,ref.draws,run.realPresents,ref.realPresents);
+    }
+    {const SkipRun idle=skipScript(1,SkipCase::Plain,false);CHECK(idle.skipped==0&&idle.realPresents==6);}   // a replay that keeps up never skips
+}
+// The game thread's Present wait is released by a skipped Present: with the replay stuck in frame 0, a game thread records frames 1..4 (Present 3 waits
+// for Present 0, Present 4 for Present 1); released, the replay skips frame 1 and the game finishes. The CSTREAM line counts it; the first skip is logged once.
+static std::vector<std::string> gSkipLog;static std::mutex gSkipLogMutex;
+static void frameSkipReleasesPresentWait(){
+    gTrace.clear();gSkipLog.clear();StreamDevice::Options opt;opt.framesAhead=3;opt.frameSkip=1;opt.log=[](const char* l){std::lock_guard<std::mutex> g(gSkipLogMutex);gSkipLog.push_back(l);};
+    Rig rig(true,opt);IDirect3DDevice9* d=rig.dev;d->SetRenderState((D3DRENDERSTATETYPE)7,1);rig.sync();   // frame 0 opened with nothing ahead of it: drawn
+    gKnobs.hold.store(true);std::atomic<unsigned> returned{0};
+    std::thread game([&]{for(int f=0;f<5;++f){d->BeginScene();d->DrawPrimitive((D3DPRIMITIVETYPE)4,0,2);d->EndScene();d->Present(nullptr,nullptr,nullptr,nullptr);returned.fetch_add(1);}});
+    CHECK(waitFor([&]{return returned.load()==3;}));std::this_thread::sleep_for(std::chrono::milliseconds(30));CHECK(returned.load()==3);   // Present 3 waits for the stuck frame 0
+    gKnobs.hold.store(false);game.join();rig.sync();
+    auto& rp=rig.sd->replayerOf();CHECK(rp.skippedFrames()>=1&&rp.skippedFrames()<=2);   // frame 1 always (frames 1 and 2 were complete), frame 2 if Present 3 came first
+    unsigned presents=0;for(auto& t:gTrace)if(t.rfind("Device::Present",0)==0)++presents;CHECK(presents+rp.skippedFrames()==5);
+    {std::lock_guard<std::mutex> g(gSkipLogMutex);unsigned first=0;for(auto& l:gSkipLog)if(l.rfind("CSTREAM frame skip: first skipped frame=1 ",0)==0)++first;CHECK(first==1);}
+    rig.finish();checkClean();
+}
 static void streamTests(bool threadsOnly){
     layoutIsolation();replayTimingAccounting();diagnosticsOffSkipsAudit();idlePollWakes();
     lifetimeAndIdentity();stateKnownUnknown();locksPreserveBytes();staticBufferShadows();dynamicBufferShadows();largeBufferAllowance();adaptiveShadowCap();shadowCap();queriesAndSyncCensus();resetAndShutdown();directReplayRaw();redundantFiltering();renderTargetResetsViewport();textureShadows();statsLine();childrenOutliveTheDevice();queryProbeAndDeadQuery();initFailureFallback();cursorHandling();nestedSyncInPump();upDrawsAndBackpressure();snapshotTriggers();snapshotPoolNotExhausted();memoryPressureRelease();impossibleBlockIsRefusedAtOnce();smallStagedLocksUseScratch();
-    framesAheadPacing();textureShadowSpares();
+    framesAheadPacing();textureShadowSpares();frameSkipping();frameSkipReleasesPresentWait();   // 0.3.200 (frame skip)
     equivalence(20000,12345);equivalence(20000,987654321);equivalence(20000,24680,2);equivalence(20000,13579,3);   // 0.3.200 (pipeline): 2 and 3 frames ahead
     (void)threadsOnly;
 }

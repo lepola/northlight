@@ -55,6 +55,7 @@ struct Counters {
     alignas(kLine) Counter consumerSleeps{0};
     Counter directCalls{0};   // replayed straight on the extension device
     Counter queryPolls{0},deadCreates{0},createFailures{0},replayFailures{0},syncOnlySlots{0},proxyMismatch{0};   // replayFailures: the game thread adds rarely too
+    Counter skippedFrames{0},skippedCommands{0};   // 0.3.200 (frame skip): frames replayed in skip mode (no draws, no real Present) and the draws/clears they dropped
     // ---- Both threads write: memory in flight (chunks handed to the producer and not yet recycled, live blocks, registered shadows). ----
     alignas(kLine) Counter chunksLive{0};
     Counter blocksLive{0},blockBytes{0};

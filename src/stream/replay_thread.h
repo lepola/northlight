@@ -138,6 +138,18 @@ public:
     std::function<void(const char*)> log;               // diagnostics line sink; may be empty
     bool (*diagnostics)()=nullptr;                      // Diagnostics on: the CSTREAM line and the sync-only audit (asked per frame)
     unsigned sampleEvery=600;
+    // 0.3.200 (frame skip): StreamFrameSkip (set before start()). A frame is replayed in SKIP MODE when, at its first command, it and at least one later frame are
+    // completely recorded (presentsRecorded >= ordinal+2: the replay is two frames behind and the game would soon wait for it), the game marked it hazard-free
+    // (StreamCore::FrameHazard) and fewer than kMaxSkipRun frames before it were skipped in a row. Skip mode drops only the frame's draws (indexed, UP, patches)
+    // and Clears, which land in the back buffer and a standalone depth surface (the hazard rule), and its real Present: Northlight's draw hooks, capture,
+    // effects and frame finish (renderer.cpp finishFrame) never see the frame, as if the game had made one longer frame. Everything else runs as recorded:
+    // creates and Destroys, Lock/Unlock data, Update*/StretchRect/ColorFill/ProcessVertices, every Set (the device mirror and StreamState stay exact), state
+    // blocks, Begin/EndScene, query Issues (event queries only, polled as usual), snapshots (activated and released in order). The Present retires with D3D_OK
+    // in presentRing and counts as a replayed frame (endFrame), so the game's Present wait is released. A frame with a sync call cannot be complete at its first
+    // command (the game waited inside it), so it is never skipped. Temporal history stays valid: it is tagged with the view it was drawn with.
+    static constexpr unsigned kMaxSkipRun=2;   // at least every third frame is drawn
+    bool frameSkip=false;
+    std::uint64_t skippedFrames()const{return get(core.q.stats.skippedFrames);}
     // 0.3.192 (CS): replay time is accounted by what it is NOT doing: idleNs is the time spent waiting for commands (written by the replay
     // thread around its blocking wait only, no clock read per command). Busy = wall - idle; the CSTREAM line's replayBusyMs/frame is that
     // difference per window, so it now excludes the per-command timer overhead it used to include.
@@ -207,6 +219,7 @@ private:
     GameSnapshot* current_=nullptr;std::optional<ScopedPlayback> playback_;
     std::uint64_t draws_=0;
     std::atomic<std::uint64_t> startNs_{0};
+    bool frameOpen_=false,skipping_=false;unsigned skipRun_=0;   // 0.3.200 (frame skip): replay thread only, see frameSkip
     bool diag_=false;Counter auditSets_{0};   // diag_: diagnostics() as of the last frame boundary (asked once per frame, not per command)
     // audit: the values the game last set this frame, replay side
     DWORD auditRS_[StreamState::kRS]={},auditSamp_[StreamState::kSamplers][StreamState::kSampTypes]={},auditTss_[StreamState::kTSStages][StreamState::kTSTypes]={};
@@ -328,7 +341,30 @@ private:
         core.presentResult.store(hr);{const std::uint64_t seq=core.q.replayedSeq()+1;auto& e=core.presentRing[core.framesReplayed.load(std::memory_order_relaxed)%StreamCore::kRing];e.hr.store(hr);e.seq.store(seq);}   // 0.3.200 (pipeline): by ordinal (endFrame counts it next)
         endFrame();
     }
+    // 0.3.200 (frame skip): the decision at a frame's first command (see frameSkip). Two atomic loads a frame.
+    void beginFrame(){
+        frameOpen_=true;skipping_=false;
+        if(!frameSkip||skipRun_>=kMaxSkipRun)return;
+        const std::uint64_t k=core.framesReplayed.load(std::memory_order_relaxed);
+        if(core.presentsRecorded.load(std::memory_order_acquire)<k+2)return;
+        const auto& f=core.frameRing[k%StreamCore::kRing];
+        skipping_=f.tag.load(std::memory_order_acquire)==k+1&&f.hazards.load(std::memory_order_relaxed)==0;
+    }
+    // A command skip mode drops (true), or the skipped Present: its seq retires with D3D_OK and the frame is counted.
+    bool skipCommand(const CommandHeader* h){
+        switch((Cmd)h->id){
+        case Cmd::Device_DrawPrimitive:case Cmd::Device_DrawIndexedPrimitive:case Cmd::DrawPrimitiveUP:case Cmd::DrawIndexedPrimitiveUP:
+        case Cmd::Device_DrawRectPatch:case Cmd::Device_DrawTriPatch:case Cmd::Device_Clear:own(core.q.stats.skippedCommands);return true;
+        case Cmd::Present:case Cmd::SwapPresent:{
+            {const std::uint64_t seq=core.q.replayedSeq()+1;auto& e=core.presentRing[core.framesReplayed.load(std::memory_order_relaxed)%StreamCore::kRing];e.hr.store(D3D_OK);e.seq.store(seq);}
+            own(core.q.stats.skippedFrames);
+            if(get(core.q.stats.skippedFrames)==1&&log){char b[200];std::snprintf(b,sizeof b,"CSTREAM frame skip: first skipped frame=%llu (the replay was two frames behind; draws and Present dropped, state and resources applied)",(unsigned long long)core.framesReplayed.load());log(b);}
+            endFrame();return true;}
+        default:return false;
+        }
+    }
     void endFrame(){
+        if(frameOpen_){skipRun_=skipping_?skipRun_+1:0;frameOpen_=false;skipping_=false;}   // 0.3.200 (frame skip): the next command opens the next frame
         core.availableTextureMem.store(core.target->GetAvailableTextureMem());
         pollQueries();
         const std::uint64_t frames=core.framesReplayed.fetch_add(1)+1;
@@ -369,6 +405,7 @@ private:
         const double inv=avg_.n?1.0/avg_.n:0.0;
         const std::uint64_t wall=nowNs(),idle=idleNs.load(std::memory_order_relaxed),dWall=wall-lastWall_,dIdle=idle-lastIdle_,dBusy=dWall>dIdle?dWall-dIdle:0;lastWall_=wall;lastIdle_=idle;
         const std::uint64_t pubs=get(s.publishes),sleeps=get(s.consumerSleeps),dPubs=pubs-lastPubs_,dSleeps=sleeps-lastSleeps_;lastPubs_=pubs;lastSleeps_=sleeps;
+        put(buf,n," skipped=%llu",(unsigned long long)get(s.skippedFrames));   // 0.3.200 (frame skip)
         put(buf,n," frames=%llu depthAvg=%.0f depthMax=%llu bytesAvg=%.0f bytesMax=%llu replayBusyMs/frame=%.3f sleeps=%.2f publishes=%.1f dead=%llu answered=%llu synced=%llu syncOnly=%llu snap=%llu/%llu/%llu/%llu",
             (unsigned long long)frames,avg_.depth*inv,(unsigned long long)avg_.maxDepth,avg_.bytes*inv,(unsigned long long)avg_.maxBytes,sampleEvery?dBusy/1e6/sampleEvery:0.0,sampleEvery?double(dSleeps)/sampleEvery:0.0,sampleEvery?double(dPubs)/sampleEvery:0.0,
             (unsigned long long)get(s.deadCreates),(unsigned long long)get(s.stateAnswered),(unsigned long long)get(s.stateSynced),(unsigned long long)get(s.syncOnlySlots),
@@ -415,6 +452,7 @@ private:
         current_=s;if(s)playback_.emplace(*s);
     }
     void execute(const CommandHeader* h){
+        if(skipping_&&skipCommand(h))return;   // 0.3.200 (frame skip)
         Translator tr{core};
         if(dispatchGenerated(h,tr)){
             if(h->id==(std::uint16_t)Cmd::Device_SetRenderState){const auto* a=reinterpret_cast<const Args_Device_SetRenderState*>(h+1);if(diag_&&unsigned(a->State)<StreamState::kRS){auditRS_[a->State]=a->Value;note(unsigned(a->State));}}
@@ -465,6 +503,7 @@ private:
                 if(!h){if(stopNow_.load())return;continue;}
             }
             if(h->id==(std::uint16_t)Cmd::Stop){q.retire(h);return;}
+            if(!frameOpen_)beginFrame();   // 0.3.200 (frame skip)
             execute(h);
             q.retire(h);
         }
