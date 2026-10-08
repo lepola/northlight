@@ -56,7 +56,7 @@ checks['cpp: volume created lazily, L8 with an A8R8G8B8 fallback, honours the pi
 checks['cpp: shader created non-fatally, shader and volume released with the others']=(
     'CreatePixelShader(kFogCloudsShader,&fogCloudsPS)' in w and 'drop(fogCloudsPS);drop(cloudNoise);' in w)
 checks['cpp: frame derived from the settings; active only with the fog effect, no debug view, noise and shader ready']=(
-    'NorthlightFogClouds::derive(quality.fogClouds,unsigned(std::lround(float(quality.fogCloudDensity)*denseDamp)),wx.fog,c[31][3],cloudWind,context.camera,fogCloudNoise().ready.load(std::memory_order_acquire)?&fogCloudNoise().quantiles:nullptr)' in w and
+    'NorthlightFogClouds::derive(quality.fogClouds,unsigned(std::lround(float(quality.fogCloudDensity)*denseDamp)),wx.fog,c[31][3],cloudWind,context.camera,fogCloudNoise().ready.load(std::memory_order_acquire)?&fogCloudNoise().quantiles:nullptr,cloudLush)' in w and
     'cf.active=cf.active&&effects.fog&&debug==0&&fogCloudsPS&&ensureCloudNoise();' in w and w.index('c[31][3]=NorthlightRegionalFog::nightFactor')<w.index('NorthlightFogClouds::derive('))
 checks['cpp: c60..c63 written only while active, .yzw only']=(
     w.count('if(cf.active){\n            for(int i=0;i<3;++i){c[60][1+i]=cf.largeOrigin[i];c[61][1+i]=cf.smallOrigin[i];}')==1 and
@@ -79,7 +79,11 @@ mirror=[l for l in w.splitlines() if 'NorthlightFogClouds::sigmaAt(' in l]
 checks['cpp: sigmaAt adds the cloud term only under cf.active, to the base value, inside the t.height>0 branch']=(
     len(mirror)==1 and mirror[0].strip().startswith('if(clouds&&cf.active){') and 'sigma+=NorthlightFogClouds::sigmaAt(cloudData,cf,context.camera,point,t.ground,t.height,1.f)' in mirror[0] and
     w.index('if(t.height>0){')<w.index(mirror[0])<w.index('return sigma;'))
-checks['cpp: measurement line only on profile-sampled frames']='if(profileSampled())logf("WORLD fog clouds active=%d coverage=%.3f threshold=%.3f height=%.1f speed=%.2f dir=(%.2f %.2f) sigmaMax=%.4f noiseReady=%d"' in w
+# 0.3.199 (fog clouds): lush zones - the camera texel's CPU-only lush flag, smoothed; the field's lush comes from lushZone (forests, grass, Duskwood, STV, Mulgore, Stormwind), outdoors only
+rf=fp.src('regional_fog.h').read_text()
+checks['cpp: lush at the camera texel, smoothed, unchanged indoors']='lushTarget=cloudLush;' in w and 'if(t.height>0)lushTarget=f.lush[k]?1.f:0.f;' in w and 'cloudLush=NorthlightFogClouds::smoothDense(cloudLush,lushTarget,cloudDt);' in w
+checks['regional fog: lush flag per texel, not in the GPU texel']='out.lush[i]=!indoors&&lushZone(zone);' in rf and 'inline bool lushZone(uint32_t zone){return zone==10||zone==33||zone==215||zone==1519||forestZone(zone)||grassZone(zone);}' in rf and 'static_assert(sizeof(Texel)==16' in rf
+checks['cpp: measurement line only on profile-sampled frames']='if(profileSampled())logf("WORLD fog clouds active=%d coverage=%.3f threshold=%.3f height=%.1f speed=%.2f dir=(%.2f %.2f) sigmaMax=%.4f lush=%.2f noiseReady=%d"' in w
 
 # nothing on the game thread
 import os

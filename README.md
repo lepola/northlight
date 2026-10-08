@@ -42,8 +42,8 @@ Every effect below is on by default and is drawn on top of the game's own frame.
   and fog bands, and Northlight's own haze, fog, light shafts, sun and moon, shadows, GI and lamps follow
   detected rain or snow (F10 turns it off). Detection reads only the
   textures the art layer ships, no game memory, so it needs the Northlight art layer (`Weather`, `RainFog`). The game's rain streaks are drawn alpha-blended so they stay crisp instead of taking the background's colour, and the game's mist puffs, which darkened night and storm rain into black balls, are left out while it rains; snow and sand storms keep them (`RainBlend`).
-- **Fog clouds.** Low fog banks that drift with the wind, thicker and faster in rain, few or none in clear
-  daylight (its own half-resolution pass; `FogClouds`, `FogCloudDensity`). Ctrl+Shift+F7 (fog) and F10 turn
+- **Fog clouds.** Low fog banks that drift with the wind, thicker and faster in rain, few and faint in clear
+  weather and only in forest and grass zones then (its own half-resolution pass; `FogClouds`, `FogCloudDensity`). Ctrl+Shift+F7 (fog) and F10 turn
   them off with the rest; the Performance preset has them off. The fog is also smoothed over frames so lamp glows
   and shafts do not shimmer while moving (`FogTemporal`).
 - **Water.** The game's water is drawn unchanged; a liquid mask keeps the relighting and AO off the

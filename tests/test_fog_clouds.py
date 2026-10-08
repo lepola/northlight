@@ -85,6 +85,7 @@ int main(){
         for(auto f:{FC::derive(0,100,1,1,w0,cam,&Q),FC::derive(1,0,1,1,w0,cam,&Q),FC::derive(1,100,1,1,w0,cam,nullptr)}){
             assert(!f.active&&f.coverage==0&&f.height==0&&f.sigmaMax==0&&f.invLarge==0&&f.invSmall==0&&f.threshold==0&&f.sharpness==0);
             for(int i=0;i<3;++i)assert(f.largeOrigin[i]==0&&f.smallOrigin[i]==0);}
+        const float nan=std::numeric_limits<float>::quiet_NaN();
         const auto dry=FC::derive(1,100,0,0,w0,cam,&Q),night=FC::derive(1,100,0,1,w0,cam,&Q),rain=FC::derive(1,100,1,0,w0,cam,&Q);
         assert(dry.active&&near(dry.coverage,.05f)&&near(night.coverage,.23f)&&near(rain.coverage,FC::kMaxCoverage));
         assert(dry.coverage<night.coverage&&night.coverage<rain.coverage&&dry.threshold>night.threshold&&night.threshold>rain.threshold&&dry.sharpness>0);
@@ -92,7 +93,12 @@ int main(){
         assert(near(dry.height,FC::kBaseHeight)&&near(rain.height,FC::kBaseHeight+FC::kRainHeight)&&near(dry.sigmaMax,FC::kSigmaMax*FC::kDrySigma)&&near(rain.sigmaMax,FC::kSigmaMax)&&near(dry.invLarge,1.f/FC::LargePeriod)&&near(dry.invSmall,1.f/FC::SmallPeriod));
         assert(near(FC::derive(1,200,0,0,w0,cam,&Q).coverage,.10f)&&near(FC::derive(1,50,0,0,w0,cam,&Q).coverage,.025f)&&near(FC::derive(1,200,1,1,w0,cam,&Q).coverage,FC::kMaxCoverage));
         assert(!FC::derive(1,10,0,0,w0,cam,&Q).active); /* .005 < kMinCoverage: the pass is skipped */
-        const float nan=std::numeric_limits<float>::quiet_NaN();
+        // 0.3.199 (fog clouds): lush zones; dry thinner at night
+        assert(!FC::derive(1,100,0,0,w0,cam,&Q,0.f).active&&!FC::derive(1,100,0,1,w0,cam,&Q,0.f).active); /* dry, not lush: no banks */
+        assert(near(FC::derive(1,100,0,1,w0,cam,&Q,.5f).coverage,.115f)&&near(FC::derive(1,100,0,1,w0,cam,&Q,1.f).coverage,.23f)); /* the dry share scales with lush */
+        assert(near(FC::derive(1,100,1,0,w0,cam,&Q,0.f).coverage,rain.coverage)&&near(FC::derive(1,100,.5f,0,w0,cam,&Q,0.f).coverage,.5f)&&near(FC::derive(1,100,.5f,0,w0,cam,&Q,1.f).coverage,.525f)); /* full rain: every zone its full coverage; half rain: the dry share x fog */
+        assert(near(FC::derive(1,100,0,0,w0,cam,&Q,nan).coverage,dry.coverage)); /* nan lush: lush */
+        assert(near(night.sigmaMax,FC::kSigmaMax*FC::kDrySigma*(1-FC::kDryNightThin))&&night.sigmaMax<dry.sigmaMax&&near(FC::derive(1,100,1,1,w0,cam,&Q).sigmaMax,FC::kSigmaMax)); /* dry nights thinner; rain unchanged */
         const auto bad=FC::derive(1,100,nan,nan,w0,cam,&Q);assert(bad.active&&near(bad.coverage,.05f)&&near(bad.height,FC::kBaseHeight));
         FC::Wind w;for(int i=0;i<500;++i)w.advance(.05f,.5f);
         const float far[3]={-1e5f,3.3e5f,-17.f};

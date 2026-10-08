@@ -438,7 +438,7 @@ private:
     // 0.3.199 (fog temporal): last frame's resolved half-resolution fog (swapped with fogBlurred after the pass, so one extra target is enough), valid only after a frame that ran the pass.
     IDirect3DPixelShader9* fogTemporalPS=nullptr;IDirect3DTexture9* fogHistory=nullptr;IDirect3DSurface9* fogHistorySurface=nullptr;bool fogHistoryValid=false;
     static constexpr float FogTemporalWeight=.85f; /* history weight in c64.y (0 = pass through) */
-    NorthlightFogClouds::Wind cloudWind;int64_t cloudQpc=0;float cloudDenseZone=0; /* smoothed dense-zone profile at the camera (Duskwood 1), see denseZoneDamp */
+    NorthlightFogClouds::Wind cloudWind;int64_t cloudQpc=0;float cloudDenseZone=0,cloudLush=1; /* smoothed dense-zone profile at the camera (Duskwood 1), see denseZoneDamp; smoothed lush zone at the camera (forest/grass 1), see derive */
     // The N^3 volume as L8 (A8R8G8B8 with the value in every channel where L8 volumes are missing); one failure disables the clouds for good, nothing else.
     bool ensureCloudNoise(){
         if(cloudNoise)return true;
@@ -3190,12 +3190,15 @@ public:
         const int64_t cloudNow=QpcClock::now();
         const float cloudDt=cloudQpc&&captureFrequency.QuadPart>0?float(double(cloudNow-cloudQpc)/double(captureFrequency.QuadPart)):0.f;
         cloudQpc=cloudNow;
-        {float denseTarget=0;
+        // The same camera texel says whether the zone is lush (forest/grass): without rain only lush zones get banks (no field, indoors or unknown: unchanged; it starts lush).
+        {float denseTarget=0,lushTarget=cloudLush;
          if(uploadedFogField){const auto& f=*uploadedFogField;
              const float fx=(context.camera[0]-f.originX)/NorthlightRegionalFog::Spacing,fy=(context.camera[1]-f.originY)/NorthlightRegionalFog::Spacing;
-             if(fx>=0&&fy>=0&&fx<NorthlightRegionalFog::N-1&&fy<NorthlightRegionalFog::N-1){const auto& t=f.texels[unsigned(fy)*NorthlightRegionalFog::N+unsigned(fx)];
-                 if(t.height>0)denseTarget=std::clamp((t.height-2.5f)/2.5f,0.f,1.f);}}
-         cloudDenseZone=NorthlightFogClouds::smoothDense(cloudDenseZone,denseTarget,cloudDt);}
+             if(fx>=0&&fy>=0&&fx<NorthlightRegionalFog::N-1&&fy<NorthlightRegionalFog::N-1){const unsigned k=unsigned(fy)*NorthlightRegionalFog::N+unsigned(fx);const auto& t=f.texels[k];
+                 if(t.height>0)denseTarget=std::clamp((t.height-2.5f)/2.5f,0.f,1.f);
+                 if(t.height>0)lushTarget=f.lush[k]?1.f:0.f;}}
+         cloudDenseZone=NorthlightFogClouds::smoothDense(cloudDenseZone,denseTarget,cloudDt);
+         cloudLush=NorthlightFogClouds::smoothDense(cloudLush,lushTarget,cloudDt);}
         const float denseDamp=NorthlightFogClouds::denseZoneDamp(cloudDenseZone);
         const float airFloor=.0017f+wx.airExtinction()*denseDamp; /* the shared outdoor air extinction (the shader's old literal .0017) plus the rain's extra (thinned in dense zones): exactly .0017f when dry */
         c[59][2]=wx.shadowSoften();c[59][3]=airFloor; /* 0.3.198 (rain): direct shadow softening (0 when dry), air extinction floor (WorldFog) */
@@ -3224,14 +3227,14 @@ public:
         // The noise (and its quantile table) is requested from the settings alone: derive() cannot be active before the table exists, so a
         // request gated on cf.active would never start it. One background generation per process; FogClouds=0 or density 0 still does nothing.
         if(quality.fogClouds&&quality.fogCloudDensity&&effects.fog&&debug==0&&!fogCloudNoise().ready.load(std::memory_order_acquire))fogCloudNoise().request();
-        auto cf=NorthlightFogClouds::derive(quality.fogClouds,unsigned(std::lround(float(quality.fogCloudDensity)*denseDamp)),wx.fog,c[31][3],cloudWind,context.camera,fogCloudNoise().ready.load(std::memory_order_acquire)?&fogCloudNoise().quantiles:nullptr);
+        auto cf=NorthlightFogClouds::derive(quality.fogClouds,unsigned(std::lround(float(quality.fogCloudDensity)*denseDamp)),wx.fog,c[31][3],cloudWind,context.camera,fogCloudNoise().ready.load(std::memory_order_acquire)?&fogCloudNoise().quantiles:nullptr,cloudLush);
         cf.active=cf.active&&effects.fog&&debug==0&&fogCloudsPS&&ensureCloudNoise();
         const uint8_t* cloudData=cf.active?fogCloudNoise().data.data():nullptr;
         if(cf.active){
             for(int i=0;i<3;++i){c[60][1+i]=cf.largeOrigin[i];c[61][1+i]=cf.smallOrigin[i];}
             c[62][1]=cf.threshold;c[62][2]=cf.height;c[62][3]=cf.sigmaMax;c[63][1]=cf.invLarge;c[63][2]=cf.invSmall;c[63][3]=cf.sharpness;
         }
-        if(profileSampled())logf("WORLD fog clouds active=%d coverage=%.3f threshold=%.3f height=%.1f speed=%.2f dir=(%.2f %.2f) sigmaMax=%.4f noiseReady=%d",cf.active?1:0,cf.coverage,cf.threshold,cf.height,cloudWind.speed,cloudWind.dir[0],cloudWind.dir[1],cf.sigmaMax,fogCloudNoise().ready.load(std::memory_order_acquire)?1:0);
+        if(profileSampled())logf("WORLD fog clouds active=%d coverage=%.3f threshold=%.3f height=%.1f speed=%.2f dir=(%.2f %.2f) sigmaMax=%.4f lush=%.2f noiseReady=%d",cf.active?1:0,cf.coverage,cf.threshold,cf.height,cloudWind.speed,cloudWind.dir[0],cloudWind.dir[1],cf.sigmaMax,cloudLush,fogCloudNoise().ready.load(std::memory_order_acquire)?1:0);
         skyTransmittanceFrame=1;
         if(effects.fog&&active&&uploadedFogField){
             const auto& field=*uploadedFogField;const float night=c[31][3];
