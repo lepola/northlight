@@ -102,7 +102,9 @@ KNOWN_OURS = {'a6362b62564d8b0e9bbc71e1e8e8420b4b66557c021ea0656c3c7d34a30ac4a2'
               '0d883ef5955dd29c6f843a2622b0fe364a9726b40b4e1f9421d6a84c0acb4426',   # 0.3.199 dev HD (rain mips keep a one-texel full-alpha core)
               '931ab91f93b6c764809ac99f03b2b9b4920348fbdbb24001b069dadba2bbc94b',   # 0.3.199 stock (rain mips keep a one-texel full-alpha core)
               '39d6c9398650060c37ab358ec7822e0aada7ff218ab3c86c3f81146ad44dbe87',   # 0.3.199 dev HD (rain alpha 1)
-              '14976725862e3997f1004920bf12a5cc674b654bc9fdfbb53d8282d7bf0f350e'}   # 0.3.199 stock (rain alpha 1)
+              '14976725862e3997f1004920bf12a5cc674b654bc9fdfbb53d8282d7bf0f350e',   # 0.3.199 stock (rain alpha 1)
+              'a827c5cdb1137f271122f87aa131c5c2e163af1e873f5683ae25399ff4eaa6a8',   # 0.3.199 dev HD (rain colour .78)
+              'bf79010b93a34301b5cc96c87b9fc9e0ec98faaa5e7a74bf50be89583a87cd4c'}   # 0.3.199 stock (rain colour .78)
 BASE_ARCHIVES = ('common', 'common-2', 'expansion', 'lichking', 'patch', 'patch-2', 'patch-3')
 GIB = 1 << 30
 LOCAL_BUILD_BYTES = 13 * GIB   # 1.2 x the ~11 GB cache

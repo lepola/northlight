@@ -21,7 +21,7 @@ MEAN0 = (.043, .056)   # rain alpha 1, core sigma .62 px on texel 16 (0.3.199 ga
 checks['three textures, at the client\'s paths'] = set(textures) == {'textures\\Weather\\RainDrop01.blp', 'Textures\\WEATHER\\RAINDROPRED01.BLP', 'textures\\Weather\\SnowFlake01.blp'}
 # Palette layout: 256 BGRA entries, entry 0 = the colour exactly, the rest zero; per mip all-zero indices then the alpha plane.
 rain = textures['textures\\Weather\\RainDrop01.blp']
-checks['rain palette: entry 0 = (230,230,230,255), 255 other entries zero'] = rain[148:152] == bytes((230, 230, 230, 255)) and not any(rain[152:148+1024])
+checks['rain palette: entry 0 = (199,199,199,255), 255 other entries zero'] = rain[148:152] == bytes((199, 199, 199, 255)) and not any(rain[152:148+1024])
 checks['rain mip 0: indices all 0, then the alpha plane (decodes back to it)'] = (
     not any(rain[148+1024:148+1024+32*512]) and list(decode_blp(rain, 512)[2][3::4]) == list(rain[148+1024+32*512:148+1024+2*32*512]))
 checks['deterministic: a second run gives the same bytes'] = wt.weather_textures() == textures
@@ -65,7 +65,7 @@ for name, data in textures.items():
     colour = {tuple(pixels[i*4:i*4+3]) for i in range(0, w*h) if pixels[i*4+3]}
     checks[f'{key}: one colour at every visible texel'] = len(colour) <= 1 + 2 and len({c for c in colour if all(abs(a-b) <= 1 for a, b in zip(c, sorted(colour)[len(colour)//2]))}) == len(colour)
     info[key]['colour'] = sorted(colour)[len(colour)//2]
-checks['rain is near-white neutral (230,230,230), red rain red, snow neutral white'] = info['RainDrop01']['colour'] == (230, 230, 230) and info['RAINDROPRED01']['colour'] == (191, 56, 46) and len(set(info['SnowFlake01']['colour'])) == 1
+checks['rain is light grey neutral (199,199,199), red rain red, snow neutral white'] = info['RainDrop01']['colour'] == (199, 199, 199) and info['RAINDROPRED01']['colour'] == (166, 48, 40) and len(set(info['SnowFlake01']['colour'])) == 1
 
 moon = build_outdoor_single_moon.transparent_moon()
 checks['moon02: byte-identical to the pre-refactor writer (sha256, 64x64 x7 levels)'] = (
