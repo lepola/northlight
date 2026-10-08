@@ -1,5 +1,5 @@
 {
-  "source_sha256": "31f9bdc39bcf64d4169bac1cdfdb46060d76c3698e5377833e30aa8a8810e0eb",
+  "source_sha256": "2f151f746b5ea508bdf0e58ecd66b1bbaa145f6956d8eb78a610f268d3b3cbd5",
   "compiler": "Wine d3dcompiler_47 D3DCompile",
   "game_launched": false,
   "shaders": {
@@ -394,9 +394,9 @@
     },
     "WorldComposite": {
       "target": "ps_3_0",
-      "bytes": 8240,
-      "sha256": "1f3884872a55ec91f9ee42fd153aa988d16c81382de23cdd22b3347794240cd4",
-      "static_instruction_slots": 498,
+      "bytes": 8388,
+      "sha256": "4b3b4f22b22f0cffc9b47ac4020eb68d1b3095a81f589fd0c1b4b01d1ab922f4",
+      "static_instruction_slots": 505,
       "temporary_registers": 29,
       "samplers": [
         0,
@@ -405,14 +405,15 @@
         9,
         10,
         11,
-        12
+        12,
+        13
       ],
       "instructions": {
-        "mov": 140,
-        "texldl": 10,
-        "mul": 73,
+        "mov": 142,
+        "texldl": 11,
+        "mul": 74,
         "frc": 4,
-        "add": 85,
+        "add": 87,
         "max": 23,
         "min": 12,
         "cmp": 45,

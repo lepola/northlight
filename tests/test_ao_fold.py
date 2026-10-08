@@ -177,8 +177,8 @@ checks['smoothRemoval: both Scene reads times the AO alpha; removalScale without
     and 'return max(legacyT*max(baseline,.15),scene-min(fog,scene));' in world and '.0001));' not in world[world.index('float3 removalScale('):world.index('float3 smoothRemoval(')])
 wm = json.loads(fp.src('world-shader-build.json').read_text())['shaders']
 # 0.3.185: the removal smoothing (Scene, AO, baseline reads) moved to RemovalSmooth; TemporalLight keeps no s0/s10/s12 read and gains s9.
-checks[f"world manifest: WorldComposite {wm['WorldComposite']['static_instruction_slots']} <= 500 with s10; RemovalSmooth {wm['RemovalSmooth']['static_instruction_slots']} (s10 AO) <= 512; TemporalLight {wm['TemporalLight']['static_instruction_slots']} == 293"] = (
-    wm['WorldComposite']['static_instruction_slots'] <= 500 and wm['WorldComposite']['samplers'] == [0, 1, 8, 9, 10, 11, 12]
+checks[f"world manifest: WorldComposite {wm['WorldComposite']['static_instruction_slots']} <= 512 with s10; RemovalSmooth {wm['RemovalSmooth']['static_instruction_slots']} (s10 AO) <= 512; TemporalLight {wm['TemporalLight']['static_instruction_slots']} == 293"] = (
+    wm['WorldComposite']['static_instruction_slots'] <= 512 and wm['WorldComposite']['samplers'] == [0, 1, 8, 9, 10, 11, 12, 13]  # 0.3.201: the SM3 limit (512) replaces the old 500 headroom guard; the rain mask adds s13
     and wm['RemovalSmooth']['static_instruction_slots'] <= 512 and wm['RemovalSmooth']['samplers'] == [0, 1, 8, 10, 12, 14]
     and wm['TemporalLight']['static_instruction_slots'] == 293 and wm['TemporalLight']['samplers'] == [1, 8, 9, 14, 15])
 

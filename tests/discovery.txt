@@ -83,6 +83,7 @@ test_prepare_worker.py
 test_probe_blend.py
 test_progressive_gi_worker.py
 test_quality_settings.py
+test_rain_mask.py
 test_raster_reconstruction.py
 test_regional_surface_shadow.py
 test_render_thread_probe.py
