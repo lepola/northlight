@@ -626,7 +626,11 @@ class Device final : public GuardedMirrorDevice {
         if(failed||!enabled)return;
         // 0.3.199 (rain): the effect boundary at the first rain draw (drawHook sets the flag): the composite runs before the game's rain, so the
         // fog and haze do not paint over the streaks. Same extensionWork region as the UI boundary; renderEffects restores the game's states.
-        if(rainBoundary){rainBoundary=false;if(!applied&&terrain){if(sampled())logf("EFFECT boundary frame=%u draw=%u kind=rain",frame,drawCalls);renderEffects();}}
+        if(rainBoundary){rainBoundary=false;if(!applied&&terrain){if(sampled())logf("EFFECT boundary frame=%u draw=%u kind=rain",frame,drawCalls);renderEffects();
+            /* 0.3.199 (rain): the effects end with a state-block Apply, which forgets the mirror's stage-0 texture; the game does not set the same rain
+               texture again for its next rain draws, so without this read they no longer matched (one rain draw per frame counted and blended).
+               The read goes to the device (the game's restored state) and the mirror learns it back. */
+            IDirect3DBaseTexture9* stage0=nullptr;if(SUCCEEDED(ext->GetTexture(0,&stage0)))drop(stage0);}}
         if(applied){
             if(sampled()){IDirect3DVertexShader9* late=nullptr;const bool borrowed=ext->peekVertexShader(late); // 0.3.196 (task 12): identity lookup only
                 if((borrowed||(SUCCEEDED(ext->GetVertexShader(&late))&&late))&&world){

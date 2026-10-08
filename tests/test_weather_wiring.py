@@ -51,6 +51,9 @@ pdi=r[r.index('template<class Capture> void prepareDrawImpl('):r.index('    // T
 checks['rain boundary: flag set only in the matched branch with terrain&&!applied and the setting']=cmp_line.split('{',1)[1].count('rainBoundary=rainBlend&&terrain&&!applied;')==1 and r.count('rainBoundary=true')==0
 checks['rain boundary: prepareDrawImpl consumes it before the applied return and before the draw capture']=0<pdi.index('if(rainBoundary){rainBoundary=false;if(!applied&&terrain)')<pdi.index('renderEffects();')<pdi.index('if(applied){')<pdi.index('beforeDraw(vs)')
 checks['rain boundary: UI boundary kept as the fallback, both logs name the kind']='renderEffects();\n            }\n        }\n    }' in r and 'kind=ui' in r and 'kind=rain' in pdi
+# game test: after the rain boundary the mirror forgets stage 0 (state-block Apply); one GetTexture(0) relearns it so the rest of the rain matches
+checks['rain boundary: stage 0 relearned after renderEffects (the remaining rain draws still match)']=('renderEffects();' in r and 'IDirect3DBaseTexture9* stage0=nullptr;if(SUCCEEDED(ext->GetTexture(0,&stage0)))drop(stage0);' in r
+    and r.index('kind=rain",frame,drawCalls);renderEffects();')<r.index('IDirect3DBaseTexture9* stage0=nullptr;'))
 for k,ok in checks.items():print(('PASS ' if ok else 'FAIL ')+k)
 sys.exit(0 if all(checks.values()) else 1)
 
