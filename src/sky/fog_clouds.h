@@ -159,7 +159,7 @@ inline float smoothDense(float current,float target,float dt){
 inline float sigma(float nL,float nS,float altitude,float threshold,float sharpness,float height,float tag,float sigmaMax){
     auto sat=[](float x){return std::clamp(x,0.f,1.f);};
     const float n=.65f*nL+.35f*nS,c=sat((n-threshold)*sharpness);
-    float v=sat(1-altitude/std::max(height*(.3f+1.7f*nL),.001f));v*=v; /* the bank top follows the large noise, as in the shader */
+    float v=sat(1-altitude/std::max(height*(8.f*nL-2.5f),.001f));v*=v; /* the bank top follows the large noise, as in the shader (0 below nL .31, 5.5x at 1) */
     const float zone=1+(.7f-1)*sat((tag-1.25f)/3.75f);
     return altitude>=0&&tag>0?c*v*zone*sigmaMax:0.f;}
 // CPU mirror of one GPU sample at world point p (ground = regional field ground height at p, tag = field .w, fieldCoverage = 0..1 valid weight)

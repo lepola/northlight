@@ -836,7 +836,7 @@ float4 FogClouds(float2 uv:TEXCOORD0):COLOR0 {
         float nL=tex3Dlod(CloudNoise,float4(rel*CloudInfo[3].y+CloudInfo[0].yzw,0)).r;
         float nS=tex3Dlod(CloudNoise,float4(rel*CloudInfo[3].z+CloudInfo[1].yzw,0)).r;
         float density=saturate((mad(.65,nL,.35*nS)-CloudInfo[2].y)*CloudInfo[3].w);
-        float low=saturate(1-altitude/max(CloudInfo[2].z*mad(1.7,nL,.3),.001)); // 0.3.199 (fog clouds): the bank top follows the large noise (.3..2x the mean height): thick spots reach tree tops (game test)
+        float low=saturate(1-altitude/max(CloudInfo[2].z*mad(8,nL,-2.5),.001)); // 0.3.199 (fog clouds): the bank top follows the large noise (0 below nL .31, ~1.5x at .5, ~4x at .8, 5.5x at 1): thick spots tower over the trees (game tests)
         float zone=lerp(1,.7,saturate((field.w-1.25)/3.75));
         float sigma=density*low*low*zone*CloudInfo[2].w*valid*nearFade; // valid > 0 only above ground (altitude >= 0) in a node with a layer height tag
         [branch]if(sigma>0){

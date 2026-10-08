@@ -69,7 +69,7 @@ int main(){
         assert(FC::sigma(1,1,-.01f,0,3,10,1,.03f)==0.f&&FC::sigma(1,1,2,0,3,10,0,.03f)==0.f&&FC::sigma(1,1,2,0,3,10,-1,.03f)==0.f);
         float prev=-1;for(int i=0;i<=20;++i){const float s=FC::sigma(.6f,.5f,2,1-float(i)/20,3,10,1,.03f);assert(s>=prev);prev=s;}
         assert(prev>0);
-        assert(near(FC::sigma(1,1,0,0,3,10,1,.03f),.03f)&&FC::sigma(1,1,20,0,3,10,1,.03f)==0.f&&FC::sigma(1,1,15,0,3,10,1,.03f)>0.f&&FC::sigma(0,1,3.1f,0,3,10,1,.03f)==0.f&&FC::sigma(0,1,2.9f,0,3,10,1,.03f)>0.f);
+        assert(near(FC::sigma(1,1,0,0,3,10,1,.03f),.03f)&&FC::sigma(1,1,55.1f,0,3,10,1,.03f)==0.f&&FC::sigma(1,1,54,0,3,10,1,.03f)>0.f&&FC::sigma(.4f,1,7.1f,0,3,10,1,.03f)==0.f&&FC::sigma(.4f,1,6.9f,0,3,10,1,.03f)>0.f&&FC::sigma(.3f,1,.01f,0,3,10,1,.03f)==0.f);
         const float t1=FC::sigma(1,1,1,0,3,10,1,.03f),t5=FC::sigma(1,1,1,0,3,10,5,.03f);assert(near(t5,.7f*t1,1e-7f)&&t1>0);
         assert(FC::sigma(1,1,1,0,3,10,9,.03f)==t5); /* zone saturates */
     }

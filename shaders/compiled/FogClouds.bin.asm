@@ -13,11 +13,11 @@ def c77 = 1.50000000e+00, 5.00000000e-01, 5.00000000e-01, 1.50000000e+00
 def c78 = 1.50000000e+00, 1.50000000e+00, 6.30000000e+01, 3.00000000e+00
 def c79 = 1.00000000e+00, 1.00000000e+00, 1.00000000e+00, 1.00000000e+00
 def c80 = -2.50000000e+00, 4.00000006e-01, 6.00000000e+00, 1.00000005e-03
-def c81 = 6.49999976e-01, 3.49999994e-01, 1.70000005e+00, 3.00000012e-01
-def c82 = -1.25000000e+00, 2.66666681e-01, -3.00000012e-01, 1.44269502e+00
-def c83 = 8.33333358e-02, 6.66666687e-01, 6.66666687e-01, 4.00000000e+00
-def c84 = 2.00000000e+00, 2.00000000e+00, 3.00000000e+00, 3.00000000e+00
-def c85 = -4.00000000e+00, 3.29999998e-02, 2.19999999e-01, 9.99999975e-05
+def c81 = 6.49999976e-01, 3.49999994e-01, 8.00000000e+00, -1.25000000e+00
+def c82 = 2.66666681e-01, -3.00000012e-01, 1.44269502e+00, 8.33333358e-02
+def c83 = 6.66666687e-01, 6.66666687e-01, 2.00000000e+00, 2.00000000e+00
+def c84 = 3.00000000e+00, 3.00000000e+00, 4.00000000e+00, -4.00000000e+00
+def c85 = 3.29999998e-02, 2.19999999e-01, 9.99999975e-05, 0.00000000e+00
 def c86 = 3.49999994e-01, 3.49999994e-01, 3.49999994e-01, 0.00000000e+00
 defi i0 = 255, 0, 0, 0
 dcl_volume s14
@@ -319,17 +319,17 @@ if_ne r0.x, -r0.x
         add r21.y, r21.y, -c62.y
         mul r21.y, r21.y, c63.w
         mov_sat r21.y, r21.y
-        mad r21.z, c81.z, r24.x, c81.w
+        mad r21.z, c81.z, r24.x, c80.x
         mul r21.z, c62.z, r21.z
         max r21.z, r21.z, c80.w
         rcp r16.y, r21.z
         mul r21.z, r22.w, r16.y
         add r21.z, -r21.z, c68.z
         mov_sat r21.z, r21.z
-        add r21.w, r23.z, c82.x
-        mul r21.w, r21.w, c82.y
+        add r21.w, r23.z, c81.w
+        mul r21.w, r21.w, c82.x
         mov_sat r21.w, r21.w
-        mul r21.w, r21.w, c82.z
+        mul r21.w, r21.w, c82.y
         add r21.w, r21.w, c68.z
         mul r21.y, r21.y, r21.z
         mul r21.y, r21.y, r21.z
@@ -340,11 +340,11 @@ if_ne r0.x, -r0.x
         cmp r16.w, -r16.z, c68.y, c68.z
         if_ne r16.w, -r16.w
             mul r16.z, -r16.z, r21.x
-            mul r16.z, r16.z, c82.w
+            mul r16.z, r16.z, c82.z
             exp r16.x, r16.z
             mov r16.z, -r16.x
             add r16.z, r16.z, c68.z
-            mul r16.w, r22.w, c83.x
+            mul r16.w, r22.w, c82.w
             mov_sat r16.w, r16.w
             mul r21.y, r16.w, c73.x
             add r21.y, -r21.y, c78.w
@@ -390,19 +390,19 @@ if_ne r0.x, -r0.x
                 mov r12.y, -c2.z
                 mov r24.zw, r12.xxxy
                 mul r24.xy, r24.xyxx, r24.zwzz
-                mul r24.xy, r24.xyxx, c83.yzyy
+                mul r24.xy, r24.xyxx, c83.xyxx
                 frc r24.xy, r24.xyxx
                 mul r24.zw, r24.xxxy, r24.xxxy
-                mul r25.xy, r24.xyxx, c84.xyxx
-                add r25.xy, -r25.xyxx, c84.zwzz
+                mul r25.xy, r24.xyxx, c83.zwzz
+                add r25.xy, -r25.xyxx, c84.xyxx
                 mul r24.zw, r24.xxzw, r25.xxxy
-                mul r21.w, c24.x, c83.w
+                mul r21.w, c24.x, c84.z
                 add r21.w, r22.z, -r21.w
                 mov r10.z, c68.y
                 mov r8.w, c68.y
                 rep i0.xyzw
                     mov r22.x, r8.w
-                    add r22.x, r22.x, c85.x
+                    add r22.x, r22.x, c84.w
                     cmp r22.x, r22.x, c68.y, c68.z
                     add r22.x, -r22.x, c68.z
                     if_ne r22.x, -r22.x
@@ -467,7 +467,7 @@ if_ne r0.x, -r0.x
         else
         endif
         mul r16.z, -r23.x, r21.x
-        mul r16.z, r16.z, c82.w
+        mul r16.z, r16.z, c82.z
         exp r10.y, r16.z
         mov r16.z, r0.w
         mul r16.z, r16.z, r10.y
@@ -478,7 +478,7 @@ if_ne r0.x, -r0.x
     endrep
     max r3.xyz, c17.xyzx, c69.xyzx
     dp3 r0.x, r0.xyzx, c16.xyzx
-    mad r0.x, c85.y, r0.x, c85.z
+    mad r0.x, c85.x, r0.x, c85.y
     mul r0.xyz, r3.xyzx, r0.x
     mov_sat r3.xyz, c22.xyzx
     mul r0.xyz, r0.xyzx, r3.xyzx
@@ -488,7 +488,7 @@ if_ne r0.x, -r0.x
     mul r0.xyz, r0.xyzx, r0.w
     max r0.w, r0.y, r0.z
     max r0.w, r0.x, r0.w
-    max r1.x, c21.z, c85.w
+    max r1.x, c21.z, c85.z
     add r0.w, r1.x, r0.w
     rcp r0.w, r0.w
     mul r0.w, r1.x, r0.w
