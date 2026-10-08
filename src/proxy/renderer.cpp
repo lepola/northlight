@@ -580,6 +580,8 @@ class Device final : public GuardedMirrorDevice {
         gpuProfile->mark("CelestialDiscs");
         if(celestial){celestialDiscs->renderRing();gpuProfile->mark("CelestialRing");}
         effectsBuckets.mark(Bucket::Celestial); /* discs, glare, the terrain mask prepare, the ring */
+        if(frameMarkers){const unsigned n=frame;static const D3DCOLOR sp[4]={0xffff0000,0xff00ff00,0xff0000ff,0xffffffff};D3DSURFACE_DESC td={};saved.targets[0]->GetDesc(&td);
+            const LONG top=LONG(td.Height/2);const RECT r{60,top,100,top+40};ext->ColorFill(saved.targets[0],&r,sp[n&3]);} /* 0.3.200 (frame markers): S, in the scene before its copy */
         if (error(ext->StretchRect(saved.targets[0], nullptr, sceneSurface, nullptr, D3DTEXF_NONE), "copy scene")) return;
         effectState();
         float constants[]={1.f/width,1.f/height,nearZ,farZ,scaleX,scaleY,.60f,(world&&world->ready()?0.f:.12f),.08f,2.f,float(debugMode),0,worldMinDepth,1.f/(worldMaxDepth-worldMinDepth),worldMaxDepth,0};
