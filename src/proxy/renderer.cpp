@@ -721,11 +721,29 @@ class Device final : public GuardedMirrorDevice {
     // RenderProfile sample frames only: the largest draw before the effects (WEATHER probe), to calibrate detection.
     struct WeatherProbe {UINT count=0;const void* texture=nullptr;bool known=false,candidate=false,vs=false,ps=false;} weatherProbe;
     void weatherProbeDraw(UINT count){
+        if(!applied&&weatherStateReports<4&&weatherDetect.hot&&mirrorState.textureKnown[0]&&mirrorState.textures[0]==weatherDetect.hot)weatherDrawStates(count); /* 0.3.199: sample frames only */
         if(applied||count<=weatherProbe.count)return;
         weatherProbe.count=count;weatherProbe.known=mirrorState.textureKnown[0];weatherProbe.texture=weatherProbe.known?mirrorState.textures[0]:nullptr; /* borrowed: never dereferenced */
         weatherProbe.candidate=weatherProbe.texture&&weatherDetect.isCandidate(weatherProbe.texture);weatherProbe.vs=mirrorState.vertexShaderKnown&&mirrorState.vertexShader;weatherProbe.ps=mirrorState.pixelShaderKnown&&mirrorState.pixelShader;
     }
     static void weatherLog(const char* line){logf("%s",line);}
+    // 0.3.199: how the game draws its weather (the rain streaks took the colour of what is behind them in the game tests): the blend and
+    // texture-stage states of a detected weather draw, logged for the first 4 such draws of a session, from the RenderProfile sample-frame probe
+    // (weatherProbeDraw: no per-draw cost on other frames; reads, no writes).
+    unsigned weatherStateReports=0;
+    void weatherDrawStates(UINT count){
+        ++weatherStateReports;
+        DWORD rs[10]={};const D3DRENDERSTATETYPE ids[10]={D3DRS_ALPHABLENDENABLE,D3DRS_SRCBLEND,D3DRS_DESTBLEND,D3DRS_BLENDOP,D3DRS_ALPHATESTENABLE,D3DRS_ALPHAREF,D3DRS_ZWRITEENABLE,D3DRS_SEPARATEALPHABLENDENABLE,D3DRS_TEXTUREFACTOR,D3DRS_LIGHTING};
+        for(int i=0;i<10;++i)ext->GetRenderState(ids[i],&rs[i]);
+        DWORD ts[2][6]={};const D3DTEXTURESTAGESTATETYPE tids[6]={D3DTSS_COLOROP,D3DTSS_COLORARG1,D3DTSS_COLORARG2,D3DTSS_ALPHAOP,D3DTSS_ALPHAARG1,D3DTSS_ALPHAARG2};
+        for(int st=0;st<2;++st)for(int i=0;i<6;++i)ext->GetTextureStageState(st,tids[i],&ts[st][i]);
+        IDirect3DPixelShader9* ps=nullptr;const bool hasPS=SUCCEEDED(ext->GetPixelShader(&ps))&&ps;drop(ps);
+        logf("WEATHER draw states prims=%u blend=%lu src=%lu dst=%lu op=%lu alphaTest=%lu ref=%lu zwrite=%lu sepAlpha=%lu tfactor=%08lx lighting=%lu ps=%d "
+             "stage0 color=%lu(%lu,%lu) alpha=%lu(%lu,%lu) stage1 color=%lu(%lu,%lu) alpha=%lu(%lu,%lu)",count,
+             (unsigned long)rs[0],(unsigned long)rs[1],(unsigned long)rs[2],(unsigned long)rs[3],(unsigned long)rs[4],(unsigned long)rs[5],(unsigned long)rs[6],(unsigned long)rs[7],(unsigned long)rs[8],(unsigned long)rs[9],int(hasPS),
+             (unsigned long)ts[0][0],(unsigned long)ts[0][1],(unsigned long)ts[0][2],(unsigned long)ts[0][3],(unsigned long)ts[0][4],(unsigned long)ts[0][5],
+             (unsigned long)ts[1][0],(unsigned long)ts[1][1],(unsigned long)ts[1][2],(unsigned long)ts[1][3],(unsigned long)ts[1][4],(unsigned long)ts[1][5]);
+    }
     // 0.3.187 per-frame draw gates (draw_gates.h, FrameDrawGates=1): latched where every input can
     // rise, never inside a frame: at the end of finishFrameImpl (after F9/F10/F12, setEffects and the
     // retry's failed=false; clearFrame runs before that retry, so it is not the place), in Reset
