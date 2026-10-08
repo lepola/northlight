@@ -17,7 +17,7 @@ from world_scene_builder import decode_blp
 
 textures = wt.weather_textures()
 checks, info = {}, {}
-MEAN0 = (.021, .030)   # rain alpha .5, core sigma .62 px on texel 16 (0.3.199 game tests: alpha .45 -> .35 -> .55 -> .75 -> 1 -> .8 -> .65 -> .5; core 1.1 -> .9 -> .75 -> .62 px)
+MEAN0 = (.017, .024)   # rain alpha .4, core sigma .62 px on texel 16 (0.3.199 game tests: alpha .45 -> .35 -> .55 -> .75 -> 1 -> .8 -> .65 -> .5 -> .4; core 1.1 -> .9 -> .75 -> .62 px)
 checks['three textures, at the client\'s paths'] = set(textures) == {'textures\\Weather\\RainDrop01.blp', 'Textures\\WEATHER\\RAINDROPRED01.BLP', 'textures\\Weather\\SnowFlake01.blp'}
 # Palette layout: 256 BGRA entries, entry 0 = the colour exactly, the rest zero; per mip all-zero indices then the alpha plane.
 rain = textures['textures\\Weather\\RainDrop01.blp']
@@ -26,7 +26,7 @@ checks['rain mip 0: indices all 0, then the alpha plane (decodes back to it)'] =
     not any(rain[148+1024:148+1024+32*512]) and list(decode_blp(rain, 512)[2][3::4]) == list(rain[148+1024+32*512:148+1024+2*32*512]))
 checks['deterministic: a second run gives the same bytes'] = wt.weather_textures() == textures
 
-want = {'RainDrop01': (32, 512, .5), 'RAINDROPRED01': (32, 512, .5), 'SnowFlake01': (32, 64, .8)}
+want = {'RainDrop01': (32, 512, .4), 'RAINDROPRED01': (32, 512, .4), 'SnowFlake01': (32, 64, .8)}
 for name, data in textures.items():
     key = next(k for k in want if k.lower() in name.lower())
     w, h, alpha = want[key]
@@ -54,7 +54,7 @@ for name, data in textures.items():
         checks[f'{key}: every mip level has alpha in every row but the faded ends (continuous streak, no dots)'] = all(
             all(max(px[3::4][y*lw:(y+1)*lw]) > 0 for y in range(lh//10, lh-lh//10)) for lw, lh, px in chain)
         checks[f'{key}: mip peak never below 24/255 at any level, never above level 0'] = min(peaks) >= 24 and max(peaks) == peaks[0]
-        checks[f'{key}: mean alpha 0.021-0.030 at level 0, 0.13-0.19 at the small mips (stock far mips ~0.21), full peak down to 4 texels wide'] = MEAN0[0] <= sum(chain[0][2][3::4])/(255*w*h) <= MEAN0[1] and all(.13 <= sum(px[3::4])/(255*lw*lh) <= .19 for lw, lh, px in chain[-3:]) and all(max(px[3::4]) == peak for lw, lh, px in chain if lw >= 4)
+        checks[f'{key}: mean alpha 0.017-0.024 at level 0, 0.10-0.15 at the small mips (stock far mips ~0.21), full peak down to 4 texels wide'] = MEAN0[0] <= sum(chain[0][2][3::4])/(255*w*h) <= MEAN0[1] and all(.10 <= sum(px[3::4])/(255*lw*lh) <= .15 for lw, lh, px in chain[-3:]) and all(max(px[3::4]) == peak for lw, lh, px in chain if lw >= 4)
         checks[f'{key}: ends fade out'] = max(row(0)) == 0 and max(row(h-1)) == 0 and max(row(h//40)) < peak//2 and max(row(h-h//40)) < peak//2 and row(h//8)[16] >= peak-1 and row(h-h//8)[16] >= peak-1
     else:          # flake: round in uv (a 1:2 squash in texels), centred, transparent corners and rim
         cx, cy = w//2, h//2
