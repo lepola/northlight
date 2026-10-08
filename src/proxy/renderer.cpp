@@ -311,12 +311,14 @@ class Device final : public GuardedMirrorDevice {
     // 0.3.200 (frame markers): diagnostics only, while northlight-frame-markers.txt exists in the game folder at device creation: two 40x40
     // squares at the left edge whose colour cycles with the frame number. E (upper) is filled right after the world effects, P (lower) right
     // before the real Present, so a screen recording shows which presented images went through the effects and the replay's Present, in order.
-    bool frameMarkers=false;
+    bool frameMarkers=false;IDirect3DSurface9* markerProbe=nullptr;
     void frameMarker(unsigned slot,unsigned n){
         IDirect3DSurface9* bb=nullptr;if(FAILED(ext->GetBackBuffer(0,0,D3DBACKBUFFER_TYPE_MONO,&bb))||!bb)return;
         static const D3DCOLOR palette[2][4]={{0xffff0000,0xff00ff00,0xff0000ff,0xffffffff},{0xffffff00,0xff00ffff,0xffff00ff,0xffff8000}};
         D3DSURFACE_DESC d={};bb->GetDesc(&d);const LONG top=LONG(d.Height/2)+LONG(slot)*50;
-        const RECT r{0,top,40,top+40};ext->ColorFill(bb,&r,palette[slot&1][n&3]);bb->Release();
+        const RECT r{0,top,40,top+40};ext->ColorFill(bb,&r,palette[slot&1][n&3]);
+        if(slot==1){const RECT x{140,top,180,top+40};ext->ColorFill(bb,&x,palette[1][n&3]);}   /* X: the probe the next frame's effects look for */
+        bb->Release();
     }
     int traceWorld=-1; /* 0.3.200 (frame trace): this frame's world->render result (-1 not called, 0 skipped, 1 drawn) */
     unsigned frame = 0, appliedFrames = 0, matchedTerrain = 0, matchedUI = 0, projectionRejects = 0;
@@ -385,7 +387,7 @@ class Device final : public GuardedMirrorDevice {
     }
     void releaseResources() {
         stateBlocks.clear();clearFrame();
-        drop(sceneSurface); drop(aoSurface); drop(scene); drop(depthTex); drop(ao);
+        drop(sceneSurface); drop(aoSurface); drop(scene); drop(depthTex); drop(ao);drop(markerProbe);
         drop(aoPS); drop(aoContactBloomPS); drop(compositePS); width = height = 0;
     }
     bool error(HRESULT hr, const char* stage) {
@@ -581,7 +583,12 @@ class Device final : public GuardedMirrorDevice {
         if(celestial){celestialDiscs->renderRing();gpuProfile->mark("CelestialRing");}
         effectsBuckets.mark(Bucket::Celestial); /* discs, glare, the terrain mask prepare, the ring */
         if(frameMarkers){const unsigned n=frame;static const D3DCOLOR sp[4]={0xffff0000,0xff00ff00,0xff0000ff,0xffffffff};D3DSURFACE_DESC td={};saved.targets[0]->GetDesc(&td);
-            const LONG top=LONG(td.Height/2);const RECT r{60,top,100,top+40};ext->ColorFill(saved.targets[0],&r,sp[n&3]);} /* 0.3.200 (frame markers): S, in the scene before its copy */
+            const LONG top=LONG(td.Height/2);const RECT r{60,top,100,top+40};ext->ColorFill(saved.targets[0],&r,sp[n&3]);
+            /* probe: what the bound target holds at X (140..180 on the P row, filled at every Present) is shown at Y (60..100 on the P row) */
+            if(!markerProbe)ext->CreateRenderTarget(40,40,td.Format,D3DMULTISAMPLE_NONE,0,FALSE,&markerProbe,nullptr);
+            if(markerProbe){const RECT x{140,top+50,180,top+90},y{60,top+50,100,top+90};
+                if(SUCCEEDED(ext->StretchRect(saved.targets[0],&x,markerProbe,nullptr,D3DTEXF_NONE)))ext->StretchRect(markerProbe,nullptr,saved.targets[0],&y,D3DTEXF_NONE);}}
+            /* 0.3.200 (frame markers): S, in the scene before its copy */
         if (error(ext->StretchRect(saved.targets[0], nullptr, sceneSurface, nullptr, D3DTEXF_NONE), "copy scene")) return;
         effectState();
         float constants[]={1.f/width,1.f/height,nearZ,farZ,scaleX,scaleY,.60f,(world&&world->ready()?0.f:.12f),.08f,2.f,float(debugMode),0,worldMinDepth,1.f/(worldMaxDepth-worldMinDepth),worldMaxDepth,0};
