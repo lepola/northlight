@@ -226,11 +226,6 @@ private:
     NorthlightProbeBlend::Mirror probeBlend; // 0.3.197: same-key re-publication blend (probePrev, s8 in the GI pass)
     unsigned probeBlendPublishes=0,probeBlendSlots=0; // 0.3.197: per LOCAL log interval
     bool valid=false,failed=false,reportedContext=false;
-    float traceYaw[4]={}; /* 0.3.200 (frame trace): view heading in degrees: VS c0..c3 as read here, the backend's, the game thread's sent view, the game memory camera's */
-    float traceLight[5]={-1,-1,-1,-1,-1}; /* 0.3.200 (frame trace): |sun colour|, |moon colour|, fog volume gain c21.x, |ambient|, debug */
-    float traceCel[6]={-1,-1,-1,-1,-1,-1}; /* 0.3.200 (frame trace): celestial valid, sun weight, sun z, |direct|, |sun colour| before and after the palette */
-    float traceSky[4]={}; /* 0.3.200 (frame trace): global light decode: reason (99 not tried), dayFraction, sky camera error, direction length squared */
-    float traceRot=-1,traceMove=-1;unsigned traceReject=0,traceTrigger=0;unsigned long long traceTriggerDraw=0; /* 0.3.200 (frame trace): camera disagreement (max |view diff| rotation, translation), reject reason, snapshot trigger kind and draw */
     unsigned traceContext=0; /* 0.3.200 (frame trace): this frame's context path: 0 none, 1 terrain+global light, 2 terrain native light (camera disagreed), 3 WMO */
     unsigned contextRejects=0,frames=0,slowReports=0;
     DWORD diagnosticTick=0;
@@ -1982,7 +1977,7 @@ public:
         captureRejectedBytes=acceptedSkinnedBytes=acceptedOtherBytes=0;nearAdmitted=nearRefused=0;nearBytes=0;nearAnchorReady=false;
         previousCacheHits=terrainBoundsCache.persistentHits();capturedConstantBytes=capturedConstantCalls=0;capturedSM1Draws=capturedRelativeDraws=0;
         terrainCaptureTicks=replayCaptureTicks=0;terrainCaptureCalls=terrainUPCalls=replayCaptureCalls=unknownCaptureCalls=0;captureSampled=false;
-        valid=false;traceContext=0;for(auto& x:traceLight)x=-1;shadowFrameReady=false;legacyFog=NorthlightLegacyFog::Constants{};
+        valid=false;traceContext=0;shadowFrameReady=false;legacyFog=NorthlightLegacyFog::Constants{};
         // Bound retained vector capacities across changing scenes. Reuse storage,
         // never old geometry: each subsequent draw still re-reads every byte.
         // Give the current scene first claim on the pool, instead of letting
@@ -2009,12 +2004,6 @@ public:
     unsigned capturePhaseReadsLastFrame()const{return lastCapturePhaseReads;} /* 0.3.150: clock reads of the capture-phase subset (inside the capture timers), likewise */
     bool hasContext()const{return valid&&!failed&&!workerFault();}
     unsigned frameTraceContext()const{return traceContext;} /* 0.3.200 (frame trace) */
-    const float* frameTraceYaw()const{return traceYaw;}
-    const float* frameTraceSky()const{return traceSky;}
-    const float* frameTraceLight()const{return traceLight;}
-    const float* frameTraceCel()const{return traceCel;}
-    std::function<bool(float*)> traceBackendView; /* 0.3.200 (frame trace): reads the backend's c0..c3, set by the renderer */
-    void frameTraceCamera(float& rot,float& move,unsigned& reject,unsigned& trigger,unsigned long long& draw)const{rot=traceRot;move=traceMove;reject=traceReject;trigger=traceTrigger;draw=traceTriggerDraw;}
     bool actorShadowsEnabled()const{return quality.actorShadows!=0;}
     bool commandStream()const{return quality.commandStream!=0;} /* 0.3.192 (CS): the replay-thread stream was requested; creation-time key, see stream_hooks.h */
     unsigned blobShadowStrength()const{return quality.blobShadowStrength;} /* 0.3.193: read once at device creation */
@@ -2114,14 +2103,7 @@ public:
         NorthlightWmoContext::Lighting global;
         bool globalRead=cameraMatches&&NorthlightWmoContext::readGlobalLighting(camera,global);
         bool decoded=registers&&gameContext&&NorthlightWmoContext::terrainContext(view,nativeRead?lighting:nullptr,camera,globalRead?&global:nullptr,context);
-        traceContext=globalRead?1u:2u;traceReject=unsigned(why.reason);{const auto& g=NorthlightWmoContext::decodeTrace();traceSky[0]=float(cameraMatches?g.reason:99u);traceSky[1]=g.dayFraction;traceSky[2]=g.cameraError;traceSky[3]=g.lengthSquared;}traceRot=traceMove=-1;
-        if(cameraRead){traceRot=traceMove=0;for(unsigned i=0;i<16;++i){const float e=std::fabs(view[i]-independent.view[i]);if(i>=12&&i<15)traceMove=std::max(traceMove,e);else traceRot=std::max(traceRot,e);}}
-        if(const auto* snap=NorthlightStream::activeSnapshot){traceTrigger=snap->triggerKind;traceTriggerDraw=snap->triggerDraw;}else{traceTrigger=9;traceTriggerDraw=0;}
-        {const auto yaw=[](const float* v){return std::atan2(v[2],v[6])*57.29578f;};for(auto& y:traceYaw)y=-999;
-         if(registers)traceYaw[0]=yaw(view);
-         float backend[16];if(traceBackendView&&traceBackendView(backend))traceYaw[1]=yaw(backend);
-         if(const auto* snap=NorthlightStream::activeSnapshot;snap&&snap->traceViewKnown)traceYaw[2]=yaw(snap->traceView);
-         if(cameraRead)traceYaw[3]=yaw(independent.view);}
+        traceContext=globalRead?1u:2u;
         bool agreement=decoded;
         if(!agreement){
             if(++contextRejects==1||(contextRejects%3600==0&&NorthlightDiagnostics::enabled()))logf("WORLD context rejected: registers=%d affineLight=%d clientRead=%d cameraAgreement=%d map=%s shaderCamera=(%.2f %.2f %.2f) gameCamera=(%.2f %.2f %.2f) light=(%.3f %.3f %.3f) count=%u",registers,decoded,gameContext,agreement,map,context.camera[0],context.camera[1],context.camera[2],camera[0],camera[1],camera[2],lighting[0],lighting[1],lighting[2],contextRejects);return;}
@@ -2146,13 +2128,13 @@ public:
     void updateWorldContext(const char* map,const float* camera,const NorthlightWmoContext::Lighting* global=nullptr){
         if(unsigned fault=workerFault()){if(!failed)logf("WORLD worker stopped: %s; restart required",workerFaultMessage(fault));failed=true;valid=false;return;}
         if(!reportedContext){logf("WORLD context validated: map=%s camera=(%.2f %.2f %.2f) sun=(%.3f %.3f %.3f)",map,camera[0],camera[1],camera[2],context.lightDirection[0],context.lightDirection[1],context.lightDirection[2]);reportedContext=true;}
-        celestialValid=NorthlightCelestial::read(camera,context.direct,celestial);for(auto& x:traceCel)x=-1;traceCel[0]=celestialValid?1.f:0.f;
+        celestialValid=NorthlightCelestial::read(camera,context.direct,celestial);
         // 0.3.200: a sky block read rejected for one frame (the two copies differ while the game rewrites it, more often with the game frames
         // ahead) dropped the sun weight to 0 for that frame: the sun light, shadows and shafts flashed off. The last good read on the same map
         // stands in for up to CelestialHoldMs; a longer failure (loading, an indoor map without a sky) still ends at the fallback.
         {const DWORD now=GetTickCount();
          if(celestialValid){celestialHeld=celestial;celestialHeldMap=map;celestialHeldAt=now;celestialHeldOk=true;}
-         else if(celestialHeldOk&&celestialHeldMap==map&&DWORD(now-celestialHeldAt)<=CelestialHoldMs){celestial=celestialHeld;celestialValid=true;++celestialHolds;traceCel[0]=2;}}
+         else if(celestialHeldOk&&celestialHeldMap==map&&DWORD(now-celestialHeldAt)<=CelestialHoldMs){celestial=celestialHeld;celestialValid=true;++celestialHolds;}}
         if(celestialValid){
             // A pure render-clock orbit shared by discs, shadows and fog.
             const float nativeSunAlpha=celestial.sun.alpha,nativeMoonAlpha=celestial.moon.alpha;
@@ -2168,10 +2150,7 @@ public:
             NorthlightCelestial::applyRendererPolicy(celestialLight,context.direct);
             const auto palette=celestialPalette(map,camera);
             NorthlightCelestialProfiles::apply(palette,context.direct,celestial);
-            traceCel[1]=celestialLight.sunWeight;traceCel[2]=celestialLight.sun.direction[2];traceCel[3]=std::sqrt(context.direct[0]*context.direct[0]+context.direct[1]*context.direct[1]+context.direct[2]*context.direct[2]);
-            traceCel[4]=std::sqrt(celestialLight.sunColor[0]*celestialLight.sunColor[0]+celestialLight.sunColor[1]*celestialLight.sunColor[1]+celestialLight.sunColor[2]*celestialLight.sunColor[2]);
             NorthlightCelestialProfiles::apply(palette,context.direct,celestialLight);
-            traceCel[5]=std::sqrt(celestialLight.sunColor[0]*celestialLight.sunColor[0]+celestialLight.sunColor[1]*celestialLight.sunColor[1]+celestialLight.sunColor[2]*celestialLight.sunColor[2]);
             continuousCelestialShadows=false; // Native-speed orbit: ordinary cache policy, no accelerated phases.
             if(++celestialOrbitReports%600==1&&(celestialOrbitReports==1||NorthlightDiagnostics::enabled()))logf("CELESTIAL orbit gameDay=%.6f sun=%.2f->%.2f moon=%.2f->%.2f schedule=native sunCrest=85 moonCrest=43 weights=%.3f/%.3f nativeAlpha=%.3f/%.3f rendererAlpha=%.1f/%.1f",celestial.dayFraction,nativeSun,orbit.sun.elevation,nativeMoon,orbit.moon.elevation,celestial.sunWeight,celestial.moonWeight,nativeSunAlpha,nativeMoonAlpha,celestial.sun.alpha,celestial.moon.alpha);
         }
@@ -3450,8 +3429,6 @@ public:
         for(int source=0;source<2;++source)if(sourceWeights[source]>0&&sourceActive[source])
             c[15][3]=std::max(c[15][3],std::max({sourceColors[source].x,sourceColors[source].y,sourceColors[source].z})*drawnWeight/sourceWeights[source]);
         c[30][0]=waterMask?1.f:0.f;d->SetPixelShaderConstantF(0,&c[0][0],68);
-        {const auto len=[](const V& v){return std::sqrt(NorthlightGI::dot(v,v));}; /* 0.3.200 (frame trace) */
-         traceLight[0]=len(sourceColors[0]);traceLight[1]=len(sourceColors[1]);traceLight[2]=c[21][0];traceLight[3]=std::sqrt(context.ambient[0]*context.ambient[0]+context.ambient[1]*context.ambient[1]+context.ambient[2]*context.ambient[2]);traceLight[4]=float(debug);}
         IDirect3DTexture9* textures[]={foldScene?foldScene:color,depth,shadow[0],shadow[1],probe[0],probe[1],probe[2],probe[3],nullptr,nullptr,probe[4],waterMask,nullptr,regionalFogTexture};
         for(int i=0;i<14;++i){d->SetTexture(i,textures[i]);d->SetSamplerState(i,D3DSAMP_ADDRESSU,D3DTADDRESS_CLAMP);d->SetSamplerState(i,D3DSAMP_ADDRESSV,D3DTADDRESS_CLAMP);d->SetSamplerState(i,D3DSAMP_MINFILTER,(i==0||i==9)?D3DTEXF_LINEAR:D3DTEXF_POINT);d->SetSamplerState(i,D3DSAMP_MAGFILTER,(i==0||i==9)?D3DTEXF_LINEAR:D3DTEXF_POINT);d->SetSamplerState(i,D3DSAMP_MIPFILTER,D3DTEXF_NONE);d->SetSamplerState(i,D3DSAMP_SRGBTEXTURE,FALSE);}
         auto setSource=[&](int source,bool first,bool volume=false){

@@ -616,7 +616,6 @@ private:
         if(t==Trigger::None||!capture)return;
         GameSnapshot* s=replayer.snapshots.acquire();if(!s)return;
         if(!capture(*s,t,drawOrdinal)){replayer.snapshots.release(s);return;}
-        if(t==Trigger::World&&st.vsF[0].known&&st.vsF[1].known&&st.vsF[2].known&&st.vsF[3].known){for(unsigned i=0;i<4;++i)std::memcpy(s->traceView+4*i,st.vsF[i].v,16);s->traceViewKnown=true;}   // 0.3.200 (frame trace)
         Queue& q=core.q;auto* p=static_cast<GameSnapshot**>(q.reserve((std::uint16_t)Cmd::Snapshot,sizeof(GameSnapshot*)));*p=s;q.commit();
     }
     void written(ProxyBase* p){

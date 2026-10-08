@@ -34,25 +34,19 @@ inline void rgb(std::uint32_t color,float* output){output[0]=float((color>>16)&2
 // Prelit WMO variants do NOT read c10..12 and cannot supply those values.
 // The light source is the outdoor world environment; WMO vertex baking and
 // indoor group overrides remain distinct material/local lighting contributions.
-// 0.3.200 (frame trace): why the last decode on this thread failed (0 ok, 1 size, 2 dayFraction, 3 values, 4 camera, 5 direction length, 6 torn read) and its measures.
-struct DecodeTrace {unsigned reason=0;float dayFraction=0,cameraError=0,lengthSquared=0;};
-inline DecodeTrace& decodeTrace(){static thread_local DecodeTrace t;return t;}
 inline bool decodeGlobalLighting(const unsigned char* bytes,size_t size,const float* expectedCamera,Lighting& out) {
-    auto& trace=decodeTrace();trace=DecodeTrace{};
-    if(!bytes||size<SkyBytes||!expectedCamera){trace.reason=1;return false;}
-    Lighting value;value.dayFraction=scalar(bytes,4);trace.dayFraction=value.dayFraction;
-    if(!std::isfinite(value.dayFraction)||value.dayFraction<0||value.dayFraction>=1){trace.reason=2;return false;}
+    if(!bytes||size<SkyBytes||!expectedCamera)return false;
+    Lighting value;value.dayFraction=scalar(bytes,4);
+    if(!std::isfinite(value.dayFraction)||value.dayFraction<0||value.dayFraction>=1)return false;
     float cameraError=0,lengthSquared=0;
     for(unsigned i=0;i<3;++i){
         float camera=scalar(bytes,0x18+i*4),direction=scalar(bytes,0x19c+i*4);
         if(!std::isfinite(camera)||!std::isfinite(expectedCamera[i])||!std::isfinite(direction)||
-           std::fabs(camera)>100000||std::fabs(expectedCamera[i])>100000){trace.reason=3;return false;}
+           std::fabs(camera)>100000||std::fabs(expectedCamera[i])>100000)return false;
         float delta=camera-expectedCamera[i];cameraError+=delta*delta;
         value.lightDirection[i]=-direction;lengthSquared+=direction*direction;
     }
-    trace.cameraError=std::sqrt(cameraError);trace.lengthSquared=lengthSquared;
-    if(cameraError>SkyCameraTolerance*SkyCameraTolerance){trace.reason=4;return false;}
-    if(lengthSquared<.25f||lengthSquared>2.25f){trace.reason=5;return false;}
+    if(cameraError>SkyCameraTolerance*SkyCameraTolerance||lengthSquared<.25f||lengthSquared>2.25f)return false;
     const float inverseLength=1/std::sqrt(lengthSquared);
     for(auto& component:value.lightDirection)component*=inverseLength;
     rgb(packed(bytes,0x1a8),value.direct);rgb(packed(bytes,0x1ac),value.ambient);
@@ -62,8 +56,7 @@ inline bool decodeGlobalLighting(const unsigned char* bytes,size_t size,const fl
 }
 inline bool decodeCoherentGlobalLighting(const unsigned char* first,const unsigned char* second,size_t size,
                                          const float* expectedCamera,Lighting& out) {
-    if(first&&second&&size>=SkyBytes&&std::memcmp(first,second,SkyBytes)){decodeTrace()=DecodeTrace{};decodeTrace().reason=6;return false;}
-    return first&&second&&size>=SkyBytes&&decodeGlobalLighting(first,size,expectedCamera,out);
+    return first&&second&&size>=SkyBytes&&!std::memcmp(first,second,SkyBytes)&&decodeGlobalLighting(first,size,expectedCamera,out);
 }
 // Reuse rigid-view validation and coordinate conversion from TerrainContext.
 // view MUST come from the independently verified current camera, never WMO's

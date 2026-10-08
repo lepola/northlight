@@ -334,8 +334,6 @@ public:
         if(SUCCEEDED(hr)&&m->active())m->constantEpoch.writeFloat(start,count);
         if(accepted(hr)&&data&&start<DeviceMirror::VsFloat){const UINT copied=count<DeviceMirror::VsFloat-start?count:DeviceMirror::VsFloat-start;std::memcpy(m->vsFloat[start],data,size_t(copied)*4*sizeof(float));}return hr;
     }
-    // 0.3.200 (frame trace): the backend's own registers, never the mirror (diagnostics only).
-    HRESULT backendVertexShaderConstantF(UINT start,float* out,UINT count){Guard lock(m->gate);return real->GetVertexShaderConstantF(start,out,count);}
     HRESULT STDMETHODCALLTYPE GetVertexShaderConstantF(UINT start,float* out,UINT count) override{
         Guard lock(m->gate);bool valid=out&&count&&start<DeviceMirror::VsFloat&&count<=DeviceMirror::VsFloat-start;
         const bool known=valid&&m->active()&&allKnown(m->vsFloatKnown+start,count);

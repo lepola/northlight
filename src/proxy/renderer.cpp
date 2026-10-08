@@ -311,7 +311,7 @@ class Device final : public GuardedMirrorDevice {
     // 0.3.200 (frame markers): diagnostics only, while northlight-frame-markers.txt exists in the game folder at device creation: two 40x40
     // squares at the left edge whose colour cycles with the frame number. E (upper) is filled right after the world effects, P (lower) right
     // before the real Present, so a screen recording shows which presented images went through the effects and the replay's Present, in order.
-    bool frameMarkers=false;IDirect3DSurface9* markerProbe=nullptr;
+    bool frameMarkers=false;
 public:
     // 0.3.200 (pipeline): with StreamFramesAhead >= 2 the replay thread never waits for the game, so the graphics card queue filled with
     // frames (DXVK allows BackBufferCount+1 in flight) and on macOS the window showed images still being written: horizontal tear bands
@@ -337,7 +337,6 @@ private:
         static const D3DCOLOR palette[2][4]={{0xffff0000,0xff00ff00,0xff0000ff,0xffffffff},{0xffffff00,0xff00ffff,0xffff00ff,0xffff8000}};
         D3DSURFACE_DESC d={};bb->GetDesc(&d);const LONG top=LONG(d.Height/2)+LONG(slot)*50;
         const RECT r{0,top,40,top+40};ext->ColorFill(bb,&r,palette[slot&1][n&3]);
-        if(slot==1){const RECT x{140,top,180,top+40};ext->ColorFill(bb,&x,palette[1][n&3]);}   /* X: the probe the next frame's effects look for */
         bb->Release();
     }
     int traceWorld=-1; /* 0.3.200 (frame trace): this frame's world->render result (-1 not called, 0 skipped, 1 drawn) */
@@ -407,7 +406,7 @@ private:
     }
     void releaseResources() {
         stateBlocks.clear();clearFrame();
-        drop(sceneSurface); drop(aoSurface); drop(scene); drop(depthTex); drop(ao);drop(markerProbe);
+        drop(sceneSurface); drop(aoSurface); drop(scene); drop(depthTex); drop(ao);
         drop(aoPS); drop(aoContactBloomPS); drop(compositePS); width = height = 0;
     }
     bool error(HRESULT hr, const char* stage) {
@@ -602,13 +601,6 @@ private:
         gpuProfile->mark("CelestialDiscs");
         if(celestial){celestialDiscs->renderRing();gpuProfile->mark("CelestialRing");}
         effectsBuckets.mark(Bucket::Celestial); /* discs, glare, the terrain mask prepare, the ring */
-        if(frameMarkers){const unsigned n=frame;static const D3DCOLOR sp[4]={0xffff0000,0xff00ff00,0xff0000ff,0xffffffff};D3DSURFACE_DESC td={};saved.targets[0]->GetDesc(&td);
-            const LONG top=LONG(td.Height/2);const RECT r{60,top,100,top+40};ext->ColorFill(saved.targets[0],&r,sp[n&3]);
-            /* probe: what the bound target holds at X (140..180 on the P row, filled at every Present) is shown at Y (60..100 on the P row) */
-            if(!markerProbe)ext->CreateRenderTarget(40,40,td.Format,D3DMULTISAMPLE_NONE,0,FALSE,&markerProbe,nullptr);
-            if(markerProbe){const RECT x{140,top+50,180,top+90},y{60,top+50,100,top+90};
-                if(SUCCEEDED(ext->StretchRect(saved.targets[0],&x,markerProbe,nullptr,D3DTEXF_NONE)))ext->StretchRect(markerProbe,nullptr,saved.targets[0],&y,D3DTEXF_NONE);}}
-            /* 0.3.200 (frame markers): S, in the scene before its copy */
         if (error(ext->StretchRect(saved.targets[0], nullptr, sceneSurface, nullptr, D3DTEXF_NONE), "copy scene")) return;
         effectState();
         float constants[]={1.f/width,1.f/height,nearZ,farZ,scaleX,scaleY,.60f,(world&&world->ready()?0.f:.12f),.08f,2.f,float(debugMode),0,worldMinDepth,1.f/(worldMaxDepth-worldMinDepth),worldMaxDepth,0};
@@ -1047,7 +1039,6 @@ public:
         world->setConstantEpochSource({&mirrorState.constantEpoch,&mirrorState}); /* 0.3.180 (C1): read in place under the draw's gate */
         char skyRoot[MAX_PATH*3];WideCharToMultiByte(CP_UTF8,0,rootPath,-1,skyRoot,sizeof skyRoot,nullptr,nullptr);celestialDiscs=std::make_unique<NorthlightCelestialDiscRenderer>(ext,std::string(skyRoot)+"world-cache/celestial");celestialDiscs->setTerrainSource([this]{return world->celestialTerrainGeneration();},[this](unsigned body,const float* matrix){return world->drawCelestialTerrain(body,matrix);},[this](unsigned body){world->noteCelestialTerrainReuse(body);});celestialDiscs->setIdentityMap([this](std::uintptr_t exposed){return mirrorResources.rawOf(exposed,!mirrorState.enabled);});shadowBlobs=std::make_unique<NorthlightShadowBlobFilter>(ext,world->blobShadowStrength());shadowBlobs->setTexturePeek([](void* e,DWORD stage,IDirect3DBaseTexture9*& out){return static_cast<ExtensionDevice*>(e)->peekTexture(stage,out);},ext); /* 0.3.196 (task 12): borrowed stage-0 identity */water=std::make_unique<NorthlightWaterRenderer>(ext); logf("D3D9 device wrapped. Ctrl+Shift+F7 fog; F8 GI; F9 shadows; F10 all effects; F12 world debug (all with Ctrl+Shift). F11 unassigned. Components start ON; GI cache stays warm.");
         frameDrawGates=world->frameDrawGates();latchDrawGates(); /* 0.3.187: after the renderers exist */
-        world->traceBackendView=[this](float* v){return SUCCEEDED(ext->backendVertexShaderConstantF(0,v,4));}; /* 0.3.200 (frame trace) */
         {wchar_t markers[MAX_PATH];if(swprintf(markers,MAX_PATH,L"%lsnorthlight-frame-markers.txt",rootPath)>0&&GetFileAttributesW(markers)!=INVALID_FILE_ATTRIBUTES){frameMarkers=true;logf("FRAMEMARKERS on: E after the world effects, P before Present");}}
         weatherDetect.sink=&weatherLog; /* 0.3.198 (rain) */
         // The async sweep feeds the memory guard (always) and the periodic MEMORY line
@@ -1274,10 +1265,8 @@ public:
         const bool sampledFrame=sampled(),frameApplied=applied;
         // 0.3.200 (frame trace): with Diagnostics, 240 consecutive frames out of every 1800 get one line each: whether the effects ran, the world drew,
         // and through which context (1 terrain + global light, 2 terrain native light, 3 WMO), to see frame-to-frame alternation in the log.
-        if(diagnostics()&&(frame%1800<240||frameMarkers)){float rot=-1,move=-1;unsigned reject=0,trigger=0;unsigned long long tdraw=0;if(world)world->frameTraceCamera(rot,move,reject,trigger,tdraw);
-            const float* yaw=world?world->frameTraceYaw():nullptr;const float* sky=world?world->frameTraceSky():nullptr;static const float noSky[4]={};if(!sky)sky=noSky;const float* light=world?world->frameTraceLight():nullptr;static const float noLight[5]={-1,-1,-1,-1,-1};if(!light)light=noLight;const float* cel=world?world->frameTraceCel():nullptr;static const float noCel[6]={-1,-1,-1,-1,-1,-1};if(!cel)cel=noCel;static const float none[4]={-999,-999,-999,-999};if(!yaw)yaw=none;
-            logf("FRAMETRACE frame=%u tick=%lu applied=%d enabled=%d projection=%d terrain=%d world=%d context=%u skip=%s rot=%.5f move=%.4f reject=%u trigger=%u triggerDraw=%llu yaw=%.3f/%.3f/%.3f/%.3f sky=%.0f/%.4f/%.3f/%.4f light=%.3f/%.3f/%.3f/%.3f/%.0f cel=%.0f/%.3f/%.3f/%.3f/%.3f/%.3f",frame,(unsigned long)GetTickCount(),
-            int(applied),int(enabled),int(projectionValid),int(terrain),traceWorld,world?world->frameTraceContext():0u,traceWorld==0&&world?world->lastSkipReason():"-",double(rot),double(move),reject,trigger,tdraw,yaw[0],yaw[1],yaw[2],yaw[3],sky[0],sky[1],sky[2],sky[3],light[0],light[1],light[2],light[3],light[4],cel[0],cel[1],cel[2],cel[3],cel[4],cel[5]);}
+        if(diagnostics()&&frame%1800<240)logf("FRAMETRACE frame=%u tick=%lu applied=%d enabled=%d projection=%d terrain=%d world=%d context=%u skip=%s",frame,(unsigned long)GetTickCount(),
+            int(applied),int(enabled),int(projectionValid),int(terrain),traceWorld,world?world->frameTraceContext():0u,traceWorld==0&&world?world->lastSkipReason():"-");
         traceWorld=-1;
         {CpuScope cpu(sampledFrame?&cleanup:nullptr);clearFrame();}
         if(memoryCaps>=0&&world)world->setMemoryPressure(memoryCaps==1);

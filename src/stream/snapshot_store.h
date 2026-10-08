@@ -72,9 +72,8 @@ public:
     Mode mode=Mode::Idle;
     // Which trigger took it and the draw ordinal of that draw; the consumer's age is its own draw ordinal minus this.
     std::uint32_t triggerKind=0;std::uint64_t triggerDraw=0;
-    float traceView[16]={};bool traceViewKnown=false; /* 0.3.200 (frame trace): the game thread's VS c0..c3 at a World trigger (the view it sent) */
     unsigned long hits=0,misses=0; // this activation, flushed by ScopedPlayback
-    void clear(){keyCount_=copyCount_=0;used_=0;overflowed_=false;mode=Mode::Idle;triggerKind=0;triggerDraw=0;traceViewKnown=false;hits=misses=0;}
+    void clear(){keyCount_=copyCount_=0;used_=0;overflowed_=false;mode=Mode::Idle;triggerKind=0;triggerDraw=0;hits=misses=0;}
     bool usable()const{return !overflowed_&&copyCount_>0;}
     bool overflowed()const{return overflowed_;}
     std::size_t keys()const{return keyCount_;}
