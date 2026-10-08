@@ -85,7 +85,7 @@ int main(){
         assert(dry.active&&near(dry.coverage,.05f)&&near(night.coverage,.23f)&&near(rain.coverage,FC::kMaxCoverage));
         assert(dry.coverage<night.coverage&&night.coverage<rain.coverage&&dry.threshold>night.threshold&&night.threshold>rain.threshold&&dry.sharpness>0);
         assert(near(dry.threshold,FC::quantile(Q,.95f))&&dry.sharpness<=50.f+1e-3f);
-        assert(near(dry.height,FC::kBaseHeight)&&near(rain.height,FC::kBaseHeight+FC::kRainHeight)&&dry.sigmaMax==FC::kSigmaMax&&near(dry.invLarge,1.f/FC::LargePeriod)&&near(dry.invSmall,1.f/FC::SmallPeriod));
+        assert(near(dry.height,FC::kBaseHeight)&&near(rain.height,FC::kBaseHeight+FC::kRainHeight)&&near(dry.sigmaMax,FC::kSigmaMax*FC::kDrySigma)&&near(rain.sigmaMax,FC::kSigmaMax)&&near(dry.invLarge,1.f/FC::LargePeriod)&&near(dry.invSmall,1.f/FC::SmallPeriod));
         assert(near(FC::derive(1,200,0,0,w0,cam,&Q).coverage,.10f)&&near(FC::derive(1,50,0,0,w0,cam,&Q).coverage,.025f)&&near(FC::derive(1,200,1,1,w0,cam,&Q).coverage,FC::kMaxCoverage));
         assert(!FC::derive(1,10,0,0,w0,cam,&Q).active); /* .005 < kMinCoverage: the pass is skipped */
         const float nan=std::numeric_limits<float>::quiet_NaN();
