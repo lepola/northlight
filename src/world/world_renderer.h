@@ -258,6 +258,8 @@ private:
     struct PaletteRegion {std::string map;NorthlightRegionalFog::Region region;int tx=0,ty=0;};
     std::shared_ptr<const PaletteRegion> publishedPaletteRegion; // guarded by mutex
     bool celestialValid=false,shadowFrameReady=false;float authoredFill=1;
+    // 0.3.200: the last good celestial read (see updateWorldContext), held across single rejected reads.
+    static constexpr DWORD CelestialHoldMs=500;NorthlightCelestial::Context celestialHeld;std::string celestialHeldMap;DWORD celestialHeldAt=0;bool celestialHeldOk=false;unsigned long celestialHolds=0;
     NorthlightEffectSwitches::Settings effects;
     bool neutralShadowMaps=false;
     V sourceDirections[2],sourceColors[2];
@@ -2145,6 +2147,12 @@ public:
         if(unsigned fault=workerFault()){if(!failed)logf("WORLD worker stopped: %s; restart required",workerFaultMessage(fault));failed=true;valid=false;return;}
         if(!reportedContext){logf("WORLD context validated: map=%s camera=(%.2f %.2f %.2f) sun=(%.3f %.3f %.3f)",map,camera[0],camera[1],camera[2],context.lightDirection[0],context.lightDirection[1],context.lightDirection[2]);reportedContext=true;}
         celestialValid=NorthlightCelestial::read(camera,context.direct,celestial);for(auto& x:traceCel)x=-1;traceCel[0]=celestialValid?1.f:0.f;
+        // 0.3.200: a sky block read rejected for one frame (the two copies differ while the game rewrites it, more often with the game frames
+        // ahead) dropped the sun weight to 0 for that frame: the sun light, shadows and shafts flashed off. The last good read on the same map
+        // stands in for up to CelestialHoldMs; a longer failure (loading, an indoor map without a sky) still ends at the fallback.
+        {const DWORD now=GetTickCount();
+         if(celestialValid){celestialHeld=celestial;celestialHeldMap=map;celestialHeldAt=now;celestialHeldOk=true;}
+         else if(celestialHeldOk&&celestialHeldMap==map&&DWORD(now-celestialHeldAt)<=CelestialHoldMs){celestial=celestialHeld;celestialValid=true;++celestialHolds;traceCel[0]=2;}}
         if(celestialValid){
             // A pure render-clock orbit shared by discs, shadows and fog.
             const float nativeSunAlpha=celestial.sun.alpha,nativeMoonAlpha=celestial.moon.alpha;
