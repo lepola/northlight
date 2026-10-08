@@ -6,6 +6,7 @@ struct TargetKnobs {
     std::atomic<bool> hold{false};            // BeginScene blocks while set: keeps the replay thread busy so commands queue up
     std::atomic<int> presents{0};
     std::atomic<bool> failSwapChain{false},failQueries{false},noRaw{false},holdQueries{false};   // holdQueries: a polled query stays S_FALSE
+    std::atomic<bool> noDigest{false};        // 0.3.200 (frame skip): STATE lines carry no ids, so a run without some draws numbers the objects the same
     //   // noRaw: the resolver proves no raw pointer (a proxy then replays through the Device)
     bool failCube=true;                       // CreateCubeTexture / CreateVolumeTexture fail (the dead-create path)
 };
@@ -181,6 +182,7 @@ struct TargetExt:FakeDevice {
     HRESULT SetCurrentTexturePalette(UINT n) override{FakeDevice::SetCurrentTexturePalette(n);if(!inBlock)palette=n;return D3D_OK;}
     // the points where the Target's state matters: every draw, clear, copy and present logs a digest of it
     std::string digest(){   // one hash per component, so a mismatch names what differs
+        if(gKnobs.noDigest.load())return "STATE";
         std::string out="STATE";std::uint64_t h=0;
         auto part=[&](const char* name,auto fill){h=1469598103934665603ull;fill([&](const void* p,std::size_t n){for(std::size_t i=0;i<n;++i)h=(h^static_cast<const unsigned char*>(p)[i])*1099511628211ull;});out+=std::string(" ")+name+"="+std::to_string(h%100000);};
         part("rs",[&](auto m){m(rs,sizeof rs);});part("samp",[&](auto m){m(samp,sizeof samp);});part("tss",[&](auto m){m(tss,sizeof tss);});

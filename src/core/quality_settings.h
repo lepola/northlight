@@ -85,7 +85,11 @@ struct Settings {
     // joins each result right before the D3D calls that need it (core/job_system.h); the same code, the same results. 0 = all of it
     // inline on the renderer thread, exactly as before.
     unsigned replayJobs=1;
-    char origin[42]={'d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d'};
+    // 0.3.200 (frame skip): StreamFrameSkip 1 = when the replay thread is two complete frames behind (CommandStream=1), it replays the older frame without
+    // its draws and Present (state and resources still applied; frames that render to textures, issue occlusion queries or copy the back buffer are always
+    // drawn), so the game thread does not wait for it; 0 = every frame is drawn. Creation-time key, read with CommandStream.
+    unsigned streamFrameSkip=1;
+    char origin[43]={'d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d'};
 };
 struct Key { const char* name; unsigned Settings::*field; unsigned low,high; unsigned preset[3]; };
 // preset[] = Quality, Balanced, Performance. Quality must equal Settings{}.
@@ -132,6 +136,7 @@ inline const Key Keys[]={
     {"GpuBudgetMs",&Settings::gpuBudgetMs,0,20,{4,3,2}},
     {"StreamFramesAhead",&Settings::streamFramesAhead,1,3,{2,2,2}}, /* 0.3.200 (pipeline) */
     {"ReplayJobs",&Settings::replayJobs,0,1,{1,1,1}},
+    {"StreamFrameSkip",&Settings::streamFrameSkip,0,1,{1,1,1}}, /* 0.3.200 (frame skip) */
 };
 inline bool operator==(const Settings& a,const Settings& b){for(const auto& k:Keys)if(a.*k.field!=b.*k.field)return false;return true;}
 inline bool operator!=(const Settings& a,const Settings& b){return !(a==b);}
