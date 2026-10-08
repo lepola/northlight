@@ -305,6 +305,31 @@ static void backstopSignalsOncePerSeq(){
     q.interrupt();cons.join();
     CHECK(q.backstopSignals()>=1&&q.backstopSignals()<=3);   // not one per 64-spin batch
 }
+// 0.3.200 (pipeline): retire() remembers the wait it signalled, so the spinning backstop does not signal the same seq again: only the forced pre-sleep one remains.
+static void retireSignalRemembered(){
+    Queue q;q.testArmWait(1);
+    std::thread cons([&]{auto* h=q.next(true);CHECK(h);q.retire(h);CHECK(q.next(true)==nullptr);});
+    record(q,1,8,0);q.publish();
+    CHECK(waitFor([&]{return q.replayedSeq()==1;}));
+    std::this_thread::sleep_for(std::chrono::milliseconds(30));
+    q.interrupt();cons.join();
+    CHECK(q.backstopSignals()==1);   // (0.3.199: the spin loop signalled seq 1 again after retire did: 2)
+}
+// 0.3.200 (pipeline): wakes of a sleeping consumer. (a) Several publishes while it sleeps signal it once. (b) commit()'s automatic publish does not wake it below
+// kLazyWakeCommands/kLazyWakeBytes, an explicit publish with nothing new then does; (c) past the threshold the automatic publish wakes it by itself.
+static void wakeOncePerSleep(){
+    auto asleep=[](Queue& q){CHECK(waitFor([&]{return get(q.stats.consumerSleeps)>=1;}));std::this_thread::sleep_for(std::chrono::milliseconds(5));};
+    {Queue q;std::thread cons([&]{auto* h=q.next(true);CHECK(h);q.retire(h);});
+     asleep(q);for(int i=0;i<5;++i){record(q,1,8,i);q.publish();}
+     cons.join();CHECK(q.wakeSignals()==1);while(auto* h=q.next(false))q.retire(h);}
+    {Queue q;std::atomic<int> got{0};std::thread cons([&]{for(int i=0;i<(int)kAutoPublishCommands;++i){auto* h=q.next(true);CHECK(h);q.retire(h);got.fetch_add(1);}});
+     asleep(q);for(int i=0;i<(int)kAutoPublishCommands;++i)record(q,1,8,i);   // the 64th auto-publishes
+     std::this_thread::sleep_for(std::chrono::milliseconds(20));CHECK(q.wakeSignals()==0&&got.load()==0);   // published, but the sleeper was not woken (its own timeout is 250 ms)
+     q.publish();cons.join();CHECK(q.wakeSignals()==1&&got.load()==(int)kAutoPublishCommands);}   // nothing new to publish: the held wake is delivered
+    {Queue q;const int n=(int)kLazyWakeCommands;std::atomic<int> got{0};std::thread cons([&]{for(int i=0;i<n;++i){auto* h=q.next(true);CHECK(h);q.retire(h);got.fetch_add(1);}});
+     asleep(q);const auto t0=nowNs();for(int i=0;i<n;++i)record(q,1,8,i);
+     CHECK(waitFor([&]{return got.load()==n;}));CHECK(nowNs()-t0<200000000ull&&q.wakeSignals()>=1);cons.join();}   // woken by the automatic publish, not by the 250 ms timeout
+}
 // A wait on a command that was not recorded with kFlagWaitTarget is caught (and, in a build without the check, rescued by the idle backstop / the 50 ms timeout).
 static void unflaggedWaitIsCaught(){
     Queue q;std::thread cons([&]{for(int i=0;i<3;++i){auto* h=q.next(true);CHECK(h);q.retire(h);}});
@@ -414,7 +439,7 @@ static void nestedSync(){
 
 int main(int argc,char** argv){
     const bool threadsOnly=argc>1&&std::string(argv[1])=="threads";
-    spscStress();wakeHandshakeStress();presentStyleWait();retireThenSleepAndBackpressure();unflaggedWaitIsCaught();backstopSignalsOncePerSeq();memoryCapsAndPools();producerNotSerializedByShadows();
+    spscStress();wakeHandshakeStress();presentStyleWait();retireThenSleepAndBackpressure();unflaggedWaitIsCaught();backstopSignalsOncePerSeq();retireSignalRemembered();wakeOncePerSleep();memoryCapsAndPools();producerNotSerializedByShadows();
     budgetRules();interruptAndEvents();publishRules();nestedSync();
     generatedSyncCases();
     if(!threadsOnly){
