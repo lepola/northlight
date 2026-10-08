@@ -26,13 +26,15 @@ int main(){
         // no usable game colour -> the kNightGrey hue at that floor
         const auto L=[](const float* o){return .2126f*o[0]+.7152f*o[1]+.0722f*o[2];};
         const float game[3]={.3f,.05f,.4f};float o[4];
-        FC::colour(game,true,0,o);assert(near(L(o),FC::kDayLum,1e-4f)&&near(o[0]/o[2],.75f,1e-4f)&&o[3]==0); /* dark day colour raised, hue kept */
-        FC::colour(game,true,1,o);assert(near(L(o),FC::kNightLum,1e-4f)&&near(o[0]/o[2],.75f,1e-4f));
-        const float blue[3]={.01f,.02f,.06f};FC::colour(blue,true,1,o);assert(near(o[2],.06f*FC::kNightBoost)&&o[2]>o[0]); /* capped boost, still blue */
+        /* 0.3.199: kSaturation of the hue kept around the luminance: channel = l + (scaled - l) * kSaturation */
+        const auto sat=[&](const float* g,float target,int i){const float lum=L(g),sc=std::min(target/lum,FC::kNightBoost);return lum*sc+(g[i]*sc-lum*sc)*FC::kSaturation;};
+        FC::colour(game,true,0,o);assert(near(L(o),FC::kDayLum,1e-4f)&&near(o[0],sat(game,FC::kDayLum,0),1e-4f)&&near(o[2],sat(game,FC::kDayLum,2),1e-4f)&&o[0]<o[2]&&o[3]==0); /* dark day colour raised, hue kept at half saturation */
+        FC::colour(game,true,1,o);assert(near(L(o),FC::kNightLum,1e-4f)&&near(o[0],sat(game,FC::kNightLum,0),1e-4f)&&near(o[2],sat(game,FC::kNightLum,2),1e-4f));
+        const float blue[3]={.01f,.02f,.06f};FC::colour(blue,true,1,o);{const float l=L(blue)*FC::kNightBoost;assert(near(o[2],l+(.06f*FC::kNightBoost-l)*FC::kSaturation)&&o[2]>o[0]);} /* capped boost, still blue, half as saturated */
         const float bright[3]={.5f,.5f,.5f};FC::colour(bright,true,0,o);assert(o[0]==.5f);FC::colour(bright,true,1,o);assert(o[0]==.5f); /* already bright: unchanged */
         FC::colour(game,false,0,o);assert(near(L(o),FC::kDayLum,1e-4f)&&o[2]>o[0]); /* never black: grey-blue at the floor */
         FC::colour(game,false,1,o);assert(near(L(o),FC::kNightLum,1e-4f));
-        const float bad[3]={std::numeric_limits<float>::quiet_NaN(),-1,.2f};FC::colour(bad,true,std::numeric_limits<float>::quiet_NaN(),o);assert(o[0]==0&&o[1]==0&&near(o[2],.2f*FC::kNightBoost)); /* non-finite and negative channels count as 0; the boost is capped */
+        const float bad[3]={std::numeric_limits<float>::quiet_NaN(),-1,.2f};FC::colour(bad,true,std::numeric_limits<float>::quiet_NaN(),o);{const float l=.0722f*.2f*FC::kNightBoost;assert(near(o[0],l*(1-FC::kSaturation))&&near(o[1],l*(1-FC::kSaturation))&&near(o[2],l+(.2f*FC::kNightBoost-l)*FC::kSaturation));} /* non-finite and negative channels count as 0; the boost is capped */
     }
     const auto vol=FC::generate();
     {   // generate: size, determinism, range, mean
