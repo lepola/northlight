@@ -15,7 +15,7 @@ the test output):
   skipped insert is night-like at 21:30 and 03:30.
 - every view: each outdoor row's storm profile is private, unshared with any other slot, has <= 16
   keys, a fog end within the source storm's (x0.85, never below 350 yards unless shorter) and untouched water bands, and the skybox rule holds;
-  the three BLPs in both archives are the generated ones (uncompressed, 1:16 rain, 1:2 snow).
+  the five BLPs in both archives are the generated ones (uncompressed, 1:16 rain, 1:2 snow) and the client's mist puffs at 1:4.
 - the client's own chain: when the client has our art layer installed (Data/patch-z.mpq), the
   rebuild without it is byte-identical to it, so the installer step reproduces the HD chain, and
   the Mulgore and Stormwind steps run with their sky clones."""
@@ -32,6 +32,10 @@ out = fp.output_dir()
 cache = client / 'world-cache'
 tables = {f'DBFilesClient\\{n}.dbc' for n in ('Light', 'LightParams', 'LightIntBand', 'LightFloatBand')}
 blps = build_weather_textures.weather_textures()
+_mist_assets = Assets(client, 'stock', client_archives.detect_locale(client, None), without='z')
+blps.update(build_weather_textures.mist_textures(_mist_assets.read, decode_blp))   # 0.3.199 (rain mist): the client's puffs at 1:4
+_mist_assets.close()
+assert set(build_weather_textures.MIST) <= set(blps), 'the client has both mist puffs'
 files = tables | set(blps)
 report = {}
 
@@ -50,6 +54,9 @@ for target in r['targets']:
         for n, data in blps.items():   # the generated textures, ARGB at the aspect ratios the renderer detects
             assert a.read(n) == data
             w, h = decode_blp(data, 4096)[:2]
+            if n in build_weather_textures.MIST:   # 0.3.199 (rain mist): 128x512, the renderer's mist signature
+                assert data[8:11] == bytes((1, 8, 8)) and (w, h) == (128, 512), (n, w, h)
+                continue
             assert data[8:11] == bytes((1, 8, 8)) and w <= 32 and h == (2*w if 'snow' in n.lower() else 16*w), (n, w, h)
 def storm_checks(view, folder, r):
     """The storm profiles of one built view, on its real tables (new ids have no `before`, so check them here)."""

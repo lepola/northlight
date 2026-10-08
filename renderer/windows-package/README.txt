@@ -155,7 +155,7 @@ Individual settings (Quality / Balanced / Performance):
   CommandStream         1 / 1 / 1      the game records its graphics calls and a second thread runs the renderer (0 = everything on the game's thread as before 0.3.192, for comparisons; read at game start)
   Weather               1 / 1 / 1      Northlight's haze, fog, light shafts, sun and moon, shadows, sky light and lamps follow rain and snow shown by the art layer's weather textures (0 = nothing reacts; needs the art layer; no extra passes)
   RainFog               1 / 1 / 1      how strongly rain and snow thicken the fog and haze and dim shafts, sun and moon (0..2; 0 = no change, 2 = twice as strong; snow acts at 60 percent)
-  RainBlend             1 / 1 / 1      the game's rain streaks are drawn alpha-blended, crisp, keeping their own colour (0 = the game's own blend, streaks take the background's colour; needs Weather=1)
+  RainBlend             1 / 1 / 1      the game's rain streaks are drawn alpha-blended, crisp, keeping their own colour, and the game's mist puffs (black balls in night and storm rain) are left out while it rains; snow and sand storms keep them (0 = the game's own blend and puffs; needs Weather=1)
   FogClouds             1 / 1 / 0      low fog banks that drift with the wind, thicker and faster in rain, few or none in clear daylight (0 = none; its own half-resolution pass; Ctrl+Shift+F7 and F10 turn them off with the rest)
   FogCloudDensity       100 / 100 / 100 how much of the ground the fog clouds cover, in percent (0..200; 0 = none, 200 = twice as much)
   FogTemporal           1 / 1 / 1      smooths the fog (lamp glows, shafts, clouds) over frames so it does not shimmer while moving (0 = the raw fog, no extra pass)

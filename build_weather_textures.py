@@ -1,4 +1,4 @@
-"""Procedural weather textures for the art layer, generated at build time (no client bytes).
+"""Procedural weather textures for the art layer, generated at build time (no client bytes), and the client's mist puffs reshaped (mist_textures).
 
 # 0.3.198 (rain): replaces the client's rain streaks and snow flake with BLP2 in the client's own
 palettized layout (encoding 1, alpha depth 8; the 3.3.5a client never uses encoding 3), full mip chain. The aspect ratios are the runtime's identity signature:
@@ -149,6 +149,47 @@ TEXTURES = {   # archive name -> (width, height, colour, alpha max, mip levels b
     'Textures\\WEATHER\\RAINDROPRED01.BLP': (32, 512, RAIN_RED, .4, streak_chain),
     'textures\\Weather\\SnowFlake01.blp': (32, 64, SNOW, .8, lambda w, h, colour, alpha_max: mip_chain(w, h, image(w, h, colour, alpha_max, flake))),
 }
+
+
+# 0.3.199 (rain mist): the game's weather mist puffs (stock 256x256, one white palette colour, the shape in 8-bit alpha) resampled
+# to 1:4, the runtime's mist signature (weather_detect.h): the renderer skips their draws while it rains (they darkened the scene
+# into black balls); snow and sand storms keep them. The puff is the client's own alpha, bilinearly resampled (128 across, 512 down).
+MIST = ('textures\\Weather\\WEATHERMISTGRAINY01.BLP', 'textures\\Weather\\SNOWMIST01.BLP')
+MIST_SIZE = (128, 512)
+
+
+def resample_alpha(alpha, width, height, new_width, new_height):
+    """Bilinear (texel centres, clamped) resample of a `width` x `height` alpha plane."""
+    out = bytearray(new_width*new_height)
+    for y in range(new_height):
+        fy = min(max((y+.5)*height/new_height-.5, 0), height-1)
+        y0 = int(fy); y1 = min(y0+1, height-1); ty = fy-y0
+        for x in range(new_width):
+            fx = min(max((x+.5)*width/new_width-.5, 0), width-1)
+            x0 = int(fx); x1 = min(x0+1, width-1); tx = fx-x0
+            top = alpha[y0*width+x0]*(1-tx)+alpha[y0*width+x1]*tx
+            bottom = alpha[y1*width+x0]*(1-tx)+alpha[y1*width+x1]*tx
+            out[y*new_width+x] = int(top*(1-ty)+bottom*ty+.5)
+    return bytes(out)
+
+
+def mist_textures(read, decode):
+    """{archive name: BLP2 bytes} of the client's mist puffs at MIST_SIZE. `read(name)` gives the client's file, `decode(bytes, maximum)`
+    -> (w, h, RGBA). A puff that is missing or not one constant colour is left as the client has it."""
+    out, (nw, nh) = {}, MIST_SIZE
+    for name in MIST:
+        try:
+            w, h, rgba = decode(read(name), 4096)
+        except (KeyError, ValueError, OSError):
+            continue
+        colour = bytes(rgba[:3])
+        if any(rgba[i:i+3] != colour for i in range(0, len(rgba), 4)):
+            continue
+        alpha = resample_alpha(bytes(rgba[3::4]), w, h, nw, nh)
+        bgra = bytearray(nw*nh*4)
+        bgra[0::4], bgra[1::4], bgra[2::4], bgra[3::4] = bytes([colour[2]])*(nw*nh), bytes([colour[1]])*(nw*nh), bytes([colour[0]])*(nw*nh), alpha
+        out[name] = write_blp_paletted_alpha(nw, nh, mip_chain(nw, nh, bytes(bgra)))
+    return out
 
 
 def weather_textures():

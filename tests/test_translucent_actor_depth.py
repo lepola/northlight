@@ -133,7 +133,7 @@ checks['state reads include Z write, blend, src/dst, colour write, skinned']=all
 hook=r[r.index('template<class Capture,class Draw> HRESULT drawHook('):][:3500]
 # 0.3.193: the real draw goes through blobFaintDraw (it wraps terrainShadowDraw) in both drawHook modes.
 checks['early block runs before the real draw (prepareDraw/prepareDrawImpl precede draw in both drawHook modes)']=(
-    hook.index('prepareDraw(capture,count);')<hook.index('rainBlendDraw(rainBlend,claimed,draw)')<hook.index('prepareDrawImpl(capture,count);')<hook.rindex('rainBlendDraw(rainBlend,claimed,draw)'))
+    hook.index('prepareDraw(capture,count);')<hook.index('rainBlendDraw(rainBlend,claimed||mist,draw)')<hook.index('prepareDrawImpl(capture,count);')<hook.rindex('rainBlendDraw(rainBlend,claimed||mist,draw)'))
 cf=r[r.index('void clearFrame() {'):r.index('void releaseResources()')]
 checks['clearFrame resets the latch and the census']='earlyDepth.reset()' in cf and 'resetTranslucentCensus()' in cf
 fin=r[r.index('void finishFrameImpl() {'):r.index('++frame;mirrorState.gate.frame')]

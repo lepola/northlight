@@ -19,7 +19,8 @@ installed art layer). Steps, each on the previous step's archive, as the HD chai
    a copy of the row's final clear profile when its stock storm profile is its clear profile, else the
    stock storm profile relit and retimed; then the grey, readable storm look (fog end x0.7, 300 yard floor) (build_lighting.stormify)
 8. weather_textures  procedural rain streak (1:16), red rain and snow flake (1:2) BLPs
-   (build_weather_textures), replacing the client's; generated, no client bytes
+   (build_weather_textures), replacing the client's; generated, no client bytes. Plus the client's
+   weather mist puffs resampled to 1:4 (the renderer's signature to skip them in rain)
 
 Steps 2-6 hold the HD sky cleanup: a step whose HD sky ids, profiles or textures are absent is
 skipped with the reason (build_lighting.Skip). Mulgore and Stormwind find their profiles through
@@ -43,7 +44,7 @@ import northlight_paths as fp  # noqa: E402
 fp.use_source_modules()
 import client_archives  # noqa: E402
 from mpq import Archive  # noqa: E402
-from world_scene_builder import Assets  # noqa: E402
+from world_scene_builder import Assets, decode_blp  # noqa: E402
 import build_lighting  # noqa: E402
 import build_mulgore_lighting  # noqa: E402
 import build_stormwind_single_sun  # noqa: E402
@@ -129,6 +130,7 @@ def build(client, output, world_cache, locale=None, letter='z', archives='all'):
         payload.update({DBC_NAME.format(n): t.bytes() for n, t in final.items()})
         report['steps'].append({'step': 'storm', **storm})
         textures = build_weather_textures.weather_textures()
+        textures.update(build_weather_textures.mist_textures(assets.read, decode_blp))   # 0.3.199 (rain mist)
         payload.update(textures)
         report['steps'].append({'step': 'weather_textures', 'files': sorted(textures)})
         last = None   # the payload is no longer a step's archive

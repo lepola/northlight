@@ -67,6 +67,32 @@ for name, data in textures.items():
     info[key]['colour'] = sorted(colour)[len(colour)//2]
 checks['rain is light grey neutral (204,204,204), red rain red, snow neutral white'] = info['RainDrop01']['colour'] == (204, 204, 204) and info['RAINDROPRED01']['colour'] == (171, 51, 41) and len(set(info['SnowFlake01']['colour'])) == 1
 
+# 0.3.199 (rain mist): the client's mist puffs reshaped to the runtime's 1:4 signature. A stand-in client puff: 256x256, one white palette
+# colour, a radial alpha (mean ~47 like the stock puffs); a puff with two colours or a missing file is left as the client has it.
+def puff(w, h, two_colours=False):
+    px = bytearray(w*h*4)
+    for y in range(h):
+        for x in range(w):
+            r = min(1, ((x+.5-w/2)**2+(y+.5-h/2)**2)**.5/(w/2))
+            px[(y*w+x)*4:(y*w+x)*4+4] = bytes((255, 255, 255, int(133*(1-r)**2)))
+    if two_colours:
+        px[0:3] = bytes((0, 0, 0))
+        return wt.write_blp_bgra(w, h, wt.mip_chain(w, h, bytes(px)))
+    return wt.write_blp_paletted_alpha(w, h, wt.mip_chain(w, h, bytes(px)))
+client = {wt.MIST[0]: puff(256, 256)}
+mist = wt.mist_textures(lambda n: client[n] if n in client else (_ for _ in ()).throw(KeyError(n)), decode_blp)
+checks['mist: only the puff the client has, at its path'] = set(mist) == {wt.MIST[0]}
+mw, mh, mpx = decode_blp(mist[wt.MIST[0]], 4096)
+src = decode_blp(client[wt.MIST[0]], 4096)[2]
+checks['mist: BLP2 palettized 8-bit alpha, 128x512 (1:4), full mip chain'] = (
+    struct.unpack_from('<4sI4B2I', mist[wt.MIST[0]]) == (b'BLP2', 1, 1, 8, 8, 1, 128, 512) and (mw, mh) == wt.MIST_SIZE and decode_blp(mist[wt.MIST[0]], 1)[:2] == (1, 1))
+checks['mist: white kept, mean alpha within 1 of the client\'s, centre opaque-ish, corners clear'] = (
+    set(bytes(mpx[i:i+3]) for i in range(0, len(mpx), 4)) == {bytes((255, 255, 255))} and abs(sum(mpx[3::4])/(mw*mh)-sum(src[3::4])/(256*256)) < 1
+    and mpx[(256*128+64)*4+3] > 120 and mpx[3] == 0)
+checks['mist: two-colour puff left as the client has it'] = wt.mist_textures(lambda n: puff(64, 64, True), decode_blp) == {}
+checks['mist: deterministic'] = wt.mist_textures(lambda n: client[n] if n in client else (_ for _ in ()).throw(KeyError(n)), decode_blp) == mist
+checks['weather_textures has no client puffs (the art layer adds them)'] = not set(textures) & set(wt.MIST)
+
 moon = build_outdoor_single_moon.transparent_moon()
 checks['moon02: byte-identical to the pre-refactor writer (sha256, 64x64 x7 levels)'] = (
     len(moon) == 21992 and hashlib.sha256(moon).hexdigest() == '852ac7ee4fc439442a09c6f48565a6bf6448b12fcc80aac5261395706c80735f')

@@ -97,7 +97,7 @@ checks['faint swap: SetTexture(faint), the draw, SetTexture(original), then Rele
     'ext->SetTexture(0,faint);' in swap_src and 'shadowBlobs->faintTexture()' in swap_src and swap_src.index('ext->SetTexture(0,faint);')<swap_src.index('draw();')<swap_src.index('ext->SetTexture(0,original);')<swap_src.rindex('original->Release();')
     and 'extensionWork' not in swap_src and 'return terrainShadowDraw(claimed,draw)' in swap_src)
 checks['the plan keeps only the original (no second GetTexture, no faint pointer member)']=('GetTexture' not in member(renderer,'void planBlobFaint(') and 'blobFaint;' not in renderer and 'blobFaint=' not in renderer)
-checks['faint plan dropped at the start of every draw on both paths']=(renderer.count('dropBlobFaint();prepareDraw(capture,count);')==1 and renderer.count('dropTerrainShadowSwap();dropBlobFaint();')==1 and renderer.count('rainBlendDraw(rainBlend,claimed,draw)')==2 and renderer.count('blobFaintDraw(claimed,draw)')==1)
+checks['faint plan dropped at the start of every draw on both paths']=(renderer.count('dropBlobFaint();prepareDraw(capture,count);')==1 and renderer.count('dropTerrainShadowSwap();dropBlobFaint();')==1 and renderer.count('rainBlendDraw(rainBlend,claimed||mist,draw)')==2 and renderer.count('blobFaintDraw(claimed,draw)')==1)
 # The other three overrides: 0.3.184's capture call and real draw, passed to drawHook unchanged.
 def old_parts(line):
     cap=re.search(r'prepareDraw\(\[&\]\(IDirect3DVertexShader9\* vs\)\{(.*?)captureWater\(vs,(\w+::\w+),\[&\]\{return (ext->\w+\([^)]*\));\}\);\},count\);',line)
@@ -158,7 +158,7 @@ HARNESS=r'''
 #include <vector>
 typedef long HRESULT;typedef unsigned UINT;typedef int INT;typedef long long LONGLONG;typedef unsigned DWORD;
 #define TRUE 1
-enum D3DRENDERSTATETYPE{D3DRS_ALPHABLENDENABLE=27,D3DRS_SRCBLEND=19,D3DRS_DESTBLEND=20,D3DRS_BLENDOP=171};enum{D3DBLEND_SRCALPHA=5,D3DBLEND_INVSRCALPHA=6,D3DBLENDOP_ADD=1};
+enum D3DRENDERSTATETYPE{D3DRS_ALPHABLENDENABLE=27,D3DRS_SRCBLEND=19,D3DRS_DESTBLEND=20,D3DRS_BLENDOP=171};enum{D3DBLEND_SRCCOLOR=3,D3DBLEND_SRCALPHA=5,D3DBLEND_INVSRCALPHA=6,D3DBLEND_DESTCOLOR=9,D3DBLENDOP_ADD=1};
 namespace NorthlightWeather{enum class Kind{None,Rain,Snow};} /* 0.3.199 (rain): rainBlendDraw compiles; it never runs here (hot stays null, test_weather_detect drives it) */
 #define STDMETHODCALLTYPE
 #define FAILED(hr) (((HRESULT)(hr))<0)
@@ -233,7 +233,7 @@ struct MockBlobs{Env* env=nullptr;MockExt* ext=nullptr;bool faintMode=false;unsi
     IDirect3DTexture9* faintTexture(){return env->bit("faint texture",8)?nullptr:&faint;}};
 struct Gate{int drawTid=7;void noteFirst(int){}};
 struct MirrorStateMock{Gate gate;bool textureKnown[1]={};void* textures[1]={};};
-struct WeatherDetectMock{const void* hot=nullptr;NorthlightWeather::Kind hotKind=NorthlightWeather::Kind::None;};struct WeatherSampleMock{unsigned primitives=0,draws=0;}; /* 0.3.198 (rain): drawHook's one comparison; hot stays null here (test_weather_detect drives it) */
+struct WeatherDetectMock{const void* hot=nullptr;NorthlightWeather::Kind hotKind=NorthlightWeather::Kind::None;bool mistArmed=false;bool isMist(const void*)const{return false;}void proveMist(const void*){}};struct WeatherSampleMock{unsigned primitives=0,draws=0;}; /* 0.3.198 (rain): drawHook's one comparison; hot stays null here (test_weather_detect drives it) */
 struct Guard{explicit Guard(Gate&){}};
 namespace NorthlightRenderThreadProbe{inline bool sampleFrame(unsigned f){return f%3==0;}inline bool profiling(){return true;}}
 namespace NorthlightWaterRenderer{enum UserPointer:unsigned{NoUserPointer,UserVertices,UserVerticesAndIndices};}
@@ -253,7 +253,7 @@ struct Base{
     std::unordered_map<IDirect3DVertexShader9*,std::uint64_t> vsHashes;std::unordered_map<IDirect3DPixelShader9*,std::uint64_t> psHashes;
     unsigned blobSignatureReports=0,terrainShadowDraws=0,frame=0,drawCalls=0;
     IDirect3DPixelShader9 *shadowSwapOriginal=nullptr,*shadowSwapReplacement=nullptr;
-    Keys effectKeys;GateCounts gateCounts;WeatherDetectMock weatherDetect;WeatherSampleMock weatherSample;void weatherProbeDraw(UINT){}
+    Keys effectKeys;GateCounts gateCounts;WeatherDetectMock weatherDetect;WeatherSampleMock weatherSample;unsigned weatherMistSkips=0;void weatherProbeDraw(UINT){}
     Base(){blobsObj.ext=&extObj;env.trace=&trace;blobsObj.faint.id=6;blobsObj.faint.env=extObj.original.env=&env;extObj.original.id=5;extObj.env=worldObj.env=skyObj.env=blobsObj.env=&env;extObj.ps[0].env=extObj.ps[1].env=extObj.vs.env=worldObj.replacement.env=&env;}
     bool sampledDrawTimers()const{return frame%2==0;}
     void logf(const char* format,...){char b[512];va_list a;va_start(a,format);std::vsnprintf(b,sizeof b,format,a);va_end(a);trace.push_back(std::string("log ")+b);}

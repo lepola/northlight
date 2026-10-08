@@ -725,6 +725,7 @@ class Device final : public GuardedMirrorDevice {
     // under the gate only, on whichever thread makes the draw (stream: replay thread; fallback: game thread).
     static_assert(NorthlightWeatherDetect::kFmtA8R8G8B8==D3DFMT_A8R8G8B8,"weather signature format");
     NorthlightWeatherDetect::Detector weatherDetect;NorthlightWeather::Tracker weatherTracker;NorthlightWeather::Sample weatherSample;
+    unsigned weatherMistSkips=0; /* 0.3.199 (rain mist): mist draws skipped this frame */
     LONGLONG weatherTick=0;double weatherLogClock=0;NorthlightWeather::Kind weatherLoggedKind=NorthlightWeather::Kind::None;bool weatherLoggedBlendHigh=false,weatherLoggedBlendLow=false,weatherOffReported=false;
     // RenderProfile sample frames only: the largest draw before the effects (WEATHER probe), to calibrate detection.
     struct WeatherProbe {UINT count=0;const void* texture=nullptr;bool known=false,candidate=false,vs=false,ps=false;} weatherProbe;
@@ -809,6 +810,8 @@ class Device final : public GuardedMirrorDevice {
     // 0.3.199 (rain): RainBlend. The game draws rain as a 2x modulate (DestColor/SrcColor, alpha only feeds the alpha test), so the streaks take the
     // background's colour. Around exactly the game's draw (a claimed draw never runs it) the blend becomes SrcAlpha/InvSrcAlpha/Add; the previous
     // values (the mirror answers the reads) come back right after. Texture stages, alpha test and Z stay the game's.
+    // 0.3.199 (rain mist): the draw is the game's 2x modulate (the mirror answers the reads, or relearns them after an invalidation).
+    bool mistBlend(){DWORD src=0,dst=0;return SUCCEEDED(ext->GetRenderState(D3DRS_SRCBLEND,&src))&&src==D3DBLEND_DESTCOLOR&&SUCCEEDED(ext->GetRenderState(D3DRS_DESTBLEND,&dst))&&dst==D3DBLEND_SRCCOLOR;}
     template<class Draw> HRESULT rainBlendDraw(bool rain,bool claimed,Draw draw){
         if(!rain)return blobFaintDraw(claimed,draw);
         return blobFaintDraw(claimed,[&]{
@@ -827,15 +830,16 @@ class Device final : public GuardedMirrorDevice {
     // frame's sky gate is open, the blob test only while its gate is; the observation follows the draw,
     // so it keeps a region of its own. Gates off: the 0.3.184 regions one by one.
     template<class Capture,class Draw> HRESULT drawHook(D3DPRIMITIVETYPE t,UINT count,Capture capture,Draw draw){
-        bool claimed=false,rainBlend=false;
+        bool claimed=false,rainBlend=false,mist=false;
         // 0.3.198 (rain): the whole per-draw cost of weather detection, before any other work and in both gate paths: one pointer comparison.
         if(weatherDetect.hot&&mirrorState.textureKnown[0]&&mirrorState.textures[0]==weatherDetect.hot){weatherSample.primitives+=count;++weatherSample.draws;rainBlend=weatherDetect.hotKind==NorthlightWeather::Kind::Rain&&world&&world->rainBlendSetting();rainBoundary=rainBlend&&terrain&&!applied;} /* 0.3.199 (rain): after applied too (the rest of the rain); the boundary at the first rain draw of a terrain frame */
+        else if(weatherDetect.mistArmed&&mirrorState.textureKnown[0]&&weatherDetect.isMist(mirrorState.textures[0])&&mistBlend()){mist=true;++weatherMistSkips;weatherDetect.proveMist(mirrorState.textures[0]);} /* 0.3.199 (rain mist): the game's 2x modulate mist puff, skipped; unarmed, one bool test */
         if(!frameDrawGates){
             dropBlobFaint();prepareDraw(capture,count);
             {CpuScope hooks(sampledHookTimer());
                 extensionWork("native sky claim",[&]{skyClaim(t,count,claimed);});
                 if(!claimed&&blobFilterActive())extensionWork("blob shadow filter",[&]{blobFilter(count,claimed);});}
-            const HRESULT hr=rainBlendDraw(rainBlend,claimed,draw);
+            const HRESULT hr=rainBlendDraw(rainBlend,claimed||mist,draw); /* 0.3.199 (rain mist): a mist draw is skipped */
             if(!claimed){CpuScope hooks(sampledHookTimer());extensionWork("native sky observation",[&]{skyObserve(hr,t,count);});}
             return hr;
         }
@@ -849,7 +853,7 @@ class Device final : public GuardedMirrorDevice {
             if(sky){stage="native sky claim";skyClaim(t,count,claimed);}
             if(!claimed&&drawGates.blob){stage="blob shadow filter";if(blobFilterActive())blobFilter(count,claimed);}
         });
-        const HRESULT hr=rainBlendDraw(rainBlend,claimed,draw);
+        const HRESULT hr=rainBlendDraw(rainBlend,claimed||mist,draw); /* 0.3.199 (rain mist): a mist draw is skipped */
         if(sky&&!claimed){CpuScope hooks(sampledHookTimer());extensionWork("native sky observation",[&]{skyObserve(hr,t,count);});}
         return hr;
     }
@@ -1111,12 +1115,15 @@ public:
         const bool counted=weatherSample.draws!=0;const W::Sample frameSample=weatherSample;weatherSample={};
         weatherDetect.endFrame(counted); /* hot drew: it stays; otherwise the next candidate (the tracker's hold bridges the rotation) */
         if(world)world->setWeather(st);
+        // 0.3.199 (rain mist): armed for the next frame while the weather is rain (the tracker's hold bridges detection gaps) and RainBlend is on.
+        weatherDetect.mistArmed=mirrorState.enabled&&st.kind==W::Kind::Rain&&world&&world->rainBlendSetting()&&weatherDetect.mistCount();
+        const unsigned mistSkips=weatherMistSkips;weatherMistSkips=0;
         const bool high=st.blend>=W::kBlendLogHigh,low=st.blend>=W::kBlendLogLow;
         weatherLogClock+=dt;
         const bool change=st.kind!=weatherLoggedKind||high!=weatherLoggedBlendHigh||low!=weatherLoggedBlendLow;
         if(change||(diagnostics()&&st.kind!=W::Kind::None&&weatherLogClock>=10.0)){
             weatherLogClock=0;weatherLoggedKind=st.kind;weatherLoggedBlendHigh=high;weatherLoggedBlendLow=low;
-            logf("WEATHER kind=%s prims=%u draws=%u intensity=%.3f blend=%.3f candidates=%u generation=%u hot=%p",W::kindName(st.kind),frameSample.primitives,frameSample.draws,st.intensity,st.blend,weatherDetect.count(),weatherDetect.generation,weatherDetect.hot);
+            logf("WEATHER kind=%s prims=%u draws=%u intensity=%.3f blend=%.3f candidates=%u generation=%u hot=%p mists=%u mistArmed=%d mistSkips=%u mistOverflows=%u",W::kindName(st.kind),frameSample.primitives,frameSample.draws,st.intensity,st.blend,weatherDetect.count(),weatherDetect.generation,weatherDetect.hot,weatherDetect.mistCount(),int(weatherDetect.mistArmed),mistSkips,weatherDetect.mistOverflows);
         }
     }
     void logWeatherProbe(unsigned sampleFrame){

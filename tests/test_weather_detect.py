@@ -13,6 +13,10 @@ import subprocess,tempfile
 r=fp.src('renderer.cpp').read_text()
 hook=[l for l in r.split('\n') if l.strip().startswith('if(weatherDetect.hot&&mirrorState')]
 assert len(hook)==1,'the draw hook comparison must exist exactly once'
+mistline=[l for l in r.split('\n') if l.strip().startswith('else if(weatherDetect.mistArmed&&')]
+assert len(mistline)==1,'0.3.199 (rain mist): the mist test follows the hot comparison exactly once'
+assert r.count('rainBlendDraw(rainBlend,claimed||mist,draw)')==2,'0.3.199 (rain mist): both gate paths skip a mist draw'
+mistfn=next(l for l in r.split('\n') if l.strip().startswith('bool mistBlend(){'))
 rl=r.split('\n');i0=next(i for i,l in enumerate(rl) if 'template<class Draw> HRESULT rainBlendDraw(' in l);i1=next(i for i in range(i0,len(rl)) if rl[i]=='    }')
 rainfn='\n'.join(rl[i0:i1+1])
 
@@ -28,7 +32,7 @@ typedef unsigned UINT;typedef unsigned DWORD;typedef long HRESULT;
 #define TRUE 1
 #define SUCCEEDED(h) ((h)>=0)
 enum D3DRENDERSTATETYPE{D3DRS_ALPHABLENDENABLE=27,D3DRS_SRCBLEND=19,D3DRS_DESTBLEND=20,D3DRS_BLENDOP=171,D3DRS_ZWRITEENABLE=14};
-enum{D3DBLEND_SRCCOLOR=3,D3DBLEND_SRCALPHA=5,D3DBLEND_INVSRCALPHA=6,D3DBLEND_DESTCOLOR=9,D3DBLENDOP_ADD=1};
+enum{D3DBLEND_ONE=2,D3DBLEND_SRCCOLOR=3,D3DBLEND_SRCALPHA=5,D3DBLEND_INVSRCALPHA=6,D3DBLEND_DESTCOLOR=9,D3DBLENDOP_ADD=1};
 static std::vector<std::string> lines;
 static void sink(const char* l){lines.push_back(l);}
 static int A=21,X8=22,A1=25,A4=26,R5G6B5=23,DXT5=0x35545844;
@@ -45,12 +49,14 @@ namespace NorthlightWeather{}
 struct Hook{
     Mirror mirrorState;Detector weatherDetect;Sample weatherSample;bool applied=false,terrain=true,rainBoundary=false;Ext extObj;Ext* ext=&extObj;World worldObj;World* world=&worldObj;bool claimedSkip=false;
     template<class Draw> HRESULT blobFaintDraw(bool claimed,Draw draw){return claimed?0:draw();}
-    unsigned blendAtDraw[4]={};unsigned drawn=0;
+    unsigned blendAtDraw[4]={};unsigned drawn=0;unsigned weatherMistSkips=0;
+@MISTFN@
 @RAINFN@
     HRESULT draw(UINT count){
-        bool claimed=claimedSkip,rainBlend=false;
+        bool claimed=claimedSkip,rainBlend=false,mist=false;
 @HOOK@
-        return rainBlendDraw(rainBlend,claimed,[&]{++drawn;blendAtDraw[0]=ext->rs[D3DRS_ALPHABLENDENABLE];blendAtDraw[1]=ext->rs[D3DRS_SRCBLEND];blendAtDraw[2]=ext->rs[D3DRS_DESTBLEND];blendAtDraw[3]=ext->rs[D3DRS_BLENDOP];return HRESULT(0);});
+@MISTLINE@
+        return rainBlendDraw(rainBlend,claimed||mist,[&]{++drawn;blendAtDraw[0]=ext->rs[D3DRS_ALPHABLENDENABLE];blendAtDraw[1]=ext->rs[D3DRS_SRCBLEND];blendAtDraw[2]=ext->rs[D3DRS_DESTBLEND];blendAtDraw[3]=ext->rs[D3DRS_BLENDOP];return HRESULT(0);});
     }
     void bind(unsigned stage,int i,bool known=true){mirrorState.textures[stage]=const_cast<void*>(P(i));mirrorState.textureKnown[stage]=known;}
 };
@@ -187,9 +193,36 @@ int main(){
         h.bind(0,3);h.draw(10);assert(h.ext->sets.empty()); /* not the hot texture */
         Hook nw;nw.weatherDetect.noteCreate(P(50),32,512,1,A);game(nw);nw.bind(0,50);nw.world=nullptr;nw.draw(10);assert(nw.ext->sets.empty()); /* no world */
     }
+    {   // 0.3.199 (rain mist): signature 1:4 ARGB at widths 32/64/128 only; a separate table (never a rain/snow candidate, never hot)
+        assert(isMistShape(128,512,A)&&isMistShape(64,256,A)&&isMistShape(32,128,A));
+        assert(!isMistShape(256,1024,A)&&!isMistShape(16,64,A)&&!isMistShape(128,512,DXT5)&&!isMistShape(128,512,X8)&&!isMistShape(256,256,A)&&!isMistShape(128,256,A)&&!isMistShape(32,512,A));
+        lines.clear();Detector m;m.sink=&sink;m.noteCreate(P(60),128,512,10,A);m.noteCreate(P(61),128,512,10,A);
+        assert(m.mistCount()==2&&m.isMist(P(60))&&m.isMist(P(61))&&m.count()==0&&m.hot==nullptr&&m.generation==0&&count("WEATHER mist candidate 128x512 fmt=21 levels=10")==2);
+        m.noteCreate(P(60),256,256,1,A);assert(m.mistCount()==1&&!m.isMist(P(60))); /* address reuse */
+        m.forget(P(61));assert(m.mistCount()==0);
+        m.noteCreate(P(62),128,512,10,A);m.mistArmed=true;m.reset();assert(m.mistCount()==0&&!m.mistArmed&&!m.isMist(P(62)));
+        m.noteCreate(P(63),128,512,10,A);m.mistArmed=true;m.setOff(true);assert(!m.mistArmed);
+        // a full table evicts the oldest unproven entry; proven mists stay
+        Detector f;f.noteCreate(P(0),128,512,10,A);f.noteCreate(P(1),128,512,10,A);f.proveMist(P(0));f.proveMist(P(1));
+        for(int i=0;i<100;++i)f.noteCreate(P(2+i%40),32,128,8,A);
+        assert(f.mistCount()==kMistSlots&&f.isMist(P(0))&&f.isMist(P(1))&&f.mistOverflows==100-(kMistSlots-2)&&f.overflows==0);
+        Detector g;for(unsigned i=0;i<kMistSlots;++i){g.noteCreate(P(i),128,512,10,A);g.proveMist(P(i));}
+        g.noteCreate(P(20),128,512,10,A);assert(!g.isMist(P(0))&&g.isMist(P(1))&&g.isMist(P(20))); /* all proven: the oldest */
+    }
+    {   // 0.3.199 (rain mist): the draw hook - armed and the game's 2x modulate: skipped (not drawn, not counted as weather); otherwise drawn
+        auto game=[](Hook& h){h.ext->rs[D3DRS_ALPHABLENDENABLE]=1;h.ext->rs[D3DRS_SRCBLEND]=D3DBLEND_DESTCOLOR;h.ext->rs[D3DRS_DESTBLEND]=D3DBLEND_SRCCOLOR;h.ext->rs[D3DRS_BLENDOP]=D3DBLENDOP_ADD;};
+        Hook h;h.weatherDetect.noteCreate(P(50),32,512,10,A);h.weatherDetect.noteCreate(P(52),128,512,10,A);game(h);
+        h.bind(0,52);h.draw(10);assert(h.drawn==1&&h.weatherMistSkips==0); /* unarmed (not raining): drawn */
+        h.weatherDetect.mistArmed=true;h.draw(10);assert(h.drawn==1&&h.weatherMistSkips==1&&h.weatherSample.draws==0&&h.ext->sets.empty()); /* armed: skipped, nothing touched */
+        h.bind(0,52,false);h.draw(10);assert(h.drawn==2&&h.weatherMistSkips==1); /* stage 0 unknown: drawn */
+        h.bind(0,7);h.draw(10);assert(h.drawn==3&&h.weatherMistSkips==1); /* another texture */
+        h.bind(0,52);h.ext->rs[D3DRS_SRCBLEND]=D3DBLEND_SRCALPHA;h.draw(10);assert(h.drawn==4&&h.weatherMistSkips==1); /* a 1:4 lookalike with another blend: drawn */
+        h.ext->rs[D3DRS_SRCBLEND]=D3DBLEND_DESTCOLOR;h.ext->rs[D3DRS_DESTBLEND]=D3DBLEND_ONE;h.draw(10);assert(h.drawn==5&&h.weatherMistSkips==1);
+        game(h);h.bind(0,50);h.draw(10);assert(h.drawn==6&&h.weatherSample.draws==1&&h.weatherMistSkips==1); /* rain: drawn with RainBlend */
+    }
     std::printf("PASS weather detect\n");
 }
-'''.replace('@HOOK@',hook[0]).replace('@RAINFN@',rainfn)
+'''.replace('@HOOK@',hook[0]).replace('@MISTLINE@',mistline[0]).replace('@MISTFN@',mistfn).replace('@RAINFN@',rainfn)
 with tempfile.TemporaryDirectory() as tmp:
     (Path(tmp)/'t.cpp').write_text(SRC)
     for label,flags in [('O2',['-O2']),('asan',['-O1','-g','-fsanitize=address,undefined','-fno-sanitize-recover=all'])]:

@@ -14,13 +14,19 @@
 // lookalike that draws nothing never holds it. Known limitation: a lookalike of the same signature that draws every
 // frame can hold `hot`; mitigated by the rare rain aspect and the WEATHER candidate log. All members are touched
 // under the Device's gate only.
+// 0.3.199 (rain mist): the game's weather mist puffs (WEATHERMISTGRAINY01, SNOWMIST01: white, the shape in alpha) are drawn as a
+// 2x modulate with the lit vertex colour, so in night and storm rain they darken the scene into black balls. The art layer ships
+// them resampled to 1:4 (128x512, A8R8G8B8 like the rain); `mist` holds the textures of that signature. While the frame end arms it
+// (rain, RainBlend), the draw hook skips their draws when the draw is the game's 2x modulate (DestColor/SrcColor), so a 1:4 lookalike
+// with another blend is never skipped; snow and sand storms keep their puffs. Unarmed, the extra per-draw cost is one bool test.
+// Table: kMistSlots, a full table evicts its oldest entry that never matched a mist draw (proven mists stay).
 #include <cstdint>
 #include <cstdio>
 #include "weather_state.h"
 
 namespace NorthlightWeatherDetect {
 using NorthlightWeather::Kind;
-constexpr unsigned kRainSlots=2,kSnowSlots=4,kCandidates=kRainSlots+kSnowSlots,kTallLogs=8,kShapeLogs=32;
+constexpr unsigned kRainSlots=2,kSnowSlots=4,kCandidates=kRainSlots+kSnowSlots,kTallLogs=8,kShapeLogs=32,kMistSlots=8;
 constexpr std::uint32_t kFmtA8R8G8B8=21; /* D3DFMT_A8R8G8B8 (static_assert in renderer.cpp): the client expands our palettized BLPs to it */
 constexpr std::uint32_t kMaxWidth=32;
 
@@ -40,24 +46,40 @@ inline Kind classify(std::uint32_t w,std::uint32_t h,std::uint32_t fmt){
     return Kind::None;
 }
 
+// 0.3.199 (rain mist): the art layer's mist puffs, 1:4 (texture-quality settings may halve them).
+inline bool isMistShape(std::uint32_t w,std::uint32_t h,std::uint32_t fmt){
+    return fmt==kFmtA8R8G8B8&&(w==32||w==64||w==128)&&h==4*w;
+}
+
 class Detector{
 public:
     struct Candidate{const void* raw=nullptr;Kind kind=Kind::None;bool drawn=false;};
     using Sink=void(*)(const char* line);
     const void* hot=nullptr;Kind hotKind=Kind::None; /* the per-draw comparison target */
+    std::uint32_t mistOverflows=0;
     std::uint32_t generation=0,overflows=0,tallSeen=0,rainShapeSeen=0,snowShapeSeen=0;
     Sink sink=nullptr;
+    bool mistArmed=false; /* 0.3.199 (rain mist): set at frame end while it rains; the draw hook skips mist draws only then */
 
     unsigned count()const{return n;}
     const Candidate& candidate(unsigned i)const{return table[i];}
     bool isCandidate(const void* raw)const{for(unsigned i=0;i<n;++i)if(table[i].raw==raw)return true;return false;}
+    unsigned mistCount()const{return mists;}
+    bool isMist(const void* raw)const{for(unsigned i=0;i<mists;++i)if(mist[i]==raw)return true;return false;}
+    void proveMist(const void* raw){for(unsigned i=0;i<mists;++i)if(mist[i]==raw)mistProven[i]=true;}
     // Mirror inactive: never hot (the draw hook's comparison reads the mirror's stage-0 slot).
-    void setOff(bool off_){off=off_;if(off)hot=nullptr,hotKind=Kind::None;}
+    void setOff(bool off_){off=off_;if(off)hot=nullptr,hotKind=Kind::None,mistArmed=false;}
     // `raw` = the texture before mirrorResources.wrap replaced it. A freed address can come back only through here.
     void noteCreate(const void* raw,std::uint32_t w,std::uint32_t h,std::uint32_t levels,std::uint32_t fmt){
         if(!raw)return;
         remove(raw);
         if(w&&h>=4*w){if(tallSeen<kTallLogs)say("WEATHER tall w=%u h=%u fmt=%u levels=%u",w,h,fmt,levels);++tallSeen;}
+        if(isMistShape(w,h,fmt)){
+            if(mists>=kMistSlots){++mistOverflows;unsigned victim=0;for(unsigned i=0;i<mists;++i)if(!mistProven[i]){victim=i;break;}dropMist(victim);} /* the oldest unproven, else the oldest */
+            mistProven[mists]=false;mist[mists++]=raw;
+            say("WEATHER mist candidate %ux%u fmt=%u levels=%u raw=%p count=%u",w,h,fmt,levels,raw,mists);
+            return;
+        }
         const Kind kind=classify(w,h,fmt),shape=shapeOf(w,h);
         if(shape!=Kind::None){
             std::uint32_t& seen=shape==Kind::Rain?rainShapeSeen:snowShapeSeen;
@@ -73,7 +95,7 @@ public:
         say("WEATHER candidate kind=%s %ux%u fmt=%u levels=%u raw=%p generation=%u",NorthlightWeather::kindName(kind),w,h,fmt,levels,raw,generation);
     }
     void forget(const void* raw){if(raw)remove(raw);}
-    void reset(){if(n)++generation;n=0;hot=nullptr;hotKind=Kind::None;}
+    void reset(){if(n)++generation;n=0;hot=nullptr;hotKind=Kind::None;mists=0;mistArmed=false;for(unsigned i=0;i<kMistSlots;++i)mist[i]=nullptr,mistProven[i]=false;}
     // Frame end: hot counted draws -> it stays and is marked drawn; otherwise try the next candidate.
     void endFrame(bool counted){
         if(counted&&hot){for(unsigned i=0;i<n;++i)if(table[i].raw==hot)table[i].drawn=true;return;}
@@ -91,11 +113,16 @@ private:
     void say(const char* fmt,...)const __attribute__((format(printf,2,3))){
         if(!sink)return;char line[200];__builtin_va_list a;__builtin_va_start(a,fmt);std::vsnprintf(line,sizeof line,fmt,a);__builtin_va_end(a);sink(line);
     }
-    void remove(const void* raw){for(unsigned i=0;i<n;++i)if(table[i].raw==raw){dropAt(i);++generation;return;}}
+    void remove(const void* raw){
+        for(unsigned i=0;i<mists;++i)if(mist[i]==raw){dropMist(i);break;}
+        for(unsigned i=0;i<n;++i)if(table[i].raw==raw){dropAt(i);++generation;return;}
+    }
+    void dropMist(unsigned i){for(unsigned j=i+1;j<mists;++j)mist[j-1]=mist[j],mistProven[j-1]=mistProven[j];mist[--mists]=nullptr;mistProven[mists]=false;}
     void dropAt(unsigned i){
         if(table[i].raw==hot){hot=nullptr;hotKind=Kind::None;}
         for(unsigned j=i+1;j<n;++j)table[j-1]=table[j];--n;table[n]={};
     }
     Candidate table[kCandidates];unsigned n=0;bool off=false;
+    const void* mist[kMistSlots]={};bool mistProven[kMistSlots]={};unsigned mists=0;
 };
 }
