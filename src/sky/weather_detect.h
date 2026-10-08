@@ -56,7 +56,7 @@ public:
     struct Candidate{const void* raw=nullptr;Kind kind=Kind::None;bool drawn=false;};
     using Sink=void(*)(const char* line);
     const void* hot=nullptr;Kind hotKind=Kind::None; /* the per-draw comparison target */
-    std::uint32_t mistOverflows=0;
+    std::uint32_t mistOverflows=0,mistSeen=0; /* mistSeen: mist-shaped creates, logged up to kShapeLogs */
     std::uint32_t generation=0,overflows=0,tallSeen=0,rainShapeSeen=0,snowShapeSeen=0;
     Sink sink=nullptr;
     bool mistArmed=false; /* 0.3.199 (rain mist): set at frame end while it rains; the draw hook skips mist draws only then */
@@ -77,7 +77,8 @@ public:
         if(isMistShape(w,h,fmt)){
             if(mists>=kMistSlots){++mistOverflows;unsigned victim=0;for(unsigned i=0;i<mists;++i)if(!mistProven[i]){victim=i;break;}dropMist(victim);} /* the oldest unproven, else the oldest */
             mistProven[mists]=false;mist[mists++]=raw;
-            say("WEATHER mist candidate %ux%u fmt=%u levels=%u raw=%p count=%u",w,h,fmt,levels,raw,mists);
+            if(mistSeen<kShapeLogs)say("WEATHER mist candidate %ux%u fmt=%u levels=%u raw=%p count=%u",w,h,fmt,levels,raw,mists);
+            ++mistSeen;
             return;
         }
         const Kind kind=classify(w,h,fmt),shape=shapeOf(w,h);

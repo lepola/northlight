@@ -47,7 +47,7 @@ checks['hlsl: c24.y (softness) still unread']='PassInfo.y' not in h.replace('sof
 # WorldGI carries no weather code (0.3.198 rebase onto task 13: it is at 31 temps)
 gi=h[h.index('float4 WorldGI('):h.index('// Four POINT reads work')]
 checks['hlsl WorldGI: no weather code (it is at 31 temps)']='WeatherInfo' not in gi
-checks['hlsl: no WorldWet shader, WeatherInfo.y unread']='WorldWet' not in h and 'WeatherInfo.y' not in h
+checks['hlsl: no WorldWet shader; WeatherInfo.y only the fog clouds\' folded bank top (0.3.199 optimisation)']='WorldWet' not in h and h.count('WeatherInfo.y')==1 and 'mad(nL,CloudInfo[2].z,WeatherInfo.y)' in h
 checks['render: the weather adds no pass of its own (quad count 16, shader creations 21 with the 0.3.199 fog clouds and fog temporal)']=(w.count('quad(')==16 and w.count('CreatePixelShader')==21) and 'wetPS' not in w
 # disc and veil
 checks['discs: gain atomic, default 1, opacity and glare weights only, veil inherits']=(

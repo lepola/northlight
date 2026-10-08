@@ -1,5 +1,5 @@
 {
-  "source_sha256": "b787cf1232a3cf544125320f3a5c17578117da2296b0f5802ee8117f84ce814b",
+  "source_sha256": "0c12a5a3d4f96a8f6c98b8c0d42b3a485afc1cb3c3da3de21e8c443844c28366",
   "compiler": "Wine d3dcompiler_47 D3DCompile",
   "game_launched": false,
   "shaders": {
@@ -177,10 +177,10 @@
     },
     "FogClouds": {
       "target": "ps_3_0",
-      "bytes": 8800,
-      "sha256": "67a1f8417c9cb204ea47531d9585c945e9b58810b74cd846e917e445636f967e",
-      "static_instruction_slots": 512,
-      "temporary_registers": 31,
+      "bytes": 8644,
+      "sha256": "59b5437cb3e146f1b3c6203a1ba948c86ba8c2694f7659e38d7c8518b31f768a",
+      "static_instruction_slots": 511,
+      "temporary_registers": 30,
       "samplers": [
         1,
         3,
@@ -189,25 +189,25 @@
         14
       ],
       "instructions": {
-        "add": 99,
-        "cmp": 33,
-        "mov": 134,
-        "if": 7,
-        "mul": 114,
+        "mul": 107,
         "frc": 5,
+        "add": 97,
         "max": 23,
-        "min": 9,
+        "min": 10,
+        "mov": 133,
         "texldl": 9,
+        "cmp": 33,
+        "if": 8,
         "rcp": 12,
-        "else": 7,
-        "endif": 7,
+        "else": 8,
+        "endif": 8,
         "dp3": 2,
         "rsq": 2,
         "abs": 3,
         "rep": 2,
         "break": 3,
         "dp4": 5,
-        "mad": 3,
+        "mad": 6,
         "exp": 2,
         "endrep": 2
       }

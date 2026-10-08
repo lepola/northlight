@@ -137,6 +137,18 @@ inline Frame derive(unsigned fogClouds,unsigned density,float fog,float night,co
     for(int i=0;i<3;++i){const double c=detail::finite0(camera[i]);
         f.largeOrigin[i]=detail::origin(c,wind.large[i],1.0/double(LargePeriod));f.smallOrigin[i]=detail::origin(c,wind.small[i],1.0/double(SmallPeriod));}
     return f;}
+// 0.3.199 (fog clouds, optimisation): the FogClouds pass constants, c59..c63 (rows 0..4), host-folded so the shader saves slots for its
+// early outs. Only the components below are written (the rest stay as the bank has them): c59.y -2.5 height; c60.yzw / c61.yzw the large /
+// small origins; c61.x the large noise below which a sample can hold no bank (the bank top is 0 below nL .3125, the density is 0 while
+// .65 nL + .35 <= threshold); c62.x the tallest bank top 5.5 height; c62.y -threshold x sharpness; c62.z 8 height; c62.w sigmaMax;
+// c63.x .35 sharpness; c63.y/z the inverse periods; c63.w .65 sharpness. The shader's density is then
+// saturate(nL c63.w + nS c63.x + c62.y) and its bank top nL c62.z + c59.y: sigma() below, folded.
+inline void shaderConstants(const Frame& f,float c[5][4]){
+    c[0][1]=-2.5f*f.height;
+    for(int i=0;i<3;++i){c[1][1+i]=f.largeOrigin[i];c[2][1+i]=f.smallOrigin[i];}
+    c[2][0]=std::max(.3125f,(f.threshold-.35f)/.65f);
+    c[3][0]=5.5f*f.height;c[3][1]=-f.threshold*f.sharpness;c[3][2]=8.f*f.height;c[3][3]=f.sigmaMax;
+    c[4][0]=.35f*f.sharpness;c[4][1]=f.invLarge;c[4][2]=f.invSmall;c[4][3]=.65f*f.sharpness;}
 // 0.3.199 (fog clouds): the banks' environment colour, uploaded as c26 (with c25.w=1) for the cloud pass only: the game's validated fog
 // colour. At night (nightFactor 1), and by day in the storm bands and some zones, it is near black, and the banks read as dark smears or black balls
 // (game tests); a neutral grey floor fixed that but read as dust or dirt against a blue night. So the game colour keeps its hue and is

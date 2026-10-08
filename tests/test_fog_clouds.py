@@ -154,6 +154,25 @@ int main(){
         FC::Wind w2=w;w2.advance(.1f,.4f);const auto f2=FC::derive(1,150,.6f,.1f,w2,cam,&Q);
         const float s1=FC::sigmaAt(vol.data(),f,cam,p,g,1,1),s2=FC::sigmaAt(vol.data(),f2,cam,p,g,1,1);assert(s1>=0&&s2>=0);
     }
+    {   // 0.3.199 (fog clouds, optimisation): the host-folded shader constants reproduce sigma(), and the early outs only skip samples whose sigma is 0
+        auto sat=[](float x){return std::clamp(x,0.f,1.f);};
+        for(const auto& k:{std::pair<float,float>{0,0},{0,1},{1,0},{.5f,.5f}}){
+            const auto f=FC::derive(1,150,k.first,k.second,w0,cam,&Q);assert(f.active);
+            float c[5][4]={};FC::shaderConstants(f,c);
+            assert(c[1][1]==f.largeOrigin[0]&&c[2][3]==f.smallOrigin[2]&&c[3][3]==f.sigmaMax&&c[4][1]==f.invLarge&&c[4][2]==f.invSmall&&c[0][0]==0&&c[1][0]==0);
+            unsigned skipped=0;
+            for(int a=0;a<=40;++a)for(int b=0;b<=10;++b)for(float alt:{0.f,.5f,3.f,f.height,2*f.height,5.f*f.height,5.5f*f.height,7*f.height}){
+                const float nL=a/40.f,nS=b/10.f;const float tag=1.25f;
+                const float density=sat(nL*c[4][3]+(nS*c[4][0]+c[3][1]));
+                float v=sat(1-alt/std::max(nL*c[3][2]+c[0][1],.001f));v*=v;
+                const float shader=density*v*c[3][3]; /* zone 1 at tag 1.25 */
+                const float cpu=FC::sigma(nL,nS,alt,f.threshold,f.sharpness,f.height,tag,f.sigmaMax);
+                assert(std::fabs(shader-cpu)<=1e-5f*std::max(1.f,cpu*1e5f)||std::fabs(shader-cpu)<1e-6f);
+                if(!(alt<c[3][0])||!(nL>c[2][0])){++skipped;assert(alt<.001f||cpu==0.f);} /* the shader's early outs: never a non-zero sample (bar the .001 bank-top floor at the ground) */
+            }
+            assert(skipped>0);
+        }
+    }
     std::printf("PASS fog clouds\n");
 }
 '''

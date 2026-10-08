@@ -3231,8 +3231,7 @@ public:
         cf.active=cf.active&&effects.fog&&debug==0&&fogCloudsPS&&ensureCloudNoise();
         const uint8_t* cloudData=cf.active?fogCloudNoise().data.data():nullptr;
         if(cf.active){
-            for(int i=0;i<3;++i){c[60][1+i]=cf.largeOrigin[i];c[61][1+i]=cf.smallOrigin[i];}
-            c[62][1]=cf.threshold;c[62][2]=cf.height;c[62][3]=cf.sigmaMax;c[63][1]=cf.invLarge;c[63][2]=cf.invSmall;c[63][3]=cf.sharpness;
+            NorthlightFogClouds::shaderConstants(cf,&c[59]); /* c59.y, c60..c63 (host-folded for the shader's early outs) */
         }
         if(profileSampled())logf("WORLD fog clouds active=%d coverage=%.3f threshold=%.3f height=%.1f speed=%.2f dir=(%.2f %.2f) sigmaMax=%.4f lush=%.2f noiseReady=%d",cf.active?1:0,cf.coverage,cf.threshold,cf.height,cloudWind.speed,cloudWind.dir[0],cloudWind.dir[1],cf.sigmaMax,cloudLush,fogCloudNoise().ready.load(std::memory_order_acquire)?1:0);
         skyTransmittanceFrame=1;
@@ -3438,11 +3437,11 @@ public:
         // setSource again, blend, write mask, s14 and the alpha-blend operands); inactive frames skip all of this.
         if(cf.active&&c[21][0]>=.5f){
             if(profile)profile->mark("FogMarch");
-            DWORD savedSrcA=D3DBLEND_ONE,savedDstA=D3DBLEND_ZERO,savedOpA=D3DBLENDOP_ADD;
-            if(FAILED(d->GetRenderState(D3DRS_SRCBLENDALPHA,&savedSrcA)))savedSrcA=D3DBLEND_ONE;
-            if(FAILED(d->GetRenderState(D3DRS_DESTBLENDALPHA,&savedDstA)))savedDstA=D3DBLEND_ZERO;
-            if(FAILED(d->GetRenderState(D3DRS_BLENDOPALPHA,&savedOpA)))savedOpA=D3DBLENDOP_ADD;
-            setSource(firstSource,true,true);
+            /* 0.3.199 (optimisation): the separate-alpha operands are not saved: the effects run inside the game-state save (SavedState) and with
+               SEPARATEALPHABLENDENABLE back at FALSE below they are ignored. The common sun-only frame drew the source loop once with firstSource
+               and first=true: setSource then already holds this pass's state, so it is neither set here nor put back after. */
+            const bool sameSource=lastFogSource==firstSource&&lastFogFirst;
+            if(!sameSource)setSource(firstSource,true,true);
             { /* 0.3.199 (fog clouds): the banks' colour (the game fog colour raised to a moonlit grey at night) in c25.w/c26 for this pass only; restored below */
                 float cloudColour[4],cloudFog[4]={c[25][0],c[25][1],c[25][2],1};
                 NorthlightFogClouds::colour(c[26],c[25][3]>=.5f,c[31][3],cloudColour);
@@ -3453,10 +3452,10 @@ public:
             d->SetRenderState(D3DRS_SEPARATEALPHABLENDENABLE,TRUE);d->SetRenderState(D3DRS_SRCBLENDALPHA,D3DBLEND_ZERO);d->SetRenderState(D3DRS_DESTBLENDALPHA,D3DBLEND_SRCALPHA);d->SetRenderState(D3DRS_BLENDOPALPHA,D3DBLENDOP_ADD);
             d->SetRenderState(D3DRS_COLORWRITEENABLE,15);d->SetPixelShader(fogCloudsPS);
             const bool cloudsDrawn=check(quad(w/2,h/2),"fog clouds raymarch");
-            setSource(lastFogSource,lastFogFirst,true);
+            if(!sameSource)setSource(lastFogSource,lastFogFirst,true);
             d->SetPixelShaderConstantF(25,c[25],2); /* 0.3.199 (fog clouds): the bank's game fog parameters and colour back for the lamp fog, blur and composite */
             d->SetRenderState(D3DRS_SRCBLEND,D3DBLEND_ONE);d->SetRenderState(D3DRS_DESTBLEND,D3DBLEND_ONE);d->SetRenderState(D3DRS_BLENDOP,D3DBLENDOP_ADD);
-            d->SetRenderState(D3DRS_SEPARATEALPHABLENDENABLE,FALSE);d->SetRenderState(D3DRS_SRCBLENDALPHA,savedSrcA);d->SetRenderState(D3DRS_DESTBLENDALPHA,savedDstA);d->SetRenderState(D3DRS_BLENDOPALPHA,savedOpA);
+            d->SetRenderState(D3DRS_SEPARATEALPHABLENDENABLE,FALSE);
             d->SetRenderState(D3DRS_ALPHABLENDENABLE,!lastFogFirst);d->SetRenderState(D3DRS_COLORWRITEENABLE,lastFogFirst?15:7);d->SetPixelShader(fogPS);
             d->SetTexture(14,nullptr);d->SetSamplerState(14,D3DSAMP_ADDRESSU,D3DTADDRESS_CLAMP);d->SetSamplerState(14,D3DSAMP_ADDRESSV,D3DTADDRESS_CLAMP);d->SetSamplerState(14,D3DSAMP_ADDRESSW,D3DTADDRESS_CLAMP);
             d->SetSamplerState(14,D3DSAMP_MINFILTER,D3DTEXF_POINT);d->SetSamplerState(14,D3DSAMP_MAGFILTER,D3DTEXF_POINT);

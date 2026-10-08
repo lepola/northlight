@@ -48,7 +48,7 @@ struct Ext{DWORD rs[256]={};std::vector<std::pair<int,DWORD>> sets;
 struct World{bool on=true;bool rainBlendSetting()const{return on;}};
 namespace NorthlightWeather{}
 struct Hook{
-    Mirror mirrorState;Detector weatherDetect;Sample weatherSample;bool applied=false,terrain=true,rainBoundary=false;Ext extObj;Ext* ext=&extObj;World worldObj;World* world=&worldObj;bool claimedSkip=false;
+    Mirror mirrorState;Detector weatherDetect;Sample weatherSample;bool applied=false,terrain=true,rainBoundary=false;Ext extObj;Ext* ext=&extObj;World worldObj;World* world=&worldObj;bool claimedSkip=false;bool gateFrame=true;
     template<class Draw> HRESULT blobFaintDraw(bool claimed,Draw draw){return claimed?0:draw();}
     unsigned blendAtDraw[4]={};unsigned drawn=0;unsigned weatherMistSkips=0,weatherMistUnknown=0,weatherMistOtherStage=0,weatherMistReports=0,weatherStateReports=0,logged=0;
     template<class... A> void logf(const char*,A...){++logged;}

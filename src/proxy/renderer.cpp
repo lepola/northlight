@@ -812,11 +812,11 @@ class Device final : public GuardedMirrorDevice {
     // values (the mirror answers the reads) come back right after. Texture stages, alpha test and Z stay the game's.
     // 0.3.199 (rain mist): armed draws only (it rains). Stage 0 bound to a mist texture -> skip (the 1:4 128x512 ARGB signature is the art
     // layer's own; the first game test skipped nothing with a 2x-modulate blend check, so any blend). Diagnostics for the WEATHER line:
-    // draws with stage 0 unknown, mist bound on stages 1..3, and the first 4 matches' draw states.
+    // draws with stage 0 unknown, mist bound on stages 1..3 (sample frames only), and the first 4 matches' draw states.
     bool mistDraw(UINT count){
         if(!mirrorState.textureKnown[0]){++weatherMistUnknown;return false;}
         if(!weatherDetect.isMist(mirrorState.textures[0])){
-            for(unsigned st=1;st<4;++st)if(mirrorState.textureKnown[st]&&weatherDetect.isMist(mirrorState.textures[st])){++weatherMistOtherStage;break;}
+            if(gateFrame)for(unsigned st=1;st<4;++st)if(mirrorState.textureKnown[st]&&weatherDetect.isMist(mirrorState.textures[st])){++weatherMistOtherStage;break;} /* diagnostic: RenderProfile sample frames only */
             return false;
         }
         ++weatherMistSkips;weatherDetect.proveMist(mirrorState.textures[0]);

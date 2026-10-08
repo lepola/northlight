@@ -70,9 +70,10 @@ float4 LocalLightFog[8] : register(c59); // x extinction at the light (LocalFog 
 // every use below reduces to the old math then (w is the exception by design: it carries the old literal .0017, see WorldFog). Written once per
 // frame in the bank, read before the lamp fog batch overwrites c59..c62.
 float4 WeatherInfo : register(c59); // z direct shadow softening (WorldLighting), w the shared air extinction .0017 + the extra (WorldFog)
-// 0.3.199 (fog clouds): FogClouds only. c60..c63 .x belong to LocalLightFog[1..3].x (LocalFog, a later pass); only .yzw are read here and the host
-// writes them only while the clouds are active (zero otherwise, as before). c60.yzw large-noise origin, c61.yzw small-noise origin,
-// c62.yzw coverage threshold (a quantile of the mixed noise), height, sigmaMax, c63.yzw 1/large period, 1/small period, 1/(threshold to fully dense).
+// 0.3.199 (fog clouds): FogClouds only, host-folded (NorthlightFogClouds::shaderConstants), written only while the clouds are active (zero otherwise,
+// as before). The .x components are the bank's until the lamp fog batches (a later pass) overwrite c59..c66 .x with LocalLightFog. c59.y -2.5 height;
+// c60.yzw large-noise origin; c61.x the large noise below which no bank can be, c61.yzw small-noise origin; c62.x the tallest bank top (5.5 height),
+// c62.y -threshold x sharpness, c62.z 8 height, c62.w sigmaMax; c63.x .35 sharpness, c63.yz 1/large and 1/small period, c63.w .65 sharpness.
 float4 CloudInfo[4] : register(c60);
 sampler3D CloudNoise : register(s14); // tileable N^3 L8 volume (LINEAR, WRAP); s14 is NormalBuffer/LightHistory in other passes, never bound together with this one
 
@@ -798,13 +799,13 @@ float4 FogBlur(float2 uv:TEXCOORD0):COLOR0 {
 // Exactly (0,0,0,1) where no cloud is met. The base fog only attenuates the cloud light (Tbase, never written to alpha); its density is a cut-down
 // copy of WorldFog's (the full lines do not fit the 512-slot budget next to the field fetch and the shadow filter), see the comments below.
 float4 FogClouds(float2 uv:TEXCOORD0):COLOR0 {
-    if(FogInfo.x<.5)return float4(0,0,0,1);
+    // (no FogInfo.x test: the host draws this pass only when c21.x >= .5)
     uv=depthUV(uv);
     float depth=normalizedDepth(uv);float3 view=viewPositionDistance(uv,receiverDistance(uv,min(depth,.99999)));
     float3 ray=view.x*InverseView[0].xyz+view.y*InverseView[1].xyz+view.z*InverseView[2].xyz;
     float surface=min(length(ray),FogInfo.w);
     ray*=rsqrt(max(dot(ray,ray),1e-12));
-    float tBase=1,tCloud=1,directWeight=0,ambientWeight=0; // scalar sums: the sun and sky colours multiply once after the loop
+    float tauBase=0,tCloud=1,directWeight=0,ambientWeight=0; // scalar sums: the sun and sky colours multiply once after the loop; the base fog as optical depth (exp only inside a cloud)
     float3 axis=abs(ray);
     float2 major=axis.x>=axis.y?float2(ray.x,Camera.x):float2(ray.y,Camera.y);
     major=abs(major.x)>=axis.z?major:float2(ray.z,Camera.z);
@@ -833,25 +834,33 @@ float4 FogClouds(float2 uv:TEXCOORD0):COLOR0 {
         // Air term reduced to its constant floor for the slot budget (no vertical profile, no forest policy).
         float airSigma=WeatherInfo.w;
         float baseSigma=max(groundSigma+airSigma,0)*valid*nearFade;
-        float nL=tex3Dlod(CloudNoise,float4(rel*CloudInfo[3].y+CloudInfo[0].yzw,0)).r;
-        float nS=tex3Dlod(CloudNoise,float4(rel*CloudInfo[3].z+CloudInfo[1].yzw,0)).r;
-        float density=saturate((mad(.65,nL,.35*nS)-CloudInfo[2].y)*CloudInfo[3].w);
-        float low=saturate(1-altitude/max(CloudInfo[2].z*mad(8,nL,-2.5),.001)); // 0.3.199 (fog clouds): the bank top follows the large noise (0 below nL .31, ~1.5x at .5, ~4x at .8, 5.5x at 1): thick spots tower over the trees (game tests)
-        float zone=lerp(1,.7,saturate((field.w-1.25)/3.75));
-        float sigma=density*low*low*zone*CloudInfo[2].w*valid*nearFade; // valid > 0 only above ground (altitude >= 0) in a node with a layer height tag
+        // 0.3.199 (fog clouds, optimisation): the noise only where a bank can be: inside the field above ground, below the tallest bank top
+        // (c62.x = 5.5 x height, host), and the small noise only where the large one can still give density (c61.x, host: below it either the
+        // bank top or the density is 0 whatever the small noise). Skipped samples had sigma 0.
+        float sigma=0;
+        [branch]if(min(valid,CloudInfo[2].x-altitude)>0){ // valid > 0 implies altitude >= 0
+            float nL=tex3Dlod(CloudNoise,float4(rel*CloudInfo[3].y+CloudInfo[0].yzw,0)).r;
+            [branch]if(nL>CloudInfo[1].x){
+                float nS=tex3Dlod(CloudNoise,float4(rel*CloudInfo[3].z+CloudInfo[1].yzw,0)).r;
+                float density=saturate(mad(nL,CloudInfo[3].w,mad(nS,CloudInfo[3].x,CloudInfo[2].y))); // (.65 nL + .35 nS - threshold) x sharpness, folded on the host
+                float low=saturate(1-altitude/max(mad(nL,CloudInfo[2].z,WeatherInfo.y),.001)); // height x (8 nL - 2.5), folded on the host (c62.z 8 height, c59.y -2.5 height) // 0.3.199 (fog clouds): the bank top follows the large noise (0 below nL .31, ~1.5x at .5, ~4x at .8, 5.5x at 1): thick spots tower over the trees (game tests)
+                float zone=mad(saturate(mad(field.w,1/3.75,-1.25/3.75)),-.3,1); // lerp(1,.7,saturate((field.w-1.25)/3.75))
+                sigma=density*low*low*zone*CloudInfo[2].w*valid*nearFade; // valid > 0 only above ground (altitude >= 0) in a node with a layer height tag
+            }
+        }
         [branch]if(sigma>0){
             float absorb=1-exp(-sigma*stepSize);
             float heightFade=saturate(altitude*(1.0/12));heightFade*=heightFade*(3-2*heightFade);
             float weight=tCloud*absorb; // the ambient: the pass blend already multiplies the base fog by tCloud, tBase must not enter twice (S*(1-Tb*Tc) in either order)
             // No DirectLight guard and no Tbase*Tcloud early out in this loop: both were cut for the 512-slot budget (the sun term is multiplied by DirectLight after the loop, so no sun = 0).
-            directWeight+=tBase*weight*fogShadow(p)*heightFade; // the sun light is dimmed by the base fog in front of the cloud
+            directWeight+=exp(-tauBase)*weight*fogShadow(p)*heightFade; // the sun light is dimmed by the base fog in front of the cloud
             ambientWeight+=weight;
             tCloud*=1-absorb;
         }
-        tBase*=exp(-baseSigma*stepSize);
+        tauBase+=baseSigma*stepSize;
     }
     // The narrow forward aureole of WorldFog is dropped here (register/slot budget): the broad phase alone.
-    float3 directScatter=max(DirectLight.rgb,0)*mad(.033,dot(ray,SunDirection.xyz),.22)*saturate(FogColor.rgb)*(max(FogInfo.y,0)*directWeight);
+    float3 directScatter=max(DirectLight.rgb,0)*mad(.033,dot(ray,SunDirection.xyz),.22)*(max(FogInfo.y,0)*directWeight); // FogColor.rgb (the albedo) is always 1 (host): left out for the slots
     float peak=max(directScatter.r,max(directScatter.g,directScatter.b));
     float cap=max(FogInfo.z,.0001);
     directScatter*=cap/(cap+peak);
