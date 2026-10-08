@@ -62,7 +62,7 @@ inline bool decode(const Snapshot& s,const float* camera,const float* direct,Con
         float delta=camera[i]-s.skyCamera[i];cameraError2+=delta*delta;
     }
     // Prevent an old sky snapshot after teleport/map change driving world light.
-    if(cameraError2>.25f*.25f)return false;
+    if(cameraError2>4.f*4.f)return false; /* 0.3.200: a frame of travel tolerated (NorthlightWmoContext::SkyCameraTolerance) */
     Context candidate;candidate.dayFraction=s.dayFraction;
     if(!decodeBody(s.bodies[0],s.skyCamera,candidate.sun)||
        !decodeBody(s.bodies[1],s.skyCamera,candidate.moon)||

@@ -34,6 +34,7 @@ int main() {
     assert(decode(s,translated,direct,c));
     for(int j=0;j<3;++j)assert(std::fabs(c.sun.direction[j]-origin.sun.direction[j])<1e-4f);
     assert(std::fabs(c.sunWeight-origin.sunWeight)<1e-4f);
+    {const float trailing[3]={translated[0]+3,translated[1],translated[2]};Context t;assert(decode(s,trailing,direct,t));} /* 0.3.200: a frame of travel is accepted */
     Context sentinel;c.dayFraction=-123;sentinel=c;
     assert(!decode(s,camera,direct,c));assert(c.dayFraction==sentinel.dayFraction);
     s=scene(.8f,-.8f);s.dayFraction=std::numeric_limits<float>::quiet_NaN();assert(!decode(s,camera,direct,c));
