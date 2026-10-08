@@ -22,10 +22,12 @@ int main(){
         float z=0;for(int i=0;i<300;++i)z=FC::smoothDense(z,1,.1f);assert(z>.99f&&z<=1);
         assert(FC::smoothDense(0,1,5)==FC::smoothDense(0,1,.1f)&&FC::smoothDense(.5f,.5f,.1f)==.5f&&FC::smoothDense(0,1,0)==0);
     }
-    {   // colour: by day the game fog colour exactly; at night raised per channel to the grey floor; invalid game fog -> floor only
+    {   // colour: by day the game fog colour exactly; at night the same hue scaled up to kNightLum (at most kNightBoost x); no usable game colour -> grey floor
         const float game[3]={.3f,.05f,.4f};float o[4];
         FC::colour(game,true,0,o);assert(o[0]==.3f&&o[1]==.05f&&o[2]==.4f&&o[3]==0);
-        FC::colour(game,true,1,o);assert(o[0]==.3f&&o[1]==FC::kNightGrey[1]&&o[2]==.4f);
+        FC::colour(game,true,1,o);{const float lum=.2126f*o[0]+.7152f*o[1]+.0722f*o[2];assert(near(lum,FC::kNightLum,1e-4f)&&near(o[0]/o[2],.75f,1e-4f));} /* hue kept */
+        const float blue[3]={.01f,.02f,.06f};FC::colour(blue,true,1,o);assert(near(o[2],.06f*FC::kNightBoost)&&o[2]>o[0]); /* capped boost, still blue */
+        const float bright[3]={.5f,.5f,.5f};FC::colour(bright,true,1,o);assert(o[0]==.5f); /* already bright: unchanged */
         FC::colour(game,false,0,o);assert(o[0]==0&&o[1]==0&&o[2]==0);
         FC::colour(game,false,.5f,o);assert(o[0]==FC::kNightGrey[0]*.5f&&o[2]==FC::kNightGrey[2]*.5f);
         const float bad[3]={std::numeric_limits<float>::quiet_NaN(),-1,.2f};FC::colour(bad,true,std::numeric_limits<float>::quiet_NaN(),o);assert(o[0]==0&&o[1]==0&&o[2]==.2f);

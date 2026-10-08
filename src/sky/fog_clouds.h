@@ -132,14 +132,19 @@ inline Frame derive(unsigned fogClouds,unsigned density,float fog,float night,co
     for(int i=0;i<3;++i){const double c=detail::finite0(camera[i]);
         f.largeOrigin[i]=detail::origin(c,wind.large[i],1.0/double(LargePeriod));f.smallOrigin[i]=detail::origin(c,wind.small[i],1.0/double(SmallPeriod));}
     return f;}
-// 0.3.199 (fog clouds): the banks' environment colour, uploaded as c26 (with c25.w=1) for the cloud pass only: the game's validated fog
-// colour, raised per channel to a moonlit grey floor at night (nightFactor 1). At night the game colour and the air radiance are both near
-// black and the banks read as dark smears instead of grey fog (game tests); by day the floor is 0 and the game colour stands as before.
-// The shader still takes the brighter of this and its own ambient*.35 air radiance. Without a validated game fog only the floor remains.
+// 0.3.199 (fog clouds): the banks' environment colour, uploaded as c26 (with c25.w=1) for the cloud pass only. By day: the game's validated
+// fog colour as it is. At night (nightFactor 1) the game colour and the air radiance are both near black, and the banks read as dark smears
+// (game tests); a neutral grey floor fixed that but read as dust or dirt against a blue night. So at night the game colour keeps its hue and
+// is scaled up to a luminance of at least kNightLum x night (at most kNightBoost times); only without a usable game colour (not validated,
+// or black) does the neutral kNightGrey floor apply. The shader still takes the brighter of this and its own ambient*.35 air radiance.
 constexpr float kNightGrey[3]={.15f,.16f,.18f};
+constexpr float kNightLum=.16f,kNightBoost=6.f;
 inline void colour(const float game[3],bool gameValid,float night,float out[4]){
     const float n=std::isfinite(night)?std::clamp(night,0.f,1.f):0.f;
-    for(int i=0;i<3;++i){const float g=gameValid&&std::isfinite(game[i])?std::max(game[i],0.f):0.f;out[i]=std::max(g,kNightGrey[i]*n);}
+    float g[3];for(int i=0;i<3;++i)g[i]=gameValid&&std::isfinite(game[i])?std::max(game[i],0.f):0.f;
+    const float lum=.2126f*g[0]+.7152f*g[1]+.0722f*g[2],target=kNightLum*n;
+    if(lum>1e-4f){const float scale=lum<target?std::min(target/lum,kNightBoost):1.f;for(int i=0;i<3;++i)out[i]=g[i]*scale;}
+    else for(int i=0;i<3;++i)out[i]=kNightGrey[i]*n;
     out[3]=0;}
 // 0.3.199 (fog clouds): dense-zone damping (game test: Duskwood in night rain was all fog). profile: the regional field's dense-zone tag at
 // the camera (0 ordinary air, 1 Duskwood), smoothed by smoothDense over kDenseSeconds. The rain's extra air extinction and the cloud density
