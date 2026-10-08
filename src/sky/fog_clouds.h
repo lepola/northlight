@@ -13,8 +13,8 @@ constexpr unsigned N=64;                            /* noise volume edge, L8 vox
 constexpr float LargePeriod=192.f,SmallPeriod=48.f; /* world units per noise tile (0.3.199 game tests tried 384/96..576/144; back to the original by choice) */
 constexpr uint32_t Seed=0x4e4c4643u;
 constexpr float kDry=0.05f,kNight=0.18f,kSigmaMax=0.03f,kBaseHeight=12,kRainHeight=8; /* bank height 12 units dry, 20 in full rain (0.3.199 game test: was 7/14, the banks should reach higher) */
-constexpr float kDrySigma=0.45f; /* peak extinction share without rain: sigmaMax = kSigmaMax x (kDrySigma + (1-kDrySigma) fog) (game tests: dry banks fainter, .65 -> .45) */
-constexpr float kDryNightThin=0.35f; /* dry nights thinner still: sigmaMax x (1 - kDryNightThin night (1-fog)) (game test) */
+constexpr float kDrySigma=0.33f; /* peak extinction share without rain: sigmaMax = kSigmaMax x (kDrySigma + (1-kDrySigma) fog) (game tests: dry banks fainter, .65 -> .45 -> .33) */
+constexpr float kDryNightThin=0.12f; /* dry nights thinner still: sigmaMax x (1 - kDryNightThin night (1-fog)); .33 x .88 keeps the dry night at .29 (game test: .45 x .65 was right) */
 constexpr double kWindDry=1.05,kWindRain=4.2; /* large-scale wind, units/s, dry and full rain (0.3.199 game test: was .6/2.4, read as too slow) */
 constexpr float kMaxCoverage=0.7f,kDense=0.35f,kMinCoverage=0.01f; /* coverage cap (rain keeps gaps), fully dense share of the covered area, below it the pass is skipped.
     The game tests tried larger, fainter, sparser and lower banks; the original look was kept (size, density, coverage, height), only the faster wind stayed */
