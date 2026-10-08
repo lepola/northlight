@@ -571,7 +571,7 @@ private:
     // locked first, never one that is locked), and drop buffer shadows idle for 120 frames (then the least recent while over the cap).
     // Everything here is game-thread or pool-locked state: nothing the replay thread may read.
     void releaseUnderPressure(){
-        core.q.trim();core.scratch.trim();core.q.resetShadowCap(core.frameNo);makeRoomForShadow(core,0,true,nullptr);dropIdleBufferShadows(core,120);   // (the adaptive buffer-shadow cap goes back to its base first; both kinds of buffer shadow go LRU)
+        core.q.trim();core.scratch.trim();core.q.resetShadowCap(core.frameNo);makeRoomForShadow(core,0,true,nullptr);trimTexSpares(core);dropIdleBufferShadows(core,120);   // 0.3.200 (pipeline): the spare level allocations go too   // (the adaptive buffer-shadow cap goes back to its base first; both kinds of buffer shadow go LRU)
     }
     void finalRelease(){
         st.clear();sc0->comRelease();   // binds and the swap chain's own reference go; the Destroys run before the Target's release

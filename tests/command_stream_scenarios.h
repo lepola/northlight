@@ -1104,9 +1104,33 @@ static void smallStagedLocksUseScratch(){
     CHECK(blocks()==b1+1);for(int i=0;i<4;++i)CHECK(v[i]->Unlock()==D3D_OK);
     for(auto* b:v)b->Release();a->Release();rig.finish();checkClean();
 }
+// 0.3.200 (pipeline): an evicted level shadow's allocation serves the next one (no free + malloc pair); the reused shadow is zero-filled like a new one; pressure drops the spares.
+static void textureShadowSpares(){
+    gTrace.clear();Rig rig(true);auto& core=rig.core();auto& s=core.q.stats;IDirect3DDevice9* d=rig.dev;
+    std::vector<IDirect3DTexture9*> v;
+    auto writeOnce=[&](unsigned char fill){IDirect3DTexture9* t=nullptr;CHECK(d->CreateTexture(256,256,1,0,(D3DFORMAT)22,(D3DPOOL)1,&t,nullptr)==D3D_OK);D3DLOCKED_RECT lr{};RECT rc{0,0,16,16};
+        CHECK(t->LockRect(0,&lr,&rc,0)==D3D_OK);for(int y=0;y<16;++y)std::memset(static_cast<unsigned char*>(lr.pBits)+std::ptrdiff_t(y)*lr.Pitch,fill,64);CHECK(t->UnlockRect(0)==D3D_OK);return t;};
+    for(int i=0;i<64;++i)v.push_back(writeOnce(0xAB));   // 64 x 256 KiB fresh keeps fill the 16 MiB cap
+    CHECK(get(s.texShadowSpared)==0&&get(s.texShadowSpareReuses)==0);
+    for(unsigned i=0;i<kFreshEvictAgeFrames+1;++i)d->Present(nullptr,nullptr,nullptr,nullptr);   // the keeps are stale now
+    for(int i=0;i<8;++i)v.push_back(writeOnce(0xCD));
+    CHECK(get(s.texShadowEvicted)>=8&&get(s.texShadowSpared)>=8&&get(s.texShadowSpareReuses)>=8);   // each new keep evicted a stale one and took its allocation
+    {D3DLOCKED_RECT lr{};IDirect3DTexture9* t=v.back();CHECK(t->LockRect(0,&lr,nullptr,D3::kLockReadOnly)==D3D_OK);   // served from the reused shadow
+     const auto* p=static_cast<const unsigned char*>(lr.pBits);bool ok=true;
+     for(unsigned y=0;y<256;++y)for(unsigned x=0;x<1024;++x)ok&=p[std::size_t(y)*lr.Pitch+x]==((y<16&&x<64)?0xCD:0);   // the stale level's bytes are gone: zero where nothing was written
+     CHECK(ok&&t->UnlockRect(0)==D3D_OK);}
+    {IDirect3DTexture9* t=nullptr;CHECK(d->CreateTexture(1024,512,1,0,(D3DFORMAT)22,(D3DPOOL)1,&t,nullptr)==D3D_OK);D3DLOCKED_RECT lr{};RECT rc{0,0,8,2};
+     CHECK(t->LockRect(0,&lr,&rc,0)==D3D_OK&&t->UnlockRect(0)==D3D_OK&&t->LockRect(0,&lr,&rc,0)==D3D_OK&&t->UnlockRect(0)==D3D_OK);v.push_back(t);}   // a 2 MiB readback evicts eight keeps: the spares fill, none fits it
+    {std::size_t kept=0;for(const auto& x:core.texSpare)kept+=x.capacity()?1:0;CHECK(kept==StreamCore::kTexSpares);}
+    core.memoryPressure.store(true);d->Present(nullptr,nullptr,nullptr,nullptr);rig.sync();
+    for(const auto& x:core.texSpare)CHECK(x.capacity()==0);   // pressure: no spare kept
+    core.memoryPressure.store(false);d->Present(nullptr,nullptr,nullptr,nullptr);rig.sync();
+    for(auto* t:v)t->Release();rig.sync();CHECK(s.texShadowBytes.load()==0);rig.finish();checkClean();
+}
 static void streamTests(bool threadsOnly){
     layoutIsolation();replayTimingAccounting();diagnosticsOffSkipsAudit();idlePollWakes();
     lifetimeAndIdentity();stateKnownUnknown();locksPreserveBytes();staticBufferShadows();dynamicBufferShadows();largeBufferAllowance();adaptiveShadowCap();shadowCap();queriesAndSyncCensus();resetAndShutdown();directReplayRaw();redundantFiltering();renderTargetResetsViewport();textureShadows();statsLine();childrenOutliveTheDevice();queryProbeAndDeadQuery();initFailureFallback();cursorHandling();nestedSyncInPump();upDrawsAndBackpressure();snapshotTriggers();snapshotPoolNotExhausted();memoryPressureRelease();impossibleBlockIsRefusedAtOnce();smallStagedLocksUseScratch();
+    textureShadowSpares();
     equivalence(20000,12345);equivalence(20000,987654321);
     (void)threadsOnly;
 }
