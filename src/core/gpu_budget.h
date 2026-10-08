@@ -17,6 +17,7 @@ constexpr float SettleSeconds=.25f;   // after a change: the readback still show
 constexpr float BounceSeconds=5.f;    // a step down within this long after a step up counts as an oscillation
 constexpr float CalmSeconds=30.f;     // a step up that holds this long forgets the oscillation backoff
 constexpr float MaxSampleMs=250.f;    // larger readings (device stalls, loading) are ignored like invalid ones
+constexpr float SpikeFactor=1.5f;     // a reading counts as at most this many budgets: one hitch (even after a long gap) cannot step the level down
 constexpr float MaxDt=.25f;           // a long gap between samples counts as this much
 
 struct Controller {
@@ -28,6 +29,7 @@ struct Controller {
         if(!(budgetMs>0)){reset();return level;}
         if(!std::isfinite(ms)||!(ms>0)||ms>MaxSampleMs)return level;
         dt=std::isfinite(dt)&&dt>0?(dt<MaxDt?dt:MaxDt):0.f;
+        if(ms>budgetMs*SpikeFactor)ms=budgetMs*SpikeFactor;
         if(!primed){smoothed=ms;primed=true;}
         else smoothed+=(ms-smoothed)*(1.f-std::exp(-dt/SmoothSeconds));
         sinceUp+=dt;
@@ -48,8 +50,6 @@ private:
 // Level map. Every function returns the full-quality value at level 0.
 // FogClouds march intervals over the same 128 units: 40 (full), 32 (level 1), 24 (level 2+).
 inline unsigned cloudSteps(unsigned level){return level==0?40u:level==1?32u:24u;}
-// Level 2+: the clouds are marched every other frame into their own buffer and the kept result is blended into the fog every frame.
-inline bool cloudAlternate(unsigned level){return level>=2;}
 // WorldFog march intervals: 48 (full), 40 (level 3).
 inline unsigned fogSteps(unsigned level){return level>=3?40u:48u;}
 // Lamps lit at once (LocalLightLimit): at most 16 at level 3 (the Performance value), else the setting.

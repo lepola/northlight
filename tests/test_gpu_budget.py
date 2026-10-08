@@ -37,7 +37,6 @@ static unsigned run(B::Controller& c,float budget,const float* ms,float seconds,
 int main(){
     {   // level map: level 0 is exactly the full image
         assert(B::cloudSteps(0)==40&&B::cloudSteps(1)==32&&B::cloudSteps(2)==24&&B::cloudSteps(3)==24);
-        assert(!B::cloudAlternate(0)&&!B::cloudAlternate(1)&&B::cloudAlternate(2)&&B::cloudAlternate(3));
         assert(B::fogSteps(0)==48&&B::fogSteps(2)==48&&B::fogSteps(3)==40);
         for(unsigned limit=8;limit<=64;++limit){assert(B::lightLimit(limit,0)==limit&&B::lightLimit(limit,2)==limit&&B::lightLimit(limit,3)==(limit>16?16:limit));}
         assert(B::spacingDelta(128,40,40)==0.f&&B::spacingDelta(128,48,48)==0.f&&B::spacingDelta(128,0,40)==0.f);
@@ -69,6 +68,8 @@ int main(){
     {   // a single spike (or a few) is absorbed by the smoothing
         B::Controller c;for(int i=0;i<600;++i){c.update(4,(i%60==30)?20.f:2.f,Dt);}assert(c.level==0&&c.changes==0);
         for(int i=0;i<600;++i){c.update(4,(i%30<3)?12.f:2.f,Dt);}assert(c.level==0);
+        for(int i=0;i<1200;++i){c.update(4,(i%120==60)?30.f:2.8f,(i%120==60)?.25f:Dt);}assert(c.level==0&&c.changes==0); /* a hitch reading after a long gap is clamped */
+        B::Controller h;const float over[4]={30,30,30,30};run(h,4,over,1.f);assert(h.level>=1); /* a sustained overload still steps down */
     }
     {   // step up only after ~2 s well under (75 %); at 80 % of the budget the level stays
         B::Controller c;const float heavy[4]={6,6,6,6};run(c,4,heavy,1.5f);const unsigned high=c.level;assert(high>=1);

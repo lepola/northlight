@@ -18,8 +18,7 @@ FILES=['renderer.cpp','world_renderer.h','world_shadow_experiment.inl','world_po
 GATES=('NorthlightDiagnostics::enabled()','diagnostics()','sampled()','captureSampled','if(diagnostics)','shadowFate.active()','sampledFrame','profiling()','profileSampled()')
 # Ungated lines that stay with Diagnostics=0: format prefix -> label.
 KEEP={
- 'WORLD fog clouds noise':'one-off: the noise volume generated (worker) and uploaded, 0.3.199','WORLD fog clouds disabled':'error: shader or volume creation failed, once per device, 0.3.199','WORLD fog temporal disabled':'error: shader creation failed, once per device, 0.3.199',
- 'WORLD fog clouds buffer unavailable':'error: the amortised clouds\' target failed, once per device resources, 0.3.200 (gpu budget)','GPUBUDGET timer disabled':'error: query failure, once per device, 0.3.200 (gpu budget)',
+ 'WORLD fog clouds noise':'one-off: the noise volume generated (worker) and uploaded, 0.3.199','WORLD fog clouds disabled':'error: shader or volume creation failed, once per device, 0.3.199','WORLD fog temporal disabled':'error: shader creation failed, once per device, 0.3.199','GPUBUDGET timer disabled':'error: query failure, once per device, 0.3.200 (gpu budget)',
  'JOBS workers':'start-up one-off: the replay job pool started (0.3.200 jobs)','JOBS unavailable':'start-up one-off: no job worker could start (0.3.200 jobs)',
  'LOGGER intervalMs':'indirect: reportLogCost() runs only in the gated MIRROR block',
  'EXTENSION fault':'error','DISABLED:':'error','Resources ':'one-off: resource (re)creation',

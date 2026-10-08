@@ -48,7 +48,7 @@ checks['host: pass and swap guarded by the setting, the shader, the history targ
     'std::swap(fogBlurred,fogHistory);std::swap(fogBlurredSurface,fogHistorySurface)' in pas and pas.count('std::swap')==2 and 'else fogHistoryValid=false;' in pas)
 checks['host: history weight 0 unless fogHistoryValid&&useHistory; weight constant is c64 only, previous view c53 from the bank']=(
     'fogHistoryValid&&useHistory?FogTemporalWeight:0.f' in pas and 'SetPixelShaderConstantF(64,info,1)' in pas and 'SetPixelShaderConstantF(53,c[53],4)' in pas
-    and len(re.findall(r'SetPixelShaderConstantF\(6[4-9]',w))==3 and w.count('d->SetPixelShaderConstantF(64,copy,1);')==1 and w.count('d->SetPixelShaderConstantF(64,c[64],1);')==1) # 0.3.200 (gpu budget): the amortised clouds' copy sets c64 (y=0) and puts the bank back
+    and len(re.findall(r'SetPixelShaderConstantF\(6[4-9]',w))==1)
 checks['host: reads raw fog s9 + fogHistory s14 + previous depth temporalDepth[temporalIndex] s15, writes fogBlurred; s14/s15 put back']=(
     'SetRenderTarget(0,fogBlurredSurface)' in pas and 'SetTexture(9,fog)' in pas and 'SetTexture(14,fogHistory)' in pas and 'SetTexture(15,temporalDepth[temporalIndex])' in pas
     and 'SetTexture(14,nullptr)' in pas and 'SetTexture(15,nullptr)' in pas and 'D3DSAMP_MINFILTER,D3DTEXF_POINT' in pas)

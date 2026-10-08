@@ -57,7 +57,7 @@ Every effect below is on by default and is drawn on top of the game's own frame.
   the largest part in crowds (about 4-5 ms per frame): `ActorShadows=0` in `northlight-quality.ini`
   keeps only the static shadows, and the Balanced and Performance presets trade small details for speed.
   On the graphics card, `GpuBudgetMs` (4 / 3 / 2 ms, 0 = off) keeps Northlight's own measured GPU time near
-  the budget: while it is over, the fog clouds take fewer steps and then update every other frame, then the
+  the budget: while it is over, the fog clouds take fewer steps in two stages, then the
   fog takes fewer steps and at most 16 lamps light at once; under it the picture is the full one.
   With the command stream (`CommandStream=1`) the game records its graphics calls and a second thread draws them;
   `StreamFramesAhead` (1..3, default 2) sets how many frames the game may run ahead of that thread (1 = as in 0.3.199).
