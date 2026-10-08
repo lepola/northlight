@@ -18,17 +18,17 @@ checks['no weather in any Set*/Get* Device method']=not re.search(r'HRESULT STDM
 a=r.index('template<class Capture,class Draw> HRESULT drawHook(');b=r.index('    // 0.3.154: blob shadow claim')
 hook=r[a:b]
 cmp_line='if(weatherDetect.hot&&mirrorState.textureKnown[0]&&mirrorState.textures[0]==weatherDetect.hot){weatherSample.primitives+=count;++weatherSample.draws;rainBlend=weatherDetect.hotKind==NorthlightWeather::Kind::Rain&&world&&world->rainBlendSetting();rainBoundary=rainBlend&&terrain&&!applied;}'
-checks['drawHook: the single comparison, once']=hook.count(cmp_line+' /* 0.3.199 (rain): after applied too (the rest of the rain); the boundary at the first rain draw of a terrain frame */')==1 and hook.count('weatherDetect')==6 and hook.count('weatherSample')==2
+checks['drawHook: the single comparison, once']=hook.count(cmp_line+' /* 0.3.199 (rain): after applied too (the rest of the rain); the boundary at the first rain draw of a terrain frame */')==1 and hook.count('weatherDetect')==4 and hook.count('weatherSample')==2
 checks['drawHook: before the gate split and any other work']=0<=hook.index(cmp_line)<hook.index('if(!frameDrawGates){')<hook.index('prepareDraw(capture,count)')<hook.index('prepareDrawImpl(capture,count)') and hook.index(cmp_line)<hook.index('noteFirst')
 # 0.3.199 (rain): RainBlend - the override lives in the matched branch (a bool set there), only for Rain and the setting, wraps exactly the game's draw
 helper=r[r.index('template<class Draw> HRESULT rainBlendDraw('):r.index('    // One game draw: capture')]
 checks['RainBlend: the bool is set only inside the matched branch, for Rain and the setting']=hook.count('rainBlend=weatherDetect')==1 and hook.count('rainBoundary')==1 and hook.count('rainBlend=weatherDetect.hotKind==NorthlightWeather::Kind::Rain&&world&&world->rainBlendSetting();')==1 and cmp_line.split('{',1)[1].count('rainBlend=')==1 and 'bool claimed=false,rainBlend=false,mist=false;' in hook
 checks['RainBlend: both gate paths draw through rainBlendDraw, none through blobFaintDraw directly']=hook.count('rainBlendDraw(rainBlend,claimed||mist,draw)')==2 and 'blobFaintDraw' not in hook
 # 0.3.199 (rain mist): the mist skip is the else branch of the one comparison, gated first by the armed bool; armed only at frame end for rain and RainBlend
-mist_line='else if(weatherDetect.mistArmed&&mirrorState.textureKnown[0]&&weatherDetect.isMist(mirrorState.textures[0])&&mistBlend()){mist=true;++weatherMistSkips;weatherDetect.proveMist(mirrorState.textures[0]);}'
+mist_line='else if(weatherDetect.mistArmed)mist=mistDraw(count);'
 checks['rain mist: the else branch right after the comparison, armed bool first']=hook.count(mist_line)==1 and hook.index(cmp_line)<hook.index(mist_line)<hook.index('if(!frameDrawGates){') and hook[hook.index(cmp_line)+len(cmp_line):hook.index(mist_line)].strip().startswith('/*')
 checks['rain mist: armed at frame end only for rain, RainBlend and an active mirror']=r.count('weatherDetect.mistArmed=')==1 and 'weatherDetect.mistArmed=mirrorState.enabled&&st.kind==W::Kind::Rain&&world&&world->rainBlendSetting()&&weatherDetect.mistCount();' in r
-checks['rain mist: skipped only for the game\'s 2x modulate']='return SUCCEEDED(ext->GetRenderState(D3DRS_SRCBLEND,&src))&&src==D3DBLEND_DESTCOLOR&&SUCCEEDED(ext->GetRenderState(D3DRS_DESTBLEND,&dst))&&dst==D3DBLEND_SRCCOLOR;' in r
+checks['rain mist: skipped when stage 0 is a mist texture (known), any blend']='if(!mirrorState.textureKnown[0]){++weatherMistUnknown;return false;}' in r and 'if(!weatherDetect.isMist(mirrorState.textures[0])){' in r
 checks['RainBlend: not rain = the plain draw; override sets SrcAlpha/InvSrcAlpha/Add/blend on, inside the draw callback, and restores the previous values after it']=(
     'if(!rain)return blobFaintDraw(claimed,draw);' in helper and 'return blobFaintDraw(claimed,[&]{' in helper
     and all(t in helper for t in ('D3DRS_ALPHABLENDENABLE','D3DRS_SRCBLEND','D3DRS_DESTBLEND','D3DRS_BLENDOP','TRUE,D3DBLEND_SRCALPHA,D3DBLEND_INVSRCALPHA,D3DBLENDOP_ADD'))

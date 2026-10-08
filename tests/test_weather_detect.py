@@ -13,10 +13,11 @@ import subprocess,tempfile
 r=fp.src('renderer.cpp').read_text()
 hook=[l for l in r.split('\n') if l.strip().startswith('if(weatherDetect.hot&&mirrorState')]
 assert len(hook)==1,'the draw hook comparison must exist exactly once'
-mistline=[l for l in r.split('\n') if l.strip().startswith('else if(weatherDetect.mistArmed&&')]
+mistline=[l for l in r.split('\n') if l.strip().startswith('else if(weatherDetect.mistArmed)')]
 assert len(mistline)==1,'0.3.199 (rain mist): the mist test follows the hot comparison exactly once'
 assert r.count('rainBlendDraw(rainBlend,claimed||mist,draw)')==2,'0.3.199 (rain mist): both gate paths skip a mist draw'
-mistfn=next(l for l in r.split('\n') if l.strip().startswith('bool mistBlend(){'))
+rl=r.split('\n');j0=next(i for i,l in enumerate(rl) if l.strip().startswith('bool mistDraw(UINT count){'));j1=next(i for i in range(j0,len(rl)) if rl[i]=='    }')
+mistfn='\n'.join(rl[j0:j1+1])
 rl=r.split('\n');i0=next(i for i,l in enumerate(rl) if 'template<class Draw> HRESULT rainBlendDraw(' in l);i1=next(i for i in range(i0,len(rl)) if rl[i]=='    }')
 rainfn='\n'.join(rl[i0:i1+1])
 
@@ -49,7 +50,9 @@ namespace NorthlightWeather{}
 struct Hook{
     Mirror mirrorState;Detector weatherDetect;Sample weatherSample;bool applied=false,terrain=true,rainBoundary=false;Ext extObj;Ext* ext=&extObj;World worldObj;World* world=&worldObj;bool claimedSkip=false;
     template<class Draw> HRESULT blobFaintDraw(bool claimed,Draw draw){return claimed?0:draw();}
-    unsigned blendAtDraw[4]={};unsigned drawn=0;unsigned weatherMistSkips=0;
+    unsigned blendAtDraw[4]={};unsigned drawn=0;unsigned weatherMistSkips=0,weatherMistUnknown=0,weatherMistOtherStage=0,weatherMistReports=0,weatherStateReports=0,logged=0;
+    template<class... A> void logf(const char*,A...){++logged;}
+    void weatherDrawStates(UINT){++weatherStateReports;}
 @MISTFN@
 @RAINFN@
     HRESULT draw(UINT count){
@@ -216,9 +219,11 @@ int main(){
         h.weatherDetect.mistArmed=true;h.draw(10);assert(h.drawn==1&&h.weatherMistSkips==1&&h.weatherSample.draws==0&&h.ext->sets.empty()); /* armed: skipped, nothing touched */
         h.bind(0,52,false);h.draw(10);assert(h.drawn==2&&h.weatherMistSkips==1); /* stage 0 unknown: drawn */
         h.bind(0,7);h.draw(10);assert(h.drawn==3&&h.weatherMistSkips==1); /* another texture */
-        h.bind(0,52);h.ext->rs[D3DRS_SRCBLEND]=D3DBLEND_SRCALPHA;h.draw(10);assert(h.drawn==4&&h.weatherMistSkips==1); /* a 1:4 lookalike with another blend: drawn */
-        h.ext->rs[D3DRS_SRCBLEND]=D3DBLEND_DESTCOLOR;h.ext->rs[D3DRS_DESTBLEND]=D3DBLEND_ONE;h.draw(10);assert(h.drawn==5&&h.weatherMistSkips==1);
-        game(h);h.bind(0,50);h.draw(10);assert(h.drawn==6&&h.weatherSample.draws==1&&h.weatherMistSkips==1); /* rain: drawn with RainBlend */
+        assert(h.weatherMistUnknown==1&&h.weatherMistReports==1&&h.weatherStateReports==0); /* the first match logs its states without using the rain report budget */
+        h.bind(0,52);h.ext->rs[D3DRS_SRCBLEND]=D3DBLEND_SRCALPHA;h.draw(10);assert(h.drawn==3&&h.weatherMistSkips==2); /* any blend */
+        h.bind(0,7);h.bind(1,52);h.draw(10);assert(h.drawn==4&&h.weatherMistSkips==2&&h.weatherMistOtherStage==1); /* mist on stage 1: drawn, counted */
+        game(h);h.bind(1,7);h.bind(0,50);h.draw(10);assert(h.drawn==5&&h.weatherSample.draws==1&&h.weatherMistSkips==2); /* rain: drawn with RainBlend */
+        for(int i=0;i<6;++i){h.bind(0,52);h.draw(10);}assert(h.weatherMistReports==4&&h.weatherMistSkips==8);
     }
     std::printf("PASS weather detect\n");
 }

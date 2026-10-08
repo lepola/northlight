@@ -253,7 +253,7 @@ struct Base{
     std::unordered_map<IDirect3DVertexShader9*,std::uint64_t> vsHashes;std::unordered_map<IDirect3DPixelShader9*,std::uint64_t> psHashes;
     unsigned blobSignatureReports=0,terrainShadowDraws=0,frame=0,drawCalls=0;
     IDirect3DPixelShader9 *shadowSwapOriginal=nullptr,*shadowSwapReplacement=nullptr;
-    Keys effectKeys;GateCounts gateCounts;WeatherDetectMock weatherDetect;WeatherSampleMock weatherSample;unsigned weatherMistSkips=0;void weatherProbeDraw(UINT){}
+    Keys effectKeys;GateCounts gateCounts;WeatherDetectMock weatherDetect;WeatherSampleMock weatherSample;unsigned weatherMistSkips=0,weatherMistUnknown=0,weatherMistOtherStage=0,weatherMistReports=0,weatherStateReports=0;void weatherDrawStates(UINT){}void weatherProbeDraw(UINT){}
     Base(){blobsObj.ext=&extObj;env.trace=&trace;blobsObj.faint.id=6;blobsObj.faint.env=extObj.original.env=&env;extObj.original.id=5;extObj.env=worldObj.env=skyObj.env=blobsObj.env=&env;extObj.ps[0].env=extObj.ps[1].env=extObj.vs.env=worldObj.replacement.env=&env;}
     bool sampledDrawTimers()const{return frame%2==0;}
     void logf(const char* format,...){char b[512];va_list a;va_start(a,format);std::vsnprintf(b,sizeof b,format,a);va_end(a);trace.push_back(std::string("log ")+b);}
