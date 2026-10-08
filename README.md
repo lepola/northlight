@@ -68,6 +68,10 @@ Every effect below is on by default and is drawn on top of the game's own frame.
   with `StreamFrameSkip=1` (default) a thread two whole frames behind skips drawing the older frame (state and uploads still
   apply; frames that render to textures, use occlusion queries or copy the picture are always drawn), so the game does not wait for it.
   `ContactAO=1` (default, every preset) keeps the screen-space contact shading in creases and corners; `0` skips it and its denoise pass (about 0.5 ms of GPU time) and leaves the bloom as it is.
+- **Font mods.** Lexara, TweakWoW2 (HD Font on) and the AwesomeWotLK MSDF fork replace the game's UI shaders,
+  which Northlight uses to find where the world ends and the UI begins. Northlight then learns the mod's UI draws
+  instead: effects start about 2 seconds after entering the world, and the log shows
+  `EFFECT boundary fallback active: UI shaders replaced by another module`.
 - **Platforms and install.** macOS with WoWSilicon (preloaded as `mods/d3d9.dll`) and Windows (a
   game-folder `d3d9.dll` on the bundled DXVK 3.1.1, with DXVK 2.7.1 as the `dxvk2` alternative backend for AMD RX 5000/6000 and
   older drivers (`Install.cmd --backend dxvk2`; on a driver DXVK 3 does not support, install with `--backend dxvk2`, Northlight never switches by itself; a reinstall without `--backend` keeps `dxvk2` or `native`), the system D3D9, or an existing `d3d9.dll`). The
