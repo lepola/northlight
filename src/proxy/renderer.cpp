@@ -39,6 +39,7 @@
 #include "effects_buckets.h"
 #include "draw_gates.h"
 #include "weather_state.h"
+#include "ui_boundary.h"
 #include "weather_detect.h"
 #include "translucent_depth.h"
 #include "log_rotation.h"
@@ -314,6 +315,9 @@ class Device final : public GuardedMirrorDevice {
     IDirect3DTexture9* rainMask=nullptr;IDirect3DSurface9* rainMaskSurface=nullptr;bool rainMaskFailed=false;IDirect3DSurface9* rainMaskMS=nullptr;D3DMULTISAMPLE_TYPE rainMaskMsType=D3DMULTISAMPLE_NONE;DWORD rainMaskMsQuality=0;D3DMULTISAMPLE_TYPE rainMaskWantType=D3DMULTISAMPLE_NONE;DWORD rainMaskWantQuality=0;bool rainMaskResolveLogged=false;HRESULT rainMaskResolveHr=S_OK;
     bool rainMaskCleared=false,rainMaskDrawn=false,rainMaskFrame=false,rainMaskOk=false;unsigned rainMaskDraws=0;bool rainMaskMismatchLogged=false; /* rainMaskCleared: this frame's mask start (depth snapshot + clear) ran */
     IDirect3DTexture9* rainDepth=nullptr;IDirect3DPixelShader9 *rainMrtPS=nullptr,*rainScrubPS=nullptr;bool rainMrtBound=false,rainDepthOk=false,rainCapsChecked=false,rainCapsOk=false,rainSkipLogged=false;unsigned rainMrtRuns=0,rainMaskSkips=0;DWORD rainMrtPrev[1]={};bool rainMrtPrevKnown[1]={};
+    /* 0.3.201 (task 17): fallback effect boundary when the UI shaders are replaced by another module (font mods); learned from draw state, see uiFallbackDraw. */
+    NorthlightUiBoundary::Arming uiFallback;bool hashBoundaryThisFrame=false,fallbackBoundaryThisFrame=false,stockPairNoWorld=false,uiFallbackNoCandidateLogged=false;unsigned uiFallbackBoundaries=0;
+    IDirect3DVertexShader9* triageVs=nullptr;IDirect3DPixelShader9* triagePs=nullptr;DWORD triageZw=0;float triageC3[4]={};unsigned triageDraws=0; /* most recent post-terrain draw rejected by zwrite or the c3/rows test while learning (identities only, never dereferenced) */
     bool failed = false, projectionValid = false, key10 = false, key12=false;
     // 0.3.200 (frame markers): diagnostics only, while northlight-frame-markers.txt exists in the game folder at device creation: two 40x40
     // squares at the left edge whose colour cycles with the frame number. E (upper) is filled right after the world effects, P (lower) right
@@ -1146,7 +1150,7 @@ private:
             if(gateFrame)++gateCounts.fullPasses;
         } else if (tag==2) {
             ++uiDraws;
-            if(!terrain)return;
+            if(!terrain){if(!uiFallback.disarmed()&&!stockPairNoWorld&&stockUiPair())stockPairNoWorld=true;return;} /* 0.3.201 (task 17): the stock UI pair in a frame without any world (login, glue, loading screen) disarms the fallback at the frame's end; font mods swap the pair at creation */
             ++uiAfterTerrain;
             IDirect3DPixelShader9* ps=nullptr;
             const bool borrowed=ext->peekPixelShader(ps); // identity lookup only
@@ -1154,13 +1158,81 @@ private:
             auto itp=psTags.find(ps); bool isUI=itp!=psTags.end() && itp->second==2; if(!borrowed)drop(ps);
             // UI variant uses DP4 rows c0..3; constant clip-w confirms screen-space UI.
             float w[4];
-            if (isUI && SUCCEEDED(ext->GetVertexShaderConstantF(3,w,1)) &&
-                std::fabs(w[0])+std::fabs(w[1])+std::fabs(w[2])<.001f && std::fabs(w[3]-1.f)<.001f){
+            if (isUI && SUCCEEDED(ext->GetVertexShaderConstantF(3,w,1)) && NorthlightUiBoundary::clipWOne(w)){
+                hashBoundaryThisFrame=true;
                 if(sampled()){DWORD z=0,zw=0,blend=0;ext->GetRenderState(D3DRS_ZENABLE,&z);ext->GetRenderState(D3DRS_ZWRITEENABLE,&zw);ext->GetRenderState(D3DRS_ALPHABLENDENABLE,&blend);
                     logf("EFFECT boundary frame=%u draw=%u kind=ui z=%lu zwrite=%lu blend=%lu",frame,drawCalls,(unsigned long)z,(unsigned long)zw,(unsigned long)blend);}
                 renderEffects();
             }
         }
+        uiFallbackDraw(vc,vs);
+    }
+    // 0.3.201 (task 17): fallback boundary for font mods that replace the UI VS and PS (or only the PS): the first screen-space draw after the world with
+    // ZWRITE off, full-target viewport and ortho rows, by a (VS,PS) pair learned over 120 frames without a hash boundary. WoW draws UI with ZENABLE on, so z is not tested.
+    // On stock the whole step is one bool test per draw: collecting() needs two world frames in a row without the hash boundary, and the first one disarms it for good.
+    void uiFallbackDraw(const VsClass& vc,IDirect3DVertexShader9* vs){
+        if(!uiFallback.collecting()||!terrain||applied||hashBoundaryThisFrame||fallbackBoundaryThisFrame||vc.wmo)return;
+        if(vc.world||drawWaterVS)return;
+        IDirect3DPixelShader9* ps=nullptr;
+        const bool borrowed=ext->peekPixelShader(ps); // identity lookup only
+        if(!borrowed&&(FAILED(ext->GetPixelShader(&ps))||!ps))return;
+        if(!borrowed)drop(ps);
+        const std::uintptr_t vsId=reinterpret_cast<std::uintptr_t>(vs),psId=reinterpret_cast<std::uintptr_t>(ps);
+        const bool armed=uiFallback.armed();
+        if(armed&&!uiFallback.isBoundary(vsId,psId))return;
+        DWORD zw=0;if(FAILED(ext->GetRenderState(D3DRS_ZWRITEENABLE,&zw)))return;
+        float c[16]={};if(FAILED(ext->GetVertexShaderConstantF(0,c,4)))return;
+        const bool pre=zw==0&&NorthlightUiBoundary::screenSpaceRows(c);
+        if(!pre&&!armed){triageVs=vs;triagePs=ps;triageZw=zw;for(int i=0;i<4;++i)triageC3[i]=c[12+i];++triageDraws;}
+        D3DSURFACE_DESC desc={};
+        const bool fullOk=pre&&fullViewport(desc); // last: its failures count viewportRejects and log VIEWPORT GATE
+        if(!NorthlightUiBoundary::accepts(NorthlightUiBoundary::Candidate{true,vc.world,drawWaterVS,zw!=0,fullOk,c}))return;
+        if(!armed){uiFallback.noteCandidate(vsId,psId);return;}
+        fallbackBoundaryThisFrame=true;++uiFallbackBoundaries;
+        if(sampled()){DWORD z=0,blend=0;ext->GetRenderState(D3DRS_ZENABLE,&z);ext->GetRenderState(D3DRS_ALPHABLENDENABLE,&blend);
+            logf("EFFECT boundary frame=%u draw=%u kind=ui-fallback z=%lu zwrite=%lu blend=%lu",frame,drawCalls,(unsigned long)z,(unsigned long)zw,(unsigned long)blend);}
+        renderEffects();
+    }
+    // 0.3.201 (task 17): the hash test of the boundary (UI-tagged PS bound, c3=(0,0,0,1)), for the UI draws before the world; read only until the fallback is disarmed.
+    bool stockUiPair(){
+        IDirect3DPixelShader9* ps=nullptr;
+        const bool borrowed=ext->peekPixelShader(ps); // identity lookup only
+        if(!borrowed&&(FAILED(ext->GetPixelShader(&ps))||!ps))return false;
+        auto itp=psTags.find(ps);const bool isUI=itp!=psTags.end()&&itp->second==2;if(!borrowed)drop(ps);
+        float w[4];return isUI&&SUCCEEDED(ext->GetVertexShaderConstantF(3,w,1))&&NorthlightUiBoundary::clipWOne(w);
+    }
+    // Disarms for the session; an armed fallback's stream hash goes back to 0.
+    void uiFallbackDisarm(){const bool was=uiFallback.armed();uiFallback.onHashBoundary();if(was)NorthlightStream::learnedUiVsHash.store(0,std::memory_order_relaxed);}
+    template<class T> void uiFallbackForget(T* obj){
+        const bool was=uiFallback.armed();uiFallback.forget(reinterpret_cast<std::uintptr_t>(obj));
+        if(was&&!uiFallback.armed())NorthlightStream::learnedUiVsHash.store(0,std::memory_order_relaxed);
+    }
+    // 0.3.201 (task 17): per-frame fallback bookkeeping, before clearFrame() resets terrain/applied.
+    void uiFallbackEndFrame(){
+        using K=NorthlightUiBoundary::Arming::FrameKind;
+        if(stockPairNoWorld&&!terrain)uiFallbackDisarm(); /* a world frame's pre-terrain UI draws (portrait, minimap compositing) never disarm */
+        stockPairNoWorld=false;
+        const K kind=(!enabled||failed)?K::Neutral:hashBoundaryThisFrame?K::WorldHash:fallbackBoundaryThisFrame?K::WorldFallback:!terrain?K::NoWorld:applied?K::Neutral:K::WorldMissed;
+        auto vh=[&](std::uintptr_t id){auto it=vsHashes.find(reinterpret_cast<IDirect3DVertexShader9*>(id));return it==vsHashes.end()?0ull:(unsigned long long)it->second;};
+        auto ph=[&](std::uintptr_t id){auto it=psHashes.find(reinterpret_cast<IDirect3DPixelShader9*>(id));return it==psHashes.end()?0ull:(unsigned long long)it->second;};
+        const bool wasArmed=uiFallback.armed();
+        const auto result=uiFallback.endFrame(kind);
+        if(wasArmed&&!uiFallback.armed()&&result!=NorthlightUiBoundary::Arming::Result::Lost)NorthlightStream::learnedUiVsHash.store(0,std::memory_order_relaxed); /* disarmed by a hash boundary */
+        if(result==NorthlightUiBoundary::Arming::Result::Armed){
+            logf("EFFECT boundary fallback active: UI shaders replaced by another module vs=%016llx ps=%016llx draws/frame=%.1f",vh(uiFallback.learnedVs()),ph(uiFallback.learnedPs(0)),double(uiFallback.drawsPerFrame()));
+            NorthlightStream::learnedUiVsHash.store(vh(uiFallback.learnedVs()),std::memory_order_relaxed);
+        } else if(result==NorthlightUiBoundary::Arming::Result::Lost){
+            logf("EFFECT boundary fallback lost; relearning");
+            NorthlightStream::learnedUiVsHash.store(0,std::memory_order_relaxed);
+        }
+        if(uiFallback.learning()&&uiFallback.missedWorldFrames()>=600&&!uiFallbackNoCandidateLogged){
+            uiFallbackNoCandidateLogged=true;
+            logf("EFFECT boundary fallback: no candidate missedWorldFrames=%u dropped=%u triageDraws=%u triage vs=%016llx ps=%016llx zwrite=%lu c3=[%g %g %g %g]",uiFallback.missedWorldFrames(),uiFallback.droppedPairs(),triageDraws,
+                vh(reinterpret_cast<std::uintptr_t>(triageVs)),ph(reinterpret_cast<std::uintptr_t>(triagePs)),(unsigned long)triageZw,triageC3[0],triageC3[1],triageC3[2],triageC3[3]);
+            NorthlightUiBoundary::Arming::Pair top[3];const unsigned n=uiFallback.topCandidates(top,3);
+            for(unsigned i=0;i<n;++i)logf("EFFECT boundary fallback candidate vs=%016llx ps=%016llx count=%u",vh(top[i].vs),ph(top[i].ps),top[i].count);
+        }
+        hashBoundaryThisFrame=fallbackBoundaryThisFrame=false;
     }
 public:
     // 0.3.192 (CS): the replay thread takes over as owner thread (called on it, before its first command and before CreateDevice returns).
@@ -1416,7 +1488,8 @@ public:
         bool k12=focus&&modifiers&&(GetAsyncKeyState(VK_F12)&0x8000);
         if(k12&&!key12){worldDebug=(worldDebug+1)%4;logf("World debug %d tick=%lu (0 normal,1 shadows,2 GI,3 volume)",worldDebug,(unsigned long)GetTickCount());}
         key12=k12;key10=k10;
-        if(frame==1||(frame%600==0&&diagnostics()))logf("frame=%u applied=%u terrainShaders=%u uiShaders=%u projectionRejects=%u terrainThisFrame=%d depth=%d draws=%u missingVS=%u terrainDraws=%u terrainShadowDraws=%u viewportRejects=%u depthRejects=%u uiDraws=%u uiAfterTerrain=%u",frame,appliedFrames,matchedTerrain,matchedUI,projectionRejects,terrain,captured,drawCalls,missingVS,terrainDraws,terrainShadowDraws,viewportRejects,depthRejects,uiDraws,uiAfterTerrain);
+        uiFallbackEndFrame();
+        if(frame==1||(frame%600==0&&diagnostics()))logf("frame=%u applied=%u terrainShaders=%u uiShaders=%u projectionRejects=%u terrainThisFrame=%d depth=%d draws=%u missingVS=%u terrainDraws=%u terrainShadowDraws=%u viewportRejects=%u depthRejects=%u uiDraws=%u uiAfterTerrain=%u uiFallback=%u uiFallbackState=%c",frame,appliedFrames,matchedTerrain,matchedUI,projectionRejects,terrain,captured,drawCalls,missingVS,terrainDraws,terrainShadowDraws,viewportRejects,depthRejects,uiDraws,uiAfterTerrain,uiFallbackBoundaries,uiFallback.disarmed()?'d':uiFallback.armed()?'a':'l');
         // The address-space sweep is asynchronous; the render thread only compares
         // its result. Trims run below, after clearFrame(), at the frame boundary.
         bool memoryTrim=false;int memoryCaps=-1; /* -1 unchanged, 0 full, 1 half */
@@ -1615,12 +1688,12 @@ public:
     }
     HRESULT STDMETHODCALLTYPE CreateVertexShader(const DWORD* code,IDirect3DVertexShader9** out) override { Guard mirrorLock(mirrorState.gate);
         HRESULT hr=ext->CreateVertexShader(code,out);
-        if(SUCCEEDED(hr)&&out&&*out)extensionWork("vertex shader registration",[&]{++vsGeneration;std::vector<DWORD> words;auto h=shaderHash(*out,words);int tag=NorthlightShaderTags::deviceTag(h);vsHashes[*out]=h;vsMajor[*out]=!words.empty()&&(words[0]>>16)==0xFFFEu?unsigned((words[0]>>8)&0xFFu):0u;if(world)world->registerShader(*out,h);if(water)water->registerVertex(*out,h,words.data(),words.size());vsTags[*out]=tag|(water&&water->hasVertex(*out)?kWaterTag:0);if(tag==1)++matchedTerrain;else if(tag==2)++matchedUI;});
+        if(SUCCEEDED(hr)&&out&&*out)extensionWork("vertex shader registration",[&]{++vsGeneration;std::vector<DWORD> words;auto h=shaderHash(*out,words);int tag=NorthlightShaderTags::deviceTag(h);vsHashes[*out]=h;uiFallbackForget(*out);vsMajor[*out]=!words.empty()&&(words[0]>>16)==0xFFFEu?unsigned((words[0]>>8)&0xFFu):0u;if(world)world->registerShader(*out,h);if(water)water->registerVertex(*out,h,words.data(),words.size());vsTags[*out]=tag|(water&&water->hasVertex(*out)?kWaterTag:0);if(tag==1)++matchedTerrain;else if(tag==2)++matchedUI;});
         if(SUCCEEDED(hr))mirrorResources.wrap(out);return hr;
     }
     HRESULT STDMETHODCALLTYPE CreatePixelShader(const DWORD* code,IDirect3DPixelShader9** out) override { Guard mirrorLock(mirrorState.gate);
         HRESULT hr=ext->CreatePixelShader(code,out);
-        if(SUCCEEDED(hr)&&out&&*out)extensionWork("pixel shader registration",[&]{std::vector<DWORD> words;auto h=shaderHash(*out,words);psTags[*out]=contains(kUiPS,h)?2:0;psHashes[*out]=h;if(water)water->registerPixel(*out,h,words.data(),words.size());if(world)world->registerPixelShader(*out);});
+        if(SUCCEEDED(hr)&&out&&*out)extensionWork("pixel shader registration",[&]{std::vector<DWORD> words;auto h=shaderHash(*out,words);uiFallbackForget(*out);psTags[*out]=contains(kUiPS,h)?2:0;psHashes[*out]=h;if(water)water->registerPixel(*out,h,words.data(),words.size());if(world)world->registerPixelShader(*out);});
         if(SUCCEEDED(hr))mirrorResources.wrap(out);return hr;
     }
     // 0.3.187: the four draw entry points share drawHook(); each passes its capture and its real draw.
@@ -1833,7 +1906,7 @@ static HMODULE backend() {
     // Only DXVK keeps the legacy (unchecked, no RESZ dummy draw) rules; every
     // other runtime, including the system fallback, gets the native rules.
     if(module&&(result.fallback||(configured==NorthlightBackend::Kind::Legacy&&!last.info.dxvk)))selectedBackend=NorthlightBackend::Kind::Native;
-    logf("Northlight renderer 0.3.202; reference sun look (sun glow hue from native/sunHalo band, soft-shoulder glare, veil, sun-tinted haze), native sun/moon suppressed (F1b), lamps dimmed to 30 pct in direct sun, native moon02 skipped by texture identity, no game bytes in the DLL, MEMREAD self-read profile (RenderProfile), soft sun removal in shadow, jump-stable shadow anchor, geometry coverage hold with travel lead, steadier animated shadow edges (near 5x5 tent, still-camera shadow history), native blob shadows kept at BlobShadowStrength (faint texture under modulate blend), bilinear lighting history, near capture reserve for the player and companions, remembered rigid prop shadows (drawn-by-game states, windowed held), AO and bloom folded into the world composite, ground normals reject object tops, both wide samples, batched celestial terrain mask, DXVK async left to the runtime, render-thread terrain upload and rigid bookkeeping trims, moon without the horizon stall, art layer bands retimed to the sun and moon, actor prepare on a worker, trimmed prepare handoff, in-place capture constants, gate thread census, predicted snapshot lookups, word-wise memcmp, owner-thread gate elision; abandoned-frame prepare quarantine; removal smoothing on matching normals in its own pass (35/50 degree gate); per-frame draw gates; translucent depth census; early depth for translucent actors; DXVK 3.1.1 default, dxvk2 (2.7.1) by choice only, no automatic fallback; AO depth texel snap; shadow cascades follow camera zoom and collision; reduced terrain shadow reach under address-space pressure; command-stream replay thread; draw-hook lookup caches; lighter replay retire; fresh texture shadows evict only stale keeps; soft local-light cap with fades; blended GI re-publication; Forever-style rain (storm light bands, weather draw detection); moving fog clouds; GPU budget control; frames ahead and frame skipping in the command stream; replay jobs; AO denoise pass; rain mask (MRT, depth scrub), effect boundary at the UI in rain; backend=%s path=%ls loaded=%d error=%lu",
+    logf("Northlight renderer 0.3.203; reference sun look (sun glow hue from native/sunHalo band, soft-shoulder glare, veil, sun-tinted haze), native sun/moon suppressed (F1b), lamps dimmed to 30 pct in direct sun, native moon02 skipped by texture identity, no game bytes in the DLL, MEMREAD self-read profile (RenderProfile), soft sun removal in shadow, jump-stable shadow anchor, geometry coverage hold with travel lead, steadier animated shadow edges (near 5x5 tent, still-camera shadow history), native blob shadows kept at BlobShadowStrength (faint texture under modulate blend), bilinear lighting history, near capture reserve for the player and companions, remembered rigid prop shadows (drawn-by-game states, windowed held), AO and bloom folded into the world composite, ground normals reject object tops, both wide samples, batched celestial terrain mask, DXVK async left to the runtime, render-thread terrain upload and rigid bookkeeping trims, moon without the horizon stall, art layer bands retimed to the sun and moon, actor prepare on a worker, trimmed prepare handoff, in-place capture constants, gate thread census, predicted snapshot lookups, word-wise memcmp, owner-thread gate elision; abandoned-frame prepare quarantine; removal smoothing on matching normals in its own pass (35/50 degree gate); per-frame draw gates; translucent depth census; early depth for translucent actors; DXVK 3.1.1 default, dxvk2 (2.7.1) by choice only, no automatic fallback; AO depth texel snap; shadow cascades follow camera zoom and collision; reduced terrain shadow reach under address-space pressure; command-stream replay thread; draw-hook lookup caches; lighter replay retire; fresh texture shadows evict only stale keeps; soft local-light cap with fades; blended GI re-publication; Forever-style rain (storm light bands, weather draw detection); moving fog clouds; GPU budget control; frames ahead and frame skipping in the command stream; replay jobs; AO denoise pass; rain mask (MRT, depth scrub), effect boundary at the UI in rain; UI boundary fallback for font mods; backend=%s path=%ls loaded=%d error=%lu",
          NorthlightBackend::name(configured),last.path.c_str(),module!=nullptr,module?0ul:(last.error?last.error:(unsigned long)ERROR_INVALID_PARAMETER));
     logAttempts(result.attempts);
     logHostExecutable(sys.selfPath);
