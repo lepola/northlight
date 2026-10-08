@@ -308,6 +308,16 @@ class Device final : public GuardedMirrorDevice {
     bool terrain = false, captured = false, applied = false, enabled = true;
     bool rainBoundary = false; /* 0.3.199 (rain): set by drawHook at a matched rain draw before the boundary, consumed by prepareDrawImpl */
     bool failed = false, projectionValid = false, key10 = false, key12=false;
+    // 0.3.200 (frame markers): diagnostics only, while northlight-frame-markers.txt exists in the game folder at device creation: two 40x40
+    // squares at the left edge whose colour cycles with the frame number. E (upper) is filled right after the world effects, P (lower) right
+    // before the real Present, so a screen recording shows which presented images went through the effects and the replay's Present, in order.
+    bool frameMarkers=false;
+    void frameMarker(unsigned slot,unsigned n){
+        IDirect3DSurface9* bb=nullptr;if(FAILED(ext->GetBackBuffer(0,0,D3DBACKBUFFER_TYPE_MONO,&bb))||!bb)return;
+        static const D3DCOLOR palette[2][4]={{0xffff0000,0xff00ff00,0xff0000ff,0xffffffff},{0xffffff00,0xff00ffff,0xffff00ff,0xffff8000}};
+        D3DSURFACE_DESC d={};bb->GetDesc(&d);const LONG top=LONG(d.Height/2)+LONG(slot)*50;
+        const RECT r{0,top,40,top+40};ext->ColorFill(bb,&r,palette[slot&1][n&3]);bb->Release();
+    }
     int traceWorld=-1; /* 0.3.200 (frame trace): this frame's world->render result (-1 not called, 0 skipped, 1 drawn) */
     unsigned frame = 0, appliedFrames = 0, matchedTerrain = 0, matchedUI = 0, projectionRejects = 0;
     unsigned worldSkippedFrames=0;
@@ -604,7 +614,7 @@ class Device final : public GuardedMirrorDevice {
                     logf("WORLD skipped frame=%u tick=%lu context=%d ready=%d count=%u reason=%s",frame,(unsigned long)GetTickCount(),world->hasContext(),world->ready(),worldSkippedFrames,world->lastSkipReason());
                 worldSkipLast=world->lastSkipReason();if(!worldSkipRun++){worldSkipStart=GetTickCount();worldSkipFirst=worldSkipLast;
                     if(worldSkipEpisodes<32||diagnostics())logf("WORLD skip episode begin reason=%s",worldSkipFirst);}
-            }else if(traceWorld=1,worldSkipRun){
+            }else if(traceWorld=1,(frameMarkers?frameMarker(0,frame):void()),worldSkipRun){
                 if(++worldSkipEpisodes<=32||diagnostics())logf("WORLD skip episode reason=%s last=%s frames=%u ms=%lu",worldSkipFirst,worldSkipLast,worldSkipRun,(unsigned long)(GetTickCount()-worldSkipStart));
                 worldSkipRun=0;
             }
@@ -1008,6 +1018,7 @@ public:
         world->setConstantEpochSource({&mirrorState.constantEpoch,&mirrorState}); /* 0.3.180 (C1): read in place under the draw's gate */
         char skyRoot[MAX_PATH*3];WideCharToMultiByte(CP_UTF8,0,rootPath,-1,skyRoot,sizeof skyRoot,nullptr,nullptr);celestialDiscs=std::make_unique<NorthlightCelestialDiscRenderer>(ext,std::string(skyRoot)+"world-cache/celestial");celestialDiscs->setTerrainSource([this]{return world->celestialTerrainGeneration();},[this](unsigned body,const float* matrix){return world->drawCelestialTerrain(body,matrix);},[this](unsigned body){world->noteCelestialTerrainReuse(body);});celestialDiscs->setIdentityMap([this](std::uintptr_t exposed){return mirrorResources.rawOf(exposed,!mirrorState.enabled);});shadowBlobs=std::make_unique<NorthlightShadowBlobFilter>(ext,world->blobShadowStrength());shadowBlobs->setTexturePeek([](void* e,DWORD stage,IDirect3DBaseTexture9*& out){return static_cast<ExtensionDevice*>(e)->peekTexture(stage,out);},ext); /* 0.3.196 (task 12): borrowed stage-0 identity */water=std::make_unique<NorthlightWaterRenderer>(ext); logf("D3D9 device wrapped. Ctrl+Shift+F7 fog; F8 GI; F9 shadows; F10 all effects; F12 world debug (all with Ctrl+Shift). F11 unassigned. Components start ON; GI cache stays warm.");
         frameDrawGates=world->frameDrawGates();latchDrawGates(); /* 0.3.187: after the renderers exist */
+        {wchar_t markers[MAX_PATH];if(swprintf(markers,MAX_PATH,L"%lsnorthlight-frame-markers.txt",rootPath)>0&&GetFileAttributesW(markers)!=INVALID_FILE_ATTRIBUTES){frameMarkers=true;logf("FRAMEMARKERS on: E after the world effects, P before Present");}}
         weatherDetect.sink=&weatherLog; /* 0.3.198 (rain) */
         // The async sweep feeds the memory guard (always) and the periodic MEMORY line
         // (Diagnostics only). Allocation admission stays synchronous in WorldRenderer.
@@ -1320,7 +1331,8 @@ public:
         latchDrawGates(); /* 0.3.187: the next frame's draw gates, after every input above */
     }
     HRESULT STDMETHODCALLTYPE Present(const RECT* src,const RECT* dst,HWND wnd,const RGNDATA* dirty) override { Guard mirrorLock(mirrorState.gate);mirrorState.gate.noteFirst(mirrorState.gate.presentTid);
-        PresentTicks ticks;finishFrame();ticks.finish();
+        PresentTicks ticks;const unsigned markerFrame=frame;finishFrame();ticks.finish();
+        if(frameMarkers)frameMarker(1,markerFrame);
         const HRESULT hr=ext->Present(src,dst,wnd,dirty);ticks.present();presented(ticks);return hr;
     }
     // After the real Present, under the gate. Arithmetic only; windows are logged by finishFrame.
