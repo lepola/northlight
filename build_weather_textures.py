@@ -83,7 +83,8 @@ def image(width, height, colour, alpha_max, shape):
 STREAK_SIGMA_PX, STREAK_FADE = .62, .08   # thin crisp core ~1.5 px wide (FWHM) at 32 px (0.3.199 game tests: 1.1 ~2.6 px, .9, .75); the streak fades only over the last 8% at each end
 # 0.3.199: the streak is centred on a texel (16 of 0..31), not on the 15|16 border: a border centre always covers two equal texels, so no
 # sigma could make the core narrower than 2 px (game test: 'thinner'); on a texel centre the core is one texel with soft neighbours.
-STREAK_MIN_SIGMA_TEXELS = .75                # no mip level narrows the core below this: a streak must not break up or vanish at small mips
+STREAK_MIN_SIGMA_TEXELS = .45                # no mip level narrows the core below this (0.3.199: was .75, which widened the far drops)
+STREAK_KEEP_PEAK_WIDTH = 4                   # levels at least this wide keep the full alpha peak on their own middle texel
 
 
 def streak_x(u, sigma, centre=.5):
@@ -103,21 +104,28 @@ def streak_chain(width, height, colour, alpha_max):
     """Mip levels (BGRA bytes) of the streak, each computed from the analytic shape (the area average of the same
     line over every texel of the level) instead of box-filtering 8-bit texels. A box filter keeps the mean alpha, so
     the peak falls to a third by level 2 and ~0.06 at 1 px wide, and 8-bit rounding drops the thin tails to 0: far
-    rain breaks into faint dots. Here the across-sigma stays >= .75 texel (one soft continuous line at every level)
-    and the amplitude follows sqrt(mean alpha at level 0 / mean alpha of this level): the geometric midpoint between
-    keeping the peak (a 1 px level would be a ~0.57 mean slab, 2.7x the stock texture's ~0.21) and keeping the mean
-    (invisible). The line is separable (across x along), so the texel mean is the product of the 1-D means; all
-    levels share the level-0 normalisation (alpha peak = alpha_max there)."""
-    centre = (width//2+.5)/width   # level 0 texel centre; the same uv line at every mip
-    mean0 = sum(texel_average(lambda u: streak_x(u, STREAK_SIGMA_PX/width, centre), width))/width
-    scale = alpha_max/(max(texel_average(lambda u: streak_x(u, STREAK_SIGMA_PX/width, centre), width))*max(texel_average(streak_y, height)))
+    rain breaks into faint dots. 0.3.199 (game tests: far drops read wide and see-through): the game picks the mip by
+    the streak's length (1:16 texture), so most drops use the 8..16-texel-wide levels. Down to STREAK_KEEP_PEAK_WIDTH
+    texels every level is centred on its own middle texel, keeps a one-texel core (across-sigma >= STREAK_MIN_SIGMA_TEXELS)
+    and the full alpha_max peak, like the stock texture's opaque core; narrower levels (far, tiny drops) keep the
+    mean alpha of the last full-peak level (~.23, the stock texture's far mips are ~.21): keeping the peak there would
+    make a 1 px level a ~0.57 mean slab. The line is separable (across x along),
+    so the texel mean is the product of the 1-D means."""
+    def across(w):
+        centre = (w//2+.5)/w if w >= STREAK_KEEP_PEAK_WIDTH else (width//2+.5)/width
+        sigma = STREAK_SIGMA_PX/width if w == width else max(STREAK_SIGMA_PX/width, STREAK_MIN_SIGMA_TEXELS/w)
+        return texel_average(lambda u: streak_x(u, sigma, centre), w)
+    ay0 = max(texel_average(streak_y, height))
+    kept = None   # mean alpha (across) of the last full-peak level, the reference of the narrower ones
     b, g, r = [round(c*255) for c in colour[::-1]]
     levels, w, h = [], width, height
     while True:
-        # the floor applies to the mips only: level 0 keeps STREAK_SIGMA_PX (0.3.199: with the floor there too, any sigma below .75 px was a no-op)
-        ax = texel_average(lambda u: streak_x(u, STREAK_SIGMA_PX/width if w == width else max(STREAK_SIGMA_PX/width, STREAK_MIN_SIGMA_TEXELS/w), centre), w)
+        ax = across(w)
+        if w >= STREAK_KEEP_PEAK_WIDTH or kept is None:
+            gain = alpha_max/(max(ax)*ay0); kept = sum(ax)*gain/w
+        else:
+            gain = min(alpha_max/(max(ax)*ay0), kept/(sum(ax)/w))   # keep the last full-peak level's mean (the stock far drops: ~.21)
         ay = texel_average(streak_y, h)
-        gain = scale*min(1., math.sqrt(mean0/(sum(ax)/w)))
         out = bytearray()
         for y in range(h):
             for x in range(w):

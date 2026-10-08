@@ -54,7 +54,7 @@ for name, data in textures.items():
         checks[f'{key}: every mip level has alpha in every row but the faded ends (continuous streak, no dots)'] = all(
             all(max(px[3::4][y*lw:(y+1)*lw]) > 0 for y in range(lh//10, lh-lh//10)) for lw, lh, px in chain)
         checks[f'{key}: mip peak never below 24/255 at any level, never above level 0'] = min(peaks) >= 24 and max(peaks) == peaks[0]
-        checks[f'{key}: mean alpha 0.032-0.044 at level 0, 0.13-0.20 at the small mips'] = MEAN0[0] <= sum(chain[0][2][3::4])/(255*w*h) <= MEAN0[1] and all(.13 <= sum(px[3::4])/(255*lw*lh) <= .20 for lw, lh, px in chain[-3:])
+        checks[f'{key}: mean alpha 0.032-0.044 at level 0, 0.20-0.27 at the small mips (stock far mips ~0.21), full peak down to 4 texels wide'] = MEAN0[0] <= sum(chain[0][2][3::4])/(255*w*h) <= MEAN0[1] and all(.20 <= sum(px[3::4])/(255*lw*lh) <= .27 for lw, lh, px in chain[-3:]) and all(max(px[3::4]) == peak for lw, lh, px in chain if lw >= 4)
         checks[f'{key}: ends fade out'] = max(row(0)) == 0 and max(row(h-1)) == 0 and max(row(h//40)) < peak//2 and max(row(h-h//40)) < peak//2 and row(h//8)[16] >= peak-1 and row(h-h//8)[16] >= peak-1
     else:          # flake: round in uv (a 1:2 squash in texels), centred, transparent corners and rim
         cx, cy = w//2, h//2

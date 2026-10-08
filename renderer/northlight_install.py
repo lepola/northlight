@@ -98,7 +98,9 @@ KNOWN_OURS = {'a6362b62564d8b0e9bbc71e1e8e8420b4b66557c021ea0656c3c7d34a30ac4a2'
               'fd21cd54cc823aed020f478d6ba25ab6a5d841a2f526a6edbca1b27df9dfed56',   # 0.3.199 dev HD (rain alpha .75, core sigma .75 px)
               '8ce7a1b693938b5d6fb45578cd382fee1aa25c3638e3e0a82f69910ee3d98001',   # 0.3.199 stock (rain alpha .75, core sigma .75 px)
               '2403d3272338c4a4ec8b6cd99aac7878c0466f31c36f996307ab93337bccc274',   # 0.3.199 dev HD (rain on texel 16, core sigma .62 px)
-              'e83501ac6b2bef2ddffe44bd4e1664091c7a13d8b650a7a13b046678d302c222'}   # 0.3.199 stock (rain on texel 16, core sigma .62 px)
+              'e83501ac6b2bef2ddffe44bd4e1664091c7a13d8b650a7a13b046678d302c222',   # 0.3.199 stock (rain on texel 16, core sigma .62 px)
+              '0d883ef5955dd29c6f843a2622b0fe364a9726b40b4e1f9421d6a84c0acb4426',   # 0.3.199 dev HD (rain mips keep a one-texel full-alpha core)
+              '931ab91f93b6c764809ac99f03b2b9b4920348fbdbb24001b069dadba2bbc94b'}   # 0.3.199 stock (rain mips keep a one-texel full-alpha core)
 BASE_ARCHIVES = ('common', 'common-2', 'expansion', 'lichking', 'patch', 'patch-2', 'patch-3')
 GIB = 1 << 30
 LOCAL_BUILD_BYTES = 13 * GIB   # 1.2 x the ~11 GB cache
