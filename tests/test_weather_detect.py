@@ -11,7 +11,7 @@ import northlight_paths as fp
 import subprocess,tempfile
 
 r=fp.src('renderer.cpp').read_text()
-hook=[l for l in r.split('\n') if l.strip().startswith('if(weatherDetect.hot&&!applied&&')]
+hook=[l for l in r.split('\n') if l.strip().startswith('if(weatherDetect.hot&&mirrorState')]
 assert len(hook)==1,'the draw hook comparison must exist exactly once'
 rl=r.split('\n');i0=next(i for i,l in enumerate(rl) if 'template<class Draw> HRESULT rainBlendDraw(' in l);i1=next(i for i in range(i0,len(rl)) if rl[i]=='    }')
 rainfn='\n'.join(rl[i0:i1+1])
@@ -43,7 +43,7 @@ struct Ext{DWORD rs[256]={};std::vector<std::pair<int,DWORD>> sets;
 struct World{bool on=true;bool rainBlendSetting()const{return on;}};
 namespace NorthlightWeather{}
 struct Hook{
-    Mirror mirrorState;Detector weatherDetect;Sample weatherSample;bool applied=false;Ext extObj;Ext* ext=&extObj;World worldObj;World* world=&worldObj;bool claimedSkip=false;
+    Mirror mirrorState;Detector weatherDetect;Sample weatherSample;bool applied=false,terrain=true,rainBoundary=false;Ext extObj;Ext* ext=&extObj;World worldObj;World* world=&worldObj;bool claimedSkip=false;
     template<class Draw> HRESULT blobFaintDraw(bool claimed,Draw draw){return claimed?0:draw();}
     unsigned blendAtDraw[4]={};unsigned drawn=0;
 @RAINFN@
@@ -160,10 +160,19 @@ int main(){
         h.bind(0,50,false);h.draw(100);assert(h.weatherSample.draws==0);
         h.bind(0,50);h.draw(100);h.draw(40);assert(h.weatherSample.draws==2&&h.weatherSample.primitives==140);
         h.bind(1,50);h.bind(0,51);h.draw(7);assert(h.weatherSample.draws==2); /* stage 0 only; the other candidate is not hot */
-        h.bind(0,50);h.applied=true;h.draw(100);assert(h.weatherSample.draws==2); /* UI phase */
-        h.applied=false;h.weatherDetect.rotate();h.bind(0,51);h.draw(9);assert(h.weatherSample.draws==3&&h.weatherSample.primitives==149);
+        h.bind(0,50);h.applied=true;h.draw(100);assert(h.weatherSample.draws==3&&h.weatherSample.primitives==240); /* 0.3.199: after the boundary the rest of the rain still counts */
+        h.applied=false;h.weatherSample={};h.weatherSample.draws=2;h.weatherSample.primitives=140;h.weatherDetect.rotate();h.bind(0,51);h.draw(9);assert(h.weatherSample.draws==3&&h.weatherSample.primitives==149);
         h.weatherDetect.setOff(true);h.draw(9);assert(h.weatherSample.draws==3); /* mirror inactive: hot is null */
         Hook none;none.bind(0,50);none.draw(10);assert(none.weatherSample.draws==0); /* no candidates: hot null */
+    }
+    {   // 0.3.199 (rain): the effect boundary flag - rain draw of a terrain frame before applied, with the setting; nothing else
+        Hook h;h.weatherDetect.noteCreate(P(50),32,512,1,A);h.weatherDetect.noteCreate(P(51),32,64,1,A);
+        h.bind(0,50);h.draw(10);assert(h.rainBoundary); /* first rain draw */
+        h.rainBoundary=false;h.applied=true;h.draw(10);assert(!h.rainBoundary&&h.weatherSample.draws==2); /* after the boundary: counted, no second boundary */
+        h.applied=false;h.terrain=false;h.draw(10);assert(!h.rainBoundary); /* no terrain this frame: UI fallback */
+        h.terrain=true;h.world->on=false;h.draw(10);assert(!h.rainBoundary); /* RainBlend=0 / Weather=0: the UI boundary */
+        h.world->on=true;h.bind(0,0);h.draw(10);assert(!h.rainBoundary); /* non-weather draw */
+        {const unsigned before=h.weatherSample.draws;h.weatherDetect.rotate();h.bind(0,51);h.draw(10);assert(!h.rainBoundary&&h.weatherSample.draws==before+1);} /* snow: counted, no boundary change */
     }
     {   // 0.3.199 (rain): RainBlend - rain draws run with SrcAlpha/InvSrcAlpha/Add and the game's previous states return; snow, non-weather, setting off and claimed draws are untouched
         auto game=[](Hook& h){h.ext->rs[D3DRS_ALPHABLENDENABLE]=1;h.ext->rs[D3DRS_SRCBLEND]=D3DBLEND_DESTCOLOR;h.ext->rs[D3DRS_DESTBLEND]=D3DBLEND_SRCCOLOR;h.ext->rs[D3DRS_BLENDOP]=D3DBLENDOP_ADD;h.ext->rs[D3DRS_ZWRITEENABLE]=0;};

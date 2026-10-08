@@ -17,12 +17,12 @@ checks['no weather in any Set*/Get* Device method']=not re.search(r'HRESULT STDM
 
 a=r.index('template<class Capture,class Draw> HRESULT drawHook(');b=r.index('    // 0.3.154: blob shadow claim')
 hook=r[a:b]
-cmp_line='if(weatherDetect.hot&&!applied&&mirrorState.textureKnown[0]&&mirrorState.textures[0]==weatherDetect.hot){weatherSample.primitives+=count;++weatherSample.draws;rainBlend=weatherDetect.hotKind==NorthlightWeather::Kind::Rain&&world&&world->rainBlendSetting();}'
-checks['drawHook: the single comparison, once']=hook.count(cmp_line+' /* 0.3.199 (rain): rain draws only, ~50/frame */')==1 and hook.count('weatherDetect')==3 and hook.count('weatherSample')==2
+cmp_line='if(weatherDetect.hot&&mirrorState.textureKnown[0]&&mirrorState.textures[0]==weatherDetect.hot){weatherSample.primitives+=count;++weatherSample.draws;rainBlend=weatherDetect.hotKind==NorthlightWeather::Kind::Rain&&world&&world->rainBlendSetting();rainBoundary=rainBlend&&terrain&&!applied;}'
+checks['drawHook: the single comparison, once']=hook.count(cmp_line+' /* 0.3.199 (rain): after applied too (the rest of the rain); the boundary at the first rain draw of a terrain frame */')==1 and hook.count('weatherDetect')==3 and hook.count('weatherSample')==2
 checks['drawHook: before the gate split and any other work']=0<=hook.index(cmp_line)<hook.index('if(!frameDrawGates){')<hook.index('prepareDraw(capture,count)')<hook.index('prepareDrawImpl(capture,count)') and hook.index(cmp_line)<hook.index('noteFirst')
 # 0.3.199 (rain): RainBlend - the override lives in the matched branch (a bool set there), only for Rain and the setting, wraps exactly the game's draw
 helper=r[r.index('template<class Draw> HRESULT rainBlendDraw('):r.index('    // One game draw: capture')]
-checks['RainBlend: the bool is set only inside the matched branch, for Rain and the setting']=hook.count('rainBlend=weatherDetect')==1 and hook.count('rainBlend=weatherDetect.hotKind==NorthlightWeather::Kind::Rain&&world&&world->rainBlendSetting();')==1 and cmp_line.split('{',1)[1].count('rainBlend=')==1 and 'bool claimed=false,rainBlend=false;' in hook
+checks['RainBlend: the bool is set only inside the matched branch, for Rain and the setting']=hook.count('rainBlend=weatherDetect')==1 and hook.count('rainBoundary')==1 and hook.count('rainBlend=weatherDetect.hotKind==NorthlightWeather::Kind::Rain&&world&&world->rainBlendSetting();')==1 and cmp_line.split('{',1)[1].count('rainBlend=')==1 and 'bool claimed=false,rainBlend=false;' in hook
 checks['RainBlend: both gate paths draw through rainBlendDraw, none through blobFaintDraw directly']=hook.count('rainBlendDraw(rainBlend,claimed,draw)')==2 and 'blobFaintDraw' not in hook
 checks['RainBlend: not rain = the plain draw; override sets SrcAlpha/InvSrcAlpha/Add/blend on, inside the draw callback, and restores the previous values after it']=(
     'if(!rain)return blobFaintDraw(claimed,draw);' in helper and 'return blobFaintDraw(claimed,[&]{' in helper
@@ -46,5 +46,11 @@ checks['weatherFrame: tracker, world, rotate, mirror-off']=all(s in wf for s in 
 checks['DRAWGATE line carries weatherDraws/weatherPrims']='weatherDraws=%u weatherPrims=%u weatherNs=%.1f' in r and 'weatherSample.draws,weatherSample.primitives,b.weatherNs)' in r
 w=fp.src('world_renderer.h').read_text()
 checks['WorldRenderer: POD state, setter and getter only']=all(s in w for s in ('NorthlightWeather::State weatherState{};','void setWeather(const NorthlightWeather::State& s){weatherState=s;}','const NorthlightWeather::State& weather()const{return weatherState;}')) and w.count('weatherState')==4
+# 0.3.199 (rain): the effect boundary at the first rain draw - flag from the matched branch, consumed in prepareDrawImpl (inside extensionWork), before the applied return
+pdi=r[r.index('template<class Capture> void prepareDrawImpl('):r.index('    // Terrain draws run with the game')]
+checks['rain boundary: flag set only in the matched branch with terrain&&!applied and the setting']=cmp_line.split('{',1)[1].count('rainBoundary=rainBlend&&terrain&&!applied;')==1 and r.count('rainBoundary=true')==0
+checks['rain boundary: prepareDrawImpl consumes it before the applied return and before the draw capture']=0<pdi.index('if(rainBoundary){rainBoundary=false;if(!applied&&terrain)')<pdi.index('renderEffects();')<pdi.index('if(applied){')<pdi.index('beforeDraw(vs)')
+checks['rain boundary: UI boundary kept as the fallback, both logs name the kind']='renderEffects();\n            }\n        }\n    }' in r and 'kind=ui' in r and 'kind=rain' in pdi
 for k,ok in checks.items():print(('PASS ' if ok else 'FAIL ')+k)
 sys.exit(0 if all(checks.values()) else 1)
+

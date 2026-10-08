@@ -301,6 +301,7 @@ class Device final : public GuardedMirrorDevice {
     UINT width = 0, height = 0;
     D3DFORMAT sceneFormat = D3DFMT_UNKNOWN;
     bool terrain = false, captured = false, applied = false, enabled = true;
+    bool rainBoundary = false; /* 0.3.199 (rain): set by drawHook at a matched rain draw before the boundary, consumed by prepareDrawImpl */
     bool failed = false, projectionValid = false, key10 = false, key12=false;
     unsigned frame = 0, appliedFrames = 0, matchedTerrain = 0, matchedUI = 0, projectionRejects = 0;
     unsigned worldSkippedFrames=0;
@@ -623,6 +624,9 @@ class Device final : public GuardedMirrorDevice {
     template<class Capture> void prepareDrawImpl(Capture capture,UINT count) {
         ++drawCalls;
         if(failed||!enabled)return;
+        // 0.3.199 (rain): the effect boundary at the first rain draw (drawHook sets the flag): the composite runs before the game's rain, so the
+        // fog and haze do not paint over the streaks. Same extensionWork region as the UI boundary; renderEffects restores the game's states.
+        if(rainBoundary){rainBoundary=false;if(!applied&&terrain){if(sampled())logf("EFFECT boundary frame=%u draw=%u kind=rain",frame,drawCalls);renderEffects();}}
         if(applied){
             if(sampled()){IDirect3DVertexShader9* late=nullptr;const bool borrowed=ext->peekVertexShader(late); // 0.3.196 (task 12): identity lookup only
                 if((borrowed||(SUCCEEDED(ext->GetVertexShader(&late))&&late))&&world){
@@ -821,7 +825,7 @@ class Device final : public GuardedMirrorDevice {
     template<class Capture,class Draw> HRESULT drawHook(D3DPRIMITIVETYPE t,UINT count,Capture capture,Draw draw){
         bool claimed=false,rainBlend=false;
         // 0.3.198 (rain): the whole per-draw cost of weather detection, before any other work and in both gate paths: one pointer comparison.
-        if(weatherDetect.hot&&!applied&&mirrorState.textureKnown[0]&&mirrorState.textures[0]==weatherDetect.hot){weatherSample.primitives+=count;++weatherSample.draws;rainBlend=weatherDetect.hotKind==NorthlightWeather::Kind::Rain&&world&&world->rainBlendSetting();} /* 0.3.199 (rain): rain draws only, ~50/frame */
+        if(weatherDetect.hot&&mirrorState.textureKnown[0]&&mirrorState.textures[0]==weatherDetect.hot){weatherSample.primitives+=count;++weatherSample.draws;rainBlend=weatherDetect.hotKind==NorthlightWeather::Kind::Rain&&world&&world->rainBlendSetting();rainBoundary=rainBlend&&terrain&&!applied;} /* 0.3.199 (rain): after applied too (the rest of the rain); the boundary at the first rain draw of a terrain frame */
         if(!frameDrawGates){
             dropBlobFaint();prepareDraw(capture,count);
             {CpuScope hooks(sampledHookTimer());
@@ -905,7 +909,7 @@ class Device final : public GuardedMirrorDevice {
             if (isUI && SUCCEEDED(ext->GetVertexShaderConstantF(3,w,1)) &&
                 std::fabs(w[0])+std::fabs(w[1])+std::fabs(w[2])<.001f && std::fabs(w[3]-1.f)<.001f){
                 if(sampled()){DWORD z=0,zw=0,blend=0;ext->GetRenderState(D3DRS_ZENABLE,&z);ext->GetRenderState(D3DRS_ZWRITEENABLE,&zw);ext->GetRenderState(D3DRS_ALPHABLENDENABLE,&blend);
-                    logf("EFFECT boundary frame=%u draw=%u z=%lu zwrite=%lu blend=%lu",frame,drawCalls,(unsigned long)z,(unsigned long)zw,(unsigned long)blend);}
+                    logf("EFFECT boundary frame=%u draw=%u kind=ui z=%lu zwrite=%lu blend=%lu",frame,drawCalls,(unsigned long)z,(unsigned long)zw,(unsigned long)blend);}
                 renderEffects();
             }
         }

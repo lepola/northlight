@@ -247,7 +247,7 @@ struct Base{
     Trace trace;Env env;MockExt extObj;MockWorld worldObj;MockSky skyObj;MockBlobs blobsObj;
     MockExt* ext=&extObj;MockWorld* world=&worldObj;MockSky* celestialDiscs=nullptr;MockBlobs* shadowBlobs=nullptr;
     MirrorStateMock mirrorState;
-    bool extensionFault=false,failed=false,enabled=true,applied=false,terrain=false,gateFrame=false;
+    bool extensionFault=false,failed=false,enabled=true,applied=false,terrain=false,gateFrame=false,rainBoundary=false;
     static constexpr int debugMode=0,kTagMask=3;int worldDebug=0;
     std::unordered_map<IDirect3DVertexShader9*,int> vsTags;
     std::unordered_map<IDirect3DVertexShader9*,std::uint64_t> vsHashes;std::unordered_map<IDirect3DPixelShader9*,std::uint64_t> psHashes;
