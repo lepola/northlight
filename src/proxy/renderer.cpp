@@ -1254,9 +1254,9 @@ public:
         // 0.3.200 (frame trace): with Diagnostics, 240 consecutive frames out of every 1800 get one line each: whether the effects ran, the world drew,
         // and through which context (1 terrain + global light, 2 terrain native light, 3 WMO), to see frame-to-frame alternation in the log.
         if(diagnostics()&&(frame%1800<240||frameMarkers)){float rot=-1,move=-1;unsigned reject=0,trigger=0;unsigned long long tdraw=0;if(world)world->frameTraceCamera(rot,move,reject,trigger,tdraw);
-            const float* yaw=world?world->frameTraceYaw():nullptr;static const float none[4]={-999,-999,-999,-999};if(!yaw)yaw=none;
-            logf("FRAMETRACE frame=%u tick=%lu applied=%d enabled=%d projection=%d terrain=%d world=%d context=%u skip=%s rot=%.5f move=%.4f reject=%u trigger=%u triggerDraw=%llu yaw=%.3f/%.3f/%.3f/%.3f",frame,(unsigned long)GetTickCount(),
-            int(applied),int(enabled),int(projectionValid),int(terrain),traceWorld,world?world->frameTraceContext():0u,traceWorld==0&&world?world->lastSkipReason():"-",double(rot),double(move),reject,trigger,tdraw,yaw[0],yaw[1],yaw[2],yaw[3]);}
+            const float* yaw=world?world->frameTraceYaw():nullptr;const float* sky=world?world->frameTraceSky():nullptr;static const float noSky[4]={};if(!sky)sky=noSky;static const float none[4]={-999,-999,-999,-999};if(!yaw)yaw=none;
+            logf("FRAMETRACE frame=%u tick=%lu applied=%d enabled=%d projection=%d terrain=%d world=%d context=%u skip=%s rot=%.5f move=%.4f reject=%u trigger=%u triggerDraw=%llu yaw=%.3f/%.3f/%.3f/%.3f sky=%.0f/%.4f/%.3f/%.4f",frame,(unsigned long)GetTickCount(),
+            int(applied),int(enabled),int(projectionValid),int(terrain),traceWorld,world?world->frameTraceContext():0u,traceWorld==0&&world?world->lastSkipReason():"-",double(rot),double(move),reject,trigger,tdraw,yaw[0],yaw[1],yaw[2],yaw[3],sky[0],sky[1],sky[2],sky[3]);}
         traceWorld=-1;
         {CpuScope cpu(sampledFrame?&cleanup:nullptr);clearFrame();}
         if(memoryCaps>=0&&world)world->setMemoryPressure(memoryCaps==1);

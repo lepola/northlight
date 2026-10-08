@@ -227,6 +227,7 @@ private:
     unsigned probeBlendPublishes=0,probeBlendSlots=0; // 0.3.197: per LOCAL log interval
     bool valid=false,failed=false,reportedContext=false;
     float traceYaw[4]={}; /* 0.3.200 (frame trace): view heading in degrees: VS c0..c3 as read here, the backend's, the game thread's sent view, the game memory camera's */
+    float traceSky[4]={}; /* 0.3.200 (frame trace): global light decode: reason (99 not tried), dayFraction, sky camera error, direction length squared */
     float traceRot=-1,traceMove=-1;unsigned traceReject=0,traceTrigger=0;unsigned long long traceTriggerDraw=0; /* 0.3.200 (frame trace): camera disagreement (max |view diff| rotation, translation), reject reason, snapshot trigger kind and draw */
     unsigned traceContext=0; /* 0.3.200 (frame trace): this frame's context path: 0 none, 1 terrain+global light, 2 terrain native light (camera disagreed), 3 WMO */
     unsigned contextRejects=0,frames=0,slowReports=0;
@@ -2005,6 +2006,7 @@ public:
     bool hasContext()const{return valid&&!failed&&!workerFault();}
     unsigned frameTraceContext()const{return traceContext;} /* 0.3.200 (frame trace) */
     const float* frameTraceYaw()const{return traceYaw;}
+    const float* frameTraceSky()const{return traceSky;}
     std::function<bool(float*)> traceBackendView; /* 0.3.200 (frame trace): reads the backend's c0..c3, set by the renderer */
     void frameTraceCamera(float& rot,float& move,unsigned& reject,unsigned& trigger,unsigned long long& draw)const{rot=traceRot;move=traceMove;reject=traceReject;trigger=traceTrigger;draw=traceTriggerDraw;}
     bool actorShadowsEnabled()const{return quality.actorShadows!=0;}
@@ -2106,7 +2108,7 @@ public:
         NorthlightWmoContext::Lighting global;
         bool globalRead=cameraMatches&&NorthlightWmoContext::readGlobalLighting(camera,global);
         bool decoded=registers&&gameContext&&NorthlightWmoContext::terrainContext(view,nativeRead?lighting:nullptr,camera,globalRead?&global:nullptr,context);
-        traceContext=globalRead?1u:2u;traceReject=unsigned(why.reason);traceRot=traceMove=-1;
+        traceContext=globalRead?1u:2u;traceReject=unsigned(why.reason);{const auto& g=NorthlightWmoContext::decodeTrace();traceSky[0]=float(cameraMatches?g.reason:99u);traceSky[1]=g.dayFraction;traceSky[2]=g.cameraError;traceSky[3]=g.lengthSquared;}traceRot=traceMove=-1;
         if(cameraRead){traceRot=traceMove=0;for(unsigned i=0;i<16;++i){const float e=std::fabs(view[i]-independent.view[i]);if(i>=12&&i<15)traceMove=std::max(traceMove,e);else traceRot=std::max(traceRot,e);}}
         if(const auto* snap=NorthlightStream::activeSnapshot){traceTrigger=snap->triggerKind;traceTriggerDraw=snap->triggerDraw;}else{traceTrigger=9;traceTriggerDraw=0;}
         {const auto yaw=[](const float* v){return std::atan2(v[2],v[6])*57.29578f;};for(auto& y:traceYaw)y=-999;
