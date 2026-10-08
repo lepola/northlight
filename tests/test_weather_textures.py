@@ -18,7 +18,9 @@ from world_scene_builder import decode_blp
 textures = wt.weather_textures()
 checks, info = {}, {}
 MEAN0 = (.017, .024)   # rain alpha .4, core sigma .62 px on texel 16 (0.3.199 game tests: alpha .45 -> .35 -> .55 -> .75 -> 1 -> .8 -> .65 -> .5 -> .4; core 1.1 -> .9 -> .75 -> .62 px)
-checks['three textures, at the client\'s paths'] = set(textures) == {'textures\\Weather\\RainDrop01.blp', 'Textures\\WEATHER\\RAINDROPRED01.BLP', 'textures\\Weather\\SnowFlake01.blp'}
+checks['five textures, at the client\'s paths (rain, red rain, snow, two transparent mists)'] = set(textures) == {'textures\\Weather\\RainDrop01.blp', 'Textures\\WEATHER\\RAINDROPRED01.BLP', 'textures\\Weather\\SnowFlake01.blp', *wt.MIST}
+# 0.3.199: the mist puffs are fully transparent (the 2x-modulated puffs darkened night storms into black balls): alpha 0 at every level
+checks['mist: fully transparent at every level, BLP2 palettized 8x8'] = all(struct.unpack_from('<4sI4B2I', textures[m]) == (b'BLP2', 1, 1, 8, 8, 1, 8, 8) and all(max(decode_blp(textures[m], s)[2][3::4]) == 0 for s in (8, 4, 2, 1)) for m in wt.MIST)
 # Palette layout: 256 BGRA entries, entry 0 = the colour exactly, the rest zero; per mip all-zero indices then the alpha plane.
 rain = textures['textures\\Weather\\RainDrop01.blp']
 checks['rain palette: entry 0 = (204,204,204,255), 255 other entries zero'] = rain[148:152] == bytes((204, 204, 204, 255)) and not any(rain[152:148+1024])
@@ -28,6 +30,8 @@ checks['deterministic: a second run gives the same bytes'] = wt.weather_textures
 
 want = {'RainDrop01': (32, 512, .4), 'RAINDROPRED01': (32, 512, .4), 'SnowFlake01': (32, 64, .8)}
 for name, data in textures.items():
+    if name in wt.MIST:
+        continue
     key = next(k for k in want if k.lower() in name.lower())
     w, h, alpha = want[key]
     header = struct.unpack_from('<4sI4B2I', data)
