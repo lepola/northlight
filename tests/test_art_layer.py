@@ -15,7 +15,7 @@ the test output):
   skipped insert is night-like at 21:30 and 03:30.
 - every view: each outdoor row's storm profile is private, unshared with any other slot, has <= 16
   keys, a fog end within the source storm's (x0.85, never below 350 yards unless shorter) and untouched water bands, and the skybox rule holds;
-  the five BLPs in both archives are the generated ones (uncompressed, 1:16 rain, 1:2 snow).
+  the three BLPs in both archives are the generated ones (uncompressed, 1:16 rain, 1:2 snow).
 - the client's own chain: when the client has our art layer installed (Data/patch-z.mpq), the
   rebuild without it is byte-identical to it, so the installer step reproduces the HD chain, and
   the Mulgore and Stormwind steps run with their sky clones."""
@@ -49,8 +49,6 @@ for target in r['targets']:
         assert {n for n in a.names() if not n.startswith('(')} == files
         for n, data in blps.items():   # the generated textures, ARGB at the aspect ratios the renderer detects
             assert a.read(n) == data
-            if n in build_weather_textures.MIST:
-                continue   # 0.3.199: the transparent mist stand-ins (8x8, no detection signature)
             w, h = decode_blp(data, 4096)[:2]
             assert data[8:11] == bytes((1, 8, 8)) and w <= 32 and h == (2*w if 'snow' in n.lower() else 16*w), (n, w, h)
 def storm_checks(view, folder, r):

@@ -38,7 +38,7 @@ Every effect below is on by default and is drawn on top of the game's own frame.
   outdoor clear-weather light and fog colours, warmer Mulgore, denser Stormwind day fog. Storm weather
   gets darker light and fog bands. Sky models
   that paint their own sun or moon into the clear-weather sky lose it.
-- **Weather.** A heavy-rain look: procedural rain and snow textures in the art layer (and the game's dark-in-storms mist puffs removed), darker storm light
+- **Weather.** A heavy-rain look: procedural rain and snow textures in the art layer, darker storm light
   and fog bands, and Northlight's own haze, fog, light shafts, sun and moon, shadows, GI and lamps follow
   detected rain or snow (F10 turns it off). Detection reads only the
   textures the art layer ships, no game memory, so it needs the Northlight art layer (`Weather`, `RainFog`). The game's rain streaks are drawn alpha-blended so they stay crisp instead of taking the background's colour (`RainBlend`).

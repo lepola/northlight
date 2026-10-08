@@ -148,14 +148,7 @@ TEXTURES = {   # archive name -> (width, height, colour, alpha max, mip levels b
     'textures\\Weather\\RainDrop01.blp': (32, 512, RAIN, .4, streak_chain),
     'Textures\\WEATHER\\RAINDROPRED01.BLP': (32, 512, RAIN_RED, .4, streak_chain),
     'textures\\Weather\\SnowFlake01.blp': (32, 64, SNOW, .8, lambda w, h, colour, alpha_max: mip_chain(w, h, image(w, h, colour, alpha_max, flake))),
-    # 0.3.199: the game's weather mist puffs, fully transparent. The game draws them as a 2x modulate (DestColor/SrcColor) with the lit
-    # vertex colour, so at night and in storms (vertex colour below .5) the white puffs darkened the scene into black balls (game test,
-    # also with every Northlight effect off). Alpha 0 everywhere fails the draw's alpha test (ref 1): no puff is drawn. Snow and sand
-    # storms lose their mist puffs too; the fog clouds cover that look. 8x8 (the stock 256x256 shape is not needed for nothing).
-    'textures\\Weather\\WEATHERMISTGRAINY01.BLP': (8, 8, (1., 1., 1.), 0., lambda w, h, colour, alpha_max: mip_chain(w, h, bytes((255, 255, 255, 0))*(w*h))),
-    'textures\\Weather\\SNOWMIST01.BLP': (8, 8, (1., 1., 1.), 0., lambda w, h, colour, alpha_max: mip_chain(w, h, bytes((255, 255, 255, 0))*(w*h))),
 }
-MIST = ('textures\\Weather\\WEATHERMISTGRAINY01.BLP', 'textures\\Weather\\SNOWMIST01.BLP')   # the transparent stand-ins above
 
 
 def weather_textures():
