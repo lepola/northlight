@@ -36,19 +36,21 @@ inline unsigned cores(){const unsigned hw=std::thread::hardware_concurrency();re
 // CommandStream from northlight-quality.ini text; the same loader and key the WorldRenderer uses later, so both agree.
 // Anything unreadable gives 0 (the direct path): the stream is only ever entered on an explicit, parsed 1.
 // 0.3.200 (pipeline): framesAhead (optional) receives StreamFramesAhead from the same load (1 when nothing could be read).
-inline bool commandStreamFromText(const std::string& own,bool hasFile=true,unsigned* framesAhead=nullptr){
-    if(framesAhead)*framesAhead=1;
+// 0.3.200 (frame skip): frameSkip (optional) receives StreamFrameSkip the same way (0 when nothing could be read).
+inline bool commandStreamFromText(const std::string& own,bool hasFile=true,unsigned* framesAhead=nullptr,unsigned* frameSkip=nullptr){
+    if(framesAhead)*framesAhead=1;if(frameSkip)*frameSkip=0;
     try{std::istringstream in(NorthlightQuality::narrow(own));std::vector<std::string> problems;
         const NorthlightQuality::Settings s=NorthlightQuality::load(hasFile?&in:nullptr,nullptr,problems);
         if(framesAhead)*framesAhead=s.streamFramesAhead;
+        if(frameSkip)*frameSkip=s.streamFrameSkip;
         return s.commandStream!=0;}
     catch(...){return false;}
 }
 #ifdef _WIN32
 // Called by Factory::CreateDevice before the real device exists: rootPath + northlight-quality.ini (wide path, as
 // WorldRenderer::readSmallFile). An absent file means the code default (1).
-inline bool commandStreamRequested(const wchar_t* rootPath,unsigned* framesAhead=nullptr){
-    std::string text;bool has=false;if(framesAhead)*framesAhead=1;
+inline bool commandStreamRequested(const wchar_t* rootPath,unsigned* framesAhead=nullptr,unsigned* frameSkip=nullptr){
+    std::string text;bool has=false;if(framesAhead)*framesAhead=1;if(frameSkip)*frameSkip=0;
     try{
         const std::wstring path=std::wstring(rootPath?rootPath:L"")+L"northlight-quality.ini";
         HANDLE f=CreateFileW(path.c_str(),GENERIC_READ,FILE_SHARE_READ|FILE_SHARE_WRITE,nullptr,OPEN_EXISTING,FILE_ATTRIBUTE_NORMAL,nullptr);
@@ -56,7 +58,7 @@ inline bool commandStreamRequested(const wchar_t* rootPath,unsigned* framesAhead
             while(ReadFile(f,buffer,sizeof buffer,&got,nullptr)&&got&&text.size()<262144)text.append(buffer,got);
             CloseHandle(f);}
     }catch(...){return false;}
-    return commandStreamFromText(text,has,framesAhead);
+    return commandStreamFromText(text,has,framesAhead,frameSkip);
 }
 #endif
 } // namespace NorthlightStream
