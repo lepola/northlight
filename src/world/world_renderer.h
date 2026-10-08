@@ -2006,7 +2006,7 @@ public:
     // render() and the celestial renderers read this one place; all zero (identity) with Weather=0 or no weather.
     unsigned weatherSetting()const{return quality.weather;}
     unsigned rainFogSetting()const{return quality.rainFog;}
-    bool rainBlendSetting()const{return quality.weather&&quality.rainBlend;} /* 0.3.199 (rain): the draw hook's alpha-blended rain streaks */
+    bool rainBlendSetting()const{return quality.weather!=0;} /* 0.3.199 (rain): the draw hook's alpha-blended rain streaks and rain-only mist skip, with Weather=1 */
     NorthlightWeatherEffects::Frame weatherEffects()const{return NorthlightWeatherEffects::derive(weatherState,quality.weather,quality.rainFog);}
     bool frameDrawGates()const{return quality.frameDrawGates!=0;} /* 0.3.187: read once at device creation */ /* 0.3.158: ActorShadows=0 leaves actor shadows to the game's blobs */
     const float* legacyFogParameters()const{return legacyFog.parameters;}
@@ -3492,8 +3492,8 @@ public:
         // depth-checked against the previous frame's distance in temporalDepth[temporalIndex] since TemporalLight already rotated, neighbourhood-clamped).
         // fog (raw, s9) + fogHistory (s14) -> fogBlurred, then fogBlurred<->fogHistory swap (texture and surface): fogHistory holds this frame's resolved fog for
         // the next one. History not usable (first frame, map change, camera jump, debug, fog was off last frame): weight 0, a plain copy that makes it valid.
-        // Off (FogTemporal=0, no fog effect, debug, no shader): none of this runs, the sequence and bindings below are the old ones.
-        if(effects.fog&&quality.fogTemporal&&fogTemporalPS&&fogHistory&&debug==0){
+        // Off (no fog effect, debug, no shader): none of this runs, the sequence and bindings below are the old ones.
+        if(effects.fog&&fogTemporalPS&&fogHistory&&debug==0){
             const float info[4]={0,fogHistoryValid&&useHistory?FogTemporalWeight:0.f,0,0};
             d->SetPixelShaderConstantF(53,c[53],4);d->SetPixelShaderConstantF(64,info,1);
             d->SetRenderTarget(0,fogBlurredSurface);d->SetTexture(9,fog);d->SetTexture(14,fogHistory);d->SetTexture(15,temporalDepth[temporalIndex]);

@@ -179,7 +179,7 @@ int main(){
         h.bind(0,50);h.draw(10);assert(h.rainBoundary); /* first rain draw */
         h.rainBoundary=false;h.applied=true;h.draw(10);assert(!h.rainBoundary&&h.weatherSample.draws==2); /* after the boundary: counted, no second boundary */
         h.applied=false;h.terrain=false;h.draw(10);assert(!h.rainBoundary); /* no terrain this frame: UI fallback */
-        h.terrain=true;h.world->on=false;h.draw(10);assert(!h.rainBoundary); /* RainBlend=0 / Weather=0: the UI boundary */
+        h.terrain=true;h.world->on=false;h.draw(10);assert(!h.rainBoundary); /* Weather=0: the UI boundary */
         h.world->on=true;h.bind(0,0);h.draw(10);assert(!h.rainBoundary); /* non-weather draw */
         {const unsigned before=h.weatherSample.draws;h.weatherDetect.rotate();h.bind(0,51);h.draw(10);assert(!h.rainBoundary&&h.weatherSample.draws==before+1);} /* snow: counted, no boundary change */
     }

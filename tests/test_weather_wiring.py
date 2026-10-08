@@ -33,7 +33,7 @@ checks['RainBlend: not rain = the plain draw; override sets SrcAlpha/InvSrcAlpha
     'if(!rain)return blobFaintDraw(claimed,draw);' in helper and 'return blobFaintDraw(claimed,[&]{' in helper
     and all(t in helper for t in ('D3DRS_ALPHABLENDENABLE','D3DRS_SRCBLEND','D3DRS_DESTBLEND','D3DRS_BLENDOP','TRUE,D3DBLEND_SRCALPHA,D3DBLEND_INVSRCALPHA,D3DBLENDOP_ADD'))
     and 0<helper.index('GetRenderState')<helper.index('draw();')<helper.index('prev[i]);') and helper.count('draw()')==1)
-checks['RainBlend: world setting needs Weather=1']='bool rainBlendSetting()const{return quality.weather&&quality.rainBlend;}' in fp.src('world_renderer.h').read_text()
+checks['RainBlend: on with Weather=1 (no key of its own)']='bool rainBlendSetting()const{return quality.weather!=0;}' in fp.src('world_renderer.h').read_text() and 'rainBlend' not in fp.src('quality_settings.h').read_text()
 checks['drawHook: no Get*, peek, lock or lookup in the weather lines']=not re.search(r'weather[^\n]*(Get|peek|lock|find|unordered_map|CpuScope)',hook)
 checks['drawHook: no gateFrame weather branch; the probe sits in prepareDrawImpl\'s existing gateFrame branch']='weatherProbeDraw' not in hook and 'gateFrame' not in hook.split(cmp_line)[0] and 'if(gateFrame){++gateCounts.prep;weatherProbeDraw(count);}' in r
 

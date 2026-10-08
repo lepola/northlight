@@ -2,7 +2,7 @@
 # northlight-test:
 """0.3.199 (fog temporal): wiring of the temporal accumulation of the half-resolution fog - source checks, no compiler.
 The FogTemporal shader (own entry after FogClouds; every other entry byte-identical), c64.y as its only constant, the FogTemporal key,
-the pass and the fogBlurred<->fogHistory rotation guarded by the setting (FogTemporal=0 keeps the old sequence), the composite on the
+the pass and the fogBlurred<->fogHistory rotation guarded by the fog effect, the shader and the history target (no key since the game tests), the composite on the
 final buffer, and nothing in the stream or proxy files."""
 import sys; from pathlib import Path; sys.path.insert(0, str(Path(__file__).resolve().parents[1]))  # repo root
 import northlight_paths as fp
@@ -36,13 +36,13 @@ checks['HLSL: sky reprojects the direction only, clamp over the neighbourhood, l
     'sky' in body and 'PreviousView[0].xyz' in body and 'min(lo,s)' in body and 'clamp(history,lo,hi)' in body and 'lerp(current,' in body
     and 'if(FogTemporalInfo.y<=0)return current;' in body and 'max(.25,w*.03)' in body)
 
-checks['setting: key after FogCloudDensity, 0..1, presets 1/1/1, default 1, origin grows']=(
-    '{"FogCloudDensity",&Settings::fogCloudDensity,0,200,{100,100,100}},\n    {"FogTemporal",&Settings::fogTemporal,0,1,{1,1,1}},\n    {"RainBlend",&Settings::rainBlend,0,1,{1,1,1}},' in q and 'unsigned fogTemporal=1;' in q and 'char origin[41]=' in q)
+checks['setting: no key (always on since the game tests), FogCloudDensity the last key']=(
+    'FogTemporal' not in q and 'fogTemporal' not in q and '{"FogCloudDensity",&Settings::fogCloudDensity,0,200,{100,100,100}},\n};' in q and 'char origin[39]=' in q)
 ini=(fp.REPO/'renderer'/'windows-package'/'northlight-quality.ini').read_text()
-checks['docs: ini key, both readmes']=(';FogTemporal=1' in ini and 'FogTemporal' in (fp.REPO/'README.md').read_text() and 'FogTemporal' in (fp.REPO/'renderer'/'windows-package'/'README.txt').read_text())
+checks['docs: no key in the ini or the readmes']=('FogTemporal' not in ini and 'FogTemporal' not in (fp.REPO/'README.md').read_text() and 'FogTemporal' not in (fp.REPO/'renderer'/'windows-package'/'README.txt').read_text())
 
 g=w[w.index('bool fogResolved=false;'):]
-pas=g[g.index('if(effects.fog&&quality.fogTemporal&&fogTemporalPS&&fogHistory&&debug==0){'):g.index('// Separable depth-aware blur')]
+pas=g[g.index('if(effects.fog&&fogTemporalPS&&fogHistory&&debug==0){'):g.index('// Separable depth-aware blur')]
 checks['host: pass and swap guarded by the setting, the shader, the history target, fog and debug==0']=(
     'std::swap(fogBlurred,fogHistory);std::swap(fogBlurredSurface,fogHistorySurface)' in pas and pas.count('std::swap')==2 and 'else fogHistoryValid=false;' in pas)
 checks['host: history weight 0 unless fogHistoryValid&&useHistory; weight constant is c64 only, previous view c53 from the bank']=(
