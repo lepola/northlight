@@ -228,6 +228,7 @@ private:
     bool valid=false,failed=false,reportedContext=false;
     float traceYaw[4]={}; /* 0.3.200 (frame trace): view heading in degrees: VS c0..c3 as read here, the backend's, the game thread's sent view, the game memory camera's */
     float traceLight[5]={-1,-1,-1,-1,-1}; /* 0.3.200 (frame trace): |sun colour|, |moon colour|, fog volume gain c21.x, |ambient|, debug */
+    float traceCel[6]={-1,-1,-1,-1,-1,-1}; /* 0.3.200 (frame trace): celestial valid, sun weight, sun z, |direct|, |sun colour| before and after the palette */
     float traceSky[4]={}; /* 0.3.200 (frame trace): global light decode: reason (99 not tried), dayFraction, sky camera error, direction length squared */
     float traceRot=-1,traceMove=-1;unsigned traceReject=0,traceTrigger=0;unsigned long long traceTriggerDraw=0; /* 0.3.200 (frame trace): camera disagreement (max |view diff| rotation, translation), reject reason, snapshot trigger kind and draw */
     unsigned traceContext=0; /* 0.3.200 (frame trace): this frame's context path: 0 none, 1 terrain+global light, 2 terrain native light (camera disagreed), 3 WMO */
@@ -2009,6 +2010,7 @@ public:
     const float* frameTraceYaw()const{return traceYaw;}
     const float* frameTraceSky()const{return traceSky;}
     const float* frameTraceLight()const{return traceLight;}
+    const float* frameTraceCel()const{return traceCel;}
     std::function<bool(float*)> traceBackendView; /* 0.3.200 (frame trace): reads the backend's c0..c3, set by the renderer */
     void frameTraceCamera(float& rot,float& move,unsigned& reject,unsigned& trigger,unsigned long long& draw)const{rot=traceRot;move=traceMove;reject=traceReject;trigger=traceTrigger;draw=traceTriggerDraw;}
     bool actorShadowsEnabled()const{return quality.actorShadows!=0;}
@@ -2142,7 +2144,7 @@ public:
     void updateWorldContext(const char* map,const float* camera,const NorthlightWmoContext::Lighting* global=nullptr){
         if(unsigned fault=workerFault()){if(!failed)logf("WORLD worker stopped: %s; restart required",workerFaultMessage(fault));failed=true;valid=false;return;}
         if(!reportedContext){logf("WORLD context validated: map=%s camera=(%.2f %.2f %.2f) sun=(%.3f %.3f %.3f)",map,camera[0],camera[1],camera[2],context.lightDirection[0],context.lightDirection[1],context.lightDirection[2]);reportedContext=true;}
-        celestialValid=NorthlightCelestial::read(camera,context.direct,celestial);
+        celestialValid=NorthlightCelestial::read(camera,context.direct,celestial);for(auto& x:traceCel)x=-1;traceCel[0]=celestialValid?1.f:0.f;
         if(celestialValid){
             // A pure render-clock orbit shared by discs, shadows and fog.
             const float nativeSunAlpha=celestial.sun.alpha,nativeMoonAlpha=celestial.moon.alpha;
@@ -2158,7 +2160,10 @@ public:
             NorthlightCelestial::applyRendererPolicy(celestialLight,context.direct);
             const auto palette=celestialPalette(map,camera);
             NorthlightCelestialProfiles::apply(palette,context.direct,celestial);
+            traceCel[1]=celestialLight.sunWeight;traceCel[2]=celestialLight.sun.direction[2];traceCel[3]=std::sqrt(context.direct[0]*context.direct[0]+context.direct[1]*context.direct[1]+context.direct[2]*context.direct[2]);
+            traceCel[4]=std::sqrt(celestialLight.sunColor[0]*celestialLight.sunColor[0]+celestialLight.sunColor[1]*celestialLight.sunColor[1]+celestialLight.sunColor[2]*celestialLight.sunColor[2]);
             NorthlightCelestialProfiles::apply(palette,context.direct,celestialLight);
+            traceCel[5]=std::sqrt(celestialLight.sunColor[0]*celestialLight.sunColor[0]+celestialLight.sunColor[1]*celestialLight.sunColor[1]+celestialLight.sunColor[2]*celestialLight.sunColor[2]);
             continuousCelestialShadows=false; // Native-speed orbit: ordinary cache policy, no accelerated phases.
             if(++celestialOrbitReports%600==1&&(celestialOrbitReports==1||NorthlightDiagnostics::enabled()))logf("CELESTIAL orbit gameDay=%.6f sun=%.2f->%.2f moon=%.2f->%.2f schedule=native sunCrest=85 moonCrest=43 weights=%.3f/%.3f nativeAlpha=%.3f/%.3f rendererAlpha=%.1f/%.1f",celestial.dayFraction,nativeSun,orbit.sun.elevation,nativeMoon,orbit.moon.elevation,celestial.sunWeight,celestial.moonWeight,nativeSunAlpha,nativeMoonAlpha,celestial.sun.alpha,celestial.moon.alpha);
         }
