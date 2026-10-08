@@ -28,6 +28,7 @@ struct Counters {
     Counter highWaterBytes{0},highWaterDepth{0};
     // Waits of the game thread: count and nanoseconds by kind. Nested syncs never wait; they are counted separately.
     Counter backpressureWaits{0},backpressureNs{0},syncCalls{0},syncNs{0},presentWaits{0},presentNs{0},nestedSyncs{0};
+    Counter pacedFrames{0},pacedNs{0},shortFrames{0};   // 0.3.200 (pacing): Presents held back to the replay's frame time, the time held, frames under half of it before pacing
     // Stream proxies / state / locks (0.3.192 CS, M2). Pass-through locks by reason; see PassReason in stream_proxies.h.
     static constexpr std::size_t kPassReasons=8;
     Counter passThrough[kPassReasons]{};

@@ -367,6 +367,7 @@ public:
         PresentMark& slot=presentHist[core.frameNo%framesAhead_];const PresentMark prev=slot;slot=PresentMark{q.recordedSeq(),core.frameNo};
         HRESULT result=D3D_OK;
         if(prev.seq){q.waitReplayed(prev.seq,WaitKind::Present);result=presentResult(prev);}   // framesAhead_ frames ahead: that frame's real HRESULT
+        if(framesAhead_>1)pace(q);   // 0.3.200 (pacing)
         q.setPressure(core.memoryPressure.load(std::memory_order_relaxed)||NorthlightStream::memoryPressure.load(std::memory_order_relaxed));
         frameEnd=nowNs();waitsAtFrameEnd=get(q.stats.syncNs)+get(q.stats.backpressureNs);
         ++core.frameNo;tuner.sample(q);   // idle pool memory goes back after a quiet window
@@ -549,6 +550,26 @@ private:
     StreamSwapChain* sc0=nullptr;std::atomic<LONG> refs{1};
     bool recording=false,pressureApplied=false,filter=true;BOOL cursorVisible=0;void* hCursor=nullptr;std::mutex cursorMutex;CursorApi cursor=CursorApi::native();unsigned getsSincePublish=0;std::uint64_t frameEnd=0,waitsAtFrameEnd=0;std::uint64_t drawOrdinal=0;
     unsigned framesAhead_=1;PresentMark presentHist[kMaxFramesAhead];   // 0.3.200 (pipeline): see presentCommon
+    // 0.3.200 (pacing): with StreamFramesAhead >= 2 the Present wait releases the game as soon as the replay is less than that many frames behind, so
+    // its frames came in bursts (one returning at once, the next waiting a whole replay frame). WoW's camera follow smooths with the frame time and
+    // swung back and forth on such uneven frames (a visible shake while moving or turning). pace() holds a Present that would return well before the
+    // replay's average frame time (paceEma_, measured on this thread from framesReplayed) until 90 % of it has passed since the previous return: the
+    // game's frames stay even, the frames ahead still absorb a slow replay frame. Game-limited scenes are unaffected (their own frame time is the average).
+    double paceEma_=0;std::uint64_t paceAt_=0,paceReplayed_=0;
+    static constexpr double kPaceFraction=.9,kPaceAlpha=.1;static constexpr std::uint64_t kPaceMaxNs=50000000,kPaceGapNs=250000000;
+    void pace(Queue& q){
+        std::uint64_t now=nowNs();const std::uint64_t replayed=core.framesReplayed.load(std::memory_order_relaxed);
+        if(!paceAt_||now-paceAt_>kPaceGapNs||replayed<paceReplayed_){paceAt_=now;paceReplayed_=replayed;paceEma_=0;return;}   // first frame or a long gap (loading): start over
+        if(replayed>paceReplayed_){const double per=double(now-paceAt_)/double(replayed-paceReplayed_);paceEma_=paceEma_>0?paceEma_+(per-paceEma_)*kPaceAlpha:per;paceAt_=now;paceReplayed_=replayed;}
+        if(!frameEnd||paceEma_<=0)return;
+        const std::uint64_t target=frameEnd+std::uint64_t(paceEma_*kPaceFraction);
+        if(now>=target||target-now>kPaceMaxNs)return;
+        if(double(now-frameEnd)<paceEma_*.5)own(q.stats.shortFrames);
+        const std::uint64_t t0=now;
+        while(target>now&&target-now>1500000){std::this_thread::sleep_for(std::chrono::milliseconds(1));now=nowNs();}
+        while(now<target){std::this_thread::yield();now=nowNs();}
+        own(q.stats.pacedFrames);own(q.stats.pacedNs,now-t0);
+    }
     std::thread::id gameThread=std::this_thread::get_id();
     PoolTuner tuner;TriggerPolicy policy;bool (*capture)(GameSnapshot&,Trigger,std::uint64_t)=nullptr;
     // 0.3.200 (frame skip): a swap chain's back buffer (the frame's own image); a texture level or cube face (sampled later: never a skippable depth target).

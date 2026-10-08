@@ -406,6 +406,7 @@ private:
         const std::uint64_t wall=nowNs(),idle=idleNs.load(std::memory_order_relaxed),dWall=wall-lastWall_,dIdle=idle-lastIdle_,dBusy=dWall>dIdle?dWall-dIdle:0;lastWall_=wall;lastIdle_=idle;
         const std::uint64_t pubs=get(s.publishes),sleeps=get(s.consumerSleeps),dPubs=pubs-lastPubs_,dSleeps=sleeps-lastSleeps_;lastPubs_=pubs;lastSleeps_=sleeps;
         put(buf,n," skipped=%llu",(unsigned long long)get(s.skippedFrames));   // 0.3.200 (frame skip)
+        put(buf,n," paced=%llu/%.1fms short=%llu",(unsigned long long)get(s.pacedFrames),double(get(s.pacedNs))*1e-6,(unsigned long long)get(s.shortFrames));   // 0.3.200 (pacing)
         put(buf,n," frames=%llu depthAvg=%.0f depthMax=%llu bytesAvg=%.0f bytesMax=%llu replayBusyMs/frame=%.3f sleeps=%.2f publishes=%.1f dead=%llu answered=%llu synced=%llu syncOnly=%llu snap=%llu/%llu/%llu/%llu",
             (unsigned long long)frames,avg_.depth*inv,(unsigned long long)avg_.maxDepth,avg_.bytes*inv,(unsigned long long)avg_.maxBytes,sampleEvery?dBusy/1e6/sampleEvery:0.0,sampleEvery?double(dSleeps)/sampleEvery:0.0,sampleEvery?double(dPubs)/sampleEvery:0.0,
             (unsigned long long)get(s.deadCreates),(unsigned long long)get(s.stateAnswered),(unsigned long long)get(s.stateSynced),(unsigned long long)get(s.syncOnlySlots),
