@@ -14,11 +14,11 @@
 // lookalike that draws nothing never holds it. Known limitation: a lookalike of the same signature that draws every
 // frame can hold `hot`; mitigated by the rare rain aspect and the WEATHER candidate log. All members are touched
 // under the Device's gate only.
-// 0.3.199 (rain mist): the game's weather mist puffs (WEATHERMISTGRAINY01, SNOWMIST01: white, the shape in alpha) are drawn as a
-// 2x modulate with the lit vertex colour, so in night and storm rain they darken the scene into black balls. The art layer ships
-// them resampled to 1:4 (128x512, A8R8G8B8 like the rain); `mist` holds the textures of that signature. While the frame end arms it
-// (rain, RainBlend), the draw hook skips their draws when the draw is the game's 2x modulate (DestColor/SrcColor), so a 1:4 lookalike
-// with another blend is never skipped; snow and sand storms keep their puffs. Unarmed, the extra per-draw cost is one bool test.
+// 0.3.199 (rain mist): the game's weather mist puffs (WEATHERMISTGRAINY01, SNOWMIST01: white, the shape in alpha) are alpha
+// blended (SrcAlpha/InvSrcAlpha, game test) with stage 0 = texture x vertex colour, unlit; in night and storm rain that vertex colour is
+// near black, so the puffs read as black balls. The art layer ships them resampled to 1:4 (128x512, A8R8G8B8 like the rain); `mist`
+// holds the textures of that signature. While the frame end arms it (rain, RainBlend), the draw hook skips every draw with a mist
+// texture on stage 0 (any blend: the signature is the art layer's own); snow and sand storms keep their puffs. Unarmed, the extra per-draw cost is one bool test.
 // Table: kMistSlots, a full table evicts its oldest entry that never matched a mist draw (proven mists stay).
 #include <cstdint>
 #include <cstdio>
