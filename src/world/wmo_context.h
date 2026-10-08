@@ -22,10 +22,10 @@ inline const WmoShaderSignature* signature(std::uint64_t hash) {
 }
 inline constexpr size_t SkyBytes=0x1b8,LightSlotBytes=0xd4;
 // 0.3.200: how far the sky block's own camera copy may be from the camera before the block counts as stale. The engine
-// updates that copy at its own point of the frame, so in motion it trails the camera by up to a frame of travel (0.25 used
-// to reject it on long frames: the light then switched to the native fallback frame to frame, a visible flicker). A
-// teleport or map change still moves it by far more than this.
-inline constexpr float SkyCameraTolerance=4.f;
+// updates that copy at its own point of the frame and not every frame, so in motion (mounted, measured 4..6.5 units) it
+// trails the camera by several frames of travel (0.25 used to reject it: the light then switched to the native fallback
+// frame to frame, a visible flicker). A teleport or map change moves it by far more than this.
+inline constexpr float SkyCameraTolerance=40.f;
 inline float scalar(const unsigned char* bytes,size_t at){float f;std::memcpy(&f,bytes+at,4);return f;}
 inline std::uint32_t packed(const unsigned char* bytes,size_t at){std::uint32_t n;std::memcpy(&n,bytes+at,4);return n;}
 inline void rgb(std::uint32_t color,float* output){output[0]=float((color>>16)&255)/255.f;output[1]=float((color>>8)&255)/255.f;output[2]=float(color&255)/255.f;}

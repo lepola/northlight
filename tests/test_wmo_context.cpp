@@ -59,10 +59,10 @@ int main(){
         for(unsigned j=0;j<3;++j){assert(std::fabs(decoded.lightDirection[j]-light.lightDirection[j])<1e-5f);assert(decoded.ambient[j]==light.ambient[j]&&decoded.direct[j]==light.direct[j]);}
     }
     const auto valid=sky;
-    {sky=valid;set(0x18,eye[0]+3);Lighting trailing;assert(decodeGlobalLighting(sky.data(),sky.size(),eye,trailing));sky=valid;} /* 0.3.200: a frame of travel behind the camera is accepted */
+    {sky=valid;set(0x18,eye[0]+7);Lighting trailing;assert(decodeGlobalLighting(sky.data(),sky.size(),eye,trailing));sky=valid;} /* 0.3.200: several frames of travel behind the camera are accepted */
     for(unsigned mutation=0;mutation<8;++mutation){sky=valid;
         switch(mutation){case 0:set(4,1);break;case 1:set(4,-.1f);break;case 2:set(4,std::numeric_limits<float>::quiet_NaN());break;
-            case 3:set(0x18,eye[0]+5);break;case 4:set(0x19c,0);set(0x1a4,0);break;
+            case 3:set(0x18,eye[0]+50);break;case 4:set(0x19c,0);set(0x1a4,0);break;
             case 5:set(0x19c,2);break;case 6:set(0x1a0,std::numeric_limits<float>::infinity());break;
             case 7:set(0x18,100001);break;}
         Lighting output=light;assert(!decodeGlobalLighting(sky.data(),sky.size(),eye,output));assert(output.dayFraction==light.dayFraction);
