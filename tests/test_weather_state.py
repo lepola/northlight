@@ -2,7 +2,7 @@
 # northlight-test: requires=cxx
 """0.3.198 (rain): NorthlightWeather::Tracker (src/sky/weather_state.h), the real header compiled natively.
 Ramp in (~4 s) and out (~6 s) timing, the 2.5 s hold over gaps (loading screen, Alt+Tab), the 0.1 s dt clamp,
-the intensity EMA, wetness rise/dry (rain only), a kind switch (old kind fully out first, no crossfade) and
+the intensity EMA, a kind switch (old kind fully out first, no crossfade) and
 never-seen = exactly zero. Native clang++, plain -O2 and ASan/UBSan. No device or game."""
 import sys; from pathlib import Path; sys.path.insert(0, str(Path(__file__).resolve().parents[1]))  # repo root
 import northlight_paths as fp
@@ -22,7 +22,7 @@ static bool near(float a,float b,float e){return std::fabs(a-b)<=e;}
 int main(){
     {   // never seen: every output exactly zero, for any dt
         Tracker t;run(t,none,30);t.frame(none,5.0f);t.frame(none,-1.0f);
-        const State& s=t.state();assert(s.kind==Kind::None&&s.intensity==0&&s.blend==0&&s.wetness==0&&s.secondsSinceSeen==0&&s.primitives==0);
+        const State& s=t.state();assert(s.kind==Kind::None&&s.intensity==0&&s.blend==0&&s.secondsSinceSeen==0&&s.primitives==0);
         Sample sand;sand.kind=Kind::Sand;sand.primitives=999;sand.draws=3;t.frame(sand,0.1f);assert(t.state().kind==Kind::None&&t.state().blend==0); /* reserved */
         Sample zero=rain(0,0);t.frame(zero,0.1f);assert(t.state().kind==Kind::None);
     }
@@ -45,7 +45,7 @@ int main(){
         Tracker u;u.frame(rain(),100.0f);assert(u.state().blend<=smoothstep01(kMaxDt/kBlendInSeconds)+1e-6f);
         u.frame(rain(),std::nanf(""));assert(u.state().blend==u.state().blend); /* NaN dt = 0 */
     }
-    {   // loading screen with no draws shorter than the hold keeps wetness rising as before and the state intact
+    {   // loading screen with no draws shorter than the hold keeps the state intact
         Tracker t;run(t,rain(),10);const State a=t.state();for(int i=0;i<10;++i)t.frame(none,1.0f);assert(t.state().kind==Kind::Rain&&t.state().blend==a.blend);
     }
     {   // intensity EMA: first sample seeds, then tau 1.5 s towards primitives/42000, clamped to 1
@@ -53,12 +53,6 @@ int main(){
         run(t,rain(42000),kIntensityTau,0.05f);const float i1=t.state().intensity;assert(near(i1,0.5f+0.5f*(1-std::exp(-1.0f)),0.03f));
         run(t,rain(420000),10);assert(t.state().intensity>0.99f&&t.state().intensity<=1.0f&&t.state().primitives==420000);
         run(t,rain(0,1),20);assert(t.state().intensity<0.01f);
-    }
-    {   // wetness: rain only, ~20 s up, ~90 s dry; it outlives kind; snow never wets
-        Tracker t;run(t,rain(),10);assert(near(t.state().wetness,0.5f,0.03f));run(t,rain(),12);assert(t.state().wetness==1.0f);
-        run(t,none,kHoldSeconds);run(t,none,45);assert(t.state().kind==Kind::None&&near(t.state().wetness,0.5f,0.1f)); /* dries ~45 s of 90, after the hold */
-        run(t,none,60);assert(t.state().wetness==0.0f);
-        Tracker s;run(s,snow(),30);assert(s.state().kind==Kind::Snow&&s.state().wetness==0.0f&&s.state().blend==1.0f);
     }
     {   // kind switch: rain fully out (6 s), only then snow in, never both
         Tracker t;run(t,rain(),8);bool snowSeen=false,rainAfterSnow=false;float lastRain=1;
@@ -68,7 +62,6 @@ int main(){
             if(snowSeen&&s.kind==Kind::Rain)rainAfterSnow=true;}
         assert(snowSeen&&!rainAfterSnow&&t.state().kind==Kind::Snow&&t.state().blend>0.5f);
         Tracker u;run(u,rain(),8);int fr=0;for(;u.state().kind==Kind::Rain&&fr<2000;++fr)u.frame(snow(),1.0f/60);assert(fr>=int(kBlendOutSeconds*60)-3&&fr<=int(kBlendOutSeconds*60)+3);
-        assert(u.state().wetness<1.0f); /* snow does not keep it wet */
         // switching back before the old kind is gone cancels the pending switch
         Tracker v;run(v,rain(),8);run(v,snow(),1.0f);run(v,rain(),1.0f);assert(v.state().kind==Kind::Rain);
     }

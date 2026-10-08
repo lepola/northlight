@@ -36,9 +36,9 @@ if manifest['source_sha256']!=source:
 shaders=manifest['shaders'];checks={}
 changed=sorted(k for k,v in shaders.items() if v['sha256']!=BEFORE.get(k))
 # 0.3.185: RemovalSmooth is new (smoothRemoval moved out of TemporalLight into its own half-res pass).
-# 0.3.198 (rain): WorldFog takes its air floor from c59.w; WorldWet is new (wet ground, its own pass after WorldGI).
+# 0.3.198 (rain): WorldFog takes its air floor from c59.w.
 # 0.3.197: WorldGI blends a same-key probe re-publication from the previous SH (task 13).
-checks[f'only TemporalLight (and the WorldComposite) changed, RemovalSmooth added (changed: {changed})']=changed==['LocalDirect','RemovalSmooth','SourceVisibilityPS','TemporalLight','WorldComposite','WorldFog','WorldGI','WorldLighting','WorldNormals','WorldWet'] and sorted(shaders)==sorted([*BEFORE,'RemovalSmooth','WorldWet'])
+checks[f'only TemporalLight (and the WorldComposite) changed, RemovalSmooth added (changed: {changed})']=changed==['LocalDirect','RemovalSmooth','SourceVisibilityPS','TemporalLight','WorldComposite','WorldFog','WorldGI','WorldLighting','WorldNormals'] and sorted(shaders)==sorted([*BEFORE,'RemovalSmooth'])
 t=shaders['TemporalLight']
 # 0.3.185: smoothRemoval left TemporalLight (it had hit an exact budget of 509 of the ps_3_0 minimum 512 in 0.3.174) for RemovalSmooth,
 # which carries the Scene, AO/bloom s10, BaselineLighting and NormalBuffer s14 reads. Both are pinned exactly: any later growth must be deliberate.

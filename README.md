@@ -40,10 +40,8 @@ Every effect below is on by default and is drawn on top of the game's own frame.
   that paint their own sun or moon into the clear-weather sky lose it.
 - **Weather.** A heavy-rain look: procedural rain and snow textures in the art layer, darker storm light
   and fog bands, and Northlight's own haze, fog, light shafts, sun and moon, shadows, GI and lamps follow
-  detected rain or snow; the ground under open sky turns wet in rain (its own small pass; it needs the GI probes
-  solved (`GI=1` in the ini; the F8 toggle does not matter) and F10 turns it off). Detection reads only the
-  textures the art layer ships, no game memory, so it needs the Northlight art layer (`Weather`, `RainFog`,
-  `RainWetness`).
+  detected rain or snow (F10 turns it off). Detection reads only the
+  textures the art layer ships, no game memory, so it needs the Northlight art layer (`Weather`, `RainFog`).
 - **Fog clouds.** Low fog banks that drift with the wind, thicker and faster in rain, few or none in clear
   daylight (its own half-resolution pass; `FogClouds`, `FogCloudDensity`). Ctrl+Shift+F7 (fog) and F10 turn
   them off with the rest; the Performance preset has them off.

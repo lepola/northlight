@@ -24,7 +24,6 @@ constexpr float kMaxShadowSoften=0.95f; /* RainFog=2 never removes sun shadows a
 struct Frame {
     float fog=0;  /* f: rain r or snow s, blend x (floor + (1-floor) intensity) x RainFog (x kSnowFog for snow) */
     float rain=0; /* r: rain only, the same product (0 for snow) */
-    float wet=0;  /* w: the tracker's slow wetness x RainWetness (not snow) */
     float hazeTauScale()const{return 1+kHazeTau*fog;}
     float airExtinction()const{return kAirExtinction*fog;}
     float shaftGain()const{return std::max(0.f,1-kShafts*fog);}
@@ -32,19 +31,16 @@ struct Frame {
     float shadowSoften()const{return std::min(kMaxShadowSoften,kShadowSoften*fog);}
     float lampFogGain()const{return 1+kLampFog*fog;}
     float ambientLift()const{return kAmbientLift*rain;}
-    bool any()const{return fog>0||wet>0;}
+    bool any()const{return fog>0;}
 };
-// weather: Weather 0/1; rainFog, rainWetness: RainFog / RainWetness 0..2. Non-finite or negative inputs count as 0.
-inline Frame derive(const NorthlightWeather::State& s,unsigned weather,unsigned rainFog,unsigned rainWetness){
+// weather: Weather 0/1; rainFog: RainFog 0..2. Non-finite or negative inputs count as 0.
+inline Frame derive(const NorthlightWeather::State& s,unsigned weather,unsigned rainFog){
     using NorthlightWeather::Kind;
     Frame f;
     if(!weather)return f;
     const float level=std::isfinite(s.blend)&&std::isfinite(s.intensity)?std::clamp(s.blend,0.f,1.f)*(kIntensityFloor+(1-kIntensityFloor)*std::clamp(s.intensity,0.f,1.f)):0.f; /* exactly 0 when blend is 0 */
     if(s.kind==Kind::Rain){f.fog=f.rain=level*float(std::min(rainFog,2u));}
     else if(s.kind==Kind::Snow)f.fog=kSnowFog*level*float(std::min(rainFog,2u));
-    // wetness is the tracker's own slow scalar (rises while it rains, dries over ~90 s after it, so it outlives kind None);
-    // snow never wets, and a dry frame is exactly 0
-    if(s.kind!=Kind::Snow&&std::isfinite(s.wetness))f.wet=std::clamp(s.wetness,0.f,1.f)*float(std::min(rainWetness,2u));
     return f;
 }
 }

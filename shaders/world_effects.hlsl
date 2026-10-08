@@ -66,10 +66,10 @@ float4 TemporalInfo : register(c57); // history weight (0 disables), horizon sha
 float4 HorizonShape : register(c57); // yzw: terrain start view Z, 1/ramp (0 = sky only), log2(e)/sin(band) (WorldComposite only)
 float4 FogRange : register(c58); // near fade start, 1/(fade length), lamp glow strength, lamp glow soft cap
 float4 LocalLightFog[8] : register(c59); // x extinction at the light (LocalFog reads only .x of c59..c66), yzw unused there
-// 0.3.198 (rain): c59.yzw are the weather scalars (LocalLightFog[0].yzw, free: only .x is read); y and z are 0 without weather and
+// 0.3.198 (rain): c59.zw are the weather scalars (LocalLightFog[0].zw, free: only .x is read); z is 0 without weather and
 // every use below reduces to the old math then (w is the exception by design: it carries the old literal .0017, see WorldFog). Written once per
 // frame in the bank, read before the lamp fog batch overwrites c59..c62.
-float4 WeatherInfo : register(c59); // y wetness (WorldWet), z direct shadow softening (WorldLighting), w the shared air extinction .0017 + the extra (WorldFog)
+float4 WeatherInfo : register(c59); // z direct shadow softening (WorldLighting), w the shared air extinction .0017 + the extra (WorldFog)
 // 0.3.199 (fog clouds): FogClouds only. c60..c63 .x belong to LocalLightFog[1..3].x (LocalFog, a later pass); only .yzw are read here and the host
 // writes them only while the clouds are active (zero otherwise, as before). c60.yzw large-noise origin, c61.yzw small-noise origin,
 // c62.yzw coverage threshold (a quantile of the mixed noise), height, sigmaMax, c63.yzw 1/large period, 1/small period, 1/(threshold to fully dense).
@@ -413,52 +413,6 @@ float4 WorldGI(float2 uv:TEXCOORD0):COLOR0 {
     // multiplier or brightened sky/fog. Missing probes retain native ambient.
     correction+=max(AmbientLight.rgb+correction,0)*AmbientLight.w;
     return float4(correction,0);
-}
-// 0.3.198 (rain): wet ground, its own half-resolution pass drawn right after WorldGI into the same lighting buffer
-// (additive, rgb only). It reads only probe VISIBILITY and metadata (no irradiance, so no effects.gi need, but the probes
-// must be solved: GI=1): the +Z first-hit distance of the lattice layer just above the surface says whether the sky is open
-// overhead, which keeps roofs, canopies and interiors dry. The four probes of that layer around the point are blended
-// bilinearly (no tile edges) and each must be metadata-validated, past its residency fade and must SEE the surface: its -Z
-// first hit (Chebyshev-weighted like probeIrradiance) has to reach down to the surface, otherwise it sits above a low ceiling
-// or beyond a wall and its open sky says nothing about this floor. No such probe, or no grid: dry.
-// Wet surfaces lose part of the ambient they received (never more than that: the direct light is not touched, WorldLighting
-// owns it and may already have removed it in shadow) and gain a faint sky sheen at grazing angles.
-// Limits: half resolution, runs through RemovalSmooth/TemporalLight like every correction (RemovalSmooth clamps at -.45),
-// the sheen is scaled by the albedo in the composite, real reflections are later phases.
-float4 WorldWet(float2 uv:TEXCOORD0):COLOR0 {
-    float4 smoothNormal=tex2Dlod(NormalBuffer,float4(uv,0,0));
-    uv=depthUV(uv);
-    float d=normalizedDepth(uv);if(d>=.99999||waterDistance(uv,d)>0)return 0;
-    float3 p=worldPosition(uv,d);float3 n=smoothNormal.xyz;
-    float up=saturate((n.z-.55)/.35);
-    float3 grid=p/GridOrigin.w;
-    float3 base=floor(grid);base.z+=1; // the lattice layer above the surface
-    float2 fraction=grid.xy-base.xy;
-    float open=0,total=0;
-    [branch]if(GridInfo.w>=.5)[loop]for(int i=0;i<4;++i){
-        float2 bit=float2(i-floor(i/2.0)*2,floor(i/2.0));
-        float3 cell=base+float3(bit,0);
-        float3 wrapped=cell-GridInfo.x*floor(cell/GridInfo.x);
-        float2 uvp=probeUV(wrapped);
-        float4 metadata=tex2Dlod(ProbeMetadata,float4(uvp,0,0));
-        if(all(metadata.xyz==cell)&&metadata.w>=0){
-            float2 t=lerp(1-fraction,fraction,bit);
-            float weight=t.x*t.y*saturate((PassInfo.w-metadata.w)*(1/.45));
-            float4 above=tex2Dlod(ProbeVisibility,float4(uvp.x,(wrapped.y+4*GridInfo.x+.5)/(GridInfo.x*6),0,0));
-            float4 below=tex2Dlod(ProbeVisibility,float4(uvp.x,(wrapped.y+5*GridInfo.x+.5)/(GridInfo.x*6),0,0));
-            float need=cell.z*GridOrigin.w-p.z; // distance down to the surface
-            float variance=max(below.y-below.x*below.x,.02);
-            float excess=max(need-below.x-.25*GridOrigin.w,0); // slack for a sloped floor between the probe column and this pixel
-            float sees=variance/(variance+excess*excess);
-            weight*=sees*sees*below.z;
-            open+=saturate((above.x-24)/48)*above.z*weight;total+=weight;
-        }
-    }
-    open=total>.00001?open/total:0;
-    float wet=saturate(WeatherInfo.y*up*open*smoothNormal.w);
-    float3 eye=normalize(Camera.xyz-p);
-    float fresnel=pow(1-saturate(dot(n,eye)),5)*.96+.04;
-    return float4(wet*AmbientLight.rgb*(fresnel*.15-.35),0);
 }
 // Four POINT reads work on float32 textures without optional linear filtering.
 // Empty metadata nodes must never interpolate their dummy ground=0 into real

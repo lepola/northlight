@@ -447,7 +447,7 @@ int main(){
     // 0.3.192 CommandStream: 1 (the replay-thread command stream) in the code default and every preset, 0..1, own origin
     // slot (0.3.193: BlobShadowStrength follows); a creation-time key, so ActorShadows=0 does not force it. 0 is the direct path.
     assert(d.commandStream==1&&preset(Preset::Balanced).commandStream==1&&preset(Preset::Performance).commandStream==1);
-    assert(std::string(Keys[33].name)=="CommandStream"&&Keys[33].field==&Settings::commandStream&&Keys[33].low==0&&Keys[33].high==1&&sizeof(Keys)/sizeof(Keys[0])==40);
+    assert(std::string(Keys[33].name)=="CommandStream"&&Keys[33].field==&Settings::commandStream&&Keys[33].low==0&&Keys[33].high==1&&sizeof(Keys)/sizeof(Keys[0])==39);
     {auto off=parse("[Quality]\nCommandStream=0\n");assert(off.commandStream==0&&off!=d&&parse("[Quality]\nCommandStream=1\n")==d);
         unsigned i=0;for(const auto& k:Keys){assert(off.origin[i]==(std::string(k.name)=="CommandStream"?'f':'d'));++i;}
         std::vector<std::string> p;assert(parse("[Quality]\nCommandStream=2\n",nullptr,p)==d&&p.size()==1);
@@ -456,29 +456,28 @@ int main(){
         assert(describe(d).find(" ShadowPivotCorrection=1(default) CommandStream=1(default) BlobShadowStrength=50(default)")!=std::string::npos&&describe(off).find(" CommandStream=0(file)")!=std::string::npos);}
     // 0.3.193 BlobShadowStrength: 50 in the code default and every preset, 0..100, own last origin slot; ActorShadows=0 does not force it.
     assert(d.blobShadowStrength==50&&preset(Preset::Balanced).blobShadowStrength==50&&preset(Preset::Performance).blobShadowStrength==50);
-    assert(std::string(Keys[34].name)=="BlobShadowStrength"&&Keys[34].field==&Settings::blobShadowStrength&&Keys[34].low==0&&Keys[34].high==100&&sizeof(Keys)/sizeof(Keys[0])==40);
+    assert(std::string(Keys[34].name)=="BlobShadowStrength"&&Keys[34].field==&Settings::blobShadowStrength&&Keys[34].low==0&&Keys[34].high==100&&sizeof(Keys)/sizeof(Keys[0])==39);
     for(unsigned v:{0u,1u,50u,99u,100u}){auto on=parse(("[Quality]\nBlobShadowStrength="+std::to_string(v)+"\n").c_str());assert(on.blobShadowStrength==v&&(on==d)==(v==50));
         unsigned i=0;for(const auto& k:Keys){assert(on.origin[i]==(std::string(k.name)=="BlobShadowStrength"?'f':'d'));++i;}
         assert(effective(on).blobShadowStrength==v&&effective(parse(("[Quality]\nActorShadows=0\nBlobShadowStrength="+std::to_string(v)+"\n").c_str())).blobShadowStrength==v);}
     {std::vector<std::string> p;assert(parse("[Quality]\nBlobShadowStrength=101\n",nullptr,p)==d&&p.size()==1);
      p.clear();assert(parse("[Quality]\nBlobShadowStrength=-1\n",nullptr,p)==d&&p.size()==1);
      assert(describe(d).find(" CommandStream=1(default) BlobShadowStrength=50(default)")!=std::string::npos&&describe(parse("[Quality]\nBlobShadowStrength=0\n")).find(" BlobShadowStrength=0(file)")!=std::string::npos);}
-    // 0.3.198 (rain): Weather 1/1/1 (0..1), RainFog 1/1/1 (0..2), RainWetness 1/1/0 (0..2), the last three origin slots; ActorShadows=0 forces none.
-    assert(d.weather==1&&d.rainFog==1&&d.rainWetness==1&&preset(Preset::Performance).rainWetness==0&&preset(Preset::Balanced).rainWetness==1&&preset(Preset::Performance).weather==1&&preset(Preset::Performance).rainFog==1);
+    // 0.3.198 (rain): Weather 1/1/1 (0..1), RainFog 1/1/1 (0..2), the two origin slots before the fog clouds; ActorShadows=0 forces none.
+    assert(d.weather==1&&d.rainFog==1&&preset(Preset::Performance).weather==1&&preset(Preset::Performance).rainFog==1);
     assert(std::string(Keys[35].name)=="Weather"&&Keys[35].field==&Settings::weather&&Keys[35].low==0&&Keys[35].high==1);
     assert(std::string(Keys[36].name)=="RainFog"&&Keys[36].field==&Settings::rainFog&&Keys[36].low==0&&Keys[36].high==2);
-    assert(std::string(Keys[37].name)=="RainWetness"&&Keys[37].field==&Settings::rainWetness&&Keys[37].low==0&&Keys[37].high==2);
-    {auto w=parse("[Quality]\nWeather=0\nRainFog=2\nRainWetness=0\n");assert(w.weather==0&&w.rainFog==2&&w.rainWetness==0&&w.origin[35]=='f'&&w.origin[36]=='f'&&w.origin[37]=='f'&&w.origin[34]=='d');
+    {auto w=parse("[Quality]\nWeather=0\nRainFog=2\n");assert(w.weather==0&&w.rainFog==2&&w.origin[35]=='f'&&w.origin[36]=='f'&&w.origin[37]=='d'&&w.origin[34]=='d');
      assert(effective(w).weather==0&&effective(w).rainFog==2);
      std::vector<std::string> p;assert(parse("[Quality]\nRainFog=3\n",nullptr,p)==d&&p.size()==1);p.clear();assert(parse("[Quality]\nWeather=2\n",nullptr,p)==d&&p.size()==1);
-     assert(describe(d).find(" BlobShadowStrength=50(default) Weather=1(default) RainFog=1(default) RainWetness=1(default)")!=std::string::npos);}
+     assert(describe(d).find(" BlobShadowStrength=50(default) Weather=1(default) RainFog=1(default)")!=std::string::npos);}
     // 0.3.199 (fog clouds): FogClouds 1/1/0 (0..1), FogCloudDensity 100/100/100 (0..200), the last two origin slots; ActorShadows=0 forces none.
     assert(d.fogClouds==1&&d.fogCloudDensity==100&&preset(Preset::Balanced).fogClouds==1&&preset(Preset::Performance).fogClouds==0&&preset(Preset::Performance).fogCloudDensity==100);
-    assert(std::string(Keys[38].name)=="FogClouds"&&Keys[38].field==&Settings::fogClouds&&Keys[38].low==0&&Keys[38].high==1);
-    assert(std::string(Keys[39].name)=="FogCloudDensity"&&Keys[39].field==&Settings::fogCloudDensity&&Keys[39].low==0&&Keys[39].high==200);
-    {auto f=parse("[Quality]\nFogClouds=0\nFogCloudDensity=200\n");assert(f.fogClouds==0&&f.fogCloudDensity==200&&f.origin[38]=='f'&&f.origin[39]=='f'&&f.origin[37]=='d'&&effective(f).fogClouds==0);
+    assert(std::string(Keys[37].name)=="FogClouds"&&Keys[37].field==&Settings::fogClouds&&Keys[37].low==0&&Keys[37].high==1);
+    assert(std::string(Keys[38].name)=="FogCloudDensity"&&Keys[38].field==&Settings::fogCloudDensity&&Keys[38].low==0&&Keys[38].high==200);
+    {auto f=parse("[Quality]\nFogClouds=0\nFogCloudDensity=200\n");assert(f.fogClouds==0&&f.fogCloudDensity==200&&f.origin[37]=='f'&&f.origin[38]=='f'&&f.origin[36]=='d'&&effective(f).fogClouds==0);
      std::vector<std::string> p;assert(parse("[Quality]\nFogClouds=2\nFogCloudDensity=201\n",nullptr,p)==d&&p.size()==2);
-     assert(describe(d).find(" RainWetness=1(default) FogClouds=1(default) FogCloudDensity=100(default)")!=std::string::npos);}
+     assert(describe(d).find(" RainFog=1(default) FogClouds=1(default) FogCloudDensity=100(default)")!=std::string::npos);}
     { /* effective(): the identity with ActorShadows=1 (any value of every key), with 0 only the two replay keys drop. */
       std::mt19937 er(158);
       for(int round=0;round<4000;++round){Settings s;s.preset=Preset(er()%3);unsigned i=0;
