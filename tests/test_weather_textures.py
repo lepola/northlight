@@ -17,7 +17,7 @@ from world_scene_builder import decode_blp
 
 textures = wt.weather_textures()
 checks, info = {}, {}
-MEAN0 = (.033, .045)   # rain alpha .55, core sigma .75 px (0.3.199 game tests: alpha .45 -> .35 -> .55; core 1.1 -> .9 -> .75 px)
+MEAN0 = (.046, .060)   # rain alpha .75, core sigma .75 px (0.3.199 game tests: alpha .45 -> .35 -> .55 -> .75; core 1.1 -> .9 -> .75 px)
 checks['three textures, at the client\'s paths'] = set(textures) == {'textures\\Weather\\RainDrop01.blp', 'Textures\\WEATHER\\RAINDROPRED01.BLP', 'textures\\Weather\\SnowFlake01.blp'}
 # Palette layout: 256 BGRA entries, entry 0 = the colour exactly, the rest zero; per mip all-zero indices then the alpha plane.
 rain = textures['textures\\Weather\\RainDrop01.blp']
@@ -26,7 +26,7 @@ checks['rain mip 0: indices all 0, then the alpha plane (decodes back to it)'] =
     not any(rain[148+1024:148+1024+32*512]) and list(decode_blp(rain, 512)[2][3::4]) == list(rain[148+1024+32*512:148+1024+2*32*512]))
 checks['deterministic: a second run gives the same bytes'] = wt.weather_textures() == textures
 
-want = {'RainDrop01': (32, 512, .55), 'RAINDROPRED01': (32, 512, .55), 'SnowFlake01': (32, 64, .8)}
+want = {'RainDrop01': (32, 512, .75), 'RAINDROPRED01': (32, 512, .75), 'SnowFlake01': (32, 64, .8)}
 for name, data in textures.items():
     key = next(k for k in want if k.lower() in name.lower())
     w, h, alpha = want[key]
@@ -54,7 +54,7 @@ for name, data in textures.items():
         checks[f'{key}: every mip level has alpha in every row but the faded ends (continuous streak, no dots)'] = all(
             all(max(px[3::4][y*lw:(y+1)*lw]) > 0 for y in range(lh//10, lh-lh//10)) for lw, lh, px in chain)
         checks[f'{key}: mip peak never below 24/255 at any level, never above level 0'] = min(peaks) >= 24 and max(peaks) == peaks[0]
-        checks[f'{key}: mean alpha 0.033-0.045 at level 0, 0.12-0.20 at the small mips'] = MEAN0[0] <= sum(chain[0][2][3::4])/(255*w*h) <= MEAN0[1] and all(.12 <= sum(px[3::4])/(255*lw*lh) <= .20 for lw, lh, px in chain[-3:])
+        checks[f'{key}: mean alpha 0.046-0.060 at level 0, 0.17-0.26 at the small mips'] = MEAN0[0] <= sum(chain[0][2][3::4])/(255*w*h) <= MEAN0[1] and all(.17 <= sum(px[3::4])/(255*lw*lh) <= .26 for lw, lh, px in chain[-3:])
         checks[f'{key}: ends fade out'] = max(row(0)) == 0 and max(row(h-1)) == 0 and max(row(h//40)) < peak//2 and max(row(h-h//40)) < peak//2 and row(h//8)[16] >= peak-1 and row(h-h//8)[16] >= peak-1
     else:          # flake: round in uv (a 1:2 squash in texels), centred, transparent corners and rim
         cx, cy = w//2, h//2
