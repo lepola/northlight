@@ -138,7 +138,7 @@ inline Frame derive(unsigned fogClouds,unsigned density,float fog,float night,co
 // is scaled up to a luminance of at least kNightLum x night (at most kNightBoost times); only without a usable game colour (not validated,
 // or black) does the neutral kNightGrey floor apply. The shader still takes the brighter of this and its own ambient*.35 air radiance.
 constexpr float kNightGrey[3]={.15f,.16f,.18f};
-constexpr float kNightLum=.16f,kNightBoost=6.f;
+constexpr float kNightLum=.24f,kNightBoost=10.f; /* game test: .16 / 6 still read dark next to the moonlit, Northlight-lit ground at night */
 inline void colour(const float game[3],bool gameValid,float night,float out[4]){
     const float n=std::isfinite(night)?std::clamp(night,0.f,1.f):0.f;
     float g[3];for(int i=0;i<3;++i)g[i]=gameValid&&std::isfinite(game[i])?std::max(game[i],0.f):0.f;
