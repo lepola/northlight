@@ -227,6 +227,7 @@ private:
     unsigned probeBlendPublishes=0,probeBlendSlots=0; // 0.3.197: per LOCAL log interval
     bool valid=false,failed=false,reportedContext=false;
     float traceYaw[4]={}; /* 0.3.200 (frame trace): view heading in degrees: VS c0..c3 as read here, the backend's, the game thread's sent view, the game memory camera's */
+    float traceLight[5]={-1,-1,-1,-1,-1}; /* 0.3.200 (frame trace): |sun colour|, |moon colour|, fog volume gain c21.x, |ambient|, debug */
     float traceSky[4]={}; /* 0.3.200 (frame trace): global light decode: reason (99 not tried), dayFraction, sky camera error, direction length squared */
     float traceRot=-1,traceMove=-1;unsigned traceReject=0,traceTrigger=0;unsigned long long traceTriggerDraw=0; /* 0.3.200 (frame trace): camera disagreement (max |view diff| rotation, translation), reject reason, snapshot trigger kind and draw */
     unsigned traceContext=0; /* 0.3.200 (frame trace): this frame's context path: 0 none, 1 terrain+global light, 2 terrain native light (camera disagreed), 3 WMO */
@@ -1978,7 +1979,7 @@ public:
         captureRejectedBytes=acceptedSkinnedBytes=acceptedOtherBytes=0;nearAdmitted=nearRefused=0;nearBytes=0;nearAnchorReady=false;
         previousCacheHits=terrainBoundsCache.persistentHits();capturedConstantBytes=capturedConstantCalls=0;capturedSM1Draws=capturedRelativeDraws=0;
         terrainCaptureTicks=replayCaptureTicks=0;terrainCaptureCalls=terrainUPCalls=replayCaptureCalls=unknownCaptureCalls=0;captureSampled=false;
-        valid=false;traceContext=0;shadowFrameReady=false;legacyFog=NorthlightLegacyFog::Constants{};
+        valid=false;traceContext=0;for(auto& x:traceLight)x=-1;shadowFrameReady=false;legacyFog=NorthlightLegacyFog::Constants{};
         // Bound retained vector capacities across changing scenes. Reuse storage,
         // never old geometry: each subsequent draw still re-reads every byte.
         // Give the current scene first claim on the pool, instead of letting
@@ -2007,6 +2008,7 @@ public:
     unsigned frameTraceContext()const{return traceContext;} /* 0.3.200 (frame trace) */
     const float* frameTraceYaw()const{return traceYaw;}
     const float* frameTraceSky()const{return traceSky;}
+    const float* frameTraceLight()const{return traceLight;}
     std::function<bool(float*)> traceBackendView; /* 0.3.200 (frame trace): reads the backend's c0..c3, set by the renderer */
     void frameTraceCamera(float& rot,float& move,unsigned& reject,unsigned& trigger,unsigned long long& draw)const{rot=traceRot;move=traceMove;reject=traceReject;trigger=traceTrigger;draw=traceTriggerDraw;}
     bool actorShadowsEnabled()const{return quality.actorShadows!=0;}
@@ -3435,6 +3437,8 @@ public:
         for(int source=0;source<2;++source)if(sourceWeights[source]>0&&sourceActive[source])
             c[15][3]=std::max(c[15][3],std::max({sourceColors[source].x,sourceColors[source].y,sourceColors[source].z})*drawnWeight/sourceWeights[source]);
         c[30][0]=waterMask?1.f:0.f;d->SetPixelShaderConstantF(0,&c[0][0],68);
+        {const auto len=[](const V& v){return std::sqrt(NorthlightGI::dot(v,v));}; /* 0.3.200 (frame trace) */
+         traceLight[0]=len(sourceColors[0]);traceLight[1]=len(sourceColors[1]);traceLight[2]=c[21][0];traceLight[3]=std::sqrt(context.ambient[0]*context.ambient[0]+context.ambient[1]*context.ambient[1]+context.ambient[2]*context.ambient[2]);traceLight[4]=float(debug);}
         IDirect3DTexture9* textures[]={foldScene?foldScene:color,depth,shadow[0],shadow[1],probe[0],probe[1],probe[2],probe[3],nullptr,nullptr,probe[4],waterMask,nullptr,regionalFogTexture};
         for(int i=0;i<14;++i){d->SetTexture(i,textures[i]);d->SetSamplerState(i,D3DSAMP_ADDRESSU,D3DTADDRESS_CLAMP);d->SetSamplerState(i,D3DSAMP_ADDRESSV,D3DTADDRESS_CLAMP);d->SetSamplerState(i,D3DSAMP_MINFILTER,(i==0||i==9)?D3DTEXF_LINEAR:D3DTEXF_POINT);d->SetSamplerState(i,D3DSAMP_MAGFILTER,(i==0||i==9)?D3DTEXF_LINEAR:D3DTEXF_POINT);d->SetSamplerState(i,D3DSAMP_MIPFILTER,D3DTEXF_NONE);d->SetSamplerState(i,D3DSAMP_SRGBTEXTURE,FALSE);}
         auto setSource=[&](int source,bool first,bool volume=false){
