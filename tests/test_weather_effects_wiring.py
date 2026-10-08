@@ -20,7 +20,7 @@ checks={}
 checks['hlsl: WeatherInfo at c59, documented (z shadows, w air extinction), LocalLightFog still read only through .x']=(
     'float4 WeatherInfo : register(c59);' in h and 'z direct shadow softening (WorldLighting), w the shared air extinction' in h
     and 'free: only .x is read' in h and re.findall(r'LocalLightFog\[[^\]]*\]\.(\w+)',re.sub(r'//[^\n]*','',h))==['x'] and 'LocalLightFog[i].x' in h)
-checks['hlsl: no other register c59..c66 reader']=re.findall(r'register\(c6[0-6]\)',h)==['register(c60)'] and h.count('register(c59)')==2 # 0.3.199 (fog clouds): CloudInfo[4] at c60 (.yzw only), see test_fog_clouds_wiring
+checks['hlsl: no other register c59..c66 reader']=re.findall(r'register\(c6[0-6]\)',h)==['register(c60)','register(c64)'] and h.count('register(c59)')==2 # 0.3.199 (fog clouds): CloudInfo[4] at c60 (.yzw only), see test_fog_clouds_wiring; (fog temporal): FogTemporalInfo at c64 (.y only), see test_fog_temporal_wiring
 checks['hlsl: WorldLighting and WorldFog read WeatherInfo (z, w)']=all(
     ('WeatherInfo.'+c) in h for c in 'zw') and len(re.findall(r'WeatherInfo\.x',h))==0
 checks['cpp: c59.zw set in the bank, c59.x and c60..c66 not']=('c[59][2]=wx.shadowSoften();c[59][3]=airFloor;' in w and 'c[59][0]' not in w and 'c[59][1]' not in w and set(re.findall(r'c\[(6[0-6])\]',w))<={'60','61','62','63'}) # 0.3.199 (fog clouds): c60..c63 .yzw belong to CloudInfo
@@ -48,7 +48,7 @@ checks['hlsl: c24.y (softness) still unread']='PassInfo.y' not in h.replace('sof
 gi=h[h.index('float4 WorldGI('):h.index('// Four POINT reads work')]
 checks['hlsl WorldGI: no weather code (it is at 31 temps)']='WeatherInfo' not in gi
 checks['hlsl: no WorldWet shader, WeatherInfo.y unread']='WorldWet' not in h and 'WeatherInfo.y' not in h
-checks['render: the weather adds no pass of its own (quad count 15, shader creations 20 with the 0.3.199 fog clouds)']=(w.count('quad(')==15 and w.count('CreatePixelShader')==20) and 'wetPS' not in w
+checks['render: the weather adds no pass of its own (quad count 16, shader creations 21 with the 0.3.199 fog clouds and fog temporal)']=(w.count('quad(')==16 and w.count('CreatePixelShader')==21) and 'wetPS' not in w
 # disc and veil
 checks['discs: gain atomic, default 1, opacity and glare weights only, veil inherits']=(
     'std::atomic<float> weatherGain{1.f};' in dr and 'c[9][3]=glare?disc.opacity:disc.opacity*weatherGain.load(std::memory_order_relaxed);' in dr

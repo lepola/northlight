@@ -18,7 +18,7 @@ FILES=['renderer.cpp','world_renderer.h','world_shadow_experiment.inl','world_po
 GATES=('NorthlightDiagnostics::enabled()','diagnostics()','sampled()','captureSampled','if(diagnostics)','shadowFate.active()','sampledFrame','profiling()','profileSampled()')
 # Ungated lines that stay with Diagnostics=0: format prefix -> label.
 KEEP={
- 'WORLD fog clouds noise':'one-off: the noise volume generated (worker) and uploaded, 0.3.199','WORLD fog clouds disabled':'error: shader or volume creation failed, once per device, 0.3.199',
+ 'WORLD fog clouds noise':'one-off: the noise volume generated (worker) and uploaded, 0.3.199','WORLD fog clouds disabled':'error: shader or volume creation failed, once per device, 0.3.199','WORLD fog temporal disabled':'error: shader creation failed, once per device, 0.3.199',
  'LOGGER intervalMs':'indirect: reportLogCost() runs only in the gated MIRROR block',
  'EXTENSION fault':'error','DISABLED:':'error','Resources ':'one-off: resource (re)creation',
  'LOCK METER':'one-off startup line and ProcessVertices warning; the interval line runs only from the Diagnostics-gated block of WorldRenderer::endFrame (0.3.192)',
@@ -119,7 +119,7 @@ print('PASS Diagnostics=0 audit: every periodic line gated, only start-up/settin
 SPAN_FILES=['world_renderer.h','world_shadow_experiment.inl','world_point_rendering.inl','world_replay_probe.inl','world_rigid_memory.inl','world_diagnostics.h']
 SPAN_ALLOWED={'PREPARE worker':'0.3.177: watchdog (at most 5 a session) / record exception (first 4)','WORLD DISABLED':'error (check())','GEOMETRY MEMORY':'warning: allocation deferral','WORLD pending mesh released':'event (0.3.156)',
  'SHADOW experiment selection allocation failed':'error','WORLD streaming retry':'capped error','WORLD staged mesh committed':'event: one per commit',
- 'WORLD fog clouds disabled':'one-off error per device (0.3.199): optional shader creation failed',
+ 'WORLD fog clouds disabled':'one-off error per device (0.3.199): optional shader creation failed','WORLD fog temporal disabled':'one-off error per device (0.3.199): optional shader creation failed',
  'GI probe blend texture unavailable':'one-off warning (0.3.197: static once flag)'}
 SPAN_DEFERRED=['MODEL GPU cache','MODEL bulk sharing','MODEL GPU policy','MODEL GPU clears','MODEL shadow actors','MODEL shadow selection','RIGID memory','RIGID event','WORLD actor packets']
 KEYWORDS={'if','for','while','switch','return','catch','sizeof','defined','decltype','static_assert','alignof','noexcept','do','else','try','new','delete'}

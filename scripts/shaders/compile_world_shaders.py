@@ -17,7 +17,7 @@ import northlight_paths as fp  # noqa: E402
 from build_environment import wine_build_prefix, zig_env, TOOLS, WINE_ROOT, ZIG
 
 HERE = Path(__file__).resolve().parent   # compile_shaders.cpp and the built compile_shaders.exe
-ENTRIES = (("WorldNormals", "ps_3_0"), ("WorldLighting", "ps_3_0"), ("WorldGI", "ps_3_0"), ("WorldFog", "ps_3_0"), ("FogBlur", "ps_3_0"), ("FogClouds", "ps_3_0"), ("LocalDirect", "ps_3_0"), ("RemovalSmooth", "ps_3_0"), ("TemporalLight", "ps_3_0"), ("LocalFog", "ps_3_0"), ("SourceVisibilityPS", "ps_3_0"),
+ENTRIES = (("WorldNormals", "ps_3_0"), ("WorldLighting", "ps_3_0"), ("WorldGI", "ps_3_0"), ("WorldFog", "ps_3_0"), ("FogBlur", "ps_3_0"), ("FogClouds", "ps_3_0"), ("FogTemporal", "ps_3_0"), ("LocalDirect", "ps_3_0"), ("RemovalSmooth", "ps_3_0"), ("TemporalLight", "ps_3_0"), ("LocalFog", "ps_3_0"), ("SourceVisibilityPS", "ps_3_0"),
            ("WorldComposite", "ps_3_0"), ("ShadowVS", "vs_3_0"), ("ShadowCacheVS", "vs_3_0"),
            ("ShadowPS", "ps_3_0"), ("ShadowReplayPS", "ps_3_0"), ("ShadowUnion", "ps_3_0"))
 

@@ -73,7 +73,10 @@ struct Settings {
     // 0.3.199 (fog clouds): FogClouds 1 = low fog banks that drift with the wind (own half-resolution raymarch pass, sky/fog_clouds.h);
     // 0 = none. FogCloudDensity 0..200 percent scales how much of the ground they cover (100 = the tuned look; thicker and faster in rain).
     unsigned fogClouds=1,fogCloudDensity=100;
-    char origin[39]={'d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d'};
+    // 0.3.199 (fog temporal): FogTemporal 1 = the half-resolution fog is accumulated over frames (reprojected, depth-checked, neighbourhood-clamped;
+    // calms the lamp glow and sun shaft shimmer while moving); 0 = the raw fog, as before.
+    unsigned fogTemporal=1;
+    char origin[40]={'d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d'};
 };
 struct Key { const char* name; unsigned Settings::*field; unsigned low,high; unsigned preset[3]; };
 // preset[] = Quality, Balanced, Performance. Quality must equal Settings{}.
@@ -117,6 +120,7 @@ inline const Key Keys[]={
     {"RainFog",&Settings::rainFog,0,2,{1,1,1}},
     {"FogClouds",&Settings::fogClouds,0,1,{1,1,0}},
     {"FogCloudDensity",&Settings::fogCloudDensity,0,200,{100,100,100}},
+    {"FogTemporal",&Settings::fogTemporal,0,1,{1,1,1}},
 };
 inline bool operator==(const Settings& a,const Settings& b){for(const auto& k:Keys)if(a.*k.field!=b.*k.field)return false;return true;}
 inline bool operator!=(const Settings& a,const Settings& b){return !(a==b);}

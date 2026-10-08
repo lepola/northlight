@@ -859,6 +859,49 @@ float4 FogClouds(float2 uv:TEXCOORD0):COLOR0 {
     // (without a validated game fog its colour is the grey floor alone); FogColor.rgb, the scattering albedo, is always 1: left out for the slots.
     return float4(max(max(AmbientLight.rgb,0)*.35,LegacyFogColor.rgb*LegacyFog.w)*ambientWeight+directScatter,tCloud);
 }
+// 0.3.199 (fog temporal): temporal accumulation of the half-resolution fog (raw FogBuffer, s9) with last frame's resolved fog (FogHistory, s14
+// LINEAR), reprojected through the previous view (c53..c56, still the previous frame's here) and accepted only where the previous frame's
+// stored view distance (DepthHistory, s15) agrees; sky pixels reproject their view direction only. History is clamped to the current 3x3
+// neighbourhood (all four channels) so a moving lamp or shaft leaves no trail, then lerped with the current by c64.y (0 = pass through).
+sampler2D FogHistory : register(s14);
+float4 FogTemporalInfo : register(c64); // y history weight (c64.yzw are read by no other shader: LocalFog reads only .x of c59..c66)
+float4 FogTemporal(float2 uv:TEXCOORD0):COLOR0 {
+    float2 half=ScreenSize.zw;
+    float2 base=floor(uv*half);float2 q=(base+.5)/half;
+    float4 current=tex2Dlod(FogBuffer,float4(q,0,0));
+    if(FogTemporalInfo.y<=0)return current;
+    float2 duv=depthUV(q);float d=normalizedDepth(duv);bool sky=d>=.99999;
+    float3 v;
+    if(sky){
+        float3 r=viewPositionDistance(duv,1);
+        float3 world=r.x*InverseView[0].xyz+r.y*InverseView[1].xyz+r.z*InverseView[2].xyz;
+        v=world.x*PreviousView[0].xyz+world.y*PreviousView[1].xyz+world.z*PreviousView[2].xyz;
+    }else v=affinePoint(worldPosition(duv,d),PreviousView);
+    float w=v.z*Projection.z;
+    if(w<=ImageClip.z)return current;
+    float2 puv=(v.xy*Projection.xy/w)*float2(.5,-.5)+.5;
+    if(any(puv<0)||any(puv>1))return current;
+    float2 pq=(clamp(floor(puv*half),0,half-1)+.5)/half;
+    float2 texel=1/half,corner=(floor(puv*half-.5)+.5)*texel;
+    float tol=max(.25,w*.03);bool agree=true;
+    if(!sky){
+        if(abs(tex2Dlod(DepthHistory,float4(pq,0,0)).r-w)>tol)return current;
+        float4 footprint=float4(tex2Dlod(DepthHistory,float4(corner,0,0)).r,
+            tex2Dlod(DepthHistory,float4(corner+float2(texel.x,0),0,0)).r,
+            tex2Dlod(DepthHistory,float4(corner+float2(0,texel.y),0,0)).r,
+            tex2Dlod(DepthHistory,float4(corner+texel,0,0)).r);
+        agree=all(abs(footprint-w)<=tol);
+    }
+    float4 history=tex2Dlod(FogHistory,float4(agree?puv:pq,0,0));
+    float4 lo=current,hi=current;
+    [unroll]for(int i=0;i<8;++i){
+        float2 offset=float2(i%3-1,i/3-1);
+        offset=i>=4?float2((i+1)%3-1,(i+1)/3-1):offset;
+        float4 s=tex2Dlod(FogBuffer,float4((clamp(base+offset,0,half-1)+.5)/half,0,0));
+        lo=min(lo,s);hi=max(hi,s);
+    }
+    return lerp(current,clamp(history,lo,hi),FogTemporalInfo.y);
+}
 // Distant haze toward the WORLD horizon: in front of the scene, behind local
 // scattering. Terrain weight is 0 at or nearer than the start view Z (the
 // scene colour is returned bit for bit) and 1 at the game's fog end; sky/WDL

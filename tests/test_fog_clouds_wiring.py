@@ -35,7 +35,7 @@ checks['hlsl: CloudInfo is read only through .yzw-components (never .x: c60..c63
 checks['hlsl: the .x ownership is documented at the declaration']='c60..c63 .x belong to LocalLightFog[1..3].x' in h
 i=h.index('float4 FogBlur(');j=h.index('float4 FogClouds(');k=h.index('// Distant haze toward the WORLD horizon')
 checks['hlsl: FogClouds sits after FogBlur and before the horizon haze section (WorldFog slice for test_fog_motion unchanged)']=i<j<k and h.index('float4 WorldFog(')<h.index('// Glow of')<i
-body=h[j:k]
+body=h[j:h.index('// 0.3.199 (fog temporal): temporal accumulation')] # 0.3.199 (fog temporal): FogTemporal follows FogClouds
 checks['hlsl: no jitter or history, 40 world-fixed intervals, returns (0,0,0,1) with no cloud']=('FogInfo.w/40' in body and 'i<41' in body and 'if(FogInfo.x<.5)return float4(0,0,0,1);' in body and 'jitter' not in body and 'frac(major.y*(major.x<0?-1:1)/spacing)' in body)
 checks['hlsl: the cloud sigma matches the CPU sigma (.65/.35 mix, quantile threshold x sharpness ramp, squared height falloff, zone .7, sigmaMax, field coverage x near fade)']=all(s in body for s in (
     'mad(.65,nL,.35*nS)-CloudInfo[2].y)*CloudInfo[3].w','saturate(1-altitude/max(CloudInfo[2].z,.001))','lerp(1,.7,saturate((field.w-1.25)/3.75))','CloudInfo[2].w*valid*nearFade','tex3Dlod(CloudNoise,float4(rel*CloudInfo[3].y+CloudInfo[0].yzw,0))','tex3Dlod(CloudNoise,float4(rel*CloudInfo[3].z+CloudInfo[1].yzw,0))'))
