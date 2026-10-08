@@ -798,6 +798,20 @@ class Device final : public GuardedMirrorDevice {
         if(verdict.claim==NorthlightShadowBlobFilter::Claim::Faint)planBlobFaint(verdict.original);
         if(claimed&&blobSignatureReports<4){++blobSignatureReports;IDirect3DVertexShader9* bvs=nullptr;IDirect3DPixelShader9* bps=nullptr;ext->GetVertexShader(&bvs);ext->GetPixelShader(&bps);auto vi=vsHashes.find(bvs);auto pi=psHashes.find(bps);logf("SHADOWBLOB draw signature vs=%016llx ps=%016llx primitives=%u",(unsigned long long)(vi==vsHashes.end()?0:vi->second),(unsigned long long)(pi==psHashes.end()?0:pi->second),count);drop(bvs);drop(bps);}
     }
+    // 0.3.199 (rain): RainBlend. The game draws rain as a 2x modulate (DestColor/SrcColor, alpha only feeds the alpha test), so the streaks take the
+    // background's colour. Around exactly the game's draw (a claimed draw never runs it) the blend becomes SrcAlpha/InvSrcAlpha/Add; the previous
+    // values (the mirror answers the reads) come back right after. Texture stages, alpha test and Z stay the game's.
+    template<class Draw> HRESULT rainBlendDraw(bool rain,bool claimed,Draw draw){
+        if(!rain)return blobFaintDraw(claimed,draw);
+        return blobFaintDraw(claimed,[&]{
+            static const D3DRENDERSTATETYPE types[4]={D3DRS_ALPHABLENDENABLE,D3DRS_SRCBLEND,D3DRS_DESTBLEND,D3DRS_BLENDOP};
+            static const DWORD want[4]={TRUE,D3DBLEND_SRCALPHA,D3DBLEND_INVSRCALPHA,D3DBLENDOP_ADD};
+            DWORD prev[4]={};bool changed[4]={};
+            for(int i=0;i<4;++i)if(SUCCEEDED(ext->GetRenderState(types[i],&prev[i]))&&prev[i]!=want[i]){changed[i]=true;ext->SetRenderState(types[i],want[i]);}
+            const HRESULT hr=draw();
+            for(int i=0;i<4;++i)if(changed[i])ext->SetRenderState(types[i],prev[i]);
+            return hr;});
+    }
     // One game draw: capture, the native sky and blob claims, the real draw (outside every extension
     // region, so a fault keeps the game's call) and the sky observation. The capture and its order are
     // prepareDraw's in both paths. Gates on: capture and claims share one region (a fault in either
@@ -805,15 +819,15 @@ class Device final : public GuardedMirrorDevice {
     // frame's sky gate is open, the blob test only while its gate is; the observation follows the draw,
     // so it keeps a region of its own. Gates off: the 0.3.184 regions one by one.
     template<class Capture,class Draw> HRESULT drawHook(D3DPRIMITIVETYPE t,UINT count,Capture capture,Draw draw){
-        bool claimed=false;
+        bool claimed=false,rainBlend=false;
         // 0.3.198 (rain): the whole per-draw cost of weather detection, before any other work and in both gate paths: one pointer comparison.
-        if(weatherDetect.hot&&!applied&&mirrorState.textureKnown[0]&&mirrorState.textures[0]==weatherDetect.hot){weatherSample.primitives+=count;++weatherSample.draws;}
+        if(weatherDetect.hot&&!applied&&mirrorState.textureKnown[0]&&mirrorState.textures[0]==weatherDetect.hot){weatherSample.primitives+=count;++weatherSample.draws;rainBlend=weatherDetect.hotKind==NorthlightWeather::Kind::Rain&&world&&world->rainBlendSetting();} /* 0.3.199 (rain): rain draws only, ~50/frame */
         if(!frameDrawGates){
             dropBlobFaint();prepareDraw(capture,count);
             {CpuScope hooks(sampledHookTimer());
                 extensionWork("native sky claim",[&]{skyClaim(t,count,claimed);});
                 if(!claimed&&blobFilterActive())extensionWork("blob shadow filter",[&]{blobFilter(count,claimed);});}
-            const HRESULT hr=blobFaintDraw(claimed,draw);
+            const HRESULT hr=rainBlendDraw(rainBlend,claimed,draw);
             if(!claimed){CpuScope hooks(sampledHookTimer());extensionWork("native sky observation",[&]{skyObserve(hr,t,count);});}
             return hr;
         }
@@ -827,7 +841,7 @@ class Device final : public GuardedMirrorDevice {
             if(sky){stage="native sky claim";skyClaim(t,count,claimed);}
             if(!claimed&&drawGates.blob){stage="blob shadow filter";if(blobFilterActive())blobFilter(count,claimed);}
         });
-        const HRESULT hr=blobFaintDraw(claimed,draw);
+        const HRESULT hr=rainBlendDraw(rainBlend,claimed,draw);
         if(sky&&!claimed){CpuScope hooks(sampledHookTimer());extensionWork("native sky observation",[&]{skyObserve(hr,t,count);});}
         return hr;
     }

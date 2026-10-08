@@ -37,7 +37,7 @@ checks['HLSL: sky reprojects the direction only, clamp over the neighbourhood, l
     and 'if(FogTemporalInfo.y<=0)return current;' in body and 'max(.25,w*.03)' in body)
 
 checks['setting: key after FogCloudDensity, 0..1, presets 1/1/1, default 1, origin grows']=(
-    '{"FogCloudDensity",&Settings::fogCloudDensity,0,200,{100,100,100}},\n    {"FogTemporal",&Settings::fogTemporal,0,1,{1,1,1}},' in q and 'unsigned fogTemporal=1;' in q and 'char origin[40]=' in q)
+    '{"FogCloudDensity",&Settings::fogCloudDensity,0,200,{100,100,100}},\n    {"FogTemporal",&Settings::fogTemporal,0,1,{1,1,1}},\n    {"RainBlend",&Settings::rainBlend,0,1,{1,1,1}},' in q and 'unsigned fogTemporal=1;' in q and 'char origin[41]=' in q)
 ini=(fp.REPO/'renderer'/'windows-package'/'northlight-quality.ini').read_text()
 checks['docs: ini key, both readmes']=(';FogTemporal=1' in ini and 'FogTemporal' in (fp.REPO/'README.md').read_text() and 'FogTemporal' in (fp.REPO/'renderer'/'windows-package'/'README.txt').read_text())
 

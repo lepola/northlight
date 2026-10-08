@@ -2006,6 +2006,7 @@ public:
     // render() and the celestial renderers read this one place; all zero (identity) with Weather=0 or no weather.
     unsigned weatherSetting()const{return quality.weather;}
     unsigned rainFogSetting()const{return quality.rainFog;}
+    bool rainBlendSetting()const{return quality.weather&&quality.rainBlend;} /* 0.3.199 (rain): the draw hook's alpha-blended rain streaks */
     NorthlightWeatherEffects::Frame weatherEffects()const{return NorthlightWeatherEffects::derive(weatherState,quality.weather,quality.rainFog);}
     bool frameDrawGates()const{return quality.frameDrawGates!=0;} /* 0.3.187: read once at device creation */ /* 0.3.158: ActorShadows=0 leaves actor shadows to the game's blobs */
     const float* legacyFogParameters()const{return legacyFog.parameters;}

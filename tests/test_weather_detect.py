@@ -13,6 +13,8 @@ import subprocess,tempfile
 r=fp.src('renderer.cpp').read_text()
 hook=[l for l in r.split('\n') if l.strip().startswith('if(weatherDetect.hot&&!applied&&')]
 assert len(hook)==1,'the draw hook comparison must exist exactly once'
+rl=r.split('\n');i0=next(i for i,l in enumerate(rl) if 'template<class Draw> HRESULT rainBlendDraw(' in l);i1=next(i for i in range(i0,len(rl)) if rl[i]=='    }')
+rainfn='\n'.join(rl[i0:i1+1])
 
 SRC=r'''
 #include "weather_detect.h"
@@ -22,7 +24,11 @@ SRC=r'''
 #include <string>
 #include <vector>
 using namespace NorthlightWeatherDetect;using NorthlightWeather::Kind;
-typedef unsigned UINT;
+typedef unsigned UINT;typedef unsigned DWORD;typedef long HRESULT;
+#define TRUE 1
+#define SUCCEEDED(h) ((h)>=0)
+enum D3DRENDERSTATETYPE{D3DRS_ALPHABLENDENABLE=27,D3DRS_SRCBLEND=19,D3DRS_DESTBLEND=20,D3DRS_BLENDOP=171,D3DRS_ZWRITEENABLE=14};
+enum{D3DBLEND_SRCCOLOR=3,D3DBLEND_SRCALPHA=5,D3DBLEND_INVSRCALPHA=6,D3DBLEND_DESTCOLOR=9,D3DBLENDOP_ADD=1};
 static std::vector<std::string> lines;
 static void sink(const char* l){lines.push_back(l);}
 static int A=21,X8=22,A1=25,A4=26,R5G6B5=23,DXT5=0x35545844;
@@ -31,10 +37,20 @@ static unsigned count(const char* prefix){unsigned n=0;for(auto& l:lines)if(l.rf
 // The hook: the line extracted from Device::drawHook over a mock mirror.
 struct Mirror{bool textureKnown[16]={};void* textures[16]={};};
 struct Sample{unsigned primitives=0,draws=0;};
+struct Ext{DWORD rs[256]={};std::vector<std::pair<int,DWORD>> sets;
+    HRESULT GetRenderState(D3DRENDERSTATETYPE t,DWORD* v){*v=rs[t];return 0;}
+    HRESULT SetRenderState(D3DRENDERSTATETYPE t,DWORD v){rs[t]=v;sets.push_back({int(t),v});return 0;}};
+struct World{bool on=true;bool rainBlendSetting()const{return on;}};
+namespace NorthlightWeather{}
 struct Hook{
-    Mirror mirrorState;Detector weatherDetect;Sample weatherSample;bool applied=false;
-    void draw(UINT count){
+    Mirror mirrorState;Detector weatherDetect;Sample weatherSample;bool applied=false;Ext extObj;Ext* ext=&extObj;World worldObj;World* world=&worldObj;bool claimedSkip=false;
+    template<class Draw> HRESULT blobFaintDraw(bool claimed,Draw draw){return claimed?0:draw();}
+    unsigned blendAtDraw[4]={};unsigned drawn=0;
+@RAINFN@
+    HRESULT draw(UINT count){
+        bool claimed=claimedSkip,rainBlend=false;
 @HOOK@
+        return rainBlendDraw(rainBlend,claimed,[&]{++drawn;blendAtDraw[0]=ext->rs[D3DRS_ALPHABLENDENABLE];blendAtDraw[1]=ext->rs[D3DRS_SRCBLEND];blendAtDraw[2]=ext->rs[D3DRS_DESTBLEND];blendAtDraw[3]=ext->rs[D3DRS_BLENDOP];return HRESULT(0);});
     }
     void bind(unsigned stage,int i,bool known=true){mirrorState.textures[stage]=const_cast<void*>(P(i));mirrorState.textureKnown[stage]=known;}
 };
@@ -149,9 +165,22 @@ int main(){
         h.weatherDetect.setOff(true);h.draw(9);assert(h.weatherSample.draws==3); /* mirror inactive: hot is null */
         Hook none;none.bind(0,50);none.draw(10);assert(none.weatherSample.draws==0); /* no candidates: hot null */
     }
+    {   // 0.3.199 (rain): RainBlend - rain draws run with SrcAlpha/InvSrcAlpha/Add and the game's previous states return; snow, non-weather, setting off and claimed draws are untouched
+        auto game=[](Hook& h){h.ext->rs[D3DRS_ALPHABLENDENABLE]=1;h.ext->rs[D3DRS_SRCBLEND]=D3DBLEND_DESTCOLOR;h.ext->rs[D3DRS_DESTBLEND]=D3DBLEND_SRCCOLOR;h.ext->rs[D3DRS_BLENDOP]=D3DBLENDOP_ADD;h.ext->rs[D3DRS_ZWRITEENABLE]=0;};
+        Hook h;h.weatherDetect.noteCreate(P(50),32,512,1,A);game(h);h.bind(0,50);
+        h.draw(10);assert(h.drawn==1&&h.blendAtDraw[0]==1&&h.blendAtDraw[1]==D3DBLEND_SRCALPHA&&h.blendAtDraw[2]==D3DBLEND_INVSRCALPHA&&h.blendAtDraw[3]==D3DBLENDOP_ADD);
+        assert(h.ext->rs[D3DRS_ALPHABLENDENABLE]==1&&h.ext->rs[D3DRS_SRCBLEND]==D3DBLEND_DESTCOLOR&&h.ext->rs[D3DRS_DESTBLEND]==D3DBLEND_SRCCOLOR&&h.ext->rs[D3DRS_BLENDOP]==D3DBLENDOP_ADD&&h.ext->rs[D3DRS_ZWRITEENABLE]==0);
+        assert(h.ext->sets.size()==4); /* only the two differing states, set and restored */
+        h.ext->rs[D3DRS_ALPHABLENDENABLE]=0;h.draw(10);assert(h.blendAtDraw[0]==1&&h.ext->rs[D3DRS_ALPHABLENDENABLE]==0); /* blend off before: on during, off after */
+        h.ext->sets.clear();h.world->on=false;h.draw(10);assert(h.ext->sets.empty()&&h.blendAtDraw[1]==D3DBLEND_DESTCOLOR); /* setting off / Weather=0 */
+        h.world->on=true;h.claimedSkip=true;const unsigned n=h.drawn;h.draw(10);assert(h.drawn==n&&h.ext->sets.empty()); /* claimed: the game's draw does not run, nothing touched */
+        h.claimedSkip=false;h.weatherDetect.noteCreate(P(51),32,64,1,A);h.weatherDetect.reset();h.weatherDetect.noteCreate(P(51),32,64,1,A);h.bind(0,51);h.draw(10);assert(h.weatherDetect.hotKind==Kind::Snow&&h.ext->sets.empty()&&h.blendAtDraw[1]==D3DBLEND_DESTCOLOR); /* snow untouched */
+        h.bind(0,3);h.draw(10);assert(h.ext->sets.empty()); /* not the hot texture */
+        Hook nw;nw.weatherDetect.noteCreate(P(50),32,512,1,A);game(nw);nw.bind(0,50);nw.world=nullptr;nw.draw(10);assert(nw.ext->sets.empty()); /* no world */
+    }
     std::printf("PASS weather detect\n");
 }
-'''.replace('@HOOK@',hook[0])
+'''.replace('@HOOK@',hook[0]).replace('@RAINFN@',rainfn)
 with tempfile.TemporaryDirectory() as tmp:
     (Path(tmp)/'t.cpp').write_text(SRC)
     for label,flags in [('O2',['-O2']),('asan',['-O1','-g','-fsanitize=address,undefined','-fno-sanitize-recover=all'])]:
