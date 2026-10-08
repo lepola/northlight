@@ -115,8 +115,10 @@ northlight-quality.ini in the game folder chooses the quality: Preset=Quality (t
 default, full quality), Balanced or Performance. On a weaker processor, Balanced
 or Performance raises the FPS by lightening mainly shadows and lamps.
 The file is read when the game starts; restart WoW after a change.
-The installer adds the file only if it does not exist yet: an update never
-replaces your own changes. northlight-renderer.log shows the values in use (QUALITY).
+The installer adds the file if it does not exist yet. An update never changes
+your lines or values: it only appends the settings your file does not mention
+yet, commented out (the preset's values apply until you enable one).
+northlight-renderer.log shows the values in use (QUALITY).
 Individual settings (Quality / Balanced / Performance):
   ActorShadowBudgetMiB  0 / 16 / 8     character shadows, nearest first (0 = no limit)
   ActorShadowRadius     40 / 35 / 20   characters more than N yards from your own character cast no shadow (0..200; 0 = no limit; 1..3 = your own character, mount, weapons and whatever is right next to you)

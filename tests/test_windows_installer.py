@@ -326,6 +326,38 @@ class InstallerTests(unittest.TestCase):
         m.restore(self.client,backup)
         self.assertEqual(self.read('northlight-quality.ini'),b'[Quality]\nPreset=Balanced\n')
         self.assertEqual(self.read('d3d9.dll'),FOREIGN)
+    def test_quality_settings_missing_keys_added_values_kept(self):
+        template=b'[Quality]\nPreset=Quality\n\n; Fog clouds.\n; Allowed 0..1.\n;FogClouds=1\n\n; Density.\n;FogCloudDensity=100\n'
+        self.add_quality(template)
+        user=b'[Quality]\nPreset=Performance\nFogClouds=0\n'
+        (self.client/'northlight-quality.ini').write_bytes(user)
+        backup=m.install(self.client,self.pkg)
+        merged=self.read('northlight-quality.ini')
+        self.assertTrue(merged.startswith(user))
+        self.assertIn(b'; Density.\n;FogCloudDensity=100\n',merged)
+        self.assertEqual(merged.count(b'FogClouds'),1)   # mentioned already: not added again, its value kept
+        self.assertEqual(merged.count(b'Preset='),1)
+        m.restore(self.client,backup)
+        self.assertEqual(self.read('northlight-quality.ini'),user)
+    def test_quality_merge_commented_key_counts_crlf_and_bom_kept(self):
+        template=b'[Quality]\nPreset=Quality\n\n; A.\n;GpuBudgetMs=4\n\n; B.\n;ReplayJobs=1\n'
+        self.assertIsNone(m.merge_quality_ini(b'[Quality]\r\nPreset=Quality\r\n;GpuBudgetMs=4\r\n; ReplayJobs = 0\r\n',template))
+        merged=m.merge_quality_ini(b'\xef\xbb\xbf[Quality]\r\nPreset=Balanced\r\n;gpubudgetms=6',template)
+        self.assertTrue(merged.startswith(b'\xef\xbb\xbf[Quality]\r\nPreset=Balanced\r\n;gpubudgetms=6\r\n'))
+        self.assertIn(b'\r\n; B.\r\n;ReplayJobs=1\r\n',merged)
+        self.assertNotIn(b'GpuBudgetMs',merged)
+        self.assertNotIn(b'\n\n',merged.replace(b'\r\n',b''))   # every line ending is CRLF
+        self.assertIsNone(m.merge_quality_ini(b'\xff\xfe[\x00Q\x00',template))   # UTF-16: left alone
+    def test_quality_merge_with_the_real_template(self):
+        template=(Path(__file__).resolve().parents[1]/'renderer/windows-package/northlight-quality.ini').read_bytes()
+        lines=template.decode('utf-8-sig').splitlines()
+        wanted={mm.group(1).lower() for mm in map(m.QUALITY_KEY.match,lines) if mm}
+        merged=m.merge_quality_ini(b'[Quality]\nPreset=Quality\nGpuBudgetMs=7\n',template).decode('utf-8')
+        got={mm.group(1).lower() for mm in map(m.QUALITY_KEY.match,merged.splitlines()) if mm}
+        self.assertEqual(got,wanted)
+        self.assertIn('GpuBudgetMs=7\n',merged)
+        self.assertEqual(merged.lower().count('gpubudgetms='),1)
+        self.assertIsNone(m.merge_quality_ini(template,template))
     def set_payload(self,name,data):
         (self.pkg/'payload'/name).write_bytes(data)
         manifest=json.loads((self.pkg/'payload-manifest.json').read_text())
