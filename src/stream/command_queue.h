@@ -35,8 +35,14 @@ constexpr std::size_t ChunkBytes=std::size_t(1)<<20;
 constexpr std::size_t MaxInlinePayload=ChunkBytes/4;   // larger payloads travel in a Block
 // 0.3.192 (CS): the stream's own memory shares a 32-bit address space with the game and the world renderer, which stalled for lack of a
 // contiguous block while the stream held ~100 MiB. Real sessions peak at ~12 MiB of queue; every cap is now 16 MiB (queue, texture shadows, buffer shadows, large allowance; worst case ~64 MiB
-// plus the replay-side copies' own 16+16 MiB, see replay_copies.h; ~20-30 MiB typically) and the idle pools are kept small (kPoolMaxChunks, kMaxPooledBlockBytes, PoolTuner).
+// plus the replay-side copies' own 16+16 MiB, see replay_copies.h; ~20-30 MiB typically) and the idle pools are kept small (kPoolMaxChunks, kMaxPooledBlockBytes, PoolTuner). 0.3.200 (pipeline): the queue may take 32 MiB with StreamFramesAhead >= 2 (budgetForFramesAhead below): worst case +16 MiB.
 constexpr std::size_t BudgetBytes=std::size_t(16)<<20;
+// 0.3.200 (pipeline): StreamFramesAhead (1..kMaxFramesAhead) frames may be in flight; the queue budget grows by BudgetBytes per extra frame up to
+// kMaxBudgetBytes (32 MiB: the address-space rule above; still halved under memory pressure). 1 = BudgetBytes, the 0.3.199 queue.
+constexpr unsigned kMaxFramesAhead=3;
+constexpr std::size_t kMaxBudgetBytes=std::size_t(32)<<20;
+constexpr unsigned clampFramesAhead(unsigned n){return n<1?1:n>kMaxFramesAhead?kMaxFramesAhead:n;}
+constexpr std::size_t budgetForFramesAhead(unsigned n){return BudgetBytes*clampFramesAhead(n)<kMaxBudgetBytes?BudgetBytes*clampFramesAhead(n):kMaxBudgetBytes;}
 constexpr std::size_t TextureShadowBudgetBytes=std::size_t(16)<<20;   // per-level texture shadows; halved under pressure; evictable (LRU)
 // 0.3.192 (CS): CPU shadows of buffers (DYNAMIC and re-locked non-DYNAMIC ones; evictable LRU, never while locked). The cap is ADAPTIVE: ShadowBudgetBytes is
 // the base/start value; it grows by kShadowGrowStep (up to kShadowBudgetMaxBytes) only when the shadows thrash AND there is no memory pressure: the LRU had
@@ -55,6 +61,10 @@ constexpr std::size_t LargeShadowBudgetBytes=std::size_t(16)<<20,kMaxLargeShadow
 constexpr std::uint64_t kLargeIdleFrames=60;
 constexpr std::size_t kPoolMaxChunks=4,kReserveChunks=2;   // idle chunks kept at most / after a quiet window
 constexpr std::uint32_t kAutoPublishCommands=64,kAutoPublishBytes=64u<<10;
+// 0.3.200 (pipeline): commit()'s automatic publish wakes a SLEEPING consumer only once this much has been published without a wake (a sleeping replay
+// thread has caught up: waking it per 64 commands cost a SetEvent each time). Explicit publishes (scene/target/clear/sync/Present/GetData), a chunk
+// switch and backpressure always wake; an explicit publish with nothing new still wakes when an automatic one held its wake back (never strands work).
+constexpr std::uint32_t kLazyWakeCommands=256,kLazyWakeBytes=256u<<10;
 constexpr std::uint32_t kNoPayload=0xFFFFFFFFu;   // a nullable pointer's offset in a generated Args struct
 
 // Command flags. kFlagBlock: the first kBlockSlot payload bytes hold a Block*; retire() returns that Block to the pool.
@@ -90,8 +100,10 @@ class Queue {
     // Producer-private.
     alignas(kLine) Chunk* wchunk_;
     std::uint32_t wpos_=0,pubPos_=0,sinceCmds_=0,sinceBytes_=0,openSize_=0;bool open_=false;
+    bool lazyWake_=false;std::uint32_t lazyCmds_=0,lazyBytes_=0;   // 0.3.200 (pipeline): published by commit() without a wake since the last wake (kLazyWake*)
 #ifdef NORTHLIGHT_STREAM_CHECK_WAIT
     bool openFlagged_=false;unsigned badWaits_=0;std::vector<std::uint64_t> flaggedSeqs_;   // 0.3.196 (task 12): test builds only, see unflaggedWaits()
+    unsigned wakeSignals_=0;   // 0.3.200 (pipeline): consumer wakes the producer signalled (test builds only)
 #endif
     // Written by the producer at every commit.
     alignas(kLine) std::atomic<std::uint64_t> recorded_{0};
@@ -155,7 +167,26 @@ class Queue {
         wchunk_=n;wpos_=0;pubPos_=0;sinceCmds_=0;sinceBytes_=0;
         add(stats.publishes);wake();
     }
-    void wake(){if(sleeping_.load())consumerEv_.set();}
+    // 0.3.200 (pipeline): one SetEvent per sleep: the producer takes the sleeper flag (exchange, only when it saw it set), so further publishes before the consumer
+    // runs again do not signal again (the event is already set). The consumer sets the flag before its final peek, so a publish after that peek still finds it.
+    void wake(){
+        lazyWake_=false;lazyCmds_=lazyBytes_=0;
+        if(sleeping_.load()&&sleeping_.exchange(false)){
+#ifdef NORTHLIGHT_STREAM_CHECK_WAIT
+            ++wakeSignals_;
+#endif
+            consumerEv_.set();}
+    }
+    // commit()'s automatic publish: the same publication, but a sleeping consumer is woken only past kLazyWakeCommands/kLazyWakeBytes (see there).
+    void publishLazy(){
+        const std::uint32_t c=sinceCmds_,b=sinceBytes_;
+        wchunk_->published.store(wpos_);pubPos_=wpos_;sinceCmds_=0;sinceBytes_=0;
+        std::atomic_thread_fence(std::memory_order_seq_cst);   // as in publish()
+        own(stats.publishes);raiseMax(stats.highWaterDepth,recorded_.load(std::memory_order_relaxed)-replayed_.load(std::memory_order_relaxed));
+        lazyCmds_+=c;lazyBytes_+=b;
+        if(lazyCmds_<kLazyWakeCommands&&lazyBytes_<kLazyWakeBytes){lazyWake_=true;return;}
+        wake();
+    }
     void recycle(Chunk* c){
         c->next.store(nullptr,std::memory_order_relaxed);c->published.store(0,std::memory_order_relaxed);c->end.store(0,std::memory_order_relaxed);
         bool kept=false;
@@ -262,11 +293,11 @@ public:
         if(openFlagged_)flaggedSeqs_.push_back(recorded_.load(std::memory_order_relaxed));
 #endif
         own(stats.commands);own(stats.bytes,openSize_);
-        if(sinceCmds_>=kAutoPublishCommands||sinceBytes_>=kAutoPublishBytes)publish();
+        if(sinceCmds_>=kAutoPublishCommands||sinceBytes_>=kAutoPublishBytes)publishLazy();   // 0.3.200 (pipeline): lazy wake
     }
     // Makes everything committed visible to the consumer and wakes it if it sleeps.
     void publish(){
-        if(wpos_==pubPos_)return;
+        if(wpos_==pubPos_){if(lazyWake_)wake();return;}   // 0.3.200 (pipeline): an automatic publish held its wake back: this explicit one delivers it
         wchunk_->published.store(wpos_);pubPos_=wpos_;sinceCmds_=0;sinceBytes_=0;
         std::atomic_thread_fence(std::memory_order_seq_cst);   // pairs with the fence in next(): the store above or the sleeper flag is seen
         own(stats.publishes);raiseMax(stats.highWaterDepth,recorded_.load(std::memory_order_relaxed)-replayed_.load(std::memory_order_relaxed));
@@ -293,6 +324,7 @@ public:
 #ifdef NORTHLIGHT_STREAM_CHECK_WAIT
     unsigned unflaggedWaits()const{return badWaits_;}   // producer thread
     unsigned backstopSignals()const{return backstopSignals_.load();}   // progress_ signals made by the idle backstop (wakeWaiters)
+    unsigned wakeSignals()const{return wakeSignals_;}   // 0.3.200 (pipeline): consumer wakes signalled by the producer (producer thread)
     void testArmWait(std::uint64_t w){waitSeq_.store(w);}   // test seam: a producer 'waiting' on seq w that never wakes
 #endif
     // A pooled Block of at least bytes (capacity is the power of two above), budgeted. nullptr when the request alone
@@ -421,9 +453,11 @@ public:
         replayed_.store(n,std::memory_order_release);
         if(fl&kFlagWaitTarget)std::atomic_thread_fence(std::memory_order_seq_cst);
         advance();
+        // 0.3.200 (pipeline): the signal is remembered (lastSignalledSeq_/bpSignalledRec_, as wakeWaiters does), so neither a later retire nor the idle backstop
+        // signals the same wait again while the producer has not yet run (a SetEvent each); the backstop's forced pre-sleep signal stays.
         const std::uint64_t w=waitSeq_.load();
-        if(w&&n>=w)progress_.set();
-        else if(bpWaiting_.load()&&n>=recorded_.load())progress_.set();   // drained: nothing more to free, let the producer re-evaluate
+        if(w&&n>=w){if(w!=lastSignalledSeq_){lastSignalledSeq_=w;progress_.set();}}
+        else if(bpWaiting_.load()){const std::uint64_t rec=recorded_.load();if(n>=rec&&rec!=bpSignalledRec_){bpSignalledRec_=rec;progress_.set();}}   // drained: nothing more to free, let the producer re-evaluate
     }
     std::uint64_t replayedSeq()const{return replayed_.load();}
     // The Block of a kFlagBlock command and the caller part of its payload (after the slot).

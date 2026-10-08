@@ -146,7 +146,7 @@ public:
     std::uint64_t busyNsTotal()const{const auto w=wallNs(),i=idleNs.load(std::memory_order_relaxed);return w>i?w-i:0;}
     // Diagnostics bookkeeping (the audit's value mirror and touched list) runs only while diagnostics were on at the last frame boundary.
     std::uint64_t auditSets()const{return get(auditSets_);}   // audited Sets recorded by the replay thread (0 while diagnostics are off)
-    explicit Replayer(StreamCore& c):core(c){}
+    explicit Replayer(StreamCore& c,std::size_t snapshotCap=SnapshotPool::DefaultCap):core(c),snapshots(snapshotCap){}   // 0.3.200 (pipeline): SnapshotPool::capFor(StreamFramesAhead)
     ~Replayer(){join();}
     Replayer(const Replayer&)=delete;Replayer& operator=(const Replayer&)=delete;
 
@@ -325,7 +325,7 @@ private:
         if(swap){IDirect3DSwapChain9* s=a->swapChain->dead.load()?nullptr:static_cast<IDirect3DSwapChain9*>(a->swapChain->inner);
                  hr=s?s->Present(a->hasSrc?&a->src:nullptr,a->hasDst?&a->dst:nullptr,a->window,dirty,a->flags):D3DERR_INVALIDCALL;}
         else hr=core.target->Present(a->hasSrc?&a->src:nullptr,a->hasDst?&a->dst:nullptr,a->window,dirty);
-        core.presentResult.store(hr);{const std::uint64_t seq=core.q.replayedSeq()+1;auto& e=core.presentRing[seq%StreamCore::kRing];e.hr.store(hr);e.seq.store(seq);}
+        core.presentResult.store(hr);{const std::uint64_t seq=core.q.replayedSeq()+1;auto& e=core.presentRing[core.framesReplayed.load(std::memory_order_relaxed)%StreamCore::kRing];e.hr.store(hr);e.seq.store(seq);}   // 0.3.200 (pipeline): by ordinal (endFrame counts it next)
         endFrame();
     }
     void endFrame(){
@@ -385,8 +385,9 @@ private:
              double(cm-lastCmds_)*inv2,double(fl-lastFiltered_)*inv2,double(an-lastAnswered_)*inv2,double(sc-lastSyncCalls_)*inv2,double(dr-lastDirect_)*inv2);
          lastGameNs_=gNs;lastGameWait_=gW;lastPresentNs_=pNs;lastSyncNs_=sNs;lastBpNs_=bNs;lastCmds_=cm;lastFiltered_=fl;lastDirect_=dr;lastAnswered_=an;lastSyncCalls_=sc;}
         {const Memory m=memory();put(buf,n," memMB=%.1f(queue %.1f, bufShadow %.1f, texShadow %.1f, snapshots %.2f)",m.total()/1048576.0,m.queue/1048576.0,m.bufferShadows/1048576.0,m.textureShadows/1048576.0,m.snapshots/1048576.0);}
-        put(buf,n," texShadow=%.1f/%.0fMB hits=%llu fresh=%llu readbacks=%llu evicted=%llu freshUseful=%llu refused=%llu/%.1fMB",double(std::max<std::int64_t>(0,s.texShadowBytes.load()))/1048576.0,double(core.q.texShadowCap())/1048576.0,
-            (unsigned long long)get(s.texShadowHits),(unsigned long long)get(s.texShadowFresh),(unsigned long long)get(s.texShadowReadbacks),(unsigned long long)get(s.texShadowEvicted),(unsigned long long)get(s.texShadowFreshUseful),(unsigned long long)get(s.texShadowRefused),get(s.texShadowRefusedBytes)/1048576.0);
+        put(buf,n," texShadow=%.1f/%.0fMB hits=%llu fresh=%llu readbacks=%llu evicted=%llu freshUseful=%llu refused=%llu/%.1fMB spared=%llu/%llu",double(std::max<std::int64_t>(0,s.texShadowBytes.load()))/1048576.0,double(core.q.texShadowCap())/1048576.0,
+            (unsigned long long)get(s.texShadowHits),(unsigned long long)get(s.texShadowFresh),(unsigned long long)get(s.texShadowReadbacks),(unsigned long long)get(s.texShadowEvicted),(unsigned long long)get(s.texShadowFreshUseful),(unsigned long long)get(s.texShadowRefused),get(s.texShadowRefusedBytes)/1048576.0,
+            (unsigned long long)get(s.texShadowSpared),(unsigned long long)get(s.texShadowSpareReuses));   // 0.3.200 (pipeline): spared=kept/reused
         // 0.3.196 (task 12): fresh keeps skipped for lack of room, readbacks by cause (fresh drop + re-locked evict + never shadowed); total and per frame in this window.
         {const std::uint64_t sk=get(s.texShadowFreshSkipped),rf2=get(s.readbackAfterFreshDrop),rr=get(s.readbackAfterRelockedEvict),rn=get(s.readbackNeverShadowed),rs=get(s.readbackAfterFreshSkip);const double f=sampleEvery?1.0/double(sampleEvery):0.0;
          put(buf,n," texFreshSkipped=%llu(%.2f/frame) texReadbackCause[freshDrop=%llu(%.2f) relockedEvict=%llu(%.2f) neverShadowed=%llu(%.2f) freshSkip=%llu(%.2f)]",(unsigned long long)sk,double(sk-lastTexSkip_)*f,(unsigned long long)rf2,double(rf2-lastRbFresh_)*f,

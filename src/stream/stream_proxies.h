@@ -223,6 +223,10 @@ struct StreamCore {
     // The live level shadows (see SubRes): inserted and evicted on the game thread, removed by a proxy's destructor on the replay thread.
     // Live level shadows in LRU order (never re-locked "fresh" ones are evicted before re-locked ones) and live buffer shadows (the large allowance apart): all under texMutex.
     std::mutex texMutex;LruList<SubRes> texFresh,texRelocked;LruList<BufferState> bufRegular,bufLarge;
+    // 0.3.200 (pipeline): allocations of level shadows the game thread evicted, kept (under texMutex) for the next level shadow instead of a free + malloc pair;
+    // at most kTexSpares of at most kTexSpareMaxBytes each (~0.5 MiB outside the texture-shadow cap), none kept under memory pressure (trimTexSpares).
+    static constexpr unsigned kTexSpares=2;static constexpr std::size_t kTexSpareMaxBytes=(std::size_t(256)<<10)+kLockSlack;
+    std::vector<unsigned char> texSpare[kTexSpares];
     LockScratch scratch;             // game thread: small staged buffer locks
     std::uint64_t frameNo=0;         // game thread: Presents so far (the idle clock of buffer shadows)
     DWORD (*readBackLock)()=nullptr;             // flags of the stream's own READONLY read-backs of buffers (NorthlightUpload::readBackLock in the DLL); null = READONLY
@@ -235,7 +239,11 @@ struct StreamCore {
     template<class T> ProxyBase* proxyFor(T* innerRef,bool bound);
     ProxyBase* makeImplicit(IUnknown* inner);
     std::atomic<HRESULT> presentResult{D3D_OK};
-    static constexpr unsigned kRing=8;   // real HRESULT of the last Present commands by command sequence number (the game reads frame N-1's)
+    // Real HRESULT of the last Present commands (the game reads the one StreamFramesAhead frames back). 0.3.200 (pipeline): the slot is the Present's ordinal
+    // (the replay's framesReplayed before it counts this one = the game's frameNo when it recorded it), seq still checked: with at most kMaxFramesAhead+1
+    // Presents in flight no newer one can take the slot first (keyed by seq%kRing it could, and the game then read D3D_OK).
+    static constexpr unsigned kRing=8;
+    static_assert(kRing>kMaxFramesAhead+1,"every Present in flight has its own slot");
     struct PresentEntry {std::atomic<std::uint64_t> seq{0};std::atomic<HRESULT> hr{D3D_OK};};
     PresentEntry presentRing[kRing];
     void replayFailureOnFail(HRESULT hr){if(FAILED(hr)){add(q.stats.replayFailures);replayFailure.store(true);}}
@@ -295,12 +303,29 @@ enum ImageRoute:UINT{RouteSurface=0,RouteTexture=1,RouteCube=2,RouteVolumeTextur
 inline void countPass(ProxyBase& p,PassReason r){own(p.core->q.stats.passThrough[unsigned(r)]);}   // game thread only
 // Both need StreamCore::texMutex held. A shadow is game-side memory and no queued command refers to it (Unlock copies the rows into a Block).
 inline LruList<SubRes>& texListOf(StreamCore& c,const SubRes& s){return s.relocked?c.texRelocked:c.texFresh;}
-inline void dropShadowLocked(StreamCore& c,SubRes& s){
+// 0.3.200 (pipeline): recycle (the game thread's evictions only): the allocation goes to an empty spare slot, or replaces a smaller spare, unless under pressure or too large.
+inline void spareTexShadowLocked(StreamCore& c,std::vector<unsigned char>& v){
+    const std::size_t cap=v.capacity();if(!cap||cap>StreamCore::kTexSpareMaxBytes||c.q.pressure())return;
+    std::vector<unsigned char>* slot=nullptr;
+    for(auto& x:c.texSpare)if(!slot||x.capacity()<slot->capacity())slot=&x;   // the empty or smallest slot
+    if(slot->capacity()<cap){slot->swap(v);add(c.q.stats.texShadowSpared);}
+}
+inline void dropShadowLocked(StreamCore& c,SubRes& s,bool recycle=false){
     if(!s.shadowOn)return;
     texListOf(c,s).remove(&s);
     c.q.addTexShadowBytes(-std::int64_t(std::size_t(s.levelRows)*s.levelRowBytes*s.levelSlices));
+    if(recycle)spareTexShadowLocked(c,s.shadow);
     std::vector<unsigned char>().swap(s.shadow);s.shadowOn=false;
 }
+// 0.3.200 (pipeline): game thread, before a level shadow is made: the smallest spare that holds `bytes` without wasting more than half of it moves into `out`
+// (its assign() then neither frees nor allocates). Zero-filled as before (assign): a fresh level's unwritten bytes stay deterministic.
+inline void takeTexSpare(StreamCore& c,std::vector<unsigned char>& out,std::size_t bytes){
+    if(out.capacity()>=bytes)return;
+    std::lock_guard<std::mutex> l(c.texMutex);std::vector<unsigned char>* best=nullptr;
+    for(auto& x:c.texSpare)if(x.capacity()>=bytes&&x.capacity()-bytes<=bytes/2&&(!best||x.capacity()<best->capacity()))best=&x;
+    if(best){out.swap(*best);std::vector<unsigned char>().swap(*best);add(c.q.stats.texShadowSpareReuses);}
+}
+inline void trimTexSpares(StreamCore& c){std::lock_guard<std::mutex> l(c.texMutex);for(auto& x:c.texSpare)std::vector<unsigned char>().swap(x);}   // game thread (pressure)
 inline void dropSubShadow(StreamCore& c,SubRes& s){std::lock_guard<std::mutex> l(c.texMutex);dropShadowLocked(c,s);}
 // Game thread: makes `bytes` fit the texture-shadow cap by evicting least-recently-locked shadows, never-re-locked ones (fresh keeps) first,
 // never one that is locked now or `keep`. mayEvictRelocked=false leaves the re-locked ones alone (no caller: 0.3.196 (task 12): a fresh keep no longer evicts anything,
@@ -314,7 +339,7 @@ inline bool makeRoomForShadow(StreamCore& c,std::size_t bytes,bool mayEvictReloc
         if(!victim&&mayEvictRelocked)for(SubRes* s=c.texRelocked.head;s&&!victim;s=s->lru.next)if(s!=keep&&s->mode!=SubRes::Shadowed)victim=s;
         if(!victim)return false;
         victim->gone=victim->relocked?SubRes::GoneRelocked:SubRes::GoneFresh;   // which list it was on: the cause of the readback its next write lock costs
-        dropShadowLocked(c,*victim);add(c.q.stats.texShadowEvicted);
+        dropShadowLocked(c,*victim,true);add(c.q.stats.texShadowEvicted);   // 0.3.200 (pipeline): the allocation may serve the next shadow
     }
     return true;
 }
@@ -329,7 +354,7 @@ inline bool makeRoomForFreshKeep(StreamCore& c,std::size_t bytes,const SubRes* k
         SubRes* victim=nullptr;
         for(SubRes* s=c.texFresh.head;s&&!victim;s=s->lru.next)if(s!=keep&&s->mode!=SubRes::Shadowed)victim=s;
         if(!victim||c.frameNo-victim->lastLockFrame<kFreshEvictAgeFrames)return false;
-        victim->gone=SubRes::GoneFresh;dropShadowLocked(c,*victim);add(c.q.stats.texShadowEvicted);
+        victim->gone=SubRes::GoneFresh;dropShadowLocked(c,*victim,true);add(c.q.stats.texShadowEvicted);   // 0.3.200 (pipeline): the fresh keep that evicted it usually takes this allocation
     }
     return true;
 }
@@ -468,6 +493,7 @@ inline HRESULT lockImage(ProxyBase& self,ProxyBase& root,SubRes& sub,UINT route,
                 }
                 else{
                     bool ok=true;
+                    takeTexSpare(*self.core,sub.shadow,levelBytes+kLockSlack);   // 0.3.200 (pipeline)
                     try{sub.shadow.assign(levelBytes+kLockSlack,0);}catch(...){ok=false;}
                     if(ok&&readback){   // ONE synchronous readback: the replay thread copies the whole real level out under a READONLY lock
                         ok=false;

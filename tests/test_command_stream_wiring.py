@@ -16,12 +16,12 @@ gpu=fp.src('static_shadow_gpu.h').read_text();exp=fp.src('world_shadow_experimen
 keys=q[q.index('inline const Key Keys[]={'):q.index('inline bool operator==(const Settings')]
 checks={}
 # 0.3.193: BlobShadowStrength is appended after it (origin[41]); test_quality_settings checks the order.
-checks['quality key: in Keys before BlobShadowStrength, 0..1, presets 1/1/1, default 1, own origin slot']=(keys.rstrip().endswith('    {"CommandStream",&Settings::commandStream,0,1,{1,1,1}},\n    {"BlobShadowStrength",&Settings::blobShadowStrength,0,100,{50,50,50}},\n    {"Weather",&Settings::weather,0,1,{1,1,1}},\n    {"RainFog",&Settings::rainFog,0,2,{1,1,1}},\n    {"FogClouds",&Settings::fogClouds,0,1,{1,1,0}},\n    {"FogCloudDensity",&Settings::fogCloudDensity,0,200,{100,100,100}},\n    {"GpuBudgetMs",&Settings::gpuBudgetMs,0,20,{4,3,2}},\n};')
-    and 'unsigned commandStream=1;' in q and 'char origin[40]=' in q and len(re.findall(r"'d'",q[q.index('char origin[40]='):].split('\n')[0]))==40)
+checks['quality key: in Keys before BlobShadowStrength, 0..1, presets 1/1/1, default 1, own origin slot']=(keys.rstrip().endswith('    {"CommandStream",&Settings::commandStream,0,1,{1,1,1}},\n    {"BlobShadowStrength",&Settings::blobShadowStrength,0,100,{50,50,50}},\n    {"Weather",&Settings::weather,0,1,{1,1,1}},\n    {"RainFog",&Settings::rainFog,0,2,{1,1,1}},\n    {"FogClouds",&Settings::fogClouds,0,1,{1,1,0}},\n    {"FogCloudDensity",&Settings::fogCloudDensity,0,200,{100,100,100}},\n    {"GpuBudgetMs",&Settings::gpuBudgetMs,0,20,{4,3,2}},\n    {"StreamFramesAhead",&Settings::streamFramesAhead,1,3,{2,2,2}}, /* 0.3.200 (pipeline) */\n};')
+    and 'unsigned commandStream=1;' in q and 'char origin[41]=' in q and len(re.findall(r"'d'",q[q.index('char origin[41]='):].split('\n')[0]))==41)
 checks['documented in the ini template (commented, with default) and the README table']=(';CommandStream=1' in ini and re.search(r'^  CommandStream +1 / 1 / 1 ',readme,re.M) is not None)
 checks['WorldRenderer exposes the loaded value; the early reader uses the same loader']=('bool commandStream()const{return quality.commandStream!=0;}' in w
-    and 'NorthlightQuality::load(hasFile?&in:nullptr,nullptr,problems).commandStream!=0' in hooks and 'northlight-quality.ini' in hooks)
-checks['early reader is Win32-only and falls back to the direct path on any failure']=('inline bool commandStreamRequested(const wchar_t* rootPath){' in hooks and hooks.count('catch(...){return false;}')==2)
+    and 'const NorthlightQuality::Settings s=NorthlightQuality::load(hasFile?&in:nullptr,nullptr,problems);' in hooks and 'return s.commandStream!=0;' in hooks and 'northlight-quality.ini' in hooks)
+checks['early reader is Win32-only and falls back to the direct path on any failure']=('inline bool commandStreamRequested(const wchar_t* rootPath,unsigned* framesAhead=nullptr){' in hooks and hooks.count('catch(...){return false;}')==2)
 # 0.3.193: the faint blob shadows bump the version; 0.3.196: the removed DXVK 3 start-marker fallback bumps it;
 # 0.3.196 (task 12): the stream is followed by the task's lookup caches and stream bookkeeping.
 # 0.3.197 (task 13): the soft local-light cap and blended GI re-publication follow them.
@@ -44,7 +44,7 @@ checks['stream_hooks.h starts no thread']=not any(x in hooks for x in ('CreateTh
 create=r[r.index('HRESULT STDMETHODCALLTYPE CreateDevice(UINT adapter'):];create=create[:create.index('\n};')]
 device=r[r.index('class Device final'):r.index('class Factory final')]
 checks['CreateDevice: stream flag read before the real create, streamActive before the Device, MULTITHREADED added only when streaming']=(
-    'const bool stream=NorthlightStream::commandStreamRequested(rootPath);' in create
+    'unsigned framesAhead=1;const bool stream=NorthlightStream::commandStreamRequested(rootPath,&framesAhead);' in create
     and create.index('streamActive.store(true')<create.index('real->CreateDevice(adapter,type,window,flags,pp,out)')<create.index('new Device(*out,this)')
     and 'if(stream)flags|=D3DCREATE_MULTITHREADED;' in create)
 checks['CreateDevice: any stream failure logs CSTREAM disabled and returns the Device unchanged']=(
@@ -53,6 +53,13 @@ checks['the Device has no CommandStream branch (the stream sits in front of it)'
 checks['the owner handoff runs on the replay thread through the one Device method']=('options.threadStart=[target]{target->adoptOwnerThread();};' in r and r.count('void adoptOwnerThread(){mirrorState.gate.ownerTid=MirrorGuard::threadId();}')==1)
 checks['memory pressure reaches the stream only through the hook atomic']=('NorthlightStream::memoryPressure.store(memoryCaps==1' in r and 'inline std::atomic<bool> memoryPressure{false};' in hooks)
 checks['the stream\'s buffer read-backs use NorthlightUpload::readBackLock (NOOVERWRITE only on DXVK >= 3) and keep READONLY as the fallback']=('options.readBackLock=&NorthlightUpload::readBackLock;' in r and 'c.readBackLock?c.readBackLock():D3::kLockReadOnly' in ''.join(fp.src('stream_proxies.h').read_text().split()))
+# 0.3.200 (pipeline): StreamFramesAhead, the last key: 1..3, presets 2/2/2, read by the early reader with CommandStream (1 when unreadable) and handed to the
+# stream with the bounded queue budget; documented in the ini template and the README table.
+checks['StreamFramesAhead: last key 1..3 2/2/2, read with CommandStream, passed with budgetForFramesAhead, documented']=(
+    keys.rstrip().endswith('{"StreamFramesAhead",&Settings::streamFramesAhead,1,3,{2,2,2}}, /* 0.3.200 (pipeline) */\n};') and 'unsigned streamFramesAhead=2;' in q
+    and 'if(framesAhead)*framesAhead=s.streamFramesAhead;' in hooks and hooks.count('if(framesAhead)*framesAhead=1;')==2
+    and 'options.framesAhead=framesAhead;options.budget=NorthlightStream::budgetForFramesAhead(framesAhead);' in r and 'startStream(*out,pp,framesAhead)' in create
+    and ';StreamFramesAhead=2' in ini and re.search(r'^  StreamFramesAhead +2 / 2 / 2 ',readme,re.M) is not None)
 for name,ok in checks.items():print(('PASS ' if ok else 'FAIL ')+name)
 assert all(checks.values())
 print('PASS command stream wiring: key, docs, banner, GATE fields, inert hooks, no DllMain thread')

@@ -77,7 +77,10 @@ struct Settings {
     // 0.3.200 (gpu budget): GpuBudgetMs 0 = off (the full image, no GPU timing); 1..20 = Northlight's own GPU time per frame (measured, read back a few
     // frames late) is kept near this many ms by lighter fog clouds, fog and lamps while it is over (gpu_budget.h); under it the image is the full one.
     unsigned gpuBudgetMs=4;
-    char origin[40]={'d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d'};
+    // 0.3.200 (pipeline): StreamFramesAhead 1..3 = how many frames the game thread may record ahead of the replay thread (CommandStream=1): Present
+    // waits for the Present that many frames back. 1 = the 0.3.199 behaviour. Read with CommandStream before the device exists (creation-time key).
+    unsigned streamFramesAhead=2;
+    char origin[41]={'d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d'};
 };
 struct Key { const char* name; unsigned Settings::*field; unsigned low,high; unsigned preset[3]; };
 // preset[] = Quality, Balanced, Performance. Quality must equal Settings{}.
@@ -122,6 +125,7 @@ inline const Key Keys[]={
     {"FogClouds",&Settings::fogClouds,0,1,{1,1,0}},
     {"FogCloudDensity",&Settings::fogCloudDensity,0,200,{100,100,100}},
     {"GpuBudgetMs",&Settings::gpuBudgetMs,0,20,{4,3,2}},
+    {"StreamFramesAhead",&Settings::streamFramesAhead,1,3,{2,2,2}}, /* 0.3.200 (pipeline) */
 };
 inline bool operator==(const Settings& a,const Settings& b){for(const auto& k:Keys)if(a.*k.field!=b.*k.field)return false;return true;}
 inline bool operator!=(const Settings& a,const Settings& b){return !(a==b);}
