@@ -226,6 +226,7 @@ private:
     NorthlightProbeBlend::Mirror probeBlend; // 0.3.197: same-key re-publication blend (probePrev, s8 in the GI pass)
     unsigned probeBlendPublishes=0,probeBlendSlots=0; // 0.3.197: per LOCAL log interval
     bool valid=false,failed=false,reportedContext=false;
+    float traceRot=-1,traceMove=-1;unsigned traceReject=0,traceTrigger=0;unsigned long long traceTriggerDraw=0; /* 0.3.200 (frame trace): camera disagreement (max |view diff| rotation, translation), reject reason, snapshot trigger kind and draw */
     unsigned traceContext=0; /* 0.3.200 (frame trace): this frame's context path: 0 none, 1 terrain+global light, 2 terrain native light (camera disagreed), 3 WMO */
     unsigned contextRejects=0,frames=0,slowReports=0;
     DWORD diagnosticTick=0;
@@ -2002,6 +2003,7 @@ public:
     unsigned capturePhaseReadsLastFrame()const{return lastCapturePhaseReads;} /* 0.3.150: clock reads of the capture-phase subset (inside the capture timers), likewise */
     bool hasContext()const{return valid&&!failed&&!workerFault();}
     unsigned frameTraceContext()const{return traceContext;} /* 0.3.200 (frame trace) */
+    void frameTraceCamera(float& rot,float& move,unsigned& reject,unsigned& trigger,unsigned long long& draw)const{rot=traceRot;move=traceMove;reject=traceReject;trigger=traceTrigger;draw=traceTriggerDraw;}
     bool actorShadowsEnabled()const{return quality.actorShadows!=0;}
     bool commandStream()const{return quality.commandStream!=0;} /* 0.3.192 (CS): the replay-thread stream was requested; creation-time key, see stream_hooks.h */
     unsigned blobShadowStrength()const{return quality.blobShadowStrength;} /* 0.3.193: read once at device creation */
@@ -2101,7 +2103,9 @@ public:
         NorthlightWmoContext::Lighting global;
         bool globalRead=cameraMatches&&NorthlightWmoContext::readGlobalLighting(camera,global);
         bool decoded=registers&&gameContext&&NorthlightWmoContext::terrainContext(view,nativeRead?lighting:nullptr,camera,globalRead?&global:nullptr,context);
-        traceContext=globalRead?1u:2u;
+        traceContext=globalRead?1u:2u;traceReject=unsigned(why.reason);traceRot=traceMove=-1;
+        if(cameraRead){traceRot=traceMove=0;for(unsigned i=0;i<16;++i){const float e=std::fabs(view[i]-independent.view[i]);if(i>=12&&i<15)traceMove=std::max(traceMove,e);else traceRot=std::max(traceRot,e);}}
+        if(const auto* snap=NorthlightStream::activeSnapshot){traceTrigger=snap->triggerKind;traceTriggerDraw=snap->triggerDraw;}else{traceTrigger=9;traceTriggerDraw=0;}
         bool agreement=decoded;
         if(!agreement){
             if(++contextRejects==1||(contextRejects%3600==0&&NorthlightDiagnostics::enabled()))logf("WORLD context rejected: registers=%d affineLight=%d clientRead=%d cameraAgreement=%d map=%s shaderCamera=(%.2f %.2f %.2f) gameCamera=(%.2f %.2f %.2f) light=(%.3f %.3f %.3f) count=%u",registers,decoded,gameContext,agreement,map,context.camera[0],context.camera[1],context.camera[2],camera[0],camera[1],camera[2],lighting[0],lighting[1],lighting[2],contextRejects);return;}
