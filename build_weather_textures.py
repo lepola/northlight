@@ -80,12 +80,14 @@ def image(width, height, colour, alpha_max, shape):
     return bytes(out)
 
 
-STREAK_SIGMA_PX, STREAK_FADE = .75, .08   # thin crisp core ~1.8 px wide (FWHM) at 32 px (0.3.199 game tests: 1.1 ~2.6 px, then .9); the streak fades only over the last 8% at each end
+STREAK_SIGMA_PX, STREAK_FADE = .62, .08   # thin crisp core ~1.5 px wide (FWHM) at 32 px (0.3.199 game tests: 1.1 ~2.6 px, .9, .75); the streak fades only over the last 8% at each end
+# 0.3.199: the streak is centred on a texel (16 of 0..31), not on the 15|16 border: a border centre always covers two equal texels, so no
+# sigma could make the core narrower than 2 px (game test: 'thinner'); on a texel centre the core is one texel with soft neighbours.
 STREAK_MIN_SIGMA_TEXELS = .75                # no mip level narrows the core below this: a streak must not break up or vanish at small mips
 
 
-def streak_x(u, sigma):
-    return math.exp(-((u-.5)/sigma)**2/2)
+def streak_x(u, sigma, centre=.5):
+    return math.exp(-((u-centre)/sigma)**2/2)
 
 
 def streak_y(v):
@@ -106,12 +108,14 @@ def streak_chain(width, height, colour, alpha_max):
     keeping the peak (a 1 px level would be a ~0.57 mean slab, 2.7x the stock texture's ~0.21) and keeping the mean
     (invisible). The line is separable (across x along), so the texel mean is the product of the 1-D means; all
     levels share the level-0 normalisation (alpha peak = alpha_max there)."""
-    mean0 = sum(texel_average(lambda u: streak_x(u, STREAK_SIGMA_PX/width), width))/width
-    scale = alpha_max/(max(texel_average(lambda u: streak_x(u, STREAK_SIGMA_PX/width), width))*max(texel_average(streak_y, height)))
+    centre = (width//2+.5)/width   # level 0 texel centre; the same uv line at every mip
+    mean0 = sum(texel_average(lambda u: streak_x(u, STREAK_SIGMA_PX/width, centre), width))/width
+    scale = alpha_max/(max(texel_average(lambda u: streak_x(u, STREAK_SIGMA_PX/width, centre), width))*max(texel_average(streak_y, height)))
     b, g, r = [round(c*255) for c in colour[::-1]]
     levels, w, h = [], width, height
     while True:
-        ax = texel_average(lambda u: streak_x(u, max(STREAK_SIGMA_PX/width, STREAK_MIN_SIGMA_TEXELS/w)), w)
+        # the floor applies to the mips only: level 0 keeps STREAK_SIGMA_PX (0.3.199: with the floor there too, any sigma below .75 px was a no-op)
+        ax = texel_average(lambda u: streak_x(u, STREAK_SIGMA_PX/width if w == width else max(STREAK_SIGMA_PX/width, STREAK_MIN_SIGMA_TEXELS/w), centre), w)
         ay = texel_average(streak_y, h)
         gain = scale*min(1., math.sqrt(mean0/(sum(ax)/w)))
         out = bytearray()
