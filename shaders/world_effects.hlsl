@@ -743,7 +743,11 @@ float4 LocalFog(float2 uv:TEXCOORD0):COLOR0 {
         float invH=rsqrt(h2+core*core);
         float boundary=rcp(max(LocalLightPos[i].w*LocalLightPos[i].w+core*core,.001));
         float integral=(disc>0&&t1>t0)?max((atanFast((t1+b)*invH)-atanFast((t0+b)*invH))*invH-(t1-t0)*boundary,0):0;
-        result+=LocalLightColor[i].rgb*(integral*LocalLightFog[i].x);
+        // 0.3.199 (fog clouds): the same smooth near ramp as WorldFog's air (0 at FogRange.x, full one fade length later), taken at the
+        // ray's closest approach to the light inside the integrated span. The glow's bright core sits there; with only the hard FogRange.x
+        // start it was cut off within a unit or two of walking, so the glow popped while approaching a lamp (game test).
+        float nearGlow=saturate((clamp(-b,t0,t1)-FogRange.x)*FogRange.y);nearGlow*=nearGlow*(3-2*nearGlow);
+        result+=LocalLightColor[i].rgb*(integral*LocalLightFog[i].x*nearGlow);
     }
     float3 scatter=result*FogRange.z;
     float peak=max(scatter.r,max(scatter.g,scatter.b));

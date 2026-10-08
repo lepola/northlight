@@ -391,10 +391,10 @@ def main():
             # 0.3.185: RemovalSmooth is new (the removal smoothing's own half-res pass; TemporalLight shrinks).
             # 0.3.197: WorldGI blends a same-key probe re-publication from the previous SH (task 13).
             # 0.3.198 (rain): WorldFog (air floor from c59.w) changes on purpose.
-            if name not in ('WorldComposite', 'TemporalLight', 'SourceVisibilityPS', 'WorldLighting', 'LocalDirect', 'WorldNormals', 'RemovalSmooth', 'WorldGI', 'WorldFog', 'FogClouds', 'FogTemporal'):  # FogClouds (0.3.199) is new, not in BEFORE
+            if name not in ('WorldComposite', 'TemporalLight', 'SourceVisibilityPS', 'WorldLighting', 'LocalDirect', 'WorldNormals', 'RemovalSmooth', 'WorldGI', 'WorldFog', 'FogClouds', 'FogTemporal', 'LocalFog'):  # FogClouds (0.3.199) is new, not in BEFORE; LocalFog (0.3.199) gains the near ramp
                 assert info['sha256'] == BEFORE[name], name
                 unchanged.append(name)
-        assert sorted(unchanged) == sorted(k for k in BEFORE if k not in ('TemporalLight', 'SourceVisibilityPS', 'WorldLighting', 'LocalDirect', 'WorldNormals', 'WorldGI', 'WorldFog'))
+        assert sorted(unchanged) == sorted(k for k in BEFORE if k not in ('TemporalLight', 'SourceVisibilityPS', 'WorldLighting', 'LocalDirect', 'WorldNormals', 'WorldGI', 'WorldFog', 'LocalFog'))
         assert manifest['shaders']['WorldNormals']['static_instruction_slots'] == 434  # r77: both wide samples or neither
         assert manifest['shaders']['WorldFog']['static_instruction_slots'] == 512  # 0.3.198 (rain): the same 512 slots (the literal .0017 became c59.w)
         assert SOURCE_VISIBILITY_SLOTS is not None, 'TODO(lead): pin SOURCE_VISIBILITY_SLOTS to the compiled count (%d)' % manifest['shaders']['SourceVisibilityPS']['static_instruction_slots']

@@ -100,5 +100,9 @@ checks['colour: c25/c26 set for the cloud pass from NorthlightFogClouds::colour,
 checks['dense zones: airFloor = .0017f + rain extra x denseDamp, cloud density x denseDamp, lamps sigmaAt without clouds']=(
     'const float airFloor=.0017f+wx.airExtinction()*denseDamp;' in w and 'unsigned(std::lround(float(quality.fogCloudDensity)*denseDamp))' in w
     and 'localLights.position[i][2],false);' in w and 'ray.z*t,true)' in w and 'if(clouds&&cf.active)' in w)
+# lamp glow game test: the glow fades in over the same near ramp as the air, at the ray's closest approach to the light
+lf=h.split('float4 LocalFog(',1)[1].split('\n}\n',1)[0]
+checks['LocalFog: smooth near ramp at the closest approach (no hard FogRange.x cut of the glow core)']=(
+    'float nearGlow=saturate((clamp(-b,t0,t1)-FogRange.x)*FogRange.y);nearGlow*=nearGlow*(3-2*nearGlow);' in lf and 'integral*LocalLightFog[i].x*nearGlow' in lf)
 for k,ok in checks.items():print(('PASS ' if ok else 'FAIL ')+k)
 sys.exit(0 if all(checks.values()) else 1)
