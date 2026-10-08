@@ -1,5 +1,7 @@
 #pragma once
 #include <algorithm>
+#include <atomic>
+#include <cmath>
 #include <functional>
 #include "celestial_terrain.h"
 #include "diagnostics_switch.h"
@@ -75,6 +77,12 @@ class NorthlightCelestialDiscRenderer {
     IDirect3DTexture9* ringVisibility[2]={};IDirect3DSurface9* ringSurface[2]={};unsigned ringIndex=0;
     NorthlightCelestialHalo::History ringHistory;bool ringWritten=false;unsigned ringFrame=0;
     IDirect3DPixelShader9* veilPS=nullptr;
+    // 0.3.198 (rain): detected rain or snow dims the sun and moon: disc opacity and the sun glare weights (which the veil inherits) x
+    // weatherEffects().discGain() = 1 - 0.85 f, set once per frame before render() (one frame late for the sky-phase disc); exactly 1 when dry.
+    std::atomic<float> weatherGain{1.f};
+public:
+    void setWeatherGain(float g){weatherGain.store(std::isfinite(g)?std::clamp(g,0.f,1.f):1.f,std::memory_order_relaxed);}
+private:
     NorthlightCelestialGlow::Hue glow; // the last render()'s hue; the sky-phase disc uses it one frame later
     // This frame's sun glare, kept for the ring pass and the veil (same placement and constants).
     struct Glare {bool valid=false;NorthlightCelestialDisc::Disc disc{};float projection[3]={},inverseView[16]={},constants[NorthlightCelestialVeil::Registers][4]={};
@@ -314,12 +322,13 @@ public:
         if(glare)NorthlightCelestialGlow::glareConstants(glow,i,disc.tint,NorthlightCelestialGlow::sunTailWeight(disc.direction[2]),ring?NorthlightCelestialGlow::Wrap:0.f,c[47],c[48]);
         else NorthlightCelestialGlow::constants(glow,i,0.f,c[47],c[48]);
         c[12][2]*=fade;c[47][3]*=fade;
+        if(glare){const float gain=weatherGain.load(std::memory_order_relaxed);c[12][2]*=gain;c[47][3]*=gain;} /* 0.3.198 (rain): x1 when dry */
         (void)legacyFog;c[11][0]=repairDepth;c[11][1]=repairDepth>=0?1.f:0.f;c[11][2]=NorthlightCelestialDisc::RepairDepthTolerance;c[11][3]=i==0?1.f:0.f;
         std::memcpy(c[1],projection,12);c[1][3]=water?1.f:0.f;std::memcpy(c[2],inverseView,64);c[10][0]=srgb?1.f:0.f;c[10][1]=nearZ;c[10][2]=farZ;c[10][3]=occlude?1.f:0.f;
         struct V{float x,y,z,w,u,v;} vertices[]={{-.5f,-.5f,spriteDepth,1,0,0},{float(width)-.5f,-.5f,spriteDepth,1,1,0},{-.5f,float(height)-.5f,spriteDepth,1,0,1},{float(width)-.5f,float(height)-.5f,spriteDepth,1,1,1}};
         D3DVIEWPORT9 viewport={0,0,width,height,0,1};d->SetViewport(&viewport);
         std::memcpy(c[6],disc.direction,12);c[6][3]=disc.tangentRadius;std::memcpy(c[7],disc.right,12);std::memcpy(c[8],disc.up,12);
-        std::memcpy(c[9],disc.tint,12);c[9][3]=disc.opacity;RECT clip={bounds[0],bounds[1],bounds[2],bounds[3]};
+        std::memcpy(c[9],disc.tint,12);c[9][3]=glare?disc.opacity:disc.opacity*weatherGain.load(std::memory_order_relaxed);RECT clip /* 0.3.198 (rain): the glare keeps its opacity (the veil reads it); its weights carry the gain */={bounds[0],bounds[1],bounds[2],bounds[3]};
         d->SetScissorRect(&clip);d->SetTexture(1,texture[i]);
         if(!check(d->SetPixelShaderConstantF(47,c[47],2),"glow constants"))return false;
         if(glare){

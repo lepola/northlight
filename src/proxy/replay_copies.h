@@ -12,7 +12,7 @@
    geometry_capture.h, terrain_capture_bounds.h) reads these bytes instead of locking a DXVK buffer READONLY, so it no longer depends on how a
    DXVK version treats a read lock (3.x marks the range dirty, then Unlock stages + GPU-copies it; see upload_lock.h readBackLock()).
 
-   Position: a copy equals the real buffer AT THE REPLAY POSITION, never the game thread's (the game is up to a frame ahead and has already
+   Position: a copy equals the real buffer AT THE REPLAY POSITION, never the game thread's (the game is up to StreamFramesAhead frames ahead and has already
    overwritten ring ranges). It is kept current in stream order at ONE choke point: every write the stream replays into a game buffer goes
    through the tracked wrapper NorthlightTrackedBuffers::Buffer on the replay thread (Device::CreateVertexBuffer/CreateIndexBuffer wrap, the
    stream's inner object IS the wrapper): UnlockBuffer payloads (Lock, memcpy, Unlock), first-lock/DISCARD staging (same command), and
@@ -20,7 +20,7 @@
    forwards, it copies that range out of the still-mapped pointer, or, for the stream's own UnlockBuffer replay, out of the command's source bytes
    (UnlockSourceScope, unlock_source.h: the mapped pointer may be uncached write-combined memory). ProcessVertices (the only GPU-side writer of a buffer) calls written(): the
    copy is dropped for good. Device Reset (invalidateAll) drops every copy. Nothing else writes a game buffer.
-   While a write lock is outstanding (pending), a nested lock, or any lock, the copy is not served (the capture falls back to its lock).
+   While a write lock is outstanding, a nested lock, or any lock, the copy is not served (the capture falls back to its lock).
    DISCARD: the new contents outside the written range are undefined in D3D9; the copy keeps the old bytes there. A real lock would return
    arbitrary bytes for them, so a capture or revalidate compare that read them would be reading undefined data either way (the revision
    changes with the DISCARD, so no cache keyed on it survives).
@@ -63,12 +63,16 @@ struct Slot {
     enum State:unsigned char{None,Filling,Valid};
     std::atomic<unsigned char> state{None};
     std::vector<unsigned char> data;
-    bool gpuWritten=false,pending=false,evicted=false,large=false,dropAtUnpin=false;unsigned strikes=0,frames=0,pins=0,listAt=0;std::uint64_t used=0,lastFrame=0,evictedFrame=0,parkUntil=0;   // frames: distinct recent frames with a capture read
-    UINT pOff=0,pEnd=0;const unsigned char* pPtr=nullptr;   // the outstanding write lock: range and mapped pointer
+    bool gpuWritten=false,evicted=false,large=false,dropAtUnpin=false;unsigned strikes=0,frames=0,pins=0,listAt=0;std::uint64_t used=0,lastFrame=0,evictedFrame=0,parkUntil=0;   // frames: distinct recent frames with a capture read
 };
+// 0.3.196 (task 12): the outstanding write lock of ONE wrapper (a member of the tracked Buffer, no mutex): noteWrite() fills it at Lock, commitWrite() consumes it at Unlock
+// under ONE store mutex acquisition. `drop`: the lock cannot be mirrored exactly (nested, null pointer, offset past the end): the copy is dropped at Unlock.
+struct PendingWrite {bool active=false,drop=false;UINT off=0,end=0;const unsigned char* ptr=nullptr;};
 struct Store {
     std::mutex m;std::unordered_map<const void*,Slot*> registry;std::vector<Slot*> list;   // list: Filling and Valid slots
     std::uint64_t used=0,clock=0,frame=1,cap=kCapBytes,largeUsed=0,largeBlockUntil=0;bool pressure=false;   // largeUsed: the large allowance's bytes (not in `used`)
+    // 0.3.196 (task 12): the data vector of a slot evicted INSIDE beginFill, held only until that same call sizes the new fill (then freed): at most one vector, never kept across calls.
+    std::vector<unsigned char> spare;bool recycling=false;
 };
 inline Store& store(){static Store s;return s;}
 inline void pinRef(Slot& c){++c.pins;if(c.owner)c.ref(c.owner,true);}   // a pin holds the wrapper alive (see LIFETIME); store mutex held
@@ -81,9 +85,11 @@ inline void drop(Store& s,Slot& c,Why why){
     if(c.state.load()==Slot::None)return;
     const std::uint64_t n=c.size;Slot* last=s.list.back();s.list[c.listAt]=last;last->listAt=c.listAt;s.list.pop_back();
     if(c.large){s.largeUsed-=n;M::state().copyLargeDrops.fetch_add(1,std::memory_order_relaxed);c.large=false;}else s.used-=n;
-    c.dropAtUnpin=false;c.state.store(Slot::None);c.pending=false;c.pPtr=nullptr;
+    c.dropAtUnpin=false;c.state.store(Slot::None);
     if(why!=Why::Silent){c.evicted=true;c.evictedFrame=s.frame;c.frames=0;}   // a refill needs 2 fresh frames of reads, and counts as a strike when it comes soon
-    if(!c.pins)std::vector<unsigned char>().swap(c.data);
+    if(!c.pins){
+        if(why==Why::Evict&&s.recycling&&c.data.capacity()>s.spare.capacity())s.spare.swap(c.data);   // beginFill's own eviction: its fill may take this allocation over
+        std::vector<unsigned char>().swap(c.data);}
     auto& m=M::state();if(why==Why::Evict)m.copyEvictions.fetch_add(1,std::memory_order_relaxed);else if(why==Why::Invalidate)m.copyInvalidations.fetch_add(1,std::memory_order_relaxed);
     gauges(s);
 }
@@ -114,15 +120,14 @@ inline void detach(Slot& c){
     Store& s=store();std::lock_guard<std::mutex> g(s.m);
     detail::drop(s,c,detail::Why::Silent);s.registry.erase(c.raw);s.registry.erase(c.exposed);c.attached=false;
 }
-// A successful write Lock (not READONLY). before = locks already outstanding on the buffer. A nested write, an offset past the end or a
-// null pointer cannot be mirrored exactly: the copy is dropped. Size 0 = to the end, a range past the end is clamped (as the stream does).
-inline void writeLocked(Slot& c,unsigned before,UINT off,UINT size,void* ptr){
+// A successful write Lock (not READONLY), no mutex (0.3.196, task 12: the Lock/Unlock pair used to take the store mutex twice). before = locks already outstanding on the buffer.
+// Only records what Unlock needs; a nested write, an offset past the end or a null pointer cannot be mirrored exactly: commitWrite drops the copy. Size 0 = to the end, a
+// range past the end is clamped (as the stream does). A slot that is not Valid now cannot become Valid before the Unlock (beginFill refuses while locks>0), so nothing is recorded.
+inline void writeLocked(const Slot& c,PendingWrite& w,unsigned before,UINT off,UINT size,void* ptr){
     if(c.state.load()!=Slot::Valid)return;
-    Store& s=store();std::lock_guard<std::mutex> g(s.m);
-    if(c.state.load()!=Slot::Valid)return;
-    if(before||c.pending||!ptr||off>c.size){detail::drop(s,c,detail::Why::Invalidate);return;}
+    if(w.active||before||!ptr||off>c.size){w.active=true;w.drop=true;return;}   // a pending write of this wrapper means a nested one, as does before
     std::uint64_t end=size?std::uint64_t(off)+size:std::uint64_t(c.size);if(end>c.size)end=c.size;
-    c.pending=true;c.pOff=off;c.pEnd=UINT(end);c.pPtr=static_cast<const unsigned char*>(ptr);
+    w.active=true;w.drop=false;w.off=off;w.end=UINT(end);w.ptr=static_cast<const unsigned char*>(ptr);
 }
 // A rejected write Lock, a failed Unlock, a GPU write: the copy no longer mirrors the buffer.
 inline void invalidate(Slot& c,bool gpuWrite=false){
@@ -131,17 +136,19 @@ inline void invalidate(Slot& c,bool gpuWrite=false){
     if(gpuWrite)c.gpuWritten=true;   // never copied again
     detail::drop(s,c,detail::Why::Invalidate);
 }
-// Before the wrapper forwards Unlock (the pointer is still mapped): copy the written range into the copy. before = locks outstanding (this one included).
-inline void beforeUnlock(Slot& c,unsigned before){
+// Before the wrapper forwards Unlock (the pointer is still mapped): copy the written range into the copy. before = locks outstanding (this one included). ONE mutex acquisition;
+// the slot may have been evicted or invalidated since the Lock (evictOne, setPressure, a failed nested Lock): then only the record is cleared.
+inline void beforeUnlock(Slot& c,PendingWrite& w,unsigned before){
+    if(!w.active)return;   // a READONLY lock's Unlock: nothing was written
+    const PendingWrite p=w;w=PendingWrite{};
     if(c.state.load()!=Slot::Valid)return;
     Store& s=store();std::lock_guard<std::mutex> g(s.m);
-    if(c.state.load()!=Slot::Valid||!c.pending)return;   // a READONLY lock's Unlock: nothing was written
-    if(before>1){detail::drop(s,c,detail::Why::Invalidate);return;}   // which lock does this Unlock close? unknown: drop
-    if(c.pEnd>c.pOff){   // the stream's own replayed write names its source bytes (cached memory, see unlock_source.h); a pass-through lock is read back from the mapped pointer
+    if(c.state.load()!=Slot::Valid)return;
+    if(p.drop||before>1){detail::drop(s,c,detail::Why::Invalidate);return;}   // which lock does this Unlock close? unknown: drop
+    if(p.end>p.off){   // the stream's own replayed write names its source bytes (cached memory, see unlock_source.h); a pass-through lock is read back from the mapped pointer
         const UnlockSource& u=unlockSource;
-        const unsigned char* from=u.bytes&&u.off==c.pOff&&u.size==c.pEnd-c.pOff?u.bytes:c.pPtr;
-        std::memcpy(c.data.data()+c.pOff,from,c.pEnd-c.pOff);}
-    c.pending=false;c.pPtr=nullptr;
+        const unsigned char* from=u.bytes&&u.off==p.off&&u.size==p.end-p.off?u.bytes:p.ptr;
+        std::memcpy(c.data.data()+p.off,from,p.end-p.off);}
 }
 // ---- reader side (replay_copy_reader.h) ----
 // Once per frame (replay thread, WorldRenderer::endFrame): the time base of the thrash guard and of the deferred fill.
@@ -153,12 +160,12 @@ inline void touch(Store& s,Slot& c){   // one capture read in this frame
 }
 }
 // The bytes at [off,off+size) of the buffer at its replay position, pinned until unpin(); null when no valid copy (slot is set when the buffer
-// is tracked at all, to let the caller try a fill). key: the raw or the exposed pointer. Not served while any lock is outstanding or a write is pending.
+// is tracked at all, to let the caller try a fill). key: the raw or the exposed pointer. Not served while any lock is outstanding (a pending write implies one).
 inline const unsigned char* read(const void* key,UINT off,UINT size,Slot*& slot){
     slot=nullptr;Store& s=store();std::lock_guard<std::mutex> g(s.m);
     auto it=s.registry.find(key);if(it==s.registry.end())return nullptr;
     Slot& c=*it->second;slot=&c;detail::touch(s,c);
-    if(c.state.load()!=Slot::Valid||c.pending||(c.locks&&c.locks->load())||!size||std::uint64_t(off)+size>c.size)return nullptr;
+    if(c.state.load()!=Slot::Valid||(c.locks&&c.locks->load())||!size||std::uint64_t(off)+size>c.size)return nullptr;
     pinRef(c);c.used=++s.clock;return c.data.data()+off;
 }
 // Drops one pin; the bytes go if the slot was dropped meanwhile. The wrapper reference is released last, outside the mutex (it may be the final one).
@@ -170,9 +177,11 @@ inline void unpin(Slot& c){
      if(!c.pins&&c.state.load()==Slot::None)std::vector<unsigned char>().swap(c.data);}
     if(owner)ref(owner,false);   // c may be freed from here on
 }
-// Reserves room for a whole-buffer copy of c (evicting LRU entries) and pins it; false = stay on the fallback.
-inline bool beginFill(Slot& c,UINT requested){
-    Store& s=store();std::lock_guard<std::mutex> g(s.m);auto& m=NorthlightLockMeter::state();
+// Reserves room for a whole-buffer copy of c (evicting LRU entries) and pins it; false = stay on the fallback. Store mutex held.
+// 0.3.196 (task 12): a slot evicted to make room hands its allocation to this fill when it fits tightly (capacity within 1/8 above the size: the slack is the only memory not charged to
+// the budget, <= 12.5% of the slot, and only until the slot is dropped); anything else, and every leftover, is freed before returning.
+inline bool beginFillLocked(Store& s,Slot& c,UINT requested){
+    auto& m=NorthlightLockMeter::state();
     const bool large=c.size>s.cap/4;   // above the regular per-buffer limit: the large allowance or nothing
     const bool wanted=large?c.frames>=2:(c.size<=kEagerBytes||requested>=c.size||c.frames>=2);   // a big buffer read for a small range: only once it proved to be read in 2 recent frames
     if(c.state.load()!=Slot::None||c.pins||!wanted)return false;
@@ -180,12 +189,27 @@ inline bool beginFill(Slot& c,UINT requested){
     if(large&&(c.size>kLargeCopyBytes||s.pressure||s.frame<s.largeBlockUntil||(c.evicted&&s.frame-c.evictedFrame<kLargeRefillFrames)||!detail::freeLarge(s,c))){m.copyRefused.fetch_add(1,std::memory_order_relaxed);return false;}
     const bool recent=c.evicted&&s.frame-c.evictedFrame<=kThrashFrames;
     if(recent&&c.strikes>=kMaxStrikes){c.parkUntil=s.frame+kBackoffFrames;c.strikes=0;c.evicted=false;m.copyRefused.fetch_add(1,std::memory_order_relaxed);return false;}   // thrash guard: parked
+    struct SpareScope {Store& s;explicit SpareScope(Store& st):s(st){s.recycling=true;}~SpareScope(){s.recycling=false;std::vector<unsigned char>().swap(s.spare);}} spare(s);
     if(!large)while(s.used+c.size>s.cap)if(!detail::evictOne(s)){m.copyRefused.fetch_add(1,std::memory_order_relaxed);return false;}
-    try{c.data.assign(c.size,0);s.list.push_back(&c);}catch(...){std::vector<unsigned char>().swap(c.data);m.copyRefused.fetch_add(1,std::memory_order_relaxed);return false;}
-    c.listAt=unsigned(s.list.size()-1);c.state.store(Slot::Filling);c.pending=false;c.used=++s.clock;pinRef(c);c.dropAtUnpin=false;
+    try{
+        if(s.spare.capacity()>=c.size&&s.spare.capacity()-c.size<=std::size_t(c.size)/8)c.data.swap(s.spare);   // evicted a moment ago: same allocation, no malloc/free pair
+        c.data.assign(c.size,0);s.list.push_back(&c);
+    }catch(...){std::vector<unsigned char>().swap(c.data);m.copyRefused.fetch_add(1,std::memory_order_relaxed);return false;}
+    c.listAt=unsigned(s.list.size()-1);c.state.store(Slot::Filling);c.used=++s.clock;pinRef(c);c.dropAtUnpin=false;
     if(large){c.large=true;s.largeUsed+=c.size;m.copyLargeGrants.fetch_add(1,std::memory_order_relaxed);}else s.used+=c.size;
     if(recent)++c.strikes;else c.strikes=0;detail::gauges(s);
     return true;
+}
+inline bool beginFill(Slot& c,UINT requested){Store& s=store();std::lock_guard<std::mutex> g(s.m);return beginFillLocked(s,c,requested);}
+// read() plus, on a miss for a tracked buffer whose range fits, beginFill(), in ONE mutex acquisition (0.3.196, task 12: a cache miss used to take it twice). Returns the pinned bytes of a hit;
+// else null, with `fill` true when the slot is now Filling and pinned (the caller reads the buffer into slot->data, then endFill()s) and `slot` set when the buffer is tracked at all.
+inline const unsigned char* readOrBeginFill(const void* key,UINT off,UINT size,Slot*& slot,bool& fill){
+    slot=nullptr;fill=false;Store& s=store();std::lock_guard<std::mutex> g(s.m);
+    auto it=s.registry.find(key);if(it==s.registry.end())return nullptr;
+    Slot& c=*it->second;slot=&c;detail::touch(s,c);
+    if(c.state.load()==Slot::Valid&&!(c.locks&&c.locks->load())&&size&&std::uint64_t(off)+size<=c.size){pinRef(c);c.used=++s.clock;return c.data.data()+off;}
+    if(size&&std::uint64_t(off)+size<=c.size)fill=beginFillLocked(s,c,size);
+    return nullptr;
 }
 // The fill is done (data written by the caller while the slot was Filling and pinned). ok keeps the pin (the caller reads, then unpin()s).
 inline void endFill(Slot& c,bool ok){

@@ -17,9 +17,9 @@ public:
     ~Reader(){if(pinned)unpin(*pinned);}   // an early return without unlock(): the pin goes, a real lock is left as the old code left it
     HRESULT lock(UINT off,UINT size,void** out){
         if(enabled.load(std::memory_order_relaxed)&&b){
-            Slot* slot=nullptr;
-            if(const unsigned char* bytes=read(b,off,size,slot)){pinned=slot;*out=const_cast<unsigned char*>(bytes);served(size);return D3D_OK;}
-            if(slot&&size&&std::uint64_t(off)+size<=slot->size&&beginFill(*slot,size)){
+            Slot* slot=nullptr;bool fill=false;
+            if(const unsigned char* bytes=readOrBeginFill(b,off,size,slot,fill)){pinned=slot;*out=const_cast<unsigned char*>(bytes);served(size);return D3D_OK;}   // 0.3.196 (task 12): hit or begin the fill, one mutex acquisition
+            if(fill){
                 void* all=nullptr;bool ok=false;
                 const HRESULT hr=b->Lock(0,slot->size,&all,NorthlightUpload::readBackLock());
                 if(!FAILED(hr)){

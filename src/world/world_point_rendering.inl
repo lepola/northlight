@@ -34,6 +34,7 @@
 
     void releasePointGPU(){
         pointSchedule.invalidate();pointUpdates=pointReuses=0;
+        localLightTracker.reset();localLightQpc=0; /* 0.3.197: releaseGPU's only caller; a rebuilt device restarts the local light fades */
         for(auto* lists:{&pointStaticCandidates,&pointTerrainCandidates,&pointLiveCandidates,&pointReplayCandidates})
             for(auto& list:*lists)std::vector<size_t>().swap(list);
         pointReady=false;for(auto& face:pointFaces)drop(face);drop(pointCube);drop(pointDepth);

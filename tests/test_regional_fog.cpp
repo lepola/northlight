@@ -9,6 +9,11 @@ static NorthlightGI::WorldScene plane(float cx,float cy,bool terrain=true){North
  for(auto p:std::array<std::array<float,2>,4>{{{{-400,-400}},{{400,-400}},{{400,400}},{{-400,400}}}})s.vertices.push_back({{cx+p[0],cy+p[1],100+p[0]*.02f},{0,0,1},0,0});
  s.triangles.push_back({0,1,2,0});s.triangles.push_back({0,2,3,0});return s;}
 int main(int argc,char** argv){
+ // 0.3.199 (fog clouds): lush zones (forests, grass, Duskwood, STV, Mulgore, Stormwind) get dry-weather fog banks; deserts and Orgrimmar do not
+ for(uint32_t z:{10u,33u,215u,1519u,12u,40u,44u,45u,267u,38u,28u,139u,36u,3518u,3537u,394u})assert(lushZone(z));
+ for(uint32_t z:{14u,440u,17u,3u,4u,1637u,0u,1377u,405u,400u})assert(!lushZone(z));
+ for(uint32_t z:{40u,3518u})assert(!forestZone(z)&&grassZone(z)&&policy(z,100,1,1,false).height==policy(14,100,1,1,false).height); /* grass: the general outdoor fog, unchanged */
+
  unsigned cases=0;
  for(unsigned i=0;i<10000;++i){float time=float(i)/10000;float night=nightFactor(time);assert(night>=0&&night<=1);auto d=policy(440,100,1,1,false);assert(d.day+night*d.nightExtra==0);++cases;}
  assert(nightFactor(0)==1&&nightFactor(.5f)==0&&nightFactor(7.f/24)>.49f&&nightFactor(7.f/24)<.51f);

@@ -18,7 +18,9 @@ struct Rig {
     }
     StreamCore& core(){return sd->streamCore();}
     void sync(){CHECK(dev->TestCooperativeLevel()==5);}
-    void finish(){dev->Release();dev=nullptr;}
+    // 0.3.196 (task 12): every wait of the real StreamDevice paths (generated runSync, runTask, Present/SwapPresent) targeted a kFlagWaitTarget command.
+    void checkFlagged(){if(sd)CHECK(core().q.unflaggedWaits()==0);}
+    void finish(){checkFlagged();dev->Release();dev=nullptr;}
 };
 // With filtering on the Target sees fewer Sets: the filterable ones are dropped from both traces and the STATE digests (logged at every draw,
 // clear, copy, present and write unlock) carry the effective device state instead. With it compiled out the traces must be identical.
@@ -428,13 +430,56 @@ static void textureShadows(){
         CHECK(rig.dev->UpdateTexture(a,b)==D3D_OK&&s.texShadowBytes.load()==bytes-16*16*4);const auto w=get(s.passThrough[unsigned(PassReason::Written)]);
         CHECK(b->LockRect(0,&lr,nullptr,0)==D3D_OK&&get(s.passThrough[unsigned(PassReason::Written)])==w+1&&b->UnlockRect(0)==D3D_OK);a->Release();b->Release();
     }
+    {   // 0.3.196 (task 12): a fresh keep takes free room or evicts only fresh keeps that are >= kFreshEvictAgeFrames old, never a re-locked shadow; with none it is skipped, the lock stages (no sync) and the real level still gets the bytes.
+        // The readbacks that follow are split by cause: a fresh keep that was evicted, a re-locked shadow that was evicted, a level that never had a shadow.
+        std::vector<IDirect3DTexture9*> v;const auto skip0=get(s.texShadowFreshSkipped),ev0=get(s.texShadowEvicted),sl0=get(s.census[(std::size_t)Cmd::SyncLock]),rf0=get(s.texShadowRefused);
+        TTexture* last=nullptr;
+        for(int i=0;i<100&&get(s.texShadowFreshSkipped)==skip0;++i){
+            IDirect3DTexture9* t=nullptr;CHECK(rig.dev->CreateTexture(256,256,1,0,(D3DFORMAT)22,(D3DPOOL)1,&t,nullptr)==D3D_OK);rig.sync();last=gLastTexture;
+            D3DLOCKED_RECT lr{};CHECK(t->LockRect(0,&lr,nullptr,0)==D3D_OK);fill((unsigned char*)lr.pBits,lr.Pitch,256,1024,77);CHECK(t->UnlockRect(0)==D3D_OK);v.push_back(t);}
+        CHECK(get(s.texShadowFreshSkipped)==skip0+1&&v.size()>=2&&s.texShadowBytes.load()<=std::int64_t(q.texShadowCap()));   // the cap filled with fresh keeps, the next one was skipped
+        CHECK(get(s.texShadowEvicted)==ev0&&get(s.census[(std::size_t)Cmd::SyncLock])==sl0&&get(s.texShadowRefused)==rf0);   // ... without evicting, without a synchronous lock, and not as a refusal
+        rig.sync();for(unsigned y=0;y<256;++y)for(unsigned x=0;x<1024;++x)CHECK(last->surf[0]->mem[std::size_t(y)*last->surf[0]->pitch+x]==(unsigned char)(77+y*7+x));   // the staged Block reached the device
+        const auto rb0=get(s.texShadowReadbacks),nv0=get(s.readbackNeverShadowed),fd0=get(s.readbackAfterFreshDrop),re0=get(s.readbackAfterRelockedEvict),fs0=get(s.readbackAfterFreshSkip);
+        auto causes=[&]{return get(s.readbackAfterFreshSkip)-fs0+get(s.readbackNeverShadowed)-nv0+get(s.readbackAfterFreshDrop)-fd0+get(s.readbackAfterRelockedEvict)-re0;};
+        {D3DLOCKED_RECT lr{};IDirect3DTexture9* t=v.back();CHECK(t->LockRect(0,&lr,nullptr,0)==D3D_OK&&t->UnlockRect(0)==D3D_OK);}   // the skipped level, written now: one readback, its fresh keep was skipped
+        CHECK(get(s.texShadowReadbacks)==rb0+1&&get(s.readbackAfterFreshSkip)==fs0+1&&causes()==1&&get(s.texShadowEvicted)>ev0);
+        for(auto* t:v){D3DLOCKED_RECT lr{};CHECK(t->LockRect(0,&lr,nullptr,0)==D3D_OK&&t->UnlockRect(0)==D3D_OK);}   // the fresh keeps the readback evicted come back through a readback each
+        CHECK(get(s.readbackAfterFreshDrop)>fd0&&causes()==get(s.texShadowReadbacks)-rb0);
+        std::vector<IDirect3DTexture9*> hot;   // re-locked 2 MiB levels push the re-locked shadows out too
+        for(int i=0;i<10;++i){IDirect3DTexture9* t=nullptr;CHECK(rig.dev->CreateTexture(1024,512,1,0,(D3DFORMAT)22,(D3DPOOL)1,&t,nullptr)==D3D_OK);D3DLOCKED_RECT lr{};RECT rc{0,0,8,2};
+            CHECK(t->LockRect(0,&lr,&rc,0)==D3D_OK&&t->UnlockRect(0)==D3D_OK&&t->LockRect(0,&lr,&rc,0)==D3D_OK&&t->UnlockRect(0)==D3D_OK);hot.push_back(t);}
+        for(auto* t:v){D3DLOCKED_RECT lr{};CHECK(t->LockRect(0,&lr,nullptr,0)==D3D_OK&&t->UnlockRect(0)==D3D_OK);}
+        CHECK(get(s.readbackAfterRelockedEvict)>re0&&causes()==get(s.texShadowReadbacks)-rb0&&s.texShadowBytes.load()<=std::int64_t(q.texShadowCap()));   // every readback has exactly one cause
+        for(auto* t:v)t->Release();for(auto* t:hot)t->Release();rig.sync();CHECK(s.texShadowBytes.load()==0);
+    }
+    {   // 0.3.196 (task 12) cooldown: 80 write-once levels fill the cap; a new level written and re-locked at once is skipped (young keeps) and costs one readback, counted as freshSkip;
+        // after kFreshEvictAgeFrames Presents the stale keeps make room, and new write-then-re-lock levels are served from their shadow without any SyncLock.
+        std::vector<IDirect3DTexture9*> v;const auto skip0=get(s.texShadowFreshSkipped);
+        auto writeOnce=[&](bool relock){IDirect3DTexture9* t=nullptr;CHECK(rig.dev->CreateTexture(256,256,1,0,(D3DFORMAT)22,(D3DPOOL)1,&t,nullptr)==D3D_OK);D3DLOCKED_RECT lr{};
+            CHECK(t->LockRect(0,&lr,nullptr,0)==D3D_OK&&t->UnlockRect(0)==D3D_OK);
+            if(relock){RECT rc{0,0,8,2};CHECK(t->LockRect(0,&lr,&rc,0)==D3D_OK&&t->UnlockRect(0)==D3D_OK);}
+            return t;};
+        for(int i=0;i<80;++i)v.push_back(writeOnce(false));
+        CHECK(get(s.texShadowFreshSkipped)>skip0);
+        const auto fs0=get(s.readbackAfterFreshSkip),sl0=get(s.census[(std::size_t)Cmd::SyncLock]),ev0=get(s.texShadowEvicted);
+        v.push_back(writeOnce(true));
+        CHECK(get(s.readbackAfterFreshSkip)==fs0+1&&get(s.census[(std::size_t)Cmd::SyncLock])==sl0+1);   // before the cooldown
+        for(unsigned i=0;i<kFreshEvictAgeFrames+1;++i)rig.dev->Present(nullptr,nullptr,nullptr,nullptr);
+        const auto sl1=get(s.census[(std::size_t)Cmd::SyncLock]),rb1=get(s.texShadowReadbacks),hits1=get(s.texShadowHits);
+        for(int i=0;i<10;++i)v.push_back(writeOnce(true));
+        CHECK(get(s.census[(std::size_t)Cmd::SyncLock])==sl1&&get(s.texShadowReadbacks)==rb1&&get(s.texShadowHits)>=hits1+10&&get(s.texShadowEvicted)>ev0);   // after it: no sync, stale keeps were evicted
+        CHECK(s.texShadowBytes.load()<=std::int64_t(q.texShadowCap()));
+        for(auto* t:v)t->Release();rig.sync();CHECK(s.texShadowBytes.load()==0);
+    }
     rig.sync();CHECK(s.texShadowBytes.load()>=0);
     // The cap fills with fresh keeps (levels WoW loads once and never locks again); the levels that ARE re-locked must still end up shadowed:
     // shadows are evictable, never-re-locked ones first, and each hot level costs one readback and then no sync at all.
     std::vector<IDirect3DTexture9*> fresh;const auto evicted0=get(s.texShadowEvicted);
     for(int i=0;i<140;++i){IDirect3DTexture9* t=nullptr;CHECK(rig.dev->CreateTexture(256,256,1,0,(D3DFORMAT)22,(D3DPOOL)1,&t,nullptr)==D3D_OK);D3DLOCKED_RECT lr{};   // 256 KiB: the largest fresh keep
         CHECK(t->LockRect(0,&lr,nullptr,0)==D3D_OK&&t->UnlockRect(0)==D3D_OK);fresh.push_back(t);}
-    CHECK(s.texShadowBytes.load()<=std::int64_t(q.texShadowCap())&&get(s.texShadowEvicted)>evicted0);   // 140 x 256 KiB > 32 MiB: older fresh keeps were evicted, nothing refused
+    const auto skipped0=get(s.texShadowFreshSkipped);
+    CHECK(s.texShadowBytes.load()<=std::int64_t(q.texShadowCap())&&get(s.texShadowEvicted)==evicted0&&skipped0>0);   // 140 x 256 KiB > 16 MiB: the keeps that did not fit were skipped (0.3.196: a fresh keep evicts nothing), nothing refused
     std::vector<IDirect3DTexture9*> hot;
     for(int i=0;i<4;++i){IDirect3DTexture9* t=nullptr;CHECK(rig.dev->CreateTexture(1024,512,1,0,(D3DFORMAT)22,(D3DPOOL)1,&t,nullptr)==D3D_OK);D3DLOCKED_RECT lr{};RECT rc{0,0,8,2};
         CHECK(t->LockRect(0,&lr,&rc,0)==D3D_OK&&t->UnlockRect(0)==D3D_OK);hot.push_back(t);}   // first write: staged (the level is above the fresh limit)
@@ -443,7 +488,8 @@ static void textureShadows(){
     CHECK(get(s.texShadowReadbacks)==rb0+4&&get(s.census[(std::size_t)Cmd::SyncLock])==sl0+4);   // one readback per hot level, then nothing synchronous
     CHECK(s.texShadowBytes.load()<=std::int64_t(q.texShadowCap()));
     // a kept first write that is locked again was worth keeping (counted once), and a re-locked shadow outlives never-re-locked ones
-    const auto useful0=get(s.texShadowFreshUseful);{D3DLOCKED_RECT lr{};IDirect3DTexture9* t=fresh.back();CHECK(t->LockRect(0,&lr,nullptr,0)==D3D_OK&&t->UnlockRect(0)==D3D_OK&&t->LockRect(0,&lr,nullptr,0)==D3D_OK&&t->UnlockRect(0)==D3D_OK);}
+    const auto useful0=get(s.texShadowFreshUseful);{D3DLOCKED_RECT lr{};IDirect3DTexture9* t=fresh[48];   // (a kept one: the first ~64 fit, the readbacks above evicted the oldest 32)
+       CHECK(t->LockRect(0,&lr,nullptr,0)==D3D_OK&&t->UnlockRect(0)==D3D_OK&&t->LockRect(0,&lr,nullptr,0)==D3D_OK&&t->UnlockRect(0)==D3D_OK);}
     CHECK(get(s.texShadowFreshUseful)==useful0+1);
     for(int i=0;i<140;++i){IDirect3DTexture9* t=nullptr;CHECK(rig.dev->CreateTexture(256,256,1,0,(D3DFORMAT)22,(D3DPOOL)1,&t,nullptr)==D3D_OK);D3DLOCKED_RECT lr{};CHECK(t->LockRect(0,&lr,nullptr,0)==D3D_OK&&t->UnlockRect(0)==D3D_OK);fresh.push_back(t);}   // more fresh keeps churn
     const auto sl1=get(s.census[(std::size_t)Cmd::SyncLock]);
@@ -453,11 +499,11 @@ static void textureShadows(){
     for(auto* t:fresh)t->Release();fresh.clear();rig.sync();
     std::vector<IDirect3DTexture9*> warm;
     for(int i=0;i<16;++i){IDirect3DTexture9* t=nullptr;CHECK(rig.dev->CreateTexture(1024,512,1,0,(D3DFORMAT)22,(D3DPOOL)1,&t,nullptr)==D3D_OK);D3DLOCKED_RECT lr{};RECT rc{0,0,8,2};
-        CHECK(t->LockRect(0,&lr,&rc,0)==D3D_OK&&t->UnlockRect(0)==D3D_OK&&t->LockRect(0,&lr,&rc,0)==D3D_OK&&t->UnlockRect(0)==D3D_OK);warm.push_back(t);}   // 20 re-locked 2 MiB levels > the 32 MiB cap: the oldest were evicted
+        CHECK(t->LockRect(0,&lr,&rc,0)==D3D_OK&&t->UnlockRect(0)==D3D_OK&&t->LockRect(0,&lr,&rc,0)==D3D_OK&&t->UnlockRect(0)==D3D_OK);warm.push_back(t);}   // 20 re-locked 2 MiB levels > the 16 MiB cap: the oldest were evicted
     CHECK(s.texShadowBytes.load()<=std::int64_t(q.texShadowCap()));
-    const auto refused0=get(s.texShadowRefused);{IDirect3DTexture9* t=nullptr;CHECK(rig.dev->CreateTexture(64,64,1,0,(D3DFORMAT)22,(D3DPOOL)1,&t,nullptr)==D3D_OK);D3DLOCKED_RECT lr{};
+    const auto skipped1=get(s.texShadowFreshSkipped),refused0=get(s.texShadowRefused);{IDirect3DTexture9* t=nullptr;CHECK(rig.dev->CreateTexture(64,64,1,0,(D3DFORMAT)22,(D3DPOOL)1,&t,nullptr)==D3D_OK);D3DLOCKED_RECT lr{};
         const auto size0=s.texShadowBytes.load();CHECK(size0+64*64*4>std::int64_t(q.texShadowCap()));   // the cap is full of re-locked levels
-        CHECK(t->LockRect(0,&lr,nullptr,0)==D3D_OK&&t->UnlockRect(0)==D3D_OK&&get(s.texShadowRefused)==refused0+1&&s.texShadowBytes.load()==size0);t->Release();}
+        CHECK(t->LockRect(0,&lr,nullptr,0)==D3D_OK&&t->UnlockRect(0)==D3D_OK&&get(s.texShadowFreshSkipped)==skipped1+1&&get(s.texShadowRefused)==refused0&&s.texShadowBytes.load()==size0);t->Release();}   // skipped (it stages), not refused
     for(auto* t:hot)t->Release();for(auto* t:warm)t->Release();rig.sync();CHECK(s.texShadowBytes.load()==0);
     rig.finish();checkClean();
 }
@@ -561,7 +607,7 @@ static void childrenOutliveTheDevice(){
     CHECK(rig.dev->GetSwapChain(0,&sc)==D3D_OK&&tex->GetSurfaceLevel(1,&lvl)==D3D_OK&&rig.dev->GetBackBuffer(0,0,(D3DBACKBUFFER_TYPE)0,&bb)==D3D_OK);
     rig.dev->SetTexture(0,tex);   // a bind pins nothing
     void* p=nullptr;CHECK(vb->Lock(0,0,&p,0)==D3D_OK&&vb->Unlock()==D3D_OK);
-    rig.dev->Release();   // the game's reference: the device lives on for the objects it handed out
+    rig.checkFlagged();rig.dev->Release();   // the game's reference: the device lives on for the objects it handed out
     CHECK(gDeviceDeletes.load()==deletes&&tex->GetDevice(&back)==D3D_OK&&back==rig.sd);back->Release();
     D3DSURFACE_DESC d{};CHECK(lvl->GetDesc(&d)==D3D_OK&&d.Width==16);
     tex->Release();vb->Release();sc->Release();CHECK(gDeviceDeletes.load()==deletes);   // the level and the back buffer still hold it
@@ -570,7 +616,7 @@ static void childrenOutliveTheDevice(){
     CHECK(gDeviceDeletes.load()==deletes+1);checkClean();
     // and without the game keeping a bound proxy alive: a bound texture does not keep the device
     Rig again(true);IDirect3DTexture9* t2=nullptr;CHECK(again.dev->CreateTexture(8,8,1,0,(D3DFORMAT)22,(D3DPOOL)1,&t2,nullptr)==D3D_OK);
-    again.dev->SetTexture(0,t2);t2->Release();again.dev->Release();CHECK(gDeviceDeletes.load()==deletes+2);checkClean();
+    again.dev->SetTexture(0,t2);t2->Release();again.checkFlagged();again.dev->Release();CHECK(gDeviceDeletes.load()==deletes+2);checkClean();
 }
 static void queryProbeAndDeadQuery(){
     gTrace.clear();Rig rig(true);
@@ -601,8 +647,8 @@ static void statsLine(){
     rig.sync();
     std::vector<std::string> lines;for(auto& l:gStatLines)if(l.find(" frames=600 ")!=std::string::npos)lines.push_back(l);   // the 600th replayed frame
     CHECK(lines.size()==1&&lines[0].rfind("CSTREAM cmds=",0)==0&&lines[0].find("passPerFrame=")!=std::string::npos&&lines[0].find("census[")!=std::string::npos&&lines[0].back()==']');
-    for(const char* field:{"game[per frame]: ms=","syncMs=","presentWaitMs=","bpMs=","sleeps=","publishes=","replayBusyMs/frame=","recorded=","answered=","texShadow=","readbacks=","bufShadow=","readbacks/frame=","evicted/frame=","(hot ","refused/frame=","grows=","large=","memMB="})CHECK(lines[0].find(field)!=std::string::npos);   // per-window numbers
-    CHECK(lines[0].size()<1600);
+    for(const char* field:{"game[per frame]: ms=","syncMs=","presentWaitMs=","bpMs=","sleeps=","publishes=","replayBusyMs/frame=","recorded=","answered=","texShadow=","readbacks=","bufShadow=","readbacks/frame=","evicted/frame=","(hot ","refused/frame=","grows=","large=","memMB=","texFreshSkipped=","texReadbackCause[freshDrop=","relockedEvict=","neverShadowed=","freshSkip="," skipped="})CHECK(lines[0].find(field)!=std::string::npos);   // per-window numbers
+    CHECK(lines[0].size()<2000);
     rig.finish();checkClean();
 }
 // Redundant-state filtering: a repeated Set of the value the game last set is not recorded; anything else is.
@@ -893,12 +939,12 @@ struct Game {
         tex.clear();vb.clear();ib.clear();surf.clear();vs.clear();ps.clear();decl.clear();queries.clear();blocks.clear();
     }
 };
-static void equivalence(int steps,std::uint64_t seed){
+static void equivalence(int steps,std::uint64_t seed,unsigned framesAhead=1){
     // mode 0: the game on the Device directly; 1: through the stream, every call replayed on the Device; 2: through the stream with the DIRECT
     // methods replayed on the extension device with raw pointers. All three must leave identical Target traces and game-visible results.
     std::vector<std::string> out[3],trace[3];std::vector<HRESULT> pres[3];
     for(int mode=0;mode<3;++mode){
-        gTrace.clear();gKnobs.presents.store(0);gNormalize=true;gPtrIds.clear();gNextPtrId=0;Rig rig(mode>0,{},mode==2);
+        gTrace.clear();gKnobs.presents.store(0);gNormalize=true;gPtrIds.clear();gNextPtrId=0;StreamDevice::Options opt;opt.framesAhead=framesAhead;Rig rig(mode>0,opt,mode==2);
         Game g(rig.dev,seed,out[mode],pres[mode]);
         for(int i=0;i<steps;++i){
             g.step(i);
@@ -919,9 +965,10 @@ static void equivalence(int steps,std::uint64_t seed){
         {std::size_t i=0;auto& A=trace[0];auto& B=trace[mode];while(i<A.size()&&i<B.size()&&A[i]==B[i])++i;
          if(i<A.size()||i<B.size()){std::fprintf(stderr,"trace differs at %zu (mode %d, sizes %zu vs %zu)\n direct: %s\n stream: %s\n",i,mode,A.size(),B.size(),i<A.size()?A[i].substr(0,300).c_str():"-",i<B.size()?B[i].substr(0,300).c_str():"-");
              for(std::size_t k=i>12?i-12:0;k<i;++k)std::fprintf(stderr,"  before[%zu]: %s | %s\n",k,A[k].substr(0,110).c_str(),B[k].substr(0,110).c_str());std::abort();}}
-        CHECK(pres[0].size()==pres[mode].size()&&!pres[0].empty());CHECK(pres[mode][0]==D3D_OK);for(std::size_t i=1;i<pres[mode].size();++i)CHECK(pres[mode][i]==pres[0][i-1]);   // Present returns the previous frame's real result
+        // Present returns the real result of the Present framesAhead frames back (0.3.200 (pipeline); 1 = the previous frame's), D3D_OK before there is one
+        CHECK(pres[0].size()==pres[mode].size()&&!pres[0].empty());for(std::size_t i=0;i<pres[mode].size();++i)CHECK(pres[mode][i]==(i>=framesAhead?pres[0][i-framesAhead]:D3D_OK));
     }
-    std::printf("equivalence seed=%llu steps=%d results=%zu trace=%zu presents=%zu\n",(unsigned long long)seed,steps,out[0].size(),trace[0].size(),pres[0].size());
+    std::printf("equivalence seed=%llu steps=%d framesAhead=%u results=%zu trace=%zu presents=%zu\n",(unsigned long long)seed,steps,framesAhead,out[0].size(),trace[0].size(),pres[0].size());
 }
 // Direct replay: a proxy caches the backend object behind its inner right when the create/derive/first-sight bound it, a proxy without one
 // replays through the Device, and the cache follows Reset.
@@ -974,7 +1021,7 @@ static void replayTimingAccounting(){
     const auto idle0=rp.idleNs.load(),wall0=rp.wallNs();
     std::this_thread::sleep_for(std::chrono::milliseconds(60));rig.sync();   // the replay thread waits for commands; a wait is accounted when it ends (the sync wakes it)
     const auto idle1=rp.idleNs.load(),wall1=rp.wallNs();
-    CHECK(idle1-idle0>=40000000ull&&idle1-idle0<=wall1-wall0);   // grew by about the empty time, never more than elapsed
+    CHECK(idle1-idle0>=40000000ull&&idle1-idle0<=wall1-wall0+2000000ull);   // grew by about the empty time, never more than elapsed (+2 ms: 0.3.196 (task 12): the replay thread may already have begun this wait when wall0 was sampled, a few us of slack seen in ~1 run of 20)
     const auto idle=rp.idleNs.load();const auto wall=rp.wallNs();CHECK(idle<=wall&&rp.busyNsTotal()<=wall&&rp.busyNsTotal()>0);
     rig.finish();checkClean();
 }
@@ -1058,9 +1105,133 @@ static void smallStagedLocksUseScratch(){
     CHECK(blocks()==b1+1);for(int i=0;i<4;++i)CHECK(v[i]->Unlock()==D3D_OK);
     for(auto* b:v)b->Release();a->Release();rig.finish();checkClean();
 }
+// 0.3.200 (pipeline): StreamFramesAhead n: with the replay thread stuck, n Presents return at once and the next one waits (n=1: the 0.3.199 pacing, the
+// second Present waits); the snapshot pool and the clamp follow n.
+static void framesAheadPacing(){
+    static_assert(SnapshotPool::capFor(1)==SnapshotPool::DefaultCap&&SnapshotPool::capFor(3)*sizeof(GameSnapshot)<=(1u<<20),"pool per framesAhead, under 1 MiB");
+    static_assert(budgetForFramesAhead(1)==BudgetBytes&&budgetForFramesAhead(2)==(32u<<20)&&budgetForFramesAhead(3)==(32u<<20)&&budgetForFramesAhead(0)==BudgetBytes&&budgetForFramesAhead(9)==kMaxBudgetBytes,"budget: +16 MiB per extra frame, 32 MiB at most");
+    for(unsigned n:{1u,2u,3u,7u}){
+        const unsigned want=clampFramesAhead(n);
+        gTrace.clear();StreamDevice::Options opt;opt.framesAhead=n;Rig rig(true,opt);auto& q=rig.core().q;
+        CHECK(rig.sd->framesAhead()==want&&rig.sd->replayerOf().snapshots.allocated()==0);
+        rig.dev->Present(nullptr,nullptr,nullptr,nullptr);rig.sync();   // P0 has run
+        gKnobs.hold.store(true);rig.dev->BeginScene();   // the replay thread is stuck: nothing after this runs
+        std::atomic<unsigned> returned{0};const auto waits0=get(q.stats.presentWaits);
+        std::thread game([&]{for(unsigned i=0;i<want+1;++i){rig.dev->Present(nullptr,nullptr,nullptr,nullptr);returned.fetch_add(1);}});   // (the producer for now; joined before the main thread records again)
+        CHECK(waitFor([&]{return returned.load()==want;}));
+        std::this_thread::sleep_for(std::chrono::milliseconds(40));CHECK(returned.load()==want);   // Present want+1 waits for the stuck one want frames back
+        gKnobs.hold.store(false);game.join();CHECK(returned.load()==want+1&&get(q.stats.presentWaits)>=waits0+1);
+        rig.dev->EndScene();rig.sync();rig.finish();checkClean();
+    }
+}
+// 0.3.200 (pipeline): an evicted level shadow's allocation serves the next one (no free + malloc pair); the reused shadow is zero-filled like a new one; pressure drops the spares.
+static void textureShadowSpares(){
+    gTrace.clear();Rig rig(true);auto& core=rig.core();auto& s=core.q.stats;IDirect3DDevice9* d=rig.dev;
+    std::vector<IDirect3DTexture9*> v;
+    auto writeOnce=[&](unsigned char fill){IDirect3DTexture9* t=nullptr;CHECK(d->CreateTexture(256,256,1,0,(D3DFORMAT)22,(D3DPOOL)1,&t,nullptr)==D3D_OK);D3DLOCKED_RECT lr{};RECT rc{0,0,16,16};
+        CHECK(t->LockRect(0,&lr,&rc,0)==D3D_OK);for(int y=0;y<16;++y)std::memset(static_cast<unsigned char*>(lr.pBits)+std::ptrdiff_t(y)*lr.Pitch,fill,64);CHECK(t->UnlockRect(0)==D3D_OK);return t;};
+    for(int i=0;i<64;++i)v.push_back(writeOnce(0xAB));   // 64 x 256 KiB fresh keeps fill the 16 MiB cap
+    CHECK(get(s.texShadowSpared)==0&&get(s.texShadowSpareReuses)==0);
+    for(unsigned i=0;i<kFreshEvictAgeFrames+1;++i)d->Present(nullptr,nullptr,nullptr,nullptr);   // the keeps are stale now
+    for(int i=0;i<8;++i)v.push_back(writeOnce(0xCD));
+    CHECK(get(s.texShadowEvicted)>=8&&get(s.texShadowSpared)>=8&&get(s.texShadowSpareReuses)>=8);   // each new keep evicted a stale one and took its allocation
+    {D3DLOCKED_RECT lr{};IDirect3DTexture9* t=v.back();CHECK(t->LockRect(0,&lr,nullptr,D3::kLockReadOnly)==D3D_OK);   // served from the reused shadow
+     const auto* p=static_cast<const unsigned char*>(lr.pBits);bool ok=true;
+     for(unsigned y=0;y<256;++y)for(unsigned x=0;x<1024;++x)ok&=p[std::size_t(y)*lr.Pitch+x]==((y<16&&x<64)?0xCD:0);   // the stale level's bytes are gone: zero where nothing was written
+     CHECK(ok&&t->UnlockRect(0)==D3D_OK);}
+    {IDirect3DTexture9* t=nullptr;CHECK(d->CreateTexture(1024,512,1,0,(D3DFORMAT)22,(D3DPOOL)1,&t,nullptr)==D3D_OK);D3DLOCKED_RECT lr{};RECT rc{0,0,8,2};
+     CHECK(t->LockRect(0,&lr,&rc,0)==D3D_OK&&t->UnlockRect(0)==D3D_OK&&t->LockRect(0,&lr,&rc,0)==D3D_OK&&t->UnlockRect(0)==D3D_OK);v.push_back(t);}   // a 2 MiB readback evicts eight keeps: the spares fill, none fits it
+    {std::size_t kept=0;for(const auto& x:core.texSpare)kept+=x.capacity()?1:0;CHECK(kept==StreamCore::kTexSpares);}
+    core.memoryPressure.store(true);d->Present(nullptr,nullptr,nullptr,nullptr);rig.sync();
+    for(const auto& x:core.texSpare)CHECK(x.capacity()==0);   // pressure: no spare kept
+    core.memoryPressure.store(false);d->Present(nullptr,nullptr,nullptr,nullptr);rig.sync();
+    for(auto* t:v)t->Release();rig.sync();CHECK(s.texShadowBytes.load()==0);rig.finish();checkClean();
+}
+// 0.3.200 (frame skip): StreamFrameSkip. A lagging replay (stuck in frame 0 while the game records frames 1 and 2, three frames ahead) skips frame 1:
+// its draws, Clears and real Present are dropped, everything else runs. The same script with StreamFrameSkip=0 is the reference: the trace without draws,
+// Clears and Presents, the Target's resource bytes, its final state and the Present results must be equal. Frames that issue an occlusion query, draw into
+// a texture (set in the frame or carried over from the previous one) or copy the back buffer are drawn; an event query's frame is skipped and still completes.
+enum class SkipCase{Plain,Event,Occlusion,RenderToTexture,CarriedTarget,BackBufferCopy};
+struct SkipRun {std::vector<std::string> trace;std::vector<unsigned char> tex,vb;std::string state;std::vector<HRESULT> presents;std::uint64_t skipped=0,dropped=0;unsigned draws=0,realPresents=0;};
+static bool droppedBySkip(const std::string& t){return t.rfind("Device::Draw",0)==0||t.rfind("Device::Clear",0)==0||t.rfind("Device::Present",0)==0;}
+static SkipRun skipScript(unsigned frameSkip,SkipCase c,bool lag=true){
+    gTrace.clear();gCaptures=0;gNormalize=true;gPtrIds.clear();gNextPtrId=0;gKnobs.presents.store(0);gKnobs.noDigest.store(true);
+    StreamDevice::Options opt;opt.framesAhead=3;opt.frameSkip=frameSkip;opt.capture=&fakeCapture;Rig rig(true,opt);IDirect3DDevice9* d=rig.dev;SkipRun r;
+    IDirect3DTexture9* tex=nullptr;CHECK(d->CreateTexture(16,16,1,0,(D3DFORMAT)22,(D3DPOOL)1,&tex,nullptr)==D3D_OK);
+    IDirect3DVertexBuffer9* vb=nullptr;CHECK(d->CreateVertexBuffer(256,D3::kUsageDynamic,0,(D3DPOOL)0,&vb,nullptr)==D3D_OK);
+    IDirect3DTexture9* rtt=nullptr;CHECK(d->CreateTexture(32,32,1,D3::kUsageRT,(D3DFORMAT)22,(D3DPOOL)0,&rtt,nullptr)==D3D_OK);
+    IDirect3DSurface9 *rts=nullptr,*bb=nullptr;CHECK(rtt->GetSurfaceLevel(0,&rts)==D3D_OK&&d->GetBackBuffer(0,0,(D3DBACKBUFFER_TYPE)0,&bb)==D3D_OK);
+    IDirect3DQuery9* q=nullptr;CHECK(d->CreateQuery((D3DQUERYTYPE)(c==SkipCase::Event?8:9),&q)==D3D_OK);
+    const unsigned char up[3*16]={1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31,32,33,34,35,36,37,38,39,40,41,42,43,44,45,46,47,48};
+    auto frame=[&](int f){
+        d->SetRenderState((D3DRENDERSTATETYPE)7,100+f);d->SetTexture(0,tex);const float k[4]={float(f),1,2,3};d->SetVertexShaderConstantF(4,k,1);
+        D3DLOCKED_RECT lr{};RECT rc{0,f,16,f+1};CHECK(tex->LockRect(0,&lr,&rc,0)==D3D_OK);std::memset(lr.pBits,0x10+f,64);CHECK(tex->UnlockRect(0)==D3D_OK);   // one row per frame
+        void* p=nullptr;CHECK(vb->Lock(UINT(f)*16,16,&p,D3::kLockNoOverwrite)==D3D_OK);std::memset(p,0x40+f,16);CHECK(vb->Unlock()==D3D_OK);
+        d->BeginScene();d->Clear(0,nullptr,1,0,1.f,0);d->DrawPrimitive((D3DPRIMITIVETYPE)4,0,2);d->DrawPrimitiveUP((D3DPRIMITIVETYPE)4,1,up,16);
+        if(f==1)switch(c){
+            case SkipCase::Event:case SkipCase::Occlusion:q->Issue(D3::kIssueBegin);d->DrawPrimitive((D3DPRIMITIVETYPE)4,0,2);q->Issue(D3::kIssueEnd);break;
+            case SkipCase::RenderToTexture:d->SetRenderTarget(0,rts);d->DrawPrimitive((D3DPRIMITIVETYPE)4,0,2);d->SetRenderTarget(0,bb);break;
+            case SkipCase::CarriedTarget:d->DrawPrimitive((D3DPRIMITIVETYPE)4,0,2);d->SetRenderTarget(0,bb);break;   // frame 0 left the texture bound
+            case SkipCase::BackBufferCopy:d->StretchRect(bb,nullptr,rts,nullptr,(D3DTEXTUREFILTERTYPE)0);break;
+            default:break;}
+        if(f==0&&c==SkipCase::CarriedTarget)d->SetRenderTarget(0,rts);
+        d->EndScene();r.presents.push_back(d->Present(nullptr,nullptr,nullptr,nullptr));
+    };
+    rig.sync();   // the replay has opened frame 0 (nothing recorded ahead of it: drawn)
+    if(lag)gKnobs.hold.store(true);   // frame 0's BeginScene keeps the replay thread there while frames 1 and 2 are recorded (three frames ahead: no Present waits)
+    for(int f=0;f<3;++f){frame(f);if(!lag)rig.sync();}
+    gKnobs.hold.store(false);rig.sync();   // frame 1 opened with frames 1 and 2 complete: skipped if allowed; frame 2 had no later frame: drawn
+    for(int f=3;f<6;++f){frame(f);rig.sync();}   // drained after each: no later frame is complete when one opens; Present 4 waits for Present 1 (the skipped one when it was skipped)
+    rig.sync();
+    if(c==SkipCase::Event){HRESULT hr=S_FALSE;CHECK(waitFor([&]{hr=q->GetData(nullptr,0,0);return hr!=S_FALSE;})&&hr==D3D_OK);}   // the skipped frame's event query still completes
+    rig.sync();
+    auto& rp=rig.sd->replayerOf();CHECK(rp.snapshots.allocated()>=1&&rp.snapshots.idle()+1==rp.snapshots.allocated());   // every snapshot but the active one is back in the pool
+    r.skipped=rp.skippedFrames();r.dropped=get(rig.core().q.stats.skippedCommands);r.trace=gTrace;
+    for(auto& t:gTrace){if(t.rfind("Device::Draw",0)==0)++r.draws;if(t.rfind("Device::Present",0)==0)++r.realPresents;}
+    {auto* t=static_cast<TTexture*>(static_cast<IDirect3DTexture9*>(ProxyBase::of(tex)->inner));r.tex.assign(t->surf[0]->mem,t->surf[0]->mem+t->surf[0]->own.size());}
+    r.vb.assign(targetBytes(vb),targetBytes(vb)+256);
+    gKnobs.noDigest.store(false);r.state=rig.target->digest();
+    CHECK(rig.target->ext.tex[0]==ProxyBase::of(tex)->inner&&rig.target->ext.rt0==static_cast<TSurface*>(static_cast<IDirect3DSurface9*>(ProxyBase::of(bb)->inner)));   // the Target binds the game's objects
+    q->Release();rts->Release();bb->Release();rtt->Release();vb->Release();tex->Release();rig.finish();checkClean();gNormalize=false;
+    return r;
+}
+static std::vector<std::string> withoutDropped(const std::vector<std::string>& t){std::vector<std::string> r;for(auto& s:t)if(!droppedBySkip(s)&&s!="STATE")r.push_back(s);return r;}
+static void frameSkipping(){
+    for(SkipCase c:{SkipCase::Plain,SkipCase::Event,SkipCase::Occlusion,SkipCase::RenderToTexture,SkipCase::CarriedTarget,SkipCase::BackBufferCopy}){
+        const SkipRun ref=skipScript(0,c),run=skipScript(1,c);
+        const bool skippable=c==SkipCase::Plain||c==SkipCase::Event;
+        CHECK(ref.skipped==0&&ref.realPresents==6);   // StreamFrameSkip=0: every frame drawn and presented
+        CHECK(run.skipped==(skippable?1u:0u)&&run.realPresents==(skippable?5u:6u));
+        if(skippable){
+            const unsigned frameDraws=c==SkipCase::Event?3u:2u;   // frame 1: the indexed draw, the UP draw (and the query's draw)
+            CHECK(run.draws+frameDraws==ref.draws&&run.dropped==frameDraws+1);   // + its Clear
+            CHECK(withoutDropped(run.trace)==withoutDropped(ref.trace));   // every other call: the same, in the same order, with the same bytes
+        }else CHECK(run.trace==ref.trace&&run.dropped==0);   // drawn: exactly the reference
+        CHECK(run.tex==ref.tex&&run.vb==ref.vb&&run.state==ref.state&&run.presents==ref.presents);   // resources, final state and Present results as the full replay
+        for(int f=0;f<6;++f){CHECK(run.tex[std::size_t(f)*(16*4+16)]==0x10+f);CHECK(run.vb[std::size_t(f)*16]==0x40+f);}   // the skipped frame's uploads are there
+        std::printf("frame skip case=%d skipped=%llu dropped=%llu draws=%u/%u presents=%u/%u\n",int(c),(unsigned long long)run.skipped,(unsigned long long)run.dropped,run.draws,ref.draws,run.realPresents,ref.realPresents);
+    }
+    {const SkipRun idle=skipScript(1,SkipCase::Plain,false);CHECK(idle.skipped==0&&idle.realPresents==6);}   // a replay that keeps up never skips
+}
+// The game thread's Present wait is released by a skipped Present: with the replay stuck in frame 0, a game thread records frames 1..4 (Present 3 waits
+// for Present 0, Present 4 for Present 1); released, the replay skips frame 1 and the game finishes. The CSTREAM line counts it; the first skip is logged once.
+static std::vector<std::string> gSkipLog;static std::mutex gSkipLogMutex;
+static void frameSkipReleasesPresentWait(){
+    gTrace.clear();gSkipLog.clear();StreamDevice::Options opt;opt.framesAhead=3;opt.frameSkip=1;opt.log=[](const char* l){std::lock_guard<std::mutex> g(gSkipLogMutex);gSkipLog.push_back(l);};
+    Rig rig(true,opt);IDirect3DDevice9* d=rig.dev;d->SetRenderState((D3DRENDERSTATETYPE)7,1);rig.sync();   // frame 0 opened with nothing ahead of it: drawn
+    gKnobs.hold.store(true);std::atomic<unsigned> returned{0};
+    std::thread game([&]{for(int f=0;f<5;++f){d->BeginScene();d->DrawPrimitive((D3DPRIMITIVETYPE)4,0,2);d->EndScene();d->Present(nullptr,nullptr,nullptr,nullptr);returned.fetch_add(1);}});
+    CHECK(waitFor([&]{return returned.load()==3;}));std::this_thread::sleep_for(std::chrono::milliseconds(30));CHECK(returned.load()==3);   // Present 3 waits for the stuck frame 0
+    gKnobs.hold.store(false);game.join();rig.sync();
+    auto& rp=rig.sd->replayerOf();CHECK(rp.skippedFrames()>=1&&rp.skippedFrames()<=2);   // frame 1 always (frames 1 and 2 were complete), frame 2 if Present 3 came first
+    unsigned presents=0;for(auto& t:gTrace)if(t.rfind("Device::Present",0)==0)++presents;CHECK(presents+rp.skippedFrames()==5);
+    {std::lock_guard<std::mutex> g(gSkipLogMutex);unsigned first=0;for(auto& l:gSkipLog)if(l.rfind("CSTREAM frame skip: first skipped frame=1 ",0)==0)++first;CHECK(first==1);}
+    rig.finish();checkClean();
+}
 static void streamTests(bool threadsOnly){
     layoutIsolation();replayTimingAccounting();diagnosticsOffSkipsAudit();idlePollWakes();
     lifetimeAndIdentity();stateKnownUnknown();locksPreserveBytes();staticBufferShadows();dynamicBufferShadows();largeBufferAllowance();adaptiveShadowCap();shadowCap();queriesAndSyncCensus();resetAndShutdown();directReplayRaw();redundantFiltering();renderTargetResetsViewport();textureShadows();statsLine();childrenOutliveTheDevice();queryProbeAndDeadQuery();initFailureFallback();cursorHandling();nestedSyncInPump();upDrawsAndBackpressure();snapshotTriggers();snapshotPoolNotExhausted();memoryPressureRelease();impossibleBlockIsRefusedAtOnce();smallStagedLocksUseScratch();
-    equivalence(20000,12345);equivalence(20000,987654321);
+    framesAheadPacing();textureShadowSpares();frameSkipping();frameSkipReleasesPresentWait();   // 0.3.200 (frame skip)
+    equivalence(20000,12345);equivalence(20000,987654321);equivalence(20000,24680,2);equivalence(20000,13579,3);   // 0.3.200 (pipeline): 2 and 3 frames ahead
     (void)threadsOnly;
 }

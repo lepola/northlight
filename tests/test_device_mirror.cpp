@@ -813,7 +813,18 @@ static void writeThroughImplicitState(){
  assert(ext.peekRenderTarget(0,peeked)&&peeked==other);assert(!ext.peekRenderTarget(4,peeked));
  IDirect3DPixelShader9* peekPS=nullptr;assert(!ext.peekPixelShader(peekPS));assert(SUCCEEDED(game.SetPixelShader(ps)));IDirect3DPixelShader9* gotPS=nullptr;assert(SUCCEEDED(ext.GetPixelShader(&gotPS)));gotPS->Release();
  assert(ext.peekPixelShader(peekPS)&&peekPS==ps&&ps->refs==2);
- {ExtensionDevice::RawScope scope(ext);assert(!ext.peekRenderTarget(0,peeked)&&!ext.peekDepthStencilSurface(peeked)&&!ext.peekPixelShader(peekPS));}
+ // 0.3.196 (task 12): vertex shader and texture peeks: unknown until observed or written with a trusted mirror, then a borrowed pointer (no reference).
+ IDirect3DVertexShader9* peekVS=nullptr;IDirect3DBaseTexture9* peekTex=nullptr;auto* vsObj=new Object<IDirect3DVertexShader9>();auto* texObj=new Object<IDirect3DBaseTexture9>();
+ assert(!ext.peekVertexShader(peekVS)&&!ext.peekTexture(0,peekTex));
+ assert(SUCCEEDED(game.SetVertexShader(vsObj))&&SUCCEEDED(game.SetTexture(0,texObj)));
+ {IDirect3DVertexShader9* gotVS=nullptr;IDirect3DBaseTexture9* gotTex=nullptr;assert(SUCCEEDED(ext.GetVertexShader(&gotVS))&&SUCCEEDED(ext.GetTexture(0,&gotTex)));gotVS->Release();gotTex->Release();}
+ {const auto vsRefs=vsObj->refs.load(),texRefs=texObj->refs.load();assert(ext.peekVertexShader(peekVS)&&peekVS==vsObj&&ext.peekTexture(0,peekTex)&&peekTex==texObj&&vsObj->refs==vsRefs&&texObj->refs==texRefs);}
+ assert(!ext.peekTexture(1,peekTex)&&!ext.peekTexture(DeviceMirror::Textures,peekTex)&&!ext.peekTexture(DWORD(-1),peekTex)); // unknown stage and out of range
+ assert(SUCCEEDED(game.SetTexture(0,nullptr))&&!ext.peekTexture(0,peekTex)); // null binding: use the Get* method
+ assert(SUCCEEDED(game.SetTexture(0,texObj))&&!ext.peekTexture(0,peekTex)); // written, not yet trusted again until observed
+ {IDirect3DBaseTexture9* gotTex=nullptr;assert(SUCCEEDED(ext.GetTexture(0,&gotTex)));gotTex->Release();}
+ {ExtensionDevice::RawScope scope(ext);assert(!ext.peekRenderTarget(0,peeked)&&!ext.peekDepthStencilSurface(peeked)&&!ext.peekPixelShader(peekPS)&&!ext.peekVertexShader(peekVS)&&!ext.peekTexture(0,peekTex));}
+ assert(SUCCEEDED(game.SetVertexShader(nullptr))&&!ext.peekVertexShader(peekVS));assert(SUCCEEDED(game.SetTexture(0,nullptr)));vsObj->Release();texObj->Release();
  assert(!ext.audit()&&m.enabled);
  assert(SUCCEEDED(game.SetPixelShader(nullptr)));
  surf->Release();other->Release();dec->Release();vb->Release();ib->Release();ps->Release();
@@ -854,6 +865,8 @@ static void writeThroughDifferential(){
   IDirect3DSurface9* peeked=nullptr;if(ext.peekRenderTarget(0,peeked))assert(peeked==b.state.targets[0].p);
   if(ext.peekDepthStencilSurface(peeked))assert(peeked==b.state.depth.p);
   IDirect3DPixelShader9* peekPS=nullptr;if(ext.peekPixelShader(peekPS))assert(peekPS==b.state.ps.p);
+  IDirect3DVertexShader9* peekVS=nullptr;if(ext.peekVertexShader(peekVS))assert(peekVS==b.state.vs.p);
+  for(DWORD n=0;n<4;++n){IDirect3DBaseTexture9* peekTex=nullptr;if(ext.peekTexture(n,peekTex))assert(peekTex==b.state.textures[n].p);}
   ++checks;
  };
  for(unsigned step=0;step<60000;++step){

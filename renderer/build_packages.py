@@ -11,8 +11,8 @@ Northlight-<v>-<macOS|Windows>.zip holds one folder of the same name:
                 pipeline. Every repository module a packaged module imports must be packaged.
   runtime/      Python 3.13 (macOS: python-build-standalone arm64, pruned; Windows: python.org
                 embed-amd64) and StormLib (scripts/build_stormlib.py; the bytes must equal the pin)
-  payload/      d3d9.dll (the renderer), the profile .ini files, northlight-quality.ini (kept when the
-                player has one); Windows: DXVK 3.1.1 as renderer-backends/dxvk/dxvk_d3d9.dll
+  payload/      d3d9.dll (the renderer), the profile .ini files, northlight-quality.ini (the
+                player's own is kept; only settings it lacks are appended, commented out); Windows: DXVK 3.1.1 as renderer-backends/dxvk/dxvk_d3d9.dll
                 and DXVK 2.7.1 (the alternative backend dxvk2) as renderer-backends/dxvk2/dxvk2_d3d9.dll
   variants/     the prebuilt cache manifests the installer matches (from --variant-manifest)
   LICENSES/     third-party licences; macOS also python-third-party/ (the libraries linked into its python3)
@@ -49,7 +49,7 @@ PLATFORMS = {'mac': 'macOS', 'windows': 'Windows'}
 APP_FILES = [
     'northlight_paths.py', 'mpq.py', 'client_archives.py',
     'build_art_layer.py', 'build_lighting.py', 'build_mulgore_lighting.py', 'build_stormwind_single_sun.py',
-    'build_outdoor_single_sun.py', 'build_outdoor_single_moon.py',
+    'build_outdoor_single_sun.py', 'build_outdoor_single_moon.py', 'build_weather_textures.py',  # 0.3.198 (rain): the art layer's procedural weather textures
     'scripts/install_world_cache.py', 'scripts/client_identity.py',
     'renderer/northlight_install.py', 'renderer/migrate_mac_proxy.py', 'renderer/windows-package/install.py',
     'renderer/world_scene_builder.py', 'renderer/m2_visibility.py', 'renderer/world_lights_builder.py',

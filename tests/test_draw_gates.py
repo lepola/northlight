@@ -28,10 +28,10 @@ OLD_MEMBERS = r'''
             logf("EXTENSION fault stage=%s type=%u availableVirtualMiB=%llu; original game calls retained; restart required",stage,unsigned(fault),(unsigned long long)(memory.ullAvailVirtual>>20));
         });
     }
-    template<class Capture> void prepareDraw(Capture capture) {
+    template<class Capture> void prepareDraw(Capture capture,UINT count) {
         mirrorState.gate.noteFirst(mirrorState.gate.drawTid); /* 0.3.180 (D0): the census' first draw */
         dropTerrainShadowSwap();
-        extensionWork("draw capture/effects",[&]{prepareDrawImpl(capture);});
+        extensionWork("draw capture/effects",[&]{prepareDrawImpl(capture,count);});
     }
     void planTerrainShadowSwap(IDirect3DVertexShader9* vs){
         if(!world||applied||!enabled||failed||!terrain||debugMode!=0||worldDebug!=0||!world->terrainShadowActive())return;
@@ -59,10 +59,10 @@ OLD_MEMBERS = r'''
 '''
 # ... and the four Draw* overrides.
 OLD_DRAWS = r'''
-    HRESULT STDMETHODCALLTYPE DrawPrimitive(D3DPRIMITIVETYPE t,UINT start,UINT count) override { Guard mirrorLock(mirrorState.gate);prepareDraw([&](IDirect3DVertexShader9* vs){world->capture(t,0,0,0,start,count,false,vs,frame%120==0,NorthlightRenderThreadProbe::sampleFrame(frame));captureWater(vs,NorthlightWaterRenderer::NoUserPointer,[&]{return ext->DrawPrimitive(t,start,count);});});bool claimed=false;extensionWork("native sky claim",[&]{if(celestialDiscs&&enabled&&!applied&&count<=4&&celestialDiscs->nativeClaimPossible(t,count)){D3DSURFACE_DESC desc;if(fullViewport(desc)){claimed=celestialDiscs->claimNativeGlare(t,count);if(!claimed)claimed=celestialDiscs->claimNativeDraw(t,count,true,[&](const char* map,const float* camera){return world->celestialPalette(map,camera);});}}});if(!claimed&&blobFilterActive())extensionWork("blob shadow filter",[&]{claimed=blobClaim(count);if(claimed&&blobSignatureReports<4){++blobSignatureReports;IDirect3DVertexShader9* bvs=nullptr;IDirect3DPixelShader9* bps=nullptr;ext->GetVertexShader(&bvs);ext->GetPixelShader(&bps);auto vi=vsHashes.find(bvs);auto pi=psHashes.find(bps);logf("SHADOWBLOB draw signature vs=%016llx ps=%016llx primitives=%u",(unsigned long long)(vi==vsHashes.end()?0:vi->second),(unsigned long long)(pi==psHashes.end()?0:pi->second),count);drop(bvs);drop(bps);}});HRESULT hr=terrainShadowDraw(claimed,[&]{return ext->DrawPrimitive(t,start,count);});if(!claimed)extensionWork("native sky observation",[&]{if(celestialDiscs&&enabled&&!applied&&count<=4&&celestialDiscs->nativeObservePossible(hr,t,count)){D3DSURFACE_DESC desc;if(fullViewport(desc))celestialDiscs->observeNativeDraw(hr,t,count,true);}});return hr;}
-    HRESULT STDMETHODCALLTYPE DrawIndexedPrimitive(D3DPRIMITIVETYPE t,INT base,UINT min,UINT vertices,UINT start,UINT count) override { Guard mirrorLock(mirrorState.gate);prepareDraw([&](IDirect3DVertexShader9* vs){world->capture(t,base,min,vertices,start,count,true,vs,frame%120==0,NorthlightRenderThreadProbe::sampleFrame(frame));captureWater(vs,NorthlightWaterRenderer::NoUserPointer,[&]{return ext->DrawIndexedPrimitive(t,base,min,vertices,start,count);});});bool claimed=false;extensionWork("native sky claim",[&]{if(celestialDiscs&&enabled&&!applied&&count<=4&&celestialDiscs->nativeClaimPossible(t,count)){D3DSURFACE_DESC desc;if(fullViewport(desc)){claimed=celestialDiscs->claimNativeGlare(t,count);if(!claimed)claimed=celestialDiscs->claimNativeDraw(t,count,true,[&](const char* map,const float* camera){return world->celestialPalette(map,camera);});}}});if(!claimed&&blobFilterActive())extensionWork("blob shadow filter",[&]{claimed=blobClaim(count);if(claimed&&blobSignatureReports<4){++blobSignatureReports;IDirect3DVertexShader9* bvs=nullptr;IDirect3DPixelShader9* bps=nullptr;ext->GetVertexShader(&bvs);ext->GetPixelShader(&bps);auto vi=vsHashes.find(bvs);auto pi=psHashes.find(bps);logf("SHADOWBLOB draw signature vs=%016llx ps=%016llx primitives=%u",(unsigned long long)(vi==vsHashes.end()?0:vi->second),(unsigned long long)(pi==psHashes.end()?0:pi->second),count);drop(bvs);drop(bps);}});HRESULT hr=terrainShadowDraw(claimed,[&]{return ext->DrawIndexedPrimitive(t,base,min,vertices,start,count);});if(!claimed)extensionWork("native sky observation",[&]{if(celestialDiscs&&enabled&&!applied&&count<=4&&celestialDiscs->nativeObservePossible(hr,t,count)){D3DSURFACE_DESC desc;if(fullViewport(desc))celestialDiscs->observeNativeDraw(hr,t,count,true);}});return hr;}
-    HRESULT STDMETHODCALLTYPE DrawPrimitiveUP(D3DPRIMITIVETYPE t,UINT count,const void* data,UINT stride) override { Guard mirrorLock(mirrorState.gate);prepareDraw([&](IDirect3DVertexShader9* vs){world->captureUP(t,0,0,count,nullptr,D3DFMT_UNKNOWN,data,stride,false,vs,frame%120==0,NorthlightRenderThreadProbe::sampleFrame(frame));captureWater(vs,NorthlightWaterRenderer::UserVertices,[&]{return ext->DrawPrimitiveUP(t,count,data,stride);});});bool claimed=false;extensionWork("native sky claim",[&]{if(celestialDiscs&&enabled&&!applied&&count<=4&&celestialDiscs->nativeClaimPossible(t,count)){D3DSURFACE_DESC desc;if(fullViewport(desc)){claimed=celestialDiscs->claimNativeGlare(t,count);if(!claimed)claimed=celestialDiscs->claimNativeDraw(t,count,true,[&](const char* map,const float* camera){return world->celestialPalette(map,camera);});}}});if(!claimed&&blobFilterActive())extensionWork("blob shadow filter",[&]{claimed=blobClaim(count);if(claimed&&blobSignatureReports<4){++blobSignatureReports;IDirect3DVertexShader9* bvs=nullptr;IDirect3DPixelShader9* bps=nullptr;ext->GetVertexShader(&bvs);ext->GetPixelShader(&bps);auto vi=vsHashes.find(bvs);auto pi=psHashes.find(bps);logf("SHADOWBLOB draw signature vs=%016llx ps=%016llx primitives=%u",(unsigned long long)(vi==vsHashes.end()?0:vi->second),(unsigned long long)(pi==psHashes.end()?0:pi->second),count);drop(bvs);drop(bps);}});HRESULT hr=terrainShadowDraw(claimed,[&]{return ext->DrawPrimitiveUP(t,count,data,stride);});if(!claimed)extensionWork("native sky observation",[&]{if(celestialDiscs&&enabled&&!applied&&count<=4&&celestialDiscs->nativeObservePossible(hr,t,count)){D3DSURFACE_DESC desc;if(fullViewport(desc))celestialDiscs->observeNativeDraw(hr,t,count,true);}});return hr;}
-    HRESULT STDMETHODCALLTYPE DrawIndexedPrimitiveUP(D3DPRIMITIVETYPE t,UINT min,UINT vertices,UINT count,const void* indices,D3DFORMAT fmt,const void* data,UINT stride) override { Guard mirrorLock(mirrorState.gate);prepareDraw([&](IDirect3DVertexShader9* vs){world->captureUP(t,min,vertices,count,indices,fmt,data,stride,true,vs,frame%120==0,NorthlightRenderThreadProbe::sampleFrame(frame));captureWater(vs,NorthlightWaterRenderer::UserVerticesAndIndices,[&]{return ext->DrawIndexedPrimitiveUP(t,min,vertices,count,indices,fmt,data,stride);});});bool claimed=false;extensionWork("native sky claim",[&]{if(celestialDiscs&&enabled&&!applied&&count<=4&&celestialDiscs->nativeClaimPossible(t,count)){D3DSURFACE_DESC desc;if(fullViewport(desc)){claimed=celestialDiscs->claimNativeGlare(t,count);if(!claimed)claimed=celestialDiscs->claimNativeDraw(t,count,true,[&](const char* map,const float* camera){return world->celestialPalette(map,camera);});}}});if(!claimed&&blobFilterActive())extensionWork("blob shadow filter",[&]{claimed=blobClaim(count);if(claimed&&blobSignatureReports<4){++blobSignatureReports;IDirect3DVertexShader9* bvs=nullptr;IDirect3DPixelShader9* bps=nullptr;ext->GetVertexShader(&bvs);ext->GetPixelShader(&bps);auto vi=vsHashes.find(bvs);auto pi=psHashes.find(bps);logf("SHADOWBLOB draw signature vs=%016llx ps=%016llx primitives=%u",(unsigned long long)(vi==vsHashes.end()?0:vi->second),(unsigned long long)(pi==psHashes.end()?0:pi->second),count);drop(bvs);drop(bps);}});HRESULT hr=terrainShadowDraw(claimed,[&]{return ext->DrawIndexedPrimitiveUP(t,min,vertices,count,indices,fmt,data,stride);});if(!claimed)extensionWork("native sky observation",[&]{if(celestialDiscs&&enabled&&!applied&&count<=4&&celestialDiscs->nativeObservePossible(hr,t,count)){D3DSURFACE_DESC desc;if(fullViewport(desc))celestialDiscs->observeNativeDraw(hr,t,count,true);}});return hr;}
+    HRESULT STDMETHODCALLTYPE DrawPrimitive(D3DPRIMITIVETYPE t,UINT start,UINT count) override { Guard mirrorLock(mirrorState.gate);prepareDraw([&](IDirect3DVertexShader9* vs){world->capture(t,0,0,0,start,count,false,vs,frame%120==0,NorthlightRenderThreadProbe::sampleFrame(frame));captureWater(vs,NorthlightWaterRenderer::NoUserPointer,[&]{return ext->DrawPrimitive(t,start,count);});},count);bool claimed=false;extensionWork("native sky claim",[&]{if(celestialDiscs&&enabled&&!applied&&count<=4&&celestialDiscs->nativeClaimPossible(t,count)){D3DSURFACE_DESC desc;if(fullViewport(desc)){claimed=celestialDiscs->claimNativeGlare(t,count);if(!claimed)claimed=celestialDiscs->claimNativeDraw(t,count,true,[&](const char* map,const float* camera){return world->celestialPalette(map,camera);});}}});if(!claimed&&blobFilterActive())extensionWork("blob shadow filter",[&]{claimed=blobClaim(count);if(claimed&&blobSignatureReports<4){++blobSignatureReports;IDirect3DVertexShader9* bvs=nullptr;IDirect3DPixelShader9* bps=nullptr;ext->GetVertexShader(&bvs);ext->GetPixelShader(&bps);auto vi=vsHashes.find(bvs);auto pi=psHashes.find(bps);logf("SHADOWBLOB draw signature vs=%016llx ps=%016llx primitives=%u",(unsigned long long)(vi==vsHashes.end()?0:vi->second),(unsigned long long)(pi==psHashes.end()?0:pi->second),count);drop(bvs);drop(bps);}});HRESULT hr=terrainShadowDraw(claimed,[&]{return ext->DrawPrimitive(t,start,count);});if(!claimed)extensionWork("native sky observation",[&]{if(celestialDiscs&&enabled&&!applied&&count<=4&&celestialDiscs->nativeObservePossible(hr,t,count)){D3DSURFACE_DESC desc;if(fullViewport(desc))celestialDiscs->observeNativeDraw(hr,t,count,true);}});return hr;}
+    HRESULT STDMETHODCALLTYPE DrawIndexedPrimitive(D3DPRIMITIVETYPE t,INT base,UINT min,UINT vertices,UINT start,UINT count) override { Guard mirrorLock(mirrorState.gate);prepareDraw([&](IDirect3DVertexShader9* vs){world->capture(t,base,min,vertices,start,count,true,vs,frame%120==0,NorthlightRenderThreadProbe::sampleFrame(frame));captureWater(vs,NorthlightWaterRenderer::NoUserPointer,[&]{return ext->DrawIndexedPrimitive(t,base,min,vertices,start,count);});},count);bool claimed=false;extensionWork("native sky claim",[&]{if(celestialDiscs&&enabled&&!applied&&count<=4&&celestialDiscs->nativeClaimPossible(t,count)){D3DSURFACE_DESC desc;if(fullViewport(desc)){claimed=celestialDiscs->claimNativeGlare(t,count);if(!claimed)claimed=celestialDiscs->claimNativeDraw(t,count,true,[&](const char* map,const float* camera){return world->celestialPalette(map,camera);});}}});if(!claimed&&blobFilterActive())extensionWork("blob shadow filter",[&]{claimed=blobClaim(count);if(claimed&&blobSignatureReports<4){++blobSignatureReports;IDirect3DVertexShader9* bvs=nullptr;IDirect3DPixelShader9* bps=nullptr;ext->GetVertexShader(&bvs);ext->GetPixelShader(&bps);auto vi=vsHashes.find(bvs);auto pi=psHashes.find(bps);logf("SHADOWBLOB draw signature vs=%016llx ps=%016llx primitives=%u",(unsigned long long)(vi==vsHashes.end()?0:vi->second),(unsigned long long)(pi==psHashes.end()?0:pi->second),count);drop(bvs);drop(bps);}});HRESULT hr=terrainShadowDraw(claimed,[&]{return ext->DrawIndexedPrimitive(t,base,min,vertices,start,count);});if(!claimed)extensionWork("native sky observation",[&]{if(celestialDiscs&&enabled&&!applied&&count<=4&&celestialDiscs->nativeObservePossible(hr,t,count)){D3DSURFACE_DESC desc;if(fullViewport(desc))celestialDiscs->observeNativeDraw(hr,t,count,true);}});return hr;}
+    HRESULT STDMETHODCALLTYPE DrawPrimitiveUP(D3DPRIMITIVETYPE t,UINT count,const void* data,UINT stride) override { Guard mirrorLock(mirrorState.gate);prepareDraw([&](IDirect3DVertexShader9* vs){world->captureUP(t,0,0,count,nullptr,D3DFMT_UNKNOWN,data,stride,false,vs,frame%120==0,NorthlightRenderThreadProbe::sampleFrame(frame));captureWater(vs,NorthlightWaterRenderer::UserVertices,[&]{return ext->DrawPrimitiveUP(t,count,data,stride);});},count);bool claimed=false;extensionWork("native sky claim",[&]{if(celestialDiscs&&enabled&&!applied&&count<=4&&celestialDiscs->nativeClaimPossible(t,count)){D3DSURFACE_DESC desc;if(fullViewport(desc)){claimed=celestialDiscs->claimNativeGlare(t,count);if(!claimed)claimed=celestialDiscs->claimNativeDraw(t,count,true,[&](const char* map,const float* camera){return world->celestialPalette(map,camera);});}}});if(!claimed&&blobFilterActive())extensionWork("blob shadow filter",[&]{claimed=blobClaim(count);if(claimed&&blobSignatureReports<4){++blobSignatureReports;IDirect3DVertexShader9* bvs=nullptr;IDirect3DPixelShader9* bps=nullptr;ext->GetVertexShader(&bvs);ext->GetPixelShader(&bps);auto vi=vsHashes.find(bvs);auto pi=psHashes.find(bps);logf("SHADOWBLOB draw signature vs=%016llx ps=%016llx primitives=%u",(unsigned long long)(vi==vsHashes.end()?0:vi->second),(unsigned long long)(pi==psHashes.end()?0:pi->second),count);drop(bvs);drop(bps);}});HRESULT hr=terrainShadowDraw(claimed,[&]{return ext->DrawPrimitiveUP(t,count,data,stride);});if(!claimed)extensionWork("native sky observation",[&]{if(celestialDiscs&&enabled&&!applied&&count<=4&&celestialDiscs->nativeObservePossible(hr,t,count)){D3DSURFACE_DESC desc;if(fullViewport(desc))celestialDiscs->observeNativeDraw(hr,t,count,true);}});return hr;}
+    HRESULT STDMETHODCALLTYPE DrawIndexedPrimitiveUP(D3DPRIMITIVETYPE t,UINT min,UINT vertices,UINT count,const void* indices,D3DFORMAT fmt,const void* data,UINT stride) override { Guard mirrorLock(mirrorState.gate);prepareDraw([&](IDirect3DVertexShader9* vs){world->captureUP(t,min,vertices,count,indices,fmt,data,stride,true,vs,frame%120==0,NorthlightRenderThreadProbe::sampleFrame(frame));captureWater(vs,NorthlightWaterRenderer::UserVerticesAndIndices,[&]{return ext->DrawIndexedPrimitiveUP(t,min,vertices,count,indices,fmt,data,stride);});},count);bool claimed=false;extensionWork("native sky claim",[&]{if(celestialDiscs&&enabled&&!applied&&count<=4&&celestialDiscs->nativeClaimPossible(t,count)){D3DSURFACE_DESC desc;if(fullViewport(desc)){claimed=celestialDiscs->claimNativeGlare(t,count);if(!claimed)claimed=celestialDiscs->claimNativeDraw(t,count,true,[&](const char* map,const float* camera){return world->celestialPalette(map,camera);});}}});if(!claimed&&blobFilterActive())extensionWork("blob shadow filter",[&]{claimed=blobClaim(count);if(claimed&&blobSignatureReports<4){++blobSignatureReports;IDirect3DVertexShader9* bvs=nullptr;IDirect3DPixelShader9* bps=nullptr;ext->GetVertexShader(&bvs);ext->GetPixelShader(&bps);auto vi=vsHashes.find(bvs);auto pi=psHashes.find(bps);logf("SHADOWBLOB draw signature vs=%016llx ps=%016llx primitives=%u",(unsigned long long)(vi==vsHashes.end()?0:vi->second),(unsigned long long)(pi==psHashes.end()?0:pi->second),count);drop(bvs);drop(bps);}});HRESULT hr=terrainShadowDraw(claimed,[&]{return ext->DrawIndexedPrimitiveUP(t,min,vertices,count,indices,fmt,data,stride);});if(!claimed)extensionWork("native sky observation",[&]{if(celestialDiscs&&enabled&&!applied&&count<=4&&celestialDiscs->nativeObservePossible(hr,t,count)){D3DSURFACE_DESC desc;if(fullViewport(desc))celestialDiscs->observeNativeDraw(hr,t,count,true);}});return hr;}
 '''
 HERE=Path(__file__).resolve().parent
 renderer=fp.src('renderer.cpp').read_text()
@@ -79,7 +79,8 @@ def member(text,signature):
 
 assert renderer.count('    // 0.3.187 per-frame draw gates')==1
 gates_block=renderer[renderer.index('    // 0.3.187 per-frame draw gates'):renderer.index('    // 0.3.154: blob shadow claim')]
-new_members='\n'.join([member(renderer,'template<class Work> bool extensionWork('),member(renderer,'template<class Capture> void prepareDraw(Capture capture)'),
+new_members='\n'.join([member(renderer,'template<class Work> bool extensionWork('),member(renderer,'template<class Capture> void prepareDraw(Capture capture,UINT count)'),
+    renderer[renderer.index('    // 0.3.196 (task 12): one-entry per-draw vertex shader classification'):renderer.index('    std::unordered_map<IDirect3DPixelShader9*, uint64_t> psHashes;')],
     member(renderer,'void planTerrainShadowSwap('),member(renderer,'void dropTerrainShadowSwap('),member(renderer,'template<class Draw> HRESULT terrainShadowDraw('),
     gates_block,member(renderer,'bool blobFilterActive()const'),member(renderer,'NorthlightShadowBlobFilter::Result blobClaim(UINT count)'),
     member(renderer,'HRESULT STDMETHODCALLTYPE DrawPrimitive(D3DPRIMITIVETYPE t,UINT start,UINT count) override')])
@@ -96,10 +97,10 @@ checks['faint swap: SetTexture(faint), the draw, SetTexture(original), then Rele
     'ext->SetTexture(0,faint);' in swap_src and 'shadowBlobs->faintTexture()' in swap_src and swap_src.index('ext->SetTexture(0,faint);')<swap_src.index('draw();')<swap_src.index('ext->SetTexture(0,original);')<swap_src.rindex('original->Release();')
     and 'extensionWork' not in swap_src and 'return terrainShadowDraw(claimed,draw)' in swap_src)
 checks['the plan keeps only the original (no second GetTexture, no faint pointer member)']=('GetTexture' not in member(renderer,'void planBlobFaint(') and 'blobFaint;' not in renderer and 'blobFaint=' not in renderer)
-checks['faint plan dropped at the start of every draw on both paths']=(renderer.count('dropBlobFaint();prepareDraw(capture);')==1 and renderer.count('dropTerrainShadowSwap();dropBlobFaint();')==1 and renderer.count('blobFaintDraw(claimed,draw)')==2)
+checks['faint plan dropped at the start of every draw on both paths']=(renderer.count('dropBlobFaint();prepareDraw(capture,count);')==1 and renderer.count('dropTerrainShadowSwap();dropBlobFaint();')==1 and renderer.count('rainBlendDraw(rainBlend,claimed||mist,draw)')==2 and renderer.count('blobFaintDraw(claimed,draw)')==1)
 # The other three overrides: 0.3.184's capture call and real draw, passed to drawHook unchanged.
 def old_parts(line):
-    cap=re.search(r'prepareDraw\(\[&\]\(IDirect3DVertexShader9\* vs\)\{(.*?)captureWater\(vs,(\w+::\w+),\[&\]\{return (ext->\w+\([^)]*\));\}\);\}\);',line)
+    cap=re.search(r'prepareDraw\(\[&\]\(IDirect3DVertexShader9\* vs\)\{(.*?)captureWater\(vs,(\w+::\w+),\[&\]\{return (ext->\w+\([^)]*\));\}\);\},count\);',line)
     sig=line[:line.index(' override {')]
     return sig,cap.group(1),cap.group(2),cap.group(3),re.search(r'terrainShadowDraw\(claimed,\[&\]\{return (ext->\w+\([^)]*\));\}\)',line).group(1)
 def new_parts(sig):
@@ -155,7 +156,10 @@ HARNESS=r'''
 #include <unordered_map>
 #include <utility>
 #include <vector>
-typedef long HRESULT;typedef unsigned UINT;typedef int INT;typedef long long LONGLONG;
+typedef long HRESULT;typedef unsigned UINT;typedef int INT;typedef long long LONGLONG;typedef unsigned DWORD;
+#define TRUE 1
+enum D3DRENDERSTATETYPE{D3DRS_ALPHABLENDENABLE=27,D3DRS_SRCBLEND=19,D3DRS_DESTBLEND=20,D3DRS_BLENDOP=171};enum{D3DBLEND_SRCCOLOR=3,D3DBLEND_SRCALPHA=5,D3DBLEND_INVSRCALPHA=6,D3DBLEND_DESTCOLOR=9,D3DBLENDOP_ADD=1};
+namespace NorthlightWeather{enum class Kind{None,Rain,Snow};} /* 0.3.199 (rain): rainBlendDraw compiles; it never runs here (hot stays null, test_weather_detect drives it) */
 #define STDMETHODCALLTYPE
 #define FAILED(hr) (((HRESULT)(hr))<0)
 #define SUCCEEDED(hr) (((HRESULT)(hr))>=0)
@@ -188,16 +192,19 @@ struct MockExt{
     IDirect3DTexture9 original;
     HRESULT GetTexture(unsigned stage,IDirect3DBaseTexture9** out){env->call("GetTexture "+std::to_string(stage),"fault gettexture");*out=env->bit("no texture",8)?nullptr:&original;if(!*out)env->trace->push_back("GetTexture null");return *out?D3D_OK:HRESULT(-1);}
     HRESULT SetTexture(unsigned stage,IDirect3DBaseTexture9* t){env->call("SetTexture "+std::to_string(stage)+(t==&original?" orig":" faint"));return D3D_OK;}
+    HRESULT GetRenderState(D3DRENDERSTATETYPE,DWORD* v){*v=0;return D3D_OK;}HRESULT SetRenderState(D3DRENDERSTATETYPE,DWORD){return D3D_OK;}
     HRESULT GetVertexShader(IDirect3DVertexShader9** out){env->call("GetVertexShader");*out=&vs;return D3D_OK;}
     HRESULT DrawPrimitive(D3DPRIMITIVETYPE t,UINT s,UINT c){env->call("DrawPrimitive "+drawName(t,s,c));return env->bit("draw failure",6)?HRESULT(-2005530516):D3D_OK;}
 };
 struct MockWorld{
     Env* env=nullptr;bool context=true,actorShadows=true,shadows=true,composited=true;IDirect3DPixelShader9 replacement{9,nullptr};
     bool hasContext()const{return context;}
+    bool rainBlendSetting()const{return false;}
     bool actorShadowsEnabled()const{return actorShadows;}
     bool shadowsRequested()const{return shadows;}
     bool terrainShadowActive()const{return shadows&&composited;}
     bool frameDrawGates()const{return true;}
+    bool recognizesWmo(IDirect3DVertexShader9*)const{return false;}bool isWorldShader(IDirect3DVertexShader9*)const{return false;}bool isSkinnedShader(IDirect3DVertexShader9*)const{return false;}
     IDirect3DPixelShader9* terrainShadowReplacement(IDirect3DPixelShader9* p){env->call("terrainShadowReplacement "+psName(p),"fault replacement");return env->bit("replacement")?&replacement:nullptr;}
     void capture(D3DPRIMITIVETYPE t,INT base,UINT min,UINT vertices,UINT start,UINT count,bool indexed,IDirect3DVertexShader9*,bool a,bool b){
         env->call("capture "+drawName(t,start,count)+" "+std::to_string(base+min+vertices)+std::to_string(indexed)+std::to_string(a)+std::to_string(b),"fault capture");}
@@ -225,7 +232,8 @@ struct MockBlobs{Env* env=nullptr;MockExt* ext=nullptr;bool faintMode=false;unsi
         return {C::Faint,original};}
     IDirect3DTexture9* faintTexture(){return env->bit("faint texture",8)?nullptr:&faint;}};
 struct Gate{int drawTid=7;void noteFirst(int){}};
-struct MirrorStateMock{Gate gate;};
+struct MirrorStateMock{Gate gate;bool textureKnown[1]={};void* textures[1]={};};
+struct WeatherDetectMock{const void* hot=nullptr;NorthlightWeather::Kind hotKind=NorthlightWeather::Kind::None;bool mistArmed=false;bool isMist(const void*)const{return false;}void proveMist(const void*){}};struct WeatherSampleMock{unsigned primitives=0,draws=0;}; /* 0.3.198 (rain): drawHook's one comparison; hot stays null here (test_weather_detect drives it) */
 struct Guard{explicit Guard(Gate&){}};
 namespace NorthlightRenderThreadProbe{inline bool sampleFrame(unsigned f){return f%3==0;}inline bool profiling(){return true;}}
 namespace NorthlightWaterRenderer{enum UserPointer:unsigned{NoUserPointer,UserVertices,UserVerticesAndIndices};}
@@ -239,13 +247,13 @@ struct Base{
     Trace trace;Env env;MockExt extObj;MockWorld worldObj;MockSky skyObj;MockBlobs blobsObj;
     MockExt* ext=&extObj;MockWorld* world=&worldObj;MockSky* celestialDiscs=nullptr;MockBlobs* shadowBlobs=nullptr;
     MirrorStateMock mirrorState;
-    bool extensionFault=false,failed=false,enabled=true,applied=false,terrain=false,gateFrame=false;
+    bool extensionFault=false,failed=false,enabled=true,applied=false,terrain=false,gateFrame=false,rainBoundary=false;
     static constexpr int debugMode=0,kTagMask=3;int worldDebug=0;
     std::unordered_map<IDirect3DVertexShader9*,int> vsTags;
     std::unordered_map<IDirect3DVertexShader9*,std::uint64_t> vsHashes;std::unordered_map<IDirect3DPixelShader9*,std::uint64_t> psHashes;
     unsigned blobSignatureReports=0,terrainShadowDraws=0,frame=0,drawCalls=0;
     IDirect3DPixelShader9 *shadowSwapOriginal=nullptr,*shadowSwapReplacement=nullptr;
-    Keys effectKeys;GateCounts gateCounts;
+    Keys effectKeys;GateCounts gateCounts;WeatherDetectMock weatherDetect;WeatherSampleMock weatherSample;unsigned weatherMistSkips=0,weatherMistUnknown=0,weatherMistOtherStage=0,weatherMistReports=0,weatherStateReports=0;void weatherDrawStates(UINT){}void weatherProbeDraw(UINT){}
     Base(){blobsObj.ext=&extObj;env.trace=&trace;blobsObj.faint.id=6;blobsObj.faint.env=extObj.original.env=&env;extObj.original.id=5;extObj.env=worldObj.env=skyObj.env=blobsObj.env=&env;extObj.ps[0].env=extObj.ps[1].env=extObj.vs.env=worldObj.replacement.env=&env;}
     bool sampledDrawTimers()const{return frame%2==0;}
     void logf(const char* format,...){char b[512];va_list a;va_start(a,format);std::vsnprintf(b,sizeof b,format,a);va_end(a);trace.push_back(std::string("log ")+b);}
@@ -254,11 +262,11 @@ struct Base{
 };
 // prepareDrawImpl stand-in: beforeDraw may find terrain, fail or apply the effects (UI), then the swap plan and the capture.
 #define PREPARE_IMPL \
-    template<class Capture> void prepareDrawImpl(Capture capture){ \
+    template<class Capture> void prepareDrawImpl(Capture capture,UINT count){ \
         ++drawCalls;env.call("prepare","fault prepare"); \
         if(failed||!enabled)return; \
         if(applied)return; \
-        IDirect3DVertexShader9* vs=&extObj.vs;vsTags[vs]=env.bit("terrain tag")?1:2; \
+        IDirect3DVertexShader9* vs=&extObj.vs;setTag(vs,env.bit("terrain tag")?1:2); \
         if(env.bit("finds terrain",5))terrain=true; \
         if(env.bit("fails",60))failed=true; \
         if(env.bit("applies",30)){applied=true;trace.push_back("renderEffects");} \
@@ -266,10 +274,13 @@ struct Base{
         if(env.bit("world domain"))capture(vs); \
     }
 struct OldDevice final:Base{
+    void setTag(IDirect3DVertexShader9* vs,int t){vsTags[vs]=t;}
     PREPARE_IMPL
 @OLD@
 };
 struct NewDevice final:Base{
+    // A registration: the generation moves when the tag at an address changes (the real CreateVertexShader bumps it before every registration).
+    void setTag(IDirect3DVertexShader9* vs,int t){auto it=vsTags.find(vs);if(it==vsTags.end()||it->second!=t)++vsGeneration;vsTags[vs]=t;}
     PREPARE_IMPL
 @NEW@
 };

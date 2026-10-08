@@ -8,6 +8,7 @@ import argparse
 import hashlib
 import json
 import os
+import re
 from pathlib import Path, PurePosixPath
 import shutil
 import subprocess
@@ -254,6 +255,38 @@ def commit(client, plan, staged, payload=None, version='__RELEASE_VERSION__', ki
         shutil.rmtree(stage, ignore_errors=True)
     return backup
 
+QUALITY_KEY = re.compile(r'^\s*;?\s*([A-Za-z][A-Za-z0-9]*)\s*=')
+QUALITY_ADDED = '; Added by the Northlight installer: settings this file did not mention yet. Commented out, so the preset\'s values apply.'
+
+def merge_quality_ini(user, template):
+    """The user's northlight-quality.ini with every setting of the package template it does not mention yet appended:
+    each with its comment block, as written in the template (commented out). A key counts as mentioned when any line
+    sets it, active or commented. Nothing already in the file changes. None when nothing is missing or the file is
+    not UTF-8 text (left alone)."""
+    try: text, tmpl = user.decode('utf-8-sig'), template.decode('utf-8-sig')
+    except UnicodeDecodeError: return None
+    if '\x00' in text: return None
+    have = {m.group(1).lower() for m in map(QUALITY_KEY.match, text.splitlines()) if m}
+    blocks, comments = [], []
+    for line in tmpl.splitlines():
+        m = QUALITY_KEY.match(line)
+        if m and not line.lstrip().startswith('['):
+            blocks.append((m.group(1).lower(), comments+[line])); comments = []
+        elif not line.strip(): comments = []
+        elif line.lstrip().startswith(';'): comments.append(line)
+        else: comments = []
+    missing, seen = [], set()
+    for key, block in blocks:
+        if key in have or key in seen: continue
+        seen.add(key); missing.append(block)
+    if not missing: return None
+    eol = '\r\n' if '\r\n' in text else '\n'
+    out = text if text.endswith(('\n', '\r')) or not text else text+eol
+    out += eol+QUALITY_ADDED+eol
+    for block in missing: out += eol+eol.join(block)+eol
+    bom = user.startswith(b'\xef\xbb\xbf')
+    return (b'\xef\xbb\xbf' if bom else b'')+out.encode('utf-8')
+
 def resolve_backend(client, backend=None):
     """The one place that picks the backend. An explicit backend wins; else an installed Backend=dxvk2 or
     native is kept; else dxvk. An installed Backend=legacy resolves to dxvk here: switch_plan keeps the legacy
@@ -312,9 +345,15 @@ def payload_plan(client, package, use_existing=False, backend=None, extra=None, 
                     plan.append({'path':e['path'], 'before':sha(dst), 'after':None})
                 continue
         old = sha(dst) if dst.exists() else None
-        # User settings (northlight-quality.ini) are installed only when missing, never overwritten.
+        # User settings (northlight-quality.ini) are installed only when missing, never overwritten: an existing file
+        # keeps every line and value; settings it does not mention yet are appended, commented out (merge_quality_ini).
         if e.get('preserve') and dst.exists():
-            print('Keeping your existing', e['path'], flush=True); continue
+            merged = merge_quality_ini(dst.read_bytes(), safe_path(package/'payload', e['path']).read_bytes()) if e['sha256'] is not None else None
+            if merged is None:
+                print('Keeping your existing', e['path'], flush=True); continue
+            print('Keeping your existing', e['path'], 'and adding the settings it does not mention yet', flush=True)
+            staged[e['path']] = merged
+            plan.append({'path':e['path'], 'before':old, 'after':hashlib.sha256(merged).hexdigest(), 'source':'staged', 'preserve':True}); continue
         entry = {'path':e['path'], 'before':old, 'after':e['sha256'], **({'preserve':True} if e.get('preserve') else {})}
         if e['path'] == CONFIG and config:
             staged[CONFIG] = config; entry.update(after=hashlib.sha256(config).hexdigest(), source='staged')

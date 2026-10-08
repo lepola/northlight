@@ -41,8 +41,9 @@ checks['shortfall frames record and draw; only the despawn test needs a complete
 checks['logged on sampled frames']='if(captureSampled){const auto& s=rigidMemory.stats();' in inject and 'deferLogf("RIGID memory tracks=%zu entries=%zu injected=%u seen=%zu held=%zu static=%zu mobile=%zu droppedInView=' in inject
 capture=w[w.index('    void captureModel(D3DPRIMITIVETYPE type,'):w.index('    // One directional replay draw in the 0.3.142 order')]
 drawn='if(!rigidDrawKeys.empty()&&rigidDrawKeys.contains(current,count))rigidMemoryDrawn(current,count);'
+# 0.3.196 (task 12): captureModel's shader lookup goes through lookupShader(), so metadata is `*found`.
 checks['0.3.173 drawn test: only with entries, right after the shader lookup, before the 4096 cap, budget, blend and projection checks']=(capture.count(drawn)==1
-    and capture.index('const auto& metadata=it->second;')<capture.index(drawn)<capture.index('if(replays.size()>=4096)')<capture.index('if(replaySnapshots.captureExhausted(priority))')
+    and capture.index('const auto& metadata=*found;')<capture.index(drawn)<capture.index('if(replays.size()>=4096)')<capture.index('if(replaySnapshots.captureExhausted(priority))')
     and capture.index(drawn)<capture.index('D3DRS_ALPHABLENDENABLE')<capture.index('kind==1?4:2,q,4'))
 checks['drawn test reuses the mirror-answered palette rows of drawRoot (one read site), bone 0 at c31']=(w.count('GetVertexShaderConstantF(UINT(program->second->paletteBase),rows,3)')==1
     and 'float rows[12];const auto* program=paletteRows(shader,rows);if(!program)return false;' in w and 'const auto* program=paletteRows(shader,rows);' in m and 'program->paletteBase!=31' in m)

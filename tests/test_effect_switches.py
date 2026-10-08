@@ -170,7 +170,7 @@ for key, value in [('SETTER', setter), ('SHADOW_CLEAR', shadow_clear),
 renderer = fp.src('renderer.cpp').read_text()
 assert 'if(effectKeys.poll(focus,modifiers,componentKeys)){' in renderer
 assert renderer.index('effectKeys.poll(') < renderer.index('if(world)world->setEffects(settings);')
-assert 'farZ,hazeZone,effects.fog,celestialValid,hazeSun,sourceWeights[0],hazeLift);' in world
+assert 'farZ,hazeZone,effects.fog,celestialValid,hazeSun,sourceWeights[0],hazeLift,wx.hazeTauScale());' in world
 assert world.index('d->SetPixelShaderConstantF(34,haze.haze,1);') < world.index('"world composite"')
 
 with tempfile.TemporaryDirectory(prefix='fr-effect-switches-') as temp:

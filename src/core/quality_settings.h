@@ -67,7 +67,29 @@ struct Settings {
     // 0.3.193 BlobShadowStrength: how strongly the game's own round blob shadow under characters shows while the mod draws
     // actor shadows: 100 = the game's texture unchanged (no filter work), 0 = hidden, 1..99 = drawn with a lighter texture.
     unsigned blobShadowStrength=50;
-    char origin[35]={'d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d'};
+    // 0.3.198 (rain): Weather 1 = Northlight's own effects follow detected rain or snow (sky/weather_effects.h); 0 = nothing reacts.
+    // RainFog 0..2 scales the haze/fog/shafts/sun/shadow/GI/lamp couplings (1 = the tuned look).
+    unsigned weather=1,rainFog=1;
+    // 0.3.199 (fog clouds): FogClouds 1 = low fog banks that drift with the wind (own half-resolution raymarch pass, sky/fog_clouds.h);
+    // 0 = none. FogCloudDensity 0..200 percent scales how much of the ground they cover (100 = the tuned look; thicker and faster in rain).
+    unsigned fogClouds=1,fogCloudDensity=100;
+    // 0.3.199: the fog's temporal accumulation and the rain's alpha blend (with the rain-only mist skip) are always on (game-tested; no keys).
+    // 0.3.200 (gpu budget): GpuBudgetMs 0 = off (the full image, no GPU timing); 1..20 = Northlight's own GPU time per frame (measured, read back a few
+    // frames late) is kept near this many ms by lighter fog clouds, fog and lamps while it is over (gpu_budget.h); under it the image is the full one.
+    unsigned gpuBudgetMs=4;
+    // 0.3.200 (pipeline): StreamFramesAhead 1..3 = how many frames the game thread may record ahead of the replay thread (CommandStream=1): Present
+    // waits for the Present that many frames back. 1 = the 0.3.199 behaviour. Read with CommandStream before the device exists (creation-time key).
+    unsigned streamFramesAhead=2;
+    // 0.3.200 (jobs): ReplayJobs 1 = the renderer thread hands its D3D-free per-frame CPU work (local light selection and scissor rects,
+    // fog clouds and the veil's fog samples, terrain shadow candidates, the later cascades' replay culling) to a small worker pool and
+    // joins each result right before the D3D calls that need it (core/job_system.h); the same code, the same results. 0 = all of it
+    // inline on the renderer thread, exactly as before.
+    unsigned replayJobs=1;
+    // 0.3.200 (frame skip): StreamFrameSkip 1 = when the replay thread is two complete frames behind (CommandStream=1), it replays the older frame without
+    // its draws and Present (state and resources still applied; frames that render to textures, issue occlusion queries or copy the back buffer are always
+    // drawn), so the game thread does not wait for it; 0 = every frame is drawn. Creation-time key, read with CommandStream.
+    unsigned streamFrameSkip=1;
+    char origin[43]={'d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d'};
 };
 struct Key { const char* name; unsigned Settings::*field; unsigned low,high; unsigned preset[3]; };
 // preset[] = Quality, Balanced, Performance. Quality must equal Settings{}.
@@ -107,6 +129,14 @@ inline const Key Keys[]={
     {"ShadowPivotCorrection",&Settings::shadowPivotCorrection,0,1,{1,1,1}},
     {"CommandStream",&Settings::commandStream,0,1,{1,1,1}},
     {"BlobShadowStrength",&Settings::blobShadowStrength,0,100,{50,50,50}},
+    {"Weather",&Settings::weather,0,1,{1,1,1}},
+    {"RainFog",&Settings::rainFog,0,2,{1,1,1}},
+    {"FogClouds",&Settings::fogClouds,0,1,{1,1,0}},
+    {"FogCloudDensity",&Settings::fogCloudDensity,0,200,{100,100,100}},
+    {"GpuBudgetMs",&Settings::gpuBudgetMs,0,20,{4,3,2}},
+    {"StreamFramesAhead",&Settings::streamFramesAhead,1,3,{2,2,2}}, /* 0.3.200 (pipeline) */
+    {"ReplayJobs",&Settings::replayJobs,0,1,{1,1,1}},
+    {"StreamFrameSkip",&Settings::streamFrameSkip,0,1,{1,1,1}}, /* 0.3.200 (frame skip) */
 };
 inline bool operator==(const Settings& a,const Settings& b){for(const auto& k:Keys)if(a.*k.field!=b.*k.field)return false;return true;}
 inline bool operator!=(const Settings& a,const Settings& b){return !(a==b);}

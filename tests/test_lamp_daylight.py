@@ -73,7 +73,7 @@ def main():
     assert 'return float4(result*(LocalLightInfo.y*(1-LocalLightInfo.z*sunlit)),0);' in local
     # CPU: no global daylight gain (lamp fog c58 and the point lamp as in 0.3.164); c52.z per batch; s12 bound.
     assert 'const float lampGain=.9f*NorthlightLocalLightSelection::nightGain(lampNight);' in cpu and 'daylightGain' not in cpu and 'lampDaylight' not in cpu
-    assert 'c[52][1]=.9f*lampGain;' in cpu and 'c[58][2]=13.f*lampGain;c[58][3]=.156f*lampGain;' in cpu
+    assert 'c[52][1]=.9f*lampGain;' in cpu and 'c[58][2]=10.f*lampGain*wx.lampFogGain();c[58][3]=.12f*lampGain*wx.lampFogGain();' in cpu
     assert 'NorthlightLocalLightSelection::sunlitCut(celestialValid?sourceWeights[0]:0.f,sourceActive[0]&&effects.shadows);' in cpu
     assert 'const float info[4]={float(batch.count),c[52][1],lampSunlitCut,0};' in cpu
     assert cpu.index('d->SetTexture(12,baselineLight); /* sun visibility') < cpu.index('"local direct light batch"')

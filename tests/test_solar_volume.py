@@ -165,7 +165,7 @@ def main():
     # 0.3.163: fog-pass-only overrides. The sun's forward soft cap .38 -> .95 (moon .24 kept),
     # the sun's c17 takes the glow hue, c18.rgb is cooled (w kept) for the fog loop only and
     # c17/c18 are restored from the bank before lamp fog, blur and composite. WorldFog unchanged.
-    assert 'c[21][1]=1.2f*volumePalette.fogGain[source];c[21][2]=source==0?NorthlightSunHue::SunForwardCap:NorthlightSunHue::MoonForwardCap' in cpu
+    assert 'c[21][1]=1.2f*volumePalette.fogGain[source]*wx.shaftGain();c[21][2]=source==0?NorthlightSunHue::SunForwardCap:NorthlightSunHue::MoonForwardCap' in cpu
     hue = fp.src('sun_hue.h').read_text()
     assert f'SunForwardCap={SUN_CAP:g}f,MoonForwardCap=.24f'.replace('0.', '.') in hue
     set_source = cpu[cpu.index('auto setSource=[&](int source,bool first,bool volume=false){'):]
@@ -221,8 +221,8 @@ def main():
             assert math.isclose(air, (.00345+.00155*night)*(1-8/48)**2, rel_tol=1e-12)
             assert density((0., 0., 148.), lambda x, y: node(zone), night=night) == (0., 0.)
             assert density((0., 0., 108.), lambda x, y: node(zone, indoor=True), night=night) == (0., 0.)
-    assert 'airBase=.0017+airBase*saturate(mad(field.w,1.6,-1))' in shader
-    assert 'airBase=.0017f+airBase*std::clamp((t.height-.625f)/.625f,0.f,1.f)' in cpu
+    assert 'airBase=WeatherInfo.w+airBase*saturate(mad(field.w,1.6,-1))' in shader  # 0.3.198 (rain): c59.w = .0017 + the rain's extra extinction
+    assert 'airBase=airFloor+airBase*std::clamp((t.height-.625f)/.625f,0.f,1.f)' in cpu and 'const float airFloor=.0017f+wx.airExtinction()*denseDamp;' in cpu
     # Stormwind has ~90% of Elwynn daytime air at any shared height;
     # indoor/unknown regions remain empty, with no city ground blanket.
     for night in (0., .25, .5, .75, 1.):

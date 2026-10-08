@@ -314,6 +314,15 @@ public:
         Guard lock(m->gate);if(!kMirrorBorrowedPeek||!m->active()||!m->pixelShaderKnown||!m->pixelShader)return false;
         ++m->answered;++m->peeks;out=m->pixelShader;return true;
     }
+    // 0.3.196 (task 12): the mirror holds no reference (Set* stores raw pointers), so a borrowed shader/texture pointer is valid only while it stays bound.
+    bool peekVertexShader(IDirect3DVertexShader9*& out){
+        Guard lock(m->gate);if(!kMirrorBorrowedPeek||!m->active()||!m->vertexShaderKnown||!m->vertexShader)return false;
+        ++m->answered;++m->peeks;out=m->vertexShader;return true;
+    }
+    bool peekTexture(DWORD stage,IDirect3DBaseTexture9*& out){
+        Guard lock(m->gate);if(!kMirrorBorrowedPeek||stage>=DeviceMirror::Textures||!m->active()||!m->textureKnown[stage]||!m->textures[stage])return false;
+        ++m->answered;++m->peeks;out=m->textures[stage];return true;
+    }
     bool peekDepthStencilSurface(IDirect3DSurface9*& out){
         Guard lock(m->gate);if(!kMirrorBorrowedPeek||!m->active()||!m->depthKnown||!m->depth)return false;
         ++m->answered;++m->peeks;out=m->depth;return true;

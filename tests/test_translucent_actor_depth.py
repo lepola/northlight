@@ -129,16 +129,16 @@ checks['trigger guarded by terrain, !captured and the armed latch']=all(x in imp
 checks['attempt latched before the resolve, resolve inside RawScope, success recorded']=blk.index('earlyDepth.attempt()')<blk.index('ExtensionDevice::RawScope')<blk.index('resolveDepth()')<blk.index('earlyDepth.success()')
 checks['runtime undo needs captured and earlyCaptured, clears captured, counts undone']=(lambda u:all(x in u for x in ('captured&&earlyDepth.earlyCaptured','captured=false','earlyDepth.undo()','++earlyResolveUndone')))(impl[undo-80:trig])
 checks['no SetRenderState and no resolve in the early/undo/census region']='SetRenderState' not in impl[dom:cap] and impl[dom:cap].count('resolveDepth()')==1
-checks['state reads include Z write, blend, src/dst, colour write, skinned']=all(x in impl[dom:cen] for x in ('D3DRS_ZWRITEENABLE','D3DRS_ALPHABLENDENABLE','D3DRS_SRCBLEND','D3DRS_DESTBLEND','D3DRS_COLORWRITEENABLE','isSkinnedShader(vs)'))
+checks['state reads include Z write, blend, src/dst, colour write, skinned']=all(x in impl[dom:cen] for x in ('D3DRS_ZWRITEENABLE','D3DRS_ALPHABLENDENABLE','D3DRS_SRCBLEND','D3DRS_DESTBLEND','D3DRS_COLORWRITEENABLE','classifyVs(vs).skinned'))
 hook=r[r.index('template<class Capture,class Draw> HRESULT drawHook('):][:3500]
 # 0.3.193: the real draw goes through blobFaintDraw (it wraps terrainShadowDraw) in both drawHook modes.
 checks['early block runs before the real draw (prepareDraw/prepareDrawImpl precede draw in both drawHook modes)']=(
-    hook.index('prepareDraw(capture);')<hook.index('blobFaintDraw(claimed,draw)')<hook.index('prepareDrawImpl(capture);')<hook.rindex('blobFaintDraw(claimed,draw)'))
+    hook.index('prepareDraw(capture,count);')<hook.index('rainBlendDraw(rainBlend,claimed||mist,draw)')<hook.index('prepareDrawImpl(capture,count);')<hook.rindex('rainBlendDraw(rainBlend,claimed||mist,draw)'))
 cf=r[r.index('void clearFrame() {'):r.index('void releaseResources()')]
 checks['clearFrame resets the latch and the census']='earlyDepth.reset()' in cf and 'resetTranslucentCensus()' in cf
 fin=r[r.index('void finishFrameImpl() {'):r.index('++frame;mirrorState.gate.frame')]
 checks['TRANSLUCENT logged before clearFrame in finishFrameImpl']=fin.index('TRANSLUCENT frame=')<fin.index('clearFrame();')
-terr=r[r.index('drop(worldDepth); worldDepth=ds;'):][:400]
+terr=r[r.index('if(!bindWorldDepth(desc))return;'):][:400]
 checks['terrain draw undo uses earlyCaptured, counted before captured=false']=terr.index('captured&&earlyDepth.earlyCaptured')<terr.index('++earlyResolveUndone')<terr.index('terrain=true; captured=false;')
 clr=r[r.index('HRESULT STDMETHODCALLTYPE Clear('):][:900]
 checks['Clear(Z) after the early resolve freezes it instead of resolving']='earlyDepth.earlyCaptured' in clr and 'earlyDepth.freeze()' in clr and 'resolveDepth()' in clr
@@ -146,7 +146,7 @@ checks['state reads cached per draw']='known=true' in impl
 checks['no TranslucentActorDepth setting']=all('ranslucentActorDepth' not in x for x in (r,q,w))
 rd_=r[r.index('bool resolveDepth() {'):r.index('HRESULT quad(UINT w')]
 checks['resolveDepth unchanged: SavedState and captured=true on success']='SavedState saved(ext,&stateBlocks);' in rd_ and 'captured = true; return true;' in rd_
-checks['banner']='translucent depth census; early depth for translucent actors; DXVK 3.1.1 default, dxvk2 (2.7.1) by choice only, no automatic fallback; AO depth texel snap; shadow cascades follow camera zoom and collision; reduced terrain shadow reach under address-space pressure; command-stream replay thread; backend=' in r
+checks['banner']='translucent depth census; early depth for translucent actors; DXVK 3.1.1 default, dxvk2 (2.7.1) by choice only, no automatic fallback; AO depth texel snap; shadow cascades follow camera zoom and collision; reduced terrain shadow reach under address-space pressure; command-stream replay thread; draw-hook lookup caches; lighter replay retire; fresh texture shadows evict only stale keeps; soft local-light cap with fades; blended GI re-publication; Forever-style rain (storm light bands, weather draw detection); moving fog clouds; GPU budget control; frames ahead and frame skipping in the command stream; replay jobs; backend=' in r
 ini=fp.src('windows-package/northlight-quality.ini').read_text();rm=fp.src('windows-package/README.txt').read_text()
 checks['docs: no setting in the ini or README']='TranslucentActorDepth' not in ini and 'TranslucentActorDepth' not in rm
 for n,ok in checks.items():print(('PASS ' if ok else 'FAIL ')+n)

@@ -67,6 +67,12 @@ public:
         bool filterRedundant=true;                                      // see redundant(); off: every Set is recorded
         DWORD (*readBackLock)()=nullptr;                                // NorthlightUpload::readBackLock in the DLL: READONLY, plus NOOVERWRITE on DXVK >= 3
         bool (*diagnostics)()=nullptr;                                  // NorthlightDiagnostics::enabled in the DLL
+        // 0.3.200 (pipeline): StreamFramesAhead (clamped to 1..kMaxFramesAhead): Present waits for the Present this many frames back; the snapshot pool follows
+        // (SnapshotPool::capFor). 1 = the 0.3.199 pacing. The queue budget is `budget` (the DLL passes budgetForFramesAhead).
+        unsigned framesAhead=1;
+        // 0.3.200 (frame skip): StreamFrameSkip. 1: a replay two complete frames behind replays the older one without its draws and real Present (Replayer::beginFrame);
+        // 0 (the default here, so every test keeps its exact trace): every frame is drawn, as before.
+        unsigned frameSkip=0;
     };
     // Builds the stream around `target` (the Device). On success the replay thread owns the target; on failure nothing
     // was handed over (nullptr, reason filled) and the caller keeps using the target directly.
@@ -180,8 +186,8 @@ public:
         for(UINT i=0;i<n;++i)if(!regs[r+i].known||!regs[r+i].fromSet||regs[r+i].v!=d[i])return false;
         return filtered();}
     // state class: StreamState follows the game's calls (not while a state block records)
-    void observe(CmdTag<Cmd::Device_SetRenderTarget>,DWORD i,IDirect3DSurface9* s){if(recording||i>=StreamState::kRTs)return;StreamState::bind(st.rt[i],ProxyBase::of(s));st.rtKnown[i]=true;st.afterRenderTarget();}
-    void observe(CmdTag<Cmd::Device_SetDepthStencilSurface>,IDirect3DSurface9* s){if(recording)return;StreamState::bind(st.ds,ProxyBase::of(s));st.dsKnown=true;}
+    void observe(CmdTag<Cmd::Device_SetRenderTarget>,DWORD i,IDirect3DSurface9* s){if(s&&(i||!backBuffer(ProxyBase::of(s))))core.frameHazards|=StreamCore::kHazardTarget;if(recording||i>=StreamState::kRTs)return;StreamState::bind(st.rt[i],ProxyBase::of(s));st.rtKnown[i]=true;st.afterRenderTarget();}
+    void observe(CmdTag<Cmd::Device_SetDepthStencilSurface>,IDirect3DSurface9* s){if(textureLevel(ProxyBase::of(s)))core.frameHazards|=StreamCore::kHazardTarget;if(recording)return;StreamState::bind(st.ds,ProxyBase::of(s));st.dsKnown=true;}
     void observe(CmdTag<Cmd::Device_SetTransform>,D3DTRANSFORMSTATETYPE s,const D3DMATRIX* m){if(recording||unsigned(s)>=StreamState::kXforms)return;if(m)st.xf[s].set(*m);else st.xf[s].known=false;}
     void observe(CmdTag<Cmd::Device_MultiplyTransform>,D3DTRANSFORMSTATETYPE s,const D3DMATRIX*){if(!recording&&unsigned(s)<StreamState::kXforms)st.xf[s].known=false;}
     void observe(CmdTag<Cmd::Device_SetViewport>,const D3DVIEWPORT9* v){if(recording)return;if(v)st.viewport.set(*v);else st.viewport.known=false;}
@@ -217,7 +223,9 @@ public:
     // GPU-side writes: the destination's CPU-side lock knowledge no longer holds
     void observe(CmdTag<Cmd::Device_UpdateSurface>,IDirect3DSurface9*,const RECT*,IDirect3DSurface9* dst,const POINT*){written(ProxyBase::of(dst));}
     void observe(CmdTag<Cmd::Device_UpdateTexture>,IDirect3DBaseTexture9*,IDirect3DBaseTexture9* dst){written(ProxyBase::of(dst));}
-    void observe(CmdTag<Cmd::Device_StretchRect>,IDirect3DSurface9*,const RECT*,IDirect3DSurface9* dst,const RECT*,D3DTEXTUREFILTERTYPE){written(ProxyBase::of(dst));}
+    void observe(CmdTag<Cmd::Device_StretchRect>,IDirect3DSurface9* src,const RECT*,IDirect3DSurface9* dst,const RECT*,D3DTEXTUREFILTERTYPE){
+        {ProxyBase* p=ProxyBase::of(src);if(backBuffer(p)||(p&&(p->info.usage&D3::kUsageDS)))core.frameHazards|=StreamCore::kHazardCopy;}   // 0.3.200 (frame skip): copies what this frame drew
+        written(ProxyBase::of(dst));}
     void observe(CmdTag<Cmd::Device_ColorFill>,IDirect3DSurface9* s,const RECT*,D3DCOLOR){written(ProxyBase::of(s));}
     void observe(CmdTag<Cmd::Device_ProcessVertices>,UINT,UINT,UINT,IDirect3DVertexBuffer9* dst,IDirect3DVertexDeclaration9*,DWORD){written(ProxyBase::of(dst));}
     template<class... A> void noteSync(A&&...){}
@@ -345,15 +353,20 @@ public:
         policy.onPresent();takeReplayFailure();
         UINT dirtyBytes=0;
         if(dirty){dirtyBytes=dirty->rdh.dwSize+dirty->rdh.nCount*UINT(sizeof(RECT));if(sizeof(PresentArgs)+dirtyBytes>MaxInlinePayload)dirtyBytes=0;}
-        auto* a=static_cast<PresentArgs*>(q.reserve((std::uint16_t)(swap?Cmd::SwapPresent:Cmd::Present),std::uint32_t(sizeof(PresentArgs)+dirtyBytes)));
+        auto* a=static_cast<PresentArgs*>(q.reserve((std::uint16_t)(swap?Cmd::SwapPresent:Cmd::Present),std::uint32_t(sizeof(PresentArgs)+dirtyBytes),kFlagWaitTarget));   // 0.3.196 (task 12): the next Present waits for this one's seq
         a->swapChain=swap;a->window=window;a->flags=flags;a->hasSrc=src!=nullptr;a->hasDst=dst!=nullptr;a->dirtyBytes=dirtyBytes;
         if(src)a->src=*src;else a->src=RECT{};
         if(dst)a->dst=*dst;else a->dst=RECT{};
         if(dirtyBytes)std::memcpy(a+1,dirty,dirtyBytes);
-        q.commit();q.publish();
-        const std::uint64_t seq=q.recordedSeq(),prev=prevPresent;prevPresent=seq;
+        // 0.3.200 (frame skip): this frame's hazards to its ring slot (tag last); the next frame starts with the targets this one leaves bound
+        {auto& f=core.frameRing[core.frameNo%StreamCore::kRing];f.hazards.store(core.frameHazards,std::memory_order_relaxed);f.tag.store(core.frameNo+1,std::memory_order_release);
+         core.frameHazards=offscreenTargets()?StreamCore::kHazardTarget:0;}
+        q.commit();q.publish();core.presentsRecorded.store(core.frameNo+1,std::memory_order_release);   // 0.3.200 (frame skip): complete frames, before the wait below
+        // 0.3.200 (pipeline): presentHist holds the last framesAhead_ Presents (seq, ordinal = frameNo when recorded); the slot reused now is the one framesAhead_ back
+        // (framesAhead_=1: always slot 0, the previous Present, as before)
+        PresentMark& slot=presentHist[core.frameNo%framesAhead_];const PresentMark prev=slot;slot=PresentMark{q.recordedSeq(),core.frameNo};
         HRESULT result=D3D_OK;
-        if(prev){q.waitReplayed(prev,WaitKind::Present);result=presentResult(prev);}   // one frame ahead: the previous frame's real HRESULT
+        if(prev.seq){q.waitReplayed(prev.seq,WaitKind::Present);result=presentResult(prev);}   // framesAhead_ frames ahead: that frame's real HRESULT
         q.setPressure(core.memoryPressure.load(std::memory_order_relaxed)||NorthlightStream::memoryPressure.load(std::memory_order_relaxed));
         frameEnd=nowNs();waitsAtFrameEnd=get(q.stats.syncNs)+get(q.stats.backpressureNs);
         ++core.frameNo;tuner.sample(q);   // idle pool memory goes back after a quiet window
@@ -365,8 +378,10 @@ public:
         }
         return result;
     }
-    // The real result of the Present command with sequence number `seq`, recorded by the replay thread.
-    HRESULT presentResult(std::uint64_t seq){const auto& e=core.presentRing[seq%core.kRing];return e.seq.load()==seq?e.hr.load():D3D_OK;}
+    // The real result of a recorded Present (its command sequence number and ordinal), recorded by the replay thread.
+    struct PresentMark {std::uint64_t seq=0,ordinal=0;};
+    HRESULT presentResult(const PresentMark& m){const auto& e=core.presentRing[m.ordinal%core.kRing];return e.seq.load()==m.seq?e.hr.load():D3D_OK;}
+    unsigned framesAhead()const{return framesAhead_;}
 
     HRESULT STDMETHODCALLTYPE Reset(D3DPRESENT_PARAMETERS* p) override{
         if(!p)return D3DERR_INVALIDCALL;
@@ -532,15 +547,24 @@ private:
     std::unique_ptr<StreamCore> coreOwner;StreamCore& core;Replayer replayer;StreamState st;std::function<void()> restoreOwner;
     IDirect3D9* parent;D3DCAPS9 caps{};D3DDEVICE_CREATION_PARAMETERS creation{};D3DPRESENT_PARAMETERS pp{};
     StreamSwapChain* sc0=nullptr;std::atomic<LONG> refs{1};
-    bool recording=false,pressureApplied=false,filter=true;BOOL cursorVisible=0;void* hCursor=nullptr;std::mutex cursorMutex;CursorApi cursor=CursorApi::native();unsigned getsSincePublish=0;std::uint64_t frameEnd=0,waitsAtFrameEnd=0;std::uint64_t prevPresent=0,drawOrdinal=0;
+    bool recording=false,pressureApplied=false,filter=true;BOOL cursorVisible=0;void* hCursor=nullptr;std::mutex cursorMutex;CursorApi cursor=CursorApi::native();unsigned getsSincePublish=0;std::uint64_t frameEnd=0,waitsAtFrameEnd=0;std::uint64_t drawOrdinal=0;
+    unsigned framesAhead_=1;PresentMark presentHist[kMaxFramesAhead];   // 0.3.200 (pipeline): see presentCommon
     std::thread::id gameThread=std::this_thread::get_id();
     PoolTuner tuner;TriggerPolicy policy;bool (*capture)(GameSnapshot&,Trigger,std::uint64_t)=nullptr;
+    // 0.3.200 (frame skip): a swap chain's back buffer (the frame's own image); a texture level or cube face (sampled later: never a skippable depth target).
+    // A frame may be skipped only while every draw and clear lands in a back buffer and a standalone depth surface.
+    static bool backBuffer(const ProxyBase* p){return p&&p->parent&&p->parent->kind==Kind::SwapChain;}
+    static bool textureLevel(const ProxyBase* p){return p&&p->parent&&p->parent->kind!=Kind::SwapChain;}
+    bool offscreenTargets()const{
+        if(!st.rtKnown[0]||!backBuffer(st.rt[0])||!st.dsKnown||textureLevel(st.ds))return true;
+        for(unsigned i=1;i<StreamState::kRTs;++i)if(!st.rtKnown[i]||st.rt[i])return true;
+        return false;}
 
     StreamDevice(IDirect3DDevice9* target,IDirect3D9* par,const D3DPRESENT_PARAMETERS* p,Options opt)
-        :coreOwner(new StreamCore(opt.budget)),core(*coreOwner),replayer(core),parent(par),capture(opt.capture){
+        :coreOwner(new StreamCore(opt.budget)),core(*coreOwner),replayer(core,SnapshotPool::capFor(clampFramesAhead(opt.framesAhead))),parent(par),framesAhead_(clampFramesAhead(opt.framesAhead)),capture(opt.capture){
         core.target=target;core.game=this;core.logLine=nullptr;core.readBackLock=opt.readBackLock;st.core=&core;
         if(opt.cursorApi)cursor=*opt.cursorApi;
-        restoreOwner=opt.threadStart;replayer.threadStart=std::move(opt.threadStart);replayer.log=opt.log;replayer.diagnostics=opt.diagnostics;filter=opt.filterRedundant;
+        restoreOwner=opt.threadStart;replayer.frameSkip=opt.frameSkip!=0;replayer.threadStart=std::move(opt.threadStart);replayer.log=opt.log;replayer.diagnostics=opt.diagnostics;filter=opt.filterRedundant;
         if(kDirectReplay&&opt.directReplay&&opt.extension&&opt.rawOf){core.ext=opt.extension;auto f=opt.rawOf;core.reg.rawOf=[f](IUnknown* e,Kind k){return f(e,unsigned(k));};}
         if(p)pp=*p;
         sc0=new StreamSwapChain(&core);sc0->baseline=1;sc0->pp=pp;
@@ -571,7 +595,7 @@ private:
     // locked first, never one that is locked), and drop buffer shadows idle for 120 frames (then the least recent while over the cap).
     // Everything here is game-thread or pool-locked state: nothing the replay thread may read.
     void releaseUnderPressure(){
-        core.q.trim();core.scratch.trim();core.q.resetShadowCap(core.frameNo);makeRoomForShadow(core,0,true,nullptr);dropIdleBufferShadows(core,120);   // (the adaptive buffer-shadow cap goes back to its base first; both kinds of buffer shadow go LRU)
+        core.q.trim();core.scratch.trim();core.q.resetShadowCap(core.frameNo);makeRoomForShadow(core,0,true,nullptr);trimTexSpares(core);dropIdleBufferShadows(core,120);   // 0.3.200 (pipeline): the spare level allocations go too   // (the adaptive buffer-shadow cap goes back to its base first; both kinds of buffer shadow go LRU)
     }
     void finalRelease(){
         st.clear();sc0->comRelease();   // binds and the swap chain's own reference go; the Destroys run before the Target's release

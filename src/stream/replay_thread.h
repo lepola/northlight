@@ -138,6 +138,18 @@ public:
     std::function<void(const char*)> log;               // diagnostics line sink; may be empty
     bool (*diagnostics)()=nullptr;                      // Diagnostics on: the CSTREAM line and the sync-only audit (asked per frame)
     unsigned sampleEvery=600;
+    // 0.3.200 (frame skip): StreamFrameSkip (set before start()). A frame is replayed in SKIP MODE when, at its first command, it and at least one later frame are
+    // completely recorded (presentsRecorded >= ordinal+2: the replay is two frames behind and the game would soon wait for it), the game marked it hazard-free
+    // (StreamCore::FrameHazard) and fewer than kMaxSkipRun frames before it were skipped in a row. Skip mode drops only the frame's draws (indexed, UP, patches)
+    // and Clears, which land in the back buffer and a standalone depth surface (the hazard rule), and its real Present: Northlight's draw hooks, capture,
+    // effects and frame finish (renderer.cpp finishFrame) never see the frame, as if the game had made one longer frame. Everything else runs as recorded:
+    // creates and Destroys, Lock/Unlock data, Update*/StretchRect/ColorFill/ProcessVertices, every Set (the device mirror and StreamState stay exact), state
+    // blocks, Begin/EndScene, query Issues (event queries only, polled as usual), snapshots (activated and released in order). The Present retires with D3D_OK
+    // in presentRing and counts as a replayed frame (endFrame), so the game's Present wait is released. A frame with a sync call cannot be complete at its first
+    // command (the game waited inside it), so it is never skipped. Temporal history stays valid: it is tagged with the view it was drawn with.
+    static constexpr unsigned kMaxSkipRun=2;   // at least every third frame is drawn
+    bool frameSkip=false;
+    std::uint64_t skippedFrames()const{return get(core.q.stats.skippedFrames);}
     // 0.3.192 (CS): replay time is accounted by what it is NOT doing: idleNs is the time spent waiting for commands (written by the replay
     // thread around its blocking wait only, no clock read per command). Busy = wall - idle; the CSTREAM line's replayBusyMs/frame is that
     // difference per window, so it now excludes the per-command timer overhead it used to include.
@@ -146,7 +158,7 @@ public:
     std::uint64_t busyNsTotal()const{const auto w=wallNs(),i=idleNs.load(std::memory_order_relaxed);return w>i?w-i:0;}
     // Diagnostics bookkeeping (the audit's value mirror and touched list) runs only while diagnostics were on at the last frame boundary.
     std::uint64_t auditSets()const{return get(auditSets_);}   // audited Sets recorded by the replay thread (0 while diagnostics are off)
-    explicit Replayer(StreamCore& c):core(c){}
+    explicit Replayer(StreamCore& c,std::size_t snapshotCap=SnapshotPool::DefaultCap):core(c),snapshots(snapshotCap){}   // 0.3.200 (pipeline): SnapshotPool::capFor(StreamFramesAhead)
     ~Replayer(){join();}
     Replayer(const Replayer&)=delete;Replayer& operator=(const Replayer&)=delete;
 
@@ -207,12 +219,13 @@ private:
     GameSnapshot* current_=nullptr;std::optional<ScopedPlayback> playback_;
     std::uint64_t draws_=0;
     std::atomic<std::uint64_t> startNs_{0};
+    bool frameOpen_=false,skipping_=false;unsigned skipRun_=0;   // 0.3.200 (frame skip): replay thread only, see frameSkip
     bool diag_=false;Counter auditSets_{0};   // diag_: diagnostics() as of the last frame boundary (asked once per frame, not per command)
     // audit: the values the game last set this frame, replay side
     DWORD auditRS_[StreamState::kRS]={},auditSamp_[StreamState::kSamplers][StreamState::kSampTypes]={},auditTss_[StreamState::kTSStages][StreamState::kTSTypes]={};
     std::vector<unsigned> touched_;std::vector<bool> touchedFlag_=std::vector<bool>(StreamState::kBits,false);
     struct Avg {double depth=0,bytes=0;unsigned n=0;std::uint64_t maxDepth=0,maxBytes=0;} avg_;
-    std::uint64_t lastIdle_=0,lastPubs_=0,lastSleeps_=0,lastWall_=0,lastPass_=0,lastGameNs_=0,lastGameWait_=0,lastGameFrames_=0,lastPresentNs_=0,lastSyncNs_=0,lastBpNs_=0,lastCmds_=0,lastAnswered_=0,lastSyncCalls_=0,lastFiltered_=0,lastDirect_=0,lastBufRbD_=0,lastBufRbS_=0,lastBufEv_=0,lastBufHot_=0,lastBufRef_=0;unsigned deadLogged_=0;
+    std::uint64_t lastIdle_=0,lastPubs_=0,lastSleeps_=0,lastWall_=0,lastPass_=0,lastGameNs_=0,lastGameWait_=0,lastGameFrames_=0,lastPresentNs_=0,lastSyncNs_=0,lastBpNs_=0,lastCmds_=0,lastAnswered_=0,lastSyncCalls_=0,lastFiltered_=0,lastDirect_=0,lastBufRbD_=0,lastBufRbS_=0,lastBufEv_=0,lastBufHot_=0,lastBufRef_=0,lastTexSkip_=0,lastRbFresh_=0,lastRbRelocked_=0,lastRbNever_=0,lastRbSkip_=0;unsigned deadLogged_=0;
 
     static void captureFpu(unsigned short& cw,unsigned& csr){
         cw=0;csr=0;
@@ -325,10 +338,33 @@ private:
         if(swap){IDirect3DSwapChain9* s=a->swapChain->dead.load()?nullptr:static_cast<IDirect3DSwapChain9*>(a->swapChain->inner);
                  hr=s?s->Present(a->hasSrc?&a->src:nullptr,a->hasDst?&a->dst:nullptr,a->window,dirty,a->flags):D3DERR_INVALIDCALL;}
         else hr=core.target->Present(a->hasSrc?&a->src:nullptr,a->hasDst?&a->dst:nullptr,a->window,dirty);
-        core.presentResult.store(hr);{const std::uint64_t seq=core.q.replayedSeq()+1;auto& e=core.presentRing[seq%StreamCore::kRing];e.hr.store(hr);e.seq.store(seq);}
+        core.presentResult.store(hr);{const std::uint64_t seq=core.q.replayedSeq()+1;auto& e=core.presentRing[core.framesReplayed.load(std::memory_order_relaxed)%StreamCore::kRing];e.hr.store(hr);e.seq.store(seq);}   // 0.3.200 (pipeline): by ordinal (endFrame counts it next)
         endFrame();
     }
+    // 0.3.200 (frame skip): the decision at a frame's first command (see frameSkip). Two atomic loads a frame.
+    void beginFrame(){
+        frameOpen_=true;skipping_=false;
+        if(!frameSkip||skipRun_>=kMaxSkipRun)return;
+        const std::uint64_t k=core.framesReplayed.load(std::memory_order_relaxed);
+        if(core.presentsRecorded.load(std::memory_order_acquire)<k+2)return;
+        const auto& f=core.frameRing[k%StreamCore::kRing];
+        skipping_=f.tag.load(std::memory_order_acquire)==k+1&&f.hazards.load(std::memory_order_relaxed)==0;
+    }
+    // A command skip mode drops (true), or the skipped Present: its seq retires with D3D_OK and the frame is counted.
+    bool skipCommand(const CommandHeader* h){
+        switch((Cmd)h->id){
+        case Cmd::Device_DrawPrimitive:case Cmd::Device_DrawIndexedPrimitive:case Cmd::DrawPrimitiveUP:case Cmd::DrawIndexedPrimitiveUP:
+        case Cmd::Device_DrawRectPatch:case Cmd::Device_DrawTriPatch:case Cmd::Device_Clear:own(core.q.stats.skippedCommands);return true;
+        case Cmd::Present:case Cmd::SwapPresent:{
+            {const std::uint64_t seq=core.q.replayedSeq()+1;auto& e=core.presentRing[core.framesReplayed.load(std::memory_order_relaxed)%StreamCore::kRing];e.hr.store(D3D_OK);e.seq.store(seq);}
+            own(core.q.stats.skippedFrames);
+            if(get(core.q.stats.skippedFrames)==1&&log){char b[200];std::snprintf(b,sizeof b,"CSTREAM frame skip: first skipped frame=%llu (the replay was two frames behind; draws and Present dropped, state and resources applied)",(unsigned long long)core.framesReplayed.load());log(b);}
+            endFrame();return true;}
+        default:return false;
+        }
+    }
     void endFrame(){
+        if(frameOpen_){skipRun_=skipping_?skipRun_+1:0;frameOpen_=false;skipping_=false;}   // 0.3.200 (frame skip): the next command opens the next frame
         core.availableTextureMem.store(core.target->GetAvailableTextureMem());
         pollQueries();
         const std::uint64_t frames=core.framesReplayed.fetch_add(1)+1;
@@ -358,7 +394,7 @@ private:
         }
     }
     // Appends to the CSTREAM line, never past the buffer (n stays below kLine).
-    static constexpr int kLine=1600;
+    static constexpr int kLine=2000;
     __attribute__((format(printf,3,4))) static void put(char* buf,int& n,const char* fmt,...){
         if(n<0||n>=kLine-1)return;va_list ap;va_start(ap,fmt);const int w=std::vsnprintf(buf+n,size_t(kLine-n),fmt,ap);va_end(ap);
         if(w>0)n=n+w<kLine-1?n+w:kLine-1;
@@ -369,6 +405,7 @@ private:
         const double inv=avg_.n?1.0/avg_.n:0.0;
         const std::uint64_t wall=nowNs(),idle=idleNs.load(std::memory_order_relaxed),dWall=wall-lastWall_,dIdle=idle-lastIdle_,dBusy=dWall>dIdle?dWall-dIdle:0;lastWall_=wall;lastIdle_=idle;
         const std::uint64_t pubs=get(s.publishes),sleeps=get(s.consumerSleeps),dPubs=pubs-lastPubs_,dSleeps=sleeps-lastSleeps_;lastPubs_=pubs;lastSleeps_=sleeps;
+        put(buf,n," skipped=%llu",(unsigned long long)get(s.skippedFrames));   // 0.3.200 (frame skip)
         put(buf,n," frames=%llu depthAvg=%.0f depthMax=%llu bytesAvg=%.0f bytesMax=%llu replayBusyMs/frame=%.3f sleeps=%.2f publishes=%.1f dead=%llu answered=%llu synced=%llu syncOnly=%llu snap=%llu/%llu/%llu/%llu",
             (unsigned long long)frames,avg_.depth*inv,(unsigned long long)avg_.maxDepth,avg_.bytes*inv,(unsigned long long)avg_.maxBytes,sampleEvery?dBusy/1e6/sampleEvery:0.0,sampleEvery?double(dSleeps)/sampleEvery:0.0,sampleEvery?double(dPubs)/sampleEvery:0.0,
             (unsigned long long)get(s.deadCreates),(unsigned long long)get(s.stateAnswered),(unsigned long long)get(s.stateSynced),(unsigned long long)get(s.syncOnlySlots),
@@ -385,8 +422,14 @@ private:
              double(cm-lastCmds_)*inv2,double(fl-lastFiltered_)*inv2,double(an-lastAnswered_)*inv2,double(sc-lastSyncCalls_)*inv2,double(dr-lastDirect_)*inv2);
          lastGameNs_=gNs;lastGameWait_=gW;lastPresentNs_=pNs;lastSyncNs_=sNs;lastBpNs_=bNs;lastCmds_=cm;lastFiltered_=fl;lastDirect_=dr;lastAnswered_=an;lastSyncCalls_=sc;}
         {const Memory m=memory();put(buf,n," memMB=%.1f(queue %.1f, bufShadow %.1f, texShadow %.1f, snapshots %.2f)",m.total()/1048576.0,m.queue/1048576.0,m.bufferShadows/1048576.0,m.textureShadows/1048576.0,m.snapshots/1048576.0);}
-        put(buf,n," texShadow=%.1f/%.0fMB hits=%llu fresh=%llu readbacks=%llu evicted=%llu freshUseful=%llu refused=%llu/%.1fMB",double(std::max<std::int64_t>(0,s.texShadowBytes.load()))/1048576.0,double(core.q.texShadowCap())/1048576.0,
-            (unsigned long long)get(s.texShadowHits),(unsigned long long)get(s.texShadowFresh),(unsigned long long)get(s.texShadowReadbacks),(unsigned long long)get(s.texShadowEvicted),(unsigned long long)get(s.texShadowFreshUseful),(unsigned long long)get(s.texShadowRefused),get(s.texShadowRefusedBytes)/1048576.0);
+        put(buf,n," texShadow=%.1f/%.0fMB hits=%llu fresh=%llu readbacks=%llu evicted=%llu freshUseful=%llu refused=%llu/%.1fMB spared=%llu/%llu",double(std::max<std::int64_t>(0,s.texShadowBytes.load()))/1048576.0,double(core.q.texShadowCap())/1048576.0,
+            (unsigned long long)get(s.texShadowHits),(unsigned long long)get(s.texShadowFresh),(unsigned long long)get(s.texShadowReadbacks),(unsigned long long)get(s.texShadowEvicted),(unsigned long long)get(s.texShadowFreshUseful),(unsigned long long)get(s.texShadowRefused),get(s.texShadowRefusedBytes)/1048576.0,
+            (unsigned long long)get(s.texShadowSpared),(unsigned long long)get(s.texShadowSpareReuses));   // 0.3.200 (pipeline): spared=kept/reused
+        // 0.3.196 (task 12): fresh keeps skipped for lack of room, readbacks by cause (fresh drop + re-locked evict + never shadowed); total and per frame in this window.
+        {const std::uint64_t sk=get(s.texShadowFreshSkipped),rf2=get(s.readbackAfterFreshDrop),rr=get(s.readbackAfterRelockedEvict),rn=get(s.readbackNeverShadowed),rs=get(s.readbackAfterFreshSkip);const double f=sampleEvery?1.0/double(sampleEvery):0.0;
+         put(buf,n," texFreshSkipped=%llu(%.2f/frame) texReadbackCause[freshDrop=%llu(%.2f) relockedEvict=%llu(%.2f) neverShadowed=%llu(%.2f) freshSkip=%llu(%.2f)]",(unsigned long long)sk,double(sk-lastTexSkip_)*f,(unsigned long long)rf2,double(rf2-lastRbFresh_)*f,
+             (unsigned long long)rr,double(rr-lastRbRelocked_)*f,(unsigned long long)rn,double(rn-lastRbNever_)*f,(unsigned long long)rs,double(rs-lastRbSkip_)*f);
+         lastTexSkip_=sk;lastRbFresh_=rf2;lastRbRelocked_=rr;lastRbNever_=rn;lastRbSkip_=rs;}
         {const std::uint64_t rbD=get(s.dynShadowReadbacks),rbS=get(s.stShadowReadbacks),evD=get(s.dynShadowEvicted),evS=get(s.stShadowEvicted),evH=get(s.hotShadowEvicted),rf=get(s.relockRefused);
          const double f=sampleEvery?1.0/double(sampleEvery):0.0;
          put(buf,n," bufShadow=%.1f/%.0fMB readbacks/frame=%.2f+%.2f evicted/frame=%.2f(hot %.2f) refused/frame=%.2f grows=%llu large=%.1f/%.0fMB(%llu,%llu) total[readbacks=%llu+%llu evicted=%llu+%llu hot=%llu refused=%llu/%.1fMB]",
@@ -409,6 +452,7 @@ private:
         current_=s;if(s)playback_.emplace(*s);
     }
     void execute(const CommandHeader* h){
+        if(skipping_&&skipCommand(h))return;   // 0.3.200 (frame skip)
         Translator tr{core};
         if(dispatchGenerated(h,tr)){
             if(h->id==(std::uint16_t)Cmd::Device_SetRenderState){const auto* a=reinterpret_cast<const Args_Device_SetRenderState*>(h+1);if(diag_&&unsigned(a->State)<StreamState::kRS){auditRS_[a->State]=a->Value;note(unsigned(a->State));}}
@@ -459,6 +503,7 @@ private:
                 if(!h){if(stopNow_.load())return;continue;}
             }
             if(h->id==(std::uint16_t)Cmd::Stop){q.retire(h);return;}
+            if(!frameOpen_)beginFrame();   // 0.3.200 (frame skip)
             execute(h);
             q.retire(h);
         }

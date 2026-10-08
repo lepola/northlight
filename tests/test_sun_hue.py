@@ -141,7 +141,7 @@ def main():
     assert '?"fallback":g.native>=.5f?"native":"sunHalo"' in cpu
     assert 'float moonStrength=0;' in hue and 'h.moonStrength=normMax(moonTint,h.moon)?1.f:0.f;' in hue
     assert 'value.slotsConsistent=value.slots[1]==packed(bytes,0x17c);' in wmo and '0x1ac);' not in wmo.split('slotsConsistent=',2)[-1][:60] and 'out.slotsProven=slots&&out.slotsConsistent;return true;' in wmo
-    assert 'float skyTransmittance()const{return skyTransmittanceFrame;}' in cpu and cpu.count('skyTransmittanceFrame=std::exp(-depth);') == 1
+    assert 'float skyTransmittance()const{return skyTransmittanceFrame;}' in cpu and cpu.count('a.veil[0]=std::exp(-depth);a.veil[1]=std::exp(-cloudyDepth);') == 1 and cpu.count('skyTransmittanceFrame=cf.active?atmosphere.veil[1]:atmosphere.veil[0];') == 1  # 0.3.200 (jobs): the veil computed in atmosphereWork
     result = dict(game_launched=False, gpu_tested=False, native_policy_passed=True, reference_band10=dict(
         brill=[36, 63, 50], durotar=[225, 67, 1], orgrimmar=[195, 75, 3]), hue=values)
     (fp.output_dir()/'sun-hue-validation.json').write_text(json.dumps(result, indent=2)+'\n')

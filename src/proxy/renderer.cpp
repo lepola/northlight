@@ -38,6 +38,8 @@
 #include "render_thread_probe.h"
 #include "effects_buckets.h"
 #include "draw_gates.h"
+#include "weather_state.h"
+#include "weather_detect.h"
 #include "translucent_depth.h"
 #include "log_rotation.h"
 #include "memory_guard.h"
@@ -193,6 +195,8 @@ template<class T> static uint64_t shaderHash(T* shader, std::vector<DWORD>& word
 #include "saved_state.h"
 
 #include "gpu_profile.h"
+#include "gpu_frame_timer.h" // 0.3.200 (gpu budget)
+#include "gpu_budget.h"
 #include "water_renderer.h"
 #include "world_renderer.h"
 #include "celestial_disc_renderer.h"
@@ -270,10 +274,14 @@ class Device final : public GuardedMirrorDevice {
     std::unique_ptr<NorthlightShadowBlobFilter> shadowBlobs;
     std::unique_ptr<NorthlightWaterRenderer> water;
     std::unique_ptr<NorthlightGpuProfile> gpuProfile;
+    // 0.3.200 (gpu budget): GpuBudgetMs > 0 only: Northlight's GPU time on every effects frame (two timestamps, read back late, never waited on)
+    // feeds the controller; its level goes to the world for the next frames. GpuBudgetMs=0: no query is created, the world stays at level 0.
+    std::unique_ptr<NorthlightGpuFrameTimer> gpuTimer;NorthlightGpuBudget::Controller gpuBudget;std::int64_t gpuBudgetQpc=0;double gpuBudgetLastMs=0;
     std::unique_ptr<NorthlightMemoryDiagnostics::Sampler> memoryDiagnostics; /* also feeds the functional memory guard */
     NorthlightMemoryGuard::Guard memoryGuard;
     IDirect3DTexture9 *scene = nullptr, *depthTex = nullptr, *ao = nullptr;
     IDirect3DSurface9 *sceneSurface = nullptr, *aoSurface = nullptr, *worldDepth = nullptr;
+    D3DSURFACE_DESC worldDepthDesc={};bool worldDepthDescKnown=false; // 0.3.196 (task 12): worldDepth's desc (a held reference, so the object and its desc are fixed); cleared when worldDepth is dropped
     IDirect3DPixelShader9 *aoPS = nullptr, *aoContactBloomPS = nullptr, *compositePS = nullptr;
     // Low bits: 1 terrain, 2 UI. kWaterTag: the water renderer holds a mask shader
     // for it (set at registration, where the water map changes), so non-water
@@ -283,13 +291,55 @@ class Device final : public GuardedMirrorDevice {
     bool drawWaterVS=false; // beforeDraw() result for the current draw
     std::unordered_map<IDirect3DPixelShader9*, int> psTags;
     std::unordered_map<IDirect3DVertexShader9*, uint64_t> vsHashes;
+    // 0.3.196 (task 12): one-entry per-draw vertex shader classification. vsTags, vsHashes and the world's shader maps change only in
+    // CreateVertexShader registration, which bumps vsGeneration first (nothing is ever erased, but a freed address can be registered again).
+    struct VsClass {IDirect3DVertexShader9* vs=nullptr;std::uint32_t gen=~0u;int entry=0;bool wmo=false,world=false,skinned=false;};
+    std::uint32_t vsGeneration=0;VsClass lastVs;unsigned long long vsCacheHits=0,vsCacheMisses=0;
+    const VsClass& classifyVs(IDirect3DVertexShader9* vs){
+        if(lastVs.vs==vs&&lastVs.gen==vsGeneration){++vsCacheHits;return lastVs;}
+        ++vsCacheMisses;auto it=vsTags.find(vs);lastVs.vs=vs;lastVs.gen=vsGeneration;lastVs.entry=it==vsTags.end()?0:it->second;
+        lastVs.wmo=world&&world->recognizesWmo(vs);lastVs.world=world&&world->isWorldShader(vs);lastVs.skinned=world&&world->isSkinnedShader(vs);return lastVs;
+    }
     std::unordered_map<IDirect3DPixelShader9*, uint64_t> psHashes;
     unsigned blobSignatureReports=0;
     NorthlightMirrorAuditSchedule mirrorAuditSchedule;bool mirrorFallbackReported=false;
     UINT width = 0, height = 0;
     D3DFORMAT sceneFormat = D3DFMT_UNKNOWN;
     bool terrain = false, captured = false, applied = false, enabled = true;
+    bool rainBoundary = false; /* 0.3.199 (rain): set by drawHook at a matched rain draw before the boundary, consumed by prepareDrawImpl */
     bool failed = false, projectionValid = false, key10 = false, key12=false;
+    // 0.3.200 (frame markers): diagnostics only, while northlight-frame-markers.txt exists in the game folder at device creation: two 40x40
+    // squares at the left edge whose colour cycles with the frame number. E (upper) is filled right after the world effects, P (lower) right
+    // before the real Present, so a screen recording shows which presented images went through the effects and the replay's Present, in order.
+    bool frameMarkers=false;
+public:
+    // 0.3.200 (pipeline): with StreamFramesAhead >= 2 the replay thread never waits for the game, so the graphics card queue filled with
+    // frames (DXVK allows BackBufferCount+1 in flight) and on macOS the window showed images still being written: horizontal tear bands
+    // from frames several apart, a flicker while moving (gone with d3d9.maxFrameLatency = 1). A non-Ex device cannot ask DXVK for that,
+    // so the replay does it: before each Present it waits until the graphics card finished the previous frame (one EVENT query issued
+    // right after every Present). The game thread is not involved; it stays its frames ahead.
+    bool limitGpuLatency=false;
+private:
+    IDirect3DQuery9* latencyQuery=nullptr;bool latencyPending=false,latencyFailed=false;std::uint64_t latencyWaits=0;double latencyWaitMs=0;
+    void waitPreviousFrameGpu(){
+        if(!latencyPending||!latencyQuery)return;latencyPending=false;
+        if(latencyQuery->GetData(nullptr,0,D3DGETDATA_FLUSH)!=S_FALSE)return;
+        const std::int64_t t0=qpcNow();const double perMs=cpuFrequency.QuadPart>0?1000.0/double(cpuFrequency.QuadPart):0;
+        while(latencyQuery->GetData(nullptr,0,D3DGETDATA_FLUSH)==S_FALSE){if(double(qpcNow()-t0)*perMs>100.0)break;SwitchToThread();} /* a lost device or a stuck query never holds the replay */
+        ++latencyWaits;latencyWaitMs+=double(qpcNow()-t0)*perMs;
+    }
+    void markFrameGpu(){
+        if(!latencyQuery&&!latencyFailed&&(FAILED(ext->CreateQuery(D3DQUERYTYPE_EVENT,&latencyQuery))||!latencyQuery)){latencyQuery=nullptr;latencyFailed=true;logf("CSTREAM GPU latency limit unavailable: no event query");}
+        if(latencyQuery&&SUCCEEDED(latencyQuery->Issue(D3DISSUE_END)))latencyPending=true;
+    }
+    void frameMarker(unsigned slot,unsigned n){
+        IDirect3DSurface9* bb=nullptr;if(FAILED(ext->GetBackBuffer(0,0,D3DBACKBUFFER_TYPE_MONO,&bb))||!bb)return;
+        static const D3DCOLOR palette[2][4]={{0xffff0000,0xff00ff00,0xff0000ff,0xffffffff},{0xffffff00,0xff00ffff,0xffff00ff,0xffff8000}};
+        D3DSURFACE_DESC d={};bb->GetDesc(&d);const LONG top=LONG(d.Height/2)+LONG(slot)*50;
+        const RECT r{0,top,40,top+40};ext->ColorFill(bb,&r,palette[slot&1][n&3]);
+        bb->Release();
+    }
+    int traceWorld=-1; /* 0.3.200 (frame trace): this frame's world->render result (-1 not called, 0 skipped, 1 drawn) */
     unsigned frame = 0, appliedFrames = 0, matchedTerrain = 0, matchedUI = 0, projectionRejects = 0;
     unsigned worldSkippedFrames=0;
     // 0.3.169: one line per run of skipped world frames, with the first and last skipReason().
@@ -322,7 +372,7 @@ class Device final : public GuardedMirrorDevice {
     // sceneMs (previous Present done -> renderEffects entry) and exact counts: DRAWGATE ab.
     bool gateFrame=false,gateUntimed=false;
     struct GateCounts {unsigned prep=0,capture=0,water=0,wmo=0,fullPasses=0,audits=0,blobCalls=0,blobTextures=0,blobClaimed=0,bufferCreates=0,processVertices=0;};
-    struct GateStart {unsigned missingVS=0,terrain=0,ui=0,shadowSwaps=0;std::uint64_t generations=0;};
+    struct GateStart {unsigned missingVS=0,terrain=0,ui=0,shadowSwaps=0;std::uint64_t generations=0,vsHits=0,vsMisses=0;};
     GateCounts gateCounts;GateStart gateStart;
     LARGE_INTEGER gateSceneEnd={};LONGLONG gatePresentDone=0;unsigned gateSceneDraws=0;unsigned long long gateSceneReads=0;
     std::recursive_mutex gateBenchLock; /* private, uncontended: the microbenchmark's lock */
@@ -352,7 +402,7 @@ class Device final : public GuardedMirrorDevice {
         if(!applied||failed)stateBlocks.clear();
         if(!enabled||extensionFault){stateBlocks.clear();if(world)world->releaseStateCache();if(water)water->releaseStateCache();}
         if(world)world->endFrame(!extensionFault);if(water)water->endFrame();if(celestialDiscs)celestialDiscs->endFrame();if(shadowBlobs)shadowBlobs->endFrame();
-        drop(worldDepth); terrain = captured = applied = projectionValid = false;earlyDepth.reset();resetTranslucentCensus(); /* the TRANSLUCENT line is logged before clearFrame */
+        drop(worldDepth);worldDepthDescKnown=false; terrain = captured = applied = projectionValid = false;earlyDepth.reset();resetTranslucentCensus(); /* the TRANSLUCENT line is logged before clearFrame */
     }
     void releaseResources() {
         stateBlocks.clear();clearFrame();
@@ -385,12 +435,16 @@ class Device final : public GuardedMirrorDevice {
     }
     // Swap chain 0's back buffer description only changes through Reset.
     static constexpr bool kCacheBackBufferDesc=true;
-    D3DSURFACE_DESC backDesc={};bool backDescKnown=false;
+    // 0.3.196 (task 12): backSurface is swap chain 0's back buffer identity (no reference; cleared with backDescKnown in Reset, which frees it).
+    D3DSURFACE_DESC backDesc={};bool backDescKnown=false;IDirect3DSurface9* backSurface=nullptr;
     bool fullViewport(D3DSURFACE_DESC& desc,D3DVIEWPORT9* viewport=nullptr) {
         desc={};
         IDirect3DSurface9* rt = nullptr;
         HRESULT rtHR;
-        if(ext->peekRenderTarget(0,rt))rtHR=rt->GetDesc(&desc); // borrowed: no device write before GetDesc
+        if(ext->peekRenderTarget(0,rt)){ // borrowed: no device write before GetDesc
+            if(kCacheBackBufferDesc&&backDescKnown&&backSurface&&rt==backSurface){desc=backDesc;rtHR=D3D_OK;} // the render target is the back buffer itself: same object, same desc
+            else rtHR=rt->GetDesc(&desc);
+        }
         else{
             rtHR=ext->GetRenderTarget(0,&rt);
             if (SUCCEEDED(rtHR)&&rt) {rtHR=rt->GetDesc(&desc);drop(rt);}
@@ -402,9 +456,9 @@ class Device final : public GuardedMirrorDevice {
         else{
             IDirect3DSurface9* back = nullptr;
             backHR=ext->GetBackBuffer(0,0,D3DBACKBUFFER_TYPE_MONO,&back);
-            if(SUCCEEDED(backHR)&&back){backHR=back->GetDesc(&bd);drop(back);}
+            if(SUCCEEDED(backHR)&&back){backHR=back->GetDesc(&bd);backSurface=back;drop(back);}
             else backHR=D3DERR_NOTFOUND;
-            if(SUCCEEDED(backHR)){backDesc=bd;backDescKnown=true;}
+            if(SUCCEEDED(backHR)){backDesc=bd;backDescKnown=true;}else backSurface=nullptr;
         }
         D3DVIEWPORT9 vp={};HRESULT vpHR=ext->GetViewport(&vp);
         bool ok=SUCCEEDED(rtHR)&&SUCCEEDED(backHR)&&SUCCEEDED(vpHR)&&desc.Width>=640&&desc.Height>=360&&
@@ -529,6 +583,8 @@ class Device final : public GuardedMirrorDevice {
         if (!fullViewport(desc) || !resources(desc.Width, desc.Height, desc.Format) || !resolveDepth()) return;
         SavedState saved(ext,&stateBlocks);
         if (!saved.ok) return;
+        // 0.3.200 (gpu budget): the frame timer brackets every effect pass (closed on every return path by the guard, after the profile's end).
+        struct TimerEnd { NorthlightGpuFrameTimer* t; bool open; ~TimerEnd(){if(open)t->end();} } timerEnd{gpuTimer.get(),world&&world->gpuBudgetMs()&&gpuTimer->begin()};
         if(diagnostics())gpuProfile->beginFrame(frame,NorthlightRenderThreadProbe::sampleFrame(frame)); // otherwise no queries; mark/endFrame are no-ops
         effectsBuckets.mark(Bucket::Setup);
         struct ProfileEnd { NorthlightGpuProfile* p; ~ProfileEnd(){p->endFrame();} } profileEnd{gpuProfile.get()};
@@ -539,6 +595,7 @@ class Device final : public GuardedMirrorDevice {
         if(celestial){
             NorthlightCelestial::Context sky;float inverseView[16],projection[3];
             if(world->celestialContext(sky,inverseView,projection)){sunElevation=sky.sun.direction[2];
+                celestialDiscs->setWeatherGain(world->weatherEffects().discGain()); /* 0.3.198 (rain): the discs, glare and veil follow the weather */
                 celestialDiscs->render(saved.targets[0],depthTex,waterMask,width,height,world->legacyFogParameters(),worldMinDepth,worldMaxDepth,nearZ,farZ,projection,inverseView,sky,celestialGlowHue());}
         }
         gpuProfile->mark("CelestialDiscs");
@@ -572,12 +629,13 @@ class Device final : public GuardedMirrorDevice {
         };
         if(!fold&&!legacyComposite())return;
         if(world&&debugMode==0){
+            traceWorld=0;
             if(!world->render(saved.targets[0],depthTex,width,height,sceneFormat,nearZ,farZ,worldMinDepth,worldMaxDepth,worldDebug,gpuProfile.get(),waterMask,fold?scene:nullptr,fold?ao:nullptr)){
                 if(++worldSkippedFrames<=8||(worldSkippedFrames%120==0&&diagnostics()))
                     logf("WORLD skipped frame=%u tick=%lu context=%d ready=%d count=%u reason=%s",frame,(unsigned long)GetTickCount(),world->hasContext(),world->ready(),worldSkippedFrames,world->lastSkipReason());
                 worldSkipLast=world->lastSkipReason();if(!worldSkipRun++){worldSkipStart=GetTickCount();worldSkipFirst=worldSkipLast;
                     if(worldSkipEpisodes<32||diagnostics())logf("WORLD skip episode begin reason=%s",worldSkipFirst);}
-            }else if(worldSkipRun){
+            }else if(traceWorld=1,(frameMarkers?frameMarker(0,frame):void()),worldSkipRun){
                 if(++worldSkipEpisodes<=32||diagnostics())logf("WORLD skip episode reason=%s last=%s frames=%u ms=%lu",worldSkipFirst,worldSkipLast,worldSkipRun,(unsigned long)(GetTickCount()-worldSkipStart));
                 worldSkipRun=0;
             }
@@ -598,26 +656,37 @@ class Device final : public GuardedMirrorDevice {
         if (appliedFrames==1) logf("FIRST EFFECT FRAME: near=%.5f far=%.2f scale=%.4f,%.4f depthRange=%.9g..%.9g (before UI)",nearZ,farZ,scaleX,scaleY,worldMinDepth,worldMaxDepth);
     }
     // One shader query/reference per original draw, shared with shadow capture.
-    template<class Capture> void prepareDraw(Capture capture) {
+    template<class Capture> void prepareDraw(Capture capture,UINT count) {
         mirrorState.gate.noteFirst(mirrorState.gate.drawTid); /* 0.3.180 (D0): the census' first draw */
         dropTerrainShadowSwap();
-        extensionWork("draw capture/effects",[&]{prepareDrawImpl(capture);});
+        extensionWork("draw capture/effects",[&]{prepareDrawImpl(capture,count);});
     }
-    template<class Capture> void prepareDrawImpl(Capture capture) {
+    template<class Capture> void prepareDrawImpl(Capture capture,UINT count) {
         ++drawCalls;
         if(failed||!enabled)return;
+        // 0.3.199 (rain): the effect boundary at the first rain draw (drawHook sets the flag): the composite runs before the game's rain, so the
+        // fog and haze do not paint over the streaks. Same extensionWork region as the UI boundary; renderEffects restores the game's states.
+        if(rainBoundary){rainBoundary=false;if(!applied&&terrain){if(sampled())logf("EFFECT boundary frame=%u draw=%u kind=rain",frame,drawCalls);renderEffects();
+            /* 0.3.199 (rain): the effects end with a state-block Apply, which forgets the mirror's stage-0 texture; the game does not set the same rain
+               texture again for its next rain draws, so without this read they no longer matched (one rain draw per frame counted and blended).
+               The read goes to the device (the game's restored state) and the mirror learns it back. */
+            IDirect3DBaseTexture9* stage0=nullptr;if(SUCCEEDED(ext->GetTexture(0,&stage0)))drop(stage0);}}
         if(applied){
-            if(sampled()){IDirect3DVertexShader9* late=nullptr;
-                if(SUCCEEDED(ext->GetVertexShader(&late))&&late&&world){
-                    if(world->isWorldShader(late))++postEffectWorldDraws;
-                    if(world->isSkinnedShader(late))++postEffectSkinnedDraws;
-                }drop(late);
+            if(sampled()){IDirect3DVertexShader9* late=nullptr;const bool borrowed=ext->peekVertexShader(late); // 0.3.196 (task 12): identity lookup only
+                if((borrowed||(SUCCEEDED(ext->GetVertexShader(&late))&&late))&&world){
+                    const VsClass& vc=classifyVs(late);
+                    if(vc.world)++postEffectWorldDraws;
+                    if(vc.skinned)++postEffectSkinnedDraws;
+                }if(!borrowed)drop(late);
             }return;
         }
-        CpuScope cpu(sampledDrawTimers()?&cpuPrep:nullptr);if(gateFrame)++gateCounts.prep;
+        CpuScope cpu(sampledDrawTimers()?&cpuPrep:nullptr);if(gateFrame){++gateCounts.prep;weatherProbeDraw(count);} /* 0.3.198 (rain): RenderProfile sample frames only, pre-effects draws */
         IDirect3DVertexShader9* vs=nullptr;
-        if(FAILED(ext->GetVertexShader(&vs))||!vs){++missingVS;drop(vs);return;}
-        struct ShaderRelease {IDirect3DVertexShader9*& p;~ShaderRelease(){drop(p);}} shaderRelease{vs};
+        // 0.3.196 (task 12): borrowed (no reference). The shader stays bound through this hook (the game's draw is issued after it); capture AddRefs whatever it keeps,
+        // after renderEffects applied=true stops further use of vs, and resolveDepth's SavedState restores the binding. Released only when not borrowed.
+        const bool borrowedVS=ext->peekVertexShader(vs);
+        if(!borrowedVS&&(FAILED(ext->GetVertexShader(&vs))||!vs)){++missingVS;drop(vs);return;}
+        struct ShaderRelease {IDirect3DVertexShader9*& p;bool borrowed;~ShaderRelease(){if(!borrowed)drop(p);}} shaderRelease{vs,borrowedVS};
         beforeDraw(vs);planTerrainShadowSwap(vs);
         if(world&&!applied&&enabled&&!failed&&projectionValid){
             D3DVIEWPORT9 viewport={};DWORD depthEnabled=FALSE;
@@ -629,7 +698,7 @@ class Device final : public GuardedMirrorDevice {
                 auto rs=[&](D3DRENDERSTATETYPE t){return [this,t,v=DWORD(0),known=false]()mutable{if(!known){ext->GetRenderState(t,&v);known=true;}return v;};};
                 auto zw=rs(D3DRS_ZWRITEENABLE);auto ab=rs(D3DRS_ALPHABLENDENABLE);auto sb=rs(D3DRS_SRCBLEND);auto db=rs(D3DRS_DESTBLEND);auto cw=rs(D3DRS_COLORWRITEENABLE);
                 if(captured&&earlyDepth.earlyCaptured&&NorthlightTranslucentDepth::isUndo(drawWaterVS,zw,ab,sb,db,cw)){captured=false;earlyDepth.undo();++earlyResolveUndone;++earlyResolveUndoneTotal;} /* undo: later opaque or water Z draw after the early resolve */
-                if(terrain&&!captured&&earlyDepth.armed()&&NorthlightTranslucentDepth::shouldResolve(drawWaterVS,zw,ab,sb,db,cw,[&]{return world->isSkinnedShader(vs);})&&earlyDepth.attempt()){ /* 0.3.188 (2A): early depth for translucent actors, every frame, minimum state reads */
+                if(terrain&&!captured&&earlyDepth.armed()&&NorthlightTranslucentDepth::shouldResolve(drawWaterVS,zw,ab,sb,db,cw,[&]{return classifyVs(vs).skinned;})&&earlyDepth.attempt()){ /* 0.3.188 (2A): early depth for translucent actors, every frame, minimum state reads */
                     ExtensionDevice::RawScope raw(*ext);
                     if(resolveDepth()){earlyDepth.success();++earlyResolves;++earlyResolveTotal;if(sampled())earlyResolveAt=censusDraws+1;}}
                 if(sampled()){const unsigned at=++censusDraws; /* 0.3.188 (task 3): read-only census before capture(vs) so no early return hides a draw; sample frames only */
@@ -642,12 +711,12 @@ class Device final : public GuardedMirrorDevice {
                     if(const char* field=ext->audit())logf("MIRROR mismatch field=%s frame=%u; cache disabled, rendering retained",field,frame);
                 }
             }
-            else if(world->isWorldShader(vs)){
+            else if(classifyVs(vs).world){
                 if(++nonWorldCaptureRejects<=4||(nonWorldCaptureRejects%3600==0&&diagnostics()))
                     logf("WORLD non-caster draw rejected: worldDepth=%.7f..%.7f drawDepth=%.7f..%.7f z=%lu states=%d count=%u",worldMinDepth,worldMaxDepth,viewport.MinZ,viewport.MaxZ,(unsigned long)depthEnabled,statesRead,nonWorldCaptureRejects);
             }
         }
-        drop(vs);
+        if(!borrowedVS)drop(vs);
     }
     // Terrain draws run with the game's shadow term neutralised while the
     // extension's shadow maps were composited last frame, so the baked ADT
@@ -658,7 +727,7 @@ class Device final : public GuardedMirrorDevice {
     void planTerrainShadowSwap(IDirect3DVertexShader9* vs){
         if(!drawGates.terrainShadow)return; /* 0.3.187: implied by the line below at every draw of this frame */
         if(!world||applied||!enabled||failed||!terrain||debugMode!=0||worldDebug!=0||!world->terrainShadowActive())return;
-        auto tag=vsTags.find(vs);if(tag==vsTags.end()||(tag->second&kTagMask)!=1)return;
+        if((classifyVs(vs).entry&kTagMask)!=1)return;
         IDirect3DPixelShader9* ps=nullptr;if(FAILED(ext->GetPixelShader(&ps))||!ps)return;
         IDirect3DPixelShader9* replacement=world->terrainShadowReplacement(ps);
         if(!replacement){ps->Release();return;}
@@ -681,7 +750,8 @@ class Device final : public GuardedMirrorDevice {
         if(!water||!drawWaterVS||!water->usable()||!world||!world->hasContext())return; // == recognizesVertex(vs)
         if(!projectionValid||!worldDepth)return;
         CpuScope cost(sampledDrawTimers()?&cpuWaterCapture:nullptr);if(gateFrame)++gateCounts.water;
-        IDirect3DSurface9* currentDepth=nullptr;bool mainDepth=SUCCEEDED(ext->GetDepthStencilSurface(&currentDepth))&&currentDepth==worldDepth;drop(currentDepth);if(!mainDepth)return;
+        IDirect3DSurface9* currentDepth=nullptr;bool mainDepth;if(ext->peekDepthStencilSurface(currentDepth))mainDepth=currentDepth==worldDepth; /* 0.3.196 (task 12): identity compare only, borrowed */
+        else{mainDepth=SUCCEEDED(ext->GetDepthStencilSurface(&currentDepth))&&currentDepth==worldDepth;drop(currentDepth);}if(!mainDepth)return;
         D3DSURFACE_DESC desc={};D3DVIEWPORT9 viewport={};if(!fullViewport(desc,&viewport))return;
         IDirect3DPixelShader9* ps=nullptr;struct PixelRelease {IDirect3DPixelShader9*& p;~PixelRelease(){drop(p);}} releasePS{ps};if(SUCCEEDED(ext->GetPixelShader(&ps))&&ps)water->capture(vs,ps,desc.Width,desc.Height,worldDepth,viewport,userPointer,mirrorState.invalidations,draw);
     }
@@ -690,6 +760,39 @@ class Device final : public GuardedMirrorDevice {
     // texture (skipped when the game's blend cannot be lightened). Applies only while the mod draws actor shadows: effects (F10) and shadows (F9) on, a world
     // context, and 0.3.158 ActorShadows=1 (with 0 the game's blobs are the actor shadows).
     bool blobFilterActive()const{return shadowBlobs&&shadowBlobs->active()&&enabled&&effectKeys.settings.shadows&&!applied&&terrain&&!failed&&world&&world->hasContext()&&world->actorShadowsEnabled();}
+    // 0.3.198 (rain): weather detection. weatherDetect.hot is the one candidate texture the draw hook compares
+    // stage 0 with (weather_detect.h); the sample is what that comparison counted this frame. Both are touched
+    // under the gate only, on whichever thread makes the draw (stream: replay thread; fallback: game thread).
+    static_assert(NorthlightWeatherDetect::kFmtA8R8G8B8==D3DFMT_A8R8G8B8,"weather signature format");
+    NorthlightWeatherDetect::Detector weatherDetect;NorthlightWeather::Tracker weatherTracker;NorthlightWeather::Sample weatherSample;
+    unsigned weatherMistSkips=0,weatherMistUnknown=0,weatherMistOtherStage=0,weatherMistReports=0; /* 0.3.199 (rain mist): this frame's skipped mist draws and diagnostics */
+    LONGLONG weatherTick=0;double weatherLogClock=0;NorthlightWeather::Kind weatherLoggedKind=NorthlightWeather::Kind::None;bool weatherLoggedBlendHigh=false,weatherLoggedBlendLow=false,weatherOffReported=false;
+    // RenderProfile sample frames only: the largest draw before the effects (WEATHER probe), to calibrate detection.
+    struct WeatherProbe {UINT count=0;const void* texture=nullptr;bool known=false,candidate=false,vs=false,ps=false;} weatherProbe;
+    void weatherProbeDraw(UINT count){
+        if(!applied&&weatherStateReports<4&&weatherDetect.hot&&mirrorState.textureKnown[0]&&mirrorState.textures[0]==weatherDetect.hot)weatherDrawStates(count); /* 0.3.199: sample frames only */
+        if(applied||count<=weatherProbe.count)return;
+        weatherProbe.count=count;weatherProbe.known=mirrorState.textureKnown[0];weatherProbe.texture=weatherProbe.known?mirrorState.textures[0]:nullptr; /* borrowed: never dereferenced */
+        weatherProbe.candidate=weatherProbe.texture&&weatherDetect.isCandidate(weatherProbe.texture);weatherProbe.vs=mirrorState.vertexShaderKnown&&mirrorState.vertexShader;weatherProbe.ps=mirrorState.pixelShaderKnown&&mirrorState.pixelShader;
+    }
+    static void weatherLog(const char* line){logf("%s",line);}
+    // 0.3.199: how the game draws its weather (the rain streaks took the colour of what is behind them in the game tests): the blend and
+    // texture-stage states of a detected weather draw, logged for the first 4 such draws of a session, from the RenderProfile sample-frame probe
+    // (weatherProbeDraw: no per-draw cost on other frames; reads, no writes).
+    unsigned weatherStateReports=0;
+    void weatherDrawStates(UINT count){
+        ++weatherStateReports;
+        DWORD rs[10]={};const D3DRENDERSTATETYPE ids[10]={D3DRS_ALPHABLENDENABLE,D3DRS_SRCBLEND,D3DRS_DESTBLEND,D3DRS_BLENDOP,D3DRS_ALPHATESTENABLE,D3DRS_ALPHAREF,D3DRS_ZWRITEENABLE,D3DRS_SEPARATEALPHABLENDENABLE,D3DRS_TEXTUREFACTOR,D3DRS_LIGHTING};
+        for(int i=0;i<10;++i)ext->GetRenderState(ids[i],&rs[i]);
+        DWORD ts[2][6]={};const D3DTEXTURESTAGESTATETYPE tids[6]={D3DTSS_COLOROP,D3DTSS_COLORARG1,D3DTSS_COLORARG2,D3DTSS_ALPHAOP,D3DTSS_ALPHAARG1,D3DTSS_ALPHAARG2};
+        for(int st=0;st<2;++st)for(int i=0;i<6;++i)ext->GetTextureStageState(st,tids[i],&ts[st][i]);
+        IDirect3DPixelShader9* ps=nullptr;const bool hasPS=SUCCEEDED(ext->GetPixelShader(&ps))&&ps;drop(ps);
+        logf("WEATHER draw states prims=%u blend=%lu src=%lu dst=%lu op=%lu alphaTest=%lu ref=%lu zwrite=%lu sepAlpha=%lu tfactor=%08lx lighting=%lu ps=%d "
+             "stage0 color=%lu(%lu,%lu) alpha=%lu(%lu,%lu) stage1 color=%lu(%lu,%lu) alpha=%lu(%lu,%lu)",count,
+             (unsigned long)rs[0],(unsigned long)rs[1],(unsigned long)rs[2],(unsigned long)rs[3],(unsigned long)rs[4],(unsigned long)rs[5],(unsigned long)rs[6],(unsigned long)rs[7],(unsigned long)rs[8],(unsigned long)rs[9],int(hasPS),
+             (unsigned long)ts[0][0],(unsigned long)ts[0][1],(unsigned long)ts[0][2],(unsigned long)ts[0][3],(unsigned long)ts[0][4],(unsigned long)ts[0][5],
+             (unsigned long)ts[1][0],(unsigned long)ts[1][1],(unsigned long)ts[1][2],(unsigned long)ts[1][3],(unsigned long)ts[1][4],(unsigned long)ts[1][5]);
+    }
     // 0.3.187 per-frame draw gates (draw_gates.h, FrameDrawGates=1): latched where every input can
     // rise, never inside a frame: at the end of finishFrameImpl (after F9/F10/F12, setEffects and the
     // retry's failed=false; clearFrame runs before that retry, so it is not the place), in Reset
@@ -744,6 +847,33 @@ class Device final : public GuardedMirrorDevice {
         if(verdict.claim==NorthlightShadowBlobFilter::Claim::Faint)planBlobFaint(verdict.original);
         if(claimed&&blobSignatureReports<4){++blobSignatureReports;IDirect3DVertexShader9* bvs=nullptr;IDirect3DPixelShader9* bps=nullptr;ext->GetVertexShader(&bvs);ext->GetPixelShader(&bps);auto vi=vsHashes.find(bvs);auto pi=psHashes.find(bps);logf("SHADOWBLOB draw signature vs=%016llx ps=%016llx primitives=%u",(unsigned long long)(vi==vsHashes.end()?0:vi->second),(unsigned long long)(pi==psHashes.end()?0:pi->second),count);drop(bvs);drop(bps);}
     }
+    // 0.3.199 (rain): RainBlend. The game draws rain as a 2x modulate (DestColor/SrcColor, alpha only feeds the alpha test), so the streaks take the
+    // background's colour. Around exactly the game's draw (a claimed draw never runs it) the blend becomes SrcAlpha/InvSrcAlpha/Add; the previous
+    // values (the mirror answers the reads) come back right after. Texture stages, alpha test and Z stay the game's.
+    // 0.3.199 (rain mist): armed draws only (it rains). Stage 0 bound to a mist texture -> skip (the 1:4 128x512 ARGB signature is the art
+    // layer's own; the first game test skipped nothing with a 2x-modulate blend check, so any blend). Diagnostics for the WEATHER line:
+    // draws with stage 0 unknown, mist bound on stages 1..3 (sample frames only), and the first 4 matches' draw states.
+    bool mistDraw(UINT count){
+        if(!mirrorState.textureKnown[0]){++weatherMistUnknown;return false;}
+        if(!weatherDetect.isMist(mirrorState.textures[0])){
+            if(gateFrame)for(unsigned st=1;st<4;++st)if(mirrorState.textureKnown[st]&&weatherDetect.isMist(mirrorState.textures[st])){++weatherMistOtherStage;break;} /* diagnostic: RenderProfile sample frames only */
+            return false;
+        }
+        ++weatherMistSkips;weatherDetect.proveMist(mirrorState.textures[0]);
+        if(weatherMistReports<4){++weatherMistReports;logf("WEATHER mist draw (skipped) applied=%d terrain=%d",int(applied),int(terrain));weatherDrawStates(count);--weatherStateReports;}
+        return true;
+    }
+    template<class Draw> HRESULT rainBlendDraw(bool rain,bool claimed,Draw draw){
+        if(!rain)return blobFaintDraw(claimed,draw);
+        return blobFaintDraw(claimed,[&]{
+            static const D3DRENDERSTATETYPE types[4]={D3DRS_ALPHABLENDENABLE,D3DRS_SRCBLEND,D3DRS_DESTBLEND,D3DRS_BLENDOP};
+            static const DWORD want[4]={TRUE,D3DBLEND_SRCALPHA,D3DBLEND_INVSRCALPHA,D3DBLENDOP_ADD};
+            DWORD prev[4]={};bool changed[4]={};
+            for(int i=0;i<4;++i)if(SUCCEEDED(ext->GetRenderState(types[i],&prev[i]))&&prev[i]!=want[i]){changed[i]=true;ext->SetRenderState(types[i],want[i]);}
+            const HRESULT hr=draw();
+            for(int i=0;i<4;++i)if(changed[i])ext->SetRenderState(types[i],prev[i]);
+            return hr;});
+    }
     // One game draw: capture, the native sky and blob claims, the real draw (outside every extension
     // region, so a fault keeps the game's call) and the sky observation. The capture and its order are
     // prepareDraw's in both paths. Gates on: capture and claims share one region (a fault in either
@@ -751,13 +881,16 @@ class Device final : public GuardedMirrorDevice {
     // frame's sky gate is open, the blob test only while its gate is; the observation follows the draw,
     // so it keeps a region of its own. Gates off: the 0.3.184 regions one by one.
     template<class Capture,class Draw> HRESULT drawHook(D3DPRIMITIVETYPE t,UINT count,Capture capture,Draw draw){
-        bool claimed=false;
+        bool claimed=false,rainBlend=false,mist=false;
+        // 0.3.198 (rain): the whole per-draw cost of weather detection, before any other work and in both gate paths: one pointer comparison.
+        if(weatherDetect.hot&&mirrorState.textureKnown[0]&&mirrorState.textures[0]==weatherDetect.hot){weatherSample.primitives+=count;++weatherSample.draws;rainBlend=weatherDetect.hotKind==NorthlightWeather::Kind::Rain&&world&&world->rainBlendSetting();rainBoundary=rainBlend&&terrain&&!applied;} /* 0.3.199 (rain): after applied too (the rest of the rain); the boundary at the first rain draw of a terrain frame */
+        else if(weatherDetect.mistArmed)mist=mistDraw(count); /* 0.3.199 (rain mist): a mist puff in rain is skipped; unarmed, one bool test */
         if(!frameDrawGates){
-            dropBlobFaint();prepareDraw(capture);
+            dropBlobFaint();prepareDraw(capture,count);
             {CpuScope hooks(sampledHookTimer());
                 extensionWork("native sky claim",[&]{skyClaim(t,count,claimed);});
                 if(!claimed&&blobFilterActive())extensionWork("blob shadow filter",[&]{blobFilter(count,claimed);});}
-            const HRESULT hr=blobFaintDraw(claimed,draw);
+            const HRESULT hr=rainBlendDraw(rainBlend,claimed||mist,draw); /* 0.3.199 (rain mist): a mist draw is skipped */
             if(!claimed){CpuScope hooks(sampledHookTimer());extensionWork("native sky observation",[&]{skyObserve(hr,t,count);});}
             return hr;
         }
@@ -766,12 +899,12 @@ class Device final : public GuardedMirrorDevice {
         const bool sky=count<=4&&drawGates.sky;
         const char* stage="draw capture/effects";
         extensionWork(stage,[&]{
-            prepareDrawImpl(capture);
+            prepareDrawImpl(capture,count);
             CpuScope hooks(sampledHookTimer());
             if(sky){stage="native sky claim";skyClaim(t,count,claimed);}
             if(!claimed&&drawGates.blob){stage="blob shadow filter";if(blobFilterActive())blobFilter(count,claimed);}
         });
-        const HRESULT hr=blobFaintDraw(claimed,draw);
+        const HRESULT hr=rainBlendDraw(rainBlend,claimed||mist,draw); /* 0.3.199 (rain mist): a mist draw is skipped */
         if(sky&&!claimed){CpuScope hooks(sampledHookTimer());extensionWork("native sky observation",[&]{skyObserve(hr,t,count);});}
         return hr;
     }
@@ -780,10 +913,28 @@ class Device final : public GuardedMirrorDevice {
         if(gateFrame){++gateCounts.blobCalls;if(count&&count<=256)++gateCounts.blobTextures;}
         const auto verdict=shadowBlobs->claim(count);if(gateFrame&&verdict.claim==NorthlightShadowBlobFilter::Claim::Skip)++gateCounts.blobClaimed;return verdict;
     }
+    // 0.3.196 (task 12): beforeDraw's world depth step (extracted unchanged for testing). False: the draw is rejected (beforeDraw returns).
+    bool bindWorldDepth(const D3DSURFACE_DESC& desc){
+        IDirect3DSurface9* ds=nullptr;D3DSURFACE_DESC dd;
+        // 0.3.196 (task 12): the bound depth is the one worldDepth already holds (a reference, so same object and desc): reuse its cached desc, keep the reference.
+        const bool sameDepth=worldDepth&&worldDepthDescKnown&&ext->peekDepthStencilSurface(ds)&&ds==worldDepth;
+        if(sameDepth){ds=nullptr;dd=worldDepthDesc;}
+        else{
+            ds=nullptr;
+            if (FAILED(ext->GetDepthStencilSurface(&ds)) || !ds) {++depthRejects;return false;}
+            ds->GetDesc(&dd);
+        }
+        if (dd.Width!=desc.Width || dd.Height!=desc.Height) {++depthRejects;drop(ds);return false;}
+        if (dd.Format!=D3DFMT_D24S8 && dd.Format!=D3DFMT_D24X8 && dd.Format!=(D3DFORMAT)MAKEFOURCC('I','N','T','Z')) {
+            logf("DISABLED: unsupported world depth format %u",unsigned(dd.Format));failed=true;drop(ds);return false;
+        }
+        if(!sameDepth){drop(worldDepth);worldDepthDescKnown=false;worldDepth=ds;worldDepthDesc=dd;worldDepthDescKnown=true;}
+        return true;
+    }
     void beforeDraw(IDirect3DVertexShader9* vs) {
-        auto it=vsTags.find(vs); const int entry=it==vsTags.end()?0:it->second; int tag=entry&kTagMask;
+        const VsClass& vc=classifyVs(vs); const int entry=vc.entry; int tag=entry&kTagMask;
         drawWaterVS=(entry&kWaterTag)!=0;
-        bool wmo=tag!=1&&world&&world->recognizesWmo(vs);if(gateFrame&&wmo)++gateCounts.wmo;
+        bool wmo=tag!=1&&vc.wmo;if(gateFrame&&wmo)++gateCounts.wmo;
         if(wmo&&projectionValid&&world->hasContext())return; // allow recovery after a terrain context rejection
         if (tag==1||wmo) {
             if(tag==1)++terrainDraws;
@@ -799,14 +950,7 @@ class Device final : public GuardedMirrorDevice {
             if(wmo&&!world->wmoContext(vs))return;
             if(!wmo&&world)world->terrainContext();
             projectionValid=true;
-            IDirect3DSurface9* ds=nullptr;
-            if (FAILED(ext->GetDepthStencilSurface(&ds)) || !ds) {++depthRejects;return;}
-            D3DSURFACE_DESC dd; ds->GetDesc(&dd);
-            if (dd.Width!=desc.Width || dd.Height!=desc.Height) {++depthRejects;drop(ds);return;}
-            if (dd.Format!=D3DFMT_D24S8 && dd.Format!=D3DFMT_D24X8 && dd.Format!=(D3DFORMAT)MAKEFOURCC('I','N','T','Z')) {
-                logf("DISABLED: unsupported world depth format %u",unsigned(dd.Format));failed=true;drop(ds);return;
-            }
-            drop(worldDepth); worldDepth=ds;
+            if(!bindWorldDepth(desc))return;
             if(captured&&earlyDepth.earlyCaptured){earlyDepth.undo();++earlyResolveUndone;++earlyResolveUndoneTotal;} /* 0.3.188 (2A): a terrain draw after the early resolve: the UI-time resolve redoes it */
             terrain=true; captured=false;
             resources(desc.Width,desc.Height,desc.Format);
@@ -824,7 +968,7 @@ class Device final : public GuardedMirrorDevice {
             if (isUI && SUCCEEDED(ext->GetVertexShaderConstantF(3,w,1)) &&
                 std::fabs(w[0])+std::fabs(w[1])+std::fabs(w[2])<.001f && std::fabs(w[3]-1.f)<.001f){
                 if(sampled()){DWORD z=0,zw=0,blend=0;ext->GetRenderState(D3DRS_ZENABLE,&z);ext->GetRenderState(D3DRS_ZWRITEENABLE,&zw);ext->GetRenderState(D3DRS_ALPHABLENDENABLE,&blend);
-                    logf("EFFECT boundary frame=%u draw=%u z=%lu zwrite=%lu blend=%lu",frame,drawCalls,(unsigned long)z,(unsigned long)zw,(unsigned long)blend);}
+                    logf("EFFECT boundary frame=%u draw=%u kind=ui z=%lu zwrite=%lu blend=%lu",frame,drawCalls,(unsigned long)z,(unsigned long)zw,(unsigned long)blend);}
                 renderEffects();
             }
         }
@@ -847,9 +991,9 @@ public:
     bool setExclusiveOwner(bool on){return mirrorState.gate.setExclusive(on);} /* 0.3.192 (CS): one thread makes every Device call (mirror_guard.h) */
     HRESULT STDMETHODCALLTYPE SetCursorProperties(UINT XHotSpot, UINT YHotSpot, IDirect3DSurface9* pCursorBitmap) override{Guard mirrorLock(mirrorState.gate);return ext->SetCursorProperties(XHotSpot, YHotSpot, mirrorResources.unwrap(pCursorBitmap));}
     HRESULT STDMETHODCALLTYPE GetBackBuffer(UINT iSwapChain, UINT iBackBuffer, D3DBACKBUFFER_TYPE Type, IDirect3DSurface9** ppBackBuffer) override{Guard mirrorLock(mirrorState.gate);HRESULT hr=ext->GetBackBuffer(iSwapChain, iBackBuffer, Type, ppBackBuffer);if(SUCCEEDED(hr)){mirrorResources.wrap(ppBackBuffer);}return hr;}
-    HRESULT STDMETHODCALLTYPE CreateTexture(UINT Width, UINT Height, UINT Levels, DWORD Usage, D3DFORMAT Format, D3DPOOL Pool, IDirect3DTexture9** ppTexture, HANDLE* pSharedHandle) override{Guard mirrorLock(mirrorState.gate);HRESULT hr=ext->CreateTexture(Width, Height, Levels, Usage, Format, Pool, ppTexture, pSharedHandle);if(SUCCEEDED(hr)){NorthlightReplayDrawState::noteTextureFormat(Format);mirrorResources.wrap(ppTexture);}return hr;}
-    HRESULT STDMETHODCALLTYPE CreateVolumeTexture(UINT Width, UINT Height, UINT Depth, UINT Levels, DWORD Usage, D3DFORMAT Format, D3DPOOL Pool, IDirect3DVolumeTexture9** ppVolumeTexture, HANDLE* pSharedHandle) override{Guard mirrorLock(mirrorState.gate);HRESULT hr=ext->CreateVolumeTexture(Width, Height, Depth, Levels, Usage, Format, Pool, ppVolumeTexture, pSharedHandle);if(SUCCEEDED(hr)){NorthlightReplayDrawState::noteTextureFormat(Format);mirrorResources.wrap(ppVolumeTexture);}return hr;}
-    HRESULT STDMETHODCALLTYPE CreateCubeTexture(UINT EdgeLength, UINT Levels, DWORD Usage, D3DFORMAT Format, D3DPOOL Pool, IDirect3DCubeTexture9** ppCubeTexture, HANDLE* pSharedHandle) override{Guard mirrorLock(mirrorState.gate);HRESULT hr=ext->CreateCubeTexture(EdgeLength, Levels, Usage, Format, Pool, ppCubeTexture, pSharedHandle);if(SUCCEEDED(hr)){NorthlightReplayDrawState::noteTextureFormat(Format);mirrorResources.wrap(ppCubeTexture);}return hr;}
+    HRESULT STDMETHODCALLTYPE CreateTexture(UINT Width, UINT Height, UINT Levels, DWORD Usage, D3DFORMAT Format, D3DPOOL Pool, IDirect3DTexture9** ppTexture, HANDLE* pSharedHandle) override{Guard mirrorLock(mirrorState.gate);HRESULT hr=ext->CreateTexture(Width, Height, Levels, Usage, Format, Pool, ppTexture, pSharedHandle);if(SUCCEEDED(hr)){NorthlightReplayDrawState::noteTextureFormat(Format);weatherDetect.noteCreate(static_cast<IDirect3DBaseTexture9*>(*ppTexture),Width,Height,Levels,Format); /* 0.3.198 (rain): the raw pointer, before wrap */mirrorResources.wrap(ppTexture);}return hr;}
+    HRESULT STDMETHODCALLTYPE CreateVolumeTexture(UINT Width, UINT Height, UINT Depth, UINT Levels, DWORD Usage, D3DFORMAT Format, D3DPOOL Pool, IDirect3DVolumeTexture9** ppVolumeTexture, HANDLE* pSharedHandle) override{Guard mirrorLock(mirrorState.gate);HRESULT hr=ext->CreateVolumeTexture(Width, Height, Depth, Levels, Usage, Format, Pool, ppVolumeTexture, pSharedHandle);if(SUCCEEDED(hr)){NorthlightReplayDrawState::noteTextureFormat(Format);weatherDetect.forget(static_cast<IDirect3DBaseTexture9*>(*ppVolumeTexture)); /* 0.3.198 (rain): address reuse */mirrorResources.wrap(ppVolumeTexture);}return hr;}
+    HRESULT STDMETHODCALLTYPE CreateCubeTexture(UINT EdgeLength, UINT Levels, DWORD Usage, D3DFORMAT Format, D3DPOOL Pool, IDirect3DCubeTexture9** ppCubeTexture, HANDLE* pSharedHandle) override{Guard mirrorLock(mirrorState.gate);HRESULT hr=ext->CreateCubeTexture(EdgeLength, Levels, Usage, Format, Pool, ppCubeTexture, pSharedHandle);if(SUCCEEDED(hr)){NorthlightReplayDrawState::noteTextureFormat(Format);weatherDetect.forget(static_cast<IDirect3DBaseTexture9*>(*ppCubeTexture)); /* 0.3.198 (rain): address reuse */mirrorResources.wrap(ppCubeTexture);}return hr;}
     HRESULT STDMETHODCALLTYPE CreateRenderTarget(UINT Width, UINT Height, D3DFORMAT Format, D3DMULTISAMPLE_TYPE MultiSample, DWORD MultisampleQuality, WINBOOL Lockable, IDirect3DSurface9** ppSurface, HANDLE* pSharedHandle) override{Guard mirrorLock(mirrorState.gate);HRESULT hr=ext->CreateRenderTarget(Width, Height, Format, MultiSample, MultisampleQuality, Lockable, ppSurface, pSharedHandle);if(SUCCEEDED(hr)){mirrorResources.wrap(ppSurface);}return hr;}
     HRESULT STDMETHODCALLTYPE CreateDepthStencilSurface(UINT Width, UINT Height, D3DFORMAT Format, D3DMULTISAMPLE_TYPE MultiSample, DWORD MultisampleQuality, WINBOOL Discard, IDirect3DSurface9** ppSurface, HANDLE* pSharedHandle) override{Guard mirrorLock(mirrorState.gate);HRESULT hr=ext->CreateDepthStencilSurface(Width, Height, Format, MultiSample, MultisampleQuality, Discard, ppSurface, pSharedHandle);if(SUCCEEDED(hr)){mirrorResources.wrap(ppSurface);}return hr;}
     HRESULT STDMETHODCALLTYPE UpdateSurface(IDirect3DSurface9 *src_surface, const RECT *src_rect, IDirect3DSurface9 *dst_surface, const POINT *dst_point) override{Guard mirrorLock(mirrorState.gate);return ext->UpdateSurface(mirrorResources.unwrap(src_surface), src_rect, mirrorResources.unwrap(dst_surface), dst_point);}
@@ -891,10 +1035,12 @@ public:
     Device(IDirect3DDevice9* d,IDirect3D9* p):GuardedMirrorDevice(d,&mirrorState),parent(p),mirrorResources(this,mirrorState.gate,&mirrorEscape,&mirrorState,d),ext(new ExtensionDevice(d,&mirrorState)),stateBlocks(ext) {
         mirrorState.gate.ownerTid=MirrorGuard::threadId(); /* 0.3.180 (D0): the CreateDevice caller */
         mirrorState.gate.reportContext=this;mirrorState.gate.report=&gateForeignReport;
-        parent->AddRef(); QueryPerformanceFrequency(&cpuFrequency); gpuProfile=std::make_unique<NorthlightGpuProfile>(ext); world=std::make_unique<WorldRenderer>(ext);world->setEffectsBuckets(&effectsBuckets);
+        parent->AddRef(); QueryPerformanceFrequency(&cpuFrequency); gpuProfile=std::make_unique<NorthlightGpuProfile>(ext);gpuTimer=std::make_unique<NorthlightGpuFrameTimer>(ext); world=std::make_unique<WorldRenderer>(ext);world->setEffectsBuckets(&effectsBuckets);
         world->setConstantEpochSource({&mirrorState.constantEpoch,&mirrorState}); /* 0.3.180 (C1): read in place under the draw's gate */
-        char skyRoot[MAX_PATH*3];WideCharToMultiByte(CP_UTF8,0,rootPath,-1,skyRoot,sizeof skyRoot,nullptr,nullptr);celestialDiscs=std::make_unique<NorthlightCelestialDiscRenderer>(ext,std::string(skyRoot)+"world-cache/celestial");celestialDiscs->setTerrainSource([this]{return world->celestialTerrainGeneration();},[this](unsigned body,const float* matrix){return world->drawCelestialTerrain(body,matrix);},[this](unsigned body){world->noteCelestialTerrainReuse(body);});celestialDiscs->setIdentityMap([this](std::uintptr_t exposed){return mirrorResources.rawOf(exposed,!mirrorState.enabled);});shadowBlobs=std::make_unique<NorthlightShadowBlobFilter>(ext,world->blobShadowStrength());water=std::make_unique<NorthlightWaterRenderer>(ext); logf("D3D9 device wrapped. Ctrl+Shift+F7 fog; F8 GI; F9 shadows; F10 all effects; F12 world debug (all with Ctrl+Shift). F11 unassigned. Components start ON; GI cache stays warm.");
+        char skyRoot[MAX_PATH*3];WideCharToMultiByte(CP_UTF8,0,rootPath,-1,skyRoot,sizeof skyRoot,nullptr,nullptr);celestialDiscs=std::make_unique<NorthlightCelestialDiscRenderer>(ext,std::string(skyRoot)+"world-cache/celestial");celestialDiscs->setTerrainSource([this]{return world->celestialTerrainGeneration();},[this](unsigned body,const float* matrix){return world->drawCelestialTerrain(body,matrix);},[this](unsigned body){world->noteCelestialTerrainReuse(body);});celestialDiscs->setIdentityMap([this](std::uintptr_t exposed){return mirrorResources.rawOf(exposed,!mirrorState.enabled);});shadowBlobs=std::make_unique<NorthlightShadowBlobFilter>(ext,world->blobShadowStrength());shadowBlobs->setTexturePeek([](void* e,DWORD stage,IDirect3DBaseTexture9*& out){return static_cast<ExtensionDevice*>(e)->peekTexture(stage,out);},ext); /* 0.3.196 (task 12): borrowed stage-0 identity */water=std::make_unique<NorthlightWaterRenderer>(ext); logf("D3D9 device wrapped. Ctrl+Shift+F7 fog; F8 GI; F9 shadows; F10 all effects; F12 world debug (all with Ctrl+Shift). F11 unassigned. Components start ON; GI cache stays warm.");
         frameDrawGates=world->frameDrawGates();latchDrawGates(); /* 0.3.187: after the renderers exist */
+        {wchar_t markers[MAX_PATH];if(swprintf(markers,MAX_PATH,L"%lsnorthlight-frame-markers.txt",rootPath)>0&&GetFileAttributesW(markers)!=INVALID_FILE_ATTRIBUTES){frameMarkers=true;logf("FRAMEMARKERS on: E after the world effects, P before Present");}}
+        weatherDetect.sink=&weatherLog; /* 0.3.198 (rain) */
         // The async sweep feeds the memory guard (always) and the periodic MEMORY line
         // (Diagnostics only). Allocation admission stays synchronous in WorldRenderer.
         try{memoryDiagnostics=std::make_unique<NorthlightMemoryDiagnostics::Sampler>(&queryAddressSpace);}
@@ -908,7 +1054,7 @@ public:
         memmap("destroy-begin");
         logGateThreads("destroy");
         memoryDiagnostics.reset();
-        dropBlobFaint();shadowBlobs.reset();celestialDiscs.reset();gpuProfile.reset();water.reset();world.reset();releaseResources();
+        dropBlobFaint();shadowBlobs.reset();celestialDiscs.reset();gpuProfile.reset();gpuTimer.reset();drop(latencyQuery);water.reset();world.reset();releaseResources();
         stateBlocks.clear();ext->Release();ext=nullptr;
         const ULONG backendReferences=real->Release();parent->Release();
         logf("DEVICE lifetime event=destroy-end id=%ld live=%ld backendReleaseCount=%lu tick=%lu",diagnosticId,InterlockedDecrement(&liveDevices),(unsigned long)backendReferences,(unsigned long)GetTickCount());
@@ -923,8 +1069,8 @@ public:
     ULONG STDMETHODCALLTYPE Release() override {auto n=InterlockedDecrement(&refs);if(!n)delete this;return n;}
     HRESULT STDMETHODCALLTYPE GetDirect3D(IDirect3D9** out) override { Guard mirrorLock(mirrorState.gate);if(!out)return D3DERR_INVALIDCALL;*out=parent;parent->AddRef();return D3D_OK;}
     HRESULT STDMETHODCALLTYPE Reset(D3DPRESENT_PARAMETERS* pp) override { Guard mirrorLock(mirrorState.gate);
-        frameIntervals.reset();frameCost.reset();backDescKnown=false;
-        NorthlightTrackedBuffers::invalidateAll();gpuProfile->reset(); releaseResources(); if(world)world->reset();if(water)water->reset();if(celestialDiscs)celestialDiscs->reset();if(shadowBlobs)shadowBlobs->reset(); failed=false;latchDrawGates();
+        frameIntervals.reset();frameCost.reset();backDescKnown=false;backSurface=nullptr;
+        NorthlightTrackedBuffers::invalidateAll();gpuProfile->reset();gpuTimer->reset();gpuBudgetQpc=0;drop(latencyQuery);latencyPending=false;latencyFailed=false; releaseResources(); if(world)world->reset();if(water)water->reset();if(celestialDiscs)celestialDiscs->reset();if(shadowBlobs)shadowBlobs->reset(); weatherDetect.reset();weatherSample={}; /* 0.3.198 (rain) */failed=false;latchDrawGates();
         HRESULT hr=ext->Reset(pp); logf("Reset HRESULT=0x%08lx",(unsigned long)hr); return hr;
     }
     // Frame boundary only (after clearFrame()): no draw of the finished frame
@@ -956,7 +1102,7 @@ public:
     // 0.3.154 microbenchmark (DRAWGATE lines, at log time): GateBenchIters x each per-draw primitive,
     // ns per op including the loop. The gate is held here, so the lock is a private recursive_mutex.
     static constexpr unsigned GateBenchIters=256;
-    struct GateBench {double lockNs=-1,findNs=-1,getVsNs=-1,qpcNs=-1,ownerNs=-1;unsigned findHits=0;};
+    struct GateBench {double lockNs=-1,findNs=-1,getVsNs=-1,qpcNs=-1,ownerNs=-1,weatherNs=-1;unsigned findHits=0;};
     GateBench gateBench(){
         GateBench b;if(cpuFrequency.QuadPart<=0)return b;const double ns=1e9/double(cpuFrequency.QuadPart);
         LARGE_INTEGER t0={},t1={},t={};
@@ -974,6 +1120,10 @@ public:
         b.getVsNs=double(t1.QuadPart-t0.QuadPart)*ns/GateBenchIters;mirrorState.answered=answered;mirrorState.forwarded=forwarded;
         QueryPerformanceCounter(&t0);for(unsigned i=0;i<GateBenchIters;++i)QueryPerformanceCounter(&t);QueryPerformanceCounter(&t1);
         b.qpcNs=double(t1.QuadPart-t0.QuadPart)*ns/(GateBenchIters+1);
+        // 0.3.198 (rain): the draw hook's weather comparison, hot set and matching (the worst case), on a throwaway sample.
+        {const void* volatile benchHot=&b;const void* volatile benchTexture=&b;NorthlightWeather::Sample sample;
+            QueryPerformanceCounter(&t0);for(unsigned i=0;i<GateBenchIters;++i){const void* hot=benchHot;if(hot&&!applied&&benchTexture==hot){sample.primitives+=i;++sample.draws;}}QueryPerformanceCounter(&t1);
+            b.weatherNs=double(t1.QuadPart-t0.QuadPart)*ns/GateBenchIters;}
         b.findHits=unsigned(hits);return b;
     }
     // 0.3.154: one DRAWGATE ab line per RenderProfile sample frame; -1 = not measured.
@@ -990,13 +1140,13 @@ public:
         const GateBench b=gateBench();const GateCounts& n=gateCounts;
         if(NorthlightRenderThreadProbe::profiling())logf("DRAWGATE ab frame=%u mode=%c perDrawTimers=%u applied=%u far=%u captureSkipped=%u draws=%u sceneDraws=%u sceneMs=%.4f sceneReads=%llu frameReads=%llu qpcNs=%.1f "
             "drawGateMs=%.4f prepMs=%.4f captureMs=%.4f waterMs=%.4f effectsMs=%.4f p=%u c=%u w=%u missingVS=%u terrain=%u wmo=%u ui=%u fullPasses=%u shadowSwaps=%u audits=%u "
-            "blobCalls=%u blobTextures=%u blobClaimed=%u gameCalls=%u perfCalls=%u bufferGenerations=%llu bufferCreates=%u processVertices=%u benchIters=%u lockNs=%.1f findNs=%.1f findHits=%u getVsNs=%.1f qpcBackNs=%.1f ownerNs=%.1f acqDevice=%u acqRegistry=%u acqResource=%u acqOther=%u",
+            "blobCalls=%u blobTextures=%u blobClaimed=%u gameCalls=%u perfCalls=%u bufferGenerations=%llu bufferCreates=%u processVertices=%u benchIters=%u lockNs=%.1f findNs=%.1f findHits=%u getVsNs=%.1f qpcBackNs=%.1f ownerNs=%.1f acqDevice=%u acqRegistry=%u acqResource=%u acqOther=%u vsCacheHits=%llu vsCacheMisses=%llu weatherDraws=%u weatherPrims=%u weatherNs=%.1f",
             sampleFrame,timed?'T':'U',unsigned(timed),unsigned(frameApplied),unsigned(world&&world->lastFarDrawn()),unsigned(world&&world->captureSkippedLastFrame()),drawCalls-frameStartDrawCalls,scene?gateSceneDraws-frameStartDrawCalls:0u,
             scene?double(gateSceneEnd.QuadPart-gatePresentDone)*ms:-1.0,scene?gateSceneReads-frameStartScopeReads:0ull,frameReads,qpcNs,
             timed?std::max(0.0,double(cpuPrep-cpuCapture-cpuEffects)*ms):-1.0,timed?cpuPrep*ms:-1.0,timed?cpuCapture*ms:-1.0,timed?cpuWaterCapture*ms:-1.0,cpuEffects*ms,
             n.prep,n.capture,n.water,missingVS-gateStart.missingVS,terrainDraws-gateStart.terrain,n.wmo,uiDraws-gateStart.ui,n.fullPasses,terrainShadowDraws-gateStart.shadowSwaps,n.audits,
             n.blobCalls,n.blobTextures,n.blobClaimed,gameCalls,perf,generations,n.bufferCreates,n.processVertices,GateBenchIters,b.lockNs,b.findNs,b.findHits,b.getVsNs,b.qpcNs,
-            b.ownerNs,acqDevice,acqRegistry,acqResource,acqOther);
+            b.ownerNs,acqDevice,acqRegistry,acqResource,acqOther,vsCacheHits-gateStart.vsHits,vsCacheMisses-gateStart.vsMisses,weatherSample.draws,weatherSample.primitives,b.weatherNs); /* 0.3.198 (rain): derived from the sample, no per-draw counter */
     }
     void finishFrame() {
         Guard mirrorLock(mirrorState.gate);
@@ -1004,12 +1154,54 @@ public:
         if(extensionFault){clearFrame();return;}
         extensionWork("frame finish",[&]{finishFrameImpl();});
     }
+    // 0.3.198 (rain): frame end, on the finishing thread, under the gate: the frame's sample into the tracker, the state to the
+    // world, the hot candidate rotated on every frame it counted no draws, and the WEATHER lines.
+    void weatherFrame(unsigned sampleFrame){
+        namespace W=NorthlightWeather;
+        if(gateFrame){logWeatherProbe(sampleFrame);weatherProbe={};}
+        LARGE_INTEGER now={};double dt=0;
+        if(cpuFrequency.QuadPart>0&&QueryPerformanceCounter(&now)){if(weatherTick)dt=double(now.QuadPart-weatherTick)/double(cpuFrequency.QuadPart);weatherTick=now.QuadPart;}
+        if(!mirrorState.enabled){weatherDetect.setOff(true);if(!weatherOffReported){weatherOffReported=true;logf("WEATHER detect=off (mirror inactive)");}}
+        weatherSample.kind=weatherSample.draws?weatherDetect.hotKind:W::Kind::None;
+        weatherTracker.frame(weatherSample,float(dt));const W::State& st=weatherTracker.state();
+        const bool counted=weatherSample.draws!=0;const W::Sample frameSample=weatherSample;weatherSample={};
+        weatherDetect.endFrame(counted); /* hot drew: it stays; otherwise the next candidate (the tracker's hold bridges the rotation) */
+        if(world)world->setWeather(st);
+        // 0.3.199 (rain mist): armed for the next frame while the weather is rain (the tracker's hold bridges detection gaps) and RainBlend is on.
+        weatherDetect.mistArmed=mirrorState.enabled&&st.kind==W::Kind::Rain&&world&&world->rainBlendSetting()&&weatherDetect.mistCount();
+        const unsigned mistSkips=weatherMistSkips,mistUnknown=weatherMistUnknown,mistOther=weatherMistOtherStage;weatherMistSkips=weatherMistUnknown=weatherMistOtherStage=0;
+        const bool high=st.blend>=W::kBlendLogHigh,low=st.blend>=W::kBlendLogLow;
+        weatherLogClock+=dt;
+        const bool change=st.kind!=weatherLoggedKind||high!=weatherLoggedBlendHigh||low!=weatherLoggedBlendLow;
+        if(change||(diagnostics()&&st.kind!=W::Kind::None&&weatherLogClock>=10.0)){
+            weatherLogClock=0;weatherLoggedKind=st.kind;weatherLoggedBlendHigh=high;weatherLoggedBlendLow=low;
+            logf("WEATHER kind=%s prims=%u draws=%u intensity=%.3f blend=%.3f candidates=%u generation=%u hot=%p mists=%u mistArmed=%d mistSkips=%u mistUnknownStage0=%u mistOtherStage=%u mistOverflows=%u",W::kindName(st.kind),frameSample.primitives,frameSample.draws,st.intensity,st.blend,weatherDetect.count(),weatherDetect.generation,weatherDetect.hot,weatherDetect.mistCount(),int(weatherDetect.mistArmed),mistSkips,mistUnknown,mistOther,weatherDetect.mistOverflows);
+        }
+    }
+    void logWeatherProbe(unsigned sampleFrame){
+        logf("WEATHER probe frame=%u maxDrawPrims=%u tex=%p known=%d candidate=%d vs=%d ps=%d hot=%p hotDraws=%u tall=%u overflows=%u",sampleFrame,weatherProbe.count,weatherProbe.texture,int(weatherProbe.known),int(weatherProbe.candidate),int(weatherProbe.vs),int(weatherProbe.ps),weatherDetect.hot,weatherSample.draws,weatherDetect.tallSeen,weatherDetect.overflows);
+    }
+    // 0.3.200 (gpu budget): once per frame: a finished timer reading (if any) updates the controller and the world's level; a level change is
+    // logged (the first 32 always, later with Diagnostics), the state on RenderProfile sample frames. GpuBudgetMs=0: level 0, nothing measured.
+    void gpuBudgetFrame(){
+        const unsigned budget=world?world->gpuBudgetMs():0;
+        if(!budget){gpuBudget.reset();gpuBudgetQpc=0;if(world)world->setGpuBudgetLevel(0);return;}
+        double ms=0;
+        if(gpuTimer&&gpuTimer->poll(ms)){const std::int64_t now=qpcNow();
+            const float dt=gpuBudgetQpc&&cpuFrequency.QuadPart>0?float(double(now-gpuBudgetQpc)/double(cpuFrequency.QuadPart)):0.f;gpuBudgetQpc=now;gpuBudgetLastMs=ms;
+            const unsigned before=gpuBudget.level;world->setGpuBudgetLevel(gpuBudget.update(float(budget),float(ms),dt));
+            if(gpuBudget.level!=before&&(gpuBudget.changes<=32||diagnostics()))
+                logf("GPUBUDGET level %u -> %u smoothed=%.3f budget=%u changes=%u",before,gpuBudget.level,double(gpuBudget.smoothed),budget,gpuBudget.changes);}
+        if(limitGpuLatency&&sampled()&&NorthlightRenderThreadProbe::profiling()){logf("CSTREAM GPU latency waits=%llu waitMs=%.1f",(unsigned long long)latencyWaits,latencyWaitMs);latencyWaits=0;latencyWaitMs=0;}
+        if(sampled()&&NorthlightRenderThreadProbe::profiling())logf("GPUBUDGET ms=%.3f smoothed=%.3f budget=%.1f level=%u",gpuBudgetLastMs,double(gpuBudget.smoothed),double(budget),gpuBudget.level);
+    }
     void finishFrameImpl() {
         const auto frameEffects=effectKeys.settings;const bool frameEnabled=enabled;
         LARGE_INTEGER intervalTick={};NorthlightFrameIntervals::Report intervalReport;
         if(diagnostics()&&QueryPerformanceCounter(&intervalTick)&&frameIntervals.sample(intervalTick.QuadPart,cpuFrequency.QuadPart,intervalReport))
             logf("FRAME interval device=%ld frame=%u tick=%lu enabled=%d samples=%u meanMs=%.3f p50Ms=%.3f p95Ms=%.3f maxMs=%.3f fps=%.2f gi=%u shadows=%u fog=%u",diagnosticId,frame,(unsigned long)GetTickCount(),enabled,intervalReport.count,intervalReport.meanMs,intervalReport.p50Ms,intervalReport.p95Ms,intervalReport.maxMs,1000.0/intervalReport.meanMs,unsigned(frameEffects.gi),unsigned(frameEffects.shadows),unsigned(frameEffects.fog));
         if(diagnostics())gpuProfile->poll();
+        gpuBudgetFrame();
         // Poll only while this game owns foreground focus.
         D3DDEVICE_CREATION_PARAMETERS cp={}; ext->GetCreationParameters(&cp);
         bool focus=GetForegroundWindow()==cp.hFocusWindow;
@@ -1071,6 +1263,11 @@ public:
         if(sampled())logf("TRANSLUCENT frame=%u draws=%u lastOpaqueZ=%u clearResolve=%u earlyResolve=%u earlyResolveAt=%u earlyResolveTotal=%u earlyResolveUndone=%u earlyResolveUndoneTotal=%u",frame,censusDraws,lastOpaqueZAt,clearResolveAt,earlyResolves,earlyResolveAt,earlyResolveTotal,earlyResolveUndone,earlyResolveUndoneTotal);
         postEffectWorldDraws=postEffectSkinnedDraws=0;
         const bool sampledFrame=sampled(),frameApplied=applied;
+        // 0.3.200 (frame trace): with Diagnostics, 240 consecutive frames out of every 1800 get one line each: whether the effects ran, the world drew,
+        // and through which context (1 terrain + global light, 2 terrain native light, 3 WMO), to see frame-to-frame alternation in the log.
+        if(diagnostics()&&frame%1800<240)logf("FRAMETRACE frame=%u tick=%lu applied=%d enabled=%d projection=%d terrain=%d world=%d context=%u skip=%s",frame,(unsigned long)GetTickCount(),
+            int(applied),int(enabled),int(projectionValid),int(terrain),traceWorld,world?world->frameTraceContext():0u,traceWorld==0&&world?world->lastSkipReason():"-");
+        traceWorld=-1;
         {CpuScope cpu(sampledFrame?&cleanup:nullptr);clearFrame();}
         if(memoryCaps>=0&&world)world->setMemoryPressure(memoryCaps==1);
         if(memoryCaps>=0&&NorthlightReplayCopies::enabled.load(std::memory_order_relaxed))NorthlightReplayCopies::setPressure(memoryCaps==1); /* 0.3.192 (CS): replay thread: halves the CPU copies' cap and evicts down to it */
@@ -1108,6 +1305,10 @@ public:
                         const int wrote=std::snprintf(buckets+at,sizeof buckets-at," %s=%.3f/%u",NorthlightEffectsBuckets::name(b),bucketMs,effectsBuckets.drawCalls(b));if(wrote>0)at=std::min(sizeof buckets-1,at+size_t(wrote));}
                     logf("EFFECTS buckets frame=%u applied=%d effectsMs=%.3f sumMs=%.3f spanMs=%.3f reads=%u draws=%u (ms/draw calls)%s",sampleFrame,int(frameApplied),double(cpuEffects)*tick,sum,
                         double(effectsBuckets.total())*tick,effectsBuckets.reads(),draws,buckets);}
+                // 0.3.200 (jobs): the effects' CPU split of this frame (ReplayJobs): jobMs ran on the job workers, joinWaitMs the renderer thread spent
+                // at the joins (jobs it ran itself while waiting included), replayMs the effects' wall time on the renderer thread (effects= above).
+                if(world){const auto j=world->takeJobStats();
+                    logf("JOBS frame=%u jobs=%u jobMs=%.3f joinWaitMs=%.3f replayMs=%.3f",sampleFrame,j.jobs,double(j.workerNs)*1e-6,double(j.waitNs)*1e-6,double(cpuEffects)*ms);}
                 logf("D3D calls frame=%u mirrorAudit=%u counted=%d total=%u gameDraws=%u mirrorAnswered=%llu mirrorForwarded=%llu captureSkipped=%u probeRan=%u probeMode=%s%s",sampleFrame,unsigned(sampleFrame%120==60),int(mirrorState.rawCounting),rawTotal,drawCalls-frameStartDrawCalls,
                     (unsigned long long)(mirrorState.answered-frameStartAnswered),(unsigned long long)(mirrorState.forwarded-frameStartForwarded),unsigned(world&&world->captureSkippedLastFrame()),
                     unsigned(world&&world->replayProbeRanThisFrame),NorthlightRenderThreadProbe::probeModeName(world?world->probeMode():NorthlightRenderThreadProbe::ProbeOff),calls);
@@ -1134,6 +1335,7 @@ public:
             logGateThreads("periodic");
             reportLogCost();
         }
+        weatherFrame(sampleFrame);
         cpuPrep=cpuCapture=cpuWaterCapture=cpuEffects=0;cpuCaptureReads=0;cpuDrawHooks=0;
         ++frame;mirrorState.gate.frame.store(frame,std::memory_order_relaxed); /* 0.3.180: the census' frame */
         if(frame==300)memmap(diagnosticId==1?"baseline-frame300":"frame300"); /* 0.3.192 (MEMMAP): allocations settled; device 1 is the baseline */
@@ -1145,13 +1347,16 @@ public:
         // index (parity phase-locks to FarShadowInterval: 16 of 21 far frames would have been U).
         gateFrame=mirrorState.rawCounting;gateUntimed=gateFrame&&(((frame/NorthlightRenderThreadProbe::ProfilePeriod)*2654435761u)>>31);
         mirrorState.gate.counting.store(gateFrame,std::memory_order_relaxed);perfCounting.store(gateFrame,std::memory_order_relaxed);
-        if(gateFrame){gateCounts={};gateStart={missingVS,terrainDraws,uiDraws,terrainShadowDraws,NorthlightTrackedBuffers::clock.load(std::memory_order_relaxed)};
+        if(gateFrame){gateCounts={};gateStart={missingVS,terrainDraws,uiDraws,terrainShadowDraws,NorthlightTrackedBuffers::clock.load(std::memory_order_relaxed),vsCacheHits,vsCacheMisses};
             gateSceneEnd={};gateSceneDraws=0;gateSceneReads=0;for(unsigned s=0;s<MirrorGate::Sites;++s)mirrorState.gate.takeAcquired(MirrorSite(s));perfCalls.store(0,std::memory_order_relaxed);}
         latchDrawGates(); /* 0.3.187: the next frame's draw gates, after every input above */
     }
     HRESULT STDMETHODCALLTYPE Present(const RECT* src,const RECT* dst,HWND wnd,const RGNDATA* dirty) override { Guard mirrorLock(mirrorState.gate);mirrorState.gate.noteFirst(mirrorState.gate.presentTid);
-        PresentTicks ticks;finishFrame();ticks.finish();
-        const HRESULT hr=ext->Present(src,dst,wnd,dirty);ticks.present();presented(ticks);return hr;
+        PresentTicks ticks;const unsigned markerFrame=frame;finishFrame();ticks.finish();
+        if(frameMarkers)frameMarker(1,markerFrame);
+        if(limitGpuLatency)waitPreviousFrameGpu();
+        const HRESULT hr=ext->Present(src,dst,wnd,dirty);
+        if(limitGpuLatency)markFrameGpu();ticks.present();presented(ticks);return hr;
     }
     // After the real Present, under the gate. Arithmetic only; windows are logged by finishFrame.
     void presented(const PresentTicks& t){
@@ -1214,7 +1419,7 @@ public:
     }
     HRESULT STDMETHODCALLTYPE CreateVertexShader(const DWORD* code,IDirect3DVertexShader9** out) override { Guard mirrorLock(mirrorState.gate);
         HRESULT hr=ext->CreateVertexShader(code,out);
-        if(SUCCEEDED(hr)&&out&&*out)extensionWork("vertex shader registration",[&]{std::vector<DWORD> words;auto h=shaderHash(*out,words);int tag=NorthlightShaderTags::deviceTag(h);vsHashes[*out]=h;if(world)world->registerShader(*out,h);if(water)water->registerVertex(*out,h,words.data(),words.size());vsTags[*out]=tag|(water&&water->hasVertex(*out)?kWaterTag:0);if(tag==1)++matchedTerrain;else if(tag==2)++matchedUI;});
+        if(SUCCEEDED(hr)&&out&&*out)extensionWork("vertex shader registration",[&]{++vsGeneration;std::vector<DWORD> words;auto h=shaderHash(*out,words);int tag=NorthlightShaderTags::deviceTag(h);vsHashes[*out]=h;if(world)world->registerShader(*out,h);if(water)water->registerVertex(*out,h,words.data(),words.size());vsTags[*out]=tag|(water&&water->hasVertex(*out)?kWaterTag:0);if(tag==1)++matchedTerrain;else if(tag==2)++matchedUI;});
         if(SUCCEEDED(hr))mirrorResources.wrap(out);return hr;
     }
     HRESULT STDMETHODCALLTYPE CreatePixelShader(const DWORD* code,IDirect3DPixelShader9** out) override { Guard mirrorLock(mirrorState.gate);
@@ -1254,9 +1459,11 @@ public:
     ULONG STDMETHODCALLTYPE Release() override{auto n=InterlockedDecrement(&refs);if(!n)delete this;return n;}
     // 0.3.192 (CS): wraps the Device in the command stream; on any failure the game keeps the Device directly (the worker core
     // budgets were read with the stream flag set, a harmless one core less).
-    IDirect3DDevice9* startStream(IDirect3DDevice9* device,D3DPRESENT_PARAMETERS* pp){
+    IDirect3DDevice9* startStream(IDirect3DDevice9* device,D3DPRESENT_PARAMETERS* pp,unsigned framesAhead,unsigned frameSkip){
         Device* target=static_cast<Device*>(device);const char* reason="unknown";
         NorthlightStream::StreamDevice::Options options;
+        options.framesAhead=framesAhead;options.budget=NorthlightStream::budgetForFramesAhead(framesAhead); /* 0.3.200 (pipeline): StreamFramesAhead, read with CommandStream; the queue budget grows with it (bounded) */
+        options.frameSkip=frameSkip; /* 0.3.200 (frame skip): StreamFrameSkip, read with CommandStream */
         options.capture=&NorthlightStream::capture;
         options.threadStart=[target]{target->adoptOwnerThread();};
         options.log=[](const char* line){logf("%s",line);};
@@ -1268,7 +1475,8 @@ public:
         try{stream=NorthlightStream::StreamDevice::make(device,this,pp,std::move(options),&reason);}catch(...){reason="exception";}
         if(!stream){NorthlightStream::streamActive.store(false,std::memory_order_relaxed);NorthlightReplayCopies::enabled.store(false,std::memory_order_relaxed);target->setExclusiveOwner(false);target->adoptOwnerThread(); /* the gate owner is this thread again (a replay thread that ran has been joined) */
             logf("CSTREAM disabled reason=%s",reason);return device;}
-        logf("CSTREAM active gameTid=%lu replayTid=%lu exclusiveGate=%d",NorthlightStream::gameTid.load(),NorthlightStream::replayTid.load(),int(exclusiveOwner));
+        target->limitGpuLatency=stream->framesAhead()>=2; /* 0.3.200 (pipeline): see Device::limitGpuLatency */
+        logf("CSTREAM active gameTid=%lu replayTid=%lu exclusiveGate=%d framesAhead=%u frameSkip=%u budgetMiB=%u gpuLatencyLimit=%d",NorthlightStream::gameTid.load(),NorthlightStream::replayTid.load(),int(exclusiveOwner),stream->framesAhead(),frameSkip,unsigned(NorthlightStream::budgetForFramesAhead(framesAhead)>>20),int(target->limitGpuLatency));
         return stream;
     }
     HRESULT STDMETHODCALLTYPE CreateDevice(UINT adapter,D3DDEVTYPE type,HWND window,DWORD flags,D3DPRESENT_PARAMETERS* pp,IDirect3DDevice9** out) override {
@@ -1289,14 +1497,14 @@ public:
                 return D3DERR_NOTAVAILABLE;
             }
         }
-        const bool stream=NorthlightStream::commandStreamRequested(rootPath); /* 0.3.192 (CS): CommandStream=0 or an unreadable ini is the old path below */
+        unsigned framesAhead=1,frameSkip=0;const bool stream=NorthlightStream::commandStreamRequested(rootPath,&framesAhead,&frameSkip); /* 0.3.192 (CS): CommandStream=0 or an unreadable ini is the old path below; 0.3.200 (pipeline): StreamFramesAhead from the same read */
         if(stream)NorthlightStream::streamActive.store(true,std::memory_order_relaxed); /* before the Device exists: worker core budgets read it once */
         if(stream)NorthlightReplayCopies::enabled.store(true,std::memory_order_relaxed); /* 0.3.192 (CS): before the first game buffer is wrapped: the replay-side CPU copies of replay_copies.h; never on with CommandStream=0 */
         if(stream)flags|=D3DCREATE_MULTITHREADED; /* DXVK's window-proc hook may touch the swap chain on the game thread while the replay thread presents */
         HRESULT hr=real->CreateDevice(adapter,type,window,flags,pp,out);
         logf("CreateDevice HRESULT=0x%08lx flags=0x%lx",(unsigned long)hr,(unsigned long)flags);
         if(SUCCEEDED(hr)&&out&&*out)*out=new Device(*out,this);
-        if(SUCCEEDED(hr)&&out&&*out&&stream)*out=startStream(*out,pp);
+        if(SUCCEEDED(hr)&&out&&*out&&stream)*out=startStream(*out,pp,framesAhead,frameSkip);
         return hr;
     }
 };
@@ -1429,7 +1637,7 @@ static HMODULE backend() {
     // Only DXVK keeps the legacy (unchecked, no RESZ dummy draw) rules; every
     // other runtime, including the system fallback, gets the native rules.
     if(module&&(result.fallback||(configured==NorthlightBackend::Kind::Legacy&&!last.info.dxvk)))selectedBackend=NorthlightBackend::Kind::Native;
-    logf("Northlight renderer 0.3.195; reference sun look (sun glow hue from native/sunHalo band, soft-shoulder glare, veil, sun-tinted haze), native sun/moon suppressed (F1b), lamps dimmed to 30 pct in direct sun, native moon02 skipped by texture identity, no game bytes in the DLL, MEMREAD self-read profile (RenderProfile), soft sun removal in shadow, jump-stable shadow anchor, geometry coverage hold with travel lead, steadier animated shadow edges (near 5x5 tent, still-camera shadow history), native blob shadows kept at BlobShadowStrength (faint texture under modulate blend), bilinear lighting history, near capture reserve for the player and companions, remembered rigid prop shadows (drawn-by-game states, windowed held), AO and bloom folded into the world composite, ground normals reject object tops, both wide samples, batched celestial terrain mask, DXVK async left to the runtime, render-thread terrain upload and rigid bookkeeping trims, moon without the horizon stall, art layer bands retimed to the sun and moon, actor prepare on a worker, trimmed prepare handoff, in-place capture constants, gate thread census, predicted snapshot lookups, word-wise memcmp, owner-thread gate elision; abandoned-frame prepare quarantine; removal smoothing on matching normals in its own pass (35/50 degree gate); per-frame draw gates; translucent depth census; early depth for translucent actors; DXVK 3.1.1 default, dxvk2 (2.7.1) by choice only, no automatic fallback; AO depth texel snap; shadow cascades follow camera zoom and collision; reduced terrain shadow reach under address-space pressure; command-stream replay thread; backend=%s path=%ls loaded=%d error=%lu",
+    logf("Northlight renderer 0.3.200; reference sun look (sun glow hue from native/sunHalo band, soft-shoulder glare, veil, sun-tinted haze), native sun/moon suppressed (F1b), lamps dimmed to 30 pct in direct sun, native moon02 skipped by texture identity, no game bytes in the DLL, MEMREAD self-read profile (RenderProfile), soft sun removal in shadow, jump-stable shadow anchor, geometry coverage hold with travel lead, steadier animated shadow edges (near 5x5 tent, still-camera shadow history), native blob shadows kept at BlobShadowStrength (faint texture under modulate blend), bilinear lighting history, near capture reserve for the player and companions, remembered rigid prop shadows (drawn-by-game states, windowed held), AO and bloom folded into the world composite, ground normals reject object tops, both wide samples, batched celestial terrain mask, DXVK async left to the runtime, render-thread terrain upload and rigid bookkeeping trims, moon without the horizon stall, art layer bands retimed to the sun and moon, actor prepare on a worker, trimmed prepare handoff, in-place capture constants, gate thread census, predicted snapshot lookups, word-wise memcmp, owner-thread gate elision; abandoned-frame prepare quarantine; removal smoothing on matching normals in its own pass (35/50 degree gate); per-frame draw gates; translucent depth census; early depth for translucent actors; DXVK 3.1.1 default, dxvk2 (2.7.1) by choice only, no automatic fallback; AO depth texel snap; shadow cascades follow camera zoom and collision; reduced terrain shadow reach under address-space pressure; command-stream replay thread; draw-hook lookup caches; lighter replay retire; fresh texture shadows evict only stale keeps; soft local-light cap with fades; blended GI re-publication; Forever-style rain (storm light bands, weather draw detection); moving fog clouds; GPU budget control; frames ahead and frame skipping in the command stream; replay jobs; backend=%s path=%ls loaded=%d error=%lu",
          NorthlightBackend::name(configured),last.path.c_str(),module!=nullptr,module?0ul:(last.error?last.error:(unsigned long)ERROR_INVALID_PARAMETER));
     logAttempts(result.attempts);
     logHostExecutable(sys.selfPath);

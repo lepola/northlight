@@ -74,7 +74,7 @@ struct Settings { unsigned strength=50,startPercent=75,bandDegrees=6,terrain=1; 
 // c35.yzw: lift colour, the glow hue (sun_hue.h horizonLift); Warm when none is given.
 struct Constants { float haze[4]={0,0,0,0};float shape[3]={0,0,0};float sun[2]={0,0};float lift[3]={Warm[0],Warm[1],Warm[2]}; };
 inline Constants constants(const State& s,const Settings& q,float farZ,float zoneScale,bool fogOn,
-                           bool sunValid,const float* sunDirection,float sunWeight,const float* liftColour=nullptr){
+                           bool sunValid,const float* sunDirection,float sunWeight,const float* liftColour=nullptr,float tauScale=1.f){ /* 0.3.198 (rain): tauScale x1 = unchanged */
     Constants c;
     if(liftColour)for(unsigned i=0;i<3;++i)c.lift[i]=std::isfinite(liftColour[i])?std::clamp(liftColour[i],0.f,1.f):Warm[i];
     const float end=s.effectiveEnd(farZ);
@@ -83,7 +83,7 @@ inline Constants constants(const State& s,const Settings& q,float farZ,float zon
     const float band=float(std::clamp(q.bandDegrees,2u,15u))*3.14159265f/180;
     c.shape[2]=Log2e/std::sin(band);
     const float scale=std::isfinite(zoneScale)?std::clamp(zoneScale,0.f,4.f):1.f;
-    const float tau=MaxOpticalDepth*float(std::min(q.strength,100u))*.01f*scale;
+    const float tau=MaxOpticalDepth*float(std::min(q.strength,100u))*.01f*scale*(std::isfinite(tauScale)&&tauScale>0?tauScale:1.f);
     if(!fogOn||!s.colorKnown||!(tau>0))return c; /* optical depth 0: exact scene colour */
     for(unsigned i=0;i<3;++i)c.haze[i]=s.color[i];
     c.haze[3]=tau*Log2e;

@@ -160,6 +160,8 @@ public:
     // At most 3 triggers a frame (FrameStart, World, Ui) and the game runs at most one frame ahead of the replay: 2 frames x 3 = 6, plus slack.
     // 8 x sizeof(GameSnapshot) (~68 KiB) stays under 1 MiB of the 32-bit address space.
     static constexpr std::size_t DefaultCap=8;
+    // 0.3.200 (pipeline): StreamFramesAhead n puts n+1 frames in flight: (n+1) x 3 + 2 (8, 11, 14; 14 x ~68 KiB still under 1 MiB). capFor(1) == DefaultCap.
+    static constexpr std::size_t capFor(unsigned framesAhead){return std::size_t(framesAhead<1?1:framesAhead>3?3:framesAhead)*3+5;}
     explicit SnapshotPool(std::size_t cap=DefaultCap):cap_(cap){}
     GameSnapshot* acquire(){
         std::lock_guard<std::mutex> lock(mutex_);

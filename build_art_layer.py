@@ -15,6 +15,12 @@ installed art layer). Steps, each on the previous step's archive, as the HD chai
 4. orgrimmar    the HD Orgrimmar sky without its sun                                 (HD sky only)
 5. outdoor_sun  HD outdoor skies without their solar batches                         (HD skies only)
 6. outdoor_moon HD outdoor skies without lunar batches + transparent moon02          (HD skies only)
+7. storm        a private storm profile (Light column 9) per outdoor row, made after the sky steps:
+   a copy of the row's final clear profile when its stock storm profile is its clear profile, else the
+   stock storm profile relit and retimed; then the grey, readable storm look (fog end x0.7, 300 yard floor) (build_lighting.stormify)
+8. weather_textures  procedural rain streak (1:16), red rain and snow flake (1:2) BLPs
+   (build_weather_textures), replacing the client's; generated, no client bytes. Plus the client's
+   weather mist puffs resampled to 1:4 (the renderer's signature to skip them in rain)
 
 Steps 2-6 hold the HD sky cleanup: a step whose HD sky ids, profiles or textures are absent is
 skipped with the reason (build_lighting.Skip). Mulgore and Stormwind find their profiles through
@@ -38,12 +44,13 @@ import northlight_paths as fp  # noqa: E402
 fp.use_source_modules()
 import client_archives  # noqa: E402
 from mpq import Archive  # noqa: E402
-from world_scene_builder import Assets  # noqa: E402
+from world_scene_builder import Assets, decode_blp  # noqa: E402
 import build_lighting  # noqa: E402
 import build_mulgore_lighting  # noqa: E402
 import build_stormwind_single_sun  # noqa: E402
 import build_outdoor_single_sun  # noqa: E402
 import build_outdoor_single_moon  # noqa: E402
+import build_weather_textures  # noqa: E402
 from build_lighting import DBC, Skip  # noqa: E402
 
 DBC_NAME = 'DBFilesClient\\{}.dbc'
@@ -78,6 +85,7 @@ def build(client, output, world_cache, locale=None, letter='z', archives='all'):
     work = Path(tempfile.mkdtemp(prefix='art-layer-', dir=output.parent))
     try:
         tables = {n: DBC(assets.read(DBC_NAME.format(n))) for n in build_lighting.TABLES}
+        stock = {n: DBC(assets.read(DBC_NAME.format(n))) for n in build_lighting.TABLES}   # untouched, for the storm sources
         chain_skybox = assets.read(SKYBOX)
         changes, skipped, zones = build_lighting.relight(tables)
         retimed = build_lighting.retime(tables, [c['new'] for c in changes.values()])
@@ -116,6 +124,16 @@ def build(client, output, world_cache, locale=None, letter='z', archives='all'):
             if manifest.get('sky_clone_skipped'):
                 report['steps'][-1]['sky_clone_skipped'] = manifest['sky_clone_skipped']
                 print(f"{name}: sky clone skipped ({manifest['sky_clone_skipped']})", flush=True)
+        # 0.3.198 (rain): after the sky steps, so their skybox edits are kept: private storm profiles, then the weather textures.
+        final = {n: DBC(payload[DBC_NAME.format(n)]) for n in build_lighting.TABLES}
+        storm = build_lighting.stormify(final, stock)
+        payload.update({DBC_NAME.format(n): t.bytes() for n, t in final.items()})
+        report['steps'].append({'step': 'storm', **storm})
+        textures = build_weather_textures.weather_textures()
+        textures.update(build_weather_textures.mist_textures(assets.read, decode_blp))   # 0.3.199 (rain mist)
+        payload.update(textures)
+        report['steps'].append({'step': 'weather_textures', 'files': sorted(textures)})
+        last = None   # the payload is no longer a step's archive
         unchanged = sorted(n for n, data in payload.items() if n.lower() in assets.providers and assets.read(n) == data)
         payload = {n: data for n, data in payload.items() if n not in unchanged}
         data = client_archives.data_dir(client).name

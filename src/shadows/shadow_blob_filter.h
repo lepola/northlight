@@ -18,6 +18,8 @@
 class NorthlightShadowBlobFilter {
     struct Verdict {bool blob=false;UINT width=0,height=0;D3DFORMAT format=D3DFMT_UNKNOWN;unsigned checkedFrame=0;};
     IDirect3DDevice9* d;
+    // 0.3.196 (task 12): optional borrowed-texture peek (the renderer's mirror); null or false = the GetTexture path.
+    bool (*peekTexture)(void*,DWORD,IDirect3DBaseTexture9*&)=nullptr;void* peekContext=nullptr;
     std::unordered_map<IDirect3DBaseTexture9*,Verdict> verdicts;
     std::vector<std::uint8_t> raw,decoded;
     const std::vector<std::uint8_t> reference=NorthlightShadowBlobModel::referencePixels();   // ~10 us once, at construction
@@ -94,6 +96,7 @@ public:
     NorthlightShadowBlobFilter(const NorthlightShadowBlobFilter&)=delete;
     NorthlightShadowBlobFilter& operator=(const NorthlightShadowBlobFilter&)=delete;
     void reset(){verdicts.clear();}
+    void setTexturePeek(bool(*fn)(void*,DWORD,IDirect3DBaseTexture9*&),void* context){peekTexture=fn;peekContext=context;}
     void endFrame(){++frame;if(frame%600==0&&NorthlightDiagnostics::enabled()&&(skippedTotal||faintTotal||reported++<3))logf("SHADOWBLOB skippedThisFrame=%u skippedTotal=%u faintThisFrame=%u faintTotal=%u verdicts=%zu",skippedThisFrame,skippedTotal,faintThisFrame,faintTotal,verdicts.size());skippedThisFrame=0;faintThisFrame=0;
         if(verdicts.size()>4096)verdicts.clear();}
     IDirect3DTexture9* faintTexture()const{return faint;}
@@ -107,8 +110,10 @@ public:
     Result claim(UINT primitiveCount){
         if(strength>=100||!primitiveCount||primitiveCount>256)return {};
         IDirect3DBaseTexture9* bound=nullptr;
-        if(FAILED(d->GetTexture(0,&bound))||!bound)return {};
-        struct Release {IDirect3DBaseTexture9* p;~Release(){release(p);}} guard{bound};   // Faint takes the reference over
+        // 0.3.196 (task 12): a borrowed identity (no device write before the verdict); a Faint verdict AddRefs it for the caller below.
+        const bool borrowed=peekTexture&&peekTexture(peekContext,0,bound);
+        if(!borrowed&&(FAILED(d->GetTexture(0,&bound))||!bound))return {};
+        struct Release {IDirect3DBaseTexture9* p;~Release(){release(p);}} guard{borrowed?nullptr:bound};   // Faint takes the reference over
         auto it=verdicts.find(bound);
         if(it==verdicts.end()){it=verdicts.emplace(bound,evaluate(bound)).first;}
         else{
@@ -127,6 +132,6 @@ public:
         const bool accepted=modulate&&ensureFaint()!=nullptr;
         if(statesLogged<2){++statesLogged;logStates(primitiveCount,modulate,accepted?"faint":"skip");}
         if(!accepted){++skippedThisFrame;++skippedTotal;return {Claim::Skip};}   // 0.3.193: cannot lighten it, hide it as 0.3.192 did
-        ++faintThisFrame;++faintTotal;guard.p=nullptr;return {Claim::Faint,bound};
+        ++faintThisFrame;++faintTotal;if(borrowed)bound->AddRef();guard.p=nullptr;return {Claim::Faint,bound};
     }
 };

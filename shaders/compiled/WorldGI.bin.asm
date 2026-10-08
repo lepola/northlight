@@ -9,14 +9,16 @@ def c73 = 2.50000000e-01, 2.50000000e-01, 2.50000000e-01, 2.82094777e-01
 def c74 = 3.14159274e+00, 2.09439516e+00, 2.09439516e+00, 2.09439516e+00
 def c75 = -8.00000000e+00, 1.00000000e+00, 1.00000000e+00, 1.00000000e+00
 def c76 = 2.22222233e+00, 3.00000000e+00, 4.00000000e+00, 5.00000000e+00
-def c77 = 6.00000000e+00, 1.99999996e-02, 0.00000000e+00, 0.00000000e+00
-def c78 = 3.18309873e-01, 3.18309873e-01, 3.18309873e-01, 0.00000000e+00
+def c77 = 6.00000000e+00, 1.99999996e-02, 3.33333325e+00, 3.33333343e-01
+def c78 = 3.33333343e-01, 0.00000000e+00, 6.66666687e-01, 0.00000000e+00
+def c79 = 3.18309873e-01, 3.18309873e-01, 3.18309873e-01, 0.00000000e+00
 defi i0 = 255, 0, 0, 0
 dcl_2d s1
 dcl_2d s14
 dcl_2d s6
 dcl_2d s5
 dcl_2d s10
+dcl_2d s8
 dcl_2d s4
 dcl_2d s7
 dcl_2d s11
@@ -134,181 +136,225 @@ if_ne r1.w, -r1.w
         mov r2.w, c68.x
         mov r5.w, c68.x
         rep i0.xyzw
-            mov r15.w, r5.w
-            add r15.w, r15.w, c75.x
-            cmp r15.w, r15.w, c68.x, c70.y
-            add r15.w, -r15.w, c70.y
-            if_ne r15.w, -r15.w
+            mov r20.w, r5.w
+            add r20.w, r20.w, c75.x
+            cmp r20.w, r20.w, c68.x, c70.y
+            add r20.w, -r20.w, c70.y
+            if_ne r20.w, -r20.w
                 break
             else
             endif
-            mov r15.w, r5.w
-            mov r19.x, r5.w
-            mul r19.x, r19.x, c69.z
-            frc r20.xyzw, r19.x
-            add r19.x, r19.x, -r20.xyzw
-            mul r19.x, r19.x, c72.x
-            add r15.w, r15.w, -r19.x
-            mov r19.x, r5.w
-            mul r19.x, r19.x, c69.z
-            frc r20.xyzw, r19.x
-            add r19.x, r19.x, -r20.xyzw
-            mov r19.y, r5.w
-            mul r19.y, r19.y, c73.x
-            frc r20.xyzw, r19.y
-            add r19.y, r19.y, -r20.x
-            mul r19.y, r19.y, c72.x
-            add r19.x, r19.x, -r19.y
-            mov r19.y, r5.w
-            mul r19.y, r19.y, c73.x
-            frc r20.xyzw, r19.y
-            add r19.y, r19.y, -r20.x
-            mov r14.x, r15.w
-            mov r14.y, r19.x
-            mov r14.z, r19.y
-            mov r19.xyz, r14.xyzx
-            add r19.xyz, r5.xyzx, r19.xyzx
-            rcp r13.x, c20.x
-            rcp r13.y, c20.x
-            rcp r13.z, c20.x
-            mul r20.xyz, r19.xyzx, r13.xyzx
-            frc r21.xyzw, r20.xyzx
-            add r20.xyz, r20.xyzx, -r21.xyzw
-            mul r20.xyz, c20.x, r20.xyzx
-            add r20.xyz, r19.xyzx, -r20.xyzx
-            mul r15.w, r20.z, c20.x
-            add r15.w, r20.x, r15.w
-            mov r12.x, r15.w
-            mov r12.y, r20.y
-            mov r21.xy, r12.xyxx
-            add r21.xy, r21.xyxx, c69.zwzz
-            mul r15.w, c20.x, c20.x
-            mov r11.y, r15.w
-            mov r11.z, c20.x
-            mov r21.zw, r11.xxyz
-            rcp r12.z, r21.z
-            rcp r12.w, r21.w
-            mul r21.xy, r21.xyxx, r12.zwzz
-            mov r17.xyzw, c68.xyzw
-            mov r17.xy, r21.xyxx
-            mov r22.xyzw, r17.xyzw
-            texldl r22.xyzw, r22.xyzw, s10
-            add r23.xyz, r22.xyzx, -r19.xyzx
-            abs r23.xyz, r23.xyzx
-            add r23.xyz, -r23.xyzx, -r23.xyzx
-            cmp r23.xyz, r23.xyzx, c68.xyzx, c75.yzwy
-            add r23.xyz, -r23.xyzx, c75.yzwy
-            min r15.w, r23.x, r23.y
-            min r15.w, r15.w, r23.z
-            cmp r19.w, r22.w, c68.x, c70.y
-            add r19.w, -r19.w, c70.y
-            min r15.w, r15.w, r19.w
-            if_ne r15.w, -r15.w
-                add r23.xyz, -r2.xyzx, c75.yzwy
-                mov r24.xyz, r14.xyzx
-                add r25.xyz, r2.xyzx, -r23.xyzx
-                mul r24.xyz, r24.xyzx, r25.xyzx
-                add r23.xyz, r23.xyzx, r24.xyzx
-                mul r15.w, r23.x, r23.y
-                mul r15.w, r15.w, r23.z
-                add r19.w, c24.w, -r22.w
-                mul r19.w, r19.w, c76.x
-                mov_sat r19.w, r19.w
-                mul r15.w, r15.w, r19.w
-                mov r19.w, r2.w
-                add r19.w, r19.w, r15.w
-                mov r2.w, r19.w
-                mul r19.xyz, r19.xyzx, c19.w
-                add r19.xyz, r1.xyzx, -r19.xyzx
-                dp3 r19.w, r19.xyzx, r19.xyzx
-                rsq r11.x, r19.w
-                rcp r7.w, r11.x
-                abs r22.xyz, r19.xyzx
-                add r21.zw, r22.x, -r22.xxyz
-                cmp r21.zw, r21.xxzw, c68.xxxy, c75.xxyz
-                add r21.zw, -r21.xxzw, c75.xxyz
-                min r19.w, r21.z, r21.w
-                if_ne r19.w, -r19.w
-                    cmp r19.w, r19.x, c68.x, c70.y
-                    add r19.w, -r19.w, c70.y
-                    cmp r19.w, -r19.w, c70.y, c68.x
-                    mov r11.w, r19.w
+            mov r20.w, r5.w
+            mov r23.z, r5.w
+            mul r23.z, r23.z, c69.z
+            frc r25.xyzw, r23.z
+            add r23.z, r23.z, -r25.x
+            mul r23.z, r23.z, c72.x
+            add r20.w, r20.w, -r23.z
+            mov r23.z, r5.w
+            mul r23.z, r23.z, c69.z
+            frc r25.xyzw, r23.z
+            add r23.z, r23.z, -r25.x
+            mov r23.w, r5.w
+            mul r23.w, r23.w, c73.x
+            frc r25.xyzw, r23.w
+            add r23.w, r23.w, -r25.x
+            mul r23.w, r23.w, c72.x
+            add r23.z, r23.z, -r23.w
+            mov r23.w, r5.w
+            mul r23.w, r23.w, c73.x
+            frc r25.xyzw, r23.w
+            add r23.w, r23.w, -r25.x
+            mov r17.x, r20.w
+            mov r17.y, r23.z
+            mov r17.z, r23.w
+            mov r25.xyz, r17.xyzx
+            add r25.xyz, r5.xyzx, r25.xyzx
+            rcp r14.x, c20.x
+            rcp r14.y, c20.x
+            rcp r14.z, c20.x
+            mul r26.xyz, r25.xyzx, r14.xyzx
+            frc r27.xyzw, r26.xyzx
+            add r26.xyz, r26.xyzx, -r27.xyzw
+            mul r26.xyz, c20.x, r26.xyzx
+            add r26.xyz, r25.xyzx, -r26.xyzx
+            mul r20.w, r26.z, c20.x
+            add r20.w, r26.x, r20.w
+            mov r8.z, r20.w
+            mov r8.w, r26.y
+            mov r23.zw, r8.xxzw
+            add r23.zw, r23.xxzw, c69.xxzw
+            mul r20.w, c20.x, c20.x
+            mov r8.x, r20.w
+            mov r8.y, c20.x
+            mov r27.xy, r8.xyxx
+            rcp r20.x, r27.x
+            rcp r20.y, r27.y
+            mul r23.zw, r23.xxzw, r20.xxxy
+            mov r22.xyzw, c68.xyzw
+            mov r22.xy, r23.zwzz
+            mov r27.xyzw, r22.xyzw
+            texldl r27.xyzw, r27.xyzw, s10
+            add r28.xyz, r27.xyzx, -r25.xyzx
+            abs r28.xyz, r28.xyzx
+            add r28.xyz, -r28.xyzx, -r28.xyzx
+            cmp r28.xyz, r28.xyzx, c68.xyzx, c75.yzwy
+            add r28.xyz, -r28.xyzx, c75.yzwy
+            min r20.w, r28.x, r28.y
+            min r20.w, r20.w, r28.z
+            cmp r24.w, r27.w, c68.x, c70.y
+            add r24.w, -r24.w, c70.y
+            min r20.w, r20.w, r24.w
+            if_ne r20.w, -r20.w
+                add r28.xyz, -r2.xyzx, c75.yzwy
+                mov r29.xyz, r17.xyzx
+                add r30.xyz, r2.xyzx, -r28.xyzx
+                mul r29.xyz, r29.xyzx, r30.xyzx
+                add r28.xyz, r28.xyzx, r29.xyzx
+                mul r20.w, r28.x, r28.y
+                mul r20.w, r20.w, r28.z
+                add r24.w, c24.w, -r27.w
+                mul r24.w, r24.w, c76.x
+                mov_sat r24.w, r24.w
+                mul r20.w, r20.w, r24.w
+                mov r24.w, r2.w
+                add r24.w, r24.w, r20.w
+                mov r2.w, r24.w
+                mul r25.xyz, r25.xyzx, c19.w
+                add r25.xyz, r1.xyzx, -r25.xyzx
+                dp3 r24.w, r25.xyzx, r25.xyzx
+                rsq r17.w, r24.w
+                rcp r7.w, r17.w
+                abs r27.xyz, r25.xyzx
+                add r28.xy, r27.x, -r27.yzyy
+                cmp r28.xy, r28.xyxx, c68.xyxx, c75.yzyy
+                add r28.xy, -r28.xyxx, c75.yzyy
+                min r24.w, r28.x, r28.y
+                if_ne r24.w, -r24.w
+                    cmp r24.w, r25.x, c68.x, c70.y
+                    add r24.w, -r24.w, c70.y
+                    cmp r24.w, -r24.w, c70.y, c68.x
+                    mov r9.w, r24.w
                 else
-                    add r19.w, r22.y, -r22.z
-                    cmp r19.w, r19.w, c68.x, c70.y
-                    add r19.w, -r19.w, c70.y
-                    cmp r20.w, r19.y, c68.x, c70.y
-                    add r20.w, -r20.w, c70.y
-                    cmp r20.w, -r20.w, c76.y, c72.x
-                    mov r21.z, r11.w
-                    cmp r21.z, -r19.w, r21.z, r20.w
-                    mov r11.w, r21.z
-                    cmp r19.x, r19.z, c68.x, c70.y
-                    add r19.x, -r19.x, c70.y
-                    cmp r19.x, -r19.x, c76.w, c76.z
-                    cmp r19.x, -r19.w, r19.x, r20.w
-                    mov r11.w, r19.x
+                    add r24.w, r27.y, -r27.z
+                    cmp r24.w, r24.w, c68.x, c70.y
+                    add r24.w, -r24.w, c70.y
+                    cmp r25.w, r25.y, c68.x, c70.y
+                    add r25.w, -r25.w, c70.y
+                    cmp r25.w, -r25.w, c76.y, c72.x
+                    mov r26.w, r9.w
+                    cmp r26.w, -r24.w, r26.w, r25.w
+                    mov r9.w, r26.w
+                    cmp r25.x, r25.z, c68.x, c70.y
+                    add r25.x, -r25.x, c70.y
+                    cmp r25.x, -r25.x, c76.w, c76.z
+                    cmp r24.w, -r24.w, r25.x, r25.w
+                    mov r9.w, r24.w
                 endif
-                mov r19.x, r11.w
-                mul r19.x, r19.x, c20.x
-                add r19.x, r20.y, r19.x
-                add r19.x, r19.x, c69.z
-                mul r19.y, c20.x, c77.x
-                rcp r14.w, r19.y
-                mul r19.x, r19.x, r14.w
-                mov r10.x, r21.x
-                mov r10.y, r19.x
-                mov r10.z, c68.x
-                mov r10.w, c68.x
-                mov r19.xyzw, r10.xyzw
-                mov r8.xyzw, c68.xyzw
-                mov r8.xy, r19.xyxx
-                mov r19.xyzw, r8.xyzw
-                texldl r19.xyzw, r19.xyzw, s7
-                mul r20.x, r19.x, r19.x
-                add r20.x, r19.y, -r20.x
-                max r20.x, r20.x, c77.y
-                add r20.y, r7.w, -r19.x
-                max r20.y, r20.y, c68.x
-                mul r20.y, r20.y, r20.y
-                add r20.y, r20.x, r20.y
-                rcp r13.w, r20.y
-                mul r20.x, r20.x, r13.w
-                mul r20.x, r20.x, r20.x
-                mul r19.x, r20.x, r19.z
-                mul r15.w, r15.w, r19.x
+                mov r24.w, r9.w
+                mul r24.w, r24.w, c20.x
+                add r24.w, r26.y, r24.w
+                add r24.w, r24.w, c69.z
+                mul r25.x, c20.x, c77.x
+                rcp r14.w, r25.x
+                mul r24.w, r24.w, r14.w
+                mov r19.x, r23.z
+                mov r19.y, r24.w
+                mov r19.z, c68.x
+                mov r19.w, c68.x
+                mov r25.xyzw, r19.xyzw
+                mov r21.xyzw, c68.xyzw
+                mov r21.xy, r25.xyxx
+                mov r25.xyzw, r21.xyzw
+                texldl r25.xyzw, r25.xyzw, s7
+                mul r24.w, r25.x, r25.x
+                add r24.w, r25.y, -r24.w
+                max r24.w, r24.w, c77.y
+                add r26.x, r7.w, -r25.x
+                max r26.x, r26.x, c68.x
+                mul r26.x, r26.x, r26.x
+                add r26.x, r24.w, r26.x
+                rcp r20.z, r26.x
+                mul r24.w, r24.w, r20.z
+                mul r24.w, r24.w, r24.w
+                mul r24.w, r24.w, r25.z
+                mul r20.w, r20.w, r24.w
                 mov r18.xyzw, c68.xyzw
-                mov r18.xy, r21.xyxx
-                mov r19.xyzw, r18.xyzw
-                texldl r19.xyzw, r19.xyzw, s4
-                dp4 r19.x, r19.xyzw, r6.xyzw
-                mov r9.xyzw, c68.xyzw
-                mov r9.xy, r21.xyxx
-                mov r20.xyzw, r9.xyzw
-                texldl r20.xyzw, r20.xyzw, s5
-                dp4 r19.y, r20.xyzw, r6.xyzw
+                mov r18.xy, r23.zwzz
+                mov r26.xyzw, r18.xyzw
+                texldl r26.xyzw, r26.xyzw, s4
+                dp4 r24.w, r26.xyzw, r6.xyzw
+                mov r15.xyzw, c68.xyzw
+                mov r15.xy, r23.zwzz
+                mov r26.xyzw, r15.xyzw
+                texldl r26.xyzw, r26.xyzw, s5
+                dp4 r26.x, r26.xyzw, r6.xyzw
                 mov r16.xyzw, c68.xyzw
-                mov r16.xy, r21.xyxx
-                mov r20.xyzw, r16.xyzw
-                texldl r20.xyzw, r20.xyzw, s6
-                dp4 r19.z, r20.xyzw, r6.xyzw
-                mov r15.x, r19.x
-                mov r15.y, r19.y
-                mov r15.z, r19.z
-                mov r19.xyz, r15.xyzx
-                max r19.xyz, r19.xyzx, c68.xyzx
-                mul r19.xyz, r19.xyzx, r15.w
-                mov r20.xyz, r7.xyzx
-                add r19.xyz, r20.xyzx, r19.xyzx
-                mov r7.xyz, r19.xyzx
-                mov r19.x, r1.w
-                add r15.w, r19.x, r15.w
-                mov r1.w, r15.w
+                mov r16.xy, r23.zwzz
+                mov r27.xyzw, r16.xyzw
+                texldl r27.xyzw, r27.xyzw, s6
+                dp4 r26.y, r27.xyzw, r6.xyzw
+                mov r24.x, r24.w
+                mov r24.y, r26.x
+                mov r24.z, r26.y
+                add r24.w, c24.w, -r25.w
+                mul r24.w, r24.w, c77.z
+                mov_sat r24.w, r24.w
+                add r25.x, r24.w, c69.x
+                cmp r25.x, r25.x, c68.x, c70.y
+                if_ne r25.x, -r25.x
+                    mul r25.x, r23.z, c77.w
+                    mov r23.x, r25.x
+                    mov r23.y, r23.w
+                    mov r13.x, r25.x
+                    mov r13.y, r23.w
+                    mov r13.z, c68.x
+                    mov r13.w, c68.x
+                    mov r25.xyzw, r13.xyzw
+                    mov r12.xyzw, c68.xyzw
+                    mov r12.xy, r25.xyxx
+                    mov r25.xyzw, r12.xyzw
+                    texldl r25.xyzw, r25.xyzw, s8
+                    dp4 r23.z, r25.xyzw, r6.xyzw
+                    mov r25.xy, r23.xyxx
+                    add r25.xy, r25.xyxx, c78.xyxx
+                    mov r11.xyzw, c68.xyzw
+                    mov r11.xy, r25.xyxx
+                    mov r25.xyzw, r11.xyzw
+                    texldl r25.xyzw, r25.xyzw, s8
+                    dp4 r23.w, r25.xyzw, r6.xyzw
+                    mov r25.xy, r23.xyxx
+                    add r25.xy, r25.xyxx, c78.zwzz
+                    mov r10.xyzw, c68.xyzw
+                    mov r10.xy, r25.xyxx
+                    mov r25.xyzw, r10.xyzw
+                    texldl r25.xyzw, r25.xyzw, s8
+                    dp4 r25.x, r25.xyzw, r6.xyzw
+                    mov r9.x, r23.z
+                    mov r9.y, r23.w
+                    mov r9.z, r25.x
+                    mov r25.xyz, r9.xyzx
+                    mov r26.xyz, r24.xyzx
+                    add r26.xyz, r26.xyzx, -r25.xyzx
+                    mul r26.xyz, r24.w, r26.xyzx
+                    add r25.xyz, r25.xyzx, r26.xyzx
+                    mov r24.xyz, r25.xyzx
+                else
+                endif
+                mov r25.xyz, r24.xyzx
+                max r25.xyz, r25.xyzx, c68.xyzx
+                mul r25.xyz, r25.xyzx, r20.w
+                mov r26.xyz, r7.xyzx
+                add r25.xyz, r26.xyzx, r25.xyzx
+                mov r7.xyz, r25.xyzx
+                mov r23.z, r1.w
+                add r20.w, r23.z, r20.w
+                mov r1.w, r20.w
             else
             endif
-            mov r15.w, r5.w
-            add r15.w, r15.w, c70.y
-            mov r5.w, r15.w
+            mov r20.w, r5.w
+            add r20.w, r20.w, c70.y
+            mov r5.w, r20.w
         endrep
         mov r1.x, r1.w
         add r1.x, -r1.x, c70.w
@@ -328,7 +374,7 @@ if_ne r1.w, -r1.w
     else
     endif
     mov r1.xyzw, r4.xyzw
-    mul r2.xyz, r1.xyzx, c78.xyzx
+    mul r2.xyz, r1.xyzx, c79.xyzx
     add r2.xyz, r2.xyzx, -c18.xyzx
     mul r2.xyz, r2.xyzx, c20.y
     mul r1.xyz, r2.xyzx, r1.w

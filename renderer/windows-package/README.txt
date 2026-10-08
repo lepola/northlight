@@ -115,8 +115,10 @@ northlight-quality.ini in the game folder chooses the quality: Preset=Quality (t
 default, full quality), Balanced or Performance. On a weaker processor, Balanced
 or Performance raises the FPS by lightening mainly shadows and lamps.
 The file is read when the game starts; restart WoW after a change.
-The installer adds the file only if it does not exist yet: an update never
-replaces your own changes. northlight-renderer.log shows the values in use (QUALITY).
+The installer adds the file if it does not exist yet. An update never changes
+your lines or values: it only appends the settings your file does not mention
+yet, commented out (the preset's values apply until you enable one).
+northlight-renderer.log shows the values in use (QUALITY).
 Individual settings (Quality / Balanced / Performance):
   ActorShadowBudgetMiB  0 / 16 / 8     character shadows, nearest first (0 = no limit)
   ActorShadowRadius     40 / 35 / 20   characters more than N yards from your own character cast no shadow (0..200; 0 = no limit; 1..3 = your own character, mount, weapons and whatever is right next to you)
@@ -153,6 +155,14 @@ Individual settings (Quality / Balanced / Performance):
   FrameDrawGates        1 / 1 / 1      per-frame draw checks (0 = check every draw as before 0.3.187, for comparisons; the image does not change)
   ShadowPivotCorrection 1 / 1 / 1      near shadow detail follows camera zoom and collisions (0 = the distance of the sharp shadow area is only estimated while orbiting, as before 0.3.190, for comparisons)
   CommandStream         1 / 1 / 1      the game records its graphics calls and a second thread runs the renderer (0 = everything on the game's thread as before 0.3.192, for comparisons; read at game start)
+  Weather               1 / 1 / 1      Northlight's haze, fog, light shafts, sun and moon, shadows, sky light and lamps follow rain and snow shown by the art layer's weather textures; the game's rain streaks are drawn alpha-blended (crisp, their own colour) and its mist puffs (black balls in night and storm rain) are left out while it rains (0 = nothing reacts, the game's own rain; needs the art layer; no extra passes)
+  RainFog               1 / 1 / 1      how strongly rain and snow thicken the fog and haze and dim shafts, sun and moon (0..2; 0 = no change, 2 = twice as strong; snow acts at 60 percent)
+  FogClouds             1 / 1 / 0      low fog banks that drift with the wind, thicker and faster in rain, few and faint in clear weather and then only in forest and grass zones (0 = none; its own half-resolution pass; Ctrl+Shift+F7 and F10 turn them off with the rest)
+  FogCloudDensity       100 / 100 / 100 how much of the ground the fog clouds cover, in percent (0..200; 0 = none, 200 = twice as much)
+  GpuBudgetMs           4 / 3 / 2      graphics card time per frame for Northlight's own effects, in ms (0..20; 0 = off, always the full picture); while the measured time stays over it, fewer fog cloud steps in two stages, then fewer fog steps and at most 16 lamps; the full picture comes back when the time is well under it for a few seconds
+  StreamFramesAhead     2 / 2 / 2      with CommandStream=1, how many frames the game may record before the renderer thread has drawn them (1..3; 1 = as in 0.3.199; more smooths out spikes, the picture can lag by that many frames and the stream may use up to 16 MiB more memory; read at game start)
+  ReplayJobs            1 / 1 / 1      the renderer thread hands the lamp choice, the fog clouds and sun-ray fog, the terrain under the sun and moon shadows and part of the character shadow culling to 1 to 4 helper threads; the picture is exactly the same (0 = all on the renderer thread as before 0.3.200, for comparisons)
+  StreamFrameSkip       1 / 1 / 1      with CommandStream=1, 1 = when the renderer thread is two whole frames behind, it skips drawing the older one (its uploads and settings still apply; frames that draw into textures, use occlusion tests or copy the picture are always drawn; at least every third frame is shown) so the game does not wait; 0 = every frame is drawn; read at game start
 When both NearShadowInterval and FarShadowInterval are at least 2, frames that
 draw neither shadow also skip copying the character geometry (about 1–1.5 ms
 of CPU per skipped frame). Light and normal frames alternate: the average FPS

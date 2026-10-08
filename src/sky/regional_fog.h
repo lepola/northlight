@@ -20,7 +20,7 @@ struct Tile {int x=0,y=0;std::array<uint32_t,256> zones{};std::vector<Water> wat
 struct Region {std::vector<Tile> tiles;unsigned missing=0,invalid=0;};
 struct Texel {float ground=0,day=0,nightExtra=0,height=0;};
 static_assert(sizeof(Texel)==16,"Fog texture float4");
-struct Field {float originX=0,originY=0;std::array<Texel,N*N> texels{};unsigned groundCells=0,fogCells=0,airCells=0,indoorCells=0,citySurfaceCells=0;};
+struct Field {float originX=0,originY=0;std::array<Texel,N*N> texels{};std::array<uint8_t,N*N> lush{}; /* 0.3.199 (fog clouds): 1 = outdoor forest/grass zone (lushZone), CPU only */unsigned groundCells=0,fogCells=0,airCells=0,indoorCells=0,citySurfaceCells=0;};
 inline float smooth(float x){x=std::clamp(x,0.f,1.f);return x*x*(3-2*x);}
 // Artist policy transitions, applied to the VERIFIED game's normalized render
 // time (minute-of-day / 1440, including fixed-time map override). Unknown clock
@@ -97,6 +97,26 @@ inline bool forestZone(uint32_t zone){
         default:return false;
     }
 }
+// 0.3.199 (fog clouds): grass zones (root AreaTable ids, checked against the 3.3.5a client's AreaTable). With the forests, Duskwood, STV,
+// Mulgore and Stormwind they are the lush zones that get fog banks without rain; deserts, barrens, badlands and the like get them only in rain.
+// Runtime only: no world-cache input, no regional fog density change.
+inline bool grassZone(uint32_t zone){
+    switch(zone){
+        case 40:   /* Westfall */
+        case 44:   /* Redridge Mountains */
+        case 45:   /* Arathi Highlands */
+        case 267:  /* Hillsbrad Foothills */
+        case 38:   /* Loch Modan */
+        case 28:   /* Western Plaguelands */
+        case 139:  /* Eastern Plaguelands */
+        case 36:   /* Alterac Mountains */
+        case 3518: /* Nagrand */
+        case 3537: /* Borean Tundra */
+            return true;
+        default:return false;
+    }
+}
+inline bool lushZone(uint32_t zone){return zone==10||zone==33||zone==215||zone==1519||forestZone(zone)||grassZone(zone);}
 inline Texel policy(uint32_t zone,float ground,float wet,float basin,bool indoors){
     Texel out;out.ground=ground;
     if(indoors||!std::isfinite(ground))return out;
@@ -188,7 +208,8 @@ inline Field buildField(const NorthlightGI::WorldScene& scene,const Region& regi
         for(int dy=-1;dy<=1;++dy)for(int dx=-1;dx<=1;++dx){int xx=int(x)+dx,yy=int(y)+dy;if((dx||dy)&&xx>=0&&xx<int(N)&&yy>=0&&yy<int(N)&&std::isfinite(ground[yy*N+xx])){surrounding+=ground[yy*N+xx];++count;}}
         float basin=count?smooth((surrounding/count-ground[i]-.25f)/2.f):0;
         float surface=ground[i],wet=wetness(region,px,py,ground[i],surface);
-        auto cell=policy(zoneAt(region,px,py),surface,wet,basin,indoors);
+        const uint32_t zone=zoneAt(region,px,py);
+        auto cell=policy(zone,surface,wet,basin,indoors);out.lush[i]=!indoors&&lushZone(zone);
         float edge=smooth(float(std::min({x,y,N-1-x,N-1-y}))/2.f);cell.day*=edge;cell.nightExtra*=edge;
         out.texels[i]=cell;if(cell.day>0||cell.nightExtra>0)++out.fogCells;
         if(cell.height>0&&edge>0)++out.airCells;

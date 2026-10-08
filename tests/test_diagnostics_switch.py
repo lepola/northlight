@@ -13,17 +13,19 @@ from pathlib import Path
 import re,sys
 HERE=Path(__file__).resolve().parent
 FILES=['renderer.cpp','world_renderer.h','world_shadow_experiment.inl','world_point_rendering.inl','celestial_disc_renderer.h',
-       'shadow_blob_filter.h','water_renderer.h','gpu_profile.h','world_diagnostics.h','world_replay_probe.inl','world_rigid_memory.inl']
+       'shadow_blob_filter.h','water_renderer.h','gpu_profile.h','gpu_frame_timer.h','world_diagnostics.h','world_replay_probe.inl','world_rigid_memory.inl']
 # 0.3.149: profiling()/profileSampled() = RenderProfile, which requires Diagnostics=1 (NorthlightQuality::renderProfile).
 GATES=('NorthlightDiagnostics::enabled()','diagnostics()','sampled()','captureSampled','if(diagnostics)','shadowFate.active()','sampledFrame','profiling()','profileSampled()')
 # Ungated lines that stay with Diagnostics=0: format prefix -> label.
 KEEP={
+ 'WORLD fog clouds noise':'one-off: the noise volume generated (worker) and uploaded, 0.3.199','WORLD fog clouds disabled':'error: shader or volume creation failed, once per device, 0.3.199','WORLD fog temporal disabled':'error: shader creation failed, once per device, 0.3.199','CSTREAM GPU latency limit unavailable':'error: event query creation failed, once per device, 0.3.200 (pipeline)','FRAMEMARKERS on':'one-off: the frame marker file exists at device creation, 0.3.200 (frame markers)','GPUBUDGET timer disabled':'error: query failure, once per device, 0.3.200 (gpu budget)',
+ 'JOBS workers':'start-up one-off: the replay job pool started (0.3.200 jobs)','JOBS unavailable':'start-up one-off: no job worker could start (0.3.200 jobs)',
  'LOGGER intervalMs':'indirect: reportLogCost() runs only in the gated MIRROR block',
  'EXTENSION fault':'error','DISABLED:':'error','Resources ':'one-off: resource (re)creation',
  'LOCK METER':'one-off startup line and ProcessVertices warning; the interval line runs only from the Diagnostics-gated block of WorldRenderer::endFrame (0.3.192)',
  'VIEWPORT GATE':'capped: first 8','WORLD skipped frame':'capped: first 8 (periodic tail gated)',
  'WORLD skip episode':'capped: first 32 runs of skipped world frames (tail gated; 0.3.169)','WORLD coverage hold':'capped: first 32 hold/retire episodes (tail gated; 0.3.169)',
- 'FIRST EFFECT FRAME':'one-off','MIRROR mismatch':'error (the audit itself is functional and ungated)',
+ 'FIRST EFFECT FRAME':'one-off','GI probe blend texture unavailable':'one-off warning: the 0.3.197 blend texture failed to allocate (static once flag)','MIRROR mismatch':'error (the audit itself is functional and ungated)',
  'WORLD non-caster draw rejected':'capped: first 4 (periodic tail gated)','Projection rejected':'capped: first',
  'D3D9 device wrapped':'start-up','MEMORY async sampler':'error','MEMORY guard':'warning: low address space (pressure/trim/after-trim/recovery, cooldown-limited)',
  'LOG previous session':'start-up: previous log rotation result','DEVICE lifetime':'one-off: device create/destroy',
@@ -37,6 +39,7 @@ KEEP={
  'PROXY WARNING':'start-up warning','GAME d3d9.dll':'start-up: game-folder d3d9.dll identity','GAME WARNING':'start-up warning',
  'WORLD shadow cache VERIFY MISMATCH':'error (debug verify)','GEOMETRY MEMORY':'warning: allocation deferral',
  'STATIC SHADOW request deferred':'warning: allocation failure','STATIC SHADOW upload deferred':'warning: allocation failure',
+ 'WEATHER detect=off':'one-off: the mirror is disabled (0.3.198 rain)','WEATHER probe':'gated: RenderProfile sample frames only, like DRAWGATE ab (0.3.198 rain)','WEATHER draw states':'gated: RenderProfile sample frames only, first 4 detected weather draws per session (0.3.199)','WEATHER mist draw':'one-off: the first 4 skipped rain mist draws per session (0.3.199)',
  'CSTREAM active':'start-up one-off: the replay thread runs (0.3.192)','CSTREAM disabled':'start-up one-off: why the command stream is off (0.3.192)',
  'QUALITY':'settings','WORLD replacement deferred':'warning','WORLD pending mesh released':'event: orphaned staged upload released (0.3.156), at most once per geometry snapshot','WORLD geometry stalled':'warning: once per generation-admission stall episode (0.3.156 watchdog)','WORLD terrain allocation requestMiB':'warning: allocation deferred',
  'WORLD shadow terrain reach':'warning: terrain shadow reach reduced/restored under address-space pressure (0.3.190), at most one pair per 30 s backoff','WORLD geometry memory stall':'warning: one begin/end pair per geometry-memory stall episode (0.3.190)',
@@ -116,7 +119,9 @@ print('PASS Diagnostics=0 audit: every periodic line gated, only start-up/settin
 # turned back into logf the audit must find those lines.
 SPAN_FILES=['world_renderer.h','world_shadow_experiment.inl','world_point_rendering.inl','world_replay_probe.inl','world_rigid_memory.inl','world_diagnostics.h']
 SPAN_ALLOWED={'PREPARE worker':'0.3.177: watchdog (at most 5 a session) / record exception (first 4)','WORLD DISABLED':'error (check())','GEOMETRY MEMORY':'warning: allocation deferral','WORLD pending mesh released':'event (0.3.156)',
- 'SHADOW experiment selection allocation failed':'error','WORLD streaming retry':'capped error','WORLD staged mesh committed':'event: one per commit'}
+ 'SHADOW experiment selection allocation failed':'error','WORLD streaming retry':'capped error','WORLD staged mesh committed':'event: one per commit',
+ 'WORLD fog clouds disabled':'one-off error per device (0.3.199): optional shader creation failed','WORLD fog temporal disabled':'one-off error per device (0.3.199): optional shader creation failed',
+ 'GI probe blend texture unavailable':'one-off warning (0.3.197: static once flag)'}
 SPAN_DEFERRED=['MODEL GPU cache','MODEL bulk sharing','MODEL GPU policy','MODEL GPU clears','MODEL shadow actors','MODEL shadow selection','RIGID memory','RIGID event','WORLD actor packets']
 KEYWORDS={'if','for','while','switch','return','catch','sizeof','defined','decltype','static_assert','alignof','noexcept','do','else','try','new','delete'}
 def uncomment(t):return re.sub(r'/\*.*?\*/','',re.sub(r'//[^\n]*','',t),flags=re.S)

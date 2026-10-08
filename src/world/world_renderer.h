@@ -39,6 +39,7 @@
 #include "world_probe_cache.h"
 #include "world_probe_progress.h"
 #include "probe_activation.h"
+#include "probe_blend.h" // 0.3.197
 #include "patch_terrain_shadow.h"
 #include "celestial_time_warp.h"
 #include "cascade_anchor.h"
@@ -49,6 +50,11 @@
 #include "terrain_shadow_candidates.h"
 #include "legacy_fog.h"
 #include "horizon_haze.h"
+#include "weather_state.h"
+#include "weather_effects.h"
+#include "fog_clouds.h"
+#include "gpu_budget.h" // 0.3.200 (gpu budget)
+#include "job_system.h" // 0.3.200 (jobs)
 #include "sun_hue.h"
 #include "replay_constant_ranges.h"
 #include "replay_pose_groups.h"
@@ -217,7 +223,10 @@ private:
     NorthlightEffectsBuckets::Frame* effectsBuckets=nullptr;
     void bucket(NorthlightEffectsBuckets::Bucket b){if(effectsBuckets)effectsBuckets->mark(b);}
     NorthlightProbeActivation probeActivation;
+    NorthlightProbeBlend::Mirror probeBlend; // 0.3.197: same-key re-publication blend (probePrev, s8 in the GI pass)
+    unsigned probeBlendPublishes=0,probeBlendSlots=0; // 0.3.197: per LOCAL log interval
     bool valid=false,failed=false,reportedContext=false;
+    unsigned traceContext=0; /* 0.3.200 (frame trace): this frame's context path: 0 none, 1 terrain+global light, 2 terrain native light (camera disagreed), 3 WMO */
     unsigned contextRejects=0,frames=0,slowReports=0;
     DWORD diagnosticTick=0;
     // 0.3.169 coverage hold and geometry lead (render thread). coverMax: largest eye-to-active
@@ -244,6 +253,8 @@ private:
     struct PaletteRegion {std::string map;NorthlightRegionalFog::Region region;int tx=0,ty=0;};
     std::shared_ptr<const PaletteRegion> publishedPaletteRegion; // guarded by mutex
     bool celestialValid=false,shadowFrameReady=false;float authoredFill=1;
+    // 0.3.200: the last good celestial read (see updateWorldContext), held across single rejected reads.
+    static constexpr DWORD CelestialHoldMs=500;NorthlightCelestial::Context celestialHeld;std::string celestialHeldMap;DWORD celestialHeldAt=0;bool celestialHeldOk=false;unsigned long celestialHolds=0;
     NorthlightEffectSwitches::Settings effects;
     bool neutralShadowMaps=false;
     V sourceDirections[2],sourceColors[2];
@@ -268,7 +279,7 @@ private:
     std::unordered_map<IDirect3DPixelShader9*,FogShader> fogShaders;
     unsigned fogReports=0;
     float projection[3]={1,1,1};
-    IDirect3DTexture9 *shadow[4]={},*probe[5]={},*light=nullptr,*smoothLight=nullptr,*fog=nullptr,*fogBlurred=nullptr,*color=nullptr,*baselineLight=nullptr;
+    IDirect3DTexture9 *shadow[4]={},*probe[5]={},*probePrev=nullptr,*light=nullptr,*smoothLight=nullptr,*fog=nullptr,*fogBlurred=nullptr,*color=nullptr,*baselineLight=nullptr;
     IDirect3DTexture9 *normalBuffer=nullptr;IDirect3DSurface9* normalSurface=nullptr;
     IDirect3DTexture9* sourceVis[2][2]={};IDirect3DSurface9* sourceVisSurface[2][2]={};unsigned sourceVisIndex=0;bool sourceVisValid=false;
     IDirect3DTexture9 *temporalLight[2]={},*temporalDepth[2]={};IDirect3DSurface9 *temporalLightSurface[2]={},*temporalDepthSurface[2]={};
@@ -412,16 +423,61 @@ private:
     uint64_t liveChunkHash()const{uint64_t h=1469598103934665603ull;for(const auto& c:liveTerrainChunks){h^=uint64_t(uint32_t(c.first))*0x9E3779B97F4A7C15ull+uint64_t(uint32_t(c.second));h*=1099511628211ull;}return h;}
     IDirect3DPixelShader9 *cachedFastPS=nullptr,*cachedOpaqueFastPS=nullptr,*cachedOpaquePS=nullptr;
     IDirect3DPixelShader9 *lightingPS=nullptr,*giPS=nullptr,*fogPS=nullptr,*fogBlurPS=nullptr,*localDirectPS=nullptr,*removalPS=nullptr,*temporalPS=nullptr,*localFogPS=nullptr,*normalsPS=nullptr,*sourceVisPS=nullptr,*finalPS=nullptr,*shadowPS=nullptr,*cachedShadowPS=nullptr,*replayPS=nullptr;
+    // 0.3.199 (fog clouds): the moving fog banks' own half-resolution pass (FogClouds), its noise volume and the wind clock. The volume's bytes are
+    // generated once per process on a worker thread (first active frame, never DllMain) and shared by every device; the holder is leaked on
+    // purpose and the worker detached, so neither DLL unload nor process exit waits on a thread under the loader lock.
+    struct FogCloudNoise{
+        std::vector<uint8_t> data;NorthlightFogClouds::Quantiles quantiles{};std::atomic<bool> ready{false},started{false};
+        void request(){
+            if(started.exchange(true))return;
+            try{std::thread([this]{
+                const auto t0=std::chrono::steady_clock::now();
+                try{data=NorthlightFogClouds::generate();quantiles=NorthlightFogClouds::quantiles(data.data());}catch(...){return;} /* allocation failure: never ready, no retry */
+                const double ms=std::chrono::duration<double,std::milli>(std::chrono::steady_clock::now()-t0).count();
+                ready.store(true,std::memory_order_release);logf("WORLD fog clouds noise ms=%.1f",ms);
+            }).detach();}catch(...){}
+        }
+    };
+    static FogCloudNoise& fogCloudNoise(){static FogCloudNoise* noise=new FogCloudNoise;return *noise;}
+    IDirect3DPixelShader9* fogCloudsPS=nullptr;IDirect3DVolumeTexture9* cloudNoise=nullptr;bool cloudNoiseFailed=false;
+    // 0.3.199 (fog temporal): last frame's resolved half-resolution fog (swapped with fogBlurred after the pass, so one extra target is enough), valid only after a frame that ran the pass.
+    IDirect3DPixelShader9* fogTemporalPS=nullptr;IDirect3DTexture9* fogHistory=nullptr;IDirect3DSurface9* fogHistorySurface=nullptr;bool fogHistoryValid=false;
+    static constexpr float FogTemporalWeight=.85f; /* history weight in c64.y (0 = pass through) */
+    // 0.3.200 (gpu budget): the level the proxy's controller chose (0 = full, always with GpuBudgetMs=0).
+    unsigned gpuBudgetLevel=0;
+    NorthlightFogClouds::Wind cloudWind;int64_t cloudQpc=0;float cloudDenseZone=0,cloudLush=1; /* smoothed dense-zone profile at the camera (Duskwood 1), see denseZoneDamp; smoothed lush zone at the camera (forest/grass 1), see derive */
+    // The N^3 volume as L8 (A8R8G8B8 with the value in every channel where L8 volumes are missing); one failure disables the clouds for good, nothing else.
+    bool ensureCloudNoise(){
+        if(cloudNoise)return true;
+        auto& noise=fogCloudNoise();
+        if(cloudNoiseFailed||memoryPressure||!noise.ready.load(std::memory_order_acquire))return false;
+        constexpr unsigned N=NorthlightFogClouds::N;
+        IDirect3DVolumeTexture9* t=nullptr;bool l8=true;
+        HRESULT hr=d->CreateVolumeTexture(N,N,N,1,0,D3DFMT_L8,D3DPOOL_MANAGED,&t,nullptr);
+        if(FAILED(hr)||!t){t=nullptr;l8=false;hr=d->CreateVolumeTexture(N,N,N,1,0,D3DFMT_A8R8G8B8,D3DPOOL_MANAGED,&t,nullptr);}
+        D3DLOCKED_BOX box={};
+        if(FAILED(hr)||!t||FAILED(t->LockBox(0,&box,nullptr,0))||!box.pBits){
+            if(t)t->Release();cloudNoiseFailed=true;logf("WORLD fog clouds disabled: noise volume HRESULT=%08lx",(unsigned long)hr);return false;}
+        for(unsigned z=0;z<N;++z)for(unsigned y=0;y<N;++y){
+            const uint8_t* src=noise.data.data()+size_t(N)*(y+size_t(N)*z);
+            uint8_t* row=static_cast<uint8_t*>(box.pBits)+size_t(z)*box.SlicePitch+size_t(y)*box.RowPitch;
+            if(l8)memcpy(row,src,N);else for(unsigned x=0;x<N;++x)reinterpret_cast<uint32_t*>(row)[x]=0xff000000u|src[x]*0x010101u;
+        }
+        t->UnlockBox(0);cloudNoise=t;logf("WORLD fog clouds noise volume %ux%ux%u %s",N,N,N,l8?"L8":"A8R8G8B8");return true;
+    }
     unsigned localDirectCount=0;float localDirectNearest=0;
+    // 0.3.197: soft cap, incumbent bias and fades for the local lights (task 13). The clock is the selection's own: its gap and reset policy mirror useHistory.
+    NorthlightLocalLightSelection::Tracker localLightTracker;std::string localLightMap;V localLightCamera;int64_t localLightQpc=0;double localSelectUsSum=0,localSelectUsMax=0;unsigned localSelectFrames=0;
     // Additive local light passes add exactly +0 outside their batch's projected
     // spheres; scissor them there. Counters cover one LOCAL log interval.
     NorthlightLocalLightScissor::View localScissorView;
     unsigned localScissorBatches=0,localScissorClipped=0,localScissorSkipped=0;double localScissorCoverage=0;
-    template<std::size_t N> bool localScissor(const std::array<NorthlightLocalLightSelection::Constant,N>& position,unsigned count){
+    // 0.3.200 (jobs): known = the batch's rect from atmosphereWork (the same batchRect of the same view and positions), else computed here.
+    template<std::size_t N> bool localScissor(const std::array<NorthlightLocalLightSelection::Constant,N>& position,unsigned count,const NorthlightLocalLightScissor::Rect* known=nullptr){
         if(!NorthlightLocalLightScissor::Enabled)return true;
         // Fail open: without a proven view the batch draws unclipped.
         if(!localScissorView.valid){d->SetRenderState(D3DRS_SCISSORTESTENABLE,FALSE);++localScissorBatches;localScissorCoverage+=1;return true;}
-        const auto r=NorthlightLocalLightScissor::batchRect(localScissorView,position,count);
+        const auto r=known?*known:NorthlightLocalLightScissor::batchRect(localScissorView,position,count);
         const double all=double(localScissorView.halfW)*localScissorView.halfH;
         ++localScissorBatches;localScissorCoverage+=all>0?double(r.area())/all:1.;
         if(!r.area()){++localScissorSkipped;return false;} // no pixel can change: skip the draw only
@@ -723,6 +779,17 @@ private:
         std::shared_ptr<const NorthlightActorDeformation::Program> program; /* 0.3.179 (T1): actorPrograms' object (null: none) */
     };
     std::unordered_map<IDirect3DVertexShader9*,CaptureShader> captureShaders;
+    // 0.3.196 (task 12): one-entry lookup cache for repeated draws of the same shader. terrainShaders/captureShaders change only in
+    // registerShader (a freed address can be re-registered), which bumps worldShaderGen first, so a stale entry never matches.
+    // The cached CaptureShader pointer is a map node (stable across rehash) and is dropped with the generation on any erase.
+    std::uint32_t worldShaderGen=0;
+    struct ShaderLookup{IDirect3DVertexShader9* shader=nullptr;std::uint32_t gen=~0u;bool terrain=false;const CaptureShader* capture=nullptr;};
+    ShaderLookup lastShader;unsigned long long shaderLookupHits=0,shaderLookupMisses=0;
+    const ShaderLookup& lookupShader(IDirect3DVertexShader9* shader){
+        if(lastShader.shader==shader&&lastShader.gen==worldShaderGen){++shaderLookupHits;return lastShader;}
+        ++shaderLookupMisses;auto it=captureShaders.find(shader);
+        lastShader.shader=shader;lastShader.gen=worldShaderGen;lastShader.terrain=terrainShaders.count(shader)!=0;lastShader.capture=it==captureShaders.end()?nullptr:&it->second;return lastShader;
+    }
     // 0.3.179 (T1): programs erased by registerShader while replays may still point at them; released after
     // endFrame's recycle (0.3.183: an abandoned worker reads the copies pinned in prepareQuarantinedPrograms).
     std::vector<std::shared_ptr<const NorthlightActorDeformation::Program>> retiredPrograms;
@@ -1419,6 +1486,8 @@ private:
         if(width==w&&height==h&&color)return true;
         releaseGPU();width=w;height=h;
         if(!check(d->CreatePixelShader(kWorldGIShader,&giPS),"world GI shader")||!check(d->CreatePixelShader(kWorldLightingShader,&lightingPS),"world lighting shader")||!check(d->CreatePixelShader(kWorldFogShader,&fogPS),"volume shader")||!check(d->CreatePixelShader(kFogBlurShader,&fogBlurPS),"volume blur shader")||!check(d->CreatePixelShader(kLocalDirectShader,&localDirectPS),"local direct light shader")||!check(d->CreatePixelShader(kRemovalSmoothShader,&removalPS),"removal smoothing shader")||!check(d->CreatePixelShader(kTemporalLightShader,&temporalPS),"temporal light shader")||!check(d->CreatePixelShader(kLocalFogShader,&localFogPS),"local fog glow shader")||!check(d->CreatePixelShader(kWorldNormalsShader,&normalsPS),"world normals shader")||!check(d->CreatePixelShader(kSourceVisibilityPSShader,&sourceVisPS),"source visibility shader")||!check(d->CreatePixelShader(kWorldCompositeShader,&finalPS),"world composite shader")||!check(d->CreatePixelShader(kShadowPSShader,&shadowPS),"shadow shader")||!check(d->CreatePixelShader(kShadowReplayPSShader,&replayPS),"replay shader")||!check(d->CreateVertexShader(kShadowVSShader,&shadowVS),"shadow vertex shader")||!check(d->CreateVertexShader(kShadowCacheVSShader,&cachedShadowVS),"cached shadow vertex shader")||!check(d->CreatePixelShader(kStaticCasterPSShader,&cachedShadowPS),"cached shadow depth shader"))return false;
+        if(FAILED(d->CreatePixelShader(kFogCloudsShader,&fogCloudsPS))){fogCloudsPS=nullptr;logf("WORLD fog clouds disabled: shader creation failed");} /* 0.3.199 (fog clouds): optional, the rest of the world never depends on it */
+        if(FAILED(d->CreatePixelShader(kFogTemporalShader,&fogTemporalPS))){fogTemporalPS=nullptr;logf("WORLD fog temporal disabled: shader creation failed");} /* 0.3.199 (fog temporal): optional as well, the raw fog is the fallback */
         // Optional equivalent variants; unsupported creation retains .95 depth semantics.
         if(FAILED(d->CreatePixelShader(kStaticCasterFastPSShader,&cachedFastPS)))drop(cachedFastPS);
         if(FAILED(d->CreatePixelShader(kStaticCasterOpaqueFastPSShader,&cachedOpaqueFastPS)))drop(cachedOpaqueFastPS);
@@ -1430,11 +1499,11 @@ private:
         if(!target(1024,1024,D3DFMT_R32F,&shadowScratch,&shadowScratchSurface))return false;
         if(!check(d->CreatePixelShader(kShadowUnionShader,&unionPS),"shadow union shader"))return false;
         invalidateShadowCache();
-        {const UINT n=NorthlightGI::probeLayout().atlas;for(int i=0;i<5;++i)if(!check(d->CreateTexture(n*n,i==3?n*6:n,1,0,D3DFMT_A32B32G32R32F,D3DPOOL_MANAGED,&probe[i],nullptr),"GI probe texture"))return false;}
+        {const UINT n=NorthlightGI::probeLayout().atlas;for(int i=0;i<5;++i)if(!check(d->CreateTexture(n*n,i==3?n*6:n,1,0,D3DFMT_A32B32G32R32F,D3DPOOL_MANAGED,&probe[i],nullptr),"GI probe texture"))return false;if(!probePrev&&FAILED(d->CreateTexture(n*n*3,n,1,0,D3DFMT_A32B32G32R32F,D3DPOOL_MANAGED,&probePrev,nullptr))){probePrev=nullptr;static bool logged=false;if(!logged){logged=true;logf("GI probe blend texture unavailable; same-key probe re-publication switches instantly");}}}
         // AO 1, bloom 0 for TemporalLight/WorldComposite on frames the proxy composites itself.
         if(!check(d->CreateTexture(1,1,1,0,D3DFMT_A8R8G8B8,D3DPOOL_MANAGED,&neutralAO,nullptr),"neutral AO texture"))return false;
         {D3DLOCKED_RECT lock={};if(!check(neutralAO->LockRect(0,&lock,nullptr,0),"neutral AO lock"))return false;*static_cast<DWORD*>(lock.pBits)=0xff000000u;neutralAO->UnlockRect(0);}
-        if(!target(w/2,h/2,D3DFMT_A16B16G16R16F,&baselineLight,&baselineSurface)||!target(w/2,h/2,D3DFMT_A16B16G16R16F,&light,&lightSurface)||!target(w/2,h/2,D3DFMT_A16B16G16R16F,&smoothLight,&smoothSurface)||!target(w/2,h/2,D3DFMT_A16B16G16R16F,&fog,&fogSurface)||!target(w/2,h/2,D3DFMT_A16B16G16R16F,&fogBlurred,&fogBlurredSurface)||!target(w/2,h/2,D3DFMT_A16B16G16R16F,&normalBuffer,&normalSurface)||!target(1,1,D3DFMT_A16B16G16R16F,&sourceVis[0][0],&sourceVisSurface[0][0])||!target(1,1,D3DFMT_A16B16G16R16F,&sourceVis[0][1],&sourceVisSurface[0][1])||!target(1,1,D3DFMT_A16B16G16R16F,&sourceVis[1][0],&sourceVisSurface[1][0])||!target(1,1,D3DFMT_A16B16G16R16F,&sourceVis[1][1],&sourceVisSurface[1][1])||!target(w/2,h/2,D3DFMT_A16B16G16R16F,&temporalLight[0],&temporalLightSurface[0])||!target(w/2,h/2,D3DFMT_A16B16G16R16F,&temporalLight[1],&temporalLightSurface[1])||!target(w/2,h/2,D3DFMT_R32F,&temporalDepth[0],&temporalDepthSurface[0])||!target(w/2,h/2,D3DFMT_R32F,&temporalDepth[1],&temporalDepthSurface[1])||!target(w,h,fmt,&color,&colorSurface))return false;
+        if(!target(w/2,h/2,D3DFMT_A16B16G16R16F,&baselineLight,&baselineSurface)||!target(w/2,h/2,D3DFMT_A16B16G16R16F,&light,&lightSurface)||!target(w/2,h/2,D3DFMT_A16B16G16R16F,&smoothLight,&smoothSurface)||!target(w/2,h/2,D3DFMT_A16B16G16R16F,&fog,&fogSurface)||!target(w/2,h/2,D3DFMT_A16B16G16R16F,&fogBlurred,&fogBlurredSurface)||!target(w/2,h/2,D3DFMT_A16B16G16R16F,&fogHistory,&fogHistorySurface)||!target(w/2,h/2,D3DFMT_A16B16G16R16F,&normalBuffer,&normalSurface)||!target(1,1,D3DFMT_A16B16G16R16F,&sourceVis[0][0],&sourceVisSurface[0][0])||!target(1,1,D3DFMT_A16B16G16R16F,&sourceVis[0][1],&sourceVisSurface[0][1])||!target(1,1,D3DFMT_A16B16G16R16F,&sourceVis[1][0],&sourceVisSurface[1][0])||!target(1,1,D3DFMT_A16B16G16R16F,&sourceVis[1][1],&sourceVisSurface[1][1])||!target(w/2,h/2,D3DFMT_A16B16G16R16F,&temporalLight[0],&temporalLightSurface[0])||!target(w/2,h/2,D3DFMT_A16B16G16R16F,&temporalLight[1],&temporalLightSurface[1])||!target(w/2,h/2,D3DFMT_R32F,&temporalDepth[0],&temporalDepthSurface[0])||!target(w/2,h/2,D3DFMT_R32F,&temporalDepth[1],&temporalDepthSurface[1])||!target(w,h,fmt,&color,&colorSurface))return false;
         const D3DVERTEXELEMENT9 elements[]={{0,0,D3DDECLTYPE_FLOAT3,D3DDECLMETHOD_DEFAULT,D3DDECLUSAGE_POSITION,0},{0,12,D3DDECLTYPE_FLOAT3,D3DDECLMETHOD_DEFAULT,D3DDECLUSAGE_NORMAL,0},{0,24,D3DDECLTYPE_FLOAT2,D3DDECLMETHOD_DEFAULT,D3DDECLUSAGE_TEXCOORD,0},D3DDECL_END()};
         return check(d->CreateVertexDeclaration(elements,&shadowDecl),"shadow declaration");
     }
@@ -1637,17 +1706,23 @@ private:
             if(active->atlas.size()!=NorthlightGI::probeLayout().atlasSize())return false;
             probeActivation.begin(active->map);
             float activationNow=float(DWORD(GetTickCount()-animationEpoch))*.001f;
+            probeBlend.begin(active->map);const unsigned blendedSlots=probePrev?probeBlend.publish(active->atlas,activationNow):0; // 0.3.197
             const unsigned n=NorthlightGI::probeLayout().atlas;
             for(int channel=0;channel<5;++channel){D3DLOCKED_RECT lock;if(!check(probe[channel]->LockRect(0,&lock,nullptr,0),"probe upload"))return false;
                 for(unsigned z=0;z<n;++z)for(unsigned y=0;y<n;++y)for(unsigned x=0;x<n;++x){
                     const auto& entry=active->atlas[x+y*n+z*n*n];const auto& p=entry.probe;
                     float* dst=(float*)((char*)lock.pBits+y*lock.Pitch)+(x+z*n)*4;
                     if(channel<3){for(int k=0;k<4;++k)dst[k]=channel==0?p.sh[k].x:channel==1?p.sh[k].y:p.sh[k].z;}
-                    else if(channel==3)for(unsigned axis=0;axis<6;++axis){float* moment=(float*)((char*)lock.pBits+(y+axis*n)*lock.Pitch)+(x+z*n)*4;moment[0]=p.moments[axis].mean;moment[1]=p.moments[axis].meanSquare;moment[2]=entry.occupied&&p.valid?1.f:0.f;moment[3]=0;}
+                    else if(channel==3)for(unsigned axis=0;axis<6;++axis){float* moment=(float*)((char*)lock.pBits+(y+axis*n)*lock.Pitch)+(x+z*n)*4;moment[0]=p.moments[axis].mean;moment[1]=p.moments[axis].meanSquare;moment[2]=entry.occupied&&p.valid?1.f:0.f;moment[3]=probePrev?probeBlend.start(x+y*n+z*n*n):NorthlightProbeBlend::None;}
                     else{dst[0]=float(entry.key.x);dst[1]=float(entry.key.y);dst[2]=float(entry.key.z);dst[3]=probeActivation.update(x+y*n+z*n*n,entry,activationNow);}
                 }
                 probe[channel]->UnlockRect(0);
             }
+            if(probePrev){D3DLOCKED_RECT lock; /* 0.3.197: what was on screen before each slot's latest SH, R|G|B in three horizontal thirds */
+                if(!check(probePrev->LockRect(0,&lock,nullptr,0),"probe blend upload"))return false;
+                for(unsigned z=0;z<n;++z)for(unsigned y=0;y<n;++y)for(unsigned x=0;x<n;++x){const float* previous=probeBlend.previous(x+y*n+z*n*n);float* row=(float*)((char*)lock.pBits+y*lock.Pitch)+(x+z*n)*4;for(int c=0;c<3;++c)for(int k=0;k<4;++k)row[c*n*n*4+k]=previous[c*4+k];}
+                probePrev->UnlockRect(0);}
+            ++probeBlendPublishes;probeBlendSlots+=blendedSlots; /* 0.3.197: logged with LOCAL direct (the upload span has no log line) */
             uploadedSerial=active->serial;
         }return true;
     }
@@ -1792,7 +1867,7 @@ public:
     ~WorldRenderer(){prepareWorker.join(); /* 0.3.179: first: an abandoned worker may still be inside a record */
         logSnapshotAb(); /* 0.3.181: the SNAPSHOT ab window at device destroy */
         {std::lock_guard<std::mutex> lock(mutex);stopping=true;}wake.notify_one();if(worker.joinable())worker.join();releaseGPU();for(auto& p:captureShaders)drop(p.second.replacement);for(auto& p:terrainShadowShaders)drop(p.second);}
-    void releaseGPU(){replayBoundsAbandon();releaseReplayProbe();staticCasters.settle();rigidMemoryClear();prepareQuiesce();neutralShadowMaps=false;prepareCaches->sampled.clear();prepareCaches->bones.clear();prepareCachesStale=false;if(replays.empty()&&heldShadowReplays.empty())prepareFrameRelease(); /* 0.3.179: no replay left to point at them */actorShadowHistory.clear();actorShadowOriginValid=false;replayBoundsMetadata.clear();replayBoundsCache.clear();declarationCache.clear();uploadedStaticOwners.reset();staticOwnerGeneration=UINT64_MAX;staticCasters.reset();staticMatcher.clear();staticScene.reset();staticRetryTick=0;stateBlocks.clear();uploadedTerrain.clear();liveTerrainIndexCount=liveDirectionalIndexCount=0;fixedTerrain.reset();fixedTerrainBits.reset();liveTerrainGeneration=0;drop(regionalFogTexture);drop(neutralAO);uploadedFogField.reset();releasePointGPU();probeActivation.reset();drop(baselineSurface);drop(baselineLight);releaseReplayGPU();liveTerrainGPU.clear();{auto& queries=fence();NorthlightDynamicRing::reset(liveIndexRing,0,queries);queries.drop();}drop(liveIndicesGPU);liveIndexBytes=0;liveIndexBase=0;pendingMesh.reset();clearMesh();retiredMaterials.clear();releaseMeshPool();uploadedMap.clear();for(auto& t:shadow)drop(t);for(auto& s:shadowSurface)drop(s);for(auto& t:shadowCache)drop(t);for(auto& s:shadowCacheSurface)drop(s);drop(shadowCacheDepth);drop(shadowVerifySurface);drop(shadowVerify);for(auto& r:shadowVerifyRead)drop(r);drop(shadowScratch);drop(shadowScratchSurface);drop(unionPS);invalidateShadowCache();for(auto& t:probe)drop(t);drop(shadowDepth);drop(lightSurface);drop(smoothSurface);drop(fogSurface);drop(fogBlurredSurface);drop(colorSurface);drop(light);drop(smoothLight);drop(fog);drop(fogBlurred);drop(color);drop(lightingPS);drop(giPS);drop(fogPS);drop(fogBlurPS);drop(localDirectPS);drop(removalPS);drop(temporalPS);drop(localFogPS);drop(normalsPS);drop(normalBuffer);drop(normalSurface);drop(sourceVisPS);for(int a=0;a<2;++a)for(int b=0;b<2;++b){drop(sourceVis[a][b]);drop(sourceVisSurface[a][b]);}sourceVisValid=false;for(int i=0;i<2;++i){drop(temporalLight[i]);drop(temporalLightSurface[i]);drop(temporalDepth[i]);drop(temporalDepthSurface[i]);}temporalValid=false;drop(finalPS);drop(shadowPS);drop(replayPS);drop(shadowVS);drop(cachedShadowVS);drop(cachedShadowPS);drop(cachedFastPS);drop(cachedOpaqueFastPS);drop(cachedOpaquePS);drop(shadowDecl);width=height=0;uploadedSerial=0;}
+    void releaseGPU(){replayBoundsAbandon();releaseReplayProbe();staticCasters.settle();rigidMemoryClear();prepareQuiesce();neutralShadowMaps=false;prepareCaches->sampled.clear();prepareCaches->bones.clear();prepareCachesStale=false;if(replays.empty()&&heldShadowReplays.empty())prepareFrameRelease(); /* 0.3.179: no replay left to point at them */actorShadowHistory.clear();actorShadowOriginValid=false;replayBoundsMetadata.clear();replayBoundsCache.clear();declarationCache.clear();uploadedStaticOwners.reset();staticOwnerGeneration=UINT64_MAX;staticCasters.reset();staticMatcher.clear();staticScene.reset();staticRetryTick=0;stateBlocks.clear();uploadedTerrain.clear();liveTerrainIndexCount=liveDirectionalIndexCount=0;fixedTerrain.reset();fixedTerrainBits.reset();liveTerrainGeneration=0;drop(regionalFogTexture);drop(neutralAO);uploadedFogField.reset();releasePointGPU();probeActivation.reset();probeBlend.reset();drop(baselineSurface);drop(baselineLight);releaseReplayGPU();liveTerrainGPU.clear();{auto& queries=fence();NorthlightDynamicRing::reset(liveIndexRing,0,queries);queries.drop();}drop(liveIndicesGPU);liveIndexBytes=0;liveIndexBase=0;pendingMesh.reset();clearMesh();retiredMaterials.clear();releaseMeshPool();uploadedMap.clear();for(auto& t:shadow)drop(t);for(auto& s:shadowSurface)drop(s);for(auto& t:shadowCache)drop(t);for(auto& s:shadowCacheSurface)drop(s);drop(shadowCacheDepth);drop(shadowVerifySurface);drop(shadowVerify);for(auto& r:shadowVerifyRead)drop(r);drop(shadowScratch);drop(shadowScratchSurface);drop(unionPS);invalidateShadowCache();for(auto& t:probe)drop(t);drop(probePrev);drop(shadowDepth);drop(lightSurface);drop(smoothSurface);drop(fogSurface);drop(fogBlurredSurface);drop(fogHistorySurface);drop(fogHistory);drop(fogTemporalPS);fogHistoryValid=false;drop(colorSurface);drop(light);drop(smoothLight);drop(fog);drop(fogBlurred);drop(color);drop(lightingPS);drop(giPS);drop(fogPS);drop(fogBlurPS);drop(fogCloudsPS);drop(cloudNoise);drop(localDirectPS);drop(removalPS);drop(temporalPS);drop(localFogPS);drop(normalsPS);drop(normalBuffer);drop(normalSurface);drop(sourceVisPS);for(int a=0;a<2;++a)for(int b=0;b<2;++b){drop(sourceVis[a][b]);drop(sourceVisSurface[a][b]);}sourceVisValid=false;for(int i=0;i<2;++i){drop(temporalLight[i]);drop(temporalLightSurface[i]);drop(temporalDepth[i]);drop(temporalDepthSurface[i]);}temporalValid=false;drop(finalPS);drop(shadowPS);drop(replayPS);drop(shadowVS);drop(cachedShadowVS);drop(cachedShadowPS);drop(cachedFastPS);drop(cachedOpaqueFastPS);drop(cachedOpaquePS);drop(shadowDecl);width=height=0;uploadedSerial=0;}
     // Explicit enable/retry only, called after the wrapper's clearFrame(). This
     // never calls endFrame(), so packet capture and cleanup run exactly once.
     void recover(){meshRetry.clear();if(!failed)return;releaseGPU();failed=false;valid=false;streamingReports=0;logf("WORLD explicit recovery requested");}
@@ -1902,7 +1977,7 @@ public:
         captureRejectedBytes=acceptedSkinnedBytes=acceptedOtherBytes=0;nearAdmitted=nearRefused=0;nearBytes=0;nearAnchorReady=false;
         previousCacheHits=terrainBoundsCache.persistentHits();capturedConstantBytes=capturedConstantCalls=0;capturedSM1Draws=capturedRelativeDraws=0;
         terrainCaptureTicks=replayCaptureTicks=0;terrainCaptureCalls=terrainUPCalls=replayCaptureCalls=unknownCaptureCalls=0;captureSampled=false;
-        valid=false;shadowFrameReady=false;legacyFog=NorthlightLegacyFog::Constants{};
+        valid=false;traceContext=0;shadowFrameReady=false;legacyFog=NorthlightLegacyFog::Constants{};
         // Bound retained vector capacities across changing scenes. Reuse storage,
         // never old geometry: each subsequent draw still re-reads every byte.
         // Give the current scene first claim on the pool, instead of letting
@@ -1928,9 +2003,23 @@ public:
     bool captureSkippedLastFrame()const{return lastCaptureSkipped;} /* for the sampled CPU profile, logged after endFrame */
     unsigned capturePhaseReadsLastFrame()const{return lastCapturePhaseReads;} /* 0.3.150: clock reads of the capture-phase subset (inside the capture timers), likewise */
     bool hasContext()const{return valid&&!failed&&!workerFault();}
+    unsigned frameTraceContext()const{return traceContext;} /* 0.3.200 (frame trace) */
     bool actorShadowsEnabled()const{return quality.actorShadows!=0;}
     bool commandStream()const{return quality.commandStream!=0;} /* 0.3.192 (CS): the replay-thread stream was requested; creation-time key, see stream_hooks.h */
     unsigned blobShadowStrength()const{return quality.blobShadowStrength;} /* 0.3.193: read once at device creation */
+    // 0.3.198 (rain): the smoothed weather state, set once per frame at the frame boundary (Device::finishFrameImpl); no effect reads it yet.
+    NorthlightWeather::State weatherState{};
+    void setWeather(const NorthlightWeather::State& s){weatherState=s;}
+    const NorthlightWeather::State& weather()const{return weatherState;}
+    // 0.3.198 (rain): the settings (Weather 0/1, RainFog 0..2) and the per-frame scalars derived from them and weather():
+    // render() and the celestial renderers read this one place; all zero (identity) with Weather=0 or no weather.
+    unsigned weatherSetting()const{return quality.weather;}
+    unsigned rainFogSetting()const{return quality.rainFog;}
+    // 0.3.200 (gpu budget): GpuBudgetMs (0 = off) and the controller's level for the next frames; off forces level 0 (the full path, unchanged).
+    unsigned gpuBudgetMs()const{return quality.gpuBudgetMs;}
+    void setGpuBudgetLevel(unsigned level){gpuBudgetLevel=quality.gpuBudgetMs?std::min(level,NorthlightGpuBudget::MaxLevel):0u;}
+    bool rainBlendSetting()const{return quality.weather!=0;} /* 0.3.199 (rain): the draw hook's alpha-blended rain streaks and rain-only mist skip, with Weather=1 */
+    NorthlightWeatherEffects::Frame weatherEffects()const{return NorthlightWeatherEffects::derive(weatherState,quality.weather,quality.rainFog);}
     bool frameDrawGates()const{return quality.frameDrawGates!=0;} /* 0.3.187: read once at device creation */ /* 0.3.158: ActorShadows=0 leaves actor shadows to the game's blobs */
     const float* legacyFogParameters()const{return legacyFog.parameters;}
     const NorthlightCelestialProfiles::Profile& celestialPalette(const char* map,const float* camera){
@@ -1997,7 +2086,7 @@ public:
             if(++wmoRejects==1||(wmoRejects%3600==0&&NorthlightDiagnostics::enabled()))logf("CITY context rejected camera=%s count=%u",NorthlightWorldCamera::rejectName(why.reason),wmoRejects);
             return false;
         }
-        valid=true;projection[0]=rows[0];projection[1]=rows[5];projection[2]=rows[11];
+        valid=true;traceContext=3;projection[0]=rows[0];projection[1]=rows[5];projection[2]=rows[11];
         readOriginalFog(30,it->second->fog);
         updateWorldContext(map,camera.camera,globalRead?&light:nullptr);
         if(++wmoContexts==1||(wmoContexts%600==0&&NorthlightDiagnostics::enabled()))logf("CITY WMO context accepted map=%s count=%u fogProof=%d globalLight=%d",map,wmoContexts,it->second->fog,globalRead);
@@ -2014,6 +2103,7 @@ public:
         NorthlightWmoContext::Lighting global;
         bool globalRead=cameraMatches&&NorthlightWmoContext::readGlobalLighting(camera,global);
         bool decoded=registers&&gameContext&&NorthlightWmoContext::terrainContext(view,nativeRead?lighting:nullptr,camera,globalRead?&global:nullptr,context);
+        traceContext=globalRead?1u:2u;
         bool agreement=decoded;
         if(!agreement){
             if(++contextRejects==1||(contextRejects%3600==0&&NorthlightDiagnostics::enabled()))logf("WORLD context rejected: registers=%d affineLight=%d clientRead=%d cameraAgreement=%d map=%s shaderCamera=(%.2f %.2f %.2f) gameCamera=(%.2f %.2f %.2f) light=(%.3f %.3f %.3f) count=%u",registers,decoded,gameContext,agreement,map,context.camera[0],context.camera[1],context.camera[2],camera[0],camera[1],camera[2],lighting[0],lighting[1],lighting[2],contextRejects);return;}
@@ -2039,6 +2129,12 @@ public:
         if(unsigned fault=workerFault()){if(!failed)logf("WORLD worker stopped: %s; restart required",workerFaultMessage(fault));failed=true;valid=false;return;}
         if(!reportedContext){logf("WORLD context validated: map=%s camera=(%.2f %.2f %.2f) sun=(%.3f %.3f %.3f)",map,camera[0],camera[1],camera[2],context.lightDirection[0],context.lightDirection[1],context.lightDirection[2]);reportedContext=true;}
         celestialValid=NorthlightCelestial::read(camera,context.direct,celestial);
+        // 0.3.200: a sky block read rejected for one frame (the two copies differ while the game rewrites it, more often with the game frames
+        // ahead) dropped the sun weight to 0 for that frame: the sun light, shadows and shafts flashed off. The last good read on the same map
+        // stands in for up to CelestialHoldMs; a longer failure (loading, an indoor map without a sky) still ends at the fallback.
+        {const DWORD now=GetTickCount();
+         if(celestialValid){celestialHeld=celestial;celestialHeldMap=map;celestialHeldAt=now;celestialHeldOk=true;}
+         else if(celestialHeldOk&&celestialHeldMap==map&&DWORD(now-celestialHeldAt)<=CelestialHoldMs){celestial=celestialHeld;celestialValid=true;++celestialHolds;}}
         if(celestialValid){
             // A pure render-clock orbit shared by discs, shadows and fog.
             const float nativeSunAlpha=celestial.sun.alpha,nativeMoonAlpha=celestial.moon.alpha;
@@ -2167,6 +2263,7 @@ public:
         info.colorRegister=NorthlightLegacyFog::ps3FogColorRegister(code.data(),code.size());info.verified=info.colorRegister>=0;fogShaders[shader]=info;
     }
     void registerShader(IDirect3DVertexShader9* shader,uint64_t hash){
+        ++worldShaderGen; /* 0.3.196 (task 12): before any map changes */
         replayBoundsMetadata.invalidateShader(shader);
         wmoShaders.erase(shader);if(auto* info=NorthlightWmoContext::signature(hash))wmoShaders[shader]=info;
         terrainShaders.erase(shader);if(contains(kTerrainVS,hash))terrainShaders.insert(shader);
@@ -2212,7 +2309,7 @@ public:
     void captureUP(D3DPRIMITIVETYPE type,UINT minimum,UINT vertexTotal,UINT count,const void* indexData,D3DFORMAT format,const void* vertexData,UINT stride,bool indexed,IDirect3DVertexShader9* shader,bool selfCheck,bool sample){
         constantSelfCheck=selfCheck;sample=sample&&NorthlightDiagnostics::enabled();
         if(!ready())return;
-        if(!terrainShaders.count(shader)){captureSampled|=sample;captureModel(type,0,minimum,vertexTotal,0,count,indexed,shader,sample,indexData,format,vertexData,stride);return;}
+        if(!lookupShader(shader).terrain){captureSampled|=sample;captureModel(type,0,minimum,vertexTotal,0,count,indexed,shader,sample,indexData,format,vertexData,stride);return;}
         captureSampled|=sample;if(sample){++terrainCaptureCalls;++terrainUPCalls;}CpuScope cpu(sample?&terrainCaptureTicks:nullptr);
         ++terrainAttempts;NorthlightTerrainCapture::MeshSnapshot snapshot;NorthlightTerrainCapture::Diagnostics why;
         bool ok=indexed?terrainBoundsCache.readMeshUP(d,type,minimum,vertexTotal,count,indexData,format,vertexData,stride,context.view,snapshot,&why):
@@ -2223,7 +2320,7 @@ public:
     void capture(D3DPRIMITIVETYPE type,INT base,UINT min,UINT vertexTotal,UINT start,UINT count,bool indexed,IDirect3DVertexShader9* current,bool selfCheck,bool sample){
         constantSelfCheck=selfCheck;sample=sample&&NorthlightDiagnostics::enabled();
         if(!ready()||replays.size()>=4096||(type!=D3DPT_TRIANGLELIST&&type!=D3DPT_TRIANGLESTRIP))return;
-        captureSampled|=sample;bool isTerrain=terrainShaders.count(current)!=0;
+        captureSampled|=sample;bool isTerrain=lookupShader(current).terrain;
         if(isTerrain){
             if(sample)++terrainCaptureCalls;CpuScope cpu(sample?&terrainCaptureTicks:nullptr);
             ++terrainAttempts;
@@ -2506,8 +2603,8 @@ public:
         return priority&&replaySnapshots.nearReserve()&&!replaySnapshots.countExhausted(priority)&&nearDraw(shader);}
     void captureModel(D3DPRIMITIVETYPE type,INT base,UINT minimum,UINT vertexTotal,UINT start,UINT count,bool indexed,IDirect3DVertexShader9* current,bool sample,const void* userIndices,D3DFORMAT userFormat,const void* userVertices,UINT userStride){
         if(modelCaptureSkipped())return; /* previous replays/actor packets are not needed this frame */
-        auto it=captureShaders.find(current);if(it==captureShaders.end()){if(sample)++unknownCaptureCalls;return;}
-        const auto& metadata=it->second;
+        const CaptureShader* found=lookupShader(current).capture;if(!found){if(sample)++unknownCaptureCalls;return;}
+        const auto& metadata=*found;
         // 0.3.173 rigid memory: did the game draw a remembered prop? Before every capture rejection.
         if(!rigidDrawKeys.empty()&&rigidDrawKeys.contains(current,count))rigidMemoryDrawn(current,count);
         // Shadow fate (diagnostic window only): the outcome recorded at return.
@@ -2629,6 +2726,154 @@ public:
     // share it. Split marks the state/own/draw spans on RenderProfile sample frames;
     // Off compiles them away. StateOnly/LogicOnly (probe modes) drop the draw / every
     // D3D9 call at compile time. ok(hr,stage) false stops the pass (the cascade: check()).
+    // 0.3.200 (jobs): ReplayJobs=1 (core/job_system.h). The pool starts lazily on the renderer thread inside render(); the jobs are pure
+    // CPU work on inputs that are final when they are kicked and untouched until their join (no D3D, no logs, no game memory).
+    NorthlightJobs::System replayJobs_;bool replayJobsTried_=false;
+    struct JobJoin {NorthlightJobs::System& s;NorthlightJobs::Counter& c;~JobJoin(){s.wait(c);c.clearFailure();}}; /* every kicked job is joined before render() returns */
+    bool jobsOn()const{return quality.replayJobs!=0&&replayJobs_.started();}
+    bool jobsStart(){
+        if(quality.replayJobs&&!replayJobsTried_){replayJobsTried_=true;
+            const unsigned cores=NorthlightStream::cores(); /* the replay thread excluded while the stream runs */
+            if(replayJobs_.start(cores))logf("JOBS workers=%u cores=%u",replayJobs_.workers(),cores);
+            else logf("JOBS unavailable: no worker thread; the per-frame work stays on the renderer thread");}
+        return jobsOn();
+    }
+    NorthlightJobs::Stats takeJobStats(){return replayJobs_.take();} /* renderer.cpp's JOBS line, RenderProfile sample frames */
+    static constexpr float LampFogNear=3.5f; /* c58.x: the lamp glow's near fade start, the scissor view's fog near */
+    // The frame's D3D-free light and fog work. Its inputs are final once upload() has run (the snapshot and its lights, the fog field,
+    // the camera, the celestial state, the settings); its outputs (the tracker, the clouds' clock and state, localScissorView and this
+    // frame) are read only after the join at the constant bank. c holds the bank's c22.w, c31.w and c32 (the same expressions).
+    struct AtmosphereFrame {
+        NorthlightLocalLightSelection::Selection lights;NorthlightFogClouds::Frame cf;float c[33][4]={};
+        float airFloor=.0017f,veil[2]={1,1}; /* veil: the sky transmittance toward the sun without / with the clouds' term */
+        NorthlightLocalLightScissor::Rect directRects[NorthlightLocalLightSelection::Slots/NorthlightLocalLightSelection::DirectBatchSize],
+            fogRects[NorthlightLocalLightSelection::Slots/NorthlightLocalLightSelection::FogBatchSize];
+    };
+    AtmosphereFrame atmosphere;NorthlightJobs::Counter atmosphereDone;
+    void atmosphereWork(AtmosphereFrame& a,float nearZ,UINT w,UINT h,int debug){
+        auto& c=a.c;const auto wx=weatherEffects();
+        // 0.3.197: tracked selection. A camera jump (teleport), a long gap (F10 off, loading) or F12 debug snap the
+        // factors without fades; a different map (and a rebuilt device, releasePointGPU) forgets the tracker.
+        if(!active||active->map!=localLightMap)localLightTracker.reset();
+        const int64_t selectT0=QpcClock::now();
+        const double selectDt=localLightQpc&&captureFrequency.QuadPart>0?double(selectT0-localLightQpc)/double(captureFrequency.QuadPart):0;
+        const bool selectContinuous=active&&localLightQpc&&selectDt<=NorthlightLocalLightSelection::MaxGapSeconds&&active->map==localLightMap&&!different(vec(context.camera),localLightCamera,40)&&debug==0;
+        a.lights=active?localLightTracker.update(active->localLights,context.camera,NorthlightGpuBudget::lightLimit(quality.localLightLimit,gpuBudgetLevel),float(selectDt),selectContinuous) /* 0.3.200 (gpu budget): the setting at level 0 */:NorthlightLocalLightSelection::Selection{};
+        auto& localLights=a.lights;
+        if(NorthlightDiagnostics::enabled()){const double us=double(QpcClock::now()-selectT0)*1e6/(captureFrequency.QuadPart>0?double(captureFrequency.QuadPart):1.);localSelectUsSum+=us;localSelectUsMax=std::max(localSelectUsMax,us);++localSelectFrames;} /* selectUs on LOCAL direct */
+        localLightQpc=selectT0;localLightCamera=vec(context.camera);if(active&&localLightMap!=active->map)localLightMap=active->map;
+        // 0.3.199 (fog clouds): the frame clock of the clouds (a gap or the first frame counts as 0; advance() clamps) and the dense-zone damping: where the
+        // regional fog is already thick (the field's profile tag at the camera, Duskwood 1) the rain's extra air and the clouds thin out, the profile
+        // smoothed over ~3 s so a zone border never pops. A dry frame's air floor stays exactly .0017f (the extra is 0 whatever the damping).
+        const int64_t cloudNow=QpcClock::now();
+        const float cloudDt=cloudQpc&&captureFrequency.QuadPart>0?float(double(cloudNow-cloudQpc)/double(captureFrequency.QuadPart)):0.f;
+        cloudQpc=cloudNow;
+        // The same camera texel says whether the zone is lush (forest/grass): without rain only lush zones get banks (no field, indoors or unknown: unchanged; it starts lush).
+        {float denseTarget=0,lushTarget=cloudLush;
+         if(uploadedFogField){const auto& f=*uploadedFogField;
+             const float fx=(context.camera[0]-f.originX)/NorthlightRegionalFog::Spacing,fy=(context.camera[1]-f.originY)/NorthlightRegionalFog::Spacing;
+             if(fx>=0&&fy>=0&&fx<NorthlightRegionalFog::N-1&&fy<NorthlightRegionalFog::N-1){const unsigned k=unsigned(fy)*NorthlightRegionalFog::N+unsigned(fx);const auto& t=f.texels[k];
+                 if(t.height>0)denseTarget=std::clamp((t.height-2.5f)/2.5f,0.f,1.f);
+                 if(t.height>0)lushTarget=f.lush[k]?1.f:0.f;}}
+         cloudDenseZone=NorthlightFogClouds::smoothDense(cloudDenseZone,denseTarget,cloudDt);
+         cloudLush=NorthlightFogClouds::smoothDense(cloudLush,lushTarget,cloudDt);}
+        const float denseDamp=NorthlightFogClouds::denseZoneDamp(cloudDenseZone);
+        const float airFloor=.0017f+wx.airExtinction()*denseDamp; /* the shared outdoor air extinction (the shader's old literal .0017) plus the rain's extra (thinned in dense zones): exactly .0017f when dry */
+        a.airFloor=airFloor;
+        // Same camera, projection, near plane and glow start as c0..c6/c58; each batch's rect of the direct (8) and fog (4) passes.
+        localScissorView=NorthlightLocalLightScissor::view(context.inverseView,projection,nearZ,LampFogNear,w,h);
+        for(unsigned first=0;first<localLights.count;first+=NorthlightLocalLightSelection::DirectBatchSize){const auto batch=localLights.batch<NorthlightLocalLightSelection::DirectBatchSize>(first);
+            a.directRects[first/NorthlightLocalLightSelection::DirectBatchSize]=NorthlightLocalLightScissor::batchRect(localScissorView,batch.position,batch.count);}
+        for(unsigned first=0;first<localLights.count;first+=NorthlightLocalLightSelection::FogBatchSize){const auto batch=localLights.batch<NorthlightLocalLightSelection::FogBatchSize>(first);
+            a.fogRects[first/NorthlightLocalLightSelection::FogBatchSize]=NorthlightLocalLightScissor::batchRect(localScissorView,batch.position,batch.count);}
+        c[31][3]=NorthlightRegionalFog::nightFactor(celestialValid?celestial.dayFraction:-1.f);
+        // Neutral scattering albedo preserves the zone/source palette. Atmospheric
+        // style is separate from ground fog and surface irradiance.
+        c[22][3]=.0035f+.0031f*c[31][3]; // generic forest day .0035, night .0066 (+20%)
+        // Forest atmosphere follows verified render time, independently of source
+        // visibility. Smooth nightFactor avoids a camera-driven density switch.
+        // STV total air including the shared .0017: .0054 day (2x),
+        // .01245 night (1.5x). Duskwood and general forest air retain their density.
+        c[32][0]=.0055f+.0089f*c[31][3];c[32][1]=.0037f+.00705f*c[31][3];
+        const auto& volumePalette=paletteFrameValid?framePalette:celestialProfiles.fallback;
+        const float volumeHeightScale=NorthlightCelestialProfiles::fogHeightScale(volumePalette,c[31][3]);
+        c[32][2]=64.f*volumeHeightScale;c[32][3]=48.f*volumeHeightScale;
+        // Extinction at each picked light for its glow in the fog: same ground
+        // and air policy as the shader, evaluated at the light's own position.
+        // 0.3.199 (fog clouds): the wind advances on the render thread's own clock (a gap or the first frame counts as 0, advance() clamps), the frame's
+        // constants come from the settings and the weather. Inactive (off, no coverage, fog effect off, debug view, noise or shader missing):
+        // c60..c63 keep their zeros, the pass is not drawn and sigmaAt below adds nothing.
+        if(quality.fogClouds)cloudWind.advance(cloudDt,wx.fog);
+        // The noise (and its quantile table) is requested in render() before this, from the settings alone: derive() cannot be active before
+        // the table exists. The device part (ensureCloudNoise) is decided at the bank: here the clouds' term is a candidate and the veil keeps both sums.
+        auto& cf=a.cf;
+        cf=NorthlightFogClouds::derive(quality.fogClouds,unsigned(std::lround(float(quality.fogCloudDensity)*denseDamp)),wx.fog,c[31][3],cloudWind,context.camera,fogCloudNoise().ready.load(std::memory_order_acquire)?&fogCloudNoise().quantiles:nullptr,cloudLush);
+        const bool cloudCandidate=cf.active&&effects.fog&&debug==0&&fogCloudsPS;
+        const uint8_t* cloudData=cloudCandidate?fogCloudNoise().data.data():nullptr;
+        a.veil[0]=a.veil[1]=1;
+        if(effects.fog&&active&&uploadedFogField){
+            const auto& field=*uploadedFogField;const float night=c[31][3];
+            // cloudy: the same sigma plus the clouds' term (the old sigma+= on an active pass), else the same sigma.
+            auto sigmaAt=[&](float lx,float ly,float lz,bool clouds,float& cloudy){
+                const float fx=(lx-field.originX)/NorthlightRegionalFog::Spacing,fy=(ly-field.originY)/NorthlightRegionalFog::Spacing;
+                float sigma=0;cloudy=0;
+                if(fx>=0&&fy>=0&&fx<NorthlightRegionalFog::N-1&&fy<NorthlightRegionalFog::N-1){
+                    const auto& t=field.texels[unsigned(fy)*NorthlightRegionalFog::N+unsigned(fx)];
+                    if(t.height>0){
+                        const float altitude=lz-t.ground;
+                        const float profile=std::clamp((t.height-2.5f)/2.5f,0.f,1.f),generalForest=1-std::clamp((t.height-1.25f)/1.25f,0.f,1.f);
+                        const float groundHeight=t.height+(6-t.height)*night*(1-profile);
+                        const float vertical=std::clamp(1-altitude/std::max(groundHeight,.001f),0.f,1.f);
+                        const float ground=altitude>=0?std::max(t.day+t.nightExtra*night,0.f)*vertical*vertical:0;
+                        float airBase=c[32][1]+(c[32][0]-c[32][1])*profile;airBase=airBase+(c[22][3]-airBase)*generalForest;
+                        airBase=airFloor+airBase*std::clamp((t.height-.625f)/.625f,0.f,1.f); /* 0.3.198 (rain): mirrors the shader (+0 when dry) */
+                        const float airHeight=c[32][3]+(c[32][2]-c[32][3])*profile;
+                        const float airVertical=std::clamp(1-altitude/std::max(airHeight,.001f),0.f,1.f);
+                        sigma=altitude>=0?ground+airBase*airVertical*airVertical:0;cloudy=sigma;
+                        if(clouds&&cloudCandidate){const float point[3]={lx,ly,lz};cloudy+=NorthlightFogClouds::sigmaAt(cloudData,cf,context.camera,point,t.ground,t.height,1.f);} /* 0.3.199 (fog clouds): the sun-ray veil follows the clouds; the lamp glow does not (it read too strong) */
+                    }
+                }
+                return sigma;
+            };
+            float unused=0;
+            for(unsigned i=0;i<localLights.count;++i)localLights.fog[i][0]=sigmaAt(localLights.position[i][0],localLights.position[i][1],localLights.position[i][2],false,unused);
+            // the veil's estimate of the composite's fog.a on a sky pixel toward the sun: the
+            // 128-unit volume along the sun ray from the eye, with the shader's near fade.
+            if(field.fogCells||field.airCells){
+                float depth=0,cloudyDepth=0;const V ray=sourceDirections[0];
+                for(unsigned i=0;i<16;++i){const float t=(float(i)+.5f)*8;
+                    const float fade=std::clamp((t-3.5f)/12.f,0.f,1.f);float cloudy=0;
+                    const float sigma=sigmaAt(context.camera[0]+ray.x*t,context.camera[1]+ray.y*t,context.camera[2]+ray.z*t,true,cloudy);
+                    depth+=sigma*fade*fade*(3-2*fade)*8;cloudyDepth+=cloudy*fade*fade*(3-2*fade)*8;}
+                a.veil[0]=std::exp(-depth);a.veil[1]=std::exp(-cloudyDepth);
+            }
+        }
+    }
+    // The later cascades' replay culling (per packet: the static proof's containment in the slot's cached matrix, bit 0; the pose
+    // bounds' clip test against the slot's matrix, bit 1). Kicked after the frame's first bounds join for every later active slot and
+    // read at that slot's replay loop when both matrices still match (else the loop tests inline, as before). Reads the packets only.
+    struct ReplayCull {WorldRenderer* r=nullptr;int slot=0;bool kicked=false;float matrix[16]={},cached[16]={};std::vector<uint8_t> flags;NorthlightJobs::Counter done;
+        void operator()(){r->replayCullWork(*this);}};
+    ReplayCull replayCulls[4];
+    void replayCullWork(ReplayCull& job){
+        const size_t n=replays.size();job.flags.resize(n);
+        for(size_t index=0;index<n;++index){const auto& p=*replays[index];uint8_t f=0;
+            if((p.staticProofMask&(1u<<job.slot))&&StaticShadow::containsBounds(job.cached,p.staticProofLow,p.staticProofHigh))f|=1;
+            if(p.pointBounds.valid&&NorthlightShadowBounds::clipReject(V(p.pointBounds.low[0],p.pointBounds.low[1],p.pointBounds.low[2]),V(p.pointBounds.high[0],p.pointBounds.high[1],p.pointBounds.high[2]),job.matrix))f|=2;
+            job.flags[index]=f;}
+    }
+    void replayCullKick(int fromSlot,const bool* sourceActive){
+        for(int slot=fromSlot+1;slot<4;++slot){if(!sourceActive[slot/2])continue;auto& job=replayCulls[slot];
+            job.r=this;job.slot=slot;std::memcpy(job.matrix,sourceMatrices[slot/2][slot%2],sizeof job.matrix);std::memcpy(job.cached,staticSlotMatrix[slot],sizeof job.cached);
+            job.kicked=true;replayJobs_.kick(job.done,job);}
+    }
+    // Null: test inline (no job for the slot, or its inputs differ). The job is joined either way.
+    const uint8_t* replayCullFor(int slot,const float* cached,const float* matrix){
+        auto& job=replayCulls[slot];if(!job.kicked)return nullptr;
+        job.kicked=false;const bool ok=replayJobs_.wait(job.done);job.done.clearFailure();
+        return ok&&job.flags.size()==replays.size()&&!std::memcmp(job.matrix,matrix,sizeof job.matrix)&&!std::memcmp(job.cached,cached,sizeof job.cached)?job.flags.data():nullptr;
+    }
+    void replayCullSettle(){for(auto& job:replayCulls)if(job.kicked){job.kicked=false;replayJobs_.wait(job.done);job.done.clearFailure();}}
     template<class Split,class Check> bool submitReplay(const Replay* p,NorthlightReplayDrawState::Cache& replayBindings,NorthlightReplayPoses::Pass<BOOL>& poseConstants,const float* rows,Split& split,size_t& replayConstantBytes,size_t& replayConstantCalls,Check&& ok){
         if constexpr(!Split::Calls)return poseConstants.prepare(*p,rows); /* DiagReplayProbe logic-only mode: no D3D9 call */
         if(!ok(replayBindings.geometry(*p),"replay geometry state"))return false;
@@ -2703,6 +2948,31 @@ public:
         skipReason="draw";
         if(profile)profile->mark("WorldUpload");
         bucket(NorthlightEffectsBuckets::Upload);
+        // 0.3.200 (jobs): ReplayJobs=1 kicks the frame's D3D-free CPU work here, as soon as its inputs are final (the snapshot, the fog field, the
+        // batches and terrain chunks committed by upload()); each result is joined right before the first D3D call that needs it, and the guards
+        // join on every return. ReplayJobs=0 (or no worker): nothing is kicked and each body runs inline at its old place. Same code, same results.
+        const bool jobs=jobsStart();replayJobs_.take();replayJobs_.timing(jobs&&profileSampled()); /* this frame's JOBS accounting (sample frames: timed) */
+        // The fog clouds' noise (and its quantile table) is requested from the settings alone: derive() cannot be active before the table exists, so a
+        // request gated on cf.active would never start it. One background generation per process; FogClouds=0 or density 0 still does nothing.
+        if(quality.fogClouds&&quality.fogCloudDensity&&effects.fog&&debug==0&&!fogCloudNoise().ready.load(std::memory_order_acquire))fogCloudNoise().request();
+        auto atmosphereJob=[&]{atmosphereWork(atmosphere,nearZ,w,h,debug);};
+        JobJoin atmosphereJoin{replayJobs_,atmosphereDone};
+        if(jobs)replayJobs_.kick(atmosphereDone,atmosphereJob);
+        bool sourceActive[2]={NorthlightGI::dot(sourceColors[0],sourceColors[0])>1e-10f,NorthlightGI::dot(sourceColors[1],sourceColors[1])>1e-10f};
+        // Terrain shadow candidates (the cached terrain chunks the game did not draw live): read by the directional passes' terrain draws.
+        NorthlightTerrainCandidates::Selection<> terrainCandidates(directionalTerrainScratch);double terrainPrepareMs=0;
+        auto terrainJob=[&]{
+            std::chrono::steady_clock::time_point terrainPrepareStart;
+            if(captureSampled)terrainPrepareStart=std::chrono::steady_clock::now();
+            if(effects.shadows&&(sourceActive[0]||sourceActive[1])){
+                // 0.3.175 (S2): this generation's terrain-outside-fixed list, when it belongs to these batches and fixed set.
+                if(terrainBatchListGeneration==meshGeneration&&terrainBatchListSize==batches.size()&&terrainListFixed==&fixedTerrainChunks())
+                    terrainCandidates.prepareListed(batches,shadowTerrainList,fixedTerrainChunks(),liveTerrainChunks,captureSampled);
+                else terrainCandidates.prepare(batches,fixedTerrainChunks(),liveTerrainChunks,captureSampled);}
+            if(captureSampled)terrainPrepareMs=std::chrono::duration<double,std::milli>(std::chrono::steady_clock::now()-terrainPrepareStart).count();
+        };
+        NorthlightJobs::Counter terrainDone;JobJoin terrainJoin{replayJobs_,terrainDone};
+        if(jobs)replayJobs_.kick(terrainDone,terrainJob);
         {auto phase=streamingPhases.measure(NorthlightStreaming::PhaseProfile::Static);
          updateStaticCasters(effects.shadows,&streamBudget);
          if(effects.shadows&&replayShadows){auto proofs=streamingPhases.measure(NorthlightStreaming::PhaseProfile::Proofs);prepareStaticProofs();}}
@@ -2731,7 +3001,6 @@ public:
         // their cache placement and the static prebuild use the jump-stable anchor.
         const bool anchorNewMap=cascadeAnchorMap!=lastRequest.map;if(anchorNewMap)cascadeAnchorMap=lastRequest.map; /* the requested map: the snapshot can lag */
         const V cascadePivot=cascadeAnchor.update(pivot,vec(context.camera),uint32_t(GetTickCount()),anchorNewMap);
-        bool sourceActive[2]={NorthlightGI::dot(sourceColors[0],sourceColors[0])>1e-10f,NorthlightGI::dot(sourceColors[1],sourceColors[1])>1e-10f};
         int firstSource=sourceActive[0]||!sourceActive[1]?0:1;
         NorthlightWorldMath::ShadowFrame cascadeFrames[2][2];
         for(int source=0;source<2;++source)for(int cascade=0;cascade<2;++cascade){
@@ -2779,17 +3048,11 @@ public:
         d->SetSamplerState(0,D3DSAMP_ADDRESSU,D3DTADDRESS_WRAP);d->SetSamplerState(0,D3DSAMP_ADDRESSV,D3DTADDRESS_WRAP);d->SetSamplerState(0,D3DSAMP_MINFILTER,D3DTEXF_LINEAR);d->SetSamplerState(0,D3DSAMP_MAGFILTER,D3DTEXF_LINEAR);d->SetSamplerState(0,D3DSAMP_MIPFILTER,D3DTEXF_NONE);d->SetSamplerState(0,D3DSAMP_SRGBTEXTURE,FALSE);
         unsigned culledBatches[2]={},drawnBatches[2]={};
         size_t replayConstantBytes=0,replayConstantCalls=0,replayPosePrepared=0,replayPoseReused=0;
-        NorthlightTerrainCandidates::Selection<> terrainCandidates(directionalTerrainScratch);
-        std::chrono::steady_clock::time_point terrainPrepareStart;double terrainPrepareMs=0;
         bucket(NorthlightEffectsBuckets::ShadowSetup);
-        if(captureSampled)terrainPrepareStart=std::chrono::steady_clock::now();
-        if(effects.shadows&&(sourceActive[0]||sourceActive[1])){
-            // 0.3.175 (S2): this generation's terrain-outside-fixed list, when it belongs to these batches and fixed set.
-            if(terrainBatchListGeneration==meshGeneration&&terrainBatchListSize==batches.size()&&terrainListFixed==&fixedTerrainChunks())
-                terrainCandidates.prepareListed(batches,shadowTerrainList,fixedTerrainChunks(),liveTerrainChunks,captureSampled);
-            else terrainCandidates.prepare(batches,fixedTerrainChunks(),liveTerrainChunks,captureSampled);}
-        if(captureSampled)terrainPrepareMs=std::chrono::duration<double,std::milli>(std::chrono::steady_clock::now()-terrainPrepareStart).count();
+        if(!jobs)terrainJob(); /* 0.3.200 (jobs): ReplayJobs=0 prepares here, as before; ReplayJobs=1 joins at the first terrain draw below */
         bucket(NorthlightEffectsBuckets::TerrainSelection);
+        // 0.3.200 (jobs): the later slots' replay culling is kicked at the frame's first bounds join (replayCullKick), joined per slot and here.
+        bool replayCullsKicked=false;struct CullSettle {WorldRenderer& r;~CullSettle(){r.replayCullSettle();}} cullSettle{*this};
         bool anyShadowCacheRender=false;
         ++shadowPasses;
         if(NorthlightStaticPrebuild::Scheduler::Enabled)for(int source=0;source<2;++source)staticPrebuild.observe(source,effects.shadows&&sourceActive[source],rawSourceDirections[source],GetTickCount());
@@ -2940,6 +3203,7 @@ public:
             d->SetVertexShader(shadowVS);d->SetVertexShaderConstantF(0,matrices[cascade],4);d->SetPixelShader(shadowPS);
             // Cached-mesh terrain chunks that the game did not draw live this frame.
             UINT terrainBoundPage=UINT_MAX;
+            if(jobs)replayJobs_.wait(terrainDone); /* 0.3.200 (jobs): the candidates' first reader */
             if(!terrainCandidates.forEach(batches,fixedTerrainChunks(),liveTerrainChunks,[&](const Batch& b){
                 if(NorthlightShadowBounds::clipReject(b.boundsLow,b.boundsHigh,matrices[cascade])){++culledBatches[cascade];return true;}
                 ++drawnBatches[cascade];float material[]={1,1,1,uploadedAlphaCutoffs[b.material]};
@@ -2958,6 +3222,8 @@ public:
             }
             if(actorShadows){ /* 0.3.158: ActorShadows=0 draws no replays; terrain above and the union below stay */
             replayBoundsJoin(); /* 0.3.143: first pointBounds reader */
+            if(jobs&&!replayCullsKicked){replayCullsKicked=true;replayCullKick(slot,sourceActive);} /* 0.3.200 (jobs): the bounds are final; this slot tests inline */
+            const uint8_t* cull=replayCullFor(slot,cachedMatrix,matrices[cascade]); /* null: tested inline below, as before */
             float rows[16];NorthlightWorldMath::replayProjection(context.inverseView,matrices[cascade],rows);
             d->SetPixelShader(replayPS);
             // Fresh banks after the static pass. Fold the shadow projection into
@@ -2974,18 +3240,18 @@ public:
             auto replayLoop=[&](auto& split)->bool{
               using NorthlightRenderThreadProbe::Own;
               split.start();
-              for(auto& p:replays){
+              for(size_t index=0;index<replays.size();++index){const auto& p=replays[index];
                 // Only full geometric proof plus cached-volume containment can
                 // replace a live rigid draw. Dynamic/alpha/unknown draws survive.
                 if(key.valid&&(p->staticProofMask&(1u<<slot))&&staticCasters.stats().readyModels&&
-                   StaticShadow::containsBounds(cachedMatrix,p->staticProofLow,p->staticProofHigh)){
+                   (cull?(cull[index]&1)!=0:StaticShadow::containsBounds(cachedMatrix,p->staticProofLow,p->staticProofHigh))){
                     // Diagnostic only (no behaviour change): the proved model must be in
                     // this slot's committed cache content. Must stay 0 (same-frame commit).
                     if(key.staticContent.valid&&!key.staticContent.contains(p->staticProofModel,p->staticProofRevision))++staticDedupUncommitted;
                     ++staticDedupSkipped;continue;
                 }
                 ++replaySlotTested[slot];replaySlotBounded[slot]+=p->pointBounds.valid;
-                if(p->pointBounds.valid&&NorthlightShadowBounds::clipReject(V(p->pointBounds.low[0],p->pointBounds.low[1],p->pointBounds.low[2]),V(p->pointBounds.high[0],p->pointBounds.high[1],p->pointBounds.high[2]),matrices[cascade])){++culledReplayDraws;++replaySlotCulled[slot];continue;}
+                if(p->pointBounds.valid&&(cull?(cull[index]&2)!=0:NorthlightShadowBounds::clipReject(V(p->pointBounds.low[0],p->pointBounds.low[1],p->pointBounds.low[2]),V(p->pointBounds.high[0],p->pointBounds.high[1],p->pointBounds.high[2]),matrices[cascade]))){++culledReplayDraws;++replaySlotCulled[slot];continue;}
                 split.mark(Own);
                 if(!submitReplay(p.get(),replayBindings,poseConstants,rows,split,replayConstantBytes,replayConstantCalls,[&](HRESULT h,const char* s){return check(h,s);}))return false;
                 split.drawn(p.get());
@@ -3057,6 +3323,7 @@ public:
             [&](const float* m){return staticCasters.planReady(m);},
             [&](const float* m){try {staticCasters.signature(m);return true;}catch(...){return false;}}, /* a failed early build never resets the cache */
             [&](const float* m){staticCasters.discardPlan(m);});
+        replayCullSettle();if(jobs)replayJobs_.wait(terrainDone); /* 0.3.200 (jobs): no cascade drew terrain: joined here */
         if(captureSampled){const auto& selection=terrainCandidates.stats();
             logf("WORLD terrain selection scanned=%llu candidates=%zu membershipChecks=%llu passes=%u reusedMembershipChecks=%llu fallbackPasses=%u scratchBytes=%zu prepareMs=%.3f",
                 (unsigned long long)selection.scanned,terrainCandidates.candidates(),(unsigned long long)selection.membershipChecks,selection.passes,
@@ -3076,6 +3343,10 @@ public:
         d->SetVertexShader(nullptr);d->SetFVF(D3DFVF_XYZRHW|D3DFVF_TEX1);d->SetStreamSourceFreq(0,1);d->SetRenderState(D3DRS_ZENABLE,FALSE);d->SetRenderState(D3DRS_ZWRITEENABLE,FALSE);
         d->SetTextureStageState(0,D3DTSS_TEXCOORDINDEX,0);d->SetTextureStageState(0,D3DTSS_TEXTURETRANSFORMFLAGS,D3DTTFF_DISABLE);d->SetRenderState(D3DRS_WRAP0,0);
         float c[68][4]={};c[0][0]=1.f/w;c[0][1]=1.f/h;c[0][2]=nearZ;c[0][3]=farZ;
+        // 0.3.198 (rain): the frame's weather scalars (all 0 and every gain exactly 1 without weather: the bank below is then unchanged).
+        // The new constants live in c59.yzw (LocalLightFog[0].yzw; only .x of c59..c66 is read, by LocalFog) and are read by WorldLighting (z)
+        // and WorldFog (w); the lamp fog batch overwrites c59..c62 after all three have run, the bank is uploaded whole each frame.
+        const auto wx=weatherEffects();
         c[67][0]=celestialValid?std::max(celestial.sun.angularRadius,celestial.moon.angularRadius):.03f;c[67][1]=sourceVisValid?.85f:0.f;
         // Temporal history is valid only for the same map, a continuous camera
         // and normal rendering; teleports, F10 and diagnostics restart it.
@@ -3088,64 +3359,31 @@ public:
         // the first lighting pass is the sun's (with real shadows) only then: its visibility is in the
         // baseline alpha. The renderer's own orbit gives the sun weight; without it (game light only) no dimming.
         const float lampSunlitCut=NorthlightLocalLightSelection::sunlitCut(celestialValid?sourceWeights[0]:0.f,sourceActive[0]&&effects.shadows);
-        auto localLights=active?NorthlightLocalLightSelection::select(active->localLights,context.camera,quality.localLightLimit):NorthlightLocalLightSelection::Selection{};
+        // 0.3.200 (jobs): the selection, the clouds' state and frame, the lamps' fog extinction, the veil and the scissor rects come from
+        // atmosphereWork(): on a job kicked after upload() (ReplayJobs=1), joined here, or inline here (ReplayJobs=0, the old place).
+        if(jobs)replayJobs_.wait(atmosphereDone);else atmosphereWork(atmosphere,nearZ,w,h,debug);
+        auto& localLights=atmosphere.lights;
         localDirectCount=localLights.count;localDirectNearest=localLights.nearest;
         c[52][0]=float(std::min(localDirectCount,NorthlightLocalLightSelection::DirectBatchSize));c[52][1]=.9f*lampGain;
         // Near fade: no added fog within 3.5 units of the viewer, full at 15.5.
         // Same soft ramp, shifted 0.5 world units closer.
-        c[58][0]=3.5f;c[58][1]=1.f/12;c[58][2]=13.f*lampGain;c[58][3]=.156f*lampGain;
-        // Same camera, projection, near plane and glow start as c0..c6/c58.
-        localScissorView=NorthlightLocalLightScissor::view(context.inverseView,projection,nearZ,c[58][0],w,h);
+        c[58][0]=3.5f;c[58][1]=1.f/12;c[58][2]=10.f*lampGain*wx.lampFogGain();c[58][3]=.12f*lampGain*wx.lampFogGain(); /* 0.3.198 (rain): lamp fog gain (x1 since 0.3.199); 0.3.199 (fog clouds): 10 / .12 (were 13 / .156): the glow read too strong in the game test */
+        const float airFloor=atmosphere.airFloor; /* atmosphereWork: .0017f plus the rain's extra, thinned in dense zones */
+        c[59][2]=wx.shadowSoften();c[59][3]=airFloor; /* 0.3.198 (rain): direct shadow softening (0 when dry), air extinction floor (WorldFog) */
         if(uploadedFogField){c[31][0]=uploadedFogField->originX;c[31][1]=uploadedFogField->originY;}
         c[31][2]=1.f/(NorthlightRegionalFog::N*NorthlightRegionalFog::Spacing);
-        c[31][3]=NorthlightRegionalFog::nightFactor(celestialValid?celestial.dayFraction:-1.f);
-        // Neutral scattering albedo preserves the zone/source palette. Atmospheric
-        // style is separate from ground fog and surface irradiance.
-        c[22][0]=c[22][1]=c[22][2]=1;c[22][3]=.0035f+.0031f*c[31][3]; // generic forest day .0035, night .0066 (+20%)
-        // Forest atmosphere follows verified render time, independently of source
-        // visibility. Smooth nightFactor avoids a camera-driven density switch.
-        // STV total air including the shared .0017: .0054 day (2x),
-        // .01245 night (1.5x). Duskwood and general forest air retain their density.
-        c[32][0]=.0055f+.0089f*c[31][3];c[32][1]=.0037f+.00705f*c[31][3];
+        c[31][3]=atmosphere.c[31][3]; /* nightFactor, atmosphereWork */
+        // Neutral scattering albedo preserves the zone/source palette (c22.w and c32: atmosphereWork, the same expressions).
+        c[22][0]=c[22][1]=c[22][2]=1;c[22][3]=atmosphere.c[22][3];memcpy(c[32],atmosphere.c[32],16);
         const auto& volumePalette=paletteFrameValid?framePalette:celestialProfiles.fallback;
-        const float volumeHeightScale=NorthlightCelestialProfiles::fogHeightScale(volumePalette,c[31][3]);
-        c[32][2]=64.f*volumeHeightScale;c[32][3]=48.f*volumeHeightScale;
-        // Extinction at each picked light for its glow in the fog: same ground
-        // and air policy as the shader, evaluated at the light's own position.
-        skyTransmittanceFrame=1;
-        if(effects.fog&&active&&uploadedFogField){
-            const auto& field=*uploadedFogField;const float night=c[31][3];
-            auto sigmaAt=[&](float lx,float ly,float lz){
-                const float fx=(lx-field.originX)/NorthlightRegionalFog::Spacing,fy=(ly-field.originY)/NorthlightRegionalFog::Spacing;
-                float sigma=0;
-                if(fx>=0&&fy>=0&&fx<NorthlightRegionalFog::N-1&&fy<NorthlightRegionalFog::N-1){
-                    const auto& t=field.texels[unsigned(fy)*NorthlightRegionalFog::N+unsigned(fx)];
-                    if(t.height>0){
-                        const float altitude=lz-t.ground;
-                        const float profile=std::clamp((t.height-2.5f)/2.5f,0.f,1.f),generalForest=1-std::clamp((t.height-1.25f)/1.25f,0.f,1.f);
-                        const float groundHeight=t.height+(6-t.height)*night*(1-profile);
-                        const float vertical=std::clamp(1-altitude/std::max(groundHeight,.001f),0.f,1.f);
-                        const float ground=altitude>=0?std::max(t.day+t.nightExtra*night,0.f)*vertical*vertical:0;
-                        float airBase=c[32][1]+(c[32][0]-c[32][1])*profile;airBase=airBase+(c[22][3]-airBase)*generalForest;
-                        airBase=.0017f+airBase*std::clamp((t.height-.625f)/.625f,0.f,1.f);
-                        const float airHeight=c[32][3]+(c[32][2]-c[32][3])*profile;
-                        const float airVertical=std::clamp(1-altitude/std::max(airHeight,.001f),0.f,1.f);
-                        sigma=altitude>=0?ground+airBase*airVertical*airVertical:0;
-                    }
-                }
-                return sigma;
-            };
-            for(unsigned i=0;i<localDirectCount;++i)localLights.fog[i][0]=sigmaAt(localLights.position[i][0],localLights.position[i][1],localLights.position[i][2]);
-            // the veil's estimate of the composite's fog.a on a sky pixel toward the sun: the
-            // 128-unit volume along the sun ray from the eye, with the shader's near fade.
-            if(field.fogCells||field.airCells){
-                float depth=0;const V ray=sourceDirections[0];
-                for(unsigned i=0;i<16;++i){const float t=(float(i)+.5f)*8;
-                    const float fade=std::clamp((t-3.5f)/12.f,0.f,1.f);
-                    depth+=sigmaAt(context.camera[0]+ray.x*t,context.camera[1]+ray.y*t,context.camera[2]+ray.z*t)*fade*fade*(3-2*fade)*8;}
-                skyTransmittanceFrame=std::exp(-depth);
-            }
+        // 0.3.199 (fog clouds): the frame derived in atmosphereWork; the device part of its activity (the noise volume) is decided here.
+        auto& cf=atmosphere.cf;
+        cf.active=cf.active&&effects.fog&&debug==0&&fogCloudsPS&&ensureCloudNoise();
+        if(cf.active){
+            NorthlightFogClouds::shaderConstants(cf,&c[59]); /* c59.y, c60..c63 (host-folded for the shader's early outs) */
         }
+        if(profileSampled())logf("WORLD fog clouds active=%d coverage=%.3f threshold=%.3f height=%.1f speed=%.2f dir=(%.2f %.2f) sigmaMax=%.4f lush=%.2f noiseReady=%d",cf.active?1:0,cf.coverage,cf.threshold,cf.height,cloudWind.speed,cloudWind.dir[0],cloudWind.dir[1],cf.sigmaMax,cloudLush,fogCloudNoise().ready.load(std::memory_order_acquire)?1:0);
+        skyTransmittanceFrame=cf.active?atmosphere.veil[1]:atmosphere.veil[0]; /* the clouds' term only when the pass is really active (1: no fog field or no fog) */
         c[33][0]=float(w);c[33][1]=float(h);c[33][2]=float(w/2);c[33][3]=float(h/2);
         c[1][0]=projection[0];c[1][1]=projection[1];c[1][2]=projection[2];c[1][3]=minZ;
         c[2][0]=1.f/(maxZ-minZ);c[2][1]=48;c[2][2]=192;c[2][3]=1.f/1024;
@@ -3153,10 +3391,13 @@ public:
         memcpy(c[15],context.camera,12);memcpy(c[16],context.lightDirection,12);memcpy(c[17],context.direct,12);memcpy(c[18],context.ambient,12);
         c[18][3]=NorthlightTwilightFill::gain(celestialValid,celestialValid?celestial.dayFraction:-1.,
             celestialValid?celestialLight.sun.direction[2]:0.f,celestialValid?celestialLight.moon.direction[2]:0.f);
+        c[18][3]+=wx.ambientLift(); /* 0.3.198 (rain): a little more sky ambient from the GI pass in rain (+0 when dry; the probes themselves are untouched) */
         c[19][0]=active->origin.x;c[19][1]=active->origin.y;c[19][2]=active->origin.z;c[19][3]=8;
         c[20][0]=float(NorthlightGI::probeLayout().atlas);c[20][1]=NorthlightQuality::giIntensity(quality);c[20][2]=.85f;c[20][3]=active->serial?1.f:0.f;
         DWORD now=GetTickCount();
-        c[21][0]=uploadedFogField&&(uploadedFogField->fogCells||uploadedFogField->airCells)?1.f:0.f;c[21][1]=1.2f;c[21][2]=.38f;c[21][3]=128;
+        c[21][0]=uploadedFogField&&(uploadedFogField->fogCells||uploadedFogField->airCells)?1.f:0.f;c[21][1]=1.2f*wx.shaftGain();c[21][2]=.38f;c[21][3]=128; /* 0.3.198 (rain): shafts fade in rain, x1 when dry */
+        // 0.3.200 (gpu budget): fewer march intervals at reduced levels (c60.x clouds, c64.z WorldFog; both stay 0, the bank unchanged, at level 0).
+        if(gpuBudgetLevel){if(cf.active)c[60][0]=NorthlightGpuBudget::spacingDelta(c[21][3],NorthlightGpuBudget::cloudSteps(gpuBudgetLevel),40);c[64][2]=NorthlightGpuBudget::spacingDelta(c[21][3],NorthlightGpuBudget::fogSteps(gpuBudgetLevel),48);}
         memcpy(c[23],context.camera,12);c[24][0]=NorthlightWorldMath::ShadowBiasWorld*NorthlightWorldMath::InverseShadowDepth;c[24][1]=2;c[24][2]=float(debug);c[24][3]=float(DWORD(now-animationEpoch))*.001f;
         memcpy(c[25],legacyFog.parameters,16);memcpy(c[26],legacyFog.color,16);
         memcpy(c[28],context.lightDirection,12);memcpy(c[29],context.direct,12);
@@ -3171,7 +3412,7 @@ public:
         const float hazeZone=NorthlightCelestialProfiles::horizonHaze(volumePalette,c[31][3]);
         float hazeLift[3];NorthlightSunHue::horizonLift(glowHueFrame,hazeLift);
         const auto haze=NorthlightHorizonHaze::constants(horizonHazeState,{quality.horizonHaze,quality.horizonHazeStart,quality.horizonHazeBand,quality.horizonHazeTerrain},
-            farZ,hazeZone,effects.fog,celestialValid,hazeSun,sourceWeights[0],hazeLift);
+            farZ,hazeZone,effects.fog,celestialValid,hazeSun,sourceWeights[0],hazeLift,wx.hazeTauScale());
         c[57][1]=haze.shape[0];c[57][2]=haze.shape[1];c[57][3]=haze.shape[2];c[67][2]=haze.sun[0];c[67][3]=haze.sun[1];
         c[35][1]=haze.lift[0];c[35][2]=haze.lift[1];c[35][3]=haze.lift[2]; /* lift colour = the glow hue (WorldComposite reads c35.yzw) */
         hazeFrame=haze;
@@ -3206,7 +3447,7 @@ public:
             // rises so the aureole brightens toward the sun. c17/c18 are restored after the fog loop.
             if(volume&&source==0)NorthlightSunHue::fogDirect(rgb,glowHueFrame,rgb);
             d->SetPixelShaderConstantF(16,dir,1);d->SetPixelShaderConstantF(17,rgb,1);
-            if(volume){c[21][1]=1.2f*volumePalette.fogGain[source];c[21][2]=source==0?NorthlightSunHue::SunForwardCap:NorthlightSunHue::MoonForwardCap;d->SetPixelShaderConstantF(21,c[21],1);d->SetTexture(15,sourceVis[source][1-sourceVisIndex]);}
+            if(volume){c[21][1]=1.2f*volumePalette.fogGain[source]*wx.shaftGain();c[21][2]=source==0?NorthlightSunHue::SunForwardCap:NorthlightSunHue::MoonForwardCap;d->SetPixelShaderConstantF(21,c[21],1);d->SetTexture(15,sourceVis[source][1-sourceVisIndex]);}
             c[27][0]=first?(volume?1.f:1.f-authoredFill):0.f;c[27][1]=sourceWeights[source];d->SetPixelShaderConstantF(27,c[27],1);
         };
         d->SetRenderState(D3DRS_SRCBLEND,D3DBLEND_ONE);d->SetRenderState(D3DRS_DESTBLEND,D3DBLEND_ONE);d->SetRenderState(D3DRS_BLENDOP,D3DBLENDOP_ADD);
@@ -3228,7 +3469,9 @@ public:
         if(profile)profile->mark("WorldLighting");
         bucket(NorthlightEffectsBuckets::Lighting);
         d->SetRenderState(D3DRS_ALPHABLENDENABLE,TRUE);d->SetRenderState(D3DRS_COLORWRITEENABLE,7);d->SetPixelShader(giPS);
+        if(effects.gi)d->SetTexture(8,probePrev); /* 0.3.197: WorldGI reads the previous SH on s8 (LightingBuffer is not read here); null without the texture, moment.w is then None */
         if(effects.gi&&!check(quad(w/2,h/2),"world GI pass"))return false;
+        d->SetTexture(8,textures[8]); /* 0.3.197: restore the frame-start binding */
         if(localDirectCount&&debug==0){
             d->SetPixelShader(localDirectPS);d->SetRenderState(D3DRS_SCISSORTESTENABLE,NorthlightLocalLightScissor::Enabled);
             d->SetTexture(12,baselineLight); /* sun visibility (baseline alpha); the temporal pass rebinds it anyway */
@@ -3238,7 +3481,7 @@ public:
                 d->SetPixelShaderConstantF(36,batch.position[0].data(),NorthlightLocalLightSelection::DirectBatchSize);
                 d->SetPixelShaderConstantF(44,batch.color[0].data(),NorthlightLocalLightSelection::DirectBatchSize);
                 d->SetPixelShaderConstantF(52,info,1);
-                if(localScissor(batch.position,batch.count)&&!check(quad(w/2,h/2),"local direct light batch")){d->SetRenderState(D3DRS_SCISSORTESTENABLE,FALSE);return false;}
+                if(localScissor(batch.position,batch.count,&atmosphere.directRects[firstLight/NorthlightLocalLightSelection::DirectBatchSize])&&!check(quad(w/2,h/2),"local direct light batch")){d->SetRenderState(D3DRS_SCISSORTESTENABLE,FALSE);return false;}
             }
             d->SetRenderState(D3DRS_SCISSORTESTENABLE,FALSE);
         }
@@ -3287,6 +3530,7 @@ public:
         // Source visibility (1x1 per source, temporally smoothed): drives the
         // fog aureole when the body is behind geometry; broad scattering uses
         // world shadow visibility independently of the body's screen position.
+        bool fogResolved=false; // 0.3.199 (fog temporal): the final fog is fogBlurred (the pass ran and the pointers rotated), else fog
         if(effects.fog){
         {const unsigned cur=sourceVisIndex,prev=1-sourceVisIndex;
          d->SetRenderState(D3DRS_ALPHABLENDENABLE,FALSE);d->SetRenderState(D3DRS_COLORWRITEENABLE,15);d->SetPixelShader(sourceVisPS);
@@ -3299,9 +3543,41 @@ public:
         d->SetRenderTarget(0,fogSurface);d->SetPixelShader(fogPS);first=true;
         float fogAmbient[4]={0,0,0,c[18][3]};NorthlightSunHue::coolAmbient(c[18],glowHueFrame,sourceWeights[0],fogAmbient);
         d->SetPixelShaderConstantF(18,fogAmbient,1); /* cooler environment scatter while the sun is up (w kept) */
+        int lastFogSource=firstSource;bool lastFogFirst=true;
         for(int source=0;source<2;++source){if(!sourceActive[source]&&source!=firstSource)continue;
             setSource(source,first,true);d->SetRenderState(D3DRS_ALPHABLENDENABLE,!first);d->SetRenderState(D3DRS_COLORWRITEENABLE,first?15:7);
-            if(!check(quad(w/2,h/2),"celestial volumetric raymarch"))return false;first=false;
+            if(!check(quad(w/2,h/2),"celestial volumetric raymarch"))return false;lastFogSource=source;lastFogFirst=first;first=false;
+        }
+        // 0.3.199 (fog clouds): the moving fog banks, a second half-resolution raymarch into the same fog buffer: rgb added (ONE), the fog already
+        // there attenuated by the cloud transmittance (alpha, SRCALPHA); alpha out is the old alpha times it. The first source lights it, ambient once
+        // (c27.x=1 in setSource). Afterwards every state the later passes read is put back exactly as the loop above left it (the last source's
+        // setSource again, blend, write mask, s14 and the alpha-blend operands); inactive frames skip all of this.
+        if(cf.active&&c[21][0]>=.5f){
+            if(profile)profile->mark("FogMarch");
+            /* 0.3.199 (optimisation): the separate-alpha operands are not saved: the effects run inside the game-state save (SavedState) and with
+               SEPARATEALPHABLENDENABLE back at FALSE below they are ignored. The common sun-only frame drew the source loop once with firstSource
+               and first=true: setSource then already holds this pass's state, so it is neither set here nor put back after. */
+            const bool sameSource=lastFogSource==firstSource&&lastFogFirst;
+            if(!sameSource)setSource(firstSource,true,true);
+            { /* 0.3.199 (fog clouds): the banks' colour (the game fog colour raised to a moonlit grey at night) in c25.w/c26 for this pass only; restored below */
+                float cloudColour[4],cloudFog[4]={c[25][0],c[25][1],c[25][2],1};
+                NorthlightFogClouds::colour(c[26],c[25][3]>=.5f,c[31][3],cloudColour);
+                d->SetPixelShaderConstantF(25,cloudFog,1);d->SetPixelShaderConstantF(26,cloudColour,1);}
+            d->SetTexture(14,cloudNoise);d->SetSamplerState(14,D3DSAMP_ADDRESSU,D3DTADDRESS_WRAP);d->SetSamplerState(14,D3DSAMP_ADDRESSV,D3DTADDRESS_WRAP);d->SetSamplerState(14,D3DSAMP_ADDRESSW,D3DTADDRESS_WRAP);
+            const DWORD cloudFilter=D3DTEXF_LINEAR;d->SetSamplerState(14,D3DSAMP_MINFILTER,cloudFilter);d->SetSamplerState(14,D3DSAMP_MAGFILTER,cloudFilter);d->SetSamplerState(14,D3DSAMP_MIPFILTER,D3DTEXF_NONE);d->SetSamplerState(14,D3DSAMP_SRGBTEXTURE,FALSE);
+            d->SetRenderState(D3DRS_ALPHABLENDENABLE,TRUE);d->SetRenderState(D3DRS_SRCBLEND,D3DBLEND_ONE);d->SetRenderState(D3DRS_DESTBLEND,D3DBLEND_SRCALPHA);d->SetRenderState(D3DRS_BLENDOP,D3DBLENDOP_ADD);
+            d->SetRenderState(D3DRS_SEPARATEALPHABLENDENABLE,TRUE);d->SetRenderState(D3DRS_SRCBLENDALPHA,D3DBLEND_ZERO);d->SetRenderState(D3DRS_DESTBLENDALPHA,D3DBLEND_SRCALPHA);d->SetRenderState(D3DRS_BLENDOPALPHA,D3DBLENDOP_ADD);
+            d->SetRenderState(D3DRS_COLORWRITEENABLE,15);d->SetPixelShader(fogCloudsPS);
+            const bool cloudsDrawn=check(quad(w/2,h/2),"fog clouds raymarch");
+            if(!sameSource)setSource(lastFogSource,lastFogFirst,true);
+            d->SetPixelShaderConstantF(25,c[25],2); /* 0.3.199 (fog clouds): the bank's game fog parameters and colour back for the lamp fog, blur and composite */
+            d->SetRenderState(D3DRS_SRCBLEND,D3DBLEND_ONE);d->SetRenderState(D3DRS_DESTBLEND,D3DBLEND_ONE);d->SetRenderState(D3DRS_BLENDOP,D3DBLENDOP_ADD);
+            d->SetRenderState(D3DRS_SEPARATEALPHABLENDENABLE,FALSE);
+            d->SetRenderState(D3DRS_ALPHABLENDENABLE,!lastFogFirst);d->SetRenderState(D3DRS_COLORWRITEENABLE,lastFogFirst?15:7);d->SetPixelShader(fogPS);
+            d->SetTexture(14,nullptr);d->SetSamplerState(14,D3DSAMP_ADDRESSU,D3DTADDRESS_CLAMP);d->SetSamplerState(14,D3DSAMP_ADDRESSV,D3DTADDRESS_CLAMP);d->SetSamplerState(14,D3DSAMP_ADDRESSW,D3DTADDRESS_CLAMP);
+            d->SetSamplerState(14,D3DSAMP_MINFILTER,D3DTEXF_POINT);d->SetSamplerState(14,D3DSAMP_MAGFILTER,D3DTEXF_POINT);
+            if(!cloudsDrawn)return false;
+            if(profile)profile->mark("FogClouds");
         }
         d->SetPixelShaderConstantF(17,c[17],2); /* restore the bank's direct/ambient before lamp fog, blur and composite */
         if(localDirectCount&&debug==0){
@@ -3315,7 +3591,7 @@ public:
                 d->SetPixelShaderConstantF(36,batch.position[0].data(),NorthlightLocalLightSelection::FogBatchSize);
                 d->SetPixelShaderConstantF(44,batch.color[0].data(),NorthlightLocalLightSelection::FogBatchSize);
                 d->SetPixelShaderConstantF(59,batch.fog[0].data(),NorthlightLocalLightSelection::FogBatchSize);
-                if(localScissor(batch.position,batch.count)&&!check(quad(w/2,h/2),"local fog glow batch")){d->SetRenderState(D3DRS_SCISSORTESTENABLE,FALSE);return false;}
+                if(localScissor(batch.position,batch.count,&atmosphere.fogRects[firstLight/NorthlightLocalLightSelection::FogBatchSize])&&!check(quad(w/2,h/2),"local fog glow batch")){d->SetRenderState(D3DRS_SCISSORTESTENABLE,FALSE);return false;}
             }
             d->SetRenderState(D3DRS_SCISSORTESTENABLE,FALSE);
             d->SetPixelShaderConstantF(21,c[21],1);
@@ -3328,14 +3604,30 @@ public:
                !check(d->Clear(0,nullptr,D3DCLEAR_TARGET,0xff000000,1,0),"neutral fog clear"))return false;
         }
         if(profile)profile->mark("Fog");bucket(NorthlightEffectsBuckets::Fog);d->SetRenderState(D3DRS_ALPHABLENDENABLE,FALSE);d->SetRenderState(D3DRS_COLORWRITEENABLE,15);
-        // Separable depth-aware blur: fog -> fogBlurred (horizontal) -> fog (vertical).
+        // 0.3.199 (fog temporal): the fog is complete; accumulate it with last frame's resolved fog (reprojected through the previous view still in c53..c56,
+        // depth-checked against the previous frame's distance in temporalDepth[temporalIndex] since TemporalLight already rotated, neighbourhood-clamped).
+        // fog (raw, s9) + fogHistory (s14) -> fogBlurred, then fogBlurred<->fogHistory swap (texture and surface): fogHistory holds this frame's resolved fog for
+        // the next one. History not usable (first frame, map change, camera jump, debug, fog was off last frame): weight 0, a plain copy that makes it valid.
+        // Off (no fog effect, debug, no shader): none of this runs, the sequence and bindings below are the old ones.
+        if(effects.fog&&fogTemporalPS&&fogHistory&&debug==0){
+            const float info[4]={0,fogHistoryValid&&useHistory?FogTemporalWeight:0.f,0,0};
+            d->SetPixelShaderConstantF(53,c[53],4);d->SetPixelShaderConstantF(64,info,1);
+            d->SetRenderTarget(0,fogBlurredSurface);d->SetTexture(9,fog);d->SetTexture(14,fogHistory);d->SetTexture(15,temporalDepth[temporalIndex]);
+            for(unsigned sampler=14;sampler<16;++sampler){d->SetSamplerState(sampler,D3DSAMP_ADDRESSU,D3DTADDRESS_CLAMP);d->SetSamplerState(sampler,D3DSAMP_ADDRESSV,D3DTADDRESS_CLAMP);d->SetSamplerState(sampler,D3DSAMP_MINFILTER,sampler==14?D3DTEXF_LINEAR:D3DTEXF_POINT);d->SetSamplerState(sampler,D3DSAMP_MAGFILTER,sampler==14?D3DTEXF_LINEAR:D3DTEXF_POINT);d->SetSamplerState(sampler,D3DSAMP_MIPFILTER,D3DTEXF_NONE);d->SetSamplerState(sampler,D3DSAMP_SRGBTEXTURE,FALSE);}
+            d->SetPixelShader(fogTemporalPS);const bool resolved=check(quad(w/2,h/2),"fog temporal pass");
+            d->SetTexture(14,nullptr);d->SetTexture(15,nullptr);d->SetSamplerState(14,D3DSAMP_MINFILTER,D3DTEXF_POINT);d->SetSamplerState(14,D3DSAMP_MAGFILTER,D3DTEXF_POINT);
+            if(!resolved){fogHistoryValid=false;return false;}
+            std::swap(fogBlurred,fogHistory);std::swap(fogBlurredSurface,fogHistorySurface);fogHistoryValid=true;fogResolved=true;
+            if(profile)profile->mark("FogTemporal");
+        }else fogHistoryValid=false;
+        // Separable depth-aware blur: fog -> fogBlurred (horizontal) -> fog (vertical); with the temporal pass the resolved fogHistory -> fog -> fogBlurred (the final fog).
         if(effects.fog){float blur[4]={2,0,0,0};d->SetPixelShader(fogBlurPS);
-         d->SetRenderTarget(0,fogBlurredSurface);d->SetTexture(9,fog);d->SetPixelShaderConstantF(34,blur,1);if(!check(quad(w/2,h/2),"volume blur horizontal"))return false;
-         blur[0]=0;blur[1]=2;d->SetRenderTarget(0,fogSurface);d->SetTexture(9,fogBlurred);d->SetPixelShaderConstantF(34,blur,1);if(!check(quad(w/2,h/2),"volume blur vertical"))return false;}
+         d->SetRenderTarget(0,fogResolved?fogSurface:fogBlurredSurface);d->SetTexture(9,fogResolved?fogHistory:fog);d->SetPixelShaderConstantF(34,blur,1);if(!check(quad(w/2,h/2),"volume blur horizontal"))return false;
+         blur[0]=0;blur[1]=2;d->SetRenderTarget(0,fogResolved?fogBlurredSurface:fogSurface);d->SetTexture(9,fogResolved?fog:fogBlurred);d->SetPixelShaderConstantF(34,blur,1);if(!check(quad(w/2,h/2),"volume blur vertical"))return false;}
         // c34 belongs to the blur above and to HorizonHaze ONLY in the final pass;
         // set on fog-off frames too, where the blur did not run.
         d->SetPixelShaderConstantF(34,haze.haze,1);
-        d->SetRenderTarget(0,targetSurface);d->SetTexture(8,temporalLight[1-temporalIndex]);d->SetTexture(9,fog);d->SetPixelShader(finalPS);if(!check(quad(w,h),"world composite"))return false;composited=true;if(profile)profile->mark("WorldComposite");
+        d->SetRenderTarget(0,targetSurface);d->SetTexture(8,temporalLight[1-temporalIndex]);d->SetTexture(9,fogResolved?fogBlurred:fog);d->SetPixelShader(finalPS);if(!check(quad(w,h),"world composite"))return false;composited=true;if(profile)profile->mark("WorldComposite");
         if(diagnosticCapture){
             gpuDiagnosticArmed=false;unsigned capture=++gpuDiagnosticCaptures;
             const std::string& directory=gpuDiagnosticDirectory;
@@ -3354,7 +3646,7 @@ public:
             dump(d,c[30][1]>0?smoothSurface:lightSurface,directory,"smoothed-light",capture); // what TemporalLight read: the raw light when no source is drawn
             dump(d,temporalLightSurface[1-temporalIndex],directory,"temporal-light",capture);
             dump(d,temporalDepthSurface[1-temporalIndex],directory,"distance",capture);
-            dump(d,fogSurface,directory,"fog",capture);
+            dump(d,fogResolved?fogBlurredSurface:fogSurface,directory,"fog",capture);
             // 0.3.174 FOLD: the proxy's scene copy, before AO and bloom (the colour copy was skipped).
             if(foldScene){IDirect3DSurface9* folded=nullptr;if(SUCCEEDED(foldScene->GetSurfaceLevel(0,&folded))){dump(d,folded,directory,"scene",capture);folded->Release();}}
             else dump(d,colorSurface,directory,"scene",capture);
@@ -3376,9 +3668,12 @@ public:
                 g.sun[0],g.sun[1],g.sun[2],g.sunCore[0],g.sunCore[1],g.sunCore[2],g.moon[0],g.moon[1],g.moon[2],liftRGB[0],liftRGB[1],liftRGB[2],
                 fogDirectRGB[0],fogDirectRGB[1],fogDirectRGB[2],fogAmbientRGB[0],fogAmbientRGB[1],fogAmbientRGB[2],NorthlightSunHue::SunForwardCap,NorthlightSunHue::MoonForwardCap);
         }
-        if(frames==1||frames%600==0){if(frames==1||NorthlightDiagnostics::enabled())logf("LOCAL direct lights=%u limit=%u nearestReach=%.1f visibilityEnd=%.1f fogDistance=%.1f strength=%.3f lampGain=%.3f sunlitCut=%.3f available=%zu scissor=%d batches=%u clipped=%u skipped=%u coverage=%.3f",localDirectCount,quality.localLightLimit,localDirectNearest,NorthlightLocalLightSelection::VisibilityEnd,localLights.fogDistance,c[52][1],lampGain,lampSunlitCut,active?active->localLights.size():size_t(0),
-            int(NorthlightLocalLightScissor::Enabled),localScissorBatches,localScissorClipped,localScissorSkipped,localScissorBatches?localScissorCoverage/localScissorBatches:1.);
-            localScissorBatches=localScissorClipped=localScissorSkipped=0;localScissorCoverage=0;}
+        if(frames==1||frames%600==0){if(frames==1||NorthlightDiagnostics::enabled())logf("LOCAL direct lights=%u limit=%u nearestReach=%.1f visibilityEnd=%.1f fogDistance=%.1f strength=%.3f lampGain=%.3f sunlitCut=%.3f available=%zu scissor=%d batches=%u clipped=%u skipped=%u coverage=%.3f fading=%u selectUs=%.1f selectMaxUs=%.1f",localDirectCount,quality.localLightLimit,localDirectNearest,NorthlightLocalLightSelection::VisibilityEnd,localLights.fogDistance,c[52][1],lampGain,lampSunlitCut,active?active->localLights.size():size_t(0),
+            int(NorthlightLocalLightScissor::Enabled),localScissorBatches,localScissorClipped,localScissorSkipped,localScissorBatches?localScissorCoverage/localScissorBatches:1.,
+            localLightTracker.fading,localSelectFrames?localSelectUsSum/localSelectFrames:0.,localSelectUsMax);
+            localScissorBatches=localScissorClipped=localScissorSkipped=0;localScissorCoverage=0;localSelectUsSum=localSelectUsMax=0;localSelectFrames=0;
+            if(frames>1&&NorthlightDiagnostics::enabled())logf("GI probe blend publishes=%u blendedSlots=%u texture=%d",probeBlendPublishes,probeBlendSlots,int(probePrev!=nullptr));
+            probeBlendPublishes=probeBlendSlots=0;}
         if(frames==1||(frames%600==0&&NorthlightDiagnostics::enabled()))logf("HORIZON haze strength=%u start=%u band=%u terrain=%u fog=%u colorKnown=%d fogEnd=%.1f far=%.1f startZ=%.1f tau=%.3f zone=%.3f rgb=%.3f,%.3f,%.3f sun=%.4f,%.4f",
             quality.horizonHaze,quality.horizonHazeStart,quality.horizonHazeBand,quality.horizonHazeTerrain,unsigned(effects.fog),int(horizonHazeState.colorKnown),horizonHazeState.end,farZ,haze.shape[0],
             haze.haze[3]/NorthlightHorizonHaze::Log2e,hazeZone,haze.haze[0],haze.haze[1],haze.haze[2],haze.sun[0],haze.sun[1]);

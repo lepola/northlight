@@ -35,8 +35,17 @@ Every effect below is on by default and is drawn on top of the game's own frame.
   turns them on): only lights inside buildings cast faint shadows, at dusk and night; street lamps,
   lanterns and torches never do.
 - **Lighting art layer.** An MPQ patch (`patch-z`) built from your client's own `Light*.dbc`: retuned
-  outdoor clear-weather light and fog colours, warmer Mulgore, denser Stormwind day fog. Sky models
+  outdoor clear-weather light and fog colours, warmer Mulgore, denser Stormwind day fog. Storm weather
+  gets darker light and fog bands. Sky models
   that paint their own sun or moon into the clear-weather sky lose it.
+- **Weather.** A heavy-rain look: procedural rain and snow textures in the art layer, darker storm light
+  and fog bands, and Northlight's own haze, fog, light shafts, sun and moon, shadows, GI and lamps follow
+  detected rain or snow (F10 turns it off). Detection reads only the
+  textures the art layer ships, no game memory, so it needs the Northlight art layer (`Weather`, `RainFog`). The game's rain streaks are drawn alpha-blended so they stay crisp instead of taking the background's colour, and the game's mist puffs, which darkened night and storm rain into black balls, are left out while it rains; snow and sand storms keep them.
+- **Fog clouds.** Low fog banks that drift with the wind, thicker and faster in rain, few and faint in clear
+  weather and only in forest and grass zones then (its own half-resolution pass; `FogClouds`, `FogCloudDensity`). Ctrl+Shift+F7 (fog) and F10 turn
+  them off with the rest; the Performance preset has them off. The fog is also smoothed over frames so lamp glows
+  and shafts do not shimmer while moving.
 - **Water.** The game's water is drawn unchanged; a liquid mask keeps the relighting and AO off the
   surface, and fog is measured to the water surface.
 - **Settings.** `northlight-quality.ini` has three presets (Quality, the default, Balanced and
@@ -47,6 +56,17 @@ Every effect below is on by default and is drawn on top of the game's own frame.
 - **Cost.** Northlight costs frame time, mostly on the game's main CPU thread. Character shadows are
   the largest part in crowds (about 4-5 ms per frame): `ActorShadows=0` in `northlight-quality.ini`
   keeps only the static shadows, and the Balanced and Performance presets trade small details for speed.
+  On the graphics card, `GpuBudgetMs` (4 / 3 / 2 ms, 0 = off) keeps Northlight's own measured GPU time near
+  the budget: while it is over, the fog clouds take fewer steps in two stages, then the
+  fog takes fewer steps and at most 16 lamps light at once; under it the picture is the full one.
+  With the command stream (`CommandStream=1`) the game records its graphics calls and a second thread draws them;
+  `StreamFramesAhead` (1..3, default 2) sets how many frames the game may run ahead of that thread (1 = as in 0.3.199).
+  `ReplayJobs=1` (every preset) runs part of the renderer thread's per-frame CPU work (lamp choice, fog
+  clouds, the terrain and character culling of the sun and moon shadows) on 1-4 helper threads with the
+  exact same picture; `0` keeps all of it on the renderer thread.
+  `StreamFramesAhead` (1..3, default 2) sets how many frames the game may run ahead of that thread (1 = as in 0.3.199);
+  with `StreamFrameSkip=1` (default) a thread two whole frames behind skips drawing the older frame (state and uploads still
+  apply; frames that render to textures, use occlusion queries or copy the picture are always drawn), so the game does not wait for it.
 - **Platforms and install.** macOS with WoWSilicon (preloaded as `mods/d3d9.dll`) and Windows (a
   game-folder `d3d9.dll` on the bundled DXVK 3.1.1, with DXVK 2.7.1 as the `dxvk2` alternative backend for AMD RX 5000/6000 and
   older drivers (`Install.cmd --backend dxvk2`; on a driver DXVK 3 does not support, install with `--backend dxvk2`, Northlight never switches by itself; a reinstall without `--backend` keeps `dxvk2` or `native`), the system D3D9, or an existing `d3d9.dll`). The

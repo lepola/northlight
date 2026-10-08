@@ -1,5 +1,7 @@
 // Native fake-COM contract test; no D3D, Wine or game is executed.
+#include <atomic>
 #include <cassert>
+#include <chrono>
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
@@ -257,6 +259,40 @@ static void copiesTests(){
   b.raw->failLock=true;assert(FAILED(b.vb->Lock(0,4,&p,0)));b.raw->failLock=false;assert(m.copyInvalidations.load()==inv+2);
   assert(readSame(b,0,1024));b.raw->failUnlock=true;assert(b.vb->Lock(0,4,&p,0)==S_OK&&FAILED(b.vb->Unlock()));b.raw->failUnlock=false;assert(m.copyInvalidations.load()==inv+3);
   freeVB(b);}
+ // 0.3.196 (task 12): a Lock..Unlock pair takes the store mutex ONCE (at Unlock): Lock records into wrapper-private fields while another thread holds it
+ {VB b=makeVB(owner,4096);replayWrite(b,0,4096,0,60);assert(readSame(b,0,8));auto& st=C::store();void* p=nullptr;
+  std::unique_lock<std::mutex> hold(st.m);
+  std::atomic<bool> locked{false};std::thread t([&]{void* q=nullptr;assert(b.vb->Lock(64,32,&q,0)==S_OK);std::memset(q,0x66,32);locked.store(true);assert(b.vb->Unlock()==S_OK);});
+  for(int i=0;i<500&&!locked.load();++i)std::this_thread::sleep_for(std::chrono::milliseconds(1));
+  assert(locked.load()); // the Lock completed with the mutex held elsewhere (the old writeLocked would have blocked here)
+  hold.unlock();t.join();b.raw->readLocks=0;assert(readSame(b,0,4096)&&b.raw->readLocks==0);(void)p; // Unlock mirrored the bytes
+  freeVB(b);}
+ // evict between Lock and Unlock: the slot is gone at Unlock, which only clears the record; the next read fills again and is exact
+ {VB b=makeVB(owner,4096);replayWrite(b,0,4096,0,61);assert(readSame(b,0,8));void* p=nullptr;const auto ev=m.copyEvictions.load(),inv=m.copyInvalidations.load();
+  assert(b.vb->Lock(10,20,&p,0)==S_OK);std::memset(p,0x42,20);
+  {auto& st=C::store();std::lock_guard<std::mutex> g(st.m);assert(C::detail::evictOne(st));}
+  assert(b.vb->Unlock()==S_OK&&m.copyEvictions.load()==ev+1&&m.copyInvalidations.load()==inv);
+  b.raw->readLocks=0;assert(readSame(b,0,4096)&&b.raw->readLocks==1&&readSame(b,0,4096)&&b.raw->readLocks==1);
+  // a further write pair after the refill is mirrored normally (the stale record did not leak into it)
+  replayWrite(b,200,50,0,62);assert(readSame(b,0,4096)&&b.raw->readLocks==1);
+  freeVB(b);}
+ // nested locks: READONLY outside a write, a write inside a READONLY, two writes; each drops exactly once, the record never leaks into the next pair
+ {VB b=makeVB(owner,4096);replayWrite(b,0,4096,0,63);assert(readSame(b,0,8));void *p=nullptr,*p2=nullptr;auto inv=m.copyInvalidations.load();
+  assert(b.vb->Lock(0,10,&p,0)==S_OK&&b.vb->Lock(0,10,&p2,D3DLOCK_READONLY)==S_OK&&b.vb->Unlock()==S_OK&&b.vb->Unlock()==S_OK&&m.copyInvalidations.load()==inv+1); // write, then READONLY: the first Unlock cannot tell which it closes
+  b.raw->readLocks=0;assert(readSame(b,0,4096)&&b.raw->readLocks==1);inv=m.copyInvalidations.load();
+  assert(b.vb->Lock(0,10,&p2,D3DLOCK_READONLY)==S_OK&&b.vb->Lock(20,10,&p,0)==S_OK&&b.vb->Unlock()==S_OK&&b.vb->Unlock()==S_OK&&m.copyInvalidations.load()==inv+1); // a write nested in a READONLY: dropped
+  b.raw->readLocks=0;assert(readSame(b,0,4096)&&b.raw->readLocks==1);
+  replayWrite(b,300,40,D3DLOCK_DISCARD,64);assert(readSame(b,0,4096)&&b.raw->readLocks==1); // a plain pair afterwards is mirrored
+  // READONLY alone and a rejected nested write leave a valid copy alone / dropped as before
+  b.raw->readLocks=0;assert(b.vb->Lock(0,10,&p,D3DLOCK_READONLY)==S_OK&&b.vb->Unlock()==S_OK&&readSame(b,0,4096)&&b.raw->readLocks==1); // the READONLY lock itself counts 1, the read is served
+  assert(b.vb->Lock(0,4,&p,0)==S_OK);b.raw->failLock=true;assert(FAILED(b.vb->Lock(8,4,&p2,0)));b.raw->failLock=false;assert(b.vb->Unlock()==S_OK);
+  b.raw->readLocks=0;assert(readSame(b,0,4096)&&b.raw->readLocks==1);
+  freeVB(b);}
+ // DISCARD with a source scope and size 0 (to the end) through the one-pair path
+ {VB b=makeVB(owner,4096);replayWrite(b,0,4096,D3DLOCK_DISCARD,65);assert(readSame(b,0,8));void* p=nullptr;std::vector<unsigned char> src(4096-100,0x9C);
+  {C::UnlockSourceScope scope(src.data(),100,4096-100);assert(b.vb->Lock(100,0,&p,D3DLOCK_DISCARD)==S_OK);std::memset(p,0x2D,4096-100);assert(b.vb->Unlock()==S_OK);}
+  b.raw->readLocks=0;{C::Reader<IDirect3DVertexBuffer9> r(b.raw);void* q=nullptr;assert(r.lock(100,4096-100,&q)==S_OK&&static_cast<unsigned char*>(q)[0]==0x9C&&static_cast<unsigned char*>(q)[4096-101]==0x9C&&r.unlock()==S_OK);}
+  assert(b.raw->readLocks==0);freeVB(b);}
  // a GPU-side write (ProcessVertices): invalidated for good, every read is an ordinary lock
  {VB b=makeVB(owner,1024);replayWrite(b,0,1024,0,8);assert(readSame(b,0,8)&&readSame(b,0,8));written(b.vb);b.raw->readLocks=0;
   for(int i=0;i<3;++i)assert(readSame(b,0,1024));assert(b.raw->readLocks==3);freeVB(b);}
@@ -332,6 +368,25 @@ static void copiesTests(){
    assert(!std::memcmp(p,raw->mem.data(),64)&&d2.refs==2&&NorthlightTrackedBuffers::records.size()==2);
    assert(r.unlock()==S_OK);}  // the last reference goes here: ~Buffer, detach, owner released
   assert(d2.refs==1&&NorthlightTrackedBuffers::records.empty());raw->Release();}
+ // 0.3.196 (task 12): a copy-cache miss is ONE store mutex acquisition (readOrBeginFill) and a fill that evicts a slot takes over its allocation when the size is close
+ {auto slotOf=[&](VB& b){return C::store().registry.at(b.raw);};
+  const UINT big=3u<<20;std::vector<VB> v;for(int i=0;i<5;++i){v.push_back(makeVB(owner,big));replayWrite(v.back(),0,4096,0,70+i);}
+  for(auto& b:v){assert(readSame(b,0,64));}C::advanceFrame();for(auto& b:v){assert(readSame(b,0,64));assert(slotOf(b)->state.load()==C::Slot::Valid);} // 5 x 3 MiB: fills, the oldest read first
+  assert(slotOf(v[0])->data.capacity()==big);
+  // a 3 MiB - 4 KiB buffer (within 1/8): its fill evicts v[0] and keeps that allocation
+  VB near=makeVB(owner,big-4096);replayWrite(near,0,4096,0,80);assert(readSame(near,0,64));C::advanceFrame();assert(readSame(near,0,64));
+  C::Slot* sn=slotOf(near);assert(sn->state.load()==C::Slot::Valid&&slotOf(v[0])->state.load()==C::Slot::None&&sn->data.size()==big-4096&&sn->data.capacity()==big);
+  assert(readSame(near,0,big-4096)&&readSame(v[0],0,64)); // exact bytes in the recycled storage, and the evicted buffer reads fine through its fallback
+  // a very different size does not inherit it: its capacity is its own size
+  VB small=makeVB(owner,512u<<10);replayWrite(small,0,4096,0,81);assert(readSame(small,0,512u<<10));
+  C::Slot* ss=slotOf(small);assert(ss->state.load()==C::Slot::Valid&&ss->data.capacity()==512u<<10);
+  // the whole fill is one mutex acquisition: with the mutex held elsewhere readOrBeginFill blocks, and a miss never needs the lock twice (no re-entry: the call returns)
+  {C::Slot* sl=nullptr;bool fill=false;auto& st=C::store();std::unique_lock<std::mutex> hold(st.m);std::atomic<bool> done{false};
+   std::thread t([&]{C::Slot* x=nullptr;bool f=false;const unsigned char* r=C::readOrBeginFill(small.raw,0,64,x,f);assert(r&&x&&!f);C::unpin(*x);done.store(true);});
+   std::this_thread::sleep_for(std::chrono::milliseconds(20));assert(!done.load());hold.unlock();t.join();assert(done.load());(void)sl;(void)fill;}
+  // spare memory is not kept after the call
+  assert(C::store().spare.capacity()==0&&!C::store().recycling);
+  freeVB(small);freeVB(near);for(auto& b:v)freeVB(b);assert(m.copyResidentBytes.load()==0);}
  // randomized equivalence (20000 steps): partial/whole writes of all lock flags, pending locks, reads at random ranges, GPU writes, pressure toggles
  {std::mt19937 rng(20260);const UINT sizes[]={512,4096,60000,70000,3u<<20,3u<<20,3u<<20,3u<<20};std::vector<VB> v;for(UINT s:sizes)v.push_back(makeVB(owner,s));
   unsigned reads=0,mismatch=0;const auto servedBefore=served(),fillsBefore=m.copyFills.load(),evictBefore=m.copyEvictions.load();
