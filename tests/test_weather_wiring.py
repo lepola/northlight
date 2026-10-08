@@ -17,12 +17,12 @@ checks['no weather in any Set*/Get* Device method']=not re.search(r'HRESULT STDM
 
 a=r.index('template<class Capture,class Draw> HRESULT drawHook(');b=r.index('    // 0.3.154: blob shadow claim')
 hook=r[a:b]
-cmp_line='if(weatherDetect.hot&&mirrorState.textureKnown[0]&&mirrorState.textures[0]==weatherDetect.hot){weatherSample.primitives+=count;++weatherSample.draws;rainBlend=weatherDetect.hotKind==NorthlightWeather::Kind::Rain&&world&&world->rainBlendSetting();rainBoundary=rainBlend&&terrain&&!applied;}'
-checks['drawHook: the single comparison, once']=hook.count(cmp_line+' /* 0.3.199 (rain): after applied too (the rest of the rain); the boundary at the first rain draw of a terrain frame */')==1 and hook.count('weatherDetect')==4 and hook.count('weatherSample')==2
+cmp_line='if(weatherDetect.hot&&mirrorState.textureKnown[0]&&mirrorState.textures[0]==weatherDetect.hot){weatherSample.primitives+=count;++weatherSample.draws;rainBlend=weatherDetect.hotKind==NorthlightWeather::Kind::Rain&&world&&world->rainBlendSetting();}'
+checks['drawHook: the single comparison, once']=hook.count(cmp_line+' /* 0.3.199 (rain): counted after applied too (the rest of the rain); 0.3.201: no boundary here, the effects run at the UI again */')==1 and hook.count('weatherDetect')==4 and hook.count('weatherSample')==2
 checks['drawHook: before the gate split and any other work']=0<=hook.index(cmp_line)<hook.index('if(!frameDrawGates){')<hook.index('prepareDraw(capture,count)')<hook.index('prepareDrawImpl(capture,count)') and hook.index(cmp_line)<hook.index('noteFirst')
 # 0.3.199 (rain): RainBlend - the override lives in the matched branch (a bool set there), only for Rain and the setting, wraps exactly the game's draw
 helper=r[r.index('template<class Draw> HRESULT rainBlendDraw('):r.index('    // One game draw: capture')]
-checks['RainBlend: the bool is set only inside the matched branch, for Rain and the setting']=hook.count('rainBlend=weatherDetect')==1 and hook.count('rainBoundary')==1 and hook.count('rainBlend=weatherDetect.hotKind==NorthlightWeather::Kind::Rain&&world&&world->rainBlendSetting();')==1 and cmp_line.split('{',1)[1].count('rainBlend=')==1 and 'bool claimed=false,rainBlend=false,mist=false;' in hook
+checks['RainBlend: the bool is set only inside the matched branch, for Rain and the setting']=hook.count('rainBlend=weatherDetect')==1 and 'rainBoundary' not in r and hook.count('rainBlend=weatherDetect.hotKind==NorthlightWeather::Kind::Rain&&world&&world->rainBlendSetting();')==1 and cmp_line.split('{',1)[1].count('rainBlend=')==1 and 'bool claimed=false,rainBlend=false,mist=false;' in hook
 checks['RainBlend: both gate paths draw through rainBlendDraw, none through blobFaintDraw directly']=hook.count('rainBlendDraw(rainBlend,claimed||mist,draw)')==2 and 'blobFaintDraw' not in hook
 # 0.3.199 (rain mist): the mist skip is the else branch of the one comparison, gated first by the armed bool; armed only at frame end for rain and RainBlend
 mist_line='else if(weatherDetect.mistArmed)mist=mistDraw(count);'
@@ -51,14 +51,34 @@ checks['weatherFrame: tracker, world, rotate, mirror-off']=all(s in wf for s in 
 checks['DRAWGATE line carries weatherDraws/weatherPrims']='weatherDraws=%u weatherPrims=%u weatherNs=%.1f' in r and 'weatherSample.draws,weatherSample.primitives,b.weatherNs)' in r
 w=fp.src('world_renderer.h').read_text()
 checks['WorldRenderer: POD state, setter and getter only']=all(s in w for s in ('NorthlightWeather::State weatherState{};','void setWeather(const NorthlightWeather::State& s){weatherState=s;}','const NorthlightWeather::State& weather()const{return weatherState;}')) and w.count('weatherState')==4
-# 0.3.199 (rain): the effect boundary at the first rain draw - flag from the matched branch, consumed in prepareDrawImpl (inside extensionWork), before the applied return
+# 0.3.201 (rain): the rain boundary is gone (the UI boundary is the only one again); the rain mask replaces it
 pdi=r[r.index('template<class Capture> void prepareDrawImpl('):r.index('    // Terrain draws run with the game')]
-checks['rain boundary: flag set only in the matched branch with terrain&&!applied and the setting']=cmp_line.split('{',1)[1].count('rainBoundary=rainBlend&&terrain&&!applied;')==1 and r.count('rainBoundary=true')==0
-checks['rain boundary: prepareDrawImpl consumes it before the applied return and before the draw capture']=0<pdi.index('if(rainBoundary){rainBoundary=false;if(!applied&&terrain)')<pdi.index('renderEffects();')<pdi.index('if(applied){')<pdi.index('beforeDraw(vs)')
-checks['rain boundary: UI boundary kept as the fallback, both logs name the kind']='renderEffects();\n            }\n        }\n    }' in r and 'kind=ui' in r and 'kind=rain' in pdi
-# game test: after the rain boundary the mirror forgets stage 0 (state-block Apply); one GetTexture(0) relearns it so the rest of the rain matches
-checks['rain boundary: stage 0 relearned after renderEffects (the remaining rain draws still match)']=('renderEffects();' in r and 'IDirect3DBaseTexture9* stage0=nullptr;if(SUCCEEDED(ext->GetTexture(0,&stage0)))drop(stage0);' in r
-    and r.index('kind=rain",frame,drawCalls);renderEffects();')<r.index('IDirect3DBaseTexture9* stage0=nullptr;'))
+checks['no rain boundary: no rainBoundary anywhere, no kind=rain log, no stage-0 relearn in prepareDrawImpl']=('rainBoundary' not in r and 'kind=rain' not in r and 'IDirect3DBaseTexture9* stage0=nullptr' not in pdi and 'ext->GetTexture(0,&stage0)' not in pdi and 'renderEffects();' not in pdi)
+branch=helper[helper.index('return blobFaintDraw(claimed,[&]{'):]
+checks['rain mask: the pass runs once, only after draw() in the rain branch, inside extensionWork("rain mask"), before the blend restore']=(helper.count('rainMaskPass(')==1 and 'if(SUCCEEDED(hr))extensionWork("rain mask",[&]{rainMaskPass(draw,false);});' in branch
+    and branch.index('const HRESULT hr=draw();')<branch.index('rainMaskPass(draw,false)')<branch.index('prev[i]);') and 'rainMaskPass' not in helper.split('return blobFaintDraw(claimed,[&]{')[0])
+mp=r[r.index('template<class Draw> void rainMaskPass('):r.index('template<class Draw> HRESULT rainBlendDraw(')]
+checks['rain mask: eligibility (not applied, terrain, enabled, not failed, world, mask not failed), scrub needs rainMaskDrawn, eligibility cached per frame']=(
+    'if(scrub&&!rainMaskDrawn)return;' in mp and 'if(applied||!terrain||!enabled||failed||!world||rainMaskFailed||!width||!height)return;' in mp and 'if(!rainMaskFrame){rainMaskFrame=true;rainMaskOk=rainMaskEligible();}' in mp)
+el=r[r.index('bool rainMaskEligible()'):r.index('bool rainMaskCreate()')]
+checks['rain mask: eligible only at the effect size, no multisampling on target and depth']=('rd.Width==width&&rd.Height==height&&rd.MultiSampleType==D3DMULTISAMPLE_NONE' in el and 'dd.MultiSampleType==D3DMULTISAMPLE_NONE' in el and 'GetDepthStencilSurface' in el)
+checks['rain mask: states set (alpha-only write, blend on, no separate alpha, no Z write, no sRGB, no stencil, the game scissor rect), mask is ONE/ZERO/MAX, scrub ZERO/ZERO/ADD with LESS widened to LESSEQUAL']=(
+    all(t in mp for t in ('D3DRS_COLORWRITEENABLE,D3DCOLORWRITEENABLE_ALPHA','D3DRS_ALPHABLENDENABLE,TRUE','D3DRS_SEPARATEALPHABLENDENABLE,FALSE','D3DRS_ZWRITEENABLE,FALSE','D3DRS_SRGBWRITEENABLE,FALSE','scrub?D3DBLEND_ZERO:D3DBLEND_ONE','D3DRS_DESTBLEND,D3DBLEND_ZERO','scrub?D3DBLENDOP_ADD:D3DBLENDOP_MAX','D3DRS_STENCILENABLE,FALSE','ext->GetScissorRect(&scissor)','if(scrub&&known[10]&&prev[10]==D3DCMP_LESS)ext->SetRenderState(D3DRS_ZFUNC,D3DCMP_LESSEQUAL);'))
+    and mp.count('ext->SetScissorRect(&scissor)')==2
+    and 'D3DRS_ZENABLE' not in mp and 'D3DRS_ALPHATESTENABLE' not in mp and 'SetTexture' not in mp and 'SetPixelShader' not in mp)
+checks['rain mask: render target and viewport saved, restored after the draw (SetRenderTarget resets the viewport), cleared once per frame with the scissor off']=(
+    'GetRenderTarget(0,&gameRT)' in mp and 'ext->GetViewport(&vp)' in mp and mp.index('SetRenderTarget(0,rainMaskSurface)')<mp.index('const HRESULT hr=draw();')<mp.rindex('restore();')
+    and 'ext->SetRenderTarget(0,gameRT);ext->SetViewport(&vp);if(scissorKnown)ext->SetScissorRect(&scissor);drop(gameRT);' in mp and 'if(!rainMaskCleared){' in mp and 'rainMaskCleared=true;' in mp and mp.count('Clear(')==1 and 'D3DRS_SCISSORTESTENABLE,FALSE' in mp and mp.count('draw()')==1)
+checks['rain mask: created lazily at the effect size, failure logged once and disables the mask only']=('D3DFMT_A8R8G8B8,D3DPOOL_DEFAULT,&rainMask' in r and 'rainMaskFailed=true;logf("WEATHER rain mask disabled' in r and 'if(!rainMaskSurface&&!rainMaskCreate())return;' in mp)
+rr=r[r.index('    void releaseResources() {'):r.index('    bool error(HRESULT hr')]
+rs=r[r.index('    bool resources(UINT w'):r.index('    // Swap chain 0')]
+checks['rain mask: dropped in releaseResources (with the failed flag reset) and on a size change']=('drop(rainMaskSurface);drop(rainMask);rainMaskFailed=false;' in rr and 'drop(rainMaskSurface);drop(rainMask);' in rs.split('captured=false;')[1].split('}')[0])
+checks['rain mask: per-frame flags reset where terrain/applied reset (clearFrame)']='terrain = captured = applied = projectionValid = false;rainMaskCleared=rainMaskDrawn=rainMaskFrame=rainMaskOk=rainScrubDraw=false;' in r
+checks['rain mask: setRainMask right before world->render in renderEffects, only when drawn']=0<r.index('world->setRainMask(rainMaskDrawn?rainMask:nullptr);')<r.index('world->render(saved.targets[0]') and r.index('world->render(saved.targets[0]')-r.index('world->setRainMask(')<260
+checks['rain scrub: per-draw flag only with rainMaskDrawn&&!applied for world or skinned shaders; dry frames one bool test']=('if(rainMaskDrawn&&world&&!applied){const VsClass& vc=classifyVs(vs);rainScrubDraw=vc.world||vc.skinned;}' in pdi and pdi.count('rainScrubDraw=')==2 and pdi.index('rainScrubDraw=false;')<pdi.index('if(applied){'))
+checks['rain scrub: after the game draw in both gate paths, not for rain, claimed or mist draws, only on success']=(hook.count('if(rainScrubDraw&&!rainBlend&&!claimed&&!mist&&SUCCEEDED(hr)){rainScrubDraw=false;extensionWork("rain mask",[&]{rainMaskPass(draw,true);});}')==2
+    and hook.index('rainBlendDraw(rainBlend,claimed||mist,draw)')<hook.index('rainScrubDraw&&')<hook.index('if(!frameDrawGates){')+hook[hook.index('if(!frameDrawGates){'):].index('return hr;'))
+checks['rain mask: WEATHER line carries the counters; world binds RainMask on s13 for the composite only']=('rainMask=%u rainMaskScrub=%u' in r and 'd->SetTexture(13,rainMask?rainMask:neutralZero);rainMask=nullptr;' in w and 'composited=true;d->SetTexture(13,regionalFogTexture);' in w and 'void setRainMask(IDirect3DTexture9* t){rainMask=t;}' in w)
 for k,ok in checks.items():print(('PASS ' if ok else 'FAIL ')+k)
 sys.exit(0 if all(checks.values()) else 1)
 

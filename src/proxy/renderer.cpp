@@ -306,7 +306,10 @@ class Device final : public GuardedMirrorDevice {
     UINT width = 0, height = 0;
     D3DFORMAT sceneFormat = D3DFMT_UNKNOWN;
     bool terrain = false, captured = false, applied = false, enabled = true;
-    bool rainBoundary = false; /* 0.3.199 (rain): set by drawHook at a matched rain draw before the boundary, consumed by prepareDrawImpl */
+    // 0.3.201 (rain): the rain streak alpha mask (RainMask, s13 of WorldComposite): created on the first mask draw at the effect resources' size; the
+    // flags and the cached eligibility are per frame (clearFrame), the counters are read and zeroed by the WEATHER line.
+    IDirect3DTexture9* rainMask=nullptr;IDirect3DSurface9* rainMaskSurface=nullptr;bool rainMaskFailed=false;
+    bool rainMaskCleared=false,rainMaskDrawn=false,rainMaskFrame=false,rainMaskOk=false,rainScrubDraw=false;unsigned rainMaskDraws=0,rainMaskScrubs=0;bool rainMaskMismatchLogged=false;
     bool failed = false, projectionValid = false, key10 = false, key12=false;
     // 0.3.200 (frame markers): diagnostics only, while northlight-frame-markers.txt exists in the game folder at device creation: two 40x40
     // squares at the left edge whose colour cycles with the frame number. E (upper) is filled right after the world effects, P (lower) right
@@ -402,11 +405,11 @@ private:
         if(!applied||failed)stateBlocks.clear();
         if(!enabled||extensionFault){stateBlocks.clear();if(world)world->releaseStateCache();if(water)water->releaseStateCache();}
         if(world)world->endFrame(!extensionFault);if(water)water->endFrame();if(celestialDiscs)celestialDiscs->endFrame();if(shadowBlobs)shadowBlobs->endFrame();
-        drop(worldDepth);worldDepthDescKnown=false; terrain = captured = applied = projectionValid = false;earlyDepth.reset();resetTranslucentCensus(); /* the TRANSLUCENT line is logged before clearFrame */
+        drop(worldDepth);worldDepthDescKnown=false; terrain = captured = applied = projectionValid = false;rainMaskCleared=rainMaskDrawn=rainMaskFrame=rainMaskOk=rainScrubDraw=false; /* 0.3.201 (rain) */earlyDepth.reset();resetTranslucentCensus(); /* the TRANSLUCENT line is logged before clearFrame */
     }
     void releaseResources() {
         stateBlocks.clear();clearFrame();
-        drop(sceneSurface); drop(aoSurface); drop(aoRawSurface); drop(scene); drop(depthTex); drop(ao); drop(aoRaw);
+        drop(sceneSurface); drop(aoSurface); drop(aoRawSurface); drop(scene); drop(depthTex); drop(ao); drop(aoRaw);drop(rainMaskSurface);drop(rainMask);rainMaskFailed=false; /* 0.3.201 (rain) */
         drop(aoPS); drop(aoBlurPS); drop(aoContactBloomPS); drop(contactBloomPS); drop(compositePS); width = height = 0;
     }
     bool error(HRESULT hr, const char* stage) {
@@ -419,7 +422,7 @@ private:
         // Resource replacement must not invalidate this frame's retained depth surface.
         drop(sceneSurface); drop(scene);
         if (w!=width || h!=height) {
-            drop(aoSurface); drop(ao); drop(aoRawSurface); drop(aoRaw); drop(depthTex); captured=false;
+            drop(aoSurface); drop(ao); drop(aoRawSurface); drop(aoRaw); drop(depthTex); captured=false;drop(rainMaskSurface);drop(rainMask); /* 0.3.201 (rain): the mask follows the effect size */
         }
         width = w; height = h; sceneFormat = format;
         if (!aoPS && error(ext->CreatePixelShader(kAoShader, &aoPS), "AO shader")) return false;
@@ -657,6 +660,7 @@ private:
         if(!fold&&!legacyComposite())return;
         if(world&&debugMode==0){
             traceWorld=0;
+            world->setRainMask(rainMaskDrawn?rainMask:nullptr); /* 0.3.201 (rain): RainMask for this frame's composite only */
             if(!world->render(saved.targets[0],depthTex,width,height,sceneFormat,nearZ,farZ,worldMinDepth,worldMaxDepth,worldDebug,gpuProfile.get(),waterMask,fold?scene:nullptr,fold?ao:nullptr)){
                 if(++worldSkippedFrames<=8||(worldSkippedFrames%120==0&&diagnostics()))
                     logf("WORLD skipped frame=%u tick=%lu context=%d ready=%d count=%u reason=%s",frame,(unsigned long)GetTickCount(),world->hasContext(),world->ready(),worldSkippedFrames,world->lastSkipReason());
@@ -690,14 +694,8 @@ private:
     }
     template<class Capture> void prepareDrawImpl(Capture capture,UINT count) {
         ++drawCalls;
+        rainScrubDraw=false; /* 0.3.201 (rain): set below for a world or skinned draw after the frame's first mask draw */
         if(failed||!enabled)return;
-        // 0.3.199 (rain): the effect boundary at the first rain draw (drawHook sets the flag): the composite runs before the game's rain, so the
-        // fog and haze do not paint over the streaks. Same extensionWork region as the UI boundary; renderEffects restores the game's states.
-        if(rainBoundary){rainBoundary=false;if(!applied&&terrain){if(sampled())logf("EFFECT boundary frame=%u draw=%u kind=rain",frame,drawCalls);renderEffects();
-            /* 0.3.199 (rain): the effects end with a state-block Apply, which forgets the mirror's stage-0 texture; the game does not set the same rain
-               texture again for its next rain draws, so without this read they no longer matched (one rain draw per frame counted and blended).
-               The read goes to the device (the game's restored state) and the mirror learns it back. */
-            IDirect3DBaseTexture9* stage0=nullptr;if(SUCCEEDED(ext->GetTexture(0,&stage0)))drop(stage0);}}
         if(applied){
             if(sampled()){IDirect3DVertexShader9* late=nullptr;const bool borrowed=ext->peekVertexShader(late); // 0.3.196 (task 12): identity lookup only
                 if((borrowed||(SUCCEEDED(ext->GetVertexShader(&late))&&late))&&world){
@@ -715,6 +713,7 @@ private:
         if(!borrowedVS&&(FAILED(ext->GetVertexShader(&vs))||!vs)){++missingVS;drop(vs);return;}
         struct ShaderRelease {IDirect3DVertexShader9*& p;bool borrowed;~ShaderRelease(){if(!borrowed)drop(p);}} shaderRelease{vs,borrowedVS};
         beforeDraw(vs);planTerrainShadowSwap(vs);
+        if(rainMaskDrawn&&world&&!applied){const VsClass& vc=classifyVs(vs);rainScrubDraw=vc.world||vc.skinned;} /* 0.3.201 (rain): dry frames pay one bool test */
         if(world&&!applied&&enabled&&!failed&&projectionValid){
             D3DVIEWPORT9 viewport={};DWORD depthEnabled=FALSE;
             const bool statesRead=SUCCEEDED(ext->GetViewport(&viewport))&&SUCCEEDED(ext->GetRenderState(D3DRS_ZENABLE,&depthEnabled));
@@ -890,6 +889,45 @@ private:
         if(weatherMistReports<4){++weatherMistReports;logf("WEATHER mist draw (skipped) applied=%d terrain=%d",int(applied),int(terrain));weatherDrawStates(count);--weatherStateReports;}
         return true;
     }
+    // 0.3.201 (rain): RainMask. The rain draw is repeated into an A8R8G8B8 target the size of the effects (alpha only, MAX of the streak alphas, Z test the game's) so
+    // WorldComposite can leave the streaks out of fog and haze; scrub draws (world and skinned draws after the first mask draw) write alpha 0 where they pass Z.
+    // Eligible only in a terrain frame before the effects, at the effect size and without multisampling; the mask target is cleared once per frame.
+    bool rainMaskEligible(){
+        IDirect3DSurface9* rt=nullptr;IDirect3DSurface9* ds=nullptr;bool ok=false;D3DSURFACE_DESC rd={},dd={};
+        if(SUCCEEDED(ext->GetRenderTarget(0,&rt))&&rt){rt->GetDesc(&rd);ok=rd.Width==width&&rd.Height==height&&rd.MultiSampleType==D3DMULTISAMPLE_NONE;
+            if(ok&&SUCCEEDED(ext->GetDepthStencilSurface(&ds))&&ds){ds->GetDesc(&dd);ok=dd.MultiSampleType==D3DMULTISAMPLE_NONE;}}
+        if(!ok&&!rainMaskMismatchLogged){rainMaskMismatchLogged=true;logf("WEATHER rain mask skipped: render target %ux%u ms=%u, effects %ux%u",rd.Width,rd.Height,unsigned(rd.MultiSampleType),width,height);}
+        drop(ds);drop(rt);return ok;
+    }
+    bool rainMaskCreate(){
+        HRESULT hr=ext->CreateTexture(width,height,1,D3DUSAGE_RENDERTARGET,D3DFMT_A8R8G8B8,D3DPOOL_DEFAULT,&rainMask,nullptr);
+        if(SUCCEEDED(hr))hr=rainMask->GetSurfaceLevel(0,&rainMaskSurface);
+        if(FAILED(hr)){drop(rainMaskSurface);drop(rainMask);rainMaskFailed=true;logf("WEATHER rain mask disabled (%ux%u A8R8G8B8 target) HRESULT=0x%08lx",width,height,(unsigned long)hr);return false;}
+        return true;
+    }
+    template<class Draw> void rainMaskPass(Draw draw,bool scrub){
+        if(scrub&&!rainMaskDrawn)return;
+        if(applied||!terrain||!enabled||failed||!world||rainMaskFailed||!width||!height)return;
+        if(!rainMaskFrame){rainMaskFrame=true;rainMaskOk=rainMaskEligible();}
+        if(!rainMaskOk)return;
+        if(!rainMaskSurface&&!rainMaskCreate())return;
+        IDirect3DSurface9* gameRT=nullptr;D3DVIEWPORT9 vp={};RECT scissor={};
+        if(FAILED(ext->GetRenderTarget(0,&gameRT))||!gameRT||FAILED(ext->GetViewport(&vp))){drop(gameRT);return;}
+        const bool scissorKnown=SUCCEEDED(ext->GetScissorRect(&scissor)); /* SetRenderTarget(0) resets the scissor rect too, and the mirror does not hold it */
+        static const D3DRENDERSTATETYPE types[11]={D3DRS_COLORWRITEENABLE,D3DRS_ALPHABLENDENABLE,D3DRS_SEPARATEALPHABLENDENABLE,D3DRS_ZWRITEENABLE,D3DRS_SRGBWRITEENABLE,D3DRS_SRCBLEND,D3DRS_DESTBLEND,D3DRS_BLENDOP,D3DRS_SCISSORTESTENABLE,D3DRS_STENCILENABLE,D3DRS_ZFUNC};
+        DWORD prev[11]={};bool known[11]={};for(int i=0;i<11;++i)known[i]=SUCCEEDED(ext->GetRenderState(types[i],&prev[i]));
+        auto restore=[&]{for(int i=0;i<11;++i)if(known[i])ext->SetRenderState(types[i],prev[i]);ext->SetRenderTarget(0,gameRT);ext->SetViewport(&vp);if(scissorKnown)ext->SetScissorRect(&scissor);drop(gameRT);};
+        if(FAILED(ext->SetRenderTarget(0,rainMaskSurface))){restore();return;}
+        if(!rainMaskCleared){ext->SetRenderState(D3DRS_SCISSORTESTENABLE,FALSE);ext->Clear(0,nullptr,D3DCLEAR_TARGET,0,1,0);if(known[8])ext->SetRenderState(D3DRS_SCISSORTESTENABLE,prev[8]);rainMaskCleared=true;} /* the whole target: SetRenderTarget reset the viewport to it */
+        ext->SetViewport(&vp);
+        ext->SetRenderState(D3DRS_COLORWRITEENABLE,D3DCOLORWRITEENABLE_ALPHA);ext->SetRenderState(D3DRS_ALPHABLENDENABLE,TRUE);ext->SetRenderState(D3DRS_SEPARATEALPHABLENDENABLE,FALSE);ext->SetRenderState(D3DRS_ZWRITEENABLE,FALSE);ext->SetRenderState(D3DRS_SRGBWRITEENABLE,FALSE);
+        ext->SetRenderState(D3DRS_STENCILENABLE,FALSE);if(scissorKnown)ext->SetScissorRect(&scissor); /* no second stencil write; the game's scissor */
+        if(scrub&&known[10]&&prev[10]==D3DCMP_LESS)ext->SetRenderState(D3DRS_ZFUNC,D3DCMP_LESSEQUAL); /* the scrub meets its own depth */
+        ext->SetRenderState(D3DRS_SRCBLEND,scrub?D3DBLEND_ZERO:D3DBLEND_ONE);ext->SetRenderState(D3DRS_DESTBLEND,D3DBLEND_ZERO);ext->SetRenderState(D3DRS_BLENDOP,scrub?D3DBLENDOP_ADD:D3DBLENDOP_MAX);
+        const HRESULT hr=draw();
+        restore();
+        if(SUCCEEDED(hr)){if(scrub)++rainMaskScrubs;else{rainMaskDrawn=true;++rainMaskDraws;}}
+    }
     template<class Draw> HRESULT rainBlendDraw(bool rain,bool claimed,Draw draw){
         if(!rain)return blobFaintDraw(claimed,draw);
         return blobFaintDraw(claimed,[&]{
@@ -898,6 +936,9 @@ private:
             DWORD prev[4]={};bool changed[4]={};
             for(int i=0;i<4;++i)if(SUCCEEDED(ext->GetRenderState(types[i],&prev[i]))&&prev[i]!=want[i]){changed[i]=true;ext->SetRenderState(types[i],want[i]);}
             const HRESULT hr=draw();
+            /* 0.3.201 (rain): the same draw again into the mask (alpha only, MAX). It stays inside the blobFaintDraw/terrainShadowDraw wrappers, which is harmless for rain,
+               and the draw lambdas are pure ext->Draw* calls (also in the command-stream replay), so a second call is safe. */
+            if(SUCCEEDED(hr))extensionWork("rain mask",[&]{rainMaskPass(draw,false);});
             for(int i=0;i<4;++i)if(changed[i])ext->SetRenderState(types[i],prev[i]);
             return hr;});
     }
@@ -910,7 +951,7 @@ private:
     template<class Capture,class Draw> HRESULT drawHook(D3DPRIMITIVETYPE t,UINT count,Capture capture,Draw draw){
         bool claimed=false,rainBlend=false,mist=false;
         // 0.3.198 (rain): the whole per-draw cost of weather detection, before any other work and in both gate paths: one pointer comparison.
-        if(weatherDetect.hot&&mirrorState.textureKnown[0]&&mirrorState.textures[0]==weatherDetect.hot){weatherSample.primitives+=count;++weatherSample.draws;rainBlend=weatherDetect.hotKind==NorthlightWeather::Kind::Rain&&world&&world->rainBlendSetting();rainBoundary=rainBlend&&terrain&&!applied;} /* 0.3.199 (rain): after applied too (the rest of the rain); the boundary at the first rain draw of a terrain frame */
+        if(weatherDetect.hot&&mirrorState.textureKnown[0]&&mirrorState.textures[0]==weatherDetect.hot){weatherSample.primitives+=count;++weatherSample.draws;rainBlend=weatherDetect.hotKind==NorthlightWeather::Kind::Rain&&world&&world->rainBlendSetting();} /* 0.3.199 (rain): counted after applied too (the rest of the rain); 0.3.201: no boundary here, the effects run at the UI again */
         else if(weatherDetect.mistArmed)mist=mistDraw(count); /* 0.3.199 (rain mist): a mist puff in rain is skipped; unarmed, one bool test */
         if(!frameDrawGates){
             dropBlobFaint();prepareDraw(capture,count);
@@ -919,6 +960,7 @@ private:
                 if(!claimed&&blobFilterActive())extensionWork("blob shadow filter",[&]{blobFilter(count,claimed);});}
             const HRESULT hr=rainBlendDraw(rainBlend,claimed||mist,draw); /* 0.3.199 (rain mist): a mist draw is skipped */
             if(!claimed){CpuScope hooks(sampledHookTimer());extensionWork("native sky observation",[&]{skyObserve(hr,t,count);});}
+            if(rainScrubDraw&&!rainBlend&&!claimed&&!mist&&SUCCEEDED(hr)){rainScrubDraw=false;extensionWork("rain mask",[&]{rainMaskPass(draw,true);});} /* 0.3.201 (rain): the world draw also cuts the streaks behind it out of the mask */
             return hr;
         }
         mirrorState.gate.noteFirst(mirrorState.gate.drawTid); /* prepareDraw's prologue */
@@ -933,6 +975,7 @@ private:
         });
         const HRESULT hr=rainBlendDraw(rainBlend,claimed||mist,draw); /* 0.3.199 (rain mist): a mist draw is skipped */
         if(sky&&!claimed){CpuScope hooks(sampledHookTimer());extensionWork("native sky observation",[&]{skyObserve(hr,t,count);});}
+        if(rainScrubDraw&&!rainBlend&&!claimed&&!mist&&SUCCEEDED(hr)){rainScrubDraw=false;extensionWork("rain mask",[&]{rainMaskPass(draw,true);});} /* 0.3.201 (rain): see the ungated path */
         return hr;
     }
     // 0.3.154: blob shadow claim with the profile frame's counts (claim() reads texture 0 for 1..256 primitives).
@@ -1198,12 +1241,13 @@ public:
         // 0.3.199 (rain mist): armed for the next frame while the weather is rain (the tracker's hold bridges detection gaps) and RainBlend is on.
         weatherDetect.mistArmed=mirrorState.enabled&&st.kind==W::Kind::Rain&&world&&world->rainBlendSetting()&&weatherDetect.mistCount();
         const unsigned mistSkips=weatherMistSkips,mistUnknown=weatherMistUnknown,mistOther=weatherMistOtherStage;weatherMistSkips=weatherMistUnknown=weatherMistOtherStage=0;
+        const unsigned rainMaskCount=rainMaskDraws,rainMaskScrubCount=rainMaskScrubs;rainMaskDraws=rainMaskScrubs=0; /* 0.3.201 (rain) */
         const bool high=st.blend>=W::kBlendLogHigh,low=st.blend>=W::kBlendLogLow;
         weatherLogClock+=dt;
         const bool change=st.kind!=weatherLoggedKind||high!=weatherLoggedBlendHigh||low!=weatherLoggedBlendLow;
         if(change||(diagnostics()&&st.kind!=W::Kind::None&&weatherLogClock>=10.0)){
             weatherLogClock=0;weatherLoggedKind=st.kind;weatherLoggedBlendHigh=high;weatherLoggedBlendLow=low;
-            logf("WEATHER kind=%s prims=%u draws=%u intensity=%.3f blend=%.3f candidates=%u generation=%u hot=%p mists=%u mistArmed=%d mistSkips=%u mistUnknownStage0=%u mistOtherStage=%u mistOverflows=%u",W::kindName(st.kind),frameSample.primitives,frameSample.draws,st.intensity,st.blend,weatherDetect.count(),weatherDetect.generation,weatherDetect.hot,weatherDetect.mistCount(),int(weatherDetect.mistArmed),mistSkips,mistUnknown,mistOther,weatherDetect.mistOverflows);
+            logf("WEATHER kind=%s prims=%u draws=%u intensity=%.3f blend=%.3f candidates=%u generation=%u hot=%p mists=%u mistArmed=%d mistSkips=%u mistUnknownStage0=%u mistOtherStage=%u mistOverflows=%u rainMask=%u rainMaskScrub=%u",W::kindName(st.kind),frameSample.primitives,frameSample.draws,st.intensity,st.blend,weatherDetect.count(),weatherDetect.generation,weatherDetect.hot,weatherDetect.mistCount(),int(weatherDetect.mistArmed),mistSkips,mistUnknown,mistOther,weatherDetect.mistOverflows,rainMaskCount,rainMaskScrubCount);
         }
     }
     void logWeatherProbe(unsigned sampleFrame){
@@ -1665,7 +1709,7 @@ static HMODULE backend() {
     // Only DXVK keeps the legacy (unchecked, no RESZ dummy draw) rules; every
     // other runtime, including the system fallback, gets the native rules.
     if(module&&(result.fallback||(configured==NorthlightBackend::Kind::Legacy&&!last.info.dxvk)))selectedBackend=NorthlightBackend::Kind::Native;
-    logf("Northlight renderer 0.3.201; reference sun look (sun glow hue from native/sunHalo band, soft-shoulder glare, veil, sun-tinted haze), native sun/moon suppressed (F1b), lamps dimmed to 30 pct in direct sun, native moon02 skipped by texture identity, no game bytes in the DLL, MEMREAD self-read profile (RenderProfile), soft sun removal in shadow, jump-stable shadow anchor, geometry coverage hold with travel lead, steadier animated shadow edges (near 5x5 tent, still-camera shadow history), native blob shadows kept at BlobShadowStrength (faint texture under modulate blend), bilinear lighting history, near capture reserve for the player and companions, remembered rigid prop shadows (drawn-by-game states, windowed held), AO and bloom folded into the world composite, ground normals reject object tops, both wide samples, batched celestial terrain mask, DXVK async left to the runtime, render-thread terrain upload and rigid bookkeeping trims, moon without the horizon stall, art layer bands retimed to the sun and moon, actor prepare on a worker, trimmed prepare handoff, in-place capture constants, gate thread census, predicted snapshot lookups, word-wise memcmp, owner-thread gate elision; abandoned-frame prepare quarantine; removal smoothing on matching normals in its own pass (35/50 degree gate); per-frame draw gates; translucent depth census; early depth for translucent actors; DXVK 3.1.1 default, dxvk2 (2.7.1) by choice only, no automatic fallback; AO depth texel snap; shadow cascades follow camera zoom and collision; reduced terrain shadow reach under address-space pressure; command-stream replay thread; draw-hook lookup caches; lighter replay retire; fresh texture shadows evict only stale keeps; soft local-light cap with fades; blended GI re-publication; Forever-style rain (storm light bands, weather draw detection); moving fog clouds; GPU budget control; frames ahead and frame skipping in the command stream; replay jobs; AO denoise pass; backend=%s path=%ls loaded=%d error=%lu",
+    logf("Northlight renderer 0.3.202; reference sun look (sun glow hue from native/sunHalo band, soft-shoulder glare, veil, sun-tinted haze), native sun/moon suppressed (F1b), lamps dimmed to 30 pct in direct sun, native moon02 skipped by texture identity, no game bytes in the DLL, MEMREAD self-read profile (RenderProfile), soft sun removal in shadow, jump-stable shadow anchor, geometry coverage hold with travel lead, steadier animated shadow edges (near 5x5 tent, still-camera shadow history), native blob shadows kept at BlobShadowStrength (faint texture under modulate blend), bilinear lighting history, near capture reserve for the player and companions, remembered rigid prop shadows (drawn-by-game states, windowed held), AO and bloom folded into the world composite, ground normals reject object tops, both wide samples, batched celestial terrain mask, DXVK async left to the runtime, render-thread terrain upload and rigid bookkeeping trims, moon without the horizon stall, art layer bands retimed to the sun and moon, actor prepare on a worker, trimmed prepare handoff, in-place capture constants, gate thread census, predicted snapshot lookups, word-wise memcmp, owner-thread gate elision; abandoned-frame prepare quarantine; removal smoothing on matching normals in its own pass (35/50 degree gate); per-frame draw gates; translucent depth census; early depth for translucent actors; DXVK 3.1.1 default, dxvk2 (2.7.1) by choice only, no automatic fallback; AO depth texel snap; shadow cascades follow camera zoom and collision; reduced terrain shadow reach under address-space pressure; command-stream replay thread; draw-hook lookup caches; lighter replay retire; fresh texture shadows evict only stale keeps; soft local-light cap with fades; blended GI re-publication; Forever-style rain (storm light bands, weather draw detection); moving fog clouds; GPU budget control; frames ahead and frame skipping in the command stream; replay jobs; AO denoise pass; rain mask, effect boundary at the UI in rain; backend=%s path=%ls loaded=%d error=%lu",
          NorthlightBackend::name(configured),last.path.c_str(),module!=nullptr,module?0ul:(last.error?last.error:(unsigned long)ERROR_INVALID_PARAMETER));
     logAttempts(result.attempts);
     logHostExecutable(sys.selfPath);

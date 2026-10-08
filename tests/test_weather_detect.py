@@ -20,7 +20,10 @@ rl=r.split('\n');j0=next(i for i,l in enumerate(rl) if l.strip().startswith('boo
 mistfn='\n'.join(rl[j0:j1+1])
 rl=r.split('\n');i0=next(i for i,l in enumerate(rl) if 'template<class Draw> HRESULT rainBlendDraw(' in l);i1=next(i for i in range(i0,len(rl)) if rl[i]=='    }')
 rainfn='\n'.join(rl[i0:i1+1])
-
+rl=r.split('\n');k0=next(i for i,l in enumerate(rl) if l.strip().startswith('bool rainMaskEligible(){'));k1=next(i for i,l in enumerate(rl) if 'template<class Draw> HRESULT rainBlendDraw(' in l)
+maskfn='\n'.join(rl[k0:k1]) # 0.3.201 (rain): rainMaskEligible, rainMaskCreate, rainMaskPass
+scrubs=[l for l in rl if l.strip().startswith('if(rainScrubDraw&&')];assert len(scrubs)==2 and scrubs[0].strip()[:90]==scrubs[1].strip()[:90],'0.3.201 (rain): the scrub line in both gate paths'
+preps=[l for l in rl if l.strip().startswith('if(rainMaskDrawn&&world&&!applied){')];assert len(preps)==1
 SRC=r'''
 #include "weather_detect.h"
 #include <cassert>
@@ -32,8 +35,12 @@ using namespace NorthlightWeatherDetect;using NorthlightWeather::Kind;
 typedef unsigned UINT;typedef unsigned DWORD;typedef long HRESULT;
 #define TRUE 1
 #define SUCCEEDED(h) ((h)>=0)
-enum D3DRENDERSTATETYPE{D3DRS_ALPHABLENDENABLE=27,D3DRS_SRCBLEND=19,D3DRS_DESTBLEND=20,D3DRS_BLENDOP=171,D3DRS_ZWRITEENABLE=14};
-enum{D3DBLEND_ONE=2,D3DBLEND_SRCCOLOR=3,D3DBLEND_SRCALPHA=5,D3DBLEND_INVSRCALPHA=6,D3DBLEND_DESTCOLOR=9,D3DBLENDOP_ADD=1};
+#define FALSE 0
+#define FAILED(h) ((h)<0)
+enum D3DRENDERSTATETYPE{D3DRS_ALPHABLENDENABLE=27,D3DRS_SRCBLEND=19,D3DRS_DESTBLEND=20,D3DRS_BLENDOP=171,D3DRS_ZWRITEENABLE=14,D3DRS_COLORWRITEENABLE=168,D3DRS_SEPARATEALPHABLENDENABLE=206,D3DRS_SRGBWRITEENABLE=194,D3DRS_SCISSORTESTENABLE=174,D3DRS_STENCILENABLE=52,D3DRS_ZFUNC=23};enum{D3DCMP_LESS=2,D3DCMP_LESSEQUAL=4};struct RECT{long left=0,top=0,right=0,bottom=0;};
+enum D3DMULTISAMPLE_TYPE{D3DMULTISAMPLE_NONE=0,D3DMULTISAMPLE_4_SAMPLES=4};enum D3DFORMAT{D3DFMT_A8R8G8B8=21};enum D3DPOOL{D3DPOOL_DEFAULT=0};typedef DWORD D3DCOLOR;struct D3DRECT{long a,b,c,d;};
+struct D3DSURFACE_DESC{UINT Width=0,Height=0;D3DMULTISAMPLE_TYPE MultiSampleType=D3DMULTISAMPLE_NONE;};struct D3DVIEWPORT9{DWORD X=0,Y=0,Width=0,Height=0;float MinZ=0,MaxZ=1;};
+enum{D3DBLEND_ZERO=1,D3DBLENDOP_MAX=5,D3DCOLORWRITEENABLE_ALPHA=8,D3DCLEAR_TARGET=1,D3DUSAGE_RENDERTARGET=1,D3DBLEND_ONE=2,D3DBLEND_SRCCOLOR=3,D3DBLEND_SRCALPHA=5,D3DBLEND_INVSRCALPHA=6,D3DBLEND_DESTCOLOR=9,D3DBLENDOP_ADD=1};
 static std::vector<std::string> lines;
 static void sink(const char* l){lines.push_back(l);}
 static int A=21,X8=22,A1=25,A4=26,R5G6B5=23,DXT5=0x35545844;
@@ -42,24 +49,47 @@ static unsigned count(const char* prefix){unsigned n=0;for(auto& l:lines)if(l.rf
 // The hook: the line extracted from Device::drawHook over a mock mirror.
 struct Mirror{bool textureKnown[16]={};void* textures[16]={};};
 struct Sample{unsigned primitives=0,draws=0;};
+struct Surface{D3DSURFACE_DESC desc;void GetDesc(D3DSURFACE_DESC* d){*d=desc;}};
+struct IDirect3DTexture9{Surface s;HRESULT GetSurfaceLevel(UINT,Surface** o){*o=&s;return 0;}};
+typedef Surface IDirect3DSurface9;
+template<class T> static void drop(T*& p){p=nullptr;}
+struct DrawRec{Surface* rt;DWORD colorWrite,blend,sep,zwrite,srgb,src,dst,op,scissor;D3DVIEWPORT9 vp;DWORD stencil=0,zfunc=0;RECT sr;};
 struct Ext{DWORD rs[256]={};std::vector<std::pair<int,DWORD>> sets;
+    Surface gameRT,gameDS;bool hasDS=true;Surface* rt=&gameRT;D3DVIEWPORT9 vp;IDirect3DTexture9 maskTex;bool createFails=false;unsigned clears=0,creates=0,clearScissor=0,clearPartial=0;std::vector<DrawRec> draws;
     HRESULT GetRenderState(D3DRENDERSTATETYPE t,DWORD* v){*v=rs[t];return 0;}
-    HRESULT SetRenderState(D3DRENDERSTATETYPE t,DWORD v){rs[t]=v;sets.push_back({int(t),v});return 0;}};
+    HRESULT SetRenderState(D3DRENDERSTATETYPE t,DWORD v){rs[t]=v;sets.push_back({int(t),v});return 0;}
+    HRESULT GetRenderTarget(DWORD,Surface** o){*o=rt;return 0;}
+    HRESULT SetRenderTarget(DWORD,Surface* s){rt=s;vp=D3DVIEWPORT9();vp.Width=s->desc.Width;vp.Height=s->desc.Height;sr=RECT();sr.right=long(s->desc.Width);sr.bottom=long(s->desc.Height);return 0;} /* the viewport and the scissor rect reset to the whole target */
+    RECT sr;HRESULT GetScissorRect(RECT* o){*o=sr;return 0;}HRESULT SetScissorRect(const RECT* r){sr=*r;return 0;}
+    HRESULT GetDepthStencilSurface(Surface** o){if(!hasDS)return -1;*o=&gameDS;return 0;}
+    HRESULT GetViewport(D3DVIEWPORT9* o){*o=vp;return 0;}HRESULT SetViewport(const D3DVIEWPORT9* v){vp=*v;return 0;}
+    HRESULT Clear(DWORD,const D3DRECT*,DWORD,D3DCOLOR,float,DWORD){++clears;clearScissor+=rs[D3DRS_SCISSORTESTENABLE]!=0;clearPartial+=vp.X!=0||vp.Y!=0||(rt&&(vp.Width!=rt->desc.Width||vp.Height!=rt->desc.Height));return 0;}
+    HRESULT CreateTexture(UINT w,UINT h,UINT,DWORD,D3DFORMAT,D3DPOOL,IDirect3DTexture9** o,void*){++creates;if(createFails)return -2005530516;maskTex.s.desc.Width=w;maskTex.s.desc.Height=h;*o=&maskTex;return 0;}};
+struct VsClass{bool world=false,skinned=false;};
 struct World{bool on=true;bool rainBlendSetting()const{return on;}};
 namespace NorthlightWeather{}
 struct Hook{
-    Mirror mirrorState;Detector weatherDetect;Sample weatherSample;bool applied=false,terrain=true,rainBoundary=false;Ext extObj;Ext* ext=&extObj;World worldObj;World* world=&worldObj;bool claimedSkip=false;bool gateFrame=true;
+    Mirror mirrorState;Detector weatherDetect;Sample weatherSample;bool applied=false,terrain=true,enabled=true,failed=false;UINT width=0,height=0;IDirect3DTexture9* rainMask=nullptr;Surface* rainMaskSurface=nullptr;bool rainMaskFailed=false,rainMaskCleared=false,rainMaskDrawn=false,rainMaskFrame=false,rainMaskOk=false,rainScrubDraw=false,rainMaskMismatchLogged=false;unsigned rainMaskDraws=0,rainMaskScrubs=0;VsClass vcMock;const VsClass& classifyVs(int){return vcMock;}std::vector<std::string> logs;template<class F> void extensionWork(const char*,F f){f();}
+    void newFrame(){rainMaskCleared=rainMaskDrawn=rainMaskFrame=rainMaskOk=rainScrubDraw=false;applied=false;} /* clearFrame's part */
+    Ext extObj;Ext* ext=&extObj;World worldObj;World* world=&worldObj;bool claimedSkip=false;bool gateFrame=true;
     template<class Draw> HRESULT blobFaintDraw(bool claimed,Draw draw){return claimed?0:draw();}
     unsigned blendAtDraw[4]={};unsigned drawn=0;unsigned weatherMistSkips=0,weatherMistUnknown=0,weatherMistOtherStage=0,weatherMistReports=0,weatherStateReports=0,logged=0;
-    template<class... A> void logf(const char*,A...){++logged;}
+    template<class... A> void logf(const char* f,A...){++logged;logs.push_back(f);}
     void weatherDrawStates(UINT){++weatherStateReports;}
 @MISTFN@
+@MASKFN@
 @RAINFN@
     HRESULT draw(UINT count){
         bool claimed=claimedSkip,rainBlend=false,mist=false;
+        rainScrubDraw=false;int vs=0;
+@PREPLINE@
 @HOOK@
 @MISTLINE@
-        return rainBlendDraw(rainBlend,claimed||mist,[&]{++drawn;blendAtDraw[0]=ext->rs[D3DRS_ALPHABLENDENABLE];blendAtDraw[1]=ext->rs[D3DRS_SRCBLEND];blendAtDraw[2]=ext->rs[D3DRS_DESTBLEND];blendAtDraw[3]=ext->rs[D3DRS_BLENDOP];return HRESULT(0);});
+        auto draw=[&]{++drawn;blendAtDraw[0]=ext->rs[D3DRS_ALPHABLENDENABLE];blendAtDraw[1]=ext->rs[D3DRS_SRCBLEND];blendAtDraw[2]=ext->rs[D3DRS_DESTBLEND];blendAtDraw[3]=ext->rs[D3DRS_BLENDOP];
+            ext->draws.push_back({ext->rt,ext->rs[D3DRS_COLORWRITEENABLE],ext->rs[D3DRS_ALPHABLENDENABLE],ext->rs[D3DRS_SEPARATEALPHABLENDENABLE],ext->rs[D3DRS_ZWRITEENABLE],ext->rs[D3DRS_SRGBWRITEENABLE],ext->rs[D3DRS_SRCBLEND],ext->rs[D3DRS_DESTBLEND],ext->rs[D3DRS_BLENDOP],ext->rs[D3DRS_SCISSORTESTENABLE],ext->vp,ext->rs[D3DRS_STENCILENABLE],ext->rs[D3DRS_ZFUNC],ext->sr});return HRESULT(0);};
+        const HRESULT hr=rainBlendDraw(rainBlend,claimed||mist,draw);
+@SCRUBLINE@
+        return hr;
     }
     void bind(unsigned stage,int i,bool known=true){mirrorState.textures[stage]=const_cast<void*>(P(i));mirrorState.textureKnown[stage]=known;}
 };
@@ -174,14 +204,48 @@ int main(){
         h.weatherDetect.setOff(true);h.draw(9);assert(h.weatherSample.draws==3); /* mirror inactive: hot is null */
         Hook none;none.bind(0,50);none.draw(10);assert(none.weatherSample.draws==0); /* no candidates: hot null */
     }
-    {   // 0.3.199 (rain): the effect boundary flag - rain draw of a terrain frame before applied, with the setting; nothing else
-        Hook h;h.weatherDetect.noteCreate(P(50),32,512,1,A);h.weatherDetect.noteCreate(P(51),32,64,1,A);
-        h.bind(0,50);h.draw(10);assert(h.rainBoundary); /* first rain draw */
-        h.rainBoundary=false;h.applied=true;h.draw(10);assert(!h.rainBoundary&&h.weatherSample.draws==2); /* after the boundary: counted, no second boundary */
-        h.applied=false;h.terrain=false;h.draw(10);assert(!h.rainBoundary); /* no terrain this frame: UI fallback */
-        h.terrain=true;h.world->on=false;h.draw(10);assert(!h.rainBoundary); /* Weather=0: the UI boundary */
-        h.world->on=true;h.bind(0,0);h.draw(10);assert(!h.rainBoundary); /* non-weather draw */
-        {const unsigned before=h.weatherSample.draws;h.weatherDetect.rotate();h.bind(0,51);h.draw(10);assert(!h.rainBoundary&&h.weatherSample.draws==before+1);} /* snow: counted, no boundary change */
+    {   // 0.3.201 (rain): no boundary any more; the rain mask. A mask-eligible Hook: effect size 100x50, game target and viewport set, RainBlend on
+        auto mk=[](Hook& h){h.weatherDetect.noteCreate(P(50),32,512,1,A);h.weatherDetect.noteCreate(P(51),32,64,1,A);h.width=100;h.height=50;h.ext->gameRT.desc.Width=100;h.ext->gameRT.desc.Height=50;
+            h.ext->vp.X=3;h.ext->vp.Y=4;h.ext->vp.Width=90;h.ext->vp.Height=40;h.ext->sr.left=5;h.ext->sr.top=6;h.ext->sr.right=70;h.ext->sr.bottom=30;h.ext->rs[D3DRS_STENCILENABLE]=1;h.ext->rs[D3DRS_ZFUNC]=D3DCMP_LESS;h.ext->rs[D3DRS_COLORWRITEENABLE]=15;h.ext->rs[D3DRS_ALPHABLENDENABLE]=1;h.ext->rs[D3DRS_SRCBLEND]=D3DBLEND_DESTCOLOR;h.ext->rs[D3DRS_DESTBLEND]=D3DBLEND_SRCCOLOR;h.ext->rs[D3DRS_BLENDOP]=D3DBLENDOP_ADD;h.ext->rs[D3DRS_ZWRITEENABLE]=1;h.ext->rs[D3DRS_SRGBWRITEENABLE]=1;h.ext->rs[D3DRS_SEPARATEALPHABLENDENABLE]=1;h.ext->rs[D3DRS_SCISSORTESTENABLE]=1;h.bind(0,50);};
+        auto snap=[](Hook& h){std::vector<DWORD> v(h.ext->rs,h.ext->rs+256);return v;};
+        {Hook h;mk(h);const auto before=snap(h);const D3DVIEWPORT9 vp0=h.ext->vp;
+            h.draw(10);assert(h.drawn==2&&h.ext->draws.size()==2&&h.rainMaskDraws==1&&h.rainMaskDrawn&&h.rainMaskCleared&&h.ext->clears==1&&h.ext->clearScissor==0&&h.ext->clearPartial==0); /* the whole mask, not the game viewport */
+            const DrawRec& g=h.ext->draws[0];const DrawRec& m=h.ext->draws[1];
+            assert(g.rt==&h.ext->gameRT&&g.src==D3DBLEND_SRCALPHA&&g.colorWrite==15&&g.vp.X==3); /* the game's draw first, with RainBlend */
+            assert(m.rt==&h.ext->maskTex.s&&m.colorWrite==D3DCOLORWRITEENABLE_ALPHA&&m.blend==1&&m.sep==0&&m.zwrite==0&&m.srgb==0&&m.src==D3DBLEND_ONE&&m.dst==D3DBLEND_ZERO&&m.op==D3DBLENDOP_MAX&&m.vp.X==3&&m.vp.Y==4&&m.vp.Width==90&&m.vp.Height==40
+                &&m.stencil==0&&m.zfunc==D3DCMP_LESS&&m.sr.left==5&&m.sr.top==6&&m.sr.right==70&&m.sr.bottom==30); /* no stencil write, the game's Z test and scissor rect */
+            assert(snap(h)==before&&h.ext->rt==&h.ext->gameRT&&h.ext->vp.X==vp0.X&&h.ext->vp.Y==vp0.Y&&h.ext->vp.Width==vp0.Width&&h.ext->vp.Height==vp0.Height
+                &&h.ext->sr.left==5&&h.ext->sr.right==70&&h.ext->sr.bottom==30); /* states, target and viewport restored */
+            h.draw(10);h.draw(10);assert(h.drawn==6&&h.ext->clears==1&&h.ext->creates==1&&h.rainMaskDraws==3); /* cleared once, created once */
+            h.newFrame();h.draw(10);assert(h.ext->clears==2&&h.rainMaskDraws==4);
+            h.newFrame();h.applied=true;const unsigned n=h.drawn;h.draw(10);assert(h.drawn==n+1&&h.rainMaskDraws==4); /* applied: counted and blended, no mask */
+        }
+        {Hook h;mk(h);h.terrain=false;h.draw(10);assert(h.drawn==1&&h.rainMaskDraws==0&&h.ext->clears==0);}
+        {Hook h;mk(h);h.world->on=false;h.draw(10);assert(h.drawn==1&&h.rainMaskDraws==0);}
+        {Hook h;mk(h);h.claimedSkip=true;h.draw(10);assert(h.drawn==0&&h.rainMaskDraws==0&&h.ext->clears==0);}
+        {Hook h;mk(h);h.weatherDetect.noteCreate(P(52),128,512,10,A);h.weatherDetect.mistArmed=true;h.bind(0,52);h.draw(10);assert(h.drawn==0&&h.rainMaskDraws==0);} /* mist: skipped */
+        {Hook h;mk(h);h.enabled=false;h.draw(10);assert(h.drawn==1&&h.rainMaskDraws==0);}
+        {Hook h;mk(h);h.ext->gameRT.desc.Width=99;h.draw(10);h.draw(10);assert(h.drawn==2&&h.rainMaskDraws==0&&h.ext->creates==0&&h.logs.size()==1);} /* wrong size: skipped for the frame, logged once */
+        {Hook h;mk(h);h.ext->gameRT.desc.MultiSampleType=D3DMULTISAMPLE_4_SAMPLES;h.draw(10);assert(h.drawn==1&&h.rainMaskDraws==0);}
+        {Hook h;mk(h);h.ext->gameDS.desc.MultiSampleType=D3DMULTISAMPLE_4_SAMPLES;h.draw(10);assert(h.drawn==1&&h.rainMaskDraws==0);}
+        {Hook h;mk(h);h.ext->hasDS=false;h.draw(10);assert(h.drawn==2&&h.rainMaskDraws==1);} /* no depth surface to compare: eligible */
+        {Hook h;mk(h);h.ext->createFails=true;h.draw(10);assert(h.drawn==1&&h.rainMaskFailed&&h.logs.size()==1&&h.logs[0].rfind("WEATHER rain mask disabled",0)==0);
+            h.newFrame();h.draw(10);assert(h.drawn==2&&h.ext->creates==1&&h.logs.size()==1&&h.rainMaskDraws==0);} /* rain still draws, no second attempt, no second log */
+        {   // scrub: world and skinned draws after the frame's first mask draw
+            Hook h;mk(h);h.bind(0,3);h.vcMock.world=true;h.draw(10);assert(h.drawn==1&&h.rainMaskScrubs==0&&h.ext->clears==0); /* before any rain: drawn once */
+            h.bind(0,50);h.draw(10);assert(h.rainMaskDrawn&&h.drawn==3);
+            h.bind(0,3);h.draw(10);assert(h.drawn==5&&h.rainMaskScrubs==1);
+            const DrawRec& sg=h.ext->draws[4];assert(sg.rt==&h.ext->maskTex.s&&sg.colorWrite==D3DCOLORWRITEENABLE_ALPHA&&sg.src==D3DBLEND_ZERO&&sg.dst==D3DBLEND_ZERO&&sg.op==D3DBLENDOP_ADD&&sg.zwrite==0&&sg.vp.X==3&&sg.stencil==0&&sg.zfunc==D3DCMP_LESSEQUAL&&sg.sr.right==70); /* LESS -> LESSEQUAL: the scrub meets its own depth */
+            assert(h.ext->rt==&h.ext->gameRT&&h.ext->clears==1&&h.ext->rs[D3DRS_COLORWRITEENABLE]==15&&h.ext->rs[D3DRS_SRCBLEND]==D3DBLEND_DESTCOLOR);
+            h.vcMock.world=false;h.vcMock.skinned=true;h.draw(10);assert(h.drawn==7&&h.rainMaskScrubs==2); /* skinned too */
+            h.vcMock.skinned=false;h.draw(10);assert(h.drawn==8&&h.rainMaskScrubs==2); /* another shader class: once */
+            h.vcMock.world=true;h.ext->createFails=true;h.applied=true;h.draw(10);assert(h.drawn==9&&h.rainMaskScrubs==2); /* after the effects: once */
+            h.applied=false;h.claimedSkip=true;h.draw(10);assert(h.drawn==9); /* claimed: nothing */
+            h.claimedSkip=false;h.newFrame();h.draw(10);assert(h.drawn==10&&h.rainMaskScrubs==2); /* new frame, no rain yet */
+        }
+        {   // dry frame: no mask draw, no scrub, no states touched
+            Hook h;mk(h);h.vcMock.world=true;h.bind(0,3);h.draw(10);h.draw(10);assert(h.drawn==2&&h.ext->sets.empty()&&h.ext->clears==0&&h.ext->creates==0);
+        }
     }
     {   // 0.3.199 (rain): RainBlend - rain draws run with SrcAlpha/InvSrcAlpha/Add and the game's previous states return; snow, non-weather, setting off and claimed draws are untouched
         auto game=[](Hook& h){h.ext->rs[D3DRS_ALPHABLENDENABLE]=1;h.ext->rs[D3DRS_SRCBLEND]=D3DBLEND_DESTCOLOR;h.ext->rs[D3DRS_DESTBLEND]=D3DBLEND_SRCCOLOR;h.ext->rs[D3DRS_BLENDOP]=D3DBLENDOP_ADD;h.ext->rs[D3DRS_ZWRITEENABLE]=0;};
@@ -227,7 +291,7 @@ int main(){
     }
     std::printf("PASS weather detect\n");
 }
-'''.replace('@HOOK@',hook[0]).replace('@MISTLINE@',mistline[0]).replace('@MISTFN@',mistfn).replace('@RAINFN@',rainfn)
+'''.replace('@MASKFN@',maskfn).replace('@PREPLINE@',preps[0]).replace('@SCRUBLINE@',scrubs[0]).replace('@HOOK@',hook[0]).replace('@MISTLINE@',mistline[0]).replace('@MISTFN@',mistfn).replace('@RAINFN@',rainfn)
 with tempfile.TemporaryDirectory() as tmp:
     (Path(tmp)/'t.cpp').write_text(SRC)
     for label,flags in [('O2',['-O2']),('asan',['-O1','-g','-fsanitize=address,undefined','-fno-sanitize-recover=all'])]:
