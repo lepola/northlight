@@ -37,8 +37,8 @@ checks['HLSL: sky reprojects the direction only, clamp over the neighbourhood, l
     'sky' in body and 'PreviousView[0].xyz' in body and 'min(lo,s)' in body and 'clamp(history,lo,hi)' in body and 'lerp(current,' in body
     and 'if(FogTemporalInfo.y<=0)return current;' in body and 'max(.25,w*.03)' in body)
 
-checks['setting: no key (always on since the game tests), FogCloudDensity then 0.3.200 GpuBudgetMs the last keys']=(
-    'FogTemporal' not in q and 'fogTemporal' not in q and '{"FogCloudDensity",&Settings::fogCloudDensity,0,200,{100,100,100}},\n    {"GpuBudgetMs",&Settings::gpuBudgetMs,0,20,{4,3,2}},\n};' in q and 'char origin[40]=' in q)
+checks['setting: no key (always on since the game tests), FogCloudDensity then 0.3.200 GpuBudgetMs and ReplayJobs the last keys']=(
+    'FogTemporal' not in q and 'fogTemporal' not in q and '{"FogCloudDensity",&Settings::fogCloudDensity,0,200,{100,100,100}},\n    {"GpuBudgetMs",&Settings::gpuBudgetMs,0,20,{4,3,2}},\n    {"ReplayJobs",&Settings::replayJobs,0,1,{1,1,1}},\n};' in q and 'char origin[41]=' in q)
 ini=(fp.REPO/'renderer'/'windows-package'/'northlight-quality.ini').read_text()
 checks['docs: no key in the ini or the readmes']=('FogTemporal' not in ini and 'FogTemporal' not in (fp.REPO/'README.md').read_text() and 'FogTemporal' not in (fp.REPO/'renderer'/'windows-package'/'README.txt').read_text())
 

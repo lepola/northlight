@@ -75,9 +75,13 @@ checks['cpp: the source loop records the state its last iteration left']='lastFo
 checks['cpp: profile marks FogMarch / FogClouds only with the pass (<= 20 marks per frame stays true: 16 existing names + 2)']=(pas.count('profile->mark("FogMarch")')==1 and pas.count('profile->mark("FogClouds")')==1)
 # sigmaAt mirror
 mirror=[l for l in w.splitlines() if 'NorthlightFogClouds::sigmaAt(' in l]
-checks['cpp: sigmaAt adds the cloud term only under cf.active, to the base value, inside the t.height>0 branch']=(
-    len(mirror)==1 and mirror[0].strip().startswith('if(clouds&&cf.active){') and 'sigma+=NorthlightFogClouds::sigmaAt(cloudData,cf,context.camera,point,t.ground,t.height,1.f)' in mirror[0] and
-    w.index('if(t.height>0){')<w.index(mirror[0])<w.index('return sigma;'))
+# 0.3.200 (jobs): the mirror runs in atmosphereWork (a job with ReplayJobs=1) before ensureCloudNoise (the device) is decided: the cloud term is
+# added to a second sum (cloudy) for a candidate pass, and the bank takes that sum only when cf.active is final (same value as the old sigma+=).
+checks['cpp: sigmaAt adds the cloud term only for a candidate pass, to the base value, inside the t.height>0 branch; the bank picks it only when cf.active']=(
+    len(mirror)==1 and mirror[0].strip().startswith('if(clouds&&cloudCandidate){') and 'cloudy+=NorthlightFogClouds::sigmaAt(cloudData,cf,context.camera,point,t.ground,t.height,1.f)' in mirror[0] and
+    w.index('if(t.height>0){')<w.index(mirror[0])<w.index('return sigma;') and 'sigma=altitude>=0?ground+airBase*airVertical*airVertical:0;cloudy=sigma;' in w
+    and 'const bool cloudCandidate=cf.active&&effects.fog&&debug==0&&fogCloudsPS;' in w and 'skyTransmittanceFrame=cf.active?atmosphere.veil[1]:atmosphere.veil[0];' in w
+    and w.index('cf.active=cf.active&&effects.fog&&debug==0&&fogCloudsPS&&ensureCloudNoise();')<w.index('skyTransmittanceFrame=cf.active?atmosphere.veil[1]'))
 # 0.3.199 (fog clouds): lush zones - the camera texel's CPU-only lush flag, smoothed; the field's lush comes from lushZone (forests, grass, Duskwood, STV, Mulgore, Stormwind), outdoors only
 rf=fp.src('regional_fog.h').read_text()
 checks['cpp: lush at the camera texel, smoothed, unchanged indoors']='lushTarget=cloudLush;' in w and 'if(t.height>0)lushTarget=f.lush[k]?1.f:0.f;' in w and 'cloudLush=NorthlightFogClouds::smoothDense(cloudLush,lushTarget,cloudDt);' in w
@@ -91,7 +95,7 @@ checks['game thread untouched: no FogClouds / fog_clouds in stream_device.h, str
 # review fix: derive() is inactive until the quantile table exists, so the generation request must not depend on cf.active (it never started)
 req=[l for l in w.splitlines() if 'fogCloudNoise().request()' in l]
 checks['noise request: gated by the settings only (never by cf.active), before derive']=(len(req)==1 and 'cf.active' not in req[0] and 'quality.fogClouds&&quality.fogCloudDensity&&effects.fog&&debug==0' in req[0]
-    and w.index('fogCloudNoise().request()')<w.index('NorthlightFogClouds::derive('))
+    and w.index('fogCloudNoise().request()')<w.index('if(jobs)replayJobs_.kick(atmosphereDone,atmosphereJob);')<w.index('if(jobs)replayJobs_.wait(atmosphereDone);else atmosphereWork(')) # 0.3.200 (jobs): derive() runs in atmosphereWork, kicked or called after the request
 # game test fix: the banks take the game's fog colour (c26) when it is validated (c25.w), not the near-black ambient*.35 air radiance
 checks['colour: cloud ambient is the brighter of the air radiance and the validated game fog colour (never darker than the fog it hides)']=('max(max(AmbientLight.rgb,0)*.35,LegacyFogColor.rgb*LegacyFog.w)*ambientWeight' in h.split('float4 FogClouds(',1)[1].split('\n}\n',1)[0])
 # night game test: the banks' colour goes in c25.w/c26 for the cloud pass only and the bank's values come back before the lamp fog
@@ -102,7 +106,7 @@ checks['colour: c25/c26 set for the cloud pass from NorthlightFogClouds::colour,
 # Duskwood/lamp game test: the rain's extra air and the cloud density thin out in dense zones; the lamp glow ignores the clouds
 checks['dense zones: airFloor = .0017f + rain extra x denseDamp, cloud density x denseDamp, lamps sigmaAt without clouds']=(
     'const float airFloor=.0017f+wx.airExtinction()*denseDamp;' in w and 'unsigned(std::lround(float(quality.fogCloudDensity)*denseDamp))' in w
-    and 'localLights.position[i][2],false);' in w and 'ray.z*t,true)' in w and 'if(clouds&&cf.active)' in w)
+    and 'localLights.position[i][2],false,unused);' in w and 'ray.z*t,true,cloudy)' in w and 'if(clouds&&cloudCandidate)' in w)
 # lamp glow game test: the glow fades in over the same near ramp as the air, at the ray's closest approach to the light
 lf=h.split('float4 LocalFog(',1)[1].split('\n}\n',1)[0]
 checks['LocalFog: smooth near ramp at the closest approach (no hard FogRange.x cut of the glow core)']=(

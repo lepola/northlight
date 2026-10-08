@@ -77,7 +77,12 @@ struct Settings {
     // 0.3.200 (gpu budget): GpuBudgetMs 0 = off (the full image, no GPU timing); 1..20 = Northlight's own GPU time per frame (measured, read back a few
     // frames late) is kept near this many ms by lighter fog clouds, fog and lamps while it is over (gpu_budget.h); under it the image is the full one.
     unsigned gpuBudgetMs=4;
-    char origin[40]={'d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d'};
+    // 0.3.200 (jobs): ReplayJobs 1 = the renderer thread hands its D3D-free per-frame CPU work (local light selection and scissor rects,
+    // fog clouds and the veil's fog samples, terrain shadow candidates, the later cascades' replay culling) to a small worker pool and
+    // joins each result right before the D3D calls that need it (core/job_system.h); the same code, the same results. 0 = all of it
+    // inline on the renderer thread, exactly as before.
+    unsigned replayJobs=1;
+    char origin[41]={'d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d'};
 };
 struct Key { const char* name; unsigned Settings::*field; unsigned low,high; unsigned preset[3]; };
 // preset[] = Quality, Balanced, Performance. Quality must equal Settings{}.
@@ -122,6 +127,7 @@ inline const Key Keys[]={
     {"FogClouds",&Settings::fogClouds,0,1,{1,1,0}},
     {"FogCloudDensity",&Settings::fogCloudDensity,0,200,{100,100,100}},
     {"GpuBudgetMs",&Settings::gpuBudgetMs,0,20,{4,3,2}},
+    {"ReplayJobs",&Settings::replayJobs,0,1,{1,1,1}},
 };
 inline bool operator==(const Settings& a,const Settings& b){for(const auto& k:Keys)if(a.*k.field!=b.*k.field)return false;return true;}
 inline bool operator!=(const Settings& a,const Settings& b){return !(a==b);}

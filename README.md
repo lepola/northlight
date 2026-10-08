@@ -59,6 +59,9 @@ Every effect below is on by default and is drawn on top of the game's own frame.
   On the graphics card, `GpuBudgetMs` (4 / 3 / 2 ms, 0 = off) keeps Northlight's own measured GPU time near
   the budget: while it is over, the fog clouds take fewer steps and then update every other frame, then the
   fog takes fewer steps and at most 16 lamps light at once; under it the picture is the full one.
+  `ReplayJobs=1` (every preset) runs part of the renderer thread's per-frame CPU work (lamp choice, fog
+  clouds, the terrain and character culling of the sun and moon shadows) on 1-4 helper threads with the
+  exact same picture; `0` keeps all of it on the renderer thread.
 - **Platforms and install.** macOS with WoWSilicon (preloaded as `mods/d3d9.dll`) and Windows (a
   game-folder `d3d9.dll` on the bundled DXVK 3.1.1, with DXVK 2.7.1 as the `dxvk2` alternative backend for AMD RX 5000/6000 and
   older drivers (`Install.cmd --backend dxvk2`; on a driver DXVK 3 does not support, install with `--backend dxvk2`, Northlight never switches by itself; a reinstall without `--backend` keeps `dxvk2` or `native`), the system D3D9, or an existing `d3d9.dll`). The

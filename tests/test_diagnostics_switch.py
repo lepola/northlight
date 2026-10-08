@@ -20,6 +20,7 @@ GATES=('NorthlightDiagnostics::enabled()','diagnostics()','sampled()','captureSa
 KEEP={
  'WORLD fog clouds noise':'one-off: the noise volume generated (worker) and uploaded, 0.3.199','WORLD fog clouds disabled':'error: shader or volume creation failed, once per device, 0.3.199','WORLD fog temporal disabled':'error: shader creation failed, once per device, 0.3.199',
  'WORLD fog clouds buffer unavailable':'error: the amortised clouds\' target failed, once per device resources, 0.3.200 (gpu budget)','GPUBUDGET timer disabled':'error: query failure, once per device, 0.3.200 (gpu budget)',
+ 'JOBS workers':'start-up one-off: the replay job pool started (0.3.200 jobs)','JOBS unavailable':'start-up one-off: no job worker could start (0.3.200 jobs)',
  'LOGGER intervalMs':'indirect: reportLogCost() runs only in the gated MIRROR block',
  'EXTENSION fault':'error','DISABLED:':'error','Resources ':'one-off: resource (re)creation',
  'LOCK METER':'one-off startup line and ProcessVertices warning; the interval line runs only from the Diagnostics-gated block of WorldRenderer::endFrame (0.3.192)',

@@ -447,7 +447,7 @@ int main(){
     // 0.3.192 CommandStream: 1 (the replay-thread command stream) in the code default and every preset, 0..1, own origin
     // slot (0.3.193: BlobShadowStrength follows); a creation-time key, so ActorShadows=0 does not force it. 0 is the direct path.
     assert(d.commandStream==1&&preset(Preset::Balanced).commandStream==1&&preset(Preset::Performance).commandStream==1);
-    assert(std::string(Keys[33].name)=="CommandStream"&&Keys[33].field==&Settings::commandStream&&Keys[33].low==0&&Keys[33].high==1&&sizeof(Keys)/sizeof(Keys[0])==40);
+    assert(std::string(Keys[33].name)=="CommandStream"&&Keys[33].field==&Settings::commandStream&&Keys[33].low==0&&Keys[33].high==1&&sizeof(Keys)/sizeof(Keys[0])==41);
     {auto off=parse("[Quality]\nCommandStream=0\n");assert(off.commandStream==0&&off!=d&&parse("[Quality]\nCommandStream=1\n")==d);
         unsigned i=0;for(const auto& k:Keys){assert(off.origin[i]==(std::string(k.name)=="CommandStream"?'f':'d'));++i;}
         std::vector<std::string> p;assert(parse("[Quality]\nCommandStream=2\n",nullptr,p)==d&&p.size()==1);
@@ -456,7 +456,7 @@ int main(){
         assert(describe(d).find(" ShadowPivotCorrection=1(default) CommandStream=1(default) BlobShadowStrength=50(default)")!=std::string::npos&&describe(off).find(" CommandStream=0(file)")!=std::string::npos);}
     // 0.3.193 BlobShadowStrength: 50 in the code default and every preset, 0..100, own last origin slot; ActorShadows=0 does not force it.
     assert(d.blobShadowStrength==50&&preset(Preset::Balanced).blobShadowStrength==50&&preset(Preset::Performance).blobShadowStrength==50);
-    assert(std::string(Keys[34].name)=="BlobShadowStrength"&&Keys[34].field==&Settings::blobShadowStrength&&Keys[34].low==0&&Keys[34].high==100&&sizeof(Keys)/sizeof(Keys[0])==40);
+    assert(std::string(Keys[34].name)=="BlobShadowStrength"&&Keys[34].field==&Settings::blobShadowStrength&&Keys[34].low==0&&Keys[34].high==100&&sizeof(Keys)/sizeof(Keys[0])==41);
     for(unsigned v:{0u,1u,50u,99u,100u}){auto on=parse(("[Quality]\nBlobShadowStrength="+std::to_string(v)+"\n").c_str());assert(on.blobShadowStrength==v&&(on==d)==(v==50));
         unsigned i=0;for(const auto& k:Keys){assert(on.origin[i]==(std::string(k.name)=="BlobShadowStrength"?'f':'d'));++i;}
         assert(effective(on).blobShadowStrength==v&&effective(parse(("[Quality]\nActorShadows=0\nBlobShadowStrength="+std::to_string(v)+"\n").c_str())).blobShadowStrength==v);}
@@ -481,12 +481,19 @@ int main(){
     // 0.3.199: FogTemporal and RainBlend were removed (always on, game-tested): unknown keys now, the origin ends at FogCloudDensity.
     {std::vector<std::string> p;assert(parse("[Quality]\nFogTemporal=0\nRainBlend=0\n",nullptr,p)==d);assert(std::string(Keys[38].name)=="FogCloudDensity");}
     // 0.3.200 (gpu budget): GpuBudgetMs 4/3/2 (0..20, 0 = off) appended after FogCloudDensity, its own origin slot.
-    assert(d.gpuBudgetMs==4&&preset(Preset::Balanced).gpuBudgetMs==3&&preset(Preset::Performance).gpuBudgetMs==2&&sizeof(Keys)/sizeof(Keys[0])==40);
+    assert(d.gpuBudgetMs==4&&preset(Preset::Balanced).gpuBudgetMs==3&&preset(Preset::Performance).gpuBudgetMs==2&&sizeof(Keys)/sizeof(Keys[0])==41);
     assert(std::string(Keys[39].name)=="GpuBudgetMs"&&Keys[39].field==&Settings::gpuBudgetMs&&Keys[39].low==0&&Keys[39].high==20);
     {auto g=parse("[Quality]\nGpuBudgetMs=0\n");assert(g.gpuBudgetMs==0&&g.origin[39]=='f'&&g.origin[38]=='d'&&effective(g).gpuBudgetMs==0);
      g=parse("[Quality]\nPreset=Performance\nGpuBudgetMs=20\n");assert(g.gpuBudgetMs==20&&g.origin[39]=='f');
      std::vector<std::string> p;assert(parse("[Quality]\nGpuBudgetMs=21\n",nullptr,p)==d&&p.size()==1);
      assert(describe(d).find(" FogCloudDensity=100(default) GpuBudgetMs=4(default)")!=std::string::npos);}
+    // 0.3.200 (jobs): ReplayJobs 1/1/1 (0..1, 0 = all on the renderer thread) appended after GpuBudgetMs, its own origin slot; ActorShadows=0 does not force it.
+    assert(d.replayJobs==1&&preset(Preset::Balanced).replayJobs==1&&preset(Preset::Performance).replayJobs==1&&sizeof(Keys)/sizeof(Keys[0])==41);
+    assert(std::string(Keys[40].name)=="ReplayJobs"&&Keys[40].field==&Settings::replayJobs&&Keys[40].low==0&&Keys[40].high==1);
+    {auto j=parse("[Quality]\nReplayJobs=0\n");assert(j.replayJobs==0&&j.origin[40]=='f'&&j.origin[39]=='d'&&j!=d&&effective(j).replayJobs==0);
+     assert(effective(parse("[Quality]\nActorShadows=0\nReplayJobs=1\n")).replayJobs==1&&parse("[Quality]\nReplayJobs=1\n")==d);
+     std::vector<std::string> p;assert(parse("[Quality]\nReplayJobs=2\n",nullptr,p)==d&&p.size()==1);
+     assert(describe(d).find(" GpuBudgetMs=4(default) ReplayJobs=1(default)")!=std::string::npos&&describe(j).find(" ReplayJobs=0(file)")!=std::string::npos);}
     { /* effective(): the identity with ActorShadows=1 (any value of every key), with 0 only the two replay keys drop. */
       std::mt19937 er(158);
       for(int round=0;round<4000;++round){Settings s;s.preset=Preset(er()%3);unsigned i=0;

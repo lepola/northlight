@@ -54,6 +54,7 @@ test_gpu_budget_wiring.py
 test_horizon_haze.py
 test_index_working_set.py
 test_install_world_cache.py
+test_job_system.py
 test_lamp_daylight.py
 test_live_terrain_gpu.py
 test_local_fog_profile.py

@@ -12,7 +12,7 @@ w=fp.src('world_renderer.h').read_text()
 checks={
  'list built with the terrain list at the mesh commit, against the committed fixed set':'if(!fixed.count({batches[i].chunkX,batches[i].chunkY}))shadowTerrainList.push_back(uint32_t(i));' in w
     and 'terrainBatchListSize=batches.size();terrainListFixed=&fixed;terrainBatchListGeneration=meshGeneration;' in w and w.count('rebuildTerrainLists();')==1,
- 'listed selection only for its generation, batches and fixed set; the set rule otherwise':'if(terrainBatchListGeneration==meshGeneration&&terrainBatchListSize==batches.size()&&terrainListFixed==&fixedTerrainChunks())\n                terrainCandidates.prepareListed(batches,shadowTerrainList,fixedTerrainChunks(),liveTerrainChunks,captureSampled);\n            else terrainCandidates.prepare(batches,fixedTerrainChunks(),liveTerrainChunks,captureSampled);' in w,
+ 'listed selection only for its generation, batches and fixed set; the set rule otherwise':'if(terrainBatchListGeneration==meshGeneration&&terrainBatchListSize==batches.size()&&terrainListFixed==&fixedTerrainChunks())\n                    terrainCandidates.prepareListed(batches,shadowTerrainList,fixedTerrainChunks(),liveTerrainChunks,captureSampled);\n                else terrainCandidates.prepare(batches,fixedTerrainChunks(),liveTerrainChunks,captureSampled);' in w, # 0.3.200 (jobs): inside terrainJob
  'live chunks: the set plus bitmap':'NorthlightTerrainCandidates::ChunkSet liveTerrainChunks;' in w,
 }
 for name,ok in checks.items():print(('PASS ' if ok else 'FAIL ')+name)

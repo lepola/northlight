@@ -80,8 +80,8 @@ checks['hlsl: the intervals are mad(range,1/N,addend): c60.x clouds (40), c64.z 
 checks['hlsl: FogTemporal still passes s9 through at weight 0 (the clouds\' copy)']='if(FogTemporalInfo.y<=0)return current;' in h
 
 # settings and docs
-checks['settings: GpuBudgetMs the last key (0..20, presets 4/3/2, default 4)']=(
-    '{"GpuBudgetMs",&Settings::gpuBudgetMs,0,20,{4,3,2}},\n};' in q and 'unsigned gpuBudgetMs=4;' in q and 'char origin[40]=' in q)
+checks['settings: GpuBudgetMs appended after FogCloudDensity (0..20, presets 4/3/2, default 4); 0.3.200 (jobs) ReplayJobs follows it, last']=(
+    '{"GpuBudgetMs",&Settings::gpuBudgetMs,0,20,{4,3,2}},\n    {"ReplayJobs",&Settings::replayJobs,0,1,{1,1,1}},\n};' in q and 'unsigned gpuBudgetMs=4;' in q and 'char origin[41]=' in q)
 ini=(fp.REPO/'renderer'/'windows-package'/'northlight-quality.ini').read_text()
 readme=(fp.REPO/'README.md').read_text();txt=(fp.REPO/'renderer'/'windows-package'/'README.txt').read_text()
 checks['docs: ini template, README.md and README.txt']=(';GpuBudgetMs=4' in ini and 'GpuBudgetMs' in readme and re.search(r'^  GpuBudgetMs +4 / 3 / 2 ',txt,re.M) is not None)

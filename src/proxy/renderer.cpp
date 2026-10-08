@@ -1265,6 +1265,10 @@ public:
                         const int wrote=std::snprintf(buckets+at,sizeof buckets-at," %s=%.3f/%u",NorthlightEffectsBuckets::name(b),bucketMs,effectsBuckets.drawCalls(b));if(wrote>0)at=std::min(sizeof buckets-1,at+size_t(wrote));}
                     logf("EFFECTS buckets frame=%u applied=%d effectsMs=%.3f sumMs=%.3f spanMs=%.3f reads=%u draws=%u (ms/draw calls)%s",sampleFrame,int(frameApplied),double(cpuEffects)*tick,sum,
                         double(effectsBuckets.total())*tick,effectsBuckets.reads(),draws,buckets);}
+                // 0.3.200 (jobs): the effects' CPU split of this frame (ReplayJobs): jobMs ran on the job workers, joinWaitMs the renderer thread spent
+                // at the joins (jobs it ran itself while waiting included), replayMs the effects' wall time on the renderer thread (effects= above).
+                if(world){const auto j=world->takeJobStats();
+                    logf("JOBS frame=%u jobs=%u jobMs=%.3f joinWaitMs=%.3f replayMs=%.3f",sampleFrame,j.jobs,double(j.workerNs)*1e-6,double(j.waitNs)*1e-6,double(cpuEffects)*ms);}
                 logf("D3D calls frame=%u mirrorAudit=%u counted=%d total=%u gameDraws=%u mirrorAnswered=%llu mirrorForwarded=%llu captureSkipped=%u probeRan=%u probeMode=%s%s",sampleFrame,unsigned(sampleFrame%120==60),int(mirrorState.rawCounting),rawTotal,drawCalls-frameStartDrawCalls,
                     (unsigned long long)(mirrorState.answered-frameStartAnswered),(unsigned long long)(mirrorState.forwarded-frameStartForwarded),unsigned(world&&world->captureSkippedLastFrame()),
                     unsigned(world&&world->replayProbeRanThisFrame),NorthlightRenderThreadProbe::probeModeName(world?world->probeMode():NorthlightRenderThreadProbe::ProbeOff),calls);
