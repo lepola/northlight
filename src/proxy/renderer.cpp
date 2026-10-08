@@ -312,6 +312,26 @@ class Device final : public GuardedMirrorDevice {
     // squares at the left edge whose colour cycles with the frame number. E (upper) is filled right after the world effects, P (lower) right
     // before the real Present, so a screen recording shows which presented images went through the effects and the replay's Present, in order.
     bool frameMarkers=false;IDirect3DSurface9* markerProbe=nullptr;
+public:
+    // 0.3.200 (pipeline): with StreamFramesAhead >= 2 the replay thread never waits for the game, so the graphics card queue filled with
+    // frames (DXVK allows BackBufferCount+1 in flight) and on macOS the window showed images still being written: horizontal tear bands
+    // from frames several apart, a flicker while moving (gone with d3d9.maxFrameLatency = 1). A non-Ex device cannot ask DXVK for that,
+    // so the replay does it: before each Present it waits until the graphics card finished the previous frame (one EVENT query issued
+    // right after every Present). The game thread is not involved; it stays its frames ahead.
+    bool limitGpuLatency=false;
+private:
+    IDirect3DQuery9* latencyQuery=nullptr;bool latencyPending=false,latencyFailed=false;std::uint64_t latencyWaits=0;double latencyWaitMs=0;
+    void waitPreviousFrameGpu(){
+        if(!latencyPending||!latencyQuery)return;latencyPending=false;
+        if(latencyQuery->GetData(nullptr,0,D3DGETDATA_FLUSH)!=S_FALSE)return;
+        const std::int64_t t0=qpcNow();const double perMs=cpuFrequency.QuadPart>0?1000.0/double(cpuFrequency.QuadPart):0;
+        while(latencyQuery->GetData(nullptr,0,D3DGETDATA_FLUSH)==S_FALSE){if(double(qpcNow()-t0)*perMs>100.0)break;SwitchToThread();} /* a lost device or a stuck query never holds the replay */
+        ++latencyWaits;latencyWaitMs+=double(qpcNow()-t0)*perMs;
+    }
+    void markFrameGpu(){
+        if(!latencyQuery&&!latencyFailed&&(FAILED(ext->CreateQuery(D3DQUERYTYPE_EVENT,&latencyQuery))||!latencyQuery)){latencyQuery=nullptr;latencyFailed=true;logf("CSTREAM GPU latency limit unavailable: no event query");}
+        if(latencyQuery&&SUCCEEDED(latencyQuery->Issue(D3DISSUE_END)))latencyPending=true;
+    }
     void frameMarker(unsigned slot,unsigned n){
         IDirect3DSurface9* bb=nullptr;if(FAILED(ext->GetBackBuffer(0,0,D3DBACKBUFFER_TYPE_MONO,&bb))||!bb)return;
         static const D3DCOLOR palette[2][4]={{0xffff0000,0xff00ff00,0xff0000ff,0xffffffff},{0xffffff00,0xff00ffff,0xffff00ff,0xffff8000}};
@@ -1043,7 +1063,7 @@ public:
         memmap("destroy-begin");
         logGateThreads("destroy");
         memoryDiagnostics.reset();
-        dropBlobFaint();shadowBlobs.reset();celestialDiscs.reset();gpuProfile.reset();gpuTimer.reset();water.reset();world.reset();releaseResources();
+        dropBlobFaint();shadowBlobs.reset();celestialDiscs.reset();gpuProfile.reset();gpuTimer.reset();drop(latencyQuery);water.reset();world.reset();releaseResources();
         stateBlocks.clear();ext->Release();ext=nullptr;
         const ULONG backendReferences=real->Release();parent->Release();
         logf("DEVICE lifetime event=destroy-end id=%ld live=%ld backendReleaseCount=%lu tick=%lu",diagnosticId,InterlockedDecrement(&liveDevices),(unsigned long)backendReferences,(unsigned long)GetTickCount());
@@ -1059,7 +1079,7 @@ public:
     HRESULT STDMETHODCALLTYPE GetDirect3D(IDirect3D9** out) override { Guard mirrorLock(mirrorState.gate);if(!out)return D3DERR_INVALIDCALL;*out=parent;parent->AddRef();return D3D_OK;}
     HRESULT STDMETHODCALLTYPE Reset(D3DPRESENT_PARAMETERS* pp) override { Guard mirrorLock(mirrorState.gate);
         frameIntervals.reset();frameCost.reset();backDescKnown=false;backSurface=nullptr;
-        NorthlightTrackedBuffers::invalidateAll();gpuProfile->reset();gpuTimer->reset();gpuBudgetQpc=0; releaseResources(); if(world)world->reset();if(water)water->reset();if(celestialDiscs)celestialDiscs->reset();if(shadowBlobs)shadowBlobs->reset(); weatherDetect.reset();weatherSample={}; /* 0.3.198 (rain) */failed=false;latchDrawGates();
+        NorthlightTrackedBuffers::invalidateAll();gpuProfile->reset();gpuTimer->reset();gpuBudgetQpc=0;drop(latencyQuery);latencyPending=false;latencyFailed=false; releaseResources(); if(world)world->reset();if(water)water->reset();if(celestialDiscs)celestialDiscs->reset();if(shadowBlobs)shadowBlobs->reset(); weatherDetect.reset();weatherSample={}; /* 0.3.198 (rain) */failed=false;latchDrawGates();
         HRESULT hr=ext->Reset(pp); logf("Reset HRESULT=0x%08lx",(unsigned long)hr); return hr;
     }
     // Frame boundary only (after clearFrame()): no draw of the finished frame
@@ -1181,6 +1201,7 @@ public:
             const unsigned before=gpuBudget.level;world->setGpuBudgetLevel(gpuBudget.update(float(budget),float(ms),dt));
             if(gpuBudget.level!=before&&(gpuBudget.changes<=32||diagnostics()))
                 logf("GPUBUDGET level %u -> %u smoothed=%.3f budget=%u changes=%u",before,gpuBudget.level,double(gpuBudget.smoothed),budget,gpuBudget.changes);}
+        if(limitGpuLatency&&sampled()&&NorthlightRenderThreadProbe::profiling()){logf("CSTREAM GPU latency waits=%llu waitMs=%.1f",(unsigned long long)latencyWaits,latencyWaitMs);latencyWaits=0;latencyWaitMs=0;}
         if(sampled()&&NorthlightRenderThreadProbe::profiling())logf("GPUBUDGET ms=%.3f smoothed=%.3f budget=%.1f level=%u",gpuBudgetLastMs,double(gpuBudget.smoothed),double(budget),gpuBudget.level);
     }
     void finishFrameImpl() {
@@ -1344,7 +1365,9 @@ public:
     HRESULT STDMETHODCALLTYPE Present(const RECT* src,const RECT* dst,HWND wnd,const RGNDATA* dirty) override { Guard mirrorLock(mirrorState.gate);mirrorState.gate.noteFirst(mirrorState.gate.presentTid);
         PresentTicks ticks;const unsigned markerFrame=frame;finishFrame();ticks.finish();
         if(frameMarkers)frameMarker(1,markerFrame);
-        const HRESULT hr=ext->Present(src,dst,wnd,dirty);ticks.present();presented(ticks);return hr;
+        if(limitGpuLatency)waitPreviousFrameGpu();
+        const HRESULT hr=ext->Present(src,dst,wnd,dirty);
+        if(limitGpuLatency)markFrameGpu();ticks.present();presented(ticks);return hr;
     }
     // After the real Present, under the gate. Arithmetic only; windows are logged by finishFrame.
     void presented(const PresentTicks& t){
@@ -1463,7 +1486,8 @@ public:
         try{stream=NorthlightStream::StreamDevice::make(device,this,pp,std::move(options),&reason);}catch(...){reason="exception";}
         if(!stream){NorthlightStream::streamActive.store(false,std::memory_order_relaxed);NorthlightReplayCopies::enabled.store(false,std::memory_order_relaxed);target->setExclusiveOwner(false);target->adoptOwnerThread(); /* the gate owner is this thread again (a replay thread that ran has been joined) */
             logf("CSTREAM disabled reason=%s",reason);return device;}
-        logf("CSTREAM active gameTid=%lu replayTid=%lu exclusiveGate=%d framesAhead=%u frameSkip=%u budgetMiB=%u",NorthlightStream::gameTid.load(),NorthlightStream::replayTid.load(),int(exclusiveOwner),stream->framesAhead(),frameSkip,unsigned(NorthlightStream::budgetForFramesAhead(framesAhead)>>20));
+        target->limitGpuLatency=stream->framesAhead()>=2; /* 0.3.200 (pipeline): see Device::limitGpuLatency */
+        logf("CSTREAM active gameTid=%lu replayTid=%lu exclusiveGate=%d framesAhead=%u frameSkip=%u budgetMiB=%u gpuLatencyLimit=%d",NorthlightStream::gameTid.load(),NorthlightStream::replayTid.load(),int(exclusiveOwner),stream->framesAhead(),frameSkip,unsigned(NorthlightStream::budgetForFramesAhead(framesAhead)>>20),int(target->limitGpuLatency));
         return stream;
     }
     HRESULT STDMETHODCALLTYPE CreateDevice(UINT adapter,D3DDEVTYPE type,HWND window,DWORD flags,D3DPRESENT_PARAMETERS* pp,IDirect3DDevice9** out) override {
