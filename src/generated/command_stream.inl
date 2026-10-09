@@ -2290,7 +2290,7 @@ template<class Tr> inline bool executeSync(SyncCall& sc, Tr& tr) {
 }  // namespace NorthlightStream
 
 #define NORTHLIGHT_STREAM_DEVICE_METHODS \
-    HRESULT STDMETHODCALLTYPE TestCooperativeLevel() override { return this->syncCall(NORTHLIGHT_STREAM_TAG(Device_TestCooperativeLevel)); } \
+    HRESULT STDMETHODCALLTYPE TestCooperativeLevel() override { HRESULT _r{};if(this->answer(NORTHLIGHT_STREAM_TAG(Device_TestCooperativeLevel), _r))return _r;return this->syncGet(NORTHLIGHT_STREAM_TAG(Device_TestCooperativeLevel)); } \
     UINT STDMETHODCALLTYPE GetAvailableTextureMem() override { return this->local(NORTHLIGHT_STREAM_TAG(Device_GetAvailableTextureMem)); } \
     HRESULT STDMETHODCALLTYPE EvictManagedResources() override { ::NorthlightStream::record_Device_EvictManagedResources(this->streamQueue());return D3D_OK; } \
     HRESULT STDMETHODCALLTYPE GetDirect3D(IDirect3D9** ppD3D9) override { return this->local(NORTHLIGHT_STREAM_TAG(Device_GetDirect3D), ppD3D9); } \

@@ -67,6 +67,7 @@ public:
         bool filterRedundant=true;                                      // see redundant(); off: every Set is recorded
         DWORD (*readBackLock)()=nullptr;                                // NorthlightUpload::readBackLock in the DLL: READONLY, plus NOOVERWRITE on DXVK >= 3
         bool (*diagnostics)()=nullptr;                                  // NorthlightDiagnostics::enabled in the DLL
+        const char* (*callerModule)(void* address)=nullptr;             // 0.3.204 (task 21): "module+0xoffset" of a TestCooperativeLevel caller's return address (Windows only); null = no caller line
         // 0.3.200 (pipeline): StreamFramesAhead (clamped to 1..kMaxFramesAhead): Present waits for the Present this many frames back; the snapshot pool follows
         // (SnapshotPool::capFor). 1 = the 0.3.199 pacing. The queue budget is `budget` (the DLL passes budgetForFramesAhead).
         unsigned framesAhead=1;
@@ -109,6 +110,13 @@ public:
     template<Cmd C,class... A> void observe(CmdTag<C>,A&&...){}
     template<Cmd C,class... A> typename MethodTraits<C>::Ret syncCall(CmdTag<C> t,A... a){noteSync(t,a...);return runSync(streamQueue(),t,a...);}
     template<Cmd C,class... A> typename MethodTraits<C>::Ret syncGet(CmdTag<C> t,A... a){own(core.q.stats.stateSynced);return runSync(streamQueue(),t,a...);}
+    // 0.3.204 (task 21): the synchronous TestCooperativeLevel (device not D3D_OK yet). A task, so the replay thread stays the only writer of coopState (a game-side store could
+    // overwrite the result of a Present replayed from a pumped wait); census name, syncCalls and the nested fallback as runSync.
+    HRESULT syncGet(CmdTag<Cmd::Device_TestCooperativeLevel>){
+        own(core.q.stats.stateSynced);HRESULT hr=D3DERR_INVALIDCALL;
+        if(inPumpedWait)own(core.q.stats.census[(std::size_t)Cmd::Device_TestCooperativeLevel]);   // runTask counts nestedSyncs; runSync also counted the census
+        const bool ran=runTask(core,[&](StreamCore& c){hr=c.target->TestCooperativeLevel();c.coopState.store(hr);},Cmd::Device_TestCooperativeLevel);
+        return ran?hr:D3DERR_INVALIDCALL;}
 
 
     // ---- redundant-state filtering ----
@@ -240,6 +248,19 @@ public:
         takeReplayFailure();
         return true;}
     bool hit(){own(core.q.stats.stateAnswered);return true;}
+    // 0.3.204 (task 21): TestCooperativeLevel from the replay-published cooperative state while it is D3D_OK (a game may call it ~100 times a frame). Deliberately no begin():
+    // its publish every 8th call would wake the replay thread each time and the sync wait it replaces would only move; lost / not reset -> false = the exact synchronous path.
+    // always_inline: __builtin_return_address(0) then names the return address of the game-facing TestCooperativeLevel, i.e. the caller (no stack walk: the x86 DLL omits frame pointers).
+    inline __attribute__((always_inline)) bool answer(CmdTag<Cmd::Device_TestCooperativeLevel>,HRESULT& r){
+        if(core.coopState.load(std::memory_order_acquire)!=D3D_OK)return false;
+        r=D3D_OK;own(core.q.stats.coopAnswered);
+        if(core.callerModule&&callerLogs<2&&core.frameNo>=callerNextFrame)logCaller(__builtin_return_address(0));
+        return true;}
+    // Diagnostics: who calls it. The first locally answered call with Diagnostics on, and once more 600 frames later; with Diagnostics off it looks again every 600 frames.
+    unsigned callerLogs=0;std::uint64_t callerNextFrame=0;std::function<void(const char*)> callerLog;bool (*callerDiag)()=nullptr;
+    void logCaller(void* address){
+        callerNextFrame=core.frameNo+600;if(!callerLog||!callerDiag||!callerDiag())return;
+        ++callerLogs;char b[300];std::snprintf(b,sizeof b,"CSTREAM TestCooperativeLevel caller=%s",core.callerModule(address));callerLog(b);}
     template<class I> static void give(ProxyBase* p,I** out){if(!p){*out=nullptr;return;}p->comAddRef();*out=static_cast<I*>(p->unk);}
     bool syncOnly(unsigned bit){return core.syncOnly[bit/64].load(std::memory_order_relaxed)&(1ull<<(bit%64));}
     bool answer(CmdTag<Cmd::Device_GetRenderState>,D3DRENDERSTATETYPE s,DWORD* v,HRESULT& hr){
@@ -389,7 +410,7 @@ public:
         HRESULT hr=D3DERR_INVALIDCALL;
         const bool ran=runTask(core,[&](StreamCore& c){   // everything recorded so far has run; the game waits, pumped
             for(ProxyBase* k:sc0->kids)if(k&&k->inner&&k->refs.load()==0){c.reg.unbindInner(k);k->inner->Release();k->inner=nullptr;}   // one the game still holds keeps its object, as in D3D9   // back buffers must not outlive the swap chain's reset
-            hr=c.target->Reset(p);
+            hr=c.target->Reset(p);c.coopState.store(c.target->TestCooperativeLevel());   // 0.3.204 (task 21): the replay thread publishes the new cooperative level; StreamDevice is not an IDirect3DDevice9Ex, so there is no ResetEx
             if(SUCCEEDED(hr)){IDirect3DSwapChain9* sc=nullptr;if(SUCCEEDED(c.target->GetSwapChain(0,&sc))&&sc){sc->GetPresentParameters(&sc0->pp);sc->Release();}}
             ensureBackBuffers(c);
             st.loadDefaults(c.target);c.replayFailure.store(false);},Cmd::SyncReset);
@@ -562,7 +583,7 @@ private:
 
     StreamDevice(IDirect3DDevice9* target,IDirect3D9* par,const D3DPRESENT_PARAMETERS* p,Options opt)
         :coreOwner(new StreamCore(opt.budget)),core(*coreOwner),replayer(core,SnapshotPool::capFor(clampFramesAhead(opt.framesAhead))),parent(par),framesAhead_(clampFramesAhead(opt.framesAhead)),capture(opt.capture){
-        core.target=target;core.game=this;core.logLine=nullptr;core.readBackLock=opt.readBackLock;st.core=&core;
+        core.target=target;core.game=this;core.logLine=nullptr;core.callerModule=opt.callerModule;callerLog=opt.log;callerDiag=opt.diagnostics;core.readBackLock=opt.readBackLock;st.core=&core;
         if(opt.cursorApi)cursor=*opt.cursorApi;
         restoreOwner=opt.threadStart;replayer.frameSkip=opt.frameSkip!=0;replayer.threadStart=std::move(opt.threadStart);replayer.log=opt.log;replayer.diagnostics=opt.diagnostics;filter=opt.filterRedundant;
         if(kDirectReplay&&opt.directReplay&&opt.extension&&opt.rawOf){core.ext=opt.extension;auto f=opt.rawOf;core.reg.rawOf=[f](IUnknown* e,Kind k){return f(e,unsigned(k));};}

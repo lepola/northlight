@@ -239,6 +239,10 @@ struct StreamCore {
     template<class T> ProxyBase* proxyFor(T* innerRef,bool bound);
     ProxyBase* makeImplicit(IUnknown* inner);
     std::atomic<HRESULT> presentResult{D3D_OK};
+    // 0.3.204 (task 21): the cooperative level TestCooperativeLevel reports, written ONLY by the replay thread (after each real Present, in the Reset task and in the
+    // sync TestCooperativeLevel task); the game thread answers D3D_OK from it locally and goes synchronous for anything else. Loss shows up at most StreamFramesAhead frames late.
+    std::atomic<HRESULT> coopState{D3D_OK};
+    const char* (*callerModule)(void* address)=nullptr;   // diagnostics: "module+0xoffset" of a TestCooperativeLevel caller (renderer.cpp, Windows; logged only with Diagnostics on); null in tests
     // Real HRESULT of the last Present commands (the game reads the one StreamFramesAhead frames back). 0.3.200 (pipeline): the slot is the Present's ordinal
     // (the replay's framesReplayed before it counts this one = the game's frameNo when it recorded it), seq still checked: with at most kMaxFramesAhead+1
     // Presents in flight no newer one can take the slot first (keyed by seq%kRing it could, and the game then read D3D_OK).

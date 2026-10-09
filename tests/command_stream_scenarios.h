@@ -17,7 +17,7 @@ struct Rig {
         }else dev=target;
     }
     StreamCore& core(){return sd->streamCore();}
-    void sync(){CHECK(dev->TestCooperativeLevel()==5);}
+    void sync(){DWORD n=0;CHECK(dev->ValidateDevice(&n)==5);}   // 0.3.204 (task 21): a sync call that always drains (TestCooperativeLevel is answered locally while the device is OK)
     // 0.3.196 (task 12): every wait of the real StreamDevice paths (generated runSync, runTask, Present/SwapPresent) targeted a kFlagWaitTarget command.
     void checkFlagged(){if(sd)CHECK(core().q.unflaggedWaits()==0);}
     void finish(){checkFlagged();dev->Release();dev=nullptr;}
@@ -522,9 +522,11 @@ static void queriesAndSyncCensus(){
     q->Release();
     // every sync class drains and is counted by name
     rig.dev->SetRenderState((D3DRENDERSTATETYPE)7,1);DWORD n=0;D3DDISPLAYMODE dm{};D3DRASTER_STATUS rs{};D3DGAMMARAMP ramp{};D3DCLIPSTATUS9 cs{};
-    CHECK(rig.dev->TestCooperativeLevel()==5&&rig.core().q.depth()==0);
-    CHECK(rig.dev->ValidateDevice(&n)==5&&rig.dev->GetDisplayMode(0,&dm)==5&&rig.dev->GetRasterStatus(0,&rs)==5&&rig.dev->GetClipStatus(&cs)==5);rig.dev->GetGammaRamp(0,&ramp);
-    for(Cmd c:{Cmd::Device_TestCooperativeLevel,Cmd::Device_ValidateDevice,Cmd::Device_GetDisplayMode,Cmd::Device_GetRasterStatus,Cmd::Device_GetClipStatus,Cmd::Device_GetGammaRamp})CHECK(get(s.census[(std::size_t)c])==1);
+    CHECK(rig.dev->ValidateDevice(&n)==5&&rig.core().q.depth()==0);
+    CHECK(rig.dev->TestCooperativeLevel()==D3D_OK&&get(s.coopAnswered)==1);   // 0.3.204 (task 21): answered on the game thread (no census, see testCooperativeLevelLocal)
+    CHECK(rig.dev->GetDisplayMode(0,&dm)==5&&rig.dev->GetRasterStatus(0,&rs)==5&&rig.dev->GetClipStatus(&cs)==5);rig.dev->GetGammaRamp(0,&ramp);
+    CHECK(get(s.census[(std::size_t)Cmd::Device_TestCooperativeLevel])==0);
+    for(Cmd c:{Cmd::Device_ValidateDevice,Cmd::Device_GetDisplayMode,Cmd::Device_GetRasterStatus,Cmd::Device_GetClipStatus,Cmd::Device_GetGammaRamp})CHECK(get(s.census[(std::size_t)c])==1);
     IDirect3DSurface9* off=nullptr;CHECK(rig.dev->CreateOffscreenPlainSurface(8,8,(D3DFORMAT)22,(D3DPOOL)2,&off,nullptr)==D3D_OK);
     CHECK(rig.dev->GetRenderTargetData(off,off)==5&&rig.dev->GetFrontBufferData(0,off)==5);off->Release();
     rig.finish();checkClean();
@@ -775,12 +777,50 @@ static void memoryPressureRelease(){
     for(auto* t:tex)t->Release();for(auto* b:vb)b->Release();
     rig.finish();checkClean();
 }
+// 0.3.204 (task 21): TestCooperativeLevel is answered on the game thread from StreamCore::coopState (written by the replay thread) while it is D3D_OK; lost / not reset
+// goes synchronous again (exact answers), and a successful Reset publishes D3D_OK. Observed StreamFramesAhead frames late, so the test Presents and drains first.
+static void testCooperativeLevelLocal(unsigned framesAhead){
+    gTrace.clear();gKnobs.coop.store(D3D_OK);StreamDevice::Options opt;opt.framesAhead=framesAhead;Rig rig(true,opt);auto& core=rig.core();auto& s=core.q.stats;
+    // (a) device OK: nothing is queued, nothing waits, the replay thread is not involved (it is busy in BeginScene)
+    gKnobs.hold.store(true);rig.dev->BeginScene();rig.dev->SetRenderState((D3DRENDERSTATETYPE)7,5);
+    const auto syncs=get(s.syncCalls),sg=get(s.stateSynced);const std::size_t depth=core.q.depth();
+    for(int i=0;i<50;++i)CHECK(rig.dev->TestCooperativeLevel()==D3D_OK);
+    CHECK(get(s.syncCalls)==syncs&&get(s.stateSynced)==sg&&get(s.coopAnswered)==50&&get(s.census[(std::size_t)Cmd::Device_TestCooperativeLevel])==0&&core.q.depth()>=depth&&core.q.depth()>0);
+    gKnobs.hold.store(false);rig.sync();
+    // Presents of an OK device keep it OK
+    for(unsigned i=0;i<4;++i)rig.dev->Present(nullptr,nullptr,nullptr,nullptr);rig.sync();
+    const auto base=get(s.syncCalls);CHECK(rig.dev->TestCooperativeLevel()==D3D_OK&&get(s.syncCalls)==base);
+    // (b) lost: the replay thread sees DEVICELOST at a Present; every call is then synchronous and exact
+    gKnobs.coop.store(D3DERR_DEVICELOST);
+    for(unsigned i=0;i<framesAhead+3;++i)rig.dev->Present(nullptr,nullptr,nullptr,nullptr);rig.sync();
+    CHECK(core.coopState.load()==D3DERR_DEVICELOST);
+    const auto s0=get(s.syncCalls),c0=get(s.census[(std::size_t)Cmd::Device_TestCooperativeLevel]),a0=get(s.coopAnswered);
+    CHECK(rig.dev->TestCooperativeLevel()==D3DERR_DEVICELOST&&rig.dev->TestCooperativeLevel()==D3DERR_DEVICELOST);
+    CHECK(get(s.syncCalls)==s0+2&&get(s.census[(std::size_t)Cmd::Device_TestCooperativeLevel])==c0+2&&get(s.coopAnswered)==a0);
+    // a Reset that fails (still lost) leaves the cache at what the Target reports: the next call stays synchronous, never a local D3D_OK
+    IDirect3DSurface9* bb=nullptr;CHECK(rig.dev->GetBackBuffer(0,0,(D3DBACKBUFFER_TYPE)0,&bb)==D3D_OK);bb->Release();
+    D3DPRESENT_PARAMETERS pp{};pp.BackBufferWidth=640;pp.BackBufferHeight=480;pp.BackBufferFormat=(D3DFORMAT)22;pp.BackBufferCount=2;
+    CHECK(rig.dev->Reset(&pp)==D3DERR_DEVICELOST&&core.coopState.load()==D3DERR_DEVICELOST);
+    {const auto s2=get(s.syncCalls),a2=get(s.coopAnswered);CHECK(rig.dev->TestCooperativeLevel()==D3DERR_DEVICELOST&&get(s.syncCalls)==s2+1&&get(s.coopAnswered)==a2);}
+    // not reset yet: the Target says so and the cache follows it
+    gKnobs.coop.store(D3DERR_DEVICENOTRESET);
+    {const auto s3=get(s.syncCalls);
+     CHECK(rig.dev->TestCooperativeLevel()==D3DERR_DEVICENOTRESET&&get(s.syncCalls)==s3+1&&core.coopState.load()==D3DERR_DEVICENOTRESET);
+     CHECK(rig.dev->TestCooperativeLevel()==D3DERR_DEVICENOTRESET&&get(s.syncCalls)==s3+2);}
+    // Reset (the game released its back buffer): the Target is cooperative again, the next call is local
+    CHECK(rig.dev->Reset(&pp)==D3D_OK&&core.coopState.load()==D3D_OK);
+    const auto s1=get(s.syncCalls),a1=get(s.coopAnswered);
+    CHECK(rig.dev->TestCooperativeLevel()==D3D_OK&&get(s.syncCalls)==s1&&get(s.coopAnswered)==a1+1);
+    for(unsigned i=0;i<4;++i)rig.dev->Present(nullptr,nullptr,nullptr,nullptr);rig.sync();
+    CHECK(rig.dev->TestCooperativeLevel()==D3D_OK&&core.coopState.load()==D3D_OK);
+    rig.finish();gKnobs.coop.store(D3D_OK);
+}
 static void nestedSyncInPump(){
     gTrace.clear();Rig rig(true);auto& s=rig.core().q.stats;
     static Rig* r;static HRESULT nested;static int calls;r=&rig;nested=12345;calls=0;
     gKnobs.hold.store(true);rig.dev->BeginScene();   // the replay thread is busy: the next sync really waits
-    pumpHook=[]{if(calls++==0){nested=r->dev->TestCooperativeLevel();gKnobs.hold.store(false);}};
-    CHECK(rig.dev->TestCooperativeLevel()==5);pumpHook=nullptr;
+    pumpHook=[]{if(calls++==0){DWORD np=0;nested=r->dev->ValidateDevice(&np);gKnobs.hold.store(false);}};
+    DWORD np=0;CHECK(rig.dev->ValidateDevice(&np)==5);pumpHook=nullptr;
     CHECK(nested==D3DERR_INVALIDCALL&&get(s.nestedSyncs)==1);
     rig.finish();
 }
@@ -1230,7 +1270,7 @@ static void frameSkipReleasesPresentWait(){
 }
 static void streamTests(bool threadsOnly){
     layoutIsolation();replayTimingAccounting();diagnosticsOffSkipsAudit();idlePollWakes();
-    lifetimeAndIdentity();stateKnownUnknown();locksPreserveBytes();staticBufferShadows();dynamicBufferShadows();largeBufferAllowance();adaptiveShadowCap();shadowCap();queriesAndSyncCensus();resetAndShutdown();directReplayRaw();redundantFiltering();renderTargetResetsViewport();textureShadows();statsLine();childrenOutliveTheDevice();queryProbeAndDeadQuery();initFailureFallback();cursorHandling();nestedSyncInPump();upDrawsAndBackpressure();snapshotTriggers();snapshotPoolNotExhausted();memoryPressureRelease();impossibleBlockIsRefusedAtOnce();smallStagedLocksUseScratch();
+    lifetimeAndIdentity();stateKnownUnknown();locksPreserveBytes();staticBufferShadows();dynamicBufferShadows();largeBufferAllowance();adaptiveShadowCap();shadowCap();queriesAndSyncCensus();resetAndShutdown();directReplayRaw();redundantFiltering();renderTargetResetsViewport();textureShadows();statsLine();childrenOutliveTheDevice();queryProbeAndDeadQuery();initFailureFallback();cursorHandling();nestedSyncInPump();testCooperativeLevelLocal(1);testCooperativeLevelLocal(3);upDrawsAndBackpressure();snapshotTriggers();snapshotPoolNotExhausted();memoryPressureRelease();impossibleBlockIsRefusedAtOnce();smallStagedLocksUseScratch();
     framesAheadPacing();textureShadowSpares();frameSkipping();frameSkipReleasesPresentWait();   // 0.3.200 (frame skip)
     equivalence(20000,12345);equivalence(20000,987654321);equivalence(20000,24680,2);equivalence(20000,13579,3);   // 0.3.200 (pipeline): 2 and 3 frames ahead
     (void)threadsOnly;

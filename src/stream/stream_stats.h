@@ -50,6 +50,7 @@ struct Counters {
     Counter gameNs{0},gameWaitNs{0},gameFrames{0};
     Counter filteredCalls{0};   // redundant Sets the game side did not record
     Counter stateAnswered{0},stateSynced{0},lockAsync{0};
+    Counter coopAnswered{0};   // 0.3.204 (task 21): TestCooperativeLevel calls the game thread answered D3D_OK from StreamCore::coopState (not in stateAnswered)
     Counter census[kMaxCmdIds]{};   // sync calls per command id (name via cmdName in command_stream.inl)
     // ---- Consumer (replay thread) ----
     alignas(kLine) Counter consumerSleeps{0};

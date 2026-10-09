@@ -17,6 +17,7 @@ SDK = northlight_paths.windows_headers() / 'd3d9.h'
 #             proxy can mirror the call (set slots, bind refs, draw triggers) before it is recorded.
 #   get       a Get* that StreamState answers locally: `if(answer(tag,args...,ret))return ret; return syncGet(tag,args...)`;
 #             an unknown or sync-only slot falls back to a sync call. Never void.
+#             (0.3.204: also TestCooperativeLevel, answered from the replay-published cooperative state while it is D3D_OK.)
 #   local     answered on the game thread from proxy/device-held data: `return local(tag,args...)` (hand-written).
 #   sync      drains the queue to this point; the replay thread runs the Target method with translated arguments and
 #             writes out-parameters into the waiting caller's memory (interface out-parameters translated inner->proxy
@@ -56,9 +57,9 @@ STREAM = {
                'GetRenderState GetTexture GetTextureStageState GetSamplerState GetPaletteEntries GetCurrentTexturePalette GetScissorRect '
                'GetSoftwareVertexProcessing GetNPatchMode GetVertexDeclaration GetFVF GetVertexShader GetVertexShaderConstantF '
                'GetVertexShaderConstantI GetVertexShaderConstantB GetStreamSource GetStreamSourceFreq GetIndices GetPixelShader '
-               'GetPixelShaderConstantF GetPixelShaderConstantI GetPixelShaderConstantB',
+               'GetPixelShaderConstantF GetPixelShaderConstantI GetPixelShaderConstantB TestCooperativeLevel',
         'local': 'GetAvailableTextureMem GetDirect3D GetDeviceCaps GetCreationParameters GetSwapChain GetNumberOfSwapChains',
-        'sync': 'TestCooperativeLevel GetDisplayMode GetRasterStatus GetGammaRamp GetRenderTargetData GetFrontBufferData ValidateDevice '
+        'sync': 'GetDisplayMode GetRasterStatus GetGammaRamp GetRenderTargetData GetFrontBufferData ValidateDevice '
                 'GetClipStatus',
     },
     'IDirect3DSwapChain9': {

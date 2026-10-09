@@ -109,7 +109,7 @@ def stub():
     for _, ret, _, params in all_methods():
         tokens |= set(re.findall(r'\w+', ret + ' ' + ' '.join(p.type for p in params)))
     out = ['#pragma once', '#include <cstdint>', '#define STDMETHODCALLTYPE', 'using REFIID=const int&;using REFGUID=const int&;',
-           'constexpr int32_t S_OK=0,D3D_OK=0,S_FALSE=1,E_POINTER=-1,E_NOINTERFACE=-2,D3DERR_INVALIDCALL=-3,E_OUTOFMEMORY=-4,D3DERR_NOTFOUND=-5,D3DERR_MOREDATA=-6,D3DERR_NOTAVAILABLE=-7;',
+           'constexpr int32_t S_OK=0,D3D_OK=0,S_FALSE=1,E_POINTER=-1,E_NOINTERFACE=-2,D3DERR_INVALIDCALL=-3,E_OUTOFMEMORY=-4,D3DERR_NOTFOUND=-5,D3DERR_MOREDATA=-6,D3DERR_NOTAVAILABLE=-7,D3DERR_DEVICELOST=-8,D3DERR_DEVICENOTRESET=-9;',
            '#define SUCCEEDED(hr) ((hr)>=0)', '#define FAILED(hr) ((hr)<0)', 'template<class T>struct IID;', '#define __uuidof(T) IID<T>::value',
            'constexpr unsigned D3DRTYPE_SURFACE=1,D3DRTYPE_VOLUME=2,D3DRTYPE_TEXTURE=3,D3DRTYPE_VOLUMETEXTURE=4,D3DRTYPE_CUBETEXTURE=5,D3DRTYPE_VERTEXBUFFER=6,D3DRTYPE_INDEXBUFFER=7;']
     out += [f'using {k}={v};' for k, v in SCALARS.items() if k != 'float']
