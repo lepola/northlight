@@ -232,6 +232,7 @@ struct StreamCore {
     // 0.3.204 (task 21): Diagnostics split timers. timing is the game thread's own copy of the Diagnostics switch, refreshed at each Present (StreamDevice::presentCommon);
     // timingN counts the generated calls for the 1-in-16 sampling. Both are game-thread only: the replay thread never runs a game-facing method or a Lock/Unlock path.
     bool timing=false;unsigned timingN=0;
+    std::uint64_t clockNs=0;   // the cost of one nowNs() as the scopes see it (measured once at the first timed Present), subtracted from every timed span
     std::uint64_t frameNo=0;         // game thread: Presents so far (the idle clock of buffer shadows)
     DWORD (*readBackLock)()=nullptr;             // flags of the stream's own READONLY read-backs of buffers (NorthlightUpload::readBackLock in the DLL); null = READONLY
     void (*logLine)(const char*)=nullptr;        // diagnostics sink (renderer.cpp's logf); may be null
@@ -273,16 +274,16 @@ inline Queue& ProxyBase::streamQueue(){return core->q;}
 // 0.3.204 (task 21): game-thread split timers, active only while core.timing (Diagnostics on); off: one bool test. Waits (sync, backpressure, present) are subtracted so they stay in their own counters.
 inline std::uint64_t gameWaitsNs(const Counters& s){return get(s.syncNs)+get(s.backpressureNs)+get(s.presentNs);}
 struct CallScope {   // 1 in 16 generated method bodies: 16 x (elapsed - waits - snapshot capture) into recordSampledNs
-    Counters* st=nullptr;std::uint64_t t0=0,w0=0;std::uint16_t id=0;
-    CallScope(StreamCore& c,std::uint16_t cmd){if(c.timing&&(++c.timingN&15)==0){st=&c.q.stats;id=cmd<kMaxCmdIds?cmd:0;w0=gameWaitsNs(*st)+get(st->snapNs);t0=nowNs();}}
+    Counters* st=nullptr;std::uint64_t t0=0,w0=0,clock=0;std::uint16_t id=0;
+    CallScope(StreamCore& c,std::uint16_t cmd){if(c.timing&&(++c.timingN&15)==0){st=&c.q.stats;clock=c.clockNs;id=cmd<kMaxCmdIds?cmd:0;w0=gameWaitsNs(*st)+get(st->snapNs);t0=nowNs();}}
     CallScope(const CallScope&)=delete;CallScope& operator=(const CallScope&)=delete;
-    ~CallScope(){if(st){const std::uint64_t e=nowNs()-t0,w=gameWaitsNs(*st)+get(st->snapNs)-w0,ns=(e>w?e-w:0)*16;own(st->recordSampledNs,ns);own(st->cmdSampledNs[id],ns);own(st->cmdSamples[id]);}}
+    ~CallScope(){if(st){const std::uint64_t e0=nowNs()-t0,e=e0>clock?e0-clock:0,w=gameWaitsNs(*st)+get(st->snapNs)-w0,ns=(e>w?e-w:0)*16;own(st->recordSampledNs,ns);own(st->cmdSampledNs[id],ns);own(st->cmdSamples[id]);}}
 };
 struct LockScope {   // every buffer/image Lock or Unlock: elapsed minus the waits inside into lockNs
-    Counters* st=nullptr;std::uint64_t t0=0,w0=0;
-    explicit LockScope(StreamCore& c){if(c.timing){st=&c.q.stats;w0=gameWaitsNs(*st);t0=nowNs();}}
+    Counters* st=nullptr;std::uint64_t t0=0,w0=0,clock=0;
+    explicit LockScope(StreamCore& c){if(c.timing){st=&c.q.stats;clock=c.clockNs;w0=gameWaitsNs(*st);t0=nowNs();}}
     LockScope(const LockScope&)=delete;LockScope& operator=(const LockScope&)=delete;
-    ~LockScope(){if(st){const std::uint64_t e=nowNs()-t0,w=gameWaitsNs(*st)-w0;own(st->lockNs,e>w?e-w:0);}}
+    ~LockScope(){if(st){const std::uint64_t e0=nowNs()-t0,e=e0>clock?e0-clock:0,w=gameWaitsNs(*st)-w0;own(st->lockNs,e>w?e-w:0);}}
 };
 inline CallScope ProxyBase::callScope(std::uint16_t id){return CallScope(*core,id);}
 inline void ProxyBase::pinDevice(){if(core->game)core->game->AddRef();}

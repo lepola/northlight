@@ -423,7 +423,7 @@ private:
              double(cm-lastCmds_)*inv2,double(fl-lastFiltered_)*inv2,double(an-lastAnswered_)*inv2,double(co-lastCoop_)*inv2,double(sc-lastSyncCalls_)*inv2,double(dr-lastDirect_)*inv2);
          // 0.3.204 (task 21, Diagnostics on only): where the game thread's time goes: Lock/Unlock work (waits excluded) and the MB they queued, generated-call recording (sampled 1 in 16, waits excluded), snapshot capture, Present bookkeeping.
          {const std::uint64_t lk=get(s.lockNs),rc=get(s.recordSampledNs),sn=get(s.snapNs),pb=get(s.presentBookNs),lb=get(s.lockRecordedBytes);
-          if(lk|rc|sn|pb)put(buf,n," split[per frame]: lockMs=%.3f lockMB=%.2f recordMs~=%.3f(1/16) snapMs=%.3f presentMs=%.3f",double(lk-lastLockNs_)/1e6*inv2,double(lb-lastLockBytes_)/1048576.0*inv2,double(rc-lastRecordNs_)/1e6*inv2,double(sn-lastSnapNs_)/1e6*inv2,double(pb-lastPresentBookNs_)/1e6*inv2);
+          if(lk|rc|sn|pb)put(buf,n," split[per frame]: lockMs=%.3f lockMB=%.2f recordMs~=%.3f(1/16) snapMs=%.3f presentMs=%.3f clockNs=%llu",double(lk-lastLockNs_)/1e6*inv2,double(lb-lastLockBytes_)/1048576.0*inv2,double(rc-lastRecordNs_)/1e6*inv2,double(sn-lastSnapNs_)/1e6*inv2,double(pb-lastPresentBookNs_)/1e6*inv2,(unsigned long long)core.clockNs);
           lastLockNs_=lk;lastRecordNs_=rc;lastSnapNs_=sn;lastPresentBookNs_=pb;lastLockBytes_=lb;}
          lastGameNs_=gNs;lastGameWait_=gW;lastPresentNs_=pNs;lastSyncNs_=sNs;lastBpNs_=bNs;lastCmds_=cm;lastFiltered_=fl;lastDirect_=dr;lastAnswered_=an;lastCoop_=co;lastSyncCalls_=sc;}
         {const Memory m=memory();put(buf,n," memMB=%.1f(queue %.1f, bufShadow %.1f, texShadow %.1f, snapshots %.2f)",m.total()/1048576.0,m.queue/1048576.0,m.bufferShadows/1048576.0,m.textureShadows/1048576.0,m.snapshots/1048576.0);}
