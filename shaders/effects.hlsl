@@ -174,17 +174,28 @@ float3 BrightTap(float3 c, float3 sum)
     return mad(c, saturate(mad(dot(c, float3(0.2126, 0.7152, 0.0722)), 1.0 / 0.28, -0.72 / 0.28)), sum);
 }
 
-float4 AOContactBloom(float2 uv : TEXCOORD0) : COLOR0
+// Composite's bloom taps: the centre (x4) and 4 px along each axis. Scene has one level,
+// so tex2D (texld, before any flow control) reads what tex2Dlod does, in fewer slots.
+float3 ContactBloomRgb(float2 uv)
 {
-    // Composite's bloom taps: the centre (x4) and 4 px along each axis. Scene has one level,
-    // so tex2D (texld, before any flow control) reads what tex2Dlod does, in fewer slots.
     float4 b = ImageAndClip.xyxy * float4(4, 0, 0, 4);
     float3 bloom = BrightTap(tex2D(Scene, uv).rgb, 0) * 4.0;
     bloom = BrightTap(tex2D(Scene, uv + b.xy).rgb, bloom);
     bloom = BrightTap(tex2D(Scene, uv - b.xy).rgb, bloom);
     bloom = BrightTap(tex2D(Scene, uv + b.zw).rgb, bloom);
     bloom = BrightTap(tex2D(Scene, uv - b.zw).rgb, bloom);
-    return float4(bloom * (0.125 * Options.x), AOImpl(uv, false).a);
+    return bloom * (0.125 * Options.x);
+}
+
+float4 AOContactBloom(float2 uv : TEXCOORD0) : COLOR0
+{
+    return float4(ContactBloomRgb(uv), AOImpl(uv, false).a);
+}
+
+// 0.3.201 (task 18) ContactAO=0 with a ready world: the same bloom with AO 1 and no depth work; the AO pass and AOBlur do not run.
+float4 ContactBloom(float2 uv : TEXCOORD0) : COLOR0
+{
+    return float4(ContactBloomRgb(uv), 1);
 }
 
 float3 NeighbourNormal(float2 uv, float3 p)

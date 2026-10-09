@@ -1,5 +1,5 @@
 {
-  "source_sha256": "3a479155aca3ff9d4e852eb48992ec4aa677a1e3e652a2e19aa5ee42bff22b01",
+  "source_sha256": "3c4ebf55f84663efe1aa13c7010171ffa70ae611dac561be800bb8fd77ba64e9",
   "target": "ps_3_0",
   "shaders": {
     "AO": {
@@ -57,6 +57,20 @@
         "rep": 1,
         "break": 1,
         "endrep": 1
+      }
+    },
+    "ContactBloom": {
+      "bytes": 932,
+      "sha256": "497c6c2c8e74e44e3cfbf6551fa7ac316750e3ccb63d78d94e29459ec36955b0",
+      "static_instruction_slots": 35,
+      "temporary_registers": 3,
+      "instructions": {
+        "mul": 4,
+        "texld": 5,
+        "dp3": 5,
+        "mad": 10,
+        "mov": 7,
+        "add": 4
       }
     },
     "AOBlur": {

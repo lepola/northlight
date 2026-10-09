@@ -282,7 +282,7 @@ class Device final : public GuardedMirrorDevice {
     IDirect3DTexture9 *scene = nullptr, *depthTex = nullptr, *ao = nullptr, *aoRaw = nullptr;
     IDirect3DSurface9 *sceneSurface = nullptr, *aoSurface = nullptr, *aoRawSurface = nullptr, *worldDepth = nullptr;
     D3DSURFACE_DESC worldDepthDesc={};bool worldDepthDescKnown=false; // 0.3.196 (task 12): worldDepth's desc (a held reference, so the object and its desc are fixed); cleared when worldDepth is dropped
-    IDirect3DPixelShader9 *aoPS = nullptr, *aoBlurPS = nullptr, *aoContactBloomPS = nullptr, *compositePS = nullptr;
+    IDirect3DPixelShader9 *aoPS = nullptr, *aoBlurPS = nullptr, *aoContactBloomPS = nullptr, *contactBloomPS = nullptr, *compositePS = nullptr;
     // Low bits: 1 terrain, 2 UI. kWaterTag: the water renderer holds a mask shader
     // for it (set at registration, where the water map changes), so non-water
     // draws need no second hash lookup.
@@ -407,7 +407,7 @@ private:
     void releaseResources() {
         stateBlocks.clear();clearFrame();
         drop(sceneSurface); drop(aoSurface); drop(aoRawSurface); drop(scene); drop(depthTex); drop(ao); drop(aoRaw);
-        drop(aoPS); drop(aoBlurPS); drop(aoContactBloomPS); drop(compositePS); width = height = 0;
+        drop(aoPS); drop(aoBlurPS); drop(aoContactBloomPS); drop(contactBloomPS); drop(compositePS); width = height = 0;
     }
     bool error(HRESULT hr, const char* stage) {
         if (SUCCEEDED(hr)) return false;
@@ -425,6 +425,7 @@ private:
         if (!aoPS && error(ext->CreatePixelShader(kAoShader, &aoPS), "AO shader")) return false;
         if (!aoContactBloomPS && error(ext->CreatePixelShader(kAoContactBloomShader, &aoContactBloomPS), "AO contact bloom shader")) return false;
         if (!aoBlurPS && error(ext->CreatePixelShader(kAoBlurShader, &aoBlurPS), "AO blur shader")) return false;
+        if (!contactBloomPS && error(ext->CreatePixelShader(kContactBloomShader, &contactBloomPS), "contact bloom shader")) return false;
         if (!compositePS && error(ext->CreatePixelShader(kCompositeShader, &compositePS), "composite shader")) return false;
         if (error(ext->CreateTexture(w, h, 1, D3DUSAGE_RENDERTARGET, format, D3DPOOL_DEFAULT, &scene, nullptr), "scene texture")) return false;
         if (!depthTex && error(ext->CreateTexture(w, h, 1, D3DUSAGE_DEPTHSTENCIL, (D3DFORMAT)MAKEFOURCC('I','N','T','Z'), D3DPOOL_DEFAULT, &depthTex, nullptr), "INTZ depth texture")) return false;
@@ -615,17 +616,33 @@ private:
             ext->SetTexture(0,scene); ext->SetTexture(1,depthTex); ext->SetTexture(2,ambient);
         };
         bindEffects(nullptr);
-        if (error(ext->SetRenderTarget(0,aoRawSurface),"AO render target")) return;
-        ext->SetPixelShader(constants[7]==0.f?aoContactBloomPS:aoPS);
-        if (error(quad(width/2,height/2),"AO pass")) return;
-        gpuProfile->mark("AO");
-        // 0.3.201 (task 18): the raw IGN-rotated AO is denoised by a half-resolution bilateral pass into `ao`,
-        // which every consumer (legacy composite, world fold) keeps reading. s2 is released afterwards.
-        if (error(ext->SetRenderTarget(0,aoSurface),"AO blur render target")) return;
-        bindEffects(aoRaw);ext->SetPixelShader(aoBlurPS);
-        if (error(quad(width/2,height/2),"AO blur pass")) return;
-        ext->SetTexture(2,nullptr);
-        gpuProfile->mark("AOBlur");effectsBuckets.mark(Bucket::AO);
+        if (!contactAO) {
+            // 0.3.201 (task 18) ContactAO=0: no AO and no AOBlur. A ready world gets the bloom with AO 1 straight into `ao` (ContactBloom);
+            // the legacy composite gets a neutral ambient (AO 1, no bounce) from a clear. SetRenderTarget resets the viewport; scissor and depth are off (effectState).
+            if (constants[7]==0.f) {
+                if (error(ext->SetRenderTarget(0,aoSurface),"contact bloom render target")) return;
+                ext->SetPixelShader(contactBloomPS);
+                if (error(quad(width/2,height/2),"contact bloom pass")) return;
+                gpuProfile->mark("ContactBloom");
+            } else {
+                if (error(ext->SetRenderTarget(0,aoSurface),"neutral AO render target")) return;
+                if (error(ext->Clear(0,nullptr,D3DCLEAR_TARGET,D3DCOLOR_ARGB(255,0,0,0),1.f,0),"neutral AO clear")) return;
+                gpuProfile->mark("AOClear");
+            }
+            effectsBuckets.mark(Bucket::AO);
+        } else {
+            if (error(ext->SetRenderTarget(0,aoRawSurface),"AO render target")) return;
+            ext->SetPixelShader(constants[7]==0.f?aoContactBloomPS:aoPS);
+            if (error(quad(width/2,height/2),"AO pass")) return;
+            gpuProfile->mark("AO");
+            // 0.3.201 (task 18): the raw IGN-rotated AO is denoised by a half-resolution bilateral pass into `ao`,
+            // which every consumer (legacy composite, world fold) keeps reading. s2 is released afterwards.
+            if (error(ext->SetRenderTarget(0,aoSurface),"AO blur render target")) return;
+            bindEffects(aoRaw);ext->SetPixelShader(aoBlurPS);
+            if (error(quad(width/2,height/2),"AO blur pass")) return;
+            ext->SetTexture(2,nullptr);
+            gpuProfile->mark("AOBlur");effectsBuckets.mark(Bucket::AO);
+        }
         // 0.3.174 FOLD: with a ready world and no effect debug view, WorldComposite applies the
         // AO and bloom (AOContactBloom: bloom rgb, AO alpha) to the scene copy itself, so the
         // full-resolution composite and the world's colour copy are skipped. LEGACY (any other
@@ -807,7 +824,7 @@ private:
     // rise, never inside a frame: at the end of finishFrameImpl (after F9/F10/F12, setEffects and the
     // retry's failed=false; clearFrame runs before that retry, so it is not the place), in Reset
     // (failed=false) and at device creation. Off: every gate open, the 0.3.184 per-draw work.
-    NorthlightDrawGates::Frame drawGates;bool frameDrawGates=true;
+    NorthlightDrawGates::Frame drawGates;bool frameDrawGates=true;bool contactAO=true; /* 0.3.201 (task 18): ContactAO, read once at device creation */
     LONGLONG cpuDrawHooks=0; /* RenderProfile sample frames: per-draw work outside prepareDraw (CPU profile drawHooks=) */
     LONGLONG* hookTimer=nullptr; /* &cpuDrawHooks on a timed RenderProfile sample frame (frame, gateUntimed: set before the latch) */
     void latchDrawGates(){
@@ -1048,6 +1065,7 @@ public:
         parent->AddRef(); QueryPerformanceFrequency(&cpuFrequency); gpuProfile=std::make_unique<NorthlightGpuProfile>(ext);gpuTimer=std::make_unique<NorthlightGpuFrameTimer>(ext); world=std::make_unique<WorldRenderer>(ext);world->setEffectsBuckets(&effectsBuckets);
         world->setConstantEpochSource({&mirrorState.constantEpoch,&mirrorState}); /* 0.3.180 (C1): read in place under the draw's gate */
         char skyRoot[MAX_PATH*3];WideCharToMultiByte(CP_UTF8,0,rootPath,-1,skyRoot,sizeof skyRoot,nullptr,nullptr);celestialDiscs=std::make_unique<NorthlightCelestialDiscRenderer>(ext,std::string(skyRoot)+"world-cache/celestial");celestialDiscs->setTerrainSource([this]{return world->celestialTerrainGeneration();},[this](unsigned body,const float* matrix){return world->drawCelestialTerrain(body,matrix);},[this](unsigned body){world->noteCelestialTerrainReuse(body);});celestialDiscs->setIdentityMap([this](std::uintptr_t exposed){return mirrorResources.rawOf(exposed,!mirrorState.enabled);});shadowBlobs=std::make_unique<NorthlightShadowBlobFilter>(ext,world->blobShadowStrength());shadowBlobs->setTexturePeek([](void* e,DWORD stage,IDirect3DBaseTexture9*& out){return static_cast<ExtensionDevice*>(e)->peekTexture(stage,out);},ext); /* 0.3.196 (task 12): borrowed stage-0 identity */water=std::make_unique<NorthlightWaterRenderer>(ext); logf("D3D9 device wrapped. Ctrl+Shift+F7 fog; F8 GI; F9 shadows; F10 all effects; F12 world debug (all with Ctrl+Shift). F11 unassigned. Components start ON; GI cache stays warm.");
+        contactAO=world->contactAO(); /* 0.3.201 (task 18) */
         frameDrawGates=world->frameDrawGates();latchDrawGates(); /* 0.3.187: after the renderers exist */
         {wchar_t markers[MAX_PATH];if(swprintf(markers,MAX_PATH,L"%lsnorthlight-frame-markers.txt",rootPath)>0&&GetFileAttributesW(markers)!=INVALID_FILE_ATTRIBUTES){frameMarkers=true;logf("FRAMEMARKERS on: E after the world effects, P before Present");}}
         weatherDetect.sink=&weatherLog; /* 0.3.198 (rain) */

@@ -499,6 +499,42 @@ def audit_wiring():
     return True
 
 
+def audit_contact_ao():
+    """0.3.201 (task 18) ContactAO=0: no AO pass and no AOBlur; a ready world gets ContactBloom (bloom, AO 1) straight into ao,
+    the legacy path a neutral clear; ContactAO=1 keeps the raw AO then AOBlur sequence checked by audit_wiring."""
+    text = fp.src('renderer.cpp').read_text()
+    fn = text[text.index('bindEffects(nullptr);\n        if (!contactAO) {'):text.index('// 0.3.174 FOLD:')]
+    off, on = fn.split('        } else {\n            if (error(ext->SetRenderTarget(0,aoRawSurface)', 1)
+    on = '            if (error(ext->SetRenderTarget(0,aoRawSurface)' + on
+    assert 'constants[7]==0.f' in off
+    ready, legacy = off.split('} else {', 1)
+    assert 'SetRenderTarget(0,aoSurface)' in ready and 'SetPixelShader(contactBloomPS)' in ready and 'quad(width/2,height/2)' in ready
+    assert 'aoRaw' not in off and 'aoPS' not in off and 'aoBlurPS' not in off and 'aoContactBloomPS' not in off, 'off path runs neither AO nor AOBlur'
+    assert 'SetRenderTarget(0,aoSurface)' in legacy and 'ext->Clear(0,nullptr,D3DCLEAR_TARGET,D3DCOLOR_ARGB(255,0,0,0),1.f,0)' in legacy
+    assert 'quad(' not in legacy and 'D3DCLEAR_ZBUFFER' not in legacy and 'D3DCLEAR_STENCIL' not in legacy
+    assert off.count('effectsBuckets.mark(Bucket::AO)') == 1 and on.count('effectsBuckets.mark(Bucket::AO)') == 1
+    assert 'SetPixelShader(constants[7]==0.f?aoContactBloomPS:aoPS)' in on and 'SetPixelShader(aoBlurPS)' in on and 'contactBloomPS' not in on
+    assert 'bool contactAO=true;' in text and 'contactAO=world->contactAO();' in text
+    assert 'drop(contactBloomPS)' in text and 'CreatePixelShader(kContactBloomShader, &contactBloomPS)' in text
+    assert 'bool contactAO()const{return quality.contactAO!=0;}' in fp.src('world_renderer.h').read_text()
+    hlsl = fp.src('effects.hlsl').read_text()
+    cb = hlsl[hlsl.index('float4 ContactBloom('):hlsl.index('float3 NeighbourNormal(')]
+    assert 'float4 ContactBloom(float2 uv : TEXCOORD0) : COLOR0' in hlsl and 'return float4(ContactBloomRgb(uv), 1);' in cb
+    assert 'AOImpl' not in cb and 'ReadDepth' not in cb
+    assert 'return float4(ContactBloomRgb(uv), AOImpl(uv, false).a);' in hlsl
+    build = json.loads(fp.src('shader-build.json').read_text())['shaders']
+    c = build['ContactBloom']
+    assert c['static_instruction_slots'] <= 512 and c['temporary_registers'] <= 32 and set(c['instructions']) <= {'mul', 'texld', 'dp3', 'mad', 'mov', 'add'}, c
+    assert re.search(r'\("ContactBloom",\s*"kContactBloomShader"\)', (fp.SCRIPTS/'shaders'/'compile_shaders.py').read_text())
+    ini = (fp.REPO/'renderer'/'windows-package'/'northlight-quality.ini').read_text()
+    readme = (fp.REPO/'renderer'/'windows-package'/'README.txt').read_text()
+    assert ';ContactAO=1' in ini and 'Allowed 0..1. 1 / 1 / 1' in ini[ini.index(';ContactAO=1')-400:ini.index(';ContactAO=1')]
+    assert re.search(r'^  ContactAO +1 / 1 / 1 ', readme, re.M) and 'ContactAO' in (fp.REPO/'README.md').read_text()
+    q = fp.src('quality_settings.h').read_text()
+    assert '{"ContactAO",&Settings::contactAO,0,1,{1,1,1}}, /* 0.3.201 (task 18) */\n};' in q and 'unsigned contactAO=1;' in q
+    return {'contact_bloom_slots': c['static_instruction_slots']}
+
+
 def run():
     pattern = check_pattern()
     silhouette = check_silhouette()
@@ -506,10 +542,11 @@ def run():
     early = check_early_out()
     shader = audit_source()
     wiring = audit_wiring()
+    contact = audit_contact_ao()
     checks = {'residual_reduced_4x': all(r['blurred_residual_rms'] <= r['raw_residual_rms']/RES_RATIO for r in pattern if r['class'] == 'lowfreq'),
               'grooved_residual_reduced': all(r['blurred_residual_rms'] <= min(r['raw_residual_rms']/GROOVE_RATIO, r['noise_free_residual_rms']) for r in pattern if r['class'] == 'groove'),
               'mean_preserved': all(abs(r['mean_shift']) < MEAN_TOL for r in pattern),
-              'silhouette_no_bleed': True, 'passthrough': True, 'early_out_identical': True, 'shader_source': True, 'renderer_wiring': wiring}
+              'silhouette_no_bleed': True, 'passthrough': True, 'early_out_identical': True, 'shader_source': True, 'renderer_wiring': wiring, 'contact_ao_off_path': bool(contact)}
     report = {'result': 'pass', 'game_launched': False, 'gpu_test': False, 'checks': checks, 'pattern': pattern,
               'silhouette': silhouette, 'passthrough': passthrough, 'early_out': early, 'shader': shader,
               'test_sha256': hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),

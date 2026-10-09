@@ -67,6 +67,7 @@ Every effect below is on by default and is drawn on top of the game's own frame.
   `StreamFramesAhead` (1..3, default 2) sets how many frames the game may run ahead of that thread (1 = as in 0.3.199);
   with `StreamFrameSkip=1` (default) a thread two whole frames behind skips drawing the older frame (state and uploads still
   apply; frames that render to textures, use occlusion queries or copy the picture are always drawn), so the game does not wait for it.
+  `ContactAO=1` (default, every preset) keeps the screen-space contact shading in creases and corners; `0` skips it and its denoise pass (about 0.5 ms of GPU time) and leaves the bloom as it is.
 - **Platforms and install.** macOS with WoWSilicon (preloaded as `mods/d3d9.dll`) and Windows (a
   game-folder `d3d9.dll` on the bundled DXVK 3.1.1, with DXVK 2.7.1 as the `dxvk2` alternative backend for AMD RX 5000/6000 and
   older drivers (`Install.cmd --backend dxvk2`; on a driver DXVK 3 does not support, install with `--backend dxvk2`, Northlight never switches by itself; a reinstall without `--backend` keeps `dxvk2` or `native`), the system D3D9, or an existing `d3d9.dll`). The
