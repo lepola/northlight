@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Build StormLib for the player packages with zig 0.15.2 (never runs a Windows binary).
 
-    python3 scripts/build_stormlib.py                    # both targets -> out/stormlib/<target>/
-    python3 scripts/build_stormlib.py --target windows   # or mac
+    python3 scripts/build_stormlib.py                    # every target -> out/stormlib/<target>/
+    python3 scripts/build_stormlib.py --target windows   # or mac, linux
     python3 scripts/build_stormlib.py --verify FILE      # check a built library only
 
 Targets (sources from tools/StormLib-master/CMakeLists.txt, read-only):
@@ -10,7 +10,9 @@ Targets (sources from tools/StormLib-master/CMakeLists.txt, read-only):
            exports from src/DllMain.def, -lwininet, stripped, no PDB  -> StormLib.dll
   mac      aarch64-macos.12.0, bundled zlib/bzip2 (their headers shadow the SDK's, which
            StormPort.h forces on Apple), install name @rpath/libstorm.dylib -> libstorm.dylib
-Both: -O2 -D_7ZIP_ST -DBZ_STRICT_ANSI -DNDEBUG, no debug info. The same inputs give the same
+  linux    x86_64-linux-gnu.2.17 (glibc 2.17 or newer), bundled zlib/bzip2, libc++ linked in,
+           soname libstorm.so -> libstorm.so
+All: -O2 -D_7ZIP_ST -DBZ_STRICT_ANSI -DNDEBUG, no debug info. The same inputs give the same
 bytes (the build runs twice under --check-deterministic). The source tree is identified by
 tree_sha256 (every file under src/ plus CMakeLists.txt and LICENSE); renderer/package-pins.json
 pins it, and a mismatch refuses the build.
@@ -19,9 +21,13 @@ Verification (stdlib parse, nothing is loaded or executed):
   PE32+ AMD64 DLL; exports the 9 functions mpq.py binds; imports only KERNEL32, USER32,
   WININET and api-ms-win-crt-*; KERNEL32 has CreateFileW and no CreateFileA.
   Mach-O arm64 dylib; id @rpath/libstorm.dylib; links only /usr/lib/libSystem.B.dylib; exports
-  the 9 functions. Neither may embed a build path (the unstripped dylib names the zig cache).
+  the 9 functions.
+  ELF x86-64 shared object; soname libstorm.so; needs only glibc's own libraries (libc, libm,
+  libpthread, libdl, librt, ld-linux) and no symbol version newer than GLIBC_2.17; exports the 9
+  functions and nothing outside StormLib's API (LINUX_EXPORTS, a linker version script). None may embed a build path (the unstripped dylib names the zig cache).
 """
 import argparse
+import fnmatch
 import hashlib
 import json
 import os
@@ -46,7 +52,14 @@ TARGETS = {
                 'extra': ['src/DllMain.c', 'src/DllMain.def'], 'libs': ['-lwininet']},
     'mac': {'name': 'libstorm.dylib', 'zig': 'aarch64-macos.12.0',
             'flags': ['-s', '-Wl,-install_name,@rpath/libstorm.dylib'], 'extra': [], 'libs': []},
+    'linux': {'name': 'libstorm.so', 'zig': 'x86_64-linux-gnu.2.17',
+              'flags': ['-s', '-fPIC', '-Wl,-soname,libstorm.so'], 'extra': [], 'libs': [], 'exports': 'linux.map'},
 }
+# ELF exports every global symbol and resolves through the process's global scope: without this, StormLib's
+# bundled zlib (inflate, crc32, ...) would bind to the zlib linked into libpython, and libc++ would leak too.
+# Only StormLib's API stays visible (SErr*: its POSIX error emulation).
+LINUX_EXPORTS = ['SFile*', 'SComp*', 'SListFile*', 'SMem*', 'SErr*']
+LINUX_MAP = '{\n  global:\n' + ''.join(f'    {n};\n' for n in LINUX_EXPORTS) + '  local: *;\n};\n'
 PINS = fp.RENDERER / 'package-pins.json'
 
 
@@ -92,7 +105,11 @@ def build(target, out_dir, root=None, cache=None):
     for stale in out_dir.iterdir():
         if stale.is_file():
             stale.unlink()
-    cmd = [str(fp.zig()), 'c++', '-target', spec['zig'], '-shared', *COMMON, *spec['flags'],
+    flags = list(spec['flags'])
+    if spec.get('exports'):   # a linker version script, written next to the result and removed with the extras
+        (out_dir / spec['exports']).write_text(LINUX_MAP, encoding='ascii')
+        flags.append(f"-Wl,--version-script={out_dir / spec['exports']}")
+    cmd = [str(fp.zig()), 'c++', '-target', spec['zig'], '-shared', *COMMON, *flags,
            *sources(root), *spec['extra'], *spec['libs'], '-o', str(result)]
     env = fp.zig_env()   # both caches outside the (read-only) source tree
     if cache:
@@ -212,12 +229,80 @@ def verify_mac(path):
     return problems, {'format': 'Mach-O', 'machine': 'arm64', 'exports': len(info['exports']), 'dylibs': info['dylibs']}
 
 
+# ---- ELF ----
+
+LINUX_NEEDED = {'libc.so.6', 'libm.so.6', 'libpthread.so.0', 'libdl.so.2', 'librt.so.1', 'ld-linux-x86-64.so.2'}
+GLIBC_FLOOR = (2, 17)   # the zig target's glibc: every distribution since 2014 has at least this
+
+
+def elf_info(data):
+    """{'machine','type','soname','needed','exports','glibc'} of a 64-bit little-endian ELF (read-only parse)."""
+    if data[:4] != b'\x7fELF' or data[4] != 2 or data[5] != 1:
+        raise ValueError('not a 64-bit little-endian ELF')
+    etype, machine = struct.unpack_from('<HH', data, 16)
+    shoff, = struct.unpack_from('<Q', data, 40)
+    shentsize, shnum = struct.unpack_from('<HH', data, 58)
+    sections = [struct.unpack_from('<IIQQQQIIQQ', data, shoff + shentsize * i) for i in range(shnum)]
+
+    def cstr(at):
+        return data[at:data.index(b'\0', at)].decode('ascii', 'replace')
+
+    needed, soname, exports, glibc = [], None, [], []
+    for _, kind, _, _, offset, size, link, _, _, entsize in sections:
+        strtab = sections[link][4] if link < len(sections) else 0
+        if kind == 6:   # SHT_DYNAMIC
+            for at in range(offset, offset + size, entsize or 16):
+                tag, value = struct.unpack_from('<qQ', data, at)
+                if tag == 1:
+                    needed.append(cstr(strtab + value))
+                elif tag == 14:
+                    soname = cstr(strtab + value)
+        elif kind == 11:   # SHT_DYNSYM
+            for at in range(offset + 24, offset + size, entsize or 24):   # entry 0 is the null symbol
+                name, info, _, shndx = struct.unpack_from('<IBBH', data, at)
+                if info >> 4 in (1, 2) and shndx:   # STB_GLOBAL/STB_WEAK, defined here
+                    exports.append(cstr(strtab + name))
+        elif kind == 0x6ffffffe:   # SHT_GNU_verneed: the symbol versions required from each library
+            at = offset
+            while True:
+                _, count, _, aux, following = struct.unpack_from('<HHIII', data, at)
+                vat = at + aux
+                for _ in range(count):
+                    _, _, _, vname, vnext = struct.unpack_from('<IHHII', data, vat)
+                    glibc.append(cstr(strtab + vname))
+                    vat += vnext
+                if not following:
+                    break
+                at += following
+    return {'machine': machine, 'type': etype, 'soname': soname, 'needed': needed, 'exports': exports, 'versions': glibc}
+
+
+def verify_linux(path):
+    info = elf_info(Path(path).read_bytes())
+    problems = []
+    if info['machine'] != 62 or info['type'] != 3:
+        problems.append(f"not an x86-64 shared object (machine {info['machine']}, type {info['type']})")
+    if info['soname'] != 'libstorm.so':
+        problems.append(f"soname {info['soname']}")
+    problems += [f'links {d}' for d in info['needed'] if d not in LINUX_NEEDED]
+    problems += [f'missing export {n}' for n in REQUIRED_EXPORTS if n not in info['exports']]
+    problems += [f'exports {n} (not StormLib API)' for n in info['exports']
+                 if not any(fnmatch.fnmatchcase(n, pattern) for pattern in LINUX_EXPORTS)]
+    for v in info['versions']:
+        m = re.fullmatch(r'GLIBC_(\d+)\.(\d+)(?:\.\d+)?', v)
+        if m and (int(m.group(1)), int(m.group(2))) > GLIBC_FLOOR:
+            problems.append(f'needs {v} (newer than glibc {GLIBC_FLOOR[0]}.{GLIBC_FLOOR[1]})')
+    return problems, {'format': 'ELF', 'machine': 'x86-64', 'exports': len(info['exports']), 'needed': info['needed'],
+                      'glibc': sorted({v for v in info['versions'] if v.startswith('GLIBC_')})}
+
+
 BUILD_PATHS = re.compile(rb'/Users/|/private/|/home/|/tmp/|zig-cache|[A-Za-z]:\\\\Users', re.I)  # layout: allow-machine-path
 
 
 def verify(path):
     data = Path(path).read_bytes()
-    problems, info = verify_windows(path) if data[:2] == b'MZ' else verify_mac(path)
+    problems, info = verify_windows(path) if data[:2] == b'MZ' else verify_linux(path) if data[:4] == b'\x7fELF' \
+        else verify_mac(path)
     # A debug map or object path would carry the build machine's folders into the package.
     problems += sorted({'embedded build path ' + m.group().decode('latin-1') for m in BUILD_PATHS.finditer(data)})
     return problems, info
