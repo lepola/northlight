@@ -543,6 +543,9 @@ inline HRESULT lockImage(ProxyBase& self,ProxyBase& root,SubRes& sub,UINT route,
                 // 0.3.196 (task 12): a FRESH keep (a level WoW writes once and may never lock again) takes free room, or evicts never-re-locked keeps that are at least kFreshEvictAgeFrames
                 // old (never a re-locked shadow); otherwise it is skipped: not made, and the lock takes the staged path below (a Block recorded with the same bytes, no sync).
                 // A readback may still evict (fresh keeps first, then re-locked ones).
+                // 0.3.204 (task 21): thrash signal for the adaptive level-shadow cap: this level needs a readback because its shadow was evicted shortly ago (hot), or because its fresh keep was skipped for lack of room:
+                // one growth step if allowed (no pressure, interval), before room is made
+                if(readback&&sub.gone!=SubRes::GoneNone&&(sub.gone==SubRes::GoneSkipped||self.core->frameNo-sub.lastLockFrame<kShadowHotFrames))q.growTexShadowCap(self.core->frameNo);
                 const bool room=readback?makeRoomForShadow(*self.core,levelBytes,true,&sub):makeRoomForFreshKeep(*self.core,levelBytes,&sub);
                 if(!room){
                     if(readback){add(q.stats.texShadowRefused);add(q.stats.texShadowRefusedBytes,levelBytes);}
