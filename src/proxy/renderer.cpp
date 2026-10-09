@@ -40,6 +40,7 @@
 #include "draw_gates.h"
 #include "weather_state.h"
 #include "weather_detect.h"
+#include "particle_shader_patch.h"
 #include "translucent_depth.h"
 #include "log_rotation.h"
 #include "memory_guard.h"
@@ -324,6 +325,11 @@ class Device final : public GuardedMirrorDevice {
     // the composite relights that background and adds the particles back (green = 1-T, blue = touched). particleBgTried / particleBgOk are per frame. A frame may bind RT1 for particles at most kParticleRebindCap times.
     IDirect3DTexture9* particleBg=nullptr;IDirect3DSurface9* particleBgSurface=nullptr;D3DFORMAT particleBgFormat=D3DFMT_UNKNOWN;bool particleBgTried=false,particleBgOk=false,particleBgLogged=false;
     static constexpr unsigned kParticleRebindCap=24;
+    // 0.3.203 (particle mask): the game draws its particles with its own pixel shaders, so the mask comes from a patched variant of the bound one (particle_shader_patch.h: oC0 renamed,
+    // the mask written to oC1), built at the first eligible draw and cached per original shader and blend kind. particleGamePs: the game's shader (one reference) while its patched variant
+    // is bound for the draw; particlePatchedDraws and particlePatchRejects are the PARTICLES line's counters.
+    NorthlightParticleShaderPatch::Cache<ExtensionDevice,IDirect3DPixelShader9> particlePatched;
+    IDirect3DPixelShader9* particleGamePs=nullptr;unsigned particlePatchedDraws=0,particlePatchRejects[NorthlightParticleShaderPatch::ReasonCount]={};
     bool failed = false, projectionValid = false, key10 = false, key12=false;
     // 0.3.200 (frame markers): diagnostics only, while northlight-frame-markers.txt exists in the game folder at device creation: two 40x40
     // squares at the left edge whose colour cycles with the frame number. E (upper) is filled right after the world effects, P (lower) right
@@ -424,7 +430,7 @@ private:
     void releaseResources() {
         rainMrtUnbind();stateBlocks.clear();clearFrame();
         drop(sceneSurface); drop(aoSurface); drop(aoRawSurface); drop(scene); drop(depthTex); drop(ao); drop(aoRaw);drop(rainMaskMS);drop(rainMaskSurface);drop(rainMask);drop(rainDepth);drop(particleBgSurface);drop(particleBg);particleBgFormat=D3DFMT_UNKNOWN;rainMaskFailed=false; /* 0.3.202 (rain) */
-        drop(aoPS); drop(aoBlurPS); drop(aoContactBloomPS); drop(contactBloomPS); drop(compositePS);drop(rainMrtPS);drop(rainScrubPS);for(auto& ps:particlePS)drop(ps);particlePSFailed=false; width = height = 0;
+        drop(aoPS); drop(aoBlurPS); drop(aoContactBloomPS); drop(contactBloomPS); drop(compositePS);drop(rainMrtPS);drop(rainScrubPS);for(auto& ps:particlePS)drop(ps);particlePatched.clear();particlePSFailed=false; width = height = 0;
     }
     bool error(HRESULT hr, const char* stage) {
         if (SUCCEEDED(hr)) return false;
@@ -1036,7 +1042,8 @@ private:
         particleBgOk=true;return true;
     }
     // Everything that makes a rain draw (particle=false) or a translucent particle draw (particle=true) eligible for the mask, else a reason mask (bit 1: target/size/MSAA, 2: caps,
-    // 4: game vertex shader, 8: game pixel shader, 16: stage setup, 32: depth snapshot, 64: resources or RT1, 128: particle blend, 256: particle stage 0 has no texture, 512: no background snapshot, 1024: RT1 rebind cap):
+    // 4: game vertex shader, 8: game pixel shader (rain), 16: stage setup, 32: depth snapshot, 64: resources or RT1, 128: particle blend, 256: particle stage 0 has no texture, 512: no background snapshot, 1024: RT1 rebind cap,
+    // 2048: a particle draw's game pixel shader has no patched variant (the PARTICLES line says why)):
     // the draw is then made as it is. True: RT1 holds the mask target, the mask pixel shader and the MRT states are set (rainMrtEnd undoes them).
     // A particle draw outside the world (terrain, UI, water, another depth or viewport range) is no candidate: false, uncounted.
     bool rainMrtBegin(bool particle=false){
@@ -1045,6 +1052,7 @@ private:
         if(!rainMaskFrame){rainMaskFrame=true;rainMaskOk=rainMaskEligible();}
         if(!rainCapsChecked)rainMaskCaps();
         unsigned why=0;bool vsBound=false,psBound=false;unsigned vsModel=0;DWORD spec=0;unsigned variant=0;
+        IDirect3DPixelShader9* gamePs=nullptr,*patchedPs=nullptr;int patchKind=-1; /* particles with a game pixel shader: the bound shader (borrowed until the draw), the blend kind, the patched variant */
         DWORD st[9]={~0u,~0u,~0u,~0u,~0u,~0u,~0u,~0u,~0u}; /* color op/arg1/arg2, alpha op/arg1/arg2, stage 1 color op, texcoord index, texture transform */
         DWORD bl[4]={~0u,~0u,~0u,~0u}; /* particles: source and destination blend, blend op, alpha test */
         if(!rainMaskOk)why|=1;
@@ -1053,9 +1061,10 @@ private:
             IDirect3DVertexShader9* v=nullptr;IDirect3DPixelShader9* p=nullptr;
             const bool borrowed=ext->peekVertexShader(v);if(!borrowed&&FAILED(ext->GetVertexShader(&v)))v=nullptr;
             if(v){vsBound=true;auto it=vsMajor.find(v);vsModel=it==vsMajor.end()?0:it->second;}if(!borrowed)drop(v);
-            if(ext->peekPixelShader(p))psBound=true;else{if(SUCCEEDED(ext->GetPixelShader(&p))&&p)psBound=true;drop(p);}
-            if(vsBound&&(vsModel<1||vsModel>2))why|=4; /* vs_1_x/vs_2_x write the fixed oD0/oT0/oFog the ps_2_0 reads (the game's rain has one); vs_3_0 needs a ps_3_0 */
-            if(psBound)why|=8;
+            if(ext->peekPixelShader(p)){psBound=true;gamePs=p;}
+            else{if(SUCCEEDED(ext->GetPixelShader(&p))&&p){psBound=true;gamePs=p;}drop(p);} /* only the identity is kept: the device holds the bound shader alive until the draw replaces it */
+            if(vsBound&&(vsModel<1||vsModel>2)&&!(particle&&psBound))why|=4; /* vs_1_x/vs_2_x write the fixed oD0/oT0/oFog the ps_2_0 reads (the game's rain has one); vs_3_0 needs a ps_3_0. A particle draw with a game pixel shader keeps the game's own pair (its patched variant) */
+            if(psBound&&!particle)why|=8;
             if(!why||particle){ /* rain: stage 0 MODULATE texture x diffuse (colour and alpha), nothing on stage 1, no texture transform, no specular: what rainMrtPS reproduces. Particles: the same reads for the census, then their own rule */
                 static const struct{DWORD stage;D3DTEXTURESTAGESTATETYPE type;} reads[9]={{0,D3DTSS_COLOROP},{0,D3DTSS_COLORARG1},{0,D3DTSS_COLORARG2},{0,D3DTSS_ALPHAOP},{0,D3DTSS_ALPHAARG1},{0,D3DTSS_ALPHAARG2},{1,D3DTSS_COLOROP},{0,D3DTSS_TEXCOORDINDEX},{0,D3DTSS_TEXTURETRANSFORMFLAGS}};
                 bool known=SUCCEEDED(ext->GetRenderState(D3DRS_SPECULARENABLE,&spec));
@@ -1075,19 +1084,28 @@ private:
                         else if((bl[0]==D3DBLEND_ONE||bl[0]==D3DBLEND_SRCCOLOR)&&bl[1]==D3DBLEND_ONE)kind=2;
                     }
                     if(kind<0)why|=128;
+                    else if(psBound)patchKind=kind; /* a game pixel shader: its stage setup is a leftover, the patched shader replaces nothing of it */
                     auto texDiffuse=[](DWORD a,DWORD b){const bool bd=(b==D3DTA_DIFFUSE||b==D3DTA_CURRENT),ad=(a==D3DTA_DIFFUSE||a==D3DTA_CURRENT);return (a==D3DTA_TEXTURE&&bd)||(b==D3DTA_TEXTURE&&ad);};
                     const bool colorOk=(st[0]==D3DTOP_MODULATE||st[0]==D3DTOP_MODULATE2X)&&texDiffuse(st[1],st[2]);
                     const bool alphaOk=st[3]==D3DTOP_MODULATE&&texDiffuse(st[4],st[5]);
-                    if(!(known&&colorOk&&alphaOk&&st[6]==D3DTOP_DISABLE&&st[7]==0&&st[8]==D3DTTFF_DISABLE&&spec==FALSE))why|=16;
-                    if(kind>=0&&colorOk)variant=unsigned(kind)*2+(st[0]==D3DTOP_MODULATE2X?1:0);
-                    bool tex0=mirrorState.textureKnown[0]&&mirrorState.textures[0];
-                    if(!mirrorState.textureKnown[0]){IDirect3DBaseTexture9* t=nullptr;tex0=SUCCEEDED(ext->GetTexture(0,&t))&&t;drop(t);}
-                    if(!tex0)why|=256;
+                    if(!psBound){
+                        if(!(known&&colorOk&&alphaOk&&st[6]==D3DTOP_DISABLE&&st[7]==0&&st[8]==D3DTTFF_DISABLE&&spec==FALSE))why|=16;
+                        if(kind>=0&&colorOk)variant=unsigned(kind)*2+(st[0]==D3DTOP_MODULATE2X?1:0);
+                        bool tex0=mirrorState.textureKnown[0]&&mirrorState.textures[0];
+                        if(!mirrorState.textureKnown[0]){IDirect3DBaseTexture9* t=nullptr;tex0=SUCCEEDED(ext->GetTexture(0,&t))&&t;drop(t);}
+                        if(!tex0)why|=256;
+                    }
                 }
             }
         }
         IDirect3DSurface9* maskTarget=nullptr;
-        if(!why&&particle&&!particlePS[variant]){
+        if(!why&&particle&&psBound){ /* the game's pixel shader: its patched variant for this blend kind, built at the first such draw (a rejection is remembered, logged once per shader) */
+            const auto patched=particlePatched.get(ext,gamePs,unsigned(patchKind));
+            if(patched.log)logf("PARTICLES game shader hash=%016llx kind=%d: %s",(unsigned long long)patched.hash,patchKind,patched.shader?"patched":NorthlightParticleShaderPatch::reasonName(patched.reason));
+            if(!patched.shader){why|=2048;++particlePatchRejects[patched.reason<NorthlightParticleShaderPatch::ReasonCount?patched.reason:NorthlightParticleShaderPatch::CacheFull];}
+            else patchedPs=patched.shader;
+        }
+        if(!why&&particle&&!psBound&&!particlePS[variant]){
             static const DWORD* const code[6]={kParticleOver1Shader,kParticleOver2Shader,kParticleAddA1Shader,kParticleAddA2Shader,kParticleAddC1Shader,kParticleAddC2Shader};
             const HRESULT hr=particlePSFailed?E_FAIL:ext->CreatePixelShader(code[variant],&particlePS[variant]);
             if(FAILED(hr)){if(!particlePSFailed)logf("PARTICLES mask shader %u not created HRESULT=0x%08lx; particles stay unmasked",variant,(unsigned long)hr);particlePSFailed=true;why|=64;}
@@ -1124,27 +1142,31 @@ private:
             }
             return false;
         }
-        if(particle&&!particleFirstLogged){particleFirstLogged=true;logf("PARTICLES first mask draw: variant=%u vsModel=%u blend=%ld/%ld stage0 color=%ld alpha=%ld",variant,vsModel,long(bl[0]),long(bl[1]),long(st[0]),long(st[3]));}
+        if(particle&&!particleFirstLogged){particleFirstLogged=true;logf("PARTICLES first mask draw: variant=%u gamePs=%d vsModel=%u blend=%ld/%ld stage0 color=%ld alpha=%ld",variant,int(patchedPs!=nullptr),vsModel,long(bl[0]),long(bl[1]),long(st[0]),long(st[3]));}
         /* Only RT1's write mask changes: RT0's colour and alpha blend exactly as the game's draw without the mask. Rain writes red, particles green. */
         static const D3DRENDERSTATETYPE types[1]={D3DRS_COLORWRITEENABLE1};
-        const DWORD want[1]={particle?DWORD(variant<2?D3DCOLORWRITEENABLE_GREEN|D3DCOLORWRITEENABLE_BLUE:D3DCOLORWRITEENABLE_BLUE):DWORD(D3DCOLORWRITEENABLE_RED)}; /* particles: alpha over = green (1-T) + blue (touched), additive = blue only */
+        const bool over=patchedPs?patchKind==0:variant<2;
+        const DWORD want[1]={particle?DWORD(over?D3DCOLORWRITEENABLE_GREEN|D3DCOLORWRITEENABLE_BLUE:D3DCOLORWRITEENABLE_BLUE):DWORD(D3DCOLORWRITEENABLE_RED)}; /* particles: alpha over = green (1-T) + blue (touched), additive = blue only */
         for(int i=0;i<1;++i){rainMrtPrevKnown[i]=SUCCEEDED(ext->GetRenderState(types[i],&rainMrtPrev[i]));ext->SetRenderState(types[i],want[i]);}
-        ext->SetPixelShader(particle?particlePS[variant]:rainMrtPS);
+        if(patchedPs){particleGamePs=gamePs;gamePs->AddRef();} /* the draw replaces the binding; the game's shader must outlive it */
+        ext->SetPixelShader(patchedPs?patchedPs:particle?particlePS[variant]:rainMrtPS);
         return true;
     }
     void rainMrtEnd(){
         static const D3DRENDERSTATETYPE types[1]={D3DRS_COLORWRITEENABLE1};
         for(int i=0;i<1;++i)if(rainMrtPrevKnown[i])ext->SetRenderState(types[i],rainMrtPrev[i]);
-        ext->SetPixelShader(nullptr); /* eligibility: the game had no pixel shader bound (its vertex shader, if any, stays) */
+        if(particleGamePs){ext->SetPixelShader(particleGamePs);particleGamePs->Release();particleGamePs=nullptr;} /* a patched game shader: the game's own comes back */
+        else ext->SetPixelShader(nullptr); /* eligibility: the game had no pixel shader bound (its vertex shader, if any, stays) */
     }
     // The rain or particle draw: when eligible the same single game draw writes the mask through RT1; otherwise as it was (RT1 unbound first: a pixel shader that does not write oC1 must not meet it).
     template<class Draw> HRESULT rainMrtDraw(Draw draw,bool particle=false){
         bool masked=false;
         extensionWork("rain mask",[&]{masked=rainMrtBegin(particle);});
         if(!masked){rainMrtUnbind();return draw();}
+        const bool gameShader=particleGamePs!=nullptr;
         const HRESULT hr=draw();
         extensionWork("rain mask",[&]{rainMrtEnd();});
-        if(SUCCEEDED(hr)){rainMaskDrawn=true;if(particle)++particleDraws;else{rainMaskRainDrawn=true;++rainMaskDraws;}}
+        if(SUCCEEDED(hr)){rainMaskDrawn=true;if(particle){++particleDraws;if(gameShader)++particlePatchedDraws;}else{rainMaskRainDrawn=true;++rainMaskDraws;}}
         return hr;
     }
     // renderEffects: the mask for this frame's composite, or nullptr. Resolves the MSAA twin, then one full-screen pass over the texture: pixels whose depth differs from rainDepth
@@ -1501,15 +1523,17 @@ public:
     // row per distinct draw setup: reason (0 = masked), vertex shader model, blend src/dst/op, alpha test, stage 0 colour op (args) alpha op (args), stage 1 colour op, texcoord index,
     // texture transform, and the draw count. Not-masked rows say which game setups the next shader variant must cover.
     void logParticles(unsigned sampleFrame,unsigned rebinds){
-        const bool any=particleDraws||particleSkips||particleSigCount;
+        const bool any=particleDraws||particleSkips||particleSigCount||particlePatchedDraws;
         if(sampled()&&any){
             std::string rows;char row[200];
             for(unsigned i=0;i<particleSigCount;++i){const ParticleSig& r=particleSigs[i];
                 snprintf(row,sizeof row," [n=%u why=%u vs=%u blend=%ld/%ld/%ld at=%ld c=%ld(%ld,%ld) a=%ld(%ld,%ld) s1=%ld tc=%ld tt=%ld]",r.count,r.why,r.vsModel,long(r.v[0]),long(r.v[1]),long(r.v[2]),long(r.v[3]),long(r.v[4]),long(r.v[5]),long(r.v[6]),long(r.v[7]),long(r.v[8]),long(r.v[9]),long(r.v[10]),long(r.v[11]),long(r.v[12]));
                 rows+=row;}
-            logf("PARTICLES frame=%u masked=%u skipped=%u rt1Binds=%u cap=%u bg=%d sigs=%u more=%u%s",sampleFrame,particleDraws,particleSkips,rebinds,kParticleRebindCap,int(particleBgOk),particleSigCount,particleSigMore,rows.c_str());
+            std::string rejects;char rej[64];
+            for(unsigned i=0;i<NorthlightParticleShaderPatch::ReasonCount;++i)if(particlePatchRejects[i]){snprintf(rej,sizeof rej," %s=%u",NorthlightParticleShaderPatch::reasonName(i),particlePatchRejects[i]);rejects+=rej;}
+            logf("PARTICLES frame=%u masked=%u skipped=%u rt1Binds=%u cap=%u bg=%d sigs=%u more=%u patched=%u psCache=%u/%u patchRejects={%s }%s",sampleFrame,particleDraws,particleSkips,rebinds,kParticleRebindCap,int(particleBgOk),particleSigCount,particleSigMore,particlePatchedDraws,unsigned(particlePatched.size()),unsigned(particlePatched.variants()),rejects.c_str(),rows.c_str());
         }
-        particleSigCount=particleSigMore=0;
+        particleSigCount=particleSigMore=0;particlePatchedDraws=0;memset(particlePatchRejects,0,sizeof particlePatchRejects);
     }
     void logWeatherProbe(unsigned sampleFrame){
         logf("WEATHER probe frame=%u maxDrawPrims=%u tex=%p known=%d candidate=%d vs=%d ps=%d hot=%p hotDraws=%u tall=%u overflows=%u",sampleFrame,weatherProbe.count,weatherProbe.texture,int(weatherProbe.known),int(weatherProbe.candidate),int(weatherProbe.vs),int(weatherProbe.ps),weatherDetect.hot,weatherSample.draws,weatherDetect.tallSeen,weatherDetect.overflows);
@@ -1759,7 +1783,7 @@ public:
     }
     HRESULT STDMETHODCALLTYPE CreatePixelShader(const DWORD* code,IDirect3DPixelShader9** out) override { Guard mirrorLock(mirrorState.gate);
         HRESULT hr=ext->CreatePixelShader(code,out);
-        if(SUCCEEDED(hr)&&out&&*out)extensionWork("pixel shader registration",[&]{std::vector<DWORD> words;auto h=shaderHash(*out,words);psTags[*out]=contains(kUiPS,h)?2:0;psHashes[*out]=h;if(water)water->registerPixel(*out,h,words.data(),words.size());if(world)world->registerPixelShader(*out);});
+        if(SUCCEEDED(hr)&&out&&*out)extensionWork("pixel shader registration",[&]{std::vector<DWORD> words;auto h=shaderHash(*out,words);particlePatched.forget(*out);psTags[*out]=contains(kUiPS,h)?2:0;psHashes[*out]=h;if(water)water->registerPixel(*out,h,words.data(),words.size());if(world)world->registerPixelShader(*out);});
         if(SUCCEEDED(hr))mirrorResources.wrap(out);return hr;
     }
     // 0.3.187: the four draw entry points share drawHook(); each passes its capture and its real draw.

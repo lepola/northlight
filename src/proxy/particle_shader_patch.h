@@ -191,7 +191,7 @@ public:
             e.hash=hashOf(words);
             std::vector<Word> patched;
             e.reason[kind]=patch(words.data(),words.size(),kind,patched);
-            if(e.reason[kind]==Ok&&FAILED(ext->CreatePixelShader(patched.data(),&e.variant[kind]))){e.variant[kind]=nullptr;e.reason[kind]=CreateFailed;}
+            if(e.reason[kind]==Ok&&FAILED(ext->CreatePixelShader(Code{patched.data()},&e.variant[kind]))){e.variant[kind]=nullptr;e.reason[kind]=CreateFailed;}
         }
         r.shader=e.variant[kind];r.reason=e.reason[kind];r.hash=e.hash;
         const std::uint64_t key=e.hash*4+kind;
@@ -208,6 +208,10 @@ public:
     std::size_t size()const{return entries_.size();}
     std::size_t variants()const{std::size_t n=0;for(auto& e:entries_)for(auto* v:e.second.variant)n+=v!=nullptr;return n;}
 private:
+    struct Code { // the words as whatever const pointer type the device's CreatePixelShader takes (DWORD is not uint32_t on Windows)
+        const Word* words;
+        template<class T> operator const T*()const{return reinterpret_cast<const T*>(words);}
+    };
     struct Entry {Shader* variant[3]={};unsigned char state[3]={};Reason reason[3]={Ok,Ok,Ok};std::uint64_t hash=0;};
     static std::uint64_t hashOf(const std::vector<Word>& words) {
         const auto* bytes=reinterpret_cast<const unsigned char*>(words.data());

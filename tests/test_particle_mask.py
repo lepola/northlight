@@ -118,10 +118,11 @@ checks['begin: a non-world particle draw is no candidate (uncounted); the blend 
     and '(bl[0]==D3DBLEND_ONE||bl[0]==D3DBLEND_SRCCOLOR)&&bl[1]==D3DBLEND_ONE)kind=2;' in bg and 'bl[2]==D3DBLENDOP_ADD' in bg and 'st[0]==D3DTOP_MODULATE||st[0]==D3DTOP_MODULATE2X' in bg and 'st[3]==D3DTOP_MODULATE&&texDiffuse(st[4],st[5])' in bg
     and 'variant=unsigned(kind)*2+(st[0]==D3DTOP_MODULATE2X?1:0);' in bg)
 checks['begin: the shader variants are created on first use; a failure is logged once and leaves the rain mask alone']=(
-    'kParticleOver1Shader,kParticleOver2Shader,kParticleAddA1Shader,kParticleAddA2Shader,kParticleAddC1Shader,kParticleAddC2Shader' in bg and 'particlePSFailed=true;why|=64;' in bg and 'rainMaskFailed' not in bg.split('particlePSFailed=true')[0].split('if(!why&&particle&&!particlePS[variant])')[1])
+    'kParticleOver1Shader,kParticleOver2Shader,kParticleAddA1Shader,kParticleAddA2Shader,kParticleAddC1Shader,kParticleAddC2Shader' in bg and 'particlePSFailed=true;why|=64;' in bg and 'rainMaskFailed' not in bg.split('particlePSFailed=true')[0].split('if(!why&&particle&&!psBound&&!particlePS[variant])')[1])
 checks['begin: reasons 128 (blend) and 256 (no stage 0 texture) are particle-only; skips are counted and each distinct reason logged once (at most 8)']=(
     'why|=128' in bg and 'why|=256' in bg and '++particleSkips;' in bg and 'particleSkipLogs<8' in bg and 'PARTICLES mask skip: reason=%u' in bg)
-checks['begin: particles write RT1 green+blue (alpha over) or blue (additive) with the particle shader; rain keeps red and rainMrtPS']=('want[1]={particle?DWORD(variant<2?D3DCOLORWRITEENABLE_GREEN|D3DCOLORWRITEENABLE_BLUE:D3DCOLORWRITEENABLE_BLUE):DWORD(D3DCOLORWRITEENABLE_RED)};' in bg and 'ext->SetPixelShader(particle?particlePS[variant]:rainMrtPS);' in bg)
+checks['begin: particles write RT1 green+blue (alpha over) or blue (additive) with the particle shader or the patched game shader; rain keeps red and rainMrtPS']=(
+    'const bool over=patchedPs?patchKind==0:variant<2;' in bg and 'want[1]={particle?DWORD(over?D3DCOLORWRITEENABLE_GREEN|D3DCOLORWRITEENABLE_BLUE:D3DCOLORWRITEENABLE_BLUE):DWORD(D3DCOLORWRITEENABLE_RED)};' in bg and 'ext->SetPixelShader(patchedPs?patchedPs:particle?particlePS[variant]:rainMrtPS);' in bg)
 checks['scrub: one pass clears red, green and blue']=('D3DRS_COLORWRITEENABLE,D3DCOLORWRITEENABLE_RED|D3DCOLORWRITEENABLE_GREEN|D3DCOLORWRITEENABLE_BLUE)' in r)
 pbd=r[r.index('template<class Draw> HRESULT particleBlendDraw('):r.index('template<class Draw> HRESULT rainBlendDraw(')]
 checks['particle draw: a claimed draw or a blob shadow is drawn as it was with RT1 unbound; otherwise one draw through rainMrtDraw']=('if(claimed||blobOriginal){rainMrtUnbind();return blobFaintDraw(claimed,draw);}' in pbd and 'rainMrtDraw(draw,true)' in pbd)
@@ -129,9 +130,9 @@ wf=r[r.index('    void weatherFrame('):r.index('    void logParticles(')]
 checks['WEATHER line carries particleMask, particleSkips, rainLateZ and rainLateZPrims; all zeroed per frame']=(
     'particleMask=%u particleSkips=%u rainLateZ=%u rainLateZPrims=%u' in wf and 'particleMaskCount,particleSkipCount,lateZ,lateZPrims' in wf and 'particleDraws=particleSkips=rainLateZ=rainLateZPrims=0;' in wf)
 lp=r[r.index('void logParticles('):r.index('void logWeatherProbe(')]
-checks['PARTICLES line: sample frames only, rows of the census, reset every frame']=('if(sampled()&&any)' in lp and 'logf("PARTICLES frame=%u masked=%u skipped=%u rt1Binds=%u cap=%u bg=%d sigs=%u more=%u%s"' in lp and 'particleSigCount=particleSigMore=0;' in lp)
+checks['PARTICLES line: sample frames only, rows of the census, reset every frame']=('if(sampled()&&any)' in lp and 'logf("PARTICLES frame=%u masked=%u skipped=%u rt1Binds=%u cap=%u bg=%d sigs=%u more=%u patched=%u psCache=%u/%u patchRejects={%s }%s"' in lp and 'particleSigCount=particleSigMore=0;' in lp)
 checks['census rows are collected on sample frames only']=('if(particle&&sampled())particleCensus(why,vsModel,bl,st);' in bg)
-checks['resources: the particle shaders are dropped with the others, flags per frame reset in clearFrame']=('for(auto& ps:particlePS)drop(ps);particlePSFailed=false;' in r and 'rainDepthOk=rainMaskRainDrawn=particleBgTried=particleBgOk=false;' in r)
+checks['resources: the particle shaders are dropped with the others, flags per frame reset in clearFrame']=('for(auto& ps:particlePS)drop(ps);particlePatched.clear();particlePSFailed=false;' in r and 'rainDepthOk=rainMaskRainDrawn=particleBgTried=particleBgOk=false;' in r)
 bs=r[r.index('bool particleBackgroundStart(){'):r.index('// Everything that makes a rain draw (particle=false)')]
 checks['background: one StretchRect of the game target (MSAA resolved) into a lazily created texture of the target format; failure logged once, no particle mask that frame']=(
     'ext->StretchRect(rt,nullptr,particleBgSurface,nullptr,D3DTEXF_NONE)' in bs and 'ext->CreateTexture(width,height,1,D3DUSAGE_RENDERTARGET,rd.Format,D3DPOOL_DEFAULT,&particleBg,nullptr)' in bs and 'particleBgFormat!=rd.Format' in bs
@@ -147,6 +148,16 @@ checks['composite handoff: renderEffects gives the world the background only wit
 wr=fp.src('world_renderer.h').read_text()
 checks['world: Background on s14 for the composite only (neutralZero otherwise, explicit sampler state), unbound after; the pointer is frame-local']=(
     'd->SetTexture(14,particleBackground?particleBackground:neutralZero);particleBackground=nullptr;' in wr and 'D3DSAMP_SRGBTEXTURE,FALSE);' in wr.split('d->SetTexture(14,particleBackground?',1)[1][:600] and 'd->SetTexture(13,regionalFogTexture);d->SetTexture(14,nullptr);' in wr)
+# the game's own particle pixel shaders (vs_3_0 + ps_3_0): a patched variant, not a replacement
+checks['begin: a particle draw with a game pixel shader is eligible when the variant for its blend kind exists; the stage setup, texture and vertex shader model are not read for it']=(
+    'if(psBound&&!particle)why|=8;' in bg and '&&!(particle&&psBound))why|=4;' in bg and 'else if(psBound)patchKind=kind;' in bg and 'if(!psBound){' in bg.split('const bool colorOk')[1].split('if(kind>=0&&colorOk)')[0] and 'particlePatched.get(ext,gamePs,unsigned(patchKind))' in bg)
+checks['begin: no variant = reason 2048, counted by reason, logged once per shader and kind; the draw is made as the game does']=(
+    'if(!patched.shader){why|=2048;++particlePatchRejects[' in bg and 'if(patched.log)logf("PARTICLES game shader hash=%016llx kind=%d: %s"' in bg and 'PARTICLES mask skip: reason=%u' in bg)
+checks['begin: the game shader is bound only for the draw: one reference held, restored by rainMrtEnd (never nullptr for it)']=(
+    'if(patchedPs){particleGamePs=gamePs;gamePs->AddRef();}' in bg and 'if(particleGamePs){ext->SetPixelShader(particleGamePs);particleGamePs->Release();particleGamePs=nullptr;}' in r and 'else ext->SetPixelShader(nullptr);' in r)
+checks['lifetime: variants are forgotten when the game registers a pixel shader at the same address, and cleared with the resources']=(
+    'particlePatched.forget(*out);' in r and 'particlePatched.clear();' in r.split('void releaseResources() {')[1].split('bool error(')[0])
+checks['counters: patched draws and rejections are zeroed with the PARTICLES line']=('particlePatchedDraws=0;memset(particlePatchRejects,0,sizeof particlePatchRejects);' in lp and '#include "particle_shader_patch.h"' in r)
 checks['banner: 0.3.203']=('logf("Northlight renderer 0.3.203;' in r)
 
 for k,ok in checks.items():print(('PASS ' if ok else 'FAIL ')+k)
