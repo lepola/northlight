@@ -80,7 +80,8 @@ Every effect below is on by default and is drawn on top of the game's own frame.
   which Northlight uses to find where the world ends and the UI begins. Northlight then learns the mod's UI draws
   instead: effects start about 2 seconds after entering the world, and the log shows
   `EFFECT boundary fallback active: UI shaders replaced by another module`.
-- **Platforms and install.** macOS with WoWSilicon (preloaded as `mods/d3d9.dll`) and Windows (a
+- **Platforms and install.** macOS with WoWSilicon (preloaded as `mods/d3d9.dll`), Linux with Wine or Proton
+  (the Windows payload; see [Install on Linux](#install-on-linux-wine-or-proton)) and Windows (a
   game-folder `d3d9.dll` on the bundled DXVK 3.1.1, with DXVK 2.7.1 as the `dxvk2` alternative backend for AMD RX 5000/6000 and
   older drivers (`Install.cmd --backend dxvk2`; on a driver DXVK 3 does not support, install with `--backend dxvk2`, Northlight never switches by itself; a reinstall without `--backend` keeps `dxvk2` or `native`), the system D3D9, or an existing `d3d9.dll`). The
   installer never writes `wow.exe`. It builds the world cache (terrain, models, lamps and fog
@@ -94,7 +95,7 @@ Every effect below is on by default and is drawn on top of the game's own frame.
 | `src/<group>/` | DLL sources, grouped: `proxy` (the D3D9 proxy and device mirror), `core` (settings, memory, logging, profiling), `world`, `replay`, `shadows`, `gi`, `lights`, `sky`, `water`, `gamedata` (tables derived from the game's MPQs), `generated` (headers written by the generators and shader compilers; do not edit) |
 | `shaders/` | `*.hlsl` and their `*-shader-build.json` manifests; `shaders/compiled/` holds the compiled `<Entry>.bin` and `.bin.asm` |
 | `scripts/` | `build_renderer.py`, `build_environment.py`, `generate_*.py`, `run_tests.py`, `check_layout.py`, `pe_normalized_hash.py`; `scripts/shaders/` holds the shader compilers (`compile_*_shaders.py`, `compile_shaders.cpp`, `disassemble_*.cpp`) |
-| `renderer/` | `windows-package/`, `mac-package/`, the player installer `northlight_install.py`, the pipeline and packaging tools (`world_*_builder.py`, `extract_*.py`, `migrate_mac_proxy.py`, `build_packages.py`, `package-pins.json`, ...) and the built `frd9.dll` |
+| `renderer/` | `windows-package/`, `mac-package/`, `linux-package/`, the player installer `northlight_install.py`, the pipeline and packaging tools (`world_*_builder.py`, `extract_*.py`, `migrate_mac_proxy.py`, `build_packages.py`, `package-pins.json`, ...) and the built `frd9.dll` |
 | `tests/` | test runners (`test_*.py`), native tests (`test_*.cpp/.h`), release validators (`validate_*.py`, `verify_*.py`) |
 | `tests/support/`, `tests/fixtures/` | d3d9.h/windows.h shims for native builds; the archived baselines (old sources of this project, digests) that tests compare against. Real client data (shaders, doodad placements) is read from your client by `tests/client_fixtures.py`, never stored |
 | `northlight_paths.py` | the only place that knows where the client, toolchain and outputs are |
@@ -243,3 +244,35 @@ stops with an error that names them.
 `on` installs `renderer/frd9.dll` as `mods/d3d9.dll`, and `off` restores the recorded
 transaction. Add `--dry-run` to preview. The Windows package template is in
 `renderer/windows-package/`.
+
+## Install on Linux (Wine or Proton)
+
+The Linux package (`Northlight-<version>-Linux.zip`) is for players who run the game under Wine or
+Proton (Lutris, Bottles, Steam or plain Wine). **It has not been tested in game yet**; reports are welcome.
+The game gets the Windows payload (the game-folder `d3d9.dll` and the bundled DXVK 3.1.1 and 2.7.1 in
+`renderer-backends/`), while the installer, the world cache and the art layer run natively on x86_64 Linux
+(glibc 2.17 or newer) with the package's own Python (python-build-standalone) and StormLib (`libstorm.so`).
+
+With the game closed, unzip the package outside the game folder and run, in that folder:
+
+```sh
+bash install.sh --client ~/Games/WoW          # the folder that holds Wow.exe; asked when left out
+bash install.sh --client ~/Games/WoW --backend dxvk2   # DXVK 2.7.1 for drivers DXVK 3 does not support
+bash uninstall.sh --client ~/Games/WoW
+```
+
+Then make Wine load the game-folder `d3d9.dll` once, with the override `d3d9=n,b`
+(`WINEDLLOVERRIDES="d3d9=n,b"`):
+
+- Lutris: Configure > Runner options > DLL overrides: `d3d9` = `n,b` (Lutris builds `WINEDLLOVERRIDES`
+  from this list).
+- Bottles: the bottle's settings > DLL Overrides (under Advanced in recent versions): `d3d9` = Native, then Builtin.
+- Steam/Proton (a non-Steam game): Launch options `WINEDLLOVERRIDES="d3d9=n,b" %command%`.
+- Plain Wine: `WINEDLLOVERRIDES="d3d9=n,b" wine Wow.exe`, or winecfg > Applications > `Wow.exe` > Libraries.
+
+Northlight loads its own DXVK from `renderer-backends/`, so the DXVK option of Lutris, Bottles, Proton or
+the prefix does not matter. Leave it as it is, and do not copy a DXVK `d3d9.dll` into the game folder.
+WineD3D modes (`PROTON_USE_WINED3D=1`) bypass Northlight. 32-bit (lib32/i386) Vulkan drivers are needed,
+as for any DXVK game. Because Linux names are case-sensitive and Wine's are not, the installer stops
+when the game folder already has a case variant of a name it writes (for example `D3D9.dll`). The player
+instructions are in `renderer/linux-package/README.txt`.
