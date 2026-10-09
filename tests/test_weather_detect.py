@@ -48,7 +48,7 @@ enum D3DMULTISAMPLE_TYPE{D3DMULTISAMPLE_NONE=0,D3DMULTISAMPLE_4_SAMPLES=4};enum 
 #define D3DPS_VERSION(a,b) (0xFFFF0000|((a)<<8)|(b))
 struct D3DCAPS9{DWORD NumSimultaneousRTs=0,PrimitiveMiscCaps=0,PixelShaderVersion=0;};
 struct D3DSURFACE_DESC{UINT Width=0,Height=0;D3DMULTISAMPLE_TYPE MultiSampleType=D3DMULTISAMPLE_NONE;DWORD MultiSampleQuality=0;};struct D3DVIEWPORT9{DWORD X=0,Y=0,Width=0,Height=0;float MinZ=0,MaxZ=1;};
-enum{D3DTEXF_NONE=0,D3DBLEND_ZERO=1,D3DBLENDOP_MAX=5,D3DCOLORWRITEENABLE_ALPHA=8,D3DCLEAR_TARGET=1,D3DUSAGE_RENDERTARGET=1,D3DUSAGE_DEPTHSTENCIL=2,D3DBLEND_ONE=2,D3DBLEND_SRCCOLOR=3,D3DBLEND_SRCALPHA=5,D3DBLEND_INVSRCALPHA=6,D3DBLEND_DESTCOLOR=9,D3DBLENDOP_ADD=1,D3DPMISCCAPS_INDEPENDENTWRITEMASKS=0x4000,D3DPMISCCAPS_SEPARATEALPHABLEND=0x20000,D3DPMISCCAPS_MRTPOSTPIXELSHADERBLENDING=0x80000};
+enum{D3DTEXF_NONE=0,D3DBLEND_ZERO=1,D3DBLENDOP_MAX=5,D3DCOLORWRITEENABLE_ALPHA=8,D3DCOLORWRITEENABLE_RED=1,D3DCLEAR_TARGET=1,D3DUSAGE_RENDERTARGET=1,D3DUSAGE_DEPTHSTENCIL=2,D3DBLEND_ONE=2,D3DBLEND_SRCCOLOR=3,D3DBLEND_SRCALPHA=5,D3DBLEND_INVSRCALPHA=6,D3DBLEND_DESTCOLOR=9,D3DBLENDOP_ADD=1,D3DPMISCCAPS_INDEPENDENTWRITEMASKS=0x4000,D3DPMISCCAPS_SEPARATEALPHABLEND=0x20000,D3DPMISCCAPS_MRTPOSTPIXELSHADERBLENDING=0x80000};
 static const DWORD kRainMaskMrtShader[]={1},kRainScrubShader[]={2};
 static std::vector<std::string> lines;
 static void sink(const char* l){lines.push_back(l);}
@@ -255,7 +255,7 @@ int main(){
             h.draw(10);assert(h.drawn==1&&h.ext->draws.size()==1&&h.rainMaskDraws==1&&h.rainMaskDrawn&&h.rainMaskCleared&&h.rainDepthOk&&h.rainMrtRuns==1&&h.rainMaskSkips==0&&h.logs.empty()); /* exactly ONE game draw */
             const DrawRec& g=h.ext->draws[0];
             assert(g.rt==&h.ext->gameRT&&g.rt1==&h.ext->maskTex.s&&g.ps==&h.ext->psMrt); /* RT0 untouched, RT1 = the mask target, rainMrtPS during the draw */
-            assert(g.colorWrite==15&&g.colorWrite1==D3DCOLORWRITEENABLE_ALPHA&&g.sep==1&&g.srcA==D3DBLEND_ONE&&g.dstA==D3DBLEND_ONE&&g.opA==D3DBLENDOP_MAX&&g.blend==1&&g.src==D3DBLEND_SRCALPHA&&g.dst==D3DBLEND_INVSRCALPHA&&g.op==D3DBLENDOP_ADD); /* RainBlend's colour blend stays; alpha MAX */
+            assert(g.colorWrite==15&&g.colorWrite1==D3DCOLORWRITEENABLE_RED&&g.sep==0&&g.srcA==D3DBLEND_SRCALPHA&&g.dstA==D3DBLEND_ZERO&&g.opA==D3DBLENDOP_ADD&&g.blend==1&&g.src==D3DBLEND_SRCALPHA&&g.dst==D3DBLEND_INVSRCALPHA&&g.op==D3DBLENDOP_ADD); /* RainBlend's blend (colour and alpha) and the game's separate-alpha states stay; only RT1 is masked to red */
             assert(snap(h)==before&&h.ext->ps==nullptr&&h.ext->rt==&h.ext->gameRT&&h.ext->vp.X==vp0.X&&h.ext->vp.Width==vp0.Width&&h.ext->sr.right==70); /* every state back, no game target or viewport change */
             assert(h.rainMrtBound&&h.ext->rt1==&h.ext->maskTex.s&&h.ext->rt1Binds==1&&h.ext->rt1Unbinds==0); /* RT1 stays bound (lazy) */
             assert(h.snapshots==1&&h.snapshotTarget==h.rainDepth&&!h.snapshotFatal&&h.ext->colorFills==1&&h.ext->clears==0&&h.ext->creates==1&&h.ext->depthCreates==1&&h.ext->shaderCreates==2); /* one depth snapshot (non-fatal), ColorFill clear, no RT0 swap */
@@ -294,6 +294,7 @@ int main(){
         {Hook h;mk(h);h.ext->caps.PrimitiveMiscCaps=D3DPMISCCAPS_SEPARATEALPHABLEND;h.draw(10);assert(h.rainMaskDraws==0&&h.logs[0].rfind("WEATHER rain mask disabled: caps",0)==0);}
         {Hook h;mk(h);h.ext->caps.PrimitiveMiscCaps=D3DPMISCCAPS_INDEPENDENTWRITEMASKS;h.draw(10);assert(h.rainMaskDraws==0);}
         {Hook h;mk(h);h.ext->caps.PrimitiveMiscCaps=D3DPMISCCAPS_INDEPENDENTWRITEMASKS|D3DPMISCCAPS_SEPARATEALPHABLEND;h.draw(10);assert(h.rainMaskDraws==0);} // no RT1 blending
+        {Hook h;mk(h);h.ext->caps.PrimitiveMiscCaps=D3DPMISCCAPS_INDEPENDENTWRITEMASKS|D3DPMISCCAPS_MRTPOSTPIXELSHADERBLENDING;h.draw(10);assert(h.rainMaskDraws==1);} // separate alpha blend not needed
         {Hook h;mk(h);h.ext->caps.PixelShaderVersion=D3DPS_VERSION(1,4);h.draw(10);assert(h.rainMaskDraws==0);}
         {Hook h;mk(h);h.ext->capsGetFails=true;h.draw(10);assert(h.rainMaskDraws==0&&h.drawn==1);}
         {Hook h;mk(h);h.terrain=false;h.draw(10);assert(h.drawn==1&&h.rainMaskDraws==0&&h.rainMaskSkips==0&&h.ext->colorFills==0&&h.ext->rt1Binds==0);}
@@ -320,7 +321,7 @@ int main(){
             Hook h;mk(h);h.draw(10);h.draw(10);assert(h.rainMrtBound);
             IDirect3DTexture9* m=h.rainMaskPrepare();
             assert(m==h.rainMask&&!h.rainMrtBound&&h.ext->rt1==nullptr&&h.quads==1&&h.effectStates==1&&h.ext->stretches==0); /* RT1 off first; no MSAA: no resolve */
-            assert(h.quadRec.rt==&h.ext->maskTex.s&&h.quadRec.ps==&h.ext->psScrub&&h.quadTex0==h.depthTex&&h.quadTex1==h.rainDepth&&h.quadRec.colorWrite==D3DCOLORWRITEENABLE_ALPHA&&h.ext->minFilter0==D3DTEXF_POINT&&h.ext->magFilter0==D3DTEXF_POINT&&h.quadRec.rt1==nullptr); /* final depth (s0) vs the snapshot (s1), POINT, alpha only */
+            assert(h.quadRec.rt==&h.ext->maskTex.s&&h.quadRec.ps==&h.ext->psScrub&&h.quadTex0==h.depthTex&&h.quadTex1==h.rainDepth&&h.quadRec.colorWrite==D3DCOLORWRITEENABLE_RED&&h.ext->minFilter0==D3DTEXF_POINT&&h.ext->magFilter0==D3DTEXF_POINT&&h.quadRec.rt1==nullptr); /* final depth (s0) vs the snapshot (s1), POINT, alpha only */
             assert(h.ext->rt==&h.ext->gameRT&&h.ext->vp.X==3); /* its own SavedState brought the game's target back */
         }
         {Hook h;mk(h);h.ext->gameRT.desc.MultiSampleType=D3DMULTISAMPLE_4_SAMPLES;h.ext->gameRT.desc.MultiSampleQuality=2;h.ext->gameDS.desc.MultiSampleType=D3DMULTISAMPLE_4_SAMPLES;h.ext->gameDS.desc.MultiSampleQuality=2;h.draw(10);

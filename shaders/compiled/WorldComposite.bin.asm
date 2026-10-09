@@ -479,7 +479,7 @@ if_ne r1.z, -r1.z
     mov r1.xyz, r3.xyzx
     mad r1.xyz, r1.xyzx, r10.w, r10.xyzx
     add r2.xyz, r2.yzwy, -r1.xyzx
-    mul r2.xyz, r4.w, r2.xyzx
+    mul r2.xyz, r4.x, r2.xyzx
     add r1.xyz, r1.xyzx, r2.xyzx
     mov r9.xyz, r1.xyzx
 else

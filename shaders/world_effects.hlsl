@@ -14,7 +14,7 @@ sampler2D FogBuffer : register(s9);
 sampler2D WaterMask : register(s11);
 sampler2D BaselineLighting : register(s12);
 sampler2D RegionalFog : register(s13); // ground, day extinction, night extra, layer height
-sampler2D RainMask : register(s13); // 0.3.202 (rain mask): WorldComposite only, rain streak alpha (a), 0 without rain
+sampler2D RainMask : register(s13); // 0.3.202 (rain mask): WorldComposite only, rain streak coverage (r), 0 without rain
 float4 RegionalFogInfo : register(c31); // world node0 XY, inverse field span, night fraction
 float4 WaterInfo : register(c30);
 float4 RemovalInfo : register(c30); // RemovalSmooth, TemporalLight: y 1 when a lit source is drawn, z 1/(summed source weight), w disc radius in half-res pixels at view distance 1
@@ -1028,7 +1028,7 @@ float4 WorldComposite(float2 uv:TEXCOORD0):COLOR0 {
     if(PassInfo.z<.5){
         float3 unfogged=color;
         // Rain streaks were drawn into the scene before the composite: on mask pixels go back toward the unfogged pixel so they are not hazed.
-        float rain=tex2Dlod(RainMask,float4(uv,0,0)).a;
+        float rain=tex2Dlod(RainMask,float4(uv,0,0)).r;
         color=lerp(mad(horizonHaze(color,centerUV,viewZ,d>=.99999&&liquid<=0),fog.a,fog.rgb),unfogged,rain);
     }
     if(PassInfo.z==3)color=fog.rgb;

@@ -68,8 +68,8 @@ checks['rain mask MRT: eligibility (not applied, terrain, enabled, not failed, w
     'if(applied||!terrain||!enabled||failed||!world||rainMaskFailed||!width||!height){rainMrtUnbind();return false;}' in bg and 'if(!rainMaskFrame){rainMaskFrame=true;rainMaskOk=rainMaskEligible();}' in bg and 'if(!rainCapsChecked)rainMaskCaps();' in bg
     and all(t in bg for t in ('if(vsBound&&(vsModel<1||vsModel>2))why|=4;','if(psBound)why|=8;','st[0]==D3DTOP_MODULATE&&st[1]==D3DTA_TEXTURE&&arg2&&st[3]==D3DTOP_MODULATE&&st[4]==D3DTA_TEXTURE&&alphaArg2&&st[6]==D3DTOP_DISABLE&&st[7]==0&&st[8]==D3DTTFF_DISABLE&&spec==FALSE',
         'st[2]==D3DTA_DIFFUSE||st[2]==D3DTA_CURRENT','st[5]==D3DTA_DIFFUSE||st[5]==D3DTA_CURRENT','D3DRS_SPECULARENABLE','ext->peekVertexShader(v)','vsMajor.find(v)','ext->peekPixelShader(p)')))
-checks['rain mask MRT: the states (RT1 alpha-only write, separate alpha ONE/ONE/MAX) are saved with Get, set after the RT1 bind, restored in rainMrtEnd with the pixel shader back to none']=(
-    'D3DRS_COLORWRITEENABLE1,D3DRS_SEPARATEALPHABLENDENABLE,D3DRS_SRCBLENDALPHA,D3DRS_DESTBLENDALPHA,D3DRS_BLENDOPALPHA' in bg and 'D3DCOLORWRITEENABLE_ALPHA,TRUE,D3DBLEND_ONE,D3DBLEND_ONE,D3DBLENDOP_MAX' in bg
+checks['rain mask MRT: only RT1\'s write mask (red) is saved with Get, set after the RT1 bind and restored in rainMrtEnd with the pixel shader back to none; RT0 blends as RainBlend (colour and alpha)']=(
+    'types[1]={D3DRS_COLORWRITEENABLE1};' in bg and 'want[1]={D3DCOLORWRITEENABLE_RED};' in bg and 'D3DRS_SEPARATEALPHABLENDENABLE' not in bg and 'BLENDOPALPHA' not in bg
     and 'ext->GetRenderState(types[i],&rainMrtPrev[i])' in bg and 'ext->SetPixelShader(rainMrtPS);' in bg and bg.index('ext->SetRenderTarget(1,maskTarget)')<bg.index('ext->SetRenderState(types[i],want[i])')<bg.index('ext->SetPixelShader(rainMrtPS)')
     and 'ext->SetRenderState(types[i],rainMrtPrev[i])' in r and 'ext->SetPixelShader(nullptr);' in r[r.index('void rainMrtEnd(){'):r.index('template<class Draw> HRESULT rainMrtDraw(')])
 checks['rain mask MRT: RT1 binds once per run (rainMrtRuns), lazily unbound by rainMrtUnbind; a skip unbinds, counts and logs the first reason once']=(
@@ -80,7 +80,7 @@ checks['rain mask: eligible only at the effect size, depth type AND quality equa
     and 'dd.MultiSampleType=rd.MultiSampleType;dd.MultiSampleQuality=rd.MultiSampleQuality;' in el and 'rainMaskWantType=rd.MultiSampleType;rainMaskWantQuality=rd.MultiSampleQuality;' in el and 'ms=%u depthMs=%u' in el)
 caps=r[r.index('void rainMaskCaps()'):r.index('bool rainMaskCreate()')]
 checks['rain mask MRT: caps checked once (2 RTs, independent write masks, separate alpha blend, ps_2_0), disabled with one log naming them']=(
-    'caps.NumSimultaneousRTs>=2' in caps and 'D3DPMISCCAPS_INDEPENDENTWRITEMASKS' in caps and 'D3DPMISCCAPS_SEPARATEALPHABLEND' in caps and 'D3DPMISCCAPS_MRTPOSTPIXELSHADERBLENDING' in caps and 'caps.PixelShaderVersion>=D3DPS_VERSION(2,0)' in caps and 'rainCapsChecked=true;' in caps and 'logf("WEATHER rain mask disabled: caps' in caps)
+    'caps.NumSimultaneousRTs>=2' in caps and 'D3DPMISCCAPS_INDEPENDENTWRITEMASKS' in caps and 'D3DPMISCCAPS_SEPARATEALPHABLEND' not in caps and 'D3DPMISCCAPS_MRTPOSTPIXELSHADERBLENDING' in caps and 'caps.PixelShaderVersion>=D3DPS_VERSION(2,0)' in caps and 'rainCapsChecked=true;' in caps and 'logf("WEATHER rain mask disabled: caps' in caps)
 cr=r[r.index('bool rainMaskCreate()'):r.index('void rainMaskClearSwap(')]
 checks['rain mask: created lazily at the effect size, failure logged once and disables the mask only (target, rain depth INTZ, both shaders)']=('D3DFMT_A8R8G8B8,D3DPOOL_DEFAULT,&rainMask' in r and 'rainMaskFailed=true;logf("WEATHER rain mask disabled' in r and 'if(!rainMaskSurface&&!rainMaskCreate())why|=64;' in bg
     and 'D3DUSAGE_DEPTHSTENCIL,(D3DFORMAT)MAKEFOURCC(\'I\',\'N\',\'T\',\'Z\'),D3DPOOL_DEFAULT,&rainDepth' in cr and 'CreatePixelShader(kRainMaskMrtShader,&rainMrtPS)' in cr and 'CreatePixelShader(kRainScrubShader,&rainScrubPS)' in cr and 'drop(rainDepth);drop(rainMrtPS);drop(rainScrubPS);rainMaskFailed=true;' in cr)
@@ -110,7 +110,7 @@ checks['rain scrub: renderEffects asks rainMaskPrepare once, early (before the A
 checks['rain scrub: RT1 unbound, MSAA twin resolved by StretchRect (failure: nullptr and a one-shot log), ONE full-screen quad into the mask texture with depthTex (s0) and rainDepth (s1) POINT, alpha-only write, own SavedState']=(
     pr.startswith('IDirect3DTexture9* rainMaskPrepare(){\n        rainMrtUnbind();') and 'if(!rainMaskDrawn||!rainDepthOk||' in pr and 'ext->StretchRect(rainMaskMS,nullptr,rainMaskSurface,nullptr,D3DTEXF_NONE)' in pr and 'rainMaskResolveHr=rh;return nullptr;' in pr
     and 'SavedState scrub(ext,&stateBlocks);' in pr and 'effectState();' in pr and 'ext->SetRenderTarget(0,rainMaskSurface)' in pr and 'ext->SetTexture(0,depthTex);ext->SetTexture(1,rainDepth);' in pr
-    and 'D3DSAMP_MINFILTER,D3DTEXF_POINT' in pr and 'D3DSAMP_MAGFILTER,D3DTEXF_POINT' in pr and 'ext->SetPixelShader(rainScrubPS);' in pr and 'D3DRS_COLORWRITEENABLE,D3DCOLORWRITEENABLE_ALPHA' in pr and pr.count('quad(width,height)')==1
+    and 'D3DSAMP_MINFILTER,D3DTEXF_POINT' in pr and 'D3DSAMP_MAGFILTER,D3DTEXF_POINT' in pr and 'ext->SetPixelShader(rainScrubPS);' in pr and 'D3DRS_COLORWRITEENABLE,D3DCOLORWRITEENABLE_RED' in pr and pr.count('quad(width,height)')==1
     and 'if(FAILED(rainMaskResolveHr)&&!rainMaskResolveLogged){rainMaskResolveLogged=true;logf("WEATHER rain mask resolve failed HRESULT' in r)
 # every device operation that could draw, clear, copy or change targets runs rainMrtUnbind() first
 def method(name):

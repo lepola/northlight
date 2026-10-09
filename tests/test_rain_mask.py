@@ -28,7 +28,7 @@ checks['source: RainMask declared on s13 (aliasing RegionalFog, as s8/s10 do)']=
 comp=h.split('float4 WorldComposite(',1)[1].split('// Separate geometry pass:',1)[0]
 m=re.search(r'if\(PassInfo\.z<\.5\)\{(.*?)\n    \}',comp,re.S)
 body=m.group(1) if m else ''
-checks['source: WorldComposite reads the mask once, only inside the PassInfo.z<.5 branch']=(bool(m) and comp.count('RainMask')==1 and body.count('tex2Dlod(RainMask,float4(uv,0,0)).a')==1)
+checks['source: WorldComposite reads the mask once, only inside the PassInfo.z<.5 branch']=(bool(m) and comp.count('RainMask')==1 and body.count('tex2Dlod(RainMask,float4(uv,0,0)).r')==1)
 checks['source: unfogged colour kept before haze, lerped back to after the haze + fog mad']=(
     'float3 unfogged=color;' in body and body.index('unfogged=color')<body.index('lerp(mad(horizonHaze(')<body.index('fog.a,fog.rgb)')<body.index(',unfogged,rain)')
     and ',unfogged,rain)' in body)
@@ -62,6 +62,6 @@ checks['MRT shaders: effects.hlsl untouched (the rain shaders have their own sou
 checks['MRT shaders: AO, AOContactBloom and Composite byte-identical to 0.3.201']=all(eff[n]['sha256']==x for n,x in EFF_BEFORE.items())
 checks['MRT shaders: RainMaskMRT and RainScrub are ps_2_0, small, with a compiled .bin']=all(n in eff and eff[n]['target']=='ps_2_0' and eff[n]['static_instruction_slots']<=32 and (fp.COMPILED/(n+'.bin')).exists() for n in ('RainMaskMRT','RainScrub'))
 ehl=(fp.SHADERS/'rain_mask.hlsl').read_text()
-checks['MRT shaders: source writes oC1 alpha only; the scrub discards unchanged depth and outputs alpha 0']=('out float4 mask : COLOR1' in ehl and 'mask = float4(0, 0, 0, c.a);' in ehl and 'clip(abs(tex2D(Scene, uv).r - tex2D(Depth, uv).r) - 1e-6);' in ehl and 'return 0;' in ehl.split('float4 RainScrub(',1)[1])
+checks['MRT shaders: source writes oC1 = white with the streak alpha (RT1 masked to red); the scrub discards unchanged depth and outputs 0']=('out float4 mask : COLOR1' in ehl and 'mask = float4(1, 1, 1, c.a);' in ehl and 'clip(abs(tex2D(Scene, uv).r - tex2D(Depth, uv).r) - 1e-6);' in ehl and 'return 0;' in ehl.split('float4 RainScrub(',1)[1])
 for k,ok in checks.items():print(('PASS ' if ok else 'FAIL ')+k)
 sys.exit(0 if all(checks.values()) else 1)

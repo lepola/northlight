@@ -313,7 +313,7 @@ class Device final : public GuardedMirrorDevice {
     // (unbound lazily, rainMrtUnbind); rainDepth: the depth at the frame's first mask draw (INTZ), compared with the final depth by rainScrubPS in renderEffects.
     IDirect3DTexture9* rainMask=nullptr;IDirect3DSurface9* rainMaskSurface=nullptr;bool rainMaskFailed=false;IDirect3DSurface9* rainMaskMS=nullptr;D3DMULTISAMPLE_TYPE rainMaskMsType=D3DMULTISAMPLE_NONE;DWORD rainMaskMsQuality=0;D3DMULTISAMPLE_TYPE rainMaskWantType=D3DMULTISAMPLE_NONE;DWORD rainMaskWantQuality=0;bool rainMaskResolveLogged=false;HRESULT rainMaskResolveHr=S_OK;
     bool rainMaskCleared=false,rainMaskDrawn=false,rainMaskFrame=false,rainMaskOk=false;unsigned rainMaskDraws=0;bool rainMaskMismatchLogged=false; /* rainMaskCleared: this frame's mask start (depth snapshot + clear) ran */
-    IDirect3DTexture9* rainDepth=nullptr;IDirect3DPixelShader9 *rainMrtPS=nullptr,*rainScrubPS=nullptr;bool rainMrtBound=false,rainDepthOk=false,rainCapsChecked=false,rainCapsOk=false,rainSkipLogged=false;unsigned rainMrtRuns=0,rainMaskSkips=0;DWORD rainMrtPrev[5]={};bool rainMrtPrevKnown[5]={};
+    IDirect3DTexture9* rainDepth=nullptr;IDirect3DPixelShader9 *rainMrtPS=nullptr,*rainScrubPS=nullptr;bool rainMrtBound=false,rainDepthOk=false,rainCapsChecked=false,rainCapsOk=false,rainSkipLogged=false;unsigned rainMrtRuns=0,rainMaskSkips=0;DWORD rainMrtPrev[1]={};bool rainMrtPrevKnown[1]={};
     bool failed = false, projectionValid = false, key10 = false, key12=false;
     // 0.3.200 (frame markers): diagnostics only, while northlight-frame-markers.txt exists in the game folder at device creation: two 40x40
     // squares at the left edge whose colour cycles with the frame number. E (upper) is filled right after the world effects, P (lower) right
@@ -902,10 +902,11 @@ private:
         if(weatherMistReports<4){++weatherMistReports;logf("WEATHER mist draw (skipped) applied=%d terrain=%d",int(applied),int(terrain));weatherDrawStates(count);--weatherStateReports;}
         return true;
     }
-    // 0.3.202 (rain): RainMask. The rain streak alpha mask (A8R8G8B8 the size of the effects, MAX of the streak alphas, Z test the game's) lets WorldComposite leave
+    // 0.3.202 (rain): RainMask. The rain streak coverage mask (red of an A8R8G8B8 the size of the effects, the streaks blended over each other, Z test the game's) lets WorldComposite leave
     // the streaks out of fog and haze. Eligible only in a terrain frame before the effects, at the effect size.
-    // 0.3.202 (rain mask MRT): the mask is written by the SAME game draw through render target 1 (rainMrtPS writes oC1.a = the streak alpha; SEPARATEALPHABLEND MAX on
-    // both targets, RT1 colour-masked to alpha), RT1 stays bound across consecutive rain draws (rainMrtUnbind runs before anything else that draws, clears, copies or
+    // 0.3.202 (rain mask MRT): the mask is written by the SAME game draw through render target 1 (rainMrtPS writes oC1 = (1,1,1,streak alpha), RT1 colour-masked to
+    // red, so RainBlend's SRCALPHA/INVSRCALPHA lays the streaks over each other in red; the blend state is the game's own, so RT0 keeps RainBlend's colour AND alpha:
+    // a separate alpha blend would change RT0's alpha, which the game's glow reads), RT1 stays bound across consecutive rain draws (rainMrtUnbind runs before anything else that draws, clears, copies or
     // changes targets), so a frame costs a few pass breaks instead of two per rain draw and one per world draw. Objects drawn over the rain later are cut out by one
     // full-screen pass (rainMaskPrepare): rainDepth, the depth at the frame's first mask draw (rain writes no depth), against the final depth. MSAA scenes draw into a
     // multisampled mask target matching the game's RT/depth (D3D9 wants them to share type and quality), resolved once into the texture before the composite.
@@ -921,8 +922,8 @@ private:
     // Once per device: two render targets, independent write masks, separate alpha blend and ps_2_0; else the mask stays off.
     void rainMaskCaps(){
         rainCapsChecked=true;D3DCAPS9 caps={};const bool got=SUCCEEDED(ext->GetDeviceCaps(&caps));
-        rainCapsOk=got&&caps.NumSimultaneousRTs>=2&&(caps.PrimitiveMiscCaps&D3DPMISCCAPS_INDEPENDENTWRITEMASKS)&&(caps.PrimitiveMiscCaps&D3DPMISCCAPS_SEPARATEALPHABLEND)&&(caps.PrimitiveMiscCaps&D3DPMISCCAPS_MRTPOSTPIXELSHADERBLENDING)&&caps.PixelShaderVersion>=D3DPS_VERSION(2,0); /* RT1 is blended (MAX alpha) */
-        if(!rainCapsOk)logf("WEATHER rain mask disabled: caps got=%d simultaneousRTs=%lu independentWriteMasks=%d separateAlphaBlend=%d mrtBlending=%d pixelShader=0x%08lx",int(got),(unsigned long)caps.NumSimultaneousRTs,int((caps.PrimitiveMiscCaps&D3DPMISCCAPS_INDEPENDENTWRITEMASKS)!=0),int((caps.PrimitiveMiscCaps&D3DPMISCCAPS_SEPARATEALPHABLEND)!=0),int((caps.PrimitiveMiscCaps&D3DPMISCCAPS_MRTPOSTPIXELSHADERBLENDING)!=0),(unsigned long)caps.PixelShaderVersion);
+        rainCapsOk=got&&caps.NumSimultaneousRTs>=2&&(caps.PrimitiveMiscCaps&D3DPMISCCAPS_INDEPENDENTWRITEMASKS)&&(caps.PrimitiveMiscCaps&D3DPMISCCAPS_MRTPOSTPIXELSHADERBLENDING)&&caps.PixelShaderVersion>=D3DPS_VERSION(2,0); /* RT1 is blended (MAX alpha) */
+        if(!rainCapsOk)logf("WEATHER rain mask disabled: caps got=%d simultaneousRTs=%lu independentWriteMasks=%d mrtBlending=%d pixelShader=0x%08lx",int(got),(unsigned long)caps.NumSimultaneousRTs,int((caps.PrimitiveMiscCaps&D3DPMISCCAPS_INDEPENDENTWRITEMASKS)!=0),int((caps.PrimitiveMiscCaps&D3DPMISCCAPS_MRTPOSTPIXELSHADERBLENDING)!=0),(unsigned long)caps.PixelShaderVersion);
     }
     bool rainMaskCreate(){
         HRESULT hr=ext->CreateTexture(width,height,1,D3DUSAGE_RENDERTARGET,D3DFMT_A8R8G8B8,D3DPOOL_DEFAULT,&rainMask,nullptr);
@@ -1003,16 +1004,16 @@ private:
             if(!rainSkipLogged){rainSkipLogged=true;logf("WEATHER rain mask skip: reason=%u vs=%d vsModel=%u ps=%d stage0 color=%ld(%ld,%ld) alpha=%ld(%ld,%ld) stage1 color=%ld texcoord=%ld texTransform=%ld specular=%lu",why,int(vsBound),vsModel,int(psBound),long(st[0]),long(st[1]),long(st[2]),long(st[3]),long(st[4]),long(st[5]),long(st[6]),long(st[7]),long(st[8]),(unsigned long)spec);}
             return false;
         }
-        /* RT0 alpha becomes max(src,dst) during the draw (RainBlend's alpha is a*a+d*(1-a)); RGB is unchanged. */
-        static const D3DRENDERSTATETYPE types[5]={D3DRS_COLORWRITEENABLE1,D3DRS_SEPARATEALPHABLENDENABLE,D3DRS_SRCBLENDALPHA,D3DRS_DESTBLENDALPHA,D3DRS_BLENDOPALPHA};
-        static const DWORD want[5]={D3DCOLORWRITEENABLE_ALPHA,TRUE,D3DBLEND_ONE,D3DBLEND_ONE,D3DBLENDOP_MAX};
-        for(int i=0;i<5;++i){rainMrtPrevKnown[i]=SUCCEEDED(ext->GetRenderState(types[i],&rainMrtPrev[i]));ext->SetRenderState(types[i],want[i]);}
+        /* Only RT1's write mask changes: RT0's colour and alpha blend exactly as RainBlend's draw without the mask. */
+        static const D3DRENDERSTATETYPE types[1]={D3DRS_COLORWRITEENABLE1};
+        static const DWORD want[1]={D3DCOLORWRITEENABLE_RED};
+        for(int i=0;i<1;++i){rainMrtPrevKnown[i]=SUCCEEDED(ext->GetRenderState(types[i],&rainMrtPrev[i]));ext->SetRenderState(types[i],want[i]);}
         ext->SetPixelShader(rainMrtPS);
         return true;
     }
     void rainMrtEnd(){
-        static const D3DRENDERSTATETYPE types[5]={D3DRS_COLORWRITEENABLE1,D3DRS_SEPARATEALPHABLENDENABLE,D3DRS_SRCBLENDALPHA,D3DRS_DESTBLENDALPHA,D3DRS_BLENDOPALPHA};
-        for(int i=0;i<5;++i)if(rainMrtPrevKnown[i])ext->SetRenderState(types[i],rainMrtPrev[i]);
+        static const D3DRENDERSTATETYPE types[1]={D3DRS_COLORWRITEENABLE1};
+        for(int i=0;i<1;++i)if(rainMrtPrevKnown[i])ext->SetRenderState(types[i],rainMrtPrev[i]);
         ext->SetPixelShader(nullptr); /* eligibility: the game had no pixel shader bound (its vertex shader, if any, stays) */
     }
     // The rain draw: when eligible the same single game draw writes the mask through RT1; otherwise as it was (RT1 unbound first: a pixel shader that does not write oC1 must not meet it).
@@ -1038,7 +1039,7 @@ private:
         if(SUCCEEDED(hr)){
             ext->SetTexture(0,depthTex);ext->SetTexture(1,rainDepth);
             for(DWORD s=0;s<2;++s){ext->SetSamplerState(s,D3DSAMP_MINFILTER,D3DTEXF_POINT);ext->SetSamplerState(s,D3DSAMP_MAGFILTER,D3DTEXF_POINT);ext->SetSamplerState(s,D3DSAMP_MIPFILTER,D3DTEXF_NONE);} /* both depths exact, texel for texel */
-            ext->SetPixelShader(rainScrubPS);ext->SetRenderState(D3DRS_COLORWRITEENABLE,D3DCOLORWRITEENABLE_ALPHA);
+            ext->SetPixelShader(rainScrubPS);ext->SetRenderState(D3DRS_COLORWRITEENABLE,D3DCOLORWRITEENABLE_RED);
             hr=quad(width,height);
         }
         if(FAILED(hr)){rainMaskResolveHr=hr;return nullptr;}

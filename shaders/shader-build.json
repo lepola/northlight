@@ -1,6 +1,6 @@
 {
   "source_sha256": "3c4ebf55f84663efe1aa13c7010171ffa70ae611dac561be800bb8fd77ba64e9",
-  "rain_source_sha256": "af93fa77187d96e053cfe545389354846622e26ac524b69d7acafe421a1be9e0",
+  "rain_source_sha256": "10948a355dc52e824d9ae61b5251a5146a20955295070dbe9ce749dec0eac172",
   "target": "ps_3_0",
   "shaders": {
     "AO": {
@@ -133,7 +133,7 @@
     },
     "RainMaskMRT": {
       "bytes": 284,
-      "sha256": "8c60cb581c924c1720c8bcc7278fa76b16a9aa1fccc32fd68e5dd3b7be3e3067",
+      "sha256": "bac487c7850375bdde1b396e0b5b6ed875b6b704b5dd04d4e6bd50681370d2bc",
       "target": "ps_2_0",
       "static_instruction_slots": 8,
       "temporary_registers": 2,
