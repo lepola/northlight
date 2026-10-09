@@ -23,7 +23,7 @@ checks['source: the debug entry keeps the plain transmittance composite, the nor
     'if(debugViews)color=mad(1-mask.y,fogged-B,pixel);' in body and body.index('if(debugViews)')<body.index('float fm=')<body.index('float s=')<body.index('float transP='))
 checks['source: red over blue is the weighted mean fog factor, 1 (no extra fog) when nothing was written; thin coverage is only guarded against 0/0']=('float fm=mask.r*rcp(max(mask.b,.0078));' in body)
 checks['source: the distance fraction comes from the host constant LegacyFogColor.w = 1/(slope x signed projection); 0 means no fog: s = 0']=(
-    'float s=saturate((fm-1)*LegacyFogColor.w*rcp(viewZ));' in body and 'w (WorldComposite only)' in h.split('float4 LegacyFogColor : register(c26);',1)[1].split('\n',1)[0])
+    'float s=saturate((fm<.998?fm-LegacyFog.y:0)*LegacyFogColor.w*rcp(viewZ));' in body and 'w (WorldComposite only)' in h.split('float4 LegacyFogColor : register(c26);',1)[1].split('\n',1)[0])
 checks['source: transmittance to the particle = (1 - haze ramp at s x viewZ) x fog.a^s; 1 for s = 0']=(
     'float rp=saturate((viewZ*s-HorizonShape.y)*HorizonShape.z);' in body and 'float transP=(1-hazeRamp(rp)*hz.a)*exp2(s*log2(max(fog.a,.0001)));' in body and 'float transF=(1-h)*fog.a;' in body)
 checks['source: out = T x F + transP x E + g x (airlight ratio) x airlight; E = pixel - T x B']=(
@@ -33,8 +33,8 @@ checks['source: the haze is one call with the angular amount split from the ramp
 checks['source: no sampler or texture read was added in the particle fog']=(comp.count('tex2D')==comp.count('tex2D')) and 'tex2Dlod' not in body.split('float fm=',1)[1]
 # ---- manifest
 wc,wd=wm['WorldComposite'],wm['WorldCompositeDebug']
-checks['manifest: WorldComposite (normal) 506 slots, WorldCompositeDebug 504 slots, both within SM3\'s 512 and 32 temporaries, samplers 0,1,8..14']=(
-    wc['static_instruction_slots']==506 and wd['static_instruction_slots']==504 and wc['temporary_registers']<=32 and wd['temporary_registers']<=32 and wc['samplers']==wd['samplers']==[0,1,8,9,10,11,12,13,14])
+checks['manifest: WorldComposite (normal) 509 slots, WorldCompositeDebug 504 slots, both within SM3\'s 512 and 32 temporaries, samplers 0,1,8..14']=(
+    wc['static_instruction_slots']==509 and wd['static_instruction_slots']==504 and wc['temporary_registers']<=32 and wd['temporary_registers']<=32 and wc['samplers']==wd['samplers']==[0,1,8,9,10,11,12,13,14])
 BEFORE_EXTRA={'WorldNormals':'e647de5f5ba48db3fa790f329731d066a47fa965fdf474dcc568c337f36fac34'}
 checks['manifest: WorldNormals and every other world entry byte-identical to 0.3.202 (only the composite entries changed)']=all(wm[n]['sha256']==s for n,s in BEFORE_EXTRA.items())
 checks['compiled: both composite binaries exist and the generated header carries both symbols']=(
@@ -50,19 +50,19 @@ with tempfile.TemporaryDirectory(prefix='particle-fog-') as tmp:
     exe=Path(tmp)/'t'
     subprocess.run(['clang++','-std=c++17','-O1','-Wall','-Wextra','-Werror',*fp.test_include_flags(),str(Path(__file__).resolve().parent/'test_particle_fog.cpp'),'-o',str(exe)],check=True)
     vals=[float(x) for x in subprocess.check_output([str(exe)],text=True).split()]
-checks['legacy fog constant: 1/(slope x projection) for a validated linear fog from the camera (either handedness); 0 for anything else']=(
-    abs(vals[0]-1/-0.0019)<1e-3 and abs(vals[1]-1/-0.0019)<1e-3 and vals[2:]==[0.0]*5)
+checks['legacy fog constant: 1/(slope x projection) for a validated linear fog, any Y (HD client Y < 1, stock client Y > 1; either handedness); 0 for anything else']=(
+    abs(vals[0]-1/-0.0019)<1e-3 and abs(vals[1]-1/-0.0019)<1e-3 and vals[2:5]==[0.0]*3 and abs(vals[5]-1/-0.0024)<1e-2 and abs(vals[6]-1/-0.005135)<1e-1 and vals[7]==0.0)
 
 # ---- numeric model of the composite (mirrors the HLSL; floats as Python doubles)
 def sat(x):return min(1.,max(0.,x))
 def lerp(a,b,t):return tuple(x+(y-x)*t for x,y in zip(a,b))
 def ramp(r):return r*r*(3-2*r)
 SHAPE_Y,SHAPE_Z=40.,1/200.      # haze start view Z and 1/ramp
-def composite(pixel,B,g,r,b,viewZ,fog_a,fog_rgb,color,haze_rgb,haze_ang,scale):
+def composite(pixel,B,g,r,b,viewZ,fog_a,fog_rgb,color,haze_rgb,haze_ang,scale,Y=1.):
     """the normal entry's tail. pixel = T x B + E (the scene), B the snapshot (or the pixel), g = 1-T, r/b the mask's red/blue, scale = LegacyFogColor.w."""
     rng=sat((viewZ-SHAPE_Y)*SHAPE_Z);hh=ramp(rng)*haze_ang
     fogged=tuple(c*fog_a+f for c,f in zip(lerp(color,haze_rgb,hh),fog_rgb))
-    fm=r/max(b,.0078);s=sat((fm-1)*scale/viewZ)
+    fm=r/max(b,.0078);s=sat(((fm-Y) if fm<.998 else 0.)*scale/viewZ)
     rp=sat((viewZ*s-SHAPE_Y)*SHAPE_Z);transF=(1-hh)*fog_a;transP=(1-ramp(rp)*haze_ang)*2**(s*math.log2(max(fog_a,.0001)))
     T=1-g;air=tuple(f-transF*c for f,c in zip(fogged,color))
     ratio=(1-transP)/(1.001-transF)
@@ -73,7 +73,7 @@ def previous(pixel,B,g,viewZ,fog_a,fog_rgb,color,haze_rgb,haze_ang):
     return tuple(p+(1-g)*(f-b) for p,f,b in zip(pixel,fogged,B))
 rnd=random.Random(2037)
 SLOPE=-0.0019      # legacy fog: f = 1 + z x slope (projection sign +1), scale = 1/slope
-def f_at(z):return sat(1+z*SLOPE)
+def f_at(z,Y=1.,slope=SLOPE):return sat(min(Y+z*slope,1.))
 exact=True;neutral=True;nofog=True
 for _ in range(500):
     B=tuple(rnd.uniform(0,.8) for _ in range(3));E=tuple(rnd.uniform(0,.6) for _ in range(3));g=rnd.choice((0,rnd.uniform(0,1)));T=1-g
@@ -144,9 +144,27 @@ checks['numeric: layers without a fog factor write f = 1: red == blue exactly in
 # SRCCOLOR/ONE squares the written value in blue (b' = src^2): a red of (m f)^2 would square f, so that kind writes none (red = blue's value m)
 m,f=.5,.64
 checks['numeric: SRCCOLOR/ONE with the f write would give red/blue = f^2; kind 3 keeps red == blue (f = 1)']=abs((m*f)**2/(m*m)-f*f)<1e-12 and abs(m**2/(m*m)-1)<1e-12
+# the game's fog varies per zone and client: f = min(z x slope + Y, 1) with Y < 1 (HD client), Y = 1 and Y > 1 (stock client: the fog starts away from the camera)
+for Y,slope in ((0.6666667,-0.0024),(1.,-0.0019),(1.7857143,-0.005135)):
+    scale=1/slope;vz=700.
+    fa=0.2;fr=tuple(l*(1-fa) for l in Lh)
+    pix=tuple(b+e for b,e in zip(col,E))
+    for zp in (120.,250.):
+        far=composite(pix,col,0.,f_at(zp,Y,slope)*.4,.4,vz,fa,fr,col,Lh,ha,scale,Y)
+        saturated=f_at(zp,Y,slope)>=.998
+        checks['numeric: Y=%.3f: a particle at %d yd %s'%(Y,zp,'is inside the fog start (f = 1): s = 0, unchanged' if saturated else 'inverts to its distance and fades (transP < 1, s = z/viewZ)')]=(
+            (far[2]==0. and far[1]==1.) if saturated else (abs(far[2]-zp/vz)<1e-6 and far[1]<1.))
+    # near particle (inside every fog start, f = 1 or the fog's value at the camera): bit-for-bit unchanged
+    near=composite(pix,col,0.,f_at(0.,Y,slope)*.4,.4,vz,fa,fr,col,Lh,ha,scale,Y)
+    checks['numeric: Y=%.3f: a particle at the camera is unchanged (transP = 1)'%Y]=(near[1]==1. or abs(near[1]-1)<1e-9)
+    beyond=composite(pix,col,0.,0.,.4,vz,fa,fr,col,Lh,ha,scale,Y)    # f = 0: beyond the fog end
+    checks['numeric: Y=%.3f: f clamped at 0 beyond the fog end reads as the fog end distance (s = min(end/viewZ, 1)), never brighter than before'%Y]=(abs(beyond[2]-min(1.,(-Y*scale)/vz))<1e-9 and beyond[1]<=1.)
+    # layers without a fog factor write f = 1: no distance for any Y
+    sentinel=composite(pix,col,0.,.4,.4,vz,fa,fr,col,Lh,ha,scale,Y)
+    checks['numeric: Y=%.3f: red == blue (layers without a fog factor, f = 1) is no distance: the previous composite exactly'%Y]=(sentinel[2]==0. and sentinel[1]==1.)
 # distance from f: both handednesses of the projection
 for proj in (1.,-1.):
-    x_param=SLOPE*proj;scale=1/(x_param*proj);z=(f_at(250.)-1)*scale      # the game uploads X so that z x projectionZ x X = z x SLOPE
+    x_param=SLOPE*proj;scale=1/(x_param*proj);z=(f_at(250.)-1.)*scale      # the game uploads X so that z x projectionZ x X = z x SLOPE
     checks['numeric: f inverts to the particle distance (projection sign %+d)'%proj]=abs(z-250.)<1e-6
 for k,ok in checks.items():print(('PASS ' if ok else 'FAIL ')+k)
 sys.exit(0 if all(checks.values()) else 1)

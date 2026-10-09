@@ -8,7 +8,8 @@ int main(){
         {{-0.0019f,1,1,0},1.f},                            // not validated enabled
         {{0.f,1,1,0},1.f},                                 // the identity upload
         {{-0.0019f,1,2,1},1.f},                            // exponent 2
-        {{-0.0019f,1.4f,1,1},1.f},                         // fog starts away from the camera
+        {{-0.0024f,0.6666667f,1,1},1.f},                   // the HD client's fog (Y < 1)
+        {{-0.005135f,1.785714f,1,1},1.f},                  // the stock client's fog (Y > 1: starts away from the camera)
         {{0.0019f,1,1,1},1.f},                             // fog factor rising with distance: not a fog
     };
     for(const auto& c:cases)std::printf("%.9g\n",particleDistanceScale(c.p,c.proj));

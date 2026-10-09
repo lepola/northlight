@@ -116,11 +116,11 @@ inline RGB composeVolume(RGB corrected,RGB original,float legacyT,RGB legacyColo
     }
     return result;
 }
-// 0.3.203 (particle fog): WorldComposite inverts the game's fog factor f = sat(z x X + Y) that a particle shader received into the particle's view distance z = (f - 1) / (X x projectionZ),
-// which needs a validated linear fog (exponent 1) that starts at the camera (Y = 1). Returns 1 / (X x projectionZ) (negative), else 0: no usable fog, particles keep the plain composite.
+// 0.3.203 (particle fog): WorldComposite inverts the game's fog factor f = min(z x projectionZ x X + Y, 1) that a particle shader received into the particle's view distance z = (f - Y) / (X x projectionZ),
+// which needs a validated linear fog (exponent 1; Y is read from the same constants, any value). Returns 1 / (X x projectionZ) (negative), else 0: no usable fog, particles keep the plain composite.
 inline float particleDistanceScale(const float* parameters,float projectionZ){
     const float x=parameters[0]*projectionZ;
-    const bool usable=parameters[3]>0&&parameters[2]==1.f&&std::fabs(parameters[1]-1.f)<=1e-4f&&x<-1e-9f&&std::isfinite(x);
+    const bool usable=parameters[3]>0&&parameters[2]==1.f&&std::isfinite(parameters[1])&&x<-1e-9f&&std::isfinite(x);
     return usable?1.f/x:0.f;
 }
 } // namespace NorthlightLegacyFog

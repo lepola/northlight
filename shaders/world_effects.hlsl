@@ -1049,11 +1049,12 @@ float4 compositeImpl(float2 uv,bool debugViews) {
         if(debugViews)color=mad(1-mask.y,fogged-B,pixel); // the debug entry keeps the plain transmittance composite: no fog at the particles' own distance (the instruction budget)
         else{
         // The particles' own light E = pixel - T x B was fogged by the game at ITS distance (legacy fog, in the pixel already) and gets Northlight's fog and haze at that same distance: the mask's red over blue is the
-        // weighted mean of the game's fog factor f the particle shaders received (1 where the shader had none: no extra fog, the old result). f = sat(z x X + 1) inverts to the distance z = (f - 1) / X; the host
-        // uploads 1/X (signed projection included) in LegacyFogColor.w, and 0 without a usable linear legacy fog starting at the camera (Y = 1, exponent 1). s = z/viewZ. A coverage below 2/255 has too
+        // weighted mean of the game's fog factor f the particle shaders received (1 where the shader had none: no extra fog, the old result). f = min(z x X + Y, 1) inverts to the distance z = (f - Y) / X; the host
+        // uploads 1/X (signed projection included) in LegacyFogColor.w, and 0 without a usable linear legacy fog (exponent 1). f = 1 is no distance (the sentinel of layers without a fog factor, and
+        // a particle inside a fog that starts away from the camera, Y > 1): s = 0, near particles stay as they were. s = z/viewZ, clamped (f = 0 beyond the fog end). A coverage below 2/255 has too
         // little light to matter: its ratio is only guarded against 0/0.
         float fm=mask.r*rcp(max(mask.b,.0078));
-        float s=saturate((fm-1)*LegacyFogColor.w*rcp(viewZ));
+        float s=saturate((fm<.998?fm-LegacyFog.y:0)*LegacyFogColor.w*rcp(viewZ));
         float rp=saturate((viewZ*s-HorizonShape.y)*HorizonShape.z);
         float transF=(1-h)*fog.a;                                       // fog and haze from the camera to the surface behind
         float transP=(1-hazeRamp(rp)*hz.a)*exp2(s*log2(max(fog.a,.0001))); // ... to the particle: 1 for s = 0
