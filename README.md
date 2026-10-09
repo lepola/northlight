@@ -67,6 +67,11 @@ Every effect below is on by default and is drawn on top of the game's own frame.
   `StreamFramesAhead` (1..3, default 2) sets how many frames the game may run ahead of that thread (1 = as in 0.3.199);
   with `StreamFrameSkip=1` (default) a thread two whole frames behind skips drawing the older frame (state and uploads still
   apply; frames that render to textures, use occlusion queries or copy the picture are always drawn), so the game does not wait for it.
+  `IDirect3DDevice9::TestCooperativeLevel` is answered on the game thread (D3D_OK) while the device is fine, so a client that calls it
+  hundreds of times a frame no longer waits for the draw thread on each call (0.3.204); a lost or not yet reset device is reported by the
+  real call, up to `StreamFramesAhead` frames after the loss. The `CSTREAM` log line shows the locally answered calls per frame as
+  `coop=` (next to `answered=`); `synced=` counts only the calls that waited, which now includes `TestCooperativeLevel` calls made
+  while the device is lost. With `Diagnostics=1` the log also names the module that calls it once (`CSTREAM TestCooperativeLevel caller=`).
   `ContactAO=1` (default, every preset) keeps the screen-space contact shading in creases and corners; `0` skips it and its denoise pass (about 0.5 ms of GPU time) and leaves the bloom as it is.
 - **Font mods.** Lexara, TweakWoW2 (HD Font on) and the AwesomeWotLK MSDF fork replace the game's UI shaders,
   which Northlight uses to find where the world ends and the UI begins. Northlight then learns the mod's UI draws
