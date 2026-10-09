@@ -321,7 +321,7 @@ class Device final : public GuardedMirrorDevice {
     IDirect3DPixelShader9* particlePS[8]={};bool particlePSFailed=false,rainMaskRainDrawn=false;unsigned particleDraws=0,particleSkips=0,rainLateZ=0,rainLateZPrims=0,particleSkipLogs=0,particleSkipLogged[8]={};
     struct LateZSig{DWORD v[6]={};unsigned vs=0,ps=0,draws=0,prims=0;}; /* vs: 0 none, 1 world, 2 skinned, 3 water, 4 other */
     LateZSig lateZSigs[12];unsigned lateZSigCount=0,lateZSigMore=0,lateZBlended=0,lateZOpaque=0;
-    struct NoZSig{DWORD v[4]={};unsigned vs=0,ps=0,cand=0,draws=0,prims=0;}; /* v: blend enable, src, dst, alpha test; vs as LateZSig; cand: 0 neither, 1 a particle candidate that got no mask, 2 a rain candidate that got none */
+    struct NoZSig{DWORD v[6]={};unsigned vs=0,ps=0,cand=0,draws=0,prims=0;}; /* v: blend enable, src, dst, alpha test, ZWRITEENABLE, ZENABLE; vs as LateZSig; cand: 0 neither, 1 a particle candidate that got no mask, 2 a rain candidate that got none */
     NoZSig noZSigs[12];unsigned noZSigCount=0,noZSigMore=0,noZDraws=0,noZPrims=0;
     struct ParticleSig{unsigned why=0,vsModel=0;DWORD v[13]={};unsigned count=0;}; /* a sample frame's census row: the draw states of a candidate (v: src, dst, op, alpha test, colour op/args, alpha op/args, stage 1 colour op) */
     ParticleSig particleSigs[12];unsigned particleSigCount=0,particleSigMore=0;bool particleFirstLogged=false;
@@ -996,14 +996,14 @@ private:
         else{if(SUCCEEDED(ext->GetDepthStencilSurface(&ds)))same=ds==worldDepth;drop(ds);}
         return same;
     }
-    // 0.3.203 (particle mask): a draw into the world depth, in the world's viewport depth range, with a model vertex shader or none (not terrain, UI, water or skinned).
+    // 0.3.203 (particle mask): a draw into the world depth, in the world's viewport depth range, with a model vertex shader or none (not terrain, UI or water).
     bool particleWorldDraw(){
         if(!projectionValid||!sameWorldDepth())return false;
         D3DVIEWPORT9 vp={};DWORD ze=FALSE;
         if(FAILED(ext->GetViewport(&vp))||FAILED(ext->GetRenderState(D3DRS_ZENABLE,&ze)))return false;
         if(!NorthlightWorldDrawDomain::accepts(projectionValid,ze!=FALSE,worldMinDepth,worldMaxDepth,vp.MinZ,vp.MaxZ))return false;
         IDirect3DVertexShader9* v=nullptr;const bool borrowed=ext->peekVertexShader(v);if(!borrowed&&FAILED(ext->GetVertexShader(&v)))v=nullptr;
-        bool ok=true;if(v){const VsClass& vc=classifyVs(v);ok=(vc.entry&(kTagMask|kWaterTag))==0&&!vc.skinned;} /* skinned: the translucent-actor path (ghosts, translucent characters) stays out */
+        bool ok=true;if(v){const VsClass& vc=classifyVs(v);ok=(vc.entry&(kTagMask|kWaterTag))==0;} /* skinned (bone-animated M2) vertex shaders are in: the lantern glow cards are skinned, no-Z-write blended draws; translucent actors write Z, so particleCandidate() leaves them out */
         if(!borrowed)drop(v);return ok;
     }
     // 0.3.203 (particle mask): the draw hook's test, before the draw's other work: a pre-effects draw after the terrain that blends and writes no depth (torch and brazier
@@ -1031,6 +1031,7 @@ private:
         NoZSig sig;sig.cand=cand;
         static const D3DRENDERSTATETYPE reads[4]={D3DRS_ALPHABLENDENABLE,D3DRS_SRCBLEND,D3DRS_DESTBLEND,D3DRS_ALPHATESTENABLE};
         for(int i=0;i<4;++i){if(FAILED(ext->GetRenderState(reads[i],&sig.v[i])))sig.v[i]=~0u;}
+        sig.v[4]=zw;sig.v[5]=ze;
         IDirect3DVertexShader9* v=nullptr;const bool borrowed=ext->peekVertexShader(v);if(!borrowed&&FAILED(ext->GetVertexShader(&v)))v=nullptr;
         if(v){const VsClass& vc=classifyVs(v);sig.vs=(vc.entry&kWaterTag)?3:vc.skinned?2:vc.world?1:4;}
         if(!borrowed)drop(v);
@@ -1592,7 +1593,7 @@ public:
             static const char* const vsNames[5]={"none","world","skinned","water","other"};
             std::string rows;char row[200];
             for(unsigned i=0;i<noZSigCount;++i){const NoZSig& r=noZSigs[i];
-                snprintf(row,sizeof row," [n=%u prims=%u blend=%ld %ld/%ld at=%ld vs=%s ps=%u cand=%u]",r.draws,r.prims,long(r.v[0]),long(r.v[1]),long(r.v[2]),long(r.v[3]),vsNames[r.vs],r.ps,r.cand);rows+=row;}
+                snprintf(row,sizeof row," [n=%u prims=%u blend=%ld %ld/%ld at=%ld zw=%ld ze=%ld vs=%s ps=%u cand=%u]",r.draws,r.prims,long(r.v[0]),long(r.v[1]),long(r.v[2]),long(r.v[3]),long(r.v[4]),long(r.v[5]),vsNames[r.vs],r.ps,r.cand);rows+=row;}
             logf("PARTICLES lateNoZ frame=%u draws=%u prims=%u sigs=%u more=%u%s",sampleFrame,noZDraws,noZPrims,noZSigCount,noZSigMore,rows.c_str());
         }
         noZSigCount=noZSigMore=noZDraws=noZPrims=0;

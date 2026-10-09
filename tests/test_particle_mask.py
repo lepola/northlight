@@ -142,7 +142,7 @@ checks['begin: the snapshot is taken once per frame at the first mask draw of ei
     'if(!particleBgTried){rainMrtUnbind();particleBackgroundStart();}' in bg and 'if(!particleBgOk)why|=512;' in bg and 'if(!particle&&rainBgState<0)rainBgState=particleBgOk?1:0;' in bg and bg.index('rainMaskStart(maskTarget)')<bg.index('particleBackgroundStart();')<bg.index('ext->SetRenderTarget(1,maskTarget)'))
 checks['begin: particles bind RT1 at most kParticleRebindCap (24) times a frame; past it the draw is made unchanged (reason 1024)']=(
     'static constexpr unsigned kParticleRebindCap=24;' in r and 'if(particle&&rainMrtRuns>=kParticleRebindCap)why|=1024;' in bg)
-checks['classification: skinned (actor) vertex shaders are excluded']=('&&!vc.skinned' in pw)
+checks['classification: skinned vertex shaders are candidates (lantern glow cards); translucent actors write Z and fail particleCandidate()']=('vc.skinned' not in pw and 'ok=(vc.entry&(kTagMask|kWaterTag))==0;' in pw)
 checks['resources: the background is released with the mask resources (release, size change)']=r[r.index('void releaseResources() {'):r.index('bool error(HRESULT hr')].count('drop(particleBgSurface);drop(particleBg);')==1 and r[r.index('bool resources(UINT w'):r.index('if (!aoPS &&')].count('drop(particleBgSurface);drop(particleBg);')==1
 checks['composite handoff: renderEffects gives the world the background only with a mask and a good snapshot, right before the rain mask']=(
     'world->setParticleBackground(rainMaskTex&&particleBgOk?particleBg:nullptr);' in r and 0<r.index('world->setRainMask(rainMaskTex);')-r.index('world->setParticleBackground(')<260)

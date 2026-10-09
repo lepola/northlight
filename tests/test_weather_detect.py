@@ -135,7 +135,7 @@ struct Hook{
     IDirect3DPixelShader9* particlePS[8]={};static constexpr D3DCOLOR kRainMaskClear=0x80000000;IDirect3DTexture9* particleBg=nullptr;Surface* particleBgSurface=nullptr;D3DFORMAT particleBgFormat=D3DFMT_UNKNOWN;bool particleBgTried=false,particleBgOk=false,particleBgLogged=false;int particleBgLast=-1,rainBgState=-1;unsigned mod2xBeforeSnapshot=0,mod2xAfterSnapshot=0,mod2xAfterRain=0;static constexpr unsigned kParticleRebindCap=24;
     bool particlePSFailed=false,rainMaskRainDrawn=false;unsigned particleDraws=0,particleSkips=0,rainLateZ=0,rainLateZPrims=0,particleSkipLogs=0,particleSkipLogged[8]={};
     struct LateZSig{DWORD v[6]={};unsigned vs=0,ps=0,draws=0,prims=0;};LateZSig lateZSigs[12];unsigned lateZSigCount=0,lateZSigMore=0,lateZBlended=0,lateZOpaque=0;
-    struct NoZSig{DWORD v[4]={};unsigned vs=0,ps=0,cand=0,draws=0,prims=0;};NoZSig noZSigs[12];unsigned noZSigCount=0,noZSigMore=0,noZDraws=0,noZPrims=0;
+    struct NoZSig{DWORD v[6]={};unsigned vs=0,ps=0,cand=0,draws=0,prims=0;};NoZSig noZSigs[12];unsigned noZSigCount=0,noZSigMore=0,noZDraws=0,noZPrims=0;
     struct ParticleSig{unsigned why=0,vsModel=0;DWORD v[13]={};unsigned count=0;};ParticleSig particleSigs[12];unsigned particleSigCount=0,particleSigMore=0;bool particleFirstLogged=false;std::vector<std::string> logs;template<class F> void extensionWork(const char*,F f){f();}
     void newFrame(){rainMrtUnbind();rainMaskCleared=rainMaskDrawn=rainMaskFrame=rainMaskOk=rainDepthOk=rainMaskRainDrawn=particleBgTried=particleBgOk=false;applied=false;} /* clearFrame's part */
     Ext extObj;Ext* ext=&extObj;NorthlightParticleShaderPatch::Cache<Ext,IDirect3DPixelShader9> particlePatched;IDirect3DPixelShader9* particleGamePs=nullptr;unsigned particlePatchedDraws=0,particlePatchRejects[NorthlightParticleShaderPatch::ReasonCount]={};World worldObj;World* world=&worldObj;bool claimedSkip=false;bool gateFrame=true;
@@ -430,6 +430,8 @@ int main(){
                 h.draw(10);assert(h.particleSkips==2&&h.particlePatchRejects[MrtDepthWrite]==2&&h.logs.size()==2&&h.ext->patchedCreates==0&&h.particlePatched.size()==1&&h.particlePatched.variants()==0); /* remembered: no second attempt, no second log */}
             {Hook h;mkg(h);h.ext->patchedShaderFails=true;h.draw(10);h.draw(10);assert(h.particleSkips==2&&h.particlePatchRejects[CreateFailed]==2&&h.drawn==2&&h.ext->draws[1].ps==&h.ext->gamePs&&h.logs.size()==2);} /* the device refused the variant: drawn unchanged */
             {Hook h;mkg(h);h.ext->rs[D3DRS_SRCBLEND]=D3DBLEND_DESTCOLOR;h.ext->rs[D3DRS_DESTBLEND]=D3DBLEND_SRCCOLOR;h.draw(10);assert(h.particleSkips==1&&h.particlePatched.size()==0&&h.ext->patchedCreates==0&&h.ext->draws[0].ps==&h.ext->gamePs);} /* an unsupported blend: nothing is patched */
+            {Hook h;mkg(h);h.vcMock.skinned=true;h.draw(10);h.ext->rs[D3DRS_DESTBLEND]=D3DBLEND_ONE;h.draw(10);assert(h.particlePatchedDraws==2&&h.particleSkips==0&&h.ext->patchedCreates==2&&h.ext->draws[1].colorWrite1==D3DCOLORWRITEENABLE_BLUE);} /* skinned vs_3_0 + game ps_3_0 (the lantern glow cards): patched, over and additive */
+            {Hook h;mkg(h);h.vcMock.skinned=true;h.ext->rs[D3DRS_ZWRITEENABLE]=1;h.draw(10);assert(h.particlePatchedDraws==0&&h.particleSkips==0&&h.ext->draws[0].ps==&h.ext->gamePs&&h.ext->draws[0].rt1==nullptr&&h.particlePatched.size()==0);} /* a Z-writing skinned draw (translucent actor) is nothing for the mask */
             {Hook h;mkg(h);h.vsMajor[&h.ext->gameVs]=1;h.draw(10);assert(h.particlePatchedDraws==1);h.vsMajor.erase(&h.ext->gameVs);h.draw(10);assert(h.particlePatchedDraws==2);} /* the game's own vertex shader, whatever its model */
             {Hook h;mkg(h);h.ext->borrowOk=false;h.draw(10);assert(h.particlePatchedDraws==1&&h.ext->ps==&h.ext->gamePs&&h.ext->gamePs.refs==1);} /* the shader found through GetPixelShader instead of the mirror's identity */
         }
@@ -520,9 +522,10 @@ int main(){
             Hook f;mk(f);for(int i=0;i<10;++i){f.ext->rs[D3DRS_ZWRITEENABLE]=0;f.draw(10);f.draw(10);f.ext->rs[D3DRS_ZWRITEENABLE]=1;f.draw(10);}
             assert(f.particleDraws==20&&f.rainMrtRuns==10&&f.particleSkips==0); /* consecutive mask draws share one bind */
         }
-        {   // actor (skinned) vertex shaders are not particles: translucent characters stay fogged like before
-            Hook h;mk(h);h.ext->vsBound=&h.ext->gameVs;h.vsMajor[&h.ext->gameVs]=1;h.vcMock.skinned=true;h.draw(10);assert(h.drawn==1&&h.particleDraws==0&&h.particleSkips==0&&h.ext->sets.empty()&&h.ext->draws[0].rt1==nullptr&&h.ext->colorFills==0);
-            h.vcMock.skinned=false;h.draw(10);assert(h.particleDraws==1);
+        {   // skinned (bone-animated M2) vertex shaders are in: the lantern glow cards are skinned no-Z blended draws; a translucent actor writes Z and is no candidate
+            Hook h;mk(h);h.ext->vsBound=&h.ext->gameVs;h.vsMajor[&h.ext->gameVs]=1;h.vcMock.skinned=true;h.draw(10);assert(h.drawn==1&&h.particleDraws==1&&h.ext->draws[0].rt1==&h.ext->maskTex.s);
+            h.ext->rs[D3DRS_ZWRITEENABLE]=1;h.draw(10);assert(h.drawn==2&&h.particleDraws==1&&h.particleSkips==0&&h.ext->draws[1].rt1==nullptr&&h.ext->draws[1].ps==nullptr&&h.ext->draws[1].colorWrite1==15); /* a Z-writing skinned draw: as the game draws it, uncounted */
+            h.ext->rs[D3DRS_ZWRITEENABLE]=0;h.vcMock.skinned=false;h.draw(10);assert(h.particleDraws==2);
         }
         {   // rain late-Z counter: Z-writing world draws after the frame's first rain mask draw
             Hook h;mk(h);h.weatherDetect.noteCreate(P(51),32,512,1,A);h.weatherDetect.reset();h.weatherDetect.noteCreate(P(51),32,512,1,A);
@@ -560,6 +563,7 @@ int main(){
             h.ext->rs[D3DRS_ZWRITEENABLE]=1;after(5,0,h.particleDraws+h.rainMaskDraws);assert(h.noZDraws==3); /* writes Z */
             h.ext->rs[D3DRS_ZWRITEENABLE]=0;h.ext->rs[D3DRS_ZENABLE]=0;h.ext->peekDS=false;Surface other;h.worldDepth=&other;after(5,0,h.particleDraws+h.rainMaskDraws);assert(h.noZDraws==3);h.worldDepth=&h.ext->gameDS;h.ext->peekDS=true; /* another depth buffer */
             h.ext->rs[D3DRS_ZENABLE]=0;after(5,0,h.particleDraws+h.rainMaskDraws);assert(h.noZDraws==4); /* no depth test: writes no Z either */
+            assert(h.noZSigs[0].v[4]==0&&h.noZSigs[0].v[5]==1&&h.noZSigCount==3&&h.noZSigs[2].v[5]==0); /* ZWRITEENABLE and ZENABLE are in the signature */
         }
         {   // the sample-frame census: one row per distinct setup, masked (why 0) and skipped
             Hook h;mk(h);h.sampledFrame=true;h.draw(10);h.draw(10);h.ext->rs[D3DRS_SRCBLEND]=D3DBLEND_DESTCOLOR;h.draw(10);h.ext->rs[D3DRS_SRCBLEND]=D3DBLEND_SRCALPHA;h.ext->tss[0][D3DTSS_COLOROP]=D3DTOP_MODULATE2X;h.draw(10);
