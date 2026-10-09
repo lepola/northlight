@@ -60,7 +60,7 @@ checks['c30.yzw only from the drawn source weight (sum of positive weights), set
 tb=w[w.index('{   // Temporal stabilization: light + history'):w.index('temporalIndex=prev;temporalValid=true;')]
 # s12 moved from the composite's binding line to the temporal pass: the same API calls per frame, and
 # nothing between the two passes rebinds s12 (the frame-start texture loop sets it to null earlier).
-between=w[w.index('temporalIndex=prev;temporalValid=true;'):w.index('d->SetPixelShader(finalPS);if(!check(quad(w,h),"world composite"))')]
+between=w[w.index('temporalIndex=prev;temporalValid=true;'):w.index('d->SetPixelShader(debug?finalDebugPS:finalPS);if(!check(quad(w,h),"world composite"))')]
 # LocalDirect also reads the baseline alpha (sun visibility), so s12 is bound once more,
 # only inside the LocalDirect block (frames with lamps), before the temporal pass rebinds it.
 local=w[w.index('d->SetPixelShader(localDirectPS);'):w.index('if(profile)profile->mark("GI");')]

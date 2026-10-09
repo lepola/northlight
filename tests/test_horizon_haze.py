@@ -37,7 +37,7 @@ PRE_LIFT_COMPOSITE_SLOTS = 467
 # same instruction, so 467 (by inspection of WorldComposite.bin.asm). SourceVisibilityPS: +8 ring taps,
 # estimated 440-460 but not knowable without the compiler.
 # 0.3.174: WorldComposite folds the AO/bloom composite (s10 AO in the tent loop, bloom, original'): 498.
-LIFT_COMPOSITE_SLOTS = 511  # 0.3.203 (rain streaks in the transmittance composite): was 509 with the rain lerp; 505 (0.3.202 rain mask), 498 before
+LIFT_COMPOSITE_SLOTS = 506  # 0.3.203 (particle fog; the F12 views moved to WorldCompositeDebug): was 511 with them; 509 with the rain lerp; 505 (0.3.202 rain mask), 498 before
 SOURCE_VISIBILITY_SLOTS = 492  # compiled at integration (was 281 before the wrap ring)
 BEFORE = {
     'WorldNormals': '1e8d22d66a1022bad26c930dd719398eba02c22179084a275f4fe52bf54c1db5',
@@ -344,27 +344,29 @@ def main():
     # 8. Source integration.
     shader = fp.src('world_effects.hlsl').read_text()
     cpu = fp.src('world_renderer.h').read_text()
-    composite_src = shader.split('float4 WorldComposite(', 1)[1].split('// Separate geometry pass:', 1)[0]
-    helper = block(shader, 'float3 horizonHaze(')
-    # 0.3.203 (particle mask): haze, then the fog mad, in the one transmittance expression (rain streaks and particles: original + T x (F(bg) - bg)).
-    assert composite_src.index('horizonHaze(color,centerUV,viewZ,d>=.99999&&liquid<=0)') < composite_src.index('fog.a,fog.rgb)')
-    assert 'color=mad(1-mask.y,mad(horizonHaze(color,centerUV,viewZ,d>=.99999&&liquid<=0),fog.a,fog.rgb)-B,pixel);' in composite_src
-    assert '[branch]if(range<=0||HorizonHaze.w<=0)return color;' in helper
+    composite_src = shader.split('float4 compositeImpl(', 1)[1].split('// Separate geometry pass:', 1)[0]
+    helper = block(shader, 'float4 horizonHaze(')
+    # 0.3.203 (particle fog): the haze split in the ramp (hazeRange / hazeRamp, per distance) and the angular amount (horizonHaze, per ray), so a particle in front of the
+    # surface is hazed at its own distance; the haze, then the fog mad, then the transmittance composite.
+    assert composite_src.index('float4 hz=horizonHaze(centerUV,range);') < composite_src.index('float3 fogged=mad(lerp(color,hz.rgb,h),fog.a,fog.rgb);')
+    assert 'float range=hazeRange(viewZ,d>=.99999&&liquid<=0);' in composite_src and 'float h=hazeRamp(range)*hz.a;' in composite_src
+    assert '[branch]if(range>0&&HorizonHaze.w>0){' in helper
     assert helper.index('[branch]') < helper.index('viewPositionDistance') and 'tex2D' not in helper and 'loop' not in helper
-    assert 'float range=sky?1:saturate((viewZ-HorizonShape.y)*HorizonShape.z);' in helper
-    assert 'return lerp(color,haze,amount);' in helper
+    assert 'float hazeRange(float viewZ,bool sky) {return sky?1:saturate((viewZ-HorizonShape.y)*HorizonShape.z);}' in shader
+    assert 'float hazeRamp(float range) {return range*range*(3-2*range);}' in shader
+    assert 'result=float4(HorizonHaze.rgb*mad(lift,ShadowRange.yzw,1),1-exp2(-HorizonHaze.w*band));' in helper
     # Literals mirrored by horizon_haze.h (LiftCap, LobePeak, Warm) for the haze colour <= 1 cap.
     assert 'float lift=min(lobe*.64*pow(1.36-1.2*azimuth,-1.5),.25);' in helper
-    assert 'float3 haze=HorizonHaze.rgb*mad(lift,ShadowRange.yzw,1);' in helper  # lift colour from c35.yzw
-    assert shader.count('ShadowRange.yzw') == 1 and 'float3(1,.8,.55)' not in shader
+    assert shader.count('ShadowRange.yzw') == 1 and 'float3(1,.8,.55)' not in shader  # lift colour from c35.yzw
     policy = fp.src('horizon_haze.h').read_text()
     assert 'LiftCap=.25f,LobePeak=10.01f' in policy and 'Warm[3]={1,.8f,.55f}' in policy
     assert 'SunLobe=.06f;' in policy  # the warm lobe toward a low sun doubled
-    assert shader.count('horizonHaze(') == 2  # defined once, used only by WorldComposite
+    assert shader.count('float4 hz=horizonHaze(') == 1 and shader.count('float4 horizonHaze(') == 1  # defined once, used only by the composite
     for decl in ('float4 HorizonHaze : register(c34);', 'float4 HorizonShape : register(c57);', 'float4 HorizonSun : register(c67);'):
         assert decl in shader
-    for other in ('HorizonHaze.', 'HorizonShape.', 'HorizonSun.'):
+    for other in ('HorizonHaze.', 'HorizonSun.'):
         assert shader.count(other) == helper.count(other), other
+    assert shader.count('HorizonShape.') == helper.count('HorizonShape.') + 4  # hazeRange (y, z) and the particle's own ramp in the composite (y, z)
     assert cpu.count('d->SetPixelShaderConstantF(0,&c[0][0],68)') == 2  # register bank unchanged
     upload = cpu.index('c[30][0]=waterMask?1.f:0.f;d->SetPixelShaderConstantF(0,&c[0][0],68);')
     assert cpu.index('c[57][1]=haze.shape[0];c[57][2]=haze.shape[1];c[57][3]=haze.shape[2];c[67][2]=haze.sun[0];c[67][3]=haze.sun[1];') < upload
@@ -392,7 +394,7 @@ def main():
             # 0.3.185: RemovalSmooth is new (the removal smoothing's own half-res pass; TemporalLight shrinks).
             # 0.3.197: WorldGI blends a same-key probe re-publication from the previous SH (task 13).
             # 0.3.198 (rain): WorldFog (air floor from c59.w) changes on purpose.
-            if name not in ('WorldComposite', 'TemporalLight', 'SourceVisibilityPS', 'WorldLighting', 'LocalDirect', 'WorldNormals', 'RemovalSmooth', 'WorldGI', 'WorldFog', 'FogClouds', 'FogTemporal', 'LocalFog'):  # FogClouds (0.3.199) is new, not in BEFORE; LocalFog (0.3.199) gains the near ramp
+            if name not in ('WorldComposite', 'WorldCompositeDebug', 'TemporalLight', 'SourceVisibilityPS', 'WorldLighting', 'LocalDirect', 'WorldNormals', 'RemovalSmooth', 'WorldGI', 'WorldFog', 'FogClouds', 'FogTemporal', 'LocalFog'):  # FogClouds (0.3.199) is new, not in BEFORE; LocalFog (0.3.199) gains the near ramp
                 assert info['sha256'] == BEFORE[name], name
                 unchanged.append(name)
         assert sorted(unchanged) == sorted(k for k in BEFORE if k not in ('TemporalLight', 'SourceVisibilityPS', 'WorldLighting', 'LocalDirect', 'WorldNormals', 'WorldGI', 'WorldFog', 'LocalFog'))

@@ -25,17 +25,17 @@ BEFORE={'WorldNormals':'e647de5f5ba48db3fa790f329731d066a47fa965fdf474dcc568c337
 
 # HLSL
 checks['source: RainMask declared on s13 (aliasing RegionalFog, as s8/s10 do)']=('sampler2D RainMask : register(s13);' in h)
-comp=h.split('float4 WorldComposite(',1)[1].split('// Separate geometry pass:',1)[0]
-m=re.search(r'if\(PassInfo\.z<\.5\)\{(.*?)\n    \}',comp,re.S)
+comp=h.split('float4 compositeImpl(',1)[1].split('// Separate geometry pass:',1)[0]
+m=re.search(r'if\(!debugViews\|\|PassInfo\.z<\.5\)\{(.*?)\n    \}\n    if\(debugViews',comp,re.S)
 body=m.group(1) if m else ''
 checks['source: WorldComposite reads the mask once, with tex2D at the top before any flow control (0.3.203; the rain term is its red)']=(bool(m) and comp.count('RainMask')==1 and comp.count('float4 mask=tex2D(RainMask,uv);')==1 and comp.index('float4 mask=tex2D(RainMask,uv);')<comp.index('[loop]'))
 checks['source: no rain lerp any more: rain streaks are alpha-over layers of the transmittance composite (green = 1-T, blue = touched); the red channel is unused (0.3.203)']=(
-    'unfogged' not in comp and 'mask.x' not in comp and 'color=mad(1-mask.y,mad(horizonHaze(color,centerUV,viewZ,d>=.99999&&liquid<=0),fog.a,fog.rgb)-B,pixel);' in body)
+    'unfogged' not in comp and 'mask.x' not in comp and 'float3 fogged=mad(lerp(color,hz.rgb,h),fog.a,fog.rgb);' in body and 'float T=1-mask.y;' in body)
 # manifest
 wc=manifest['WorldComposite']
 checks['manifest: WorldComposite samples s13, <= 512 slots, <= 32 temporaries']=(13 in wc['samplers'] and wc['static_instruction_slots']<=512 and wc['temporary_registers']<=32)
 checks['manifest: WorldComposite bytecode changed']=(wc['sha256']!=BEFORE['WorldComposite'])
-checks['manifest: every other entry byte-identical to 0.3.200']=(set(manifest)==set(BEFORE) and all(manifest[n]['sha256']==s for n,s in BEFORE.items() if n!='WorldComposite'))
+checks['manifest: every other entry byte-identical to 0.3.200 (WorldCompositeDebug is new: 0.3.203)']=(set(manifest)==set(BEFORE)|{'WorldCompositeDebug'} and all(manifest[n]['sha256']==s for n,s in BEFORE.items() if n!='WorldComposite'))
 checks['compiled: WorldComposite.bin exists']=(fp.COMPILED/'WorldComposite.bin').exists()
 
 # numeric reference: the streak is an alpha-over layer, the pixel = T x background + emission; the composite outputs original + T x (F(B) - B) (0.3.203, same rule as the particles)

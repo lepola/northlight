@@ -43,7 +43,7 @@ float4 LegacyFog : register(c25); // original VS c12.xyz, validated enabled flag
 float4 SourcePolicy : register(c27); // first source, diagnostic energy weight, time, regional density
 float4 LegacyDirection : register(c28);
 float4 LegacyDirect : register(c29);
-float4 LegacyFogColor : register(c26); // proven terrain PS3 c2/c6.rgb or fixed fog RGB
+float4 LegacyFogColor : register(c26); // proven terrain PS3 c2/c6.rgb or fixed fog RGB; w (WorldComposite only): 1 / (fog slope x signed projection), 0 without a usable linear fog starting at the camera
 float4 VolumeAir : register(c32); // Dusk/STV extinction, Dusk/STV finite layer height
 float4 ScreenSize : register(c33); // full width,height; half-resolution width,height
 float4 BlurInfo : register(c34); // half-resolution texel step for the fog blur (x,y), unused
@@ -927,24 +927,30 @@ float4 FogTemporal(float2 uv:TEXCOORD0):COLOR0 {
 // sky without a step. Band by world elevation: camera pitch/roll never moves
 // it. Full below the horizon, where only the distance weight protects ground.
 // No samples, passes or raymarch steps.
-float3 horizonHaze(float3 color,float2 uv,float viewZ,bool sky) {
-    float range=sky?1:saturate((viewZ-HorizonShape.y)*HorizonShape.z);
-    [branch]if(range<=0||HorizonHaze.w<=0)return color;
-    float3 ray=viewPositionDistance(uv,1);
-    float3 world=ray.x*InverseView[0].xyz+ray.y*InverseView[1].xyz+ray.z*InverseView[2].xyz;
-    float elevation=world.z*rsqrt(dot(ray,ray));
-    float band=exp2(-max(elevation,0)*HorizonShape.w);
-    float amount=range*range*(3-2*range)*(1-exp2(-HorizonHaze.w*band));
-    // Distant forward scattering toward a low sun: Henyey-Greenstein g=.6 in
-    // azimuth, amplitude sunWeight*cos(sun elevation) from the host, capped.
-    // Lift of the fog colour itself, tinted by the glow hue (c35.yzw): black night fog cannot glow.
-    float lobe=length(HorizonSun.zw);
-    float azimuth=dot(world.xy,HorizonSun.zw)*rsqrt(max(dot(world.xy,world.xy),1e-12))/max(lobe,1e-6);
-    float lift=min(lobe*.64*pow(1.36-1.2*azimuth,-1.5),.25);
-    float3 haze=HorizonHaze.rgb*mad(lift,ShadowRange.yzw,1);
-    return lerp(color,haze,amount);
+// 0.3.203: the haze split in two so a particle in front of the surface can be hazed at its own distance (same ray: only the distance ramp differs). hazeRange is the ramp
+// (0 at or nearer than the start view Z, 1 at the end); horizonHaze() returns the haze colour in rgb and the angular amount (elevation band, no ramp) in a; the
+// amount at a distance is hazeRamp(range) * a, and the pixel is lerp(color, rgb, amount). Zero rgb/a when the ramp is 0 or the haze is off: the scene colour bit for bit.
+float hazeRange(float viewZ,bool sky) {return sky?1:saturate((viewZ-HorizonShape.y)*HorizonShape.z);}
+float hazeRamp(float range) {return range*range*(3-2*range);}
+float4 horizonHaze(float2 uv,float range) {
+    float4 result=0;
+    [branch]if(range>0&&HorizonHaze.w>0){
+        float3 ray=viewPositionDistance(uv,1);
+        float3 world=ray.x*InverseView[0].xyz+ray.y*InverseView[1].xyz+ray.z*InverseView[2].xyz;
+        float elevation=world.z*rsqrt(dot(ray,ray));
+        float band=exp2(-max(elevation,0)*HorizonShape.w);
+        // Distant forward scattering toward a low sun: Henyey-Greenstein g=.6 in
+        // azimuth, amplitude sunWeight*cos(sun elevation) from the host, capped.
+        // Lift of the fog colour itself, tinted by the glow hue (c35.yzw): black night fog cannot glow.
+        float lobe=length(HorizonSun.zw);
+        float azimuth=dot(world.xy,HorizonSun.zw)*rsqrt(max(dot(world.xy,world.xy),1e-12))/max(lobe,1e-6);
+        float lift=min(lobe*.64*pow(1.36-1.2*azimuth,-1.5),.25);
+        result=float4(HorizonHaze.rgb*mad(lift,ShadowRange.yzw,1),1-exp2(-HorizonHaze.w*band));
+    }
+    return result;
 }
-float4 WorldComposite(float2 uv:TEXCOORD0):COLOR0 {
+// debugViews: the F12 views (PassInfo.z 1 shadow, 2 light, 3 fog) exist only in WorldCompositeDebug; WorldComposite compiles without them (a literal false: the selects fold away).
+float4 compositeImpl(float2 uv,bool debugViews) {
     float4 original=tex2D(Scene,uv); // 0.3.203: tex2D, before any flow control (single-level POINT textures): one slot instead of three
     float4 mask=tex2D(RainMask,uv);
     // 0.3.203 (particle mask): a translucent particle was drawn here when b >= 1/255 (8 bit); original = M x (T x background + emission), T = 1-g. M is the product of the mod2x halos (2 x src x dst blend) drawn over
@@ -1024,8 +1030,8 @@ float4 WorldComposite(float2 uv:TEXCOORD0):COLOR0 {
         // Bound combined GI/shadow darkening relative to the existing surface;
         // this preserves black and does not introduce an absolute exposure floor.
         color=max(color,mad(-.45,transported,lit));
-        if(PassInfo.z==1)color=shadow.xxx;
-        if(PassInfo.z==2)color=max(AmbientLight.rgb+bounce,0);
+        if(debugViews&&PassInfo.z==1)color=shadow.xxx;
+        if(debugViews&&PassInfo.z==2)color=max(AmbientLight.rgb+bounce,0);
     }
     // The captured scene already contains legacy distance fog. Local integrated
     // radiance lies IN FRONT of that background, including sky/fogged terrain.
@@ -1033,15 +1039,36 @@ float4 WorldComposite(float2 uv:TEXCOORD0):COLOR0 {
     // Retain fogPart only for safe surface relighting above; never de-fog/divide.
     // Horizon haze extinguishes the far scene (including the depth-occluded
     // sun/moon disc) BEFORE the local scattering is added in front of it.
-    if(PassInfo.z<.5){
+    if(!debugViews||PassInfo.z<.5){
         // 0.3.203 (particle mask): translucent particles write no depth and the rain streaks are drawn over the scene, so their pixels carry the background's depth. Everything above ran on the background
-        // colour (bg); the pixel is T x background + emission (rain streaks are alpha-over draws like the particles), so the result is original + T x (F(bg) - bg), F being the relight, AO, haze and fog.
-        // out = E + T x F(M x B): the streaks' and particles' own light is neither hazed nor multiplied, the halo is fogged with the background it multiplies.
-        color=mad(1-mask.y,mad(horizonHaze(color,centerUV,viewZ,d>=.99999&&liquid<=0),fog.a,fog.rgb)-B,pixel); // untouched, no halo: mask.y is 0, M is 1 and B is original
+        // colour (bg); the pixel is T x background + emission E (rain streaks are alpha-over draws like the particles), so the result is pixel + T x (F(bg) - B), F being the relight, AO, haze and fog.
+        float range=hazeRange(viewZ,d>=.99999&&liquid<=0);
+        float4 hz=horizonHaze(centerUV,range);
+        float h=hazeRamp(range)*hz.a;
+        float3 fogged=mad(lerp(color,hz.rgb,h),fog.a,fog.rgb); // F(bg)
+        if(debugViews)color=mad(1-mask.y,fogged-B,pixel); // the debug entry keeps the plain transmittance composite: no fog at the particles' own distance (the instruction budget)
+        else{
+        // The particles' own light E = pixel - T x B was fogged by the game at ITS distance (legacy fog, in the pixel already) and gets Northlight's fog and haze at that same distance: the mask's red over blue is the
+        // weighted mean of the game's fog factor f the particle shaders received (1 where the shader had none: no extra fog, the old result). f = sat(z x X + 1) inverts to the distance z = (f - 1) / X; the host
+        // uploads 1/X (signed projection included) in LegacyFogColor.w, and 0 without a usable linear legacy fog starting at the camera (Y = 1, exponent 1). s = z/viewZ. A coverage below 2/255 has too
+        // little light to matter: its ratio is only guarded against 0/0.
+        float fm=mask.r*rcp(max(mask.b,.0078));
+        float s=saturate((fm-1)*LegacyFogColor.w*rcp(viewZ));
+        float rp=saturate((viewZ*s-HorizonShape.y)*HorizonShape.z);
+        float transF=(1-h)*fog.a;                                       // fog and haze from the camera to the surface behind
+        float transP=(1-hazeRamp(rp)*hz.a)*exp2(s*log2(max(fog.a,.0001))); // ... to the particle: 1 for s = 0
+        // out = T x F(bg) + transP x E: the surface's light under the particles as before, E at its own distance; plus the airlight in front of the particle where it covers the surface
+        // (g = 1-T): the surface's own in-scatter scaled by (1-transP)/(1-transF).
+        float T=1-mask.y;
+        float3 airlight=fogged-transF*color;
+        color=mad(T,fogged,transP*(pixel-T*B))+mask.y*((1-transP)*rcp(1.001-transF))*airlight; // no particle: mask is 0, B is the pixel, E is 0 and transP is 1
+        }
     }
-    if(PassInfo.z==3)color=fog.rgb;
+    if(debugViews&&PassInfo.z==3)color=fog.rgb;
     return float4(max(color,0),original.a);
 }
+float4 WorldComposite(float2 uv:TEXCOORD0):COLOR0 {return compositeImpl(uv,false);}
+float4 WorldCompositeDebug(float2 uv:TEXCOORD0):COLOR0 {return compositeImpl(uv,true);}
 
 // Separate geometry pass: c0..3 contains the light's world->clip matrix.
 row_major float4x4 LightMatrix:register(c0);

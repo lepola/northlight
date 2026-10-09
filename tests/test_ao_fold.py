@@ -162,7 +162,7 @@ checks['world: composited cleared at entry, set right after the WorldComposite q
 checks['diagnostic capture: the folded scene dump is labelled pre-AO'] = 'foldScene?"pre-AO (folded AO/bloom)":"post-AO composite"' in wr
 
 # 5. shaders: WorldComposite folds, smoothRemoval reads the AO, removalScale has no floor
-composite = world[world.index('float4 WorldComposite('):]
+composite = world[world.index('float4 compositeImpl('):]
 checks['WorldComposite: AO in the tent (same weight, nearest fallback), bloom bilinear, original\' before fogPart'] = (
     'sampler2D AmbientOcclusion : register(s10);' in world
     and 'ao+=occlusion*weight;' in composite and 'fallbackAO=occlusion;' in composite
