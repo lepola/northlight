@@ -656,8 +656,15 @@ inline bool makeRoomForBufferShadow(StreamCore& c,std::size_t bytes,bool relock,
 // large shadow and mayEvict, that one is dropped if unlocked and idle for kLargeIdleFrames, LRU). Game thread.
 inline bool largeCandidate(const ProxyBase& p){const std::size_t len=p.info.length;return dynamicBuffer(p)&&len>p.core->q.shadowCap()/4&&len<=kMaxLargeShadow;}
 inline bool makeRoomForLarge(StreamCore& c,std::size_t bytes,bool mayEvict,const BufferState* keep){
+    if(c.q.largeAdmit(bytes))return true;
+    if(!mayEvict||c.q.pressure()||bytes>kMaxLargeShadow)return false;
+    {   // 0.3.204: up to two holders: evict only if the idle unlocked ones (LRU prefix) free enough, else refuse and drop nothing
+        std::lock_guard<std::mutex> l(c.texMutex);std::size_t freeable=0;
+        for(const BufferState* s=c.bufLarge.head;s&&c.frameNo>=s->lastUse+kLargeIdleFrames;s=s->lru.next)if(s!=keep&&s->mode==BufferState::Free)freeable+=s->proxy->info.length;
+        if(c.q.largeBytes()-std::min(freeable,c.q.largeBytes())+bytes>LargeShadowBudgetBytes)return false;
+    }
     while(!c.q.largeAdmit(bytes)){
-        if(!mayEvict||c.q.pressure()||bytes>kMaxLargeShadow)return false;
+        if(c.q.pressure())return false;
         std::lock_guard<std::mutex> l(c.texMutex);
         BufferState* victim=nullptr;
         for(BufferState* s=c.bufLarge.head;s&&c.frameNo>=s->lastUse+kLargeIdleFrames;s=s->lru.next)if(s!=keep&&s->mode==BufferState::Free){victim=s;break;}   // (at most a few entries)

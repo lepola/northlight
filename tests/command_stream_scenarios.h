@@ -319,13 +319,13 @@ static void adaptiveShadowCap(){
     rig.finish();checkClean();
 }
 
-// 0.3.192 (CS): the LARGE-buffer allowance: a ~15.8 MB DYNAMIC buffer (above a quarter of the regular cap) keeps a shadow in its own 16 MiB budget (not in
+// 0.3.192 (CS): the LARGE-buffer allowance: a ~15.8 MB DYNAMIC buffer (above a quarter of the regular cap) keeps a shadow in its own large budget (36 MiB since 0.3.204; not in
 // shadowBytes): granted at creation when free, so its locks never sync; a second large buffer is refused while the holder is in use and takes it by LRU only
-// when the holder is idle; pressure drops it (never while locked: at the unlock) and blocks a re-grant until it ends.
+// when the holder is idle (L=20 MB: one fits the 36 MiB budget, two do not); pressure drops it (never while locked: at the unlock) and blocks a re-grant until it ends.
 static void largeBufferAllowance(){
     gTrace.clear();StreamDevice::Options opt;opt.readBackLock=&dxvk3ReadBack;
     Rig rig(true,opt);auto& q=rig.core().q;auto& s=q.stats;IDirect3DDevice9* d=rig.dev;
-    const UINT L=15800000;
+    const UINT L=20000000;static_assert(L<=kMaxLargeShadow&&2*std::size_t(L)>LargeShadowBudgetBytes,"one fits, two do not");
     IDirect3DVertexBuffer9 *A=nullptr,*B=nullptr;
     CHECK(d->CreateVertexBuffer(L,D3::kUsageDynamic,0,(D3DPOOL)0,&A,nullptr)==D3D_OK);
     CHECK(shadowOn(A)&&q.largeBytes()==L&&s.shadowBytes.load()==0&&get(s.largeShadowGrants)==1&&get(s.shadowRefused)==0);
@@ -359,6 +359,39 @@ static void largeBufferAllowance(){
     {const auto g=get(s.largeShadowGrants);mb.write(B,800,16,0x34);CHECK(shadowOn(B)&&q.largeBytes()==L&&get(s.largeShadowGrants)==g+1);}
     rig.sync();CHECK(mb.same(targetBytes(B)));
     A->Release();B->Release();rig.sync();CHECK(q.largeBytes()==0&&s.shadowBytes.load()==0);
+    rig.finish();checkClean();
+}
+
+// 0.3.204: the allowance holds two large buffers (a player's client: the game's ~15.8 MB one plus an 18 MB one): both shadowed, no pass-through; a third that
+// does not fit is refused; one above kMaxLargeShadow is never a candidate; pressure drops both (a locked one at its unlock).
+static void twoLargeBuffers(){
+    gTrace.clear();StreamDevice::Options opt;opt.readBackLock=&dxvk3ReadBack;
+    Rig rig(true,opt);auto& q=rig.core().q;auto& s=q.stats;IDirect3DDevice9* d=rig.dev;
+    const UINT L1=15800000,L2=18000000,L3=6000000,Big=26000000;
+    static_assert(std::size_t(L1)+L2<=LargeShadowBudgetBytes&&std::size_t(L1)+L2+L3>LargeShadowBudgetBytes&&Big>kMaxLargeShadow,"sizes");
+    IDirect3DVertexBuffer9 *A=nullptr,*B=nullptr,*C=nullptr,*G=nullptr;
+    CHECK(d->CreateVertexBuffer(L1,D3::kUsageDynamic,0,(D3DPOOL)0,&A,nullptr)==D3D_OK&&d->CreateVertexBuffer(L2,D3::kUsageDynamic,0,(D3DPOOL)0,&B,nullptr)==D3D_OK);
+    CHECK(shadowOn(A)&&shadowOn(B)&&q.largeBytes()==std::size_t(L1)+L2&&s.shadowBytes.load()==0&&get(s.largeShadowGrants)==2&&get(s.shadowRefused)==0);
+    BufModel ma(L1),mb(L2);const auto noshadow=[&]{return get(s.passThrough[unsigned(PassReason::NoShadow)]);};
+    rig.sync();const auto sync0=get(s.syncCalls),pass0=noshadow();
+    ma.write(A,0,4096,0x11);ma.write(A,5000,300,0x12,D3::kLockNoOverwrite);ma.write(A,9000,64,0x13,D3::kLockDiscard);
+    mb.write(B,0,4096,0x21);mb.write(B,17000000,300,0x22,D3::kLockNoOverwrite);mb.write(B,9000,64,0x23,D3::kLockDiscard);mb.write(B,70000,64,0x24);
+    CHECK(get(s.syncCalls)==sync0&&noshadow()==pass0&&get(s.shadowRefused)==0);
+    rig.sync();CHECK(ma.same(targetBytes(A))&&mb.same(targetBytes(B)));
+    // a third large buffer does not fit (both holders in use): refused, nothing dropped
+    CHECK(d->CreateVertexBuffer(L3,D3::kUsageDynamic,0,(D3DPOOL)0,&C,nullptr)==D3D_OK);
+    CHECK(!shadowOn(C)&&shadowOn(A)&&shadowOn(B)&&q.largeBytes()==std::size_t(L1)+L2&&get(s.shadowRefused)==1&&get(s.largeShadowDrops)==0);
+    // above kMaxLargeShadow: never a large candidate
+    CHECK(d->CreateVertexBuffer(Big,D3::kUsageDynamic,0,(D3DPOOL)0,&G,nullptr)==D3D_OK&&!shadowOn(G)&&q.largeBytes()==std::size_t(L1)+L2&&get(s.largeShadowGrants)==2);
+    // pressure while B is locked: A goes at once, B at its unlock; largeBytes returns to 0
+    frames(d,1);
+    {void* p=nullptr;CHECK(B->Lock(400,32,&p,0)==D3D_OK);std::memset(p,0x31,32);std::memset(mb.bytes.data()+400,0x31,32);
+     rig.sync();rig.core().memoryPressure.store(true);frames(d,1);rig.sync();
+     CHECK(q.pressure()&&!shadowOn(A)&&shadowOn(B)&&q.largeBytes()==L2);
+     CHECK(B->Unlock()==D3D_OK&&!shadowOn(B)&&q.largeBytes()==0);}
+    rig.sync();CHECK(mb.same(targetBytes(B))&&ma.same(targetBytes(A)));
+    rig.core().memoryPressure.store(false);frames(d,1);rig.sync();
+    A->Release();B->Release();C->Release();G->Release();rig.sync();CHECK(q.largeBytes()==0&&s.shadowBytes.load()==0);
     rig.finish();checkClean();
 }
 
@@ -1270,7 +1303,7 @@ static void frameSkipReleasesPresentWait(){
 }
 static void streamTests(bool threadsOnly){
     layoutIsolation();replayTimingAccounting();diagnosticsOffSkipsAudit();idlePollWakes();
-    lifetimeAndIdentity();stateKnownUnknown();locksPreserveBytes();staticBufferShadows();dynamicBufferShadows();largeBufferAllowance();adaptiveShadowCap();shadowCap();queriesAndSyncCensus();resetAndShutdown();directReplayRaw();redundantFiltering();renderTargetResetsViewport();textureShadows();statsLine();childrenOutliveTheDevice();queryProbeAndDeadQuery();initFailureFallback();cursorHandling();nestedSyncInPump();testCooperativeLevelLocal(1);testCooperativeLevelLocal(3);upDrawsAndBackpressure();snapshotTriggers();snapshotPoolNotExhausted();memoryPressureRelease();impossibleBlockIsRefusedAtOnce();smallStagedLocksUseScratch();
+    lifetimeAndIdentity();stateKnownUnknown();locksPreserveBytes();staticBufferShadows();dynamicBufferShadows();largeBufferAllowance();twoLargeBuffers();adaptiveShadowCap();shadowCap();queriesAndSyncCensus();resetAndShutdown();directReplayRaw();redundantFiltering();renderTargetResetsViewport();textureShadows();statsLine();childrenOutliveTheDevice();queryProbeAndDeadQuery();initFailureFallback();cursorHandling();nestedSyncInPump();testCooperativeLevelLocal(1);testCooperativeLevelLocal(3);upDrawsAndBackpressure();snapshotTriggers();snapshotPoolNotExhausted();memoryPressureRelease();impossibleBlockIsRefusedAtOnce();smallStagedLocksUseScratch();
     framesAheadPacing();textureShadowSpares();frameSkipping();frameSkipReleasesPresentWait();   // 0.3.200 (frame skip)
     equivalence(20000,12345);equivalence(20000,987654321);equivalence(20000,24680,2);equivalence(20000,13579,3);   // 0.3.200 (pipeline): 2 and 3 frames ahead
     (void)threadsOnly;
