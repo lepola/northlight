@@ -956,7 +956,12 @@ private:
         if(!peeked){bound=nullptr;if(FAILED(ext->GetDepthStencilSurface(&bound)))bound=nullptr;}
         const bool sameDepth=bound&&bound==worldDepth;if(!peeked)drop(bound);
         if(!sameDepth)return false; /* the snapshot is of the terrain depth; a rain draw into another depth buffer is not ours */
-        {ExtensionDevice::RawScope raw(*ext);if(!resolveDepthInto(rainDepth,false))return false;}
+        bool snapped=false;{ExtensionDevice::RawScope raw(*ext);snapped=resolveDepthInto(rainDepth,false);}
+        /* The snapshot (failed or not) ends with a state-block Apply, which forgets the mirror's stage-0 texture; the game does not set the rain texture again for its next
+           rain draws, so without this read only the first rain draw of the frame matched (as at the 0.3.199 rain boundary): the rest lost RainBlend and the
+           mask, and the weather intensity, which drives the rain fog, fell to one draw's worth. The read goes to the device and the mirror learns it back. */
+        {IDirect3DBaseTexture9* stage0=nullptr;if(SUCCEEDED(ext->GetTexture(0,&stage0)))drop(stage0);}
+        if(!snapped)return false;
         if(FAILED(ext->ColorFill(maskTarget,nullptr,0)))rainMaskClearSwap(maskTarget);
         rainDepthOk=true;return true;
     }

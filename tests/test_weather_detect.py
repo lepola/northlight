@@ -59,6 +59,7 @@ static unsigned count(const char* prefix){unsigned n=0;for(auto& l:lines)if(l.rf
 struct Mirror{bool textureKnown[16]={};void* textures[16]={};};
 struct Sample{unsigned primitives=0,draws=0;};
 struct Surface{D3DSURFACE_DESC desc;void GetDesc(D3DSURFACE_DESC* d){*d=desc;}};
+struct IDirect3DBaseTexture9{};
 struct IDirect3DTexture9{Surface s;HRESULT GetSurfaceLevel(UINT,Surface** o){*o=&s;return 0;}};
 typedef Surface IDirect3DSurface9;
 struct IDirect3DPixelShader9{int id;};struct IDirect3DVertexShader9{int id;};
@@ -68,6 +69,8 @@ struct DrawRec{Surface* rt;Surface* rt1;IDirect3DPixelShader9* ps;DWORD colorWri
 struct Ext{DWORD rs[256]={};DWORD tss[2][32]={};std::vector<std::pair<int,DWORD>> sets;
     Surface gameRT,gameDS;bool hasDS=true,peekDS=true;Surface* rt=&gameRT;Surface* rt1=nullptr;D3DVIEWPORT9 vp;IDirect3DTexture9 maskTex,depthMock;Surface msTarget;bool createFails=false,createMsFails=false,createDepthFails=false,stretchFails=false,colorFillFails=false,capsGetFails=false;unsigned msCreates=0,stretches=0,creates=0,depthCreates=0,colorFills=0,clears=0,rt1Binds=0,rt1Unbinds=0,rtSets=0,shaderCreates=0;D3DMULTISAMPLE_TYPE msCreatedType=D3DMULTISAMPLE_NONE;DWORD msCreatedQuality=0;
     D3DCAPS9 caps;IDirect3DPixelShader9 psMrt{1},psScrub{2},gamePs{9};IDirect3DPixelShader9* ps=nullptr;IDirect3DVertexShader9 gameVs{7};IDirect3DVertexShader9* vsBound=nullptr;bool borrowOk=true;
+    Mirror* mirror=nullptr;void* stage0=nullptr;unsigned textureReads=0; /* GetTexture: the device's stage 0, and the mirror learns it back */
+    HRESULT GetTexture(DWORD st,IDirect3DBaseTexture9** o){++textureReads;*o=nullptr;if(st==0&&mirror&&stage0){mirror->textures[0]=stage0;mirror->textureKnown[0]=true;}return 0;}
     IDirect3DTexture9* tex[4]={};unsigned samplerSets=0;DWORD minFilter0=0,magFilter0=0;
     std::vector<DrawRec> draws;
     Ext(){caps.NumSimultaneousRTs=4;caps.PrimitiveMiscCaps=D3DPMISCCAPS_INDEPENDENTWRITEMASKS|D3DPMISCCAPS_SEPARATEALPHABLEND|D3DPMISCCAPS_MRTPOSTPIXELSHADERBLENDING;caps.PixelShaderVersion=D3DPS_VERSION(3,0);}
@@ -106,7 +109,7 @@ struct Hook{
     std::unordered_map<IDirect3DVertexShader9*,unsigned> vsMajor;
     HRESULT rainMaskResolveHr=0;IDirect3DTexture9 depthTexObj;IDirect3DTexture9* depthTex=&depthTexObj;Surface* worldDepth=nullptr;int stateBlocks=0;
     unsigned snapshots=0,effectStates=0,quads=0;bool snapshotOk=true;IDirect3DTexture9* snapshotTarget=nullptr;bool snapshotFatal=true;DrawRec quadRec{};IDirect3DTexture9* quadTex0=nullptr;IDirect3DTexture9* quadTex1=nullptr;bool quadFails=false;
-    bool resolveDepthInto(IDirect3DTexture9* target,bool fatal){++snapshots;snapshotTarget=target;snapshotFatal=fatal;return snapshotOk;}
+    bool resolveDepthInto(IDirect3DTexture9* target,bool fatal){++snapshots;snapshotTarget=target;snapshotFatal=fatal;ext->stage0=mirrorState.textures[0];ext->mirror=&mirrorState;mirrorState.textureKnown[0]=false;return snapshotOk;} /* its state-block Apply forgets the mirror's stage 0 */
     void effectState(){++effectStates;}
     HRESULT quad(UINT,UINT){++quads;quadRec={ext->rt,ext->rt1,ext->ps,ext->rs[D3DRS_COLORWRITEENABLE],0,0,0,0,0,0,0,0,0};quadTex0=ext->tex[0];quadTex1=ext->tex[1];return quadFails?-1:0;}
     VsClass vcMock;const VsClass& classifyVs(int){return vcMock;}std::vector<std::string> logs;template<class F> void extensionWork(const char*,F f){f();}
@@ -251,6 +254,7 @@ int main(){
             h.ext->tss[0][D3DTSS_COLOROP]=D3DTOP_MODULATE;h.ext->tss[0][D3DTSS_COLORARG1]=D3DTA_TEXTURE;h.ext->tss[0][D3DTSS_COLORARG2]=D3DTA_CURRENT;h.ext->tss[0][D3DTSS_ALPHAOP]=D3DTOP_MODULATE;h.ext->tss[0][D3DTSS_ALPHAARG1]=D3DTA_TEXTURE;h.ext->tss[0][D3DTSS_ALPHAARG2]=D3DTA_DIFFUSE;h.ext->tss[1][D3DTSS_COLOROP]=D3DTOP_DISABLE; /* the logged setup: color=4(2,1) alpha=4(2,1) stage1 color=1 */
             h.bind(0,50);};
         auto snap=[](Hook& h){std::vector<DWORD> v(h.ext->rs,h.ext->rs+256);return v;};
+        {Hook h;mk(h);h.draw(10);h.draw(10);h.draw(10);assert(h.weatherSample.draws==3&&h.rainMaskDraws==3&&h.drawn==3&&h.snapshots==1&&h.ext->textureReads==1&&h.mirrorState.textureKnown[0]);} /* the snapshot's Apply forgets stage 0: relearnt, so every rain draw of the frame still matches */
         {Hook h;mk(h);const auto before=snap(h);const D3DVIEWPORT9 vp0=h.ext->vp;
             h.draw(10);assert(h.drawn==1&&h.ext->draws.size()==1&&h.rainMaskDraws==1&&h.rainMaskDrawn&&h.rainMaskCleared&&h.rainDepthOk&&h.rainMrtRuns==1&&h.rainMaskSkips==0&&h.logs.empty()); /* exactly ONE game draw */
             const DrawRec& g=h.ext->draws[0];
