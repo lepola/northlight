@@ -68,7 +68,8 @@ def main():
                                   ("RainMaskMRT", "kRainMaskMrtShader", "ps_2_0"), ("RainScrub", "kRainScrubShader", "ps_2_0"),
                                   ("ParticleOver1", "kParticleOver1Shader", "ps_2_0"), ("ParticleOver2", "kParticleOver2Shader", "ps_2_0"),
                                   ("ParticleAddA1", "kParticleAddA1Shader", "ps_2_0"), ("ParticleAddA2", "kParticleAddA2Shader", "ps_2_0"),
-                                  ("ParticleAddC1", "kParticleAddC1Shader", "ps_2_0"), ("ParticleAddC2", "kParticleAddC2Shader", "ps_2_0")):
+                                  ("ParticleAddC1", "kParticleAddC1Shader", "ps_2_0"), ("ParticleAddC2", "kParticleAddC2Shader", "ps_2_0"),
+                                  ("ParticleMod1", "kParticleMod1Shader", "ps_2_0"), ("ParticleMod2", "kParticleMod2Shader", "ps_2_0")):
         output = fp.COMPILED / f"{entry}.bin"
         assembly = fp.COMPILED / f"{entry}.bin.asm"
         assembly.unlink(missing_ok=True)

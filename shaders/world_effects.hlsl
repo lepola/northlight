@@ -15,7 +15,7 @@ sampler2D WaterMask : register(s11);
 sampler2D BaselineLighting : register(s12);
 sampler2D RegionalFog : register(s13); // ground, day extinction, night extra, layer height
 sampler2D Background : register(s14); // 0.3.203 (particle mask): WorldComposite only, the scene colour before the frame's first mask draw (rain or particle)
-sampler2D RainMask : register(s13); // 0.3.202 (rain mask): WorldComposite only, 1-T of the alpha-over rain streaks and translucent particles (g), one of them touched the pixel (b); r unused; 0 without either
+sampler2D RainMask : register(s13); // 0.3.202 (rain mask): WorldComposite only, 1-T of the alpha-over rain streaks and translucent particles (g), one of them touched the pixel (b), M/2 of the mod2x halos (a, 128/255 = x1); r unused; 0 without a mask
 float4 RegionalFogInfo : register(c31); // world node0 XY, inverse field span, night fraction
 float4 WaterInfo : register(c30);
 float4 RemovalInfo : register(c30); // RemovalSmooth, TemporalLight: y 1 when a lit source is drawn, z 1/(summed source weight), w disc radius in half-res pixels at view distance 1
@@ -947,8 +947,12 @@ float3 horizonHaze(float3 color,float2 uv,float viewZ,bool sky) {
 float4 WorldComposite(float2 uv:TEXCOORD0):COLOR0 {
     float4 original=tex2D(Scene,uv); // 0.3.203: tex2D, before any flow control (single-level POINT textures): one slot instead of three
     float4 mask=tex2D(RainMask,uv);
-    // 0.3.203 (particle mask): a translucent particle was drawn here when b >= 1/255 (8 bit); original = T x background + emission, T = 1-g. The relight, AO, haze and fog below work on the background colour (bg).
-    float3 bg=lerp(original.rgb,tex2D(Background,uv).rgb,saturate(mask.b*255));
+    // 0.3.203 (particle mask): a translucent particle was drawn here when b >= 1/255 (8 bit); original = M x (T x background + emission), T = 1-g. M is the product of the mod2x halos (2 x src x dst blend) drawn over
+    // the pixel: the mask's alpha holds M/2 (128/255 = x1); no mask (alpha 0) means x1. The relight, AO, haze and fog below work on the background with the halo applied (bg = M x B, B the snapshot's colour).
+    float M=mask.a<.05?1:mask.a*(255./128.);
+    float3 pixel=original.rgb*rcp(M); // the pixel without the halos: T x background + emission
+    float3 B=mask.b<.002?pixel:tex2D(Background,uv).rgb; // blue >= 1/255 (8 bit): something touched the pixel
+    float3 bg=B*M;
     float2 centerUV=depthUV(uv);
     float d=normalizedDepth(centerUV);
     float liquid=waterDistance(centerUV,d);float viewZ=liquid>0?liquid:viewDistance(d);
@@ -1032,7 +1036,8 @@ float4 WorldComposite(float2 uv:TEXCOORD0):COLOR0 {
     if(PassInfo.z<.5){
         // 0.3.203 (particle mask): translucent particles write no depth and the rain streaks are drawn over the scene, so their pixels carry the background's depth. Everything above ran on the background
         // colour (bg); the pixel is T x background + emission (rain streaks are alpha-over draws like the particles), so the result is original + T x (F(bg) - bg), F being the relight, AO, haze and fog.
-        color=mad(1-mask.y,mad(horizonHaze(color,centerUV,viewZ,d>=.99999&&liquid<=0),fog.a,fog.rgb)-bg,original.rgb); // untouched: mask.y is 0 and bg is original
+        // out = E + T x F(M x B): the streaks' and particles' own light is neither hazed nor multiplied, the halo is fogged with the background it multiplies.
+        color=mad(1-mask.y,mad(horizonHaze(color,centerUV,viewZ,d>=.99999&&liquid<=0),fog.a,fog.rgb)-B,pixel); // untouched, no halo: mask.y is 0, M is 1 and B is original
     }
     if(PassInfo.z==3)color=fog.rgb;
     return float4(max(color,0),original.a);

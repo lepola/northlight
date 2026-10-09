@@ -17,7 +17,7 @@ r=fp.src('renderer.cpp').read_text()
 checks={}
 
 # HLSL: six ps_2_0 entries; the rain shaders are unchanged
-ENTRIES=('ParticleOver1','ParticleOver2','ParticleAddA1','ParticleAddA2','ParticleAddC1','ParticleAddC2')
+ENTRIES=('ParticleOver1','ParticleOver2','ParticleAddA1','ParticleAddA2','ParticleAddC1','ParticleAddC2','ParticleMod1','ParticleMod2')
 checks['source: the six particle entries are generated from the three mask kinds and the two colour multipliers']=all(f'({n}, {1 if n.endswith("1") else 2})' in hl for n in ENTRIES) and all(f'PARTICLE_{k}(' in hl for k in ('OVER','ADDA','ADDC'))
 checks['source: stage 0 = texture x diffuse, colour times the multiplier (MODULATE / MODULATE2X), alpha not scaled']=('float4 c = tex2D(Scene, uv) * diffuse;' in hl and 'c.rgb *= scale;' in hl)
 checks['source: Over writes (1,1,1,a); AddA (1,1,1,a x brightest); AddC (brightest x4); all saturate']=(
@@ -28,9 +28,9 @@ sh=eff['shaders']
 checks['manifest: the particle shaders are ps_2_0, small, with a compiled .bin and a generated array']=all(
     sh[n]['target']=='ps_2_0' and sh[n]['static_instruction_slots']<=32 and (fp.COMPILED/(n+'.bin')).exists() and f'static const DWORD k{n}Shader[]' in (fp.GENERATED/'compiled_shaders.h').read_text() for n in ENTRIES)
 checks['manifest: the source hash covers rain_mask.hlsl']=eff['rain_source_sha256']==hashlib.sha256((fp.SHADERS/'rain_mask.hlsl').read_bytes()).hexdigest()
-BEFORE={'RainMaskMRT':'bac487c7850375bdde1b396e0b5b6ed875b6b704b5dd04d4e6bd50681370d2bc','RainScrub':'ebd42e4fb0abda3ada825d75bfb148a2c5f4b2f9df307b4e9ac84da92e0bed10','AO':'778be1ea3b147c4bd34bed3e8b13536506fea805acf6660e85119f8cbb4a9bb9',
+BEFORE={'RainMaskMRT':'bac487c7850375bdde1b396e0b5b6ed875b6b704b5dd04d4e6bd50681370d2bc','AO':'778be1ea3b147c4bd34bed3e8b13536506fea805acf6660e85119f8cbb4a9bb9',
         'AOContactBloom':'15618e0c53efdbe986b4ff74e34ef7d2c3e93e5847ac3b85bdd8c637a24eeeda','Composite':'0bfee11760ad650d421136aa252d412c632dad0af6d84ade6a1305f7219c3988','AOBlur':'8f993e4c8118c029f4af218ae30620ef7c994e28c28b7ab46e02a7e070e51d2a','ContactBloom':'497c6c2c8e74e44e3cfbf6551fa7ac316750e3ccb63d78d94e29459ec36955b0'}
-checks['manifest: every earlier effect and rain entry is byte-identical to 0.3.202']=all(sh[n]['sha256']==x for n,x in BEFORE.items())
+checks['manifest: every earlier effect and rain entry (but the scrub) is byte-identical to 0.3.202']=all(sh[n]['sha256']==x for n,x in BEFORE.items())
 
 # the stage result is clamped like the fixed-function stage (RT0 must equal it under the game's fog): the compiled output has a saturating move into oC0
 def sat_into_oc0(n):
@@ -51,13 +51,14 @@ comp=world.split('float4 WorldComposite(',1)[1].split('// Separate geometry pass
 body=re.search(r'if\(PassInfo\.z<\.5\)\{(.*?)\n    \}',comp,re.S).group(1)
 checks['composite: RainMask and Background are read once each with tex2D at the top, before any flow control']=(
     comp.count('RainMask')==1 and comp.count('Background')==1 and 'float4 mask=tex2D(RainMask,uv);' in comp and 'tex2D(Background,uv).rgb' in comp and comp.index('tex2D(Background,uv)')<comp.index('[loop]'))
-checks['composite: bg = the background where blue >= 1/255 (a particle touched the pixel), else the scene colour']=('float3 bg=lerp(original.rgb,tex2D(Background,uv).rgb,saturate(mask.b*255));' in comp)
+checks['composite: B = the snapshot where blue >= 1/255 (something touched the pixel), else the pixel without its mod2x halos; bg = B x M']=(
+    'float M=mask.a<.05?1:mask.a*(255./128.);' in comp and 'float3 pixel=original.rgb*rcp(M);' in comp and 'float3 B=mask.b<.002?pixel:tex2D(Background,uv).rgb;' in comp and 'float3 bg=B*M;' in comp)
 checks['composite: the AO/bloom and relight work on bg']=('float3 lit=saturate(mad(bloom,1-saturate(bg*ao),bg*ao));' in comp and 'original.rgb' not in comp.split('float3 lit=',1)[1].split('if(PassInfo.z<.5)',1)[0])
-checks['composite: original + T x (F(bg) - bg) with T = 1 - green for rain streaks and particles alike (no rain lerp), inside the PassInfo.z<.5 branch']=(
-    'unfogged' not in comp and 'color=mad(1-mask.y,mad(horizonHaze(color,centerUV,viewZ,d>=.99999&&liquid<=0),fog.a,fog.rgb)-bg,original.rgb);' in body and comp.count('1-mask.y')==1)
+checks['composite: pixel + T x (F(M x B) - B) with T = 1 - green for rain streaks and particles alike (no rain lerp), inside the PassInfo.z<.5 branch']=(
+    'unfogged' not in comp and 'color=mad(1-mask.y,mad(horizonHaze(color,centerUV,viewZ,d>=.99999&&liquid<=0),fog.a,fog.rgb)-B,pixel);' in body and comp.count('1-mask.y')==1)
 checks['composite: the old lerp to the scene colour is gone']=('lerp(color,original.rgb' not in comp)
 wc=wm['WorldComposite']
-checks['manifest: WorldComposite within the 512 slots of SM3, samplers 0,1,8..14']=(wc['static_instruction_slots']<=512 and wc['temporary_registers']<32 and wc['samplers']==[0,1,8,9,10,11,12,13,14])
+checks['manifest: WorldComposite within the 512 slots of SM3, samplers 0,1,8..14']=(wc['static_instruction_slots']<=512 and wc['temporary_registers']<=32 and wc['samplers']==[0,1,8,9,10,11,12,13,14])
 
 # the arithmetic of the mask values under each blend (D3D9 applies the draw's blend to RT1 with oC1 as the source)
 def blend(src,dst,s,d,m):  # RT1 green: s,d factor functions of (oC1 g, oC1 a)
@@ -122,8 +123,8 @@ checks['begin: the shader variants are created on first use; a failure is logged
 checks['begin: reasons 128 (blend) and 256 (no stage 0 texture) are particle-only; skips are counted and each distinct reason logged once (at most 8)']=(
     'why|=128' in bg and 'why|=256' in bg and '++particleSkips;' in bg and 'particleSkipLogs<8' in bg and 'PARTICLES mask skip: reason=%u' in bg)
 checks['begin: particles write RT1 green+blue (alpha over) or blue (additive) with the particle shader or the patched game shader; rain streaks are alpha-over layers like over particles, with rainMrtPS']=(
-    'const bool over=patchedPs?patchKind==0:variant<2;' in bg and 'want[1]={DWORD(particle&&!over?D3DCOLORWRITEENABLE_BLUE:D3DCOLORWRITEENABLE_GREEN|D3DCOLORWRITEENABLE_BLUE)};' in bg and 'ext->SetPixelShader(patchedPs?patchedPs:particle?particlePS[variant]:rainMrtPS);' in bg)
-checks['scrub: one pass clears red, green and blue']=('D3DRS_COLORWRITEENABLE,D3DCOLORWRITEENABLE_RED|D3DCOLORWRITEENABLE_GREEN|D3DCOLORWRITEENABLE_BLUE)' in r)
+    'const bool over=patchedPs?patchKind==0:variant<2;' in bg and 'const bool mod2x=!patchedPs&&particle&&variant>=6;' in bg and 'want[1]={DWORD(mod2x?D3DCOLORWRITEENABLE_ALPHA:particle&&!over?D3DCOLORWRITEENABLE_BLUE:D3DCOLORWRITEENABLE_GREEN|D3DCOLORWRITEENABLE_BLUE)};' in bg and 'ext->SetPixelShader(patchedPs?patchedPs:particle?particlePS[variant]:rainMrtPS);' in bg)
+checks['scrub: one pass clears red, green, blue and sets alpha back to 128/255']=('D3DRS_COLORWRITEENABLE,D3DCOLORWRITEENABLE_RED|D3DCOLORWRITEENABLE_GREEN|D3DCOLORWRITEENABLE_BLUE|D3DCOLORWRITEENABLE_ALPHA)' in r)
 pbd=r[r.index('template<class Draw> HRESULT particleBlendDraw('):r.index('template<class Draw> HRESULT rainBlendDraw(')]
 checks['particle draw: a claimed draw or a blob shadow is drawn as it was with RT1 unbound; otherwise one draw through rainMrtDraw']=('if(claimed||blobOriginal){rainMrtUnbind();return blobFaintDraw(claimed,draw);}' in pbd and 'rainMrtDraw(draw,true)' in pbd)
 wf=r[r.index('    void weatherFrame('):r.index('    void logParticles(')]

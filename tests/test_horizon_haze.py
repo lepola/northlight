@@ -37,7 +37,7 @@ PRE_LIFT_COMPOSITE_SLOTS = 467
 # same instruction, so 467 (by inspection of WorldComposite.bin.asm). SourceVisibilityPS: +8 ring taps,
 # estimated 440-460 but not knowable without the compiler.
 # 0.3.174: WorldComposite folds the AO/bloom composite (s10 AO in the tent loop, bloom, original'): 498.
-LIFT_COMPOSITE_SLOTS = 504  # 0.3.203 (rain streaks in the transmittance composite): was 509 with the rain lerp; 505 (0.3.202 rain mask), 498 before
+LIFT_COMPOSITE_SLOTS = 511  # 0.3.203 (rain streaks in the transmittance composite): was 509 with the rain lerp; 505 (0.3.202 rain mask), 498 before
 SOURCE_VISIBILITY_SLOTS = 492  # compiled at integration (was 281 before the wrap ring)
 BEFORE = {
     'WorldNormals': '1e8d22d66a1022bad26c930dd719398eba02c22179084a275f4fe52bf54c1db5',
@@ -348,7 +348,7 @@ def main():
     helper = block(shader, 'float3 horizonHaze(')
     # 0.3.203 (particle mask): haze, then the fog mad, in the one transmittance expression (rain streaks and particles: original + T x (F(bg) - bg)).
     assert composite_src.index('horizonHaze(color,centerUV,viewZ,d>=.99999&&liquid<=0)') < composite_src.index('fog.a,fog.rgb)')
-    assert 'color=mad(1-mask.y,mad(horizonHaze(color,centerUV,viewZ,d>=.99999&&liquid<=0),fog.a,fog.rgb)-bg,original.rgb);' in composite_src
+    assert 'color=mad(1-mask.y,mad(horizonHaze(color,centerUV,viewZ,d>=.99999&&liquid<=0),fog.a,fog.rgb)-B,pixel);' in composite_src
     assert '[branch]if(range<=0||HorizonHaze.w<=0)return color;' in helper
     assert helper.index('[branch]') < helper.index('viewPositionDistance') and 'tex2D' not in helper and 'loop' not in helper
     assert 'float range=sky?1:saturate((viewZ-HorizonShape.y)*HorizonShape.z);' in helper

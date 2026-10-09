@@ -14,11 +14,12 @@ float4 RainMaskMRT(float4 diffuse : COLOR0, float2 uv : TEXCOORD0, out float4 ma
 }
 
 // RainScrub: Scene = the final scene depth, Depth = the depth snapshot taken before the frame's first rain draw. Pixels whose depth did not
-// change are discarded (the mask stays); a pixel something was drawn over since gets 0 (the pass writes red only).
+// change are discarded (the mask stays); a pixel something was drawn over since gets (0,0,0,128/255): no coverage, no touch, and the multiplicative
+// factor of the mod2x halos (alpha, 128/255 = x1, see ParticleMod) back to its start.
 float4 RainScrub(float2 uv : TEXCOORD0) : COLOR0
 {
     clip(abs(tex2D(Scene, uv).r - tex2D(Depth, uv).r) - 1e-6);
-    return 0;
+    return float4(0, 0, 0, 128.0 / 255.0);
 }
 
 // 0.3.203 (particle mask): translucent world particles (torch and brazier flames, sparks, spell particles) draw no depth, so WorldComposite
@@ -46,9 +47,15 @@ float particleBrightness(float4 c)
     { float4 c = particleStage(diffuse, uv, scale); mask = float4(1, 1, 1, saturate(c.a) * particleBrightness(c)); return c; }
 #define PARTICLE_ADDC(name, scale) float4 name(float4 diffuse : COLOR0, float2 uv : TEXCOORD0, out float4 mask : COLOR1) : COLOR0 \
     { float4 c = particleStage(diffuse, uv, scale); mask = particleBrightness(c).xxxx; return c; }
+// Mod  (DESTCOLOR/SRCCOLOR, the M2 "mod2x" blend: pixel = 2 x src x dst)   (.,.,.,y):  alpha only (colour mask ALPHA). The mask's alpha starts at 128/255 (factor M = 1; the composite reads M = alpha x 255/128,
+//   at most ~2) and the draw's own blend turns it into 2 x y x alpha, so y = the luminance of the colour the blend multiplies by (src.rgb x 2 / 2) keeps alpha = M/2 across stacked halos.
+#define PARTICLE_MOD(name, scale) float4 name(float4 diffuse : COLOR0, float2 uv : TEXCOORD0, out float4 mask : COLOR1) : COLOR0 \
+    { float4 c = particleStage(diffuse, uv, scale); mask = dot(c.rgb, float3(0.299, 0.587, 0.114)).xxxx; return c; }
 PARTICLE_OVER(ParticleOver1, 1)
 PARTICLE_OVER(ParticleOver2, 2)
 PARTICLE_ADDA(ParticleAddA1, 1)
 PARTICLE_ADDA(ParticleAddA2, 2)
 PARTICLE_ADDC(ParticleAddC1, 1)
 PARTICLE_ADDC(ParticleAddC2, 2)
+PARTICLE_MOD(ParticleMod1, 1)
+PARTICLE_MOD(ParticleMod2, 2)

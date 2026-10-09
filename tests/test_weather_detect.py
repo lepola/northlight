@@ -60,6 +60,7 @@ struct D3DCAPS9{DWORD NumSimultaneousRTs=0,PrimitiveMiscCaps=0,PixelShaderVersio
 struct D3DSURFACE_DESC{D3DFORMAT Format=D3DFMT_UNKNOWN;UINT Width=0,Height=0;D3DMULTISAMPLE_TYPE MultiSampleType=D3DMULTISAMPLE_NONE;DWORD MultiSampleQuality=0;};struct D3DVIEWPORT9{DWORD X=0,Y=0,Width=0,Height=0;float MinZ=0,MaxZ=1;};
 enum{D3DTEXF_NONE=0,D3DBLEND_ZERO=1,D3DBLENDOP_MAX=5,D3DCOLORWRITEENABLE_ALPHA=8,D3DCOLORWRITEENABLE_RED=1,D3DCOLORWRITEENABLE_GREEN=2,D3DCOLORWRITEENABLE_BLUE=4,D3D_OK=0,D3DTEXF_NONE_=0,D3DCLEAR_TARGET=1,D3DUSAGE_RENDERTARGET=1,D3DUSAGE_DEPTHSTENCIL=2,D3DBLEND_ONE=2,D3DBLEND_SRCCOLOR=3,D3DBLEND_SRCALPHA=5,D3DBLEND_INVSRCALPHA=6,D3DBLEND_DESTCOLOR=9,D3DBLENDOP_ADD=1,D3DPMISCCAPS_INDEPENDENTWRITEMASKS=0x4000,D3DPMISCCAPS_SEPARATEALPHABLEND=0x20000,D3DPMISCCAPS_MRTPOSTPIXELSHADERBLENDING=0x80000};
 static const DWORD kRainMaskMrtShader[]={1},kRainScrubShader[]={2};
+static const DWORD kParticleMod1Shader[]={16},kParticleMod2Shader[]={17};
 static const DWORD kParticleOver1Shader[]={10},kParticleOver2Shader[]={11},kParticleAddA1Shader[]={12},kParticleAddA2Shader[]={13},kParticleAddC1Shader[]={14},kParticleAddC2Shader[]={15};
 #define E_FAIL ((HRESULT)-2147467259L)
 #include "particle_shader_patch.h"
@@ -82,7 +83,7 @@ template<class T> static void drop(T*& p){p=nullptr;}
 struct DrawRec{Surface* rt;Surface* rt1;IDirect3DPixelShader9* ps;DWORD colorWrite,colorWrite1,blend,sep,srcA,dstA,opA,src,dst,op;};
 struct Ext{DWORD rs[256]={};DWORD tss[2][32]={};std::vector<std::pair<int,DWORD>> sets;
     Surface gameRT,gameDS;bool hasDS=true,peekDS=true;Surface* rt=&gameRT;Surface* rt1=nullptr;D3DVIEWPORT9 vp;IDirect3DTexture9 maskTex,depthMock;Surface msTarget;bool createFails=false,createMsFails=false,createDepthFails=false,stretchFails=false,colorFillFails=false,capsGetFails=false;unsigned msCreates=0,stretches=0,creates=0,depthCreates=0,colorFills=0,clears=0,rt1Binds=0,rt1Unbinds=0,rtSets=0,shaderCreates=0;D3DMULTISAMPLE_TYPE msCreatedType=D3DMULTISAMPLE_NONE;DWORD msCreatedQuality=0;
-    D3DCAPS9 caps;IDirect3DPixelShader9 psMrt{1},psScrub{2},gamePs{9},psParticle[6]={{10},{11},{12},{13},{14},{15}};bool particleShaderFails=false,patchedShaderFails=false;std::deque<IDirect3DPixelShader9> patchedShaders;unsigned patchedCreates=0;IDirect3DPixelShader9* ps=nullptr;IDirect3DVertexShader9 gameVs{7};IDirect3DVertexShader9* vsBound=nullptr;bool borrowOk=true;
+    D3DCAPS9 caps;IDirect3DPixelShader9 psMrt{1},psScrub{2},gamePs{9},psParticle[8]={{10},{11},{12},{13},{14},{15},{16},{17}};bool particleShaderFails=false,patchedShaderFails=false;std::deque<IDirect3DPixelShader9> patchedShaders;unsigned patchedCreates=0;IDirect3DPixelShader9* ps=nullptr;IDirect3DVertexShader9 gameVs{7};IDirect3DVertexShader9* vsBound=nullptr;bool borrowOk=true;
     Mirror* mirror=nullptr;void* stage0=nullptr;unsigned textureReads=0; /* GetTexture: the device's stage 0, and the mirror learns it back */
     HRESULT GetTexture(DWORD st,IDirect3DBaseTexture9** o){++textureReads;*o=nullptr;if(st==0&&mirror&&stage0){mirror->textures[0]=stage0;mirror->textureKnown[0]=true;}return 0;}
     IDirect3DTexture9* tex[4]={};unsigned samplerSets=0;DWORD minFilter0=0,magFilter0=0;
@@ -104,8 +105,8 @@ struct Ext{DWORD rs[256]={};DWORD tss[2][32]={};std::vector<std::pair<int,DWORD>
     HRESULT SetTexture(DWORD st,IDirect3DTexture9* t){if(st<4)tex[st]=t;return 0;}
     HRESULT SetSamplerState(DWORD st,D3DSAMPLERSTATETYPE t,DWORD v){++samplerSets;if(st==0&&t==D3DSAMP_MINFILTER)minFilter0=v;if(st==0&&t==D3DSAMP_MAGFILTER)magFilter0=v;return 0;}
     HRESULT GetViewport(D3DVIEWPORT9* o){*o=vp;return 0;}HRESULT SetViewport(const D3DVIEWPORT9* v){vp=*v;return 0;}
-    HRESULT Clear(DWORD,const D3DRECT*,DWORD,D3DCOLOR,float,DWORD){++clears;return 0;}
-    HRESULT ColorFill(Surface*,const RECT*,D3DCOLOR){++colorFills;return colorFillFails?-1:0;}
+    D3DCOLOR lastClear=~0u,lastFill=~0u;HRESULT Clear(DWORD,const D3DRECT*,DWORD,D3DCOLOR c,float,DWORD){++clears;lastClear=c;return 0;}
+    HRESULT ColorFill(Surface*,const RECT*,D3DCOLOR c){++colorFills;lastFill=c;return colorFillFails?-1:0;}
     HRESULT CreateTexture(UINT w,UINT h,UINT,DWORD usage,D3DFORMAT fmt,D3DPOOL,IDirect3DTexture9** o,void*){
         if(usage&D3DUSAGE_DEPTHSTENCIL){++depthCreates;if(createDepthFails)return -2005530516;depthMock.s.desc.Width=w;depthMock.s.desc.Height=h;*o=&depthMock;return 0;}
         if(fmt==D3DFMT_X8R8G8B8){++bgCreates;if(bgCreateFails)return -2005530516;bgFormat=fmt;bgTex.s.desc.Width=w;bgTex.s.desc.Height=h;*o=&bgTex;return 0;}
@@ -131,7 +132,7 @@ struct Hook{
     HRESULT quad(UINT,UINT){++quads;quadRec={ext->rt,ext->rt1,ext->ps,ext->rs[D3DRS_COLORWRITEENABLE],0,0,0,0,0,0,0,0,0};quadTex0=ext->tex[0];quadTex1=ext->tex[1];return quadFails?-1:0;}
     static constexpr int kTagMask=3,kWaterTag=4;VsClass vcMock;const VsClass& classifyVs(IDirect3DVertexShader9*){return vcMock;}
     bool projectionValid=false;float worldMinDepth=0.f,worldMaxDepth=1.f;bool sampledFrame=false;bool sampled()const{return sampledFrame;}IDirect3DBaseTexture9* blobOriginal=nullptr;
-    IDirect3DPixelShader9* particlePS[6]={};IDirect3DTexture9* particleBg=nullptr;Surface* particleBgSurface=nullptr;D3DFORMAT particleBgFormat=D3DFMT_UNKNOWN;bool particleBgTried=false,particleBgOk=false,particleBgLogged=false;int particleBgLast=-1,rainBgState=-1;unsigned mod2xBeforeSnapshot=0,mod2xAfterSnapshot=0,mod2xAfterRain=0;static constexpr unsigned kParticleRebindCap=24;
+    IDirect3DPixelShader9* particlePS[8]={};static constexpr D3DCOLOR kRainMaskClear=0x80000000;IDirect3DTexture9* particleBg=nullptr;Surface* particleBgSurface=nullptr;D3DFORMAT particleBgFormat=D3DFMT_UNKNOWN;bool particleBgTried=false,particleBgOk=false,particleBgLogged=false;int particleBgLast=-1,rainBgState=-1;unsigned mod2xBeforeSnapshot=0,mod2xAfterSnapshot=0,mod2xAfterRain=0;static constexpr unsigned kParticleRebindCap=24;
     bool particlePSFailed=false,rainMaskRainDrawn=false;unsigned particleDraws=0,particleSkips=0,rainLateZ=0,rainLateZPrims=0,particleSkipLogs=0,particleSkipLogged[8]={};
     struct ParticleSig{unsigned why=0,vsModel=0;DWORD v[13]={};unsigned count=0;};ParticleSig particleSigs[12];unsigned particleSigCount=0,particleSigMore=0;bool particleFirstLogged=false;std::vector<std::string> logs;template<class F> void extensionWork(const char*,F f){f();}
     void newFrame(){rainMrtUnbind();rainMaskCleared=rainMaskDrawn=rainMaskFrame=rainMaskOk=rainDepthOk=rainMaskRainDrawn=particleBgTried=particleBgOk=false;applied=false;} /* clearFrame's part */
@@ -348,7 +349,7 @@ int main(){
             Hook h;mk(h);h.draw(10);h.draw(10);assert(h.rainMrtBound);
             IDirect3DTexture9* m=h.rainMaskPrepare();
             assert(m==h.rainMask&&!h.rainMrtBound&&h.ext->rt1==nullptr&&h.quads==1&&h.effectStates==1&&h.ext->stretches==0); /* RT1 off first; no MSAA: no resolve */
-            assert(h.quadRec.rt==&h.ext->maskTex.s&&h.quadRec.ps==&h.ext->psScrub&&h.quadTex0==h.depthTex&&h.quadTex1==h.rainDepth&&h.quadRec.colorWrite==(D3DCOLORWRITEENABLE_RED|D3DCOLORWRITEENABLE_GREEN|D3DCOLORWRITEENABLE_BLUE)&&h.ext->minFilter0==D3DTEXF_POINT&&h.ext->magFilter0==D3DTEXF_POINT&&h.quadRec.rt1==nullptr); /* final depth (s0) vs the snapshot (s1), POINT, alpha only */
+            assert(h.quadRec.rt==&h.ext->maskTex.s&&h.quadRec.ps==&h.ext->psScrub&&h.quadTex0==h.depthTex&&h.quadTex1==h.rainDepth&&h.quadRec.colorWrite==(D3DCOLORWRITEENABLE_RED|D3DCOLORWRITEENABLE_GREEN|D3DCOLORWRITEENABLE_BLUE|D3DCOLORWRITEENABLE_ALPHA)&&h.ext->minFilter0==D3DTEXF_POINT&&h.ext->magFilter0==D3DTEXF_POINT&&h.quadRec.rt1==nullptr); /* final depth (s0) vs the snapshot (s1), POINT, alpha only */
             assert(h.ext->rt==&h.ext->gameRT&&h.ext->vp.X==3); /* its own SavedState brought the game's target back */
         }
         {Hook h;mk(h);h.ext->gameRT.desc.MultiSampleType=D3DMULTISAMPLE_4_SAMPLES;h.ext->gameRT.desc.MultiSampleQuality=2;h.ext->gameDS.desc.MultiSampleType=D3DMULTISAMPLE_4_SAMPLES;h.ext->gameDS.desc.MultiSampleQuality=2;h.draw(10);
@@ -386,7 +387,7 @@ int main(){
             Hook sw;mk(sw);sw.ext->tss[0][D3DTSS_COLORARG1]=D3DTA_DIFFUSE;sw.ext->tss[0][D3DTSS_COLORARG2]=D3DTA_TEXTURE;sw.ext->tss[0][D3DTSS_ALPHAARG1]=D3DTA_CURRENT;sw.ext->tss[0][D3DTSS_ALPHAARG2]=D3DTA_TEXTURE;sw.draw(10);assert(sw.particleDraws==1); /* either argument order */
         }
         {   // skipped (drawn unchanged, counted, the first of each reason logged): reasons 128 blend, 16 stage, 256 no texture, 2048 game pixel shader without a patch, 4 vs_3_0, 2 caps, 1 size
-            Hook h;mk(h);h.ext->rs[D3DRS_SRCBLEND]=D3DBLEND_DESTCOLOR;h.ext->rs[D3DRS_DESTBLEND]=D3DBLEND_SRCCOLOR;h.draw(10);
+            Hook h;mk(h);h.ext->rs[D3DRS_SRCBLEND]=D3DBLEND_DESTCOLOR;h.ext->rs[D3DRS_DESTBLEND]=D3DBLEND_ZERO;h.draw(10);
             assert(h.drawn==1&&h.particleDraws==0&&h.particleSkips==1&&h.logs.size()==1&&h.ext->draws[0].rt1==nullptr&&h.ext->draws[0].ps==nullptr&&h.ext->draws[0].colorWrite1==15&&!h.rainMrtBound&&h.snapshots==0&&!h.rainMaskDrawn&&h.ext->rtSets==0);
             h.draw(10);assert(h.particleSkips==2&&h.logs.size()==1); /* the same reason is not logged again */
             h.ext->rs[D3DRS_SRCBLEND]=D3DBLEND_SRCALPHA;h.ext->rs[D3DRS_DESTBLEND]=D3DBLEND_INVSRCALPHA;h.ext->tss[0][D3DTSS_ALPHAOP]=D3DTOP_SELECTARG1;h.draw(10);assert(h.particleSkips==3&&h.logs.size()==2&&h.particleDraws==0);
@@ -430,13 +431,25 @@ int main(){
             {Hook h;mkg(h);h.vsMajor[&h.ext->gameVs]=1;h.draw(10);assert(h.particlePatchedDraws==1);h.vsMajor.erase(&h.ext->gameVs);h.draw(10);assert(h.particlePatchedDraws==2);} /* the game's own vertex shader, whatever its model */
             {Hook h;mkg(h);h.ext->borrowOk=false;h.draw(10);assert(h.particlePatchedDraws==1&&h.ext->ps==&h.ext->gamePs&&h.ext->gamePs.refs==1);} /* the shader found through GetPixelShader instead of the mirror's identity */
         }
-        {   // the order of mod2x (DESTCOLOR/SRCCOLOR) draws against the background snapshot and the first rain mask draw: counted whether or not they are masked
+        {   // the order of mod2x (DESTCOLOR/SRCCOLOR) draws against the background snapshot and the first rain mask draw: counted on every candidate, masked or not
             Hook h;mk(h);h.ext->rs[D3DRS_SRCBLEND]=D3DBLEND_DESTCOLOR;h.ext->rs[D3DRS_DESTBLEND]=D3DBLEND_SRCCOLOR;
-            h.draw(10);h.draw(10);assert(h.mod2xBeforeSnapshot==2&&h.mod2xAfterSnapshot==0&&h.mod2xAfterRain==0&&h.particleBgTried==false); /* nothing masked yet: no snapshot */
-            h.ext->rs[D3DRS_SRCBLEND]=D3DBLEND_SRCALPHA;h.ext->rs[D3DRS_DESTBLEND]=D3DBLEND_INVSRCALPHA;h.draw(10);assert(h.particleBgTried&&h.mod2xBeforeSnapshot==2); /* the snapshot */
-            h.ext->rs[D3DRS_SRCBLEND]=D3DBLEND_DESTCOLOR;h.ext->rs[D3DRS_DESTBLEND]=D3DBLEND_SRCCOLOR;h.draw(10);assert(h.mod2xBeforeSnapshot==2&&h.mod2xAfterSnapshot==1&&h.mod2xAfterRain==0);
+            h.draw(10);assert(h.mod2xBeforeSnapshot==1&&h.mod2xAfterSnapshot==0&&h.particleBgTried); /* the first mask draw takes the snapshot after being counted */
+            h.draw(10);assert(h.mod2xBeforeSnapshot==1&&h.mod2xAfterSnapshot==1&&h.mod2xAfterRain==0);
             h.rainMaskRainDrawn=true;h.draw(10);assert(h.mod2xAfterSnapshot==2&&h.mod2xAfterRain==1);
-            h.ext->rs[D3DRS_SRCBLEND]=D3DBLEND_ONE;h.ext->rs[D3DRS_DESTBLEND]=D3DBLEND_ONE;h.draw(10);assert(h.mod2xAfterSnapshot==2&&h.mod2xBeforeSnapshot==2); /* other blends are not counted */
+            h.ext->rs[D3DRS_SRCBLEND]=D3DBLEND_ONE;h.ext->rs[D3DRS_DESTBLEND]=D3DBLEND_ONE;h.draw(10);assert(h.mod2xAfterSnapshot==2&&h.mod2xBeforeSnapshot==1); /* other blends are not counted */
+            Hook u;mk(u);u.ext->rs[D3DRS_SRCBLEND]=D3DBLEND_DESTCOLOR;u.ext->rs[D3DRS_DESTBLEND]=D3DBLEND_SRCCOLOR;u.ext->tss[1][D3DTSS_COLOROP]=D3DTOP_MODULATE;u.draw(10);u.draw(10);assert(u.particleSkips==2&&u.mod2xBeforeSnapshot==2&&!u.particleBgTried); /* skipped for the stage setup: before any snapshot, still counted */
+        }
+        {   // mod2x halos (DESTCOLOR/SRCCOLOR): their own shader, alpha only; the mask starts at alpha 128/255 (x1) and the scrub puts it back
+            for(int x2=0;x2<2;++x2){Hook h;mk(h);h.ext->rs[D3DRS_SRCBLEND]=D3DBLEND_DESTCOLOR;h.ext->rs[D3DRS_DESTBLEND]=D3DBLEND_SRCCOLOR;h.ext->tss[0][D3DTSS_COLOROP]=x2?D3DTOP_MODULATE2X:D3DTOP_MODULATE;const auto before=snap(h);
+                h.draw(10);const DrawRec& g=h.ext->draws[0];
+                assert(h.drawn==1&&h.particleDraws==1&&h.particleSkips==0&&h.ext->lastFill==Hook::kRainMaskClear&&g.ps==&h.ext->psParticle[6+x2]&&g.rt1==&h.ext->maskTex.s&&g.colorWrite==15&&g.colorWrite1==D3DCOLORWRITEENABLE_ALPHA&&g.src==D3DBLEND_DESTCOLOR&&g.dst==D3DBLEND_SRCCOLOR);
+                assert(h.ext->ps==nullptr&&h.ext->rs[D3DRS_COLORWRITEENABLE1]==15&&snap(h)==before);} /* RT0 blends as the game does; every state back */
+            {Hook h;mk(h);h.ext->rs[D3DRS_SRCBLEND]=D3DBLEND_DESTCOLOR;h.ext->rs[D3DRS_DESTBLEND]=D3DBLEND_SRCCOLOR;h.ext->rs[D3DRS_SEPARATEALPHABLENDENABLE]=1;h.draw(10);assert(h.particleDraws==0&&h.particleSkips==1&&h.ext->draws[0].ps==nullptr);} /* separate alpha blend: the factor arithmetic would differ */
+            {Hook h;mk(h);h.ext->rs[D3DRS_SRCBLEND]=D3DBLEND_DESTCOLOR;h.ext->rs[D3DRS_DESTBLEND]=D3DBLEND_SRCCOLOR;h.ext->vsBound=&h.ext->gameVs;h.vsMajor[&h.ext->gameVs]=2;h.vcMock.entry=0;h.draw(10);assert(h.particleDraws==1&&h.ext->draws[0].colorWrite1==D3DCOLORWRITEENABLE_ALPHA);} /* the logged case: vs_2_x with the fixed-function stage */
+            {Hook h;mk(h);h.ext->rs[D3DRS_SRCBLEND]=D3DBLEND_DESTCOLOR;h.ext->rs[D3DRS_DESTBLEND]=D3DBLEND_SRCCOLOR;h.ext->vsBound=&h.ext->gameVs;h.vsMajor[&h.ext->gameVs]=3;h.ext->ps=&h.ext->gamePs;h.draw(10);assert(h.particleDraws==0&&h.particleSkips==1&&h.ext->draws[0].ps==&h.ext->gamePs&&h.particlePatched.size()==0);} /* a game pixel shader with this blend is not patched (reason 128) */
+            {Hook h;mk(h);h.draw(10);h.ext->rs[D3DRS_SRCBLEND]=D3DBLEND_DESTCOLOR;h.ext->rs[D3DRS_DESTBLEND]=D3DBLEND_SRCCOLOR;h.draw(10);h.draw(10);h.ext->rs[D3DRS_SRCBLEND]=D3DBLEND_SRCALPHA;h.ext->rs[D3DRS_DESTBLEND]=D3DBLEND_INVSRCALPHA;h.draw(10);
+                assert(h.snapshots==1&&h.ext->clears==0&&h.ext->colorFills==1&&h.ext->rt1Binds==1&&h.particleDraws==4&&h.ext->draws[1].colorWrite1==D3DCOLORWRITEENABLE_ALPHA&&h.ext->draws[3].colorWrite1==(D3DCOLORWRITEENABLE_GREEN|D3DCOLORWRITEENABLE_BLUE));} /* halos and layers share one mask, one clear, one bind */
+            {Hook h;mk(h);h.ext->colorFillFails=true;h.draw(10);assert(h.ext->clears==1&&h.ext->lastClear==Hook::kRainMaskClear);} /* the fallback clear starts at the same alpha */
         }
         {   // not a particle: nothing is read beyond the first test, nothing set, nothing counted
             auto quiet=[&](Hook& h){h.draw(10);assert(h.drawn==1&&h.particleDraws==0&&h.particleSkips==0&&h.ext->sets.empty()&&h.ext->colorFills==0&&h.ext->rtSets==0&&h.snapshots==0&&h.logs.empty()&&h.ext->draws[0].rt1==nullptr&&h.ext->draws[0].ps==nullptr);};
@@ -471,7 +484,7 @@ int main(){
             assert(h.ext->draws[1].src==D3DBLEND_SRCALPHA&&h.ext->draws[1].dst==D3DBLEND_INVSRCALPHA); /* rain keeps RainBlend */
             h.ext->rs[D3DRS_ZWRITEENABLE]=1;h.draw(10);assert(!h.rainMrtBound&&h.ext->rt1Unbinds==1&&h.ext->draws[3].rt1==nullptr&&h.particleDraws==2); /* any other draw unbinds */
             h.ext->rs[D3DRS_ZWRITEENABLE]=0;h.draw(10);assert(h.ext->rt1Binds==2&&h.snapshots==1&&h.particleDraws==3); /* and the next mask draw rebinds, same frame, no second snapshot */
-            assert(h.rainMaskPrepare()==h.rainMask&&h.quads==1&&h.quadRec.colorWrite==(D3DCOLORWRITEENABLE_RED|D3DCOLORWRITEENABLE_GREEN|D3DCOLORWRITEENABLE_BLUE)&&h.quadRec.ps==&h.ext->psScrub); /* the one scrub clears all three channels */
+            assert(h.rainMaskPrepare()==h.rainMask&&h.quads==1&&h.quadRec.colorWrite==(D3DCOLORWRITEENABLE_RED|D3DCOLORWRITEENABLE_GREEN|D3DCOLORWRITEENABLE_BLUE|D3DCOLORWRITEENABLE_ALPHA)&&h.quadRec.ps==&h.ext->psScrub); /* the one scrub clears all three channels */
         }
         {   // particles alone (clear weather) reach the composite too, and a dry frame without candidates costs nothing
             Hook h;mk(h);h.draw(10);assert(h.rainMaskPrepare()==h.rainMask&&h.quads==1);

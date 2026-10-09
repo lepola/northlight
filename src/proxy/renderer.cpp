@@ -318,13 +318,14 @@ class Device final : public GuardedMirrorDevice {
     // 0.3.203 (particle mask): translucent world particles (no depth write) write their coverage into the same mask (green) through RT1 in their own draw;
     // particlePS: the six ps_2_0 variants (blend kind x stage-0 colour multiplier), created on first use; the counters are read and zeroed by the PARTICLES / WEATHER lines;
     // rainMaskRainDrawn: this frame's first rain mask draw has happened, rainLateZ*: Z-writing world draws after it (what a mask cannot fix: geometry drawn over the rain).
-    IDirect3DPixelShader9* particlePS[6]={};bool particlePSFailed=false,rainMaskRainDrawn=false;unsigned particleDraws=0,particleSkips=0,rainLateZ=0,rainLateZPrims=0,particleSkipLogs=0,particleSkipLogged[8]={};
+    IDirect3DPixelShader9* particlePS[8]={};bool particlePSFailed=false,rainMaskRainDrawn=false;unsigned particleDraws=0,particleSkips=0,rainLateZ=0,rainLateZPrims=0,particleSkipLogs=0,particleSkipLogged[8]={};
     struct ParticleSig{unsigned why=0,vsModel=0;DWORD v[13]={};unsigned count=0;}; /* a sample frame's census row: the draw states of a candidate (v: src, dst, op, alpha test, colour op/args, alpha op/args, stage 1 colour op) */
     ParticleSig particleSigs[12];unsigned particleSigCount=0,particleSigMore=0;bool particleFirstLogged=false;
     // 0.3.203 (particle mask): particleBg: the scene colour from before the frame's first particle mask draw (one StretchRect, lazily created at the game's target format, released with the mask);
     // the composite relights that background and adds the particles back (green = 1-T, blue = touched). particleBgTried / particleBgOk are per frame. A frame may bind RT1 for particles at most kParticleRebindCap times.
     IDirect3DTexture9* particleBg=nullptr;IDirect3DSurface9* particleBgSurface=nullptr;D3DFORMAT particleBgFormat=D3DFMT_UNKNOWN;bool particleBgTried=false,particleBgOk=false,particleBgLogged=false;int particleBgLast=-1,rainBgState=-1; /* particleBgLast: last frame's snapshot (-1 not taken, 0 failed, 1 ok), kept past clearFrame for the PARTICLES line; rainBgState: -1 no rain mask candidate, 0 the first one found no snapshot, 1 the snapshot was taken before the first rain mask draw */
     static constexpr unsigned kParticleRebindCap=24;
+    static constexpr D3DCOLOR kRainMaskClear=0x80000000; /* r, g, b 0; alpha 128/255 = the factor of the mod2x halos (M = 1): the composite reads M = alpha x 255/128 */
     // 0.3.203 (particle mask): the game draws its particles with its own pixel shaders, so the mask comes from a patched variant of the bound one (particle_shader_patch.h: oC0 renamed,
     // the mask written to oC1), built at the first eligible draw and cached per original shader and blend kind. particleGamePs: the game's shader (one reference) while its patched variant
     // is bound for the draw; particlePatchedDraws and particlePatchRejects are the PARTICLES line's counters.
@@ -962,7 +963,7 @@ private:
         const bool scissorKnown=SUCCEEDED(ext->GetScissorRect(&scissor)); /* SetRenderTarget(0) resets the scissor rect too, and the mirror does not hold it */
         const bool scissorStateKnown=SUCCEEDED(ext->GetRenderState(D3DRS_SCISSORTESTENABLE,&scissorOn));
         if(SUCCEEDED(ext->SetRenderTarget(0,maskTarget))){
-            ext->SetRenderState(D3DRS_SCISSORTESTENABLE,FALSE);ext->Clear(0,nullptr,D3DCLEAR_TARGET,0,1,0);if(scissorStateKnown)ext->SetRenderState(D3DRS_SCISSORTESTENABLE,scissorOn); /* the whole target: SetRenderTarget reset the viewport to it */
+            ext->SetRenderState(D3DRS_SCISSORTESTENABLE,FALSE);ext->Clear(0,nullptr,D3DCLEAR_TARGET,kRainMaskClear,1,0);if(scissorStateKnown)ext->SetRenderState(D3DRS_SCISSORTESTENABLE,scissorOn); /* the whole target: SetRenderTarget reset the viewport to it */
             ext->SetRenderTarget(0,gameRT);}
         ext->SetViewport(&vp);if(scissorKnown)ext->SetScissorRect(&scissor);drop(gameRT);
     }
@@ -980,7 +981,7 @@ private:
            mask, and the weather intensity, which drives the rain fog, fell to one draw's worth. The read goes to the device and the mirror learns it back. */
         {IDirect3DBaseTexture9* stage0=nullptr;if(SUCCEEDED(ext->GetTexture(0,&stage0)))drop(stage0);}
         if(!snapped)return false;
-        if(FAILED(ext->ColorFill(maskTarget,nullptr,0)))rainMaskClearSwap(maskTarget);
+        if(FAILED(ext->ColorFill(maskTarget,nullptr,kRainMaskClear)))rainMaskClearSwap(maskTarget);
         rainDepthOk=true;return true;
     }
     // 0.3.203 (particle mask): the bound depth is the world depth (an identity compare).
@@ -1084,6 +1085,8 @@ private:
                         if(bl[0]==D3DBLEND_SRCALPHA&&bl[1]==D3DBLEND_INVSRCALPHA)kind=0;
                         else if(bl[0]==D3DBLEND_SRCALPHA&&bl[1]==D3DBLEND_ONE)kind=1;
                         else if((bl[0]==D3DBLEND_ONE||bl[0]==D3DBLEND_SRCCOLOR)&&bl[1]==D3DBLEND_ONE)kind=2;
+                        else if(bl[0]==D3DBLEND_DESTCOLOR&&bl[1]==D3DBLEND_SRCCOLOR&&!psBound){ /* the M2 mod2x halo (2 x src x dst): the factor goes into the mask's alpha; fixed-function stage only, with one blend for colour and alpha */
+                            DWORD sepAlpha=TRUE;if(SUCCEEDED(ext->GetRenderState(D3DRS_SEPARATEALPHABLENDENABLE,&sepAlpha))&&!sepAlpha)kind=3;}
                     }
                     if(kind<0)why|=128;
                     else if(psBound)patchKind=kind; /* a game pixel shader: its stage setup is a leftover, the patched shader replaces nothing of it */
@@ -1108,7 +1111,7 @@ private:
             else patchedPs=patched.shader;
         }
         if(!why&&particle&&!psBound&&!particlePS[variant]){
-            static const DWORD* const code[6]={kParticleOver1Shader,kParticleOver2Shader,kParticleAddA1Shader,kParticleAddA2Shader,kParticleAddC1Shader,kParticleAddC2Shader};
+            static const DWORD* const code[8]={kParticleOver1Shader,kParticleOver2Shader,kParticleAddA1Shader,kParticleAddA2Shader,kParticleAddC1Shader,kParticleAddC2Shader,kParticleMod1Shader,kParticleMod2Shader};
             const HRESULT hr=particlePSFailed?E_FAIL:ext->CreatePixelShader(code[variant],&particlePS[variant]);
             if(FAILED(hr)){if(!particlePSFailed)logf("PARTICLES mask shader %u not created HRESULT=0x%08lx; particles stay unmasked",variant,(unsigned long)hr);particlePSFailed=true;why|=64;}
         }
@@ -1149,7 +1152,8 @@ private:
         /* Only RT1's write mask changes: RT0's colour and alpha blend exactly as the game's draw without the mask. */
         static const D3DRENDERSTATETYPE types[1]={D3DRS_COLORWRITEENABLE1};
         const bool over=patchedPs?patchKind==0:variant<2;
-        const DWORD want[1]={DWORD(particle&&!over?D3DCOLORWRITEENABLE_BLUE:D3DCOLORWRITEENABLE_GREEN|D3DCOLORWRITEENABLE_BLUE)}; /* rain streaks and alpha-over particles: green (1-T) + blue (touched); additive particles: blue only */
+        const bool mod2x=!patchedPs&&particle&&variant>=6;
+        const DWORD want[1]={DWORD(mod2x?D3DCOLORWRITEENABLE_ALPHA:particle&&!over?D3DCOLORWRITEENABLE_BLUE:D3DCOLORWRITEENABLE_GREEN|D3DCOLORWRITEENABLE_BLUE)}; /* rain streaks and alpha-over particles: green (1-T) + blue (touched); additive particles: blue only; mod2x halos: alpha only (the factor) */
         for(int i=0;i<1;++i){rainMrtPrevKnown[i]=SUCCEEDED(ext->GetRenderState(types[i],&rainMrtPrev[i]));ext->SetRenderState(types[i],want[i]);}
         if(patchedPs){particleGamePs=gamePs;gamePs->AddRef();} /* the draw replaces the binding; the game's shader must outlive it */
         ext->SetPixelShader(patchedPs?patchedPs:particle?particlePS[variant]:rainMrtPS);
@@ -1185,7 +1189,7 @@ private:
         if(SUCCEEDED(hr)){
             ext->SetTexture(0,depthTex);ext->SetTexture(1,rainDepth);
             for(DWORD s=0;s<2;++s){ext->SetSamplerState(s,D3DSAMP_MINFILTER,D3DTEXF_POINT);ext->SetSamplerState(s,D3DSAMP_MAGFILTER,D3DTEXF_POINT);ext->SetSamplerState(s,D3DSAMP_MIPFILTER,D3DTEXF_NONE);} /* both depths exact, texel for texel */
-            ext->SetPixelShader(rainScrubPS);ext->SetRenderState(D3DRS_COLORWRITEENABLE,D3DCOLORWRITEENABLE_RED|D3DCOLORWRITEENABLE_GREEN|D3DCOLORWRITEENABLE_BLUE); /* 0.3.203: the rain (red) and the particles (green, blue) */
+            ext->SetPixelShader(rainScrubPS);ext->SetRenderState(D3DRS_COLORWRITEENABLE,D3DCOLORWRITEENABLE_RED|D3DCOLORWRITEENABLE_GREEN|D3DCOLORWRITEENABLE_BLUE|D3DCOLORWRITEENABLE_ALPHA); /* 0.3.203: coverage, touch flag and halo factor (alpha back to 128/255) */
             hr=quad(width,height);
         }
         if(FAILED(hr)){rainMaskResolveHr=hr;return nullptr;}
