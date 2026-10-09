@@ -46,10 +46,22 @@ struct Counters {
     Counter dynShadowReadbacks{0},stShadowReadbacks{0},dynShadowEvicted{0},stShadowEvicted{0},hotShadowEvicted{0},relockRefused{0},relockRefusedBytes{0},shadowCapGrows{0};
     // 0.3.192 (CS): the LARGE-buffer allowance (command_queue.h LargeShadowBudgetBytes): grants (shadows made) and drops (evicted for another large buffer, pressure, GPU write).
     Counter largeShadowGrants{0},largeShadowDrops{0};
+    // 0.3.204 (task 21): zero-copy buffer unlocks (see unlockBuffer): unlocks recorded as a reference into the large buffer's slice (no copy into the queue) and their bytes, DISCARD renames to the spare slice,
+    // spare slices allocated for them, and the waits (count, ns) for a slice the replay thread still reads (a busy spare at a rename, or a non-DISCARD/NOOVERWRITE write lock). Game thread.
+    Counter zeroCopyUnlocks{0},zeroCopyBytes{0},renames{0},renameAllocs{0},renameWaits{0},renameWaitNs{0},writeWaits{0},writeWaitNs{0};   // rename*: DISCARD renames; write*: waits of the other write locks (flags 0) for a slice's readers
+    Counter waitMax{0},waitBudget{0},waitDrain{0},waitAlloc{0},maxRing{0},maxDiscards{0};   // why a DISCARD rename had to wait (ring at its allowed size / budget refused / draining the current slice under memory pressure / allocation failed); the largest ring (non-current slices) in use; the largest per-frame DISCARD count of a buffer (reset by each zerocopy line)
+    Counter zcSkipPool{0},zcSkipNoShadow{0},zcSkipSmall{0},zcSkipPressure{0},zcSkipOther{0};
+    Counter copyPressureUnlocks{0},copyPressureBytes{0};   // unlocks of 4 KiB or more that were copied into the queue instead of zero-copy because of memory pressure, and their bytes   // DISCARD/NOOVERWRITE write unlocks of DYNAMIC buffers that did NOT go zero-copy, by reason (not the default pool / no shadow slice / below 4 KiB / other)
     // The game thread's own time per frame (Present to Present, minus its sync and backpressure waits), in ns, and its frames.
     Counter gameNs{0},gameWaitNs{0},gameFrames{0};
+    // 0.3.204 (task 21, Diagnostics only): where the game thread's own time goes, ns (zero while Diagnostics are off). lockNs: buffer/image Lock+Unlock work (shadow memset/memcpy, readbacks),
+    // synchronous waits excluded; recordSampledNs: 16 x the sampled (1 in 16) generated method bodies, waits and snapshot capture excluded; snapNs: snapshot captures at draw triggers;
+    // presentBookNs: the Present call's bookkeeping, waits excluded.
+    Counter lockNs{0},recordSampledNs{0},snapNs{0},presentBookNs{0};
+    Counter cmdSampledNs[kMaxCmdIds]{},cmdSamples[kMaxCmdIds]{};   // the same sampled recording time per command id, and the samples (x16 = calls); the CSTREAM top line
     Counter filteredCalls{0};   // redundant Sets the game side did not record
     Counter stateAnswered{0},stateSynced{0},lockAsync{0};
+    Counter coopAnswered{0};   // 0.3.204 (task 21): TestCooperativeLevel calls the game thread answered D3D_OK from StreamCore::coopState (not in stateAnswered)
     Counter census[kMaxCmdIds]{};   // sync calls per command id (name via cmdName in command_stream.inl)
     // ---- Consumer (replay thread) ----
     alignas(kLine) Counter consumerSleeps{0};
@@ -59,7 +71,9 @@ struct Counters {
     // ---- Both threads write: memory in flight (chunks handed to the producer and not yet recycled, live blocks, registered shadows). ----
     alignas(kLine) Counter chunksLive{0};
     Counter blocksLive{0},blockBytes{0};
-    std::atomic<std::int64_t> shadowBytes{0},texShadowBytes{0},largeShadowBytes{0};   // largeShadowBytes: the large allowance, NOT part of shadowBytes (shadowAdmit's cap)
+    std::atomic<std::int64_t> shadowBytes{0},texShadowBytes{0},largeShadowBytes{0};   // largeShadowBytes: the large allowance, NOT part of shadowBytes (shadowAdmit's cap); 0.3.204 (task 21): also the spare and the retired slices
+    std::atomic<std::int64_t> retiredBytes{0},ringBytes{0},ringSlices{0};   // 0.3.204 (task 21): live bytes of retired slices (dropped while the replay thread may still read them) and of ring slices (the buffers' non-current slices); NOT part of shadowBytes/largeShadowBytes (so they never block a shadow grant), but in memory() and under their own budget:
+    std::atomic<std::int64_t> ringLargeBytes{0},ringRegularBytes{0},retiredLargeBytes{0},retiredRegularBytes{0};   // the ring budget per kind (live + retired): regular <= ShadowBudgetBytes, large <= LargeShadowBudgetBytes
 };
 static_assert(alignof(Counters)==kLine&&sizeof(Counters)%kLine==0,"Counters groups are line-aligned");
 static_assert(offsetof(Counters,commands)/kLine!=offsetof(Counters,consumerSleeps)/kLine&&offsetof(Counters,consumerSleeps)/kLine!=offsetof(Counters,chunksLive)/kLine,"counter groups on distinct lines");

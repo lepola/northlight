@@ -116,7 +116,7 @@ assert 'if(stream)NorthlightReplayCopies::enabled.store(true' in renderer and 'N
 assert [n for n,t in sources.items() if 'enabled.store(true' in t and 'NorthlightReplayCopies' in t]==['renderer.cpp']
 # every write a stream replays into a game buffer is a Lock/Unlock on the stream's inner object, which is the wrapper (Device::Create*Buffer wraps)
 replay=sources['replay_thread.h']
-assert 'static_cast<IDirect3DVertexBuffer9*>(p->inner)->Lock(a->off,a->size,&dst,flags)' in replay and 'static_cast<IDirect3DVertexBuffer9*>(p->inner)->Unlock()' in replay
+assert 'static_cast<IDirect3DVertexBuffer9*>(p->inner)->Lock(off,size,&dst,flags)' in replay and replay.count('->Lock(off,size,&dst,flags)')==2 and 'writeBuffer(a->proxy,a->off,a->size,a->flags,a->src+a->off)' in replay and 'static_cast<IDirect3DVertexBuffer9*>(p->inner)->Unlock()' in replay
 dev=renderer[renderer.index('class Device final'):renderer.index('class Factory final')]
 assert 'ext->CreateVertexBuffer(' in dev and 'NorthlightTrackedBuffers::wrap<IDirect3DVertexBuffer9' in dev and 'NorthlightTrackedBuffers::wrap<IDirect3DIndexBuffer9' in dev
 assert dev.count('NorthlightTrackedBuffers::unwrap(buffer)')==1 # ProcessVertices is the only unwrapping use of a game buffer for a write

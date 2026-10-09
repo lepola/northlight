@@ -40,6 +40,8 @@
    frames (a whole-buffer request does not shortcut that), not within kLargeRefillFrames of its own eviction/invalidation, and not within kLargeBackoffFrames
    after a pressure edge (the fill is one 16 MB read on the replay thread: it must not repeat). Pressure drops it at once, or at its unpin when pinned
    (never freed while pinned); another large buffer takes the allowance only when the holder is unpinned and unread for kLargeRefillFrames.
+   0.3.204: deliberately still one holder of at most 16 MiB here, unlike the command stream's two-buffer CPU shadow allowance (command_queue.h,
+   LargeShadowBudgetBytes): a larger buffer (e.g. an 18 MB one) never gets a replay-side copy and its reads keep taking the readBackLock path.
    A buffer without a valid copy takes today's readBackLock() path.
    Gate: `enabled` (set where the stream starts, with CommandStream=0 it stays false): no wrapper hook copies anything, no Reader changes a call.
    Threads: every writer and every capture site runs on the replay thread; the registry is still mutex-guarded (the wrapper can be released

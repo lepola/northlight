@@ -67,6 +67,7 @@ public:
         bool filterRedundant=true;                                      // see redundant(); off: every Set is recorded
         DWORD (*readBackLock)()=nullptr;                                // NorthlightUpload::readBackLock in the DLL: READONLY, plus NOOVERWRITE on DXVK >= 3
         bool (*diagnostics)()=nullptr;                                  // NorthlightDiagnostics::enabled in the DLL
+        const char* (*callerModule)(void* address)=nullptr;             // 0.3.204 (task 21): "module+0xoffset" of a TestCooperativeLevel caller's return address (Windows only); null = no caller line
         // 0.3.200 (pipeline): StreamFramesAhead (clamped to 1..kMaxFramesAhead): Present waits for the Present this many frames back; the snapshot pool follows
         // (SnapshotPool::capFor). 1 = the 0.3.199 pacing. The queue budget is `budget` (the DLL passes budgetForFramesAhead).
         unsigned framesAhead=1;
@@ -106,9 +107,17 @@ public:
 
     // ---- hooks the generated bodies call ----
     Queue& streamQueue(){return core.q;}
+    CallScope callScope(std::uint16_t id){return CallScope(core,id);}   // 0.3.204 (task 21): sampled recording timer, see CallScope
     template<Cmd C,class... A> void observe(CmdTag<C>,A&&...){}
     template<Cmd C,class... A> typename MethodTraits<C>::Ret syncCall(CmdTag<C> t,A... a){noteSync(t,a...);return runSync(streamQueue(),t,a...);}
     template<Cmd C,class... A> typename MethodTraits<C>::Ret syncGet(CmdTag<C> t,A... a){own(core.q.stats.stateSynced);return runSync(streamQueue(),t,a...);}
+    // 0.3.204 (task 21): the synchronous TestCooperativeLevel (device not D3D_OK yet). A task, so the replay thread stays the only writer of coopState (a game-side store could
+    // overwrite the result of a Present replayed from a pumped wait); census name, syncCalls and the nested fallback as runSync.
+    HRESULT syncGet(CmdTag<Cmd::Device_TestCooperativeLevel>){
+        own(core.q.stats.stateSynced);HRESULT hr=D3DERR_INVALIDCALL;
+        if(inPumpedWait)own(core.q.stats.census[(std::size_t)Cmd::Device_TestCooperativeLevel]);   // runTask counts nestedSyncs; runSync also counted the census
+        const bool ran=runTask(core,[&](StreamCore& c){hr=c.target->TestCooperativeLevel();c.coopState.store(hr);},Cmd::Device_TestCooperativeLevel);
+        return ran?hr:D3DERR_INVALIDCALL;}
 
 
     // ---- redundant-state filtering ----
@@ -160,8 +169,8 @@ public:
     bool redundant(CmdTag<Cmd::Device_SetPixelShader>,IDirect3DPixelShader9* s){return filterOn()&&st.psKnown&&st.psSet&&st.ps==ProxyBase::of(s)&&filtered();}
     bool redundant(CmdTag<Cmd::Device_SetVertexDeclaration>,IDirect3DVertexDeclaration9* d){return filterOn()&&st.declKnown&&st.declSet&&st.decl==ProxyBase::of(d)&&filtered();}
     bool redundant(CmdTag<Cmd::Device_SetFVF>,DWORD f){return filterOn()&&st.fvf.known&&st.fvf.fromSet&&st.fvf.v==f&&filtered();}
-    bool redundant(CmdTag<Cmd::Device_SetVertexShaderConstantF>,UINT r,const float* d,UINT n){return sameConstants(st.vsF,256,r,d,n);}
-    bool redundant(CmdTag<Cmd::Device_SetPixelShaderConstantF>,UINT r,const float* d,UINT n){return sameConstants(st.psF,256,r,d,n);}
+    bool redundant(CmdTag<Cmd::Device_SetVertexShaderConstantF>,UINT r,const float* d,UINT n){return sameFloats(st.vsF,r,d,n);}
+    bool redundant(CmdTag<Cmd::Device_SetPixelShaderConstantF>,UINT r,const float* d,UINT n){return sameFloats(st.psF,r,d,n);}
     bool redundant(CmdTag<Cmd::Device_SetVertexShaderConstantI>,UINT r,const int* d,UINT n){return sameConstants(st.vsI,16,r,d,n);}
     bool redundant(CmdTag<Cmd::Device_SetPixelShaderConstantI>,UINT r,const int* d,UINT n){return sameConstants(st.psI,16,r,d,n);}
     bool redundant(CmdTag<Cmd::Device_SetVertexShaderConstantB>,UINT r,const WINBOOL* d,UINT n){return sameBools(st.vsB,r,d,n);}
@@ -177,12 +186,17 @@ public:
     bool redundant(CmdTag<Cmd::Device_SetNPatchMode>,float n){return filterOn()&&st.npatch.known&&st.npatch.fromSet&&!std::memcmp(&st.npatch.v,&n,sizeof n)&&filtered();}
     bool redundant(CmdTag<Cmd::Device_SetSoftwareVertexProcessing>,WINBOOL b){return filterOn()&&st.swvp.known&&st.swvp.fromSet&&st.swvp.v==b&&filtered();}
     bool redundant(CmdTag<Cmd::Device_SetCurrentTexturePalette>,UINT n){return filterOn()&&st.palette.known&&st.palette.fromSet&&st.palette.v==n&&filtered();}
+    // the whole range known (from a game Set) and bytewise equal: one bitmask test and one memcmp
+    bool sameFloats(const StreamState::FloatBank& b,UINT r,const float* d,UINT n){
+        if(!filterOn()||!d||r>=StreamState::FloatBank::kRegs||n>StreamState::FloatBank::kRegs-r||!n)return false;   // (r+n could wrap)
+        if(!b.allKnown(r,n)||std::memcmp(b.v[r],d,std::size_t(n)*16))return false;
+        return filtered();}
     template<class Reg,class T> bool sameConstants(const Reg* regs,UINT count,UINT r,const T* d,UINT n){
-        if(!filterOn()||!d||r+n>count||!n)return false;
+        if(!filterOn()||!d||r>=count||n>count-r||!n)return false;   // (r+n could wrap)
         for(UINT i=0;i<n;++i)if(!regs[r+i].known||std::memcmp(regs[r+i].v,d+4*i,16))return false;   // known only ever comes from a game Set for constants
         return filtered();}
     bool sameBools(const Slot<BOOL>* regs,UINT r,const WINBOOL* d,UINT n){
-        if(!filterOn()||!d||r+n>16||!n)return false;
+        if(!filterOn()||!d||r>=16||n>16-r||!n)return false;
         for(UINT i=0;i<n;++i)if(!regs[r+i].known||!regs[r+i].fromSet||regs[r+i].v!=d[i])return false;
         return filtered();}
     // state class: StreamState follows the game's calls (not while a state block records)
@@ -240,6 +254,19 @@ public:
         takeReplayFailure();
         return true;}
     bool hit(){own(core.q.stats.stateAnswered);return true;}
+    // 0.3.204 (task 21): TestCooperativeLevel from the replay-published cooperative state while it is D3D_OK (a game may call it ~100 times a frame). Deliberately no begin():
+    // its publish every 8th call would wake the replay thread each time and the sync wait it replaces would only move; lost / not reset -> false = the exact synchronous path.
+    // always_inline: __builtin_return_address(0) then names the return address of the game-facing TestCooperativeLevel, i.e. the caller (no stack walk: the x86 DLL omits frame pointers).
+    inline __attribute__((always_inline)) bool answer(CmdTag<Cmd::Device_TestCooperativeLevel>,HRESULT& r){
+        if(core.coopState.load(std::memory_order_acquire)!=D3D_OK)return false;
+        r=D3D_OK;own(core.q.stats.coopAnswered);
+        if(core.callerModule&&callerLogs<2&&core.frameNo>=callerNextFrame)logCaller(__builtin_return_address(0));
+        return true;}
+    // Diagnostics: who calls it. The first locally answered call with Diagnostics on, and once more 600 frames later; with Diagnostics off it looks again every 600 frames.
+    unsigned callerLogs=0;std::uint64_t callerNextFrame=0;std::function<void(const char*)> callerLog;bool (*callerDiag)()=nullptr;
+    void logCaller(void* address){
+        callerNextFrame=core.frameNo+600;if(!callerLog||!callerDiag||!callerDiag())return;
+        ++callerLogs;char b[300];std::snprintf(b,sizeof b,"CSTREAM TestCooperativeLevel caller=%s",core.callerModule(address));callerLog(b);}
     template<class I> static void give(ProxyBase* p,I** out){if(!p){*out=nullptr;return;}p->comAddRef();*out=static_cast<I*>(p->unk);}
     bool syncOnly(unsigned bit){return core.syncOnly[bit/64].load(std::memory_order_relaxed)&(1ull<<(bit%64));}
     bool answer(CmdTag<Cmd::Device_GetRenderState>,D3DRENDERSTATETYPE s,DWORD* v,HRESULT& hr){
@@ -346,8 +373,11 @@ public:
     HRESULT STDMETHODCALLTYPE Present(const RECT* src,const RECT* dst,HWND window,const RGNDATA* dirty) override{return presentCommon(nullptr,src,dst,window,dirty,0);}
     HRESULT presentCommon(StreamSwapChain* swap,const RECT* src,const RECT* dst,HWND window,const RGNDATA* dirty,DWORD flags){
         Queue& q=streamQueue();
+        core.timing=replayer.diagnostics&&replayer.diagnostics();   // 0.3.204 (task 21): the split timers follow Diagnostics, asked once per frame on the game thread
+        if(core.timing&&!core.clockNs){std::uint64_t sum=0;for(int i=0;i<1024;++i){const std::uint64_t a=nowNs(),b=nowNs();sum+=b-a;}core.clockNs=sum/1024?sum/1024:1;}   // one clock read, as a timed span sees it: the mean of 1024 back-to-back pairs (the mean, not the min: the clock may tick in 100 ns steps)
+        std::uint64_t nowAtPresent=0;const std::uint64_t waits0=core.timing?gameWaitsNs(q.stats):0;
         {   // the game thread's own time this frame: from the previous Present's return to here, minus the waits it spent (sync, backpressure)
-            const std::uint64_t now=nowNs();auto& st2=q.stats;
+            nowAtPresent=nowNs();const std::uint64_t now=nowAtPresent;auto& st2=q.stats;
             if(frameEnd){own(st2.gameNs,now-frameEnd);own(st2.gameWaitNs,get(st2.syncNs)+get(st2.backpressureNs)-waitsAtFrameEnd);own(st2.gameFrames);}
         }
         policy.onPresent();takeReplayFailure();
@@ -368,8 +398,12 @@ public:
         HRESULT result=D3D_OK;
         if(prev.seq){q.waitReplayed(prev.seq,WaitKind::Present);result=presentResult(prev);}   // framesAhead_ frames ahead: that frame's real HRESULT
         q.setPressure(core.memoryPressure.load(std::memory_order_relaxed)||NorthlightStream::memoryPressure.load(std::memory_order_relaxed));
-        frameEnd=nowNs();waitsAtFrameEnd=get(q.stats.syncNs)+get(q.stats.backpressureNs);
+        frameEnd=nowNs();
+        if(core.timing){const std::uint64_t e=frameEnd-nowAtPresent,w=gameWaitsNs(q.stats)-waits0;own(q.stats.presentBookNs,e>w?e-w:0);}   // 0.3.204 (task 21): Present bookkeeping, waits excluded (no extra clock reads)
+        waitsAtFrameEnd=get(q.stats.syncNs)+get(q.stats.backpressureNs);
         ++core.frameNo;tuner.sample(q);   // idle pool memory goes back after a quiet window
+        trimIdleRings(core);   // 0.3.204 (task 21): ring slices free for kLargeIdleFrames frames go
+        trimRetired(core);   // 0.3.204 (task 21): large-buffer slices dropped while the replay thread still read them are freed once it has passed (it just retired a Present)
         const bool pressureNow=q.pressure();
         if(pressureNow&&(!pressureApplied||core.frameNo%60==0))releaseUnderPressure();   // the memory guard asked: give memory back now, not only stop growing
         if(pressureApplied!=pressureNow){
@@ -389,7 +423,7 @@ public:
         HRESULT hr=D3DERR_INVALIDCALL;
         const bool ran=runTask(core,[&](StreamCore& c){   // everything recorded so far has run; the game waits, pumped
             for(ProxyBase* k:sc0->kids)if(k&&k->inner&&k->refs.load()==0){c.reg.unbindInner(k);k->inner->Release();k->inner=nullptr;}   // one the game still holds keeps its object, as in D3D9   // back buffers must not outlive the swap chain's reset
-            hr=c.target->Reset(p);
+            hr=c.target->Reset(p);c.coopState.store(c.target->TestCooperativeLevel());   // 0.3.204 (task 21): the replay thread publishes the new cooperative level; StreamDevice is not an IDirect3DDevice9Ex, so there is no ResetEx
             if(SUCCEEDED(hr)){IDirect3DSwapChain9* sc=nullptr;if(SUCCEEDED(c.target->GetSwapChain(0,&sc))&&sc){sc->GetPresentParameters(&sc0->pp);sc->Release();}}
             ensureBackBuffers(c);
             st.loadDefaults(c.target);c.replayFailure.store(false);},Cmd::SyncReset);
@@ -562,7 +596,7 @@ private:
 
     StreamDevice(IDirect3DDevice9* target,IDirect3D9* par,const D3DPRESENT_PARAMETERS* p,Options opt)
         :coreOwner(new StreamCore(opt.budget)),core(*coreOwner),replayer(core,SnapshotPool::capFor(clampFramesAhead(opt.framesAhead))),parent(par),framesAhead_(clampFramesAhead(opt.framesAhead)),capture(opt.capture){
-        core.target=target;core.game=this;core.logLine=nullptr;core.readBackLock=opt.readBackLock;st.core=&core;
+        core.target=target;core.game=this;core.framesAhead=framesAhead_;core.logLine=nullptr;core.callerModule=opt.callerModule;callerLog=opt.log;callerDiag=opt.diagnostics;core.readBackLock=opt.readBackLock;st.core=&core;
         if(opt.cursorApi)cursor=*opt.cursorApi;
         restoreOwner=opt.threadStart;replayer.frameSkip=opt.frameSkip!=0;replayer.threadStart=std::move(opt.threadStart);replayer.log=opt.log;replayer.diagnostics=opt.diagnostics;filter=opt.filterRedundant;
         if(kDirectReplay&&opt.directReplay&&opt.extension&&opt.rawOf){core.ext=opt.extension;auto f=opt.rawOf;core.reg.rawOf=[f](IUnknown* e,Kind k){return f(e,unsigned(k));};}
@@ -595,7 +629,7 @@ private:
     // locked first, never one that is locked), and drop buffer shadows idle for 120 frames (then the least recent while over the cap).
     // Everything here is game-thread or pool-locked state: nothing the replay thread may read.
     void releaseUnderPressure(){
-        core.q.trim();core.scratch.trim();core.q.resetShadowCap(core.frameNo);makeRoomForShadow(core,0,true,nullptr);trimTexSpares(core);dropIdleBufferShadows(core,120);   // 0.3.200 (pipeline): the spare level allocations go too   // (the adaptive buffer-shadow cap goes back to its base first; both kinds of buffer shadow go LRU)
+        core.q.trim();core.scratch.trim();core.q.resetShadowCap(core.frameNo);makeRoomForShadow(core,0,true,nullptr);trimTexSpares(core);dropIdleBufferShadows(core,120);trimRetired(core);   // 0.3.200 (pipeline): the spare level allocations go too   // (the adaptive buffer-shadow cap goes back to its base first; both kinds of buffer shadow go LRU)
     }
     void finalRelease(){
         st.clear();sc0->comRelease();   // binds and the swap chain's own reference go; the Destroys run before the Target's release
@@ -615,9 +649,11 @@ private:
     }
     void takeSnapshot(Trigger t){
         if(t==Trigger::None||!capture)return;
+        const std::uint64_t t0=core.timing?nowNs():0;   // 0.3.204 (task 21): snapshot capture time (acquire + capture + record), Diagnostics only
         GameSnapshot* s=replayer.snapshots.acquire();if(!s)return;
-        if(!capture(*s,t,drawOrdinal)){replayer.snapshots.release(s);return;}
+        if(!capture(*s,t,drawOrdinal)){replayer.snapshots.release(s);if(t0)own(core.q.stats.snapNs,nowNs()-t0);return;}
         Queue& q=core.q;auto* p=static_cast<GameSnapshot**>(q.reserve((std::uint16_t)Cmd::Snapshot,sizeof(GameSnapshot*)));*p=s;q.commit();
+        if(t0)own(q.stats.snapNs,nowNs()-t0);
     }
     void written(ProxyBase* p){
         if(!p)return;
@@ -630,17 +666,17 @@ private:
         default:break;
         }
     }
-    void constF(StreamState::VsF* regs,UINT r,const float* d,UINT n){if(recording||!d)return;for(UINT i=0;i<n&&r+i<256;++i){regs[r+i].known=true;std::memcpy(regs[r+i].v,d+4*i,16);}}
+    void constF(StreamState::FloatBank& b,UINT r,const float* d,UINT n){if(recording||!d||r>=StreamState::FloatBank::kRegs)return;if(n>StreamState::FloatBank::kRegs-r)n=StreamState::FloatBank::kRegs-r;std::memcpy(b.v[r],d,std::size_t(n)*16);b.setKnown(r,n);}   // 0.3.204 (task 21): one copy and word-wise bits (a range past the end is clamped, as before)
     void constI(StreamState::VsI* regs,UINT r,const int* d,UINT n){if(recording||!d)return;for(UINT i=0;i<n&&r+i<16;++i){regs[r+i].known=true;std::memcpy(regs[r+i].v,d+4*i,16);}}
     void constB(Slot<BOOL>* regs,UINT r,const WINBOOL* d,UINT n){if(recording||!d)return;for(UINT i=0;i<n&&r+i<16;++i)regs[r+i].set(d[i]);}
-    bool getF(StreamState::VsF* regs,UINT r,float* d,UINT n,HRESULT& hr){
-        if(!d||r+n>256)return false;for(UINT i=0;i<n;++i)if(!regs[r+i].known)return false;
-        for(UINT i=0;i<n;++i)std::memcpy(d+4*i,regs[r+i].v,16);hr=D3D_OK;return hit();}
+    bool getF(const StreamState::FloatBank& b,UINT r,float* d,UINT n,HRESULT& hr){
+        if(!d||r>StreamState::FloatBank::kRegs||n>StreamState::FloatBank::kRegs-r||!b.allKnown(r,n))return false;   // (r+n could wrap)
+        std::memcpy(d,b.v[r],std::size_t(n)*16);hr=D3D_OK;return hit();}
     bool getI(StreamState::VsI* regs,UINT r,int* d,UINT n,HRESULT& hr){
-        if(!d||r+n>16)return false;for(UINT i=0;i<n;++i)if(!regs[r+i].known)return false;
+        if(!d||r>16||n>16-r)return false;for(UINT i=0;i<n;++i)if(!regs[r+i].known)return false;
         for(UINT i=0;i<n;++i)std::memcpy(d+4*i,regs[r+i].v,16);hr=D3D_OK;return hit();}
     bool getB(Slot<BOOL>* regs,UINT r,WINBOOL* d,UINT n,HRESULT& hr){
-        if(!d||r+n>16)return false;for(UINT i=0;i<n;++i)if(!regs[r+i].known)return false;
+        if(!d||r>16||n>16-r)return false;for(UINT i=0;i<n;++i)if(!regs[r+i].known)return false;
         for(UINT i=0;i<n;++i)d[i]=regs[r+i].v;hr=D3D_OK;return hit();}
 };
 

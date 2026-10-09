@@ -17,6 +17,7 @@ SDK = northlight_paths.windows_headers() / 'd3d9.h'
 #             proxy can mirror the call (set slots, bind refs, draw triggers) before it is recorded.
 #   get       a Get* that StreamState answers locally: `if(answer(tag,args...,ret))return ret; return syncGet(tag,args...)`;
 #             an unknown or sync-only slot falls back to a sync call. Never void.
+#             (0.3.204: also TestCooperativeLevel, answered from the replay-published cooperative state while it is D3D_OK.)
 #   local     answered on the game thread from proxy/device-held data: `return local(tag,args...)` (hand-written).
 #   sync      drains the queue to this point; the replay thread runs the Target method with translated arguments and
 #             writes out-parameters into the waiting caller's memory (interface out-parameters translated inner->proxy
@@ -56,9 +57,9 @@ STREAM = {
                'GetRenderState GetTexture GetTextureStageState GetSamplerState GetPaletteEntries GetCurrentTexturePalette GetScissorRect '
                'GetSoftwareVertexProcessing GetNPatchMode GetVertexDeclaration GetFVF GetVertexShader GetVertexShaderConstantF '
                'GetVertexShaderConstantI GetVertexShaderConstantB GetStreamSource GetStreamSourceFreq GetIndices GetPixelShader '
-               'GetPixelShaderConstantF GetPixelShaderConstantI GetPixelShaderConstantB',
+               'GetPixelShaderConstantF GetPixelShaderConstantI GetPixelShaderConstantB TestCooperativeLevel',
         'local': 'GetAvailableTextureMem GetDirect3D GetDeviceCaps GetCreationParameters GetSwapChain GetNumberOfSwapChains',
-        'sync': 'TestCooperativeLevel GetDisplayMode GetRasterStatus GetGammaRamp GetRenderTargetData GetFrontBufferData ValidateDevice '
+        'sync': 'GetDisplayMode GetRasterStatus GetGammaRamp GetRenderTargetData GetFrontBufferData ValidateDevice '
                 'GetClipStatus',
     },
     'IDirect3DSwapChain9': {
@@ -144,7 +145,7 @@ CUSTOM_IDS = ('Nop', 'Sync', 'Destroy', 'Derive', 'Snapshot', 'Quiesce', 'Stop',
               'CreateTexture', 'CreateVolumeTexture', 'CreateCubeTexture', 'CreateVertexBuffer', 'CreateIndexBuffer',
               'CreateRenderTarget', 'CreateDepthStencilSurface', 'CreateOffscreenPlainSurface', 'CreateVertexDeclaration',
               'CreateVertexShader', 'CreatePixelShader', 'CreateQuery', 'CreateStateBlock', 'BeginStateBlock', 'EndStateBlock',
-              'CreateAdditionalSwapChain', 'UnlockBuffer', 'UnlockRect', 'UnlockBox', 'DrawPrimitiveUP', 'DrawIndexedPrimitiveUP',
+              'CreateAdditionalSwapChain', 'UnlockBuffer', 'UnlockBufferRef', 'UnlockRect', 'UnlockBox', 'DrawPrimitiveUP', 'DrawIndexedPrimitiveUP',
               # census labels of task-based sync calls (never recorded as commands of their own; see runTask)
               'SyncGetData', 'SyncLock', 'SyncUnlock', 'SyncCreate', 'SyncReset', 'SyncRelease', 'SyncUpDraw', 'SyncInit')
 DEVICE = 'IDirect3DDevice9'
@@ -352,6 +353,10 @@ def macro_body(m):
     t, names = tag(m), ', '.join(p.name for p in m.params)
     this = 'this' if m.self_arg else ''
     q = 'this->streamQueue()'
+    return f'[[maybe_unused]] auto _scope=this->callScope((std::uint16_t)::NorthlightStream::Cmd::{m.enum});' + macro_body_inner(m, t, names, this, q)   # 0.3.204 (task 21): sampled game-thread timer, per command
+
+
+def macro_body_inner(m, t, names, this, q):
     if m.cls in ('record', 'state'):
         obs = f'this->observe({join_args(t, names)});' if m.cls == 'state' else ''
         if (m.iface, m.name) in REDUNDANT:
@@ -410,6 +415,7 @@ def stream_text(text):
            '//   void direct();                               counts a call replayed on ext()',
            '// The game-facing class using NORTHLIGHT_STREAM_<IFACE>_METHODS provides streamQueue(), observe(tag,args...), answer(tag,args...,ret&),',
            '// syncGet(tag,[proxy,]args...), local(tag,args...), syncCall(tag,[proxy,]args...); the proxy argument is passed for non-device interfaces.',
+           '// Every generated body starts with `auto _scope=this->callScope(id);` (0.3.204: the sampled game-thread recording timer, per command id; the host returns a scope object).',
            '// The device class also provides bool redundant(tag,args...) (true: a repeated Set the game side does not record; see REDUNDANT).',
            '#ifndef NORTHLIGHT_STREAM_DIRECT', '#define NORTHLIGHT_STREAM_DIRECT 1', '#endif',
            '#define NORTHLIGHT_STREAM_TAG(X) ::NorthlightStream::CmdTag<::NorthlightStream::Cmd::X>{}',

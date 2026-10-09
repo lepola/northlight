@@ -6,6 +6,7 @@ struct TargetKnobs {
     std::atomic<bool> hold{false};            // BeginScene blocks while set: keeps the replay thread busy so commands queue up
     std::atomic<int> presents{0};
     std::atomic<bool> failSwapChain{false},failQueries{false},noRaw{false},holdQueries{false};   // holdQueries: a polled query stays S_FALSE
+    std::atomic<HRESULT> coop{D3D_OK};        // 0.3.204 (task 21): what the Target's TestCooperativeLevel reports (D3D_OK / D3DERR_DEVICELOST / D3DERR_DEVICENOTRESET); Present fails with DEVICELOST while it is not D3D_OK
     std::atomic<bool> noDigest{false};        // 0.3.200 (frame skip): STATE lines carry no ids, so a run without some draws numbers the objects the same
     //   // noRaw: the resolver proves no raw pointer (a proxy then replays through the Device)
     bool failCube=true;                       // CreateCubeTexture / CreateVolumeTexture fail (the dead-create path)
@@ -269,14 +270,19 @@ struct TargetDevice:Counted<FakeDevice> {
     UINT GetAvailableTextureMem() override{return 1234;}
     HRESULT Present(const RECT* s,const RECT* d,HWND,const RGNDATA* dirty) override{
         gTrace.push_back(std::string("Device::Present ")+(s?"src":"nosrc")+" "+(d?"dst":"nodst")+" "+(dirty?"dirty":"nodirty"));gTrace.push_back(digest());
+        if(gKnobs.coop.load()!=D3D_OK)return D3DERR_DEVICELOST;
         const int n=gKnobs.presents.fetch_add(1);return n%5==4?S_FALSE:D3D_OK;}
+    // 0.3.204 (task 21): not traced (the replay thread calls it once per replayed Present, and a skipped run has fewer real Presents than the full run).
+    HRESULT TestCooperativeLevel() override{return gKnobs.coop.load();}
     HRESULT Reset(D3DPRESENT_PARAMETERS* p) override{
+        if(gKnobs.coop.load()==D3DERR_DEVICELOST)return D3DERR_DEVICELOST;   // as D3D9: a lost (not yet resettable) device fails Reset
         for(auto* b:sc->back)if(b->refs.load()>1+(b==ext.rt0?1:0))return D3DERR_INVALIDCALL;   // a held back buffer fails Reset, as in D3D9
         if(ext.rt0){ext.rt0->Release();ext.rt0=nullptr;}
         gTrace.push_back("Device::Reset "+std::to_string(p->BackBufferWidth)+"x"+std::to_string(p->BackBufferHeight));
         sc->pp.BackBufferWidth=p->BackBufferWidth;sc->pp.BackBufferHeight=p->BackBufferHeight;sc->pp.Windowed=p->Windowed;sc->rebuild();ext.rt0=sc->back[0];ext.rt0->AddRef();
         for(unsigned i=0;i<256;++i)ext.rs[i]=1000+i;ext.vp.Width=p->BackBufferWidth;ext.vp.Height=p->BackBufferHeight;++resets;
-        for(auto& t:ext.tex)if(t){t->Release();t=nullptr;}for(auto& v:ext.sv)if(v){v->Release();v=nullptr;}if(ext.idx){ext.idx->Release();ext.idx=nullptr;}return D3D_OK;}
+        for(auto& t:ext.tex)if(t){t->Release();t=nullptr;}for(auto& v:ext.sv)if(v){v->Release();v=nullptr;}if(ext.idx){ext.idx->Release();ext.idx=nullptr;}
+        gKnobs.coop.store(D3D_OK);return D3D_OK;}   // a successful Reset ends DEVICENOTRESET
     HRESULT CreateTexture(UINT w,UINT h,UINT l,DWORD u,D3DFORMAT f,D3DPOOL p,IDirect3DTexture9** pp,HANDLE*) override{
         gTrace.push_back("Device::CreateTexture "+std::to_string(w)+" "+std::to_string(h)+" "+std::to_string(l)+" "+std::to_string(u)+" "+std::to_string(unsigned(f))+" "+std::to_string(unsigned(p)));
         if(!w||!h)return D3DERR_INVALIDCALL;auto* tx=new TTexture(w,h,l,u,unsigned(f),unsigned(p));gLastTexture=tx;*pp=tx;return D3D_OK;}

@@ -193,7 +193,7 @@ public:
     // pooled), buffer shadows, texture shadows, snapshots.
     struct Memory {std::size_t queue,bufferShadows,textureShadows,snapshots;std::size_t total()const{return queue+bufferShadows+textureShadows+snapshots;}};
     Memory memory()const{
-        const auto& s=core.q.stats;const auto bs=s.shadowBytes.load(std::memory_order_relaxed)+s.largeShadowBytes.load(std::memory_order_relaxed),ts=s.texShadowBytes.load(std::memory_order_relaxed);
+        const auto& s=core.q.stats;const auto bs=s.shadowBytes.load(std::memory_order_relaxed)+s.largeShadowBytes.load(std::memory_order_relaxed)+s.ringBytes.load(std::memory_order_relaxed)+s.retiredBytes.load(std::memory_order_relaxed),ts=s.texShadowBytes.load(std::memory_order_relaxed);
         return {core.q.reservedBytes(),bs>0?std::size_t(bs):0,ts>0?std::size_t(ts):0,snapshots.reservedBytes()};
     }
     // The background workers (GI, geometry builder, static shadow streamer) run BELOW_NORMAL; the replay thread is the critical path and
@@ -225,7 +225,7 @@ private:
     DWORD auditRS_[StreamState::kRS]={},auditSamp_[StreamState::kSamplers][StreamState::kSampTypes]={},auditTss_[StreamState::kTSStages][StreamState::kTSTypes]={};
     std::vector<unsigned> touched_;std::vector<bool> touchedFlag_=std::vector<bool>(StreamState::kBits,false);
     struct Avg {double depth=0,bytes=0;unsigned n=0;std::uint64_t maxDepth=0,maxBytes=0;} avg_;
-    std::uint64_t lastIdle_=0,lastPubs_=0,lastSleeps_=0,lastWall_=0,lastPass_=0,lastGameNs_=0,lastGameWait_=0,lastGameFrames_=0,lastPresentNs_=0,lastSyncNs_=0,lastBpNs_=0,lastCmds_=0,lastAnswered_=0,lastSyncCalls_=0,lastFiltered_=0,lastDirect_=0,lastBufRbD_=0,lastBufRbS_=0,lastBufEv_=0,lastBufHot_=0,lastBufRef_=0,lastTexSkip_=0,lastRbFresh_=0,lastRbRelocked_=0,lastRbNever_=0,lastRbSkip_=0;unsigned deadLogged_=0;
+    std::uint64_t lastIdle_=0,lastPubs_=0,lastSleeps_=0,lastWall_=0,lastPass_=0,lastGameNs_=0,lastGameWait_=0,lastGameFrames_=0,lastPresentNs_=0,lastSyncNs_=0,lastBpNs_=0,lastCmds_=0,lastAnswered_=0,lastCoop_=0,lastSyncCalls_=0,lastFiltered_=0,lastDirect_=0,lastBufRbD_=0,lastBufRbS_=0,lastBufEv_=0,lastBufHot_=0,lastBufRef_=0,lastTexSkip_=0,lastRbFresh_=0,lastRbRelocked_=0,lastRbNever_=0,lastRbSkip_=0,lastLockNs_=0,lastRecordNs_=0,lastSnapNs_=0,lastPresentBookNs_=0,lastLockBytes_=0;unsigned deadLogged_=0;
 
     static void captureFpu(unsigned short& cw,unsigned& csr){
         cw=0;csr=0;
@@ -301,14 +301,21 @@ private:
         applyImageUnlock(core,*a,b?b->data():nullptr);
     }
     void unlockBuffer(const CommandHeader* h){
-        const auto* a=reinterpret_cast<const UnlockBufferArgs*>(Queue::payload(h));ProxyBase* p=a->proxy;
-        const unsigned char* data=a->inlineData?reinterpret_cast<const unsigned char*>(a+1):Queue::blockOf(h)->data();
+        const auto* a=reinterpret_cast<const UnlockBufferArgs*>(Queue::payload(h));
+        writeBuffer(a->proxy,a->off,a->size,a->flags,a->inlineData?reinterpret_cast<const unsigned char*>(a+1):Queue::blockOf(h)->data());
+    }
+    // 0.3.204 (task 21): the zero-copy unlock: the bytes are read straight from the game-side slice (it stays untouched until this command retires).
+    void unlockBufferRef(const CommandHeader* h){
+        const auto* a=reinterpret_cast<const UnlockBufferRefArgs*>(Queue::payload(h));
+        writeBuffer(a->proxy,a->off,a->size,a->flags,a->src+a->off);
+    }
+    void writeBuffer(ProxyBase* p,UINT off,UINT size,DWORD fl,const unsigned char* data){
         if(!p->inner||p->dead.load()){add(core.q.stats.replayFailures);return;}
-        void* dst=nullptr;const DWORD flags=a->flags&~D3::kLockReadOnly;
-        NorthlightReplayCopies::UnlockSourceScope source(data,a->off,a->size);   // the replay-side CPU copy is fed from these bytes, not read back from the mapped pointer
-        const HRESULT hr=p->kind==Kind::VertexBuffer?static_cast<IDirect3DVertexBuffer9*>(p->inner)->Lock(a->off,a->size,&dst,flags):static_cast<IDirect3DIndexBuffer9*>(p->inner)->Lock(a->off,a->size,&dst,flags);
+        void* dst=nullptr;const DWORD flags=fl&~D3::kLockReadOnly;
+        NorthlightReplayCopies::UnlockSourceScope source(data,off,size);   // the replay-side CPU copy is fed from these bytes, not read back from the mapped pointer
+        const HRESULT hr=p->kind==Kind::VertexBuffer?static_cast<IDirect3DVertexBuffer9*>(p->inner)->Lock(off,size,&dst,flags):static_cast<IDirect3DIndexBuffer9*>(p->inner)->Lock(off,size,&dst,flags);
         if(FAILED(hr)||!dst){add(core.q.stats.replayFailures);return;}
-        std::memcpy(dst,data,a->size);
+        std::memcpy(dst,data,size);
         if(p->kind==Kind::VertexBuffer)static_cast<IDirect3DVertexBuffer9*>(p->inner)->Unlock();else static_cast<IDirect3DIndexBuffer9*>(p->inner)->Unlock();
     }
     void derive(const DeriveArgs& a){
@@ -323,7 +330,7 @@ private:
         else{a.child->dead.store(true);add(core.q.stats.deadCreates);}
     }
     void destroy(ProxyBase* p){
-        if(p->pendingDestroy.fetch_sub(1)!=1||p->use.load()>0)return;   // a later Destroy is queued, or the proxy was handed out again
+        if(p->pendingDestroy.fetch_sub(1)!=1||p->inUse()>0)return;   // a later Destroy is queued, or the proxy was handed out again
         core.reg.erase(p);
         for(ProxyBase* k:p->kids)if(k){core.reg.erase(k);if(k->inner)k->inner->Release();delete k;}
         if(p->inner)p->inner->Release();
@@ -338,6 +345,7 @@ private:
         if(swap){IDirect3DSwapChain9* s=a->swapChain->dead.load()?nullptr:static_cast<IDirect3DSwapChain9*>(a->swapChain->inner);
                  hr=s?s->Present(a->hasSrc?&a->src:nullptr,a->hasDst?&a->dst:nullptr,a->window,dirty,a->flags):D3DERR_INVALIDCALL;}
         else hr=core.target->Present(a->hasSrc?&a->src:nullptr,a->hasDst?&a->dst:nullptr,a->window,dirty);
+        core.coopState.store(hr==D3DERR_DEVICELOST?hr:core.target->TestCooperativeLevel());   // 0.3.204 (task 21): before presentResult/presentRing/endFrame, so a game that read LOST from Present never reads OK from TestCooperativeLevel; skipped frames never get here
         core.presentResult.store(hr);{const std::uint64_t seq=core.q.replayedSeq()+1;auto& e=core.presentRing[core.framesReplayed.load(std::memory_order_relaxed)%StreamCore::kRing];e.hr.store(hr);e.seq.store(seq);}   // 0.3.200 (pipeline): by ordinal (endFrame counts it next)
         endFrame();
     }
@@ -356,6 +364,7 @@ private:
         case Cmd::Device_DrawPrimitive:case Cmd::Device_DrawIndexedPrimitive:case Cmd::DrawPrimitiveUP:case Cmd::DrawIndexedPrimitiveUP:
         case Cmd::Device_DrawRectPatch:case Cmd::Device_DrawTriPatch:case Cmd::Device_Clear:own(core.q.stats.skippedCommands);return true;
         case Cmd::Present:case Cmd::SwapPresent:{
+            core.coopState.store(core.target->TestCooperativeLevel());   // 0.3.204: a skipped Present refreshes the cooperative level too (as present() does), before the ring entry, so a loss is not delayed further
             {const std::uint64_t seq=core.q.replayedSeq()+1;auto& e=core.presentRing[core.framesReplayed.load(std::memory_order_relaxed)%StreamCore::kRing];e.hr.store(D3D_OK);e.seq.store(seq);}
             own(core.q.stats.skippedFrames);
             if(get(core.q.stats.skippedFrames)==1&&log){char b[200];std::snprintf(b,sizeof b,"CSTREAM frame skip: first skipped frame=%llu (the replay was two frames behind; draws and Present dropped, state and resources applied)",(unsigned long long)core.framesReplayed.load());log(b);}
@@ -416,11 +425,15 @@ private:
         // Per window (deltas since the previous line, per frame): the game thread's own time (Present to Present minus its waits),
         // its waits, and how many D3D calls it made (recorded, answered locally, synchronous).
         {const std::uint64_t gf=get(s.gameFrames)-lastGameFrames_;lastGameFrames_+=gf;const double inv2=gf?1.0/double(gf):0.0;
-         const std::uint64_t gNs=get(s.gameNs),gW=get(s.gameWaitNs),pNs=get(s.presentNs),sNs=get(s.syncNs),bNs=get(s.backpressureNs),cm=get(s.commands),fl=get(s.filteredCalls),dr=get(s.directCalls),an=get(s.stateAnswered),sc=get(s.syncCalls);
-         put(buf,n," game[per frame]: ms=%.3f(excl waits) syncMs=%.3f presentWaitMs=%.3f bpMs=%.3f recorded=%.1f filtered=%.1f answered=%.1f sync=%.2f direct=%.1f",
+         const std::uint64_t gNs=get(s.gameNs),gW=get(s.gameWaitNs),pNs=get(s.presentNs),sNs=get(s.syncNs),bNs=get(s.backpressureNs),cm=get(s.commands),fl=get(s.filteredCalls),dr=get(s.directCalls),an=get(s.stateAnswered),co=get(s.coopAnswered),sc=get(s.syncCalls);
+         put(buf,n," game[per frame]: ms=%.3f(excl waits) syncMs=%.3f presentWaitMs=%.3f bpMs=%.3f recorded=%.1f filtered=%.1f answered=%.1f coop=%.1f sync=%.2f direct=%.1f",
              double(gNs-lastGameNs_-(gW-lastGameWait_))/1e6*inv2,double(sNs-lastSyncNs_)/1e6*inv2,double(pNs-lastPresentNs_)/1e6*inv2,double(bNs-lastBpNs_)/1e6*inv2,
-             double(cm-lastCmds_)*inv2,double(fl-lastFiltered_)*inv2,double(an-lastAnswered_)*inv2,double(sc-lastSyncCalls_)*inv2,double(dr-lastDirect_)*inv2);
-         lastGameNs_=gNs;lastGameWait_=gW;lastPresentNs_=pNs;lastSyncNs_=sNs;lastBpNs_=bNs;lastCmds_=cm;lastFiltered_=fl;lastDirect_=dr;lastAnswered_=an;lastSyncCalls_=sc;}
+             double(cm-lastCmds_)*inv2,double(fl-lastFiltered_)*inv2,double(an-lastAnswered_)*inv2,double(co-lastCoop_)*inv2,double(sc-lastSyncCalls_)*inv2,double(dr-lastDirect_)*inv2);
+         // 0.3.204 (task 21, Diagnostics on only): where the game thread's time goes: Lock/Unlock work (waits excluded) and the MB they queued, generated-call recording (sampled 1 in 16, waits excluded), snapshot capture, Present bookkeeping.
+         {const std::uint64_t lk=get(s.lockNs),rc=get(s.recordSampledNs),sn=get(s.snapNs),pb=get(s.presentBookNs),lb=get(s.lockRecordedBytes);
+          if(lk|rc|sn|pb)put(buf,n," split[per frame]: lockMs=%.3f lockMB=%.2f recordMs~=%.3f(1/16) snapMs=%.3f presentMs=%.3f clockNs=%llu",double(lk-lastLockNs_)/1e6*inv2,double(lb-lastLockBytes_)/1048576.0*inv2,double(rc-lastRecordNs_)/1e6*inv2,double(sn-lastSnapNs_)/1e6*inv2,double(pb-lastPresentBookNs_)/1e6*inv2,(unsigned long long)core.clockNs);
+          lastLockNs_=lk;lastRecordNs_=rc;lastSnapNs_=sn;lastPresentBookNs_=pb;lastLockBytes_=lb;}
+         lastGameNs_=gNs;lastGameWait_=gW;lastPresentNs_=pNs;lastSyncNs_=sNs;lastBpNs_=bNs;lastCmds_=cm;lastFiltered_=fl;lastDirect_=dr;lastAnswered_=an;lastCoop_=co;lastSyncCalls_=sc;}
         {const Memory m=memory();put(buf,n," memMB=%.1f(queue %.1f, bufShadow %.1f, texShadow %.1f, snapshots %.2f)",m.total()/1048576.0,m.queue/1048576.0,m.bufferShadows/1048576.0,m.textureShadows/1048576.0,m.snapshots/1048576.0);}
         put(buf,n," texShadow=%.1f/%.0fMB hits=%llu fresh=%llu readbacks=%llu evicted=%llu freshUseful=%llu refused=%llu/%.1fMB spared=%llu/%llu",double(std::max<std::int64_t>(0,s.texShadowBytes.load()))/1048576.0,double(core.q.texShadowCap())/1048576.0,
             (unsigned long long)get(s.texShadowHits),(unsigned long long)get(s.texShadowFresh),(unsigned long long)get(s.texShadowReadbacks),(unsigned long long)get(s.texShadowEvicted),(unsigned long long)get(s.texShadowFreshUseful),(unsigned long long)get(s.texShadowRefused),get(s.texShadowRefusedBytes)/1048576.0,
@@ -445,6 +458,38 @@ private:
         for(std::size_t i=0;i<top.size()&&i<8;++i)put(buf,n,"%s%s=%llu",i?",":"",cmdName((Cmd)top[i].second),(unsigned long long)top[i].first);
         put(buf,n,"]");
         log(buf);avg_=Avg();
+        logZeroCopy();
+        logCallTop();
+    }
+    // 0.3.204 (task 21, Diagnostics only): the generated calls that cost the game thread the most since the previous line (sampled 1 in 16), per frame:
+    // "CSTREAM top[per frame]: Device::SetRenderState=0.812ms/4980 ..." (time, calls). Nothing while the timers are off.
+    // 0.3.204 (task 21): the zero-copy buffer unlocks on a line of their own (the main CSTREAM line is capped): per frame since the previous line, and the live bytes of retired and spare slices. Nothing until the first zero-copy unlock or rename.
+    std::uint64_t lastZcUnlocks_=0,lastZcBytes_=0,lastRenames_=0,lastRenameWaits_=0,lastRenameWaitNs_=0,lastWriteWaits_=0,lastWriteWaitNs_=0,lastRenameAllocs_=0,lastZcFrames_=0;
+    void logZeroCopy(){
+        const Counters& s=core.q.stats;const std::uint64_t un=get(s.zeroCopyUnlocks),by=get(s.zeroCopyBytes),rn=get(s.renames),rw=get(s.renameWaits),rwn=get(s.renameWaitNs),ww=get(s.writeWaits),wwn=get(s.writeWaitNs),ra=get(s.renameAllocs),gf=get(s.gameFrames)-lastZcFrames_;lastZcFrames_+=gf;
+        const double inv=gf?1.0/double(gf):0.0;
+        if(log&&(un|rn|rw|ww|get(s.zcSkipPool)|get(s.zcSkipNoShadow)|get(s.zcSkipSmall)|get(s.zcSkipPressure)|get(s.zcSkipOther))){
+            char buf[kLine];
+            std::snprintf(buf,sizeof buf,"CSTREAM zerocopy[per frame]: unlocks=%.1f MB=%.2f renames=%.2f allocs=%.2f renameWaits=%.2f renameWaitMs=%.3f writeWaits=%.2f writeWaitMs=%.3f retiredMB=%.1f ringMB=%.1f slices=%lld maxRing=%llu maxDiscards=%llu waitWhy[max=%llu budget=%llu drain=%llu alloc=%llu] copyUnderPressure[unlocks=%llu MB=%.1f] notZeroCopy[pool=%llu noShadow=%llu small=%llu pressure=%llu other=%llu]",
+                double(un-lastZcUnlocks_)*inv,double(by-lastZcBytes_)/1048576.0*inv,double(rn-lastRenames_)*inv,double(ra-lastRenameAllocs_)*inv,double(rw-lastRenameWaits_)*inv,double(rwn-lastRenameWaitNs_)/1e6*inv,double(ww-lastWriteWaits_)*inv,double(wwn-lastWriteWaitNs_)/1e6*inv,
+                double(std::max<std::int64_t>(0,s.retiredBytes.load()))/1048576.0,double(std::max<std::int64_t>(0,s.ringBytes.load()))/1048576.0,(long long)std::max<std::int64_t>(0,s.ringSlices.load()),(unsigned long long)get(s.maxRing),(unsigned long long)core.q.stats.maxDiscards.exchange(0),(unsigned long long)get(s.waitMax),(unsigned long long)get(s.waitBudget),(unsigned long long)get(s.waitDrain),(unsigned long long)get(s.waitAlloc),(unsigned long long)get(s.copyPressureUnlocks),double(get(s.copyPressureBytes))/1048576.0,
+                (unsigned long long)get(s.zcSkipPool),(unsigned long long)get(s.zcSkipNoShadow),(unsigned long long)get(s.zcSkipSmall),(unsigned long long)get(s.zcSkipPressure),(unsigned long long)get(s.zcSkipOther));
+            log(buf);
+        }
+        lastZcUnlocks_=un;lastZcBytes_=by;lastRenames_=rn;lastRenameWaits_=rw;lastRenameWaitNs_=rwn;lastWriteWaits_=ww;lastWriteWaitNs_=wwn;lastRenameAllocs_=ra;
+    }
+    std::uint64_t lastCmdNs_[kMaxCmdIds]={},lastCmdSamples_[kMaxCmdIds]={},lastTopFrames_=0;
+    void logCallTop(){
+        const Counters& s=core.q.stats;const std::uint64_t gf=get(s.gameFrames)-lastTopFrames_;lastTopFrames_+=gf;const double perFrame=gf?1.0/double(gf):0.0;std::vector<std::pair<std::uint64_t,unsigned>> top;std::uint64_t calls[kMaxCmdIds]={};
+        for(unsigned i=0;i<(unsigned)Cmd::Count&&i<kMaxCmdIds;++i){
+            const std::uint64_t ns=get(s.cmdSampledNs[i]),k=get(s.cmdSamples[i]);
+            if(ns>lastCmdNs_[i])top.push_back({ns-lastCmdNs_[i],i});
+            calls[i]=k-lastCmdSamples_[i];lastCmdNs_[i]=ns;lastCmdSamples_[i]=k;}
+        if(top.empty()||!log)return;
+        std::sort(top.rbegin(),top.rend());
+        char buf[kLine];int n=std::snprintf(buf,sizeof buf,"CSTREAM top[per frame]:");
+        for(std::size_t i=0;i<top.size()&&i<12;++i)put(buf,n," %s=%.3fms/%.0f",cmdName((Cmd)top[i].second),double(top[i].first)/1e6*perFrame,double(calls[top[i].second])*16.0*perFrame);
+        log(buf);
     }
     void activateSnapshot(GameSnapshot* s){
         playback_.reset();
@@ -477,6 +522,7 @@ private:
         case Cmd::SwapPresent:present(h,true);return;
         case Cmd::BeginStateBlock:core.replayFailureOnFail(core.target->BeginStateBlock());return;
         case Cmd::UnlockBuffer:unlockBuffer(h);return;
+        case Cmd::UnlockBufferRef:unlockBufferRef(h);return;
         case Cmd::UnlockRect:case Cmd::UnlockBox:unlockImage(h);return;
         case Cmd::DrawPrimitiveUP:{
             const auto* a=reinterpret_cast<const DrawUPArgs*>(Queue::payload(h));const void* data=a->flat?static_cast<const void*>(a+1):Queue::blockOf(h)->data();

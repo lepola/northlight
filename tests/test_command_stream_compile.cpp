@@ -9,6 +9,7 @@ using namespace NorthlightStream;
 struct HostBase {
     Queue q;
     Queue& streamQueue(){return q;}
+    struct Scope{};Scope callScope(std::uint16_t){return {};}   // 0.3.204 (task 21): the generated bodies open a timing scope
     template<Cmd C,class... A> bool redundant(CmdTag<C>,A&&...){return false;}
     template<Cmd C,class... A> void observe(CmdTag<C>,A&&...){}
     template<Cmd C,class... A> bool answer(CmdTag<C>,A&&...){return false;}

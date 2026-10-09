@@ -75,13 +75,30 @@ constexpr std::size_t kLockSlack=4096;   // bytes past a staged range / a shadow
 // pressure, GetData(FLUSH), Reset, the defaults batch, final release. fn executes with the replay-side core.
 struct Task {void (*fn)(void*,StreamCore&);void* arg;};
 
+// 0.3.204 (task 21): a vector whose resize() leaves new bytes uninitialized (default-init, no memset): the slices of a buffer's ring, whose contents are undefined (DISCARD) anyway. assign(n,0) still zero-fills.
+template<class T> struct DefaultInitAllocator:std::allocator<T> {
+    template<class U> struct rebind{using other=DefaultInitAllocator<U>;};
+    using std::allocator<T>::allocator;
+    template<class U> void construct(U* p) noexcept(std::is_nothrow_default_constructible<U>::value){::new(static_cast<void*>(p)) U;}
+    template<class U,class... A> void construct(U* p,A&&... a){::new(static_cast<void*>(p)) U(std::forward<A>(a)...);}
+};
+using SliceMem=std::vector<unsigned char,DefaultInitAllocator<unsigned char>>;
 struct PrivEntry {std::string key;std::vector<unsigned char> bytes;IUnknown* unk=nullptr;};
 
 struct ProxyBase {
     StreamCore* core;Kind kind;IUnknown* unk=nullptr;   // unk: the proxy as the interface pointer the game holds (registry key)
     IUnknown* inner=nullptr;                            // the Target-level object: replay thread only, set when the create ran
     IUnknown* raw=nullptr;                              // the backend object behind `inner` (what Device would unwrap it to), cached with it; null = not provably a pure unwrap: replay through the Device
-    std::atomic<LONG> refs{1},use{1},pendingDestroy{0};  // refs: what Release reports; use = refs + StreamState binds
+    std::atomic<LONG> refs{1},use{1},pendingDestroy{0};  // refs: what Release reports; use = refs + the in-use children (a parent's); StreamState binds are counted in `binds`, not here
+    // 0.3.204 (task 21): StreamState binds of this proxy. Single writer at any time: the game thread, or the replay thread while the game thread waits for it (the defaults batch of Reset / init: runTask is the handoff) - so it
+    // is updated with a plain load+store (no locked instruction on the per-draw bind path) and read by the replay thread only in Replayer::destroy (an atomic, so the read is race-free). The proxy is "in use" (not destroyable,
+    // keeps its parent in use) while use>0 || binds>0; the Destroy is recorded by whichever operation takes the total to 0: useDec when binds==0, bindRelease when use==0. Audit: `use` is written by AddRef/Release (game thread; a final
+    // Release records the Destroy, which only the producer thread may do), by the replay thread's implicit-proxy hand-outs (also under a game wait), and read by Replayer::destroy; nothing else touches use/binds. A final COM Release from a foreign thread was already unsupported (it records the Destroy on the
+    // producer queue) and stays so: use and binds then have one writer at a time, which the split relies on.
+    std::atomic<LONG> binds{0};
+    // Replayer::destroy's test. `use` is read FIRST (seq_cst): a game AddRef -> bind -> Release of a re-handed proxy then shows either use>0 or, after the
+    // Release (a release RMW sequenced after the bind store), binds>0 to the binds load that follows. Two independent loads in either order could miss both.
+    LONG inUse()const{const LONG u=use.load(std::memory_order_seq_cst);const LONG b=binds.load(std::memory_order_seq_cst);return u+b;}
     std::atomic<bool> dead{false};                       // the real create failed: commands on it are dropped
     ProxyBase* parent=nullptr;std::vector<ProxyBase*> kids;   // children (levels, faces, back buffers): owned by the parent
     Info info;DWORD priority=0;std::vector<PrivEntry> priv;
@@ -89,9 +106,10 @@ struct ProxyBase {
     virtual ~ProxyBase();
     ProxyBase(const ProxyBase&)=delete;ProxyBase& operator=(const ProxyBase&)=delete;
     Queue& streamQueue();
+    struct CallScope callScope(std::uint16_t id);   // 0.3.204 (task 21): sampled game-thread timer of a generated method body (defined below StreamCore)
     // The DXVK model for the device's lifetime: a top-level proxy with public references (refs above `baseline`) holds one
     // reference on the StreamDevice, so the device, the queue and the replay thread outlive every object the game still holds.
-    // StreamState binds count in `use` only: they never pin the device (or it would never die). A child's public reference
+    // StreamState binds count in `binds` only (see there): they never pin the device (or it would never die). A child's public reference
     // is its parent's public reference; a child in use keeps its parent in use.
     LONG baseline=0;   // refs the proxy holds itself without pinning (the swap chain's own)
     void pinDevice();
@@ -107,10 +125,11 @@ struct ProxyBase {
         if(unpin)unpinDevice();   // last: this may be the device's final release
         return n<0?0:ULONG(n);}
     void adoptKid(){comAddRef();useInc();}   // a new child starts with one public reference and one use: the same on this parent
-    void useInc(){if(use.fetch_add(1)==0&&parent)parent->useInc();}
-    void useDec();                                                        // game thread: 1->0 records Destroy (or releases the container)
-    void bindAdd(){useInc();}                                             // StreamState bind
-    void bindRelease(){useDec();}
+    void useInc(){if(use.fetch_add(1)==0&&binds.load(std::memory_order_relaxed)==0&&parent)parent->useInc();}
+    void useDec();                                                        // game thread: use 1->0 with no binds records Destroy (or releases the container)
+    void gone();                                                          // the total (use+binds) reached 0: record Destroy, or release the container
+    void bindAdd(){const LONG b=binds.load(std::memory_order_relaxed);binds.store(b+1,std::memory_order_relaxed);if(b==0&&use.load(std::memory_order_relaxed)==0&&parent)parent->useInc();}   // StreamState bind: no locked instruction
+    void bindRelease(){const LONG b=binds.load(std::memory_order_relaxed)-1;binds.store(b,std::memory_order_relaxed);if(b==0&&use.load(std::memory_order_relaxed)==0)gone();}
     // Local private data (nothing of it reaches the Target).
     template<class G> static std::string guidKey(const G& g){return std::string(reinterpret_cast<const char*>(&g),sizeof g);}
     template<class G> HRESULT setPrivate(const G& guid,const void* data,DWORD size,DWORD flags){
@@ -228,9 +247,24 @@ struct StreamCore {
     static constexpr unsigned kTexSpares=2;static constexpr std::size_t kTexSpareMaxBytes=(std::size_t(256)<<10)+kLockSlack;
     std::vector<unsigned char> texSpare[kTexSpares];
     LockScratch scratch;             // game thread: small staged buffer locks
+    unsigned framesAhead=1;          // 0.3.204 (task 21): StreamFramesAhead (clamped), set once by the StreamDevice: the buffers' slice rings hold framesAhead+2 slices at most
+    // 0.3.204 (task 21): large-buffer slices that were dropped or swapped away while the replay thread may still read them (a zero-copy unlock refers to the bytes until it retires): the storage waits here
+    // (under texMutex) with the seq of the last command that reads it, and is freed by trimRetired once replayedSeq has passed it. Their bytes leave shadowBytes/largeShadowBytes at once and count in the ring budget (retired*Bytes) until freed.
+    struct Retired {SliceMem mem;std::uint64_t seq;std::size_t bytes;bool large;};   // large: counted in retiredLargeBytes (the ring budget of the large allowance), else in retiredRegularBytes
+    std::vector<Retired> retired;
+    // 0.3.204 (task 21): Diagnostics split timers. timing is the game thread's own copy of the Diagnostics switch, refreshed at each Present (StreamDevice::presentCommon);
+    // timingN counts the generated calls for the 1-in-16 sampling. Both are game-thread only: the replay thread never runs a game-facing method or a Lock/Unlock path.
+    bool timing=false;unsigned timingN=0;
+    std::uint64_t clockNs=0;   // the cost of one nowNs() as the scopes see it (measured once at the first timed Present), subtracted from every timed span
     std::uint64_t frameNo=0;         // game thread: Presents so far (the idle clock of buffer shadows)
     DWORD (*readBackLock)()=nullptr;             // flags of the stream's own READONLY read-backs of buffers (NorthlightUpload::readBackLock in the DLL); null = READONLY
     void (*logLine)(const char*)=nullptr;        // diagnostics sink (renderer.cpp's logf); may be null
+    static constexpr std::size_t slicesFor(unsigned framesAhead){return std::size_t(clampFramesAhead(framesAhead))+2;}   // 0.3.204 (task 21): the least slices a buffer may own in all (current + ring)
+    // 0.3.204 (task 21): a buffer that DISCARDs n times per frame has n x (framesAhead+1) + 1 slices in flight at most; never below slicesFor, never above kRingHardMax (still subject to the memory rules)
+    static constexpr std::size_t kRingHardMax=12;
+    static constexpr std::size_t allowedSlices(unsigned framesAhead,unsigned discardsPerFrame){
+        const std::size_t want=std::size_t(discardsPerFrame)*(clampFramesAhead(framesAhead)+1)+1,base=slicesFor(framesAhead);
+        return (want>base?want:base)<kRingHardMax?(want>base?want:base):kRingHardMax;}
     explicit StreamCore(std::size_t budget=BudgetBytes):q(budget){}
     void log(const char* text){if(logLine)logLine(text);}
     // Replay thread: Target-level interface pointer -> game-facing proxy (taking over the reference the Target returned).
@@ -239,6 +273,10 @@ struct StreamCore {
     template<class T> ProxyBase* proxyFor(T* innerRef,bool bound);
     ProxyBase* makeImplicit(IUnknown* inner);
     std::atomic<HRESULT> presentResult{D3D_OK};
+    // 0.3.204 (task 21): the cooperative level TestCooperativeLevel reports, written ONLY by the replay thread (after each real Present, in the Reset task and in the
+    // sync TestCooperativeLevel task); the game thread answers D3D_OK from it locally and goes synchronous for anything else. Loss shows up at most StreamFramesAhead frames late.
+    std::atomic<HRESULT> coopState{D3D_OK};
+    const char* (*callerModule)(void* address)=nullptr;   // diagnostics: "module+0xoffset" of a TestCooperativeLevel caller (renderer.cpp, Windows; logged only with Diagnostics on); null in tests
     // Real HRESULT of the last Present commands (the game reads the one StreamFramesAhead frames back). 0.3.200 (pipeline): the slot is the Present's ordinal
     // (the replay's framesReplayed before it counts this one = the game's frameNo when it recorded it), seq still checked: with at most kMaxFramesAhead+1
     // Presents in flight no newer one can take the slot first (keyed by seq%kRing it could, and the game then read D3D_OK).
@@ -262,11 +300,29 @@ struct StreamCore {
     }
 };
 inline Queue& ProxyBase::streamQueue(){return core->q;}
+// 0.3.204 (task 21): game-thread split timers, active only while core.timing (Diagnostics on); off: one bool test. Waits (sync, backpressure, present) are subtracted so they stay in their own counters.
+inline std::uint64_t gameWaitsNs(const Counters& s){return get(s.syncNs)+get(s.backpressureNs)+get(s.presentNs);}
+struct CallScope {   // 1 in 16 generated method bodies: 16 x (elapsed - waits - snapshot capture) into recordSampledNs
+    Counters* st=nullptr;std::uint64_t t0=0,w0=0,clock=0;std::uint16_t id=0;
+    CallScope(StreamCore& c,std::uint16_t cmd){if(c.timing&&(++c.timingN&15)==0){st=&c.q.stats;clock=c.clockNs;id=cmd<kMaxCmdIds?cmd:0;w0=gameWaitsNs(*st)+get(st->snapNs);t0=nowNs();}}
+    CallScope(const CallScope&)=delete;CallScope& operator=(const CallScope&)=delete;
+    ~CallScope(){if(st){const std::uint64_t e0=nowNs()-t0,e=e0>clock?e0-clock:0,w=gameWaitsNs(*st)+get(st->snapNs)-w0,ns=(e>w?e-w:0)*16;own(st->recordSampledNs,ns);own(st->cmdSampledNs[id],ns);own(st->cmdSamples[id]);}}
+};
+struct LockScope {   // every buffer/image Lock or Unlock: elapsed minus the waits inside into lockNs
+    Counters* st=nullptr;std::uint64_t t0=0,w0=0,clock=0;
+    explicit LockScope(StreamCore& c){if(c.timing){st=&c.q.stats;clock=c.clockNs;w0=gameWaitsNs(*st);t0=nowNs();}}
+    LockScope(const LockScope&)=delete;LockScope& operator=(const LockScope&)=delete;
+    ~LockScope(){if(st){const std::uint64_t e0=nowNs()-t0,e=e0>clock?e0-clock:0,w=gameWaitsNs(*st)-w0;own(st->lockNs,e>w?e-w:0);}}
+};
+inline CallScope ProxyBase::callScope(std::uint16_t id){return CallScope(*core,id);}
 inline void ProxyBase::pinDevice(){if(core->game)core->game->AddRef();}
 inline void ProxyBase::unpinDevice(){if(core->game)core->game->Release();}
 inline ProxyBase::~ProxyBase(){dropPrivate();}
 inline void ProxyBase::useDec(){
-    if(use.fetch_sub(1)!=1)return;
+    if(use.fetch_sub(1)!=1||binds.load(std::memory_order_relaxed)!=0)return;
+    gone();
+}
+inline void ProxyBase::gone(){
     if(parent){parent->useDec();return;}
     pendingDestroy.fetch_add(1);
     Queue& q=core->q;
@@ -305,6 +361,8 @@ struct SubRes {
 // What a staged Unlock records (followed by nothing: the bytes are in the command's Block).
 struct UnlockImageArgs {ProxyBase* proxy;UINT level,face;DWORD flags;UINT hasRect,rows,slices,rowBytes,pitch,slicePitch;LONG l,t,r,b;UINT bf,bk;UINT route;};
 struct UnlockBufferArgs {ProxyBase* proxy;UINT off,size,flags,inlineData;};
+// 0.3.204 (task 21): a zero-copy unlock: the replay thread reads the bytes from the game-side slice itself (src = the slice base; the range starts at src+off). The slice is kept alive until this command retires (see BufferState::sliceSeq).
+struct UnlockBufferRefArgs {ProxyBase* proxy;const unsigned char* src;UINT off,size,flags,pad;};
 enum ImageRoute:UINT{RouteSurface=0,RouteTexture=1,RouteCube=2,RouteVolumeTexture=3,RouteVolume=4};
 
 inline void countPass(ProxyBase& p,PassReason r){own(p.core->q.stats.passThrough[unsigned(r)]);}   // game thread only
@@ -460,7 +518,7 @@ constexpr std::size_t kFreshShadowMax=std::size_t(256)<<10;   // a fresh level u
 // self: the object the game called (its inner receives the replayed Lock); root: where creation info and `sub` live.
 inline HRESULT lockImage(ProxyBase& self,ProxyBase& root,SubRes& sub,UINT route,UINT level,UINT face,UINT lw,UINT lh,UINT ld,
                          D3DLOCKED_RECT* lr,D3DLOCKED_BOX* lb,const RECT* rect,const D3DBOX* box,DWORD flags){
-    Queue& q=self.core->q;
+    LockScope _ts(*self.core);Queue& q=self.core->q;
     if((!lr&&!lb)||sub.mode!=SubRes::Free)return D3DERR_INVALIDCALL;
     UINT l=0,t=0,r=lw,b=lh,f=0,k=ld;
     if(rect){
@@ -558,7 +616,7 @@ inline HRESULT lockImage(ProxyBase& self,ProxyBase& root,SubRes& sub,UINT route,
     return hr;
 }
 inline HRESULT unlockImage(ProxyBase& self,SubRes& sub,UINT route,UINT level,UINT face){
-    Queue& q=self.core->q;
+    LockScope _ts(*self.core);Queue& q=self.core->q;
     if(sub.mode==SubRes::Free)return D3DERR_INVALIDCALL;
     const bool volume=route==RouteVolume||route==RouteVolumeTexture;
     const std::uint16_t cmd=(std::uint16_t)(volume?Cmd::UnlockBox:Cmd::UnlockRect);
@@ -595,7 +653,7 @@ inline HRESULT unlockImage(ProxyBase& self,SubRes& sub,UINT route,UINT level,UIN
 // 0.3.192 (CS): kMaxStaticShadow: a NON-DYNAMIC buffer up to this size may hold a shadow (a larger one stays pass-through).
 constexpr std::size_t kMaxStaticShadow=std::size_t(4)<<20;
 struct BufferState {
-    std::vector<unsigned char> shadow;bool shadowOn=false,written=false,whole=false;
+    SliceMem shadow;bool shadowOn=false,written=false,whole=false;
     // lastUse: StreamCore::frameNo of its last shadow lock. lru: StreamCore::bufRegular / bufLarge, least recently locked first, so lastUse never decreases from the head
     // (an eviction scan stops at the first entry locked in the current frame). proxy: the owner, set when the shadow is registered.
     std::uint64_t lastUse=0;LruNode<BufferState> lru;ProxyBase* proxy=nullptr;
@@ -605,6 +663,13 @@ struct BufferState {
     // "refused for good": it gets one at its next write re-lock (one readback) or, DYNAMIC, at a DISCARD lock, whenever room can be made.
     bool canShadow=false,shadowDead=false;
     bool large=false;   // the shadow lives in the large allowance (Queue::largeAdmit), not in the regular cap
+    // 0.3.204 (task 21): zero-copy slices of a DYNAMIC buffer. `shadow` is the current slice; `ring` the buffer's other slices (at most kMaxSlices-1: framesAhead+2 in all), each with the seq of the last recorded zero-copy
+    // unlock that reads it (0 = none) and the frame it left the current role (idle trimming). sliceSeq: the same for the current slice. The game may write, free or reuse a slice only once replayedSeq() >= its seq.
+    // zc: the current lock is a DISCARD/NOOVERWRITE write lock on a slice.
+    struct Slice {SliceMem mem;std::uint64_t seq=0,frame=0;};
+    std::vector<Slice> ring;std::uint64_t sliceSeq=0;bool zc=false,copyP=false;   // copyP: this lock would have been zero-copy but memory pressure keeps it on the copy path
+    // DISCARD locks per frame (StreamCore::frameNo): discNow in frame discFrame, discMax the largest count of the last kDiscardWindowFrames frames (it decays); they size the ring (StreamCore::allowedSlices).
+    std::uint64_t discFrame=0,discMaxFrame=0;unsigned discNow=0,discMax=0;
 };
 // Buffer shadows (game-side memory, persistent CPU copies of the buffer; every lock of one returns shadow memory and Unlock copies the locked range into
 // the queue). They share one cap (ShadowBudgetBytes, adaptive, outside the queue budget) and ONE LRU: a DYNAMIC buffer gets its shadow at creation when
@@ -617,11 +682,38 @@ inline void registerShadow(ProxyBase& p,BufferState& s,bool large=false){
     s.shadowOn=true;s.large=large;s.proxy=&p;if(large){p.core->q.addLargeBytes(std::int64_t(p.info.length));add(p.core->q.stats.largeShadowGrants);}else p.core->q.addShadowBytes(std::int64_t(p.info.length));s.lastUse=p.core->frameNo;
     std::lock_guard<std::mutex> l(p.core->texMutex);bufListOf(*p.core,s).pushBack(&s);
 }
+// 0.3.204 (task 21): frees the retired slices the replay thread has passed (any thread; the game thread at every Present and before a large allocation).
+inline void trimRetired(StreamCore& c){
+    if(c.q.stats.retiredBytes.load(std::memory_order_relaxed)<=0)return;
+    std::vector<SliceMem> dead;std::size_t freedLarge=0,freedRegular=0;
+    {
+        std::lock_guard<std::mutex> l(c.texMutex);const std::uint64_t rep=c.q.replayedSeq();std::size_t j=0;
+        for(std::size_t i=0;i<c.retired.size();++i){
+            if(c.retired[i].seq<=rep){(c.retired[i].large?freedLarge:freedRegular)+=c.retired[i].bytes;dead.push_back(std::move(c.retired[i].mem));}
+            else{if(j!=i)c.retired[j]=std::move(c.retired[i]);++j;}
+        }
+        c.retired.resize(j);
+    }
+    if(freedLarge){c.q.stats.retiredLargeBytes.fetch_sub(std::int64_t(freedLarge),std::memory_order_relaxed);}
+    if(freedRegular){c.q.stats.retiredRegularBytes.fetch_sub(std::int64_t(freedRegular),std::memory_order_relaxed);}
+    if(freedLarge+freedRegular)c.q.stats.retiredBytes.fetch_sub(std::int64_t(freedLarge+freedRegular),std::memory_order_relaxed);
+}   // `dead` is freed here, outside the lock
+// texMutex held. A slice goes: freed now when no recorded command reads it any more, else moved (the storage, not the BufferState) to the retire list with its last reader's seq.
+// Accounting: the current slice (a shadow) leaves shadowBytes/largeShadowBytes at once, a ring slice leaves the ring counters; what is still read counts in retired*Bytes (the ring budget, memory() totals) until trimRetired frees it.
+inline void retireSliceLocked(ProxyBase& p,SliceMem& v,std::uint64_t seq,bool isRing,bool large){
+    if(v.empty())return;
+    StreamCore& c=*p.core;const std::size_t len=p.info.length;auto& st=c.q.stats;
+    if(isRing){st.ringBytes.fetch_sub(std::int64_t(len),std::memory_order_relaxed);st.ringSlices.fetch_sub(1,std::memory_order_relaxed);(large?st.ringLargeBytes:st.ringRegularBytes).fetch_sub(std::int64_t(len),std::memory_order_relaxed);}
+    else{if(large)c.q.addLargeBytes(-std::int64_t(len));else c.q.addShadowBytes(-std::int64_t(len));}
+    if(seq>c.q.replayedSeq()){c.retired.push_back(StreamCore::Retired{std::move(v),seq,len,large});st.retiredBytes.fetch_add(std::int64_t(len),std::memory_order_relaxed);(large?st.retiredLargeBytes:st.retiredRegularBytes).fetch_add(std::int64_t(len),std::memory_order_relaxed);}
+    SliceMem().swap(v);   // (empty after a move; frees otherwise)
+}
 inline void dropShadowLocked(ProxyBase& p,BufferState& s){
     if(!s.shadowOn)return;
     bufListOf(*p.core,s).remove(&s);
-    if(s.large){p.core->q.addLargeBytes(-std::int64_t(p.info.length));add(p.core->q.stats.largeShadowDrops);s.large=false;}else p.core->q.addShadowBytes(-std::int64_t(p.info.length));
-    std::vector<unsigned char>().swap(s.shadow);s.shadowOn=false;
+    retireSliceLocked(p,s.shadow,s.sliceSeq,false,s.large);for(auto& sl:s.ring)retireSliceLocked(p,sl.mem,sl.seq,true,s.large);s.ring.clear();   // 0.3.204 (task 21): every slice of the ring (large or regular cap), retired while a recorded zero-copy unlock still reads them
+    if(s.large){add(p.core->q.stats.largeShadowDrops);s.large=false;}
+    s.sliceSeq=0;s.zc=false;s.shadowOn=false;
 }
 inline void noteShadowEvicted(StreamCore& c,const ProxyBase& p){add(dynamicBuffer(p)?c.q.stats.dynShadowEvicted:c.q.stats.stShadowEvicted);}
 // Game thread: the shadow was locked: most recently used now (frame and list position). A repeated lock of the one at the tail takes no lock.
@@ -630,6 +722,8 @@ inline void touchBufferShadow(StreamCore& c,BufferState& s){
     if(bufListOf(c,s).isTail(&s))return;
     std::lock_guard<std::mutex> l(c.texMutex);auto& list=bufListOf(c,s);list.remove(&s);list.pushBack(&s);
 }
+// 0.3.204 (task 21): a holder whose slices unreplayed zero-copy unlocks still read frees nothing when dropped (the slices retire with their bytes counted), so it is no eviction victim until the replay has passed.
+inline bool slicesBusy(const StreamCore& c,const BufferState& s){const std::uint64_t r=c.q.replayedSeq();if(r<s.sliceSeq)return true;for(const auto& sl:s.ring)if(r<sl.seq)return true;return false;}
 // Game thread: makes `bytes` fit the cap by evicting shadows, least recently locked first (the head of the LRU list), never a locked one, `keep`,
 // or one locked in the CURRENT frame (anti-thrash: it is in use now; the requester is refused instead; the list is in lastUse order, so the scan ends there).
 // Thrash signal for the adaptive cap: evicting a HOT shadow (locked within kShadowHotFrames) or, for a re-lock (`relock`), finding no victim at all grows the
@@ -640,7 +734,7 @@ inline bool makeRoomForBufferShadow(StreamCore& c,std::size_t bytes,bool relock,
         if(bytes>c.q.shadowCap()/4)return false;
         std::lock_guard<std::mutex> l(c.texMutex);
         BufferState* victim=nullptr;
-        for(BufferState* s=c.bufRegular.head;s&&s->lastUse<c.frameNo;s=s->lru.next)if(s!=keep&&s->mode==BufferState::Free){victim=s;break;}
+        for(BufferState* s=c.bufRegular.head;s&&s->lastUse<c.frameNo;s=s->lru.next)if(s!=keep&&s->mode==BufferState::Free&&!slicesBusy(c,*s)){victim=s;break;}   // 0.3.204 (task 21): never a holder whose slices unreplayed unlocks still read
         if(!victim){if(relock&&c.q.growShadowCap(c.frameNo))continue;return false;}
         const bool hot=c.frameNo-victim->lastUse<kShadowHotFrames;
         if(hot&&c.q.growShadowCap(c.frameNo))continue;
@@ -652,11 +746,19 @@ inline bool makeRoomForBufferShadow(StreamCore& c,std::size_t bytes,bool relock,
 // large shadow and mayEvict, that one is dropped if unlocked and idle for kLargeIdleFrames, LRU). Game thread.
 inline bool largeCandidate(const ProxyBase& p){const std::size_t len=p.info.length;return dynamicBuffer(p)&&len>p.core->q.shadowCap()/4&&len<=kMaxLargeShadow;}
 inline bool makeRoomForLarge(StreamCore& c,std::size_t bytes,bool mayEvict,const BufferState* keep){
+    trimRetired(c);   // 0.3.204 (task 21): retired slices the replay thread has passed count against the allowance until freed
+    if(c.q.largeAdmit(bytes))return true;
+    if(!mayEvict||c.q.pressure()||bytes>kMaxLargeShadow)return false;
+    {   // 0.3.204: up to two holders: evict only if the idle unlocked ones (LRU prefix) free enough, else refuse and drop nothing
+        std::lock_guard<std::mutex> l(c.texMutex);std::size_t freeable=0;
+        for(const BufferState* s=c.bufLarge.head;s&&c.frameNo>=s->lastUse+kLargeIdleFrames;s=s->lru.next)if(s!=keep&&s->mode==BufferState::Free&&!slicesBusy(c,*s))freeable+=s->proxy->info.length;
+        if(c.q.largeBytes()-std::min(freeable,c.q.largeBytes())+bytes>LargeShadowBudgetBytes)return false;
+    }
     while(!c.q.largeAdmit(bytes)){
-        if(!mayEvict||c.q.pressure()||bytes>kMaxLargeShadow)return false;
+        if(c.q.pressure())return false;
         std::lock_guard<std::mutex> l(c.texMutex);
         BufferState* victim=nullptr;
-        for(BufferState* s=c.bufLarge.head;s&&c.frameNo>=s->lastUse+kLargeIdleFrames;s=s->lru.next)if(s!=keep&&s->mode==BufferState::Free){victim=s;break;}   // (at most a few entries)
+        for(BufferState* s=c.bufLarge.head;s&&c.frameNo>=s->lastUse+kLargeIdleFrames;s=s->lru.next)if(s!=keep&&s->mode==BufferState::Free&&!slicesBusy(c,*s)){victim=s;break;}   // (at most a few entries)
         if(!victim)return false;
         ProxyBase& vp=*victim->proxy;noteShadowEvicted(c,vp);dropShadowLocked(vp,*victim);
     }
@@ -698,14 +800,31 @@ inline int readBackShadow(ProxyBase& self,BufferState& s){
         if(FAILED(hr)||!got)return;
         std::memcpy(s.shadow.data(),got,len);ok=true;
         if(vb)static_cast<IDirect3DVertexBuffer9*>(self.inner)->Unlock();else static_cast<IDirect3DIndexBuffer9*>(self.inner)->Unlock();},Cmd::SyncLock);
-    if(!ran){std::vector<unsigned char>().swap(s.shadow);return -1;}
-    if(!ok){std::vector<unsigned char>().swap(s.shadow);s.shadowDead=true;return 0;}   // the real buffer cannot be read: pass-through as before
+    if(!ran){SliceMem().swap(s.shadow);return -1;}
+    if(!ok){SliceMem().swap(s.shadow);s.shadowDead=true;return 0;}   // the real buffer cannot be read: pass-through as before
     add(dyn?q.stats.dynShadowReadbacks:q.stats.stShadowReadbacks);
     registerShadow(self,s,large);return 1;
 }
 // Memory pressure (game thread, at a Present): drop shadows of buffers not locked for idleFrames, then, while still over the (halved) cap, the
 // least recently locked unlocked ones (both kinds, one LRU). A dropped buffer's next write re-lock reads it back again (or a DISCARD lock of a
 // DYNAMIC one makes a zero-filled shadow) when the cap allows: the correctness rule is unchanged.
+// texMutex held, game thread: frees the ring slices no reader needs any more (all of them under memory pressure; olderThan = idle trimming: only those free for that many frames). The current slice stays.
+inline void releaseRingLocked(ProxyBase& p,BufferState& s,std::uint64_t olderThan=0){
+    if(s.mode!=BufferState::Free)return;   // (a lock in progress, maybe waiting in a pumped wait: its slices stay)
+    const std::uint64_t rep=p.core->q.replayedSeq();
+    for(std::size_t i=s.ring.size();i-->0;){
+        auto& sl=s.ring[i];
+        if(rep<sl.seq||p.core->frameNo<sl.frame+olderThan)continue;
+        retireSliceLocked(p,sl.mem,sl.seq,true,s.large);s.ring.erase(s.ring.begin()+i);
+    }
+}
+// Game thread, every Present (scanning every 16th frame): ring slices that have been free for kLargeIdleFrames frames are freed (the memory returns when the crowd goes away).
+inline void trimIdleRings(StreamCore& c){
+    if(c.frameNo%16!=0||c.q.stats.ringSlices.load(std::memory_order_relaxed)<=0)return;   // (the idle threshold is 60 frames: a scan every 16 is plenty)
+    std::lock_guard<std::mutex> l(c.texMutex);
+    for(BufferState* s=c.bufRegular.head;s;s=s->lru.next)if(!s->ring.empty())releaseRingLocked(*s->proxy,*s,kLargeIdleFrames);
+    for(BufferState* s=c.bufLarge.head;s;s=s->lru.next)if(!s->ring.empty())releaseRingLocked(*s->proxy,*s,kLargeIdleFrames);
+}
 inline void dropIdleBufferShadows(StreamCore& c,unsigned idleFrames){
     std::lock_guard<std::mutex> l(c.texMutex);
     for(BufferState* s=c.bufLarge.head;s;){   // the large allowance goes first and whole (never a locked one: its unlock or the next tick, see unlockBuffer)
@@ -718,16 +837,83 @@ inline void dropIdleBufferShadows(StreamCore& c,unsigned idleFrames){
         if(s->mode==BufferState::Free){noteShadowEvicted(c,p);dropShadowLocked(p,*s);}
         s=n;
     }
+    for(BufferState* s=c.bufRegular.head;s;s=s->lru.next)releaseRingLocked(*s->proxy,*s);   // 0.3.204 (task 21): the free non-current slices go first with the pressure (the shadows that stay keep their current slice)
+    for(BufferState* s=c.bufLarge.head;s;s=s->lru.next)releaseRingLocked(*s->proxy,*s);
     while(!c.q.shadowAdmit(0)){
-        BufferState* victim=c.bufRegular.head;while(victim&&victim->mode!=BufferState::Free)victim=victim->lru.next;
+        BufferState* victim=c.bufRegular.head;while(victim&&(victim->mode!=BufferState::Free||slicesBusy(c,*victim)))victim=victim->lru.next;
         if(!victim)break;
         ProxyBase& p=*victim->proxy;noteShadowEvicted(c,p);dropShadowLocked(p,*victim);
     }
 }
 // Range rules (our reading of DXVK, not verified against it): an offset beyond the end fails with INVALIDCALL; a size of 0 or one
 // that runs past the end becomes "to the end" instead of failing, so the staged/shadow range and the replayed Lock are the clamped one.
+// 0.3.204 (task 21): game thread. Waits (pumped, exact) until the replay thread has retired command seq; counted as a rename wait (the time also lands in syncNs, so the split timers stay right).
+// false = nested in a pumped wait (a message handler DXVK's pump dispatched): nothing waited, the caller takes the fallback.
+inline bool waitSliceSeq(StreamCore& c,std::uint64_t seq,bool rename){
+    Queue& q=c.q;if(q.replayedSeq()>=seq)return true;
+    if(inPumpedWait){add(q.stats.nestedSyncs);return false;}
+    const std::uint64_t t0=nowNs();q.waitReplayed(seq,WaitKind::Sync);const std::uint64_t ns=nowNs()-t0;own(rename?q.stats.renameWaits:q.stats.writeWaits);own(rename?q.stats.renameWaitNs:q.stats.writeWaitNs,ns);return true;
+}
+constexpr std::uint64_t kDiscardWindowFrames=60;
+// Game thread, at every DISCARD write lock of a slice-capable buffer: counts it in the current frame; the largest per-frame count of the last kDiscardWindowFrames frames decays. Returns the count that sizes the ring.
+inline unsigned noteDiscard(StreamCore& c,BufferState& s){
+    if(s.discFrame!=c.frameNo){   // a new frame: the one just ended competes for the window's maximum (an expired maximum is replaced by it)
+        if(s.discNow>=s.discMax||c.frameNo>=s.discMaxFrame+kDiscardWindowFrames){s.discMax=s.discNow;s.discMaxFrame=s.discFrame;}
+        s.discFrame=c.frameNo;s.discNow=0;
+    }
+    ++s.discNow;raiseMax(c.q.stats.maxDiscards,s.discNow);
+    return s.discNow>s.discMax?s.discNow:s.discMax;
+}
+constexpr std::size_t kZeroCopyMin=4096;   // a smaller range keeps the inline copy (cheaper than a reference and its bookkeeping)
+// Game thread: a write lock of a DYNAMIC buffer's current slice (s.shadow). The replay thread may still read that slice for zero-copy unlocks recorded earlier (s.sliceSeq), so:
+// no pending reader: as it is. DISCARD (the contents are undefined): the game gets another slice of the buffer's ring, the old one stays (renamed) for its readers: the oldest free one (its readers retired); else a new one if the
+// ring has room (framesAhead+2 slices in all), memory allows (no pressure; the ring budget: regular rings up to the base buffer-shadow cap, large rings up to the large allowance, both apart from the shadows' own caps) and the allocation succeeds; else the game waits for the OLDEST busy slice (exact).
+// NOOVERWRITE: the game writes only bytes no pending command reads (the D3D9 contract), no wait. Any other write: waits for the readers (exact).
+// false = nested in a pumped wait with the slice busy: the caller drops the shadow (it retires with its readers) and takes the unshadowed path.
+// Memory pressure (the 32-bit address space is nearly full): no slice is added and no new reader is created: a DISCARD/NOOVERWRITE unlock COPIES into the queue as before zero-copy (zc=false, so the slice never gets
+// new pending readers); a DISCARD whose current slice still has readers from before the pressure takes a free ring slice if there is one, else waits ONCE for the current slice (it drains within the frames in flight) and goes on in copy mode.
+inline bool prepareSliceWrite(ProxyBase& self,BufferState& s,DWORD eff,bool& zc){
+    StreamCore& c=*self.core;Queue& q=c.q;const bool pressure=q.pressure();
+    zc=(eff&(D3::kLockDiscard|D3::kLockNoOverwrite))!=0&&!pressure;
+    const unsigned perFrame=(eff&D3::kLockDiscard)?noteDiscard(c,s):0;
+    if(q.replayedSeq()>=s.sliceSeq)return true;
+    if(eff&D3::kLockDiscard){
+        const std::size_t len=self.info.length;trimRetired(c);
+        const std::size_t allowed=StreamCore::allowedSlices(c.framesAhead,perFrame);
+        bool atMax=false,noRoom=false,allocFailed=false;
+        const std::uint64_t rep=q.replayedSeq();std::size_t pick=s.ring.size();
+        for(std::size_t i=0;i<s.ring.size();++i)if(rep>=s.ring[i].seq&&(pick==s.ring.size()||s.ring[i].seq<s.ring[pick].seq))pick=i;
+        if(pick==s.ring.size()&&pressure){   // nothing is allocated under pressure: the current slice drains (waited once below)
+            own(q.stats.waitDrain);
+            return waitSliceSeq(c,s.sliceSeq,true);   // (the caller re-checks shadowOn: a nested path may have dropped the shadow during the wait)
+        }
+        if(pick==s.ring.size()&&s.ring.size()+1>=allowed)atMax=true;
+        else if(pick==s.ring.size()){
+            // 0.3.204 (task 21): ring slices have a fixed budget of their own (not the adaptive cap, not counted in shadowBytes/largeShadowBytes): regular rings (live + retired) up to the BASE buffer-shadow cap,
+            // large rings up to the large allowance
+            const auto rb=s.large?q.stats.ringLargeBytes.load(std::memory_order_relaxed)+q.stats.retiredLargeBytes.load(std::memory_order_relaxed)
+                                 :q.stats.ringRegularBytes.load(std::memory_order_relaxed)+q.stats.retiredRegularBytes.load(std::memory_order_relaxed);
+            const bool room=(rb>0?std::size_t(rb):0)+len<=(s.large?LargeShadowBudgetBytes:ShadowBudgetBytes);
+            if(!room)noRoom=true;
+            else{
+                try{BufferState::Slice sl;sl.mem.resize(len+kLockSlack);sl.frame=c.frameNo;s.ring.push_back(std::move(sl));pick=s.ring.size()-1;}catch(...){pick=s.ring.size();allocFailed=true;}   // (resize: uninitialized, the contents of a DISCARD are undefined)
+                if(pick<s.ring.size()){q.stats.ringBytes.fetch_add(std::int64_t(len),std::memory_order_relaxed);(s.large?q.stats.ringLargeBytes:q.stats.ringRegularBytes).fetch_add(std::int64_t(len),std::memory_order_relaxed);q.stats.ringSlices.fetch_add(1,std::memory_order_relaxed);own(q.stats.renameAllocs);raiseMax(q.stats.maxRing,s.ring.size());}
+            }
+        }
+        if(pick==s.ring.size()){   // none free, none allowed: why (the zerocopy line's waitWhy)
+            own(atMax?q.stats.waitMax:noRoom?q.stats.waitBudget:allocFailed?q.stats.waitAlloc:q.stats.waitMax);
+            if(s.ring.empty())return waitSliceSeq(c,s.sliceSeq,true);   // no second slice: the readers must finish before the game overwrites this one
+            pick=0;for(std::size_t i=1;i<s.ring.size();++i)if(s.ring[i].seq<s.ring[pick].seq)pick=i;   // the oldest busy one
+            if(!waitSliceSeq(c,s.ring[pick].seq,true))return false;
+            if(!s.shadowOn)return true;   // a nested path (ProcessVertices) dropped the shadow and its ring during the wait: nothing left to swap; the caller takes the unshadowed path
+        }
+        auto& sl=s.ring[pick];s.shadow.swap(sl.mem);sl.seq=s.sliceSeq;sl.frame=c.frameNo;s.sliceSeq=0;own(q.stats.renames);return true;
+    }
+    if(eff&D3::kLockNoOverwrite)return true;
+    return waitSliceSeq(c,s.sliceSeq,false);
+}
 inline HRESULT lockBuffer(ProxyBase& self,BufferState& s,UINT off,UINT size,void** pp,DWORD flags){
-    Queue& q=self.core->q;const UINT length=self.info.length;
+    LockScope _ts(*self.core);Queue& q=self.core->q;const UINT length=self.info.length;
     if(!pp||s.mode!=BufferState::Free||off>length)return D3DERR_INVALIDCALL;
     s.whole=!size||(off==0&&size>=length);
     if(!size||std::uint64_t(off)+size>length)size=length-off;
@@ -740,6 +926,21 @@ inline HRESULT lockBuffer(ProxyBase& self,BufferState& s,UINT off,UINT size,void
         if(dynamicBuffer(self)&&(eff&D3::kLockDiscard)){if(takeShadow(self,s,true))add(q.stats.shadowLate);}
         else if(s.written&&!(eff&D3::kLockDiscard)&&!(flags&D3::kLockReadOnly)){
             if(readBackShadow(self,s)<0)return D3DERR_INVALIDCALL;
+        }
+    }
+    s.zc=false;s.copyP=false;
+    if(s.shadowOn&&dynamicBuffer(self)&&self.info.pool==D3::kPoolDefault&&!(flags&D3::kLockReadOnly)){   // 0.3.204 (task 21): a write lock of a DYNAMIC default-pool buffer's slice, large allowance or regular cap (see prepareSliceWrite)
+        bool zc=false;
+        // the buffer is busy while prepareSliceWrite may wait (a PUMPED wait): a nested Lock of it fails as a double lock, evictions, pressure drops and ring trimming skip it; a nested ProcessVertices
+        // can still drop its shadow (checked below)
+        s.mode=BufferState::Shadow;const bool ok=prepareSliceWrite(self,s,eff,zc);s.mode=BufferState::Free;
+        if(!s.shadowOn){}   // dropped during the wait: the unshadowed paths below
+        else if(ok){s.zc=zc;s.copyP=!zc&&(eff&(D3::kLockDiscard|D3::kLockNoOverwrite))!=0;}
+        else{   // nested in a pumped wait: the shadow (retired with its readers) goes. A DISCARD stages below; any other write copies the slice's current bytes (the game-side truth) into a staged Block, which its unlock queues without a copy
+            Block* b=nullptr;
+            if(!(eff&D3::kLockDiscard)&&(b=q.tryAllocBlock(size+kLockSlack))){std::memcpy(b->data(),s.shadow.data()+off,size);b->used=size;}
+            {std::lock_guard<std::mutex> l(self.core->texMutex);dropShadowLocked(self,s);}
+            if(b){s.mode=BufferState::Staged;s.stage=b;*pp=b->data();own(q.stats.lockAsync);return D3D_OK;}
         }
     }
     if(s.shadowOn){s.mode=BufferState::Shadow;touchBufferShadow(*self.core,s);*pp=s.shadow.data()+off;own(q.stats.lockAsync);return D3D_OK;}
@@ -763,15 +964,24 @@ inline HRESULT lockBuffer(ProxyBase& self,BufferState& s,UINT off,UINT size,void
     return hr;
 }
 inline void noteRecorded(ProxyBase& p,const BufferState& s,UINT bytes){add(p.core->q.stats.lockRecordedBytes,bytes);if(s.whole)add(p.core->q.stats.wholeLockBytes,bytes);}
-inline HRESULT unlockBuffer(ProxyBase& self,BufferState& s){
-    Queue& q=self.core->q;
+inline HRESULT unlockBufferImpl(ProxyBase& self,BufferState& s,bool& zcDone){
+    LockScope _ts(*self.core);Queue& q=self.core->q;
     switch(s.mode){
     case BufferState::Free:return D3DERR_INVALIDCALL;
-    case BufferState::Shadow:
-        s.mode=BufferState::Free;
+    case BufferState::Shadow:{
+        s.mode=BufferState::Free;const bool zc=s.zc;s.zc=false;
         if(!s.shadowOn)return D3D_OK;   // (a GPU write dropped it under a lock: nothing left to copy)
         if((s.flags&D3::kLockReadOnly)||!s.size)return D3D_OK;   // (a zero-length range must not be replayed: Lock(off,0) means to the end)
-        noteRecorded(self,s,s.size);
+        noteRecorded(self,s,s.size);   // zero-copy unlocks count too (before/after comparisons stay valid); zeroCopyBytes says how much of it went without a copy
+        if(zc&&s.size>=kZeroCopyMin){   // 0.3.204 (task 21): no copy: the replay thread reads the slice itself; the slice stays alive and unwritten (for conflicting locks) until this command retires
+            // Known overlap: a whole-buffer (size 0) DISCARD unlock followed by NOOVERWRITE writes into the same slice can be read by the replay thread while the game writes the later ranges; the later NOOVERWRITE
+            // unlock re-copies those bytes before any draw that may use them (the D3D9 NOOVERWRITE contract), so the GPU result is exact. Plainly: this IS a formal data race (the replay's memcpy reads bytes the game thread
+            // may be writing; undefined behaviour in C++ even though the result on the GPU is correct), and TSan does not exercise it (no test covers a whole-buffer DISCARD followed by NOOVERWRITE writes into the
+            // pending range). See lepola/northlight#34 (overlapping zero-copy ranges).
+            auto* a=static_cast<UnlockBufferRefArgs*>(q.reserve((std::uint16_t)Cmd::UnlockBufferRef,sizeof(UnlockBufferRefArgs),kFlagWaitTarget));   // flagged: prepareSliceWrite may wait for it
+            *a=UnlockBufferRefArgs{&self,s.shadow.data(),s.off,s.size,s.flags,0};q.commit();s.sliceSeq=q.recordedSeq();
+            own(q.stats.zeroCopyUnlocks);own(q.stats.zeroCopyBytes,s.size);zcDone=true;
+        }else{
         if(s.size<=MaxInlinePayload-sizeof(UnlockBufferArgs)-16){
             auto* a=static_cast<UnlockBufferArgs*>(q.reserve((std::uint16_t)Cmd::UnlockBuffer,std::uint32_t(sizeof(UnlockBufferArgs)+s.size)));
             *a=UnlockBufferArgs{&self,s.off,s.size,s.flags,1};std::memcpy(a+1,s.shadow.data()+s.off,s.size);q.commit();
@@ -786,9 +996,10 @@ inline HRESULT unlockBuffer(ProxyBase& self,BufferState& s){
                 *a=UnlockBufferArgs{&self,s.off+done,n,done?(s.flags&~D3::kLockDiscard):s.flags,1};std::memcpy(a+1,s.shadow.data()+s.off+done,n);q.commit();
             }
         }
+        }
         s.written=true;
         if(s.large&&q.pressure()){std::lock_guard<std::mutex> l(self.core->texMutex);noteShadowEvicted(*self.core,self);dropShadowLocked(self,s);}   // pressure began under the lock: the large shadow goes now
-        return D3D_OK;
+        return D3D_OK;}
     case BufferState::Scratch:{
         noteRecorded(self,s,s.size);
         auto* a=static_cast<UnlockBufferArgs*>(q.reserve((std::uint16_t)Cmd::UnlockBuffer,std::uint32_t(sizeof(UnlockBufferArgs)+s.size)));
@@ -803,6 +1014,19 @@ inline HRESULT unlockBuffer(ProxyBase& self,BufferState& s){
         if(!runTask(*self.core,[&](StreamCore&){if(self.inner)hr=self.kind==Kind::VertexBuffer?static_cast<IDirect3DVertexBuffer9*>(self.inner)->Unlock():static_cast<IDirect3DIndexBuffer9*>(self.inner)->Unlock();},Cmd::SyncUnlock))return D3DERR_INVALIDCALL;
         s.mode=BufferState::Free;if(!(s.flags&D3::kLockReadOnly))s.written=true;return hr;}
     }
+}
+// 0.3.204 (task 21): why a DISCARD/NOOVERWRITE write unlock of a DYNAMIC buffer did not go zero-copy (the CSTREAM zerocopy line): not the default pool (the flags mean nothing there), no shadow
+// slice (staged, scratch, pass-through or a dropped shadow), a range below kZeroCopyMin, anything else.
+inline HRESULT unlockBuffer(ProxyBase& self,BufferState& s){
+    const BufferState::Mode m=s.mode;const DWORD fl=s.flags;const UINT sz=s.size;const bool cp=s.copyP;bool zcDone=false;
+    const HRESULT hr=unlockBufferImpl(self,s,zcDone);
+    if(!zcDone&&m!=BufferState::Free&&dynamicBuffer(self)&&(fl&(D3::kLockDiscard|D3::kLockNoOverwrite))&&!(fl&D3::kLockReadOnly)&&SUCCEEDED(hr)){
+        Counters& st=self.core->q.stats;
+        const bool underPressure=cp&&m==BufferState::Shadow&&sz>=kZeroCopyMin&&self.info.pool==D3::kPoolDefault;
+        if(underPressure){own(st.copyPressureUnlocks);own(st.copyPressureBytes,sz);}   // would have been zero-copy: copied because of memory pressure
+        own(self.info.pool!=D3::kPoolDefault?st.zcSkipPool:m!=BufferState::Shadow?st.zcSkipNoShadow:sz<kZeroCopyMin?st.zcSkipSmall:underPressure?st.zcSkipPressure:st.zcSkipOther);
+    }
+    return hr;
 }
 inline void releaseStage(ProxyBase& p,BufferState& s){if(s.stage){p.core->q.freeBlock(s.stage);s.stage=nullptr;}if(s.mode==BufferState::Scratch){p.core->scratch.give(s.scratchSlot);s.mode=BufferState::Free;}}
 
