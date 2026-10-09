@@ -32,7 +32,7 @@ checks['rain mist: skipped when stage 0 is a mist texture (known), any blend']='
 checks['RainBlend: not rain = the plain draw; override sets SrcAlpha/InvSrcAlpha/Add/blend on, inside the draw callback, and restores the previous values after it']=(
     'if(!rain)return blobFaintDraw(claimed,draw);' in helper and 'return blobFaintDraw(claimed,[&]{' in helper
     and all(t in helper for t in ('D3DRS_ALPHABLENDENABLE','D3DRS_SRCBLEND','D3DRS_DESTBLEND','D3DRS_BLENDOP','TRUE,D3DBLEND_SRCALPHA,D3DBLEND_INVSRCALPHA,D3DBLENDOP_ADD'))
-    and 0<helper.index('GetRenderState')<helper.index('draw();')<helper.index('prev[i]);') and helper.count('draw()')==1)
+    and 0<helper.index('GetRenderState')<helper.index('rainMrtDraw(draw);')<helper.index('prev[i]);') and helper.count('draw()')==0) # 0.3.201 (rain mask MRT): the draw goes through rainMrtDraw
 checks['RainBlend: on with Weather=1 (no key of its own)']='bool rainBlendSetting()const{return quality.weather!=0;}' in fp.src('world_renderer.h').read_text() and 'rainBlend' not in fp.src('quality_settings.h').read_text()
 checks['drawHook: no Get*, peek, lock or lookup in the weather lines']=not re.search(r'weather[^\n]*(Get|peek|lock|find|unordered_map|CpuScope)',hook)
 checks['drawHook: no gateFrame weather branch; the probe sits in prepareDrawImpl\'s existing gateFrame branch']='weatherProbeDraw' not in hook and 'gateFrame' not in hook.split(cmp_line)[0] and 'if(gateFrame){++gateCounts.prep;weatherProbeDraw(count);}' in r
@@ -55,37 +55,84 @@ checks['WorldRenderer: POD state, setter and getter only']=all(s in w for s in (
 pdi=r[r.index('template<class Capture> void prepareDrawImpl('):r.index('    // Terrain draws run with the game')]
 checks['no rain boundary: no rainBoundary anywhere, no kind=rain log, no stage-0 relearn in prepareDrawImpl']=('rainBoundary' not in r and 'kind=rain' not in r and 'IDirect3DBaseTexture9* stage0=nullptr' not in pdi and 'ext->GetTexture(0,&stage0)' not in pdi and 'renderEffects();' not in pdi)
 branch=helper[helper.index('return blobFaintDraw(claimed,[&]{'):]
-checks['rain mask: the pass runs once, only after draw() in the rain branch, inside extensionWork("rain mask"), before the blend restore']=(helper.count('rainMaskPass(')==1 and 'if(SUCCEEDED(hr))extensionWork("rain mask",[&]{rainMaskPass(draw,false);});' in branch
-    and branch.index('const HRESULT hr=draw();')<branch.index('rainMaskPass(draw,false)')<branch.index('prev[i]);') and 'rainMaskPass' not in helper.split('return blobFaintDraw(claimed,[&]{')[0])
-mp=r[r.index('template<class Draw> void rainMaskPass('):r.index('template<class Draw> HRESULT rainBlendDraw(')]
-checks['rain mask: eligibility (not applied, terrain, enabled, not failed, world, mask not failed), scrub needs rainMaskDrawn, eligibility cached per frame']=(
-    'if(scrub&&!rainMaskDrawn)return;' in mp and 'if(applied||!terrain||!enabled||failed||!world||rainMaskFailed||!width||!height)return;' in mp and 'if(!rainMaskFrame){rainMaskFrame=true;rainMaskOk=rainMaskEligible();}' in mp)
-el=r[r.index('bool rainMaskEligible()'):r.index('bool rainMaskCreate()')]
+# 0.3.201 (rain mask MRT): the mask is written by the rain draw itself (render target 1); no second draw, no scrub draw, no RT0 swap per draw
+checks['rain mask MRT: the rain branch makes ONE draw through rainMrtDraw, between the blend setup and its restore; no second draw call, no rainMaskPass/rainScrubDraw anywhere']=(
+    branch.count('rainMrtDraw(draw)')==1 and branch.count('draw()')==0 and branch.index('ext->SetRenderState(types[i],want[i])')<branch.index('const HRESULT hr=rainMrtDraw(draw);')<branch.index('prev[i]);')
+    and 'rainMrtDraw' not in helper.split('return blobFaintDraw(claimed,[&]{')[0] and 'rainMaskPass' not in r and 'rainScrub' not in r.replace('rainScrubPS','').replace('kRainScrubShader','') and 'rainMaskScrub' not in r)
+mrt=r[r.index('template<class Draw> HRESULT rainMrtDraw('):r.index('IDirect3DTexture9* rainMaskPrepare()')]
+checks['rain mask MRT: rainMrtDraw: begin and end inside extensionWork("rain mask"), the draw once between them, unbound before a plain draw, counted only on success']=(
+    mrt.count('draw()')==2 and mrt.count('extensionWork("rain mask"')==2 and 'masked=rainMrtBegin()' in mrt and 'if(!masked){rainMrtUnbind();return draw();}' in mrt and mrt.index('rainMrtBegin()')<mrt.index('const HRESULT hr=draw();')<mrt.index('rainMrtEnd()')
+    and 'if(SUCCEEDED(hr)){rainMaskDrawn=true;++rainMaskDraws;}' in mrt)
+bg=r[r.index('bool rainMrtBegin(){'):r.index('void rainMrtEnd(){')]
+checks['rain mask MRT: eligibility (not applied, terrain, enabled, not failed, world, mask not failed), cached per frame; caps once; no game VS or PS; the exact stage setup']=(
+    'if(applied||!terrain||!enabled||failed||!world||rainMaskFailed||!width||!height){rainMrtUnbind();return false;}' in bg and 'if(!rainMaskFrame){rainMaskFrame=true;rainMaskOk=rainMaskEligible();}' in bg and 'if(!rainCapsChecked)rainMaskCaps();' in bg
+    and all(t in bg for t in ('if(vsBound)why|=4;','if(psBound)why|=8;','st[0]==D3DTOP_MODULATE&&st[1]==D3DTA_TEXTURE&&arg2&&st[3]==D3DTOP_MODULATE&&st[4]==D3DTA_TEXTURE&&alphaArg2&&st[6]==D3DTOP_DISABLE&&st[7]==0&&st[8]==D3DTTFF_DISABLE&&spec==FALSE',
+        'st[2]==D3DTA_DIFFUSE||st[2]==D3DTA_CURRENT','st[5]==D3DTA_DIFFUSE||st[5]==D3DTA_CURRENT','D3DRS_SPECULARENABLE','ext->peekVertexShader(v)','ext->peekPixelShader(p)')))
+checks['rain mask MRT: the states (RT1 alpha-only write, separate alpha ONE/ONE/MAX) are saved with Get, set after the RT1 bind, restored in rainMrtEnd with the pixel shader back to none']=(
+    'D3DRS_COLORWRITEENABLE1,D3DRS_SEPARATEALPHABLENDENABLE,D3DRS_SRCBLENDALPHA,D3DRS_DESTBLENDALPHA,D3DRS_BLENDOPALPHA' in bg and 'D3DCOLORWRITEENABLE_ALPHA,TRUE,D3DBLEND_ONE,D3DBLEND_ONE,D3DBLENDOP_MAX' in bg
+    and 'ext->GetRenderState(types[i],&rainMrtPrev[i])' in bg and 'ext->SetPixelShader(rainMrtPS);' in bg and bg.index('ext->SetRenderTarget(1,maskTarget)')<bg.index('ext->SetRenderState(types[i],want[i])')<bg.index('ext->SetPixelShader(rainMrtPS)')
+    and 'ext->SetRenderState(types[i],rainMrtPrev[i])' in r and 'ext->SetPixelShader(nullptr);' in r[r.index('void rainMrtEnd(){'):r.index('template<class Draw> HRESULT rainMrtDraw(')])
+checks['rain mask MRT: RT1 binds once per run (rainMrtRuns), lazily unbound by rainMrtUnbind; a skip unbinds, counts and logs the first reason once']=(
+    'else if(!rainMrtBound){' in bg and 'rainMrtBound=true;++rainMrtRuns;' in bg and 'void rainMrtUnbind(){if(rainMrtBound){ext->SetRenderTarget(1,nullptr);rainMrtBound=false;}}' in r
+    and 'rainMrtUnbind();++rainMaskSkips;' in bg and 'if(!rainSkipLogged){rainSkipLogged=true;logf("WEATHER rain mask skip: reason=%u vs=%d ps=%d stage0 color=%ld(%ld,%ld) alpha=%ld(%ld,%ld) stage1 color=%ld texcoord=%ld texTransform=%ld specular=%lu"' in bg)
+el=r[r.index('bool rainMaskEligible()'):r.index('void rainMaskCaps()')]
 checks['rain mask: eligible only at the effect size, depth type AND quality equal the RT (no depth: the RT values), the RT type/quality are kept for creation, skip log carries depthMs']=('rd.Width==width&&rd.Height==height' in el and 'MultiSampleType==D3DMULTISAMPLE_NONE' not in el and 'ok=dd.MultiSampleType==rd.MultiSampleType&&dd.MultiSampleQuality==rd.MultiSampleQuality;' in el and 'GetDepthStencilSurface' in el
     and 'dd.MultiSampleType=rd.MultiSampleType;dd.MultiSampleQuality=rd.MultiSampleQuality;' in el and 'rainMaskWantType=rd.MultiSampleType;rainMaskWantQuality=rd.MultiSampleQuality;' in el and 'ms=%u depthMs=%u' in el)
-checks['rain mask: states set (alpha-only write, blend on, no separate alpha, no Z write, no sRGB, no stencil, the game scissor rect), mask is ONE/ZERO/MAX, scrub ZERO/ZERO/ADD with LESS widened to LESSEQUAL']=(
-    all(t in mp for t in ('D3DRS_COLORWRITEENABLE,D3DCOLORWRITEENABLE_ALPHA','D3DRS_ALPHABLENDENABLE,TRUE','D3DRS_SEPARATEALPHABLENDENABLE,FALSE','D3DRS_ZWRITEENABLE,FALSE','D3DRS_SRGBWRITEENABLE,FALSE','scrub?D3DBLEND_ZERO:D3DBLEND_ONE','D3DRS_DESTBLEND,D3DBLEND_ZERO','scrub?D3DBLENDOP_ADD:D3DBLENDOP_MAX','D3DRS_STENCILENABLE,FALSE','ext->GetScissorRect(&scissor)','if(scrub&&known[10]&&prev[10]==D3DCMP_LESS)ext->SetRenderState(D3DRS_ZFUNC,D3DCMP_LESSEQUAL);'))
-    and mp.count('ext->SetScissorRect(&scissor)')==2
-    and 'D3DRS_ZENABLE' not in mp and 'D3DRS_ALPHATESTENABLE' not in mp and 'SetTexture' not in mp and 'SetPixelShader' not in mp)
-checks['rain mask: render target and viewport saved, restored after the draw (SetRenderTarget resets the viewport), cleared once per frame with the scissor off']=(
-    'GetRenderTarget(0,&gameRT)' in mp and 'ext->GetViewport(&vp)' in mp and mp.index('SetRenderTarget(0,maskTarget)')<mp.index('const HRESULT hr=draw();')<mp.rindex('restore();')
-    and 'ext->SetRenderTarget(0,gameRT);ext->SetViewport(&vp);if(scissorKnown)ext->SetScissorRect(&scissor);drop(gameRT);' in mp and 'if(!rainMaskCleared){' in mp and 'rainMaskCleared=true;' in mp and mp.count('Clear(')==1 and 'D3DRS_SCISSORTESTENABLE,FALSE' in mp and mp.count('draw()')==1)
-cr=r[r.index('bool rainMaskCreate()'):r.index('template<class Draw> void rainMaskPass(')]
-checks['rain mask: created lazily at the effect size, failure logged once and disables the mask only']=('D3DFMT_A8R8G8B8,D3DPOOL_DEFAULT,&rainMask' in r and 'rainMaskFailed=true;logf("WEATHER rain mask disabled' in r and 'if(!rainMaskSurface&&!rainMaskCreate())return;' in mp)
+caps=r[r.index('void rainMaskCaps()'):r.index('bool rainMaskCreate()')]
+checks['rain mask MRT: caps checked once (2 RTs, independent write masks, separate alpha blend, ps_2_0), disabled with one log naming them']=(
+    'caps.NumSimultaneousRTs>=2' in caps and 'D3DPMISCCAPS_INDEPENDENTWRITEMASKS' in caps and 'D3DPMISCCAPS_SEPARATEALPHABLEND' in caps and 'D3DPMISCCAPS_MRTPOSTPIXELSHADERBLENDING' in caps and 'caps.PixelShaderVersion>=D3DPS_VERSION(2,0)' in caps and 'rainCapsChecked=true;' in caps and 'logf("WEATHER rain mask disabled: caps' in caps)
+cr=r[r.index('bool rainMaskCreate()'):r.index('void rainMaskClearSwap(')]
+checks['rain mask: created lazily at the effect size, failure logged once and disables the mask only (target, rain depth INTZ, both shaders)']=('D3DFMT_A8R8G8B8,D3DPOOL_DEFAULT,&rainMask' in r and 'rainMaskFailed=true;logf("WEATHER rain mask disabled' in r and 'if(!rainMaskSurface&&!rainMaskCreate())why|=64;' in bg
+    and 'D3DUSAGE_DEPTHSTENCIL,(D3DFORMAT)MAKEFOURCC(\'I\',\'N\',\'T\',\'Z\'),D3DPOOL_DEFAULT,&rainDepth' in cr and 'CreatePixelShader(kRainMaskMrtShader,&rainMrtPS)' in cr and 'CreatePixelShader(kRainScrubShader,&rainScrubPS)' in cr and 'drop(rainDepth);drop(rainMrtPS);drop(rainScrubPS);rainMaskFailed=true;' in cr)
 checks['rain mask: MSAA twin via CreateRenderTarget with the wanted type/quality only when not NONE, all dropped on failure, type/quality stored; draw target is the twin else the texture surface; recreated on a type/quality change']=(
     'rainMaskWantType!=D3DMULTISAMPLE_NONE' in cr and 'CreateRenderTarget(width,height,D3DFMT_A8R8G8B8,rainMaskWantType,rainMaskWantQuality,FALSE,&rainMaskMS,nullptr)' in cr and 'drop(rainMaskMS);drop(rainMaskSurface);drop(rainMask);rainMaskFailed=true;' in cr and 'ms=%u' in cr and 'rainMaskMsType=rainMaskWantType;rainMaskMsQuality=rainMaskWantQuality;' in cr
-    and 'IDirect3DSurface9* maskTarget=rainMaskMS?rainMaskMS:rainMaskSurface;' in mp and 'rainMaskMsType!=rainMaskWantType||rainMaskMsQuality!=rainMaskWantQuality' in mp)
+    and 'maskTarget=rainMaskMS?rainMaskMS:rainMaskSurface;' in bg and 'rainMaskMsType!=rainMaskWantType||rainMaskMsQuality!=rainMaskWantQuality' in bg)
+st=r[r.index('bool rainMaskStart('):r.index('bool rainMrtBegin(){')]
+checks['rain mask MRT: the frame start (once, before RT1 is bound): the bound depth must be worldDepth, ONE depth snapshot into rainDepth (non-fatal), then ColorFill of the mask target, the RT0-swap clear only if ColorFill fails']=(
+    'rainMaskCleared=true;rainDepthOk=false;' in st and 'bound==worldDepth' in st and st.count('resolveDepthInto(rainDepth,false)')==1 and 'ExtensionDevice::RawScope raw(*ext);' in st
+    and 'if(FAILED(ext->ColorFill(maskTarget,nullptr,0)))rainMaskClearSwap(maskTarget);' in st and st.index('resolveDepthInto')<st.index('ColorFill')<st.index('rainDepthOk=true')
+    and 'if(!rainMaskCleared&&!rainMaskStart(maskTarget))why|=32;' in bg and bg.index('rainMaskStart(maskTarget)')<bg.index('ext->SetRenderTarget(1,maskTarget)'))
+sw=r[r.index('void rainMaskClearSwap('):r.index('bool rainMaskStart(')]
+checks['rain mask MRT: the swap clear (fallback) keeps the old rules: RT, viewport and scissor saved and restored, scissor test off for the Clear, the whole target']=(
+    'GetRenderTarget(0,&gameRT)' in sw and 'ext->GetViewport(&vp)' in sw and sw.index('SetRenderTarget(0,maskTarget)')<sw.index('Clear(')<sw.index('SetRenderTarget(0,gameRT)') and 'D3DRS_SCISSORTESTENABLE,FALSE' in sw and sw.count('Clear(')==1
+    and 'ext->SetViewport(&vp);if(scissorKnown)ext->SetScissorRect(&scissor);drop(gameRT);' in sw)
+rd=r[r.index('bool resolveDepth() {'):r.index('HRESULT quad(UINT w')]
+checks['resolveDepth: the same RESZ code serves depthTex (fatal) and rainDepth (non-fatal); RT1 unbound first; captured set only for depthTex']=(
+    'resolveDepthInto(depthTex, true)' in rd and 'bool resolveDepthInto(IDirect3DTexture9* target, bool fatal) {\n        rainMrtUnbind();' in rd and rd.count('captured = true; return true;')==1 and rd.index('resolveDepthInto(depthTex, true)')<rd.index('captured = true;')<rd.index('bool resolveDepthInto('))
 rr=r[r.index('    void releaseResources() {'):r.index('    bool error(HRESULT hr')]
 rs=r[r.index('    bool resources(UINT w'):r.index('    // Swap chain 0')]
-checks['rain mask: dropped in releaseResources (with the failed flag reset) and on a size change']=('drop(rainMaskMS);drop(rainMaskSurface);drop(rainMask);rainMaskFailed=false;' in rr and 'drop(rainMaskMS);drop(rainMaskSurface);drop(rainMask);' in rs.split('captured=false;')[1].split('}')[0])
-checks['rain mask: per-frame flags reset where terrain/applied reset (clearFrame)']='terrain = captured = applied = projectionValid = false;rainMaskCleared=rainMaskDrawn=rainMaskFrame=rainMaskOk=rainScrubDraw=false;' in r
-checks['rain mask: MSAA twin resolved with StretchRect right before setRainMask (only when drawn), nullptr on failure with a one-shot log, setRainMask right before world->render']=(
-    'if(maskTex&&rainMaskMS){const HRESULT rh=ext->StretchRect(rainMaskMS,nullptr,rainMaskSurface,nullptr,D3DTEXF_NONE);if(FAILED(rh)){maskTex=nullptr;rainMaskResolveHr=rh;}}' in r and 'if(FAILED(rainMaskResolveHr)&&!rainMaskResolveLogged){rainMaskResolveLogged=true;logf("WEATHER rain mask resolve failed HRESULT' in r and 'IDirect3DTexture9* maskTex=rainMaskDrawn?rainMask:nullptr;' in r
-    and r.index('IDirect3DTexture9* maskTex=rainMaskDrawn?rainMask:nullptr;')<r.index('ext->StretchRect(rainMaskMS')<r.index('world->setRainMask(maskTex);')<r.index('world->render(saved.targets[0]') and r.index('world->render(saved.targets[0]')-r.index('world->setRainMask(')<260)
-checks['rain scrub: per-draw flag only with rainMaskDrawn&&!applied for world or skinned shaders; dry frames one bool test']=('if(rainMaskDrawn&&world&&!applied){const VsClass& vc=classifyVs(vs);rainScrubDraw=vc.world||vc.skinned;}' in pdi and pdi.count('rainScrubDraw=')==2 and pdi.index('rainScrubDraw=false;')<pdi.index('if(applied){'))
-checks['rain scrub: after the game draw in both gate paths, not for rain, claimed or mist draws, only on success']=(hook.count('if(rainScrubDraw&&!rainBlend&&!claimed&&!mist&&SUCCEEDED(hr)){rainScrubDraw=false;extensionWork("rain mask",[&]{rainMaskPass(draw,true);});}')==2
-    and hook.index('rainBlendDraw(rainBlend,claimed||mist,draw)')<hook.index('rainScrubDraw&&')<hook.index('if(!frameDrawGates){')+hook[hook.index('if(!frameDrawGates){'):].index('return hr;'))
-checks['rain mask: WEATHER line carries the counters; world binds RainMask on s13 for the composite only']=('rainMask=%u rainMaskScrub=%u' in r and 'd->SetTexture(13,rainMask?rainMask:neutralZero);rainMask=nullptr;' in w and 'composited=true;d->SetTexture(13,regionalFogTexture);' in w and 'void setRainMask(IDirect3DTexture9* t){rainMask=t;}' in w)
+checks['rain mask: dropped in releaseResources (RT1 unbound first, failed flag reset, shaders and rain depth too) and on a size change']=('rainMrtUnbind();stateBlocks.clear();' in rr and 'drop(rainMaskMS);drop(rainMaskSurface);drop(rainMask);drop(rainDepth);rainMaskFailed=false;' in rr and 'drop(rainMrtPS);drop(rainScrubPS);' in rr and 'drop(rainMaskMS);drop(rainMaskSurface);drop(rainMask);drop(rainDepth);' in rs.split('captured=false;')[1].split('}')[0])
+checks['rain mask: per-frame flags reset where terrain/applied reset (clearFrame), RT1 unbound there']='rainMrtUnbind();terrain = captured = applied = projectionValid = false;rainMaskCleared=rainMaskDrawn=rainMaskFrame=rainMaskOk=rainDepthOk=false;' in r
+pr=r[r.index('IDirect3DTexture9* rainMaskPrepare()'):r.index('template<class Draw> HRESULT rainBlendDraw(')]
+checks['rain scrub: renderEffects asks rainMaskPrepare once, early (before the AO), then hands its texture to setRainMask right before world->render; no scrub draw per world draw']=(
+    r.count('rainMaskPrepare()')==2 and 'IDirect3DTexture9* rainMaskTex=world&&debugMode==0?rainMaskPrepare():nullptr;' in r and r.index('rainMaskPrepare()')<r.index('bindEffects(nullptr);')<r.index('world->setRainMask(rainMaskTex);')<r.index('world->render(saved.targets[0]')
+    and r.index('world->render(saved.targets[0]')-r.index('world->setRainMask(')<260)
+checks['rain scrub: RT1 unbound, MSAA twin resolved by StretchRect (failure: nullptr and a one-shot log), ONE full-screen quad into the mask texture with depthTex (s0) and rainDepth (s1) POINT, alpha-only write, own SavedState']=(
+    pr.startswith('IDirect3DTexture9* rainMaskPrepare(){\n        rainMrtUnbind();') and 'if(!rainMaskDrawn||!rainDepthOk||' in pr and 'ext->StretchRect(rainMaskMS,nullptr,rainMaskSurface,nullptr,D3DTEXF_NONE)' in pr and 'rainMaskResolveHr=rh;return nullptr;' in pr
+    and 'SavedState scrub(ext,&stateBlocks);' in pr and 'effectState();' in pr and 'ext->SetRenderTarget(0,rainMaskSurface)' in pr and 'ext->SetTexture(0,depthTex);ext->SetTexture(1,rainDepth);' in pr
+    and 'D3DSAMP_MINFILTER,D3DTEXF_POINT' in pr and 'D3DSAMP_MAGFILTER,D3DTEXF_POINT' in pr and 'ext->SetPixelShader(rainScrubPS);' in pr and 'D3DRS_COLORWRITEENABLE,D3DCOLORWRITEENABLE_ALPHA' in pr and pr.count('quad(width,height)')==1
+    and 'if(FAILED(rainMaskResolveHr)&&!rainMaskResolveLogged){rainMaskResolveLogged=true;logf("WEATHER rain mask resolve failed HRESULT' in r)
+# every device operation that could draw, clear, copy or change targets runs rainMrtUnbind() first
+def method(name):
+    i=r.index('HRESULT STDMETHODCALLTYPE '+name+'(');return r[i:r.index('\n',i)+1]
+for name in ('UpdateSurface','UpdateTexture','GetRenderTargetData','StretchRect','ColorFill'):
+    m=method(name);checks[f'rain mask MRT: Device::{name} unbinds RT1 before the call']=('rainMrtUnbind();' in m and m.index('rainMrtUnbind();')<m.index('return ext->'+name))
+cl=r[r.index('HRESULT STDMETHODCALLTYPE Clear('):r.index('HRESULT STDMETHODCALLTYPE CreateVertexBuffer(')]
+checks['rain mask MRT: Device::Clear unbinds RT1 first (before the Z resolve and the real Clear)']=('rainMrtUnbind();' in cl and cl.index('rainMrtUnbind();')<cl.index('resolveDepth()')<cl.index('return ext->Clear('))
+def dmethod(name,span=240):
+    i=r.index('HRESULT STDMETHODCALLTYPE '+name+'(',r.index('class Device final'));return r[i:i+span]
+rst=dmethod('Reset');pre=dmethod('Present',480);es=dmethod('EndScene')
+checks['rain mask MRT: Reset, Present and EndScene unbind first; finishFrame (also SwapChain::Present) unbinds before the extension work']=(
+    'rainMrtUnbind();' in rst and 'rainMrtUnbind();' in pre and pre.index('rainMrtUnbind();')<pre.index('finishFrame()') and 'rainMrtUnbind();' in es and es.index('rainMrtUnbind();')<es.index('GuardedMirrorDevice::EndScene()')
+    and 'void finishFrame() {\n        Guard mirrorLock(mirrorState.gate);\n        rainMrtUnbind();' in r and 'finishDeviceFrame(owner);' in r)
+checks['rain mask MRT: renderEffects unbinds before its first device work; drawHook unbinds for every draw that is not a rain draw, before any capture or effect work']=(
+    'rainMrtUnbind(); /* 0.3.201 (rain mask MRT) */\n        ExtensionDevice::RawScope rawEffects(*ext);' in r and 'if(rainMrtBound&&!rainBlend)rainMrtUnbind();' in hook and hook.index('if(rainMrtBound&&!rainBlend)rainMrtUnbind();')<hook.index('if(!frameDrawGates){')<hook.index('prepareDraw(capture,count)'))
+checks['rain mask MRT: SetRenderTarget and SetDepthStencilSurface stay pure unwrap + forward (they are on the generator DIRECT list: the replay calls ext->, never the Device method); the next draw/Clear/StretchRect unbinds']=(
+    'HRESULT STDMETHODCALLTYPE SetRenderTarget(DWORD RenderTargetIndex, IDirect3DSurface9* pRenderTarget) override{Guard mirrorLock(mirrorState.gate);return ext->SetRenderTarget(RenderTargetIndex, mirrorResources.unwrap(pRenderTarget));}' in r
+    and 'HRESULT STDMETHODCALLTYPE SetDepthStencilSurface(IDirect3DSurface9* pNewZStencil) override{Guard mirrorLock(mirrorState.gate);return ext->SetDepthStencilSurface(mirrorResources.unwrap(pNewZStencil));}' in r)
+pdi_=r[r.index('template<class Capture> void prepareDrawImpl('):r.index('    // Terrain draws run with the game')]
+checks['rain mask: no scrub left in prepareDrawImpl or the hook']=('rainScrubDraw' not in pdi_ and 'rainScrubDraw' not in hook)
+checks['rain mask: WEATHER line carries the counters; world binds RainMask on s13 for the composite only']=('rainMask=%u rainMrtRuns=%u rainMaskSkips=%u' in r and 'rainMaskScrub' not in r and 'd->SetTexture(13,rainMask?rainMask:neutralZero);rainMask=nullptr;' in w and 'composited=true;d->SetTexture(13,regionalFogTexture);' in w and 'void setRainMask(IDirect3DTexture9* t){rainMask=t;}' in w)
 for k,ok in checks.items():print(('PASS ' if ok else 'FAIL ')+k)
 sys.exit(0 if all(checks.values()) else 1)
 
