@@ -108,8 +108,8 @@ float4 AOImpl(float2 uv, bool colorBounce)
     // Rotate the fixed kernel per pixel (interleaved gradient noise, stable
     // between frames). An unrotated kernel copies every compact occluder
     // (hands, shoulders) onto the ground at each tap offset as faint ghost
-    // shadows; rotation turns those copies into fine noise the composite's
-    // depth/normal filter averages away.
+    // shadows; rotation turns those copies into fine noise AOBlur
+    // (depth/normal filter) averages away.
     // 0.3.198 (stripes): IGN is built for integer pixel steps, and this pass is half resolution: uv*size is
     // the snapped FULL-res texel (2i+1.5, a step of 2 per AO texel), which advanced the phase by only .11 (x)
     // and .02 (hash y) per texel along a row but by the golden ratio .62 per row: the rotation, and so the
@@ -194,6 +194,44 @@ float3 NeighbourNormal(float2 uv, float3 p)
     float3 right = Position(rightUV, ReadDepth(rightUV));
     float3 down = Position(downUV, ReadDepth(downUV));
     return SafeNormal(cross(right - p, down - p));
+}
+
+// 0.3.201 (task 18): the IGN-rotated 8-tap AO left a regular dark diamond/fishnet lattice in occluded
+// creases (character skin) because nothing filtered it: WorldComposite only bilinear-upsampled it. This
+// half-resolution pass averages a symmetric 5x5 AO-texel neighbourhood (.5,1,1,1,.5 per axis, covering
+// IGN's period) on the centre's plane and normal, so silhouettes stay sharp. Same bindings as the AO pass
+// (s2 = the RAW AO texture, POINT); bloom rgb passes through untouched, sky and water return the raw texel.
+float4 AOBlur(float2 uv : TEXCOORD0) : COLOR0
+{
+    float2 size = 1.0 / ImageAndClip.xy;
+    float2 cuv = DepthTexelUV(uv, size);
+    float d = ReadDepth(cuv);
+    float4 raw = tex2Dlod(Ambient, float4(uv, 0, 0));
+    if (d >= SKY_DEPTH || IsWater(cuv, d)) return raw;
+    float3 p = Position(cuv, d);
+    float3 n = SurfaceNormal(cuv, p);
+    float depthTolerance = max(0.025, min(Options.y * 0.1, p.z * 0.002));
+    float sumAO = 0.0;
+    float sumWeight = 0.0;
+    [loop] for (int i = 0; i < 25; ++i)
+    {
+        float row = floor((i + 0.5) * 0.2);
+        float2 o = float2(i - row * 5.0 - 2.0, row - 2.0);
+        float2 tapUV = uv + o * (2.0 * ImageAndClip.xy);
+        float2 quv = DepthTexelUV(tapUV, size);
+        float qd = ReadDepth(quv);
+        float3 q = Position(quv, qd);
+        float2 a = abs(o);
+        float weight = (a.x > 1.5 ? 0.5 : 1.0) * (a.y > 1.5 ? 0.5 : 1.0);
+        weight *= exp2(-abs(dot(q - p, n)) / depthTolerance * 2.0);
+        float normalAgreement = saturate(dot(n, NeighbourNormal(quv, q)));
+        weight *= normalAgreement * normalAgreement;
+        // Sky and water taps carry no usable AO.
+        weight *= qd < SKY_DEPTH && !IsWater(quv, qd) ? 1.0 : 0.0;
+        sumAO += tex2Dlod(Ambient, float4(tapUV, 0, 0)).a * weight;
+        sumWeight += weight;
+    }
+    return float4(raw.rgb, sumWeight > 1e-5 ? sumAO / sumWeight : raw.a);
 }
 
 float4 Composite(float2 uv : TEXCOORD0) : COLOR0
