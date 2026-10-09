@@ -30,7 +30,7 @@ m=re.search(r'if\(!debugViews\|\|PassInfo\.z<\.5\)\{(.*?)\n    \}\n    if\(debug
 body=m.group(1) if m else ''
 checks['source: WorldComposite reads the mask once, with tex2D at the top before any flow control (0.3.203; the rain term is its red)']=(bool(m) and comp.count('RainMask')==1 and comp.count('float4 mask=tex2D(RainMask,uv);')==1 and comp.index('float4 mask=tex2D(RainMask,uv);')<comp.index('[loop]'))
 checks['source: no rain lerp any more: rain streaks are alpha-over layers of the transmittance composite (green = 1-T, blue = touched); the red channel is unused (0.3.203)']=(
-    'unfogged' not in comp and 'mask.x' not in comp and 'float3 fogged=mad(lerp(color,hz.rgb,h),fog.a,fog.rgb);' in body and 'float T=1-mask.y;' in body)
+    'unfogged' not in comp and 'mask.x' not in comp and 'float3 fogged=mad(color,transF,airlight);' in body and 'float T=1-mask.y;' in body)
 # manifest
 wc=manifest['WorldComposite']
 checks['manifest: WorldComposite samples s13, <= 512 slots, <= 32 temporaries']=(13 in wc['samplers'] and wc['static_instruction_slots']<=512 and wc['temporary_registers']<=32)

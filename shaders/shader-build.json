@@ -1,6 +1,6 @@
 {
   "source_sha256": "3c4ebf55f84663efe1aa13c7010171ffa70ae611dac561be800bb8fd77ba64e9",
-  "rain_source_sha256": "b7623dc7424165109a577d5128cbb4ac82b17cc12b923007edbc572a7d21abb7",
+  "rain_source_sha256": "4045a0b33aa6f87cb3d66023f49697ad8c4cedb28fc12d103587e9b6bb422c1f",
   "target": "ps_3_0",
   "shaders": {
     "AO": {
@@ -182,8 +182,21 @@
       }
     },
     "ParticleAddA1": {
+      "bytes": 404,
+      "sha256": "e25f802ca3d46f08195345feb0a77e6646ad71cbbffe292c7c4277717a5d5b3c",
+      "target": "ps_2_0",
+      "static_instruction_slots": 17,
+      "temporary_registers": 3,
+      "instructions": {
+        "texld": 1,
+        "mul": 2,
+        "mov": 12,
+        "max": 2
+      }
+    },
+    "ParticleAddA2": {
       "bytes": 420,
-      "sha256": "672f761c803face8a32819f4d65ca3ba81ca0dad2f57478940a5fbd96fe1c878",
+      "sha256": "686fbb020c25ab2762b2f57fa8b02a63856f5704c6b877bf1d439db722e4abcc",
       "target": "ps_2_0",
       "static_instruction_slots": 18,
       "temporary_registers": 3,
@@ -194,41 +207,28 @@
         "max": 2
       }
     },
-    "ParticleAddA2": {
-      "bytes": 460,
-      "sha256": "36667bd972c7a1b57b571685b40b0f01a8c703fc154aa5829e2d2b6169384cf6",
+    "ParticleAddC1": {
+      "bytes": 304,
+      "sha256": "aa182923bc0efa6bcf93cb943b6da16d878d31aa5ac135135c371ee79da802d7",
       "target": "ps_2_0",
-      "static_instruction_slots": 19,
-      "temporary_registers": 3,
+      "static_instruction_slots": 11,
+      "temporary_registers": 2,
       "instructions": {
         "texld": 1,
-        "mul": 4,
-        "mov": 12,
+        "mul": 1,
+        "mov": 7,
         "max": 2
       }
     },
-    "ParticleAddC1": {
+    "ParticleAddC2": {
       "bytes": 344,
-      "sha256": "a042d3f90e4ed3d71cd5f1bd7307cc45094497711c108670430f3ed9b614c214",
+      "sha256": "4e7527b2861304d9c83a3ee07e57f9fb588eaf311b12412b6338eed8270081aa",
       "target": "ps_2_0",
       "static_instruction_slots": 12,
       "temporary_registers": 2,
       "instructions": {
         "texld": 1,
         "mul": 2,
-        "mov": 7,
-        "max": 2
-      }
-    },
-    "ParticleAddC2": {
-      "bytes": 360,
-      "sha256": "dae0458c510ab53d4c5dda3f336ddc1e46dbcc0f449e12e4ba7bcde2fc45d5f0",
-      "target": "ps_2_0",
-      "static_instruction_slots": 13,
-      "temporary_registers": 2,
-      "instructions": {
-        "texld": 1,
-        "mul": 3,
         "mov": 7,
         "max": 2
       }

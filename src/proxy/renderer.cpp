@@ -1203,9 +1203,9 @@ private:
         static const D3DRENDERSTATETYPE types[1]={D3DRS_COLORWRITEENABLE1};
         const bool over=patchedPs?patchKind==0:variant<2;
         const bool mod2x=!patchedPs&&particle&&variant>=6;
-        /* green = 1-T (also the touch mark of over layers: rain streaks, fixed-function over particles, patched over shaders without a fog factor); red + blue = the weighted game fog factor and its weight, written by the
-           fog-aware over shader (with green) and by every additive variant (a small weight for the fog-less ones: they mark the pixel without diluting the mean); mod2x halos: alpha only (the factor) */
-        const DWORD want[1]={DWORD(mod2x?D3DCOLORWRITEENABLE_ALPHA:(!particle||over)?(patchedPs&&patchedFogged?D3DCOLORWRITEENABLE_RED|D3DCOLORWRITEENABLE_GREEN|D3DCOLORWRITEENABLE_BLUE:D3DCOLORWRITEENABLE_GREEN):D3DCOLORWRITEENABLE_RED|D3DCOLORWRITEENABLE_BLUE)};
+        /* green = 1-T (also the touch mark of over layers: rain streaks, fixed-function over particles, patched over shaders without a fog factor); blue = the touch mark and weight of additive layers; red + blue = (1-f) x weight and the weight
+           of the fog-aware layers (the fog-aware over shader also writes green, the fog-aware additive ones at 1/4 weight); fog-less additive layers write blue only, as before the fog; mod2x halos: alpha only (the factor) */
+        const DWORD want[1]={DWORD(mod2x?D3DCOLORWRITEENABLE_ALPHA:(!particle||over)?(patchedPs&&patchedFogged?D3DCOLORWRITEENABLE_RED|D3DCOLORWRITEENABLE_GREEN|D3DCOLORWRITEENABLE_BLUE:D3DCOLORWRITEENABLE_GREEN):patchedPs&&patchedFogged?D3DCOLORWRITEENABLE_RED|D3DCOLORWRITEENABLE_BLUE:D3DCOLORWRITEENABLE_BLUE)};
         particleFoggedNow=patchedPs&&patchedFogged;
         for(int i=0;i<1;++i){rainMrtPrevKnown[i]=SUCCEEDED(ext->GetRenderState(types[i],&rainMrtPrev[i]));ext->SetRenderState(types[i],want[i]);}
         if(patchedPs){particleGamePs=gamePs;gamePs->AddRef();} /* the draw replaces the binding; the game's shader must outlive it */

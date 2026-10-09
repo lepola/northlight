@@ -348,7 +348,7 @@ def main():
     helper = block(shader, 'float4 horizonHaze(')
     # 0.3.203 (particle fog): the haze split in the ramp (hazeRange / hazeRamp, per distance) and the angular amount (horizonHaze, per ray), so a particle in front of the
     # surface is hazed at its own distance; the haze, then the fog mad, then the transmittance composite.
-    assert composite_src.index('float4 hz=horizonHaze(centerUV,range);') < composite_src.index('float3 fogged=mad(lerp(color,hz.rgb,h),fog.a,fog.rgb);')
+    assert composite_src.index('float4 hz=horizonHaze(centerUV,range);') < composite_src.index('float3 fogged=mad(color,transF,airlight);')
     assert 'float range=hazeRange(viewZ,d>=.99999&&liquid<=0);' in composite_src and 'float h=hazeRamp(range)*hz.a;' in composite_src
     assert '[branch]if(range>0&&HorizonHaze.w>0){' in helper
     assert helper.index('[branch]') < helper.index('viewPositionDistance') and 'tex2D' not in helper and 'loop' not in helper

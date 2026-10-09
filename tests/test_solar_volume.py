@@ -162,7 +162,7 @@ def main():
     # 0.3.202 (rain mask): the lerp back to the unfogged colour on rain-mask pixels wraps haze + fog mad.
     # 0.3.203 (particle fog): the same gate (PassInfo.z) now selects the debug ENTRY: WorldComposite compiles without the F12 views, WorldCompositeDebug with them; the tail is the
     # transmittance composite (test_particle_fog / test_particle_mask pin its text).
-    assert 'if(!debugViews||PassInfo.z<.5){' in shader and 'float3 fogged=mad(lerp(color,hz.rgb,h),fog.a,fog.rgb);' in shader
+    assert 'if(!debugViews||PassInfo.z<.5){' in shader and 'float3 fogged=mad(color,transF,airlight);' in shader
     assert 'mad(legacyT,fog.rgb,fogPart)' not in shader
     # 0.3.163: fog-pass-only overrides. The sun's forward soft cap .38 -> .95 (moon .24 kept),
     # the sun's c17 takes the glow hue, c18.rgb is cooled (w kept) for the fog loop only and

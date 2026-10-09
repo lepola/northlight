@@ -1045,24 +1045,29 @@ float4 compositeImpl(float2 uv,bool debugViews) {
         float range=hazeRange(viewZ,d>=.99999&&liquid<=0);
         float4 hz=horizonHaze(centerUV,range);
         float h=hazeRamp(range)*hz.a;
-        float3 fogged=mad(lerp(color,hz.rgb,h),fog.a,fog.rgb); // F(bg)
+        // F(bg) = lerp(color, haze, h) x fog.a + fog.rgb = color x transF + airlight: transF is the transmittance of fog and haze to the surface behind, airlight what they add on the way
+        float ha=h*fog.a;
+        float transF=fog.a-ha;
+        float3 airlight=mad(hz.rgb,ha,fog.rgb);
+        float3 fogged=mad(color,transF,airlight);
         if(debugViews)color=mad(1-mask.y,fogged-B,pixel); // the debug entry keeps the plain transmittance composite: no fog at the particles' own distance (the instruction budget)
         else{
-        // The particles' own light E = pixel - T x B was fogged by the game at ITS distance (legacy fog, in the pixel already) and gets Northlight's fog and haze at that same distance: the mask's red over blue is the
-        // weighted mean of the game's fog factor f the fog-aware particle shaders received (1 where there is no such layer: no extra fog, the old result; rain streaks and fog-less layers add no weight). f = min(z x X + Y, 1) inverts to the distance z = (f - Y) / X; the host
-        // uploads 1/X (signed projection included) in LegacyFogColor.w, and 0 without a usable linear legacy fog (exponent 1). f = 1 is no distance (the sentinel of layers without a fog factor, and
-        // a particle inside a fog that starts away from the camera, Y > 1): s = 0, near particles stay as they were. s = z/viewZ, clamped (f = 0 beyond the fog end). A weight below 2/255 (an additive core of
-        // about w < 1/32, scaled by 1/4) has too little light to matter and counts as no distance.
-        float fm=mask.b<.0078?1:mask.r*rcp(mask.b);
-        float s=saturate((fm<.998?fm-LegacyFog.y:0)*LegacyFogColor.w*rcp(viewZ));
+        // The particles' own light E = pixel - T x B was fogged by the game at ITS distance (legacy fog, in the pixel already) and gets Northlight's fog and haze at that same distance. The fog-aware particle
+        // shaders write (1-f) x weight to the mask's red and the weight to blue (f = the game's fog factor), so red / blue is the weighted mean of 1-f and 0 means "no distance": rain streaks, fog-less layers
+        // and anything else write no red. f = min(z x X + Y, 1) inverts to the distance z = (f - Y) / X = (1 - Y - mean) x (1/X) (the host uploads 1/X, signed projection included, in LegacyFogColor.w; 0 without a
+        // usable linear legacy fog, exponent 1). s = z/viewZ, clamped (f = 0 beyond the fog end). The effect fades in with the red mass, from 1/255 to about 8/255: faint fringes and the f = 1 / Y > 1
+        // "inside the fog start" cases (red 0) keep today's look smoothly.
+        float mean1=mask.r*rcp(max(mask.b,.004));
+        float s=saturate((1-LegacyFog.y-mean1)*LegacyFogColor.w*rcp(viewZ))*saturate(mad(mask.r,37,-.15));
         float rp=saturate((viewZ*s-HorizonShape.y)*HorizonShape.z);
-        float transF=(1-h)*fog.a;                                       // fog and haze from the camera to the surface behind
         float transP=(1-hazeRamp(rp)*hz.a)*exp2(s*log2(max(fog.a,.0001))); // ... to the particle: 1 for s = 0
-        // out = T x F(bg) + transP x E: the surface's light under the particles as before, E at its own distance; plus the airlight in front of the particle where it covers the surface
-        // (g = 1-T): the surface's own in-scatter scaled by (1-transP)/(1-transF).
+        // Green (1-T of every over layer) not explained by blue (the fog-aware coverage and the additive weights) is rain / fog-less coverage: its light is near the camera and must not be dimmed with the
+        // particles'. Its share of E is estimated as half its coverage (a streak is a white-ish layer of that alpha; E is capped by it): out = T x F(bg) + transP x E + (1 - transP) x min(E, rain share),
+        // plus the airlight in front of the fog-aware coverage (the surface's own in-scatter scaled by (1-transP)/(1-transF)).
+        float covered=min(mask.y,mask.b);
         float T=1-mask.y;
-        float3 airlight=fogged-transF*color;
-        color=mad(T,fogged,transP*(pixel-T*B))+mask.y*((1-transP)*rcp(1.001-transF))*airlight; // no particle: mask is 0, B is the pixel, E is 0 and transP is 1
+        float3 emission=pixel-T*B;
+        color=mad(T,fogged,lerp(min(emission,.5*(mask.y-covered)),emission,transP))+covered*((1-transP)*rcp(1.001-transF))*airlight; // no particle: mask is 0, B is the pixel, E is 0 and transP is 1
         }
     }
     if(debugViews&&PassInfo.z==3)color=fog.rgb;
