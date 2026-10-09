@@ -315,7 +315,7 @@ class Device final : public GuardedMirrorDevice {
     IDirect3DTexture9* rainMask=nullptr;IDirect3DSurface9* rainMaskSurface=nullptr;bool rainMaskFailed=false;IDirect3DSurface9* rainMaskMS=nullptr;D3DMULTISAMPLE_TYPE rainMaskMsType=D3DMULTISAMPLE_NONE;DWORD rainMaskMsQuality=0;D3DMULTISAMPLE_TYPE rainMaskWantType=D3DMULTISAMPLE_NONE;DWORD rainMaskWantQuality=0;bool rainMaskResolveLogged=false;HRESULT rainMaskResolveHr=S_OK;
     bool rainMaskCleared=false,rainMaskDrawn=false,rainMaskFrame=false,rainMaskOk=false;unsigned rainMaskDraws=0;bool rainMaskMismatchLogged=false; /* rainMaskCleared: this frame's mask start (depth snapshot + clear) ran */
     IDirect3DTexture9* rainDepth=nullptr;IDirect3DPixelShader9 *rainMrtPS=nullptr,*rainScrubPS=nullptr;bool rainMrtBound=false,rainDepthOk=false,rainCapsChecked=false,rainCapsOk=false,rainSkipLogged=false;unsigned rainMrtRuns=0,rainMaskSkips=0;DWORD rainMrtPrev[1]={};bool rainMrtPrevKnown[1]={};
-    /* 0.3.201 (task 17): fallback effect boundary when the UI shaders are replaced by another module (font mods); learned from draw state, see uiFallbackDraw. */
+    /* 0.3.203 (task 17): fallback effect boundary when the UI shaders are replaced by another module (font mods); learned from draw state, see uiFallbackDraw. */
     NorthlightUiBoundary::Arming uiFallback;bool hashBoundaryThisFrame=false,fallbackBoundaryThisFrame=false,stockPairNoWorld=false,uiFallbackNoCandidateLogged=false;unsigned uiFallbackBoundaries=0;
     IDirect3DVertexShader9* triageVs=nullptr;IDirect3DPixelShader9* triagePs=nullptr;DWORD triageZw=0;float triageC3[4]={};unsigned triageDraws=0; /* most recent post-terrain draw rejected by zwrite or the c3/rows test while learning (identities only, never dereferenced) */
     bool failed = false, projectionValid = false, key10 = false, key12=false;
@@ -1150,7 +1150,7 @@ private:
             if(gateFrame)++gateCounts.fullPasses;
         } else if (tag==2) {
             ++uiDraws;
-            if(!terrain){if(!uiFallback.disarmed()&&!stockPairNoWorld&&stockUiPair())stockPairNoWorld=true;return;} /* 0.3.201 (task 17): the stock UI pair in a frame without any world (login, glue, loading screen) disarms the fallback at the frame's end; font mods swap the pair at creation */
+            if(!terrain){if(!uiFallback.disarmed()&&!stockPairNoWorld&&stockUiPair())stockPairNoWorld=true;return;} /* 0.3.203 (task 17): the stock UI pair in a frame without any world (login, glue, loading screen) disarms the fallback at the frame's end; font mods swap the pair at creation */
             ++uiAfterTerrain;
             IDirect3DPixelShader9* ps=nullptr;
             const bool borrowed=ext->peekPixelShader(ps); // identity lookup only
@@ -1167,7 +1167,7 @@ private:
         }
         uiFallbackDraw(vc,vs);
     }
-    // 0.3.201 (task 17): fallback boundary for font mods that replace the UI VS and PS (or only the PS): the first screen-space draw after the world with
+    // 0.3.203 (task 17): fallback boundary for font mods that replace the UI VS and PS (or only the PS): the first screen-space draw after the world with
     // ZWRITE off, full-target viewport and ortho rows, by a (VS,PS) pair learned over 120 frames without a hash boundary. WoW draws UI with ZENABLE on, so z is not tested.
     // On stock the whole step is one bool test per draw: collecting() needs two world frames in a row without the hash boundary, and the first one disarms it for good.
     void uiFallbackDraw(const VsClass& vc,IDirect3DVertexShader9* vs){
@@ -1193,7 +1193,7 @@ private:
             logf("EFFECT boundary frame=%u draw=%u kind=ui-fallback z=%lu zwrite=%lu blend=%lu",frame,drawCalls,(unsigned long)z,(unsigned long)zw,(unsigned long)blend);}
         renderEffects();
     }
-    // 0.3.201 (task 17): the hash test of the boundary (UI-tagged PS bound, c3=(0,0,0,1)), for the UI draws before the world; read only until the fallback is disarmed.
+    // 0.3.203 (task 17): the hash test of the boundary (UI-tagged PS bound, c3=(0,0,0,1)), for the UI draws before the world; read only until the fallback is disarmed.
     bool stockUiPair(){
         IDirect3DPixelShader9* ps=nullptr;
         const bool borrowed=ext->peekPixelShader(ps); // identity lookup only
@@ -1207,7 +1207,7 @@ private:
         const bool was=uiFallback.armed();uiFallback.forget(reinterpret_cast<std::uintptr_t>(obj));
         if(was&&!uiFallback.armed())NorthlightStream::learnedUiVsHash.store(0,std::memory_order_relaxed);
     }
-    // 0.3.201 (task 17): per-frame fallback bookkeeping, before clearFrame() resets terrain/applied.
+    // 0.3.203 (task 17): per-frame fallback bookkeeping, before clearFrame() resets terrain/applied.
     void uiFallbackEndFrame(){
         using K=NorthlightUiBoundary::Arming::FrameKind;
         if(stockPairNoWorld&&!terrain)uiFallbackDisarm(); /* a world frame's pre-terrain UI draws (portrait, minimap compositing) never disarm */

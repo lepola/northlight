@@ -26,7 +26,7 @@ inline const void* inner(const void* p){return innerOf&&p?innerOf(p):p;}
 // before WorldRenderer / StaticShadowGpu are constructed (their core budgets read it once). A plain atomic with
 // relaxed loads: written once on the game thread during Factory::CreateDevice, never cleared.
 inline std::atomic<bool> streamActive{false};
-/* 0.3.201 (task 17): FNV-1a hash of the vertex shader the UI boundary fallback learned (a font mod replaces the stock UI shaders), 0 = none.
+/* 0.3.203 (task 17): FNV-1a hash of the vertex shader the UI boundary fallback learned (a font mod replaces the stock UI shaders), 0 = none.
    Written by the renderer (replay thread, or the game thread in direct mode) when the fallback arms; read relaxed by StreamDevice::onDraw
    on the game thread, which then treats that VS as kUi for the snapshot trigger. */
 inline std::atomic<std::uint64_t> learnedUiVsHash{0};

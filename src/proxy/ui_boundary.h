@@ -1,5 +1,5 @@
 #pragma once
-// 0.3.201 (task 17): fallback effect boundary for clients whose UI shaders were replaced by another module (font mods). Pure logic, no D3D/Windows.
+// 0.3.203 (task 17): fallback effect boundary for clients whose UI shaders were replaced by another module (font mods). Pure logic, no D3D/Windows.
 // The stock boundary is found by shader hash; when it never fires although the world draws, this learns the (VS,PS) pair that draws the screen-space
 // UI after the world (ZWRITE off, full-target viewport, ortho rows with c3=(0,0,0,1)) and uses it as the boundary. Identities are shader object pointers.
 #include <cstddef>

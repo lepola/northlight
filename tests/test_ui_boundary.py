@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # northlight-test: requires=cxx
-"""0.3.201 (task 17) fallback effect boundary: native test of ui_boundary.h (clang++, plain and ASan/UBSan) and a wiring audit of renderer.cpp:
+"""0.3.203 (task 17) fallback effect boundary: native test of ui_boundary.h (clang++, plain and ASan/UBSan) and a wiring audit of renderer.cpp:
 the hash boundary sets its flag before renderEffects(), the fallback is guarded by the sticky disarm, reads the cheap state first and the viewport last,
 and the Armed path publishes the learned VS hash to the stream. No game or GPU."""
 import sys; from pathlib import Path; sys.path.insert(0, str(Path(__file__).resolve().parents[1]))  # repo root
