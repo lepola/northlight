@@ -8,6 +8,14 @@ game's) plus the mask write to oC1 for one blend kind (the values rain_mask.hlsl
   kind 0  alpha over         oC1 = (1,1,1,sat(a))                 needs a free constant (def) for the 1s
   kind 1  additive by alpha  oC1 = (1,1,1,sat(a)*sat(max(rgb)))   a free constant and a second free temporary
   kind 2  additive by colour oC1 = sat(max(rgb)).xxxx             a second free temporary
+  kind 3  additive by colour for SRCCOLOR/ONE: kind 2 without the fog write below
+A ps_3_0 that receives the game's fog factor (dcl_fog0 vN.c, D3DDECLUSAGE_FOG index 0) also writes it to oC1.x (0.3.203, particle fog): the mask's RED then follows the same
+recurrence as BLUE with f as the value, so red/blue is the weighted mean of f (the composite turns f into the particle's distance). sat(f) is written as:
+  kind 0  oC1 = (f,1,1,sat(a))        over: R' = a*f + (1-a)*R against B' = a + (1-a)*B
+  kind 1  oC1 = (f,1,1,w)             SRCALPHA/ONE, w = sat(a)*sat(max rgb): R' = R + w*f against B' = B + w
+  kind 2  oC1 = (m*f,m,m,m)           ONE/ONE, m = sat(max rgb): R' = R + m*f against B' = B + m
+Shaders without the input (and every fixed-function / rain variant, which write 1 / m to oC1.x) leave red equal to blue: f = 1, no extra fog. SRCCOLOR/ONE (kind 3) squares
+the written value in blue, so it would square f in red: it writes no f.
 Everything it cannot prove safe is a ValueError whose text is the reason (REASONS, the C++
 port's names): the water patch's set, with if/ifc/else/endif accepted as long as oC0 is written
 outside them. Pure: no MPQ, client, device.
@@ -38,16 +46,19 @@ def parse(code):
     raise ValueError('missing END')
 def patch(code,kind):
     """Returns (patched bytes, info). kind: 0 alpha over, 1 additive by alpha, 2 additive by colour."""
-    if kind not in (0,1,2):raise ValueError('unknown kind')
+    if kind not in (0,1,2,3):raise ValueError('unknown kind')
     w,ops,end=parse(code);major=(w[0]>>8)&255
-    used={};params=[];depth=0;mask=0;firstOp=None;relativeConst=False
+    used={};params=[];depth=0;mask=0;firstOp=None;relativeConst=False;fog=None
     for p,op,a in ops:
         if op==65534:continue
         if w[p]&0xf0000000:raise ValueError('predicated/coissued')
         if firstOp is None:firstOp=p
         if op==31:
             if len(a)!=2:raise ValueError('bad DCL')
-            k,i=register(a[1]);used.setdefault(k,set()).add(i);continue
+            k,i=register(a[1]);used.setdefault(k,set()).add(i)
+            fmask=(a[1]>>16)&15
+            if major==3 and (a[0]&31)==11 and ((a[0]>>16)&15)==0 and k==1 and fmask and kind<3 and fog is None:fog=(i,(fmask&-fmask).bit_length()-1)
+            continue
         if op==81:
             if len(a)!=5:raise ValueError('bad DEF')
             k,i=register(a[0]);used.setdefault(k,set()).add(i);continue
@@ -99,14 +110,18 @@ def patch(code,kind):
     T=lambda sw:src(0,spare,sw)
     S2=lambda sw:src(0,spare2,sw)
     suffix=[0x02000001,dst(8,0),src(0,spare)]
-    if kind<2:suffix+=[0x02000001,dst(8,1,7),src(2,const)]
+    F=src(1,fog[0],fog[1]*0x55) if fog else None
+    if kind<2:
+        if fog:suffix+=[0x02000001,dst(8,1,1)|SAT,F,0x02000001,dst(8,1,6),src(2,const)]
+        else:suffix+=[0x02000001,dst(8,1,7),src(2,const)]
     if kind==0:suffix+=[0x02000001,dst(8,1,8)|SAT,T(0xff)]
     else:
         # s2.x = sat(max(r,g,b)) of the game's colour
         suffix+=[0x0300000b,dst(0,spare2,1)|SAT,T(0x00),T(0x55),0x0300000b,dst(0,spare2,1)|SAT,S2(0x00),T(0xaa)]
         if kind==1:suffix+=[0x02000001,dst(0,spare2,2)|SAT,T(0xff),0x03000005,dst(8,1,8),S2(0x00),S2(0x55)]
+        elif fog:suffix+=[0x02000001,dst(0,spare2,2)|SAT,F,0x03000005,dst(8,1,1),S2(0x00),S2(0x55),0x02000001,dst(8,1,14),S2(0x00)]
         else:suffix+=[0x02000001,dst(8,1),S2(0x00)]
     suffix.append(65535)
     w[end:end+1]=suffix
     if const is not None:w[firstOp:firstOp]=[0x05000051,dst(2,const),0x3f800000,0x3f800000,0x3f800000,0x3f800000]
-    return struct.pack('<%dI'%len(w),*w),{'model':major,'kind':kind,'temp':spare,'temp2':spare2,'const':const}
+    return struct.pack('<%dI'%len(w),*w),{'model':major,'kind':kind,'temp':spare,'temp2':spare2,'const':const,'fog':fog is not None}

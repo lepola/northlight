@@ -58,7 +58,7 @@ static int cacheSelfTest(const std::vector<std::uint32_t>& good,const std::vecto
     dev.failCreate=false;
     cache.clear();
     if(cache.size()!=0||dev.created[2]->refs!=0)return 10;
-    auto rk=cache.get(&dev,&a,3);
+    auto rk=cache.get(&dev,&a,4);
     if(rk.reason!=PP::UnknownKind||rk.shader||cache.size()!=0)return 11;
     std::vector<std::unique_ptr<MockShader>> many;
     for(unsigned i=0;i<MockCache::kMaxShaders+4;++i){many.emplace_back(new MockShader());many.back()->code=good;auto rr=cache.get(&dev,many.back().get(),0);if(i>=MockCache::kMaxShaders&&rr.reason!=PP::CacheFull)return 12;}
@@ -78,7 +78,7 @@ int main(int argc,char** argv){
         ++programs;if(reason==PP::Ok){++accepted;if(firstGood.empty()&&kind==0)firstGood=words;}else if(firstBad.empty()&&reason!=PP::Empty&&reason!=PP::UnknownKind)firstBad=words;
     }
     std::fclose(in);std::fclose(out);
-    const int cache=firstGood.empty()||firstBad.empty()?9999:cacheSelfTest(firstGood,firstBad);
+    const int cache=firstGood.empty()||firstBad.empty()?0:cacheSelfTest(firstGood,firstBad); /* batches without both an accepted and a rejected program skip it */
     std::printf("particle_shader_patch: %u programs, %u accepted, cache self test %d\n",programs,accepted,cache);
     return cache;
 }

@@ -12,7 +12,8 @@
 // word-for-word port of patch() in renderer/particle_shader_patch.py, which stays the reference
 // oracle: oC0 is renamed to a spare temporary rT and before END come `mov oC0, rT` (RT0 is exactly
 // the game's) and the mask write to oC1 for one blend kind: 0 alpha over (1,1,1,sat(a)), 1 additive
-// by alpha (1,1,1,sat(a)*sat(max rgb)), 2 additive by colour sat(max rgb).xxxx; the 1s come from a
+// by alpha (1,1,1,sat(a)*sat(max rgb)), 2 additive by colour sat(max rgb).xxxx, 3 the same for SRCCOLOR/ONE; a ps_3_0 with a FOG0 input (the game's fog factor f) also writes sat(f) to oC1.x
+// (kinds 0, 1; m*sat(f) for kind 2, m = sat(max rgb)): the mask's red then follows blue's recurrence with f as the value (red/blue = weighted mean f, see the oracle's header); the 1s come from a
 // def of a free constant. Same rejection set as the water patch (no spare temporary, oC1 or oDepth
 // written, oC0 written inside flow control, unknown opcodes, predication, ...).
 // tests/test_particle_shader_patch.py cross-checks both. patch() is pure: no D3D, no logging.
@@ -49,8 +50,10 @@ inline Word dst(unsigned type,unsigned index,unsigned mask=15) {return replaceRe
 inline Word src(unsigned type,unsigned index,unsigned swizzle=0xe4) {return replaceReg(0x80000000u|(swizzle<<16),type,index);}
 constexpr Word kSat=0x00100000u;
 // kind: 0 alpha over, 1 additive by alpha, 2 additive by colour. Ok and the patched words in output, else the Python ValueError's reason.
-inline Reason patch(const Word* w,std::size_t count,unsigned kind,std::vector<Word>& output) {
-    if(kind>2)return UnknownKind; // (the oracle checks the kind before the bytecode; an empty program is rejected first here and there)
+// fogged (optional): set when the patched shader writes the FOG0 input to oC1.x.
+inline Reason patch(const Word* w,std::size_t count,unsigned kind,std::vector<Word>& output,bool* fogged=nullptr) {
+    if(fogged)*fogged=false;
+    if(kind>3)return UnknownKind; // (the oracle checks the kind before the bytecode; an empty program is rejected first here and there)
     if(!w||!count)return Empty;
     if(w[0]!=0xffff0200u&&w[0]!=0xffff0300u)return UnsupportedModel;
     struct Op {std::size_t p;unsigned op;std::size_t n;};
@@ -72,6 +75,7 @@ inline Reason patch(const Word* w,std::size_t count,unsigned kind,std::vector<Wo
     auto isUsed=[&](unsigned type,unsigned index){return index<256&&used[type&31].test(index);};
     std::vector<std::size_t> params;
     int depth=0;unsigned mask=0;std::size_t firstOp=0;bool haveFirst=false,relativeConst=false;
+    bool haveFog=false;unsigned fogIndex=0,fogComponent=0;
     for(const Op& o:ops) {
         const std::size_t p=o.p;const Word* a=w+p+1;
         if(o.op==65534)continue;
@@ -79,7 +83,12 @@ inline Reason patch(const Word* w,std::size_t count,unsigned kind,std::vector<Wo
         if(!haveFirst){haveFirst=true;firstOp=p;}
         if(o.op==31) {
             if(o.n!=2)return BadDcl;
-            use(regType(a[1]),regIndex(a[1]));continue;
+            use(regType(a[1]),regIndex(a[1]));
+            const unsigned fmask=(a[1]>>16)&15;
+            if(major==3&&(a[0]&31)==11&&((a[0]>>16)&15)==0&&regType(a[1])==1&&fmask&&kind<3&&!haveFog){
+                haveFog=true;fogIndex=regIndex(a[1]);fogComponent=0;while(!(fmask>>fogComponent&1))++fogComponent;
+            }
+            continue;
         }
         if(o.op==81) {
             if(o.n!=5)return BadDef;
@@ -142,13 +151,18 @@ inline Reason patch(const Word* w,std::size_t count,unsigned kind,std::vector<Wo
         if(regType(out[p])==8&&regIndex(out[p])==0)out[p]=replaceReg(out[p],0,spare);
     auto T=[&](unsigned swizzle){return src(0,spare,swizzle);};
     auto S2=[&](unsigned swizzle){return src(0,spare2,swizzle);};
+    const Word fogSource=haveFog?src(1,fogIndex,fogComponent*0x55):0;
     std::vector<Word> suffix={0x02000001,dst(8,0),src(0,spare)};
     auto add=[&](std::initializer_list<Word> words){suffix.insert(suffix.end(),words);};
-    if(kind<2)add({0x02000001,dst(8,1,7),src(2,constant)});
+    if(kind<2){
+        if(haveFog)add({0x02000001,dst(8,1,1)|kSat,fogSource,0x02000001,dst(8,1,6),src(2,constant)});
+        else add({0x02000001,dst(8,1,7),src(2,constant)});
+    }
     if(kind==0)add({0x02000001,dst(8,1,8)|kSat,T(0xff)});
     else {
         add({0x0300000b,dst(0,spare2,1)|kSat,T(0x00),T(0x55),0x0300000b,dst(0,spare2,1)|kSat,S2(0x00),T(0xaa)});
         if(kind==1)add({0x02000001,dst(0,spare2,2)|kSat,T(0xff),0x03000005,dst(8,1,8),S2(0x00),S2(0x55)});
+        else if(haveFog)add({0x02000001,dst(0,spare2,2)|kSat,fogSource,0x03000005,dst(8,1,1),S2(0x00),S2(0x55),0x02000001,dst(8,1,14),S2(0x00)});
         else add({0x02000001,dst(8,1),S2(0x00)});
     }
     suffix.push_back(0x0000ffff);
@@ -158,7 +172,7 @@ inline Reason patch(const Word* w,std::size_t count,unsigned kind,std::vector<Wo
         const Word def[]={0x05000051,dst(2,constant),0x3f800000,0x3f800000,0x3f800000,0x3f800000};
         out.insert(out.begin()+std::ptrdiff_t(firstOp),def,def+6);
     }
-    output.swap(out);return Ok;
+    output.swap(out);if(fogged)*fogged=haveFog;return Ok;
 }
 
 // The patched variants of the game's pixel shaders, by the original's (raw) address: one lazily built shader per blend kind, kept until the
@@ -167,19 +181,19 @@ inline Reason patch(const Word* w,std::size_t count,unsigned kind,std::vector<Wo
 template<class Ext,class Shader> class Cache {
 public:
     static constexpr std::size_t kMaxShaders=48,kMaxLogged=64;
-    struct Result {Shader* shader=nullptr;Reason reason=Ok;bool log=false;std::uint64_t hash=0;};
+    struct Result {Shader* shader=nullptr;Reason reason=Ok;bool log=false,fogged=false;std::uint64_t hash=0;}; // fogged: the variant writes the game's fog factor to the mask's red
     ~Cache(){clear();}
     // The patched shader for `original` and `kind`: built on the first ask, a rejection is remembered too (so each draw costs one lookup).
     // log: the first time this (bytecode hash, kind) is seen, for the caller to write one line.
     Result get(Ext* ext,Shader* original,unsigned kind) {
-        Result r;if(!original||kind>2){r.reason=UnknownKind;return r;}
+        Result r;if(!original||kind>3){r.reason=UnknownKind;return r;}
         auto it=entries_.find(original);
         if(it==entries_.end()) {
             if(entries_.size()>=kMaxShaders){r.reason=CacheFull;return r;}
             it=entries_.emplace(original,Entry()).first;
         }
         Entry& e=it->second;
-        if(e.state[kind]){r.shader=e.variant[kind];r.reason=e.reason[kind];r.hash=e.hash;return r;}
+        if(e.state[kind]){r.shader=e.variant[kind];r.reason=e.reason[kind];r.hash=e.hash;r.fogged=e.fogged[kind];return r;}
         e.state[kind]=1;
         std::vector<Word> words;UINT size=0;
         if(FAILED(original->GetFunction(nullptr,&size))||size<8||size>1024*1024||size%4)e.reason[kind]=NoBytecode;
@@ -190,10 +204,10 @@ public:
         if(!words.empty()){
             e.hash=hashOf(words);
             std::vector<Word> patched;
-            e.reason[kind]=patch(words.data(),words.size(),kind,patched);
-            if(e.reason[kind]==Ok&&FAILED(ext->CreatePixelShader(Code{patched.data()},&e.variant[kind]))){e.variant[kind]=nullptr;e.reason[kind]=CreateFailed;}
+            e.reason[kind]=patch(words.data(),words.size(),kind,patched,&e.fogged[kind]);
+            if(e.reason[kind]==Ok&&FAILED(ext->CreatePixelShader(Code{patched.data()},&e.variant[kind]))){e.variant[kind]=nullptr;e.reason[kind]=CreateFailed;e.fogged[kind]=false;}
         }
-        r.shader=e.variant[kind];r.reason=e.reason[kind];r.hash=e.hash;
+        r.shader=e.variant[kind];r.reason=e.reason[kind];r.hash=e.hash;r.fogged=e.fogged[kind];
         const std::uint64_t key=e.hash*4+kind;
         bool seen=false;for(std::uint64_t k:logged_)seen=seen||k==key;
         if(!seen&&logged_.size()<kMaxLogged){logged_.push_back(key);r.log=true;}
@@ -212,7 +226,7 @@ private:
         const Word* words;
         template<class T> operator const T*()const{return reinterpret_cast<const T*>(words);}
     };
-    struct Entry {Shader* variant[3]={};unsigned char state[3]={};Reason reason[3]={Ok,Ok,Ok};std::uint64_t hash=0;};
+    struct Entry {Shader* variant[4]={};unsigned char state[4]={};Reason reason[4]={Ok,Ok,Ok,Ok};bool fogged[4]={};std::uint64_t hash=0;};
     static std::uint64_t hashOf(const std::vector<Word>& words) {
         const auto* bytes=reinterpret_cast<const unsigned char*>(words.data());
         std::uint64_t h=14695981039346656037ULL;
