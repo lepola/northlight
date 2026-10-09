@@ -216,7 +216,13 @@ to see which allocations of the old device survive.
    20 seconds on. Keep the camera still and the game in the foreground.
 4. Also test Alt+Tab and returning to the game. Note any flicker, missing
    shadows, crash or other difference from the Mac test.
-5. Close the game and save northlight-renderer.log before the next start.
+5. With a font mod that replaces the game's UI shaders (Lexara, TweakWoW2 with
+   HD Font on, the AwesomeWotLK MSDF fork) the effects start about 2 seconds
+   after entering the world, and the log shows the line
+   EFFECT boundary fallback active: UI shaders replaced by another module
+   If the effects never start, send the log: an
+   EFFECT boundary fallback: no candidate line tells what the mod draws.
+6. Close the game and save northlight-renderer.log before the next start.
    Also take a new wow_d3d9.log if one appears; check its timestamp so that
    you do not send an old log that came with the client. Report the GPU,
    the driver version, the resolution and the estimated number of players.

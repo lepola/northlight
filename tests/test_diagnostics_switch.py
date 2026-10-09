@@ -25,7 +25,7 @@ KEEP={
  'LOCK METER':'one-off startup line and ProcessVertices warning; the interval line runs only from the Diagnostics-gated block of WorldRenderer::endFrame (0.3.192)',
  'VIEWPORT GATE':'capped: first 8','WORLD skipped frame':'capped: first 8 (periodic tail gated)',
  'WORLD skip episode':'capped: first 32 runs of skipped world frames (tail gated; 0.3.169)','WORLD coverage hold':'capped: first 32 hold/retire episodes (tail gated; 0.3.169)',
- 'FIRST EFFECT FRAME':'one-off','GI probe blend texture unavailable':'one-off warning: the 0.3.197 blend texture failed to allocate (static once flag)','MIRROR mismatch':'error (the audit itself is functional and ungated)',
+ 'FIRST EFFECT FRAME':'one-off','EFFECT boundary fallback':'one-off/sticky-state: active, lost (relearning), disarmed (only after it collected) and no candidate (with its top candidates), 0.3.203 task 17','EFFECT boundary frame=%u draw=%u kind=ui-fallback':'sampled: sampled() frames only, like the kind=ui and kind=rain boundary lines','GI probe blend texture unavailable':'one-off warning: the 0.3.197 blend texture failed to allocate (static once flag)','MIRROR mismatch':'error (the audit itself is functional and ungated)',
  'WORLD non-caster draw rejected':'capped: first 4 (periodic tail gated)','Projection rejected':'capped: first',
  'D3D9 device wrapped':'start-up','MEMORY async sampler':'error','MEMORY guard':'warning: low address space (pressure/trim/after-trim/recovery, cooldown-limited)',
  'LOG previous session':'start-up: previous log rotation result','DEVICE lifetime':'one-off: device create/destroy',

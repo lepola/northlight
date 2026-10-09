@@ -999,7 +999,7 @@ inline std::size_t shaderTokens(const DWORD* code){
     return 0;
 }
 struct StreamVertexShader final:IDirect3DVertexShader9,ProxyBase {
-    std::vector<DWORD> code;unsigned tags=0;
+    std::vector<DWORD> code;unsigned tags=0;std::uint64_t hash=0;
     explicit StreamVertexShader(StreamCore* c):ProxyBase(c,Kind::VertexShader){ProxyInit<ProxyBase>::apply(this,static_cast<IDirect3DVertexShader9*>(this));}
     ~StreamVertexShader(){liveProxyObjects.fetch_sub(1);}
     NORTHLIGHT_STREAM_VERTEXSHADER_METHODS

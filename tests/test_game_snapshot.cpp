@@ -140,6 +140,22 @@ static void testTriggers() {
     unsigned triggers=0;t.onPresent();for(int i=0;i<500;++i)triggers+=t.onDraw(i==100?kTerrain:i==400?kUi:0)!=Trigger::None;
     assert(triggers==3); // FrameStart, World, Ui: three captures a frame however many draws
 }
+static void testLearnedUi() {
+    using NorthlightShaderTags::kTerrain;using NorthlightShaderTags::kUi;
+    const std::uint64_t h=0x1234567890abcdefULL,other=h+1;
+    assert(drawTags(0,h,h)==unsigned(kUi)&&drawTags(0,h,0)==0&&drawTags(kTerrain,h,other)==unsigned(kTerrain)&&drawTags(0,0,0)==0);
+    assert(drawTags(kTerrain,h,h)==(unsigned(kTerrain)|unsigned(kUi)));
+    TriggerPolicy t;
+    assert(t.onDraw(kTerrain)==Trigger::World&&t.onDraw(drawTags(0,h,h))==Trigger::Ui&&t.onDraw(drawTags(0,h,h))==Trigger::None);
+    t.onPresent();
+    assert(t.onDraw(kTerrain)==Trigger::World&&t.onDraw(drawTags(0,h,0))==Trigger::None); // not learned: no UI trigger
+    t.onPresent();
+    assert(t.onDraw(drawTags(0,h,h))==Trigger::Ui&&t.onDraw(kTerrain)==Trigger::World); // learned draw as the frame's first draw
+    unsigned char code[40];for(unsigned i=0;i<sizeof code;++i)code[i]=(unsigned char)(i*37+5);
+    const std::uint64_t ch=NorthlightShaderTags::fnv1a(code,sizeof code);
+    assert(NorthlightShaderTags::triggerTags(ch)==NorthlightShaderTags::triggerTagsOfBytecode(code,sizeof code));
+    NorthlightStream::learnedUiVsHash.store(h,std::memory_order_relaxed);assert(NorthlightStream::learnedUiVsHash.load()==h);NorthlightStream::learnedUiVsHash.store(0);
+}
 // Reference copy of the expression Device::CreateVertexShader computed inline before 0.3.192.
 static int oldTag(std::uint64_t h){
     for(auto x:kTerrainVS)if(x==h)return 1;
@@ -191,6 +207,6 @@ static void testPoolAndHooks() {
     assert(commandStreamFromText("[Quality]\nCommandStream=2\n")); // out of range: the default, with a warning in the real loader
 }
 int main(){
-    testFifo();testOverflow();testPlayback();testCodeRangeAndInactive();testPeParse();testTriggers();testShaderTags();testPoolAndHooks();
+    testFifo();testOverflow();testPlayback();testCodeRangeAndInactive();testPeParse();testTriggers();testLearnedUi();testShaderTags();testPoolAndHooks();
     std::printf("game snapshot: FIFO record/playback incl. torn double reads, miss->live, failed reads, code-range bypass, inactive passthrough, thread-local, overflow, PE code range, trigger policy, VS tags == pre-0.3.192 tags, pool, hooks\n");
 }

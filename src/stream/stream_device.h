@@ -470,7 +470,7 @@ public:
     HRESULT STDMETHODCALLTYPE CreateVertexShader(const DWORD* code,IDirect3DVertexShader9** out) override{
         if(!out)return D3DERR_INVALIDCALL;*out=nullptr;const std::size_t tokens=shaderTokens(code);if(!tokens)return D3DERR_INVALIDCALL;
         StreamVertexShader* p;try{p=new StreamVertexShader(&core);p->code.assign(code,code+tokens);}catch(...){return E_OUTOFMEMORY;}
-        p->tags=NorthlightShaderTags::triggerTagsOfBytecode(code,tokens*4);   // from the bytes the game passed: the same ones GetFunction returns
+        p->hash=NorthlightShaderTags::fnv1a(code,tokens*4);p->tags=NorthlightShaderTags::triggerTags(p->hash);   // from the bytes the game passed: the same ones GetFunction returns
         CreateArgs a{p,{},0};void* o=nullptr;const HRESULT hr=finishCreate(p,Cmd::CreateVertexShader,a,code,UINT(tokens*4),false,&o);*out=static_cast<IDirect3DVertexShader9*>(o);return hr;}
     HRESULT STDMETHODCALLTYPE CreatePixelShader(const DWORD* code,IDirect3DPixelShader9** out) override{
         if(!out)return D3DERR_INVALIDCALL;*out=nullptr;const std::size_t tokens=shaderTokens(code);if(!tokens)return D3DERR_INVALIDCALL;
@@ -609,7 +609,8 @@ private:
     }
     void onDraw(unsigned){
         ++drawOrdinal;if(!capture)return;
-        const unsigned tags=st.vs?static_cast<StreamVertexShader*>(st.vs)->tags:0;
+        const StreamVertexShader* v=st.vs?static_cast<StreamVertexShader*>(st.vs):nullptr;
+        const unsigned tags=v?drawTags(v->tags,v->hash,learnedUiVsHash.load(std::memory_order_relaxed)):0;
         takeSnapshot(policy.onDraw(tags));
     }
     void takeSnapshot(Trigger t){
