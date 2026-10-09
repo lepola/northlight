@@ -957,7 +957,7 @@ float4 compositeImpl(float2 uv,bool debugViews) {
     // the pixel: the mask's alpha holds M/2 (128/255 = x1); no mask (alpha 0) means x1. The relight, AO, haze and fog below work on the background with the halo applied (bg = M x B, B the snapshot's colour).
     float M=mask.a<.05?1:mask.a*(255./128.);
     float3 pixel=original.rgb*rcp(M); // the pixel without the halos: T x background + emission
-    float3 B=mask.b<.002?pixel:tex2D(Background,uv).rgb; // blue >= 1/255 (8 bit): something touched the pixel
+    float3 B=max(mask.b,mask.y)<.002?pixel:tex2D(Background,uv).rgb; // green or blue >= 1/255 (8 bit): something touched the pixel
     float3 bg=B*M;
     float2 centerUV=depthUV(uv);
     float d=normalizedDepth(centerUV);
@@ -1049,11 +1049,11 @@ float4 compositeImpl(float2 uv,bool debugViews) {
         if(debugViews)color=mad(1-mask.y,fogged-B,pixel); // the debug entry keeps the plain transmittance composite: no fog at the particles' own distance (the instruction budget)
         else{
         // The particles' own light E = pixel - T x B was fogged by the game at ITS distance (legacy fog, in the pixel already) and gets Northlight's fog and haze at that same distance: the mask's red over blue is the
-        // weighted mean of the game's fog factor f the particle shaders received (1 where the shader had none: no extra fog, the old result). f = min(z x X + Y, 1) inverts to the distance z = (f - Y) / X; the host
+        // weighted mean of the game's fog factor f the fog-aware particle shaders received (1 where there is no such layer: no extra fog, the old result; rain streaks and fog-less layers add no weight). f = min(z x X + Y, 1) inverts to the distance z = (f - Y) / X; the host
         // uploads 1/X (signed projection included) in LegacyFogColor.w, and 0 without a usable linear legacy fog (exponent 1). f = 1 is no distance (the sentinel of layers without a fog factor, and
-        // a particle inside a fog that starts away from the camera, Y > 1): s = 0, near particles stay as they were. s = z/viewZ, clamped (f = 0 beyond the fog end). A coverage below 2/255 has too
-        // little light to matter: its ratio is only guarded against 0/0.
-        float fm=mask.r*rcp(max(mask.b,.0078));
+        // a particle inside a fog that starts away from the camera, Y > 1): s = 0, near particles stay as they were. s = z/viewZ, clamped (f = 0 beyond the fog end). A weight below 2/255 (an additive core of
+        // about w < 1/32, scaled by 1/4) has too little light to matter and counts as no distance.
+        float fm=mask.b<.0078?1:mask.r*rcp(mask.b);
         float s=saturate((fm<.998?fm-LegacyFog.y:0)*LegacyFogColor.w*rcp(viewZ));
         float rp=saturate((viewZ*s-HorizonShape.y)*HorizonShape.z);
         float transF=(1-h)*fog.a;                                       // fog and haze from the camera to the surface behind

@@ -335,7 +335,7 @@ class Device final : public GuardedMirrorDevice {
     // is bound for the draw; particlePatchedDraws and particlePatchRejects are the PARTICLES line's counters.
     NorthlightParticleShaderPatch::Cache<ExtensionDevice,IDirect3DPixelShader9> particlePatched;
     IDirect3DPixelShader9* particleGamePs=nullptr;unsigned mod2xBeforeSnapshot=0,mod2xAfterSnapshot=0,mod2xAfterRain=0; /* DESTCOLOR/SRCCOLOR candidates (M2 mod2x): drawn before the frame's background snapshot, after it, and after the frame's first rain mask draw (a subset of after, usually) */
-    unsigned particleFoggedDraws=0;bool particleFoggedNow=false;unsigned particlePatchedDraws=0,particlePatchRejects[NorthlightParticleShaderPatch::ReasonCount]={};
+    unsigned particleFoggedDraws=0;bool particleFoggedNow=false,particleFogLogged=false;unsigned particleFogLogFrame=0;float particleFogLast[8]={};unsigned particlePatchedDraws=0,particlePatchRejects[NorthlightParticleShaderPatch::ReasonCount]={};
     bool failed = false, projectionValid = false, key10 = false, key12=false;
     // 0.3.200 (frame markers): diagnostics only, while northlight-frame-markers.txt exists in the game folder at device creation: two 40x40
     // squares at the left edge whose colour cycles with the frame number. E (upper) is filled right after the world effects, P (lower) right
@@ -1040,6 +1040,19 @@ private:
         for(unsigned i=0;i<noZSigCount;++i){NoZSig& r=noZSigs[i];if(r.vs==sig.vs&&r.ps==sig.ps&&r.cand==sig.cand&&!memcmp(r.v,sig.v,sizeof sig.v)){++r.draws;r.prims+=count;return;}}
         if(noZSigCount<12){sig.draws=1;sig.prims=count;noZSigs[noZSigCount++]=sig;}else ++noZSigMore;
     }
+    // 0.3.203 (particle fog): the composite inverts the game's fog factor with the terrain vertex shader's legacy fog constants (c12), while the particle vertex shader computes it from its own c30
+    // (min(pow(max(z x c30.x + c30.y, 0), c30.z), 1)): one line at the first fogged draw and whenever either changes (at most every 600 frames), from the mirror's constants (no device read).
+    void particleFogCheck(){
+        if(!world)return;
+        float c30[4]={};const float* legacy=world->legacyFogParameters();
+        if(particleFogLogged&&frame-particleFogLogFrame<600)return;
+        if(FAILED(ext->GetVertexShaderConstantF(30,c30,1)))return;
+        if(particleFogLogged&&!memcmp(c30,particleFogLast,12)&&!memcmp(legacy,particleFogLast+4,12))return;
+        auto near_=[](float a,float b){return std::fabs(a-b)<=1e-4f*std::fabs(b)+1e-6f;};
+        const bool match=near_(c30[0],legacy[0])&&near_(c30[1],legacy[1])&&near_(c30[2],legacy[2]);
+        particleFogLogged=true;particleFogLogFrame=frame;memcpy(particleFogLast,c30,12);memcpy(particleFogLast+4,legacy,12);
+        logf("PARTICLES fog vs c30=(%.7g %.7g %.7g) legacy=(%.7g %.7g %.7g) match=%d",c30[0],c30[1],c30[2],legacy[0],legacy[1],legacy[2],int(match));
+    }
     // 0.3.203 (rain): sample frames only: the late Z writers by signature (blend, factors, alpha test, ZFUNC, colour write, vertex shader class, pixel shader bound), logged by logParticles with the blended / opaque split.
     void lateZCensus(UINT count){
         LateZSig sig;DWORD bl=0;
@@ -1145,7 +1158,7 @@ private:
             const auto patched=particlePatched.get(ext,gamePs,unsigned(patchKind));
             if(patched.log)logf("PARTICLES game shader hash=%016llx kind=%d: %s",(unsigned long long)patched.hash,patchKind,patched.shader?"patched":NorthlightParticleShaderPatch::reasonName(patched.reason));
             if(!patched.shader){why|=2048;++particlePatchRejects[patched.reason<NorthlightParticleShaderPatch::ReasonCount?patched.reason:NorthlightParticleShaderPatch::CacheFull];}
-            else{patchedPs=patched.shader;patchedFogged=patched.fogged;}
+            else{patchedPs=patched.shader;patchedFogged=patched.fogged;if(patchedFogged)particleFogCheck();}
         }
         if(!why&&particle&&!psBound&&!particlePS[variant]){
             static const DWORD* const code[8]={kParticleOver1Shader,kParticleOver2Shader,kParticleAddA1Shader,kParticleAddA2Shader,kParticleAddC1Shader,kParticleAddC2Shader,kParticleMod1Shader,kParticleMod2Shader};
@@ -1190,7 +1203,9 @@ private:
         static const D3DRENDERSTATETYPE types[1]={D3DRS_COLORWRITEENABLE1};
         const bool over=patchedPs?patchKind==0:variant<2;
         const bool mod2x=!patchedPs&&particle&&variant>=6;
-        const DWORD want[1]={DWORD(mod2x?D3DCOLORWRITEENABLE_ALPHA:particle&&!over?D3DCOLORWRITEENABLE_RED|D3DCOLORWRITEENABLE_BLUE:D3DCOLORWRITEENABLE_RED|D3DCOLORWRITEENABLE_GREEN|D3DCOLORWRITEENABLE_BLUE)}; /* rain streaks and alpha-over particles: red (the game's fog factor, 1 where unknown, weighted like blue) + green (1-T) + blue (touched); additive particles: red + blue; mod2x halos: alpha only (the factor) */
+        /* green = 1-T (also the touch mark of over layers: rain streaks, fixed-function over particles, patched over shaders without a fog factor); red + blue = the weighted game fog factor and its weight, written by the
+           fog-aware over shader (with green) and by every additive variant (a small weight for the fog-less ones: they mark the pixel without diluting the mean); mod2x halos: alpha only (the factor) */
+        const DWORD want[1]={DWORD(mod2x?D3DCOLORWRITEENABLE_ALPHA:(!particle||over)?(patchedPs&&patchedFogged?D3DCOLORWRITEENABLE_RED|D3DCOLORWRITEENABLE_GREEN|D3DCOLORWRITEENABLE_BLUE:D3DCOLORWRITEENABLE_GREEN):D3DCOLORWRITEENABLE_RED|D3DCOLORWRITEENABLE_BLUE)};
         particleFoggedNow=patchedPs&&patchedFogged;
         for(int i=0;i<1;++i){rainMrtPrevKnown[i]=SUCCEEDED(ext->GetRenderState(types[i],&rainMrtPrev[i]));ext->SetRenderState(types[i],want[i]);}
         if(patchedPs){particleGamePs=gamePs;gamePs->AddRef();} /* the draw replaces the binding; the game's shader must outlive it */

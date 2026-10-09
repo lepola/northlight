@@ -21,7 +21,8 @@ checks['source: two entries from one body; a literal true/false selects the F12 
     and comp.count('PassInfo.z')==4 and all(f'debugViews&&PassInfo.z=={n}' in comp for n in (1,2,3)) and 'if(!debugViews||PassInfo.z<.5){' in comp)
 checks['source: the debug entry keeps the plain transmittance composite, the normal entry the particle fog (the instruction budget)']=(
     'if(debugViews)color=mad(1-mask.y,fogged-B,pixel);' in body and body.index('if(debugViews)')<body.index('float fm=')<body.index('float s=')<body.index('float transP='))
-checks['source: red over blue is the weighted mean fog factor, 1 (no extra fog) when nothing was written; thin coverage is only guarded against 0/0']=('float fm=mask.r*rcp(max(mask.b,.0078));' in body)
+checks['source: red over blue is the weighted mean fog factor of the fog-aware layers; no weight (blue < 2/255) means f = 1, no extra fog']=('float fm=mask.b<.0078?1:mask.r*rcp(mask.b);' in body)
+checks['source: touched = green or blue >= 1/255 (rain streaks and fog-less over layers mark the pixel through green only)']=('float3 B=max(mask.b,mask.y)<.002?pixel:tex2D(Background,uv).rgb;' in comp)
 checks['source: the distance fraction comes from the host constant LegacyFogColor.w = 1/(slope x signed projection); 0 means no fog: s = 0']=(
     'float s=saturate((fm<.998?fm-LegacyFog.y:0)*LegacyFogColor.w*rcp(viewZ));' in body and 'w (WorldComposite only)' in h.split('float4 LegacyFogColor : register(c26);',1)[1].split('\n',1)[0])
 checks['source: transmittance to the particle = (1 - haze ramp at s x viewZ) x fog.a^s; 1 for s = 0']=(
@@ -33,8 +34,8 @@ checks['source: the haze is one call with the angular amount split from the ramp
 checks['source: no sampler or texture read was added in the particle fog']=(comp.count('tex2D')==comp.count('tex2D')) and 'tex2Dlod' not in body.split('float fm=',1)[1]
 # ---- manifest
 wc,wd=wm['WorldComposite'],wm['WorldCompositeDebug']
-checks['manifest: WorldComposite (normal) 509 slots, WorldCompositeDebug 504 slots, both within SM3\'s 512 and 32 temporaries, samplers 0,1,8..14']=(
-    wc['static_instruction_slots']==509 and wd['static_instruction_slots']==504 and wc['temporary_registers']<=32 and wd['temporary_registers']<=32 and wc['samplers']==wd['samplers']==[0,1,8,9,10,11,12,13,14])
+checks['manifest: WorldComposite (normal) 512 slots, WorldCompositeDebug 505 slots, both within SM3\'s 512 and 32 temporaries, samplers 0,1,8..14']=(
+    wc['static_instruction_slots']==512 and wd['static_instruction_slots']==505 and wc['temporary_registers']<=32 and wd['temporary_registers']<=32 and wc['samplers']==wd['samplers']==[0,1,8,9,10,11,12,13,14])
 BEFORE_EXTRA={'WorldNormals':'e647de5f5ba48db3fa790f329731d066a47fa965fdf474dcc568c337f36fac34'}
 checks['manifest: WorldNormals and every other world entry byte-identical to 0.3.202 (only the composite entries changed)']=all(wm[n]['sha256']==s for n,s in BEFORE_EXTRA.items())
 checks['compiled: both composite binaries exist and the generated header carries both symbols']=(
@@ -62,7 +63,7 @@ def composite(pixel,B,g,r,b,viewZ,fog_a,fog_rgb,color,haze_rgb,haze_ang,scale,Y=
     """the normal entry's tail. pixel = T x B + E (the scene), B the snapshot (or the pixel), g = 1-T, r/b the mask's red/blue, scale = LegacyFogColor.w."""
     rng=sat((viewZ-SHAPE_Y)*SHAPE_Z);hh=ramp(rng)*haze_ang
     fogged=tuple(c*fog_a+f for c,f in zip(lerp(color,haze_rgb,hh),fog_rgb))
-    fm=r/max(b,.0078);s=sat(((fm-Y) if fm<.998 else 0.)*scale/viewZ)
+    fm=1. if b<.0078 else r/b;s=sat(((fm-Y) if fm<.998 else 0.)*scale/viewZ)
     rp=sat((viewZ*s-SHAPE_Y)*SHAPE_Z);transF=(1-hh)*fog_a;transP=(1-ramp(rp)*haze_ang)*2**(s*math.log2(max(fog_a,.0001)))
     T=1-g;air=tuple(f-transF*c for f,c in zip(fogged,color))
     ratio=(1-transP)/(1.001-transF)
@@ -115,35 +116,52 @@ Ap=tp;air_full=tuple(f-((1-ramp(sat((vz-SHAPE_Y)*SHAPE_Z))*ha)*fa)*c for f,c in 
 airL=tuple(a/(1-(1-ramp(sat((vz-SHAPE_Y)*SHAPE_Z))*ha)*fa) for a in air_full)         # the uniform airlight colour
 ideal=tuple(Ap*e+Tt*f+(1-Tt)*l*(1-Ap) for e,f,l in zip(Ep,F_bg,airL))
 checks['numeric: an over-blend particle (T = .4) gets the fogged emission plus the airlight in front of it: the ideal ray model for a uniform airlight colour (within the 1.001 guard)']=all(abs(x-y)<2e-3 for x,y in zip(got,ideal))
-# mask recurrences on RT1 with the draw's own blend (D3DRS_SRCBLEND/DESTBLEND), 8 bit: red follows blue with f as the value
+# mask recurrences on RT1 with the draw's own blend (D3DRS_SRCBLEND/DESTBLEND), 8 bit: red follows blue with f as the value (fog-aware layers only)
 def q(x):return round(sat(x)*255)/255
-def over(R,G,Bm,a,f):return q(a*f+(1-a)*R),q(a+(1-a)*G),q(a+(1-a)*Bm)
-def addA(R,Bm,v,f):return q(R+v*f),q(Bm+v)
-def addC(R,Bm,m,f):return q(R+m*f),q(Bm+m)         # ONE/ONE: oC1 = (m f, m, m, m)
+def over(R,G,Bm,a,f,aware=True):                 # fog-aware over shader: (f,1,1,a) with RGB masked in; fog-less over (and rain): green only
+    return (q(a*f+(1-a)*R),q(a+(1-a)*G),q(a+(1-a)*Bm)) if aware else (R,q(a+(1-a)*G),Bm)
+def addA(R,Bm,v,f,sc=.25):return q(R+v*sc*f),q(Bm+v*sc)      # SRCALPHA/ONE: oC1 = (f,1,1,v x scale)
+def addC(R,Bm,m,f,sc=.25):return q(R+m*sc*f),q(Bm+m*sc)      # ONE/ONE: oC1 = (m scale f, m scale, ..)
 R=G=Bm=0.
 layers=[(.5,.8),(.3,.4),(.6,.9)]       # (alpha, f)
 for a,f in layers:R,G,Bm=over(R,G,Bm,a,f)
-weights=[];T=1.
-for a,f in reversed(layers):weights.append((a,f));
-# exact weights of each layer in the final alpha-over result: layer i contributes a_i x prod_{j>i}(1-a_j)
 w=[layers[i][0]*math.prod(1-layers[j][0] for j in range(i+1,3)) for i in range(3)]
 mean=sum(wi*l[1] for wi,l in zip(w,layers))/sum(w)
-checks['numeric: stacked over layers: red/blue is their coverage-weighted mean f (8 bit)']=abs(R/Bm-mean)<.02 and abs(G-Bm)<1e-9
+checks['numeric: stacked fog-aware over layers: red/blue is their coverage-weighted mean f (8 bit)']=abs(R/Bm-mean)<.02 and abs(G-Bm)<1e-9
 R=Bm=0.
 for v,f in ((.3,.9),(.2,.5),(.4,.7)):R,Bm=addA(R,Bm,v,f)
-checks['numeric: additive by alpha: red/blue is the emission-weighted mean f']=abs(R/Bm-(.3*.9+.2*.5+.4*.7)/.9)<.02
+checks['numeric: additive by alpha: red/blue is the emission-weighted mean f (quarter scale, 8 bit)']=abs(R/Bm-(.3*.9+.2*.5+.4*.7)/.9)<.05
 R=Bm=0.
 for m,f in ((.3,.9),(.2,.5)):R,Bm=addC(R,Bm,m,f)
-checks['numeric: ONE/ONE: red/blue is the emission-weighted mean f']=abs(R/Bm-(.3*.9+.2*.5)/.5)<.02
-R,G,Bm=over(0.,0.,0.,.5,.8);R,Bm=addA(R,Bm,.3,.4)
-a1=.5*.8   # after the over layer: R = a f, B = a ; then additive adds v f and v
-checks['numeric: a mixed over + additive pixel: red/blue is the mean f with the weights each layer has in blue']=abs(R/Bm-(.5*.8+.3*.4)/(.5+.3))<.02
+checks['numeric: ONE/ONE: red/blue is the emission-weighted mean f (8 bit)']=abs(R/Bm-(.3*.9+.2*.5)/.5)<.05
+# R1: stacked bright additive layers saturated blue on the 8-bit mask while red kept rising (two ONE/ONE layers m = 1, f = .3 gave red/blue = .6 at full scale): the quarter scale keeps the mean through sums of weights up to 3
+def stack(n,sc):
+    R=Bm=0.
+    for _ in range(n):R,Bm=addC(R,Bm,1.,.3,sc)
+    return R/Bm
+checks['numeric: full-scale weights: two bright ONE/ONE layers saturate blue and overestimate f (.6 for .3): the failure the quarter scale removes']=abs(stack(2,1.)-.6)<.02
+checks['numeric: quarter-scale weights: 1..3 bright layers (sum of weights up to 3) keep red/blue = .3 within the 8-bit quantisation']=all(abs(stack(n,.25)-.3)<.02 for n in (1,2,3))
+checks['numeric: a bright additive core located by that mean lands at its true distance (HD fog, f = .3 -> 153 yd), not at 29 yd']=(
+    abs((stack(2,.25)-0.6666667)/-0.0024-153.)<8 and abs((stack(2,1.)-0.6666667)/-0.0024-29.)<8)
 R=Bm=0.
-for a,f in ((.5,1.),(.4,1.)):R,G,Bm=over(R,0.,Bm,a,f)
-checks['numeric: layers without a fog factor write f = 1: red == blue exactly in 8 bit']=R==Bm
-# SRCCOLOR/ONE squares the written value in blue (b' = src^2): a red of (m f)^2 would square f, so that kind writes none (red = blue's value m)
-m,f=.5,.64
-checks['numeric: SRCCOLOR/ONE with the f write would give red/blue = f^2; kind 3 keeps red == blue (f = 1)']=abs((m*f)**2/(m*m)-f*f)<1e-12 and abs(m**2/(m*m)-1)<1e-12
+for a,f in ((.5,.8),):R,G,Bm=over(0.,0.,0.,a,f)
+R,Bm=addA(R,Bm,.3,.4)
+checks['numeric: a mixed fog-aware over + additive pixel: red/blue is the mean f with the weights each layer has in blue']=abs(R/Bm-(.5*.8+.3*.25*.4)/(.5+.3*.25))<.03
+# R2: rain streaks and fog-less layers no longer write red or blue: a streak over a far lantern leaves its mean f alone (they used to pull it toward 1: .5 lantern + a = .3 streak gave 19 yd for 153)
+R=Bm=0.;R,Bm=addC(R,Bm,.5,.3)
+fm_lantern=R/Bm
+G=0.
+R2,G,B2=over(R,G,Bm,.3,1.,aware=False)    # a rain streak: green only
+checks['numeric: a rain streak over a far lantern (m = .5, f = .3): red and blue are untouched, the mean stays .3 (153 yd), the pixel is marked through green']=(R2==R and B2==Bm and abs(R2/B2-fm_lantern)<1e-12 and G>0 and abs(fm_lantern-.3)<.02)
+dil_R,dil_G,dil_B=over(R,0.,Bm,.3,1.)      # the old scheme: the streak writes f = 1 into red and blue
+checks['numeric: (the old scheme for comparison) writing f = 1 into red and blue pulled the same pixel to a mean of %.2f'%(dil_R/dil_B)]=(dil_R/dil_B>.6)
+# the streak's own emission under the lantern's transmittance: a streak (a = .3, colour .7) over a far lantern is attenuated like the lantern is (the only channel left cannot tell them apart)
+vz=700.;fa=0.2;fr=tuple(l*(1-fa) for l in Lh)
+Es=tuple(.3*.7 for _ in range(3));Bk=col;E_l=(.9,.5,.1)
+pix_both=tuple(.7*b+es+el for b,es,el in zip(Bk,Es,E_l))
+_,tpl,_=composite(pix_both,Bk,.3,.3*.25*.3,.25*.5,vz,fa,fr,col,Lh,ha,1/-0.0024,0.6666667)
+lost=(1-tpl)*Es[0]
+checks['numeric: a rain streak over a far lantern core loses (1-transP) of its own light: transP = %.2f here, %.3f of a %.2f streak emission (against a lantern core of ~1: not distinguishable)'%(tpl,lost,Es[0])]=0<=lost<=Es[0]
 # the game's fog varies per zone and client: f = min(z x slope + Y, 1) with Y < 1 (HD client), Y = 1 and Y > 1 (stock client: the fog starts away from the camera)
 for Y,slope in ((0.6666667,-0.0024),(1.,-0.0019),(1.7857143,-0.005135)):
     scale=1/slope;vz=700.
