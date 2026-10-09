@@ -14,7 +14,7 @@ sampler2D FogBuffer : register(s9);
 sampler2D WaterMask : register(s11);
 sampler2D BaselineLighting : register(s12);
 sampler2D RegionalFog : register(s13); // ground, day extinction, night extra, layer height
-sampler2D RainMask : register(s13); // 0.3.202 (rain mask): WorldComposite only, rain streak coverage (r), 0 without rain
+sampler2D RainMask : register(s13); // 0.3.202 (rain mask): WorldComposite only, rain streak coverage (r) and translucent particle coverage (g), 0 without either
 float4 RegionalFogInfo : register(c31); // world node0 XY, inverse field span, night fraction
 float4 WaterInfo : register(c30);
 float4 RemovalInfo : register(c30); // RemovalSmooth, TemporalLight: y 1 when a lit source is drawn, z 1/(summed source weight), w disc radius in half-res pixels at view distance 1
@@ -995,11 +995,11 @@ float4 WorldComposite(float2 uv:TEXCOORD0):COLOR0 {
     // hardware-bilinear half-res value, like the old pass's unfiltered glow.
     ao=relight?(total<.02?fallbackAO:ao/total):1;
     float3 bloom=tex2Dlod(AmbientOcclusion,float4(uv,0,0)).rgb;
-    original.rgb=saturate(mad(bloom,1-saturate(original.rgb*ao),original.rgb*ao));
-    float3 color=original.rgb;
+    float3 lit=saturate(mad(bloom,1-saturate(original.rgb*ao),original.rgb*ao)); // 0.3.203: original.rgb stays the scene colour for the particle mask
+    float3 color=lit;
     // Terrain fog is only an estimate on interior/blended materials. It cannot
     // account for more light than the observed color in any channel.
-    float3 fogPart=min((1-legacyT)*LegacyFogColor.rgb,original.rgb);
+    float3 fogPart=min((1-legacyT)*LegacyFogColor.rgb,lit);
     if(relight){
         // Thin receivers whose depth matches none of the four texels keep the
         // nearest-depth texel instead of losing their shadow and GI entirely.
@@ -1010,12 +1010,12 @@ float4 WorldComposite(float2 uv:TEXCOORD0):COLOR0 {
         // The framebuffer already contains atmospheric fog. Relight only the
         // transported surface term: do not infer material albedo from fog RGB.
         float3 oldLight=max(baseline*inverseWeight,.15);
-        float3 transported=max(original.rgb-fogPart,0);
+        float3 transported=max(lit-fogPart,0);
         float3 albedoT=min(transported/oldLight,legacyT);
-        color=mad(albedoT,bounce,original.rgb);
+        color=mad(albedoT,bounce,lit);
         // Bound combined GI/shadow darkening relative to the existing surface;
         // this preserves black and does not introduce an absolute exposure floor.
-        color=max(color,mad(-.45,transported,original.rgb));
+        color=max(color,mad(-.45,transported,lit));
         if(PassInfo.z==1)color=shadow.xxx;
         if(PassInfo.z==2)color=max(AmbientLight.rgb+bounce,0);
     }
@@ -1028,8 +1028,11 @@ float4 WorldComposite(float2 uv:TEXCOORD0):COLOR0 {
     if(PassInfo.z<.5){
         float3 unfogged=color;
         // Rain streaks were drawn into the scene before the composite: on mask pixels go back toward the unfogged pixel so they are not hazed.
-        float rain=tex2Dlod(RainMask,float4(uv,0,0)).r;
-        color=lerp(mad(horizonHaze(color,centerUV,viewZ,d>=.99999&&liquid<=0),fog.a,fog.rgb),unfogged,rain);
+        // 0.3.203 (particle mask): translucent particles write no depth, so their pixels carry the background's depth: on mask pixels (g) go back to the
+        // scene colour, before the contact AO, relight, haze and fog, which were all computed from that depth.
+        float2 mask=tex2Dlod(RainMask,float4(uv,0,0)).rg;
+        color=lerp(mad(horizonHaze(color,centerUV,viewZ,d>=.99999&&liquid<=0),fog.a,fog.rgb),unfogged,mask.x);
+        color=lerp(color,original.rgb,mask.y);
     }
     if(PassInfo.z==3)color=fog.rgb;
     return float4(max(color,0),original.a);

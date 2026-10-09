@@ -168,8 +168,8 @@ checks['WorldComposite: AO in the tent (same weight, nearest fallback), bloom bi
     and 'ao+=occlusion*weight;' in composite and 'fallbackAO=occlusion;' in composite
     and 'ao=relight?(total<.02?fallbackAO:ao/total):1;' in composite
     and 'float3 bloom=tex2Dlod(AmbientOcclusion,float4(uv,0,0)).rgb;' in composite
-    and composite.index("original.rgb=saturate(mad(bloom,1-saturate(original.rgb*ao),original.rgb*ao));")
-    < composite.index('float3 color=original.rgb;') < composite.index('float3 fogPart=min((1-legacyT)*LegacyFogColor.rgb,original.rgb);')
+    and composite.index("float3 lit=saturate(mad(bloom,1-saturate(original.rgb*ao),original.rgb*ao));")  # 0.3.203: lit, so original.rgb stays the scene colour for the particle mask
+    < composite.index('float3 color=lit;') < composite.index('float3 fogPart=min((1-legacyT)*LegacyFogColor.rgb,lit);')
     < composite.index('if(relight){\n        // Thin receivers'))
 checks['smoothRemoval: both Scene reads times the AO alpha; removalScale without the .0001 floor'] = (
     world.count('tex2Dlod(Scene,float4(q,0,0)).rgb*tex2Dlod(AmbientOcclusion,float4(q,0,0)).a') == 1

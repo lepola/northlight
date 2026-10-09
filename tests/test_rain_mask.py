@@ -28,10 +28,10 @@ checks['source: RainMask declared on s13 (aliasing RegionalFog, as s8/s10 do)']=
 comp=h.split('float4 WorldComposite(',1)[1].split('// Separate geometry pass:',1)[0]
 m=re.search(r'if\(PassInfo\.z<\.5\)\{(.*?)\n    \}',comp,re.S)
 body=m.group(1) if m else ''
-checks['source: WorldComposite reads the mask once, only inside the PassInfo.z<.5 branch']=(bool(m) and comp.count('RainMask')==1 and body.count('tex2Dlod(RainMask,float4(uv,0,0)).r')==1)
+checks['source: WorldComposite reads the mask once, only inside the PassInfo.z<.5 branch']=(bool(m) and comp.count('RainMask')==1 and body.count('tex2Dlod(RainMask,float4(uv,0,0)).rg')==1)
 checks['source: unfogged colour kept before haze, lerped back to after the haze + fog mad']=(
-    'float3 unfogged=color;' in body and body.index('unfogged=color')<body.index('lerp(mad(horizonHaze(')<body.index('fog.a,fog.rgb)')<body.index(',unfogged,rain)')
-    and ',unfogged,rain)' in body)
+    'float3 unfogged=color;' in body and body.index('unfogged=color')<body.index('lerp(mad(horizonHaze(')<body.index('fog.a,fog.rgb)')<body.index(',unfogged,mask.x)')
+    and ',unfogged,mask.x)' in body)  # 0.3.203: the mask's red is the rain, green the particles (test_particle_mask)
 checks['source: debug views (PassInfo.z != 0) do not touch the mask']=('RainMask' not in comp.split('if(PassInfo.z<.5)',1)[0] and 'RainMask' not in comp.split('PassInfo.z==3',1)[1])
 
 # manifest

@@ -61,11 +61,14 @@ def main():
     manifest = {"source_sha256": hashlib.sha256((fp.SHADERS / "effects.hlsl").read_bytes()).hexdigest(),
                 "rain_source_sha256": hashlib.sha256((fp.SHADERS / "rain_mask.hlsl").read_bytes()).hexdigest(),
                 "target": "ps_3_0", "shaders": {}}
-    # 0.3.202 (rain mask MRT): the two rain mask pixel shaders are ps_2_0 (they pair with the game's fixed-function vertex pipeline and write
+    # 0.3.202 (rain mask MRT): the two rain mask pixel shaders (0.3.203: and the six particle mask ones) are ps_2_0 (they pair with the game's fixed-function vertex pipeline and write
     # oC1); their manifest entries carry their own "target" and they compile from rain_mask.hlsl. The ps_3_0 entries are unchanged.
     for entry, symbol, target in (("AO", "kAoShader", "ps_3_0"), ("AOContactBloom", "kAoContactBloomShader", "ps_3_0"), ("ContactBloom", "kContactBloomShader", "ps_3_0"),
                                   ("AOBlur", "kAoBlurShader", "ps_3_0"), ("Composite", "kCompositeShader", "ps_3_0"),
-                                  ("RainMaskMRT", "kRainMaskMrtShader", "ps_2_0"), ("RainScrub", "kRainScrubShader", "ps_2_0")):
+                                  ("RainMaskMRT", "kRainMaskMrtShader", "ps_2_0"), ("RainScrub", "kRainScrubShader", "ps_2_0"),
+                                  ("ParticleOver1", "kParticleOver1Shader", "ps_2_0"), ("ParticleOver2", "kParticleOver2Shader", "ps_2_0"),
+                                  ("ParticleAddA1", "kParticleAddA1Shader", "ps_2_0"), ("ParticleAddA2", "kParticleAddA2Shader", "ps_2_0"),
+                                  ("ParticleAddC1", "kParticleAddC1Shader", "ps_2_0"), ("ParticleAddC2", "kParticleAddC2Shader", "ps_2_0")):
         output = fp.COMPILED / f"{entry}.bin"
         assembly = fp.COMPILED / f"{entry}.bin.asm"
         assembly.unlink(missing_ok=True)
