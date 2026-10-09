@@ -11,9 +11,9 @@ The launchers (Install Northlight.command, Install.cmd, install.sh) run this wit
 1. preflight: the game and WoWSilicon are closed; wow.exe and the 3.3.5a base archives are there;
    the locale is known; the client folder is writable, ASCII-only (the renderer opens its files
    with narrow paths), not under Program Files and short enough (Windows; Linux: the path Wine shows
-   the game, wine_path); the package is outside the client; enough disk (and 8 GB RAM for a local
+   the game, wine_path of the folder as given, symlinks kept); the package is outside the client; enough disk (and 8 GB RAM for a local
    build); macOS: WoWSilicon's dlls.txt preload with DXVK is active; Linux: no name we write exists
-   in another letter case (Wine would see both), and Wow.exe is not running under Wine (pgrep).
+   in another letter case (Wine would see both), and Wow.exe is not running under Wine (/proc).
 2. identify the client's archive chain (client_identity). A client that matches the stock variant
    gets the prebuilt cache: Northlight-cache-stock-<digest12>.zip (or the folder a browser expanded
    it to) from --cache, next to the package, or in Downloads, extracted into world-cache.extract
@@ -283,39 +283,20 @@ def ancestors(pid=None):
     return found
 
 
-def linux_running():
-    """Wow.exe running under Wine or Proton: pgrep (case-insensitive, whole command line), without this installer
-    and its parents; without pgrep (a minimal system) the same match over /proc/<pid>/cmdline."""
-    mine = ancestors()
-    try:
-        run = subprocess.run(['pgrep', '-i', '-f', WINE_WOW], capture_output=True, text=True, errors='replace', timeout=30)
-        # 1 = no match; with an error text (busybox has no -i) pgrep cannot answer and /proc is read instead.
-        if run.returncode == 0 or (run.returncode == 1 and not run.stderr.strip()):
-            pids = {int(p) for p in run.stdout.split() if p.isdigit()}
-            if pids - mine:
-                return ['Wow.exe (Wine)']
-            return ['Wow.exe (Wine)'] if proc_running(mine, comm_only=True) else []
-    except (OSError, subprocess.SubprocessError):
-        pass
-    return ['Wow.exe (Wine)'] if proc_running(mine) else []
-
-
-def proc_running(mine, comm_only=False):
-    """A process other than ours whose name (comm, set by Wine) is Wow.exe, or (comm_only=False) whose command line
-    matches WINE_WOW."""
-    pattern = re.compile(WINE_WOW, re.I)
-    for proc in Path('/proc').glob('[0-9]*'):
+def linux_running(proc=Path('/proc')):
+    """Wow.exe running under Wine or Proton: a process other than this installer and its parents whose name (comm,
+    set by Wine) is Wow.exe or whose command line matches WINE_WOW (case-insensitive), in one pass over /proc."""
+    mine, pattern = ancestors(), re.compile(WINE_WOW, re.I)
+    for entry in proc.glob('[0-9]*'):
         try:
-            if int(proc.name) in mine:
+            if int(entry.name) in mine:
                 continue
-            if (proc / 'comm').read_text(errors='replace').strip().lower() == 'wow.exe':
-                return True
-            if not comm_only and pattern.search((proc / 'cmdline').read_bytes().replace(b'\0', b' ')
-                                                .decode('utf-8', 'replace').strip()):
-                return True
+            if (entry / 'comm').read_text(errors='replace').strip().lower() == 'wow.exe' or \
+                    pattern.search((entry / 'cmdline').read_bytes().replace(b'\0', b' ').decode('utf-8', 'replace')):
+                return ['Wow.exe (Wine)']
         except (OSError, ValueError):
             continue
-    return False
+    return []
 
 
 def wine_path(client):
@@ -324,6 +305,17 @@ def wine_path(client):
     if 'drive_c' in parts:
         return 'C:\\' + '\\'.join(parts[len(parts) - parts[::-1].index('drive_c'):])
     return 'Z:' + str(client).replace('/', '\\')
+
+
+def on_disk(client, name):
+    """name (a client path) as its folder already lists it in another letter case (Data/Patch-Z.MPQ), else name."""
+    path = Path(client) / name
+    try:
+        names = [p.name for p in path.parent.iterdir()]
+    except OSError:
+        return name
+    same = [n for n in names if n.lower() == path.name.lower()]
+    return name if path.name in names or not same else (path.parent / same[0]).relative_to(client).as_posix()
 
 
 def case_conflicts(client, names):
@@ -392,6 +384,7 @@ class Installer:
         self.yes = yes
         self.out = out or sys.stdout
         self.log = None
+        self.given = None   # the game folder as given, symlinks kept (Wine shows the game that path)
         self.running = (lambda: migrate().running()) if self.platform == 'mac' else \
             linux_running if self.platform == 'linux' else windows_running
         self.proxy = self.platform in PROXY_PLATFORMS   # d3d9.dll and DXVK installed by install.py
@@ -485,6 +478,7 @@ class Installer:
         client = Path(text).expanduser()
         if not client.is_dir():
             raise Refusal(f'Game folder not found: {text}')
+        self.given = Path(os.path.abspath(client))
         return client.resolve()
 
     def prompt_client(self):
@@ -524,9 +518,9 @@ class Installer:
                     raise Refusal('The game is under Program Files, where writes need administrator rights and '
                                   'are redirected. Move the game folder to for example C:\\Games\\WoW.')
         if self.platform == 'linux':
-            length = len(wine_path(client))
-            if length + LONGEST_CACHE_NAME > WINDOWS_MAX_PATH:
-                raise Refusal(f'The game folder path is too long for the game under Wine ({wine_path(client)}: {length} '
+            shown = wine_path(self.given or client)
+            if len(shown) + LONGEST_CACHE_NAME > WINDOWS_MAX_PATH:
+                raise Refusal(f'The game folder path is too long for the game under Wine ({shown}: {len(shown)} '
                               f'characters; at most {WINDOWS_MAX_PATH - LONGEST_CACHE_NAME}). Move the game folder to a '
                               'shorter path, for example ~/Games/WoW.')
         entries = {p.name.lower() for p in client.iterdir()}
@@ -744,7 +738,9 @@ class Installer:
 
     def art_layer(self, client, locale):
         """({client path: bytes} to install, None, {client path: action}) or ({}, reason it is skipped, {}).
-        The action per target is installed (absent before), replaced (another layer of ours) or kept-identical."""
+        The action per target is installed (absent before), replaced (another layer of ours) or kept-identical.
+        A target that exists in another letter case (Data/Patch-Z.MPQ on Linux) keeps its name on disk, so that
+        Wine never sees two files."""
         if not (client / CACHE / 'fog').is_dir():
             return {}, 'no world cache (its fog zones are an input)', {}
         work = self.pkg.work / 'art-layer'
@@ -756,7 +752,7 @@ class Installer:
         if code != 0 or not report:
             raise Failed(f'The art layer build failed (exit {code}); its last lines are shown above. '
                          f'Full output: {self.log.name if self.log else "not logged"}.')
-        layer = {t: (work / t).read_bytes() for t in report['targets']}
+        layer = {on_disk(client, t): (work / t).read_bytes() for t in report['targets']}
         remove_tree(work)
         steps = report.get('steps', [])
         skipped = sum(1 for step in steps if 'skipped' in step)

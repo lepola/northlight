@@ -271,6 +271,16 @@ class LinuxPreflight(WindowsPreflight):
         self.assertIn('Z:', text)
         self.assertNotIn('C:\\Games', text)   # Windows advice is wrong on Linux
 
+    def test_path_length_is_the_path_wine_shows(self):
+        # a short drive_c folder that links to a long path elsewhere: Wine shows the game C:\WoW, not Z:\<long path>
+        deep = self.base / ('x' * 60) / ('y' * 60) / 'WoW'
+        deep.parent.mkdir(parents=True); self.client.rename(deep); self.client = deep
+        link = self.base / 'prefix/drive_c/WoW'
+        link.parent.mkdir(parents=True); link.symlink_to(deep)
+        inst = self.installer()
+        self.assertEqual(inst.preflight(inst.resolve_client(link), None), 'enUS')
+        self.assertEqual(fi.wine_path(inst.given), 'C:\\WoW')
+
     def test_case_variant_of_an_installed_name_is_refused(self):
         # Wine matches names case-insensitively: a D3D9.dll next to our d3d9.dll could be the one it loads.
         (self.client / 'D3D9.dll').write_bytes(b'MZ someone else'); (self.client / 'Renderer-Backends').mkdir()
@@ -308,26 +318,36 @@ class LinuxHost(unittest.TestCase):
             with self.subTest(raw=raw):
                 self.assertEqual(inst.resolve_client(raw), base.resolve())
 
-    def ran(self, pids, mine=(), stderr='', proc=False):
-        result = subprocess.CompletedProcess([], 0 if pids else 1, stdout=''.join(f'{p}\n' for p in pids), stderr=stderr)
-        with patch.object(fi.subprocess, 'run', lambda *a, **k: result), patch.object(fi, 'ancestors', lambda: set(mine)), \
-                patch.object(fi, 'proc_running', lambda mine, comm_only=False: proc):
-            return fi.linux_running()
-
-    def test_unusable_pgrep_reads_proc(self):
-        # busybox pgrep has no -i: usage text and exit 1 must not read as "not running"
-        self.assertEqual(self.ran([], stderr='pgrep: unrecognized option: i', proc=True), ['Wow.exe (Wine)'])
-        self.assertEqual(self.ran([], proc=True), ['Wow.exe (Wine)'])   # comm Wow.exe without a matching command line
-        self.assertEqual(self.ran([], stderr='usage', proc=False), [])
+    def ran(self, procs, mine=()):
+        """linux_running over a fake /proc: {pid: (comm, cmdline argv)}."""
+        root = fp.output_dir() / 'LinuxHost' / self._testMethodName / 'proc'
+        shutil.rmtree(root, ignore_errors=True)
+        for pid, (comm, argv) in procs.items():
+            (root / str(pid)).mkdir(parents=True)
+            (root / str(pid) / 'comm').write_text(comm + '\n')
+            (root / str(pid) / 'cmdline').write_bytes(b''.join(a.encode() + b'\0' for a in argv))
+        (root / 'self').mkdir(parents=True, exist_ok=True)   # not a pid
+        with patch.object(fi, 'ancestors', lambda: set(mine)):
+            return fi.linux_running(root)
 
     def test_wow_under_wine_is_running(self):
-        self.assertEqual(self.ran([4321]), ['Wow.exe (Wine)'])
-        self.assertEqual(self.ran([]), [])
+        self.assertEqual(self.ran({4321: ('wine64-preloader', ['C:\\Games\\WoW\\Wow.exe'])}), ['Wow.exe (Wine)'])
+        self.assertEqual(self.ran({4321: ('Wow.exe', ['wine-preloader'])}), ['Wow.exe (Wine)'])   # comm only
+        self.assertEqual(self.ran({1: ('systemd', ['/sbin/init']), 77: ('wineserver', ['/usr/bin/wineserver'])}), [])
+        self.assertEqual(self.ran({}), [])
 
     def test_own_launcher_chain_is_not_the_game(self):
-        # `bash install.sh --client /data/u/WoW/Wow.exe`: pgrep matches the launcher, an ancestor of this installer
-        self.assertEqual(self.ran([100, 101], mine={100, 101, 102}), [])
-        self.assertEqual(self.ran([100, 555], mine={100, 101}), ['Wow.exe (Wine)'])
+        # `bash install.sh --client /data/u/WoW/Wow.exe`: the launcher matches, but it is an ancestor of this installer
+        launcher = ('bash', ['bash', 'install.sh', '--client', '/data/u/WoW/Wow.exe'])
+        self.assertEqual(self.ran({100: launcher, 101: ('python3', ['python3'])}, mine={100, 101}), [])
+        self.assertEqual(self.ran({100: launcher, 555: ('Wow.exe', ['Z:\\data\\u\\WoW\\Wow.exe'])}, mine={100}),
+                         ['Wow.exe (Wine)'])
+
+    def test_unreadable_process_is_skipped(self):
+        root = fp.output_dir() / 'LinuxHost' / self._testMethodName / 'proc'
+        shutil.rmtree(root, ignore_errors=True); (root / '42').mkdir(parents=True)   # gone or hidden: no comm, no cmdline
+        with patch.object(fi, 'ancestors', lambda: set()):
+            self.assertEqual(fi.linux_running(root), [])
 
     def test_pattern(self):
         import re
@@ -337,13 +357,6 @@ class LinuxHost(unittest.TestCase):
             self.assertTrue(p.search(cmd), cmd)
         for cmd in ['/usr/bin/wineserver', 'less /data/u/WoW/Wow.exe.log', 'wine NotWow.exe']:
             self.assertFalse(p.search(cmd), cmd)
-
-    def test_no_pgrep_falls_back(self):
-        def missing(*a, **k):
-            raise FileNotFoundError('pgrep')
-        with patch.object(fi.subprocess, 'run', missing):
-            self.assertIsInstance(fi.linux_running(), list)
-
 
 class LinuxOnlyChecks(Base):
     """The Linux checks stay off on Windows and macOS (case-insensitive file systems, no Wine paths)."""
@@ -449,6 +462,20 @@ class Install(Base):
         self.zip.unlink()
         self.installer().install(self.client, cache=folder)
         self.assertEqual((self.client / 'world-cache/models/0123.fgs').read_bytes(), CACHE_FILES['models/0123.fgs'])
+
+    def test_patch_z_of_ours_in_another_case_keeps_its_name(self):
+        # Data/Patch-Z.MPQ (an older layer of ours): replaced under that name, never a second patch-z.mpq next to it
+        # (Wine on a case-sensitive file system would see two)
+        old = b'MPQ\x1a older layer'
+        (self.client / 'Data/Patch-Z.MPQ').write_bytes(old); self.before = tree(self.client)
+        with patch.object(fi, 'KNOWN_OURS', fi.KNOWN_OURS | {sha(old)}):
+            report = self.installer().install(self.client)
+        self.assertIn(f'replaced {sha(ART)[:8]} Data/Patch-Z.MPQ', report['art_layer'])
+        self.assertEqual([p.name for p in (self.client / 'Data').iterdir() if p.name.lower() == 'patch-z.mpq'],
+                         ['Patch-Z.MPQ'])
+        self.assertEqual((self.client / 'Data/Patch-Z.MPQ').read_bytes(), ART)
+        self.installer().uninstall(self.client)
+        self.assertEqual(tree(self.client), self.before)
 
     def test_foreign_patch_z_is_part_of_the_client(self):
         (self.client / 'Data/patch-z.mpq').write_bytes(b'someone else'); self.before = tree(self.client)
