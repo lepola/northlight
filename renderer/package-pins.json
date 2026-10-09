@@ -93,6 +93,62 @@
       }
     }
   },
+  "python_linux": {
+    "name": "CPython (python-build-standalone)",
+    "version": "3.13.15",
+    "release": "20260924",
+    "file": "cpython-3.13.15+20260924-x86_64-unknown-linux-gnu-install_only_stripped.tar.gz",
+    "url": "https://github.com/astral-sh/python-build-standalone/releases/download/20260924/cpython-3.13.15%2B20260924-x86_64-unknown-linux-gnu-install_only_stripped.tar.gz",
+    "sha256": "d0b640eed27fbdd6f5f2bd33444aee53df2c8863f8b2a96f4094717411e3de9c",
+    "bytes": 34993852,
+    "sha256_source": "the release's SHA256SUMS and the GitHub asset digest (both d0b640ee...)",
+    "requires": "x86_64 Linux with glibc 2.17 or newer",
+    "license": "PSF-2.0 (python/lib/python3.13/LICENSE.txt, CPython only); the libraries linked statically into bin/python3.13 are in python_linux_licenses; python-build-standalone build scripts: MPL-2.0"
+  },
+  "python_linux_licenses": {
+    "note": "Third-party code linked statically into python_linux bin/python3 (which also links libpython statically), from build_info in PYTHON.json of the same release's pgo+lto-full archive and the version strings in the library. Shared with python_mac (same python-build-standalone release, so the same versions): openssl, expat, libffi, mpdecimal, bzip2, xz, sqlite, libuuid, hacl, mimalloc. Linux only (system libraries on macOS): zlib, ncurses and libedit (readline), whose texts are python/licenses/ of the pgo+lto-full archive. Tcl/Tk, X11 (_tkinter) and Berkeley DB (_dbm) are pruned with their modules. Shipped as LICENSES/python-third-party/<name>.txt.",
+    "shared": [
+      "openssl",
+      "expat",
+      "libffi",
+      "mpdecimal",
+      "bzip2",
+      "xz",
+      "sqlite",
+      "libuuid",
+      "hacl",
+      "mimalloc"
+    ],
+    "files": {
+      "zlib": {
+        "version": "1.3.2",
+        "license": "Zlib",
+        "url": "https://github.com/astral-sh/python-build-standalone/releases/download/20260924/cpython-3.13.15%2B20260924-x86_64-unknown-linux-gnu-pgo%2Blto-full.tar.zst",
+        "archive_sha256": "b806ebe660a0f7936f05fbcbc0ea4d98ec2fa3142e7b5c0805ffee06f18aad25",
+        "member": "python/licenses/LICENSE.zlib.txt",
+        "file": "python-licenses/zlib.txt",
+        "sha256": "818922b2620f12801a12bf78e399644a30990e66824abd8ca8ec24d451d6f92c"
+      },
+      "ncurses": {
+        "version": "6.5.20240427",
+        "license": "X11-style (MIT)",
+        "url": "https://github.com/astral-sh/python-build-standalone/releases/download/20260924/cpython-3.13.15%2B20260924-x86_64-unknown-linux-gnu-pgo%2Blto-full.tar.zst",
+        "archive_sha256": "b806ebe660a0f7936f05fbcbc0ea4d98ec2fa3142e7b5c0805ffee06f18aad25",
+        "member": "python/licenses/LICENSE.ncurses.txt",
+        "file": "python-licenses/ncurses.txt",
+        "sha256": "87a4c4442337b8968ef956031c406b74f9cb7149b7ba87311bdaba534816201c"
+      },
+      "libedit": {
+        "version": "as built by python-build-standalone 20260924",
+        "license": "BSD-3-Clause",
+        "url": "https://github.com/astral-sh/python-build-standalone/releases/download/20260924/cpython-3.13.15%2B20260924-x86_64-unknown-linux-gnu-pgo%2Blto-full.tar.zst",
+        "archive_sha256": "b806ebe660a0f7936f05fbcbc0ea4d98ec2fa3142e7b5c0805ffee06f18aad25",
+        "member": "python/licenses/LICENSE.libedit.txt",
+        "file": "python-licenses/libedit.txt",
+        "sha256": "29cea33c32bbc9785142386377915612a2fa786482c46843383384aded2e09b1"
+      }
+    }
+  },
   "python_windows": {
     "name": "CPython embeddable package (python.org)",
     "version": "3.13.15",
@@ -137,6 +193,7 @@
     "built_by": "scripts/build_stormlib.py (zig 0.15.2)",
     "windows_sha256": "dc1e133965432b55e0a016d0302399bfa57770c423d93db76e7dcfa45fd41b15",
     "mac_sha256": "80e591bac7e8a85958fe25ef640a5ff83fcc0a2915c9e27e511e85b91be26859",
+    "linux_sha256": "c88159a4d5c4a570daf554648253d9dd45ad7e9bdb55b251bfd9cdffaa0eb689",
     "license": "MIT; bundles zlib (zlib), bzip2 (BSD-style), LibTomCrypt/LibTomMath (public domain), LZMA SDK (public domain)"
   },
   "zig": {

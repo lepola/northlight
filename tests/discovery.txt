@@ -57,6 +57,7 @@ test_index_working_set.py
 test_install_world_cache.py
 test_job_system.py
 test_lamp_daylight.py
+test_linux_package.py
 test_live_terrain_gpu.py
 test_local_fog_batching.py
 test_local_fog_profile.py

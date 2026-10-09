@@ -1,23 +1,26 @@
 #!/usr/bin/env python3
-"""Build the player installer packages (macOS and Windows). Never runs a Windows binary or the game.
+"""Build the player installer packages (macOS, Windows and Linux). Never runs a Windows binary or the game.
 
     python3 renderer/build_packages.py --platform all --version 0.3.162 [--dll renderer/frd9.dll]
         [--variant-manifest out/variants/stock/northlight-cache.json] [--cache-zip Northlight-cache-stock-<d12>.zip]
         [--out out/packages]
 
-Northlight-<v>-<macOS|Windows>.zip holds one folder of the same name:
+Northlight-<v>-<macOS|Windows|Linux>.zip holds one folder of the same name:
   app/          the allowlisted repository subset (APP_FILES) in its repository layout: the installer
                 front end, install.py, migrate_mac_proxy.py and the local world-cache and art-layer
                 pipeline. Every repository module a packaged module imports must be packaged.
   runtime/      Python 3.13 (macOS: python-build-standalone arm64, pruned; Windows: python.org
-                embed-amd64) and StormLib (scripts/build_stormlib.py; the bytes must equal the pin)
+                embed-amd64; Linux: python-build-standalone x86_64-linux-gnu, pruned) and StormLib
+                (scripts/build_stormlib.py; the bytes must equal the pin)
   payload/      d3d9.dll (the renderer), the profile .ini files, northlight-quality.ini (the
-                player's own is kept; only settings it lacks are appended, commented out); Windows: DXVK 3.1.1 as renderer-backends/dxvk/dxvk_d3d9.dll
+                player's own is kept; only settings it lacks are appended, commented out); Windows and Linux (the game
+                runs under Wine there, so the payload is the Windows one): DXVK 3.1.1 as renderer-backends/dxvk/dxvk_d3d9.dll
                 and DXVK 2.7.1 (the alternative backend dxvk2) as renderer-backends/dxvk2/dxvk2_d3d9.dll
   variants/     the prebuilt cache manifests the installer matches (from --variant-manifest)
-  LICENSES/     third-party licences; macOS also python-third-party/ (the libraries linked into its python3)
+  LICENSES/     third-party licences; macOS and Linux also python-third-party/ (the libraries linked into their Python)
   BUILD-INFO.json, payload-manifest.json, README.txt and the launchers
-                (Install Northlight.command / Uninstall Northlight.command, or Install.cmd / Uninstall.cmd)
+                (Install Northlight.command / Uninstall Northlight.command, Install.cmd / Uninstall.cmd, or
+                install.sh / uninstall.sh)
 No world cache, MPQ or other game data, no records, logs or machine paths: tests/verify_packages.py
 checks the zips. Third-party downloads come from NORTHLIGHT_DOWNLOADS, then tools/, and must match
 renderer/package-pins.json. --cache-zip verifies a variant cache zip (allowlist, every file's sha256)
@@ -44,7 +47,8 @@ fp.use_source_modules()
 import build_stormlib  # noqa: E402
 
 PINS = json.loads((fp.RENDERER / 'package-pins.json').read_text(encoding='utf-8'))
-PLATFORMS = {'mac': 'macOS', 'windows': 'Windows'}
+PLATFORMS = {'mac': 'macOS', 'windows': 'Windows', 'linux': 'Linux'}
+PROXY_PLATFORMS = ('windows', 'linux')   # the game-folder d3d9.dll proxy with the bundled DXVK backends
 # Repository files the package needs, in their repository layout (northlight_paths finds them there).
 APP_FILES = [
     'northlight_paths.py', 'mpq.py', 'client_archives.py',
@@ -68,6 +72,11 @@ DXVK2_BACKEND = 'renderer-backends/dxvk2/dxvk2_d3d9.dll'
 MAC_RUNTIME_DROP = re.compile(r'^(bin/(?!python3\.13$)|include/|share/|lib/(libpython|libtcl|itcl|tcl|tk|thread|pkgconfig)|'
                               r'lib/python3\.13/(site-packages/|idlelib/|tkinter/|turtledemo/|ensurepip/|pydoc_data/|'
                               r'config-3\.13-darwin/|lib-dynload/_tkinter)|.*/__pycache__/)')
+# Pruned from the Linux runtime as on macOS (bin/python3.13 links libpython statically, so lib/libpython3.13.so.1.0 is
+# unused too), plus terminfo (share/), Tcl/Tk (libtcl9*, tcl9.0/, tk9.0/) and _dbm with its Berkeley DB.
+LINUX_RUNTIME_DROP = re.compile(r'^(bin/(?!python3\.13$)|include/|share/|lib/(libpython|libtcl|libtk|itcl|tcl|tk|thread|pkgconfig)|'
+                                r'lib/python3\.13/(site-packages/|idlelib/|tkinter/|turtledemo/|ensurepip/|pydoc_data/|'
+                                r'config-3\.13-x86_64-linux-gnu/|lib-dynload/_tkinter|lib-dynload/_dbm)|.*/__pycache__/)')
 CACHE_MEMBER = re.compile(r'^([A-Za-z0-9]+/\d+_\d+\.fg3|models/[0-9a-f]+\.fgs|lights/[A-Za-z0-9]+\.fgl|'
                           r'fog/[A-Za-z0-9]+/\d+_\d+\.frf|celestial/(sun|moon)\.fct|northlight-cache\.json)$')
 MARKER = re.compile(rb'Northlight renderer (\d+\.\d+\.\d+);')
@@ -195,21 +204,41 @@ class Tree:
         temp.replace(path)
 
 
-def mac_runtime(tree, pin, stormlib):
+def standalone_runtime(tree, pin, drop):
+    """A pruned python-build-standalone install_only tree as runtime/ (bin/python3.13 becomes bin/python3)."""
     with tarfile.open(download(pin)) as tar:
         for member in tar.getmembers():
             if not member.isfile() or not member.name.startswith('python/'):
                 continue
             rel = member.name[len('python/'):]
-            if MAC_RUNTIME_DROP.match(rel):
+            if drop.match(rel):
                 continue
             data = tar.extractfile(member).read()
             if rel == 'bin/python3.13':
                 rel = 'bin/python3'
             tree.add('runtime/' + rel, data, executable=bool(member.mode & 0o111) and rel.startswith('bin/'))
-    tree.add('runtime/lib/libstorm.dylib', stormlib.read_bytes(), executable=True)
     tree.add('LICENSES/Python-LICENSE.txt', tree.data('runtime/lib/python3.13/LICENSE.txt'))
-    for name, licence in PINS['python_mac_licenses']['files'].items():   # statically linked into bin/python3
+
+
+def python_licences(platform):
+    """{name: pin} of the third-party libraries linked into the platform's Python."""
+    if platform == 'mac':
+        return dict(PINS['python_mac_licenses']['files'])
+    pins = PINS['python_linux_licenses']
+    return {**{n: PINS['python_mac_licenses']['files'][n] for n in pins['shared']}, **pins['files']}
+
+
+def mac_runtime(tree, pin, stormlib):
+    standalone_runtime(tree, pin, MAC_RUNTIME_DROP)
+    tree.add('runtime/lib/libstorm.dylib', stormlib.read_bytes(), executable=True)
+    for name, licence in python_licences('mac').items():   # statically linked into bin/python3
+        tree.add(f'LICENSES/python-third-party/{name}.txt', download(licence).read_bytes())
+
+
+def linux_runtime(tree, pin, stormlib):
+    standalone_runtime(tree, pin, LINUX_RUNTIME_DROP)
+    tree.add('runtime/lib/libstorm.so', stormlib.read_bytes(), executable=True)
+    for name, licence in sorted(python_licences('linux').items()):   # statically linked into bin/python3
         tree.add(f'LICENSES/python-third-party/{name}.txt', download(licence).read_bytes())
 
 
@@ -233,6 +262,30 @@ def dxvk_files(pin_name='dxvk'):
 
 
 def launchers(platform, version):
+    if platform == 'linux':
+        def script(action):
+            # POSIX sh: `sh install.sh` (dash) works as well as `bash install.sh` or ./install.sh.
+            return (f'#!/bin/sh\n# Northlight renderer {version}: {action} (Linux; the game runs under Wine or Proton).\n'
+                    f'# Start it in a terminal in this folder:  bash {action}.sh\n'
+                    '# A first argument install, uninstall or status replaces the default action.\n'
+                    'PKG="$(cd "$(dirname "$0")" && pwd -P)"\n'
+                    'PY="$PKG/runtime/bin/python3"\n'
+                    '# Some archive tools drop the executable bit; this restores it in this package folder only.\n'
+                    '[ -x "$PY" ] || chmod u+x "$PY" 2>/dev/null\n'
+                    'if [ "$(uname -m)" != x86_64 ]; then\n'
+                    '  echo "This package is for 64-bit x86 Linux (x86_64); this computer is $(uname -m)."; exit 126\n'
+                    'fi\n'
+                    'if ! "$PY" -I -c ""; then\n'
+                    '  echo "Cannot run the package\'s own Python ($PY); the reason is above. It needs glibc 2.17 or newer."\n'
+                    '  echo "Unzip the package into your home folder (not onto an NTFS/exFAT drive or a noexec mount) and run this again."\n'
+                    '  exit 126\n'
+                    'fi\n'
+                    f'"$PY" -I -B -X utf8 "$PKG/app/renderer/northlight_install.py" --default-action {action} "$@"\n'
+                    'status=$?\n'
+                    '# Started from a file manager, the window would close before the result can be read.\n'
+                    'if [ -t 0 ]; then echo; printf "Press Enter to close this window. "; read -r _; fi\n'
+                    'exit $status\n').encode('ascii')
+        return {'install.sh': script('install'), 'uninstall.sh': script('uninstall')}
     if platform == 'windows':
         def cmd(action):
             return ('@echo off\r\nchcp 65001 >nul\r\n'
@@ -264,15 +317,15 @@ def build(platform, version, dll, variants, out, stormlib_dir):
         tree.add('app/' + name, fp.REPO / name)
     dll_data = dll.read_bytes()
     dll_version = check_dll(dll_data)
-    target = 'windows' if platform == 'windows' else 'mac'
+    target = platform
     lib = build_stormlib.build(target, stormlib_dir / target)
     problems, _ = build_stormlib.verify(lib)
     if problems or sha(lib) != PINS['stormlib'][target + '_sha256']:
         raise SystemExit(f'StormLib {target} build does not verify or does not match its pin: {problems or sha(lib)}')
     runtime_pin = PINS['python_' + platform]
-    (windows_runtime if platform == 'windows' else mac_runtime)(tree, runtime_pin, lib)
+    {'windows': windows_runtime, 'mac': mac_runtime, 'linux': linux_runtime}[platform](tree, runtime_pin, lib)
     payload = {n: (fp.REPO / src).read_bytes() for n, src in PAYLOAD_COMMON.items()}
-    if platform == 'windows':
+    if platform in PROXY_PLATFORMS:
         backend, license_text = dxvk_files('dxvk')
         backend2, license_text2 = dxvk_files('dxvk2')
         payload.update({'d3d9.dll': dll_data, DXVK_BACKEND: backend, 'renderer-backends/dxvk/LICENSE': license_text,
@@ -290,7 +343,7 @@ def build(platform, version, dll, variants, out, stormlib_dir):
     for name, manifest in sorted(variants.items()):
         tree.add(f'variants/{name}.json', (json.dumps(manifest, indent=2) + '\n').encode())
     tree.add('LICENSES/StormLib-NOTICES.txt', build_stormlib.notices(build_stormlib.source_root()).encode('utf-8'))
-    readme = fp.RENDERER / ('windows-package' if platform == 'windows' else 'mac-package') / 'README.txt'
+    readme = fp.RENDERER / f'{platform}-package' / 'README.txt'
     text = readme.read_text(encoding='utf-8').replace('__RELEASE_VERSION__', version)
     tree.add('README.txt', text.replace('\n', '\r\n').encode('utf-8') if platform == 'windows' else text.encode('utf-8'))
     for name, data in launchers(platform, version).items():
@@ -300,8 +353,8 @@ def build(platform, version, dll, variants, out, stormlib_dir):
             'dll_pe_normalized_sha256': hashlib.sha256(pe_normalized(dll_data)).hexdigest(),
             'stormlib_sha256': sha(lib), 'stormlib_source_tree_sha256': PINS['stormlib']['source_tree_sha256'],
             'runtime': {k: runtime_pin[k] for k in ('name', 'version', 'url', 'sha256')},
-            'dxvk': {k: PINS['dxvk'][k] for k in ('version', 'url', 'sha256')} if platform == 'windows' else None,
-            'dxvk_fallback': {k: PINS['dxvk2'][k] for k in ('version', 'url', 'sha256')} if platform == 'windows' else None,
+            'dxvk': {k: PINS['dxvk'][k] for k in ('version', 'url', 'sha256')} if platform in PROXY_PLATFORMS else None,
+            'dxvk_fallback': {k: PINS['dxvk2'][k] for k in ('version', 'url', 'sha256')} if platform in PROXY_PLATFORMS else None,
             'variants': {n: {'cache_digest': m['cache_digest'], 'files': len(m['files'])} for n, m in sorted(variants.items())},
             'app_files': {n: sha(fp.REPO / n) for n in APP_FILES}}
     tree.add('BUILD-INFO.json', (json.dumps(info, indent=2) + '\n').encode())
@@ -318,7 +371,7 @@ def pe_normalized(data):
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument('--platform', choices=['mac', 'windows', 'all'], default='all')
+    ap.add_argument('--platform', choices=[*PLATFORMS, 'all'], default='all')
     ap.add_argument('--version', required=True, help='package label, e.g. 0.3.162')
     ap.add_argument('--dll', type=Path, help='renderer build (default: renderer/frd9.dll or NORTHLIGHT_DLL)')
     ap.add_argument('--variant-manifest', type=Path, action='append', default=[],
@@ -355,7 +408,7 @@ def main():
         reports.append({'platform': 'any', 'file': name, 'sha256': sha(out / name), 'bytes': (out / name).stat().st_size,
                         'variant': manifest['variant'], 'cache_digest': manifest['cache_digest']})
     dll = args.dll or fp.dll()
-    for platform in ['mac', 'windows'] if args.platform == 'all' else [args.platform]:
+    for platform in list(PLATFORMS) if args.platform == 'all' else [args.platform]:
         reports.append(build(platform, args.version, dll, variants, out, fp.out() / 'stormlib'))
         print('Built', reports[-1]['file'], reports[-1]['bytes'], 'bytes', flush=True)
     (out / 'packages.json').write_text(json.dumps({'version': args.version, 'packages': reports}, indent=2) + '\n')
