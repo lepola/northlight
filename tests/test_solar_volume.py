@@ -159,13 +159,8 @@ def main():
     assert 'c[22][3]=.0035f+.0031f*c[31][3]' in cpu
     assert 'airBase=lerp(airBase,FogColor.w,generalForest);' in shader
     # Horizon haze sits between the scene and the local scattering, same debug gate.
-    # 0.3.202 (rain mask): the lerp back to the unfogged colour on rain-mask pixels wraps haze + fog mad.
-    assert ('if(PassInfo.z<.5){\n        float3 unfogged=color;\n'
-            '        // Rain streaks were drawn into the scene before the composite: on mask pixels go back toward the unfogged pixel so they are not hazed.\n'
-            '        // 0.3.203 (particle mask): a translucent particle writes no depth, so its pixel carries the background\'s depth. Everything above ran on the background colour (bg);\n'
-            '        // the pixel is T x background + emission, so the result is original + T x (F(bg) - bg), F being the relight, AO, haze and fog.\n'
-            '        color=lerp(mad(horizonHaze(color,centerUV,viewZ,d>=.99999&&liquid<=0),fog.a,fog.rgb),unfogged,mask.x);\n'
-            '        color=mad(1-mask.y,color-bg,original.rgb); // untouched: mask.y is 0 and bg is original\n    }') in shader
+    # 0.3.203 (transmittance mask): rain streaks and particles are composited as original + T x (F(bg) - B) inside the same debug gate.
+    assert "    if(PassInfo.z<.5){\n        // 0.3.203 (particle mask): translucent particles write no depth and the rain streaks are drawn over the scene, so their pixels carry the background's depth. Everything above ran on the background\n        // colour (bg); the pixel is T x background + emission (rain streaks are alpha-over draws like the particles), so the result is original + T x (F(bg) - bg), F being the relight, AO, haze and fog.\n        // out = E + T x F(M x B): the streaks' and particles' own light is neither hazed nor multiplied, the halo is fogged with the background it multiplies.\n        color=mad(1-mask.y,mad(horizonHaze(color,centerUV,viewZ,d>=.99999&&liquid<=0),fog.a,fog.rgb)-B,pixel); // untouched, no halo: mask.y is 0, M is 1 and B is original\n    }" in shader
     assert 'mad(legacyT,fog.rgb,fogPart)' not in shader
     # 0.3.163: fog-pass-only overrides. The sun's forward soft cap .38 -> .95 (moon .24 kept),
     # the sun's c17 takes the glow hue, c18.rgb is cooled (w kept) for the fog loop only and
