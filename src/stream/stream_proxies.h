@@ -241,7 +241,12 @@ struct StreamCore {
     std::uint64_t frameNo=0;         // game thread: Presents so far (the idle clock of buffer shadows)
     DWORD (*readBackLock)()=nullptr;             // flags of the stream's own READONLY read-backs of buffers (NorthlightUpload::readBackLock in the DLL); null = READONLY
     void (*logLine)(const char*)=nullptr;        // diagnostics sink (renderer.cpp's logf); may be null
-    static constexpr std::size_t slicesFor(unsigned framesAhead){return std::size_t(clampFramesAhead(framesAhead))+2;}   // 0.3.204 (task 21): slices a buffer may own in all (current + ring)
+    static constexpr std::size_t slicesFor(unsigned framesAhead){return std::size_t(clampFramesAhead(framesAhead))+2;}   // 0.3.204 (task 21): the least slices a buffer may own in all (current + ring)
+    // 0.3.204 (task 21): a buffer that DISCARDs n times per frame has n x (framesAhead+1) + 1 slices in flight at most; never below slicesFor, never above kRingHardMax (still subject to the memory rules)
+    static constexpr std::size_t kRingHardMax=12;
+    static constexpr std::size_t allowedSlices(unsigned framesAhead,unsigned discardsPerFrame){
+        const std::size_t want=std::size_t(discardsPerFrame)*(clampFramesAhead(framesAhead)+1)+1,base=slicesFor(framesAhead);
+        return (want>base?want:base)<kRingHardMax?(want>base?want:base):kRingHardMax;}
     explicit StreamCore(std::size_t budget=BudgetBytes):q(budget){}
     void log(const char* text){if(logLine)logLine(text);}
     // Replay thread: Target-level interface pointer -> game-facing proxy (taking over the reference the Target returned).
@@ -642,6 +647,8 @@ struct BufferState {
     // zc: the current lock is a DISCARD/NOOVERWRITE write lock on a slice.
     struct Slice {std::vector<unsigned char> mem;std::uint64_t seq=0,frame=0;};
     std::vector<Slice> ring;std::uint64_t sliceSeq=0;bool zc=false;
+    // DISCARD locks per frame (StreamCore::frameNo): discNow in frame discFrame, discMax the largest count of the last kDiscardWindowFrames frames (it decays); they size the ring (StreamCore::allowedSlices).
+    std::uint64_t discFrame=0,discMaxFrame=0;unsigned discNow=0,discMax=0;
 };
 // Buffer shadows (game-side memory, persistent CPU copies of the buffer; every lock of one returns shadow memory and Unlock copies the locked range into
 // the queue). They share one cap (ShadowBudgetBytes, adaptive, outside the queue budget) and ONE LRU: a DYNAMIC buffer gets its shadow at creation when
@@ -823,6 +830,16 @@ inline bool waitSliceSeq(StreamCore& c,std::uint64_t seq,bool rename){
     if(inPumpedWait){add(q.stats.nestedSyncs);return false;}
     const std::uint64_t t0=nowNs();q.waitReplayed(seq,WaitKind::Sync);const std::uint64_t ns=nowNs()-t0;own(rename?q.stats.renameWaits:q.stats.writeWaits);own(rename?q.stats.renameWaitNs:q.stats.writeWaitNs,ns);return true;
 }
+constexpr std::uint64_t kDiscardWindowFrames=60;
+// Game thread, at every DISCARD write lock of a slice-capable buffer: counts it in the current frame; the largest per-frame count of the last kDiscardWindowFrames frames decays. Returns the count that sizes the ring.
+inline unsigned noteDiscard(StreamCore& c,BufferState& s){
+    if(s.discFrame!=c.frameNo){   // a new frame: the one just ended competes for the window's maximum (an expired maximum is replaced by it)
+        if(s.discNow>=s.discMax||c.frameNo>=s.discMaxFrame+kDiscardWindowFrames){s.discMax=s.discNow;s.discMaxFrame=s.discFrame;}
+        s.discFrame=c.frameNo;s.discNow=0;
+    }
+    ++s.discNow;raiseMax(c.q.stats.maxDiscards,s.discNow);
+    return s.discNow>s.discMax?s.discNow:s.discMax;
+}
 constexpr std::size_t kZeroCopyMin=4096;   // a smaller range keeps the inline copy (cheaper than a reference and its bookkeeping)
 // Game thread: a write lock of a DYNAMIC buffer's current slice (s.shadow). The replay thread may still read that slice for zero-copy unlocks recorded earlier (s.sliceSeq), so:
 // no pending reader: as it is. DISCARD (the contents are undefined): the game gets another slice of the buffer's ring, the old one stays (renamed) for its readers: the oldest free one (its readers retired); else a new one if the
@@ -831,21 +848,27 @@ constexpr std::size_t kZeroCopyMin=4096;   // a smaller range keeps the inline c
 // false = nested in a pumped wait with the slice busy: the caller drops the shadow (it retires with its readers) and takes the unshadowed path.
 inline bool prepareSliceWrite(ProxyBase& self,BufferState& s,DWORD eff){
     StreamCore& c=*self.core;Queue& q=c.q;
+    const unsigned perFrame=(eff&D3::kLockDiscard)?noteDiscard(c,s):0;
     if(q.replayedSeq()>=s.sliceSeq)return true;
     if(eff&D3::kLockDiscard){
         const std::size_t len=self.info.length;trimRetired(c);
+        const std::size_t allowed=StreamCore::allowedSlices(c.framesAhead,perFrame);
+        bool atMax=false,noRoom=false,allocFailed=false;
         const std::uint64_t rep=q.replayedSeq();std::size_t pick=s.ring.size();
         for(std::size_t i=0;i<s.ring.size();++i)if(rep>=s.ring[i].seq&&(pick==s.ring.size()||s.ring[i].seq<s.ring[pick].seq))pick=i;
-        if(pick==s.ring.size()&&s.ring.size()+1<StreamCore::slicesFor(c.framesAhead)&&!q.pressure()){
+        if(pick==s.ring.size()&&s.ring.size()+1>=allowed)atMax=true;
+        else if(pick==s.ring.size()&&!q.pressure()){
             // a new slice is counted where the buffer's shadow is: largeShadowBytes (up to twice the allowance) or shadowBytes (up to twice the current cap)
             const std::int64_t sb=q.stats.shadowBytes.load(std::memory_order_relaxed);
             const bool room=s.large?q.largeBytes()+len<=2*LargeShadowBudgetBytes:(sb>0?std::size_t(sb):0)+len<=2*q.shadowCap();
-            if(room){
-                try{BufferState::Slice sl;sl.mem.assign(len+kLockSlack,0);sl.frame=c.frameNo;s.ring.push_back(std::move(sl));pick=s.ring.size()-1;}catch(...){pick=s.ring.size();}
-                if(pick<s.ring.size()){if(s.large)q.addLargeBytes(std::int64_t(len));else q.addShadowBytes(std::int64_t(len));q.stats.ringBytes.fetch_add(std::int64_t(len),std::memory_order_relaxed);q.stats.ringSlices.fetch_add(1,std::memory_order_relaxed);own(q.stats.renameAllocs);}
+            if(!room)noRoom=true;
+            else{
+                try{BufferState::Slice sl;sl.mem.assign(len+kLockSlack,0);sl.frame=c.frameNo;s.ring.push_back(std::move(sl));pick=s.ring.size()-1;}catch(...){pick=s.ring.size();allocFailed=true;}
+                if(pick<s.ring.size()){if(s.large)q.addLargeBytes(std::int64_t(len));else q.addShadowBytes(std::int64_t(len));q.stats.ringBytes.fetch_add(std::int64_t(len),std::memory_order_relaxed);q.stats.ringSlices.fetch_add(1,std::memory_order_relaxed);own(q.stats.renameAllocs);raiseMax(q.stats.maxRing,s.ring.size());}
             }
         }
-        if(pick==s.ring.size()){   // none free, none allowed
+        if(pick==s.ring.size()){   // none free, none allowed: why (the zerocopy line's waitWhy)
+            own(atMax?q.stats.waitMax:q.pressure()?q.stats.waitPressure:noRoom?q.stats.waitBudget:allocFailed?q.stats.waitAlloc:q.stats.waitMax);
             if(s.ring.empty())return waitSliceSeq(c,s.sliceSeq,true);   // no second slice: the readers must finish before the game overwrites this one
             pick=0;for(std::size_t i=1;i<s.ring.size();++i)if(s.ring[i].seq<s.ring[pick].seq)pick=i;   // the oldest busy one
             if(!waitSliceSeq(c,s.ring[pick].seq,true))return false;
