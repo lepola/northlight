@@ -180,42 +180,55 @@ mul r0.w, r0.w, r1.z
 mul r1.y, r1.y, c59.x
 mul r0.w, r1.y, r0.w
 mul r1.yzw, c44.xxyz, r0.w
-max r0.w, r1.z, r1.w
-max r0.w, r1.y, r0.w
-mul r0.w, r0.w, c58.z
-mul r2.x, c58.w, r0.w
-add r0.w, c58.w, r0.w
-rcp r0.w, r0.w
-mul r0.w, r2.x, r0.w
 add r2.xyz, c15.xyzx, -c37.xyzx
-dp3 r2.w, r2.xyzx, r0.xyzx
+dp3 r0.w, r2.xyzx, r0.xyzx
 dp3 r2.x, r2.xyzx, r2.xyzx
-mul r2.y, r2.w, r2.w
+mul r2.y, r0.w, r0.w
 add r2.x, r2.x, -r2.y
 max r2.x, r2.x, c68.z
 mul r2.y, c37.w, c37.w
 add r2.z, r2.y, -r2.x
-max r3.x, r2.z, c68.z
-rsq r3.x, r3.x
-rcp r3.x, r3.x
-mov r3.y, -r3.x
-add r3.y, -r2.w, r3.y
-max r3.y, r3.y, c58.x
-add r3.x, -r2.w, r3.x
-min r3.x, r3.x, r1.x
-mul r3.z, c37.w, c73.w
-max r3.z, r3.z, c73.z
-mul r3.zw, r3.z, r3.z
-add r2.x, r2.x, r3.z
+max r2.w, r2.z, c68.z
+rsq r2.w, r2.w
+rcp r2.w, r2.w
+mov r3.x, -r2.w
+add r3.x, -r0.w, r3.x
+max r3.x, r3.x, c58.x
+add r2.w, -r0.w, r2.w
+min r2.w, r2.w, r1.x
+mul r3.y, c37.w, c73.w
+max r3.y, r3.y, c73.z
+mul r3.yz, r3.y, r3.y
+add r2.x, r2.x, r3.y
 rsq r2.x, r2.x
-add r2.y, r2.y, r3.w
+add r2.y, r2.y, r3.z
 max r2.y, r2.y, c74.x
 rcp r2.y, r2.y
 cmp r2.z, -r2.z, c68.z, c71.x
-add r3.z, r3.y, -r3.x
-cmp r3.z, r3.z, c68.z, c71.x
-min r2.z, r2.z, r3.z
-add r3.z, r3.x, r2.w
+add r3.y, r3.x, -r2.w
+cmp r3.y, r3.y, c68.z, c71.x
+min r2.z, r2.z, r3.y
+add r3.y, r2.w, r0.w
+mul r3.y, r3.y, r2.x
+abs r3.z, r3.y
+add r3.w, -r3.z, c71.x
+cmp r4.x, r3.w, c68.z, c71.x
+add r4.x, -r4.x, c71.x
+mul r3.w, r3.w, c74.z
+add r3.w, r3.w, c74.y
+mul r3.w, r3.z, r3.w
+rcp r4.y, r3.z
+rcp r3.z, r3.z
+mov r3.z, -r3.z
+add r3.z, r3.z, c71.x
+mul r3.z, r3.z, c74.z
+add r3.z, r3.z, c74.y
+mul r3.z, r4.y, r3.z
+add r3.z, -r3.z, c74.w
+cmp r3.z, -r4.x, r3.z, r3.w
+cmp r3.y, r3.y, c68.z, c71.x
+cmp r3.y, -r3.y, r3.z, -r3.z
+add r3.z, r3.x, r0.w
 mul r3.z, r3.z, r2.x
 abs r3.w, r3.z
 add r4.x, -r3.w, c71.x
@@ -235,83 +248,75 @@ add r3.w, -r3.w, c74.w
 cmp r3.w, -r4.y, r3.w, r4.x
 cmp r3.z, r3.z, c68.z, c71.x
 cmp r3.z, -r3.z, r3.w, -r3.w
-add r3.w, r3.y, r2.w
-mul r3.w, r3.w, r2.x
-abs r4.x, r3.w
-add r4.y, -r4.x, c71.x
-cmp r4.z, r4.y, c68.z, c71.x
-add r4.z, -r4.z, c71.x
-mul r4.y, r4.y, c74.z
-add r4.y, r4.y, c74.y
-mul r4.y, r4.x, r4.y
-rcp r4.w, r4.x
-rcp r4.x, r4.x
-mov r4.x, -r4.x
-add r4.x, r4.x, c71.x
-mul r4.x, r4.x, c74.z
-add r4.x, r4.x, c74.y
-mul r4.x, r4.w, r4.x
-add r4.x, -r4.x, c74.w
-cmp r4.x, -r4.z, r4.x, r4.y
-cmp r3.w, r3.w, c68.z, c71.x
-cmp r3.w, -r3.w, r4.x, -r4.x
-add r3.z, r3.z, -r3.w
-mul r2.x, r3.z, r2.x
-add r3.z, r3.x, -r3.y
-mul r2.y, r3.z, r2.y
+add r3.y, r3.y, -r3.z
+mul r2.x, r3.y, r2.x
+add r3.y, r2.w, -r3.x
+mul r2.y, r3.y, r2.y
 add r2.x, r2.x, -r2.y
 max r2.x, r2.x, c68.z
 cmp r2.x, -r2.z, c68.z, r2.x
-max r2.y, -r2.w, r3.y
-min r2.y, r2.y, r3.x
-add r2.y, r2.y, -c58.x
-mul r2.y, r2.y, c58.y
-mov_sat r2.y, r2.y
-mul r2.z, r2.y, c72.y
-add r2.z, -r2.z, c75.x
-mul r2.z, r2.y, r2.z
-mul r2.y, r2.y, r2.z
+max r0.w, -r0.w, r3.x
+min r0.w, r0.w, r2.w
+add r0.w, r0.w, -c58.x
+mul r0.w, r0.w, c58.y
+mov_sat r0.w, r0.w
+mul r2.y, r0.w, c72.y
+add r2.y, -r2.y, c75.x
+mul r2.y, r0.w, r2.y
+mul r0.w, r0.w, r2.y
 mul r2.x, r2.x, c60.x
-mul r2.x, r2.x, r2.y
-mul r2.xyz, c45.xyzx, r2.x
+mul r0.w, r2.x, r0.w
+mul r2.xyz, c45.xyzx, r0.w
 add r1.yzw, r1.xyzw, r2.xxyz
-max r2.w, r2.y, r2.z
-max r2.x, r2.x, r2.w
-mul r2.x, r2.x, c58.z
-mul r2.y, c58.w, r2.x
-add r2.x, c58.w, r2.x
-rcp r2.x, r2.x
-mul r2.x, r2.y, r2.x
-add r0.w, r0.w, r2.x
 add r2.xyz, c15.xyzx, -c38.xyzx
-dp3 r2.w, r2.xyzx, r0.xyzx
+dp3 r0.w, r2.xyzx, r0.xyzx
 dp3 r2.x, r2.xyzx, r2.xyzx
-mul r2.y, r2.w, r2.w
+mul r2.y, r0.w, r0.w
 add r2.x, r2.x, -r2.y
 max r2.x, r2.x, c68.z
 mul r2.y, c38.w, c38.w
 add r2.z, r2.y, -r2.x
-max r3.x, r2.z, c68.z
-rsq r3.x, r3.x
-rcp r3.x, r3.x
-mov r3.y, -r3.x
-add r3.y, -r2.w, r3.y
-max r3.y, r3.y, c58.x
-add r3.x, -r2.w, r3.x
-min r3.x, r3.x, r1.x
-mul r3.z, c38.w, c73.w
-max r3.z, r3.z, c73.z
-mul r3.zw, r3.z, r3.z
-add r2.x, r2.x, r3.z
+max r2.w, r2.z, c68.z
+rsq r2.w, r2.w
+rcp r2.w, r2.w
+mov r3.x, -r2.w
+add r3.x, -r0.w, r3.x
+max r3.x, r3.x, c58.x
+add r2.w, -r0.w, r2.w
+min r2.w, r2.w, r1.x
+mul r3.y, c38.w, c73.w
+max r3.y, r3.y, c73.z
+mul r3.yz, r3.y, r3.y
+add r2.x, r2.x, r3.y
 rsq r2.x, r2.x
-add r2.y, r2.y, r3.w
+add r2.y, r2.y, r3.z
 max r2.y, r2.y, c74.x
 rcp r2.y, r2.y
 cmp r2.z, -r2.z, c68.z, c71.x
-add r3.z, r3.y, -r3.x
-cmp r3.z, r3.z, c68.z, c71.x
-min r2.z, r2.z, r3.z
-add r3.z, r3.x, r2.w
+add r3.y, r3.x, -r2.w
+cmp r3.y, r3.y, c68.z, c71.x
+min r2.z, r2.z, r3.y
+add r3.y, r2.w, r0.w
+mul r3.y, r3.y, r2.x
+abs r3.z, r3.y
+add r3.w, -r3.z, c71.x
+cmp r4.x, r3.w, c68.z, c71.x
+add r4.x, -r4.x, c71.x
+mul r3.w, r3.w, c74.z
+add r3.w, r3.w, c74.y
+mul r3.w, r3.z, r3.w
+rcp r4.y, r3.z
+rcp r3.z, r3.z
+mov r3.z, -r3.z
+add r3.z, r3.z, c71.x
+mul r3.z, r3.z, c74.z
+add r3.z, r3.z, c74.y
+mul r3.z, r4.y, r3.z
+add r3.z, -r3.z, c74.w
+cmp r3.z, -r4.x, r3.z, r3.w
+cmp r3.y, r3.y, c68.z, c71.x
+cmp r3.y, -r3.y, r3.z, -r3.z
+add r3.z, r3.x, r0.w
 mul r3.z, r3.z, r2.x
 abs r3.w, r3.z
 add r4.x, -r3.w, c71.x
@@ -331,54 +336,26 @@ add r3.w, -r3.w, c74.w
 cmp r3.w, -r4.y, r3.w, r4.x
 cmp r3.z, r3.z, c68.z, c71.x
 cmp r3.z, -r3.z, r3.w, -r3.w
-add r3.w, r3.y, r2.w
-mul r3.w, r3.w, r2.x
-abs r4.x, r3.w
-add r4.y, -r4.x, c71.x
-cmp r4.z, r4.y, c68.z, c71.x
-add r4.z, -r4.z, c71.x
-mul r4.y, r4.y, c74.z
-add r4.y, r4.y, c74.y
-mul r4.y, r4.x, r4.y
-rcp r4.w, r4.x
-rcp r4.x, r4.x
-mov r4.x, -r4.x
-add r4.x, r4.x, c71.x
-mul r4.x, r4.x, c74.z
-add r4.x, r4.x, c74.y
-mul r4.x, r4.w, r4.x
-add r4.x, -r4.x, c74.w
-cmp r4.x, -r4.z, r4.x, r4.y
-cmp r3.w, r3.w, c68.z, c71.x
-cmp r3.w, -r3.w, r4.x, -r4.x
-add r3.z, r3.z, -r3.w
-mul r2.x, r3.z, r2.x
-add r3.z, r3.x, -r3.y
-mul r2.y, r3.z, r2.y
+add r3.y, r3.y, -r3.z
+mul r2.x, r3.y, r2.x
+add r3.y, r2.w, -r3.x
+mul r2.y, r3.y, r2.y
 add r2.x, r2.x, -r2.y
 max r2.x, r2.x, c68.z
 cmp r2.x, -r2.z, c68.z, r2.x
-max r2.y, -r2.w, r3.y
-min r2.y, r2.y, r3.x
-add r2.y, r2.y, -c58.x
-mul r2.y, r2.y, c58.y
-mov_sat r2.y, r2.y
-mul r2.z, r2.y, c72.y
-add r2.z, -r2.z, c75.x
-mul r2.z, r2.y, r2.z
-mul r2.y, r2.y, r2.z
+max r0.w, -r0.w, r3.x
+min r0.w, r0.w, r2.w
+add r0.w, r0.w, -c58.x
+mul r0.w, r0.w, c58.y
+mov_sat r0.w, r0.w
+mul r2.y, r0.w, c72.y
+add r2.y, -r2.y, c75.x
+mul r2.y, r0.w, r2.y
+mul r0.w, r0.w, r2.y
 mul r2.x, r2.x, c61.x
-mul r2.x, r2.x, r2.y
-mul r2.xyz, c46.xyzx, r2.x
+mul r0.w, r2.x, r0.w
+mul r2.xyz, c46.xyzx, r0.w
 add r1.yzw, r1.xyzw, r2.xxyz
-max r2.w, r2.y, r2.z
-max r2.x, r2.x, r2.w
-mul r2.x, r2.x, c58.z
-mul r2.y, c58.w, r2.x
-add r2.x, c58.w, r2.x
-rcp r2.x, r2.x
-mul r2.x, r2.y, r2.x
-add r0.w, r0.w, r2.x
 add r2.xyz, c15.xyzx, -c39.xyzx
 dp3 r0.x, r2.xyzx, r0.xyzx
 dp3 r0.y, r2.xyzx, r2.xyzx
@@ -386,30 +363,50 @@ mul r0.z, r0.x, r0.x
 add r0.y, r0.y, -r0.z
 max r0.y, r0.y, c68.z
 mul r0.z, c39.w, c39.w
-add r2.x, r0.z, -r0.y
-max r2.y, r2.x, c68.z
-rsq r2.y, r2.y
-rcp r2.y, r2.y
-mov r2.z, -r2.y
-add r2.z, -r0.x, r2.z
-max r2.z, r2.z, c58.x
+add r0.w, r0.z, -r0.y
+max r2.x, r0.w, c68.z
+rsq r2.x, r2.x
+rcp r2.x, r2.x
+mov r2.y, -r2.x
 add r2.y, -r0.x, r2.y
-min r1.x, r2.y, r1.x
-mul r2.y, c39.w, c73.w
-max r2.y, r2.y, c73.z
-mul r2.yw, r2.y, r2.y
-add r0.y, r0.y, r2.y
+max r2.y, r2.y, c58.x
+add r2.x, -r0.x, r2.x
+min r1.x, r2.x, r1.x
+mul r2.x, c39.w, c73.w
+max r2.x, r2.x, c73.z
+mul r2.xz, r2.x, r2.x
+add r0.y, r0.y, r2.x
 rsq r0.y, r0.y
-add r0.z, r0.z, r2.w
+add r0.z, r0.z, r2.z
 max r0.z, r0.z, c74.x
 rcp r0.z, r0.z
-cmp r2.x, -r2.x, c68.z, c71.x
-add r2.y, r2.z, -r1.x
-cmp r2.y, r2.y, c68.z, c71.x
-min r2.x, r2.x, r2.y
-add r2.y, r1.x, r0.x
-mul r2.y, r2.y, r0.y
-abs r2.w, r2.y
+cmp r0.w, -r0.w, c68.z, c71.x
+add r2.x, r2.y, -r1.x
+cmp r2.x, r2.x, c68.z, c71.x
+min r0.w, r0.w, r2.x
+add r2.x, r1.x, r0.x
+mul r2.x, r2.x, r0.y
+abs r2.z, r2.x
+add r2.w, -r2.z, c71.x
+cmp r3.x, r2.w, c68.z, c71.x
+add r3.x, -r3.x, c71.x
+mul r2.w, r2.w, c74.z
+add r2.w, r2.w, c74.y
+mul r2.w, r2.z, r2.w
+rcp r3.y, r2.z
+rcp r2.z, r2.z
+mov r2.z, -r2.z
+add r2.z, r2.z, c71.x
+mul r2.z, r2.z, c74.z
+add r2.z, r2.z, c74.y
+mul r2.z, r3.y, r2.z
+add r2.z, -r2.z, c74.w
+cmp r2.z, -r3.x, r2.z, r2.w
+cmp r2.x, r2.x, c68.z, c71.x
+cmp r2.x, -r2.x, r2.z, -r2.z
+add r2.z, r2.y, r0.x
+mul r2.z, r2.z, r0.y
+abs r2.w, r2.z
 add r3.x, -r2.w, c71.x
 cmp r3.y, r3.x, c68.z, c71.x
 add r3.y, -r3.y, c71.x
@@ -425,36 +422,16 @@ add r2.w, r2.w, c74.y
 mul r2.w, r3.z, r2.w
 add r2.w, -r2.w, c74.w
 cmp r2.w, -r3.y, r2.w, r3.x
-cmp r2.y, r2.y, c68.z, c71.x
-cmp r2.y, -r2.y, r2.w, -r2.w
-add r2.w, r2.z, r0.x
-mul r2.w, r2.w, r0.y
-abs r3.x, r2.w
-add r3.y, -r3.x, c71.x
-cmp r3.z, r3.y, c68.z, c71.x
-add r3.z, -r3.z, c71.x
-mul r3.y, r3.y, c74.z
-add r3.y, r3.y, c74.y
-mul r3.y, r3.x, r3.y
-rcp r3.w, r3.x
-rcp r3.x, r3.x
-mov r3.x, -r3.x
-add r3.x, r3.x, c71.x
-mul r3.x, r3.x, c74.z
-add r3.x, r3.x, c74.y
-mul r3.x, r3.w, r3.x
-add r3.x, -r3.x, c74.w
-cmp r3.x, -r3.z, r3.x, r3.y
-cmp r2.w, r2.w, c68.z, c71.x
-cmp r2.w, -r2.w, r3.x, -r3.x
-add r2.y, r2.y, -r2.w
-mul r0.y, r2.y, r0.y
-add r2.y, r1.x, -r2.z
-mul r0.z, r2.y, r0.z
+cmp r2.z, r2.z, c68.z, c71.x
+cmp r2.z, -r2.z, r2.w, -r2.w
+add r2.x, r2.x, -r2.z
+mul r0.y, r2.x, r0.y
+add r2.x, r1.x, -r2.y
+mul r0.z, r2.x, r0.z
 add r0.y, r0.y, -r0.z
 max r0.y, r0.y, c68.z
-cmp r0.y, -r2.x, c68.z, r0.y
-max r0.x, -r0.x, r2.z
+cmp r0.y, -r0.w, c68.z, r0.y
+max r0.x, -r0.x, r2.y
 min r0.x, r0.x, r1.x
 add r0.x, r0.x, -c58.x
 mul r0.x, r0.x, c58.y
@@ -466,16 +443,13 @@ mul r0.x, r0.x, r0.z
 mul r0.y, r0.y, c62.x
 mul r0.x, r0.y, r0.x
 mul r0.xyz, c47.xyzx, r0.x
-add r1.xyz, r1.yzwy, r0.xyzx
-max r1.w, r0.y, r0.z
-max r0.x, r0.x, r1.w
-mul r0.x, r0.x, c58.z
-mul r0.y, c58.w, r0.x
-add r0.x, c58.w, r0.x
-rcp r0.x, r0.x
-mul r0.x, r0.y, r0.x
-add r0.x, r0.w, r0.x
-mul r0.yzw, r1.xxyz, c58.z
-mov r1.xyz, r0.yzwy
-mov r1.w, r0.x
-mov oC0.xyzw, r1.xyzw
+add r0.xyz, r1.yzwy, r0.xyzx
+mul r0.xyz, r0.xyzx, c58.z
+max r0.w, r0.y, r0.z
+max r0.w, r0.x, r0.w
+add r0.w, c58.w, r0.w
+rcp r0.w, r0.w
+mul r0.w, c58.w, r0.w
+mul r0.xyz, r0.xyzx, r0.w
+mov r0.w, c68.z
+mov oC0.xyzw, r0.xyzw

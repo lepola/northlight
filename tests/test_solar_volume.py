@@ -178,7 +178,7 @@ def main():
     cool = cpu.index('d->SetPixelShaderConstantF(18,fogAmbient,1);')
     march = cpu.index('"celestial volumetric raymarch"')
     restore = cpu.index('d->SetPixelShaderConstantF(17,c[17],2);')
-    assert fog_loop < cool < march < restore < cpu.index('d->SetPixelShader(localFogPS);') < cpu.index('"volume blur horizontal"') < cpu.index('"world composite"')
+    assert fog_loop < cool < march < restore < cpu.index('d->SetPixelShader(accumulate?localFogPS:localFogCappedPS);') < cpu.index('"volume blur horizontal"') < cpu.index('"world composite"')
     assert 'float fogAmbient[4]={0,0,0,c[18][3]};NorthlightSunHue::coolAmbient(c[18],glowHueFrame,sourceWeights[0],fogAmbient);' in cpu
     # wrap: SourceVisibilityPS keeps .6 x the clear fraction of an 8-tap ring (2.5/3.5 disc
     # radii, on-screen taps only) when larger than the disc value; WorldFog reads it unchanged.
