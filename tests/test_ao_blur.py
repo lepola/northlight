@@ -6,7 +6,10 @@ CPU reference only: no game, graphics device or GPU. The 8-tap AO rotates its ke
 gradient noise), which in occluded creases (character skin, cloth folds) leaves a regular dark diamond lattice;
 WorldComposite only bilinear-upsamples the half-resolution AO, so nothing filtered it. AOBlur is a half-resolution
 pass: 5x5 AO texels (weights .5,1,1,1,.5 per axis) kept on the centre's plane and normal, sky/water taps weight 0,
-bloom rgb passed through. This test runs a float32 emulation of AOImpl (as test_ao_rotation_stripes.py) and of
+bloom rgb passed through. Cost: it returns the raw texel before any depth work when all 25 tap AO values are
+>= .9995 (unoccluded, exactly 1.0), and its silhouette guard reads ONE extra depth per tap (the tap's tangent along
+the axis the centre normal leans towards, weight *= saturate(1 - 2 sin^2) against the centre plane) instead of
+NeighbourNormal's two. This test runs a float32 emulation of AOImpl (as test_ao_rotation_stripes.py) and of
 AOBlur exactly as written in shaders/effects.hlsl, on synthetic raw-D24 depth surfaces:
   (1) pattern: RMS of (AO - its 5x5 box mean) over interior texels, raw versus blurred, on a wide-grooved
       cylinder, an inner box corner and a floor meeting a wall at a grazing angle: blurred must be <= raw/4. The
@@ -18,6 +21,7 @@ AOBlur exactly as written in shaders/effects.hlsl, on synthetic raw-D24 depth su
       must not be darkened, and edge texels of the cylinder not lightened, by the other surface (blurred versus
       the plain mean of the same surface's raw AO in the 5x5), and must stay inside that surface's raw min/max;
   (4) passthrough of the sky centre (all four channels) and of the bloom rgb at a surface centre;
+  (4b) the early-out is output-identical to the full path (unoccluded surface texels, random all-ones windows);
   (5) source and wiring audits (effects.hlsl, shader-build.json, compile_shaders.py, renderer.cpp).
 Run this file to regenerate its JSON report.
 """
@@ -203,26 +207,36 @@ class RawAO:
         return self.cache[(i, j)]
 
 
-def ao_blur(sc, raw, i, j, diag=None):
-    """AOBlur for AO texel (i, j), line by line as in effects.hlsl (WaterInfo.x = 0: no water)."""
+EARLY_OUT = .9995
+TANGENT_K = 2.
+
+
+def ao_blur(sc, raw, i, j, diag=None, early=True):
+    """AOBlur for AO texel (i, j), line by line as in effects.hlsl (WaterInfo.x = 0: no water).
+    early=False skips the unoccluded early-out (the full path, for the identity check)."""
+    taps = [(t-math.floor((t+.5)*.2)*5-2, math.floor((t+.5)*.2)-2) for t in range(25)]
+    r = raw(i, j)
+    if early and min(raw(i+ox, j+oy)[3] for ox, oy in taps) >= EARLY_OUT:
+        if diag is not None:
+            diag['total'], diag['early'] = 1., True
+        return r
     cx, cy = snap(i, j)
     d = depth(sc.s, cx, cy)
-    r = raw(i, j)
     if d >= SKY:
         return r
     p, n = sc.pos(cx, cy), sc.normal(cx, cy)
-    tol = f32(max(.025, min(RADIUS*.1, p[2]*.002)))
+    tx, ty = (1, 0) if abs(n[0]) > abs(n[1]) else (0, 1)      # tangentStep: the axis the normal leans towards
+    plane_scale = f32(2./f32(max(.025, min(RADIUS*.1, p[2]*.002))))
     sum_ao = sum_w = f32(0.)
-    for t in range(25):
-        row = math.floor((t+.5)*.2)
-        ox, oy = t-row*5-2, row-2
+    for t, (ox, oy) in enumerate(taps):
         qx, qy = snap(i+ox, j+oy)
         qd = depth(sc.s, qx, qy)
         q = sc.pos(qx, qy)
         w = (.5 if abs(ox) > 1.5 else 1.)*(.5 if abs(oy) > 1.5 else 1.)
-        w *= 2.**(-abs(vdot(vsub(q, p), n))/tol*2.)
-        agree = min(max(vdot(n, sc.neighbour_normal(qx, qy)), 0.), 1.)
-        w *= agree*agree
+        w *= 2.**(-abs(vdot(vsub(q, p), n))*plane_scale)
+        tg = vsub(sc.pos(qx+tx, qy+ty), q)
+        off = vdot(tg, n)
+        w *= min(max(1.-TANGENT_K*off*off/vdot(tg, tg), 0.), 1.)
         w *= 1. if qd < SKY else 0.
         if diag is not None and (qd >= SKY or abs(q[2]-p[2]) > .3):   # tap on another surface (or sky)
             diag['cross'] = diag.get('cross', 0.)+w
@@ -401,8 +415,20 @@ def audit_source():
     blur = text[text.index('float4 AOBlur('):text.index('float4 Composite(')]
     assert re.search(r'for\s*\(int i = 0; i < 25; \+\+i\)', blur), '25-tap loop'
     assert re.search(r'a\.x > 1\.5 \? 0\.5 : 1\.0\) \* \(a\.y > 1\.5 \? 0\.5 : 1\.0\)', blur), '.5 edge weights'
-    assert 'float depthTolerance = max(0.025, min(Options.y * 0.1, p.z * 0.002));' in blur
-    assert re.search(r'normalAgreement = saturate\(dot\(n, NeighbourNormal\(quv, q\)\)\);\s*weight \*= normalAgreement \* normalAgreement;', blur)
+    assert 'float planeScale = 2.0 / max(0.025, min(Options.y * 0.1, p.z * 0.002));' in blur
+    assert 'exp2(-abs(dot(q - p, n)) * planeScale)' in blur
+    # unoccluded early-out: 25 AO-only reads and a dynamic branch before any depth read
+    early = blur.index('[branch] if (minAO >= 0.9995) return raw;')
+    assert re.search(r'for \(int k = 0; k < 25; \+\+k\)', blur[:early]) and 'ReadDepth' not in blur[:early], 'early-out first'
+    assert 'minAO = min(minAO, tex2Dlod(Ambient' in blur[:early]
+    assert blur.index('if (d >= SKY_DEPTH || IsWater(cuv, d)) return raw;') > early, 'sky/water passthrough kept'
+    # the guard: one extra depth read per tap (no NeighbourNormal), tangent along the axis the normal leans towards
+    assert 'NeighbourNormal' not in blur, 'the two-read normal term must be gone'
+    assert 'abs(n.x) > abs(n.y) ? float2(ImageAndClip.x, 0) : float2(0, ImageAndClip.y)' in blur
+    assert re.search(r'tangent = PositionInv\(quv \+ tangentStep, ReadDepth\(quv \+ tangentStep\), invFocal\) - q;\s*'
+                     r'float tangentOff = dot\(tangent, n\);\s*'
+                     r'weight \*= saturate\(1\.0 - 2\.0 \* tangentOff \* tangentOff / dot\(tangent, tangent\)\);', blur), 'tangent guard'
+    assert blur.count('ReadDepth(') == 3, 'centre + tap + tangent: one extra depth read per tap'
     assert re.search(r'qd < SKY_DEPTH && !IsWater\(quv, qd\) \? 1\.0 : 0\.0', blur), 'sky/water taps weight 0'
     assert 'return float4(raw.rgb' in blur
     impl = text[text.index('float4 AOImpl('):text.index('float4 AO(float2 uv')]
@@ -415,6 +441,40 @@ def audit_source():
     script = (fp.SCRIPTS/'shaders'/'compile_shaders.py').read_text()
     assert re.search(r'\("AOBlur",\s*"kAoBlurShader"\)', script)
     return {'static_instruction_slots': b['static_instruction_slots'], 'temporary_registers': b['temporary_registers']}
+
+
+def check_early_out():
+    """The unoccluded early-out must equal the full path. (a) every texel of a smooth cylinder against sky whose 25 taps
+    are all >= EARLY_OUT; (b) random all-ones windows (random rgb) over an occluding corner, where the full path
+    runs the whole filter; (c) the control: a single tap below the threshold must not early-out."""
+    import random
+    f = Fields(Surface('cylinder', groove=0., wall=None), half=26)
+    taps = [(t-math.floor((t+.5)*.2)*5-2, math.floor((t+.5)*.2)-2) for t in range(25)]
+    n_early = n_diff = 0
+    for i, j in f.window():
+        if min(f.raw_fn(i+ox, j+oy)[3] for ox, oy in taps) >= EARLY_OUT:
+            n_early += 1
+            n_diff += ao_blur(f.sc, f.raw_fn, i, j) != ao_blur(f.sc, f.raw_fn, i, j, early=False)
+    assert n_early > 200 and n_diff == 0, (n_early, n_diff)
+    c = Fields(Surface('corner'), half=8)
+    rng = random.Random(7)
+    ones = {}
+
+    def window_raw(i, j):
+        if (i, j) not in ones:
+            ones[(i, j)] = (f32(rng.random()), f32(rng.random()), f32(rng.random()), 1.)
+        return ones[(i, j)]
+    cases = diff = 0
+    for j in range(CENTRE[1]-4, CENTRE[1]+4):
+        for i in range(CENTRE[0]-4, CENTRE[0]+4):
+            cases += 1
+            diff += ao_blur(c.sc, window_raw, i, j) != ao_blur(c.sc, window_raw, i, j, early=False)
+    assert diff == 0, ('random all-ones windows', diff, cases)
+    ones[(CENTRE[0]+2, CENTRE[1]-1)] = (0., 0., 0., .5)
+    d = {}
+    ao_blur(c.sc, window_raw, *CENTRE, diag=d)
+    assert not d.get('early') and ao_blur(c.sc, window_raw, *CENTRE)[3] < 1., 'one occluded tap must run the full filter'
+    return {'unoccluded_texels_compared': n_early, 'random_all_ones_windows': cases, 'differences': 0}
 
 
 def audit_wiring():
@@ -443,14 +503,15 @@ def run():
     pattern = check_pattern()
     silhouette = check_silhouette()
     passthrough = check_passthrough()
+    early = check_early_out()
     shader = audit_source()
     wiring = audit_wiring()
     checks = {'residual_reduced_4x': all(r['blurred_residual_rms'] <= r['raw_residual_rms']/RES_RATIO for r in pattern if r['class'] == 'lowfreq'),
               'grooved_residual_reduced': all(r['blurred_residual_rms'] <= min(r['raw_residual_rms']/GROOVE_RATIO, r['noise_free_residual_rms']) for r in pattern if r['class'] == 'groove'),
               'mean_preserved': all(abs(r['mean_shift']) < MEAN_TOL for r in pattern),
-              'silhouette_no_bleed': True, 'passthrough': True, 'shader_source': True, 'renderer_wiring': wiring}
+              'silhouette_no_bleed': True, 'passthrough': True, 'early_out_identical': True, 'shader_source': True, 'renderer_wiring': wiring}
     report = {'result': 'pass', 'game_launched': False, 'gpu_test': False, 'checks': checks, 'pattern': pattern,
-              'silhouette': silhouette, 'passthrough': passthrough, 'shader': shader,
+              'silhouette': silhouette, 'passthrough': passthrough, 'early_out': early, 'shader': shader,
               'test_sha256': hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
               'limitations': ['CPU float32/float64 reference of AOImpl and AOBlur on synthetic surfaces.']}
     for name, ok in checks.items():

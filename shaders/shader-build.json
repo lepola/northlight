@@ -1,5 +1,5 @@
 {
-  "source_sha256": "1f373743a6f14505f71162bb467abc4198710dc66b2cfdd67fb4c5f31e5157cb",
+  "source_sha256": "3a479155aca3ff9d4e852eb48992ec4aa677a1e3e652a2e19aa5ee42bff22b01",
   "target": "ps_3_0",
   "shaders": {
     "AO": {
@@ -60,31 +60,31 @@
       }
     },
     "AOBlur": {
-      "bytes": 7344,
-      "sha256": "7ca08fc25effe5f2210faaf6770b92be971fc6ffa65f98f587ffe3a4720ce7bb",
-      "static_instruction_slots": 477,
-      "temporary_registers": 24,
+      "bytes": 7528,
+      "sha256": "8f993e4c8118c029f4af218ae30620ef7c994e28c28b7ab46e02a7e070e51d2a",
+      "static_instruction_slots": 507,
+      "temporary_registers": 20,
       "instructions": {
-        "rcp": 30,
-        "mad": 4,
-        "frc": 3,
-        "add": 96,
-        "mul": 101,
-        "max": 17,
-        "min": 8,
-        "mov": 123,
+        "mov": 136,
+        "mul": 94,
         "texldl": 12,
-        "cmp": 32,
-        "if": 4,
-        "else": 4,
-        "endif": 4,
-        "abs": 6,
+        "rep": 2,
+        "add": 102,
+        "cmp": 33,
+        "if": 7,
+        "break": 2,
+        "else": 7,
+        "endif": 7,
+        "frc": 4,
+        "min": 9,
+        "endrep": 2,
+        "rcp": 26,
+        "mad": 4,
+        "max": 15,
+        "abs": 7,
         "dp3": 4,
-        "rsq": 2,
-        "rep": 1,
-        "break": 1,
-        "exp": 1,
-        "endrep": 1
+        "rsq": 1,
+        "exp": 1
       }
     },
     "Composite": {

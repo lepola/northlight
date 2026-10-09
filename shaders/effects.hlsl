@@ -201,31 +201,57 @@ float3 NeighbourNormal(float2 uv, float3 p)
 // half-resolution pass averages a symmetric 5x5 AO-texel neighbourhood (.5,1,1,1,.5 per axis, covering
 // IGN's period) on the centre's plane and normal, so silhouettes stay sharp. Same bindings as the AO pass
 // (s2 = the RAW AO texture, POINT); bloom rgb passes through untouched, sky and water return the raw texel.
+// Cost: (1) unoccluded early-out: AO is saturate(1 - ...), so an unoccluded texel is exactly 1.0 (and
+// A16B16G16R16F stores 1.0 exactly); when all 25 tap AO values are >= 0.9995 the weighted average is 1 and the
+// raw texel is returned before any depth work (open ground, sky, most of the screen). The tap at offset 0 is the
+// raw texel itself. (2) the silhouette guard is one extra depth read per tap instead of NeighbourNormal's two:
+// the tap's tangent along the screen axis the centre normal leans towards (x if |n.x| > |n.y|) must lie in the
+// centre's plane, weight *= saturate(1 - 2 * sin^2) with sin = dot(r - q, n) / |r - q|. At a grazing limb the
+// plane distance alone lets far-wall taps through (their points sit near the limb's tangent plane), but the
+// wall's own tangent along the limb normal's axis is steeply off that plane, so its weight goes to zero.
+float3 PositionInv(float2 uv, float d, float2 invFocal)
+{
+    float z = LinearDepth(d);
+    return float3((uv.x * 2.0 - 1.0) * z * invFocal.x, (1.0 - uv.y * 2.0) * z * invFocal.y, z);
+}
+
 float4 AOBlur(float2 uv : TEXCOORD0) : COLOR0
 {
+    float2 tapStep = 2.0 * ImageAndClip.xy;
+    float4 raw = tex2Dlod(Ambient, float4(uv, 0, 0));
+    float minAO = raw.a;
+    [loop] for (int k = 0; k < 25; ++k)
+    {
+        float krow = floor((k + 0.5) * 0.2);
+        float2 ko = float2(k - krow * 5.0 - 2.0, krow - 2.0);
+        minAO = min(minAO, tex2Dlod(Ambient, float4(uv + ko * tapStep, 0, 0)).a);
+    }
+    [branch] if (minAO >= 0.9995) return raw;
     float2 size = 1.0 / ImageAndClip.xy;
     float2 cuv = DepthTexelUV(uv, size);
     float d = ReadDepth(cuv);
-    float4 raw = tex2Dlod(Ambient, float4(uv, 0, 0));
     if (d >= SKY_DEPTH || IsWater(cuv, d)) return raw;
     float3 p = Position(cuv, d);
     float3 n = SurfaceNormal(cuv, p);
-    float depthTolerance = max(0.025, min(Options.y * 0.1, p.z * 0.002));
+    float2 tangentStep = abs(n.x) > abs(n.y) ? float2(ImageAndClip.x, 0) : float2(0, ImageAndClip.y);
+    float2 invFocal = 1.0 / Lighting.xy;
+    float planeScale = 2.0 / max(0.025, min(Options.y * 0.1, p.z * 0.002));
     float sumAO = 0.0;
     float sumWeight = 0.0;
     [loop] for (int i = 0; i < 25; ++i)
     {
         float row = floor((i + 0.5) * 0.2);
         float2 o = float2(i - row * 5.0 - 2.0, row - 2.0);
-        float2 tapUV = uv + o * (2.0 * ImageAndClip.xy);
+        float2 tapUV = uv + o * tapStep;
         float2 quv = DepthTexelUV(tapUV, size);
         float qd = ReadDepth(quv);
-        float3 q = Position(quv, qd);
+        float3 q = PositionInv(quv, qd, invFocal);
         float2 a = abs(o);
         float weight = (a.x > 1.5 ? 0.5 : 1.0) * (a.y > 1.5 ? 0.5 : 1.0);
-        weight *= exp2(-abs(dot(q - p, n)) / depthTolerance * 2.0);
-        float normalAgreement = saturate(dot(n, NeighbourNormal(quv, q)));
-        weight *= normalAgreement * normalAgreement;
+        weight *= exp2(-abs(dot(q - p, n)) * planeScale);
+        float3 tangent = PositionInv(quv + tangentStep, ReadDepth(quv + tangentStep), invFocal) - q;
+        float tangentOff = dot(tangent, n);
+        weight *= saturate(1.0 - 2.0 * tangentOff * tangentOff / dot(tangent, tangent));
         // Sky and water taps carry no usable AO.
         weight *= qd < SKY_DEPTH && !IsWater(quv, qd) ? 1.0 : 0.0;
         sumAO += tex2Dlod(Ambient, float4(tapUV, 0, 0)).a * weight;
