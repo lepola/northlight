@@ -330,7 +330,7 @@ private:
         else{a.child->dead.store(true);add(core.q.stats.deadCreates);}
     }
     void destroy(ProxyBase* p){
-        if(p->pendingDestroy.fetch_sub(1)!=1||p->use.load()>0)return;   // a later Destroy is queued, or the proxy was handed out again
+        if(p->pendingDestroy.fetch_sub(1)!=1||p->inUse()>0)return;   // a later Destroy is queued, or the proxy was handed out again
         core.reg.erase(p);
         for(ProxyBase* k:p->kids)if(k){core.reg.erase(k);if(k->inner)k->inner->Release();delete k;}
         if(p->inner)p->inner->Release();

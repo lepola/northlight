@@ -81,7 +81,16 @@ struct ProxyBase {
     StreamCore* core;Kind kind;IUnknown* unk=nullptr;   // unk: the proxy as the interface pointer the game holds (registry key)
     IUnknown* inner=nullptr;                            // the Target-level object: replay thread only, set when the create ran
     IUnknown* raw=nullptr;                              // the backend object behind `inner` (what Device would unwrap it to), cached with it; null = not provably a pure unwrap: replay through the Device
-    std::atomic<LONG> refs{1},use{1},pendingDestroy{0};  // refs: what Release reports; use = refs + StreamState binds
+    std::atomic<LONG> refs{1},use{1},pendingDestroy{0};  // refs: what Release reports; use = refs + the in-use children (a parent's); StreamState binds are counted in `binds`, not here
+    // 0.3.204 (task 21): StreamState binds of this proxy. Single writer at any time: the game thread, or the replay thread while the game thread waits for it (the defaults batch of Reset / init: runTask is the handoff) - so it
+    // is updated with a plain load+store (no locked instruction on the per-draw bind path) and read by the replay thread only in Replayer::destroy (an atomic, so the read is race-free). The proxy is "in use" (not destroyable,
+    // keeps its parent in use) while use>0 || binds>0; the Destroy is recorded by whichever operation takes the total to 0: useDec when binds==0, bindRelease when use==0. Audit: `use` is written by AddRef/Release (game thread; a final
+    // Release records the Destroy, which only the producer thread may do), by the replay thread's implicit-proxy hand-outs (also under a game wait), and read by Replayer::destroy; nothing else touches use/binds. A final COM Release from a foreign thread was already unsupported (it records the Destroy on the
+    // producer queue) and stays so: use and binds then have one writer at a time, which the split relies on.
+    std::atomic<LONG> binds{0};
+    // Replayer::destroy's test. `use` is read FIRST (seq_cst): a game AddRef -> bind -> Release of a re-handed proxy then shows either use>0 or, after the
+    // Release (a release RMW sequenced after the bind store), binds>0 to the binds load that follows. Two independent loads in either order could miss both.
+    LONG inUse()const{const LONG u=use.load(std::memory_order_seq_cst);const LONG b=binds.load(std::memory_order_seq_cst);return u+b;}
     std::atomic<bool> dead{false};                       // the real create failed: commands on it are dropped
     ProxyBase* parent=nullptr;std::vector<ProxyBase*> kids;   // children (levels, faces, back buffers): owned by the parent
     Info info;DWORD priority=0;std::vector<PrivEntry> priv;
@@ -92,7 +101,7 @@ struct ProxyBase {
     struct CallScope callScope(std::uint16_t id);   // 0.3.204 (task 21): sampled game-thread timer of a generated method body (defined below StreamCore)
     // The DXVK model for the device's lifetime: a top-level proxy with public references (refs above `baseline`) holds one
     // reference on the StreamDevice, so the device, the queue and the replay thread outlive every object the game still holds.
-    // StreamState binds count in `use` only: they never pin the device (or it would never die). A child's public reference
+    // StreamState binds count in `binds` only (see there): they never pin the device (or it would never die). A child's public reference
     // is its parent's public reference; a child in use keeps its parent in use.
     LONG baseline=0;   // refs the proxy holds itself without pinning (the swap chain's own)
     void pinDevice();
@@ -108,10 +117,11 @@ struct ProxyBase {
         if(unpin)unpinDevice();   // last: this may be the device's final release
         return n<0?0:ULONG(n);}
     void adoptKid(){comAddRef();useInc();}   // a new child starts with one public reference and one use: the same on this parent
-    void useInc(){if(use.fetch_add(1)==0&&parent)parent->useInc();}
-    void useDec();                                                        // game thread: 1->0 records Destroy (or releases the container)
-    void bindAdd(){useInc();}                                             // StreamState bind
-    void bindRelease(){useDec();}
+    void useInc(){if(use.fetch_add(1)==0&&binds.load(std::memory_order_relaxed)==0&&parent)parent->useInc();}
+    void useDec();                                                        // game thread: use 1->0 with no binds records Destroy (or releases the container)
+    void gone();                                                          // the total (use+binds) reached 0: record Destroy, or release the container
+    void bindAdd(){const LONG b=binds.load(std::memory_order_relaxed);binds.store(b+1,std::memory_order_relaxed);if(b==0&&use.load(std::memory_order_relaxed)==0&&parent)parent->useInc();}   // StreamState bind: no locked instruction
+    void bindRelease(){const LONG b=binds.load(std::memory_order_relaxed)-1;binds.store(b,std::memory_order_relaxed);if(b==0&&use.load(std::memory_order_relaxed)==0)gone();}
     // Local private data (nothing of it reaches the Target).
     template<class G> static std::string guidKey(const G& g){return std::string(reinterpret_cast<const char*>(&g),sizeof g);}
     template<class G> HRESULT setPrivate(const G& guid,const void* data,DWORD size,DWORD flags){
@@ -301,7 +311,10 @@ inline void ProxyBase::pinDevice(){if(core->game)core->game->AddRef();}
 inline void ProxyBase::unpinDevice(){if(core->game)core->game->Release();}
 inline ProxyBase::~ProxyBase(){dropPrivate();}
 inline void ProxyBase::useDec(){
-    if(use.fetch_sub(1)!=1)return;
+    if(use.fetch_sub(1)!=1||binds.load(std::memory_order_relaxed)!=0)return;
+    gone();
+}
+inline void ProxyBase::gone(){
     if(parent){parent->useDec();return;}
     pendingDestroy.fetch_add(1);
     Queue& q=core->q;

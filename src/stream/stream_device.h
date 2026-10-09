@@ -169,8 +169,8 @@ public:
     bool redundant(CmdTag<Cmd::Device_SetPixelShader>,IDirect3DPixelShader9* s){return filterOn()&&st.psKnown&&st.psSet&&st.ps==ProxyBase::of(s)&&filtered();}
     bool redundant(CmdTag<Cmd::Device_SetVertexDeclaration>,IDirect3DVertexDeclaration9* d){return filterOn()&&st.declKnown&&st.declSet&&st.decl==ProxyBase::of(d)&&filtered();}
     bool redundant(CmdTag<Cmd::Device_SetFVF>,DWORD f){return filterOn()&&st.fvf.known&&st.fvf.fromSet&&st.fvf.v==f&&filtered();}
-    bool redundant(CmdTag<Cmd::Device_SetVertexShaderConstantF>,UINT r,const float* d,UINT n){return sameConstants(st.vsF,256,r,d,n);}
-    bool redundant(CmdTag<Cmd::Device_SetPixelShaderConstantF>,UINT r,const float* d,UINT n){return sameConstants(st.psF,256,r,d,n);}
+    bool redundant(CmdTag<Cmd::Device_SetVertexShaderConstantF>,UINT r,const float* d,UINT n){return sameFloats(st.vsF,r,d,n);}
+    bool redundant(CmdTag<Cmd::Device_SetPixelShaderConstantF>,UINT r,const float* d,UINT n){return sameFloats(st.psF,r,d,n);}
     bool redundant(CmdTag<Cmd::Device_SetVertexShaderConstantI>,UINT r,const int* d,UINT n){return sameConstants(st.vsI,16,r,d,n);}
     bool redundant(CmdTag<Cmd::Device_SetPixelShaderConstantI>,UINT r,const int* d,UINT n){return sameConstants(st.psI,16,r,d,n);}
     bool redundant(CmdTag<Cmd::Device_SetVertexShaderConstantB>,UINT r,const WINBOOL* d,UINT n){return sameBools(st.vsB,r,d,n);}
@@ -186,6 +186,11 @@ public:
     bool redundant(CmdTag<Cmd::Device_SetNPatchMode>,float n){return filterOn()&&st.npatch.known&&st.npatch.fromSet&&!std::memcmp(&st.npatch.v,&n,sizeof n)&&filtered();}
     bool redundant(CmdTag<Cmd::Device_SetSoftwareVertexProcessing>,WINBOOL b){return filterOn()&&st.swvp.known&&st.swvp.fromSet&&st.swvp.v==b&&filtered();}
     bool redundant(CmdTag<Cmd::Device_SetCurrentTexturePalette>,UINT n){return filterOn()&&st.palette.known&&st.palette.fromSet&&st.palette.v==n&&filtered();}
+    // the whole range known (from a game Set) and bytewise equal: one bitmask test and one memcmp
+    bool sameFloats(const StreamState::FloatBank& b,UINT r,const float* d,UINT n){
+        if(!filterOn()||!d||r+n>StreamState::FloatBank::kRegs||!n)return false;
+        if(!b.allKnown(r,n)||std::memcmp(b.v[r],d,std::size_t(n)*16))return false;
+        return filtered();}
     template<class Reg,class T> bool sameConstants(const Reg* regs,UINT count,UINT r,const T* d,UINT n){
         if(!filterOn()||!d||r+n>count||!n)return false;
         for(UINT i=0;i<n;++i)if(!regs[r+i].known||std::memcmp(regs[r+i].v,d+4*i,16))return false;   // known only ever comes from a game Set for constants
@@ -661,12 +666,12 @@ private:
         default:break;
         }
     }
-    void constF(StreamState::VsF* regs,UINT r,const float* d,UINT n){if(recording||!d)return;for(UINT i=0;i<n&&r+i<256;++i){regs[r+i].known=true;std::memcpy(regs[r+i].v,d+4*i,16);}}
+    void constF(StreamState::FloatBank& b,UINT r,const float* d,UINT n){if(recording||!d||r>=StreamState::FloatBank::kRegs)return;if(n>StreamState::FloatBank::kRegs-r)n=StreamState::FloatBank::kRegs-r;std::memcpy(b.v[r],d,std::size_t(n)*16);b.setKnown(r,n);}   // 0.3.204 (task 21): one copy and word-wise bits (a range past the end is clamped, as before)
     void constI(StreamState::VsI* regs,UINT r,const int* d,UINT n){if(recording||!d)return;for(UINT i=0;i<n&&r+i<16;++i){regs[r+i].known=true;std::memcpy(regs[r+i].v,d+4*i,16);}}
     void constB(Slot<BOOL>* regs,UINT r,const WINBOOL* d,UINT n){if(recording||!d)return;for(UINT i=0;i<n&&r+i<16;++i)regs[r+i].set(d[i]);}
-    bool getF(StreamState::VsF* regs,UINT r,float* d,UINT n,HRESULT& hr){
-        if(!d||r+n>256)return false;for(UINT i=0;i<n;++i)if(!regs[r+i].known)return false;
-        for(UINT i=0;i<n;++i)std::memcpy(d+4*i,regs[r+i].v,16);hr=D3D_OK;return hit();}
+    bool getF(const StreamState::FloatBank& b,UINT r,float* d,UINT n,HRESULT& hr){
+        if(!d||r+n>StreamState::FloatBank::kRegs||!b.allKnown(r,n))return false;
+        std::memcpy(d,b.v[r],std::size_t(n)*16);hr=D3D_OK;return hit();}
     bool getI(StreamState::VsI* regs,UINT r,int* d,UINT n,HRESULT& hr){
         if(!d||r+n>16)return false;for(UINT i=0;i<n;++i)if(!regs[r+i].known)return false;
         for(UINT i=0;i<n;++i)std::memcpy(d+4*i,regs[r+i].v,16);hr=D3D_OK;return hit();}

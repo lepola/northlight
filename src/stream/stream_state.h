@@ -36,8 +36,22 @@ struct StreamState {
     std::vector<Light> lights;
     struct Plane {bool known=false;float p[4]={};};
     Plane clip[kClip];
-    struct VsF {bool known=false;float v[4]={};};struct VsI {bool known=false;int v[4]={};};
-    VsF vsF[256],psF[256];VsI vsI[16],psI[16];Slot<BOOL> vsB[16],psB[16];
+    // 0.3.204 (task 21): the float constant banks as contiguous data (one memcmp / memcpy per Set) plus a known bitmask (word operations). known only ever comes from a game Set.
+    struct FloatBank {
+        static constexpr UINT kRegs=256;
+        float v[kRegs][4]={};std::uint64_t known[kRegs/64]={};
+        static std::uint64_t wordMask(UINT w,UINT r,UINT end){   // the bits of word w inside [r,end)
+            const UINT lo=w*64,a=r>lo?r-lo:0,b=end<lo+64?end-lo:64;
+            return (b>=64?~std::uint64_t(0):((std::uint64_t(1)<<b)-1))&~((std::uint64_t(1)<<a)-1);}
+        bool allKnown(UINT r,UINT n)const{   // r+n <= kRegs
+            if(!n)return true;const UINT end=r+n;
+            for(UINT w=r/64;w<=(end-1)/64;++w){const std::uint64_t m=wordMask(w,r,end);if((known[w]&m)!=m)return false;}
+            return true;}
+        void setKnown(UINT r,UINT n){if(!n)return;const UINT end=r+n;for(UINT w=r/64;w<=(end-1)/64;++w)known[w]|=wordMask(w,r,end);}
+        void forget(){for(auto& k:known)k=0;}
+    };
+    struct VsI {bool known=false;int v[4]={};};
+    FloatBank vsF,psF;VsI vsI[16],psI[16];Slot<BOOL> vsB[16],psB[16];
     struct Stream {ProxyBase* vb=nullptr;UINT offset=0,stride=0;bool known=false,fromSet=false;Slot<UINT> freq;};
     Stream streams[kStreams];
     bool indicesKnown=false,declKnown=false,vsKnown=false,psKnown=false,rtKnown[kRTs]={},dsKnown=false,texKnown[kSamplers]={};
@@ -60,7 +74,7 @@ struct StreamState {
     void clear(){
         for(auto& s:rs)s.known=false;for(auto& a:samp)for(auto& s:a)s.known=false;for(auto& a:tss)for(auto& s:a)s.known=false;
         for(auto& s:xf)s.known=false;viewport.known=scissor.known=material.known=false;lights.clear();for(auto& p:clip)p.known=false;
-        for(auto& v:vsF)v.known=false;for(auto& v:psF)v.known=false;for(auto& v:vsI)v.known=false;for(auto& v:psI)v.known=false;
+        vsF.forget();psF.forget();for(auto& v:vsI)v.known=false;for(auto& v:psI)v.known=false;
         for(auto& b:vsB)b.known=false;for(auto& b:psB)b.known=false;
         for(auto& s:streams){bind(s.vb,nullptr);s.known=false;s.fromSet=false;s.freq.known=false;}
         bind(indices,nullptr);bind(decl,nullptr);bind(vs,nullptr);bind(ps,nullptr);bind(ds,nullptr);

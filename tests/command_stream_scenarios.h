@@ -708,9 +708,9 @@ static void redundantFiltering(){
     IDirect3DTexture9 *ta=nullptr,*tb=nullptr;CHECK(d->CreateTexture(8,8,1,0,(D3DFORMAT)22,(D3DPOOL)1,&ta,nullptr)==D3D_OK&&d->CreateTexture(8,8,1,0,(D3DFORMAT)22,(D3DPOOL)1,&tb,nullptr)==D3D_OK);
     twice([&]{d->SetTexture(3,ta);},"texture");differs([&]{d->SetTexture(3,tb);},"texture");twice([&]{d->SetTexture(3,nullptr);},"texture null");
     {   // a redundant bind changes no use count (no atomic), and a different one does
-        ProxyBase* pa=ProxyBase::of(ta);d->SetTexture(4,ta);const auto use=pa->use.load();recorded([&]{d->SetTexture(4,ta);});CHECK(pa->use.load()==use);
-        d->SetTexture(4,tb);CHECK(pa->use.load()==use-1);
-        if(!kFilterRedundantState){d->SetTexture(4,tb);const auto u2=ProxyBase::of(tb)->use.load();d->SetTexture(4,tb);CHECK(ProxyBase::of(tb)->use.load()==u2);}   // unfiltered, the same proxy again still binds nothing twice
+        ProxyBase* pa=ProxyBase::of(ta);d->SetTexture(4,ta);const auto use=pa->inUse();recorded([&]{d->SetTexture(4,ta);});CHECK(pa->inUse()==use);
+        d->SetTexture(4,tb);CHECK(pa->inUse()==use-1);
+        if(!kFilterRedundantState){d->SetTexture(4,tb);const auto u2=ProxyBase::of(tb)->inUse();d->SetTexture(4,tb);CHECK(ProxyBase::of(tb)->inUse()==u2);}   // unfiltered, the same proxy again still binds nothing twice
     }
     IDirect3DVertexBuffer9* vb=nullptr;IDirect3DIndexBuffer9* ib=nullptr;CHECK(d->CreateVertexBuffer(256,0,0,(D3DPOOL)0,&vb,nullptr)==D3D_OK&&d->CreateIndexBuffer(64,0,(D3DFORMAT)101,(D3DPOOL)0,&ib,nullptr)==D3D_OK);
     twice([&]{d->SetStreamSource(0,vb,0,20);},"stream source");differs([&]{d->SetStreamSource(0,vb,4,20);},"stream source offset");differs([&]{d->SetStreamSource(0,vb,4,24);},"stream source stride");
@@ -1509,13 +1509,73 @@ static void zeroCopyReasons(){
     {bool ok=false;for(auto& l:gStatLines)if(l.rfind("CSTREAM zerocopy[per frame]:",0)==0&&l.find("notZeroCopy[pool=1 noShadow=1 small=1 other=0]")!=std::string::npos)ok=true;CHECK(ok);}
     man->Release();big->Release();z.vb->Release();z.rig->sync();z.rig->finish();checkClean();
 }
+
+// 0.3.204 (task 21): the bind counter is separate from the public references (ProxyBase::binds, plain stores): the Destroy is still recorded exactly once, by whichever of the last Release / the last unbind comes last.
+static void bindLifetime(){
+    gTrace.clear();Rig rig(true);auto& core=rig.core();IDirect3DDevice9* d=rig.dev;rig.sync();const long base=liveProxyObjects.load();
+    auto tex=[&]{IDirect3DTexture9* t=nullptr;CHECK(d->CreateTexture(16,16,1,0,(D3DFORMAT)22,(D3DPOOL)1,&t,nullptr)==D3D_OK&&t);return t;};
+    // a bound object released by the game lives on, and dies (one Destroy) only at its unbind
+    {IDirect3DTexture9* a=tex();ProxyBase* pa=ProxyBase::of(a);CHECK(d->SetTexture(2,a)==D3D_OK&&pa->binds.load()==1&&pa->inUse()==2);
+     a->Release();CHECK(pa->use.load()==0&&pa->binds.load()==1);rig.sync();CHECK(liveProxyObjects.load()==base+1);
+     const auto seq=core.q.recordedSeq();CHECK(d->SetTexture(2,nullptr)==D3D_OK&&pa->binds.load()==0&&core.q.recordedSeq()>seq);rig.sync();CHECK(liveProxyObjects.load()==base);}
+    // released last: the unbind comes first, the final Release records the Destroy
+    {IDirect3DTexture9* a=tex();CHECK(d->SetTexture(0,a)==D3D_OK&&d->SetTexture(0,nullptr)==D3D_OK);rig.sync();CHECK(liveProxyObjects.load()==base+1);a->Release();rig.sync();CHECK(liveProxyObjects.load()==base);}
+    // churn: rebinds of two objects over several stages with AddRef/Release in between; the counts match the model, and one Destroy each at the end
+    {IDirect3DTexture9 *a=tex(),*b=tex();ProxyBase *pa=ProxyBase::of(a),*pb=ProxyBase::of(b);unsigned model[2]={0,0};int slot[4]={-1,-1,-1,-1};std::uint32_t x=12345;
+     for(int i=0;i<4000;++i){
+        x=x*1664525u+1013904223u;const unsigned st=(x>>8)&3,pick=(x>>12)%3;   // 0: a, 1: b, 2: unbind
+        if(pick==2)d->SetTexture(st,nullptr);else d->SetTexture(st,pick?b:a);
+        const int np=pick==2?-1:int(pick);if(slot[st]>=0)--model[slot[st]];if(np>=0)++model[np];slot[st]=np;
+        if(!(x>>20&7)){a->AddRef();a->Release();}if(!(x>>23&7)){b->AddRef();b->Release();}
+        if(i%500==0)CHECK(pa->binds.load()==LONG(model[0])&&pb->binds.load()==LONG(model[1])&&pa->use.load()==1&&pb->use.load()==1);}
+     CHECK(pa->binds.load()==LONG(model[0])&&pb->binds.load()==LONG(model[1]));
+     a->Release();b->Release();rig.sync();CHECK(liveProxyObjects.load()==base+(model[0]>0)+(model[1]>0));   // released by the game: an object still bound somewhere lives on, an unbound one is gone
+     for(unsigned st=0;st<4;++st)d->SetTexture(st,nullptr);rig.sync();CHECK(liveProxyObjects.load()==base);}
+    // Reset: StreamState::invalidate releases every bind; objects only the state held are destroyed then; the replay thread's own binds (the defaults batch: render target, depth) are balanced
+    {IDirect3DTexture9* a=tex();IDirect3DVertexShader9* vs=nullptr;const DWORD code[]={0xFFFE0200,0x0000FFFF};CHECK(d->CreateVertexShader(code,&vs)==D3D_OK&&vs);
+     CHECK(d->SetTexture(1,a)==D3D_OK&&d->SetVertexShader(vs)==D3D_OK);a->Release();vs->Release();rig.sync();CHECK(liveProxyObjects.load()==base+2);
+     D3DPRESENT_PARAMETERS pp{};pp.BackBufferWidth=640;pp.BackBufferHeight=480;pp.BackBufferFormat=(D3DFORMAT)22;pp.BackBufferCount=2;pp.Windowed=1;
+     CHECK(d->Reset(&pp)==D3D_OK);rig.sync();CHECK(liveProxyObjects.load()==base);
+     IDirect3DSurface9* rt=nullptr;CHECK(d->GetRenderTarget(0,&rt)==D3D_OK&&rt&&ProxyBase::of(rt)->binds.load()==1);rt->Release();}
+    // a state block's Apply invalidates the state the same way
+    {IDirect3DTexture9* a=tex();CHECK(d->SetTexture(3,a)==D3D_OK);IDirect3DStateBlock9* sb=nullptr;CHECK(d->CreateStateBlock((D3DSTATEBLOCKTYPE)1,&sb)==D3D_OK&&sb);
+     const void* key=static_cast<IUnknown*>(a);   // (Apply also unbinds the render target and depth buffer: their implicit proxies go, so the live count is no gauge here)
+     a->Release();rig.sync();CHECK(core.reg.findProxy(key)!=nullptr);sb->Apply();rig.sync();CHECK(core.reg.findProxy(key)==nullptr);sb->Release();rig.sync();}
+    rig.finish();checkClean();
+}
+// 0.3.204 (task 21): the float constant banks are contiguous data with a known bitmask. Random partial overlaps (also across the 64-register words), unknown registers, repeated and subset Sets, Gets: the filter drops
+// exactly the Sets whose whole range is known and equal, and every Get returns the model's value.
+static void floatConstantBanks(){
+    gTrace.clear();Rig rig(true);auto& q=rig.core().q;IDirect3DDevice9* d=rig.dev;
+    float model[2][256][4]={};bool known[2][256]={};std::uint32_t x=987654321u;auto rnd=[&](unsigned n){x=x*1664525u+1013904223u;return (x>>10)%n;};
+    unsigned filtered=0,sets=0;
+    for(int i=0;i<6000;++i){
+        const unsigned bank=rnd(2),edge=rnd(4);UINT r=edge==0?60+rnd(8):edge==1?124+rnd(8):edge==2?250+rnd(6):rnd(256);UINT n=1+rnd(12);if(r+n>256)n=256-r;
+        if(rnd(9)==0){   // a Get (vertex bank): answered locally when the range is known, from the Target otherwise; the same values either way
+            if(bank==0){float got[12*4];CHECK(d->GetVertexShaderConstantF(r,got,n)==D3D_OK&&std::memcmp(got,model[0][r],n*16)==0);}
+            continue;}
+        float v[12*4];const bool repeat=rnd(3)==0;
+        for(UINT k=0;k<n;++k)for(int c=0;c<4;++c)v[k*4+c]=repeat?model[bank][r+k][c]:float(rnd(5));   // repeat: the model's own values (equal where known, arbitrary where not)
+        bool allKnown=true,same=true;for(UINT k=0;k<n;++k){allKnown&=known[bank][r+k];same&=std::memcmp(v+k*4,model[bank][r+k],16)==0;}
+        const bool expectFiltered=kFilterRedundantState&&allKnown&&same;
+        const auto before=q.recordedSeq();
+        if(bank==0)d->SetVertexShaderConstantF(r,v,n);else d->SetPixelShaderConstantF(r,v,n);
+        const bool recorded=q.recordedSeq()!=before;++sets;filtered+=!recorded;
+        CHECK(recorded==!expectFiltered);
+        std::memcpy(model[bank][r],v,n*16);for(UINT k=0;k<n;++k)known[bank][r+k]=true;
+    }
+    CHECK((kFilterRedundantState?filtered>0:filtered==0)&&sets>3000);
+    // out of range: never filtered, clamped as before (the in-range part is remembered)
+    {const float c[8]={1,2,3,4,5,6,7,8};const auto b0=q.recordedSeq();d->SetVertexShaderConstantF(255,c,2);d->SetVertexShaderConstantF(255,c,2);CHECK(q.recordedSeq()==b0+2);float g[4];CHECK(d->GetVertexShaderConstantF(255,g,1)==D3D_OK&&g[0]==1&&g[3]==4);}
+    rig.sync();rig.finish();checkClean();
+}
 static void streamTests(bool threadsOnly){
     layoutIsolation();replayTimingAccounting();diagnosticsOffSkipsAudit();idlePollWakes();
     lifetimeAndIdentity();stateKnownUnknown();locksPreserveBytes();staticBufferShadows();dynamicBufferShadows();largeBufferAllowance();twoLargeBuffers();adaptiveShadowCap();shadowCap();queriesAndSyncCensus();resetAndShutdown();directReplayRaw();redundantFiltering();renderTargetResetsViewport();textureShadows();statsLine();childrenOutliveTheDevice();queryProbeAndDeadQuery();initFailureFallback();cursorHandling();nestedSyncInPump();testCooperativeLevelLocal(1);testCooperativeLevelLocal(3);upDrawsAndBackpressure();snapshotTriggers();snapshotPoolNotExhausted();memoryPressureRelease();impossibleBlockIsRefusedAtOnce();smallStagedLocksUseScratch();
     framesAheadPacing();textureShadowSpares();frameSkipping();frameSkipReleasesPresentWait();   // 0.3.200 (frame skip)
     zeroCopyRenames();zeroCopyRingBudget();zeroCopyAdaptiveRing();zeroCopyRetire();zeroCopyPumpedLock(0);zeroCopyPumpedLock(1);
     for(UINT len:{512u<<10,2u<<20}){zeroCopyRenames(len);zeroCopyRetire(len);zeroCopyPumpedLock(0,len);zeroCopyPumpedLock(1,len);}   // 0.3.204 (task 21): the same for DYNAMIC buffers in the regular shadow cap
-    zeroCopyRegularEviction();zeroCopyReasons();
+    zeroCopyRegularEviction();zeroCopyReasons();bindLifetime();floatConstantBanks();
     equivalence(20000,12345);equivalence(20000,987654321);equivalence(20000,24680,2);equivalence(20000,13579,3);   // 0.3.200 (pipeline): 2 and 3 frames ahead
     (void)threadsOnly;
 }
