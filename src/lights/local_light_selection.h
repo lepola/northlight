@@ -41,6 +41,7 @@ template<unsigned N> struct Batch {
 };
 struct Selection {
     std::array<Constant,Slots> position{},color{},fog{}; // 0.3.197: Slots, select() fills at most Capacity
+    std::array<std::uint64_t,Slots> id{};                // 0.3.205 (gh#20): the source id of each slot, for FogRegroup
     unsigned count=0;float nearest=0,fogDistance=128.f;
     template<unsigned N> Batch<N> batch(unsigned first)const{
         Batch<N> b;
@@ -48,6 +49,23 @@ struct Selection {
             b.position[i]=position[first+i];b.color[i]=color[first+i];b.fog[i]=fog[first+i];++b.count;
         }
         return b; // All unused shader slots must be zero, including partial batches.
+    }
+};
+// 0.3.205 (gh#20): counts the fog batches whose set of lights differs from the previous frame's. The batches come from the closest-first order, so a lamp
+// swapping across a batch boundary or a light entering the selection regroups them; the per-batch glow cap made that visible as flicker (the "LOCAL fog regroup"
+// log line). Order inside a batch does not matter to the glow, so a batch is the sum of a mix of its ids; fixed arrays, no allocation.
+struct FogRegroup {
+    std::array<std::uint64_t,Slots/FogBatchSize> sig{};unsigned batches=0;bool known=false;
+    static std::uint64_t mix(std::uint64_t x){x+=0x9e3779b97f4a7c15ull;x=(x^(x>>30))*0xbf58476d1ce4e5b9ull;x=(x^(x>>27))*0x94d049bb133111ebull;return x^(x>>31);}
+    unsigned update(const Selection& s){
+        const unsigned n=(s.count+FogBatchSize-1)/FogBatchSize;unsigned changed=0;
+        for(unsigned b=0;b<n;++b){
+            std::uint64_t h=0;for(unsigned i=b*FogBatchSize;i<s.count&&i<(b+1)*FogBatchSize;++i)h+=mix(s.id[i]);
+            if(known&&(b>=batches||sig[b]!=h))++changed;
+            sig[b]=h;
+        }
+        if(known&&n<batches)changed+=batches-n;
+        batches=n;known=true;return changed;
     }
 };
 // `limit` (northlight-quality.ini LocalLightLimit, clamped to Capacity) keeps the closest lights;
@@ -69,6 +87,7 @@ inline Selection select(const std::vector<NorthlightLocalLights::Light>& lights,
     Selection out;out.count=count;if(count)out.nearest=picks[0].score;
     for(unsigned i=0;i<count;++i){const auto& l=*picks[i].light;
         out.position[i]={l.position[0],l.position[1],l.position[2],l.attenuationEnd};
+        out.id[i]=l.sourceId;
         const float gain=visibilityGain(picks[i].score);
         // Complete the selected influence sphere even for scaled bonfires.
         out.fogDistance=std::max(out.fogDistance,picks[i].score+2*l.attenuationEnd);
@@ -155,6 +174,7 @@ struct Tracker {
         out.count=selected+fades;
         const auto emit=[&](unsigned slot,const NorthlightLocalLights::Light& l,float score,float gain){
             out.position[slot]={l.position[0],l.position[1],l.position[2],l.attenuationEnd};
+            out.id[slot]=l.sourceId;
             out.fogDistance=std::max(out.fogDistance,score+2*l.attenuationEnd);
             out.color[slot]={l.diffuse[0]*gain,l.diffuse[1]*gain,l.diffuse[2]*gain,1.f/std::max(l.attenuationEnd-std::min(l.attenuationStart,l.attenuationEnd*.9f),.05f)};};
         for(unsigned i=0;i<selected;++i){const Sel& s=sel[order[i]];emit(i,*s.light,s.score,s.shown);}
