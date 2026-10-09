@@ -21,7 +21,7 @@ MEAN0 = (.017, .024)   # rain alpha .4, core sigma .62 px on texel 16 (0.3.199 g
 checks['three textures, at the client\'s paths'] = set(textures) == {'textures\\Weather\\RainDrop01.blp', 'Textures\\WEATHER\\RAINDROPRED01.BLP', 'textures\\Weather\\SnowFlake01.blp'}
 # Palette layout: 256 BGRA entries, entry 0 = the colour exactly, the rest zero; per mip all-zero indices then the alpha plane.
 rain = textures['textures\\Weather\\RainDrop01.blp']
-checks['rain palette: entry 0 = (204,204,204,255), 255 other entries zero'] = rain[148:152] == bytes((204, 204, 204, 255)) and not any(rain[152:148+1024])
+checks['rain palette: entry 0 = (173,173,173,255), 255 other entries zero'] = rain[148:152] == bytes((173, 173, 173, 255)) and not any(rain[152:148+1024])
 checks['rain mip 0: indices all 0, then the alpha plane (decodes back to it)'] = (
     not any(rain[148+1024:148+1024+32*512]) and list(decode_blp(rain, 512)[2][3::4]) == list(rain[148+1024+32*512:148+1024+2*32*512]))
 checks['deterministic: a second run gives the same bytes'] = wt.weather_textures() == textures
@@ -65,7 +65,7 @@ for name, data in textures.items():
     colour = {tuple(pixels[i*4:i*4+3]) for i in range(0, w*h) if pixels[i*4+3]}
     checks[f'{key}: one colour at every visible texel'] = len(colour) <= 1 + 2 and len({c for c in colour if all(abs(a-b) <= 1 for a, b in zip(c, sorted(colour)[len(colour)//2]))}) == len(colour)
     info[key]['colour'] = sorted(colour)[len(colour)//2]
-checks['rain is light grey neutral (204,204,204), red rain red, snow neutral white'] = info['RainDrop01']['colour'] == (204, 204, 204) and info['RAINDROPRED01']['colour'] == (171, 51, 41) and len(set(info['SnowFlake01']['colour'])) == 1
+checks['rain is grey neutral (173,173,173), red rain red, snow neutral white'] = info['RainDrop01']['colour'] == (173, 173, 173) and info['RAINDROPRED01']['colour'] == (171, 51, 41) and len(set(info['SnowFlake01']['colour'])) == 1
 
 # 0.3.199 (rain mist): the client's mist puffs reshaped to the runtime's 1:4 signature. A stand-in client puff: 256x256, one white palette
 # colour, a radial alpha (mean ~47 like the stock puffs); a puff with two colours or a missing file is left as the client has it.
