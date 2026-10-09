@@ -79,7 +79,7 @@ def member(text,signature):
 
 assert renderer.count('    // 0.3.187 per-frame draw gates')==1
 gates_block=renderer[renderer.index('    // 0.3.187 per-frame draw gates'):renderer.index('    // 0.3.154: blob shadow claim')]
-# 0.3.201 (rain mask MRT): the rain mask members (rainMrtUnbind .. rainBlendDraw) are test_weather_detect's; here only their call surface exists (the hook equivalence runs with rain off)
+# 0.3.202 (rain mask MRT): the rain mask members (rainMrtUnbind .. rainBlendDraw) are test_weather_detect's; here only their call surface exists (the hook equivalence runs with rain off)
 _a=gates_block.index('    void rainMrtUnbind(){');_b=gates_block.index('    template<class Draw> HRESULT rainBlendDraw(');_e=gates_block.index('\n    }\n',_b)+7
 checks_rain_stub=(gates_block[_a:_e].count('rainMrtBegin')>=1)
 gates_block=gates_block[:_a]+'    void rainMrtUnbind(){if(rainMrtBound){rainMrtBound=false;}}\n    template<class Draw> HRESULT rainBlendDraw(bool rain,bool claimed,Draw draw){(void)rain;return blobFaintDraw(claimed,draw);}\n'+gates_block[_e:]
@@ -164,7 +164,7 @@ HARNESS=r'''
 typedef long HRESULT;typedef unsigned UINT;typedef int INT;typedef long long LONGLONG;typedef unsigned DWORD;
 #define TRUE 1
 #define FALSE 0
-enum D3DRENDERSTATETYPE{D3DRS_ALPHABLENDENABLE=27,D3DRS_SRCBLEND=19,D3DRS_DESTBLEND=20,D3DRS_BLENDOP=171,D3DRS_COLORWRITEENABLE=168,D3DRS_SEPARATEALPHABLENDENABLE=206,D3DRS_ZWRITEENABLE=14,D3DRS_SRGBWRITEENABLE=194,D3DRS_SCISSORTESTENABLE=174,D3DRS_STENCILENABLE=52,D3DRS_ZFUNC=23};enum{D3DCMP_LESS=2,D3DCMP_LESSEQUAL=4};struct RECT{long left,top,right,bottom;};enum{D3DBLEND_ZERO=1,D3DBLEND_ONE=2,D3DBLEND_SRCCOLOR=3,D3DBLEND_SRCALPHA=5,D3DBLEND_INVSRCALPHA=6,D3DBLEND_DESTCOLOR=9,D3DBLENDOP_ADD=1,D3DBLENDOP_MAX=5,D3DCOLORWRITEENABLE_ALPHA=8,D3DCLEAR_TARGET=1,D3DUSAGE_RENDERTARGET=1};enum D3DMULTISAMPLE_TYPE{D3DMULTISAMPLE_NONE=0};enum D3DPOOL{D3DPOOL_DEFAULT=0};struct D3DVIEWPORT9{DWORD X=0,Y=0,Width=0,Height=0;float MinZ=0,MaxZ=1;};struct D3DRECT{long x1,y1,x2,y2;};typedef DWORD D3DCOLOR; /* 0.3.201 (rain mask MRT): the rain mask members are stubbed here (test_weather_detect drives the real ones) */
+enum D3DRENDERSTATETYPE{D3DRS_ALPHABLENDENABLE=27,D3DRS_SRCBLEND=19,D3DRS_DESTBLEND=20,D3DRS_BLENDOP=171,D3DRS_COLORWRITEENABLE=168,D3DRS_SEPARATEALPHABLENDENABLE=206,D3DRS_ZWRITEENABLE=14,D3DRS_SRGBWRITEENABLE=194,D3DRS_SCISSORTESTENABLE=174,D3DRS_STENCILENABLE=52,D3DRS_ZFUNC=23};enum{D3DCMP_LESS=2,D3DCMP_LESSEQUAL=4};struct RECT{long left,top,right,bottom;};enum{D3DBLEND_ZERO=1,D3DBLEND_ONE=2,D3DBLEND_SRCCOLOR=3,D3DBLEND_SRCALPHA=5,D3DBLEND_INVSRCALPHA=6,D3DBLEND_DESTCOLOR=9,D3DBLENDOP_ADD=1,D3DBLENDOP_MAX=5,D3DCOLORWRITEENABLE_ALPHA=8,D3DCLEAR_TARGET=1,D3DUSAGE_RENDERTARGET=1};enum D3DMULTISAMPLE_TYPE{D3DMULTISAMPLE_NONE=0};enum D3DPOOL{D3DPOOL_DEFAULT=0};struct D3DVIEWPORT9{DWORD X=0,Y=0,Width=0,Height=0;float MinZ=0,MaxZ=1;};struct D3DRECT{long x1,y1,x2,y2;};typedef DWORD D3DCOLOR; /* 0.3.202 (rain mask MRT): the rain mask members are stubbed here (test_weather_detect drives the real ones) */
 namespace NorthlightWeather{enum class Kind{None,Rain,Snow};} /* 0.3.199 (rain): rainBlendDraw compiles; it never runs here (hot stays null, test_weather_detect drives it) */
 #define STDMETHODCALLTYPE
 #define FAILED(hr) (((HRESULT)(hr))<0)

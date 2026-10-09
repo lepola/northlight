@@ -21,8 +21,8 @@ mistfn='\n'.join(rl[j0:j1+1])
 rl=r.split('\n');i0=next(i for i,l in enumerate(rl) if 'template<class Draw> HRESULT rainBlendDraw(' in l);i1=next(i for i in range(i0,len(rl)) if rl[i]=='    }')
 rainfn='\n'.join(rl[i0:i1+1])
 rl=r.split('\n');k0=next(i for i,l in enumerate(rl) if l.strip().startswith('void rainMrtUnbind(){'));k1=next(i for i,l in enumerate(rl) if 'template<class Draw> HRESULT rainBlendDraw(' in l)
-maskfn='\n'.join(rl[k0:k1]) # 0.3.201 (rain mask MRT): rainMrtUnbind, rainMaskEligible, rainMaskCaps, rainMaskCreate, the swap clear, rainMaskStart, rainMrtBegin/End/Draw, rainMaskPrepare
-unbinds=[l for l in rl if l.strip().startswith('if(rainMrtBound&&!rainBlend)rainMrtUnbind();')];assert len(unbinds)==1,'0.3.201 (rain mask MRT): the hook line that unbinds RT1 for every other draw'
+maskfn='\n'.join(rl[k0:k1]) # 0.3.202 (rain mask MRT): rainMrtUnbind, rainMaskEligible, rainMaskCaps, rainMaskCreate, the swap clear, rainMaskStart, rainMrtBegin/End/Draw, rainMaskPrepare
+unbinds=[l for l in rl if l.strip().startswith('if(rainMrtBound&&!rainBlend)rainMrtUnbind();')];assert len(unbinds)==1,'0.3.202 (rain mask MRT): the hook line that unbinds RT1 for every other draw'
 assert 'rainScrubDraw' not in r and 'rainMaskPass' not in r
 SRC=r'''
 #include "weather_detect.h"
@@ -242,7 +242,7 @@ int main(){
         h.weatherDetect.setOff(true);h.draw(9);assert(h.weatherSample.draws==3); /* mirror inactive: hot is null */
         Hook none;none.bind(0,50);none.draw(10);assert(none.weatherSample.draws==0); /* no candidates: hot null */
     }
-    {   // 0.3.201 (rain mask MRT): the mask is written by the rain draw itself through render target 1. A mask-eligible Hook: effect size 100x50, game target and viewport set, RainBlend on,
+    {   // 0.3.202 (rain mask MRT): the mask is written by the rain draw itself through render target 1. A mask-eligible Hook: effect size 100x50, game target and viewport set, RainBlend on,
         // the game's stage setup (stage 0 MODULATE texture x diffuse, nothing on stage 1), no vertex or pixel shader, the bound depth is the world depth
         auto mk=[](Hook& h){h.weatherDetect.noteCreate(P(50),32,512,1,A);h.weatherDetect.noteCreate(P(51),32,64,1,A);h.width=100;h.height=50;h.ext->gameRT.desc.Width=100;h.ext->gameRT.desc.Height=50;h.worldDepth=&h.ext->gameDS;
             h.ext->vp.X=3;h.ext->vp.Y=4;h.ext->vp.Width=90;h.ext->vp.Height=40;h.ext->sr.left=5;h.ext->sr.top=6;h.ext->sr.right=70;h.ext->sr.bottom=30;

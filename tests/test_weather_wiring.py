@@ -18,7 +18,7 @@ checks['no weather in any Set*/Get* Device method']=not re.search(r'HRESULT STDM
 a=r.index('template<class Capture,class Draw> HRESULT drawHook(');b=r.index('    // 0.3.154: blob shadow claim')
 hook=r[a:b]
 cmp_line='if(weatherDetect.hot&&mirrorState.textureKnown[0]&&mirrorState.textures[0]==weatherDetect.hot){weatherSample.primitives+=count;++weatherSample.draws;rainBlend=weatherDetect.hotKind==NorthlightWeather::Kind::Rain&&world&&world->rainBlendSetting();}'
-checks['drawHook: the single comparison, once']=hook.count(cmp_line+' /* 0.3.199 (rain): counted after applied too (the rest of the rain); 0.3.201: no boundary here, the effects run at the UI again */')==1 and hook.count('weatherDetect')==4 and hook.count('weatherSample')==2
+checks['drawHook: the single comparison, once']=hook.count(cmp_line+' /* 0.3.199 (rain): counted after applied too (the rest of the rain); 0.3.202: no boundary here, the effects run at the UI again */')==1 and hook.count('weatherDetect')==4 and hook.count('weatherSample')==2
 checks['drawHook: before the gate split and any other work']=0<=hook.index(cmp_line)<hook.index('if(!frameDrawGates){')<hook.index('prepareDraw(capture,count)')<hook.index('prepareDrawImpl(capture,count)') and hook.index(cmp_line)<hook.index('noteFirst')
 # 0.3.199 (rain): RainBlend - the override lives in the matched branch (a bool set there), only for Rain and the setting, wraps exactly the game's draw
 helper=r[r.index('template<class Draw> HRESULT rainBlendDraw('):r.index('    // One game draw: capture')]
@@ -32,7 +32,7 @@ checks['rain mist: skipped when stage 0 is a mist texture (known), any blend']='
 checks['RainBlend: not rain = the plain draw; override sets SrcAlpha/InvSrcAlpha/Add/blend on, inside the draw callback, and restores the previous values after it']=(
     'if(!rain)return blobFaintDraw(claimed,draw);' in helper and 'return blobFaintDraw(claimed,[&]{' in helper
     and all(t in helper for t in ('D3DRS_ALPHABLENDENABLE','D3DRS_SRCBLEND','D3DRS_DESTBLEND','D3DRS_BLENDOP','TRUE,D3DBLEND_SRCALPHA,D3DBLEND_INVSRCALPHA,D3DBLENDOP_ADD'))
-    and 0<helper.index('GetRenderState')<helper.index('rainMrtDraw(draw);')<helper.index('prev[i]);') and helper.count('draw()')==0) # 0.3.201 (rain mask MRT): the draw goes through rainMrtDraw
+    and 0<helper.index('GetRenderState')<helper.index('rainMrtDraw(draw);')<helper.index('prev[i]);') and helper.count('draw()')==0) # 0.3.202 (rain mask MRT): the draw goes through rainMrtDraw
 checks['RainBlend: on with Weather=1 (no key of its own)']='bool rainBlendSetting()const{return quality.weather!=0;}' in fp.src('world_renderer.h').read_text() and 'rainBlend' not in fp.src('quality_settings.h').read_text()
 checks['drawHook: no Get*, peek, lock or lookup in the weather lines']=not re.search(r'weather[^\n]*(Get|peek|lock|find|unordered_map|CpuScope)',hook)
 checks['drawHook: no gateFrame weather branch; the probe sits in prepareDrawImpl\'s existing gateFrame branch']='weatherProbeDraw' not in hook and 'gateFrame' not in hook.split(cmp_line)[0] and 'if(gateFrame){++gateCounts.prep;weatherProbeDraw(count);}' in r
@@ -51,11 +51,11 @@ checks['weatherFrame: tracker, world, rotate, mirror-off']=all(s in wf for s in 
 checks['DRAWGATE line carries weatherDraws/weatherPrims']='weatherDraws=%u weatherPrims=%u weatherNs=%.1f' in r and 'weatherSample.draws,weatherSample.primitives,b.weatherNs)' in r
 w=fp.src('world_renderer.h').read_text()
 checks['WorldRenderer: POD state, setter and getter only']=all(s in w for s in ('NorthlightWeather::State weatherState{};','void setWeather(const NorthlightWeather::State& s){weatherState=s;}','const NorthlightWeather::State& weather()const{return weatherState;}')) and w.count('weatherState')==4
-# 0.3.201 (rain): the rain boundary is gone (the UI boundary is the only one again); the rain mask replaces it
+# 0.3.202 (rain): the rain boundary is gone (the UI boundary is the only one again); the rain mask replaces it
 pdi=r[r.index('template<class Capture> void prepareDrawImpl('):r.index('    // Terrain draws run with the game')]
 checks['no rain boundary: no rainBoundary anywhere, no kind=rain log, no stage-0 relearn in prepareDrawImpl']=('rainBoundary' not in r and 'kind=rain' not in r and 'IDirect3DBaseTexture9* stage0=nullptr' not in pdi and 'ext->GetTexture(0,&stage0)' not in pdi and 'renderEffects();' not in pdi)
 branch=helper[helper.index('return blobFaintDraw(claimed,[&]{'):]
-# 0.3.201 (rain mask MRT): the mask is written by the rain draw itself (render target 1); no second draw, no scrub draw, no RT0 swap per draw
+# 0.3.202 (rain mask MRT): the mask is written by the rain draw itself (render target 1); no second draw, no scrub draw, no RT0 swap per draw
 checks['rain mask MRT: the rain branch makes ONE draw through rainMrtDraw, between the blend setup and its restore; no second draw call, no rainMaskPass/rainScrubDraw anywhere']=(
     branch.count('rainMrtDraw(draw)')==1 and branch.count('draw()')==0 and branch.index('ext->SetRenderState(types[i],want[i])')<branch.index('const HRESULT hr=rainMrtDraw(draw);')<branch.index('prev[i]);')
     and 'rainMrtDraw' not in helper.split('return blobFaintDraw(claimed,[&]{')[0] and 'rainMaskPass' not in r and 'rainScrub' not in r.replace('rainScrubPS','').replace('kRainScrubShader','') and 'rainMaskScrub' not in r)
@@ -126,7 +126,7 @@ checks['rain mask MRT: Reset, Present and EndScene unbind first; finishFrame (al
     'rainMrtUnbind();' in rst and 'rainMrtUnbind();' in pre and pre.index('rainMrtUnbind();')<pre.index('finishFrame()') and 'rainMrtUnbind();' in es and es.index('rainMrtUnbind();')<es.index('GuardedMirrorDevice::EndScene()')
     and 'void finishFrame() {\n        Guard mirrorLock(mirrorState.gate);\n        rainMrtUnbind();' in r and 'finishDeviceFrame(owner);' in r)
 checks['rain mask MRT: renderEffects unbinds before its first device work; drawHook unbinds for every draw that is not a rain draw, before any capture or effect work']=(
-    'rainMrtUnbind(); /* 0.3.201 (rain mask MRT) */\n        ExtensionDevice::RawScope rawEffects(*ext);' in r and 'if(rainMrtBound&&!rainBlend)rainMrtUnbind();' in hook and hook.index('if(rainMrtBound&&!rainBlend)rainMrtUnbind();')<hook.index('if(!frameDrawGates){')<hook.index('prepareDraw(capture,count)'))
+    'rainMrtUnbind(); /* 0.3.202 (rain mask MRT) */\n        ExtensionDevice::RawScope rawEffects(*ext);' in r and 'if(rainMrtBound&&!rainBlend)rainMrtUnbind();' in hook and hook.index('if(rainMrtBound&&!rainBlend)rainMrtUnbind();')<hook.index('if(!frameDrawGates){')<hook.index('prepareDraw(capture,count)'))
 checks['rain mask MRT: SetRenderTarget and SetDepthStencilSurface stay pure unwrap + forward (they are on the generator DIRECT list: the replay calls ext->, never the Device method); the next draw/Clear/StretchRect unbinds']=(
     'HRESULT STDMETHODCALLTYPE SetRenderTarget(DWORD RenderTargetIndex, IDirect3DSurface9* pRenderTarget) override{Guard mirrorLock(mirrorState.gate);return ext->SetRenderTarget(RenderTargetIndex, mirrorResources.unwrap(pRenderTarget));}' in r
     and 'HRESULT STDMETHODCALLTYPE SetDepthStencilSurface(IDirect3DSurface9* pNewZStencil) override{Guard mirrorLock(mirrorState.gate);return ext->SetDepthStencilSurface(mirrorResources.unwrap(pNewZStencil));}' in r)

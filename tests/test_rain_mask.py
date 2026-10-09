@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # northlight-test:
-"""0.3.201 (rain mask): WorldComposite keeps rain streaks out of the haze - source, manifest and numeric checks, no compiler.
+"""0.3.202 (rain mask): WorldComposite keeps rain streaks out of the haze - source, manifest and numeric checks, no compiler.
 The mask (RainMask, s13, alpha = streak alpha, 0 without rain) is read once inside the PassInfo.z<.5 branch and the result is lerped back
 toward the unfogged colour; every other compiled entry stays byte-identical to HEAD~ (0.3.200)."""
 import sys; from pathlib import Path; sys.path.insert(0, str(Path(__file__).resolve().parents[1]))  # repo root

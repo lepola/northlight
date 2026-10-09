@@ -14,7 +14,7 @@ sampler2D FogBuffer : register(s9);
 sampler2D WaterMask : register(s11);
 sampler2D BaselineLighting : register(s12);
 sampler2D RegionalFog : register(s13); // ground, day extinction, night extra, layer height
-sampler2D RainMask : register(s13); // 0.3.201 (rain mask): WorldComposite only, rain streak alpha (a), 0 without rain
+sampler2D RainMask : register(s13); // 0.3.202 (rain mask): WorldComposite only, rain streak alpha (a), 0 without rain
 float4 RegionalFogInfo : register(c31); // world node0 XY, inverse field span, night fraction
 float4 WaterInfo : register(c30);
 float4 RemovalInfo : register(c30); // RemovalSmooth, TemporalLight: y 1 when a lit source is drawn, z 1/(summed source weight), w disc radius in half-res pixels at view distance 1

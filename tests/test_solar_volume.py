@@ -159,7 +159,7 @@ def main():
     assert 'c[22][3]=.0035f+.0031f*c[31][3]' in cpu
     assert 'airBase=lerp(airBase,FogColor.w,generalForest);' in shader
     # Horizon haze sits between the scene and the local scattering, same debug gate.
-    # 0.3.201 (rain mask): the lerp back to the unfogged colour on rain-mask pixels wraps haze + fog mad.
+    # 0.3.202 (rain mask): the lerp back to the unfogged colour on rain-mask pixels wraps haze + fog mad.
     assert ('if(PassInfo.z<.5){\n        float3 unfogged=color;\n'
             '        // Rain streaks were drawn into the scene before the composite: on mask pixels go back toward the unfogged pixel so they are not hazed.\n'
             '        float rain=tex2Dlod(RainMask,float4(uv,0,0)).a;\n'

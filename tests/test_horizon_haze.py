@@ -37,7 +37,7 @@ PRE_LIFT_COMPOSITE_SLOTS = 467
 # same instruction, so 467 (by inspection of WorldComposite.bin.asm). SourceVisibilityPS: +8 ring taps,
 # estimated 440-460 but not knowable without the compiler.
 # 0.3.174: WorldComposite folds the AO/bloom composite (s10 AO in the tent loop, bloom, original'): 498.
-LIFT_COMPOSITE_SLOTS = 505  # 0.3.201 (rain mask): was 498
+LIFT_COMPOSITE_SLOTS = 505  # 0.3.202 (rain mask): was 498
 SOURCE_VISIBILITY_SLOTS = 492  # compiled at integration (was 281 before the wrap ring)
 BEFORE = {
     'WorldNormals': '1e8d22d66a1022bad26c930dd719398eba02c22179084a275f4fe52bf54c1db5',
@@ -346,7 +346,7 @@ def main():
     cpu = fp.src('world_renderer.h').read_text()
     composite_src = shader.split('float4 WorldComposite(', 1)[1].split('// Separate geometry pass:', 1)[0]
     helper = block(shader, 'float3 horizonHaze(')
-    # 0.3.201 (rain mask): haze, then the fog mad, in one lerp expression back toward the unfogged colour on rain-mask pixels.
+    # 0.3.202 (rain mask): haze, then the fog mad, in one lerp expression back toward the unfogged colour on rain-mask pixels.
     assert composite_src.index('horizonHaze(color,centerUV,viewZ,d>=.99999&&liquid<=0)') < composite_src.index('fog.a,fog.rgb)')
     assert 'if(PassInfo.z<.5){\n        float3 unfogged=color;' in composite_src
     assert '[branch]if(range<=0||HorizonHaze.w<=0)return color;' in helper
