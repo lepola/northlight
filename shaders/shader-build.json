@@ -1,6 +1,6 @@
 {
   "source_sha256": "3c4ebf55f84663efe1aa13c7010171ffa70ae611dac561be800bb8fd77ba64e9",
-  "rain_source_sha256": "09ee0ba4859bff1934121ad9b70e8a9f9498c243f7ee0b6b82a976c730dbb00f",
+  "rain_source_sha256": "bc749a6bae0c29819131f455259b1c1ad8814232af780e6e41d839c9fb051a6f",
   "target": "ps_3_0",
   "shaders": {
     "AO": {
@@ -158,78 +158,78 @@
       }
     },
     "ParticleOver1": {
-      "bytes": 296,
-      "sha256": "878d4d8c9c7ea3dd596c355a4ef878182e70ed2502b72348914d453b6c4123b6",
-      "target": "ps_2_0",
-      "static_instruction_slots": 9,
-      "temporary_registers": 3,
-      "instructions": {
-        "texld": 1,
-        "mul": 1,
-        "mov": 7
-      }
-    },
-    "ParticleOver2": {
-      "bytes": 324,
-      "sha256": "1a6a2582ae850e0953bb6687fbe5b1485fbcb2910636f33bfe11e27cc6ff884e",
-      "target": "ps_2_0",
-      "static_instruction_slots": 11,
-      "temporary_registers": 3,
-      "instructions": {
-        "texld": 1,
-        "mul": 2,
-        "mov": 8
-      }
-    },
-    "ParticleAddA1": {
-      "bytes": 356,
-      "sha256": "ab2cb14428bdae8a28a57d8099090df859587cc4e74167245692b1fec338e5d0",
+      "bytes": 344,
+      "sha256": "1cb5ca81bc21502d8800ce2edee00f4c6d3f999bb0575ad4d393593cebaa61e8",
       "target": "ps_2_0",
       "static_instruction_slots": 13,
       "temporary_registers": 3,
       "instructions": {
         "texld": 1,
+        "mul": 1,
+        "mov": 11
+      }
+    },
+    "ParticleOver2": {
+      "bytes": 360,
+      "sha256": "cac339225f8ab86ee107aecd73d5e130d986a14ceef36b1442b711bf1caac12b",
+      "target": "ps_2_0",
+      "static_instruction_slots": 14,
+      "temporary_registers": 3,
+      "instructions": {
+        "texld": 1,
         "mul": 2,
-        "mov": 8,
+        "mov": 11
+      }
+    },
+    "ParticleAddA1": {
+      "bytes": 404,
+      "sha256": "e25f802ca3d46f08195345feb0a77e6646ad71cbbffe292c7c4277717a5d5b3c",
+      "target": "ps_2_0",
+      "static_instruction_slots": 17,
+      "temporary_registers": 3,
+      "instructions": {
+        "texld": 1,
+        "mul": 2,
+        "mov": 12,
         "max": 2
       }
     },
     "ParticleAddA2": {
-      "bytes": 396,
-      "sha256": "375985c7b588723175872853c701c252fc463861f456c904759b7ff310af0597",
+      "bytes": 420,
+      "sha256": "686fbb020c25ab2762b2f57fa8b02a63856f5704c6b877bf1d439db722e4abcc",
       "target": "ps_2_0",
-      "static_instruction_slots": 16,
+      "static_instruction_slots": 18,
       "temporary_registers": 3,
       "instructions": {
         "texld": 1,
         "mul": 3,
-        "mov": 10,
+        "mov": 12,
         "max": 2
       }
     },
     "ParticleAddC1": {
-      "bytes": 256,
-      "sha256": "b6b0cff3683719643df782baebbe82ddfe761867f303184a280113e477fd8187",
+      "bytes": 304,
+      "sha256": "aa182923bc0efa6bcf93cb943b6da16d878d31aa5ac135135c371ee79da802d7",
       "target": "ps_2_0",
-      "static_instruction_slots": 7,
+      "static_instruction_slots": 11,
       "temporary_registers": 2,
       "instructions": {
         "texld": 1,
         "mul": 1,
-        "max": 2,
-        "mov": 3
+        "mov": 7,
+        "max": 2
       }
     },
     "ParticleAddC2": {
-      "bytes": 320,
-      "sha256": "be07b685ca3d615e19234b3bd3faf59487847c06a4f3f509ac8d37f47e73062d",
+      "bytes": 344,
+      "sha256": "4e7527b2861304d9c83a3ee07e57f9fb588eaf311b12412b6338eed8270081aa",
       "target": "ps_2_0",
-      "static_instruction_slots": 10,
-      "temporary_registers": 3,
+      "static_instruction_slots": 12,
+      "temporary_registers": 2,
       "instructions": {
         "texld": 1,
         "mul": 2,
-        "mov": 5,
+        "mov": 7,
         "max": 2
       }
     }

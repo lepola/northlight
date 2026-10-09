@@ -23,17 +23,18 @@ float4 RainScrub(float2 uv : TEXCOORD0) : COLOR0
 
 // 0.3.203 (particle mask): translucent world particles (torch and brazier flames, sparks, spell particles) draw no depth, so WorldComposite
 // would fog, haze and relight them with the background's depth. Each shader replaces the game's fixed-function stage 0 (colour MODULATE
-// or MODULATE2X of texture x diffuse, alpha MODULATE) and writes the particle's coverage to oC1 (render target 1, colour-masked to green, so the
-// red rain coverage is untouched). The draw's own blend applies to oC1 too, so the value written is what that blend must add up to:
-//   Over  (SRCALPHA/INVSRCALPHA)         (1,1,1,a):  g' = a + g(1-a), the alpha over the earlier coverage;
-//   AddA  (SRCALPHA/ONE)                 (1,1,1,v):  g' = g + v, v = a x the brightest channel, saturating at 1;
-//   AddC  (ONE/ONE and SRCCOLOR/ONE)     (v,v,v,v):  ONE adds v, SRCCOLOR adds v x v, v = the brightest channel (the colour the blend adds).
+// or MODULATE2X of texture x diffuse, alpha MODULATE, clamped like the stage) and writes the particle's coverage to oC1 (render target 1; the red
+// rain coverage is untouched). The draw's own blend applies to oC1 too, so the value written is what that blend must add up to. Blue = "a particle
+// touched this pixel", green = 1 - T, the background's transmittance through the alpha-over particles (pixel = T x background + emission):
+//   Over  (SRCALPHA/INVSRCALPHA)         (1,1,1,a):  g' = a + g(1-a) in green AND blue (colour mask green|blue);
+//   AddA  (SRCALPHA/ONE)                 (1,1,1,v):  blue only: b' = b + v, v = a x the brightest channel, saturating at 1; green untouched (no attenuation);
+//   AddC  (ONE/ONE and SRCCOLOR/ONE)     (v,v,v,v):  blue only: ONE adds v, SRCCOLOR adds v x v, v = the brightest channel (the colour the blend adds).
 // The multiplier (1 or 2) is the stage's colour op; the 1 / 2 suffix names it.
 float4 particleStage(float4 diffuse, float2 uv, float scale)
 {
     float4 c = tex2D(Scene, uv) * diffuse;
     c.rgb *= scale;
-    return c;
+    return saturate(c); // the fixed-function stage clamps its result to [0,1] before fog and blend: RT0 gets exactly that
 }
 float particleBrightness(float4 c)
 {
