@@ -107,7 +107,7 @@ public:
 
     // ---- hooks the generated bodies call ----
     Queue& streamQueue(){return core.q;}
-    CallScope callScope(){return CallScope(core);}   // 0.3.204 (task 21): sampled recording timer, see CallScope
+    CallScope callScope(std::uint16_t id){return CallScope(core,id);}   // 0.3.204 (task 21): sampled recording timer, see CallScope
     template<Cmd C,class... A> void observe(CmdTag<C>,A&&...){}
     template<Cmd C,class... A> typename MethodTraits<C>::Ret syncCall(CmdTag<C> t,A... a){noteSync(t,a...);return runSync(streamQueue(),t,a...);}
     template<Cmd C,class... A> typename MethodTraits<C>::Ret syncGet(CmdTag<C> t,A... a){own(core.q.stats.stateSynced);return runSync(streamQueue(),t,a...);}

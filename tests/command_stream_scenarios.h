@@ -684,6 +684,7 @@ static void statsLine(){
     CHECK(lines.size()==1&&lines[0].rfind("CSTREAM cmds=",0)==0&&lines[0].find("passPerFrame=")!=std::string::npos&&lines[0].find("census[")!=std::string::npos&&lines[0].back()==']');
     for(const char* field:{"game[per frame]: ms=","coop=","split[per frame]: lockMs=","recordMs~=","snapMs=","presentMs=","syncMs=","presentWaitMs=","bpMs=","sleeps=","publishes=","replayBusyMs/frame=","recorded=","answered=","texShadow=","readbacks=","bufShadow=","readbacks/frame=","evicted/frame=","(hot ","refused/frame=","grows=","large=","memMB=","texFreshSkipped=","texReadbackCause[freshDrop=","relockedEvict=","neverShadowed=","freshSkip="," skipped="})CHECK(lines[0].find(field)!=std::string::npos);   // per-window numbers
     CHECK(lines[0].size()<2000);
+    {bool top=false;for(auto& l:gStatLines)if(l.rfind("CSTREAM top[per frame]: Device::DrawPrimitive=",0)==0)top=true;CHECK(top);}   // 0.3.204 (task 21): the sampled per-command split, the draws first
     rig.finish();checkClean();
 }
 // Redundant-state filtering: a repeated Set of the value the game last set is not recorded; anything else is.

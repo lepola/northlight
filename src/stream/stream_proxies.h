@@ -89,7 +89,7 @@ struct ProxyBase {
     virtual ~ProxyBase();
     ProxyBase(const ProxyBase&)=delete;ProxyBase& operator=(const ProxyBase&)=delete;
     Queue& streamQueue();
-    struct CallScope callScope();   // 0.3.204 (task 21): sampled game-thread timer of a generated method body (defined below StreamCore)
+    struct CallScope callScope(std::uint16_t id);   // 0.3.204 (task 21): sampled game-thread timer of a generated method body (defined below StreamCore)
     // The DXVK model for the device's lifetime: a top-level proxy with public references (refs above `baseline`) holds one
     // reference on the StreamDevice, so the device, the queue and the replay thread outlive every object the game still holds.
     // StreamState binds count in `use` only: they never pin the device (or it would never die). A child's public reference
@@ -273,10 +273,10 @@ inline Queue& ProxyBase::streamQueue(){return core->q;}
 // 0.3.204 (task 21): game-thread split timers, active only while core.timing (Diagnostics on); off: one bool test. Waits (sync, backpressure, present) are subtracted so they stay in their own counters.
 inline std::uint64_t gameWaitsNs(const Counters& s){return get(s.syncNs)+get(s.backpressureNs)+get(s.presentNs);}
 struct CallScope {   // 1 in 16 generated method bodies: 16 x (elapsed - waits - snapshot capture) into recordSampledNs
-    Counters* st=nullptr;std::uint64_t t0=0,w0=0;
-    explicit CallScope(StreamCore& c){if(c.timing&&(++c.timingN&15)==0){st=&c.q.stats;w0=gameWaitsNs(*st)+get(st->snapNs);t0=nowNs();}}
+    Counters* st=nullptr;std::uint64_t t0=0,w0=0;std::uint16_t id=0;
+    CallScope(StreamCore& c,std::uint16_t cmd){if(c.timing&&(++c.timingN&15)==0){st=&c.q.stats;id=cmd<kMaxCmdIds?cmd:0;w0=gameWaitsNs(*st)+get(st->snapNs);t0=nowNs();}}
     CallScope(const CallScope&)=delete;CallScope& operator=(const CallScope&)=delete;
-    ~CallScope(){if(st){const std::uint64_t e=nowNs()-t0,w=gameWaitsNs(*st)+get(st->snapNs)-w0;own(st->recordSampledNs,(e>w?e-w:0)*16);}}
+    ~CallScope(){if(st){const std::uint64_t e=nowNs()-t0,w=gameWaitsNs(*st)+get(st->snapNs)-w0,ns=(e>w?e-w:0)*16;own(st->recordSampledNs,ns);own(st->cmdSampledNs[id],ns);own(st->cmdSamples[id]);}}
 };
 struct LockScope {   // every buffer/image Lock or Unlock: elapsed minus the waits inside into lockNs
     Counters* st=nullptr;std::uint64_t t0=0,w0=0;
@@ -284,7 +284,7 @@ struct LockScope {   // every buffer/image Lock or Unlock: elapsed minus the wai
     LockScope(const LockScope&)=delete;LockScope& operator=(const LockScope&)=delete;
     ~LockScope(){if(st){const std::uint64_t e=nowNs()-t0,w=gameWaitsNs(*st)-w0;own(st->lockNs,e>w?e-w:0);}}
 };
-inline CallScope ProxyBase::callScope(){return CallScope(*core);}
+inline CallScope ProxyBase::callScope(std::uint16_t id){return CallScope(*core,id);}
 inline void ProxyBase::pinDevice(){if(core->game)core->game->AddRef();}
 inline void ProxyBase::unpinDevice(){if(core->game)core->game->Release();}
 inline ProxyBase::~ProxyBase(){dropPrivate();}

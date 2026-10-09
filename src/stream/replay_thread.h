@@ -450,6 +450,22 @@ private:
         for(std::size_t i=0;i<top.size()&&i<8;++i)put(buf,n,"%s%s=%llu",i?",":"",cmdName((Cmd)top[i].second),(unsigned long long)top[i].first);
         put(buf,n,"]");
         log(buf);avg_=Avg();
+        logCallTop();
+    }
+    // 0.3.204 (task 21, Diagnostics only): the generated calls that cost the game thread the most since the previous line (sampled 1 in 16), per frame:
+    // "CSTREAM top[per frame]: Device::SetRenderState=0.812ms/4980 ..." (time, calls). Nothing while the timers are off.
+    std::uint64_t lastCmdNs_[kMaxCmdIds]={},lastCmdSamples_[kMaxCmdIds]={},lastTopFrames_=0;
+    void logCallTop(){
+        const Counters& s=core.q.stats;const std::uint64_t gf=get(s.gameFrames)-lastTopFrames_;lastTopFrames_+=gf;const double perFrame=gf?1.0/double(gf):0.0;std::vector<std::pair<std::uint64_t,unsigned>> top;std::uint64_t calls[kMaxCmdIds]={};
+        for(unsigned i=0;i<(unsigned)Cmd::Count&&i<kMaxCmdIds;++i){
+            const std::uint64_t ns=get(s.cmdSampledNs[i]),k=get(s.cmdSamples[i]);
+            if(ns>lastCmdNs_[i])top.push_back({ns-lastCmdNs_[i],i});
+            calls[i]=k-lastCmdSamples_[i];lastCmdNs_[i]=ns;lastCmdSamples_[i]=k;}
+        if(top.empty()||!log)return;
+        std::sort(top.rbegin(),top.rend());
+        char buf[kLine];int n=std::snprintf(buf,sizeof buf,"CSTREAM top[per frame]:");
+        for(std::size_t i=0;i<top.size()&&i<12;++i)put(buf,n," %s=%.3fms/%.0f",cmdName((Cmd)top[i].second),double(top[i].first)/1e6*perFrame,double(calls[top[i].second])*16.0*perFrame);
+        log(buf);
     }
     void activateSnapshot(GameSnapshot* s){
         playback_.reset();
