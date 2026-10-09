@@ -319,6 +319,8 @@ class Device final : public GuardedMirrorDevice {
     // particlePS: the six ps_2_0 variants (blend kind x stage-0 colour multiplier), created on first use; the counters are read and zeroed by the PARTICLES / WEATHER lines;
     // rainMaskRainDrawn: this frame's first rain mask draw has happened, rainLateZ*: Z-writing world draws after it (what a mask cannot fix: geometry drawn over the rain).
     IDirect3DPixelShader9* particlePS[8]={};bool particlePSFailed=false,rainMaskRainDrawn=false;unsigned particleDraws=0,particleSkips=0,rainLateZ=0,rainLateZPrims=0,particleSkipLogs=0,particleSkipLogged[8]={};
+    struct LateZSig{DWORD v[6]={};unsigned vs=0,ps=0,draws=0,prims=0;}; /* vs: 0 none, 1 world, 2 skinned, 3 water, 4 other */
+    LateZSig lateZSigs[12];unsigned lateZSigCount=0,lateZSigMore=0,lateZBlended=0,lateZOpaque=0;
     struct ParticleSig{unsigned why=0,vsModel=0;DWORD v[13]={};unsigned count=0;}; /* a sample frame's census row: the draw states of a candidate (v: src, dst, op, alpha test, colour op/args, alpha op/args, stage 1 colour op) */
     ParticleSig particleSigs[12];unsigned particleSigCount=0,particleSigMore=0;bool particleFirstLogged=false;
     // 0.3.203 (particle mask): particleBg: the scene colour from before the frame's first particle mask draw (one StretchRect, lazily created at the game's target format, released with the mask);
@@ -1016,6 +1018,21 @@ private:
         DWORD zw=0;
         if(FAILED(ext->GetRenderState(D3DRS_ZWRITEENABLE,&zw))||!zw||!sameWorldDepth())return;
         ++rainLateZ;rainLateZPrims+=count;
+        if(sampled())lateZCensus(count);
+    }
+    // 0.3.203 (rain): sample frames only: the late Z writers by signature (blend, factors, alpha test, ZFUNC, colour write, vertex shader class, pixel shader bound), logged by logParticles with the blended / opaque split.
+    void lateZCensus(UINT count){
+        LateZSig sig;DWORD bl=0;
+        static const D3DRENDERSTATETYPE reads[6]={D3DRS_ALPHABLENDENABLE,D3DRS_SRCBLEND,D3DRS_DESTBLEND,D3DRS_ALPHATESTENABLE,D3DRS_ZFUNC,D3DRS_COLORWRITEENABLE};
+        for(int i=0;i<6;++i){if(FAILED(ext->GetRenderState(reads[i],&sig.v[i])))sig.v[i]=~0u;}
+        bl=sig.v[0];
+        IDirect3DVertexShader9* v=nullptr;const bool borrowed=ext->peekVertexShader(v);if(!borrowed&&FAILED(ext->GetVertexShader(&v)))v=nullptr;
+        if(v){const VsClass& vc=classifyVs(v);sig.vs=(vc.entry&kWaterTag)?3:vc.skinned?2:vc.world?1:4;}
+        if(!borrowed)drop(v);
+        IDirect3DPixelShader9* p=nullptr;if(ext->peekPixelShader(p))sig.ps=1;else{if(SUCCEEDED(ext->GetPixelShader(&p))&&p)sig.ps=1;drop(p);}
+        if(bl&&bl!=~0u)++lateZBlended;else ++lateZOpaque;
+        for(unsigned i=0;i<lateZSigCount;++i){LateZSig& r=lateZSigs[i];if(r.vs==sig.vs&&r.ps==sig.ps&&!memcmp(r.v,sig.v,sizeof sig.v)){++r.draws;r.prims+=count;return;}}
+        if(lateZSigCount<12){sig.draws=1;sig.prims=count;lateZSigs[lateZSigCount++]=sig;}else ++lateZSigMore;
     }
     // 0.3.203 (particle mask): one sample-frame census row per distinct (reason, vertex shader model, blend, stage setup) of the frame's candidates, logged by logParticles.
     void particleCensus(unsigned why,unsigned vsModel,const DWORD* bl,const DWORD* st){
@@ -1540,6 +1557,14 @@ public:
             for(unsigned i=0;i<NorthlightParticleShaderPatch::ReasonCount;++i)if(particlePatchRejects[i]){snprintf(rej,sizeof rej," %s=%u",NorthlightParticleShaderPatch::reasonName(i),particlePatchRejects[i]);rejects+=rej;}
             logf("PARTICLES frame=%u masked=%u skipped=%u rt1Binds=%u cap=%u bg=%d sigs=%u more=%u patched=%u psCache=%u/%u patchRejects={%s } mod2x=%u/%u/%u%s",sampleFrame,particleDraws,particleSkips,rebinds,kParticleRebindCap,particleBgLast,particleSigCount,particleSigMore,particlePatchedDraws,unsigned(particlePatched.size()),unsigned(particlePatched.variants()),rejects.c_str(),mod2xBeforeSnapshot,mod2xAfterSnapshot,mod2xAfterRain,rows.c_str());
         }
+        if(sampled()&&(rainLateZ||lateZSigCount)){
+            static const char* const vsNames[5]={"none","world","skinned","water","other"};
+            std::string rows;char row[200];
+            for(unsigned i=0;i<lateZSigCount;++i){const LateZSig& r=lateZSigs[i];
+                snprintf(row,sizeof row," [n=%u prims=%u blend=%ld %ld/%ld at=%ld zfunc=%ld cw=%ld vs=%s ps=%u]",r.draws,r.prims,long(r.v[0]),long(r.v[1]),long(r.v[2]),long(r.v[3]),long(r.v[4]),long(r.v[5]),vsNames[r.vs],r.ps);rows+=row;}
+            logf("PARTICLES lateZ frame=%u draws=%u prims=%u blended=%u opaque=%u sigs=%u more=%u%s",sampleFrame,rainLateZ,rainLateZPrims,lateZBlended,lateZOpaque,lateZSigCount,lateZSigMore,rows.c_str());
+        }
+        lateZSigCount=lateZSigMore=lateZBlended=lateZOpaque=0;
         particleSigCount=particleSigMore=0;particlePatchedDraws=mod2xBeforeSnapshot=mod2xAfterSnapshot=mod2xAfterRain=0;memset(particlePatchRejects,0,sizeof particlePatchRejects);
     }
     void logWeatherProbe(unsigned sampleFrame){

@@ -48,7 +48,7 @@ typedef unsigned UINT;typedef unsigned DWORD;typedef long HRESULT;
 #define SUCCEEDED(h) ((h)>=0)
 #define FALSE 0
 #define FAILED(h) ((h)<0)
-enum D3DRENDERSTATETYPE{D3DRS_ALPHABLENDENABLE=27,D3DRS_SRCBLEND=19,D3DRS_DESTBLEND=20,D3DRS_BLENDOP=171,D3DRS_ZWRITEENABLE=14,D3DRS_COLORWRITEENABLE=168,D3DRS_COLORWRITEENABLE1=190,D3DRS_SEPARATEALPHABLENDENABLE=206,D3DRS_SRCBLENDALPHA=207,D3DRS_DESTBLENDALPHA=208,D3DRS_BLENDOPALPHA=209,D3DRS_SPECULARENABLE=29,D3DRS_SCISSORTESTENABLE=174,D3DRS_ZENABLE=7,D3DRS_ALPHATESTENABLE=15};
+enum D3DRENDERSTATETYPE{D3DRS_ALPHABLENDENABLE=27,D3DRS_SRCBLEND=19,D3DRS_DESTBLEND=20,D3DRS_BLENDOP=171,D3DRS_ZWRITEENABLE=14,D3DRS_COLORWRITEENABLE=168,D3DRS_COLORWRITEENABLE1=190,D3DRS_SEPARATEALPHABLENDENABLE=206,D3DRS_SRCBLENDALPHA=207,D3DRS_DESTBLENDALPHA=208,D3DRS_BLENDOPALPHA=209,D3DRS_SPECULARENABLE=29,D3DRS_SCISSORTESTENABLE=174,D3DRS_ZENABLE=7,D3DRS_ALPHATESTENABLE=15,D3DRS_ZFUNC=23};
 enum D3DTEXTURESTAGESTATETYPE{D3DTSS_COLOROP=1,D3DTSS_COLORARG1=2,D3DTSS_COLORARG2=3,D3DTSS_ALPHAOP=4,D3DTSS_ALPHAARG1=5,D3DTSS_ALPHAARG2=6,D3DTSS_TEXCOORDINDEX=11,D3DTSS_TEXTURETRANSFORMFLAGS=24};
 enum D3DSAMPLERSTATETYPE{D3DSAMP_MAGFILTER=5,D3DSAMP_MINFILTER=6,D3DSAMP_MIPFILTER=7};
 enum{D3DTOP_DISABLE=1,D3DTOP_SELECTARG1=2,D3DTOP_MODULATE=4,D3DTOP_MODULATE2X=5,D3DTA_DIFFUSE=0,D3DTA_CURRENT=1,D3DTA_TEXTURE=2,D3DTTFF_DISABLE=0,D3DTEXF_POINT=1};
@@ -134,6 +134,7 @@ struct Hook{
     bool projectionValid=false;float worldMinDepth=0.f,worldMaxDepth=1.f;bool sampledFrame=false;bool sampled()const{return sampledFrame;}IDirect3DBaseTexture9* blobOriginal=nullptr;
     IDirect3DPixelShader9* particlePS[8]={};static constexpr D3DCOLOR kRainMaskClear=0x80000000;IDirect3DTexture9* particleBg=nullptr;Surface* particleBgSurface=nullptr;D3DFORMAT particleBgFormat=D3DFMT_UNKNOWN;bool particleBgTried=false,particleBgOk=false,particleBgLogged=false;int particleBgLast=-1,rainBgState=-1;unsigned mod2xBeforeSnapshot=0,mod2xAfterSnapshot=0,mod2xAfterRain=0;static constexpr unsigned kParticleRebindCap=24;
     bool particlePSFailed=false,rainMaskRainDrawn=false;unsigned particleDraws=0,particleSkips=0,rainLateZ=0,rainLateZPrims=0,particleSkipLogs=0,particleSkipLogged[8]={};
+    struct LateZSig{DWORD v[6]={};unsigned vs=0,ps=0,draws=0,prims=0;};LateZSig lateZSigs[12];unsigned lateZSigCount=0,lateZSigMore=0,lateZBlended=0,lateZOpaque=0;
     struct ParticleSig{unsigned why=0,vsModel=0;DWORD v[13]={};unsigned count=0;};ParticleSig particleSigs[12];unsigned particleSigCount=0,particleSigMore=0;bool particleFirstLogged=false;std::vector<std::string> logs;template<class F> void extensionWork(const char*,F f){f();}
     void newFrame(){rainMrtUnbind();rainMaskCleared=rainMaskDrawn=rainMaskFrame=rainMaskOk=rainDepthOk=rainMaskRainDrawn=particleBgTried=particleBgOk=false;applied=false;} /* clearFrame's part */
     Ext extObj;Ext* ext=&extObj;NorthlightParticleShaderPatch::Cache<Ext,IDirect3DPixelShader9> particlePatched;IDirect3DPixelShader9* particleGamePs=nullptr;unsigned particlePatchedDraws=0,particlePatchRejects[NorthlightParticleShaderPatch::ReasonCount]={};World worldObj;World* world=&worldObj;bool claimedSkip=false;bool gateFrame=true;
@@ -532,6 +533,17 @@ int main(){
             h.ext->rs[D3DRS_ZWRITEENABLE]=1;h.ext->peekDS=false;Surface other;h.worldDepth=&other;h.draw(9);assert(h.rainLateZ==2);h.worldDepth=&h.ext->gameDS;h.ext->peekDS=true; /* another depth buffer */
             h.applied=true;h.draw(9);assert(h.rainLateZ==2); /* the UI */
             h.applied=false;h.newFrame();h.draw(9);assert(h.rainLateZ==2); /* a new frame: the flag is reset */
+            assert(h.lateZSigCount==0&&h.lateZBlended==0&&h.lateZOpaque==0); /* not a sample frame: the counter only, no state reads for a census */
+        }
+        {   // the late Z writers census (sample frames): one row per distinct setup, blended vs opaque
+            Hook h;mk(h);h.sampledFrame=true;h.weatherDetect.noteCreate(P(51),32,512,1,A);h.weatherDetect.reset();h.weatherDetect.noteCreate(P(51),32,512,1,A);
+            h.bind(0,51);h.draw(10);h.bind(0,3);assert(h.rainMaskRainDrawn);
+            h.ext->rs[D3DRS_ZWRITEENABLE]=1;h.ext->rs[D3DRS_ALPHABLENDENABLE]=0;h.ext->rs[D3DRS_ZFUNC]=4;h.draw(7);h.draw(5); /* opaque world-less (no vertex shader), twice */
+            h.ext->rs[D3DRS_ALPHABLENDENABLE]=1;h.ext->rs[D3DRS_SRCBLEND]=D3DBLEND_SRCALPHA;h.ext->rs[D3DRS_DESTBLEND]=D3DBLEND_INVSRCALPHA;h.ext->vsBound=&h.ext->gameVs;h.vsMajor[&h.ext->gameVs]=3;h.vcMock.entry=0;h.vcMock.world=true;h.ext->ps=&h.ext->gamePs;h.draw(3); /* a blended world writer with a game pixel shader */
+            assert(h.rainLateZ==3&&h.rainLateZPrims==15&&h.lateZBlended==1&&h.lateZOpaque==2&&h.lateZSigCount==2&&h.lateZSigMore==0);
+            assert(h.lateZSigs[0].draws==2&&h.lateZSigs[0].prims==12&&h.lateZSigs[0].vs==0&&h.lateZSigs[0].ps==0&&h.lateZSigs[0].v[0]==0&&h.lateZSigs[0].v[4]==4);
+            assert(h.lateZSigs[1].draws==1&&h.lateZSigs[1].prims==3&&h.lateZSigs[1].vs==1&&h.lateZSigs[1].ps==1&&h.lateZSigs[1].v[0]==1&&h.lateZSigs[1].v[1]==D3DBLEND_SRCALPHA);
+            h.vcMock.skinned=true;h.draw(1);assert(h.lateZSigs[2].vs==2&&h.lateZSigCount==3);h.vcMock.skinned=false;
         }
         {   // the sample-frame census: one row per distinct setup, masked (why 0) and skipped
             Hook h;mk(h);h.sampledFrame=true;h.draw(10);h.draw(10);h.ext->rs[D3DRS_SRCBLEND]=D3DBLEND_DESTCOLOR;h.draw(10);h.ext->rs[D3DRS_SRCBLEND]=D3DBLEND_SRCALPHA;h.ext->tss[0][D3DTSS_COLOROP]=D3DTOP_MODULATE2X;h.draw(10);

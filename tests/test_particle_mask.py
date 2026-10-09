@@ -161,6 +161,9 @@ checks['lifetime: variants are forgotten when the game registers a pixel shader 
 checks['counters: patched draws and rejections are zeroed with the PARTICLES line']=('particlePatchedDraws=mod2xBeforeSnapshot=mod2xAfterSnapshot=mod2xAfterRain=0;memset(particlePatchRejects,0,sizeof particlePatchRejects);' in lp and '#include "particle_shader_patch.h"' in r)
 checks['PARTICLES bg= is the frame\'s snapshot result saved before clearFrame resets it; the WEATHER line says whether the snapshot preceded the first rain mask draw']=(
     'particleBgLast=particleBgTried?int(particleBgOk):-1;drop(worldDepth);' in r and 'sampleFrame,particleDraws,particleSkips,rebinds,kParticleRebindCap,particleBgLast,' in lp and 'rainLateZPrims=%u rainBg=%d' in wf and 'const int rainBgCount=rainBgState;rainBgState=-1;' in wf)
+checks['late Z census: sample frames only (state reads and rows), blended vs opaque split, a PARTICLES lateZ line with the signature rows, zeroed per frame']=(
+    'if(sampled())lateZCensus(count);' in r and 'void lateZCensus(UINT count){' in r and 'logf("PARTICLES lateZ frame=%u draws=%u prims=%u blended=%u opaque=%u sigs=%u more=%u%s"' in lp and 'lateZSigCount=lateZSigMore=lateZBlended=lateZOpaque=0;' in lp
+    and 'D3DRS_ALPHABLENDENABLE,D3DRS_SRCBLEND,D3DRS_DESTBLEND,D3DRS_ALPHATESTENABLE,D3DRS_ZFUNC,D3DRS_COLORWRITEENABLE' in r)
 checks['banner: 0.3.203']=('logf("Northlight renderer 0.3.203;' in r)
 
 for k,ok in checks.items():print(('PASS ' if ok else 'FAIL ')+k)
