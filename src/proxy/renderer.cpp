@@ -316,7 +316,7 @@ class Device final : public GuardedMirrorDevice {
     bool rainMaskCleared=false,rainMaskDrawn=false,rainMaskFrame=false,rainMaskOk=false;unsigned rainMaskDraws=0;bool rainMaskMismatchLogged=false; /* rainMaskCleared: this frame's mask start (depth snapshot + clear) ran */
     IDirect3DTexture9* rainDepth=nullptr;IDirect3DPixelShader9 *rainMrtPS=nullptr,*rainScrubPS=nullptr;bool rainMrtBound=false,rainDepthOk=false,rainCapsChecked=false,rainCapsOk=false,rainSkipLogged=false;unsigned rainMrtRuns=0,rainMaskSkips=0;DWORD rainMrtPrev[1]={};bool rainMrtPrevKnown[1]={};
     /* 0.3.203 (task 17): fallback effect boundary when the UI shaders are replaced by another module (font mods); learned from draw state, see uiFallbackDraw. */
-    NorthlightUiBoundary::Arming uiFallback;bool hashBoundaryThisFrame=false,fallbackBoundaryThisFrame=false,stockPairNoWorld=false,uiFallbackNoCandidateLogged=false;unsigned uiFallbackBoundaries=0;
+    NorthlightUiBoundary::Arming uiFallback;bool hashBoundaryThisFrame=false,fallbackBoundaryThisFrame=false,stockPairNoWorld=false,uiFallbackNoCandidateLogged=false;unsigned uiFallbackBoundaries=0;std::uint64_t uiFallbackPublished=0; /* the value last stored in NorthlightStream::learnedUiVsHash */
     IDirect3DVertexShader9* triageVs=nullptr;IDirect3DPixelShader9* triagePs=nullptr;DWORD triageZw=0;float triageC3[4]={};unsigned triageDraws=0; /* most recent post-terrain draw rejected by zwrite or the c3/rows test while learning (identities only, never dereferenced) */
     bool failed = false, projectionValid = false, key10 = false, key12=false;
     // 0.3.200 (frame markers): diagnostics only, while northlight-frame-markers.txt exists in the game folder at device creation: two 40x40
@@ -452,7 +452,8 @@ private:
     static constexpr bool kCacheBackBufferDesc=true;
     // 0.3.196 (task 12): backSurface is swap chain 0's back buffer identity (no reference; cleared with backDescKnown in Reset, which frees it).
     D3DSURFACE_DESC backDesc={};bool backDescKnown=false;IDirect3DSurface9* backSurface=nullptr;
-    bool fullViewport(D3DSURFACE_DESC& desc,D3DVIEWPORT9* viewport=nullptr) {
+    // quiet: a probe (the UI boundary fallback while learning) that neither counts viewportRejects nor spends the VIEWPORT GATE log lines.
+    bool fullViewport(D3DSURFACE_DESC& desc,D3DVIEWPORT9* viewport=nullptr,bool quiet=false) {
         desc={};
         IDirect3DSurface9* rt = nullptr;
         HRESULT rtHR;
@@ -481,7 +482,7 @@ private:
             vp.Width == desc.Width && vp.Height == desc.Height &&
             std::isfinite(vp.MinZ)&&std::isfinite(vp.MaxZ)&&vp.MinZ>=0&&vp.MaxZ<=1&&vp.MaxZ>vp.MinZ;
         if(viewport)*viewport=vp;
-        if(!ok){
+        if(!ok&&!quiet){
             ++viewportRejects;
             if(viewportReports++<8)logf("VIEWPORT GATE: rt=%ux%u fmt=%u msaa=%u back=%ux%u vp=(%u,%u %ux%u z=%.9g..%.9g) HRESULTs=%08lx,%08lx,%08lx",desc.Width,desc.Height,unsigned(desc.Format),unsigned(desc.MultiSampleType),bd.Width,bd.Height,vp.X,vp.Y,vp.Width,vp.Height,vp.MinZ,vp.MaxZ,(unsigned long)rtHR,(unsigned long)backHR,(unsigned long)vpHR);
         }
@@ -1173,20 +1174,19 @@ private:
     void uiFallbackDraw(const VsClass& vc,IDirect3DVertexShader9* vs){
         if(!uiFallback.collecting()||!terrain||applied||hashBoundaryThisFrame||fallbackBoundaryThisFrame||vc.wmo)return;
         if(vc.world||drawWaterVS)return;
+        const bool armed=uiFallback.armed();
+        if(!armed&&(!enabled||failed))return; /* learning counts only frames that would draw effects (endFrame: Neutral) */
         IDirect3DPixelShader9* ps=nullptr;
         const bool borrowed=ext->peekPixelShader(ps); // identity lookup only
         if(!borrowed&&(FAILED(ext->GetPixelShader(&ps))||!ps))return;
         if(!borrowed)drop(ps);
         const std::uintptr_t vsId=reinterpret_cast<std::uintptr_t>(vs),psId=reinterpret_cast<std::uintptr_t>(ps);
-        const bool armed=uiFallback.armed();
         if(armed&&!uiFallback.isBoundary(vsId,psId))return;
         DWORD zw=0;if(FAILED(ext->GetRenderState(D3DRS_ZWRITEENABLE,&zw)))return;
         float c[16]={};if(FAILED(ext->GetVertexShaderConstantF(0,c,4)))return;
-        const bool pre=zw==0&&NorthlightUiBoundary::screenSpaceRows(c);
-        if(!pre&&!armed){triageVs=vs;triagePs=ps;triageZw=zw;for(int i=0;i<4;++i)triageC3[i]=c[12+i];++triageDraws;}
+        if(!NorthlightUiBoundary::accepts(zw!=0,c)){if(!armed){triageVs=vs;triagePs=ps;triageZw=zw;for(int i=0;i<4;++i)triageC3[i]=c[12+i];++triageDraws;}return;}
         D3DSURFACE_DESC desc={};
-        const bool fullOk=pre&&fullViewport(desc); // last: its failures count viewportRejects and log VIEWPORT GATE
-        if(!NorthlightUiBoundary::accepts(NorthlightUiBoundary::Candidate{true,vc.world,drawWaterVS,zw!=0,fullOk,c}))return;
+        if(!fullViewport(desc,nullptr,true))return; // last, and quiet: minimap and portrait targets are expected here
         if(!armed){uiFallback.noteCandidate(vsId,psId);return;}
         fallbackBoundaryThisFrame=true;++uiFallbackBoundaries;
         if(sampled()){DWORD z=0,blend=0;ext->GetRenderState(D3DRS_ZENABLE,&z);ext->GetRenderState(D3DRS_ALPHABLENDENABLE,&blend);
@@ -1201,36 +1201,39 @@ private:
         auto itp=psTags.find(ps);const bool isUI=itp!=psTags.end()&&itp->second==2;if(!borrowed)drop(ps);
         float w[4];return isUI&&SUCCEEDED(ext->GetVertexShaderConstantF(3,w,1))&&NorthlightUiBoundary::clipWOne(w);
     }
-    // Disarms for the session; an armed fallback's stream hash goes back to 0.
-    void uiFallbackDisarm(){const bool was=uiFallback.armed();uiFallback.onHashBoundary();if(was)NorthlightStream::learnedUiVsHash.store(0,std::memory_order_relaxed);}
-    template<class T> void uiFallbackForget(T* obj){
-        const bool was=uiFallback.armed();uiFallback.forget(reinterpret_cast<std::uintptr_t>(obj));
-        if(was&&!uiFallback.armed())NorthlightStream::learnedUiVsHash.store(0,std::memory_order_relaxed);
+    unsigned long long uiFallbackVsHash(std::uintptr_t id)const{auto it=vsHashes.find(reinterpret_cast<IDirect3DVertexShader9*>(id));return it==vsHashes.end()?0ull:(unsigned long long)it->second;}
+    // The one writer of NorthlightStream::learnedUiVsHash (read by StreamDevice::onDraw on the game thread): the learned VS hash while armed, else 0.
+    // Called after every change of uiFallback's state.
+    void uiFallbackPublish(){
+        const std::uint64_t want=uiFallback.armed()?uiFallbackVsHash(uiFallback.learnedVs()):0;
+        if(want!=uiFallbackPublished){uiFallbackPublished=want;NorthlightStream::learnedUiVsHash.store(want,std::memory_order_relaxed);}
     }
+    template<class T> void uiFallbackForget(T* obj){uiFallback.forget(reinterpret_cast<std::uintptr_t>(obj));uiFallbackPublish();}
     // 0.3.203 (task 17): per-frame fallback bookkeeping, before clearFrame() resets terrain/applied.
     void uiFallbackEndFrame(){
         using K=NorthlightUiBoundary::Arming::FrameKind;
-        if(stockPairNoWorld&&!terrain)uiFallbackDisarm(); /* a world frame's pre-terrain UI draws (portrait, minimap compositing) never disarm */
+        if(uiFallback.disarmed()){stockPairNoWorld=hashBoundaryThisFrame=fallbackBoundaryThisFrame=false;return;} /* stock after its first frames */
+        const bool active=uiFallback.collecting(); /* stock never collects: its disarm below stays silent */
+        const bool noWorldPair=stockPairNoWorld&&!terrain; /* a world frame's pre-terrain UI draws (portrait, minimap compositing) never disarm */
         stockPairNoWorld=false;
         const K kind=(!enabled||failed)?K::Neutral:hashBoundaryThisFrame?K::WorldHash:fallbackBoundaryThisFrame?K::WorldFallback:!terrain?K::NoWorld:applied?K::Neutral:K::WorldMissed;
-        auto vh=[&](std::uintptr_t id){auto it=vsHashes.find(reinterpret_cast<IDirect3DVertexShader9*>(id));return it==vsHashes.end()?0ull:(unsigned long long)it->second;};
         auto ph=[&](std::uintptr_t id){auto it=psHashes.find(reinterpret_cast<IDirect3DPixelShader9*>(id));return it==psHashes.end()?0ull:(unsigned long long)it->second;};
-        const bool wasArmed=uiFallback.armed();
-        const auto result=uiFallback.endFrame(kind);
-        if(wasArmed&&!uiFallback.armed()&&result!=NorthlightUiBoundary::Arming::Result::Lost)NorthlightStream::learnedUiVsHash.store(0,std::memory_order_relaxed); /* disarmed by a hash boundary */
-        if(result==NorthlightUiBoundary::Arming::Result::Armed){
-            logf("EFFECT boundary fallback active: UI shaders replaced by another module vs=%016llx ps=%016llx draws/frame=%.1f",vh(uiFallback.learnedVs()),ph(uiFallback.learnedPs(0)),double(uiFallback.drawsPerFrame()));
-            NorthlightStream::learnedUiVsHash.store(vh(uiFallback.learnedVs()),std::memory_order_relaxed);
-        } else if(result==NorthlightUiBoundary::Arming::Result::Lost){
-            logf("EFFECT boundary fallback lost; relearning");
-            NorthlightStream::learnedUiVsHash.store(0,std::memory_order_relaxed);
+        auto result=NorthlightUiBoundary::Arming::Result::None;
+        if(noWorldPair)uiFallback.onHashBoundary();else result=uiFallback.endFrame(kind);
+        uiFallbackPublish();
+        if(uiFallback.disarmed()){
+            if(active)logf("EFFECT boundary fallback disarmed: stock UI shaders seen frame=%u where=%s",frame,noWorldPair?"no-world":"world");
+            hashBoundaryThisFrame=fallbackBoundaryThisFrame=false;return;
         }
+        if(result==NorthlightUiBoundary::Arming::Result::Armed)
+            logf("EFFECT boundary fallback active: UI shaders replaced by another module vs=%016llx ps=%016llx draws/frame=%.1f",uiFallbackVsHash(uiFallback.learnedVs()),ph(uiFallback.learnedPs(0)),double(uiFallback.drawsPerFrame()));
+        else if(result==NorthlightUiBoundary::Arming::Result::Lost)logf("EFFECT boundary fallback lost; relearning");
         if(uiFallback.learning()&&uiFallback.missedWorldFrames()>=600&&!uiFallbackNoCandidateLogged){
             uiFallbackNoCandidateLogged=true;
             logf("EFFECT boundary fallback: no candidate missedWorldFrames=%u dropped=%u triageDraws=%u triage vs=%016llx ps=%016llx zwrite=%lu c3=[%g %g %g %g]",uiFallback.missedWorldFrames(),uiFallback.droppedPairs(),triageDraws,
-                vh(reinterpret_cast<std::uintptr_t>(triageVs)),ph(reinterpret_cast<std::uintptr_t>(triagePs)),(unsigned long)triageZw,triageC3[0],triageC3[1],triageC3[2],triageC3[3]);
+                uiFallbackVsHash(reinterpret_cast<std::uintptr_t>(triageVs)),ph(reinterpret_cast<std::uintptr_t>(triagePs)),(unsigned long)triageZw,triageC3[0],triageC3[1],triageC3[2],triageC3[3]);
             NorthlightUiBoundary::Arming::Pair top[3];const unsigned n=uiFallback.topCandidates(top,3);
-            for(unsigned i=0;i<n;++i)logf("EFFECT boundary fallback candidate vs=%016llx ps=%016llx count=%u",vh(top[i].vs),ph(top[i].ps),top[i].count);
+            for(unsigned i=0;i<n;++i)logf("EFFECT boundary fallback candidate vs=%016llx ps=%016llx count=%u",uiFallbackVsHash(top[i].vs),ph(top[i].ps),top[i].count);
         }
         hashBoundaryThisFrame=fallbackBoundaryThisFrame=false;
     }

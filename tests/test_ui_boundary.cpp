@@ -25,15 +25,11 @@ int main(){
     ortho(p);p[15]=1.01f;assert(!screenSpaceRows(p));
     ortho(p);for(int i=0;i<8;++i)p[i]=0;assert(!screenSpaceRows(p)); // rows 0 and 1 empty
     ortho(p);p[0]=0;p[3]=0;assert(screenSpaceRows(p)); // row 1 still carries a scale
-    { // accepts
-        const Candidate ok{true,false,false,false,true,c};assert(accepts(ok));
-        Candidate d=ok;d.afterWorld=false;assert(!accepts(d));
-        d=ok;d.worldVs=true;assert(!accepts(d));
-        d=ok;d.waterVs=true;assert(!accepts(d));
-        d=ok;d.zWrite=true;assert(!accepts(d));
-        d=ok;d.fullTarget=false;assert(!accepts(d));
-        d=ok;d.c=nullptr;assert(!accepts(d));
-        d=ok;d.c=p;ortho(p);p[15]=0;assert(!accepts(d));
+    { // accepts: the stock UI state (z=1 zwrite=0, ortho rows) passes; Z writes, no constants or a perspective row do not
+        assert(accepts(false,c));
+        assert(!accepts(true,c));
+        assert(!accepts(false,nullptr));
+        ortho(p);p[15]=0;assert(!accepts(false,p));
     }
     { // (a) stock: the hash boundary fires in frame 1
         Arming a;unsigned armed=0;assert(a.learning()&&!a.armed()&&!a.disarmed());
@@ -83,6 +79,18 @@ int main(){
     { // (g) Neutral neither advances nor resets
         Arming a;unsigned armed=0;frames(a,FK::WorldMissed,60,40,&armed);frames(a,FK::Neutral,500,40,&armed);assert(armed==0&&a.candidateStreak()==60);
         frames(a,FK::WorldMissed,59,40,&armed);assert(armed==0);frames(a,FK::WorldMissed,1,40,&armed);assert(armed==1);
+        assert(std::fabs(a.drawsPerFrame()-40.f)<.5f); // the 500 Neutral frames' draws are not in the density
+    }
+    { // (g2) Neutral frames (effects off) cannot raise the density: a rare pass (2 per counted frame) never arms, however long effects stay off
+        Arming a;unsigned armed=0;
+        for(unsigned f=0;f<Arming::kArmFrames;++f){
+            a.noteCandidate(0xA,0x1);a.noteCandidate(0xA,0x1);
+            if(a.endFrame(FK::WorldMissed)==R::Armed)++armed;
+            for(unsigned n=0;n<10;++n){for(int i=0;i<40;++i)a.noteCandidate(0xA,0x1);a.noteCandidate(0xE,0x5);if(a.endFrame(FK::Neutral)==R::Armed)++armed;}
+        }
+        assert(armed==0&&a.learning());
+        Arming::Pair top[4];assert(a.topCandidates(top,4)==0); // after the failed arming; the Neutral-only pair never kept a slot
+        Arming b;for(int i=0;i<40;++i)b.noteCandidate(0xE,0x5);b.endFrame(FK::Neutral);assert(b.topCandidates(top,4)==0);
     }
     { // (h) more than kSlots distinct pairs
         Arming a;unsigned armed=0;
