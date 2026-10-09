@@ -82,7 +82,7 @@ gates_block=renderer[renderer.index('    // 0.3.187 per-frame draw gates'):rende
 # 0.3.202 (rain mask MRT): the rain mask members (rainMrtUnbind .. rainBlendDraw) are test_weather_detect's; here only their call surface exists (the hook equivalence runs with rain off)
 _a=gates_block.index('    void rainMrtUnbind(){');_b=gates_block.index('    template<class Draw> HRESULT rainBlendDraw(');_e=gates_block.index('\n    }\n',_b)+7
 checks_rain_stub=(gates_block[_a:_e].count('rainMrtBegin')>=1)
-gates_block=gates_block[:_a]+'    void rainMrtUnbind(){if(rainMrtBound){rainMrtBound=false;}}\n    template<class Draw> HRESULT rainBlendDraw(bool rain,bool claimed,Draw draw){(void)rain;return blobFaintDraw(claimed,draw);}\n'+gates_block[_e:]
+gates_block=gates_block[:_a]+'    void rainMrtUnbind(){if(rainMrtBound){rainMrtBound=false;}}\n    bool rainMaskRainDrawn=false;bool particleCandidate(){return false;}void noteRainLateZ(UINT){}\n    template<class Draw> HRESULT rainBlendDraw(bool rain,bool claimed,Draw draw,bool particle=false){(void)rain;(void)particle;return blobFaintDraw(claimed,draw);}\n'+gates_block[_e:]
 new_members='\n'.join([member(renderer,'template<class Work> bool extensionWork('),member(renderer,'template<class Capture> void prepareDraw(Capture capture,UINT count)'),
     renderer[renderer.index('    // 0.3.196 (task 12): one-entry per-draw vertex shader classification'):renderer.index('    std::unordered_map<IDirect3DPixelShader9*, uint64_t> psHashes;')],
     member(renderer,'void planTerrainShadowSwap('),member(renderer,'void dropTerrainShadowSwap('),member(renderer,'template<class Draw> HRESULT terrainShadowDraw('),
@@ -102,7 +102,7 @@ checks['faint swap: SetTexture(faint), the draw, SetTexture(original), then Rele
     'ext->SetTexture(0,faint);' in swap_src and 'shadowBlobs->faintTexture()' in swap_src and swap_src.index('ext->SetTexture(0,faint);')<swap_src.index('draw();')<swap_src.index('ext->SetTexture(0,original);')<swap_src.rindex('original->Release();')
     and 'extensionWork' not in swap_src and 'return terrainShadowDraw(claimed,draw)' in swap_src)
 checks['the plan keeps only the original (no second GetTexture, no faint pointer member)']=('GetTexture' not in member(renderer,'void planBlobFaint(') and 'blobFaint;' not in renderer and 'blobFaint=' not in renderer)
-checks['faint plan dropped at the start of every draw on both paths']=(renderer.count('dropBlobFaint();prepareDraw(capture,count);')==1 and renderer.count('dropTerrainShadowSwap();dropBlobFaint();')==1 and renderer.count('rainBlendDraw(rainBlend,claimed||mist,draw)')==2 and renderer.count('blobFaintDraw(claimed,draw)')==1)
+checks['faint plan dropped at the start of every draw on both paths']=(renderer.count('dropBlobFaint();prepareDraw(capture,count);')==1 and renderer.count('dropTerrainShadowSwap();dropBlobFaint();')==1 and renderer.count('rainBlendDraw(rainBlend,claimed||mist,draw,particle)')==2 and renderer.count('blobFaintDraw(claimed,draw)')==2) # 0.3.203: rainBlendDraw's plain draw and particleBlendDraw's claimed/blob draw
 # The other three overrides: 0.3.184's capture call and real draw, passed to drawHook unchanged.
 def old_parts(line):
     cap=re.search(r'prepareDraw\(\[&\]\(IDirect3DVertexShader9\* vs\)\{(.*?)captureWater\(vs,(\w+::\w+),\[&\]\{return (ext->\w+\([^)]*\));\}\);\},count\);',line)

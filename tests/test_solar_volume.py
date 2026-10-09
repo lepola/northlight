@@ -162,8 +162,11 @@ def main():
     # 0.3.202 (rain mask): the lerp back to the unfogged colour on rain-mask pixels wraps haze + fog mad.
     assert ('if(PassInfo.z<.5){\n        float3 unfogged=color;\n'
             '        // Rain streaks were drawn into the scene before the composite: on mask pixels go back toward the unfogged pixel so they are not hazed.\n'
-            '        float rain=tex2Dlod(RainMask,float4(uv,0,0)).r;\n'
-            '        color=lerp(mad(horizonHaze(color,centerUV,viewZ,d>=.99999&&liquid<=0),fog.a,fog.rgb),unfogged,rain);\n    }') in shader
+            '        // 0.3.203 (particle mask): translucent particles write no depth, so their pixels carry the background\'s depth: on mask pixels (g) go back to the\n'
+            '        // scene colour, before the contact AO, relight, haze and fog, which were all computed from that depth.\n'
+            '        float2 mask=tex2Dlod(RainMask,float4(uv,0,0)).rg;\n'
+            '        color=lerp(mad(horizonHaze(color,centerUV,viewZ,d>=.99999&&liquid<=0),fog.a,fog.rgb),unfogged,mask.x);\n'
+            '        color=lerp(color,original.rgb,mask.y);\n    }') in shader
     assert 'mad(legacyT,fog.rgb,fogPart)' not in shader
     # 0.3.163: fog-pass-only overrides. The sun's forward soft cap .38 -> .95 (moon .24 kept),
     # the sun's c17 takes the glow hue, c18.rgb is cooled (w kept) for the fog loop only and

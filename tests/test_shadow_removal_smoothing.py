@@ -93,8 +93,8 @@ for needle in ('clamp(RemovalInfo.w/z,3,16)','-1.442695/max(.25,z*.03)','2*Remov
                'result=lerp(ratio,sum/total,amount)*scale/legacyT;',
                # the composite terms mirrored above
                'float legacyT=mad(LegacyFog.w,saturate(pow(max(mad(viewZ*Projection.z,LegacyFog.x,LegacyFog.y),0),LegacyFog.z))-1,1);',
-               'float3 fogPart=min((1-legacyT)*LegacyFogColor.rgb,original.rgb);','float3 albedoT=min(transported/oldLight,legacyT);',
-               'color=max(color,mad(-.45,transported,original.rgb));'):
+               'float3 fogPart=min((1-legacyT)*LegacyFogColor.rgb,lit);','float3 albedoT=min(transported/oldLight,legacyT);',
+               'color=max(color,mad(-.45,transported,lit));'):
     assert hlsl.count(needle)==1,needle
 
 # ---- emulation of smoothRemoval (float64; the shader runs fp32 on fp16 buffers) ----
