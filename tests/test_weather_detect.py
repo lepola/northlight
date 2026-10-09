@@ -135,6 +135,7 @@ struct Hook{
     IDirect3DPixelShader9* particlePS[8]={};static constexpr D3DCOLOR kRainMaskClear=0x80000000;IDirect3DTexture9* particleBg=nullptr;Surface* particleBgSurface=nullptr;D3DFORMAT particleBgFormat=D3DFMT_UNKNOWN;bool particleBgTried=false,particleBgOk=false,particleBgLogged=false;int particleBgLast=-1,rainBgState=-1;unsigned mod2xBeforeSnapshot=0,mod2xAfterSnapshot=0,mod2xAfterRain=0;static constexpr unsigned kParticleRebindCap=24;
     bool particlePSFailed=false,rainMaskRainDrawn=false;unsigned particleDraws=0,particleSkips=0,rainLateZ=0,rainLateZPrims=0,particleSkipLogs=0,particleSkipLogged[8]={};
     struct LateZSig{DWORD v[6]={};unsigned vs=0,ps=0,draws=0,prims=0;};LateZSig lateZSigs[12];unsigned lateZSigCount=0,lateZSigMore=0,lateZBlended=0,lateZOpaque=0;
+    struct NoZSig{DWORD v[4]={};unsigned vs=0,ps=0,cand=0,draws=0,prims=0;};NoZSig noZSigs[12];unsigned noZSigCount=0,noZSigMore=0,noZDraws=0,noZPrims=0;
     struct ParticleSig{unsigned why=0,vsModel=0;DWORD v[13]={};unsigned count=0;};ParticleSig particleSigs[12];unsigned particleSigCount=0,particleSigMore=0;bool particleFirstLogged=false;std::vector<std::string> logs;template<class F> void extensionWork(const char*,F f){f();}
     void newFrame(){rainMrtUnbind();rainMaskCleared=rainMaskDrawn=rainMaskFrame=rainMaskOk=rainDepthOk=rainMaskRainDrawn=particleBgTried=particleBgOk=false;applied=false;} /* clearFrame's part */
     Ext extObj;Ext* ext=&extObj;NorthlightParticleShaderPatch::Cache<Ext,IDirect3DPixelShader9> particlePatched;IDirect3DPixelShader9* particleGamePs=nullptr;unsigned particlePatchedDraws=0,particlePatchRejects[NorthlightParticleShaderPatch::ReasonCount]={};World worldObj;World* world=&worldObj;bool claimedSkip=false;bool gateFrame=true;
@@ -544,6 +545,21 @@ int main(){
             assert(h.lateZSigs[0].draws==2&&h.lateZSigs[0].prims==12&&h.lateZSigs[0].vs==0&&h.lateZSigs[0].ps==0&&h.lateZSigs[0].v[0]==0&&h.lateZSigs[0].v[4]==4);
             assert(h.lateZSigs[1].draws==1&&h.lateZSigs[1].prims==3&&h.lateZSigs[1].vs==1&&h.lateZSigs[1].ps==1&&h.lateZSigs[1].v[0]==1&&h.lateZSigs[1].v[1]==D3DBLEND_SRCALPHA);
             h.vcMock.skinned=true;h.draw(1);assert(h.lateZSigs[2].vs==2&&h.lateZSigCount==3);h.vcMock.skinned=false;
+        }
+        {   // draws after the background snapshot that are no mask draw and write no Z into the world depth, by signature (the water and the other translucent draws)
+            Hook h;mk(h);h.sampledFrame=true;
+            h.draw(10);assert(h.particleBgOk);
+            auto after=[&](UINT prims,unsigned cand,unsigned before){h.lateNoZCensus(prims,before,cand);};
+            h.ext->rs[D3DRS_ZWRITEENABLE]=0;h.ext->rs[D3DRS_ALPHABLENDENABLE]=1;h.ext->rs[D3DRS_SRCBLEND]=D3DBLEND_SRCALPHA;h.ext->rs[D3DRS_DESTBLEND]=D3DBLEND_INVSRCALPHA;
+            h.ext->vsBound=&h.ext->gameVs;h.vsMajor[&h.ext->gameVs]=3;h.vcMock.entry=Hook::kWaterTag;h.ext->ps=&h.ext->gamePs;
+            after(40,0,h.particleDraws+h.rainMaskDraws);after(8,0,h.particleDraws+h.rainMaskDraws); /* a water draw twice */
+            assert(h.noZDraws==2&&h.noZPrims==48&&h.noZSigCount==1&&h.noZSigs[0].vs==3&&h.noZSigs[0].ps==1&&h.noZSigs[0].v[0]==1&&h.noZSigs[0].v[1]==D3DBLEND_SRCALPHA&&h.noZSigs[0].draws==2&&h.noZSigs[0].prims==48);
+            h.vcMock.entry=0;h.ext->vsBound=nullptr;h.ext->ps=nullptr;after(5,1,h.particleDraws+h.rainMaskDraws); /* a skipped particle candidate, fixed function */
+            assert(h.noZSigCount==2&&h.noZSigs[1].vs==0&&h.noZSigs[1].ps==0&&h.noZSigs[1].cand==1);
+            after(5,1,h.particleDraws+h.rainMaskDraws-1);assert(h.noZDraws==3); /* a mask draw (the counter moved) is not counted */
+            h.ext->rs[D3DRS_ZWRITEENABLE]=1;after(5,0,h.particleDraws+h.rainMaskDraws);assert(h.noZDraws==3); /* writes Z */
+            h.ext->rs[D3DRS_ZWRITEENABLE]=0;h.ext->rs[D3DRS_ZENABLE]=0;h.ext->peekDS=false;Surface other;h.worldDepth=&other;after(5,0,h.particleDraws+h.rainMaskDraws);assert(h.noZDraws==3);h.worldDepth=&h.ext->gameDS;h.ext->peekDS=true; /* another depth buffer */
+            h.ext->rs[D3DRS_ZENABLE]=0;after(5,0,h.particleDraws+h.rainMaskDraws);assert(h.noZDraws==4); /* no depth test: writes no Z either */
         }
         {   // the sample-frame census: one row per distinct setup, masked (why 0) and skipped
             Hook h;mk(h);h.sampledFrame=true;h.draw(10);h.draw(10);h.ext->rs[D3DRS_SRCBLEND]=D3DBLEND_DESTCOLOR;h.draw(10);h.ext->rs[D3DRS_SRCBLEND]=D3DBLEND_SRCALPHA;h.ext->tss[0][D3DTSS_COLOROP]=D3DTOP_MODULATE2X;h.draw(10);

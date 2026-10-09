@@ -321,6 +321,8 @@ class Device final : public GuardedMirrorDevice {
     IDirect3DPixelShader9* particlePS[8]={};bool particlePSFailed=false,rainMaskRainDrawn=false;unsigned particleDraws=0,particleSkips=0,rainLateZ=0,rainLateZPrims=0,particleSkipLogs=0,particleSkipLogged[8]={};
     struct LateZSig{DWORD v[6]={};unsigned vs=0,ps=0,draws=0,prims=0;}; /* vs: 0 none, 1 world, 2 skinned, 3 water, 4 other */
     LateZSig lateZSigs[12];unsigned lateZSigCount=0,lateZSigMore=0,lateZBlended=0,lateZOpaque=0;
+    struct NoZSig{DWORD v[4]={};unsigned vs=0,ps=0,cand=0,draws=0,prims=0;}; /* v: blend enable, src, dst, alpha test; vs as LateZSig; cand: 0 neither, 1 a particle candidate that got no mask, 2 a rain candidate that got none */
+    NoZSig noZSigs[12];unsigned noZSigCount=0,noZSigMore=0,noZDraws=0,noZPrims=0;
     struct ParticleSig{unsigned why=0,vsModel=0;DWORD v[13]={};unsigned count=0;}; /* a sample frame's census row: the draw states of a candidate (v: src, dst, op, alpha test, colour op/args, alpha op/args, stage 1 colour op) */
     ParticleSig particleSigs[12];unsigned particleSigCount=0,particleSigMore=0;bool particleFirstLogged=false;
     // 0.3.203 (particle mask): particleBg: the scene colour from before the frame's first particle mask draw (one StretchRect, lazily created at the game's target format, released with the mask);
@@ -1020,6 +1022,23 @@ private:
         ++rainLateZ;rainLateZPrims+=count;
         if(sampled())lateZCensus(count);
     }
+    // 0.3.203 (rain): after the frame's background snapshot, a draw that is not a mask draw and writes no Z into the world depth (water, other fixed-function translucent draws): the snapshot lacks its layer,
+    // so a touched pixel keeps it unfogged. Sample frames only, called after the draw (states are the game's again): maskBefore = particleDraws + rainMaskDraws before it.
+    void lateNoZCensus(UINT count,unsigned maskBefore,unsigned cand){
+        if(particleDraws+rainMaskDraws!=maskBefore||!sameWorldDepth())return;
+        DWORD zw=1,ze=1;
+        if(FAILED(ext->GetRenderState(D3DRS_ZWRITEENABLE,&zw))||FAILED(ext->GetRenderState(D3DRS_ZENABLE,&ze))||(zw&&ze))return;
+        NoZSig sig;sig.cand=cand;
+        static const D3DRENDERSTATETYPE reads[4]={D3DRS_ALPHABLENDENABLE,D3DRS_SRCBLEND,D3DRS_DESTBLEND,D3DRS_ALPHATESTENABLE};
+        for(int i=0;i<4;++i){if(FAILED(ext->GetRenderState(reads[i],&sig.v[i])))sig.v[i]=~0u;}
+        IDirect3DVertexShader9* v=nullptr;const bool borrowed=ext->peekVertexShader(v);if(!borrowed&&FAILED(ext->GetVertexShader(&v)))v=nullptr;
+        if(v){const VsClass& vc=classifyVs(v);sig.vs=(vc.entry&kWaterTag)?3:vc.skinned?2:vc.world?1:4;}
+        if(!borrowed)drop(v);
+        IDirect3DPixelShader9* p=nullptr;if(ext->peekPixelShader(p))sig.ps=1;else{if(SUCCEEDED(ext->GetPixelShader(&p))&&p)sig.ps=1;drop(p);}
+        ++noZDraws;noZPrims+=count;
+        for(unsigned i=0;i<noZSigCount;++i){NoZSig& r=noZSigs[i];if(r.vs==sig.vs&&r.ps==sig.ps&&r.cand==sig.cand&&!memcmp(r.v,sig.v,sizeof sig.v)){++r.draws;r.prims+=count;return;}}
+        if(noZSigCount<12){sig.draws=1;sig.prims=count;noZSigs[noZSigCount++]=sig;}else ++noZSigMore;
+    }
     // 0.3.203 (rain): sample frames only: the late Z writers by signature (blend, factors, alpha test, ZFUNC, colour write, vertex shader class, pixel shader bound), logged by logParticles with the blended / opaque split.
     void lateZCensus(UINT count){
         LateZSig sig;DWORD bl=0;
@@ -1248,7 +1267,9 @@ private:
             {CpuScope hooks(sampledHookTimer());
                 extensionWork("native sky claim",[&]{skyClaim(t,count,claimed);});
                 if(!claimed&&blobFilterActive())extensionWork("blob shadow filter",[&]{blobFilter(count,claimed);});}
+            const unsigned maskBefore=particleDraws+rainMaskDraws;
             const HRESULT hr=rainBlendDraw(rainBlend,claimed||mist,draw,particle); /* 0.3.199 (rain mist): a mist draw is skipped */
+            if(particleBgOk&&!applied&&sampled())lateNoZCensus(count,maskBefore,particle?1u:rainBlend?2u:0u);
             if(!claimed){CpuScope hooks(sampledHookTimer());extensionWork("native sky observation",[&]{skyObserve(hr,t,count);});}
             return hr;
         }
@@ -1262,7 +1283,9 @@ private:
             if(sky){stage="native sky claim";skyClaim(t,count,claimed);}
             if(!claimed&&drawGates.blob){stage="blob shadow filter";if(blobFilterActive())blobFilter(count,claimed);}
         });
+        const unsigned maskBefore=particleDraws+rainMaskDraws;
         const HRESULT hr=rainBlendDraw(rainBlend,claimed||mist,draw,particle); /* 0.3.199 (rain mist): a mist draw is skipped */
+        if(particleBgOk&&!applied&&sampled())lateNoZCensus(count,maskBefore,particle?1u:rainBlend?2u:0u);
         if(sky&&!claimed){CpuScope hooks(sampledHookTimer());extensionWork("native sky observation",[&]{skyObserve(hr,t,count);});}
         return hr;
     }
@@ -1565,6 +1588,14 @@ public:
             logf("PARTICLES lateZ frame=%u draws=%u prims=%u blended=%u opaque=%u sigs=%u more=%u%s",sampleFrame,rainLateZ,rainLateZPrims,lateZBlended,lateZOpaque,lateZSigCount,lateZSigMore,rows.c_str());
         }
         lateZSigCount=lateZSigMore=lateZBlended=lateZOpaque=0;
+        if(sampled()&&noZDraws){
+            static const char* const vsNames[5]={"none","world","skinned","water","other"};
+            std::string rows;char row[200];
+            for(unsigned i=0;i<noZSigCount;++i){const NoZSig& r=noZSigs[i];
+                snprintf(row,sizeof row," [n=%u prims=%u blend=%ld %ld/%ld at=%ld vs=%s ps=%u cand=%u]",r.draws,r.prims,long(r.v[0]),long(r.v[1]),long(r.v[2]),long(r.v[3]),vsNames[r.vs],r.ps,r.cand);rows+=row;}
+            logf("PARTICLES lateNoZ frame=%u draws=%u prims=%u sigs=%u more=%u%s",sampleFrame,noZDraws,noZPrims,noZSigCount,noZSigMore,rows.c_str());
+        }
+        noZSigCount=noZSigMore=noZDraws=noZPrims=0;
         particleSigCount=particleSigMore=0;particlePatchedDraws=mod2xBeforeSnapshot=mod2xAfterSnapshot=mod2xAfterRain=0;memset(particlePatchRejects,0,sizeof particlePatchRejects);
     }
     void logWeatherProbe(unsigned sampleFrame){

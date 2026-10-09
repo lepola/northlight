@@ -164,6 +164,9 @@ checks['PARTICLES bg= is the frame\'s snapshot result saved before clearFrame re
 checks['late Z census: sample frames only (state reads and rows), blended vs opaque split, a PARTICLES lateZ line with the signature rows, zeroed per frame']=(
     'if(sampled())lateZCensus(count);' in r and 'void lateZCensus(UINT count){' in r and 'logf("PARTICLES lateZ frame=%u draws=%u prims=%u blended=%u opaque=%u sigs=%u more=%u%s"' in lp and 'lateZSigCount=lateZSigMore=lateZBlended=lateZOpaque=0;' in lp
     and 'D3DRS_ALPHABLENDENABLE,D3DRS_SRCBLEND,D3DRS_DESTBLEND,D3DRS_ALPHATESTENABLE,D3DRS_ZFUNC,D3DRS_COLORWRITEENABLE' in r)
+checks['late no-Z census: after the snapshot, not a mask draw, no Z write into the world depth; sample frames only; a PARTICLES lateNoZ line; called after both draw paths']=(
+    r.count('if(particleBgOk&&!applied&&sampled())lateNoZCensus(count,maskBefore,particle?1u:rainBlend?2u:0u);')==2 and 'if(particleDraws+rainMaskDraws!=maskBefore||!sameWorldDepth())return;' in r and 'if(FAILED(ext->GetRenderState(D3DRS_ZWRITEENABLE,&zw))||FAILED(ext->GetRenderState(D3DRS_ZENABLE,&ze))||(zw&&ze))return;' in r
+    and 'logf("PARTICLES lateNoZ frame=%u draws=%u prims=%u sigs=%u more=%u%s"' in lp and 'noZSigCount=noZSigMore=noZDraws=noZPrims=0;' in lp)
 checks['banner: 0.3.203']=('logf("Northlight renderer 0.3.203;' in r)
 
 for k,ok in checks.items():print(('PASS ' if ok else 'FAIL ')+k)
