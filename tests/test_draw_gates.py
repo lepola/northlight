@@ -79,6 +79,10 @@ def member(text,signature):
 
 assert renderer.count('    // 0.3.187 per-frame draw gates')==1
 gates_block=renderer[renderer.index('    // 0.3.187 per-frame draw gates'):renderer.index('    // 0.3.154: blob shadow claim')]
+# 0.3.202 (rain mask MRT): the rain mask members (rainMrtUnbind .. rainBlendDraw) are test_weather_detect's; here only their call surface exists (the hook equivalence runs with rain off)
+_a=gates_block.index('    void rainMrtUnbind(){');_b=gates_block.index('    template<class Draw> HRESULT rainBlendDraw(');_e=gates_block.index('\n    }\n',_b)+7
+checks_rain_stub=(gates_block[_a:_e].count('rainMrtBegin')>=1)
+gates_block=gates_block[:_a]+'    void rainMrtUnbind(){if(rainMrtBound){rainMrtBound=false;}}\n    template<class Draw> HRESULT rainBlendDraw(bool rain,bool claimed,Draw draw){(void)rain;return blobFaintDraw(claimed,draw);}\n'+gates_block[_e:]
 new_members='\n'.join([member(renderer,'template<class Work> bool extensionWork('),member(renderer,'template<class Capture> void prepareDraw(Capture capture,UINT count)'),
     renderer[renderer.index('    // 0.3.196 (task 12): one-entry per-draw vertex shader classification'):renderer.index('    std::unordered_map<IDirect3DPixelShader9*, uint64_t> psHashes;')],
     member(renderer,'void planTerrainShadowSwap('),member(renderer,'void dropTerrainShadowSwap('),member(renderer,'template<class Draw> HRESULT terrainShadowDraw('),
@@ -88,6 +92,7 @@ old_draws=[l for l in OLD_DRAWS.strip('\n').split('\n')]
 assert len(old_draws)==4
 
 checks={}
+checks['the rain mask members were found and stubbed (rainMrtBegin inside the cut span)']=checks_rain_stub
 checkflag=fp.src('shadow_blob_filter.h').read_text()
 checks['real source: no compile-time switch left; BlobShadowStrength gates blobFilterActive and the latch (the equivalence runs use strength 0 = skip)']=('HidesNativeBlobs' not in checkflag and 'HidesNativeBlobs' not in renderer
     and 'bool blobFilterActive()const{return shadowBlobs&&shadowBlobs->active()&&' in renderer and 'in.blobs=shadowBlobs!=nullptr&&shadowBlobs->active();' in renderer)
@@ -158,15 +163,17 @@ HARNESS=r'''
 #include <vector>
 typedef long HRESULT;typedef unsigned UINT;typedef int INT;typedef long long LONGLONG;typedef unsigned DWORD;
 #define TRUE 1
-enum D3DRENDERSTATETYPE{D3DRS_ALPHABLENDENABLE=27,D3DRS_SRCBLEND=19,D3DRS_DESTBLEND=20,D3DRS_BLENDOP=171};enum{D3DBLEND_SRCCOLOR=3,D3DBLEND_SRCALPHA=5,D3DBLEND_INVSRCALPHA=6,D3DBLEND_DESTCOLOR=9,D3DBLENDOP_ADD=1};
+#define FALSE 0
+enum D3DRENDERSTATETYPE{D3DRS_ALPHABLENDENABLE=27,D3DRS_SRCBLEND=19,D3DRS_DESTBLEND=20,D3DRS_BLENDOP=171,D3DRS_COLORWRITEENABLE=168,D3DRS_SEPARATEALPHABLENDENABLE=206,D3DRS_ZWRITEENABLE=14,D3DRS_SRGBWRITEENABLE=194,D3DRS_SCISSORTESTENABLE=174,D3DRS_STENCILENABLE=52,D3DRS_ZFUNC=23};enum{D3DCMP_LESS=2,D3DCMP_LESSEQUAL=4};struct RECT{long left,top,right,bottom;};enum{D3DBLEND_ZERO=1,D3DBLEND_ONE=2,D3DBLEND_SRCCOLOR=3,D3DBLEND_SRCALPHA=5,D3DBLEND_INVSRCALPHA=6,D3DBLEND_DESTCOLOR=9,D3DBLENDOP_ADD=1,D3DBLENDOP_MAX=5,D3DCOLORWRITEENABLE_ALPHA=8,D3DCLEAR_TARGET=1,D3DUSAGE_RENDERTARGET=1};enum D3DMULTISAMPLE_TYPE{D3DMULTISAMPLE_NONE=0};enum D3DPOOL{D3DPOOL_DEFAULT=0};struct D3DVIEWPORT9{DWORD X=0,Y=0,Width=0,Height=0;float MinZ=0,MaxZ=1;};struct D3DRECT{long x1,y1,x2,y2;};typedef DWORD D3DCOLOR; /* 0.3.202 (rain mask MRT): the rain mask members are stubbed here (test_weather_detect drives the real ones) */
 namespace NorthlightWeather{enum class Kind{None,Rain,Snow};} /* 0.3.199 (rain): rainBlendDraw compiles; it never runs here (hot stays null, test_weather_detect drives it) */
 #define STDMETHODCALLTYPE
 #define FAILED(hr) (((HRESULT)(hr))<0)
 #define SUCCEEDED(hr) (((HRESULT)(hr))>=0)
 constexpr HRESULT D3D_OK=0;
 enum D3DPRIMITIVETYPE{D3DPT_POINTLIST=1,D3DPT_LINELIST,D3DPT_LINESTRIP,D3DPT_TRIANGLELIST,D3DPT_TRIANGLESTRIP,D3DPT_TRIANGLEFAN};
-enum D3DFORMAT{D3DFMT_UNKNOWN=0};
-struct D3DSURFACE_DESC{UINT Width=0,Height=0;};
+enum D3DFORMAT{D3DFMT_UNKNOWN=0,D3DFMT_A8R8G8B8=21};
+struct D3DSURFACE_DESC{UINT Width=0,Height=0;D3DMULTISAMPLE_TYPE MultiSampleType=D3DMULTISAMPLE_NONE;DWORD MultiSampleQuality=0;};
+struct IDirect3DSurface9{void Release(){}void GetDesc(D3DSURFACE_DESC*){}};
 struct MEMORYSTATUSEX{unsigned dwLength=0;unsigned long long ullAvailVirtual=0;};
 static int GlobalMemoryStatusEx(MEMORYSTATUSEX* m){m->ullAvailVirtual=1ull<<30;return 1;}
 using Trace=std::vector<std::string>;
@@ -182,7 +189,7 @@ struct Env{
 struct IDirect3DVertexShader9{int id;Env* env;void Release(){env->trace->push_back("Release vs"+std::to_string(id));}};
 struct IDirect3DPixelShader9{int id;Env* env;void Release(){env->trace->push_back("Release ps"+std::to_string(id));}};
 struct IDirect3DBaseTexture9{int id;Env* env;void Release(){env->trace->push_back("Release tex"+std::to_string(id));}};
-struct IDirect3DTexture9:IDirect3DBaseTexture9{};
+struct IDirect3DTexture9:IDirect3DBaseTexture9{HRESULT GetSurfaceLevel(UINT,IDirect3DSurface9**){return D3D_OK;}};
 static std::string psName(IDirect3DPixelShader9* p){return p?"ps"+std::to_string(p->id):"null";}
 static std::string drawName(D3DPRIMITIVETYPE t,UINT a,UINT c){return std::to_string(int(t))+","+std::to_string(a)+","+std::to_string(c);}
 struct MockExt{
@@ -192,6 +199,7 @@ struct MockExt{
     IDirect3DTexture9 original;
     HRESULT GetTexture(unsigned stage,IDirect3DBaseTexture9** out){env->call("GetTexture "+std::to_string(stage),"fault gettexture");*out=env->bit("no texture",8)?nullptr:&original;if(!*out)env->trace->push_back("GetTexture null");return *out?D3D_OK:HRESULT(-1);}
     HRESULT SetTexture(unsigned stage,IDirect3DBaseTexture9* t){env->call("SetTexture "+std::to_string(stage)+(t==&original?" orig":" faint"));return D3D_OK;}
+    HRESULT GetRenderTarget(DWORD,IDirect3DSurface9**){return HRESULT(-1);}HRESULT SetRenderTarget(DWORD,IDirect3DSurface9*){return D3D_OK;}HRESULT GetDepthStencilSurface(IDirect3DSurface9**){return HRESULT(-1);}HRESULT GetViewport(D3DVIEWPORT9*){return D3D_OK;}HRESULT SetViewport(const D3DVIEWPORT9*){return D3D_OK;}HRESULT GetScissorRect(RECT*){return D3D_OK;}HRESULT SetScissorRect(const RECT*){return D3D_OK;}HRESULT Clear(DWORD,const D3DRECT*,DWORD,D3DCOLOR,float,DWORD){return D3D_OK;}HRESULT CreateTexture(UINT,UINT,UINT,DWORD,D3DFORMAT,D3DPOOL,IDirect3DTexture9**,void*){return HRESULT(-1);}HRESULT CreateRenderTarget(UINT,UINT,D3DFORMAT,D3DMULTISAMPLE_TYPE,DWORD,int,IDirect3DSurface9**,void*){return HRESULT(-1);}
     HRESULT GetRenderState(D3DRENDERSTATETYPE,DWORD* v){*v=0;return D3D_OK;}HRESULT SetRenderState(D3DRENDERSTATETYPE,DWORD){return D3D_OK;}
     HRESULT GetVertexShader(IDirect3DVertexShader9** out){env->call("GetVertexShader");*out=&vs;return D3D_OK;}
     HRESULT DrawPrimitive(D3DPRIMITIVETYPE t,UINT s,UINT c){env->call("DrawPrimitive "+drawName(t,s,c));return env->bit("draw failure",6)?HRESULT(-2005530516):D3D_OK;}
@@ -247,7 +255,7 @@ struct Base{
     Trace trace;Env env;MockExt extObj;MockWorld worldObj;MockSky skyObj;MockBlobs blobsObj;
     MockExt* ext=&extObj;MockWorld* world=&worldObj;MockSky* celestialDiscs=nullptr;MockBlobs* shadowBlobs=nullptr;
     MirrorStateMock mirrorState;
-    bool extensionFault=false,failed=false,enabled=true,applied=false,terrain=false,gateFrame=false,rainBoundary=false;
+    bool extensionFault=false,failed=false,enabled=true,applied=false,terrain=false,gateFrame=false,rainMaskCleared=false,rainMaskDrawn=false,rainMaskFrame=false,rainMaskOk=false,rainMrtBound=false,rainMaskFailed=false,rainMaskMismatchLogged=false;UINT width=0,height=0;IDirect3DTexture9* rainMask=nullptr;IDirect3DSurface9* rainMaskSurface=nullptr;IDirect3DSurface9* rainMaskMS=nullptr;D3DMULTISAMPLE_TYPE rainMaskMsType=D3DMULTISAMPLE_NONE,rainMaskWantType=D3DMULTISAMPLE_NONE;DWORD rainMaskMsQuality=0,rainMaskWantQuality=0;unsigned rainMaskDraws=0;
     static constexpr int debugMode=0,kTagMask=3;int worldDebug=0;
     std::unordered_map<IDirect3DVertexShader9*,int> vsTags;
     std::unordered_map<IDirect3DVertexShader9*,std::uint64_t> vsHashes;std::unordered_map<IDirect3DPixelShader9*,std::uint64_t> psHashes;

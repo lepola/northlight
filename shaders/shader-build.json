@@ -1,5 +1,6 @@
 {
   "source_sha256": "3c4ebf55f84663efe1aa13c7010171ffa70ae611dac561be800bb8fd77ba64e9",
+  "rain_source_sha256": "10948a355dc52e824d9ae61b5251a5146a20955295070dbe9ce749dec0eac172",
   "target": "ps_3_0",
   "shaders": {
     "AO": {
@@ -128,6 +129,32 @@
         "exp": 1,
         "endrep": 1,
         "log": 2
+      }
+    },
+    "RainMaskMRT": {
+      "bytes": 284,
+      "sha256": "bac487c7850375bdde1b396e0b5b6ed875b6b704b5dd04d4e6bd50681370d2bc",
+      "target": "ps_2_0",
+      "static_instruction_slots": 8,
+      "temporary_registers": 2,
+      "instructions": {
+        "texld": 1,
+        "mul": 1,
+        "mov": 6
+      }
+    },
+    "RainScrub": {
+      "bytes": 344,
+      "sha256": "ebd42e4fb0abda3ada825d75bfb148a2c5f4b2f9df307b4e9ac84da92e0bed10",
+      "target": "ps_2_0",
+      "static_instruction_slots": 8,
+      "temporary_registers": 2,
+      "instructions": {
+        "texld": 2,
+        "add": 2,
+        "abs": 1,
+        "texkill": 1,
+        "mov": 1
       }
     }
   }

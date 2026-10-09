@@ -439,7 +439,7 @@ def audit_source():
     b = build['shaders']['AOBlur']
     assert b['static_instruction_slots'] <= 512 and b['temporary_registers'] <= 32, b
     script = (fp.SCRIPTS/'shaders'/'compile_shaders.py').read_text()
-    assert re.search(r'\("AOBlur",\s*"kAoBlurShader"\)', script)
+    assert re.search(r'\("AOBlur",\s*"kAoBlurShader"(,\s*"ps_3_0")?\)', script)
     return {'static_instruction_slots': b['static_instruction_slots'], 'temporary_registers': b['temporary_registers']}
 
 
@@ -525,7 +525,7 @@ def audit_contact_ao():
     build = json.loads(fp.src('shader-build.json').read_text())['shaders']
     c = build['ContactBloom']
     assert c['static_instruction_slots'] <= 512 and c['temporary_registers'] <= 32 and set(c['instructions']) <= {'mul', 'texld', 'dp3', 'mad', 'mov', 'add'}, c
-    assert re.search(r'\("ContactBloom",\s*"kContactBloomShader"\)', (fp.SCRIPTS/'shaders'/'compile_shaders.py').read_text())
+    assert re.search(r'\("ContactBloom",\s*"kContactBloomShader"(,\s*"ps_3_0")?\)', (fp.SCRIPTS/'shaders'/'compile_shaders.py').read_text())
     ini = (fp.REPO/'renderer'/'windows-package'/'northlight-quality.ini').read_text()
     readme = (fp.REPO/'renderer'/'windows-package'/'README.txt').read_text()
     assert ';ContactAO=1' in ini and 'Allowed 0..1. 1 / 1 / 1' in ini[ini.index(';ContactAO=1')-400:ini.index(';ContactAO=1')]

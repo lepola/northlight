@@ -159,8 +159,11 @@ def main():
     assert 'c[22][3]=.0035f+.0031f*c[31][3]' in cpu
     assert 'airBase=lerp(airBase,FogColor.w,generalForest);' in shader
     # Horizon haze sits between the scene and the local scattering, same debug gate.
-    assert ('if(PassInfo.z<.5){\n        color=horizonHaze(color,centerUV,viewZ,d>=.99999&&liquid<=0);\n'
-            '        color=mad(color,fog.a,fog.rgb);\n    }') in shader
+    # 0.3.202 (rain mask): the lerp back to the unfogged colour on rain-mask pixels wraps haze + fog mad.
+    assert ('if(PassInfo.z<.5){\n        float3 unfogged=color;\n'
+            '        // Rain streaks were drawn into the scene before the composite: on mask pixels go back toward the unfogged pixel so they are not hazed.\n'
+            '        float rain=tex2Dlod(RainMask,float4(uv,0,0)).r;\n'
+            '        color=lerp(mad(horizonHaze(color,centerUV,viewZ,d>=.99999&&liquid<=0),fog.a,fog.rgb),unfogged,rain);\n    }') in shader
     assert 'mad(legacyT,fog.rgb,fogPart)' not in shader
     # 0.3.163: fog-pass-only overrides. The sun's forward soft cap .38 -> .95 (moon .24 kept),
     # the sun's c17 takes the glow hue, c18.rgb is cooled (w kept) for the fog loop only and
