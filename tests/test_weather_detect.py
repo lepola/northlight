@@ -31,6 +31,7 @@ SRC=r'''
 #include <cstring>
 #include <string>
 #include <vector>
+#include <unordered_map>
 using namespace NorthlightWeatherDetect;using NorthlightWeather::Kind;
 typedef unsigned UINT;typedef unsigned DWORD;typedef long HRESULT;
 #define TRUE 1
@@ -102,6 +103,7 @@ struct SavedState{Ext* d;Surface* rt;D3DVIEWPORT9 vp;bool ok=true;static inline 
 struct Hook{
     Mirror mirrorState;Detector weatherDetect;Sample weatherSample;bool applied=false,terrain=true,enabled=true,failed=false;UINT width=0,height=0;IDirect3DTexture9* rainMask=nullptr;Surface* rainMaskSurface=nullptr;Surface* rainMaskMS=nullptr;D3DMULTISAMPLE_TYPE rainMaskMsType=D3DMULTISAMPLE_NONE,rainMaskWantType=D3DMULTISAMPLE_NONE;DWORD rainMaskMsQuality=0,rainMaskWantQuality=0;bool rainMaskFailed=false,rainMaskCleared=false,rainMaskDrawn=false,rainMaskFrame=false,rainMaskOk=false,rainMaskMismatchLogged=false;unsigned rainMaskDraws=0;
     IDirect3DTexture9* rainDepth=nullptr;IDirect3DPixelShader9 *rainMrtPS=nullptr,*rainScrubPS=nullptr;bool rainMrtBound=false,rainDepthOk=false,rainCapsChecked=false,rainCapsOk=false,rainSkipLogged=false;unsigned rainMrtRuns=0,rainMaskSkips=0;DWORD rainMrtPrev[5]={};bool rainMrtPrevKnown[5]={};
+    std::unordered_map<IDirect3DVertexShader9*,unsigned> vsMajor;
     HRESULT rainMaskResolveHr=0;IDirect3DTexture9 depthTexObj;IDirect3DTexture9* depthTex=&depthTexObj;Surface* worldDepth=nullptr;int stateBlocks=0;
     unsigned snapshots=0,effectStates=0,quads=0;bool snapshotOk=true;IDirect3DTexture9* snapshotTarget=nullptr;bool snapshotFatal=true;DrawRec quadRec{};IDirect3DTexture9* quadTex0=nullptr;IDirect3DTexture9* quadTex1=nullptr;bool quadFails=false;
     bool resolveDepthInto(IDirect3DTexture9* target,bool fatal){++snapshots;snapshotTarget=target;snapshotFatal=fatal;return snapshotOk;}
@@ -283,6 +285,8 @@ int main(){
             }
             {Hook h;mk(h);h.draw(10);h.ext->tss[0][D3DTSS_COLOROP]=D3DTOP_SELECTARG1;h.draw(10);assert(h.drawn==2&&h.ext->draws[1].rt1==nullptr&&!h.rainMrtBound&&h.rainMaskSkips==1&&h.rainMaskDraws==1&&h.ext->rt1Unbinds==1&&h.rainMaskDrawn); /* eligible, then a rain draw with another setup: RT1 comes off before that draw */
                 h.ext->tss[0][D3DTSS_COLOROP]=D3DTOP_MODULATE;h.draw(10);assert(h.rainMrtRuns==2&&h.snapshots==1&&h.ext->draws[2].rt1==&h.ext->maskTex.s);}
+            for(unsigned model:{1u,2u}){Hook h;mk(h);h.vsMajor[&h.ext->gameVs]=model;h.ext->vsBound=&h.ext->gameVs;h.draw(10);h.draw(10);assert(h.drawn==2&&h.rainMaskDraws==2&&h.rainMaskSkips==0&&h.rainMrtRuns==1&&h.ext->draws[0].rt1==&h.ext->maskTex.s&&h.ext->draws[0].ps==&h.ext->psMrt&&h.ext->vsBound==&h.ext->gameVs&&h.ext->ps==nullptr);} /* the game's rain: a vs_1_x/vs_2_x vertex shader and the fixed-function pixel stages */
+            {Hook h;mk(h);h.vsMajor[&h.ext->gameVs]=3;h.ext->vsBound=&h.ext->gameVs;h.draw(10);assert(h.drawn==1&&h.rainMaskDraws==0&&h.rainMaskSkips==1&&h.logs.size()==1&&h.logs[0].find("vsModel=%u")!=std::string::npos);} /* vs_3_0: no ps_2_0 behind it */
             {Hook h;mk(h);h.ext->vsBound=&h.ext->gameVs;h.draw(10);assert(h.logs.size()==1&&h.logs[0].rfind("WEATHER rain mask skip: reason=",0)==0);h.ext->vsBound=nullptr;h.ext->ps=nullptr;h.draw(10);assert(h.rainMaskDraws==1&&h.logs.size()==1);} /* the one-shot log; the next eligible draw masks */
         }
         {Hook h;mk(h);h.ext->colorFillFails=true;h.draw(10);assert(h.drawn==1&&h.rainMaskDraws==1&&h.ext->colorFills==1&&h.ext->clears==1&&h.ext->rt==&h.ext->gameRT&&h.ext->vp.X==3&&h.ext->vp.Width==90&&h.ext->sr.right==70&&h.ext->rs[D3DRS_SCISSORTESTENABLE]==1&&h.ext->rt1==&h.ext->maskTex.s);} /* ColorFill refused: the RT0-swap clear, the game's target, viewport and scissor back, then the same single draw */

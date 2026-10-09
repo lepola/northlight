@@ -291,6 +291,7 @@ class Device final : public GuardedMirrorDevice {
     bool drawWaterVS=false; // beforeDraw() result for the current draw
     std::unordered_map<IDirect3DPixelShader9*, int> psTags;
     std::unordered_map<IDirect3DVertexShader9*, uint64_t> vsHashes;
+    std::unordered_map<IDirect3DVertexShader9*, unsigned> vsMajor; // 0.3.201 (rain mask MRT): the shader model major version from the version token (0 unknown)
     // 0.3.196 (task 12): one-entry per-draw vertex shader classification. vsTags, vsHashes and the world's shader maps change only in
     // CreateVertexShader registration, which bumps vsGeneration first (nothing is ever erased, but a freed address can be registered again).
     struct VsClass {IDirect3DVertexShader9* vs=nullptr;std::uint32_t gen=~0u;int entry=0;bool wmo=false,world=false,skinned=false;};
@@ -964,15 +965,16 @@ private:
         if(applied||!terrain||!enabled||failed||!world||rainMaskFailed||!width||!height){rainMrtUnbind();return false;}
         if(!rainMaskFrame){rainMaskFrame=true;rainMaskOk=rainMaskEligible();}
         if(!rainCapsChecked)rainMaskCaps();
-        unsigned why=0;bool vsBound=false,psBound=false;DWORD spec=0;
+        unsigned why=0;bool vsBound=false,psBound=false;unsigned vsModel=0;DWORD spec=0;
         DWORD st[9]={~0u,~0u,~0u,~0u,~0u,~0u,~0u,~0u,~0u}; /* color op/arg1/arg2, alpha op/arg1/arg2, stage 1 color op, texcoord index, texture transform */
         if(!rainMaskOk)why|=1;
         if(!rainCapsOk)why|=2;
         if(!why){
             IDirect3DVertexShader9* v=nullptr;IDirect3DPixelShader9* p=nullptr;
-            if(ext->peekVertexShader(v))vsBound=true;else{if(SUCCEEDED(ext->GetVertexShader(&v))&&v)vsBound=true;drop(v);}
+            const bool borrowed=ext->peekVertexShader(v);if(!borrowed&&FAILED(ext->GetVertexShader(&v)))v=nullptr;
+            if(v){vsBound=true;auto it=vsMajor.find(v);vsModel=it==vsMajor.end()?0:it->second;}if(!borrowed)drop(v);
             if(ext->peekPixelShader(p))psBound=true;else{if(SUCCEEDED(ext->GetPixelShader(&p))&&p)psBound=true;drop(p);}
-            if(vsBound)why|=4;
+            if(vsBound&&(vsModel<1||vsModel>2))why|=4; /* vs_1_x/vs_2_x write the fixed oD0/oT0/oFog the ps_2_0 reads (the game's rain has one); vs_3_0 needs a ps_3_0 */
             if(psBound)why|=8;
             if(!why){ /* stage 0 MODULATE texture x diffuse (colour and alpha), nothing on stage 1, no texture transform, no specular: what rainMrtPS reproduces */
                 static const struct{DWORD stage;D3DTEXTURESTAGESTATETYPE type;} reads[9]={{0,D3DTSS_COLOROP},{0,D3DTSS_COLORARG1},{0,D3DTSS_COLORARG2},{0,D3DTSS_ALPHAOP},{0,D3DTSS_ALPHAARG1},{0,D3DTSS_ALPHAARG2},{1,D3DTSS_COLOROP},{0,D3DTSS_TEXCOORDINDEX},{0,D3DTSS_TEXTURETRANSFORMFLAGS}};
@@ -998,7 +1000,7 @@ private:
         }
         if(why){
             rainMrtUnbind();++rainMaskSkips;
-            if(!rainSkipLogged){rainSkipLogged=true;logf("WEATHER rain mask skip: reason=%u vs=%d ps=%d stage0 color=%ld(%ld,%ld) alpha=%ld(%ld,%ld) stage1 color=%ld texcoord=%ld texTransform=%ld specular=%lu",why,int(vsBound),int(psBound),long(st[0]),long(st[1]),long(st[2]),long(st[3]),long(st[4]),long(st[5]),long(st[6]),long(st[7]),long(st[8]),(unsigned long)spec);}
+            if(!rainSkipLogged){rainSkipLogged=true;logf("WEATHER rain mask skip: reason=%u vs=%d vsModel=%u ps=%d stage0 color=%ld(%ld,%ld) alpha=%ld(%ld,%ld) stage1 color=%ld texcoord=%ld texTransform=%ld specular=%lu",why,int(vsBound),vsModel,int(psBound),long(st[0]),long(st[1]),long(st[2]),long(st[3]),long(st[4]),long(st[5]),long(st[6]),long(st[7]),long(st[8]),(unsigned long)spec);}
             return false;
         }
         /* RT0 alpha becomes max(src,dst) during the draw (RainBlend's alpha is a*a+d*(1-a)); RGB is unchanged. */
@@ -1011,7 +1013,7 @@ private:
     void rainMrtEnd(){
         static const D3DRENDERSTATETYPE types[5]={D3DRS_COLORWRITEENABLE1,D3DRS_SEPARATEALPHABLENDENABLE,D3DRS_SRCBLENDALPHA,D3DRS_DESTBLENDALPHA,D3DRS_BLENDOPALPHA};
         for(int i=0;i<5;++i)if(rainMrtPrevKnown[i])ext->SetRenderState(types[i],rainMrtPrev[i]);
-        ext->SetPixelShader(nullptr); /* eligibility: the game had no pixel shader bound */
+        ext->SetPixelShader(nullptr); /* eligibility: the game had no pixel shader bound (its vertex shader, if any, stays) */
     }
     // The rain draw: when eligible the same single game draw writes the mask through RT1; otherwise as it was (RT1 unbound first: a pixel shader that does not write oC1 must not meet it).
     template<class Draw> HRESULT rainMrtDraw(Draw draw){
@@ -1607,7 +1609,7 @@ public:
     }
     HRESULT STDMETHODCALLTYPE CreateVertexShader(const DWORD* code,IDirect3DVertexShader9** out) override { Guard mirrorLock(mirrorState.gate);
         HRESULT hr=ext->CreateVertexShader(code,out);
-        if(SUCCEEDED(hr)&&out&&*out)extensionWork("vertex shader registration",[&]{++vsGeneration;std::vector<DWORD> words;auto h=shaderHash(*out,words);int tag=NorthlightShaderTags::deviceTag(h);vsHashes[*out]=h;if(world)world->registerShader(*out,h);if(water)water->registerVertex(*out,h,words.data(),words.size());vsTags[*out]=tag|(water&&water->hasVertex(*out)?kWaterTag:0);if(tag==1)++matchedTerrain;else if(tag==2)++matchedUI;});
+        if(SUCCEEDED(hr)&&out&&*out)extensionWork("vertex shader registration",[&]{++vsGeneration;std::vector<DWORD> words;auto h=shaderHash(*out,words);int tag=NorthlightShaderTags::deviceTag(h);vsHashes[*out]=h;vsMajor[*out]=!words.empty()&&(words[0]>>16)==0xFFFEu?unsigned((words[0]>>8)&0xFFu):0u;if(world)world->registerShader(*out,h);if(water)water->registerVertex(*out,h,words.data(),words.size());vsTags[*out]=tag|(water&&water->hasVertex(*out)?kWaterTag:0);if(tag==1)++matchedTerrain;else if(tag==2)++matchedUI;});
         if(SUCCEEDED(hr))mirrorResources.wrap(out);return hr;
     }
     HRESULT STDMETHODCALLTYPE CreatePixelShader(const DWORD* code,IDirect3DPixelShader9** out) override { Guard mirrorLock(mirrorState.gate);
