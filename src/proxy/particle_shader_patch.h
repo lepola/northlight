@@ -12,8 +12,8 @@
 // word-for-word port of patch() in renderer/particle_shader_patch.py, which stays the reference
 // oracle: oC0 is renamed to a spare temporary rT and before END come `mov oC0, rT` (RT0 is exactly
 // the game's) and the mask write to oC1 for one blend kind: 0 alpha over (1,1,1,sat(a)), 1 additive
-// by alpha (1,1,1,sat(a)*sat(max rgb)), 2 additive by colour sat(max rgb).xxxx, 3 the same for SRCCOLOR/ONE; a ps_3_0 with a FOG0 input (the game's fog factor f) also writes sat(f) to oC1.x
-// (kinds 0, 1; m*sat(f) for kind 2, m = sat(max rgb)): the mask's red then follows blue's recurrence with f as the value (red/blue = weighted mean f, see the oracle's header); the 1s come from a
+// by alpha (1,1,1,sat(a)*sat(max rgb)), 2 additive by colour sat(max rgb).xxxx, 3 the same for SRCCOLOR/ONE; a ps_3_0 with a FOG0 input (the game's fog factor f) also writes 1-f to oC1.x
+// (as 1-f, times the weight: see the oracle's header); the 1s come from a
 // def of a free constant. Same rejection set as the water patch (no spare temporary, oC1 or oDepth
 // written, oC0 written inside flow control, unknown opcodes, predication, ...).
 // tests/test_particle_shader_patch.py cross-checks both. patch() is pure: no D3D, no logging.
@@ -137,8 +137,10 @@ inline Reason patch(const Word* w,std::size_t count,unsigned kind,std::vector<Wo
         spare2=spare+1;while(spare2<limit&&isUsed(0,spare2))++spare2;
         if(spare2==limit)return NoTemporary;
     }
+    // the constant cK = (1,1,1,scale): the over and additive-by-alpha kinds need the 1s; an additive kind with the fog factor also its weight scale
+    const bool needConstant=kind<2||(kind==2&&haveFog);
     unsigned constant=0;
-    {
+    if(needConstant){
         if(relativeConst)return RelativeConstant;
         const unsigned climit=major==3?224:32;
         unsigned c=climit;bool found=false;
@@ -154,23 +156,25 @@ inline Reason patch(const Word* w,std::size_t count,unsigned kind,std::vector<Wo
     const Word fogSource=haveFog?src(1,fogIndex,fogComponent*0x55):0;
     std::vector<Word> suffix={0x02000001,dst(8,0),src(0,spare)};
     auto add=[&](std::initializer_list<Word> words){suffix.insert(suffix.end(),words);};
+    const Word negFog=fogSource|(1u<<24); // -f: the mask carries 1-f (0 = no distance)
+    const bool scaled=haveFog&&(kind==1||kind==2);
     if(kind<2){
-        if(haveFog)add({0x02000001,dst(8,1,1)|kSat,fogSource,0x02000001,dst(8,1,6),src(2,constant)});
+        if(haveFog)add({0x03000002,dst(8,1,1)|kSat,src(2,constant,0x00),negFog,0x02000001,dst(8,1,6),src(2,constant)});
         else add({0x02000001,dst(8,1,7),src(2,constant)});
     }
     if(kind==0)add({0x02000001,dst(8,1,8)|kSat,T(0xff)});
     else {
         add({0x0300000b,dst(0,spare2,1)|kSat,T(0x00),T(0x55),0x0300000b,dst(0,spare2,1)|kSat,S2(0x00),T(0xaa)});
-        add({0x03000005,dst(0,spare2,1),S2(0x00),src(2,constant,0xff)}); // x the kind's weight scale (the constant's w)
+        if(scaled)add({0x03000005,dst(0,spare2,1),S2(0x00),src(2,constant,0xff)}); // x the weight scale (the constant's w)
         if(kind==1)add({0x02000001,dst(0,spare2,2)|kSat,T(0xff),0x03000005,dst(8,1,8),S2(0x00),S2(0x55)});
-        else if(haveFog)add({0x02000001,dst(0,spare2,2)|kSat,fogSource,0x03000005,dst(8,1,1),S2(0x00),S2(0x55),0x02000001,dst(8,1,14),S2(0x00)});
+        else if(haveFog)add({0x03000002,dst(0,spare2,2)|kSat,src(2,constant,0x00),negFog,0x03000005,dst(8,1,1),S2(0x00),S2(0x55),0x02000001,dst(8,1,14),S2(0x00)});
         else add({0x02000001,dst(8,1),S2(0x00)});
     }
     suffix.push_back(0x0000ffff);
     out.erase(out.begin()+std::ptrdiff_t(end),out.end());
     out.insert(out.end(),suffix.begin(),suffix.end());
-    { // def cK = (1,1,1,scale): 1 (over), 1/4 (additive with the fog factor), 1/64 (additive without), 1/8 (SRCCOLOR/ONE: squared by its blend)
-        const Word scale=kind==0?0x3f800000u:kind==3?0x3e000000u:haveFog?0x3e800000u:0x3c800000u;
+    if(needConstant){ // def cK = (1,1,1,scale): 1, or 1/4 for an additive kind with the fog factor
+        const Word scale=scaled?0x3e800000u:0x3f800000u;
         const Word def[]={0x05000051,dst(2,constant),0x3f800000,0x3f800000,0x3f800000,scale};
         out.insert(out.begin()+std::ptrdiff_t(firstOp),def,def+6);
     }

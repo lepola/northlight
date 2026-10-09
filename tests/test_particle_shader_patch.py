@@ -66,13 +66,12 @@ def run(words,constants,inputs):
 
 def sat(x):return min(1.,max(0.,x))
 def expected_mask(c,kind,f=None):
-    """oC1 for the kind; the additive kinds carry their weight at a scale: 1/4 with the fog factor, 1/64 without, 1/8 for SRCCOLOR/ONE (kind 3)."""
-    m=sat(max(c[0],c[1],c[2]));f1=1. if f is None else sat(f)
-    sc=.25 if f is not None else 1/64
-    if kind==0:return [f1,1.,1.,sat(c[3])]
-    if kind==1:return [f1,1.,1.,sat(c[3])*m*sc]
-    if kind==3:m*=.125;return [m]*4
-    m*=sc;return [m*f1,m,m,m]
+    """oC1 for the kind. With the fog factor: red = (1-f) times the weight; the additive kinds' weights at 1/4. Without: the original blue-only values at full weight (red = the blue value, masked out by the renderer)."""
+    m=sat(max(c[0],c[1],c[2]));aware=f is not None and kind<3;r=sat(1-f) if aware else 1.
+    if kind==0:return [r,1.,1.,sat(c[3])]
+    if kind==1:return [r,1.,1.,sat(c[3])*m*(.25 if aware else 1.)]
+    if kind==3:return [m]*4
+    m*= .25 if aware else 1.;return [m*r if aware else m,m,m,m]
 
 # ---- synthetic programs
 def ps(major,body,dcls=True,fog=None):
@@ -106,13 +105,15 @@ class Synthetic(unittest.TestCase):
             'all 32 temporaries used':(ps(3,sum([ins(1,dst(0,i),src(1,0)) for i in range(32)],[])+ins(1,dst(8,0),src(0,31))),0,'no free temporary'),
             'one temporary left, kind 1 needs two':(ps(3,sum([ins(1,dst(0,i),src(1,0)) for i in range(31)],[])+ins(1,dst(8,0),src(0,30))),1,'no free temporary'),
             'all constants used':(ps(3,sum([ins(1,dst(0,0),src(2,i)) for i in range(224)],[])+ins(1,dst(8,0),src(0,0))),0,'no free constant'),
-            'all constants used, additive by colour (every kind needs the scale constant)':(ps(3,sum([ins(1,dst(0,0),src(2,i)) for i in range(224)],[])+ins(1,dst(8,0),src(0,0))),2,'no free constant'),
+            'all constants used, additive by colour with the fog factor (the weight scale needs one)':(ps(3,sum([ins(1,dst(0,0),src(2,i)) for i in range(224)],[])+ins(1,dst(8,0),src(0,0)),fog=(2,1,0)),2,'no free constant'),
             'relative constant':(ps(3,ins(1,dst(0,0),src(2,3)|0x2000,src(3,0))+ins(1,dst(8,0),src(0,0))),0,'relative constant'),
         }
         accepts={
             'if/else around other work, oC0 outside':(ps(3,ins(40,src(14,0))+ins(1,dst(0,1),src(1,0))+ins(42)+ins(1,dst(0,1),src(1,1))+ins(43)+base+ins(1,dst(8,0),src(0,0))),0),
             'oC0 in two writes':(ps(3,base+ins(1,dst(8,0,7),src(0,0))+ins(1,dst(8,0,8),src(0,0))),1),
             'highest constant used: another is chosen':(ps(3,ins(1,dst(0,0),src(2,223))+ins(1,dst(8,0),src(0,0))),0),
+            'additive by colour without the fog factor needs no constant (the original words)':(ps(3,sum([ins(1,dst(0,0),src(2,i)) for i in range(224)],[])+ins(1,dst(8,0),src(0,0))),2),
+            'SRCCOLOR/ONE needs none either':(ps(3,sum([ins(1,dst(0,0),src(2,i)) for i in range(224)],[])+ins(1,dst(8,0),src(0,0)),fog=(2,1,0)),3),
             'comment tokens':(binary([0xffff0300,0xfffe|(2<<16),0x41424344,0x45464748,*ins(5,dst(0,0),src(1,0),src(1,1)),*ins(1,dst(8,0),src(0,0)),65535]),0),
         }
         cases+=[(c,k) for c,k,_ in rejects.values()]+list(accepts.values())
@@ -127,7 +128,7 @@ class Synthetic(unittest.TestCase):
             for kind in (0,1,2):
                 out,info=patch(game_like(major),kind)
                 self.assertEqual(struct.unpack('<I',out[:4])[0],0xffff0000|(major<<8));self.assertEqual(info['model'],major)
-                self.assertIsNotNone(info['const']);self.assertEqual(info['temp2'] is not None,kind>0);self.assertEqual(info['scale'],1.0 if kind==0 else .25 if kind==1 and info['fog'] else 1/64 if kind in (1,2) else .125 if kind==3 else info['scale'])
+                self.assertEqual(info['const'] is not None,kind<2);self.assertEqual(info['temp2'] is not None,kind>0);self.assertEqual(info['scale'],1.0)
 
 # ---- generated corpus
 def generated(rng):
@@ -181,7 +182,7 @@ class Fog(unittest.TestCase):
         # the written words: oC1.x reads the input's component, saturated; without fog the old words (xyz = the constant) are byte-identical
         plain=patch(ps(3,body),0)[0];fogged=patch(ps(3,body,fog=(5,2,0)),0)[0]
         self.assertGreater(len(fogged),len(plain)+12)
-        self.assertEqual(struct.pack('<I',dst(8,1,1)|SAT) in fogged,True);self.assertEqual(struct.pack('<I',src(1,5,0x55)) in fogged,True)
+        self.assertEqual(struct.pack('<I',dst(8,1,1)|SAT) in fogged,True);self.assertEqual(struct.pack('<I',src(1,5,0x55)|(1<<24)) in fogged,True)   # -f.y
 
 class Corpus(unittest.TestCase):
     def test_generated_corpus_matches_python(self):
