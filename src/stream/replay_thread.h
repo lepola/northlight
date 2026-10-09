@@ -301,14 +301,21 @@ private:
         applyImageUnlock(core,*a,b?b->data():nullptr);
     }
     void unlockBuffer(const CommandHeader* h){
-        const auto* a=reinterpret_cast<const UnlockBufferArgs*>(Queue::payload(h));ProxyBase* p=a->proxy;
-        const unsigned char* data=a->inlineData?reinterpret_cast<const unsigned char*>(a+1):Queue::blockOf(h)->data();
+        const auto* a=reinterpret_cast<const UnlockBufferArgs*>(Queue::payload(h));
+        writeBuffer(a->proxy,a->off,a->size,a->flags,a->inlineData?reinterpret_cast<const unsigned char*>(a+1):Queue::blockOf(h)->data());
+    }
+    // 0.3.204 (task 21): the zero-copy unlock: the bytes are read straight from the game-side slice (it stays untouched until this command retires).
+    void unlockBufferRef(const CommandHeader* h){
+        const auto* a=reinterpret_cast<const UnlockBufferRefArgs*>(Queue::payload(h));
+        writeBuffer(a->proxy,a->off,a->size,a->flags,a->src+a->off);
+    }
+    void writeBuffer(ProxyBase* p,UINT off,UINT size,DWORD fl,const unsigned char* data){
         if(!p->inner||p->dead.load()){add(core.q.stats.replayFailures);return;}
-        void* dst=nullptr;const DWORD flags=a->flags&~D3::kLockReadOnly;
-        NorthlightReplayCopies::UnlockSourceScope source(data,a->off,a->size);   // the replay-side CPU copy is fed from these bytes, not read back from the mapped pointer
-        const HRESULT hr=p->kind==Kind::VertexBuffer?static_cast<IDirect3DVertexBuffer9*>(p->inner)->Lock(a->off,a->size,&dst,flags):static_cast<IDirect3DIndexBuffer9*>(p->inner)->Lock(a->off,a->size,&dst,flags);
+        void* dst=nullptr;const DWORD flags=fl&~D3::kLockReadOnly;
+        NorthlightReplayCopies::UnlockSourceScope source(data,off,size);   // the replay-side CPU copy is fed from these bytes, not read back from the mapped pointer
+        const HRESULT hr=p->kind==Kind::VertexBuffer?static_cast<IDirect3DVertexBuffer9*>(p->inner)->Lock(off,size,&dst,flags):static_cast<IDirect3DIndexBuffer9*>(p->inner)->Lock(off,size,&dst,flags);
         if(FAILED(hr)||!dst){add(core.q.stats.replayFailures);return;}
-        std::memcpy(dst,data,a->size);
+        std::memcpy(dst,data,size);
         if(p->kind==Kind::VertexBuffer)static_cast<IDirect3DVertexBuffer9*>(p->inner)->Unlock();else static_cast<IDirect3DIndexBuffer9*>(p->inner)->Unlock();
     }
     void derive(const DeriveArgs& a){
@@ -450,10 +457,25 @@ private:
         for(std::size_t i=0;i<top.size()&&i<8;++i)put(buf,n,"%s%s=%llu",i?",":"",cmdName((Cmd)top[i].second),(unsigned long long)top[i].first);
         put(buf,n,"]");
         log(buf);avg_=Avg();
+        logZeroCopy();
         logCallTop();
     }
     // 0.3.204 (task 21, Diagnostics only): the generated calls that cost the game thread the most since the previous line (sampled 1 in 16), per frame:
     // "CSTREAM top[per frame]: Device::SetRenderState=0.812ms/4980 ..." (time, calls). Nothing while the timers are off.
+    // 0.3.204 (task 21): the zero-copy buffer unlocks on a line of their own (the main CSTREAM line is capped): per frame since the previous line, and the live bytes of retired and spare slices. Nothing until the first zero-copy unlock or rename.
+    std::uint64_t lastZcUnlocks_=0,lastZcBytes_=0,lastRenames_=0,lastRenameWaits_=0,lastRenameWaitNs_=0,lastWriteWaits_=0,lastWriteWaitNs_=0,lastRenameAllocs_=0,lastZcFrames_=0;
+    void logZeroCopy(){
+        const Counters& s=core.q.stats;const std::uint64_t un=get(s.zeroCopyUnlocks),by=get(s.zeroCopyBytes),rn=get(s.renames),rw=get(s.renameWaits),rwn=get(s.renameWaitNs),ww=get(s.writeWaits),wwn=get(s.writeWaitNs),ra=get(s.renameAllocs),gf=get(s.gameFrames)-lastZcFrames_;lastZcFrames_+=gf;
+        const double inv=gf?1.0/double(gf):0.0;
+        if(log&&(un|rn|rw|ww)){
+            char buf[kLine];
+            std::snprintf(buf,sizeof buf,"CSTREAM zerocopy[per frame]: unlocks=%.1f MB=%.2f renames=%.2f allocs=%.2f renameWaits=%.2f renameWaitMs=%.3f writeWaits=%.2f writeWaitMs=%.3f retiredMB=%.1f spareMB=%.1f",
+                double(un-lastZcUnlocks_)*inv,double(by-lastZcBytes_)/1048576.0*inv,double(rn-lastRenames_)*inv,double(ra-lastRenameAllocs_)*inv,double(rw-lastRenameWaits_)*inv,double(rwn-lastRenameWaitNs_)/1e6*inv,double(ww-lastWriteWaits_)*inv,double(wwn-lastWriteWaitNs_)/1e6*inv,
+                double(std::max<std::int64_t>(0,s.retiredBytes.load()))/1048576.0,double(std::max<std::int64_t>(0,s.spareBytes.load()))/1048576.0);
+            log(buf);
+        }
+        lastZcUnlocks_=un;lastZcBytes_=by;lastRenames_=rn;lastRenameWaits_=rw;lastRenameWaitNs_=rwn;lastWriteWaits_=ww;lastWriteWaitNs_=wwn;lastRenameAllocs_=ra;
+    }
     std::uint64_t lastCmdNs_[kMaxCmdIds]={},lastCmdSamples_[kMaxCmdIds]={},lastTopFrames_=0;
     void logCallTop(){
         const Counters& s=core.q.stats;const std::uint64_t gf=get(s.gameFrames)-lastTopFrames_;lastTopFrames_+=gf;const double perFrame=gf?1.0/double(gf):0.0;std::vector<std::pair<std::uint64_t,unsigned>> top;std::uint64_t calls[kMaxCmdIds]={};
@@ -498,6 +520,7 @@ private:
         case Cmd::SwapPresent:present(h,true);return;
         case Cmd::BeginStateBlock:core.replayFailureOnFail(core.target->BeginStateBlock());return;
         case Cmd::UnlockBuffer:unlockBuffer(h);return;
+        case Cmd::UnlockBufferRef:unlockBufferRef(h);return;
         case Cmd::UnlockRect:case Cmd::UnlockBox:unlockImage(h);return;
         case Cmd::DrawPrimitiveUP:{
             const auto* a=reinterpret_cast<const DrawUPArgs*>(Queue::payload(h));const void* data=a->flat?static_cast<const void*>(a+1):Queue::blockOf(h)->data();

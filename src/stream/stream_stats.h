@@ -46,6 +46,9 @@ struct Counters {
     Counter dynShadowReadbacks{0},stShadowReadbacks{0},dynShadowEvicted{0},stShadowEvicted{0},hotShadowEvicted{0},relockRefused{0},relockRefusedBytes{0},shadowCapGrows{0};
     // 0.3.192 (CS): the LARGE-buffer allowance (command_queue.h LargeShadowBudgetBytes): grants (shadows made) and drops (evicted for another large buffer, pressure, GPU write).
     Counter largeShadowGrants{0},largeShadowDrops{0};
+    // 0.3.204 (task 21): zero-copy buffer unlocks (see unlockBuffer): unlocks recorded as a reference into the large buffer's slice (no copy into the queue) and their bytes, DISCARD renames to the spare slice,
+    // spare slices allocated for them, and the waits (count, ns) for a slice the replay thread still reads (a busy spare at a rename, or a non-DISCARD/NOOVERWRITE write lock). Game thread.
+    Counter zeroCopyUnlocks{0},zeroCopyBytes{0},renames{0},renameAllocs{0},renameWaits{0},renameWaitNs{0},writeWaits{0},writeWaitNs{0};   // rename*: DISCARD renames; write*: waits of the other write locks (flags 0) for a slice's readers
     // The game thread's own time per frame (Present to Present, minus its sync and backpressure waits), in ns, and its frames.
     Counter gameNs{0},gameWaitNs{0},gameFrames{0};
     // 0.3.204 (task 21, Diagnostics only): where the game thread's own time goes, ns (zero while Diagnostics are off). lockNs: buffer/image Lock+Unlock work (shadow memset/memcpy, readbacks),
@@ -65,7 +68,8 @@ struct Counters {
     // ---- Both threads write: memory in flight (chunks handed to the producer and not yet recycled, live blocks, registered shadows). ----
     alignas(kLine) Counter chunksLive{0};
     Counter blocksLive{0},blockBytes{0};
-    std::atomic<std::int64_t> shadowBytes{0},texShadowBytes{0},largeShadowBytes{0};   // largeShadowBytes: the large allowance, NOT part of shadowBytes (shadowAdmit's cap)
+    std::atomic<std::int64_t> shadowBytes{0},texShadowBytes{0},largeShadowBytes{0};   // largeShadowBytes: the large allowance, NOT part of shadowBytes (shadowAdmit's cap); 0.3.204 (task 21): also the spare and the retired slices
+    std::atomic<std::int64_t> retiredBytes{0},spareBytes{0};   // 0.3.204 (task 21): live bytes of retired slices (dropped while the replay thread may still read them) and of spare slices (both counted in largeShadowBytes too)
 };
 static_assert(alignof(Counters)==kLine&&sizeof(Counters)%kLine==0,"Counters groups are line-aligned");
 static_assert(offsetof(Counters,commands)/kLine!=offsetof(Counters,consumerSleeps)/kLine&&offsetof(Counters,consumerSleeps)/kLine!=offsetof(Counters,chunksLive)/kLine,"counter groups on distinct lines");
