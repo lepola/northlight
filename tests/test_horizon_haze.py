@@ -346,9 +346,9 @@ def main():
     cpu = fp.src('world_renderer.h').read_text()
     composite_src = shader.split('float4 WorldComposite(', 1)[1].split('// Separate geometry pass:', 1)[0]
     helper = block(shader, 'float3 horizonHaze(')
-    # 0.3.202 (rain mask): haze, then the fog mad, in one lerp expression back toward the unfogged colour on rain-mask pixels.
+    # 0.3.203 (particle mask): haze, then the fog mad, in the one transmittance expression (rain streaks and particles: original + T x (F(bg) - bg)).
     assert composite_src.index('horizonHaze(color,centerUV,viewZ,d>=.99999&&liquid<=0)') < composite_src.index('fog.a,fog.rgb)')
-    assert 'if(PassInfo.z<.5){\n        float3 unfogged=color;' in composite_src
+    assert 'color=mad(1-mask.y,mad(horizonHaze(color,centerUV,viewZ,d>=.99999&&liquid<=0),fog.a,fog.rgb)-bg,original.rgb);' in composite_src
     assert '[branch]if(range<=0||HorizonHaze.w<=0)return color;' in helper
     assert helper.index('[branch]') < helper.index('viewPositionDistance') and 'tex2D' not in helper and 'loop' not in helper
     assert 'float range=sky?1:saturate((viewZ-HorizonShape.y)*HorizonShape.z);' in helper

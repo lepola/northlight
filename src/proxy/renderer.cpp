@@ -323,7 +323,7 @@ class Device final : public GuardedMirrorDevice {
     ParticleSig particleSigs[12];unsigned particleSigCount=0,particleSigMore=0;bool particleFirstLogged=false;
     // 0.3.203 (particle mask): particleBg: the scene colour from before the frame's first particle mask draw (one StretchRect, lazily created at the game's target format, released with the mask);
     // the composite relights that background and adds the particles back (green = 1-T, blue = touched). particleBgTried / particleBgOk are per frame. A frame may bind RT1 for particles at most kParticleRebindCap times.
-    IDirect3DTexture9* particleBg=nullptr;IDirect3DSurface9* particleBgSurface=nullptr;D3DFORMAT particleBgFormat=D3DFMT_UNKNOWN;bool particleBgTried=false,particleBgOk=false,particleBgLogged=false;
+    IDirect3DTexture9* particleBg=nullptr;IDirect3DSurface9* particleBgSurface=nullptr;D3DFORMAT particleBgFormat=D3DFMT_UNKNOWN;bool particleBgTried=false,particleBgOk=false,particleBgLogged=false;int particleBgLast=-1,rainBgState=-1; /* particleBgLast: last frame's snapshot (-1 not taken, 0 failed, 1 ok), kept past clearFrame for the PARTICLES line; rainBgState: -1 no rain mask candidate, 0 the first one found no snapshot, 1 the snapshot was taken before the first rain mask draw */
     static constexpr unsigned kParticleRebindCap=24;
     // 0.3.203 (particle mask): the game draws its particles with its own pixel shaders, so the mask comes from a patched variant of the bound one (particle_shader_patch.h: oC0 renamed,
     // the mask written to oC1), built at the first eligible draw and cached per original shader and blend kind. particleGamePs: the game's shader (one reference) while its patched variant
@@ -425,7 +425,7 @@ private:
         if(!applied||failed)stateBlocks.clear();
         if(!enabled||extensionFault){stateBlocks.clear();if(world)world->releaseStateCache();if(water)water->releaseStateCache();}
         if(world)world->endFrame(!extensionFault);if(water)water->endFrame();if(celestialDiscs)celestialDiscs->endFrame();if(shadowBlobs)shadowBlobs->endFrame();
-        drop(worldDepth);worldDepthDescKnown=false; rainMrtUnbind();terrain = captured = applied = projectionValid = false;rainMaskCleared=rainMaskDrawn=rainMaskFrame=rainMaskOk=rainDepthOk=rainMaskRainDrawn=particleBgTried=particleBgOk=false; /* 0.3.202 (rain mask MRT): RT1 never outlives a frame */earlyDepth.reset();resetTranslucentCensus(); /* the TRANSLUCENT line is logged before clearFrame */
+        particleBgLast=particleBgTried?int(particleBgOk):-1;drop(worldDepth);worldDepthDescKnown=false; rainMrtUnbind();terrain = captured = applied = projectionValid = false;rainMaskCleared=rainMaskDrawn=rainMaskFrame=rainMaskOk=rainDepthOk=rainMaskRainDrawn=particleBgTried=particleBgOk=false; /* 0.3.202 (rain mask MRT): RT1 never outlives a frame */earlyDepth.reset();resetTranslucentCensus(); /* the TRANSLUCENT line is logged before clearFrame */
     }
     void releaseResources() {
         rainMrtUnbind();stateBlocks.clear();clearFrame();
@@ -1118,8 +1118,9 @@ private:
                 if(!rainMaskCleared&&!rainMaskStart(maskTarget))why|=32;
                 else if(!rainDepthOk)why|=32;
                 else{
-                    if(particle&&!particleBgTried){rainMrtUnbind();particleBackgroundStart();}
-                    if(particle&&!particleBgOk)why|=512;
+                    if(!particleBgTried){rainMrtUnbind();particleBackgroundStart();} /* the first mask draw of either kind: rain streaks and particles are alpha-over layers on the same background */
+                    if(!particle&&rainBgState<0)rainBgState=particleBgOk?1:0;
+                    if(!particleBgOk)why|=512;
                     else if(!rainMrtBound){
                         if(particle&&rainMrtRuns>=kParticleRebindCap)why|=1024; /* every bind is a render pass break: past the cap the frame's remaining candidates are drawn as the game does */
                         else if(FAILED(ext->SetRenderTarget(1,maskTarget)))why|=64;
@@ -1143,10 +1144,10 @@ private:
             return false;
         }
         if(particle&&!particleFirstLogged){particleFirstLogged=true;logf("PARTICLES first mask draw: variant=%u gamePs=%d vsModel=%u blend=%ld/%ld stage0 color=%ld alpha=%ld",variant,int(patchedPs!=nullptr),vsModel,long(bl[0]),long(bl[1]),long(st[0]),long(st[3]));}
-        /* Only RT1's write mask changes: RT0's colour and alpha blend exactly as the game's draw without the mask. Rain writes red, particles green. */
+        /* Only RT1's write mask changes: RT0's colour and alpha blend exactly as the game's draw without the mask. */
         static const D3DRENDERSTATETYPE types[1]={D3DRS_COLORWRITEENABLE1};
         const bool over=patchedPs?patchKind==0:variant<2;
-        const DWORD want[1]={particle?DWORD(over?D3DCOLORWRITEENABLE_GREEN|D3DCOLORWRITEENABLE_BLUE:D3DCOLORWRITEENABLE_BLUE):DWORD(D3DCOLORWRITEENABLE_RED)}; /* particles: alpha over = green (1-T) + blue (touched), additive = blue only */
+        const DWORD want[1]={DWORD(particle&&!over?D3DCOLORWRITEENABLE_BLUE:D3DCOLORWRITEENABLE_GREEN|D3DCOLORWRITEENABLE_BLUE)}; /* rain streaks and alpha-over particles: green (1-T) + blue (touched); additive particles: blue only */
         for(int i=0;i<1;++i){rainMrtPrevKnown[i]=SUCCEEDED(ext->GetRenderState(types[i],&rainMrtPrev[i]));ext->SetRenderState(types[i],want[i]);}
         if(patchedPs){particleGamePs=gamePs;gamePs->AddRef();} /* the draw replaces the binding; the game's shader must outlive it */
         ext->SetPixelShader(patchedPs?patchedPs:particle?particlePS[variant]:rainMrtPS);
@@ -1509,14 +1510,14 @@ public:
         const unsigned mistSkips=weatherMistSkips,mistUnknown=weatherMistUnknown,mistOther=weatherMistOtherStage;weatherMistSkips=weatherMistUnknown=weatherMistOtherStage=0;
         const unsigned rainMaskCount=rainMaskDraws,rainMrtRunCount=rainMrtRuns,rainMaskSkipCount=rainMaskSkips;rainMaskDraws=rainMrtRuns=rainMaskSkips=0; /* 0.3.202 (rain mask MRT) */
         const unsigned particleMaskCount=particleDraws,particleSkipCount=particleSkips,lateZ=rainLateZ,lateZPrims=rainLateZPrims;
-        logParticles(sampleFrame,rainMrtRunCount);particleDraws=particleSkips=rainLateZ=rainLateZPrims=0; /* 0.3.203 (particle mask) */
+        const int rainBgCount=rainBgState;rainBgState=-1;logParticles(sampleFrame,rainMrtRunCount);particleDraws=particleSkips=rainLateZ=rainLateZPrims=0; /* 0.3.203 (particle mask) */
         if(FAILED(rainMaskResolveHr)&&!rainMaskResolveLogged){rainMaskResolveLogged=true;logf("WEATHER rain mask resolve failed HRESULT=0x%08lx",(unsigned long)rainMaskResolveHr);}
         const bool high=st.blend>=W::kBlendLogHigh,low=st.blend>=W::kBlendLogLow;
         weatherLogClock+=dt;
         const bool change=st.kind!=weatherLoggedKind||high!=weatherLoggedBlendHigh||low!=weatherLoggedBlendLow;
         if(change||(diagnostics()&&st.kind!=W::Kind::None&&weatherLogClock>=10.0)){
             weatherLogClock=0;weatherLoggedKind=st.kind;weatherLoggedBlendHigh=high;weatherLoggedBlendLow=low;
-            logf("WEATHER kind=%s prims=%u draws=%u intensity=%.3f blend=%.3f candidates=%u generation=%u hot=%p mists=%u mistArmed=%d mistSkips=%u mistUnknownStage0=%u mistOtherStage=%u mistOverflows=%u rainMask=%u rainMrtRuns=%u rainMaskSkips=%u particleMask=%u particleSkips=%u rainLateZ=%u rainLateZPrims=%u",W::kindName(st.kind),frameSample.primitives,frameSample.draws,st.intensity,st.blend,weatherDetect.count(),weatherDetect.generation,weatherDetect.hot,weatherDetect.mistCount(),int(weatherDetect.mistArmed),mistSkips,mistUnknown,mistOther,weatherDetect.mistOverflows,rainMaskCount,rainMrtRunCount,rainMaskSkipCount,particleMaskCount,particleSkipCount,lateZ,lateZPrims);
+            logf("WEATHER kind=%s prims=%u draws=%u intensity=%.3f blend=%.3f candidates=%u generation=%u hot=%p mists=%u mistArmed=%d mistSkips=%u mistUnknownStage0=%u mistOtherStage=%u mistOverflows=%u rainMask=%u rainMrtRuns=%u rainMaskSkips=%u particleMask=%u particleSkips=%u rainLateZ=%u rainLateZPrims=%u rainBg=%d",W::kindName(st.kind),frameSample.primitives,frameSample.draws,st.intensity,st.blend,weatherDetect.count(),weatherDetect.generation,weatherDetect.hot,weatherDetect.mistCount(),int(weatherDetect.mistArmed),mistSkips,mistUnknown,mistOther,weatherDetect.mistOverflows,rainMaskCount,rainMrtRunCount,rainMaskSkipCount,particleMaskCount,particleSkipCount,lateZ,lateZPrims,rainBgCount);
         }
     }
     // 0.3.203 (particle mask): sample frames (Diagnostics + RenderProfile) with candidates: how many translucent no-depth-write draws got the mask or were skipped, and one census
@@ -1531,7 +1532,7 @@ public:
                 rows+=row;}
             std::string rejects;char rej[64];
             for(unsigned i=0;i<NorthlightParticleShaderPatch::ReasonCount;++i)if(particlePatchRejects[i]){snprintf(rej,sizeof rej," %s=%u",NorthlightParticleShaderPatch::reasonName(i),particlePatchRejects[i]);rejects+=rej;}
-            logf("PARTICLES frame=%u masked=%u skipped=%u rt1Binds=%u cap=%u bg=%d sigs=%u more=%u patched=%u psCache=%u/%u patchRejects={%s }%s",sampleFrame,particleDraws,particleSkips,rebinds,kParticleRebindCap,int(particleBgOk),particleSigCount,particleSigMore,particlePatchedDraws,unsigned(particlePatched.size()),unsigned(particlePatched.variants()),rejects.c_str(),rows.c_str());
+            logf("PARTICLES frame=%u masked=%u skipped=%u rt1Binds=%u cap=%u bg=%d sigs=%u more=%u patched=%u psCache=%u/%u patchRejects={%s }%s",sampleFrame,particleDraws,particleSkips,rebinds,kParticleRebindCap,particleBgLast,particleSigCount,particleSigMore,particlePatchedDraws,unsigned(particlePatched.size()),unsigned(particlePatched.variants()),rejects.c_str(),rows.c_str());
         }
         particleSigCount=particleSigMore=0;particlePatchedDraws=0;memset(particlePatchRejects,0,sizeof particlePatchRejects);
     }

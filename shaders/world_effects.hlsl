@@ -14,8 +14,8 @@ sampler2D FogBuffer : register(s9);
 sampler2D WaterMask : register(s11);
 sampler2D BaselineLighting : register(s12);
 sampler2D RegionalFog : register(s13); // ground, day extinction, night extra, layer height
-sampler2D Background : register(s14); // 0.3.203 (particle mask): WorldComposite only, the scene colour before the frame's first particle draw
-sampler2D RainMask : register(s13); // 0.3.202 (rain mask): WorldComposite only, rain streak coverage (r), 1-T of the translucent particles (g), a particle touched the pixel (b); 0 without either
+sampler2D Background : register(s14); // 0.3.203 (particle mask): WorldComposite only, the scene colour before the frame's first mask draw (rain or particle)
+sampler2D RainMask : register(s13); // 0.3.202 (rain mask): WorldComposite only, 1-T of the alpha-over rain streaks and translucent particles (g), one of them touched the pixel (b); r unused; 0 without either
 float4 RegionalFogInfo : register(c31); // world node0 XY, inverse field span, night fraction
 float4 WaterInfo : register(c30);
 float4 RemovalInfo : register(c30); // RemovalSmooth, TemporalLight: y 1 when a lit source is drawn, z 1/(summed source weight), w disc radius in half-res pixels at view distance 1
@@ -1030,12 +1030,9 @@ float4 WorldComposite(float2 uv:TEXCOORD0):COLOR0 {
     // Horizon haze extinguishes the far scene (including the depth-occluded
     // sun/moon disc) BEFORE the local scattering is added in front of it.
     if(PassInfo.z<.5){
-        float3 unfogged=color;
-        // Rain streaks were drawn into the scene before the composite: on mask pixels go back toward the unfogged pixel so they are not hazed.
-        // 0.3.203 (particle mask): a translucent particle writes no depth, so its pixel carries the background's depth. Everything above ran on the background colour (bg);
-        // the pixel is T x background + emission, so the result is original + T x (F(bg) - bg), F being the relight, AO, haze and fog.
-        color=lerp(mad(horizonHaze(color,centerUV,viewZ,d>=.99999&&liquid<=0),fog.a,fog.rgb),unfogged,mask.x);
-        color=mad(1-mask.y,color-bg,original.rgb); // untouched: mask.y is 0 and bg is original
+        // 0.3.203 (particle mask): translucent particles write no depth and the rain streaks are drawn over the scene, so their pixels carry the background's depth. Everything above ran on the background
+        // colour (bg); the pixel is T x background + emission (rain streaks are alpha-over draws like the particles), so the result is original + T x (F(bg) - bg), F being the relight, AO, haze and fog.
+        color=mad(1-mask.y,mad(horizonHaze(color,centerUV,viewZ,d>=.99999&&liquid<=0),fog.a,fog.rgb)-bg,original.rgb); // untouched: mask.y is 0 and bg is original
     }
     if(PassInfo.z==3)color=fog.rgb;
     return float4(max(color,0),original.a);

@@ -29,11 +29,8 @@ comp=h.split('float4 WorldComposite(',1)[1].split('// Separate geometry pass:',1
 m=re.search(r'if\(PassInfo\.z<\.5\)\{(.*?)\n    \}',comp,re.S)
 body=m.group(1) if m else ''
 checks['source: WorldComposite reads the mask once, with tex2D at the top before any flow control (0.3.203; the rain term is its red)']=(bool(m) and comp.count('RainMask')==1 and comp.count('float4 mask=tex2D(RainMask,uv);')==1 and comp.index('float4 mask=tex2D(RainMask,uv);')<comp.index('[loop]'))
-checks['source: unfogged colour kept before haze, lerped back to after the haze + fog mad']=(
-    'float3 unfogged=color;' in body and body.index('unfogged=color')<body.index('lerp(mad(horizonHaze(')<body.index('fog.a,fog.rgb)')<body.index(',unfogged,mask.x)')
-    and ',unfogged,mask.x)' in body)  # 0.3.203: the mask's red is the rain, green the particles (test_particle_mask)
-checks['source: the rain term (mask.x) is used only inside the PassInfo.z<.5 branch, so the debug views are not rain-lerped']=(comp.count('mask.x')==1 and body.count('mask.x')==1)
-
+checks['source: no rain lerp any more: rain streaks are alpha-over layers of the transmittance composite (green = 1-T, blue = touched); the red channel is unused (0.3.203)']=(
+    'unfogged' not in comp and 'mask.x' not in comp and 'color=mad(1-mask.y,mad(horizonHaze(color,centerUV,viewZ,d>=.99999&&liquid<=0),fog.a,fog.rgb)-bg,original.rgb);' in body)
 # manifest
 wc=manifest['WorldComposite']
 checks['manifest: WorldComposite samples s13, <= 512 slots, < 32 temporaries']=(13 in wc['samplers'] and wc['static_instruction_slots']<=512 and wc['temporary_registers']<32)
@@ -41,19 +38,29 @@ checks['manifest: WorldComposite bytecode changed']=(wc['sha256']!=BEFORE['World
 checks['manifest: every other entry byte-identical to 0.3.200']=(set(manifest)==set(BEFORE) and all(manifest[n]['sha256']==s for n,s in BEFORE.items() if n!='WorldComposite'))
 checks['compiled: WorldComposite.bin exists']=(fp.COMPILED/'WorldComposite.bin').exists()
 
-# numeric reference of the blend: lerp(fogged, unfogged, mask)
-def lerp(a,b,t):return tuple(x+(y-x)*t for x,y in zip(a,b))
-def composite(color,haze,fog_a,fog_rgb,mask):
-    unfogged=color
-    fogged=tuple(c*fog_a+f for c,f in zip(haze(color),fog_rgb))
-    return lerp(fogged,unfogged,mask)
-haze=lambda c:lerp(c,(.6,.7,.8),.35)
-col=(.2,.5,.9);fa=.7;fr=(.05,.04,.03)
-old=tuple(c*fa+f for c,f in zip(haze(col),fr))
-checks['numeric: mask 0 gives exactly the previous result']=(composite(col,haze,fa,fr,0.)==old)
-checks['numeric: mask 1 gives the unfogged colour']=all(abs(a-b)<1e-12 for a,b in zip(composite(col,haze,fa,fr,1.),col))
-mid=composite(col,haze,fa,fr,.5)
-checks['numeric: mask .5 is the midpoint']=all(abs(m_-(o+c)/2)<1e-12 for m_,o,c in zip(mid,old,col))
+# numeric reference: the streak is an alpha-over layer, the pixel = T x background + emission; the composite outputs original + T x (F(B) - B) (0.3.203, same rule as the particles)
+def over(c,col,a):return tuple(x*(1-a)+y*a for x,y in zip(c,col))
+F=lambda c:tuple(.8*x+.1 for x,y in zip(c,c))   # stand-in for relight + haze + fog
+def composite(B,layers):
+    c=B;T=1.
+    for col,a,add in layers:
+        if add:c=tuple(x+y for x,y in zip(c,col))
+        else:c=over(c,col,a);T*=1-a
+    return tuple(x+T*(f-b) for x,f,b in zip(c,F(B),B))
+def truth(B,layers):                              # the same layers drawn over the fogged background
+    c=F(B)
+    for col,a,add in layers:c=tuple(x+y for x,y in zip(c,col)) if add else over(c,col,a)
+    return c
+B=(.2,.5,.9);streak=((.8,.85,.9),.3,False);glow=((.5,.3,.05),0.,True)
+checks['numeric: no layer gives F(B)']=all(abs(x-y)<1e-12 for x,y in zip(composite(B,[]),F(B)))
+checks['numeric: a rain streak is exactly the fogged background with the streak drawn over it (not an a^2 approximation)']=all(abs(x-y)<1e-12 for x,y in zip(composite(B,[streak]),truth(B,[streak])))
+def streak_term(layers_without,layers_with):   # what the streak adds over the pixel beneath it, with the composite
+    return tuple(x-y for x,y in zip(composite(B,layers_with),composite(B,layers_without)))
+beneath_plain=F(B);beneath_glow=tuple(x+y for x,y in zip(F(B),glow[0]))
+want=lambda beneath:tuple(streak[1]*(c-b) for c,b in zip(streak[0],beneath))
+checks['numeric: a streak over a far background, with and without a particle glow on the same pixel, adds a x (streak colour - what is beneath it), beneath = the fogged background (plus the glow)']=(
+    all(abs(x-y)<1e-12 for x,y in zip(streak_term([],[streak]),want(beneath_plain))) and all(abs(x-y)<1e-12 for x,y in zip(streak_term([glow],[glow,streak]),want(beneath_glow))))
+checks['numeric: glow and streak in either order equal the fogged background with both drawn over it']=all(abs(x-y)<1e-12 for x,y in zip(composite(B,[glow,streak]),truth(B,[glow,streak]))) and all(abs(x-y)<1e-12 for x,y in zip(composite(B,[streak,glow]),truth(B,[streak,glow])))
 # 0.3.202 (rain mask MRT): the two ps_2_0 shaders of the MRT mask (shaders/rain_mask.hlsl); the ps_3_0 entries of effects.hlsl stay byte-identical
 eff=json.loads((fp.SHADERS/'shader-build.json').read_text())['shaders']
 EFF_BEFORE={'AO':'778be1ea3b147c4bd34bed3e8b13536506fea805acf6660e85119f8cbb4a9bb9','AOContactBloom':'15618e0c53efdbe986b4ff74e34ef7d2c3e93e5847ac3b85bdd8c637a24eeeda','Composite':'0bfee11760ad650d421136aa252d412c632dad0af6d84ade6a1305f7219c3988'}
@@ -62,6 +69,6 @@ checks['MRT shaders: effects.hlsl untouched (the rain shaders have their own sou
 checks['MRT shaders: AO, AOContactBloom and Composite byte-identical to 0.3.201']=all(eff[n]['sha256']==x for n,x in EFF_BEFORE.items())
 checks['MRT shaders: RainMaskMRT and RainScrub are ps_2_0, small, with a compiled .bin']=all(n in eff and eff[n]['target']=='ps_2_0' and eff[n]['static_instruction_slots']<=32 and (fp.COMPILED/(n+'.bin')).exists() for n in ('RainMaskMRT','RainScrub'))
 ehl=(fp.SHADERS/'rain_mask.hlsl').read_text()
-checks['MRT shaders: source writes oC1 = white with the streak alpha (RT1 masked to red); the scrub discards unchanged depth and outputs 0']=('out float4 mask : COLOR1' in ehl and 'mask = float4(1, 1, 1, c.a);' in ehl and 'clip(abs(tex2D(Scene, uv).r - tex2D(Depth, uv).r) - 1e-6);' in ehl and 'return 0;' in ehl.split('float4 RainScrub(',1)[1])
+checks['MRT shaders: source writes oC1 = white with the streak alpha (RT1 masked to green and blue); the scrub discards unchanged depth and outputs 0']=('out float4 mask : COLOR1' in ehl and 'mask = float4(1, 1, 1, c.a);' in ehl and 'clip(abs(tex2D(Scene, uv).r - tex2D(Depth, uv).r) - 1e-6);' in ehl and 'return 0;' in ehl.split('float4 RainScrub(',1)[1])
 for k,ok in checks.items():print(('PASS ' if ok else 'FAIL ')+k)
 sys.exit(0 if all(checks.values()) else 1)

@@ -131,7 +131,7 @@ struct Hook{
     HRESULT quad(UINT,UINT){++quads;quadRec={ext->rt,ext->rt1,ext->ps,ext->rs[D3DRS_COLORWRITEENABLE],0,0,0,0,0,0,0,0,0};quadTex0=ext->tex[0];quadTex1=ext->tex[1];return quadFails?-1:0;}
     static constexpr int kTagMask=3,kWaterTag=4;VsClass vcMock;const VsClass& classifyVs(IDirect3DVertexShader9*){return vcMock;}
     bool projectionValid=false;float worldMinDepth=0.f,worldMaxDepth=1.f;bool sampledFrame=false;bool sampled()const{return sampledFrame;}IDirect3DBaseTexture9* blobOriginal=nullptr;
-    IDirect3DPixelShader9* particlePS[6]={};IDirect3DTexture9* particleBg=nullptr;Surface* particleBgSurface=nullptr;D3DFORMAT particleBgFormat=D3DFMT_UNKNOWN;bool particleBgTried=false,particleBgOk=false,particleBgLogged=false;static constexpr unsigned kParticleRebindCap=24;
+    IDirect3DPixelShader9* particlePS[6]={};IDirect3DTexture9* particleBg=nullptr;Surface* particleBgSurface=nullptr;D3DFORMAT particleBgFormat=D3DFMT_UNKNOWN;bool particleBgTried=false,particleBgOk=false,particleBgLogged=false;int particleBgLast=-1,rainBgState=-1;static constexpr unsigned kParticleRebindCap=24;
     bool particlePSFailed=false,rainMaskRainDrawn=false;unsigned particleDraws=0,particleSkips=0,rainLateZ=0,rainLateZPrims=0,particleSkipLogs=0,particleSkipLogged[8]={};
     struct ParticleSig{unsigned why=0,vsModel=0;DWORD v[13]={};unsigned count=0;};ParticleSig particleSigs[12];unsigned particleSigCount=0,particleSigMore=0;bool particleFirstLogged=false;std::vector<std::string> logs;template<class F> void extensionWork(const char*,F f){f();}
     void newFrame(){rainMrtUnbind();rainMaskCleared=rainMaskDrawn=rainMaskFrame=rainMaskOk=rainDepthOk=rainMaskRainDrawn=particleBgTried=particleBgOk=false;applied=false;} /* clearFrame's part */
@@ -270,7 +270,7 @@ int main(){
     }
     {   // 0.3.202 (rain mask MRT): the mask is written by the rain draw itself through render target 1. A mask-eligible Hook: effect size 100x50, game target and viewport set, RainBlend on,
         // the game's stage setup (stage 0 MODULATE texture x diffuse, nothing on stage 1), no vertex or pixel shader, the bound depth is the world depth
-        auto mk=[](Hook& h){h.weatherDetect.noteCreate(P(50),32,512,1,A);h.weatherDetect.noteCreate(P(51),32,64,1,A);h.width=100;h.height=50;h.ext->gameRT.desc.Width=100;h.ext->gameRT.desc.Height=50;h.worldDepth=&h.ext->gameDS;
+        auto mk=[](Hook& h){h.weatherDetect.noteCreate(P(50),32,512,1,A);h.weatherDetect.noteCreate(P(51),32,64,1,A);h.width=100;h.height=50;h.ext->gameRT.desc.Width=100;h.ext->gameRT.desc.Height=50;h.ext->gameRT.desc.Format=D3DFMT_X8R8G8B8;h.worldDepth=&h.ext->gameDS;
             h.ext->vp.X=3;h.ext->vp.Y=4;h.ext->vp.Width=90;h.ext->vp.Height=40;h.ext->sr.left=5;h.ext->sr.top=6;h.ext->sr.right=70;h.ext->sr.bottom=30;
             h.ext->rs[D3DRS_COLORWRITEENABLE]=15;h.ext->rs[D3DRS_ALPHABLENDENABLE]=1;h.ext->rs[D3DRS_SRCBLEND]=D3DBLEND_DESTCOLOR;h.ext->rs[D3DRS_DESTBLEND]=D3DBLEND_SRCCOLOR;h.ext->rs[D3DRS_BLENDOP]=D3DBLENDOP_ADD;h.ext->rs[D3DRS_ZWRITEENABLE]=0;
             h.ext->rs[D3DRS_COLORWRITEENABLE1]=15;h.ext->rs[D3DRS_SEPARATEALPHABLENDENABLE]=0;h.ext->rs[D3DRS_SRCBLENDALPHA]=D3DBLEND_SRCALPHA;h.ext->rs[D3DRS_DESTBLENDALPHA]=D3DBLEND_ZERO;h.ext->rs[D3DRS_BLENDOPALPHA]=D3DBLENDOP_ADD;h.ext->rs[D3DRS_SCISSORTESTENABLE]=1;
@@ -282,7 +282,7 @@ int main(){
             h.draw(10);assert(h.drawn==1&&h.ext->draws.size()==1&&h.rainMaskDraws==1&&h.rainMaskDrawn&&h.rainMaskCleared&&h.rainDepthOk&&h.rainMrtRuns==1&&h.rainMaskSkips==0&&h.logs.empty()); /* exactly ONE game draw */
             const DrawRec& g=h.ext->draws[0];
             assert(g.rt==&h.ext->gameRT&&g.rt1==&h.ext->maskTex.s&&g.ps==&h.ext->psMrt); /* RT0 untouched, RT1 = the mask target, rainMrtPS during the draw */
-            assert(g.colorWrite==15&&g.colorWrite1==D3DCOLORWRITEENABLE_RED&&g.sep==0&&g.srcA==D3DBLEND_SRCALPHA&&g.dstA==D3DBLEND_ZERO&&g.opA==D3DBLENDOP_ADD&&g.blend==1&&g.src==D3DBLEND_SRCALPHA&&g.dst==D3DBLEND_INVSRCALPHA&&g.op==D3DBLENDOP_ADD); /* RainBlend's blend (colour and alpha) and the game's separate-alpha states stay; only RT1 is masked to red */
+            assert(g.colorWrite==15&&g.colorWrite1==(D3DCOLORWRITEENABLE_GREEN|D3DCOLORWRITEENABLE_BLUE)&&g.sep==0&&g.srcA==D3DBLEND_SRCALPHA&&g.dstA==D3DBLEND_ZERO&&g.opA==D3DBLENDOP_ADD&&g.blend==1&&g.src==D3DBLEND_SRCALPHA&&g.dst==D3DBLEND_INVSRCALPHA&&g.op==D3DBLENDOP_ADD); /* RainBlend's blend (colour and alpha) and the game's separate-alpha states stay; only RT1 is masked to red */
             assert(snap(h)==before&&h.ext->ps==nullptr&&h.ext->rt==&h.ext->gameRT&&h.ext->vp.X==vp0.X&&h.ext->vp.Width==vp0.Width&&h.ext->sr.right==70); /* every state back, no game target or viewport change */
             assert(h.rainMrtBound&&h.ext->rt1==&h.ext->maskTex.s&&h.ext->rt1Binds==1&&h.ext->rt1Unbinds==0); /* RT1 stays bound (lazy) */
             assert(h.snapshots==1&&h.snapshotTarget==h.rainDepth&&!h.snapshotFatal&&h.ext->colorFills==1&&h.ext->clears==0&&h.ext->creates==1&&h.ext->depthCreates==1&&h.ext->shaderCreates==2); /* one depth snapshot (non-fatal), ColorFill clear, no RT0 swap */
@@ -455,11 +455,11 @@ int main(){
             {Hook h;mk(h);h.blobOriginal=reinterpret_cast<IDirect3DBaseTexture9*>(&h.cell0);h.draw(10);assert(h.drawn==1&&h.particleDraws==0&&!h.rainMrtBound&&h.ext->draws[0].rt1==nullptr);h.blobOriginal=nullptr;} /* a blob shadow's faint draw is ground shading */
             {Hook h;mk(h);h.ext->vsBound=&h.ext->gameVs;h.vsMajor[&h.ext->gameVs]=1;h.vcMock.entry=0;h.draw(10);assert(h.particleDraws==1);} /* a plain model vertex shader is */
         }
-        {   // rain and particles share the mask: red and green, one snapshot, RT1 bound across them; the first mask draw of either takes the snapshot
+        {   // rain and particles share the mask: both alpha-over layers (green and blue), one snapshot, RT1 bound across them; the first mask draw of either takes the snapshot
             Hook h;mk(h);h.weatherDetect.noteCreate(P(51),32,512,1,A);h.weatherDetect.reset();h.weatherDetect.noteCreate(P(51),32,512,1,A);
             h.draw(10);h.bind(0,51);h.draw(10);h.bind(0,3);h.draw(10);
             assert(h.drawn==3&&h.particleDraws==2&&h.rainMaskDraws==1&&h.rainMaskRainDrawn&&h.snapshots==1&&h.ext->rt1Binds==1&&h.rainMrtRuns==1);
-            assert(h.ext->draws[0].colorWrite1==(D3DCOLORWRITEENABLE_GREEN|D3DCOLORWRITEENABLE_BLUE)&&h.ext->draws[1].colorWrite1==D3DCOLORWRITEENABLE_RED&&h.ext->draws[1].ps==&h.ext->psMrt&&h.ext->draws[2].colorWrite1==(D3DCOLORWRITEENABLE_GREEN|D3DCOLORWRITEENABLE_BLUE)&&h.ext->draws[2].ps==&h.ext->psParticle[0]);
+            assert(h.ext->draws[0].colorWrite1==(D3DCOLORWRITEENABLE_GREEN|D3DCOLORWRITEENABLE_BLUE)&&h.ext->draws[1].colorWrite1==(D3DCOLORWRITEENABLE_GREEN|D3DCOLORWRITEENABLE_BLUE)&&h.ext->draws[1].ps==&h.ext->psMrt&&h.ext->draws[2].colorWrite1==(D3DCOLORWRITEENABLE_GREEN|D3DCOLORWRITEENABLE_BLUE)&&h.ext->draws[2].ps==&h.ext->psParticle[0]);
             assert(h.ext->draws[1].src==D3DBLEND_SRCALPHA&&h.ext->draws[1].dst==D3DBLEND_INVSRCALPHA); /* rain keeps RainBlend */
             h.ext->rs[D3DRS_ZWRITEENABLE]=1;h.draw(10);assert(!h.rainMrtBound&&h.ext->rt1Unbinds==1&&h.ext->draws[3].rt1==nullptr&&h.particleDraws==2); /* any other draw unbinds */
             h.ext->rs[D3DRS_ZWRITEENABLE]=0;h.draw(10);assert(h.ext->rt1Binds==2&&h.snapshots==1&&h.particleDraws==3); /* and the next mask draw rebinds, same frame, no second snapshot */
@@ -474,8 +474,13 @@ int main(){
             Hook h;mk(h);h.draw(10);h.draw(10);h.draw(10);assert(h.ext->bgCreates==1&&h.ext->bgStretches==1&&h.particleBgOk&&h.particleBgSurface==&h.ext->bgTex.s&&h.ext->bgFormat==D3DFMT_X8R8G8B8);
             h.newFrame();assert(!h.particleBgTried&&!h.particleBgOk);h.draw(10);assert(h.ext->bgCreates==1&&h.ext->bgStretches==2&&h.particleBgOk&&h.particleDraws==4); /* a new frame snapshots again, the texture stays */
             h.newFrame();h.ext->gameRT.desc.Format=D3DFMT_A8R8G8B8;h.draw(10);assert(h.ext->bgCreates==2||h.particleBgFormat==D3DFMT_A8R8G8B8); /* a new target format recreates (the mock only creates X8R8G8B8 as the background) */
-            Hook r;mk(r);r.weatherDetect.noteCreate(P(51),32,512,1,A);r.weatherDetect.reset();r.weatherDetect.noteCreate(P(51),32,512,1,A);r.bind(0,51);r.draw(10);assert(r.rainMrtBound&&r.ext->bgStretches==0&&r.ext->bgCreates==0); /* rain alone takes no background */
-            r.bind(0,3);r.draw(10);assert(r.ext->bgStretches==1&&r.ext->rt1Unbinds==1&&r.ext->rt1Binds==2&&r.rainMrtBound&&r.particleDraws==1); /* RT1 is unbound for the resolve, then rebound */
+            Hook r;mk(r);r.weatherDetect.noteCreate(P(51),32,512,1,A);r.weatherDetect.reset();r.weatherDetect.noteCreate(P(51),32,512,1,A);r.bind(0,51);r.draw(10);assert(r.rainMrtBound&&r.ext->bgStretches==1&&r.ext->bgCreates==1&&r.particleBgOk&&r.rainBgState==1&&r.rainMaskDraws==1&&r.ext->draws[0].rt1==&r.ext->maskTex.s); /* rain takes the background snapshot, before its own draw (0.3.203: rain streaks are alpha-over layers like the particles) */
+            r.bind(0,3);r.draw(10);assert(r.ext->bgStretches==1&&r.ext->rt1Unbinds==0&&r.ext->rt1Binds==1&&r.rainMrtBound&&r.particleDraws==1); /* a particle after it: the same snapshot, RT1 stays bound */
+            r.bind(0,51);r.draw(10);assert(r.ext->bgStretches==1&&r.rainMaskDraws==2&&r.rainBgState==1);
+            r.newFrame();r.draw(10);assert(r.ext->bgStretches==2&&r.ext->bgCreates==1);
+            {Hook q;mk(q);q.weatherDetect.noteCreate(P(51),32,512,1,A);q.weatherDetect.reset();q.weatherDetect.noteCreate(P(51),32,512,1,A);q.bind(0,3);q.draw(10);q.bind(0,51);q.draw(10);assert(q.ext->bgStretches==1&&q.rainBgState==1&&q.rainMaskDraws==1&&q.particleDraws==1&&q.ext->rt1Unbinds==0);} /* a particle first: the snapshot precedes both */
+            {Hook f;mk(f);f.weatherDetect.noteCreate(P(51),32,512,1,A);f.weatherDetect.reset();f.weatherDetect.noteCreate(P(51),32,512,1,A);f.bind(0,51);f.ext->bgCreateFails=true;f.draw(10);f.draw(10);
+                assert(f.drawn==2&&f.rainMaskDraws==0&&f.rainMaskSkips==2&&f.rainBgState==0&&f.ext->draws[0].rt1==nullptr&&f.ext->draws[0].ps==nullptr&&f.particleBgLogged&&f.rainSkipLogged&&f.logs.size()==2&&!f.rainMrtBound);} /* no snapshot: the rain is drawn as the game does (no mask), the failure and the skip logged once */
             Hook c;mk(c);c.ext->bgCreateFails=true;c.draw(10);c.draw(10);assert(c.drawn==2&&c.particleDraws==0&&c.particleSkips==2&&c.ext->bgCreates==1&&!c.particleBgOk&&c.particleBgLogged&&c.logs.size()==2&&!c.rainMrtBound&&c.ext->draws[1].rt1==nullptr&&!c.rainMaskFailed); /* one try a frame, one background log, then the skip reason (512) */
             c.newFrame();c.ext->bgCreateFails=false;c.draw(10);assert(c.ext->bgCreates==2&&c.particleDraws==1&&c.particleBgOk); /* the next frame tries again */
             Hook t;mk(t);t.ext->bgStretchFails=true;t.draw(10);assert(t.particleSkips==1&&t.particleDraws==0&&!t.particleBgOk&&t.ext->draws[0].rt1==nullptr);
