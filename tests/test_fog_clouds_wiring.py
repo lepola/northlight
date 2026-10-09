@@ -22,7 +22,7 @@ names=re.findall(r'\("(\w+)", "[vp]s_3_0"\)',py)
 checks['build: FogClouds is an ENTRIES member placed right after FogBlur']=('FogBlur' in names and 'FogClouds' in names and names.index('FogClouds')==names.index('FogBlur')+1)
 checks['manifest: FogClouds ps_3_0, <= 512 slots, < 32 temporaries, samples s14 (the volume)']=(fc.get('target')=='ps_3_0' and fc.get('static_instruction_slots',999)<=512 and fc.get('temporary_registers',99)<32 and 14 in fc.get('samplers',[]))
 checks['manifest: WorldFog bytecode unchanged (sha, 512 slots)']=(manifest['WorldFog']['sha256']==WORLD_FOG_SHA and manifest['WorldFog']['static_instruction_slots']==512)
-checks['manifest: s14 is read by no fog-stage entry other than FogClouds (FogBlur, WorldComposite, LocalFog, WorldFog)']=all(14 not in manifest[n]['samplers'] for n in ('FogBlur','WorldComposite','LocalFog','WorldFog'))
+checks['manifest: s14 is read by no fog-stage entry other than FogClouds (FogBlur, LocalFog, WorldFog); 0.3.203: WorldComposite reads its 2D Background there (the cloud volume is never bound with it)']=all(14 not in manifest[n]['samplers'] for n in ('FogBlur','LocalFog','WorldFog'))
 checks['compiled: FogClouds.bin exists']=(fp.COMPILED/'FogClouds.bin').exists()
 gen=fp.src('world_compiled_shaders.h').read_text()
 checks['generated header: kFogCloudsShader']='static const DWORD kFogCloudsShader[]' in gen

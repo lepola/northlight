@@ -32,18 +32,32 @@ BEFORE={'RainMaskMRT':'bac487c7850375bdde1b396e0b5b6ed875b6b704b5dd04d4e6bd50681
         'AOContactBloom':'15618e0c53efdbe986b4ff74e34ef7d2c3e93e5847ac3b85bdd8c637a24eeeda','Composite':'0bfee11760ad650d421136aa252d412c632dad0af6d84ade6a1305f7219c3988','AOBlur':'8f993e4c8118c029f4af218ae30620ef7c994e28c28b7ab46e02a7e070e51d2a','ContactBloom':'497c6c2c8e74e44e3cfbf6551fa7ac316750e3ccb63d78d94e29459ec36955b0'}
 checks['manifest: every earlier effect and rain entry is byte-identical to 0.3.202']=all(sh[n]['sha256']==x for n,x in BEFORE.items())
 
-# WorldComposite: the green mask channel
+# the stage result is clamped like the fixed-function stage (RT0 must equal it under the game's fog): the compiled output has a saturating move into oC0
+def sat_into_oc0(n):
+    asm=(fp.COMPILED/(n+'.bin.asm')).read_text().splitlines()
+    out=[l.split(',',1)[1].strip() for l in asm if l.strip().startswith('mov oC0.xyzw,')]
+    if len(out)!=1:return False
+    reg=out[0].split('.')[0]
+    for l in reversed(asm[:[k for k,x in enumerate(asm) if x.strip().startswith('mov oC0.xyzw,')][0]]):
+        t=l.strip().split()
+        if t and t[1:2] and t[1].startswith(reg+'.'):
+            return t[0].endswith('_sat') and t[1].split(',')[0].endswith('.xyzw')
+    return False
+checks['source: the stage result is saturated (fixed-function MODULATE2X clamps before fog and blend)']=('return saturate(c);' in hl)
+checks['compiled: every variant writes oC0 from a saturating move of all four components (the 2X ones too)']=all(sat_into_oc0(n) for n in ENTRIES)
+
+# WorldComposite: the transmittance composite
 comp=world.split('float4 WorldComposite(',1)[1].split('// Separate geometry pass:',1)[0]
 body=re.search(r'if\(PassInfo\.z<\.5\)\{(.*?)\n    \}',comp,re.S).group(1)
-checks['composite: RainMask read once, red and green together, inside the PassInfo.z<.5 branch']=(comp.count('RainMask')==1 and body.count('tex2Dlod(RainMask,float4(uv,0,0)).rg')==1)
-checks['composite: rain (red) lerps back to the unfogged colour first, particles (green) then to the scene colour']=(
-    'unfogged,mask.x)' in body and 'color=lerp(color,original.rgb,mask.y);' in body and body.index('unfogged,mask.x)')<body.index('original.rgb,mask.y)'))
-checks['composite: original.rgb is never overwritten (the AO/bloom colour is `lit`), so the scene colour is still there at the end']=(
-    re.search(r'\boriginal\.rgb\s*=[^=]',comp) is None and 'float3 lit=saturate(' in comp and 'float3 color=lit;' in comp and 'tex2Dlod(Scene,float4(uv,0,0))' in comp and comp.count('tex2Dlod(Scene,')==1)
-checks['composite: the relight reads lit, not the scene colour']=('min((1-legacyT)*LegacyFogColor.rgb,lit)' in comp and 'max(lit-fogPart,0)' in comp and 'mad(albedoT,bounce,lit)' in comp and 'mad(-.45,transported,lit)' in comp)
-checks['composite: debug views do not touch the mask']=('RainMask' not in comp.split('if(PassInfo.z<.5)',1)[0] and 'RainMask' not in comp.split('PassInfo.z==3',1)[1])
+checks['composite: RainMask and Background are read once each with tex2D at the top, before any flow control']=(
+    comp.count('RainMask')==1 and comp.count('Background')==1 and 'float4 mask=tex2D(RainMask,uv);' in comp and 'tex2D(Background,uv).rgb' in comp and comp.index('tex2D(Background,uv)')<comp.index('[loop]'))
+checks['composite: bg = the background where blue >= 1/255 (a particle touched the pixel), else the scene colour']=('float3 bg=lerp(original.rgb,tex2D(Background,uv).rgb,saturate(mask.b*255));' in comp)
+checks['composite: the AO/bloom and relight work on bg']=('float3 lit=saturate(mad(bloom,1-saturate(bg*ao),bg*ao));' in comp and 'original.rgb' not in comp.split('float3 lit=',1)[1].split('if(PassInfo.z<.5)',1)[0])
+checks['composite: rain (red) lerps back first, then original + T x (F(bg) - bg) with T = 1 - green, inside the PassInfo.z<.5 branch']=(
+    'unfogged,mask.x)' in body and 'color=mad(1-mask.y,color-bg,original.rgb);' in body and body.index('unfogged,mask.x)')<body.index('mad(1-mask.y,color-bg,original.rgb)') and comp.count('1-mask.y')==1)
+checks['composite: the old lerp to the scene colour is gone']=('lerp(color,original.rgb' not in comp)
 wc=wm['WorldComposite']
-checks['manifest: WorldComposite within the 512 slots of SM3, 509 now, samplers unchanged']=(wc['static_instruction_slots']==509 and wc['temporary_registers']<32 and wc['samplers']==[0,1,8,9,10,11,12,13])
+checks['manifest: WorldComposite within the 512 slots of SM3, samplers 0,1,8..14']=(wc['static_instruction_slots']<=512 and wc['temporary_registers']<32 and wc['samplers']==[0,1,8,9,10,11,12,13,14])
 
 # the arithmetic of the mask values under each blend (D3D9 applies the draw's blend to RT1 with oC1 as the source)
 def blend(src,dst,s,d,m):  # RT1 green: s,d factor functions of (oC1 g, oC1 a)
@@ -62,6 +76,29 @@ checks['numeric: additive by alpha accumulates alpha x brightest channel and sat
 checks['numeric: a dark additive particle adds little (it hides little fog)']=blend(0,0.,sa,one,addA(1.,(.1,.05,.02)))<.11
 checks['numeric: ONE/ONE adds the brightest channel']=abs(blend(0,.2,one,one,addC((.6,.3,.1)))-.8)<1e-12
 checks['numeric: SRCCOLOR/ONE adds the colour the blend adds (brightest channel squared)']=abs(blend(0,.2,sc,one,addC((.6,.3,.1)))-(.2+.36))<1e-12
+
+# the composite's arithmetic: the pixel is T x B + E, the composite outputs original + T x (F(B) - B) = E + T x F(B), exact for any F
+lerp=lambda a,b,t:tuple(x+(y-x)*t for x,y in zip(a,b))
+F=lambda c:tuple(.8*x+.1 for x in c)          # stand-in for relight + haze + fog (any function)
+def pixel(B,layers):                           # the game's blends in draw order; layers: ('over',colour,a) or ('add',colour)
+    c=list(B);T=1.
+    for l in layers:
+        if l[0]=='over':c=[x*(1-l[2])+y*l[2] for x,y in zip(c,l[1])];T*=1-l[2]
+        else:c=[x+y for x,y in zip(c,l[1])]
+    return tuple(c),1-T
+def composite(B,layers):
+    o,g=pixel(B,layers);return tuple(x+(1-g)*(f-b) for x,f,b in zip(o,F(B),B))
+def truth(B,layers):                           # the same blends on the fogged background: the particle is not fogged, the background is
+    c=list(F(B))
+    for l in layers:
+        c=[x*(1-l[2])+y*l[2] for x,y in zip(c,l[1])] if l[0]=='over' else [x+y for x,y in zip(c,l[1])]
+    return tuple(c)
+B=(.2,.5,.3);lay_over=[('over',(.9,.5,.1),.35)];lay_add=[('add',(.5,.3,.05))];lay_mix=[('over',(.2,.2,.2),.5),('add',(.4,.2,.0)),('over',(.9,.5,.1),.25)]
+checks['numeric: transmittance composite equals fogging the background and then drawing the particles (over, additive, mixed)']=all(
+    all(abs(a-b)<1e-12 for a,b in zip(composite(B,l),truth(B,l))) for l in (lay_over,lay_add,lay_mix))
+checks['numeric: green is 1-T of the over draws only; additive adds nothing to it']=(abs(pixel(B,lay_mix)[1]-(1-.5*.75))<1e-12 and pixel(B,lay_add)[1]==0.)
+checks['numeric: no particle: the composite is F of the scene colour']=all(abs(a-b)<1e-12 for a,b in zip(composite(B,[]),F(B)))
+checks['numeric: the old lerp toward the scene colour leaves the soft edge un-hazed (the fringe the transmittance composite removes)']=any(abs(a-b)>1e-3 for a,b in zip(lerp(F(B),pixel(B,lay_over)[0],pixel(B,lay_over)[1]),truth(B,lay_over)))
 
 # renderer wiring
 rl=r.split('\n')
@@ -84,17 +121,32 @@ checks['begin: the shader variants are created on first use; a failure is logged
     'kParticleOver1Shader,kParticleOver2Shader,kParticleAddA1Shader,kParticleAddA2Shader,kParticleAddC1Shader,kParticleAddC2Shader' in bg and 'particlePSFailed=true;why|=64;' in bg and 'rainMaskFailed' not in bg.split('particlePSFailed=true')[0].split('if(!why&&particle&&!particlePS[variant])')[1])
 checks['begin: reasons 128 (blend) and 256 (no stage 0 texture) are particle-only; skips are counted and each distinct reason logged once (at most 8)']=(
     'why|=128' in bg and 'why|=256' in bg and '++particleSkips;' in bg and 'particleSkipLogs<8' in bg and 'PARTICLES mask skip: reason=%u' in bg)
-checks['begin: the particle writes green on RT1 with the particle shader; rain keeps red and rainMrtPS']=('want[1]={particle?DWORD(D3DCOLORWRITEENABLE_GREEN):DWORD(D3DCOLORWRITEENABLE_RED)};' in bg and 'ext->SetPixelShader(particle?particlePS[variant]:rainMrtPS);' in bg)
-checks['scrub: one pass clears red and green']=('D3DRS_COLORWRITEENABLE,D3DCOLORWRITEENABLE_RED|D3DCOLORWRITEENABLE_GREEN)' in r)
+checks['begin: particles write RT1 green+blue (alpha over) or blue (additive) with the particle shader; rain keeps red and rainMrtPS']=('want[1]={particle?DWORD(variant<2?D3DCOLORWRITEENABLE_GREEN|D3DCOLORWRITEENABLE_BLUE:D3DCOLORWRITEENABLE_BLUE):DWORD(D3DCOLORWRITEENABLE_RED)};' in bg and 'ext->SetPixelShader(particle?particlePS[variant]:rainMrtPS);' in bg)
+checks['scrub: one pass clears red, green and blue']=('D3DRS_COLORWRITEENABLE,D3DCOLORWRITEENABLE_RED|D3DCOLORWRITEENABLE_GREEN|D3DCOLORWRITEENABLE_BLUE)' in r)
 pbd=r[r.index('template<class Draw> HRESULT particleBlendDraw('):r.index('template<class Draw> HRESULT rainBlendDraw(')]
 checks['particle draw: a claimed draw or a blob shadow is drawn as it was with RT1 unbound; otherwise one draw through rainMrtDraw']=('if(claimed||blobOriginal){rainMrtUnbind();return blobFaintDraw(claimed,draw);}' in pbd and 'rainMrtDraw(draw,true)' in pbd)
 wf=r[r.index('    void weatherFrame('):r.index('    void logParticles(')]
 checks['WEATHER line carries particleMask, particleSkips, rainLateZ and rainLateZPrims; all zeroed per frame']=(
     'particleMask=%u particleSkips=%u rainLateZ=%u rainLateZPrims=%u' in wf and 'particleMaskCount,particleSkipCount,lateZ,lateZPrims' in wf and 'particleDraws=particleSkips=rainLateZ=rainLateZPrims=0;' in wf)
 lp=r[r.index('void logParticles('):r.index('void logWeatherProbe(')]
-checks['PARTICLES line: sample frames only, rows of the census, reset every frame']=('if(sampled()&&any)' in lp and 'logf("PARTICLES frame=%u masked=%u skipped=%u sigs=%u more=%u%s"' in lp and 'particleSigCount=particleSigMore=0;' in lp)
+checks['PARTICLES line: sample frames only, rows of the census, reset every frame']=('if(sampled()&&any)' in lp and 'logf("PARTICLES frame=%u masked=%u skipped=%u rt1Binds=%u cap=%u bg=%d sigs=%u more=%u%s"' in lp and 'particleSigCount=particleSigMore=0;' in lp)
 checks['census rows are collected on sample frames only']=('if(particle&&sampled())particleCensus(why,vsModel,bl,st);' in bg)
-checks['resources: the particle shaders are dropped with the others, flags per frame reset in clearFrame']=('for(auto& ps:particlePS)drop(ps);particlePSFailed=false;' in r and 'rainDepthOk=rainMaskRainDrawn=false;' in r)
+checks['resources: the particle shaders are dropped with the others, flags per frame reset in clearFrame']=('for(auto& ps:particlePS)drop(ps);particlePSFailed=false;' in r and 'rainDepthOk=rainMaskRainDrawn=particleBgTried=particleBgOk=false;' in r)
+bs=r[r.index('bool particleBackgroundStart(){'):r.index('// Everything that makes a rain draw (particle=false)')]
+checks['background: one StretchRect of the game target (MSAA resolved) into a lazily created texture of the target format; failure logged once, no particle mask that frame']=(
+    'ext->StretchRect(rt,nullptr,particleBgSurface,nullptr,D3DTEXF_NONE)' in bs and 'ext->CreateTexture(width,height,1,D3DUSAGE_RENDERTARGET,rd.Format,D3DPOOL_DEFAULT,&particleBg,nullptr)' in bs and 'particleBgFormat!=rd.Format' in bs
+    and 'if(!particleBgLogged){particleBgLogged=true;logf("PARTICLES background snapshot failed' in bs and bs.count('StretchRect')==1)
+checks['begin: the snapshot is taken once per frame at the first particle mask draw, after the depth snapshot and with RT1 unbound; failing it skips the draw (reason 512)']=(
+    'if(particle&&!particleBgTried){rainMrtUnbind();particleBackgroundStart();}' in bg and 'if(particle&&!particleBgOk)why|=512;' in bg and bg.index('rainMaskStart(maskTarget)')<bg.index('particleBackgroundStart();')<bg.index('ext->SetRenderTarget(1,maskTarget)'))
+checks['begin: particles bind RT1 at most kParticleRebindCap (24) times a frame; past it the draw is made unchanged (reason 1024)']=(
+    'static constexpr unsigned kParticleRebindCap=24;' in r and 'if(particle&&rainMrtRuns>=kParticleRebindCap)why|=1024;' in bg)
+checks['classification: skinned (actor) vertex shaders are excluded']=('&&!vc.skinned' in pw)
+checks['resources: the background is released with the mask resources (release, size change)']=r[r.index('void releaseResources() {'):r.index('bool error(HRESULT hr')].count('drop(particleBgSurface);drop(particleBg);')==1 and r[r.index('bool resources(UINT w'):r.index('if (!aoPS &&')].count('drop(particleBgSurface);drop(particleBg);')==1
+checks['composite handoff: renderEffects gives the world the background only with a mask and a good snapshot, right before the rain mask']=(
+    'world->setParticleBackground(rainMaskTex&&particleBgOk?particleBg:nullptr);' in r and 0<r.index('world->setRainMask(rainMaskTex);')-r.index('world->setParticleBackground(')<260)
+wr=fp.src('world_renderer.h').read_text()
+checks['world: Background on s14 for the composite only (neutralZero otherwise, explicit sampler state), unbound after; the pointer is frame-local']=(
+    'd->SetTexture(14,particleBackground?particleBackground:neutralZero);particleBackground=nullptr;' in wr and 'D3DSAMP_SRGBTEXTURE,FALSE);' in wr.split('d->SetTexture(14,particleBackground?',1)[1][:600] and 'd->SetTexture(13,regionalFogTexture);d->SetTexture(14,nullptr);' in wr)
 checks['banner: 0.3.203']=('logf("Northlight renderer 0.3.203;' in r)
 
 for k,ok in checks.items():print(('PASS ' if ok else 'FAIL ')+k)

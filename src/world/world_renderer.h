@@ -238,6 +238,7 @@ private:
     std::string gpuDiagnosticDirectory;
     IDirect3DTexture9* regionalFogTexture=nullptr;
     IDirect3DTexture9* neutralZero=nullptr; // 0.3.202 (rain): 1x1 (0,0,0,0) on s13 (RainMask) when no mask was drawn this frame
+    IDirect3DTexture9* particleBackground=nullptr; // 0.3.203 (particle mask): the proxy's scene colour from before the frame's first particle draw (non-owning, set per frame, cleared after the composite)
     IDirect3DTexture9* rainMask=nullptr; // 0.3.202 (rain): the proxy's rain streak alpha mask (non-owning, set per frame, cleared after the composite)
     IDirect3DTexture9* neutralAO=nullptr; // 0.3.174: 1x1 (0,0,0,1) on s10 when the proxy does not fold its AO/bloom
     std::shared_ptr<const NorthlightRegionalFog::Field> uploadedFogField;
@@ -2014,6 +2015,7 @@ public:
     // 0.3.198 (rain): the smoothed weather state, set once per frame at the frame boundary (Device::finishFrameImpl); no effect reads it yet.
     NorthlightWeather::State weatherState{};
     void setWeather(const NorthlightWeather::State& s){weatherState=s;}
+    void setParticleBackground(IDirect3DTexture9* t){particleBackground=t;} /* 0.3.203 (particle mask): non-owning, for the next render() only */
     void setRainMask(IDirect3DTexture9* t){rainMask=t;} /* 0.3.202 (rain): non-owning, for the next render() only */
     const NorthlightWeather::State& weather()const{return weatherState;}
     // 0.3.198 (rain): the settings (Weather 0/1, RainFog 0..2) and the per-frame scalars derived from them and weather():
@@ -3635,7 +3637,10 @@ public:
         d->SetPixelShaderConstantF(34,haze.haze,1);
         /* 0.3.202 (rain): RainMask on s13 for the composite only (the loop above already set POINT/CLAMP/no mip/sRGB off on it); the pointer is frame-local, the regional fog field goes back right after the quad */
         d->SetTexture(13,rainMask?rainMask:neutralZero);rainMask=nullptr; /* never the regional fog field: null when neutralZero could not be created */
-        d->SetRenderTarget(0,targetSurface);d->SetTexture(8,temporalLight[1-temporalIndex]);d->SetTexture(9,fogResolved?fogBlurred:fog);d->SetPixelShader(finalPS);if(!check(quad(w,h),"world composite"))return false;composited=true;d->SetTexture(13,regionalFogTexture);if(profile)profile->mark("WorldComposite");
+        /* 0.3.203 (particle mask): Background on s14 (the mask's blue says where it is read; neutralZero elsewhere), explicit sampler state since s14 serves other passes */
+        d->SetTexture(14,particleBackground?particleBackground:neutralZero);particleBackground=nullptr;
+        d->SetSamplerState(14,D3DSAMP_ADDRESSU,D3DTADDRESS_CLAMP);d->SetSamplerState(14,D3DSAMP_ADDRESSV,D3DTADDRESS_CLAMP);d->SetSamplerState(14,D3DSAMP_MINFILTER,D3DTEXF_POINT);d->SetSamplerState(14,D3DSAMP_MAGFILTER,D3DTEXF_POINT);d->SetSamplerState(14,D3DSAMP_MIPFILTER,D3DTEXF_NONE);d->SetSamplerState(14,D3DSAMP_SRGBTEXTURE,FALSE);
+        d->SetRenderTarget(0,targetSurface);d->SetTexture(8,temporalLight[1-temporalIndex]);d->SetTexture(9,fogResolved?fogBlurred:fog);d->SetPixelShader(finalPS);if(!check(quad(w,h),"world composite"))return false;composited=true;d->SetTexture(13,regionalFogTexture);d->SetTexture(14,nullptr);if(profile)profile->mark("WorldComposite");
         if(diagnosticCapture){
             gpuDiagnosticArmed=false;unsigned capture=++gpuDiagnosticCaptures;
             const std::string& directory=gpuDiagnosticDirectory;

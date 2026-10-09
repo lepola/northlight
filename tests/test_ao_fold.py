@@ -168,7 +168,7 @@ checks['WorldComposite: AO in the tent (same weight, nearest fallback), bloom bi
     and 'ao+=occlusion*weight;' in composite and 'fallbackAO=occlusion;' in composite
     and 'ao=relight?(total<.02?fallbackAO:ao/total):1;' in composite
     and 'float3 bloom=tex2Dlod(AmbientOcclusion,float4(uv,0,0)).rgb;' in composite
-    and composite.index("float3 lit=saturate(mad(bloom,1-saturate(original.rgb*ao),original.rgb*ao));")  # 0.3.203: lit, so original.rgb stays the scene colour for the particle mask
+    and composite.index("float3 lit=saturate(mad(bloom,1-saturate(bg*ao),bg*ao));")  # 0.3.203: lit, on the background colour where a particle was drawn
     < composite.index('float3 color=lit;') < composite.index('float3 fogPart=min((1-legacyT)*LegacyFogColor.rgb,lit);')
     < composite.index('if(relight){\n        // Thin receivers'))
 checks['smoothRemoval: both Scene reads times the AO alpha; removalScale without the .0001 floor'] = (
@@ -178,7 +178,7 @@ checks['smoothRemoval: both Scene reads times the AO alpha; removalScale without
 wm = json.loads(fp.src('world-shader-build.json').read_text())['shaders']
 # 0.3.185: the removal smoothing (Scene, AO, baseline reads) moved to RemovalSmooth; TemporalLight keeps no s0/s10/s12 read and gains s9.
 checks[f"world manifest: WorldComposite {wm['WorldComposite']['static_instruction_slots']} <= 512 with s10; RemovalSmooth {wm['RemovalSmooth']['static_instruction_slots']} (s10 AO) <= 512; TemporalLight {wm['TemporalLight']['static_instruction_slots']} == 293"] = (
-    wm['WorldComposite']['static_instruction_slots'] <= 512 and wm['WorldComposite']['samplers'] == [0, 1, 8, 9, 10, 11, 12, 13]  # 0.3.202: the SM3 limit (512) replaces the old 500 headroom guard; the rain mask adds s13
+    wm['WorldComposite']['static_instruction_slots'] <= 512 and wm['WorldComposite']['samplers'] == [0, 1, 8, 9, 10, 11, 12, 13, 14]  # 0.3.202: the SM3 limit (512) replaces the old 500 headroom guard; the rain mask adds s13, 0.3.203 the particle background s14
     and wm['RemovalSmooth']['static_instruction_slots'] <= 512 and wm['RemovalSmooth']['samplers'] == [0, 1, 8, 10, 12, 14]
     and wm['TemporalLight']['static_instruction_slots'] == 293 and wm['TemporalLight']['samplers'] == [1, 8, 9, 14, 15])
 

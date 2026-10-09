@@ -14,7 +14,8 @@ sampler2D FogBuffer : register(s9);
 sampler2D WaterMask : register(s11);
 sampler2D BaselineLighting : register(s12);
 sampler2D RegionalFog : register(s13); // ground, day extinction, night extra, layer height
-sampler2D RainMask : register(s13); // 0.3.202 (rain mask): WorldComposite only, rain streak coverage (r) and translucent particle coverage (g), 0 without either
+sampler2D Background : register(s14); // 0.3.203 (particle mask): WorldComposite only, the scene colour before the frame's first particle draw
+sampler2D RainMask : register(s13); // 0.3.202 (rain mask): WorldComposite only, rain streak coverage (r), 1-T of the translucent particles (g), a particle touched the pixel (b); 0 without either
 float4 RegionalFogInfo : register(c31); // world node0 XY, inverse field span, night fraction
 float4 WaterInfo : register(c30);
 float4 RemovalInfo : register(c30); // RemovalSmooth, TemporalLight: y 1 when a lit source is drawn, z 1/(summed source weight), w disc radius in half-res pixels at view distance 1
@@ -944,7 +945,10 @@ float3 horizonHaze(float3 color,float2 uv,float viewZ,bool sky) {
     return lerp(color,haze,amount);
 }
 float4 WorldComposite(float2 uv:TEXCOORD0):COLOR0 {
-    float4 original=tex2Dlod(Scene,float4(uv,0,0));
+    float4 original=tex2D(Scene,uv); // 0.3.203: tex2D, before any flow control (single-level POINT textures): one slot instead of three
+    float4 mask=tex2D(RainMask,uv);
+    // 0.3.203 (particle mask): a translucent particle was drawn here when b >= 1/255 (8 bit); original = T x background + emission, T = 1-g. The relight, AO, haze and fog below work on the background colour (bg).
+    float3 bg=lerp(original.rgb,tex2D(Background,uv).rgb,saturate(mask.b*255));
     float2 centerUV=depthUV(uv);
     float d=normalizedDepth(centerUV);
     float liquid=waterDistance(centerUV,d);float viewZ=liquid>0?liquid:viewDistance(d);
@@ -995,7 +999,7 @@ float4 WorldComposite(float2 uv:TEXCOORD0):COLOR0 {
     // hardware-bilinear half-res value, like the old pass's unfiltered glow.
     ao=relight?(total<.02?fallbackAO:ao/total):1;
     float3 bloom=tex2Dlod(AmbientOcclusion,float4(uv,0,0)).rgb;
-    float3 lit=saturate(mad(bloom,1-saturate(original.rgb*ao),original.rgb*ao)); // 0.3.203: original.rgb stays the scene colour for the particle mask
+    float3 lit=saturate(mad(bloom,1-saturate(bg*ao),bg*ao));
     float3 color=lit;
     // Terrain fog is only an estimate on interior/blended materials. It cannot
     // account for more light than the observed color in any channel.
@@ -1028,11 +1032,10 @@ float4 WorldComposite(float2 uv:TEXCOORD0):COLOR0 {
     if(PassInfo.z<.5){
         float3 unfogged=color;
         // Rain streaks were drawn into the scene before the composite: on mask pixels go back toward the unfogged pixel so they are not hazed.
-        // 0.3.203 (particle mask): translucent particles write no depth, so their pixels carry the background's depth: on mask pixels (g) go back to the
-        // scene colour, before the contact AO, relight, haze and fog, which were all computed from that depth.
-        float2 mask=tex2Dlod(RainMask,float4(uv,0,0)).rg;
+        // 0.3.203 (particle mask): a translucent particle writes no depth, so its pixel carries the background's depth. Everything above ran on the background colour (bg);
+        // the pixel is T x background + emission, so the result is original + T x (F(bg) - bg), F being the relight, AO, haze and fog.
         color=lerp(mad(horizonHaze(color,centerUV,viewZ,d>=.99999&&liquid<=0),fog.a,fog.rgb),unfogged,mask.x);
-        color=lerp(color,original.rgb,mask.y);
+        color=mad(1-mask.y,color-bg,original.rgb); // untouched: mask.y is 0 and bg is original
     }
     if(PassInfo.z==3)color=fog.rgb;
     return float4(max(color,0),original.a);

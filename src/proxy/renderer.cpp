@@ -320,6 +320,10 @@ class Device final : public GuardedMirrorDevice {
     IDirect3DPixelShader9* particlePS[6]={};bool particlePSFailed=false,rainMaskRainDrawn=false;unsigned particleDraws=0,particleSkips=0,rainLateZ=0,rainLateZPrims=0,particleSkipLogs=0,particleSkipLogged[8]={};
     struct ParticleSig{unsigned why=0,vsModel=0;DWORD v[13]={};unsigned count=0;}; /* a sample frame's census row: the draw states of a candidate (v: src, dst, op, alpha test, colour op/args, alpha op/args, stage 1 colour op) */
     ParticleSig particleSigs[12];unsigned particleSigCount=0,particleSigMore=0;bool particleFirstLogged=false;
+    // 0.3.203 (particle mask): particleBg: the scene colour from before the frame's first particle mask draw (one StretchRect, lazily created at the game's target format, released with the mask);
+    // the composite relights that background and adds the particles back (green = 1-T, blue = touched). particleBgTried / particleBgOk are per frame. A frame may bind RT1 for particles at most kParticleRebindCap times.
+    IDirect3DTexture9* particleBg=nullptr;IDirect3DSurface9* particleBgSurface=nullptr;D3DFORMAT particleBgFormat=D3DFMT_UNKNOWN;bool particleBgTried=false,particleBgOk=false,particleBgLogged=false;
+    static constexpr unsigned kParticleRebindCap=24;
     bool failed = false, projectionValid = false, key10 = false, key12=false;
     // 0.3.200 (frame markers): diagnostics only, while northlight-frame-markers.txt exists in the game folder at device creation: two 40x40
     // squares at the left edge whose colour cycles with the frame number. E (upper) is filled right after the world effects, P (lower) right
@@ -415,11 +419,11 @@ private:
         if(!applied||failed)stateBlocks.clear();
         if(!enabled||extensionFault){stateBlocks.clear();if(world)world->releaseStateCache();if(water)water->releaseStateCache();}
         if(world)world->endFrame(!extensionFault);if(water)water->endFrame();if(celestialDiscs)celestialDiscs->endFrame();if(shadowBlobs)shadowBlobs->endFrame();
-        drop(worldDepth);worldDepthDescKnown=false; rainMrtUnbind();terrain = captured = applied = projectionValid = false;rainMaskCleared=rainMaskDrawn=rainMaskFrame=rainMaskOk=rainDepthOk=rainMaskRainDrawn=false; /* 0.3.202 (rain mask MRT): RT1 never outlives a frame */earlyDepth.reset();resetTranslucentCensus(); /* the TRANSLUCENT line is logged before clearFrame */
+        drop(worldDepth);worldDepthDescKnown=false; rainMrtUnbind();terrain = captured = applied = projectionValid = false;rainMaskCleared=rainMaskDrawn=rainMaskFrame=rainMaskOk=rainDepthOk=rainMaskRainDrawn=particleBgTried=particleBgOk=false; /* 0.3.202 (rain mask MRT): RT1 never outlives a frame */earlyDepth.reset();resetTranslucentCensus(); /* the TRANSLUCENT line is logged before clearFrame */
     }
     void releaseResources() {
         rainMrtUnbind();stateBlocks.clear();clearFrame();
-        drop(sceneSurface); drop(aoSurface); drop(aoRawSurface); drop(scene); drop(depthTex); drop(ao); drop(aoRaw);drop(rainMaskMS);drop(rainMaskSurface);drop(rainMask);drop(rainDepth);rainMaskFailed=false; /* 0.3.202 (rain) */
+        drop(sceneSurface); drop(aoSurface); drop(aoRawSurface); drop(scene); drop(depthTex); drop(ao); drop(aoRaw);drop(rainMaskMS);drop(rainMaskSurface);drop(rainMask);drop(rainDepth);drop(particleBgSurface);drop(particleBg);particleBgFormat=D3DFMT_UNKNOWN;rainMaskFailed=false; /* 0.3.202 (rain) */
         drop(aoPS); drop(aoBlurPS); drop(aoContactBloomPS); drop(contactBloomPS); drop(compositePS);drop(rainMrtPS);drop(rainScrubPS);for(auto& ps:particlePS)drop(ps);particlePSFailed=false; width = height = 0;
     }
     bool error(HRESULT hr, const char* stage) {
@@ -432,7 +436,7 @@ private:
         // Resource replacement must not invalidate this frame's retained depth surface.
         drop(sceneSurface); drop(scene);
         if (w!=width || h!=height) {
-            drop(aoSurface); drop(ao); drop(aoRawSurface); drop(aoRaw); drop(depthTex); captured=false;drop(rainMaskMS);drop(rainMaskSurface);drop(rainMask);drop(rainDepth); /* 0.3.202 (rain): the mask follows the effect size */
+            drop(aoSurface); drop(ao); drop(aoRawSurface); drop(aoRaw); drop(depthTex); captured=false;drop(rainMaskMS);drop(rainMaskSurface);drop(rainMask);drop(rainDepth);drop(particleBgSurface);drop(particleBg);particleBgFormat=D3DFMT_UNKNOWN; /* 0.3.202 (rain): the mask follows the effect size */
         }
         width = w; height = h; sceneFormat = format;
         if (!aoPS && error(ext->CreatePixelShader(kAoShader, &aoPS), "AO shader")) return false;
@@ -681,6 +685,7 @@ private:
         if(!fold&&!legacyComposite())return;
         if(world&&debugMode==0){
             traceWorld=0;
+            world->setParticleBackground(rainMaskTex&&particleBgOk?particleBg:nullptr); /* 0.3.203 (particle mask) */
             world->setRainMask(rainMaskTex); /* 0.3.202 (rain): RainMask for this frame's composite only (resolved and scrubbed at the top of renderEffects) */
             if(!world->render(saved.targets[0],depthTex,width,height,sceneFormat,nearZ,farZ,worldMinDepth,worldMaxDepth,worldDebug,gpuProfile.get(),waterMask,fold?scene:nullptr,fold?ao:nullptr)){
                 if(++worldSkippedFrames<=8||(worldSkippedFrames%120==0&&diagnostics()))
@@ -979,14 +984,14 @@ private:
         else{if(SUCCEEDED(ext->GetDepthStencilSurface(&ds)))same=ds==worldDepth;drop(ds);}
         return same;
     }
-    // 0.3.203 (particle mask): a draw into the world depth, in the world's viewport depth range, with a model vertex shader or none (not terrain, UI or water).
+    // 0.3.203 (particle mask): a draw into the world depth, in the world's viewport depth range, with a model vertex shader or none (not terrain, UI, water or skinned).
     bool particleWorldDraw(){
         if(!projectionValid||!sameWorldDepth())return false;
         D3DVIEWPORT9 vp={};DWORD ze=FALSE;
         if(FAILED(ext->GetViewport(&vp))||FAILED(ext->GetRenderState(D3DRS_ZENABLE,&ze)))return false;
         if(!NorthlightWorldDrawDomain::accepts(projectionValid,ze!=FALSE,worldMinDepth,worldMaxDepth,vp.MinZ,vp.MaxZ))return false;
         IDirect3DVertexShader9* v=nullptr;const bool borrowed=ext->peekVertexShader(v);if(!borrowed&&FAILED(ext->GetVertexShader(&v)))v=nullptr;
-        const bool ok=!v||(classifyVs(v).entry&(kTagMask|kWaterTag))==0;
+        bool ok=true;if(v){const VsClass& vc=classifyVs(v);ok=(vc.entry&(kTagMask|kWaterTag))==0&&!vc.skinned;} /* skinned: the translucent-actor path (ghosts, translucent characters) stays out */
         if(!borrowed)drop(v);return ok;
     }
     // 0.3.203 (particle mask): the draw hook's test, before the draw's other work: a pre-effects draw after the terrain that blends and writes no depth (torch and brazier
@@ -1011,8 +1016,27 @@ private:
         for(unsigned i=0;i<particleSigCount;++i){ParticleSig& r=particleSigs[i];if(r.why==sig.why&&r.vsModel==sig.vsModel&&!memcmp(r.v,sig.v,sizeof sig.v)){++r.count;return;}}
         if(particleSigCount<12){sig.count=1;particleSigs[particleSigCount++]=sig;}else ++particleSigMore;
     }
+    // 0.3.203 (particle mask): the scene colour before the frame's first particle mask draw, resolved into particleBg (the MSAA game target is resolved by the StretchRect, like the mask's twin).
+    // One pass break per frame, with RT1 unbound. False (logged once): no particle mask this frame.
+    bool particleBackgroundStart(){
+        particleBgTried=true;particleBgOk=false;
+        IDirect3DSurface9* rt=nullptr;D3DSURFACE_DESC rd={};
+        if(FAILED(ext->GetRenderTarget(0,&rt))||!rt)return false;
+        rt->GetDesc(&rd);
+        HRESULT hr=D3D_OK;
+        if(particleBgSurface&&particleBgFormat!=rd.Format){drop(particleBgSurface);drop(particleBg);}
+        if(!particleBgSurface){
+            hr=ext->CreateTexture(width,height,1,D3DUSAGE_RENDERTARGET,rd.Format,D3DPOOL_DEFAULT,&particleBg,nullptr);
+            if(SUCCEEDED(hr))hr=particleBg->GetSurfaceLevel(0,&particleBgSurface);
+            if(FAILED(hr)){drop(particleBgSurface);drop(particleBg);}else particleBgFormat=rd.Format;
+        }
+        if(SUCCEEDED(hr))hr=ext->StretchRect(rt,nullptr,particleBgSurface,nullptr,D3DTEXF_NONE);
+        drop(rt);
+        if(FAILED(hr)){if(!particleBgLogged){particleBgLogged=true;logf("PARTICLES background snapshot failed (%ux%u format=%u ms=%u) HRESULT=0x%08lx; no particle mask in such frames",width,height,unsigned(rd.Format),unsigned(rd.MultiSampleType),(unsigned long)hr);}return false;}
+        particleBgOk=true;return true;
+    }
     // Everything that makes a rain draw (particle=false) or a translucent particle draw (particle=true) eligible for the mask, else a reason mask (bit 1: target/size/MSAA, 2: caps,
-    // 4: game vertex shader, 8: game pixel shader, 16: stage setup, 32: depth snapshot, 64: resources or RT1, 128: particle blend, 256: particle stage 0 has no texture):
+    // 4: game vertex shader, 8: game pixel shader, 16: stage setup, 32: depth snapshot, 64: resources or RT1, 128: particle blend, 256: particle stage 0 has no texture, 512: no background snapshot, 1024: RT1 rebind cap):
     // the draw is then made as it is. True: RT1 holds the mask target, the mask pixel shader and the MRT states are set (rainMrtEnd undoes them).
     // A particle draw outside the world (terrain, UI, water, another depth or viewport range) is no candidate: false, uncounted.
     bool rainMrtBegin(bool particle=false){
@@ -1075,9 +1099,14 @@ private:
                 maskTarget=rainMaskMS?rainMaskMS:rainMaskSurface;
                 if(!rainMaskCleared&&!rainMaskStart(maskTarget))why|=32;
                 else if(!rainDepthOk)why|=32;
-                else if(!rainMrtBound){
-                    if(FAILED(ext->SetRenderTarget(1,maskTarget)))why|=64;
-                    else{rainMrtBound=true;++rainMrtRuns;}
+                else{
+                    if(particle&&!particleBgTried){rainMrtUnbind();particleBackgroundStart();}
+                    if(particle&&!particleBgOk)why|=512;
+                    else if(!rainMrtBound){
+                        if(particle&&rainMrtRuns>=kParticleRebindCap)why|=1024; /* every bind is a render pass break: past the cap the frame's remaining candidates are drawn as the game does */
+                        else if(FAILED(ext->SetRenderTarget(1,maskTarget)))why|=64;
+                        else{rainMrtBound=true;++rainMrtRuns;}
+                    }
                 }
             }
         }
@@ -1098,7 +1127,7 @@ private:
         if(particle&&!particleFirstLogged){particleFirstLogged=true;logf("PARTICLES first mask draw: variant=%u vsModel=%u blend=%ld/%ld stage0 color=%ld alpha=%ld",variant,vsModel,long(bl[0]),long(bl[1]),long(st[0]),long(st[3]));}
         /* Only RT1's write mask changes: RT0's colour and alpha blend exactly as the game's draw without the mask. Rain writes red, particles green. */
         static const D3DRENDERSTATETYPE types[1]={D3DRS_COLORWRITEENABLE1};
-        const DWORD want[1]={particle?DWORD(D3DCOLORWRITEENABLE_GREEN):DWORD(D3DCOLORWRITEENABLE_RED)};
+        const DWORD want[1]={particle?DWORD(variant<2?D3DCOLORWRITEENABLE_GREEN|D3DCOLORWRITEENABLE_BLUE:D3DCOLORWRITEENABLE_BLUE):DWORD(D3DCOLORWRITEENABLE_RED)}; /* particles: alpha over = green (1-T) + blue (touched), additive = blue only */
         for(int i=0;i<1;++i){rainMrtPrevKnown[i]=SUCCEEDED(ext->GetRenderState(types[i],&rainMrtPrev[i]));ext->SetRenderState(types[i],want[i]);}
         ext->SetPixelShader(particle?particlePS[variant]:rainMrtPS);
         return true;
@@ -1131,7 +1160,7 @@ private:
         if(SUCCEEDED(hr)){
             ext->SetTexture(0,depthTex);ext->SetTexture(1,rainDepth);
             for(DWORD s=0;s<2;++s){ext->SetSamplerState(s,D3DSAMP_MINFILTER,D3DTEXF_POINT);ext->SetSamplerState(s,D3DSAMP_MAGFILTER,D3DTEXF_POINT);ext->SetSamplerState(s,D3DSAMP_MIPFILTER,D3DTEXF_NONE);} /* both depths exact, texel for texel */
-            ext->SetPixelShader(rainScrubPS);ext->SetRenderState(D3DRS_COLORWRITEENABLE,D3DCOLORWRITEENABLE_RED|D3DCOLORWRITEENABLE_GREEN); /* 0.3.203: the rain (red) and the particles (green) */
+            ext->SetPixelShader(rainScrubPS);ext->SetRenderState(D3DRS_COLORWRITEENABLE,D3DCOLORWRITEENABLE_RED|D3DCOLORWRITEENABLE_GREEN|D3DCOLORWRITEENABLE_BLUE); /* 0.3.203: the rain (red) and the particles (green, blue) */
             hr=quad(width,height);
         }
         if(FAILED(hr)){rainMaskResolveHr=hr;return nullptr;}
@@ -1458,7 +1487,7 @@ public:
         const unsigned mistSkips=weatherMistSkips,mistUnknown=weatherMistUnknown,mistOther=weatherMistOtherStage;weatherMistSkips=weatherMistUnknown=weatherMistOtherStage=0;
         const unsigned rainMaskCount=rainMaskDraws,rainMrtRunCount=rainMrtRuns,rainMaskSkipCount=rainMaskSkips;rainMaskDraws=rainMrtRuns=rainMaskSkips=0; /* 0.3.202 (rain mask MRT) */
         const unsigned particleMaskCount=particleDraws,particleSkipCount=particleSkips,lateZ=rainLateZ,lateZPrims=rainLateZPrims;
-        logParticles(sampleFrame);particleDraws=particleSkips=rainLateZ=rainLateZPrims=0; /* 0.3.203 (particle mask) */
+        logParticles(sampleFrame,rainMrtRunCount);particleDraws=particleSkips=rainLateZ=rainLateZPrims=0; /* 0.3.203 (particle mask) */
         if(FAILED(rainMaskResolveHr)&&!rainMaskResolveLogged){rainMaskResolveLogged=true;logf("WEATHER rain mask resolve failed HRESULT=0x%08lx",(unsigned long)rainMaskResolveHr);}
         const bool high=st.blend>=W::kBlendLogHigh,low=st.blend>=W::kBlendLogLow;
         weatherLogClock+=dt;
@@ -1471,14 +1500,14 @@ public:
     // 0.3.203 (particle mask): sample frames (Diagnostics + RenderProfile) with candidates: how many translucent no-depth-write draws got the mask or were skipped, and one census
     // row per distinct draw setup: reason (0 = masked), vertex shader model, blend src/dst/op, alpha test, stage 0 colour op (args) alpha op (args), stage 1 colour op, texcoord index,
     // texture transform, and the draw count. Not-masked rows say which game setups the next shader variant must cover.
-    void logParticles(unsigned sampleFrame){
+    void logParticles(unsigned sampleFrame,unsigned rebinds){
         const bool any=particleDraws||particleSkips||particleSigCount;
         if(sampled()&&any){
             std::string rows;char row[200];
             for(unsigned i=0;i<particleSigCount;++i){const ParticleSig& r=particleSigs[i];
                 snprintf(row,sizeof row," [n=%u why=%u vs=%u blend=%ld/%ld/%ld at=%ld c=%ld(%ld,%ld) a=%ld(%ld,%ld) s1=%ld tc=%ld tt=%ld]",r.count,r.why,r.vsModel,long(r.v[0]),long(r.v[1]),long(r.v[2]),long(r.v[3]),long(r.v[4]),long(r.v[5]),long(r.v[6]),long(r.v[7]),long(r.v[8]),long(r.v[9]),long(r.v[10]),long(r.v[11]),long(r.v[12]));
                 rows+=row;}
-            logf("PARTICLES frame=%u masked=%u skipped=%u sigs=%u more=%u%s",sampleFrame,particleDraws,particleSkips,particleSigCount,particleSigMore,rows.c_str());
+            logf("PARTICLES frame=%u masked=%u skipped=%u rt1Binds=%u cap=%u bg=%d sigs=%u more=%u%s",sampleFrame,particleDraws,particleSkips,rebinds,kParticleRebindCap,int(particleBgOk),particleSigCount,particleSigMore,rows.c_str());
         }
         particleSigCount=particleSigMore=0;
     }
