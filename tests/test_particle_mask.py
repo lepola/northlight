@@ -130,7 +130,7 @@ wf=r[r.index('    void weatherFrame('):r.index('    void logParticles(')]
 checks['WEATHER line carries particleMask, particleSkips, rainLateZ and rainLateZPrims; all zeroed per frame']=(
     'particleMask=%u particleSkips=%u rainLateZ=%u rainLateZPrims=%u' in wf and 'particleMaskCount,particleSkipCount,lateZ,lateZPrims' in wf and 'particleDraws=particleSkips=rainLateZ=rainLateZPrims=0;' in wf)
 lp=r[r.index('void logParticles('):r.index('void logWeatherProbe(')]
-checks['PARTICLES line: sample frames only, rows of the census, reset every frame']=('if(sampled()&&any)' in lp and 'logf("PARTICLES frame=%u masked=%u skipped=%u rt1Binds=%u cap=%u bg=%d sigs=%u more=%u patched=%u psCache=%u/%u patchRejects={%s }%s"' in lp and 'particleSigCount=particleSigMore=0;' in lp)
+checks['PARTICLES line: sample frames only, rows of the census, reset every frame']=('if(sampled()&&any)' in lp and 'logf("PARTICLES frame=%u masked=%u skipped=%u rt1Binds=%u cap=%u bg=%d sigs=%u more=%u patched=%u psCache=%u/%u patchRejects={%s } mod2x=%u/%u/%u%s"' in lp and 'particleSigCount=particleSigMore=0;' in lp)
 checks['census rows are collected on sample frames only']=('if(particle&&sampled())particleCensus(why,vsModel,bl,st);' in bg)
 checks['resources: the particle shaders are dropped with the others, flags per frame reset in clearFrame']=('for(auto& ps:particlePS)drop(ps);particlePatched.clear();particlePSFailed=false;' in r and 'rainDepthOk=rainMaskRainDrawn=particleBgTried=particleBgOk=false;' in r)
 bs=r[r.index('bool particleBackgroundStart(){'):r.index('// Everything that makes a rain draw (particle=false)')]
@@ -157,7 +157,7 @@ checks['begin: the game shader is bound only for the draw: one reference held, r
     'if(patchedPs){particleGamePs=gamePs;gamePs->AddRef();}' in bg and 'if(particleGamePs){ext->SetPixelShader(particleGamePs);particleGamePs->Release();particleGamePs=nullptr;}' in r and 'else ext->SetPixelShader(nullptr);' in r)
 checks['lifetime: variants are forgotten when the game registers a pixel shader at the same address, and cleared with the resources']=(
     'particlePatched.forget(*out);' in r and 'particlePatched.clear();' in r.split('void releaseResources() {')[1].split('bool error(')[0])
-checks['counters: patched draws and rejections are zeroed with the PARTICLES line']=('particlePatchedDraws=0;memset(particlePatchRejects,0,sizeof particlePatchRejects);' in lp and '#include "particle_shader_patch.h"' in r)
+checks['counters: patched draws and rejections are zeroed with the PARTICLES line']=('particlePatchedDraws=mod2xBeforeSnapshot=mod2xAfterSnapshot=mod2xAfterRain=0;memset(particlePatchRejects,0,sizeof particlePatchRejects);' in lp and '#include "particle_shader_patch.h"' in r)
 checks['PARTICLES bg= is the frame\'s snapshot result saved before clearFrame resets it; the WEATHER line says whether the snapshot preceded the first rain mask draw']=(
     'particleBgLast=particleBgTried?int(particleBgOk):-1;drop(worldDepth);' in r and 'sampleFrame,particleDraws,particleSkips,rebinds,kParticleRebindCap,particleBgLast,' in lp and 'rainLateZPrims=%u rainBg=%d' in wf and 'const int rainBgCount=rainBgState;rainBgState=-1;' in wf)
 checks['banner: 0.3.203']=('logf("Northlight renderer 0.3.203;' in r)

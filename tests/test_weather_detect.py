@@ -131,7 +131,7 @@ struct Hook{
     HRESULT quad(UINT,UINT){++quads;quadRec={ext->rt,ext->rt1,ext->ps,ext->rs[D3DRS_COLORWRITEENABLE],0,0,0,0,0,0,0,0,0};quadTex0=ext->tex[0];quadTex1=ext->tex[1];return quadFails?-1:0;}
     static constexpr int kTagMask=3,kWaterTag=4;VsClass vcMock;const VsClass& classifyVs(IDirect3DVertexShader9*){return vcMock;}
     bool projectionValid=false;float worldMinDepth=0.f,worldMaxDepth=1.f;bool sampledFrame=false;bool sampled()const{return sampledFrame;}IDirect3DBaseTexture9* blobOriginal=nullptr;
-    IDirect3DPixelShader9* particlePS[6]={};IDirect3DTexture9* particleBg=nullptr;Surface* particleBgSurface=nullptr;D3DFORMAT particleBgFormat=D3DFMT_UNKNOWN;bool particleBgTried=false,particleBgOk=false,particleBgLogged=false;int particleBgLast=-1,rainBgState=-1;static constexpr unsigned kParticleRebindCap=24;
+    IDirect3DPixelShader9* particlePS[6]={};IDirect3DTexture9* particleBg=nullptr;Surface* particleBgSurface=nullptr;D3DFORMAT particleBgFormat=D3DFMT_UNKNOWN;bool particleBgTried=false,particleBgOk=false,particleBgLogged=false;int particleBgLast=-1,rainBgState=-1;unsigned mod2xBeforeSnapshot=0,mod2xAfterSnapshot=0,mod2xAfterRain=0;static constexpr unsigned kParticleRebindCap=24;
     bool particlePSFailed=false,rainMaskRainDrawn=false;unsigned particleDraws=0,particleSkips=0,rainLateZ=0,rainLateZPrims=0,particleSkipLogs=0,particleSkipLogged[8]={};
     struct ParticleSig{unsigned why=0,vsModel=0;DWORD v[13]={};unsigned count=0;};ParticleSig particleSigs[12];unsigned particleSigCount=0,particleSigMore=0;bool particleFirstLogged=false;std::vector<std::string> logs;template<class F> void extensionWork(const char*,F f){f();}
     void newFrame(){rainMrtUnbind();rainMaskCleared=rainMaskDrawn=rainMaskFrame=rainMaskOk=rainDepthOk=rainMaskRainDrawn=particleBgTried=particleBgOk=false;applied=false;} /* clearFrame's part */
@@ -429,6 +429,14 @@ int main(){
             {Hook h;mkg(h);h.ext->rs[D3DRS_SRCBLEND]=D3DBLEND_DESTCOLOR;h.ext->rs[D3DRS_DESTBLEND]=D3DBLEND_SRCCOLOR;h.draw(10);assert(h.particleSkips==1&&h.particlePatched.size()==0&&h.ext->patchedCreates==0&&h.ext->draws[0].ps==&h.ext->gamePs);} /* an unsupported blend: nothing is patched */
             {Hook h;mkg(h);h.vsMajor[&h.ext->gameVs]=1;h.draw(10);assert(h.particlePatchedDraws==1);h.vsMajor.erase(&h.ext->gameVs);h.draw(10);assert(h.particlePatchedDraws==2);} /* the game's own vertex shader, whatever its model */
             {Hook h;mkg(h);h.ext->borrowOk=false;h.draw(10);assert(h.particlePatchedDraws==1&&h.ext->ps==&h.ext->gamePs&&h.ext->gamePs.refs==1);} /* the shader found through GetPixelShader instead of the mirror's identity */
+        }
+        {   // the order of mod2x (DESTCOLOR/SRCCOLOR) draws against the background snapshot and the first rain mask draw: counted whether or not they are masked
+            Hook h;mk(h);h.ext->rs[D3DRS_SRCBLEND]=D3DBLEND_DESTCOLOR;h.ext->rs[D3DRS_DESTBLEND]=D3DBLEND_SRCCOLOR;
+            h.draw(10);h.draw(10);assert(h.mod2xBeforeSnapshot==2&&h.mod2xAfterSnapshot==0&&h.mod2xAfterRain==0&&h.particleBgTried==false); /* nothing masked yet: no snapshot */
+            h.ext->rs[D3DRS_SRCBLEND]=D3DBLEND_SRCALPHA;h.ext->rs[D3DRS_DESTBLEND]=D3DBLEND_INVSRCALPHA;h.draw(10);assert(h.particleBgTried&&h.mod2xBeforeSnapshot==2); /* the snapshot */
+            h.ext->rs[D3DRS_SRCBLEND]=D3DBLEND_DESTCOLOR;h.ext->rs[D3DRS_DESTBLEND]=D3DBLEND_SRCCOLOR;h.draw(10);assert(h.mod2xBeforeSnapshot==2&&h.mod2xAfterSnapshot==1&&h.mod2xAfterRain==0);
+            h.rainMaskRainDrawn=true;h.draw(10);assert(h.mod2xAfterSnapshot==2&&h.mod2xAfterRain==1);
+            h.ext->rs[D3DRS_SRCBLEND]=D3DBLEND_ONE;h.ext->rs[D3DRS_DESTBLEND]=D3DBLEND_ONE;h.draw(10);assert(h.mod2xAfterSnapshot==2&&h.mod2xBeforeSnapshot==2); /* other blends are not counted */
         }
         {   // not a particle: nothing is read beyond the first test, nothing set, nothing counted
             auto quiet=[&](Hook& h){h.draw(10);assert(h.drawn==1&&h.particleDraws==0&&h.particleSkips==0&&h.ext->sets.empty()&&h.ext->colorFills==0&&h.ext->rtSets==0&&h.snapshots==0&&h.logs.empty()&&h.ext->draws[0].rt1==nullptr&&h.ext->draws[0].ps==nullptr);};
