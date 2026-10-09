@@ -79,12 +79,13 @@ for _ in range(20000):
     a, b = [x * .08 for x in legacy_bloom(taps)], fold_bloom(taps)
     rel = max(rel, max(abs(x - y) / max(abs(x), 1e-6) for x, y in zip(a, b)))
 checks[f'bloom equals the Composite formula incl. .125 and Options.x (max rel {rel:.1e} <= 1e-6)'] = rel <= 1e-6
-entry = effects[effects.index('float4 AOContactBloom(float2 uv : TEXCOORD0) : COLOR0'):effects.index('float3 NeighbourNormal(')]
+entry = effects[effects.index('float3 ContactBloomRgb(float2 uv)'):effects.index('float3 NeighbourNormal(')]  # 0.3.201: the bloom is a helper shared with ContactBloom
 checks['AOContactBloom: five Scene taps (centre x4, +-4 px per axis), .125*Options.x, AO alpha of AOImpl(uv,false)'] = (
     'float4 b = ImageAndClip.xyxy * float4(4, 0, 0, 4);' in entry
     and 'float3 bloom = BrightTap(tex2D(Scene, uv).rgb, 0) * 4.0;' in entry
     and all(f'bloom = BrightTap(tex2D(Scene, uv {s} b.{c}).rgb, bloom);' in entry for s in '+-' for c in ('xy', 'zw'))
-    and 'return float4(bloom * (0.125 * Options.x), AOImpl(uv, false).a);' in entry
+    and 'return bloom * (0.125 * Options.x);' in entry
+    and 'float4 AOContactBloom(float2 uv : TEXCOORD0) : COLOR0' in entry and 'return float4(ContactBloomRgb(uv), AOImpl(uv, false).a);' in entry
     and 'saturate(mad(dot(c, float3(0.2126, 0.7152, 0.0722)), 1.0 / 0.28, -0.72 / 0.28))' in effects
     and 'AOContact(' not in effects and 'float3 Bright(float3 c)' in effects)
 asm = fp.src('AOContactBloom.bin.asm').read_text().splitlines()

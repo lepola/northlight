@@ -71,7 +71,7 @@ checks['hlsl: FogTemporal still passes s9 through at weight 0 (the clouds\' copy
 
 # settings and docs
 checks['settings: GpuBudgetMs the last key (0..20, presets 4/3/2, default 4)']=(
-    '{"GpuBudgetMs",&Settings::gpuBudgetMs,0,20,{4,3,2}},\n    {"StreamFramesAhead",' in q and 'unsigned gpuBudgetMs=4;' in q and 'char origin[43]=' in q)
+    '{"GpuBudgetMs",&Settings::gpuBudgetMs,0,20,{4,3,2}},\n    {"StreamFramesAhead",' in q and 'unsigned gpuBudgetMs=4;' in q and 'char origin[44]=' in q)
 ini=(fp.REPO/'renderer'/'windows-package'/'northlight-quality.ini').read_text()
 readme=(fp.REPO/'README.md').read_text();txt=(fp.REPO/'renderer'/'windows-package'/'README.txt').read_text()
 checks['docs: ini template, README.md and README.txt']=(';GpuBudgetMs=4' in ini and 'GpuBudgetMs' in readme and re.search(r'^  GpuBudgetMs +4 / 3 / 2 ',txt,re.M) is not None)

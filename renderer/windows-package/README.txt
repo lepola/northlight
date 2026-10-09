@@ -163,6 +163,7 @@ Individual settings (Quality / Balanced / Performance):
   StreamFramesAhead     2 / 2 / 2      with CommandStream=1, how many frames the game may record before the renderer thread has drawn them (1..3; 1 = as in 0.3.199; more smooths out spikes, the picture can lag by that many frames and the stream may use up to 16 MiB more memory; read at game start)
   ReplayJobs            1 / 1 / 1      the renderer thread hands the lamp choice, the fog clouds and sun-ray fog, the terrain under the sun and moon shadows and part of the character shadow culling to 1 to 4 helper threads; the picture is exactly the same (0 = all on the renderer thread as before 0.3.200, for comparisons)
   StreamFrameSkip       1 / 1 / 1      with CommandStream=1, 1 = when the renderer thread is two whole frames behind, it skips drawing the older one (its uploads and settings still apply; frames that draw into textures, use occlusion tests or copy the picture are always drawn; at least every third frame is shown) so the game does not wait; 0 = every frame is drawn; read at game start
+  ContactAO             1 / 1 / 1      1 = the darkening in creases and corners (contact shading) is computed, 0 = off: it and its smoothing pass are skipped, which saves about 0.5 ms of graphics card time per frame; the bloom glow stays (0..1; read once at start)
 When both NearShadowInterval and FarShadowInterval are at least 2, frames that
 draw neither shadow also skip copying the character geometry (about 1–1.5 ms
 of CPU per skipped frame). Light and normal frames alternate: the average FPS

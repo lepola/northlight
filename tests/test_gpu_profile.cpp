@@ -17,12 +17,12 @@ static void findLog(const char* s){bool found=false;for(auto& l:logs)if(l.find(s
 int main(){
     IDirect3DDevice9 d;
     {NorthlightGpuProfile p(&d);assert(!p.beginFrame(1)&&d.creates==0);assert(p.sampledFrame()==0);assert(p.beginFrame(120));assert(p.sampledFrame()==120);char label[]="AO";p.mark(label);label[0]='X';p.mark("worldComposite");p.endFrame();assert(p.sampledFrame()==0);unsigned before=d.reads;p.poll();assert(d.reads-before==1&&logs.empty());d.ready=true;p.poll();findLog("AO=1.000ms");findLog("worldComposite=1.000ms");findLog("total=3.000ms");assert(!p.beginFrame(120));
-     assert(p.beginFrame(240));for(unsigned i=0;i<24;++i)p.mark("stage");p.endFrame();p.poll();findLog("marks_truncated=1"); /* 0.3.149: MaxMarks=20 */
+     assert(p.beginFrame(240));for(unsigned i=0;i<28;++i)p.mark("stage");p.endFrame();p.poll();findLog("marks_truncated=1"); /* 0.3.201: MaxMarks=24 */
      assert(p.beginFrame(360));d.disjoint=true;p.endFrame();p.poll();findLog("discarded: disjoint");d.disjoint=false;
      assert(p.beginFrame(480));d.frequency=0;p.endFrame();p.poll();findLog("zero timestamp frequency");d.frequency=1000000;
      p.reset();assert(d.live==0);d.ready=false;
      for(unsigned i=1;i<=6;++i){assert(p.beginFrame(i*120));p.mark("pass");p.endFrame();}
-     assert(!p.beginFrame(840));before=d.reads;p.poll();assert(d.reads-before==6);assert(d.live==6*(20+2+2)); /* 6 slots x (MaxMarks+2 stamps + frequency + disjoint) */d.ready=true;p.poll();assert(p.beginFrame(960));p.mark("recovered");p.endFrame();p.poll();findLog("recovered=1.000ms");
+     assert(!p.beginFrame(840));before=d.reads;p.poll();assert(d.reads-before==6);assert(d.live==6*(24+2+2)); /* 6 slots x (MaxMarks+2 stamps + frequency + disjoint) */d.ready=true;p.poll();assert(p.beginFrame(960));p.mark("recovered");p.endFrame();p.poll();findLog("recovered=1.000ms");
      p.reset();assert(d.live==0);d.failCreate=true;assert(!p.beginFrame(1080));findLog("query creation");auto count=d.creates;assert(!p.beginFrame(1200)&&d.creates==count);p.mark("ignored");p.endFrame();p.poll();assert(d.live==0);
      d.failCreate=false;p.reset();assert(p.beginFrame(120));d.failRead=true;p.endFrame();p.poll();assert(d.live==0);findLog("disjoint read");
      d.failRead=false;p.reset();d.failIssue=true;assert(!p.beginFrame(120));assert(d.live==0);findLog("disjoint begin");d.failIssue=false;

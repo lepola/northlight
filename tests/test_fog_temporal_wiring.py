@@ -38,7 +38,7 @@ checks['HLSL: sky reprojects the direction only, clamp over the neighbourhood, l
     and 'if(FogTemporalInfo.y<=0)return current;' in body and 'max(.25,w*.03)' in body)
 
 checks['setting: no key (always on since the game tests), FogCloudDensity the last fog key']=(   # 0.3.200 (pipeline): StreamFramesAhead follows it
-    'FogTemporal' not in q and 'fogTemporal' not in q and '{"FogCloudDensity",&Settings::fogCloudDensity,0,200,{100,100,100}},\n    {"GpuBudgetMs",&Settings::gpuBudgetMs,0,20,{4,3,2}},\n    {"StreamFramesAhead",' in q and 'char origin[43]=' in q)
+    'FogTemporal' not in q and 'fogTemporal' not in q and '{"FogCloudDensity",&Settings::fogCloudDensity,0,200,{100,100,100}},\n    {"GpuBudgetMs",&Settings::gpuBudgetMs,0,20,{4,3,2}},\n    {"StreamFramesAhead",' in q and 'char origin[44]=' in q)
 ini=(fp.REPO/'renderer'/'windows-package'/'northlight-quality.ini').read_text()
 checks['docs: no key in the ini or the readmes']=('FogTemporal' not in ini and 'FogTemporal' not in (fp.REPO/'README.md').read_text() and 'FogTemporal' not in (fp.REPO/'renderer'/'windows-package'/'README.txt').read_text())
 
@@ -52,8 +52,8 @@ checks['host: history weight 0 unless fogHistoryValid&&useHistory; weight consta
 checks['host: reads raw fog s9 + fogHistory s14 + previous depth temporalDepth[temporalIndex] s15, writes fogBlurred; s14/s15 put back']=(
     'SetRenderTarget(0,fogBlurredSurface)' in pas and 'SetTexture(9,fog)' in pas and 'SetTexture(14,fogHistory)' in pas and 'SetTexture(15,temporalDepth[temporalIndex])' in pas
     and 'SetTexture(14,nullptr)' in pas and 'SetTexture(15,nullptr)' in pas and 'D3DSAMP_MINFILTER,D3DTEXF_POINT' in pas)
-checks['host: FogTemporal profile mark after the pass (worst case < MaxMarks 20)']=(pas.index('quad(w/2,h/2),"fog temporal pass"')<pas.index('profile->mark("FogTemporal")') and
-    len(set(re.findall(r'profile->mark\("(\w+)"\)',w)))+4+2<=20)
+checks['host: FogTemporal profile mark after the pass (worst case <= MaxMarks 24)']=(pas.index('quad(w/2,h/2),"fog temporal pass"')<pas.index('profile->mark("FogTemporal")') and
+    len(set(re.findall(r'profile->mark\("(\w+)"\)',w)))+6+2<=24)
 bl=g[g.index('// Separable depth-aware blur'):g.index('// c34 belongs')]
 checks['host: blur unchanged when the pass did not run (fog -> fogBlurred -> fog), resolved: fogHistory -> fog -> fogBlurred']=(
     'SetRenderTarget(0,fogResolved?fogSurface:fogBlurredSurface);d->SetTexture(9,fogResolved?fogHistory:fog)' in bl

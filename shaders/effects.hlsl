@@ -108,8 +108,8 @@ float4 AOImpl(float2 uv, bool colorBounce)
     // Rotate the fixed kernel per pixel (interleaved gradient noise, stable
     // between frames). An unrotated kernel copies every compact occluder
     // (hands, shoulders) onto the ground at each tap offset as faint ghost
-    // shadows; rotation turns those copies into fine noise the composite's
-    // depth/normal filter averages away.
+    // shadows; rotation turns those copies into fine noise AOBlur
+    // (depth/normal filter) averages away.
     // 0.3.198 (stripes): IGN is built for integer pixel steps, and this pass is half resolution: uv*size is
     // the snapped FULL-res texel (2i+1.5, a step of 2 per AO texel), which advanced the phase by only .11 (x)
     // and .02 (hash y) per texel along a row but by the golden ratio .62 per row: the rotation, and so the
@@ -174,17 +174,28 @@ float3 BrightTap(float3 c, float3 sum)
     return mad(c, saturate(mad(dot(c, float3(0.2126, 0.7152, 0.0722)), 1.0 / 0.28, -0.72 / 0.28)), sum);
 }
 
-float4 AOContactBloom(float2 uv : TEXCOORD0) : COLOR0
+// Composite's bloom taps: the centre (x4) and 4 px along each axis. Scene has one level,
+// so tex2D (texld, before any flow control) reads what tex2Dlod does, in fewer slots.
+float3 ContactBloomRgb(float2 uv)
 {
-    // Composite's bloom taps: the centre (x4) and 4 px along each axis. Scene has one level,
-    // so tex2D (texld, before any flow control) reads what tex2Dlod does, in fewer slots.
     float4 b = ImageAndClip.xyxy * float4(4, 0, 0, 4);
     float3 bloom = BrightTap(tex2D(Scene, uv).rgb, 0) * 4.0;
     bloom = BrightTap(tex2D(Scene, uv + b.xy).rgb, bloom);
     bloom = BrightTap(tex2D(Scene, uv - b.xy).rgb, bloom);
     bloom = BrightTap(tex2D(Scene, uv + b.zw).rgb, bloom);
     bloom = BrightTap(tex2D(Scene, uv - b.zw).rgb, bloom);
-    return float4(bloom * (0.125 * Options.x), AOImpl(uv, false).a);
+    return bloom * (0.125 * Options.x);
+}
+
+float4 AOContactBloom(float2 uv : TEXCOORD0) : COLOR0
+{
+    return float4(ContactBloomRgb(uv), AOImpl(uv, false).a);
+}
+
+// 0.3.201 (task 18) ContactAO=0 with a ready world: the same bloom with AO 1 and no depth work; the AO pass and AOBlur do not run.
+float4 ContactBloom(float2 uv : TEXCOORD0) : COLOR0
+{
+    return float4(ContactBloomRgb(uv), 1);
 }
 
 float3 NeighbourNormal(float2 uv, float3 p)
@@ -194,6 +205,70 @@ float3 NeighbourNormal(float2 uv, float3 p)
     float3 right = Position(rightUV, ReadDepth(rightUV));
     float3 down = Position(downUV, ReadDepth(downUV));
     return SafeNormal(cross(right - p, down - p));
+}
+
+// 0.3.201 (task 18): the IGN-rotated 8-tap AO left a regular dark diamond/fishnet lattice in occluded
+// creases (character skin) because nothing filtered it: WorldComposite only bilinear-upsampled it. This
+// half-resolution pass averages a symmetric 5x5 AO-texel neighbourhood (.5,1,1,1,.5 per axis, covering
+// IGN's period) on the centre's plane and normal, so silhouettes stay sharp. Same bindings as the AO pass
+// (s2 = the RAW AO texture, POINT); bloom rgb passes through untouched, sky and water return the raw texel.
+// Cost: (1) unoccluded early-out: AO is saturate(1 - ...), so an unoccluded texel is exactly 1.0 (and
+// A16B16G16R16F stores 1.0 exactly); when all 25 tap AO values are >= 0.9995 the weighted average is 1 and the
+// raw texel is returned before any depth work (open ground, sky, most of the screen). The tap at offset 0 is the
+// raw texel itself. (2) the silhouette guard is one extra depth read per tap instead of NeighbourNormal's two:
+// the tap's tangent along the screen axis the centre normal leans towards (x if |n.x| > |n.y|) must lie in the
+// centre's plane, weight *= saturate(1 - 2 * sin^2) with sin = dot(r - q, n) / |r - q|. At a grazing limb the
+// plane distance alone lets far-wall taps through (their points sit near the limb's tangent plane), but the
+// wall's own tangent along the limb normal's axis is steeply off that plane, so its weight goes to zero.
+float3 PositionInv(float2 uv, float d, float2 invFocal)
+{
+    float z = LinearDepth(d);
+    return float3((uv.x * 2.0 - 1.0) * z * invFocal.x, (1.0 - uv.y * 2.0) * z * invFocal.y, z);
+}
+
+float4 AOBlur(float2 uv : TEXCOORD0) : COLOR0
+{
+    float2 tapStep = 2.0 * ImageAndClip.xy;
+    float4 raw = tex2Dlod(Ambient, float4(uv, 0, 0));
+    float minAO = raw.a;
+    [loop] for (int k = 0; k < 25; ++k)
+    {
+        float krow = floor((k + 0.5) * 0.2);
+        float2 ko = float2(k - krow * 5.0 - 2.0, krow - 2.0);
+        minAO = min(minAO, tex2Dlod(Ambient, float4(uv + ko * tapStep, 0, 0)).a);
+    }
+    [branch] if (minAO >= 0.9995) return raw;
+    float2 size = 1.0 / ImageAndClip.xy;
+    float2 cuv = DepthTexelUV(uv, size);
+    float d = ReadDepth(cuv);
+    if (d >= SKY_DEPTH || IsWater(cuv, d)) return raw;
+    float3 p = Position(cuv, d);
+    float3 n = SurfaceNormal(cuv, p);
+    float2 tangentStep = abs(n.x) > abs(n.y) ? float2(ImageAndClip.x, 0) : float2(0, ImageAndClip.y);
+    float2 invFocal = 1.0 / Lighting.xy;
+    float planeScale = 2.0 / max(0.025, min(Options.y * 0.1, p.z * 0.002));
+    float sumAO = 0.0;
+    float sumWeight = 0.0;
+    [loop] for (int i = 0; i < 25; ++i)
+    {
+        float row = floor((i + 0.5) * 0.2);
+        float2 o = float2(i - row * 5.0 - 2.0, row - 2.0);
+        float2 tapUV = uv + o * tapStep;
+        float2 quv = DepthTexelUV(tapUV, size);
+        float qd = ReadDepth(quv);
+        float3 q = PositionInv(quv, qd, invFocal);
+        float2 a = abs(o);
+        float weight = (a.x > 1.5 ? 0.5 : 1.0) * (a.y > 1.5 ? 0.5 : 1.0);
+        weight *= exp2(-abs(dot(q - p, n)) * planeScale);
+        float3 tangent = PositionInv(quv + tangentStep, ReadDepth(quv + tangentStep), invFocal) - q;
+        float tangentOff = dot(tangent, n);
+        weight *= saturate(1.0 - 2.0 * tangentOff * tangentOff / dot(tangent, tangent));
+        // Sky and water taps carry no usable AO.
+        weight *= qd < SKY_DEPTH && !IsWater(quv, qd) ? 1.0 : 0.0;
+        sumAO += tex2Dlod(Ambient, float4(tapUV, 0, 0)).a * weight;
+        sumWeight += weight;
+    }
+    return float4(raw.rgb, sumWeight > 1e-5 ? sumAO / sumWeight : raw.a);
 }
 
 float4 Composite(float2 uv : TEXCOORD0) : COLOR0

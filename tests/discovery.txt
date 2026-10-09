@@ -4,6 +4,7 @@ test_actor_shadow_radius_wiring.py
 test_actor_shadow_selection.py
 test_actor_shadows_wiring.py
 test_actor_texture_worker.py
+test_ao_blur.py
 test_ao_fold.py
 test_ao_rotation_stripes.py
 test_ao_texel_snap.py
@@ -43,9 +44,9 @@ test_entrypoints_isolated.py
 test_fast_memcmp.py
 test_fog_clouds.py
 test_fog_clouds_wiring.py
-test_fog_temporal_wiring.py
 test_fog_locale.py
 test_fog_motion.py
+test_fog_temporal_wiring.py
 test_game_snapshot.py
 test_geometry_handoff.py
 test_gi_quality.py
