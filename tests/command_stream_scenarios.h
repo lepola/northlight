@@ -1013,6 +1013,7 @@ struct Game {
         tex.clear();vb.clear();ib.clear();surf.clear();vs.clear();ps.clear();decl.clear();queries.clear();blocks.clear();
     }
 };
+// 0.3.204 (task 21): the fuzz's buffers are 64 bytes and not DYNAMIC, below the 4 KiB zero-copy threshold, so it never records a zero-copy unlock (and never makes an illegal NOOVERWRITE overlap matter); zero-copy has its own scenarios.
 static void equivalence(int steps,std::uint64_t seed,unsigned framesAhead=1){
     // mode 0: the game on the Device directly; 1: through the stream, every call replayed on the Device; 2: through the stream with the DIRECT
     // methods replayed on the extension device with raw pointers. All three must leave identical Target traces and game-visible results.
@@ -1323,11 +1324,14 @@ static std::vector<ZcExpect> traceBigUnlocks(bool& uniform){   // the replayed u
 struct ZcRig {
     StreamDevice::Options opt;std::unique_ptr<Rig> rig;IDirect3DDevice9* d=nullptr;StreamCore* core=nullptr;Queue* q=nullptr;Counters* s=nullptr;
     IDirect3DVertexBuffer9* vb=nullptr;UINT L;BufModel m;std::vector<ZcExpect> exp;
+    bool large=false;
+    // the bytes the buffer's slices (and retired ones) hold in the cap that counts them: the large allowance, or the regular buffer-shadow cap
+    std::size_t held()const{if(large)return q->largeBytes();const auto b=s->shadowBytes.load();return b>0?std::size_t(b):0;}
     explicit ZcRig(UINT len=15800000,unsigned framesAhead=3):L(len),m(len){
         gTrace.clear();gStatLines.clear();opt.readBackLock=&dxvk3ReadBack;opt.framesAhead=framesAhead;
         opt.log=[](const char* l){gStatLines.push_back(l);};opt.diagnostics=[]{return true;};
-        rig.reset(new Rig(true,opt));d=rig->dev;core=&rig->core();q=&core->q;s=&q->stats;
-        CHECK(d->CreateVertexBuffer(L,D3::kUsageDynamic,0,(D3DPOOL)0,&vb,nullptr)==D3D_OK&&shadowOn(vb)&&q->largeBytes()==L);
+        rig.reset(new Rig(true,opt));d=rig->dev;core=&rig->core();q=&core->q;s=&q->stats;large=L>q->shadowCap()/4;
+        CHECK(d->CreateVertexBuffer(L,D3::kUsageDynamic,0,(D3DPOOL)0,&vb,nullptr)==D3D_OK&&shadowOn(vb)&&held()==L&&buf().large==large);
     }
     BufferState& buf(){return static_cast<StreamVertexBuffer*>(ProxyBase::of(vb))->buf;}
     void hold(){gKnobs.hold.store(true);d->BeginScene();}   // the replay thread stops at the BeginScene: everything recorded after it stays unreplayed
@@ -1351,21 +1355,21 @@ struct ZcRig {
     }
     void releaseLater(std::thread& t,unsigned ms=80){t=std::thread([ms]{std::this_thread::sleep_for(std::chrono::milliseconds(ms));gKnobs.hold.store(false);});}
 };
-static void zeroCopyRenames(){
-    ZcRig z;auto& s=*z.s;
+static void zeroCopyRenames(UINT len=15800000){
+    ZcRig z(len);auto& s=*z.s;
     // (a) two frames while the replay is held: zero-copy (nothing but references in the queue), the second DISCARD renames to a freshly allocated spare
     z.hold();z.frame(0);z.present();
     CHECK(get(s.zeroCopyUnlocks)==7&&get(s.zeroCopyBytes)==7u*8192&&get(s.renames)==0&&get(s.renameAllocs)==0);
     z.frame(1);z.present();
     CHECK(get(s.zeroCopyUnlocks)==14&&get(s.renames)==1&&get(s.renameAllocs)==1&&get(s.renameWaits)==0);
-    CHECK(s.spareBytes.load()==z.L&&z.q->largeBytes()==2u*z.L&&z.buf().sliceSeq>z.buf().spareSeq&&z.buf().spareSeq>0);
+    CHECK(s.spareBytes.load()==z.L&&z.held()==2u*z.L&&z.buf().sliceSeq>z.buf().spareSeq&&z.buf().spareSeq>0);
     CHECK(get(s.lockRecordedBytes)==14u*8192+2u*64&&get(s.zeroCopyBytes)==14u*8192&&s.blockBytes.load()==0&&get(s.bytes)<(256u<<10));   // 14 x 8 KiB went through the queue as references: only the two small inline copies were copied
     // the third DISCARD finds both slices busy and no third may be allocated: it waits for the older one's readers (frame 0), exactly
     std::thread rel;z.releaseLater(rel);
     z.frame(2);rel.join();
     CHECK(get(s.renameWaits)==1&&get(s.renameWaitNs)>=30000000ull&&get(s.renames)==2&&get(s.renameAllocs)==1&&get(s.syncNs)>=get(s.renameWaitNs));
     z.present();for(unsigned f=3;f<8;++f){z.frame(f);z.present();}
-    z.verify();CHECK(get(s.renameAllocs)==1&&z.q->largeBytes()==2u*z.L);
+    z.verify();CHECK(get(s.renameAllocs)==1&&z.held()==2u*z.L);
     // (b) a flags-0 write lock waits for the readers (a concurrent write into bytes an unreplayed unlock still reads would corrupt it); a READONLY lock does not
     z.hold();z.w(0,8192,0x61,D3::kLockDiscard);z.w(8192,8192,0x62,D3::kLockNoOverwrite);
     {const auto rw=get(s.renameWaits);void* p=nullptr;CHECK(z.vb->Lock(0,16,&p,D3::kLockReadOnly)==D3D_OK&&static_cast<unsigned char*>(p)[0]==0x61&&z.vb->Unlock()==D3D_OK&&get(s.renameWaits)==rw);}
@@ -1374,27 +1378,28 @@ static void zeroCopyRenames(){
     // the "zerocopy" line: next to the CSTREAM one (the main line stays under its cap)
     for(int i=0;i<610;++i)z.present();z.rig->sync();
     {bool zl=false;for(auto& l:gStatLines)if(l.rfind("CSTREAM zerocopy[per frame]: unlocks=",0)==0&&l.find(" MB=")!=std::string::npos&&l.find(" renames=")!=std::string::npos&&l.find(" allocs=")!=std::string::npos&&l.find(" renameWaits=")!=std::string::npos&&l.find(" renameWaitMs=")!=std::string::npos&&l.find(" writeWaits=")!=std::string::npos&&l.find(" writeWaitMs=")!=std::string::npos&&l.find(" retiredMB=")!=std::string::npos&&l.find(" spareMB=")!=std::string::npos)zl=true;CHECK(zl);}
-    z.vb->Release();z.rig->sync();CHECK(z.q->largeBytes()==0&&s.spareBytes.load()==0&&s.retiredBytes.load()==0);
+    z.vb->Release();z.rig->sync();CHECK(z.held()==0&&s.spareBytes.load()==0&&s.retiredBytes.load()==0);
     z.rig->finish();checkClean();
 }
 // Slices dropped (pressure, LRU takeover, GPU write, Release) while unlocks that read them are unreplayed: the storage is retired, not freed (the ASan build catches a read of freed memory), and freed once the replay has passed.
-static void zeroCopyRetire(){
+static void zeroCopyRetire(UINT len=15800000){
     {   // memory pressure at a Present: the idle large shadow (both slices) goes; no spare is allocated under pressure (the DISCARD waits instead)
-        ZcRig z;auto& s=*z.s;z.hold();z.frame(0);z.present();z.frame(1);z.present();
-        CHECK(z.q->largeBytes()==2u*z.L);
+        ZcRig z(len);auto& s=*z.s;z.hold();z.frame(0);z.present();z.frame(1);z.present();
+        CHECK(z.held()==2u*z.L);
+        if(!z.large)z.core->frameNo+=240;   // regular-cap shadows go under pressure only when idle for 120 frames (240: keeps the frame numbering's residues)
         z.core->memoryPressure.store(true);z.present();   // (framesAhead 3: the third Present does not wait yet)
-        CHECK(z.q->pressure()&&!shadowOn(z.vb)&&s.retiredBytes.load()==std::int64_t(2u*z.L)&&z.q->largeBytes()==2u*z.L&&s.spareBytes.load()==0);   // pending readers: retired, still counted
+        CHECK(z.q->pressure()&&!shadowOn(z.vb)&&s.retiredBytes.load()==std::int64_t(2u*z.L)&&z.held()==2u*z.L&&s.spareBytes.load()==0);   // pending readers: retired, still counted
         gKnobs.hold.store(false);z.verify();
-        z.present();z.rig->sync();CHECK(s.retiredBytes.load()==0&&z.q->largeBytes()==0);   // freed at the next Present after the replay passed
+        z.present();z.rig->sync();CHECK(s.retiredBytes.load()==0&&z.held()==0);   // freed at the next Present after the replay passed
         z.core->memoryPressure.store(false);z.present();z.rig->sync();
         // no spare under pressure: with the shadow back (DISCARD makes one) a DISCARD against pending readers waits for them instead of allocating
         z.w(0,8192,0x41,D3::kLockDiscard);CHECK(shadowOn(z.vb));
         z.hold();z.w(8192,8192,0x42,D3::kLockNoOverwrite);z.core->memoryPressure.store(true);z.q->setPressure(true);
         {const auto alloc=get(s.renameAllocs),rw=get(s.renameWaits);std::thread rel;z.releaseLater(rel);z.w(0,8192,0x43,D3::kLockDiscard);rel.join();CHECK(get(s.renameAllocs)==alloc&&get(s.renameWaits)==rw+1);}
         z.core->memoryPressure.store(false);z.q->setPressure(false);z.verify();
-        z.vb->Release();z.rig->sync();z.present();z.rig->sync();CHECK(z.q->largeBytes()==0&&s.retiredBytes.load()==0);z.rig->finish();checkClean();   // (the pressure drop at the unlock retired the slice: freed at the Present)
+        z.vb->Release();z.rig->sync();z.present();z.rig->sync();CHECK(z.held()==0&&s.retiredBytes.load()==0);z.rig->finish();checkClean();   // (the pressure drop at the unlock retired the slice: freed at the Present)
     }
-    {   // LRU takeover: another large buffer takes the allowance from an idle holder (idle = frameNo moved on) whose last unlocks are unreplayed
+    if(len>=15000000){   // LRU takeover: another large buffer takes the allowance from an idle holder (idle = frameNo moved on) whose last unlocks are unreplayed
         ZcRig z(20000000);auto& s=*z.s;IDirect3DVertexBuffer9* B=nullptr;BufModel mb(20000000);
         CHECK(z.d->CreateVertexBuffer(20000000,D3::kUsageDynamic,0,(D3DPOOL)0,&B,nullptr)==D3D_OK&&!shadowOn(B));
         mb.write(B,0,64,0x20);z.rig->sync();   // B has been written once (its next write lock is a re-lock)
@@ -1404,32 +1409,32 @@ static void zeroCopyRetire(){
          CHECK(get(s.relockRefused)==rf+1&&shadowOn(z.vb)&&!shadowOn(B)&&s.retiredBytes.load()==0&&get(s.largeShadowDrops)==0);}
         z.rig->sync();
         {const auto rb=get(s.dynShadowReadbacks);mb.write(B,128,64,0x22);   // the replay has passed: B takes the allowance, the holder's two slices are freed at once
-         CHECK(shadowOn(B)&&!shadowOn(z.vb)&&get(s.dynShadowReadbacks)==rb+1&&z.q->largeBytes()==20000000u&&s.retiredBytes.load()==0&&s.spareBytes.load()==0);}
+         CHECK(shadowOn(B)&&!shadowOn(z.vb)&&get(s.dynShadowReadbacks)==rb+1&&z.held()==20000000u&&s.retiredBytes.load()==0&&s.spareBytes.load()==0);}
         z.verify();CHECK(mb.same(targetBytes(B)));
-        B->Release();z.vb->Release();z.rig->sync();CHECK(z.q->largeBytes()==0);z.rig->finish();checkClean();
+        B->Release();z.vb->Release();z.rig->sync();CHECK(z.held()==0);z.rig->finish();checkClean();
     }
     {   // ProcessVertices into the buffer (the shadow is stale for good) and Release, both with unreplayed unlocks: retired / destroyed after the unlocks ran
-        ZcRig z;auto& s=*z.s;z.hold();z.frame(0);z.present();z.frame(1);z.present();
-        CHECK(z.d->ProcessVertices(0,0,1,z.vb,nullptr,0)==D3D_OK&&!shadowOn(z.vb)&&s.retiredBytes.load()==std::int64_t(2u*z.L)&&s.spareBytes.load()==0&&z.q->largeBytes()==2u*z.L);
+        ZcRig z(len);auto& s=*z.s;z.hold();z.frame(0);z.present();z.frame(1);z.present();
+        CHECK(z.d->ProcessVertices(0,0,1,z.vb,nullptr,0)==D3D_OK&&!shadowOn(z.vb)&&s.retiredBytes.load()==std::int64_t(2u*z.L)&&s.spareBytes.load()==0&&z.held()==2u*z.L);
         z.w(0,8192,0x55,D3::kLockDiscard);   // (a DISCARD without a shadow, GPU-written for good: staged, still exact and in order)
         CHECK(!shadowOn(z.vb));
-        gKnobs.hold.store(false);z.verify();z.present();z.rig->sync();CHECK(s.retiredBytes.load()==0&&z.q->largeBytes()==0);
+        gKnobs.hold.store(false);z.verify();z.present();z.rig->sync();CHECK(s.retiredBytes.load()==0&&z.held()==0);
         z.vb->Release();z.rig->sync();z.rig->finish();checkClean();
     }
     {   // Release with unreplayed unlocks (both slices live): the proxy is destroyed on the replay thread after every command that reads them
-        ZcRig z;auto& s=*z.s;z.hold();z.frame(0);z.present();z.frame(1);z.present();
+        ZcRig z(len);auto& s=*z.s;z.hold();z.frame(0);z.present();z.frame(1);z.present();
         z.vb->Release();   // the game lets go (the Destroy is queued behind the unlocks)
-        CHECK(z.q->largeBytes()==2u*z.L);
+        CHECK(z.held()==2u*z.L);
         gKnobs.hold.store(false);z.rig->sync();
-        CHECK(z.q->largeBytes()==0&&s.spareBytes.load()==0&&s.retiredBytes.load()==0);
+        CHECK(z.held()==0&&s.spareBytes.load()==0&&s.retiredBytes.load()==0);
         bool uni=false;const auto got=traceBigUnlocks(uni);CHECK(uni&&got.size()==z.exp.size());for(std::size_t i=0;i<got.size()&&i<z.exp.size();++i)CHECK(got[i].off==z.exp[i].off&&got[i].fill==z.exp[i].fill);
         z.rig->finish();checkClean();
     }
 }
 // A lock from inside a pumped wait (a message handler the pump dispatches) must never wait: against a busy slice it takes the fallback (the shadow retires with its readers, a DISCARD stages, a plain write is refused).
 static ZcRig* gZc;static int gZcMode,gZcCalls;static HRESULT gZcHr;static void* gZcP;
-static void zeroCopyPumpedLock(int mode){
-    ZcRig z;gZc=&z;gZcMode=mode;gZcCalls=0;gZcHr=12345;auto& s=*z.s;
+static void zeroCopyPumpedLock(int mode,UINT len=15800000){
+    ZcRig z(len);gZc=&z;gZcMode=mode;gZcCalls=0;gZcHr=12345;auto& s=*z.s;
     z.hold();z.frame(0);z.present();z.frame(1);z.present();   // both slices busy: neither a spare nor a wait is possible inside the pump
     const auto rw=get(s.renameWaits),ww=get(s.writeWaits);
     pumpHook=[]{if(gZcCalls++)return;
@@ -1439,14 +1444,43 @@ static void zeroCopyPumpedLock(int mode){
     DWORD np=0;CHECK(z.d->ValidateDevice(&np)==5);pumpHook=nullptr;
     CHECK(get(s.renameWaits)==rw&&get(s.writeWaits)==ww&&get(s.nestedSyncs)>=1&&!shadowOn(z.vb)&&gZcCalls>=1);
     CHECK(gZcHr==D3D_OK);   // DISCARD: staged; plain write: a staged Block holding the slice's current bytes (exact), its unlock queues the Block
-    z.verify();z.present();z.rig->sync();CHECK(s.retiredBytes.load()==0&&z.q->largeBytes()==0);
+    z.verify();z.present();z.rig->sync();CHECK(s.retiredBytes.load()==0&&z.held()==0);
     z.vb->Release();z.rig->sync();z.rig->finish();checkClean();
+}
+// A regular-cap holder whose slices unreplayed zero-copy unlocks still read is no eviction victim (dropping it would free nothing): the requester is refused and the holder keeps its shadow.
+static void zeroCopyRegularEviction(){
+    ZcRig z(2u<<20);auto& s=*z.s;std::vector<IDirect3DVertexBuffer9*> fill;
+    for(int i=0;i<6;++i){IDirect3DVertexBuffer9* b=nullptr;CHECK(z.d->CreateVertexBuffer(2u<<20,D3::kUsageDynamic,0,(D3DPOOL)0,&b,nullptr)==D3D_OK&&shadowOn(b));fill.push_back(b);}
+    z.hold();z.frame(0);z.present();z.frame(1);z.present();   // the holder is the LRU head (the fillers are newer), with a spare: the cap is full (7 x 2 MiB + the spare = 16 MiB)
+    for(auto* b:fill){void* p=nullptr;CHECK(b->Lock(0,16,&p,0)==D3D_OK&&b->Unlock()==D3D_OK);}
+    CHECK(z.held()==std::size_t(8)*(2u<<20));
+    IDirect3DVertexBuffer9* extra=nullptr;const auto ev=get(s.dynShadowEvicted);
+    CHECK(z.d->CreateVertexBuffer(2u<<20,D3::kUsageDynamic,0,(D3DPOOL)0,&extra,nullptr)==D3D_OK&&!shadowOn(extra));
+    CHECK(shadowOn(z.vb)&&get(s.dynShadowEvicted)==ev&&s.retiredBytes.load()==0);   // refused, the busy holder untouched
+    gKnobs.hold.store(false);z.verify();
+    extra->Release();for(auto* b:fill)b->Release();z.vb->Release();z.rig->sync();CHECK(s.shadowBytes.load()==0);z.rig->finish();checkClean();
+}
+// Why a DISCARD/NOOVERWRITE write unlock of a DYNAMIC buffer was not zero-copy: counted by reason.
+static void zeroCopyReasons(){
+    ZcRig z(2u<<20,1);auto& s=*z.s;IDirect3DVertexBuffer9 *man=nullptr,*big=nullptr;void* p=nullptr;
+    z.w(0,8192,0x11,D3::kLockDiscard);CHECK(get(s.zeroCopyUnlocks)==1);
+    z.w(0,64,0x12,D3::kLockNoOverwrite);CHECK(get(s.zcSkipSmall)==1);   // below 4 KiB: the inline copy
+    CHECK(z.d->CreateVertexBuffer(65536,D3::kUsageDynamic,0,(D3DPOOL)1,&man,nullptr)==D3D_OK);   // MANAGED: the flags mean nothing there
+    CHECK(man->Lock(0,8192,&p,D3::kLockNoOverwrite)==D3D_OK&&man->Unlock()==D3D_OK&&get(s.zcSkipPool)==1);
+    CHECK(z.d->CreateVertexBuffer(26000000,D3::kUsageDynamic,0,(D3DPOOL)0,&big,nullptr)==D3D_OK&&!shadowOn(big));   // above the large allowance: no shadow
+    CHECK(big->Lock(0,8192,&p,D3::kLockDiscard)==D3D_OK&&big->Unlock()==D3D_OK&&get(s.zcSkipNoShadow)==1&&get(s.zcSkipOther)==0&&get(s.zeroCopyUnlocks)==1);
+    z.rig->sync();
+    for(int i=0;i<610;++i)z.present();z.rig->sync();
+    {bool ok=false;for(auto& l:gStatLines)if(l.rfind("CSTREAM zerocopy[per frame]:",0)==0&&l.find("notZeroCopy[pool=1 noShadow=1 small=1 other=0]")!=std::string::npos)ok=true;CHECK(ok);}
+    man->Release();big->Release();z.vb->Release();z.rig->sync();z.rig->finish();checkClean();
 }
 static void streamTests(bool threadsOnly){
     layoutIsolation();replayTimingAccounting();diagnosticsOffSkipsAudit();idlePollWakes();
     lifetimeAndIdentity();stateKnownUnknown();locksPreserveBytes();staticBufferShadows();dynamicBufferShadows();largeBufferAllowance();twoLargeBuffers();adaptiveShadowCap();shadowCap();queriesAndSyncCensus();resetAndShutdown();directReplayRaw();redundantFiltering();renderTargetResetsViewport();textureShadows();statsLine();childrenOutliveTheDevice();queryProbeAndDeadQuery();initFailureFallback();cursorHandling();nestedSyncInPump();testCooperativeLevelLocal(1);testCooperativeLevelLocal(3);upDrawsAndBackpressure();snapshotTriggers();snapshotPoolNotExhausted();memoryPressureRelease();impossibleBlockIsRefusedAtOnce();smallStagedLocksUseScratch();
     framesAheadPacing();textureShadowSpares();frameSkipping();frameSkipReleasesPresentWait();   // 0.3.200 (frame skip)
     zeroCopyRenames();zeroCopyRetire();zeroCopyPumpedLock(0);zeroCopyPumpedLock(1);
+    for(UINT len:{512u<<10,2u<<20}){zeroCopyRenames(len);zeroCopyRetire(len);zeroCopyPumpedLock(0,len);zeroCopyPumpedLock(1,len);}   // 0.3.204 (task 21): the same for DYNAMIC buffers in the regular shadow cap
+    zeroCopyRegularEviction();zeroCopyReasons();
     equivalence(20000,12345);equivalence(20000,987654321);equivalence(20000,24680,2);equivalence(20000,13579,3);   // 0.3.200 (pipeline): 2 and 3 frames ahead
     (void)threadsOnly;
 }

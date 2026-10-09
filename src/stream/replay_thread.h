@@ -467,11 +467,12 @@ private:
     void logZeroCopy(){
         const Counters& s=core.q.stats;const std::uint64_t un=get(s.zeroCopyUnlocks),by=get(s.zeroCopyBytes),rn=get(s.renames),rw=get(s.renameWaits),rwn=get(s.renameWaitNs),ww=get(s.writeWaits),wwn=get(s.writeWaitNs),ra=get(s.renameAllocs),gf=get(s.gameFrames)-lastZcFrames_;lastZcFrames_+=gf;
         const double inv=gf?1.0/double(gf):0.0;
-        if(log&&(un|rn|rw|ww)){
+        if(log&&(un|rn|rw|ww|get(s.zcSkipPool)|get(s.zcSkipNoShadow)|get(s.zcSkipSmall)|get(s.zcSkipOther))){
             char buf[kLine];
-            std::snprintf(buf,sizeof buf,"CSTREAM zerocopy[per frame]: unlocks=%.1f MB=%.2f renames=%.2f allocs=%.2f renameWaits=%.2f renameWaitMs=%.3f writeWaits=%.2f writeWaitMs=%.3f retiredMB=%.1f spareMB=%.1f",
+            std::snprintf(buf,sizeof buf,"CSTREAM zerocopy[per frame]: unlocks=%.1f MB=%.2f renames=%.2f allocs=%.2f renameWaits=%.2f renameWaitMs=%.3f writeWaits=%.2f writeWaitMs=%.3f retiredMB=%.1f spareMB=%.1f notZeroCopy[pool=%llu noShadow=%llu small=%llu other=%llu]",
                 double(un-lastZcUnlocks_)*inv,double(by-lastZcBytes_)/1048576.0*inv,double(rn-lastRenames_)*inv,double(ra-lastRenameAllocs_)*inv,double(rw-lastRenameWaits_)*inv,double(rwn-lastRenameWaitNs_)/1e6*inv,double(ww-lastWriteWaits_)*inv,double(wwn-lastWriteWaitNs_)/1e6*inv,
-                double(std::max<std::int64_t>(0,s.retiredBytes.load()))/1048576.0,double(std::max<std::int64_t>(0,s.spareBytes.load()))/1048576.0);
+                double(std::max<std::int64_t>(0,s.retiredBytes.load()))/1048576.0,double(std::max<std::int64_t>(0,s.spareBytes.load()))/1048576.0,
+                (unsigned long long)get(s.zcSkipPool),(unsigned long long)get(s.zcSkipNoShadow),(unsigned long long)get(s.zcSkipSmall),(unsigned long long)get(s.zcSkipOther));
             log(buf);
         }
         lastZcUnlocks_=un;lastZcBytes_=by;lastRenames_=rn;lastRenameWaits_=rw;lastRenameWaitNs_=rwn;lastWriteWaits_=ww;lastWriteWaitNs_=wwn;lastRenameAllocs_=ra;

@@ -49,6 +49,7 @@ struct Counters {
     // 0.3.204 (task 21): zero-copy buffer unlocks (see unlockBuffer): unlocks recorded as a reference into the large buffer's slice (no copy into the queue) and their bytes, DISCARD renames to the spare slice,
     // spare slices allocated for them, and the waits (count, ns) for a slice the replay thread still reads (a busy spare at a rename, or a non-DISCARD/NOOVERWRITE write lock). Game thread.
     Counter zeroCopyUnlocks{0},zeroCopyBytes{0},renames{0},renameAllocs{0},renameWaits{0},renameWaitNs{0},writeWaits{0},writeWaitNs{0};   // rename*: DISCARD renames; write*: waits of the other write locks (flags 0) for a slice's readers
+    Counter zcSkipPool{0},zcSkipNoShadow{0},zcSkipSmall{0},zcSkipOther{0};   // DISCARD/NOOVERWRITE write unlocks of DYNAMIC buffers that did NOT go zero-copy, by reason (not the default pool / no shadow slice / below 4 KiB / other)
     // The game thread's own time per frame (Present to Present, minus its sync and backpressure waits), in ns, and its frames.
     Counter gameNs{0},gameWaitNs{0},gameFrames{0};
     // 0.3.204 (task 21, Diagnostics only): where the game thread's own time goes, ns (zero while Diagnostics are off). lockNs: buffer/image Lock+Unlock work (shadow memset/memcpy, readbacks),
