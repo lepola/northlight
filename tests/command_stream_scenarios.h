@@ -1326,7 +1326,7 @@ struct ZcRig {
     IDirect3DVertexBuffer9* vb=nullptr;UINT L;BufModel m;std::vector<ZcExpect> exp;
     bool large=false;
     // the bytes the buffer's slices (and retired ones) hold in the cap that counts them: the large allowance, or the regular buffer-shadow cap
-    std::size_t held()const{if(large)return q->largeBytes();const auto b=s->shadowBytes.load();return b>0?std::size_t(b):0;}
+    std::size_t held()const{const auto b=large?s->largeShadowBytes.load():s->shadowBytes.load();return (b>0?std::size_t(b):0)+std::size_t(s->ringBytes.load())+std::size_t(s->retiredBytes.load());}   // 0.3.204: the shadows plus the ring and retired slices (accounted apart from the caps)
     explicit ZcRig(UINT len=15800000,unsigned framesAhead=3):L(len),m(len){
         gTrace.clear();gStatLines.clear();opt.readBackLock=&dxvk3ReadBack;opt.framesAhead=framesAhead;
         opt.log=[](const char* l){gStatLines.push_back(l);};opt.diagnostics=[]{return true;};
@@ -1349,6 +1349,8 @@ struct ZcRig {
         if(bump)++core->frameNo;
     }
     void present(){d->Present(nullptr,nullptr,nullptr,nullptr);}
+    void presentToTrim(){do present();while(core->frameNo%16);}   // idle trimming scans every 16th frame
+
     // After sync: the Target holds what the game wrote, and every unlock it replayed carried the bytes the game wrote at that unlock
     void verify(){
         rig->sync();CHECK(m.same(targetBytes(vb)));
@@ -1357,7 +1359,7 @@ struct ZcRig {
     }
     void releaseLater(std::thread& t,unsigned ms=80){t=std::thread([ms]{std::this_thread::sleep_for(std::chrono::milliseconds(ms));gKnobs.hold.store(false);});}
 };
-static void zeroCopyRenames(UINT len=15800000){
+static void zeroCopyRenames(UINT len=10000000){   // (10 MB: three ring slices fit the 36 MiB ring budget of the large allowance)
     ZcRig z(len,2);auto& s=*z.s;   // StreamFramesAhead=2: a buffer owns up to 4 slices (the current one and a ring of 3)
     // (a) the replay is held (no Present: it would wait): zero-copy (nothing but references in the queue); every DISCARD finds a pending reader and renames to a new ring slice while the ring can grow
     z.hold();z.frame(0,true);
@@ -1376,7 +1378,7 @@ static void zeroCopyRenames(UINT len=15800000){
     z.verify();CHECK(get(s.renameAllocs)==3&&z.held()==4u*z.L);
     // idle trimming: the ring's slices free for kLargeIdleFrames frames go at a Present; the current slice stays
     z.present();z.rig->sync();CHECK(s.ringSlices.load()==3);   // (not idle yet)
-    z.core->frameNo+=240;z.present();z.rig->sync();   // (240: keeps the frame numbering's residues)
+    z.core->frameNo+=240;z.presentToTrim();z.rig->sync();   // (240: keeps the frame numbering's residues)
     CHECK(s.ringSlices.load()==0&&s.ringBytes.load()==0&&z.held()==z.L&&shadowOn(z.vb));
     z.w(0,8192,0x5C,D3::kLockDiscard);z.verify();   // (and the buffer keeps working: no pending reader, no rename needed)
     // (b) a flags-0 write lock waits for the readers (a concurrent write into bytes an unreplayed unlock still reads would corrupt it); a READONLY lock does not
@@ -1390,13 +1392,13 @@ static void zeroCopyRenames(UINT len=15800000){
     z.vb->Release();z.rig->sync();CHECK(z.held()==0&&s.ringBytes.load()==0&&s.ringSlices.load()==0&&s.retiredBytes.load()==0);
     z.rig->finish();checkClean();
 }
-// The ring stops growing where the budget stops it: a 20 MB buffer fits the allowance 3 times (twice the allowance, 72 MiB), so its 4th DISCARD cycle waits although the ring could hold more.
+// The ring stops growing where the budget stops it: a 15 MB buffer's ring budget (36 MiB, apart from the shadows) holds 2 slices, so its 4th DISCARD cycle waits although the ring could hold more.
 static void zeroCopyRingBudget(){
-    ZcRig z(20000000,2);auto& s=*z.s;
+    ZcRig z(15000000,2);auto& s=*z.s;
     z.hold();z.frame(0,true);z.frame(1,true);z.frame(2,true);
-    CHECK(get(s.renameAllocs)==2&&get(s.renames)==2&&get(s.renameWaits)==0&&s.ringSlices.load()==2&&z.held()==60000000u);
+    CHECK(get(s.renameAllocs)==2&&get(s.renames)==2&&get(s.renameWaits)==0&&s.ringSlices.load()==2&&z.held()==45000000u);
     std::thread rel;z.releaseLater(rel);z.frame(3,true);rel.join();   // no third ring slice fits: the oldest busy one is waited for
-    CHECK(get(s.waitBudget)==1&&get(s.waitMax)==0&&get(s.renameAllocs)==2&&get(s.renames)==3&&get(s.renameWaits)==1&&s.ringSlices.load()==2&&z.held()==60000000u);
+    CHECK(get(s.waitBudget)==1&&get(s.waitMax)==0&&get(s.renameAllocs)==2&&get(s.renames)==3&&get(s.renameWaits)==1&&s.ringSlices.load()==2&&z.held()==45000000u);
     z.present();z.verify();
     z.vb->Release();z.rig->sync();z.present();z.rig->sync();CHECK(z.held()==0&&s.ringSlices.load()==0&&s.retiredBytes.load()==0);z.rig->finish();checkClean();
 }
@@ -1413,7 +1415,7 @@ static void zeroCopyAdaptiveRing(){
     CHECK(get(s.renameWaits)==1&&get(s.waitMax)==1&&get(s.renameAllocs)==11&&s.ringSlices.load()==11);
     z.verify();
     // idle trimming returns the ring's memory once the burst is over
-    z.core->frameNo+=240;z.present();z.rig->sync();CHECK(s.ringSlices.load()==0&&z.held()==z.L);   // (idle trimming)
+    z.core->frameNo+=240;z.presentToTrim();z.rig->sync();CHECK(s.ringSlices.load()==0&&z.held()==z.L);   // (idle trimming)
     z.vb->Release();z.rig->sync();z.present();z.rig->sync();CHECK(z.held()==0);z.rig->finish();checkClean();
 }
 // Slices dropped (pressure, LRU takeover, GPU write, Release) while unlocks that read them are unreplayed: the storage is retired, not freed (the ASan build catches a read of freed memory), and freed once the replay has passed.
@@ -1505,10 +1507,10 @@ static void zeroCopyPressureMidStream(){
 // A regular-cap holder whose slices unreplayed zero-copy unlocks still read is no eviction victim (dropping it would free nothing): the requester is refused and the holder keeps its shadow.
 static void zeroCopyRegularEviction(){
     ZcRig z(2u<<20);auto& s=*z.s;std::vector<IDirect3DVertexBuffer9*> fill;
-    for(int i=0;i<6;++i){IDirect3DVertexBuffer9* b=nullptr;CHECK(z.d->CreateVertexBuffer(2u<<20,D3::kUsageDynamic,0,(D3DPOOL)0,&b,nullptr)==D3D_OK&&shadowOn(b));fill.push_back(b);}
-    z.hold();z.frame(0);z.present();z.frame(1);z.present();   // the holder is the LRU head (the fillers are newer), with a spare: the cap is full (7 x 2 MiB + the spare = 16 MiB)
+    for(int i=0;i<7;++i){IDirect3DVertexBuffer9* b=nullptr;CHECK(z.d->CreateVertexBuffer(2u<<20,D3::kUsageDynamic,0,(D3DPOOL)0,&b,nullptr)==D3D_OK&&shadowOn(b));fill.push_back(b);}
+    z.hold();z.frame(0);z.present();z.frame(1);z.present();   // the holder is the LRU head (the fillers are newer), with a ring slice (apart from the cap): the cap is full of 8 x 2 MiB shadows
     for(auto* b:fill){void* p=nullptr;CHECK(b->Lock(0,16,&p,0)==D3D_OK&&b->Unlock()==D3D_OK);}
-    CHECK(z.held()==std::size_t(8)*(2u<<20));
+    CHECK(z.held()==std::size_t(9)*(2u<<20));
     IDirect3DVertexBuffer9* extra=nullptr;const auto ev=get(s.dynShadowEvicted);
     CHECK(z.d->CreateVertexBuffer(2u<<20,D3::kUsageDynamic,0,(D3DPOOL)0,&extra,nullptr)==D3D_OK&&!shadowOn(extra));
     CHECK(shadowOn(z.vb)&&get(s.dynShadowEvicted)==ev&&s.retiredBytes.load()==0);   // refused, the busy holder untouched
@@ -1589,13 +1591,46 @@ static void floatConstantBanks(){
     {const float c[8]={1,2,3,4,5,6,7,8};const auto b0=q.recordedSeq();d->SetVertexShaderConstantF(255,c,2);d->SetVertexShaderConstantF(255,c,2);CHECK(q.recordedSeq()==b0+2);float g[4];CHECK(d->GetVertexShaderConstantF(255,g,1)==D3D_OK&&g[0]==1&&g[3]==4);}
     rig.sync();rig.finish();checkClean();
 }
+// 0.3.204 (task 21): ring slices are accounted apart from the shadows: with both large buffers of a client (15.8 MB + 18 MB) DISCARDing in one frame while the replay is held, each gets a ring slice (33.8 MB, inside the 36 MiB ring
+// budget) and both keep their shadows (largeAdmit does not see the ring) and zero-copy.
+static void zeroCopyTwoLargeRings(){
+    gTrace.clear();StreamDevice::Options opt;opt.readBackLock=&dxvk3ReadBack;opt.framesAhead=3;
+    Rig rig(true,opt);auto& q=rig.core().q;auto& s=q.stats;IDirect3DDevice9* d=rig.dev;
+    const UINT L1=15800000,L2=18000000;IDirect3DVertexBuffer9 *A=nullptr,*B=nullptr;
+    CHECK(d->CreateVertexBuffer(L1,D3::kUsageDynamic,0,(D3DPOOL)0,&A,nullptr)==D3D_OK&&d->CreateVertexBuffer(L2,D3::kUsageDynamic,0,(D3DPOOL)0,&B,nullptr)==D3D_OK&&shadowOn(A)&&shadowOn(B));
+    BufModel ma(L1),mb(L2);gKnobs.hold.store(true);d->BeginScene();
+    for(int k=0;k<2;++k){ma.write(A,0,8192,(unsigned char)(0x11+k),D3::kLockDiscard);mb.write(B,0,8192,(unsigned char)(0x21+k),D3::kLockDiscard);}
+    CHECK(shadowOn(A)&&shadowOn(B)&&q.largeBytes()==std::size_t(L1)+L2&&s.ringBytes.load()==std::int64_t(L1)+L2&&get(s.zeroCopyUnlocks)==4&&get(s.renameAllocs)==2&&get(s.renames)==2&&get(s.renameWaits)==0);
+    CHECK(q.largeAdmit(1));   // the ring is not part of the allowance: (this tiny request fits the 36 MiB minus the two shadows)
+    gKnobs.hold.store(false);rig.sync();CHECK(ma.same(targetBytes(A))&&mb.same(targetBytes(B)));
+    A->Release();B->Release();rig.sync();frames(d,1);rig.sync();CHECK(q.largeBytes()==0&&s.ringBytes.load()==0&&s.retiredBytes.load()==0);
+    rig.finish();checkClean();
+}
+// A pumped wait inside a DISCARD lock (the slices all busy) dispatches a nested call: a nested Lock of the same buffer fails as a double lock, a nested ProcessVertices drops its shadow and ring during the wait; the outer
+// lock must not touch the dropped ring (ASan) and takes the unshadowed path, bytes exact.
+static ZcRig* gNest;static HRESULT gNestHr;static int gNestCalls;
+static void zeroCopyNestedDuringWait(){
+    ZcRig z(512u<<10,1);gNest=&z;gNestCalls=0;gNestHr=0;auto& s=*z.s;
+    z.hold();z.frame(0,true);z.frame(1,true);z.frame(2,true);   // framesAhead 1: three slices, all busy, the ring at its allowed size
+    pumpHook=[]{if(gNestCalls++)return;
+        void* p=nullptr;gNestHr=gNest->vb->Lock(0,16,&p,D3::kLockDiscard);   // the buffer is mid-lock: a double lock
+        gNest->d->ProcessVertices(0,0,1,gNest->vb,nullptr,0);   // GPU write: the shadow (and its ring, retired with the readers) goes
+        gKnobs.hold.store(false);};
+    void* p=nullptr;const auto rw=get(s.renameWaits);
+    z.core->frameNo+=1;   // (a new frame: one DISCARD, so the ring may not grow)
+    CHECK(z.vb->Lock(0,8192,&p,D3::kLockDiscard)==D3D_OK&&gNestCalls>=1);pumpHook=nullptr;
+    CHECK(gNestHr==D3DERR_INVALIDCALL&&get(s.renameWaits)==rw+1&&!shadowOn(z.vb)&&p);
+    std::memset(p,0x5D,8192);std::memset(z.m.bytes.data(),0x5D,8192);z.exp.push_back({0,0x5D});CHECK(z.vb->Unlock()==D3D_OK);   // (staged: the buffer has no shadow now)
+    z.verify();z.present();z.rig->sync();CHECK(s.retiredBytes.load()==0&&s.ringSlices.load()==0);
+    z.vb->Release();z.rig->sync();z.rig->finish();checkClean();
+}
 static void streamTests(bool threadsOnly){
     layoutIsolation();replayTimingAccounting();diagnosticsOffSkipsAudit();idlePollWakes();
     lifetimeAndIdentity();stateKnownUnknown();locksPreserveBytes();staticBufferShadows();dynamicBufferShadows();largeBufferAllowance();twoLargeBuffers();adaptiveShadowCap();shadowCap();queriesAndSyncCensus();resetAndShutdown();directReplayRaw();redundantFiltering();renderTargetResetsViewport();textureShadows();statsLine();childrenOutliveTheDevice();queryProbeAndDeadQuery();initFailureFallback();cursorHandling();nestedSyncInPump();testCooperativeLevelLocal(1);testCooperativeLevelLocal(3);upDrawsAndBackpressure();snapshotTriggers();snapshotPoolNotExhausted();memoryPressureRelease();impossibleBlockIsRefusedAtOnce();smallStagedLocksUseScratch();
     framesAheadPacing();textureShadowSpares();frameSkipping();frameSkipReleasesPresentWait();   // 0.3.200 (frame skip)
     zeroCopyRenames();zeroCopyRingBudget();zeroCopyAdaptiveRing();zeroCopyRetire();zeroCopyPumpedLock(0);zeroCopyPumpedLock(1);
     for(UINT len:{512u<<10,2u<<20}){zeroCopyRenames(len);zeroCopyRetire(len);zeroCopyPumpedLock(0,len);zeroCopyPumpedLock(1,len);}   // 0.3.204 (task 21): the same for DYNAMIC buffers in the regular shadow cap
-    zeroCopyRegularEviction();zeroCopyReasons();zeroCopyPressureMidStream();bindLifetime();floatConstantBanks();
+    zeroCopyRegularEviction();zeroCopyReasons();zeroCopyPressureMidStream();zeroCopyTwoLargeRings();zeroCopyNestedDuringWait();bindLifetime();floatConstantBanks();
     equivalence(20000,12345);equivalence(20000,987654321);equivalence(20000,24680,2);equivalence(20000,13579,3);   // 0.3.200 (pipeline): 2 and 3 frames ahead
     (void)threadsOnly;
 }

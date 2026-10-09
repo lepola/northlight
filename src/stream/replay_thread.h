@@ -193,7 +193,7 @@ public:
     // pooled), buffer shadows, texture shadows, snapshots.
     struct Memory {std::size_t queue,bufferShadows,textureShadows,snapshots;std::size_t total()const{return queue+bufferShadows+textureShadows+snapshots;}};
     Memory memory()const{
-        const auto& s=core.q.stats;const auto bs=s.shadowBytes.load(std::memory_order_relaxed)+s.largeShadowBytes.load(std::memory_order_relaxed),ts=s.texShadowBytes.load(std::memory_order_relaxed);
+        const auto& s=core.q.stats;const auto bs=s.shadowBytes.load(std::memory_order_relaxed)+s.largeShadowBytes.load(std::memory_order_relaxed)+s.ringBytes.load(std::memory_order_relaxed)+s.retiredBytes.load(std::memory_order_relaxed),ts=s.texShadowBytes.load(std::memory_order_relaxed);
         return {core.q.reservedBytes(),bs>0?std::size_t(bs):0,ts>0?std::size_t(ts):0,snapshots.reservedBytes()};
     }
     // The background workers (GI, geometry builder, static shadow streamer) run BELOW_NORMAL; the replay thread is the critical path and
@@ -364,6 +364,7 @@ private:
         case Cmd::Device_DrawPrimitive:case Cmd::Device_DrawIndexedPrimitive:case Cmd::DrawPrimitiveUP:case Cmd::DrawIndexedPrimitiveUP:
         case Cmd::Device_DrawRectPatch:case Cmd::Device_DrawTriPatch:case Cmd::Device_Clear:own(core.q.stats.skippedCommands);return true;
         case Cmd::Present:case Cmd::SwapPresent:{
+            core.coopState.store(core.target->TestCooperativeLevel());   // 0.3.204: a skipped Present refreshes the cooperative level too (as present() does), before the ring entry, so a loss is not delayed further
             {const std::uint64_t seq=core.q.replayedSeq()+1;auto& e=core.presentRing[core.framesReplayed.load(std::memory_order_relaxed)%StreamCore::kRing];e.hr.store(D3D_OK);e.seq.store(seq);}
             own(core.q.stats.skippedFrames);
             if(get(core.q.stats.skippedFrames)==1&&log){char b[200];std::snprintf(b,sizeof b,"CSTREAM frame skip: first skipped frame=%llu (the replay was two frames behind; draws and Present dropped, state and resources applied)",(unsigned long long)core.framesReplayed.load());log(b);}

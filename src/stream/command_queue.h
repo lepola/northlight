@@ -35,7 +35,9 @@ constexpr std::size_t ChunkBytes=std::size_t(1)<<20;
 constexpr std::size_t MaxInlinePayload=ChunkBytes/4;   // larger payloads travel in a Block
 // 0.3.192 (CS): the stream's own memory shares a 32-bit address space with the game and the world renderer, which stalled for lack of a
 // contiguous block while the stream held ~100 MiB. Real sessions peak at ~12 MiB of queue; every cap is now 16 MiB (queue, texture shadows, buffer shadows; worst case ~64 MiB) plus the large allowance (36 MiB since 0.3.204, see below: worst case ~100 MiB
-// game-side) plus the replay-side copies' own 16+16 MiB, see replay_copies.h; ~20-30 MiB typically) and the idle pools are kept small (kPoolMaxChunks, kMaxPooledBlockBytes, PoolTuner). 0.3.200 (pipeline): the queue may take 32 MiB with StreamFramesAhead >= 2 (budgetForFramesAhead below): worst case +16 MiB.
+// game-side) plus the replay-side copies' own 16+16 MiB, see replay_copies.h; ~20-30 MiB typically). 0.3.204 (task 21): the zero-copy slice rings add a budget of their own, independent of the adaptive caps: regular rings <= ShadowBudgetBytes (16 MiB) and large rings
+// <= LargeShadowBudgetBytes (36 MiB), live plus retired, and slices retired while the replay thread still reads them (transient, at most the shadows dropped meanwhile). Worst case game-side buffers: 32 (adaptive regular max) + 36 (large) + 16 + 36 (rings) = 120 MiB, + texture
+// shadows 16 + queue 32 + replay copies 32 = ~200 MiB; typical sessions use a small part (rings only grow while a buffer DISCARDs with the replay behind, and are freed after 60 idle frames) and the idle pools are kept small (kPoolMaxChunks, kMaxPooledBlockBytes, PoolTuner). 0.3.200 (pipeline): the queue may take 32 MiB with StreamFramesAhead >= 2 (budgetForFramesAhead below): worst case +16 MiB.
 constexpr std::size_t BudgetBytes=std::size_t(16)<<20;
 // 0.3.200 (pipeline): StreamFramesAhead (1..kMaxFramesAhead) frames may be in flight; the queue budget grows by BudgetBytes per extra frame up to
 // kMaxBudgetBytes (32 MiB: the address-space rule above; still halved under memory pressure). 1 = BudgetBytes, the 0.3.199 queue.

@@ -72,7 +72,8 @@ struct Counters {
     alignas(kLine) Counter chunksLive{0};
     Counter blocksLive{0},blockBytes{0};
     std::atomic<std::int64_t> shadowBytes{0},texShadowBytes{0},largeShadowBytes{0};   // largeShadowBytes: the large allowance, NOT part of shadowBytes (shadowAdmit's cap); 0.3.204 (task 21): also the spare and the retired slices
-    std::atomic<std::int64_t> retiredBytes{0},ringBytes{0},ringSlices{0};   // 0.3.204 (task 21): live bytes of retired slices (dropped while the replay thread may still read them) and of ring slices (the buffers' non-current slices; both counted in largeShadowBytes too)
+    std::atomic<std::int64_t> retiredBytes{0},ringBytes{0},ringSlices{0};   // 0.3.204 (task 21): live bytes of retired slices (dropped while the replay thread may still read them) and of ring slices (the buffers' non-current slices); NOT part of shadowBytes/largeShadowBytes (so they never block a shadow grant), but in memory() and under their own budget:
+    std::atomic<std::int64_t> ringLargeBytes{0},ringRegularBytes{0},retiredLargeBytes{0},retiredRegularBytes{0};   // the ring budget per kind (live + retired): regular <= ShadowBudgetBytes, large <= LargeShadowBudgetBytes
 };
 static_assert(alignof(Counters)==kLine&&sizeof(Counters)%kLine==0,"Counters groups are line-aligned");
 static_assert(offsetof(Counters,commands)/kLine!=offsetof(Counters,consumerSleeps)/kLine&&offsetof(Counters,consumerSleeps)/kLine!=offsetof(Counters,chunksLive)/kLine,"counter groups on distinct lines");

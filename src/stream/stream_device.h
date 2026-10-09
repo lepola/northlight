@@ -188,15 +188,15 @@ public:
     bool redundant(CmdTag<Cmd::Device_SetCurrentTexturePalette>,UINT n){return filterOn()&&st.palette.known&&st.palette.fromSet&&st.palette.v==n&&filtered();}
     // the whole range known (from a game Set) and bytewise equal: one bitmask test and one memcmp
     bool sameFloats(const StreamState::FloatBank& b,UINT r,const float* d,UINT n){
-        if(!filterOn()||!d||r+n>StreamState::FloatBank::kRegs||!n)return false;
+        if(!filterOn()||!d||r>=StreamState::FloatBank::kRegs||n>StreamState::FloatBank::kRegs-r||!n)return false;   // (r+n could wrap)
         if(!b.allKnown(r,n)||std::memcmp(b.v[r],d,std::size_t(n)*16))return false;
         return filtered();}
     template<class Reg,class T> bool sameConstants(const Reg* regs,UINT count,UINT r,const T* d,UINT n){
-        if(!filterOn()||!d||r+n>count||!n)return false;
+        if(!filterOn()||!d||r>=count||n>count-r||!n)return false;   // (r+n could wrap)
         for(UINT i=0;i<n;++i)if(!regs[r+i].known||std::memcmp(regs[r+i].v,d+4*i,16))return false;   // known only ever comes from a game Set for constants
         return filtered();}
     bool sameBools(const Slot<BOOL>* regs,UINT r,const WINBOOL* d,UINT n){
-        if(!filterOn()||!d||r+n>16||!n)return false;
+        if(!filterOn()||!d||r>=16||n>16-r||!n)return false;
         for(UINT i=0;i<n;++i)if(!regs[r+i].known||!regs[r+i].fromSet||regs[r+i].v!=d[i])return false;
         return filtered();}
     // state class: StreamState follows the game's calls (not while a state block records)
@@ -670,13 +670,13 @@ private:
     void constI(StreamState::VsI* regs,UINT r,const int* d,UINT n){if(recording||!d)return;for(UINT i=0;i<n&&r+i<16;++i){regs[r+i].known=true;std::memcpy(regs[r+i].v,d+4*i,16);}}
     void constB(Slot<BOOL>* regs,UINT r,const WINBOOL* d,UINT n){if(recording||!d)return;for(UINT i=0;i<n&&r+i<16;++i)regs[r+i].set(d[i]);}
     bool getF(const StreamState::FloatBank& b,UINT r,float* d,UINT n,HRESULT& hr){
-        if(!d||r+n>StreamState::FloatBank::kRegs||!b.allKnown(r,n))return false;
+        if(!d||r>StreamState::FloatBank::kRegs||n>StreamState::FloatBank::kRegs-r||!b.allKnown(r,n))return false;   // (r+n could wrap)
         std::memcpy(d,b.v[r],std::size_t(n)*16);hr=D3D_OK;return hit();}
     bool getI(StreamState::VsI* regs,UINT r,int* d,UINT n,HRESULT& hr){
-        if(!d||r+n>16)return false;for(UINT i=0;i<n;++i)if(!regs[r+i].known)return false;
+        if(!d||r>16||n>16-r)return false;for(UINT i=0;i<n;++i)if(!regs[r+i].known)return false;
         for(UINT i=0;i<n;++i)std::memcpy(d+4*i,regs[r+i].v,16);hr=D3D_OK;return hit();}
     bool getB(Slot<BOOL>* regs,UINT r,WINBOOL* d,UINT n,HRESULT& hr){
-        if(!d||r+n>16)return false;for(UINT i=0;i<n;++i)if(!regs[r+i].known)return false;
+        if(!d||r>16||n>16-r)return false;for(UINT i=0;i<n;++i)if(!regs[r+i].known)return false;
         for(UINT i=0;i<n;++i)d[i]=regs[r+i].v;hr=D3D_OK;return hit();}
 };
 
