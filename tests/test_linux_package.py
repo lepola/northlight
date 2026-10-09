@@ -44,7 +44,7 @@ class LinuxPackageRules(unittest.TestCase):
                 self.assertTrue(vp.allowed(name, 'linux', launchers, {}))
 
     def test_runtime_prune(self):
-        keep = ['bin/python3.13', 'lib/python3.13/os.py', 'lib/python3.13/ctypes/__init__.py',
+        keep = ['bin/python3.13', 'bin/python3', 'lib/python3.13/os.py', 'lib/python3.13/ctypes/__init__.py',
                 'lib/python3.13/lib-dynload/.empty', 'lib/python3.13/LICENSE.txt']
         drop = ['bin/pip3', 'bin/python3.13-config', 'include/python3.13/Python.h', 'share/terminfo/x/xterm',
                 'lib/libpython3.13.so.1.0', 'lib/libpython3.so', 'lib/libtcl9.0.so', 'lib/libtcl9tk9.0.so',
@@ -52,8 +52,11 @@ class LinuxPackageRules(unittest.TestCase):
                 'lib/python3.13/lib-dynload/_tkinter.cpython-313-x86_64-linux-gnu.so',
                 'lib/python3.13/lib-dynload/_dbm.cpython-313-x86_64-linux-gnu.so',
                 'lib/python3.13/config-3.13-x86_64-linux-gnu/Makefile', 'lib/python3.13/site-packages/pip/x.py']
-        self.assertEqual([p for p in keep if bp.LINUX_RUNTIME_DROP.match(p)], [])
-        self.assertEqual([p for p in drop if not bp.LINUX_RUNTIME_DROP.match(p)], [])
+        self.assertEqual([p for p in keep if bp.RUNTIME_DROP['linux'].match(p)], [])
+        self.assertEqual([p for p in drop if not bp.RUNTIME_DROP['linux'].match(p)], [])
+        mac = bp.RUNTIME_DROP['mac']   # the same rules with the macOS config folder; _dbm is part of the macOS runtime
+        self.assertTrue(mac.match('lib/python3.13/config-3.13-darwin/Makefile') and mac.match('lib/libtcl9.0.dylib'))
+        self.assertFalse(mac.match('bin/python3') or mac.match('lib/python3.13/lib-dynload/_dbm.cpython-313-darwin.so'))
 
     def test_licences(self):
         linux, mac = bp.python_licences('linux'), bp.python_licences('mac')
@@ -110,7 +113,7 @@ class BuiltLinuxPackage(unittest.TestCase):
         problems = self.tampered(lambda n, d: ('runtime/lib/libpython3.13.so.1.0', d) if n == 'runtime/lib/python3.13/os.py' else (n, d))
         self.assertTrue(any('libpython' in p for p in problems), problems)
         problems = self.tampered(lambda n, d: ('runtime/lib/libtcl9.0.so', d) if n == 'runtime/lib/python3.13/abc.py' else (n, d))
-        self.assertIn('Linux runtime not pruned', problems)
+        self.assertTrue(any(p.startswith('Linux runtime not pruned') and 'libtcl' in p for p in problems), problems)
 
     def test_game_data_is_refused(self):
         problems = self.tampered(lambda n, d: ('payload/Data/patch-z.mpq', b'MPQ\x1a') if n == 'payload/celestial-profiles.ini' else (n, d))

@@ -148,15 +148,12 @@ def verify_installer(path):
               f'LICENSES/python-third-party/ differs from python_{plat}_licenses')
         check(problems, modes.get('runtime/bin/python3', 0) & 0o111 and 'runtime/lib/python3.13/os.py' in files,
               f'{bp.PLATFORMS[plat]} runtime lacks an executable bin/python3 or its stdlib')
-        check(problems, not [r for r in files if re.match(r'runtime/(share/|include/|lib/(libtcl|libtk|tk|tcl|python3\.13/'
-                                                        r'(site-packages|idlelib|tkinter)/|python3\.13/lib-dynload/_tkinter))', r)],
-              f'{bp.PLATFORMS[plat]} runtime not pruned')
+        kept = sorted(r for r in files if r.startswith('runtime/') and bp.RUNTIME_DROP[plat].match(r[len('runtime/'):]))
+        check(problems, not kept, f'{bp.PLATFORMS[plat]} runtime not pruned: {", ".join(kept[:3])}')
     if plat == 'linux':
         missing = [n for n in LINUX_RUNTIME if 'runtime/' + n not in files]
         check(problems, not missing, f'Linux runtime lacks {missing}')
         check(problems, files.get('runtime/bin/python3', b'')[:4] == b'\x7fELF', 'Linux runtime bin/python3 is not ELF')
-        check(problems, not [r for r in files if re.match(r'runtime/lib/(libpython|python3\.13/lib-dynload/_dbm)', r)],
-              'Linux runtime keeps libpython (linked into bin/python3) or _dbm (Berkeley DB)')
     # launchers
     for name, expected in launchers.items():
         data = files.get(name, b'')
@@ -198,12 +195,7 @@ def verify_installer(path):
 
 def shell_syntax(shell, data):
     """`<shell> -n` accepts the script (a launcher must run under dash's sh as well as bash)."""
-    with tempfile.NamedTemporaryFile(suffix='.sh', delete=False) as f:
-        f.write(data)
-    try:
-        return subprocess.run([shell, '-n', f.name], capture_output=True).returncode == 0
-    finally:
-        os.unlink(f.name)
+    return subprocess.run([shell, '-n'], input=data, capture_output=True).returncode == 0
 
 
 def runtime_zip():

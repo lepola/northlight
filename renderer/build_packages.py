@@ -67,16 +67,19 @@ PAYLOAD_COMMON = {'celestial-profiles.ini': 'client-config/celestial-profiles.in
 PRESERVE = {'northlight-quality.ini'}
 DXVK_BACKEND = 'renderer-backends/dxvk/dxvk_d3d9.dll'
 DXVK2_BACKEND = 'renderer-backends/dxvk2/dxvk2_d3d9.dll'
-# Pruned from the macOS runtime: pip, Tk, IDLE, docs, headers and the embedding library (the
-# python3.13 executable links libpython statically).
-MAC_RUNTIME_DROP = re.compile(r'^(bin/(?!python3\.13$)|include/|share/|lib/(libpython|libtcl|itcl|tcl|tk|thread|pkgconfig)|'
-                              r'lib/python3\.13/(site-packages/|idlelib/|tkinter/|turtledemo/|ensurepip/|pydoc_data/|'
-                              r'config-3\.13-darwin/|lib-dynload/_tkinter)|.*/__pycache__/)')
-# Pruned from the Linux runtime as on macOS (bin/python3.13 links libpython statically, so lib/libpython3.13.so.1.0 is
-# unused too), plus terminfo (share/), Tcl/Tk (libtcl9*, tcl9.0/, tk9.0/) and _dbm with its Berkeley DB.
-LINUX_RUNTIME_DROP = re.compile(r'^(bin/(?!python3\.13$)|include/|share/|lib/(libpython|libtcl|libtk|itcl|tcl|tk|thread|pkgconfig)|'
-                                r'lib/python3\.13/(site-packages/|idlelib/|tkinter/|turtledemo/|ensurepip/|pydoc_data/|'
-                                r'config-3\.13-x86_64-linux-gnu/|lib-dynload/_tkinter|lib-dynload/_dbm)|.*/__pycache__/)')
+
+
+def runtime_drop(config, extra=''):
+    """What is pruned from a python-build-standalone install_only tree (paths under python/, or under runtime/ in a
+    package, where bin/python3.13 is bin/python3): pip, Tcl/Tk, IDLE, docs, headers, terminfo (share/) and the
+    embedding library (bin/python3.13 links libpython statically), plus the platform's extra modules."""
+    return re.compile(r'^(bin/(?!python3(\.13)?$)|include/|share/|lib/(libpython|libtcl|libtk|itcl|tcl|tk|thread|pkgconfig)|'
+                      r'lib/python3\.13/(site-packages/|idlelib/|tkinter/|turtledemo/|ensurepip/|pydoc_data/|'
+                      rf'config-3\.13-{config}/|lib-dynload/_tkinter{extra})|.*/__pycache__/)')
+
+
+# Linux also drops _dbm with its Berkeley DB (a shared module there; on macOS it is part of the runtime).
+RUNTIME_DROP = {'mac': runtime_drop('darwin'), 'linux': runtime_drop('x86_64-linux-gnu', '|lib-dynload/_dbm')}
 CACHE_MEMBER = re.compile(r'^([A-Za-z0-9]+/\d+_\d+\.fg3|models/[0-9a-f]+\.fgs|lights/[A-Za-z0-9]+\.fgl|'
                           r'fog/[A-Za-z0-9]+/\d+_\d+\.frf|celestial/(sun|moon)\.fct|northlight-cache\.json)$')
 MARKER = re.compile(rb'Northlight renderer (\d+\.\d+\.\d+);')
@@ -229,14 +232,14 @@ def python_licences(platform):
 
 
 def mac_runtime(tree, pin, stormlib):
-    standalone_runtime(tree, pin, MAC_RUNTIME_DROP)
+    standalone_runtime(tree, pin, RUNTIME_DROP['mac'])
     tree.add('runtime/lib/libstorm.dylib', stormlib.read_bytes(), executable=True)
     for name, licence in python_licences('mac').items():   # statically linked into bin/python3
         tree.add(f'LICENSES/python-third-party/{name}.txt', download(licence).read_bytes())
 
 
 def linux_runtime(tree, pin, stormlib):
-    standalone_runtime(tree, pin, LINUX_RUNTIME_DROP)
+    standalone_runtime(tree, pin, RUNTIME_DROP['linux'])
     tree.add('runtime/lib/libstorm.so', stormlib.read_bytes(), executable=True)
     for name, licence in sorted(python_licences('linux').items()):   # statically linked into bin/python3
         tree.add(f'LICENSES/python-third-party/{name}.txt', download(licence).read_bytes())
@@ -317,11 +320,10 @@ def build(platform, version, dll, variants, out, stormlib_dir):
         tree.add('app/' + name, fp.REPO / name)
     dll_data = dll.read_bytes()
     dll_version = check_dll(dll_data)
-    target = platform
-    lib = build_stormlib.build(target, stormlib_dir / target)
+    lib = build_stormlib.build(platform, stormlib_dir / platform)
     problems, _ = build_stormlib.verify(lib)
-    if problems or sha(lib) != PINS['stormlib'][target + '_sha256']:
-        raise SystemExit(f'StormLib {target} build does not verify or does not match its pin: {problems or sha(lib)}')
+    if problems or sha(lib) != PINS['stormlib'][platform + '_sha256']:
+        raise SystemExit(f'StormLib {platform} build does not verify or does not match its pin: {problems or sha(lib)}')
     runtime_pin = PINS['python_' + platform]
     {'windows': windows_runtime, 'mac': mac_runtime, 'linux': linux_runtime}[platform](tree, runtime_pin, lib)
     payload = {n: (fp.REPO / src).read_bytes() for n, src in PAYLOAD_COMMON.items()}
