@@ -8,17 +8,6 @@ game's) plus the mask write to oC1 for one blend kind (the values rain_mask.hlsl
   kind 0  alpha over         oC1 = (1,1,1,sat(a))                 needs a free constant (def) for the 1s
   kind 1  additive by alpha  oC1 = (1,1,1,sat(a)*sat(max(rgb)))   a free constant and a second free temporary
   kind 2  additive by colour oC1 = sat(max(rgb)).xxxx             a second free temporary
-  kind 3  additive by colour for SRCCOLOR/ONE: kind 2 without the fog write below
-A ps_3_0 that receives the game's fog factor (dcl_fog0 vN.c, D3DDECLUSAGE_FOG index 0) also writes 1-f to oC1.x (0.3.203, particle fog): the mask's RED then follows the same
-recurrence as BLUE with 1-f as the value (the composite turns the weighted mean f into the particle's distance). The values:
-  kind 0  oC1 = (1-f,1,1,sat(a))      over: R' = a*(1-f) + (1-a)*R against B' = a + (1-a)*B
-  kind 1  oC1 = (1-f,1,1,w/4)         SRCALPHA/ONE, w = sat(a)*sat(max rgb): R' = R + w/4*(1-f) against B' = B + w/4
-  kind 2  oC1 = (m/4*(1-f),m/4,m/4,m/4) ONE/ONE, m = sat(max rgb): R' = R + m/4*(1-f) against B' = B + m/4
-The mask's red carries (1-f) times the layer's weight, so 0 means "no distance" (the sentinel of every layer that does not write red) and red / blue is the weighted mean of 1-f.
-An additive kind with the fog factor writes its weight at 1/4 (the constant's w): blue saturates after about four full layers instead of two while red keeps the mean exact.
-Additive layers without the fog factor (and kind 3, whose blend squares the value in blue) are the original blue-only writes at full weight, byte for byte, and need no
-constant (kind 2, 3); they must not write red. The renderer's colour mask for the variant decides which channels land: over without the fog factor writes green only; the
-fogged over shader writes red, green and blue; additive variants red + blue (fogged) or blue only.
 Everything it cannot prove safe is a ValueError whose text is the reason (REASONS, the C++
 port's names): the water patch's set, with if/ifc/else/endif accepted as long as oC0 is written
 outside them. Pure: no MPQ, client, device.
@@ -49,19 +38,16 @@ def parse(code):
     raise ValueError('missing END')
 def patch(code,kind):
     """Returns (patched bytes, info). kind: 0 alpha over, 1 additive by alpha, 2 additive by colour."""
-    if kind not in (0,1,2,3):raise ValueError('unknown kind')
+    if kind not in (0,1,2):raise ValueError('unknown kind')
     w,ops,end=parse(code);major=(w[0]>>8)&255
-    used={};params=[];depth=0;mask=0;firstOp=None;relativeConst=False;fog=None
+    used={};params=[];depth=0;mask=0;firstOp=None;relativeConst=False
     for p,op,a in ops:
         if op==65534:continue
         if w[p]&0xf0000000:raise ValueError('predicated/coissued')
         if firstOp is None:firstOp=p
         if op==31:
             if len(a)!=2:raise ValueError('bad DCL')
-            k,i=register(a[1]);used.setdefault(k,set()).add(i)
-            fmask=(a[1]>>16)&15
-            if major==3 and (a[0]&31)==11 and ((a[0]>>16)&15)==0 and k==1 and fmask and kind<3 and fog is None:fog=(i,(fmask&-fmask).bit_length()-1)
-            continue
+            k,i=register(a[1]);used.setdefault(k,set()).add(i);continue
         if op==81:
             if len(a)!=5:raise ValueError('bad DEF')
             k,i=register(a[0]);used.setdefault(k,set()).add(i);continue
@@ -102,10 +88,8 @@ def patch(code,kind):
     if kind:
         if len(free)<2:raise ValueError('no free temporary')
         spare2=free[1]
-    # the constant cK = (1,1,1,scale): the over and additive-by-alpha kinds need the 1s; an additive kind with the fog factor also its weight scale
-    needConst=kind<2 or (kind==2 and fog is not None)
     const=None
-    if needConst:
+    if kind<2:
         if relativeConst:raise ValueError('relative constant')
         climit=224 if major==3 else 32
         const=next((i for i in range(climit-1,-1,-1) if i not in used.get(2,set())),None)
@@ -115,22 +99,14 @@ def patch(code,kind):
     T=lambda sw:src(0,spare,sw)
     S2=lambda sw:src(0,spare2,sw)
     suffix=[0x02000001,dst(8,0),src(0,spare)]
-    F=src(1,fog[0],fog[1]*0x55) if fog else None
-    NEGF=(F|(1<<24)) if fog else None      # -f: the mask carries 1-f (0 = no distance)
-    scaled=fog is not None and kind in (1,2)
-    if kind<2:
-        if fog:suffix+=[0x03000002,dst(8,1,1)|SAT,src(2,const,0x00),NEGF,0x02000001,dst(8,1,6),src(2,const)]
-        else:suffix+=[0x02000001,dst(8,1,7),src(2,const)]
+    if kind<2:suffix+=[0x02000001,dst(8,1,7),src(2,const)]
     if kind==0:suffix+=[0x02000001,dst(8,1,8)|SAT,T(0xff)]
     else:
         # s2.x = sat(max(r,g,b)) of the game's colour
         suffix+=[0x0300000b,dst(0,spare2,1)|SAT,T(0x00),T(0x55),0x0300000b,dst(0,spare2,1)|SAT,S2(0x00),T(0xaa)]
-        if scaled:suffix+=[0x03000005,dst(0,spare2,1),S2(0x00),src(2,const,0xff)]    # x the weight scale (the constant's w)
         if kind==1:suffix+=[0x02000001,dst(0,spare2,2)|SAT,T(0xff),0x03000005,dst(8,1,8),S2(0x00),S2(0x55)]
-        elif fog:suffix+=[0x03000002,dst(0,spare2,2)|SAT,src(2,const,0x00),NEGF,0x03000005,dst(8,1,1),S2(0x00),S2(0x55),0x02000001,dst(8,1,14),S2(0x00)]
         else:suffix+=[0x02000001,dst(8,1),S2(0x00)]
     suffix.append(65535)
     w[end:end+1]=suffix
-    scale=.25 if scaled else 1.0
-    if const is not None:w[firstOp:firstOp]=[0x05000051,dst(2,const),0x3f800000,0x3f800000,0x3f800000,struct.unpack('<I',struct.pack('<f',scale))[0]]
-    return struct.pack('<%dI'%len(w),*w),{'model':major,'kind':kind,'temp':spare,'temp2':spare2,'const':const,'fog':fog is not None,'scale':scale}
+    if const is not None:w[firstOp:firstOp]=[0x05000051,dst(2,const),0x3f800000,0x3f800000,0x3f800000,0x3f800000]
+    return struct.pack('<%dI'%len(w),*w),{'model':major,'kind':kind,'temp':spare,'temp2':spare2,'const':const}

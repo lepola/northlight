@@ -4,8 +4,8 @@ sampler2D Scene : register(s0);
 sampler2D Depth : register(s1);
 
 // RainMaskMRT replaces the game's fixed-function stage 0 (MODULATE texture x diffuse, colour and alpha) for a rain draw and writes white with
-// the streak alpha to render target 1 as well: RT1 is colour-masked to green (0.3.203; red before), so the draw's own SRCALPHA/INVSRCALPHA blend lays the streaks'
-// coverage over each other in green = 1 - T, which is also the pixel's "touched" mark (RT0's colour and alpha blend as without the mask).
+// the streak alpha to render target 1 as well: RT1 is colour-masked to red, so the draw's own SRCALPHA/INVSRCALPHA blend lays the streaks'
+// coverage over each other in red (RT0's colour and alpha blend as without the mask).
 float4 RainMaskMRT(float4 diffuse : COLOR0, float2 uv : TEXCOORD0, out float4 mask : COLOR1) : COLOR0
 {
     float4 c = tex2D(Scene, uv) * diffuse;
@@ -24,13 +24,12 @@ float4 RainScrub(float2 uv : TEXCOORD0) : COLOR0
 
 // 0.3.203 (particle mask): translucent world particles (torch and brazier flames, sparks, spell particles) draw no depth, so WorldComposite
 // would fog, haze and relight them with the background's depth. Each shader replaces the game's fixed-function stage 0 (colour MODULATE
-// or MODULATE2X of texture x diffuse, alpha MODULATE, clamped like the stage) and writes the particle's coverage to oC1 (render target 1). The draw's own
-// blend applies to oC1 too, so the value written is what that blend must add up to. Green = 1 - T, the background's transmittance through the alpha-over particles (pixel = T x
-// background + emission), also "an over-blend layer touched this pixel"; blue is the touch mark and weight of the additive layers; red (with blue) is the fog-aware layers'
-// game fog factor, written by the patched game shaders only (these fixed-function shaders know none: they never write red):
-//   Over  (SRCALPHA/INVSRCALPHA)         (1,1,1,a):  g' = a + g(1-a); colour mask GREEN only;
-//   AddA  (SRCALPHA/ONE)                 (1,1,1,v):  colour mask BLUE only: b' = b + v, v = a x the brightest channel, saturating at 1; green untouched (no attenuation);
-//   AddC  (ONE/ONE and SRCCOLOR/ONE)     (v,v,v,v):  colour mask BLUE only: ONE adds v, SRCCOLOR adds v x v, v = the brightest channel (the colour the blend adds).
+// or MODULATE2X of texture x diffuse, alpha MODULATE, clamped like the stage) and writes the particle's coverage to oC1 (render target 1; the red
+// rain coverage is untouched). The draw's own blend applies to oC1 too, so the value written is what that blend must add up to. Blue = "a particle
+// touched this pixel", green = 1 - T, the background's transmittance through the alpha-over particles (pixel = T x background + emission):
+//   Over  (SRCALPHA/INVSRCALPHA)         (1,1,1,a):  g' = a + g(1-a) in green AND blue (colour mask green|blue);
+//   AddA  (SRCALPHA/ONE)                 (1,1,1,v):  blue only: b' = b + v, v = a x the brightest channel, saturating at 1; green untouched (no attenuation);
+//   AddC  (ONE/ONE and SRCCOLOR/ONE)     (v,v,v,v):  blue only: ONE adds v, SRCCOLOR adds v x v, v = the brightest channel (the colour the blend adds).
 // The multiplier (1 or 2) is the stage's colour op; the 1 / 2 suffix names it.
 float4 particleStage(float4 diffuse, float2 uv, float scale)
 {
