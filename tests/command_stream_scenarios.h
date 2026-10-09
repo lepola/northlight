@@ -1371,7 +1371,7 @@ static void zeroCopyRenames(UINT len=15800000){
     // the 5th busy cycle finds all four slices busy and the ring full: it waits for the OLDEST slice's readers (frame 0), exactly
     std::thread rel;z.releaseLater(rel);
     z.frame(4,true);rel.join();
-    CHECK(get(s.waitMax)==1&&get(s.waitBudget)+get(s.waitPressure)+get(s.waitAlloc)==0&&get(s.renameWaits)==1&&get(s.renameWaitNs)>=30000000ull&&get(s.renames)==4&&get(s.renameAllocs)==3&&get(s.syncNs)>=get(s.renameWaitNs));
+    CHECK(get(s.waitMax)==1&&get(s.waitBudget)+get(s.waitDrain)+get(s.waitAlloc)==0&&get(s.renameWaits)==1&&get(s.renameWaitNs)>=30000000ull&&get(s.renames)==4&&get(s.renameAllocs)==3&&get(s.syncNs)>=get(s.renameWaitNs));
     z.present();for(unsigned f=5;f<10;++f){z.frame(f);z.present();}
     z.verify();CHECK(get(s.renameAllocs)==3&&z.held()==4u*z.L);
     // idle trimming: the ring's slices free for kLargeIdleFrames frames go at a Present; the current slice stays
@@ -1430,7 +1430,7 @@ static void zeroCopyRetire(UINT len=15800000){
         // no spare under pressure: with the shadow back (DISCARD makes one) a DISCARD against pending readers waits for them instead of allocating
         z.w(0,8192,0x41,D3::kLockDiscard);CHECK(shadowOn(z.vb));
         z.hold();z.w(8192,8192,0x42,D3::kLockNoOverwrite);z.core->memoryPressure.store(true);z.q->setPressure(true);
-        {const auto alloc=get(s.renameAllocs),rw=get(s.renameWaits);std::thread rel;z.releaseLater(rel);z.w(0,8192,0x43,D3::kLockDiscard);rel.join();CHECK(get(s.renameAllocs)==alloc&&get(s.renameWaits)==rw+1&&get(s.waitPressure)==1);}
+        {const auto alloc=get(s.renameAllocs),rw=get(s.renameWaits);std::thread rel;z.releaseLater(rel);z.w(0,8192,0x43,D3::kLockDiscard);rel.join();CHECK(get(s.renameAllocs)==alloc&&get(s.renameWaits)==rw+1&&get(s.waitDrain)==1);}
         z.core->memoryPressure.store(false);z.q->setPressure(false);z.verify();
         z.vb->Release();z.rig->sync();z.present();z.rig->sync();CHECK(z.held()==0&&s.retiredBytes.load()==0);z.rig->finish();checkClean();   // (the pressure drop at the unlock retired the slice: freed at the Present)
     }
@@ -1482,6 +1482,26 @@ static void zeroCopyPumpedLock(int mode,UINT len=15800000){
     z.verify();z.present();z.rig->sync();CHECK(s.retiredBytes.load()==0&&z.held()==0);
     z.vb->Release();z.rig->sync();z.rig->finish();checkClean();
 }
+// Memory pressure in the middle of the stream: unlocks recorded before it still read their slices, so the first DISCARD under pressure drains the current slice (one wait, reason drain); from then on DISCARD/NOOVERWRITE
+// unlocks COPY into the queue (no new readers, no allocation, no wait, however many frames the replay is held); when the pressure ends zero-copy resumes. Every replayed unlock carries the bytes the game wrote.
+static void zeroCopyPressureMidStream(){
+    ZcRig z(512u<<10,3);auto& s=*z.s;
+    z.hold();z.frame(0,true);z.frame(1,true);   // pending zero-copy readers (the ring holds one slice)
+    CHECK(get(s.zeroCopyUnlocks)==14&&get(s.renames)==1);
+    z.core->memoryPressure.store(true);z.q->setPressure(true);   // (what the Present after the guard's flag does)
+    const auto rw0=get(s.renameWaits);std::thread rel;z.releaseLater(rel);
+    z.frame(2,true);rel.join();   // the DISCARD finds the current slice busy and may allocate nothing: waits once for it
+    CHECK(get(s.renameWaits)==rw0+1&&get(s.waitDrain)==1&&get(s.renameAllocs)==1&&get(s.zeroCopyUnlocks)==14&&get(s.copyPressureUnlocks)==7);   // (the small 8th unlock of a frame is a copy anyway: not counted)
+    // the replay held again, several frames of cycles under pressure: all copies, never a wait
+    z.hold();const auto rw=get(s.renameWaits),zc=get(s.zeroCopyUnlocks),rec=get(s.lockRecordedBytes);
+    for(unsigned f=3;f<8;++f)z.frame(f,true);
+    CHECK(get(s.renameWaits)==rw&&get(s.zeroCopyUnlocks)==zc&&get(s.waitDrain)==1&&get(s.copyPressureUnlocks)==7+5*7&&get(s.lockRecordedBytes)-rec==5u*(7*8192+64)&&get(s.zcSkipPressure)==get(s.copyPressureUnlocks));
+    // pressure over: zero-copy again at the next lock
+    z.core->memoryPressure.store(false);z.q->setPressure(false);
+    z.frame(8,true);CHECK(get(s.zeroCopyUnlocks)==zc+7&&get(s.renameWaits)==rw);
+    gKnobs.hold.store(false);z.verify();
+    z.vb->Release();z.rig->sync();z.present();z.rig->sync();CHECK(z.held()==0&&s.ringSlices.load()==0);z.rig->finish();checkClean();
+}
 // A regular-cap holder whose slices unreplayed zero-copy unlocks still read is no eviction victim (dropping it would free nothing): the requester is refused and the holder keeps its shadow.
 static void zeroCopyRegularEviction(){
     ZcRig z(2u<<20);auto& s=*z.s;std::vector<IDirect3DVertexBuffer9*> fill;
@@ -1506,7 +1526,7 @@ static void zeroCopyReasons(){
     CHECK(big->Lock(0,8192,&p,D3::kLockDiscard)==D3D_OK&&big->Unlock()==D3D_OK&&get(s.zcSkipNoShadow)==1&&get(s.zcSkipOther)==0&&get(s.zeroCopyUnlocks)==1);
     z.rig->sync();
     for(int i=0;i<610;++i)z.present();z.rig->sync();
-    {bool ok=false;for(auto& l:gStatLines)if(l.rfind("CSTREAM zerocopy[per frame]:",0)==0&&l.find("notZeroCopy[pool=1 noShadow=1 small=1 other=0]")!=std::string::npos)ok=true;CHECK(ok);}
+    {bool ok=false;for(auto& l:gStatLines)if(l.rfind("CSTREAM zerocopy[per frame]:",0)==0&&l.find("notZeroCopy[pool=1 noShadow=1 small=1 pressure=0 other=0]")!=std::string::npos)ok=true;CHECK(ok);}
     man->Release();big->Release();z.vb->Release();z.rig->sync();z.rig->finish();checkClean();
 }
 
@@ -1575,7 +1595,7 @@ static void streamTests(bool threadsOnly){
     framesAheadPacing();textureShadowSpares();frameSkipping();frameSkipReleasesPresentWait();   // 0.3.200 (frame skip)
     zeroCopyRenames();zeroCopyRingBudget();zeroCopyAdaptiveRing();zeroCopyRetire();zeroCopyPumpedLock(0);zeroCopyPumpedLock(1);
     for(UINT len:{512u<<10,2u<<20}){zeroCopyRenames(len);zeroCopyRetire(len);zeroCopyPumpedLock(0,len);zeroCopyPumpedLock(1,len);}   // 0.3.204 (task 21): the same for DYNAMIC buffers in the regular shadow cap
-    zeroCopyRegularEviction();zeroCopyReasons();bindLifetime();floatConstantBanks();
+    zeroCopyRegularEviction();zeroCopyReasons();zeroCopyPressureMidStream();bindLifetime();floatConstantBanks();
     equivalence(20000,12345);equivalence(20000,987654321);equivalence(20000,24680,2);equivalence(20000,13579,3);   // 0.3.200 (pipeline): 2 and 3 frames ahead
     (void)threadsOnly;
 }

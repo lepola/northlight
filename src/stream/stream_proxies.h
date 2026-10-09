@@ -659,7 +659,7 @@ struct BufferState {
     // unlock that reads it (0 = none) and the frame it left the current role (idle trimming). sliceSeq: the same for the current slice. The game may write, free or reuse a slice only once replayedSeq() >= its seq.
     // zc: the current lock is a DISCARD/NOOVERWRITE write lock on a slice.
     struct Slice {std::vector<unsigned char> mem;std::uint64_t seq=0,frame=0;};
-    std::vector<Slice> ring;std::uint64_t sliceSeq=0;bool zc=false;
+    std::vector<Slice> ring;std::uint64_t sliceSeq=0;bool zc=false,copyP=false;   // copyP: this lock would have been zero-copy but memory pressure keeps it on the copy path
     // DISCARD locks per frame (StreamCore::frameNo): discNow in frame discFrame, discMax the largest count of the last kDiscardWindowFrames frames (it decays); they size the ring (StreamCore::allowedSlices).
     std::uint64_t discFrame=0,discMaxFrame=0;unsigned discNow=0,discMax=0;
 };
@@ -859,8 +859,11 @@ constexpr std::size_t kZeroCopyMin=4096;   // a smaller range keeps the inline c
 // ring has room (framesAhead+2 slices in all), memory allows (no pressure; the large allowance or the shadow cap, each up to twice its size) and the allocation succeeds; else the game waits for the OLDEST busy slice (exact).
 // NOOVERWRITE: the game writes only bytes no pending command reads (the D3D9 contract), no wait. Any other write: waits for the readers (exact).
 // false = nested in a pumped wait with the slice busy: the caller drops the shadow (it retires with its readers) and takes the unshadowed path.
-inline bool prepareSliceWrite(ProxyBase& self,BufferState& s,DWORD eff){
-    StreamCore& c=*self.core;Queue& q=c.q;
+// Memory pressure (the 32-bit address space is nearly full): no slice is added and no new reader is created: a DISCARD/NOOVERWRITE unlock COPIES into the queue as before zero-copy (zc=false, so the slice never gets
+// new pending readers); a DISCARD whose current slice still has readers from before the pressure takes a free ring slice if there is one, else waits ONCE for the current slice (it drains within the frames in flight) and goes on in copy mode.
+inline bool prepareSliceWrite(ProxyBase& self,BufferState& s,DWORD eff,bool& zc){
+    StreamCore& c=*self.core;Queue& q=c.q;const bool pressure=q.pressure();
+    zc=(eff&(D3::kLockDiscard|D3::kLockNoOverwrite))!=0&&!pressure;
     const unsigned perFrame=(eff&D3::kLockDiscard)?noteDiscard(c,s):0;
     if(q.replayedSeq()>=s.sliceSeq)return true;
     if(eff&D3::kLockDiscard){
@@ -869,8 +872,12 @@ inline bool prepareSliceWrite(ProxyBase& self,BufferState& s,DWORD eff){
         bool atMax=false,noRoom=false,allocFailed=false;
         const std::uint64_t rep=q.replayedSeq();std::size_t pick=s.ring.size();
         for(std::size_t i=0;i<s.ring.size();++i)if(rep>=s.ring[i].seq&&(pick==s.ring.size()||s.ring[i].seq<s.ring[pick].seq))pick=i;
+        if(pick==s.ring.size()&&pressure){   // nothing is allocated under pressure: the current slice drains (waited once below)
+            own(q.stats.waitDrain);
+            return waitSliceSeq(c,s.sliceSeq,true);
+        }
         if(pick==s.ring.size()&&s.ring.size()+1>=allowed)atMax=true;
-        else if(pick==s.ring.size()&&!q.pressure()){
+        else if(pick==s.ring.size()){
             // a new slice is counted where the buffer's shadow is: largeShadowBytes (up to twice the allowance) or shadowBytes (up to twice the current cap)
             const std::int64_t sb=q.stats.shadowBytes.load(std::memory_order_relaxed);
             const bool room=s.large?q.largeBytes()+len<=2*LargeShadowBudgetBytes:(sb>0?std::size_t(sb):0)+len<=2*q.shadowCap();
@@ -881,7 +888,7 @@ inline bool prepareSliceWrite(ProxyBase& self,BufferState& s,DWORD eff){
             }
         }
         if(pick==s.ring.size()){   // none free, none allowed: why (the zerocopy line's waitWhy)
-            own(atMax?q.stats.waitMax:q.pressure()?q.stats.waitPressure:noRoom?q.stats.waitBudget:allocFailed?q.stats.waitAlloc:q.stats.waitMax);
+            own(atMax?q.stats.waitMax:noRoom?q.stats.waitBudget:allocFailed?q.stats.waitAlloc:q.stats.waitMax);
             if(s.ring.empty())return waitSliceSeq(c,s.sliceSeq,true);   // no second slice: the readers must finish before the game overwrites this one
             pick=0;for(std::size_t i=1;i<s.ring.size();++i)if(s.ring[i].seq<s.ring[pick].seq)pick=i;   // the oldest busy one
             if(!waitSliceSeq(c,s.ring[pick].seq,true))return false;
@@ -907,9 +914,10 @@ inline HRESULT lockBuffer(ProxyBase& self,BufferState& s,UINT off,UINT size,void
             if(readBackShadow(self,s)<0)return D3DERR_INVALIDCALL;
         }
     }
-    s.zc=false;
+    s.zc=false;s.copyP=false;
     if(s.shadowOn&&dynamicBuffer(self)&&self.info.pool==D3::kPoolDefault&&!(flags&D3::kLockReadOnly)){   // 0.3.204 (task 21): a write lock of a DYNAMIC default-pool buffer's slice, large allowance or regular cap (see prepareSliceWrite)
-        if(prepareSliceWrite(self,s,eff))s.zc=(eff&(D3::kLockDiscard|D3::kLockNoOverwrite))!=0;
+        bool zc=false;
+        if(prepareSliceWrite(self,s,eff,zc)){s.zc=zc;s.copyP=!zc&&(eff&(D3::kLockDiscard|D3::kLockNoOverwrite))!=0;}
         else{   // nested in a pumped wait: the shadow (retired with its readers) goes. A DISCARD stages below; any other write copies the slice's current bytes (the game-side truth) into a staged Block, which its unlock queues without a copy
             Block* b=nullptr;
             if(!(eff&D3::kLockDiscard)&&(b=q.tryAllocBlock(size+kLockSlack))){std::memcpy(b->data(),s.shadow.data()+off,size);b->used=size;}
@@ -990,11 +998,13 @@ inline HRESULT unlockBufferImpl(ProxyBase& self,BufferState& s,bool& zcDone){
 // 0.3.204 (task 21): why a DISCARD/NOOVERWRITE write unlock of a DYNAMIC buffer did not go zero-copy (the CSTREAM zerocopy line): not the default pool (the flags mean nothing there), no shadow
 // slice (staged, scratch, pass-through or a dropped shadow), a range below kZeroCopyMin, anything else.
 inline HRESULT unlockBuffer(ProxyBase& self,BufferState& s){
-    const BufferState::Mode m=s.mode;const DWORD fl=s.flags;const UINT sz=s.size;bool zcDone=false;
+    const BufferState::Mode m=s.mode;const DWORD fl=s.flags;const UINT sz=s.size;const bool cp=s.copyP;bool zcDone=false;
     const HRESULT hr=unlockBufferImpl(self,s,zcDone);
     if(!zcDone&&m!=BufferState::Free&&dynamicBuffer(self)&&(fl&(D3::kLockDiscard|D3::kLockNoOverwrite))&&!(fl&D3::kLockReadOnly)&&SUCCEEDED(hr)){
         Counters& st=self.core->q.stats;
-        own(self.info.pool!=D3::kPoolDefault?st.zcSkipPool:m!=BufferState::Shadow?st.zcSkipNoShadow:sz<kZeroCopyMin?st.zcSkipSmall:st.zcSkipOther);
+        const bool underPressure=cp&&m==BufferState::Shadow&&sz>=kZeroCopyMin&&self.info.pool==D3::kPoolDefault;
+        if(underPressure){own(st.copyPressureUnlocks);own(st.copyPressureBytes,sz);}   // would have been zero-copy: copied because of memory pressure
+        own(self.info.pool!=D3::kPoolDefault?st.zcSkipPool:m!=BufferState::Shadow?st.zcSkipNoShadow:sz<kZeroCopyMin?st.zcSkipSmall:underPressure?st.zcSkipPressure:st.zcSkipOther);
     }
     return hr;
 }
