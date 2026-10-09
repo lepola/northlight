@@ -44,6 +44,7 @@ a z archive that is not ours, so that archive counts as client content.
 
 Progress is one JSON object per line (--progress json, the default) or readable text
 (--progress human). The last stdout line is always JSON: {"event": "done"|"up_to_date"|"failed", ...}.
+A failed build names the logs of its failed steps ('logs'); --progress human also prints their last lines.
 Exit status: 0 done or up to date, 1 the build failed, 2 bad input (client, locale) or too little memory.
 """
 import argparse
@@ -175,13 +176,41 @@ def human(f):
     return None
 
 
+LOG_TAIL_LINES = 20
+MAX_FAILED_LOGS = 3   # a console screen: more logs would scroll the reason away
+
+
+def log_tail(path, count=LOG_TAIL_LINES):
+    """The last `count` lines of a builder log, without its per-tile progress records (a crash's traceback is last)."""
+    try:
+        lines = Path(path).read_text(encoding='utf-8', errors='replace').splitlines()
+    except OSError as e:
+        return [f'(cannot read the log: {e})']
+    return [line for line in lines if line.strip() and not line.startswith(('{"tile"', '{"tiles_total"'))][-count:]
+
+
+def failed_logs(steps, tile_failures=None):
+    """The logs to show for a failed build (at most MAX_FAILED_LOGS): those of the steps that exited non-zero; when
+    every step exited 0 (missing output, tile failures), the scene logs of the maps with tile failures and the
+    validation log, else every step's."""
+    failed = [s for s in steps if s.proc.returncode]
+    if not failed:
+        failed = [s for s in steps if (s.map and s.map in (tile_failures or {})) or s.name == 'validate'] or steps
+    return [str(s.log) for s in failed][:MAX_FAILED_LOGS]
+
+
 def final(event, code, **fields):
-    """The last stdout line, JSON in both progress modes; returns the exit status."""
+    """The last stdout line, JSON in both progress modes; returns the exit status. A failure's 'logs' are named,
+    and in human mode their last lines are printed too, so the reason is on the console, not only in the log."""
     if PROGRESS == 'human':
         text = {'done': f"World cache ready in {fields.get('seconds', 0) / 60:.1f} min",
                 'up_to_date': 'World cache is up to date',
                 'failed': f"World cache build FAILED: {fields.get('error') or '; '.join(fields.get('problems', []))}"}[event]
         print(text, flush=True)
+        for log in fields.get('logs') or []:
+            print(f'--- last lines of {log} ---', flush=True)
+            for line in log_tail(log):
+                print('  | ' + line, flush=True)   # '|': the installer shows them, never as a JSON report
     with print_lock:
         print(json.dumps({'event': event, **fields}), flush=True)
     return code
@@ -693,7 +722,7 @@ def main(argv=None):
         built = [m for m in args.maps if any((staging / m).glob('*.fg3'))]
         if failed or not built:
             return final('failed', 1, step='scene', maps=failed or args.maps, staging=str(staging),
-                         problems=[f'scene {m} failed' for m in failed or args.maps])
+                         problems=[f'scene {m} failed' for m in failed or args.maps], logs=failed_logs(ran))
         cache, previous_steps, scene_steps = staging, [], ran
     else:
         ran, tile_failures, scene_steps = [], recorded.get('tile_failures', {}), []
@@ -718,7 +747,7 @@ def main(argv=None):
                 'problems': problems}
     (staging / 'install-manifest.json').write_text(json.dumps(manifest, indent=2) + '\n')
     if problems:
-        return final('failed', 1, problems=problems, staging=str(staging))
+        return final('failed', 1, problems=problems, staging=str(staging), logs=failed_logs(ran, tile_failures))
     state.unlink()
     if mode == 'full':
         swap(staging, output, args.keep_previous)
