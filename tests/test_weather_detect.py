@@ -39,8 +39,8 @@ typedef unsigned UINT;typedef unsigned DWORD;typedef long HRESULT;
 #define FAILED(h) ((h)<0)
 enum D3DRENDERSTATETYPE{D3DRS_ALPHABLENDENABLE=27,D3DRS_SRCBLEND=19,D3DRS_DESTBLEND=20,D3DRS_BLENDOP=171,D3DRS_ZWRITEENABLE=14,D3DRS_COLORWRITEENABLE=168,D3DRS_SEPARATEALPHABLENDENABLE=206,D3DRS_SRGBWRITEENABLE=194,D3DRS_SCISSORTESTENABLE=174,D3DRS_STENCILENABLE=52,D3DRS_ZFUNC=23};enum{D3DCMP_LESS=2,D3DCMP_LESSEQUAL=4};struct RECT{long left=0,top=0,right=0,bottom=0;};
 enum D3DMULTISAMPLE_TYPE{D3DMULTISAMPLE_NONE=0,D3DMULTISAMPLE_4_SAMPLES=4};enum D3DFORMAT{D3DFMT_A8R8G8B8=21};enum D3DPOOL{D3DPOOL_DEFAULT=0};typedef DWORD D3DCOLOR;struct D3DRECT{long a,b,c,d;};
-struct D3DSURFACE_DESC{UINT Width=0,Height=0;D3DMULTISAMPLE_TYPE MultiSampleType=D3DMULTISAMPLE_NONE;};struct D3DVIEWPORT9{DWORD X=0,Y=0,Width=0,Height=0;float MinZ=0,MaxZ=1;};
-enum{D3DBLEND_ZERO=1,D3DBLENDOP_MAX=5,D3DCOLORWRITEENABLE_ALPHA=8,D3DCLEAR_TARGET=1,D3DUSAGE_RENDERTARGET=1,D3DBLEND_ONE=2,D3DBLEND_SRCCOLOR=3,D3DBLEND_SRCALPHA=5,D3DBLEND_INVSRCALPHA=6,D3DBLEND_DESTCOLOR=9,D3DBLENDOP_ADD=1};
+struct D3DSURFACE_DESC{UINT Width=0,Height=0;D3DMULTISAMPLE_TYPE MultiSampleType=D3DMULTISAMPLE_NONE;DWORD MultiSampleQuality=0;};struct D3DVIEWPORT9{DWORD X=0,Y=0,Width=0,Height=0;float MinZ=0,MaxZ=1;};
+enum{D3DTEXF_NONE=0,D3DBLEND_ZERO=1,D3DBLENDOP_MAX=5,D3DCOLORWRITEENABLE_ALPHA=8,D3DCLEAR_TARGET=1,D3DUSAGE_RENDERTARGET=1,D3DBLEND_ONE=2,D3DBLEND_SRCCOLOR=3,D3DBLEND_SRCALPHA=5,D3DBLEND_INVSRCALPHA=6,D3DBLEND_DESTCOLOR=9,D3DBLENDOP_ADD=1};
 static std::vector<std::string> lines;
 static void sink(const char* l){lines.push_back(l);}
 static int A=21,X8=22,A1=25,A4=26,R5G6B5=23,DXT5=0x35545844;
@@ -55,7 +55,7 @@ typedef Surface IDirect3DSurface9;
 template<class T> static void drop(T*& p){p=nullptr;}
 struct DrawRec{Surface* rt;DWORD colorWrite,blend,sep,zwrite,srgb,src,dst,op,scissor;D3DVIEWPORT9 vp;DWORD stencil=0,zfunc=0;RECT sr;};
 struct Ext{DWORD rs[256]={};std::vector<std::pair<int,DWORD>> sets;
-    Surface gameRT,gameDS;bool hasDS=true;Surface* rt=&gameRT;D3DVIEWPORT9 vp;IDirect3DTexture9 maskTex;bool createFails=false;unsigned clears=0,creates=0,clearScissor=0,clearPartial=0;std::vector<DrawRec> draws;
+    Surface gameRT,gameDS;bool hasDS=true;Surface* rt=&gameRT;D3DVIEWPORT9 vp;IDirect3DTexture9 maskTex;Surface msTarget;bool createFails=false,createMsFails=false,stretchFails=false;unsigned msCreates=0,stretches=0;D3DMULTISAMPLE_TYPE msCreatedType=D3DMULTISAMPLE_NONE;DWORD msCreatedQuality=0;unsigned clears=0,creates=0,clearScissor=0,clearPartial=0;std::vector<DrawRec> draws;
     HRESULT GetRenderState(D3DRENDERSTATETYPE t,DWORD* v){*v=rs[t];return 0;}
     HRESULT SetRenderState(D3DRENDERSTATETYPE t,DWORD v){rs[t]=v;sets.push_back({int(t),v});return 0;}
     HRESULT GetRenderTarget(DWORD,Surface** o){*o=rt;return 0;}
@@ -64,12 +64,14 @@ struct Ext{DWORD rs[256]={};std::vector<std::pair<int,DWORD>> sets;
     HRESULT GetDepthStencilSurface(Surface** o){if(!hasDS)return -1;*o=&gameDS;return 0;}
     HRESULT GetViewport(D3DVIEWPORT9* o){*o=vp;return 0;}HRESULT SetViewport(const D3DVIEWPORT9* v){vp=*v;return 0;}
     HRESULT Clear(DWORD,const D3DRECT*,DWORD,D3DCOLOR,float,DWORD){++clears;clearScissor+=rs[D3DRS_SCISSORTESTENABLE]!=0;clearPartial+=vp.X!=0||vp.Y!=0||(rt&&(vp.Width!=rt->desc.Width||vp.Height!=rt->desc.Height));return 0;}
-    HRESULT CreateTexture(UINT w,UINT h,UINT,DWORD,D3DFORMAT,D3DPOOL,IDirect3DTexture9** o,void*){++creates;if(createFails)return -2005530516;maskTex.s.desc.Width=w;maskTex.s.desc.Height=h;*o=&maskTex;return 0;}};
+    HRESULT CreateTexture(UINT w,UINT h,UINT,DWORD,D3DFORMAT,D3DPOOL,IDirect3DTexture9** o,void*){++creates;if(createFails)return -2005530516;maskTex.s.desc.Width=w;maskTex.s.desc.Height=h;*o=&maskTex;return 0;}
+    HRESULT CreateRenderTarget(UINT w,UINT h,D3DFORMAT,D3DMULTISAMPLE_TYPE t,DWORD q,int,Surface** o,void*){++msCreates;if(createMsFails)return -2005530516;msCreatedType=t;msCreatedQuality=q;msTarget.desc.Width=w;msTarget.desc.Height=h;msTarget.desc.MultiSampleType=t;msTarget.desc.MultiSampleQuality=q;*o=&msTarget;return 0;}
+    HRESULT StretchRect(Surface* src,const RECT*,Surface* dst,const RECT*,int){++stretches;(void)src;(void)dst;return stretchFails?-1:0;}};
 struct VsClass{bool world=false,skinned=false;};
 struct World{bool on=true;bool rainBlendSetting()const{return on;}};
 namespace NorthlightWeather{}
 struct Hook{
-    Mirror mirrorState;Detector weatherDetect;Sample weatherSample;bool applied=false,terrain=true,enabled=true,failed=false;UINT width=0,height=0;IDirect3DTexture9* rainMask=nullptr;Surface* rainMaskSurface=nullptr;bool rainMaskFailed=false,rainMaskCleared=false,rainMaskDrawn=false,rainMaskFrame=false,rainMaskOk=false,rainScrubDraw=false,rainMaskMismatchLogged=false;unsigned rainMaskDraws=0,rainMaskScrubs=0;VsClass vcMock;const VsClass& classifyVs(int){return vcMock;}std::vector<std::string> logs;template<class F> void extensionWork(const char*,F f){f();}
+    Mirror mirrorState;Detector weatherDetect;Sample weatherSample;bool applied=false,terrain=true,enabled=true,failed=false;UINT width=0,height=0;IDirect3DTexture9* rainMask=nullptr;Surface* rainMaskSurface=nullptr;Surface* rainMaskMS=nullptr;D3DMULTISAMPLE_TYPE rainMaskMsType=D3DMULTISAMPLE_NONE,rainMaskWantType=D3DMULTISAMPLE_NONE;DWORD rainMaskMsQuality=0,rainMaskWantQuality=0;bool rainMaskFailed=false,rainMaskCleared=false,rainMaskDrawn=false,rainMaskFrame=false,rainMaskOk=false,rainScrubDraw=false,rainMaskMismatchLogged=false;unsigned rainMaskDraws=0,rainMaskScrubs=0;VsClass vcMock;const VsClass& classifyVs(int){return vcMock;}std::vector<std::string> logs;template<class F> void extensionWork(const char*,F f){f();}
     void newFrame(){rainMaskCleared=rainMaskDrawn=rainMaskFrame=rainMaskOk=rainScrubDraw=false;applied=false;} /* clearFrame's part */
     Ext extObj;Ext* ext=&extObj;World worldObj;World* world=&worldObj;bool claimedSkip=false;bool gateFrame=true;
     template<class Draw> HRESULT blobFaintDraw(bool claimed,Draw draw){return claimed?0:draw();}
@@ -226,9 +228,17 @@ int main(){
         {Hook h;mk(h);h.weatherDetect.noteCreate(P(52),128,512,10,A);h.weatherDetect.mistArmed=true;h.bind(0,52);h.draw(10);assert(h.drawn==0&&h.rainMaskDraws==0);} /* mist: skipped */
         {Hook h;mk(h);h.enabled=false;h.draw(10);assert(h.drawn==1&&h.rainMaskDraws==0);}
         {Hook h;mk(h);h.ext->gameRT.desc.Width=99;h.draw(10);h.draw(10);assert(h.drawn==2&&h.rainMaskDraws==0&&h.ext->creates==0&&h.logs.size()==1);} /* wrong size: skipped for the frame, logged once */
-        {Hook h;mk(h);h.ext->gameRT.desc.MultiSampleType=D3DMULTISAMPLE_4_SAMPLES;h.draw(10);assert(h.drawn==1&&h.rainMaskDraws==0);}
-        {Hook h;mk(h);h.ext->gameDS.desc.MultiSampleType=D3DMULTISAMPLE_4_SAMPLES;h.draw(10);assert(h.drawn==1&&h.rainMaskDraws==0);}
-        {Hook h;mk(h);h.ext->hasDS=false;h.draw(10);assert(h.drawn==2&&h.rainMaskDraws==1);} /* no depth surface to compare: eligible */
+        {Hook h;mk(h);h.ext->gameRT.desc.MultiSampleType=D3DMULTISAMPLE_4_SAMPLES;h.draw(10);assert(h.drawn==1&&h.rainMaskDraws==0&&h.ext->creates==0&&h.ext->msCreates==0&&h.logs.size()==1);} /* RT 4x, depth none: skipped, logged once */
+        {Hook h;mk(h);h.ext->gameRT.desc.MultiSampleType=D3DMULTISAMPLE_4_SAMPLES;h.ext->gameDS.desc.MultiSampleType=D3DMULTISAMPLE_4_SAMPLES;h.ext->gameDS.desc.MultiSampleQuality=1;h.draw(10);assert(h.drawn==1&&h.rainMaskDraws==0&&h.ext->msCreates==0);} /* same type, other quality: skipped */
+        {Hook h;mk(h);h.ext->gameRT.desc.MultiSampleType=D3DMULTISAMPLE_4_SAMPLES;h.ext->gameRT.desc.MultiSampleQuality=2;h.ext->gameDS.desc.MultiSampleType=D3DMULTISAMPLE_4_SAMPLES;h.ext->gameDS.desc.MultiSampleQuality=2;
+            h.draw(10);assert(h.drawn==2&&h.rainMaskDraws==1&&h.rainMaskMS==&h.ext->msTarget&&h.ext->msCreates==1&&h.ext->creates==1&&h.ext->msCreatedType==D3DMULTISAMPLE_4_SAMPLES&&h.ext->msCreatedQuality==2&&h.logs.empty()); /* RT 4x + depth 4x: MS twin made with the RT's type and quality */
+            assert(h.ext->draws[1].rt==&h.ext->msTarget&&h.ext->rt==&h.ext->gameRT&&h.ext->clears==1); /* the mask draw went to the MS surface, the game's RT restored */
+            h.draw(10);h.newFrame();h.draw(10);assert(h.rainMaskDraws==3&&h.ext->msCreates==1&&h.ext->creates==1&&h.ext->clears==2);
+            h.ext->gameRT.desc.MultiSampleType=D3DMULTISAMPLE_NONE;h.ext->gameDS.desc.MultiSampleType=D3DMULTISAMPLE_NONE;h.newFrame();h.draw(10);assert(h.ext->creates==2&&h.rainMaskMS==nullptr&&h.ext->draws.back().rt==&h.ext->maskTex.s);} /* MSAA turned off without a release: recreated as a plain mask */
+        {Hook h;mk(h);h.ext->gameRT.desc.MultiSampleType=D3DMULTISAMPLE_4_SAMPLES;h.ext->gameDS.desc.MultiSampleType=D3DMULTISAMPLE_4_SAMPLES;h.ext->createMsFails=true;h.draw(10);assert(h.drawn==1&&h.rainMaskFailed&&h.rainMaskMS==nullptr&&h.rainMaskSurface==nullptr&&h.logs.size()==1&&h.logs[0].rfind("WEATHER rain mask disabled",0)==0);} /* MS target refused: all dropped, mask disabled */
+        {Hook h;mk(h);h.ext->gameDS.desc.MultiSampleType=D3DMULTISAMPLE_4_SAMPLES;h.draw(10);assert(h.drawn==1&&h.rainMaskDraws==0&&h.ext->msCreates==0);} /* RT none, depth 4x: skipped */
+        {Hook h;mk(h);h.ext->hasDS=false;h.draw(10);assert(h.drawn==2&&h.rainMaskDraws==1&&h.ext->msCreates==0);}
+        {Hook h;mk(h);h.ext->hasDS=false;h.ext->gameRT.desc.MultiSampleType=D3DMULTISAMPLE_4_SAMPLES;h.draw(10);assert(h.drawn==2&&h.rainMaskDraws==1&&h.ext->msCreatedType==D3DMULTISAMPLE_4_SAMPLES);} /* MSAA RT, no depth bound: the RT's values */ /* no depth surface to compare: eligible */
         {Hook h;mk(h);h.ext->createFails=true;h.draw(10);assert(h.drawn==1&&h.rainMaskFailed&&h.logs.size()==1&&h.logs[0].rfind("WEATHER rain mask disabled",0)==0);
             h.newFrame();h.draw(10);assert(h.drawn==2&&h.ext->creates==1&&h.logs.size()==1&&h.rainMaskDraws==0);} /* rain still draws, no second attempt, no second log */
         {   // scrub: world and skinned draws after the frame's first mask draw
