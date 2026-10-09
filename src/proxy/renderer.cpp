@@ -335,7 +335,7 @@ class Device final : public GuardedMirrorDevice {
     // is bound for the draw; particlePatchedDraws and particlePatchRejects are the PARTICLES line's counters.
     NorthlightParticleShaderPatch::Cache<ExtensionDevice,IDirect3DPixelShader9> particlePatched;
     IDirect3DPixelShader9* particleGamePs=nullptr;unsigned mod2xBeforeSnapshot=0,mod2xAfterSnapshot=0,mod2xAfterRain=0; /* DESTCOLOR/SRCCOLOR candidates (M2 mod2x): drawn before the frame's background snapshot, after it, and after the frame's first rain mask draw (a subset of after, usually) */
-    unsigned particlePatchedDraws=0,particlePatchRejects[NorthlightParticleShaderPatch::ReasonCount]={};
+    unsigned particleFoggedDraws=0;bool particleFoggedNow=false;unsigned particlePatchedDraws=0,particlePatchRejects[NorthlightParticleShaderPatch::ReasonCount]={};
     bool failed = false, projectionValid = false, key10 = false, key12=false;
     // 0.3.200 (frame markers): diagnostics only, while northlight-frame-markers.txt exists in the game folder at device creation: two 40x40
     // squares at the left edge whose colour cycles with the frame number. E (upper) is filled right after the world effects, P (lower) right
@@ -1091,7 +1091,7 @@ private:
         if(!rainMaskFrame){rainMaskFrame=true;rainMaskOk=rainMaskEligible();}
         if(!rainCapsChecked)rainMaskCaps();
         unsigned why=0;bool vsBound=false,psBound=false;unsigned vsModel=0;DWORD spec=0;unsigned variant=0;
-        IDirect3DPixelShader9* gamePs=nullptr,*patchedPs=nullptr;int patchKind=-1; /* particles with a game pixel shader: the bound shader (borrowed until the draw), the blend kind, the patched variant */
+        IDirect3DPixelShader9* gamePs=nullptr,*patchedPs=nullptr;int patchKind=-1;bool patchedFogged=false; /* particles with a game pixel shader: the bound shader (borrowed until the draw), the blend kind, the patched variant */
         DWORD st[9]={~0u,~0u,~0u,~0u,~0u,~0u,~0u,~0u,~0u}; /* color op/arg1/arg2, alpha op/arg1/arg2, stage 1 color op, texcoord index, texture transform */
         DWORD bl[4]={~0u,~0u,~0u,~0u}; /* particles: source and destination blend, blend op, alpha test */
         if(!rainMaskOk)why|=1;
@@ -1126,7 +1126,7 @@ private:
                             DWORD sepAlpha=TRUE;if(SUCCEEDED(ext->GetRenderState(D3DRS_SEPARATEALPHABLENDENABLE,&sepAlpha))&&!sepAlpha)kind=3;}
                     }
                     if(kind<0)why|=128;
-                    else if(psBound)patchKind=kind; /* a game pixel shader: its stage setup is a leftover, the patched shader replaces nothing of it */
+                    else if(psBound)patchKind=kind==2&&bl[0]==D3DBLEND_SRCCOLOR?3:kind; /* kind 3: SRCCOLOR/ONE squares the value in blue, its variant writes no fog factor (a game pixel shader: its stage setup is a leftover, the patched shader replaces nothing of it */
                     auto texDiffuse=[](DWORD a,DWORD b){const bool bd=(b==D3DTA_DIFFUSE||b==D3DTA_CURRENT),ad=(a==D3DTA_DIFFUSE||a==D3DTA_CURRENT);return (a==D3DTA_TEXTURE&&bd)||(b==D3DTA_TEXTURE&&ad);};
                     const bool colorOk=(st[0]==D3DTOP_MODULATE||st[0]==D3DTOP_MODULATE2X)&&texDiffuse(st[1],st[2]);
                     const bool alphaOk=st[3]==D3DTOP_MODULATE&&texDiffuse(st[4],st[5]);
@@ -1145,7 +1145,7 @@ private:
             const auto patched=particlePatched.get(ext,gamePs,unsigned(patchKind));
             if(patched.log)logf("PARTICLES game shader hash=%016llx kind=%d: %s",(unsigned long long)patched.hash,patchKind,patched.shader?"patched":NorthlightParticleShaderPatch::reasonName(patched.reason));
             if(!patched.shader){why|=2048;++particlePatchRejects[patched.reason<NorthlightParticleShaderPatch::ReasonCount?patched.reason:NorthlightParticleShaderPatch::CacheFull];}
-            else patchedPs=patched.shader;
+            else{patchedPs=patched.shader;patchedFogged=patched.fogged;}
         }
         if(!why&&particle&&!psBound&&!particlePS[variant]){
             static const DWORD* const code[8]={kParticleOver1Shader,kParticleOver2Shader,kParticleAddA1Shader,kParticleAddA2Shader,kParticleAddC1Shader,kParticleAddC2Shader,kParticleMod1Shader,kParticleMod2Shader};
@@ -1190,7 +1190,8 @@ private:
         static const D3DRENDERSTATETYPE types[1]={D3DRS_COLORWRITEENABLE1};
         const bool over=patchedPs?patchKind==0:variant<2;
         const bool mod2x=!patchedPs&&particle&&variant>=6;
-        const DWORD want[1]={DWORD(mod2x?D3DCOLORWRITEENABLE_ALPHA:particle&&!over?D3DCOLORWRITEENABLE_BLUE:D3DCOLORWRITEENABLE_GREEN|D3DCOLORWRITEENABLE_BLUE)}; /* rain streaks and alpha-over particles: green (1-T) + blue (touched); additive particles: blue only; mod2x halos: alpha only (the factor) */
+        const DWORD want[1]={DWORD(mod2x?D3DCOLORWRITEENABLE_ALPHA:particle&&!over?D3DCOLORWRITEENABLE_RED|D3DCOLORWRITEENABLE_BLUE:D3DCOLORWRITEENABLE_RED|D3DCOLORWRITEENABLE_GREEN|D3DCOLORWRITEENABLE_BLUE)}; /* rain streaks and alpha-over particles: red (the game's fog factor, 1 where unknown, weighted like blue) + green (1-T) + blue (touched); additive particles: red + blue; mod2x halos: alpha only (the factor) */
+        particleFoggedNow=patchedPs&&patchedFogged;
         for(int i=0;i<1;++i){rainMrtPrevKnown[i]=SUCCEEDED(ext->GetRenderState(types[i],&rainMrtPrev[i]));ext->SetRenderState(types[i],want[i]);}
         if(patchedPs){particleGamePs=gamePs;gamePs->AddRef();} /* the draw replaces the binding; the game's shader must outlive it */
         ext->SetPixelShader(patchedPs?patchedPs:particle?particlePS[variant]:rainMrtPS);
@@ -1210,7 +1211,7 @@ private:
         const bool gameShader=particleGamePs!=nullptr;
         const HRESULT hr=draw();
         extensionWork("rain mask",[&]{rainMrtEnd();});
-        if(SUCCEEDED(hr)){rainMaskDrawn=true;if(particle){++particleDraws;if(gameShader)++particlePatchedDraws;}else{rainMaskRainDrawn=true;++rainMaskDraws;}}
+        if(SUCCEEDED(hr)){rainMaskDrawn=true;if(particle){++particleDraws;if(gameShader){++particlePatchedDraws;if(particleFoggedNow)++particleFoggedDraws;}}else{rainMaskRainDrawn=true;++rainMaskDraws;}}
         return hr;
     }
     // renderEffects: the mask for this frame's composite, or nullptr. Resolves the MSAA twin, then one full-screen pass over the texture: pixels whose depth differs from rainDepth
@@ -1579,7 +1580,7 @@ public:
                 rows+=row;}
             std::string rejects;char rej[64];
             for(unsigned i=0;i<NorthlightParticleShaderPatch::ReasonCount;++i)if(particlePatchRejects[i]){snprintf(rej,sizeof rej," %s=%u",NorthlightParticleShaderPatch::reasonName(i),particlePatchRejects[i]);rejects+=rej;}
-            logf("PARTICLES frame=%u masked=%u skipped=%u rt1Binds=%u cap=%u bg=%d sigs=%u more=%u patched=%u psCache=%u/%u patchRejects={%s } mod2x=%u/%u/%u%s",sampleFrame,particleDraws,particleSkips,rebinds,kParticleRebindCap,particleBgLast,particleSigCount,particleSigMore,particlePatchedDraws,unsigned(particlePatched.size()),unsigned(particlePatched.variants()),rejects.c_str(),mod2xBeforeSnapshot,mod2xAfterSnapshot,mod2xAfterRain,rows.c_str());
+            logf("PARTICLES frame=%u masked=%u skipped=%u rt1Binds=%u cap=%u bg=%d sigs=%u more=%u patched=%u fogged=%u nofog=%u psCache=%u/%u patchRejects={%s } mod2x=%u/%u/%u%s",sampleFrame,particleDraws,particleSkips,rebinds,kParticleRebindCap,particleBgLast,particleSigCount,particleSigMore,particlePatchedDraws,particleFoggedDraws,particlePatchedDraws-particleFoggedDraws,unsigned(particlePatched.size()),unsigned(particlePatched.variants()),rejects.c_str(),mod2xBeforeSnapshot,mod2xAfterSnapshot,mod2xAfterRain,rows.c_str());
         }
         if(sampled()&&(rainLateZ||lateZSigCount)){
             static const char* const vsNames[5]={"none","world","skinned","water","other"};
@@ -1597,7 +1598,7 @@ public:
             logf("PARTICLES lateNoZ frame=%u draws=%u prims=%u sigs=%u more=%u%s",sampleFrame,noZDraws,noZPrims,noZSigCount,noZSigMore,rows.c_str());
         }
         noZSigCount=noZSigMore=noZDraws=noZPrims=0;
-        particleSigCount=particleSigMore=0;particlePatchedDraws=mod2xBeforeSnapshot=mod2xAfterSnapshot=mod2xAfterRain=0;memset(particlePatchRejects,0,sizeof particlePatchRejects);
+        particleSigCount=particleSigMore=0;particleFoggedDraws=particlePatchedDraws=mod2xBeforeSnapshot=mod2xAfterSnapshot=mod2xAfterRain=0;memset(particlePatchRejects,0,sizeof particlePatchRejects);
     }
     void logWeatherProbe(unsigned sampleFrame){
         logf("WEATHER probe frame=%u maxDrawPrims=%u tex=%p known=%d candidate=%d vs=%d ps=%d hot=%p hotDraws=%u tall=%u overflows=%u",sampleFrame,weatherProbe.count,weatherProbe.texture,int(weatherProbe.known),int(weatherProbe.candidate),int(weatherProbe.vs),int(weatherProbe.ps),weatherDetect.hot,weatherSample.draws,weatherDetect.tallSeen,weatherDetect.overflows);
