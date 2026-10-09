@@ -40,7 +40,6 @@ struct Counters {
     // 0.3.196 (task 12): fresh keeps skipped for lack of free room (they stage instead), and the readbacks split by why the level had no shadow: its fresh keep was evicted, its
     // re-locked shadow was evicted, its fresh keep was skipped (no room), or it never had one (a first write above the fresh limit, a refused or dropped shadow).
     Counter texShadowFreshSkipped{0},readbackAfterFreshDrop{0},readbackAfterRelockedEvict{0},readbackNeverShadowed{0},readbackAfterFreshSkip{0};   // ...Skip: the level's fresh keep was skipped (no room)
-    Counter texCapGrows{0};   // 0.3.204 (task 21): adaptive level-shadow cap growth steps
     Counter texShadowSpared{0},texShadowSpareReuses{0};   // 0.3.200 (pipeline): evicted level allocations kept as spares / reused by a new level shadow (StreamCore::texSpare)
     // 0.3.192 (CS): buffer shadows made by ONE synchronous whole-buffer readback at a write re-lock (DYNAMIC late shadows / non-DYNAMIC shadows), LRU evictions
     // by kind (hot = locked within kShadowHotFrames), re-locks refused (too big for the cap / no victim qualified), and adaptive cap growths.

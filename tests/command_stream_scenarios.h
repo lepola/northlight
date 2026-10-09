@@ -682,7 +682,7 @@ static void statsLine(){
     rig.sync();
     std::vector<std::string> lines;for(auto& l:gStatLines)if(l.find(" frames=600 ")!=std::string::npos)lines.push_back(l);   // the 600th replayed frame
     CHECK(lines.size()==1&&lines[0].rfind("CSTREAM cmds=",0)==0&&lines[0].find("passPerFrame=")!=std::string::npos&&lines[0].find("census[")!=std::string::npos&&lines[0].back()==']');
-    for(const char* field:{"game[per frame]: ms=","coop=","split[per frame]: lockMs=","recordMs~=","snapMs=","presentMs=","syncMs=","presentWaitMs=","bpMs=","sleeps=","publishes=","replayBusyMs/frame=","recorded=","answered=","texShadow=","texGrows=","readbacks=","bufShadow=","readbacks/frame=","evicted/frame=","(hot ","refused/frame=","grows=","large=","memMB=","texFreshSkipped=","texReadbackCause[freshDrop=","relockedEvict=","neverShadowed=","freshSkip="," skipped="})CHECK(lines[0].find(field)!=std::string::npos);   // per-window numbers
+    for(const char* field:{"game[per frame]: ms=","coop=","split[per frame]: lockMs=","recordMs~=","snapMs=","presentMs=","syncMs=","presentWaitMs=","bpMs=","sleeps=","publishes=","replayBusyMs/frame=","recorded=","answered=","texShadow=","readbacks=","bufShadow=","readbacks/frame=","evicted/frame=","(hot ","refused/frame=","grows=","large=","memMB=","texFreshSkipped=","texReadbackCause[freshDrop=","relockedEvict=","neverShadowed=","freshSkip="," skipped="})CHECK(lines[0].find(field)!=std::string::npos);   // per-window numbers
     CHECK(lines[0].size()<2000);
     {bool top=false;for(auto& l:gStatLines)if(l.rfind("CSTREAM top[per frame]: Device::DrawPrimitive=",0)==0)top=true;CHECK(top);}   // 0.3.204 (task 21): the sampled per-command split, the draws first
     rig.finish();checkClean();
@@ -1589,36 +1589,9 @@ static void floatConstantBanks(){
     {const float c[8]={1,2,3,4,5,6,7,8};const auto b0=q.recordedSeq();d->SetVertexShaderConstantF(255,c,2);d->SetVertexShaderConstantF(255,c,2);CHECK(q.recordedSeq()==b0+2);float g[4];CHECK(d->GetVertexShaderConstantF(255,g,1)==D3D_OK&&g[0]==1&&g[3]==4);}
     rig.sync();rig.finish();checkClean();
 }
-// 0.3.204 (task 21): the level-shadow cap is adaptive like the buffer one: a re-locked working set just above the 16 MiB base thrashes (a readback per lock), the cap grows one 4 MiB step per interval (none in the first one, none
-// under pressure) while it thrashes, and the readbacks stop once the set fits; it never passes 32 MiB; pressure halves the cap of the BASE and forgets the growth.
-static void textureShadowAdaptiveCap(){
-    gTrace.clear();Rig rig(true);auto& q=rig.core().q;auto& s=q.stats;IDirect3DDevice9* d=rig.dev;
-    std::vector<IDirect3DTexture9*> v;
-    auto add=[&](int n){for(int i=0;i<n;++i){IDirect3DTexture9* t=nullptr;D3DLOCKED_RECT lr{};
-        CHECK(d->CreateTexture(512,512,1,0,(D3DFORMAT)22,(D3DPOOL)1,&t,nullptr)==D3D_OK&&t->LockRect(0,&lr,nullptr,0)==D3D_OK&&t->UnlockRect(0)==D3D_OK);v.push_back(t);}rig.sync();};   // 1 MiB levels, written once (staged)
-    auto round=[&]{for(auto* t:v){D3DLOCKED_RECT lr{};CHECK(t->LockRect(0,&lr,nullptr,0)==D3D_OK&&t->UnlockRect(0)==D3D_OK);}};   // every lock a re-lock: a hit, or a readback
-    auto capMB=[&]{return q.texShadowCap()>>20;};
-    CHECK(capMB()==16);
-    add(17);   // 17 MiB: one more than the cap holds, in LRU rotation every lock misses
-    frames(d,20);{const auto rb=get(s.texShadowReadbacks);round();round();CHECK(get(s.texShadowReadbacks)>rb+17&&get(s.texCapGrows)==0&&capMB()==16);}   // thrash, but the first interval: no growth
-    frames(d,45);round();CHECK(get(s.texCapGrows)==1&&capMB()==20);   // past the interval: one step (the evicted levels were locked recently: hot)
-    round();{const auto rb=get(s.texShadowReadbacks);round();round();CHECK(get(s.texShadowReadbacks)==rb&&get(s.texCapGrows)==1&&s.texShadowBytes.load()<=std::int64_t(q.texShadowCap()));}   // it fits now: no readbacks
-    // a bigger set (34 MiB): one step per interval up to 32 MiB, then no more
-    add(17);const std::uint64_t expect[]={24,28,32,32,32};
-    for(int i=0;i<5;++i){frames(d,30);round();frames(d,31);round();round();CHECK(capMB()==expect[i]&&get(s.texCapGrows)==(i<3?2u+unsigned(i):4u)&&s.texShadowBytes.load()<=std::int64_t(q.texShadowCap()));}
-    {const auto rb=get(s.texShadowReadbacks);round();CHECK(get(s.texShadowReadbacks)>rb);}   // (still thrashing at the maximum)
-    // pressure: the cap halves from the base, the growth is forgotten, nothing grows under it
-    rig.sync();rig.core().memoryPressure.store(true);frames(d,1);rig.sync();
-    CHECK(q.pressure()&&q.texShadowCap()==TextureShadowBudgetBytes/2&&s.texShadowBytes.load()<=std::int64_t(q.texShadowCap()));
-    {const auto g=get(s.texCapGrows);frames(d,61);round();round();CHECK(get(s.texCapGrows)==g&&q.texShadowCap()==TextureShadowBudgetBytes/2);}
-    rig.core().memoryPressure.store(false);frames(d,1);rig.sync();CHECK(!q.pressure()&&capMB()==16);   // after the pressure the base again
-    {const auto g=get(s.texCapGrows);frames(d,30);round();frames(d,31);round();CHECK(get(s.texCapGrows)==g+1&&capMB()==20);}   // and it grows again only by the thrash rule
-    for(auto* t:v)t->Release();rig.sync();CHECK(s.texShadowBytes.load()==0);
-    rig.finish();checkClean();
-}
 static void streamTests(bool threadsOnly){
     layoutIsolation();replayTimingAccounting();diagnosticsOffSkipsAudit();idlePollWakes();
-    lifetimeAndIdentity();stateKnownUnknown();locksPreserveBytes();staticBufferShadows();dynamicBufferShadows();largeBufferAllowance();twoLargeBuffers();adaptiveShadowCap();shadowCap();queriesAndSyncCensus();resetAndShutdown();directReplayRaw();redundantFiltering();renderTargetResetsViewport();textureShadows();textureShadowAdaptiveCap();statsLine();childrenOutliveTheDevice();queryProbeAndDeadQuery();initFailureFallback();cursorHandling();nestedSyncInPump();testCooperativeLevelLocal(1);testCooperativeLevelLocal(3);upDrawsAndBackpressure();snapshotTriggers();snapshotPoolNotExhausted();memoryPressureRelease();impossibleBlockIsRefusedAtOnce();smallStagedLocksUseScratch();
+    lifetimeAndIdentity();stateKnownUnknown();locksPreserveBytes();staticBufferShadows();dynamicBufferShadows();largeBufferAllowance();twoLargeBuffers();adaptiveShadowCap();shadowCap();queriesAndSyncCensus();resetAndShutdown();directReplayRaw();redundantFiltering();renderTargetResetsViewport();textureShadows();statsLine();childrenOutliveTheDevice();queryProbeAndDeadQuery();initFailureFallback();cursorHandling();nestedSyncInPump();testCooperativeLevelLocal(1);testCooperativeLevelLocal(3);upDrawsAndBackpressure();snapshotTriggers();snapshotPoolNotExhausted();memoryPressureRelease();impossibleBlockIsRefusedAtOnce();smallStagedLocksUseScratch();
     framesAheadPacing();textureShadowSpares();frameSkipping();frameSkipReleasesPresentWait();   // 0.3.200 (frame skip)
     zeroCopyRenames();zeroCopyRingBudget();zeroCopyAdaptiveRing();zeroCopyRetire();zeroCopyPumpedLock(0);zeroCopyPumpedLock(1);
     for(UINT len:{512u<<10,2u<<20}){zeroCopyRenames(len);zeroCopyRetire(len);zeroCopyPumpedLock(0,len);zeroCopyPumpedLock(1,len);}   // 0.3.204 (task 21): the same for DYNAMIC buffers in the regular shadow cap

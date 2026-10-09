@@ -43,8 +43,7 @@ constexpr unsigned kMaxFramesAhead=3;
 constexpr std::size_t kMaxBudgetBytes=std::size_t(32)<<20;
 constexpr unsigned clampFramesAhead(unsigned n){return n<1?1:n>kMaxFramesAhead?kMaxFramesAhead:n;}
 constexpr std::size_t budgetForFramesAhead(unsigned n){return BudgetBytes*clampFramesAhead(n)<kMaxBudgetBytes?BudgetBytes*clampFramesAhead(n):kMaxBudgetBytes;}
-constexpr std::size_t TextureShadowBudgetBytes=std::size_t(16)<<20;   // per-level texture shadows (the base of the adaptive cap, see growTexShadowCap); halved under pressure; evictable (LRU)
-constexpr std::size_t kTexShadowMaxBytes=std::size_t(32)<<20,kTexShadowGrowStep=std::size_t(4)<<20;
+constexpr std::size_t TextureShadowBudgetBytes=std::size_t(16)<<20;   // per-level texture shadows; halved under pressure; evictable (LRU)
 // 0.3.192 (CS): CPU shadows of buffers (DYNAMIC and re-locked non-DYNAMIC ones; evictable LRU, never while locked). The cap is ADAPTIVE: ShadowBudgetBytes is
 // the base/start value; it grows by kShadowGrowStep (up to kShadowBudgetMaxBytes) only when the shadows thrash AND there is no memory pressure: the LRU had
 // to evict a HOT shadow (locked within kShadowHotFrames Presents) or a re-lock found no victim at all. At most one step per kShadowGrowFrames Presents
@@ -122,7 +121,6 @@ class Queue {
     // Rarely written flags (sleeping_ only when the consumer goes idle).
     alignas(kLine) std::atomic<bool> sleeping_{false};
     std::atomic<bool> interrupted_{false},bpWaiting_{false},pressure_{false};
-    std::atomic<std::size_t> texCapCur_{TextureShadowBudgetBytes};std::uint64_t texGrowAt_=kShadowGrowFrames;   // 0.3.204 (task 21): adaptive level-shadow cap, see growTexShadowCap
     std::atomic<std::size_t> shadowCapCur_{ShadowBudgetBytes};std::uint64_t shadowGrowAt_=kShadowGrowFrames;   // adaptive buffer-shadow cap; first frame it may grow
     std::size_t budget_;
     Event consumerEv_{false},progress_{false};
@@ -372,16 +370,7 @@ public:
     void resetShadowCap(std::uint64_t frame){shadowCapCur_.store(ShadowBudgetBytes,std::memory_order_relaxed);shadowGrowAt_=frame+kShadowGrowFrames;}   // pressure: the adaptive part goes
     // A new shadow of `bytes` fits the cap now (shadowAdmit; making room by evicting is the game thread's job, see makeRoomForBufferShadow).
     void addTexShadowBytes(std::int64_t delta){stats.texShadowBytes.fetch_add(delta,std::memory_order_relaxed);}
-    // 0.3.204 (task 21): the level-shadow cap is ADAPTIVE like the buffer one: TextureShadowBudgetBytes is the base; it grows by kTexShadowGrowStep (up to kTexShadowMaxBytes) when the level shadows thrash (a level whose shadow was
-    // evicted, or whose fresh keep was skipped, needs a readback again: see lockImage) and there is no memory pressure, at most one step per kShadowGrowFrames Presents (none in the first interval). Under pressure it never grows, is halved and the
-    // growth is forgotten (resetTexShadowCap); afterwards it grows again only by the thrash rule. Growth is game-thread; the cap is read by any thread.
-    std::size_t texShadowCap()const{const std::size_t c=texCapCur_.load(std::memory_order_relaxed);return pressure_.load()?c/2:c;}
-    bool growTexShadowCap(std::uint64_t frame){
-        const std::size_t c=texCapCur_.load(std::memory_order_relaxed);
-        if(pressure_.load()||c+kTexShadowGrowStep>kTexShadowMaxBytes||frame<texGrowAt_)return false;
-        texCapCur_.store(c+kTexShadowGrowStep,std::memory_order_relaxed);texGrowAt_=frame+kShadowGrowFrames;add(stats.texCapGrows);return true;
-    }
-    void resetTexShadowCap(std::uint64_t frame){texCapCur_.store(TextureShadowBudgetBytes,std::memory_order_relaxed);texGrowAt_=frame+kShadowGrowFrames;}
+    std::size_t texShadowCap()const{return pressure_.load()?TextureShadowBudgetBytes/2:TextureShadowBudgetBytes;}
     bool texShadowAdmit(std::size_t bytes)const{const auto s=stats.texShadowBytes.load(std::memory_order_relaxed);return (s>0?std::size_t(s):0)+bytes<=texShadowCap();}
     std::size_t largeBytes()const{const auto s=stats.largeShadowBytes.load(std::memory_order_relaxed);return s>0?std::size_t(s):0;}
     void addLargeBytes(std::int64_t delta){stats.largeShadowBytes.fetch_add(delta,std::memory_order_relaxed);}
