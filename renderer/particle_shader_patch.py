@@ -14,8 +14,11 @@ recurrence as BLUE with f as the value, so red/blue is the weighted mean of f (t
   kind 0  oC1 = (f,1,1,sat(a))        over: R' = a*f + (1-a)*R against B' = a + (1-a)*B
   kind 1  oC1 = (f,1,1,w)             SRCALPHA/ONE, w = sat(a)*sat(max rgb): R' = R + w*f against B' = B + w
   kind 2  oC1 = (m*f,m,m,m)           ONE/ONE, m = sat(max rgb): R' = R + m*f against B' = B + m
-Shaders without the input (and every fixed-function / rain variant, which write 1 / m to oC1.x) leave red equal to blue: f = 1, no extra fog. SRCCOLOR/ONE (kind 3) squares
-the written value in blue, so it would square f in red: it writes no f.
+The additive kinds write their weight at a scale (the constant's w, SCALE): 1/4 with the fog factor, so that a stack of bright layers does not saturate blue on the 8-bit mask
+(red keeps rising and the mean f would drift); without it 1/64 (kind 1, 2) or 1/8 (kind 3, whose blend squares the value): such layers carry little weight, they only mark the
+pixel as touched (blue >= 1/255 needs a bright core) and dilute the others' mean by a sixteenth. The over kind needs no scale (it lerps). The renderer's colour mask for the variant
+decides which channels land: over without a fog factor writes green only; additive and fogged-over variants write red and blue (and green for over). Kind 3 squares the written
+value in blue (SRCCOLOR), so it would square f in red: it writes no f (red = blue).
 Everything it cannot prove safe is a ValueError whose text is the reason (REASONS, the C++
 port's names): the water patch's set, with if/ifc/else/endif accepted as long as oC0 is written
 outside them. Pure: no MPQ, client, device.
@@ -100,11 +103,10 @@ def patch(code,kind):
         if len(free)<2:raise ValueError('no free temporary')
         spare2=free[1]
     const=None
-    if kind<2:
-        if relativeConst:raise ValueError('relative constant')
-        climit=224 if major==3 else 32
-        const=next((i for i in range(climit-1,-1,-1) if i not in used.get(2,set())),None)
-        if const is None:raise ValueError('no free constant')
+    if relativeConst:raise ValueError('relative constant')
+    climit=224 if major==3 else 32
+    const=next((i for i in range(climit-1,-1,-1) if i not in used.get(2,set())),None)
+    if const is None:raise ValueError('no free constant')
     for p in params:
         if register(w[p])==(8,0):w[p]=reg(w[p],0,spare)
     T=lambda sw:src(0,spare,sw)
@@ -118,10 +120,12 @@ def patch(code,kind):
     else:
         # s2.x = sat(max(r,g,b)) of the game's colour
         suffix+=[0x0300000b,dst(0,spare2,1)|SAT,T(0x00),T(0x55),0x0300000b,dst(0,spare2,1)|SAT,S2(0x00),T(0xaa)]
+        suffix+=[0x03000005,dst(0,spare2,1),S2(0x00),src(2,const,0xff)]    # x the kind's weight scale (SCALE, the constant's w)
         if kind==1:suffix+=[0x02000001,dst(0,spare2,2)|SAT,T(0xff),0x03000005,dst(8,1,8),S2(0x00),S2(0x55)]
         elif fog:suffix+=[0x02000001,dst(0,spare2,2)|SAT,F,0x03000005,dst(8,1,1),S2(0x00),S2(0x55),0x02000001,dst(8,1,14),S2(0x00)]
         else:suffix+=[0x02000001,dst(8,1),S2(0x00)]
     suffix.append(65535)
     w[end:end+1]=suffix
-    if const is not None:w[firstOp:firstOp]=[0x05000051,dst(2,const),0x3f800000,0x3f800000,0x3f800000,0x3f800000]
-    return struct.pack('<%dI'%len(w),*w),{'model':major,'kind':kind,'temp':spare,'temp2':spare2,'const':const,'fog':fog is not None}
+    scale=1.0 if kind==0 else .125 if kind==3 else .25 if fog else 1/64
+    w[firstOp:firstOp]=[0x05000051,dst(2,const),0x3f800000,0x3f800000,0x3f800000,struct.unpack('<I',struct.pack('<f',scale))[0]]
+    return struct.pack('<%dI'%len(w),*w),{'model':major,'kind':kind,'temp':spare,'temp2':spare2,'const':const,'fog':fog is not None,'scale':scale}

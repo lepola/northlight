@@ -138,7 +138,7 @@ inline Reason patch(const Word* w,std::size_t count,unsigned kind,std::vector<Wo
         if(spare2==limit)return NoTemporary;
     }
     unsigned constant=0;
-    if(kind<2) {
+    {
         if(relativeConst)return RelativeConstant;
         const unsigned climit=major==3?224:32;
         unsigned c=climit;bool found=false;
@@ -161,6 +161,7 @@ inline Reason patch(const Word* w,std::size_t count,unsigned kind,std::vector<Wo
     if(kind==0)add({0x02000001,dst(8,1,8)|kSat,T(0xff)});
     else {
         add({0x0300000b,dst(0,spare2,1)|kSat,T(0x00),T(0x55),0x0300000b,dst(0,spare2,1)|kSat,S2(0x00),T(0xaa)});
+        add({0x03000005,dst(0,spare2,1),S2(0x00),src(2,constant,0xff)}); // x the kind's weight scale (the constant's w)
         if(kind==1)add({0x02000001,dst(0,spare2,2)|kSat,T(0xff),0x03000005,dst(8,1,8),S2(0x00),S2(0x55)});
         else if(haveFog)add({0x02000001,dst(0,spare2,2)|kSat,fogSource,0x03000005,dst(8,1,1),S2(0x00),S2(0x55),0x02000001,dst(8,1,14),S2(0x00)});
         else add({0x02000001,dst(8,1),S2(0x00)});
@@ -168,8 +169,9 @@ inline Reason patch(const Word* w,std::size_t count,unsigned kind,std::vector<Wo
     suffix.push_back(0x0000ffff);
     out.erase(out.begin()+std::ptrdiff_t(end),out.end());
     out.insert(out.end(),suffix.begin(),suffix.end());
-    if(kind<2) {
-        const Word def[]={0x05000051,dst(2,constant),0x3f800000,0x3f800000,0x3f800000,0x3f800000};
+    { // def cK = (1,1,1,scale): 1 (over), 1/4 (additive with the fog factor), 1/64 (additive without), 1/8 (SRCCOLOR/ONE: squared by its blend)
+        const Word scale=kind==0?0x3f800000u:kind==3?0x3e000000u:haveFog?0x3e800000u:0x3c800000u;
+        const Word def[]={0x05000051,dst(2,constant),0x3f800000,0x3f800000,0x3f800000,scale};
         out.insert(out.begin()+std::ptrdiff_t(firstOp),def,def+6);
     }
     output.swap(out);if(fogged)*fogged=haveFog;return Ok;
