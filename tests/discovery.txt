@@ -76,7 +76,9 @@ test_model_snapshot_cache.py
 test_near_reserve.py
 test_northlight_install.py
 test_outdoor_light_profiles.py
+test_particle_fog.py
 test_particle_mask.py
+test_particle_shader_patch.py
 test_pending_release_wiring.py
 test_point_light_shadow.py
 test_point_shadow_schedule.py

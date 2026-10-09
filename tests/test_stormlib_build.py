@@ -23,7 +23,7 @@ import unittest
 import build_stormlib as bs  # noqa: E402
 
 PINS = json.loads((fp.RENDERER / 'package-pins.json').read_text())['stormlib']
-KNOWN_ART = {'7d49498b65b7f0f6ae97c1f481028d31b4af6edfaaa88c659642ed84d4d1b5b2',   # 0.3.199 storm bands + weather textures (rain colour .80, alpha .4, one-texel cores, mist puffs at 1:4): HD-2
+KNOWN_ART = {'7656fbd87dace57767bd58e0944f75b94200c2ccde3f7c9f94fb4f47cd462126',   # 0.3.203 storm bands + weather textures (rain colour .68, alpha .4, one-texel cores, mist puffs at 1:4): HD-2
              'bfd8abde6bd55201f652d0077af309df2e3d2a2cdb45c48b172cb5bdf39f4ff7'}   # stock
 OUT = fp.output_dir()
 built = {}
