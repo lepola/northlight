@@ -225,7 +225,7 @@ private:
     DWORD auditRS_[StreamState::kRS]={},auditSamp_[StreamState::kSamplers][StreamState::kSampTypes]={},auditTss_[StreamState::kTSStages][StreamState::kTSTypes]={};
     std::vector<unsigned> touched_;std::vector<bool> touchedFlag_=std::vector<bool>(StreamState::kBits,false);
     struct Avg {double depth=0,bytes=0;unsigned n=0;std::uint64_t maxDepth=0,maxBytes=0;} avg_;
-    std::uint64_t lastIdle_=0,lastPubs_=0,lastSleeps_=0,lastWall_=0,lastPass_=0,lastGameNs_=0,lastGameWait_=0,lastGameFrames_=0,lastPresentNs_=0,lastSyncNs_=0,lastBpNs_=0,lastCmds_=0,lastAnswered_=0,lastCoop_=0,lastSyncCalls_=0,lastFiltered_=0,lastDirect_=0,lastBufRbD_=0,lastBufRbS_=0,lastBufEv_=0,lastBufHot_=0,lastBufRef_=0,lastTexSkip_=0,lastRbFresh_=0,lastRbRelocked_=0,lastRbNever_=0,lastRbSkip_=0;unsigned deadLogged_=0;
+    std::uint64_t lastIdle_=0,lastPubs_=0,lastSleeps_=0,lastWall_=0,lastPass_=0,lastGameNs_=0,lastGameWait_=0,lastGameFrames_=0,lastPresentNs_=0,lastSyncNs_=0,lastBpNs_=0,lastCmds_=0,lastAnswered_=0,lastCoop_=0,lastSyncCalls_=0,lastFiltered_=0,lastDirect_=0,lastBufRbD_=0,lastBufRbS_=0,lastBufEv_=0,lastBufHot_=0,lastBufRef_=0,lastTexSkip_=0,lastRbFresh_=0,lastRbRelocked_=0,lastRbNever_=0,lastRbSkip_=0,lastLockNs_=0,lastRecordNs_=0,lastSnapNs_=0,lastPresentBookNs_=0,lastLockBytes_=0;unsigned deadLogged_=0;
 
     static void captureFpu(unsigned short& cw,unsigned& csr){
         cw=0;csr=0;
@@ -421,6 +421,10 @@ private:
          put(buf,n," game[per frame]: ms=%.3f(excl waits) syncMs=%.3f presentWaitMs=%.3f bpMs=%.3f recorded=%.1f filtered=%.1f answered=%.1f coop=%.1f sync=%.2f direct=%.1f",
              double(gNs-lastGameNs_-(gW-lastGameWait_))/1e6*inv2,double(sNs-lastSyncNs_)/1e6*inv2,double(pNs-lastPresentNs_)/1e6*inv2,double(bNs-lastBpNs_)/1e6*inv2,
              double(cm-lastCmds_)*inv2,double(fl-lastFiltered_)*inv2,double(an-lastAnswered_)*inv2,double(co-lastCoop_)*inv2,double(sc-lastSyncCalls_)*inv2,double(dr-lastDirect_)*inv2);
+         // 0.3.204 (task 21, Diagnostics on only): where the game thread's time goes: Lock/Unlock work (waits excluded) and the MB they queued, generated-call recording (sampled 1 in 16, waits excluded), snapshot capture, Present bookkeeping.
+         {const std::uint64_t lk=get(s.lockNs),rc=get(s.recordSampledNs),sn=get(s.snapNs),pb=get(s.presentBookNs),lb=get(s.lockRecordedBytes);
+          if(lk|rc|sn|pb)put(buf,n," split[per frame]: lockMs=%.3f lockMB=%.2f recordMs~=%.3f(1/16) snapMs=%.3f presentMs=%.3f",double(lk-lastLockNs_)/1e6*inv2,double(lb-lastLockBytes_)/1048576.0*inv2,double(rc-lastRecordNs_)/1e6*inv2,double(sn-lastSnapNs_)/1e6*inv2,double(pb-lastPresentBookNs_)/1e6*inv2);
+          lastLockNs_=lk;lastRecordNs_=rc;lastSnapNs_=sn;lastPresentBookNs_=pb;lastLockBytes_=lb;}
          lastGameNs_=gNs;lastGameWait_=gW;lastPresentNs_=pNs;lastSyncNs_=sNs;lastBpNs_=bNs;lastCmds_=cm;lastFiltered_=fl;lastDirect_=dr;lastAnswered_=an;lastCoop_=co;lastSyncCalls_=sc;}
         {const Memory m=memory();put(buf,n," memMB=%.1f(queue %.1f, bufShadow %.1f, texShadow %.1f, snapshots %.2f)",m.total()/1048576.0,m.queue/1048576.0,m.bufferShadows/1048576.0,m.textureShadows/1048576.0,m.snapshots/1048576.0);}
         put(buf,n," texShadow=%.1f/%.0fMB hits=%llu fresh=%llu readbacks=%llu evicted=%llu freshUseful=%llu refused=%llu/%.1fMB spared=%llu/%llu",double(std::max<std::int64_t>(0,s.texShadowBytes.load()))/1048576.0,double(core.q.texShadowCap())/1048576.0,

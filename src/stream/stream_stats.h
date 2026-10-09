@@ -48,6 +48,10 @@ struct Counters {
     Counter largeShadowGrants{0},largeShadowDrops{0};
     // The game thread's own time per frame (Present to Present, minus its sync and backpressure waits), in ns, and its frames.
     Counter gameNs{0},gameWaitNs{0},gameFrames{0};
+    // 0.3.204 (task 21, Diagnostics only): where the game thread's own time goes, ns (zero while Diagnostics are off). lockNs: buffer/image Lock+Unlock work (shadow memset/memcpy, readbacks),
+    // synchronous waits excluded; recordSampledNs: 16 x the sampled (1 in 16) generated method bodies, waits and snapshot capture excluded; snapNs: snapshot captures at draw triggers;
+    // presentBookNs: the Present call's bookkeeping, waits excluded.
+    Counter lockNs{0},recordSampledNs{0},snapNs{0},presentBookNs{0};
     Counter filteredCalls{0};   // redundant Sets the game side did not record
     Counter stateAnswered{0},stateSynced{0},lockAsync{0};
     Counter coopAnswered{0};   // 0.3.204 (task 21): TestCooperativeLevel calls the game thread answered D3D_OK from StreamCore::coopState (not in stateAnswered)

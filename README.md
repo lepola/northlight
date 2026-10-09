@@ -71,7 +71,8 @@ Every effect below is on by default and is drawn on top of the game's own frame.
   hundreds of times a frame no longer waits for the draw thread on each call (0.3.204); a lost or not yet reset device is reported by the
   real call, up to `StreamFramesAhead` frames after the loss. The `CSTREAM` log line shows the locally answered calls per frame as
   `coop=` (next to `answered=`); `synced=` counts only the calls that waited, which now includes `TestCooperativeLevel` calls made
-  while the device is lost. With `Diagnostics=1` the log also names the module that calls it once (`CSTREAM TestCooperativeLevel caller=`).
+  while the device is lost. With `Diagnostics=1` the log also names the module that calls it once (`CSTREAM TestCooperativeLevel caller=`)
+  and the `CSTREAM` line gains `split[per frame]:` with the game thread's time in buffer/texture locks (`lockMs`, `lockMB` queued), in recording generated calls (`recordMs`, sampled 1 call in 16), in snapshot capture (`snapMs`) and in the Present bookkeeping (`presentMs`), all without waits (0.3.204).
   The shadow allowance for large dynamic buffers holds two of them (up to 24 MiB each, 36 MiB in total) and is released under memory pressure.
   `ContactAO=1` (default, every preset) keeps the screen-space contact shading in creases and corners; `0` skips it and its denoise pass (about 0.5 ms of GPU time) and leaves the bloom as it is.
 - **Font mods.** Lexara, TweakWoW2 (HD Font on) and the AwesomeWotLK MSDF fork replace the game's UI shaders,

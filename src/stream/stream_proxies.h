@@ -89,6 +89,7 @@ struct ProxyBase {
     virtual ~ProxyBase();
     ProxyBase(const ProxyBase&)=delete;ProxyBase& operator=(const ProxyBase&)=delete;
     Queue& streamQueue();
+    struct CallScope callScope();   // 0.3.204 (task 21): sampled game-thread timer of a generated method body (defined below StreamCore)
     // The DXVK model for the device's lifetime: a top-level proxy with public references (refs above `baseline`) holds one
     // reference on the StreamDevice, so the device, the queue and the replay thread outlive every object the game still holds.
     // StreamState binds count in `use` only: they never pin the device (or it would never die). A child's public reference
@@ -228,6 +229,9 @@ struct StreamCore {
     static constexpr unsigned kTexSpares=2;static constexpr std::size_t kTexSpareMaxBytes=(std::size_t(256)<<10)+kLockSlack;
     std::vector<unsigned char> texSpare[kTexSpares];
     LockScratch scratch;             // game thread: small staged buffer locks
+    // 0.3.204 (task 21): Diagnostics split timers. timing is the game thread's own copy of the Diagnostics switch, refreshed at each Present (StreamDevice::presentCommon);
+    // timingN counts the generated calls for the 1-in-16 sampling. Both are game-thread only: the replay thread never runs a game-facing method or a Lock/Unlock path.
+    bool timing=false;unsigned timingN=0;
     std::uint64_t frameNo=0;         // game thread: Presents so far (the idle clock of buffer shadows)
     DWORD (*readBackLock)()=nullptr;             // flags of the stream's own READONLY read-backs of buffers (NorthlightUpload::readBackLock in the DLL); null = READONLY
     void (*logLine)(const char*)=nullptr;        // diagnostics sink (renderer.cpp's logf); may be null
@@ -266,6 +270,21 @@ struct StreamCore {
     }
 };
 inline Queue& ProxyBase::streamQueue(){return core->q;}
+// 0.3.204 (task 21): game-thread split timers, active only while core.timing (Diagnostics on); off: one bool test. Waits (sync, backpressure, present) are subtracted so they stay in their own counters.
+inline std::uint64_t gameWaitsNs(const Counters& s){return get(s.syncNs)+get(s.backpressureNs)+get(s.presentNs);}
+struct CallScope {   // 1 in 16 generated method bodies: 16 x (elapsed - waits - snapshot capture) into recordSampledNs
+    Counters* st=nullptr;std::uint64_t t0=0,w0=0;
+    explicit CallScope(StreamCore& c){if(c.timing&&(++c.timingN&15)==0){st=&c.q.stats;w0=gameWaitsNs(*st)+get(st->snapNs);t0=nowNs();}}
+    CallScope(const CallScope&)=delete;CallScope& operator=(const CallScope&)=delete;
+    ~CallScope(){if(st){const std::uint64_t e=nowNs()-t0,w=gameWaitsNs(*st)+get(st->snapNs)-w0;own(st->recordSampledNs,(e>w?e-w:0)*16);}}
+};
+struct LockScope {   // every buffer/image Lock or Unlock: elapsed minus the waits inside into lockNs
+    Counters* st=nullptr;std::uint64_t t0=0,w0=0;
+    explicit LockScope(StreamCore& c){if(c.timing){st=&c.q.stats;w0=gameWaitsNs(*st);t0=nowNs();}}
+    LockScope(const LockScope&)=delete;LockScope& operator=(const LockScope&)=delete;
+    ~LockScope(){if(st){const std::uint64_t e=nowNs()-t0,w=gameWaitsNs(*st)-w0;own(st->lockNs,e>w?e-w:0);}}
+};
+inline CallScope ProxyBase::callScope(){return CallScope(*core);}
 inline void ProxyBase::pinDevice(){if(core->game)core->game->AddRef();}
 inline void ProxyBase::unpinDevice(){if(core->game)core->game->Release();}
 inline ProxyBase::~ProxyBase(){dropPrivate();}
@@ -464,7 +483,7 @@ constexpr std::size_t kFreshShadowMax=std::size_t(256)<<10;   // a fresh level u
 // self: the object the game called (its inner receives the replayed Lock); root: where creation info and `sub` live.
 inline HRESULT lockImage(ProxyBase& self,ProxyBase& root,SubRes& sub,UINT route,UINT level,UINT face,UINT lw,UINT lh,UINT ld,
                          D3DLOCKED_RECT* lr,D3DLOCKED_BOX* lb,const RECT* rect,const D3DBOX* box,DWORD flags){
-    Queue& q=self.core->q;
+    LockScope _ts(*self.core);Queue& q=self.core->q;
     if((!lr&&!lb)||sub.mode!=SubRes::Free)return D3DERR_INVALIDCALL;
     UINT l=0,t=0,r=lw,b=lh,f=0,k=ld;
     if(rect){
@@ -562,7 +581,7 @@ inline HRESULT lockImage(ProxyBase& self,ProxyBase& root,SubRes& sub,UINT route,
     return hr;
 }
 inline HRESULT unlockImage(ProxyBase& self,SubRes& sub,UINT route,UINT level,UINT face){
-    Queue& q=self.core->q;
+    LockScope _ts(*self.core);Queue& q=self.core->q;
     if(sub.mode==SubRes::Free)return D3DERR_INVALIDCALL;
     const bool volume=route==RouteVolume||route==RouteVolumeTexture;
     const std::uint16_t cmd=(std::uint16_t)(volume?Cmd::UnlockBox:Cmd::UnlockRect);
@@ -738,7 +757,7 @@ inline void dropIdleBufferShadows(StreamCore& c,unsigned idleFrames){
 // Range rules (our reading of DXVK, not verified against it): an offset beyond the end fails with INVALIDCALL; a size of 0 or one
 // that runs past the end becomes "to the end" instead of failing, so the staged/shadow range and the replayed Lock are the clamped one.
 inline HRESULT lockBuffer(ProxyBase& self,BufferState& s,UINT off,UINT size,void** pp,DWORD flags){
-    Queue& q=self.core->q;const UINT length=self.info.length;
+    LockScope _ts(*self.core);Queue& q=self.core->q;const UINT length=self.info.length;
     if(!pp||s.mode!=BufferState::Free||off>length)return D3DERR_INVALIDCALL;
     s.whole=!size||(off==0&&size>=length);
     if(!size||std::uint64_t(off)+size>length)size=length-off;
@@ -775,7 +794,7 @@ inline HRESULT lockBuffer(ProxyBase& self,BufferState& s,UINT off,UINT size,void
 }
 inline void noteRecorded(ProxyBase& p,const BufferState& s,UINT bytes){add(p.core->q.stats.lockRecordedBytes,bytes);if(s.whole)add(p.core->q.stats.wholeLockBytes,bytes);}
 inline HRESULT unlockBuffer(ProxyBase& self,BufferState& s){
-    Queue& q=self.core->q;
+    LockScope _ts(*self.core);Queue& q=self.core->q;
     switch(s.mode){
     case BufferState::Free:return D3DERR_INVALIDCALL;
     case BufferState::Shadow:

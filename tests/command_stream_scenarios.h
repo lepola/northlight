@@ -682,7 +682,7 @@ static void statsLine(){
     rig.sync();
     std::vector<std::string> lines;for(auto& l:gStatLines)if(l.find(" frames=600 ")!=std::string::npos)lines.push_back(l);   // the 600th replayed frame
     CHECK(lines.size()==1&&lines[0].rfind("CSTREAM cmds=",0)==0&&lines[0].find("passPerFrame=")!=std::string::npos&&lines[0].find("census[")!=std::string::npos&&lines[0].back()==']');
-    for(const char* field:{"game[per frame]: ms=","syncMs=","presentWaitMs=","bpMs=","sleeps=","publishes=","replayBusyMs/frame=","recorded=","answered=","texShadow=","readbacks=","bufShadow=","readbacks/frame=","evicted/frame=","(hot ","refused/frame=","grows=","large=","memMB=","texFreshSkipped=","texReadbackCause[freshDrop=","relockedEvict=","neverShadowed=","freshSkip="," skipped="})CHECK(lines[0].find(field)!=std::string::npos);   // per-window numbers
+    for(const char* field:{"game[per frame]: ms=","coop=","split[per frame]: lockMs=","recordMs~=","snapMs=","presentMs=","syncMs=","presentWaitMs=","bpMs=","sleeps=","publishes=","replayBusyMs/frame=","recorded=","answered=","texShadow=","readbacks=","bufShadow=","readbacks/frame=","evicted/frame=","(hot ","refused/frame=","grows=","large=","memMB=","texFreshSkipped=","texReadbackCause[freshDrop=","relockedEvict=","neverShadowed=","freshSkip="," skipped="})CHECK(lines[0].find(field)!=std::string::npos);   // per-window numbers
     CHECK(lines[0].size()<2000);
     rig.finish();checkClean();
 }
@@ -1105,9 +1105,12 @@ static void diagnosticsOffSkipsAudit(){
     gTrace.clear();gDiagOn.store(false);StreamDevice::Options opt;opt.diagnostics=[]{return gDiagOn.load();};opt.log=[](const char*){};
     Rig rig(true,opt);Replayer& rp=rig.sd->replayerOf();
     auto frame=[&]{for(int i=0;i<300;++i)rig.dev->SetRenderState((D3DRENDERSTATETYPE)(7+i%5),DWORD(i+frameSalt()));rig.dev->Present(nullptr,nullptr,nullptr,nullptr);rig.sync();};
+    auto& st=rig.core().q.stats;
     frame();frame();CHECK(rp.auditSets()==0);
+    CHECK(get(st.recordSampledNs)==0&&get(st.presentBookNs)==0&&get(st.lockNs)==0);   // 0.3.204 (task 21): the split timers stay off with Diagnostics
     gDiagOn.store(true);frame();CHECK(rp.auditSets()==0);   // the frame that was running when it turned on: not recorded
     frame();CHECK(rp.auditSets()>0);
+    CHECK(get(st.recordSampledNs)>0&&get(st.presentBookNs)>0);   // 300 generated calls a frame: sampled 1 in 16
     gDiagOn.store(false);const auto n=rp.auditSets();frame();frame();CHECK(rp.auditSets()<=n+300);   // one more recorded frame at most (the flip is seen at the next boundary)
     rig.finish();checkClean();
 }

@@ -107,6 +107,7 @@ public:
 
     // ---- hooks the generated bodies call ----
     Queue& streamQueue(){return core.q;}
+    CallScope callScope(){return CallScope(core);}   // 0.3.204 (task 21): sampled recording timer, see CallScope
     template<Cmd C,class... A> void observe(CmdTag<C>,A&&...){}
     template<Cmd C,class... A> typename MethodTraits<C>::Ret syncCall(CmdTag<C> t,A... a){noteSync(t,a...);return runSync(streamQueue(),t,a...);}
     template<Cmd C,class... A> typename MethodTraits<C>::Ret syncGet(CmdTag<C> t,A... a){own(core.q.stats.stateSynced);return runSync(streamQueue(),t,a...);}
@@ -367,8 +368,10 @@ public:
     HRESULT STDMETHODCALLTYPE Present(const RECT* src,const RECT* dst,HWND window,const RGNDATA* dirty) override{return presentCommon(nullptr,src,dst,window,dirty,0);}
     HRESULT presentCommon(StreamSwapChain* swap,const RECT* src,const RECT* dst,HWND window,const RGNDATA* dirty,DWORD flags){
         Queue& q=streamQueue();
+        core.timing=replayer.diagnostics&&replayer.diagnostics();   // 0.3.204 (task 21): the split timers follow Diagnostics, asked once per frame on the game thread
+        std::uint64_t nowAtPresent=0;const std::uint64_t waits0=core.timing?gameWaitsNs(q.stats):0;
         {   // the game thread's own time this frame: from the previous Present's return to here, minus the waits it spent (sync, backpressure)
-            const std::uint64_t now=nowNs();auto& st2=q.stats;
+            nowAtPresent=nowNs();const std::uint64_t now=nowAtPresent;auto& st2=q.stats;
             if(frameEnd){own(st2.gameNs,now-frameEnd);own(st2.gameWaitNs,get(st2.syncNs)+get(st2.backpressureNs)-waitsAtFrameEnd);own(st2.gameFrames);}
         }
         policy.onPresent();takeReplayFailure();
@@ -389,7 +392,9 @@ public:
         HRESULT result=D3D_OK;
         if(prev.seq){q.waitReplayed(prev.seq,WaitKind::Present);result=presentResult(prev);}   // framesAhead_ frames ahead: that frame's real HRESULT
         q.setPressure(core.memoryPressure.load(std::memory_order_relaxed)||NorthlightStream::memoryPressure.load(std::memory_order_relaxed));
-        frameEnd=nowNs();waitsAtFrameEnd=get(q.stats.syncNs)+get(q.stats.backpressureNs);
+        frameEnd=nowNs();
+        if(core.timing){const std::uint64_t e=frameEnd-nowAtPresent,w=gameWaitsNs(q.stats)-waits0;own(q.stats.presentBookNs,e>w?e-w:0);}   // 0.3.204 (task 21): Present bookkeeping, waits excluded (no extra clock reads)
+        waitsAtFrameEnd=get(q.stats.syncNs)+get(q.stats.backpressureNs);
         ++core.frameNo;tuner.sample(q);   // idle pool memory goes back after a quiet window
         const bool pressureNow=q.pressure();
         if(pressureNow&&(!pressureApplied||core.frameNo%60==0))releaseUnderPressure();   // the memory guard asked: give memory back now, not only stop growing
@@ -636,9 +641,11 @@ private:
     }
     void takeSnapshot(Trigger t){
         if(t==Trigger::None||!capture)return;
+        const std::uint64_t t0=core.timing?nowNs():0;   // 0.3.204 (task 21): snapshot capture time (acquire + capture + record), Diagnostics only
         GameSnapshot* s=replayer.snapshots.acquire();if(!s)return;
-        if(!capture(*s,t,drawOrdinal)){replayer.snapshots.release(s);return;}
+        if(!capture(*s,t,drawOrdinal)){replayer.snapshots.release(s);if(t0)own(core.q.stats.snapNs,nowNs()-t0);return;}
         Queue& q=core.q;auto* p=static_cast<GameSnapshot**>(q.reserve((std::uint16_t)Cmd::Snapshot,sizeof(GameSnapshot*)));*p=s;q.commit();
+        if(t0)own(q.stats.snapNs,nowNs()-t0);
     }
     void written(ProxyBase* p){
         if(!p)return;

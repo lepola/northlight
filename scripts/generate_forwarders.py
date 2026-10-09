@@ -353,6 +353,10 @@ def macro_body(m):
     t, names = tag(m), ', '.join(p.name for p in m.params)
     this = 'this' if m.self_arg else ''
     q = 'this->streamQueue()'
+    return '[[maybe_unused]] auto _scope=this->callScope();' + macro_body_inner(m, t, names, this, q)   # 0.3.204 (task 21): sampled game-thread timer
+
+
+def macro_body_inner(m, t, names, this, q):
     if m.cls in ('record', 'state'):
         obs = f'this->observe({join_args(t, names)});' if m.cls == 'state' else ''
         if (m.iface, m.name) in REDUNDANT:
@@ -411,6 +415,7 @@ def stream_text(text):
            '//   void direct();                               counts a call replayed on ext()',
            '// The game-facing class using NORTHLIGHT_STREAM_<IFACE>_METHODS provides streamQueue(), observe(tag,args...), answer(tag,args...,ret&),',
            '// syncGet(tag,[proxy,]args...), local(tag,args...), syncCall(tag,[proxy,]args...); the proxy argument is passed for non-device interfaces.',
+           '// Every generated body starts with `auto _scope=this->callScope();` (0.3.204: the sampled game-thread recording timer; the host returns a scope object).',
            '// The device class also provides bool redundant(tag,args...) (true: a repeated Set the game side does not record; see REDUNDANT).',
            '#ifndef NORTHLIGHT_STREAM_DIRECT', '#define NORTHLIGHT_STREAM_DIRECT 1', '#endif',
            '#define NORTHLIGHT_STREAM_TAG(X) ::NorthlightStream::CmdTag<::NorthlightStream::Cmd::X>{}',
