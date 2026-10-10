@@ -78,6 +78,8 @@ test_model_index_cache.py
 test_model_replay_pool.py
 test_model_snapshot_cache.py
 test_near_reserve.py
+test_night_floor.py
+test_night_floor_wiring.py
 test_northlight_install.py
 test_outdoor_light_profiles.py
 test_pending_release_wiring.py

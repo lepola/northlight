@@ -32,7 +32,7 @@ float4 TemporalReach : register(c15); // w: TemporalLight only, largest drawn so
 float4 SunDirection : register(c16); // toward source
 float4 DirectLight : register(c17);
 float4 AmbientLight : register(c18); // native ambient RGB, evening surface ambient gain in w
-float4 GridOrigin : register(c19); // xyz unused; world probe spacing in w
+float4 GridOrigin : register(c19); // rgb: NightBrightness light per unit of albedo (WorldComposite only, 0 = off); w: world probe spacing
 float4 GridInfo : register(c20); // atlas N,GI intensity,shadow strength,probe ready
 float4 FogInfo : register(c21); // regional field ready,direct volume gain,direct RGB bound,max distance
 float4 FogColor : register(c22); // scattering albedo.rgb, generic-forest daytime air extinction
@@ -961,6 +961,7 @@ float3 horizonHaze(float3 color,float2 uv,float viewZ,bool sky) {
     float3 haze=HorizonHaze.rgb*mad(lift,ShadowRange.yzw,1);
     return lerp(color,haze,amount);
 }
+// 507 of the 512 ps_3_0 slots (shaders/world-shader-build.json): free slots before adding to this pass.
 float4 WorldComposite(float2 uv:TEXCOORD0):COLOR0 {
     float4 original=tex2Dlod(Scene,float4(uv,0,0));
     float2 centerUV=depthUV(uv);
@@ -1034,6 +1035,10 @@ float4 WorldComposite(float2 uv:TEXCOORD0):COLOR0 {
         // Bound combined GI/shadow darkening relative to the existing surface;
         // this preserves black and does not introduce an absolute exposure floor.
         color=max(color,mad(-.45,transported,original.rgb));
+        // NightBrightness: gives back a share of the art layer's darker night ambient (x .82 x cool tint) as light: albedoT times
+        // share x ambient x (1/factor-1), the per-frame product computed on the CPU (night_floor.h nightAmbient). Added like
+        // light, so shadows, GI and lamps keep their contrast. 0 = off (bit-identical).
+        color=mad(albedoT,GridOrigin.rgb,color);
         if(PassInfo.z==1)color=shadow.xxx;
         if(PassInfo.z==2)color=max(AmbientLight.rgb+bounce,0);
     }
