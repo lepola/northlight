@@ -469,7 +469,7 @@ private:
     }
     unsigned localDirectCount=0;float localDirectNearest=0;
     // 0.3.205 (gh#20): the lamp fog glow batches add their raw sums into localFogAccum (half resolution, like the fog buffer) and localFogCombinePS caps the total once
-    // into the fog buffer; without the target (creation failed, logged once) or with LocalLightDebug=3 each batch is capped on its own (localFogCappedPS), as before 0.3.205.
+    // into the fog buffer; without the target (creation failed, logged once) each batch is capped on its own (localFogCappedPS), as before 0.3.205.
     IDirect3DPixelShader9 *localFogCombinePS=nullptr,*localFogCappedPS=nullptr;IDirect3DTexture9* localFogAccum=nullptr;IDirect3DSurface9* localFogAccumSurface=nullptr;
     NorthlightLocalLightSelection::FogRegroup fogRegroup;unsigned fogRegroupFrames=0,fogRegroupBatches=0;
     // 0.3.197: soft cap, incumbent bias and fades for the local lights (task 13). The clock is the selection's own: its gap and reset policy mirror useHistory.
@@ -3485,7 +3485,7 @@ public:
         if(effects.gi)d->SetTexture(8,probePrev); /* 0.3.197: WorldGI reads the previous SH on s8 (LightingBuffer is not read here); null without the texture, moment.w is then None */
         if(effects.gi&&!check(quad(w/2,h/2),"world GI pass"))return false;
         d->SetTexture(8,textures[8]); /* 0.3.197: restore the frame-start binding */
-        if(localDirectCount&&debug==0&&quality.localLightDebug!=2){ // 0.3.205 (gh#20) LocalLightDebug=2: lamp fog glow only
+        if(localDirectCount&&debug==0){
             d->SetPixelShader(localDirectPS);d->SetRenderState(D3DRS_SCISSORTESTENABLE,NorthlightLocalLightScissor::Enabled);
             d->SetTexture(12,baselineLight); /* sun visibility (baseline alpha); the temporal pass rebinds it anyway */
             for(unsigned firstLight=0;firstLight<localDirectCount;firstLight+=NorthlightLocalLightSelection::DirectBatchSize){
@@ -3593,10 +3593,10 @@ public:
             if(profile)profile->mark("FogClouds");
         }
         d->SetPixelShaderConstantF(17,c[17],2); /* restore the bank's direct/ambient before lamp fog, blur and composite */
-        if(localDirectCount&&debug==0&&quality.localLightDebug!=1){ // 0.3.205 (gh#20) LocalLightDebug=1: lamp direct light only
+        if(localDirectCount&&debug==0){
             // 0.3.205 (gh#20): accumulate every batch's raw glow in localFogAccum, then cap the total once into the fog buffer (a cap per batch of four made the glow
-            // depend on how the closest-first lights group). LocalLightDebug=3 and a missing accumulator keep the per-batch cap.
-            const bool accumulate=localFogAccum&&quality.localLightDebug!=3;
+            // depend on how the closest-first lights group). A missing accumulator keeps the per-batch cap.
+            const bool accumulate=localFogAccum!=nullptr;
             const unsigned regrouped=fogRegroup.update(localLights);if(regrouped){++fogRegroupFrames;fogRegroupBatches+=regrouped;}
             d->SetRenderState(D3DRS_SCISSORTESTENABLE,FALSE);d->SetRenderState(D3DRS_SEPARATEALPHABLENDENABLE,FALSE); // alpha adds like rgb (ONE,ONE): the sum of the lamps' capped peaks
             if(accumulate&&(!check(d->SetRenderTarget(0,localFogAccumSurface),"lamp fog accumulator target")||!check(d->Clear(0,nullptr,D3DCLEAR_TARGET,0,1,0),"lamp fog accumulator clear")))return false; // scissor is off here
@@ -3703,7 +3703,7 @@ public:
             localScissorBatches=localScissorClipped=localScissorSkipped=0;localScissorCoverage=0;localSelectUsSum=localSelectUsMax=0;localSelectFrames=0;
             if(frames>1&&NorthlightDiagnostics::enabled())logf("GI probe blend publishes=%u blendedSlots=%u texture=%d",probeBlendPublishes,probeBlendSlots,int(probePrev!=nullptr));
             probeBlendPublishes=probeBlendSlots=0;
-            if(frames>1&&NorthlightDiagnostics::enabled()){logf("LOCAL fog regroup frames=%u batches=%u accumulator=%d debug=%u",fogRegroupFrames,fogRegroupBatches,int(localFogAccum!=nullptr),quality.localLightDebug);fogRegroupFrames=fogRegroupBatches=0;}}
+            if(frames>1&&NorthlightDiagnostics::enabled()){logf("LOCAL fog regroup frames=%u batches=%u accumulator=%d",fogRegroupFrames,fogRegroupBatches,int(localFogAccum!=nullptr));fogRegroupFrames=fogRegroupBatches=0;}}
         if(frames==1||(frames%600==0&&NorthlightDiagnostics::enabled()))logf("HORIZON haze strength=%u start=%u band=%u terrain=%u fog=%u colorKnown=%d fogEnd=%.1f far=%.1f startZ=%.1f tau=%.3f zone=%.3f rgb=%.3f,%.3f,%.3f sun=%.4f,%.4f",
             quality.horizonHaze,quality.horizonHazeStart,quality.horizonHazeBand,quality.horizonHazeTerrain,unsigned(effects.fog),int(horizonHazeState.colorKnown),horizonHazeState.end,farZ,haze.shape[0],
             haze.haze[3]/NorthlightHorizonHaze::Log2e,hazeZone,haze.haze[0],haze.haze[1],haze.haze[2],haze.sun[0],haze.sun[1]);

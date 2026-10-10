@@ -776,7 +776,7 @@ float4 LocalFogCombine(float2 uv:TEXCOORD0):COLOR0 {
     scatter*=pow(max(acc.a/max(capPeak,1e-6),1),.6);
     return float4(scatter,0);
 }
-// The pre-0.3.205 per-batch cap (LocalLightDebug=3 and the fallback without the accumulator): LocalFog's sum, capped per batch.
+// The pre-0.3.205 per-batch cap (the fallback without the accumulator): LocalFog's sum, capped per batch.
 float4 LocalFogBatchCapped(float2 uv:TEXCOORD0):COLOR0 {
     float3 scatter=LocalFog(uv).rgb;
     float peak=max(scatter.r,max(scatter.g,scatter.b));

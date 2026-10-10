@@ -62,7 +62,7 @@ checks['cpp: frame derived from the settings; active only with the fog effect, n
 checks['cpp: c59.y and c60..c63 written only while active, by shaderConstants (0.3.200: c60.x, the interval, only at a reduced level and while active)']=(
     w.count('if(cf.active){\n            NorthlightFogClouds::shaderConstants(cf,&c[59]);')==1 and re.findall(r'c\[(6[0-3])\]\[(\d)\]=',w)==[('60','0')] and 'if(gpuBudgetLevel){if(cf.active)c[60][0]=NorthlightGpuBudget::spacingDelta(' in w and 'c[59][1]' not in w)
 # the pass
-a=w.index('if(cf.active&&c[21][0]>=.5f){');b=w.index('d->SetPixelShaderConstantF(17,c[17],2);',a);c_=w.index('if(localDirectCount&&debug==0&&quality.localLightDebug!=1){',b)
+a=w.index('if(cf.active&&c[21][0]>=.5f){');b=w.index('d->SetPixelShaderConstantF(17,c[17],2);',a);c_=w.index('if(localDirectCount&&debug==0){',b)
 pas=w[a:b]
 checks['cpp: the pass is guarded by cf.active and the field-ready flag, between the source loop and the c17/c18 restore (before lamp fog)']=(
     w.index('"celestial volumetric raymarch"')<a<b<c_ and w.count('d->SetPixelShader(fogCloudsPS)')==1 and w.count('"fog clouds raymarch"')==1)

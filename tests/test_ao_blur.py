@@ -531,7 +531,7 @@ def audit_contact_ao():
     assert ';ContactAO=1' in ini and 'Allowed 0..1. 1 / 1 / 1' in ini[ini.index(';ContactAO=1')-400:ini.index(';ContactAO=1')]
     assert re.search(r'^  ContactAO +1 / 1 / 1 ', readme, re.M) and 'ContactAO' in (fp.REPO/'README.md').read_text()
     q = fp.src('quality_settings.h').read_text()
-    assert '{"ContactAO",&Settings::contactAO,0,1,{1,1,1}}, /* 0.3.201 (task 18) */\n    {"LocalLightDebug",' in q and 'unsigned contactAO=1;' in q
+    assert '{"ContactAO",&Settings::contactAO,0,1,{1,1,1}}, /* 0.3.201 (task 18) */\n};' in q and 'unsigned contactAO=1;' in q
     return {'contact_bloom_slots': c['static_instruction_slots']}
 
 

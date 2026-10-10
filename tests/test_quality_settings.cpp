@@ -447,7 +447,7 @@ int main(){
     // 0.3.192 CommandStream: 1 (the replay-thread command stream) in the code default and every preset, 0..1, own origin
     // slot (0.3.193: BlobShadowStrength follows); a creation-time key, so ActorShadows=0 does not force it. 0 is the direct path.
     assert(d.commandStream==1&&preset(Preset::Balanced).commandStream==1&&preset(Preset::Performance).commandStream==1);
-    assert(std::string(Keys[33].name)=="CommandStream"&&Keys[33].field==&Settings::commandStream&&Keys[33].low==0&&Keys[33].high==1&&sizeof(Keys)/sizeof(Keys[0])==45);
+    assert(std::string(Keys[33].name)=="CommandStream"&&Keys[33].field==&Settings::commandStream&&Keys[33].low==0&&Keys[33].high==1&&sizeof(Keys)/sizeof(Keys[0])==44);
     {auto off=parse("[Quality]\nCommandStream=0\n");assert(off.commandStream==0&&off!=d&&parse("[Quality]\nCommandStream=1\n")==d);
         unsigned i=0;for(const auto& k:Keys){assert(off.origin[i]==(std::string(k.name)=="CommandStream"?'f':'d'));++i;}
         std::vector<std::string> p;assert(parse("[Quality]\nCommandStream=2\n",nullptr,p)==d&&p.size()==1);
@@ -456,7 +456,7 @@ int main(){
         assert(describe(d).find(" ShadowPivotCorrection=1(default) CommandStream=1(default) BlobShadowStrength=50(default)")!=std::string::npos&&describe(off).find(" CommandStream=0(file)")!=std::string::npos);}
     // 0.3.193 BlobShadowStrength: 50 in the code default and every preset, 0..100, own last origin slot; ActorShadows=0 does not force it.
     assert(d.blobShadowStrength==50&&preset(Preset::Balanced).blobShadowStrength==50&&preset(Preset::Performance).blobShadowStrength==50);
-    assert(std::string(Keys[34].name)=="BlobShadowStrength"&&Keys[34].field==&Settings::blobShadowStrength&&Keys[34].low==0&&Keys[34].high==100&&sizeof(Keys)/sizeof(Keys[0])==45);
+    assert(std::string(Keys[34].name)=="BlobShadowStrength"&&Keys[34].field==&Settings::blobShadowStrength&&Keys[34].low==0&&Keys[34].high==100&&sizeof(Keys)/sizeof(Keys[0])==44);
     for(unsigned v:{0u,1u,50u,99u,100u}){auto on=parse(("[Quality]\nBlobShadowStrength="+std::to_string(v)+"\n").c_str());assert(on.blobShadowStrength==v&&(on==d)==(v==50));
         unsigned i=0;for(const auto& k:Keys){assert(on.origin[i]==(std::string(k.name)=="BlobShadowStrength"?'f':'d'));++i;}
         assert(effective(on).blobShadowStrength==v&&effective(parse(("[Quality]\nActorShadows=0\nBlobShadowStrength="+std::to_string(v)+"\n").c_str())).blobShadowStrength==v);}
@@ -480,22 +480,16 @@ int main(){
      assert(describe(d).find(" RainFog=1(default) FogClouds=1(default) FogCloudDensity=100(default)")!=std::string::npos);}
     // 0.3.201 (task 18): ContactAO 1/1/1 (0..1), the last key and origin slot; a creation-time key (ActorShadows=0 does not force it), 0 = no contact AO and no AOBlur pass.
     assert(d.contactAO==1&&preset(Preset::Balanced).contactAO==1&&preset(Preset::Performance).contactAO==1);
-    assert(std::string(Keys[43].name)=="ContactAO"&&Keys[43].field==&Settings::contactAO&&Keys[43].low==0&&Keys[43].high==1&&sizeof(Keys)/sizeof(Keys[0])==45&&sizeof(d.origin)==45);
+    assert(std::string(Keys[43].name)=="ContactAO"&&Keys[43].field==&Settings::contactAO&&Keys[43].low==0&&Keys[43].high==1&&sizeof(Keys)/sizeof(Keys[0])==44&&sizeof(d.origin)==44);
     {auto off=parse("[Quality]\nContactAO=0\n");assert(off.contactAO==0&&off!=d&&off.origin[43]=='f'&&off.origin[42]=='d');
      unsigned i=0;for(const auto& k:Keys){assert(off.origin[i]==(std::string(k.name)=="ContactAO"?'f':'d'));++i;}
      assert(effective(off).contactAO==0&&effective(parse("[Quality]\nActorShadows=0\n")).contactAO==1);
      std::vector<std::string> p;assert(parse("[Quality]\nContactAO=2\n",nullptr,p)==d&&p.size()==1);
      assert(describe(d).find(" StreamFrameSkip=1(default) ContactAO=1(default)")!=std::string::npos&&describe(off).find(" ContactAO=0(file)")!=std::string::npos);}
-    // 0.3.205 (gh#20): LocalLightDebug 0..3, in no preset, the last key and origin slot; it is in the QUALITY log line (describe).
-    assert(d.localLightDebug==0&&preset(Preset::Balanced).localLightDebug==0&&preset(Preset::Performance).localLightDebug==0);
-    assert(std::string(Keys[44].name)=="LocalLightDebug"&&Keys[44].field==&Settings::localLightDebug&&Keys[44].low==0&&Keys[44].high==3);
-    {auto dbg=parse("[Quality]\nLocalLightDebug=3\n");assert(dbg.localLightDebug==3&&dbg!=d&&dbg.origin[44]=='f'&&effective(dbg).localLightDebug==3);
-     std::vector<std::string> p;assert(parse("[Quality]\nLocalLightDebug=4\n",nullptr,p)==d&&p.size()==1);
-     assert(describe(d).find(" ContactAO=1(default) LocalLightDebug=0(default)")!=std::string::npos&&describe(dbg).find(" LocalLightDebug=3(file)")!=std::string::npos);}
     // 0.3.199: FogTemporal and RainBlend were removed (always on, game-tested): unknown keys now, the origin ends at FogCloudDensity.
     {std::vector<std::string> p;assert(parse("[Quality]\nFogTemporal=0\nRainBlend=0\n",nullptr,p)==d);assert(std::string(Keys[38].name)=="FogCloudDensity");}
     // 0.3.200 (gpu budget): GpuBudgetMs 4/3/2 (0..20, 0 = off) appended after FogCloudDensity, its own origin slot.
-    assert(d.gpuBudgetMs==4&&preset(Preset::Balanced).gpuBudgetMs==3&&preset(Preset::Performance).gpuBudgetMs==2&&sizeof(Keys)/sizeof(Keys[0])==45);
+    assert(d.gpuBudgetMs==4&&preset(Preset::Balanced).gpuBudgetMs==3&&preset(Preset::Performance).gpuBudgetMs==2&&sizeof(Keys)/sizeof(Keys[0])==44);
     assert(std::string(Keys[39].name)=="GpuBudgetMs"&&Keys[39].field==&Settings::gpuBudgetMs&&Keys[39].low==0&&Keys[39].high==20);
     {auto g=parse("[Quality]\nGpuBudgetMs=0\n");assert(g.gpuBudgetMs==0&&g.origin[39]=='f'&&g.origin[38]=='d'&&effective(g).gpuBudgetMs==0);
      g=parse("[Quality]\nPreset=Performance\nGpuBudgetMs=20\n");assert(g.gpuBudgetMs==20&&g.origin[39]=='f');
@@ -503,23 +497,23 @@ int main(){
      assert(describe(d).find(" FogCloudDensity=100(default) GpuBudgetMs=4(default)")!=std::string::npos);}
     // 0.3.200 (pipeline): StreamFramesAhead 2/2/2 (1..3), origin slot 40; a creation-time key (ActorShadows=0 does not force it), 1 = the 0.3.199 pacing.
     assert(d.streamFramesAhead==2&&preset(Preset::Balanced).streamFramesAhead==2&&preset(Preset::Performance).streamFramesAhead==2);
-    assert(std::string(Keys[40].name)=="StreamFramesAhead"&&Keys[40].field==&Settings::streamFramesAhead&&Keys[40].low==1&&Keys[40].high==3&&sizeof(Keys)/sizeof(Keys[0])==45&&sizeof(d.origin)==45);
+    assert(std::string(Keys[40].name)=="StreamFramesAhead"&&Keys[40].field==&Settings::streamFramesAhead&&Keys[40].low==1&&Keys[40].high==3&&sizeof(Keys)/sizeof(Keys[0])==44&&sizeof(d.origin)==44);
     {auto one=parse("[Quality]\nStreamFramesAhead=1\n");assert(one.streamFramesAhead==1&&one!=d&&one.origin[40]=='f'&&one.origin[39]=='d'&&parse("[Quality]\nStreamFramesAhead=3\n").streamFramesAhead==3);
      assert(effective(one).streamFramesAhead==1&&effective(parse("[Quality]\nActorShadows=0\n")).streamFramesAhead==2);
      std::vector<std::string> p;assert(parse("[Quality]\nStreamFramesAhead=0\n",nullptr,p)==d&&p.size()==1);p.clear();assert(parse("[Quality]\nStreamFramesAhead=4\n",nullptr,p)==d&&p.size()==1);
      assert(describe(d).find(" GpuBudgetMs=4(default) StreamFramesAhead=2(default)")!=std::string::npos&&describe(one).find(" StreamFramesAhead=1(file)")!=std::string::npos);}
     // 0.3.200 (frame skip): StreamFrameSkip 1/1/1 (0..1), an origin slot; a creation-time key (ActorShadows=0 does not force it), 0 = every frame drawn.
     assert(d.streamFrameSkip==1&&preset(Preset::Balanced).streamFrameSkip==1&&preset(Preset::Performance).streamFrameSkip==1);
-    assert(std::string(Keys[42].name)=="StreamFrameSkip"&&Keys[42].field==&Settings::streamFrameSkip&&Keys[42].low==0&&Keys[42].high==1&&sizeof(Keys)/sizeof(Keys[0])==45&&sizeof(d.origin)==45);
+    assert(std::string(Keys[42].name)=="StreamFrameSkip"&&Keys[42].field==&Settings::streamFrameSkip&&Keys[42].low==0&&Keys[42].high==1&&sizeof(Keys)/sizeof(Keys[0])==44&&sizeof(d.origin)==44);
     {auto off=parse("[Quality]\nStreamFrameSkip=0\n");assert(off.streamFrameSkip==0&&off!=d&&off.origin[42]=='f'&&off.origin[41]=='d');
      unsigned i=0;for(const auto& k:Keys){assert(off.origin[i]==(std::string(k.name)=="StreamFrameSkip"?'f':'d'));++i;}
      assert(effective(off).streamFrameSkip==0&&effective(parse("[Quality]\nActorShadows=0\n")).streamFrameSkip==1);
      std::vector<std::string> p;assert(parse("[Quality]\nStreamFrameSkip=2\n",nullptr,p)==d&&p.size()==1);
      assert(describe(d).find(" ReplayJobs=1(default) StreamFrameSkip=1(default)")!=std::string::npos&&describe(off).find(" StreamFrameSkip=0(file)")!=std::string::npos);}
     // 0.3.199: FogTemporal and RainBlend were removed (always on, game-tested): unknown keys now (0.3.200: GpuBudgetMs and StreamFramesAhead follow FogCloudDensity).
-    {std::vector<std::string> p;assert(parse("[Quality]\nFogTemporal=0\nRainBlend=0\n",nullptr,p)==d);assert(sizeof(Keys)/sizeof(Keys[0])==45&&std::string(Keys[38].name)=="FogCloudDensity");}
+    {std::vector<std::string> p;assert(parse("[Quality]\nFogTemporal=0\nRainBlend=0\n",nullptr,p)==d);assert(sizeof(Keys)/sizeof(Keys[0])==44&&std::string(Keys[38].name)=="FogCloudDensity");}
     // 0.3.200 (jobs): ReplayJobs 1/1/1 (0..1, 0 = all on the renderer thread) appended after StreamFramesAhead, its own origin slot; ActorShadows=0 does not force it.
-    assert(d.replayJobs==1&&preset(Preset::Balanced).replayJobs==1&&preset(Preset::Performance).replayJobs==1&&sizeof(Keys)/sizeof(Keys[0])==45);
+    assert(d.replayJobs==1&&preset(Preset::Balanced).replayJobs==1&&preset(Preset::Performance).replayJobs==1&&sizeof(Keys)/sizeof(Keys[0])==44);
     assert(std::string(Keys[41].name)=="ReplayJobs"&&Keys[41].field==&Settings::replayJobs&&Keys[41].low==0&&Keys[41].high==1);
     {auto j=parse("[Quality]\nReplayJobs=0\n");assert(j.replayJobs==0&&j.origin[41]=='f'&&j.origin[40]=='d'&&j!=d&&effective(j).replayJobs==0);
      assert(effective(parse("[Quality]\nActorShadows=0\nReplayJobs=1\n")).replayJobs==1&&parse("[Quality]\nReplayJobs=1\n")==d);

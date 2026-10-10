@@ -33,7 +33,8 @@ Every effect below is on by default and is drawn on top of the game's own frame.
 - **Lamps.** Up to 32 nearby lamps, lanterns, braziers and fires light the ground and walls around
   them and glow in the fog. In direct sun lamps dim. Lamp shadows are off by default (`PointShadows=1`
   turns them on): only lights inside buildings cast faint shadows, at dusk and night; street lamps,
-  lanterns and torches never do.
+  lanterns and torches never do. Overlapping lamp glows are capped once over all lamps (0.3.205), so the
+  glow no longer flickers when walking or riding past rows of lamps.
 - **Lighting art layer.** An MPQ patch (`patch-z`) built from your client's own `Light*.dbc`: retuned
   outdoor clear-weather light and fog colours, warmer Mulgore, denser Stormwind day fog. Storm weather
   gets darker light and fog bands. Sky models
@@ -75,7 +76,6 @@ Every effect below is on by default and is drawn on top of the game's own frame.
   and the `CSTREAM` line gains `split[per frame]:` with the game thread's time in buffer/texture locks (`lockMs`, `lockMB` queued), in recording generated calls (`recordMs`, sampled 1 call in 16), in snapshot capture (`snapMs`) and in the Present bookkeeping (`presentMs`), all without waits (0.3.204).
   The shadow allowance for large dynamic buffers holds two of them (up to 24 MiB each, 36 MiB in total) and is released under memory pressure. Dynamic buffers in the default pool, large or not (the CPU-skinned vertex buffers), are handed to the draw thread without a copy: an unlock of 4 KiB or more with DISCARD or NOOVERWRITE only records a reference into the buffer's game-side memory, and a DISCARD while the draw thread still reads the old contents switches to another copy of the buffer (a ring of `StreamFramesAhead`+2 slices per buffer, more (up to 12) for a buffer that DISCARDs several times a frame, counted in the large allowance or the regular shadow cap, at most twice that cap, none added under memory pressure, unused ones freed after 60 frames); with Diagnostics on a separate `CSTREAM zerocopy[per frame]` log line next to the `CSTREAM` line shows the zero-copy unlocks, renames, rename and write waits, the ring and retired memory and why a DISCARD/NOOVERWRITE unlock of a dynamic buffer did not go zero-copy.
   `ContactAO=1` (default, every preset) keeps the screen-space contact shading in creases and corners; `0` skips it and its denoise pass (about 0.5 ms of GPU time) and leaves the bloom as it is.
-  `LocalLightDebug` (diagnostics only, default 0, in no preset) isolates the lamp passes: `1` = lamp direct light only, `2` = lamp fog glow only, `3` = the pre-0.3.205 per-batch glow cap (A/B for flicker reports); the default caps the glow once over all lamps.
 - **Font mods.** Lexara, TweakWoW2 (HD Font on) and the AwesomeWotLK MSDF fork replace the game's UI shaders,
   which Northlight uses to find where the world ends and the UI begins. Northlight then learns the mod's UI draws
   instead: effects start about 2 seconds after entering the world, and the log shows
