@@ -101,7 +101,7 @@ checks['colour: cloud ambient is the brighter of the air radiance and the valida
 # night game test: the banks' colour goes in c25.w/c26 for the cloud pass only and the bank's values come back before the lamp fog
 cp=w.split('if(cf.active&&c[21][0]>=.5f){',1)[1].split('d->SetPixelShaderConstantF(17,c[17],2);',1)[0]
 checks['colour: c25/c26 set for the cloud pass from NorthlightFogClouds::colour, restored from the bank (c[25], 2 registers) after it']=(
-    'NorthlightFogClouds::colour(c[26],c[25][3]>=.5f,c[31][3],cloudColour)' in cp and 'd->SetPixelShaderConstantF(26,cloudColour,1)' in cp
+    'NorthlightFogClouds::colour(c[26],fw>0,c[31][3],cloudColour)' in cp and 'd->SetPixelShaderConstantF(26,cloudColour,1)' in cp
     and cp.index('fog clouds raymarch')<cp.index('d->SetPixelShaderConstantF(25,c[25],2)'))
 # Duskwood/lamp game test: the rain's extra air and the cloud density thin out in dense zones; the lamp glow ignores the clouds
 checks['dense zones: airFloor = .0017f + rain extra x denseDamp, cloud density x denseDamp, lamps sigmaAt without clouds']=(

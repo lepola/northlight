@@ -1535,8 +1535,8 @@ public:
         const bool sampledFrame=sampled(),frameApplied=applied;
         // 0.3.200 (frame trace): with Diagnostics, 240 consecutive frames out of every 1800 get one line each: whether the effects ran, the world drew,
         // and through which context (1 terrain + global light, 2 terrain native light, 3 WMO), to see frame-to-frame alternation in the log.
-        if(diagnostics()&&frame%1800<240)logf("FRAMETRACE frame=%u tick=%lu applied=%d enabled=%d projection=%d terrain=%d world=%d context=%u skip=%s",frame,(unsigned long)GetTickCount(),
-            int(applied),int(enabled),int(projectionValid),int(terrain),traceWorld,world?world->frameTraceContext():0u,traceWorld==0&&world?world->lastSkipReason():"-");
+        if(diagnostics()&&frame%1800<240)logf("FRAMETRACE frame=%u tick=%lu applied=%d enabled=%d projection=%d terrain=%d world=%d context=%u fog=%u skip=%s",frame,(unsigned long)GetTickCount(),
+            int(applied),int(enabled),int(projectionValid),int(terrain),traceWorld,world?world->frameTraceContext():0u,world?world->frameTraceFog():0u,traceWorld==0&&world?world->lastSkipReason():"-");
         traceWorld=-1;
         {CpuScope cpu(sampledFrame?&cleanup:nullptr);clearFrame();}
         if(memoryCaps>=0&&world)world->setMemoryPressure(memoryCaps==1);

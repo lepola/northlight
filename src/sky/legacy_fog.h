@@ -4,6 +4,7 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <string>
 
 // Pure CPU helpers. Call only while the original, recognized Terrain VS/PS and
 // constants are bound. No D3D object, game address or renderer mutation here.
@@ -18,46 +19,68 @@ inline bool plainSource(uint32_t t,unsigned kind,unsigned n,unsigned swizzle=0xe
     return reg(t,kind,n)&&((t>>16)&255)==swizzle&&((t>>24)&15)==0&&!(t&0x2000);
 }
 
-// Fail-closed bytecode proof for the original Terrain PS3 fog epilogue:
-//   add rN.xyz, surface, -cF       (or mad rN, surface, factor, -cF)
-//   mad oC0.xyz, vFog.x, rN, cF
-// Base archive commonly uses c6; the active patch also uses c2. Return the
-// proven constant index, or -1 for unknown shaders. Fog must be an input,
-// cF must not be locally defined, and no
-// later RGB write/control flow may bypass the epilogue. Alpha MOVs may follow.
-// This guards the actual shader, including patched archives, without assuming
-// that every shader using PS3 stores its fog color in c6.
+// Fail-closed bytecode proof for the original PS3 fog epilogue (Terrain and WMO/MapObj):
+//   mad oC0.xyz, vFog.x, P, cF   with   P.c = X - cF.c   (so oC0.rgb = lerp(cF, X, vFog) whatever X is)
+// The negated colour of the instruction that builds P is either the constant itself (add/mad ..., -cF) or a temp component that
+// provably holds a plain copy of cF.c (mov rK.xyz, cF ; mad rN.xyz, X, Y, -rK), including the .yzw-packed form (mad r0.yzw, ..., -r1.xxyz
+// ... mad oC0.xyz, vFog.x, r0.yzww, cF). Unrelated instructions (alpha mov, texkill, ...) may sit between. Terrain uses c6 (base) or c2
+// (patch), MapObj c2 (patch) or c16 (common-2). Return the proven constant index, or -1 for unknown shaders. Fog must be an input, cF a plain
+// cN with no def, and the epilogue the only RGB write to oC0; after it only oC0.w writes. Tracked writes must have no sat/pp/shift/relative
+// bits; sources are read before the destination state is replaced; if/loop/rep blocks clear the tracking and never contain the epilogue;
+// call/ret/label/break are rejected. Guards the actual shader, including patched archives, without assuming a fixed constant.
 inline int ps3FogColorRegister(const uint32_t* code,size_t count){
     if(!code||count<3||code[0]!=0xffff0300||code[count-1]!=0xffff)return -1;
-    unsigned fogInput=UINT32_MAX,previousOp=0,previousSize=0;
-    const uint32_t* previous=nullptr;int colorRegister=-1;bool defined[224]={};
+    struct Src{int16_t reg=-1;int8_t comp=0;}; // reg<0: unknown
+    Src copy[32][4],neg[32][4]; // copy: temp component holds cF.k ; neg: temp component = X - cF.k
+    unsigned fogInput=UINT32_MAX,depth=0;bool defined[224]={};int colorRegister=-1;
+    const auto comp=[](uint32_t t,unsigned c){return int((t>>(16+2*c))&3);};
+    const auto tracked=[](uint32_t d){return !(d&0x0ff02000);}; // no sat/pp/shift/relative on the destination
     for(size_t at=1;at<count;){
         uint32_t token=code[at];unsigned op=token&65535;
-        if(op==65535)return at==count-1?colorRegister:-1;
+        if(op==65535)return at==count-1&&depth==0?colorRegister:-1;
         if(op==65534){size_t words=1+((token>>16)&32767);if(words>count-at)return -1;at+=words;continue;}
+        if(op==0){++at;continue;} // nop
         unsigned size=(token>>24)&15;
-        const bool zeroOperand=op==0||op==28||op==29||op==39||op==42||op==43||op==44;
-        if((!size&&!zeroOperand)||size+1>count-at||(token&0x10000000))return -1;
-        const uint32_t* a=code+at+1;
-        if(op==31&&size==2&&(a[0]&31)==11&&type(a[1])==1){
-            if(fogInput!=UINT32_MAX)return -1;fogInput=a[1]&2047;
+        if(op==25||op==26||op==28||op==30||op==44||op==45||op==96)return -1; // call/callnz/ret/label/break/breakc/breakp
+        if(op==27||op==29||op==38||op==39||op==40||op==41||op==42||op==43){ // loop/endloop/rep/endrep/if/ifc/else/endif
+            if(colorRegister>=0||size+1>count-at)return -1;
+            if(op==27||op==38||op==40||op==41)++depth;else{if(!depth)return -1;if(op!=42)--depth;} // else needs an open block
+            for(auto& r:copy)for(auto& e:r)e=Src{};for(auto& r:neg)for(auto& e:r)e=Src{};
+            at+=1+size;continue;
         }
-        if(op==81){unsigned index=a[0]&2047;if(type(a[0])!=2||index>=224)return -1;defined[index]=true;}
-        if(colorRegister>=0){
-            if(!(op==1&&size==2&&reg(a[0],8,0)&&((a[0]>>16)&15)==8))return -1;
-        }else if(op==4&&size==4&&reg(a[0],8,0)&&((a[0]>>16)&15)==7&&
-                 !(a[0]&0x0ff02000)&&
-                 plainSource(a[1],1,fogInput,0)&&plainSource(a[3],2,a[3]&2047)&&
-                 (a[3]&2047)<224&&!defined[a[3]&2047]&&
-                 previous&&((previousOp==2&&previousSize==3)||(previousOp==4&&previousSize==4))&&type(previous[0])==0&&
-                 !(previous[0]&0x0ff02000)&&
-                 ((previous[0]>>16)&15)==7&&plainSource(a[2],0,previous[0]&2047)&&
-                 reg(previous[previousSize-1],2,a[3]&2047)&&((previous[previousSize-1]>>16)&255)==0xe4&&
-                 ((previous[previousSize-1]>>24)&15)==1&&!(previous[previousSize-1]&0x2000)){
-            if((token&0x00ff0000)||(previous[-1]&0x00ff0000))return -1;
-            colorRegister=int(a[3]&2047);
+        if(!size||size+1>count-at||(token&0x10000000))return -1;
+        const uint32_t* a=code+at+1;at+=1+size;
+        if(op==31){if(size==2&&(a[0]&31)==11&&type(a[1])==1){if(fogInput!=UINT32_MAX)return -1;fogInput=a[1]&2047;}continue;}
+        if(op==81){if(colorRegister>=0)return -1;unsigned i=a[0]&2047;if(type(a[0])!=2||i>=224)return -1;defined[i]=true;continue;}
+        const uint32_t d=a[0];const unsigned dk=type(d),dn=d&2047,m=(d>>16)&15;
+        if(colorRegister>=0&&!(dk==8&&dn==0&&m==8))return -1; // after the epilogue: only oC0.w
+        if(dk==8){
+            if(dn!=0)return -1;
+            if(op==4&&size==4&&m==7&&fogInput!=UINT32_MAX){
+                const uint32_t f=a[1],r=a[2],k=a[3];
+                if((d&0x0ff02000)||!plainSource(f,1,fogInput,0))return -1;
+                if(!plainSource(k,2,k&2047)||(k&2047)>=224||defined[k&2047])return -1;
+                if(type(r)!=0||((r>>24)&15)||(r&0x2000)||(r&2047)>=32)return -1;
+                for(unsigned c=0;c<3;++c){const Src& e=neg[r&2047][comp(r,c)];if(e.reg!=int16_t(k&2047)||e.comp!=int8_t(c))return -1;}
+                colorRegister=int(k&2047);
+            }else if(m&7)return -1; // any other RGB output write
+            continue;
         }
-        previous=a;previousOp=op;previousSize=size;at+=1+size;
+        if(dk!=0||dn>=32)continue; // only temps carry state
+        Src newCopy[4],newNeg[4]; // computed from the old state: sources are read before the write
+        if(tracked(d)&&!depth){
+            if(op==1&&size==2&&type(a[1])==2&&!((a[1]>>24)&15)&&!(a[1]&0x2000)&&(a[1]&2047)<224&&!defined[a[1]&2047]){
+                for(unsigned c=0;c<4;++c)if(m>>c&1)newCopy[c]={int16_t(a[1]&2047),int8_t(comp(a[1],c))};
+            }else if((op==4&&size==4)||(op==2&&size==3)){
+                const uint32_t t=a[size-1];
+                if(((t>>24)&15)==1&&!(t&0x2000)){
+                    for(unsigned c=0;c<4;++c){if(!(m>>c&1))continue;
+                        if(type(t)==2&&(t&2047)<224&&!defined[t&2047])newNeg[c]={int16_t(t&2047),int8_t(comp(t,c))};
+                        else if(type(t)==0&&(t&2047)<32)newNeg[c]=copy[t&2047][comp(t,c)];}
+                }
+            }
+        }
+        for(unsigned c=0;c<4;++c)if(m>>c&1){copy[dn][c]=newCopy[c];neg[dn][c]=newNeg[c];}
     }
     return -1;
 }
@@ -116,4 +139,33 @@ inline RGB composeVolume(RGB corrected,RGB original,float legacyT,RGB legacyColo
     }
     return result;
 }
+// Per-map hold of the measured fog, so a frame whose fog could not be read (draw order: WMO context without a proven PS3 epilogue and no terrain
+// draw yet) does not step the relighting/haze/clouds. Readable frames pass through unchanged (the framebuffer holds the game's fog of this very
+// frame, so the removal must match it at once); only unreadable frames hold the last value and then fade w out. Pure CPU; ticks are uint32 ms
+// (GetTickCount), differences wrap-safe.
+inline bool allFinite(const Constants& c){
+    for(unsigned i=0;i<4;++i)if(!std::isfinite(c.parameters[i])||!std::isfinite(c.color[i]))return false;
+    return true;
+}
+struct Hold {
+    static constexpr std::uint32_t HoldMs=2000;   // an unreadable frame returns the last readable value for this long
+    static constexpr float FadeSeconds=.5f;       // time constant of the post-hold fade of w toward 0
+    static constexpr std::uint32_t MaxStepMs=250; // dt clamp for the fade: one long frame must not collapse it
+    Constants held;std::string map;bool has=false;std::uint32_t lastKnown=0,lastUpdate=0;
+    void reset(){*this=Hold{};}
+    // known = decode() succeeded this frame (a known fog-off result, w=0, passes through and is then held as fog-off).
+    Constants update(const std::string& mapName,const Constants& measured,bool known,std::uint32_t nowMs){
+        known=known&&allFinite(measured);
+        if(has&&mapName!=map)reset(); // map change: nothing carries over
+        if(known){held=measured;if(!has)map=mapName;has=true;lastKnown=lastUpdate=nowMs;return held;}
+        if(!has)return Constants{};
+        if(std::uint32_t(nowMs-lastUpdate)>HoldMs){reset();return Constants{};} // no update for longer than the hold (loading, world hidden): never revive stale fog
+        const std::uint32_t step=std::min<std::uint32_t>(std::uint32_t(nowMs-lastUpdate),MaxStepMs);
+        lastUpdate=nowMs;
+        if(std::uint32_t(nowMs-lastKnown)<=HoldMs)return held;
+        held.parameters[3]+=(0-held.parameters[3])*(1-std::exp(-float(step)*.001f/FadeSeconds)); // x,y,z and colour stay
+        if(held.parameters[3]<1.f/256){reset();return Constants{};}
+        return held;
+    }
+};
 } // namespace NorthlightLegacyFog
