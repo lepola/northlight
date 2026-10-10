@@ -35,9 +35,6 @@ def body(text, start):
 def wiring():
     terrain = body(WORLD, 'void terrainContext()')
     assert 'if(valid||failed)return;' in terrain
-    for gone in ('terrainFogTries', 'TerrainFogMaxTries', 'noteTerrainDraw', 'lateFogFrameEnd', 'LEGACYFOG late', 'fogAttempt', 'lastLateAttempt',
-                 'lastTerrainOkAttempt', 'frameTDraw', 'frameTReach', 'frameLate', 'tdraw=', 'treach=', 'late terrain'):
-        assert gone not in WORLD and gone not in RENDERER, gone
     assert 'readOriginalFog(12,true);if(legacyFogKnown)traceFog=1;' in terrain[terrain.index('valid=true;projection[0]'):]
     assert 'legacyFogKnown=fogKnown;' in body(WORLD, 'void readOriginalFog(')
     reset = 'valid=false;traceContext=0;traceFog=0;legacyFogKnown=false;'
@@ -48,7 +45,7 @@ def wiring():
     assert 'memcpy(c[25],legacyFog' not in WORLD
     assert 'horizonHazeState.update(active->map,legacyFog.parameters,legacyFog.color,' in WORLD
     assert WORLD.count('legacyFogHold.update(') == 1
-    assert 'wmoFogCheck' not in RENDERER and 'wmoFogCheck' not in WORLD and 'wmoCheck' not in WORLD
+    assert 'if(traceFog==0&&!legacyFogKnown&&legacyFogHold.has)traceFog=2;' in WORLD
     assert 'context=%u fog=%u skip=%s' in RENDERER and 'frameTraceFog()' in RENDERER and 'unsigned frameTraceFog()' in WORLD
 
 

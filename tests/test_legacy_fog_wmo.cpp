@@ -34,6 +34,8 @@ int main(){
     assert(proof(with(formA,1,{0x05000051,0xa00f0002,0,0,0,0}))==-1);    // local def of c2
     assert(proof(with(formA,19,{0x0000001c}))==-1);                      // ret
     assert(proof(with(formA,19,{0x0000002b}))==-1);                      // endif without if
+    assert(proof(with(formA,19,{0x0000002a}))==-1);                      // else without if
+    assert(proof(with(formA,19,{0x01000028,0xb0e40000,0x0000002a,0x0000002b}))==2); // if/else/endif before the epilogue
     assert(proof(with(formA,19,{0x01000019,0x10000000}))==-1);           // call
     assert(proof(with(formA,19,{0x01000028,0xb0e40000}))==-1);           // unterminated if
     assert(proof(set(formA,15,0x90010003))==-1);                         // dcl_fog v3 but the fog mad reads v2

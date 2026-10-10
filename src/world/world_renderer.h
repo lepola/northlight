@@ -273,7 +273,7 @@ private:
     NorthlightLegacyFog::Constants legacyFog;
     NorthlightLegacyFog::Hold legacyFogHold; /* uploaded fog (c25/c26): readable fog passes through, an unreadable frame holds the last value 2 s per map, then fades w; horizon haze and logs keep the raw legacyFog */
     bool legacyFogKnown=false; /* per frame: the last readOriginalFog decode() succeeded (a known fog-off result counts) */
-    unsigned traceFog=0; /* per frame (FRAMETRACE fog=): 0 unknown, 1 read in the context draw, 3 composite used the held (or post-hold fading) value */
+    unsigned traceFog=0; /* per frame (FRAMETRACE fog=): 0 unknown, 1 read in the context draw, 2 composite used the held (or post-hold fading) value, fog-off included */
     NorthlightHorizonHaze::State horizonHazeState; /* game fog end/colour, smoothed per map */
     /* glow hue: the game's light slots (band 9 native glare, band 10 sunHalo), held for 2 s on one map without a proven read. */
     std::uint32_t lightSlots[NorthlightSunHue::Slots]={};bool lightSlotsValid=false;std::string lightSlotsMap;DWORD lightSlotsAt=0;
@@ -3414,7 +3414,7 @@ public:
         if(gpuBudgetLevel){if(cf.active)c[60][0]=NorthlightGpuBudget::spacingDelta(c[21][3],NorthlightGpuBudget::cloudSteps(gpuBudgetLevel),40);c[64][2]=NorthlightGpuBudget::spacingDelta(c[21][3],NorthlightGpuBudget::fogSteps(gpuBudgetLevel),48);}
         memcpy(c[23],context.camera,12);c[24][0]=NorthlightWorldMath::ShadowBiasWorld*NorthlightWorldMath::InverseShadowDepth;c[24][1]=2;c[24][2]=float(debug);c[24][3]=float(DWORD(now-animationEpoch))*.001f;
         // Readable fog as measured, else the held value, for every c25/c26 reader (WorldComposite, smoothRemoval, FogClouds); render() runs once per frame, so dt is one frame.
-        const auto uploadedFog=legacyFogHold.update(active->map,legacyFog,legacyFogKnown,now);if(traceFog==0&&uploadedFog.parameters[3]>0)traceFog=3;
+        const auto uploadedFog=legacyFogHold.update(active->map,legacyFog,legacyFogKnown,now);if(traceFog==0&&!legacyFogKnown&&legacyFogHold.has)traceFog=2;
         memcpy(c[25],uploadedFog.parameters,16);memcpy(c[26],uploadedFog.color,16);
         memcpy(c[28],context.lightDirection,12);memcpy(c[29],context.direct,12);
         c[27][2]=float(DWORD(now-animationEpoch))*.001f;
@@ -3577,7 +3577,7 @@ public:
             if(!sameSource)setSource(firstSource,true,true);
             { /* 0.3.199 (fog clouds): the banks' colour (the game fog colour raised to a moonlit grey at night) in c25.w/c26 for this pass only; restored below */
                 float cloudColour[4],cloudFog[4]={c[25][0],c[25][1],c[25][2],1};
-                { /* continuous in the Hold's post-hold w fade: blend the game-fog and the no-fog colour by w (exactly the old result at w=1 and w=0) */
+                { /* continuous in the Hold's post-hold w fade: blend the game-fog and the no-fog colour by w (continuous in w; equal to the old result when w is 0 or 1) */
                   const float fw=c[25][3];NorthlightFogClouds::colour(c[26],fw>0,c[31][3],cloudColour);
                   if(fw>0&&fw<1){float off[4];NorthlightFogClouds::colour(c[26],false,c[31][3],off);for(int i=0;i<4;++i)cloudColour[i]=off[i]+(cloudColour[i]-off[i])*fw;}}
                 d->SetPixelShaderConstantF(25,cloudFog,1);d->SetPixelShaderConstantF(26,cloudColour,1);}

@@ -44,7 +44,7 @@ inline int ps3FogColorRegister(const uint32_t* code,size_t count){
         if(op==25||op==26||op==28||op==30||op==44||op==45||op==96)return -1; // call/callnz/ret/label/break/breakc/breakp
         if(op==27||op==29||op==38||op==39||op==40||op==41||op==42||op==43){ // loop/endloop/rep/endrep/if/ifc/else/endif
             if(colorRegister>=0||size+1>count-at)return -1;
-            if(op==27||op==38||op==40||op==41)++depth;else if(op!=42){if(!depth)return -1;--depth;}
+            if(op==27||op==38||op==40||op==41)++depth;else{if(!depth)return -1;if(op!=42)--depth;} // else needs an open block
             for(auto& r:copy)for(auto& e:r)e=Src{};for(auto& r:neg)for(auto& e:r)e=Src{};
             at+=1+size;continue;
         }
@@ -143,22 +143,23 @@ inline RGB composeVolume(RGB corrected,RGB original,float legacyT,RGB legacyColo
 // draw yet) does not step the relighting/haze/clouds. Readable frames pass through unchanged (the framebuffer holds the game's fog of this very
 // frame, so the removal must match it at once); only unreadable frames hold the last value and then fade w out. Pure CPU; ticks are uint32 ms
 // (GetTickCount), differences wrap-safe.
-constexpr std::uint32_t HoldMs=2000;   // an unreadable frame returns the last readable value for this long
-constexpr float FadeSeconds=.5f;       // time constant of the post-hold fade of w toward 0
-constexpr std::uint32_t MaxStepMs=250; // dt clamp for the fade: one long frame must not collapse it
-inline bool finite(const Constants& c){
+inline bool allFinite(const Constants& c){
     for(unsigned i=0;i<4;++i)if(!std::isfinite(c.parameters[i])||!std::isfinite(c.color[i]))return false;
     return true;
 }
 struct Hold {
+    static constexpr std::uint32_t HoldMs=2000;   // an unreadable frame returns the last readable value for this long
+    static constexpr float FadeSeconds=.5f;       // time constant of the post-hold fade of w toward 0
+    static constexpr std::uint32_t MaxStepMs=250; // dt clamp for the fade: one long frame must not collapse it
     Constants held;std::string map;bool has=false;std::uint32_t lastKnown=0,lastUpdate=0;
     void reset(){*this=Hold{};}
     // known = decode() succeeded this frame (a known fog-off result, w=0, passes through and is then held as fog-off).
     Constants update(const std::string& mapName,const Constants& measured,bool known,std::uint32_t nowMs){
-        known=known&&finite(measured);
+        known=known&&allFinite(measured);
         if(has&&mapName!=map)reset(); // map change: nothing carries over
-        if(known){held=measured;map=mapName;has=true;lastKnown=lastUpdate=nowMs;return held;}
+        if(known){held=measured;if(!has)map=mapName;has=true;lastKnown=lastUpdate=nowMs;return held;}
         if(!has)return Constants{};
+        if(std::uint32_t(nowMs-lastUpdate)>HoldMs){reset();return Constants{};} // no update for longer than the hold (loading, world hidden): never revive stale fog
         const std::uint32_t step=std::min<std::uint32_t>(std::uint32_t(nowMs-lastUpdate),MaxStepMs);
         lastUpdate=nowMs;
         if(std::uint32_t(nowMs-lastKnown)<=HoldMs)return held;
