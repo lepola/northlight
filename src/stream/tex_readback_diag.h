@@ -1,7 +1,8 @@
 // 0.3.206 (task 31): Diagnostics-only report of the command stream's texture re-lock readbacks (lockImage's ONE SyncLock readback of a written level without a shadow, which drains the queue):
 // which texture levels do it, whether the time is the queue wait or the lock + copy, whole vs partial rect locks, and the frames between locks. Pure data: no dependency on SubRes.
-// Rows (LevelStat) exist ONLY for levels that had a readback or a pass-through in the window (cap kMaxLevels): a level's lock history lives in its SubRes (LockHist, lazily reset when the
-// window number changes) and is copied into the row at the level's first readback / pass-through; from then on the row is the source of truth for that level's locks. Groups (kinds) count every lock.
+// Rows (LevelStat) exist ONLY for levels that had a readback or a pass-through in the window (cap kMaxLevels): a level's window counters live in its SubRes (LockHist, lazily reset when the
+// window number changes; the previous lock's frame and epoch live next to it and survive the reset) and is copied into the row at the level's first readback / pass-through; from then on the row is the source of truth for that level's locks. Groups (kinds) count every lock.
+// Gaps (frames between a level's locks) are measured ACROSS report windows: a lock at frame 599 and the next at 601 is a gap of 2 even though a report falls between them; only Diagnostics off->on (epoch) cuts a gap.
 // Game thread only (StreamCore::texDiag); recorded only while StreamCore::timing (Diagnostics on), reported and cleared every window by StreamDevice::presentCommon.
 #pragma once
 #include <algorithm>
@@ -20,10 +21,10 @@ struct TexReadbackDiag {
     static unsigned bucketOf(bool hasGap,std::uint64_t gap){return !hasGap?5:gap<=1?0:gap<10?1:gap<60?2:gap<300?3:4;}
     // What a lock knows about its level.
     struct Meta {std::uint32_t fmt=0,w=0,h=0,d=1,level=0,face=0,pool=0,usage=0,baseW=0,baseH=0;std::uint64_t levelBytes=0;void* caller=nullptr;};
-    // A level's lock history since its window started (lives in SubRes: 48 bytes per texture level, Diagnostics only; zero cost to the game thread when off).
-    // window: TexReadbackDiag::window the counters belong to (0 = never); epoch: the Diagnostics on/off epoch of lastLock; lastLock: frameNo+1 of the previous lock (0 = none).
+    // A level's lock counters since its window started (lives in SubRes; reset when the window changes). window: TexReadbackDiag::window the counters belong to (0 = never).
+    // What survives a window is NOT here: SubRes::diagLastLock (frameNo+1 of the previous lock, 0 = none) and SubRes::diagEpoch (the Diagnostics on/off epoch of that lock), passed to lock().
     struct LockHist {
-        std::uint32_t window=0,epoch=0,locks=0,wholeLocks=0,partialLocks=0,gapCount=0;double coverageSum=0,gapSum=0;std::uint64_t lastLock=0;
+        std::uint32_t window=0,locks=0,wholeLocks=0,partialLocks=0,gapCount=0;double coverageSum=0,gapSum=0;
     };
     struct Sums {   // counters shared by a level and a group
         std::uint64_t locks=0,readbacks=0,readbackBytes=0,rectBytes=0,passSyncs=0,wholeLocks=0,partialLocks=0,gapCount=0,waitNs=0,lockNs=0,copyNs=0,rbWhole=0;
@@ -38,7 +39,7 @@ struct TexReadbackDiag {
         bool operator==(const GroupKey& o)const{return fmt==o.fmt&&w==o.w&&h==o.h&&pool==o.pool&&usage==o.usage;}
     };
     struct GroupHash {std::size_t operator()(const GroupKey& k)const{std::uint64_t x=k.fmt;x=x*1000003u^k.w;x=x*1000003u^k.h;x=x*1000003u^k.pool;x=x*1000003u^k.usage;return std::size_t(x^(x>>29));}};
-    struct GroupStat:Sums {std::uint64_t levels=0;};   // levels: distinct levels locked in the window
+    struct GroupStat:Sums {std::uint64_t levels=0,rbLevels=0;};   // levels: distinct levels locked in the window; rbLevels: distinct levels with a readback / pass-through
     // The records of one lock, kept by lockImage until its readback / pass-through is known (valid until the next report, i.e. within the lock call).
     struct Hit {LevelStat* lv=nullptr;GroupStat* gr=nullptr;LockHist* hist=nullptr;unsigned bucket=5;bool on=false,whole=false;double cover=0;std::uint32_t id=0;void* caller=nullptr;Meta m;};
 
@@ -48,12 +49,12 @@ struct TexReadbackDiag {
     std::uint64_t readbacks=0,readbackBytes=0,rectBytes=0,waitNs=0,lockNs=0,copyNs=0,overflow=0,gapAll[kBuckets]{},gapSkip[kBuckets]{};
     bool active=false;
 
-    // One lock of level `id` at frame `frameNo`; `hist` is the level's SubRes history. Updates the history (or the row, if the level has one) and the group.
-    Hit lock(std::uint32_t id,LockHist& hist,const Meta& m,bool whole,double cover,std::uint64_t frameNo,void* caller){
+    // One lock of level `id` at frame `frameNo`; `hist` / `lastLock` / `lastEpoch` are the level's SubRes fields (lastLock and lastEpoch persist across windows). Updates the history (or the row, if the level has one) and the group.
+    Hit lock(std::uint32_t id,LockHist& hist,std::uint64_t& lastLock,std::uint32_t& lastEpoch,const Meta& m,bool whole,double cover,std::uint64_t frameNo,void* caller){
         Hit h;h.on=true;active=true;h.id=id;h.caller=caller;h.m=m;h.whole=whole;h.cover=cover;h.hist=&hist;
-        if(hist.window!=window){hist=LockHist{};hist.window=window;hist.epoch=epoch;}
-        const bool hasGap=hist.lastLock!=0&&hist.epoch==epoch;const std::uint64_t gap=hasGap?frameNo-(hist.lastLock-1):0;
-        hist.lastLock=frameNo+1;hist.epoch=epoch;h.bucket=bucketOf(hasGap,gap);
+        if(hist.window!=window){hist=LockHist{};hist.window=window;}   // only the per-window counters restart
+        const bool hasGap=lastLock!=0&&lastEpoch==epoch;const std::uint64_t gap=hasGap?frameNo-(lastLock-1):0;
+        lastLock=frameNo+1;lastEpoch=epoch;h.bucket=bucketOf(hasGap,gap);
         GroupStat& g=groupTab[GroupKey{m.fmt,m.baseW,m.baseH,m.pool,m.usage}];h.gr=&g;
         if(seen.insert(id).second)++g.levels;
         g.lock(whole,cover,hasGap,gap);
@@ -66,6 +67,7 @@ struct TexReadbackDiag {
     LevelStat* row(Hit& h){
         if(h.lv)return h.lv;
         if(!rbSeen.insert(h.id).second)return nullptr;   // had one before and got no row (full)
+        ++h.gr->rbLevels;
         if(levelTab.size()>=kMaxLevels){++overflow;return nullptr;}
         LevelStat& r=levelTab.emplace(h.id,LevelStat{}).first->second;r.m=h.m;
         const LockHist& k=*h.hist;r.locks=k.locks;r.wholeLocks=k.wholeLocks;r.partialLocks=k.partialLocks;r.coverageSum=k.coverageSum;r.gapSum=k.gapSum;r.gapCount=k.gapCount;
@@ -115,8 +117,8 @@ struct TexReadbackDiag {
         std::partial_sort(gr.begin(),gr.begin()+ng,gr.end(),[](const auto& a,const auto& c){return before(*a.second,*c.second);});
         for(std::size_t i=0;i<ng;++i){
             const GroupKey& k=*gr[i].first;const GroupStat& s=*gr[i].second;
-            std::snprintf(b,sizeof b,"CSTREAM TEXREADBACK kind#%u fmt=%u size=%ux%u pool=%u usage=0x%x levels=%llu locks=%llu rb=%llu rbMB=%.3f rectKB=%.1f whole%%=%.4g cover=%.4g rbWhole%%=%.4g rbCover=%.4g gapFrames=%.1f",
-                unsigned(i+1),k.fmt,k.w,k.h,k.pool,k.usage,(unsigned long long)s.levels,(unsigned long long)s.locks,(unsigned long long)s.readbacks,s.readbackBytes/1048576.0,s.rectBytes/1024.0,pct(s),cover(s),rbPct(s),rbCover(s),gapFrames(s));
+            std::snprintf(b,sizeof b,"CSTREAM TEXREADBACK kind#%u fmt=%u size=%ux%u pool=%u usage=0x%x lockedLevels=%llu rbLevels=%llu locks=%llu rb=%llu rbMB=%.3f rectKB=%.1f whole%%=%.4g cover=%.4g rbWhole%%=%.4g rbCover=%.4g gapFrames=%.1f",
+                unsigned(i+1),k.fmt,k.w,k.h,k.pool,k.usage,(unsigned long long)s.levels,(unsigned long long)s.rbLevels,(unsigned long long)s.locks,(unsigned long long)s.readbacks,s.readbackBytes/1048576.0,s.rectBytes/1024.0,pct(s),cover(s),rbPct(s),rbCover(s),gapFrames(s));
             sink(b);
         }
         restart(frameNo);

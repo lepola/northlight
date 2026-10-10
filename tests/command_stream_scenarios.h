@@ -1802,7 +1802,7 @@ static void textureReadbackDiagnostics(){
         CHECK(has(win[0],"window frames=600 readbacks=2 rbMB=2.500 rectMB=")&&has(win[0],"gap[0-1=0,2-9=1,10-59=1,60-299=0,300+=0,first=0] gapFreshSkip[0-1=0,2-9=0,10-59=0,60-299=0,300+=0,first=0] levels=2 overflow=0"));
         CHECK(has(top[0],"top#1 fmt=22 size=1024x512 lvl=0 face=0 pool=1 usage=0x0 levelKB=2048.0 locks=2 rb=1 rbMB=2.000 rectKB=0.1 whole%=0 ")&&has(top[0],"rbWhole%=0 rbCover=3.815e-05 gapFrames=4.0 gone[fresh=0,relocked=0,skip=0,never=1] passSync=0 "));
         CHECK(has(top[1],"top#2 fmt=827611204 size=1024x1024 lvl=0 face=0 pool=1 usage=0x0 levelKB=512.0 locks=2 rb=1 rbMB=0.500 rectKB=512.0 whole%=100 cover=1 rbWhole%=100 rbCover=1 gapFrames=12.0 gone[fresh=0,relocked=0,skip=0,never=1] passSync=0 "));
-        CHECK(has(kind[0],"kind#1 fmt=22 size=1024x512 pool=1 usage=0x0 levels=1 locks=2 rb=1 rbMB=2.000 ")&&has(kind[1],"kind#2 fmt=827611204 size=1024x1024 pool=1 usage=0x0 levels=1 locks=2 rb=1 rbMB=0.500 rectKB=512.0 whole%=100 cover=1 rbWhole%=100 rbCover=1 gapFrames=12.0"));
+        CHECK(has(kind[0],"kind#1 fmt=22 size=1024x512 pool=1 usage=0x0 lockedLevels=1 rbLevels=1 locks=2 rb=1 rbMB=2.000 ")&&has(kind[1],"kind#2 fmt=827611204 size=1024x1024 pool=1 usage=0x0 lockedLevels=1 rbLevels=1 locks=2 rb=1 rbMB=0.500 rectKB=512.0 whole%=100 cover=1 rbWhole%=100 rbCover=1 gapFrames=12.0"));
         CHECK(has(kind[0],"rbMB=2.000 rectKB=0.1 whole%=0 cover=")&&has(kind[0],"rbWhole%=0 rbCover=3.815e-05 gapFrames=4.0"));   // the readback lock was a tiny rect: rbCover shows it, never 0
         CHECK(has(top[0],"caller=0x")&&!has(top[0],"caller=0x0 ")&&has(top[0],"rbCaller=0x")&&!has(top[0],"rbCaller=0x0"));   // no callerModule in tests: the raw return addresses
         const std::size_t n0=texLines().size();   // the next window has no texture lock at all: nothing is logged
@@ -1819,7 +1819,7 @@ static void textureReadbackDiagnostics(){
         CHECK(ta->LockRect(0,&lr,&rc,0)==D3D_OK&&ta->UnlockRect(0)==D3D_OK&&ta->LockRect(0,&lr,&rc,0)==D3D_OK&&get(s.texShadowReadbacks)==1&&ta->UnlockRect(0)==D3D_OK);
         while(core.frameNo<1200)rig.dev->Present(nullptr,nullptr,nullptr,nullptr);
         rig.sync();CHECK(texLines().empty()&&core.texDiag.empty());
-        const StreamTexture* st=static_cast<const StreamTexture*>(ta);CHECK(st->subs[0].diagId==0&&st->subs[0].diagHist.lastLock==0&&st->subs[0].diagHist.window==0&&st->subs[0].diagFirstCaller==nullptr);
+        const StreamTexture* st=static_cast<const StreamTexture*>(ta);CHECK(st->subs[0].diagId==0&&st->subs[0].diagLastLock==0&&st->subs[0].diagHist.window==0&&st->subs[0].diagFirstCaller==nullptr);
         ta->Release();rig.finish();checkClean();
     }
 }
@@ -1856,6 +1856,25 @@ static void textureReadbackTable(){
         char want[64];std::snprintf(want,sizeof want,"window frames=%u ",unsigned(600-(start-1)));   // the window starts at the Present that turned Diagnostics on
         CHECK(win.size()==1&&has(win[0],want)&&has(win[0],"first=1] ")&&has(win[0],"levels=1 overflow=0")&&top.size()==1&&has(top[0],"locks=1 rb=1 ")&&has(top[0],"gapFrames=0.0 "));   // the lock before the off period is not counted, no gap spans it
         ta->Release();rig.finish();checkClean();
+    }
+    {   // gaps span report windows: locked at 599, re-locked (readback) at 601 across the 600 report -> the gap (2) is in 2-9 of the second window, not first
+        gTrace.clear();gTexLines.clear();StreamDevice::Options opt;opt.diagnostics=[]{return true;};opt.log=[](const char* l){std::lock_guard<std::mutex> g(gTexLinesMutex);gTexLines.push_back(l);};
+        Rig rig(true,opt);auto& core=rig.core();auto& s=core.q.stats;
+        rig.dev->Present(nullptr,nullptr,nullptr,nullptr);CHECK(core.timing);
+        IDirect3DTexture9 *ta=nullptr,*tq=nullptr;D3DLOCKED_RECT lr{};RECT rc{0,0,64,4};
+        CHECK(rig.dev->CreateTexture(1024,512,1,0,(D3DFORMAT)22,(D3DPOOL)1,&ta,nullptr)==D3D_OK&&rig.dev->CreateTexture(512,512,1,0,(D3DFORMAT)22,(D3DPOOL)1,&tq,nullptr)==D3D_OK);
+        while(core.frameNo<599)rig.dev->Present(nullptr,nullptr,nullptr,nullptr);
+        CHECK(ta->LockRect(0,&lr,&rc,0)==D3D_OK&&ta->UnlockRect(0)==D3D_OK&&tq->LockRect(0,&lr,&rc,0)==D3D_OK&&tq->UnlockRect(0)==D3D_OK);   // tq: locked, never read back
+        while(core.frameNo<601)rig.dev->Present(nullptr,nullptr,nullptr,nullptr);
+        rig.sync();const auto w1=texLines("window");CHECK(w1.size()==1&&has(w1[0],"readbacks=0 ")&&has(w1[0],"first=0] "));   // (the report at 600 had locks but no readback)
+        CHECK(ta->LockRect(0,&lr,&rc,0)==D3D_OK&&get(s.texShadowReadbacks)==1&&ta->UnlockRect(0)==D3D_OK);
+        while(core.frameNo<1200)rig.dev->Present(nullptr,nullptr,nullptr,nullptr);
+        rig.sync();const auto win=texLines("window"),top=texLines("top#"),kind=texLines("kind#");
+        CHECK(win.size()==2&&has(win[1],"readbacks=1 ")&&has(win[1],"gap[0-1=0,2-9=1,10-59=0,60-299=0,300+=0,first=0] ")&&has(win[1],"levels=1 overflow=0"));
+        CHECK(top.size()==1&&has(top[0],"locks=1 rb=1 ")&&has(top[0],"gapFrames=2.0 "));
+        CHECK(kind.size()==1&&has(kind[0],"lockedLevels=1 rbLevels=1 locks=1 rb=1 "));   // only the group of the second window: tq was not locked again
+        for(const auto& l:win)std::fprintf(stderr,"%s\n",l.c_str());for(const auto& l:top)std::fprintf(stderr,"%s\n",l.c_str());for(const auto& l:kind)std::fprintf(stderr,"%s\n",l.c_str());
+        ta->Release();tq->Release();rig.finish();checkClean();
     }
 }
 static void streamTests(bool threadsOnly){
