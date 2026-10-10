@@ -9,9 +9,25 @@ struct TargetKnobs {
     std::atomic<HRESULT> coop{D3D_OK};        // 0.3.204 (task 21): what the Target's TestCooperativeLevel reports (D3D_OK / D3DERR_DEVICELOST / D3DERR_DEVICENOTRESET); Present fails with DEVICELOST while it is not D3D_OK
     std::atomic<bool> noDigest{false};        // 0.3.200 (frame skip): STATE lines carry no ids, so a run without some draws numbers the objects the same
     //   // noRaw: the resolver proves no raw pointer (a proxy then replays through the Device)
+    // 0.3.205 (#34): a Target buffer Unlock whose lockSize equals holdUnlockSize parks (inUnlock set) until the test clears holdUnlockSize: the replay thread sits after the memcpy from the game's slice and before the command retires.
+    // ALL accesses are relaxed on purpose: a stronger handshake would be a happens-before edge between the replay's read and the game's next write, and TSan would stop seeing the race.
+    std::atomic<UINT> holdUnlockSize{0};std::atomic<bool> inUnlock{false};
     bool failCube=true;                       // CreateCubeTexture / CreateVolumeTexture fail (the dead-create path)
 };
 static TargetKnobs gKnobs;
+// 0.3.205 (#34): Apple's TSan runtime does not record the byte ranges libc's memcpy/memset touch, so a race between the replay thread's memcpy out of a game-side slice and the game's memset into it stays silent there (Linux TSan sees it).
+// These two calls tell TSan about the same ranges explicitly: the Target reports the source range of the write being replayed (NorthlightReplayCopies::unlockSource), BufModel::write the range the game fills.
+#if defined(__has_feature)
+#if __has_feature(thread_sanitizer)
+extern "C" void __tsan_read_range(void*,unsigned long);extern "C" void __tsan_write_range(void*,unsigned long);
+#define NL_TSAN_READ(p,n) __tsan_read_range(const_cast<unsigned char*>(p),(unsigned long)(n))
+#define NL_TSAN_WRITE(p,n) __tsan_write_range((p),(unsigned long)(n))
+#endif
+#endif
+#ifndef NL_TSAN_READ
+#define NL_TSAN_READ(p,n) ((void)0)
+#define NL_TSAN_WRITE(p,n) ((void)0)
+#endif
 static std::atomic<int> gLiveTargets{0},gDeviceDeletes{0};
 struct TTexture;static TTexture* gLastTexture=nullptr;   // the Target's newest texture, for tests that look at its memory
 static std::string hexOf(const unsigned char* p,std::size_t n){return fb(p,n);}
@@ -81,6 +97,8 @@ template<class Base,Kind K> struct TBuffer:Counted<Base> {
         if(isLocked||off>length)return D3DERR_INVALIDCALL;if(!size)size=length-off;if(off+size>length)return D3DERR_INVALIDCALL;
         lockOff=off;lockSize=size;lockFlags=f;isLocked=true;*pp=mem.data()+off;return D3D_OK;}
     HRESULT Unlock() override{
+        if(const auto& us=NorthlightReplayCopies::unlockSource;us.bytes&&us.size==lockSize)NL_TSAN_READ(us.bytes,lockSize);   // (the replay's memcpy source, see NL_TSAN_READ)
+        if(lockSize&&lockSize==gKnobs.holdUnlockSize.load(std::memory_order_relaxed)){gKnobs.inUnlock.store(true,std::memory_order_relaxed);while(gKnobs.holdUnlockSize.load(std::memory_order_relaxed))std::this_thread::sleep_for(std::chrono::microseconds(100));}
         gTrace.push_back(std::string(K==Kind::VertexBuffer?"VB":"IB")+"::Unlock "+std::to_string(lockOff)+" "+std::to_string(lockSize)+" "+std::to_string(lockFlags&~D3::kLockReadOnly)+" "+((lockFlags&D3::kLockReadOnly)?std::string("ro"):hexOf(mem.data()+lockOff,lockSize)));
         if(!(lockFlags&D3::kLockReadOnly))traceDigest();isLocked=false;return D3D_OK;}
 };
