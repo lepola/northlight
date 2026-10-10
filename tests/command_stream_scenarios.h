@@ -1625,9 +1625,9 @@ static void zeroCopyNestedDuringWait(){
     z.vb->Release();z.rig->sync();z.rig->finish();checkClean();
 }
 // 0.3.205 (#34): a NOOVERWRITE lock whose range overlaps a zero-copy ref the replay thread has not passed (the typical case: a whole-buffer DISCARD unlock, then NOOVERWRITE appends inside it) would write bytes the
-// replay thread's memcpy reads: a data race. The lock waits for that ref (exact), and the buffer's DISCARD unlocks copy for kOverlapCopyFrames frames, so the steady pattern waits once, not per frame.
+// replay thread's memcpy reads: a data race. The lock is staged instead (the game writes a Block with the range's current bytes, no wait) and the slice takes those bytes as a patch once the replay thread has passed the ref.
 // The holdUnlockSize knob parks the replay thread in the Target's Unlock of an unlock of the whole buffer (after its memcpy, before the command retires); OvPark's watchdog clears it ~80 ms after the park (or at once
-// when cancelled), so no failure can hang the suite. TSan sees the race of (a) in a run without the wait (see NL_TSAN_READ).
+// when cancelled), so no failure can hang the suite. TSan sees the race of (a) in a run that hands out the slice instead (see NL_TSAN_READ).
 struct OvPark {
     std::atomic<bool> cancel{false};std::thread dog;
     explicit OvPark(UINT hold){
@@ -1642,41 +1642,34 @@ struct OvPark {
     ~OvPark(){end();}
 };
 static bool zcLineHas(const char* a,const char* b){for(auto& l:gStatLines)if(l.rfind("CSTREAM zerocopy[per frame]:",0)==0&&l.find(a)!=std::string::npos&&l.find(b)!=std::string::npos)return true;return false;}
+// After a sync: the game-side truth (what a READONLY lock reads, the slice with its patches in) equals the model (only without a DISCARD rename: a renamed slice holds just what was written since).
+static bool zcSliceTruth(ZcRig& z){
+    void* p=nullptr;if(z.vb->Lock(0,0,&p,D3::kLockReadOnly)!=D3D_OK||!p)return false;
+    const bool same=std::memcmp(p,z.m.bytes.data(),z.L)==0;z.vb->Unlock();return same;
+}
+static std::int64_t zcPatchMB(ZcRig& z){return z.s->zcPatchBytes.load();}
 static void zeroCopyOverlap(UINT len){
-    {   // (a) the wait path, (b) the adaptive copy, (c) its expiry, (f) the zerocopy line
+    {   // (a) the parked whole ref and a NOOVERWRITE lock inside it: staged, no wait; the patch reaches the slice once the replay has passed; (f) the zerocopy line
         ZcRig z(len,3);auto& s=*z.s;const UINT L=z.L;
         OvPark park(L);
         z.w(0,L,0xA1,D3::kLockDiscard);z.q->publish();   // the whole buffer, zero-copy; published at once (the replay thread runs it now)
         CHECK(park.parked());
-        const std::uint64_t f0=z.core->frameNo;
-        z.w(8192,8192,0xB2,D3::kLockNoOverwrite);   // inside the range the replay thread is reading: waits for it
+        z.w(8192,8192,0xB2,D3::kLockNoOverwrite);   // inside the range the replay thread is reading: staged
+        CHECK(get(s.zcOverlapLocks)==1&&get(s.zcOverlapWaits)==0&&get(s.zcSkipOverlap)==1&&get(s.zcOverlapCopyBytes)==8192u&&get(s.zeroCopyUnlocks)==1&&get(s.writeWaits)==0&&get(s.renameWaits)==0);
+        CHECK(z.buf().patches.size()==1&&z.buf().patchBytes==8192u&&zcPatchMB(z)==8192);
         park.end();
-        CHECK(get(s.zcOverlapLocks)==1&&get(s.zcOverlapWaits)==1&&get(s.zcOverlapWaitNs)>=30000000u&&get(s.writeWaits)==0&&get(s.renameWaits)==0&&get(s.zcSkipOverlap)==1&&get(s.zeroCopyUnlocks)==1&&get(s.zcOverlapRearms)==0);   // (the B unlock itself already copies: the window is open)
         z.verify();   // the whole A unlock replayed intact, then the 8 KiB B unlock, and the final memory exact
-        // (b) the next frames, with the replay parked on the whole unlock: both unlocks COPY (the window is open) and the NOOVERWRITE lock, over the copied DISCARD, re-arms the window without a wait
-        {
-            OvPark again(L);const auto zc0=get(s.zeroCopyUnlocks);
-            for(unsigned k=0;k<3;++k){
-                ++z.core->frameNo;z.w(0,L,(unsigned char)(0xC0+k),D3::kLockDiscard);z.w(8192,8192,(unsigned char)(0xD0+k),D3::kLockNoOverwrite);
-                CHECK(get(s.zcOverlapLocks)==1&&get(s.zcOverlapWaits)==1&&get(s.zcSkipOverlap)==1+2*(k+1)&&get(s.zcOverlapCopyBytes)==8192u+std::uint64_t(k+1)*(L+8192u)&&get(s.renameWaits)==0&&get(s.writeWaits)==0);
-            }
-            CHECK(get(s.zeroCopyUnlocks)==zc0&&z.buf().overlapFrame>=f0+1);
-            again.end();
-        }
-        // (c) expiry: kOverlapCopyFrames frames after the last (re-)arming the DISCARD unlock is zero-copy again (the last copying frame is of+58, of = overlapFrame)
-        z.rig->sync();const std::uint64_t of=z.buf().overlapFrame;z.core->frameNo=of+kOverlapCopyFrames-2;const auto zc1=get(s.zeroCopyUnlocks),sk=get(s.zcSkipOverlap);
-        z.w(0,L,0xE1,D3::kLockDiscard);CHECK(get(s.zcSkipOverlap)==sk+1&&get(s.zeroCopyUnlocks)==zc1);
-        z.rig->sync();z.core->frameNo=of+kOverlapCopyFrames-1;
-        z.w(0,L,0xE2,D3::kLockDiscard);CHECK(get(s.zcSkipOverlap)==sk+1&&get(s.zeroCopyUnlocks)==zc1+1&&get(s.zcOverlapLocks)==1&&get(s.zcOverlapWaits)==1);
-        z.rig->sync();CHECK(z.m.same(targetBytes(z.vb)));
+        CHECK(zcSliceTruth(z)&&z.buf().patches.empty()&&zcPatchMB(z)==0);   // the READONLY lock applied the passed patch
+        // a NOOVERWRITE over the patched range now overlaps nothing: zero-copy again
+        z.w(8192,8192,0xB3,D3::kLockNoOverwrite);CHECK(get(s.zcOverlapLocks)==1&&get(s.zeroCopyUnlocks)==2);
         for(int i=0;i<610;++i)z.present();z.rig->sync();   // (f) the zerocopy line carries the overlap fields
-        CHECK(zcLineHas(" overlap[locks=","overlap=")&&zcLineHas(" waitMs=","copyMB="));
-        z.vb->Release();z.rig->sync();z.present();z.rig->sync();z.rig->finish();checkClean();
+        CHECK(zcLineHas(" overlap[locks=","overlap=")&&zcLineHas(" copyMB=","patchMB="));
+        z.verify();z.vb->Release();z.rig->sync();z.present();z.rig->sync();z.rig->finish();checkClean();
     }
     {   // (d) no regression: WoW's pattern (a partial DISCARD, NOOVERWRITE appends beyond it) overlaps nothing, even with the replay held
         ZcRig z(len,3);auto& s=*z.s;
         z.hold();z.frame(0,true);z.frame(1,true);
-        CHECK(get(s.zcOverlapLocks)==0&&get(s.zcOverlapWaits)==0&&get(s.zcSkipOverlap)==0&&z.buf().overlapFrame==0);
+        CHECK(get(s.zcOverlapLocks)==0&&get(s.zcOverlapWaits)==0&&get(s.zcSkipOverlap)==0&&z.buf().patches.empty());
         gKnobs.hold.store(false);z.verify();
         z.vb->Release();z.rig->sync();z.rig->finish();checkClean();
     }
@@ -1686,74 +1679,85 @@ static void zeroCopyOverlap(UINT len){
         z.w(8192,8192,0x42,D3::kLockNoOverwrite);CHECK(get(s.zcOverlapLocks)==0);   // (the slice is fully replayed)
         z.rig->sync();z.hold();
         z.w(100000,8192,0x43,D3::kLockNoOverwrite);   // pending, elsewhere
-        z.w(8192,8192,0x44,D3::kLockNoOverwrite);CHECK(get(s.zcOverlapLocks)==0&&get(s.zcOverlapWaits)==0);   // over the replayed whole ref and the replayed 0x42 ref only
+        z.w(8192,8192,0x44,D3::kLockNoOverwrite);CHECK(get(s.zcOverlapLocks)==0&&get(s.zcOverlapWaits)==0&&get(s.zcSkipOverlap)==0);   // over the replayed whole ref and the replayed 0x42 ref only
         gKnobs.hold.store(false);z.verify();
         z.vb->Release();z.rig->sync();z.rig->finish();checkClean();
     }
-    {   // NOOVERWRITE-over-NOOVERWRITE (the earlier ref came from a NOOVERWRITE unlock) is detected: one exact wait
+    {   // NOOVERWRITE over NOOVERWRITE (the earlier ref came from a NOOVERWRITE unlock), partly: staged, the staged Block starts with the slice's bytes (the unlock replays the untouched part as it was)
         ZcRig z(len,3);auto& s=*z.s;
         z.hold();z.w(8192,8192,0x51,D3::kLockNoOverwrite);
-        std::thread rel;z.releaseLater(rel);
-        z.w(12288,8192,0x52,D3::kLockNoOverwrite);rel.join();
-        CHECK(get(s.zcOverlapLocks)==1&&get(s.zcOverlapWaits)==1&&get(s.zcOverlapWaitNs)>=30000000u&&get(s.zcSkipOverlap)==1&&z.buf().overlapFrame==z.core->frameNo+1);   // (the second unlock copies: the window is open)
-        z.verify();
+        void* p=nullptr;CHECK(z.vb->Lock(12288,8192,&p,D3::kLockNoOverwrite)==D3D_OK&&p);   // overlaps [12288,16384) of the pending ref
+        CHECK(std::memcmp(p,z.m.bytes.data()+12288,8192)==0);   // the range's current bytes: 0x51, then zeros
+        std::memset(static_cast<unsigned char*>(p)+4096,0x52,100);std::memset(z.m.bytes.data()+12288+4096,0x52,100);   // the game writes 100 bytes only
+        CHECK(z.vb->Unlock()==D3D_OK&&get(s.zcOverlapLocks)==1&&get(s.zcOverlapWaits)==0&&get(s.zcSkipOverlap)==1);
+        gKnobs.hold.store(false);z.rig->sync();CHECK(z.m.same(targetBytes(z.vb))&&zcSliceTruth(z));
         z.vb->Release();z.rig->sync();z.rig->finish();checkClean();
     }
-    {   // (e) memory pressure: the unlock copies (zc off), but the lock still writes into a slice earlier refs read: it waits once and the bytes stay exact
+    {   // (e) memory pressure: the unlock copies (zc off), but the lock still writes into a slice earlier refs read; no staging under pressure: it waits once and the bytes stay exact
         ZcRig z(len,3);auto& s=*z.s;
         z.hold();z.frame(0,true);z.frame(1,true);
         z.core->memoryPressure.store(true);z.q->setPressure(true);
         std::thread rel;z.releaseLater(rel);
         z.w(8192,8192,0x61,D3::kLockNoOverwrite);rel.join();   // over frame 1's pending NOOVERWRITE ref
-        CHECK(get(s.zcOverlapLocks)==1&&get(s.zcOverlapWaits)==1&&get(s.zcOverlapWaitNs)>=30000000u&&get(s.copyPressureUnlocks)>=1);
+        CHECK(get(s.zcOverlapLocks)==1&&get(s.zcOverlapWaits)==1&&get(s.zcOverlapWaitNs)>=30000000u&&get(s.zcSkipOverlap)==0&&get(s.copyPressureUnlocks)>=1);
         z.core->memoryPressure.store(false);z.q->setPressure(false);
-        gKnobs.hold.store(false);z.verify();
+        gKnobs.hold.store(false);z.verify();   // (no slice check: the DISCARD of frame 1 renamed, the new slice holds only what was written since)
         z.vb->Release();z.rig->sync();z.present();z.rig->sync();CHECK(z.held()==0&&s.ringSlices.load()==0);z.rig->finish();checkClean();
     }
 }
-// 0.3.205 (#34): a buffer that rewrites the same range with NOOVERWRITE every frame waits ONCE (the first overlap); from then on its NOOVERWRITE unlocks copy and each lock over the previous copy re-arms the window without a wait.
+// 0.3.205 (#34): the same range rewritten with NOOVERWRITE again and again while the replay is held: every lock is staged (over the ref and the earlier patches), none waits, and the patches reach the slice in order
+// (the newest bytes win).
 static void zeroCopyOverlapNoOverwriteLoop(UINT len){
     ZcRig z(len,3);auto& s=*z.s;
     z.hold();z.w(8192,8192,0x71,D3::kLockNoOverwrite);   // a real ref, pending
-    std::thread rel;z.releaseLater(rel);
-    z.w(8192,8192,0x72,D3::kLockNoOverwrite);rel.join();   // the overlap: one exact wait
-    CHECK(get(s.zcOverlapLocks)==1&&get(s.zcOverlapWaits)==1&&get(s.zcSkipOverlap)==1);
-    z.hold();
-    for(unsigned k=0;k<5;++k){++z.core->frameNo;z.w(8192,8192,(unsigned char)(0x80+k),D3::kLockNoOverwrite);}
-    CHECK(get(s.zcOverlapLocks)==1&&get(s.zcOverlapWaits)==1&&get(s.zcSkipOverlap)==6&&get(s.zcOverlapRearms)>=4&&get(s.writeWaits)==0&&get(s.renameWaits)==0);
-    gKnobs.hold.store(false);z.verify();
+    for(unsigned k=0;k<6;++k){++z.core->frameNo;z.w(8192+(k&1)*2048,8192,(unsigned char)(0x80+k),D3::kLockNoOverwrite);}
+    CHECK(get(s.zcOverlapLocks)==6&&get(s.zcOverlapWaits)==0&&get(s.zcSkipOverlap)==6&&get(s.zcOverlapCopyBytes)==6u*8192&&get(s.writeWaits)==0&&get(s.renameWaits)==0);
+    CHECK(z.buf().patches.size()==6&&z.buf().patchBytes==6u*8192);
+    gKnobs.hold.store(false);z.verify();CHECK(zcSliceTruth(z)&&z.buf().patches.empty()&&zcPatchMB(z)==0);
     z.vb->Release();z.rig->sync();z.rig->finish();checkClean();
 }
-// The steady whole-pattern over far more than kOverlapCopyFrames frames (a DISCARD and a NOOVERWRITE lock over it, the replay held): one wait in all, the window never lapses while the pattern goes on, and
-// zero-copy resumes once it has stopped for kOverlapCopyFrames frames.
+// The steady overlapping pattern over 150 frames (a DISCARD unlock, then a NOOVERWRITE lock over it while the replay has not passed it): never a wait, the DISCARD stays zero-copy, and only the NOOVERWRITE's own bytes
+// are copied (never the whole buffer); a DISCARD drops the passed patches unapplied.
 static void zeroCopyOverlapSteady(UINT len){
     ZcRig z(len,3);auto& s=*z.s;
-    z.hold();z.w(0,8192,0x91,D3::kLockDiscard);   // a real ref, pending
+    for(unsigned f=1;f<=150;++f){
+        z.hold();z.w(0,len>=(1u<<20)?(1u<<20):8192,(unsigned char)(0x20+f),D3::kLockDiscard);z.w(4096,8192,(unsigned char)(0xA0+f),D3::kLockNoOverwrite);
+        CHECK(z.buf().patches.size()==1&&zcPatchMB(z)==8192);
+        gKnobs.hold.store(false);z.rig->sync();++z.core->frameNo;
+    }
+    CHECK(get(s.zcOverlapLocks)==150&&get(s.zcOverlapWaits)==0&&get(s.renameWaits)==0&&get(s.writeWaits)==0&&get(s.zcSkipOverlap)==150&&get(s.zcOverlapCopyBytes)==150u*8192&&get(s.zeroCopyUnlocks)==150);
+    z.verify();CHECK(zcSliceTruth(z));
+    z.w(0,8192,0xF1,D3::kLockDiscard);CHECK(z.buf().patches.empty()&&zcPatchMB(z)==0);   // (the READONLY lock applied the last one; a DISCARD drops any)
+    z.verify();z.vb->Release();z.rig->sync();z.rig->finish();checkClean();
+}
+// The patches of a buffer never hold more than its length: a lock that would exceed it waits (exact) instead, and the passed patches go in first.
+static void zeroCopyOverlapPatchCap(){
+    ZcRig z(512u<<10,3);auto& s=*z.s;const UINT L=z.L;
+    z.hold();z.w(0,L,0x31,D3::kLockDiscard);   // the whole buffer, pending
+    z.w(0,L/2,0x32,D3::kLockNoOverwrite);z.w(L/2,L/2,0x33,D3::kLockNoOverwrite);   // staged: the patches hold the whole buffer
+    CHECK(get(s.zcOverlapLocks)==2&&get(s.zcOverlapWaits)==0&&z.buf().patchBytes==L);
     std::thread rel;z.releaseLater(rel);
-    z.w(4096,8192,0x92,D3::kLockNoOverwrite);rel.join();   // overlaps it: one exact wait
-    CHECK(get(s.zcOverlapLocks)==1&&get(s.zcOverlapWaits)==1);
-    z.hold();
-    for(unsigned f=1;f<=150;++f){++z.core->frameNo;z.w(0,8192,(unsigned char)(0x20+f),D3::kLockDiscard);z.w(4096,8192,(unsigned char)(0xA0+f),D3::kLockNoOverwrite);}
-    CHECK(get(s.zcOverlapLocks)==1&&get(s.zcOverlapWaits)==1&&get(s.zcOverlapRearms)>=149&&get(s.renameWaits)==0&&get(s.writeWaits)==0&&get(s.zcSkipOverlap)>=300);
-    gKnobs.hold.store(false);z.verify();
-    // the pattern stops: after kOverlapCopyFrames frames the unlocks are zero-copy again
-    const std::uint64_t of=z.buf().overlapFrame;const auto zc=get(s.zeroCopyUnlocks),sk=get(s.zcSkipOverlap);
-    z.core->frameNo=of+kOverlapCopyFrames-2;z.w(0,8192,0xF1,D3::kLockDiscard);CHECK(get(s.zcSkipOverlap)==sk+1&&get(s.zeroCopyUnlocks)==zc);
-    z.rig->sync();z.core->frameNo=of+kOverlapCopyFrames-1;z.w(0,8192,0xF2,D3::kLockDiscard);CHECK(get(s.zcSkipOverlap)==sk+1&&get(s.zeroCopyUnlocks)==zc+1&&get(s.zcOverlapWaits)==1);
-    z.verify();
+    z.w(4096,4096,0x34,D3::kLockNoOverwrite);rel.join();   // no room: one exact wait, then the slice itself
+    CHECK(get(s.zcOverlapLocks)==3&&get(s.zcOverlapWaits)==1&&get(s.zcOverlapWaitNs)>=30000000u&&get(s.zcSkipOverlap)==2&&z.buf().patches.empty()&&zcPatchMB(z)==0);
+    z.verify();CHECK(zcSliceTruth(z));
     z.vb->Release();z.rig->sync();z.rig->finish();checkClean();
 }
-// The overlap wait inside a pumped wait (a message handler DXVK's pump dispatches) must not wait: the lock takes the fallback (a staged Block with the slice's current bytes, the shadow retires with its readers), bytes exact.
-static void zeroCopyOverlapPumped(UINT len){
+// An overlapping lock inside a pumped wait (a message handler DXVK's pump dispatches): staged, no wait needed, the shadow stays. Under memory pressure (no staging) it would have to wait, which a pumped wait cannot:
+// the fallback (a staged Block with the range's current bytes, the shadow retires with its readers). Bytes exact either way.
+static void zeroCopyOverlapPumped(UINT len,bool pressure){
     ZcRig z(len,1);gZc=&z;gZcCalls=0;gZcHr=12345;auto& s=*z.s;
     z.hold();z.w(8192,8192,0x61,D3::kLockNoOverwrite);   // a real ref over [8192,16384), pending
+    if(pressure){z.core->memoryPressure.store(true);z.q->setPressure(true);}
     pumpHook=[]{if(gZcCalls++)return;
         gZcHr=gZc->vb->Lock(8292,64,&gZcP,D3::kLockNoOverwrite);   // inside it
         if(gZcHr==D3D_OK){std::memset(gZcP,0x5A,64);std::memset(gZc->m.bytes.data()+8292,0x5A,64);gZc->vb->Unlock();}
         gKnobs.hold.store(false);};
     DWORD np=0;CHECK(z.d->ValidateDevice(&np)==5);pumpHook=nullptr;
-    CHECK(get(s.zcOverlapLocks)==1&&get(s.zcOverlapWaits)==0&&get(s.nestedSyncs)>=1&&!shadowOn(z.vb)&&gZcCalls>=1&&gZcHr==D3D_OK);
-    z.verify();z.present();z.rig->sync();CHECK(s.retiredBytes.load()==0&&z.held()==0);
+    if(pressure){z.core->memoryPressure.store(false);z.q->setPressure(false);}
+    CHECK(get(s.zcOverlapLocks)==1&&get(s.zcOverlapWaits)==0&&gZcCalls>=1&&gZcHr==D3D_OK);
+    CHECK(pressure?(get(s.nestedSyncs)>=1&&!shadowOn(z.vb)):(shadowOn(z.vb)&&get(s.zcOverlapStaged)==1&&get(s.zcSkipOverlap)==0));
+    z.rig->sync();CHECK(z.m.same(targetBytes(z.vb)));if(!pressure)CHECK(zcSliceTruth(z));
+    z.present();z.rig->sync();CHECK(s.retiredBytes.load()==0);
     z.vb->Release();z.rig->sync();z.rig->finish();checkClean();
 }
 static void streamTests(bool threadsOnly){
@@ -1762,7 +1766,8 @@ static void streamTests(bool threadsOnly){
     framesAheadPacing();textureShadowSpares();frameSkipping();frameSkipReleasesPresentWait();   // 0.3.200 (frame skip)
     zeroCopyRenames();zeroCopyRingBudget();zeroCopyAdaptiveRing();zeroCopyRetire();zeroCopyPumpedLock(0);zeroCopyPumpedLock(1);
     for(UINT len:{512u<<10,2u<<20}){zeroCopyRenames(len);zeroCopyRetire(len);zeroCopyPumpedLock(0,len);zeroCopyPumpedLock(1,len);}   // 0.3.204 (task 21): the same for DYNAMIC buffers in the regular shadow cap
-    for(UINT len:{15000000u,512u<<10}){zeroCopyOverlap(len);zeroCopyOverlapNoOverwriteLoop(len);zeroCopyOverlapSteady(len);zeroCopyOverlapPumped(len);}   // 0.3.205 (#34): overlapping NOOVERWRITE locks, in the large allowance and the regular cap
+    for(UINT len:{15000000u,512u<<10}){zeroCopyOverlap(len);zeroCopyOverlapNoOverwriteLoop(len);zeroCopyOverlapSteady(len);zeroCopyOverlapPumped(len,false);zeroCopyOverlapPumped(len,true);}
+    zeroCopyOverlapPatchCap();   // 0.3.205 (#34): overlapping NOOVERWRITE locks, in the large allowance and the regular cap
     zeroCopyRegularEviction();zeroCopyReasons();zeroCopyPressureMidStream();zeroCopyTwoLargeRings();zeroCopyNestedDuringWait();bindLifetime();floatConstantBanks();
     equivalence(20000,12345);equivalence(20000,987654321);equivalence(20000,24680,2);equivalence(20000,13579,3);   // 0.3.200 (pipeline): 2 and 3 frames ahead
     (void)threadsOnly;

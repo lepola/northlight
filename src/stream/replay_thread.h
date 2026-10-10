@@ -193,7 +193,7 @@ public:
     // pooled), buffer shadows, texture shadows, snapshots.
     struct Memory {std::size_t queue,bufferShadows,textureShadows,snapshots;std::size_t total()const{return queue+bufferShadows+textureShadows+snapshots;}};
     Memory memory()const{
-        const auto& s=core.q.stats;const auto bs=s.shadowBytes.load(std::memory_order_relaxed)+s.largeShadowBytes.load(std::memory_order_relaxed)+s.ringBytes.load(std::memory_order_relaxed)+s.retiredBytes.load(std::memory_order_relaxed),ts=s.texShadowBytes.load(std::memory_order_relaxed);
+        const auto& s=core.q.stats;const auto bs=s.shadowBytes.load(std::memory_order_relaxed)+s.largeShadowBytes.load(std::memory_order_relaxed)+s.ringBytes.load(std::memory_order_relaxed)+s.retiredBytes.load(std::memory_order_relaxed)+s.zcPatchBytes.load(std::memory_order_relaxed),ts=s.texShadowBytes.load(std::memory_order_relaxed);
         return {core.q.reservedBytes(),bs>0?std::size_t(bs):0,ts>0?std::size_t(ts):0,snapshots.reservedBytes()};
     }
     // The background workers (GI, geometry builder, static shadow streamer) run BELOW_NORMAL; the replay thread is the critical path and
@@ -464,20 +464,20 @@ private:
     // 0.3.204 (task 21, Diagnostics only): the generated calls that cost the game thread the most since the previous line (sampled 1 in 16), per frame:
     // "CSTREAM top[per frame]: Device::SetRenderState=0.812ms/4980 ..." (time, calls). Nothing while the timers are off.
     // 0.3.204 (task 21): the zero-copy buffer unlocks on a line of their own (the main CSTREAM line is capped): per frame since the previous line, and the live bytes of retired and spare slices. Nothing until the first zero-copy unlock or rename.
-    std::uint64_t lastZcUnlocks_=0,lastZcBytes_=0,lastRenames_=0,lastRenameWaits_=0,lastRenameWaitNs_=0,lastWriteWaits_=0,lastWriteWaitNs_=0,lastRenameAllocs_=0,lastZcFrames_=0,lastOvLocks_=0,lastOvWaits_=0,lastOvWaitNs_=0,lastOvCopies_=0,lastOvCopyBytes_=0,lastOvRearms_=0;
+    std::uint64_t lastZcUnlocks_=0,lastZcBytes_=0,lastRenames_=0,lastRenameWaits_=0,lastRenameWaitNs_=0,lastWriteWaits_=0,lastWriteWaitNs_=0,lastRenameAllocs_=0,lastZcFrames_=0,lastOvLocks_=0,lastOvWaits_=0,lastOvWaitNs_=0,lastOvCopies_=0,lastOvCopyBytes_=0;
     void logZeroCopy(){
-        const Counters& s=core.q.stats;const std::uint64_t un=get(s.zeroCopyUnlocks),by=get(s.zeroCopyBytes),rn=get(s.renames),rw=get(s.renameWaits),rwn=get(s.renameWaitNs),ww=get(s.writeWaits),wwn=get(s.writeWaitNs),ra=get(s.renameAllocs),ol=get(s.zcOverlapLocks),ow=get(s.zcOverlapWaits),ovWn=get(s.zcOverlapWaitNs),oc=get(s.zcSkipOverlap),ocb=get(s.zcOverlapCopyBytes),orr=get(s.zcOverlapRearms),gf=get(s.gameFrames)-lastZcFrames_;lastZcFrames_+=gf;
+        const Counters& s=core.q.stats;const std::uint64_t un=get(s.zeroCopyUnlocks),by=get(s.zeroCopyBytes),rn=get(s.renames),rw=get(s.renameWaits),rwn=get(s.renameWaitNs),ww=get(s.writeWaits),wwn=get(s.writeWaitNs),ra=get(s.renameAllocs),ol=get(s.zcOverlapLocks),ow=get(s.zcOverlapWaits),ovWn=get(s.zcOverlapWaitNs),oc=get(s.zcOverlapStaged),ocb=get(s.zcOverlapCopyBytes),gf=get(s.gameFrames)-lastZcFrames_;lastZcFrames_+=gf;
         const double inv=gf?1.0/double(gf):0.0;
-        if(log&&(un|rn|rw|ww|get(s.zcSkipPool)|get(s.zcSkipNoShadow)|get(s.zcSkipSmall)|get(s.zcSkipPressure)|get(s.zcSkipOther)|ol|oc|orr)){
+        if(log&&(un|rn|rw|ww|get(s.zcSkipPool)|get(s.zcSkipNoShadow)|get(s.zcSkipSmall)|get(s.zcSkipPressure)|get(s.zcSkipOther)|ol|oc)){
             char buf[kLine];
-            std::snprintf(buf,sizeof buf,"CSTREAM zerocopy[per frame]: unlocks=%.1f MB=%.2f renames=%.2f allocs=%.2f renameWaits=%.2f renameWaitMs=%.3f writeWaits=%.2f writeWaitMs=%.3f retiredMB=%.1f ringMB=%.1f slices=%lld maxRing=%llu maxDiscards=%llu waitWhy[max=%llu budget=%llu drain=%llu alloc=%llu] copyUnderPressure[unlocks=%llu MB=%.1f] notZeroCopy[pool=%llu noShadow=%llu small=%llu pressure=%llu other=%llu overlap=%llu] overlap[locks=%.2f waits=%.2f waitMs=%.3f copies=%.2f copyMB=%.2f rearms=%.2f]",
+            std::snprintf(buf,sizeof buf,"CSTREAM zerocopy[per frame]: unlocks=%.1f MB=%.2f renames=%.2f allocs=%.2f renameWaits=%.2f renameWaitMs=%.3f writeWaits=%.2f writeWaitMs=%.3f retiredMB=%.1f ringMB=%.1f slices=%lld maxRing=%llu maxDiscards=%llu waitWhy[max=%llu budget=%llu drain=%llu alloc=%llu] copyUnderPressure[unlocks=%llu MB=%.1f] notZeroCopy[pool=%llu noShadow=%llu small=%llu pressure=%llu other=%llu overlap=%llu] overlap[locks=%.2f waits=%.2f waitMs=%.3f copies=%.2f copyMB=%.2f patchMB=%.1f]",
                 double(un-lastZcUnlocks_)*inv,double(by-lastZcBytes_)/1048576.0*inv,double(rn-lastRenames_)*inv,double(ra-lastRenameAllocs_)*inv,double(rw-lastRenameWaits_)*inv,double(rwn-lastRenameWaitNs_)/1e6*inv,double(ww-lastWriteWaits_)*inv,double(wwn-lastWriteWaitNs_)/1e6*inv,
                 double(std::max<std::int64_t>(0,s.retiredBytes.load()))/1048576.0,double(std::max<std::int64_t>(0,s.ringBytes.load()))/1048576.0,(long long)std::max<std::int64_t>(0,s.ringSlices.load()),(unsigned long long)get(s.maxRing),(unsigned long long)core.q.stats.maxDiscards.exchange(0),(unsigned long long)get(s.waitMax),(unsigned long long)get(s.waitBudget),(unsigned long long)get(s.waitDrain),(unsigned long long)get(s.waitAlloc),(unsigned long long)get(s.copyPressureUnlocks),double(get(s.copyPressureBytes))/1048576.0,
-                (unsigned long long)get(s.zcSkipPool),(unsigned long long)get(s.zcSkipNoShadow),(unsigned long long)get(s.zcSkipSmall),(unsigned long long)get(s.zcSkipPressure),(unsigned long long)get(s.zcSkipOther),(unsigned long long)oc,
-                double(ol-lastOvLocks_)*inv,double(ow-lastOvWaits_)*inv,double(ovWn-lastOvWaitNs_)/1e6*inv,double(oc-lastOvCopies_)*inv,double(ocb-lastOvCopyBytes_)/1048576.0*inv,double(orr-lastOvRearms_)*inv);
+                (unsigned long long)get(s.zcSkipPool),(unsigned long long)get(s.zcSkipNoShadow),(unsigned long long)get(s.zcSkipSmall),(unsigned long long)get(s.zcSkipPressure),(unsigned long long)get(s.zcSkipOther),(unsigned long long)get(s.zcSkipOverlap),
+                double(ol-lastOvLocks_)*inv,double(ow-lastOvWaits_)*inv,double(ovWn-lastOvWaitNs_)/1e6*inv,double(oc-lastOvCopies_)*inv,double(ocb-lastOvCopyBytes_)/1048576.0*inv,double(std::max<std::int64_t>(0,s.zcPatchBytes.load()))/1048576.0);
             log(buf);
         }
-        lastZcUnlocks_=un;lastZcBytes_=by;lastRenames_=rn;lastRenameWaits_=rw;lastRenameWaitNs_=rwn;lastWriteWaits_=ww;lastWriteWaitNs_=wwn;lastRenameAllocs_=ra;lastOvLocks_=ol;lastOvWaits_=ow;lastOvWaitNs_=ovWn;lastOvCopies_=oc;lastOvCopyBytes_=ocb;lastOvRearms_=orr;
+        lastZcUnlocks_=un;lastZcBytes_=by;lastRenames_=rn;lastRenameWaits_=rw;lastRenameWaitNs_=rwn;lastWriteWaits_=ww;lastWriteWaitNs_=wwn;lastRenameAllocs_=ra;lastOvLocks_=ol;lastOvWaits_=ow;lastOvWaitNs_=ovWn;lastOvCopies_=oc;lastOvCopyBytes_=ocb;
     }
     std::uint64_t lastCmdNs_[kMaxCmdIds]={},lastCmdSamples_[kMaxCmdIds]={},lastTopFrames_=0;
     void logCallTop(){

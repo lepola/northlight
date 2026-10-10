@@ -50,8 +50,9 @@ struct Counters {
     // spare slices allocated for them, and the waits (count, ns) for a slice the replay thread still reads (a busy spare at a rename, or a non-DISCARD/NOOVERWRITE write lock). Game thread.
     Counter zeroCopyUnlocks{0},zeroCopyBytes{0},renames{0},renameAllocs{0},renameWaits{0},renameWaitNs{0},writeWaits{0},writeWaitNs{0};   // rename*: DISCARD renames; write*: waits of the other write locks (flags 0) for a slice's readers
     Counter waitMax{0},waitBudget{0},waitDrain{0},waitAlloc{0},maxRing{0},maxDiscards{0};   // why a DISCARD rename had to wait (ring at its allowed size / budget refused / draining the current slice under memory pressure / allocation failed); the largest ring (non-current slices) in use; the largest per-frame DISCARD count of a buffer (reset by each zerocopy line)
-    // 0.3.205 (#34): NOOVERWRITE write locks whose range overlapped a zero-copy ref the replay thread had not passed (each waited for it: waits, ns), the DISCARD unlocks copied for that reason afterwards (zcSkipOverlap) and their bytes (DISCARD and NOOVERWRITE alike while the window is open). Game thread.
-    Counter zcOverlapLocks{0},zcOverlapWaits{0},zcOverlapWaitNs{0},zcSkipOverlap{0},zcOverlapCopyBytes{0},zcOverlapRearms{0};   // zcOverlapRearms: NOOVERWRITE locks over only copied unlocks of the window (no wait): the window is extended
+    // 0.3.205 (#34): NOOVERWRITE write locks whose range overlapped bytes the replay thread had not read yet (a zero-copy ref or an unapplied patch), the waits (count, ns) of the few that could not be staged (no Block, the patches
+    // already hold a whole buffer, memory pressure, a READONLY lock over a patch), the NOOVERWRITE unlocks staged for that reason and their bytes (zcOverlapStaged, zcOverlapCopyBytes; zcSkipOverlap: those of 4 KiB or more, the not-zero-copy reason). Game thread.
+    Counter zcOverlapLocks{0},zcOverlapWaits{0},zcOverlapWaitNs{0},zcOverlapStaged{0},zcOverlapCopyBytes{0},zcSkipOverlap{0};
     Counter zcSkipPool{0},zcSkipNoShadow{0},zcSkipSmall{0},zcSkipPressure{0},zcSkipOther{0};
     Counter copyPressureUnlocks{0},copyPressureBytes{0};   // unlocks of 4 KiB or more that were copied into the queue instead of zero-copy because of memory pressure, and their bytes   // DISCARD/NOOVERWRITE write unlocks of DYNAMIC buffers that did NOT go zero-copy, by reason (not the default pool / no shadow slice / below 4 KiB / other)
     // The game thread's own time per frame (Present to Present, minus its sync and backpressure waits), in ns, and its frames.
@@ -76,6 +77,7 @@ struct Counters {
     std::atomic<std::int64_t> shadowBytes{0},texShadowBytes{0},largeShadowBytes{0};   // largeShadowBytes: the large allowance, NOT part of shadowBytes (shadowAdmit's cap); 0.3.204 (task 21): also the spare and the retired slices
     std::atomic<std::int64_t> retiredBytes{0},ringBytes{0},ringSlices{0};   // 0.3.204 (task 21): live bytes of retired slices (dropped while the replay thread may still read them) and of ring slices (the buffers' non-current slices); NOT part of shadowBytes/largeShadowBytes (so they never block a shadow grant), but in memory() and under their own budget:
     std::atomic<std::int64_t> ringLargeBytes{0},ringRegularBytes{0},retiredLargeBytes{0},retiredRegularBytes{0};   // the ring budget per kind (live + retired): regular <= ShadowBudgetBytes, large <= LargeShadowBudgetBytes
+    std::atomic<std::int64_t> zcPatchBytes{0};   // 0.3.205 (#34): live bytes of staged overlap locks waiting to be written into their slice (BufferState::patches; each buffer's at most its length)
 };
 static_assert(alignof(Counters)==kLine&&sizeof(Counters)%kLine==0,"Counters groups are line-aligned");
 static_assert(offsetof(Counters,commands)/kLine!=offsetof(Counters,consumerSleeps)/kLine&&offsetof(Counters,consumerSleeps)/kLine!=offsetof(Counters,chunksLive)/kLine,"counter groups on distinct lines");
