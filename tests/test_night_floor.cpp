@@ -42,51 +42,39 @@ int main(){
             if(started)assert(std::fabs(w-last)<.0001f);last=w;started=true;
         }
     }
-    // constants
-    float k[2];
-    constants(0,1,k);assert(k[0]==0&&k[1]==0);
-    constants(100,0,k);assert(k[0]==0&&k[1]==0);
-    constants(100,-1,k);assert(k[0]==0&&k[1]==0);
-    constants(100,nan,k);assert(k[0]==0&&k[1]==0);
-    constants(100,inf,k);assert(k[0]==0&&k[1]==0);
-    constants(100,1,k);assert(std::fabs(k[0]-1/(3*Target))<1e-4f&&k[1]==2);
-    float cap[2];constants(150,1,cap);assert(cap[0]==k[0]&&cap[1]==k[1]);
-    constants(50,.5f,cap);assert(std::fabs(cap[1]-.5f)<1e-6f);
-    // The composite chain for one pixel (relight, then the lift), as WorldComposite computes it.
+    // blend
+    const float b100=blend(100,1);
+    assert(blend(0,1)==0&&blend(100,0)==0&&blend(100,-1)==0&&blend(100,nan)==0&&blend(100,inf)==0);
+    assert(b100==1&&blend(150,1)==1&&blend(100,2)==1&&std::fabs(blend(50,.5f)-.25f)<1e-6f);
+    // The composite chain for one pixel (bloom/AO already in original, relight, then the limit), as WorldComposite computes it.
     struct Px{float original[3],fog[3],baseline[3],bounce[3],legacyT;};
-    auto chain=[&](const Px& p,const float* kk,float* o){
-        float oldLight[3],transported[3],color[3],fogPart[3];
-        for(int i=0;i<3;++i){oldLight[i]=std::max(p.baseline[i],.15f);fogPart[i]=std::min(p.fog[i],p.original[i]);
-            transported[i]=std::max(p.original[i]-fogPart[i],0.f);
-            color[i]=p.original[i]+std::min(transported[i]/oldLight[i],p.legacyT)*p.bounce[i];
-            color[i]=std::max(color[i],p.original[i]-.45f*transported[i]);}
-        lift(color,fogPart,kk,o);
+    auto chain=[&](const Px& p,float x,float* o){
+        for(int i=0;i<3;++i){const float oldLight=std::max(p.baseline[i],.15f),fogPart=std::min(p.fog[i],p.original[i]);
+            const float transported=std::max(p.original[i]-fogPart,0.f);
+            float color=p.original[i]+std::min(transported/oldLight,p.legacyT)*p.bounce[i];
+            color=std::max(color,p.original[i]-.45f*transported);
+            o[i]=x*std::max(p.original[i]-color,0.f)+color;}
     };
-    auto lum=[](const float*v){return (v[0]+v[1]+v[2])/3;};
-    const float off2[2]={0,0};
     auto px=[](float a,float b,float c,float bounce){Px p={{a,b,c},{0,0,0},{.15f,.15f,.15f},{bounce,bounce,bounce},1};return p;};
-    const Px dim=px(.03f,.04f,.06f,0);
-    // Dark pixel (below Target): gain exactly 1+A, strictly monotonic, hue kept.
-    {float prev=1;for(unsigned pct:{25u,50u,75u,100u}){float kk[2],o[3];constants(pct,1,kk);chain(dim,kk,o);
-        const float g=lum(o)/lum(dim.original);assert(g>prev);prev=g;
-        assert(std::fabs(g-(1+kk[1]))<1e-5f);
-        if(pct==100)assert(std::fabs(g-(1+Gain))<1e-5f);
-        assert(std::fabs(o[0]/o[1]-dim.original[0]/dim.original[1])<1e-5f&&std::fabs(o[2]/o[1]-dim.original[2]/dim.original[1])<1e-5f);}}
-    // Lamp (large positive bounce, baseline at the clamp) and baked bright WMO pixel: small relative lift, bounded absolute add.
-    {float kk[2],d[3],o[3];constants(100,1,kk);chain(dim,kk,d);const float dimRel=lum(d)/lum(dim.original)-1;
-     Px lamp=px(.3f,.3f,.3f,1.f),baked=px(.6f,.6f,.6f,0);
-     for(const Px* p:{&lamp,&baked}){float base[3];chain(*p,off2,base);chain(*p,kk,o);
-        assert(lum(o)/lum(base)-1<.25f*dimRel);assert(lum(o)-lum(base)<=Gain*Target*(1+1e-5f));}}
-    // Monotonic in surface brightness; shadowed never above its lit neighbour.
-    for(unsigned pct:{25u,50u,100u}){float kk[2];constants(pct,1,kk);float prev=-1;
-        for(unsigned i=0;i<=100;++i){float v=i/100.f,c[3]={v,v,v},f[3]={0,0,0},o[3];lift(c,f,kk,o);assert(o[0]>=prev);prev=o[0];}
-        for(float lit:{.05f,.2f,.5f,.9f})for(float amt:{.01f,.05f,.2f}){Px a=px(.3f,.3f,.3f,lit),b=px(.3f,.3f,.3f,lit-amt);
-            float oa[3],ob[3];chain(a,kk,oa);chain(b,kk,ob);assert(ob[1]<=oa[1]);}}
-    // Off cases bit-identical, pure fog unchanged.
-    {float o[3],kk[2];
-     constants(0,1,kk);chain(dim,kk,o);for(int i=0;i<3;++i)assert(o[i]==dim.original[i]);
-     constants(100,0,kk);chain(dim,kk,o);for(int i=0;i<3;++i)assert(o[i]==dim.original[i]);
-     Px fogOnly=dim;for(int i=0;i<3;++i){fogOnly.original[i]=.2f;fogOnly.fog[i]=.3f;}
-     constants(100,1,kk);chain(fogOnly,kk,o);for(int i=0;i<3;++i)assert(o[i]==.2f);}
-    std::printf("PASS night floor maxStep=%.6f full=%u zero=%u seconds; weight ramp, orbit sweep, smoothing, constants, lift\n",maxStep,full,zero);
+    // Moon shadow / dark GI (negative bounce): 0 keeps the relit night, 100 gives the game's own picture, linear between.
+    {const Px shade=px(.03f,.04f,.06f,-.1f);float relit[3],o[3];chain(shade,0,relit);
+     for(int i=0;i<3;++i)assert(relit[i]<shade.original[i]);
+     float prev=relit[1];for(unsigned pct:{25u,50u,75u,100u}){chain(shade,blend(pct,1),o);assert(o[1]>prev);prev=o[1];
+        for(int i=0;i<3;++i){const float want=relit[i]+pct/100.f*(shade.original[i]-relit[i]);assert(std::fabs(o[i]-want)<1e-6f);}}
+     chain(shade,b100,o);for(int i=0;i<3;++i)assert(o[i]==shade.original[i]);}
+    // Added light (lamp, positive bounce) and the bloom glow in original are never touched; nothing exceeds max(relit, original).
+    {const Px lamp=px(.3f,.25f,.1f,1.f),glow=px(.9f,.6f,.2f,0);float a[3],o[3];
+     for(const Px* p:{&lamp,&glow}){chain(*p,0,a);chain(*p,b100,o);for(int i=0;i<3;++i)assert(o[i]==a[i]&&o[i]<=std::max(a[i],p->original[i]));}}
+    // Monotonic in the relit value; shadowed never above its lit neighbour.
+    for(float x:{.25f,.5f,1.f})for(float lit:{.05f,.2f,.5f,.9f})for(float amt:{.01f,.05f,.2f}){
+        float oa[3],ob[3];chain(px(.3f,.3f,.3f,lit),x,oa);chain(px(.3f,.3f,.3f,lit-amt),x,ob);assert(ob[1]<=oa[1]);
+        chain(px(.3f,.3f,.3f,-lit),x,oa);chain(px(.3f,.3f,.3f,-lit-amt),x,ob);assert(ob[1]<=oa[1]);}
+    // Off is bit-identical; pure fog unchanged.
+    {const Px shade=px(.03f,.04f,.06f,-.1f);float o[3],ref[3];
+     for(int i=0;i<3;++i){const float color=std::max(shade.original[i]+shade.original[i]/.15f*shade.bounce[i],shade.original[i]-.45f*shade.original[i]);ref[i]=color;}
+     chain(shade,blend(0,1),o);for(int i=0;i<3;++i)assert(o[i]==ref[i]);
+     chain(shade,blend(100,0),o);for(int i=0;i<3;++i)assert(o[i]==ref[i]);
+     Px fogOnly=shade;for(int i=0;i<3;++i){fogOnly.original[i]=.2f;fogOnly.fog[i]=.3f;}
+     chain(fogOnly,b100,o);for(int i=0;i<3;++i)assert(o[i]==.2f);}
+    std::printf("PASS night floor maxStep=%.6f full=%u zero=%u seconds; weight ramp, orbit sweep, smoothing, blend, darkening limit\n",maxStep,full,zero);
 }

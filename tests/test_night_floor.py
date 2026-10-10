@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # northlight-test: requires=cxx
-"""NightBrightness weight ramp over the native orbit, light-motion smoothing, constants and lift (native clang++, plain and ASan/UBSan)."""
+"""NightBrightness weight ramp over the native orbit, light-motion smoothing, blend and darkening limit (native clang++, plain and ASan/UBSan)."""
 import sys; from pathlib import Path; sys.path.insert(0, str(Path(__file__).resolve().parents[1]))  # repo root
 import northlight_paths as fp
 import subprocess,tempfile
