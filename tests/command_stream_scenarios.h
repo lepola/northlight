@@ -1873,7 +1873,6 @@ static void textureReadbackTable(){
         CHECK(win.size()==2&&has(win[1],"readbacks=1 ")&&has(win[1],"gap[0-1=0,2-9=1,10-59=0,60-299=0,300+=0,first=0] ")&&has(win[1],"levels=1 overflow=0"));
         CHECK(top.size()==1&&has(top[0],"locks=1 rb=1 ")&&has(top[0],"gapFrames=2.0 "));
         CHECK(kind.size()==1&&has(kind[0],"lockedLevels=1 rbLevels=1 locks=1 rb=1 "));   // only the group of the second window: tq was not locked again
-        for(const auto& l:win)std::fprintf(stderr,"%s\n",l.c_str());for(const auto& l:top)std::fprintf(stderr,"%s\n",l.c_str());for(const auto& l:kind)std::fprintf(stderr,"%s\n",l.c_str());
         ta->Release();tq->Release();rig.finish();checkClean();
     }
 }
