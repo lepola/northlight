@@ -35,9 +35,9 @@ constexpr std::size_t ChunkBytes=std::size_t(1)<<20;
 constexpr std::size_t MaxInlinePayload=ChunkBytes/4;   // larger payloads travel in a Block
 // 0.3.192 (CS): the stream's own memory shares a 32-bit address space with the game and the world renderer, which stalled for lack of a
 // contiguous block while the stream held ~100 MiB. Real sessions peak at ~12 MiB of queue; every cap is now 16 MiB (queue, texture shadows, buffer shadows; worst case ~64 MiB) plus the large allowance (36 MiB since 0.3.204, see below: worst case ~100 MiB
-// game-side) plus the replay-side copies' own 16+16 MiB, see replay_copies.h; ~20-30 MiB typically). 0.3.204 (task 21): the zero-copy slice rings add a budget of their own, independent of the adaptive caps: regular rings <= ShadowBudgetBytes (16 MiB) and large rings
-// <= LargeShadowBudgetBytes (36 MiB), live plus retired, and slices retired while the replay thread still reads them (transient, at most the shadows dropped meanwhile). Worst case game-side buffers: 32 (adaptive regular max) + 36 (large) + 16 + 36 (rings) = 120 MiB, + texture
-// shadows 16 + queue 32 + replay copies 32 = ~200 MiB; typical sessions use a small part (rings only grow while a buffer DISCARDs with the replay behind, and are freed after 60 idle frames) and the idle pools are kept small (kPoolMaxChunks, kMaxPooledBlockBytes, PoolTuner). 0.3.200 (pipeline): the queue may take 32 MiB with StreamFramesAhead >= 2 (budgetForFramesAhead below): worst case +16 MiB.
+// game-side) plus the replay-side copies' own 16+16 MiB, see replay_copies.h; ~20-30 MiB typically). 0.3.204 (task 21): the zero-copy slice rings add a budget of their own, independent of the adaptive caps: regular rings <= RingRegularBudgetBytes (20 MiB since 0.3.205) and large rings
+// <= LargeShadowBudgetBytes (36 MiB), live plus retired, and slices retired while the replay thread still reads them (transient, at most the shadows dropped meanwhile). Worst case game-side buffers: 32 (adaptive regular max) + 36 (large) + 20 + 36 (rings) = 124 MiB, + texture
+// shadows 16 + queue 32 + replay copies 32 = ~204 MiB; typical sessions use a small part (rings only grow while a buffer DISCARDs with the replay behind, and are freed after 60 idle frames) and the idle pools are kept small (kPoolMaxChunks, kMaxPooledBlockBytes, PoolTuner). 0.3.200 (pipeline): the queue may take 32 MiB with StreamFramesAhead >= 2 (budgetForFramesAhead below): worst case +16 MiB.
 constexpr std::size_t BudgetBytes=std::size_t(16)<<20;
 // 0.3.200 (pipeline): StreamFramesAhead (1..kMaxFramesAhead) frames may be in flight; the queue budget grows by BudgetBytes per extra frame up to
 // kMaxBudgetBytes (32 MiB: the address-space rule above; still halved under memory pressure). 1 = BudgetBytes, the 0.3.199 queue.
@@ -52,6 +52,9 @@ constexpr std::size_t TextureShadowBudgetBytes=std::size_t(16)<<20;   // per-lev
 // (and none in the first interval). Under pressure the cap never grows, is halved (the pressure path evicts LRU down to it) and the adaptive part is
 // forgotten (back to the base); after the pressure it can grow again only by the thrash rule. Growth is game-thread; the cap is read by any thread.
 constexpr std::size_t ShadowBudgetBytes=std::size_t(16)<<20;
+// 0.3.205: the ring budget of regular-cap buffers (live + retired slices; was ShadowBudgetBytes, 16 MiB): in crowds several skinning buffers of 2-3 MiB DISCARD many times a frame and the 16 MiB ring
+// made them wait for a slice the replay thread still read (waitWhy budget). Rings are dropped under memory pressure and freed after 60 idle frames, so the extra 4 MiB is only held while they are busy.
+constexpr std::size_t RingRegularBudgetBytes=std::size_t(20)<<20;
 constexpr std::size_t kShadowBudgetMaxBytes=std::size_t(32)<<20,kShadowGrowStep=std::size_t(4)<<20;
 constexpr std::uint64_t kShadowHotFrames=60,kShadowGrowFrames=60;
 // 0.3.192 (CS): LARGE-buffer allowance, outside the regular cap: a DYNAMIC buffer above a quarter of the current cap (so never admitted by shadowAdmit) up to

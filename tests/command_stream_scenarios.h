@@ -1418,6 +1418,21 @@ static void zeroCopyAdaptiveRing(){
     z.core->frameNo+=240;z.presentToTrim();z.rig->sync();CHECK(s.ringSlices.load()==0&&z.held()==z.L);   // (idle trimming)
     z.vb->Release();z.rig->sync();z.present();z.rig->sync();CHECK(z.held()==0);z.rig->finish();checkClean();
 }
+// 0.3.205: the regular rings have RingRegularBudgetBytes (20 MiB, was 16): a 2 MiB buffer DISCARDing 4 times a frame grows its ring to 9 slices (18 MiB) without a budget wait, where the old 16 MiB stopped it
+// at 8; a second buffer still gets a slice beside it (18 + 2 MiB).
+static void zeroCopyRegularRingBudget(){
+    static_assert(RingRegularBudgetBytes==std::size_t(20)<<20,"the regular ring budget");
+    ZcRig z(2u<<20,3);auto& s=*z.s;CHECK(!z.large);z.hold();unsigned k=0;
+    auto cycle=[&]{z.w((k%40)*8192u,8192,(unsigned char)(0x20+k),D3::kLockDiscard);++k;};
+    for(unsigned f=0;f<3;++f){for(int i=0;i<(f<2?4:2);++i)cycle();z.present();}
+    CHECK(k==10&&get(s.renames)==9&&get(s.renameWaits)==0&&get(s.waitBudget)==0&&s.ringSlices.load()==9&&s.ringRegularBytes.load()==9*std::int64_t(2u<<20));
+    IDirect3DVertexBuffer9* b2=nullptr;CHECK(z.d->CreateVertexBuffer(2u<<20,D3::kUsageDynamic,0,(D3DPOOL)0,&b2,nullptr)==D3D_OK&&shadowOn(b2));
+    BufModel m2(2u<<20);m2.write(b2,0,8192,0x61,D3::kLockDiscard);   // pending (the replay is held): its next DISCARD needs a ring slice
+    std::thread rel;z.releaseLater(rel);m2.write(b2,0,8192,0x62,D3::kLockDiscard);rel.join();   // 18 + 2 MiB fits: one more slice, no wait
+    CHECK(get(s.waitBudget)==0&&s.ringSlices.load()==10);
+    z.rig->sync();CHECK(z.m.same(targetBytes(z.vb))&&m2.same(targetBytes(b2)));   // (no verify(): the trace holds b2's unlocks too)
+    b2->Release();z.vb->Release();z.rig->sync();z.present();z.rig->sync();CHECK(s.ringSlices.load()==0);z.rig->finish();checkClean();
+}
 // Slices dropped (pressure, LRU takeover, GPU write, Release) while unlocks that read them are unreplayed: the storage is retired, not freed (the ASan build catches a read of freed memory), and freed once the replay has passed.
 static void zeroCopyRetire(UINT len=15800000){
     {   // memory pressure at a Present: the idle large shadow (both slices) goes; no spare is allocated under pressure (the DISCARD waits instead)
@@ -1768,7 +1783,7 @@ static void streamTests(bool threadsOnly){
     for(UINT len:{512u<<10,2u<<20}){zeroCopyRenames(len);zeroCopyRetire(len);zeroCopyPumpedLock(0,len);zeroCopyPumpedLock(1,len);}   // 0.3.204 (task 21): the same for DYNAMIC buffers in the regular shadow cap
     for(UINT len:{15000000u,512u<<10}){zeroCopyOverlap(len);zeroCopyOverlapNoOverwriteLoop(len);zeroCopyOverlapSteady(len);zeroCopyOverlapPumped(len,false);zeroCopyOverlapPumped(len,true);}
     zeroCopyOverlapPatchCap();   // 0.3.205 (#34): overlapping NOOVERWRITE locks, in the large allowance and the regular cap
-    zeroCopyRegularEviction();zeroCopyReasons();zeroCopyPressureMidStream();zeroCopyTwoLargeRings();zeroCopyNestedDuringWait();bindLifetime();floatConstantBanks();
+    zeroCopyRegularEviction();zeroCopyRegularRingBudget();zeroCopyReasons();zeroCopyPressureMidStream();zeroCopyTwoLargeRings();zeroCopyNestedDuringWait();bindLifetime();floatConstantBanks();
     equivalence(20000,12345);equivalence(20000,987654321);equivalence(20000,24680,2);equivalence(20000,13579,3);   // 0.3.200 (pipeline): 2 and 3 frames ahead
     (void)threadsOnly;
 }

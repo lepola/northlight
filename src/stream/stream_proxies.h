@@ -955,11 +955,11 @@ inline bool prepareSliceWrite(ProxyBase& self,BufferState& s,DWORD eff,bool& zc,
         }
         if(pick==s.ring.size()&&s.ring.size()+1>=allowed)atMax=true;
         else if(pick==s.ring.size()){
-            // 0.3.204 (task 21): ring slices have a fixed budget of their own (not the adaptive cap, not counted in shadowBytes/largeShadowBytes): regular rings (live + retired) up to the BASE buffer-shadow cap,
+            // 0.3.204 (task 21): ring slices have a fixed budget of their own (not the adaptive cap, not counted in shadowBytes/largeShadowBytes): regular rings (live + retired) up to RingRegularBudgetBytes,
             // large rings up to the large allowance
             const auto rb=s.large?q.stats.ringLargeBytes.load(std::memory_order_relaxed)+q.stats.retiredLargeBytes.load(std::memory_order_relaxed)
                                  :q.stats.ringRegularBytes.load(std::memory_order_relaxed)+q.stats.retiredRegularBytes.load(std::memory_order_relaxed);
-            const bool room=(rb>0?std::size_t(rb):0)+len<=(s.large?LargeShadowBudgetBytes:ShadowBudgetBytes);
+            const bool room=(rb>0?std::size_t(rb):0)+len<=(s.large?LargeShadowBudgetBytes:RingRegularBudgetBytes);
             if(!room)noRoom=true;
             else{
                 try{BufferState::Slice sl;sl.mem.resize(len+kLockSlack);sl.frame=c.frameNo;s.ring.push_back(std::move(sl));pick=s.ring.size()-1;}catch(...){pick=s.ring.size();allocFailed=true;}   // (resize: uninitialized, the contents of a DISCARD are undefined)
