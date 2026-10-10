@@ -8,6 +8,7 @@
 #include "celestial_context.h"
 #include "celestial_sources.h"
 #include "twilight_fill.h"
+#include "night_floor.h"
 #include "regional_fog.h"
 #include "regional_shadow_range.h"
 #include "celestial_profiles.h"
@@ -3406,7 +3407,8 @@ public:
         c[18][3]=NorthlightTwilightFill::gain(celestialValid,celestialValid?celestial.dayFraction:-1.,
             celestialValid?celestialLight.sun.direction[2]:0.f,celestialValid?celestialLight.moon.direction[2]:0.f);
         c[18][3]+=wx.ambientLift(); /* 0.3.198 (rain): a little more sky ambient from the GI pass in rain (+0 when dry; the probes themselves are untouched) */
-        c[19][0]=active->origin.x;c[19][1]=active->origin.y;c[19][2]=active->origin.z;c[19][3]=8;
+        NorthlightNightFloor::constants(quality.nightBrightness,NorthlightNightFloor::weight(celestialValid,celestialValid?celestialLight.sun.direction[2]:0.f),
+            context.ambient,c[19]);c[19][2]=0;c[19][3]=8; /* c19.xy: NightBrightness 1/reference light and lift (WorldComposite only; 0 = off); c19.w: probe spacing */
         c[20][0]=float(NorthlightGI::probeLayout().atlas);c[20][1]=NorthlightQuality::giIntensity(quality);c[20][2]=.85f;c[20][3]=active->serial?1.f:0.f;
         DWORD now=GetTickCount();
         c[21][0]=uploadedFogField&&(uploadedFogField->fogCells||uploadedFogField->airCells)?1.f:0.f;c[21][1]=1.2f*wx.shaftGain();c[21][2]=.38f;c[21][3]=128; /* 0.3.198 (rain): shafts fade in rain, x1 when dry */

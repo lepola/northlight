@@ -32,7 +32,8 @@ float4 TemporalReach : register(c15); // w: TemporalLight only, largest drawn so
 float4 SunDirection : register(c16); // toward source
 float4 DirectLight : register(c17);
 float4 AmbientLight : register(c18); // native ambient RGB, evening surface ambient gain in w
-float4 GridOrigin : register(c19); // xyz unused; world probe spacing in w
+float4 GridOrigin : register(c19); // xyz unused (NightFloor alias); world probe spacing in w
+float4 NightFloor : register(c19); // x: 1/(3 x reference light), y: lift (WorldComposite only, 0 = off); zw unused/GridOrigin.w
 float4 GridInfo : register(c20); // atlas N,GI intensity,shadow strength,probe ready
 float4 FogInfo : register(c21); // regional field ready,direct volume gain,direct RGB bound,max distance
 float4 FogColor : register(c22); // scattering albedo.rgb, generic-forest daytime air extinction
@@ -1034,6 +1035,9 @@ float4 WorldComposite(float2 uv:TEXCOORD0):COLOR0 {
         // Bound combined GI/shadow darkening relative to the existing surface;
         // this preserves black and does not introduce an absolute exposure floor.
         color=max(color,mad(-.45,transported,original.rgb));
+        // NightBrightness: gain on the relit surface part, 1/light above the reference level (1/(3L) constant), by the
+        // native baseline only so shadows keep their ratio; 0 = off. color>=original-.45*transported, so color-fogPart>=0.
+        color=mad(NightFloor.y/max(dot(oldLight,NightFloor.xxx),1),color-fogPart,color);
         if(PassInfo.z==1)color=shadow.xxx;
         if(PassInfo.z==2)color=max(AmbientLight.rgb+bounce,0);
     }
