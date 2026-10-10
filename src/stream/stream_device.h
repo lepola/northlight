@@ -67,7 +67,7 @@ public:
         bool filterRedundant=true;                                      // see redundant(); off: every Set is recorded
         DWORD (*readBackLock)()=nullptr;                                // NorthlightUpload::readBackLock in the DLL: READONLY, plus NOOVERWRITE on DXVK >= 3
         bool (*diagnostics)()=nullptr;                                  // NorthlightDiagnostics::enabled in the DLL
-        const char* (*callerModule)(void* address)=nullptr;             // 0.3.204 (task 21): "module+0xoffset" of a TestCooperativeLevel caller's return address (Windows only); null = no caller line
+        const char* (*callerModule)(void* address)=nullptr;             // 0.3.204 (task 21): "module+0xoffset" of a TestCooperativeLevel caller's return address (Windows only); null = no caller line. 0.3.206 (task 31): also names a texture lock's caller in the TEXREADBACK lines
         // 0.3.200 (pipeline): StreamFramesAhead (clamped to 1..kMaxFramesAhead): Present waits for the Present this many frames back; the snapshot pool follows
         // (SnapshotPool::capFor). 1 = the 0.3.199 pacing. The queue budget is `budget` (the DLL passes budgetForFramesAhead).
         unsigned framesAhead=1;
@@ -373,7 +373,9 @@ public:
     HRESULT STDMETHODCALLTYPE Present(const RECT* src,const RECT* dst,HWND window,const RGNDATA* dirty) override{return presentCommon(nullptr,src,dst,window,dirty,0);}
     HRESULT presentCommon(StreamSwapChain* swap,const RECT* src,const RECT* dst,HWND window,const RGNDATA* dirty,DWORD flags){
         Queue& q=streamQueue();
+        const bool timingWas=core.timing;
         core.timing=replayer.diagnostics&&replayer.diagnostics();   // 0.3.204 (task 21): the split timers follow Diagnostics, asked once per frame on the game thread
+        if(core.timing!=timingWas){if(core.timing)core.texDiag.resume(core.frameNo);else core.texDiag.suspend();}   // 0.3.206 (task 31): Diagnostics off or on again: no stale data, no gap across the off period
         if(core.timing&&!core.clockNs){std::uint64_t sum=0;for(int i=0;i<1024;++i){const std::uint64_t a=nowNs(),b=nowNs();sum+=b-a;}core.clockNs=sum/1024?sum/1024:1;}   // one clock read, as a timed span sees it: the mean of 1024 back-to-back pairs (the mean, not the min: the clock may tick in 100 ns steps)
         std::uint64_t nowAtPresent=0;const std::uint64_t waits0=core.timing?gameWaitsNs(q.stats):0;
         {   // the game thread's own time this frame: from the previous Present's return to here, minus the waits it spent (sync, backpressure)
@@ -401,7 +403,9 @@ public:
         frameEnd=nowNs();
         if(core.timing){const std::uint64_t e=frameEnd-nowAtPresent,w=gameWaitsNs(q.stats)-waits0;own(q.stats.presentBookNs,e>w?e-w:0);}   // 0.3.204 (task 21): Present bookkeeping, waits excluded (no extra clock reads)
         waitsAtFrameEnd=get(q.stats.syncNs)+get(q.stats.backpressureNs);
-        ++core.frameNo;tuner.sample(q);   // idle pool memory goes back after a quiet window
+        ++core.frameNo;
+        if(core.timing&&core.frameNo%600==0){if(callerLog)core.texDiag.report(callerLog,core.callerModule,core.frameNo,[](unsigned c){return cmdName((Cmd)c);});else core.texDiag.restart(core.frameNo);}   // 0.3.206 (task 31): the texture readback report, one window per 600 Presents (Diagnostics only); without a log sink the window still restarts (tables and old histories must not grow)
+        tuner.sample(q);   // idle pool memory goes back after a quiet window
         trimIdleRings(core);   // 0.3.204 (task 21): ring slices free for kLargeIdleFrames frames go
         trimRetired(core);   // 0.3.204 (task 21): large-buffer slices dropped while the replay thread still read them are freed once it has passed (it just retired a Present)
         const bool pressureNow=q.pressure();
@@ -443,11 +447,12 @@ public:
             HRESULT hr=D3DERR_INVALIDCALL;
             const bool ran=runTask(core,[&](StreamCore&){hr=replayer.createNow(a,id,extra);if(SUCCEEDED(hr))afterSyncCreate(proxy);},Cmd::SyncCreate);
             if(!ran||FAILED(hr)){discard(proxy);*out=nullptr;return ran?hr:D3DERR_INVALIDCALL;}
+            proxy->readySeq=q.recordedSeq();   // 0.3.206 (task 31): the create ran (the task is the last recorded command)
             proxy->pinDevice();*out=static_cast<typename std::remove_pointer<decltype(firstIface(proxy))>::type*>(proxy);return D3D_OK;
         }
         a.extraBytes=extraBytes;
         auto* p=static_cast<CreateArgs*>(q.reserve((std::uint16_t)id,std::uint32_t(sizeof(CreateArgs)+((extraBytes+7u)&~7u))));
-        *p=a;if(extraBytes)std::memcpy(p+1,extra,extraBytes);q.commit();
+        *p=a;if(extraBytes)std::memcpy(p+1,extra,extraBytes);q.commit();proxy->readySeq=q.recordedSeq();   // 0.3.206 (task 31)
         proxy->pinDevice();*out=static_cast<typename std::remove_pointer<decltype(firstIface(proxy))>::type*>(proxy);return D3D_OK;
     }
     static IDirect3DTexture9* firstIface(StreamTexture*);static IDirect3DCubeTexture9* firstIface(StreamCubeTexture*);static IDirect3DVolumeTexture9* firstIface(StreamVolumeTexture*);
