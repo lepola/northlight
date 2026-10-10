@@ -66,28 +66,37 @@ inline bool decodeCoherentGlobalLighting(const unsigned char* first,const unsign
 // block is read on the replay thread while the game thread may be between the copy and the rescale:
 // a coherent read then holds the unscaled band colours, equal to their own slots (direct = slot 1,
 // ambient = slot 0). In Duskwood (scale ~.8-.93) the sun light and its fog glow flashed brighter for
-// that single frame. A read whose colour equals its slot while the last accepted one was rescaled
-// keeps the last accepted colour; HoldMs of only unscaled reads (the weather ended) accept them again.
-// The direction and the slots of the read are used as read.
+// that single frame. A read whose colour equals its slot keeps the last accepted colour when that one
+// was rescaled DARKER than the band (a brighter rescale, e.g. a lightning flash, is never stretched).
+// The race lasts one read: MaxHeld consecutive unscaled reads, or HoldMs since the last accepted one
+// (a loading screen, alt-tab), accept them again (the weather ended). The direction and the slots of
+// the read are used as read. Filter a copy and keep it only when the context accepts the read, so a
+// read that is retried within the frame is counted and remembered once.
 struct LightingHold {
     static constexpr std::uint32_t HoldMs=500;
-    struct Colour {float value[3]={};bool scaled=false;std::uint32_t at=0;bool valid=false;};
+    static constexpr unsigned MaxHeld=2;
+    struct Colour {float value[3]={};bool darker=false;std::uint32_t at=0;unsigned run=0;bool valid=false;};
     Colour direct,ambient;std::string map;unsigned held=0;
-    static bool equalsSlot(const float* colour,std::uint32_t slot){
-        float raw[3];rgb(slot,raw);return colour[0]==raw[0]&&colour[1]==raw[1]&&colour[2]==raw[2];
+    // darker: no channel above the band colour and at least one below it.
+    static bool darker(const float* colour,const float* band){
+        bool below=false;
+        for(unsigned i=0;i<3;++i){if(colour[i]>band[i])return false;below|=colour[i]<band[i];}
+        return below;
     }
-    static bool keep(Colour& c,float* colour,bool unscaled,bool force,std::uint32_t now){
-        const bool hold=c.valid&&c.scaled&&(unscaled||force)&&now-c.at<=HoldMs;
-        if(hold){std::memcpy(colour,c.value,sizeof c.value);return true;}
-        std::memcpy(c.value,colour,sizeof c.value);c.scaled=!unscaled;c.at=now;c.valid=true;return false;
+    static bool keep(Colour& c,float* colour,std::uint32_t slot,bool force,std::uint32_t now){
+        float band[3];rgb(slot,band);
+        const bool unscaled=colour[0]==band[0]&&colour[1]==band[1]&&colour[2]==band[2];
+        const bool hold=c.valid&&c.darker&&(unscaled||force)&&c.run<MaxHeld&&now-c.at<=HoldMs;
+        if(hold){std::memcpy(colour,c.value,sizeof c.value);++c.run;return true;}
+        std::memcpy(c.value,colour,sizeof c.value);c.darker=darker(colour,band);c.at=now;c.run=0;c.valid=true;return false;
     }
     // Returns true when a colour of this read was replaced by the last accepted one.
     bool filter(Lighting& light,const char* nextMap,std::uint32_t now){
         if(!nextMap||map!=nextMap){direct=Colour{};ambient=Colour{};map=nextMap?nextMap:"";}
         if(!light.slotsConsistent)return false; /* the slot layout is unconfirmed: nothing to compare against */
-        const bool heldDirect=keep(direct,light.direct,equalsSlot(light.direct,light.slots[1]),false,now);
+        const bool heldDirect=keep(direct,light.direct,light.slots[1],false,now);
         // The ambient is rescaled after the direct: an unscaled direct means an unscaled ambient.
-        const bool heldAmbient=keep(ambient,light.ambient,equalsSlot(light.ambient,light.slots[0]),heldDirect,now);
+        const bool heldAmbient=keep(ambient,light.ambient,light.slots[0],heldDirect,now);
         held+=heldDirect||heldAmbient;
         return heldDirect||heldAmbient;
     }
@@ -107,10 +116,10 @@ inline bool context(const float* view,const Lighting& lighting,NorthlightWorldCo
 // draw. Prefer the independently validated environment, but still require this
 // draw's rigid world view to agree with the current game camera.
 inline bool terrainContext(const float* view,const float* nativeLight,const float* camera,
-                           const Lighting* global,NorthlightWorldContext::TerrainContext& out) {
-    NorthlightWorldContext::TerrainContext candidate;
+                           const Lighting* global,NorthlightWorldContext::TerrainContext& out,bool* usedGlobal=nullptr) {
+    NorthlightWorldContext::TerrainContext candidate;if(usedGlobal)*usedGlobal=false;
     if(global&&context(view,*global,candidate)&&NorthlightWorldContext::cameraAgrees(candidate,camera)){
-        out=candidate;return true;
+        out=candidate;if(usedGlobal)*usedGlobal=true;return true;
     }
     if(nativeLight&&NorthlightWorldContext::decodeTerrain(view,nativeLight,candidate)&&
        NorthlightWorldContext::cameraAgrees(candidate,camera)){out=candidate;return true;}

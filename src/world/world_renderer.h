@@ -2093,8 +2093,9 @@ public:
         NorthlightWmoContext::Lighting light;
         bool cameraRead=NorthlightWorldCamera::read(map,rows[11],camera,&why);
         bool globalRead=cameraRead&&NorthlightWmoContext::readGlobalLighting(camera.camera,light);
-        if(globalRead)globalLightHold.filter(light,map,GetTickCount());
-        bool lightingRead=globalRead&&NorthlightWmoContext::context(camera.view,light,context);
+        auto lightHold=globalLightHold;if(globalRead)lightHold.filter(light,map,GetTickCount()); /* kept below only when this read is accepted */
+        const bool globalLighting=globalRead&&NorthlightWmoContext::context(camera.view,light,context);
+        bool lightingRead=globalLighting;
         if(cameraRead&&!lightingRead&&it->second->lighting){float values[12];
             lightingRead=SUCCEEDED(d->GetVertexShaderConstantF(10,values,3))&&NorthlightWmoContext::decodeLitShader(it->second->hash,camera.view,values,context);
         }
@@ -2102,6 +2103,7 @@ public:
             if(++wmoRejects==1||(wmoRejects%3600==0&&NorthlightDiagnostics::enabled()))logf("CITY context rejected camera=%s count=%u",NorthlightWorldCamera::rejectName(why.reason),wmoRejects);
             return false;
         }
+        if(globalLighting)globalLightHold=std::move(lightHold);
         valid=true;traceContext=3;projection[0]=rows[0];projection[1]=rows[5];projection[2]=rows[11];
         readOriginalFog(30,it->second->fog);if(legacyFogKnown)traceFog=1;
         updateWorldContext(map,camera.camera,globalRead?&light:nullptr);
@@ -2118,13 +2120,15 @@ public:
         bool cameraMatches=cameraRead&&!std::strcmp(map,cameraMap)&&NorthlightWorldCamera::agreesWithTerrain(independent,view);
         NorthlightWmoContext::Lighting global;
         bool globalRead=cameraMatches&&NorthlightWmoContext::readGlobalLighting(camera,global);
-        if(globalRead)globalLightHold.filter(global,map,GetTickCount());
-        bool decoded=registers&&gameContext&&NorthlightWmoContext::terrainContext(view,nativeRead?lighting:nullptr,camera,globalRead?&global:nullptr,context);
+        auto lightHold=globalLightHold;if(globalRead)lightHold.filter(global,map,GetTickCount()); /* kept below only when this read is accepted */
+        bool globalLighting=false;
+        bool decoded=registers&&gameContext&&NorthlightWmoContext::terrainContext(view,nativeRead?lighting:nullptr,camera,globalRead?&global:nullptr,context,&globalLighting);
         traceContext=globalRead?1u:2u;
         bool agreement=decoded;
         if(!agreement){
             if(++contextRejects==1||(contextRejects%3600==0&&NorthlightDiagnostics::enabled()))logf("WORLD context rejected: registers=%d affineLight=%d clientRead=%d cameraAgreement=%d map=%s shaderCamera=(%.2f %.2f %.2f) gameCamera=(%.2f %.2f %.2f) light=(%.3f %.3f %.3f) count=%u",registers,decoded,gameContext,agreement,map,context.camera[0],context.camera[1],context.camera[2],camera[0],camera[1],camera[2],lighting[0],lighting[1],lighting[2],contextRejects);return;}
         if(++cameraChecks==1||(cameraChecks%3600==0&&NorthlightDiagnostics::enabled()))logf("CITY camera audit read=%d terrainAgreement=%d reject=%s permissiveSignatures=%d failingSignature=%d",cameraRead,cameraMatches,NorthlightWorldCamera::rejectName(why.reason),int(NorthlightWorldCamera::kPermissiveCameraSignatures),NorthlightWorldCamera::failingSignature());
+        if(globalLighting)globalLightHold=std::move(lightHold);
         valid=true;projection[0]=p[0];projection[1]=p[5];projection[2]=p[11];
         readOriginalFog(12,true);if(legacyFogKnown)traceFog=1;
         updateWorldContext(map,camera,globalRead?&global:nullptr);
