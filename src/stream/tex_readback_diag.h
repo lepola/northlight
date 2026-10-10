@@ -27,10 +27,10 @@ struct TexReadbackDiag {
         std::uint32_t window=0,locks=0,wholeLocks=0,partialLocks=0,gapCount=0;double coverageSum=0,gapSum=0;
     };
     struct Sums {   // counters shared by a level and a group
-        std::uint64_t locks=0,readbacks=0,readbackBytes=0,rectBytes=0,passSyncs=0,wholeLocks=0,partialLocks=0,gapCount=0,waitNs=0,lockNs=0,copyNs=0,rbWhole=0;
+        std::uint64_t locks=0,readbacks=0,readbackBytes=0,rectBytes=0,passSyncs=0,wholeLocks=0,partialLocks=0,gapCount=0,waitNs=0,lockNs=0,copyNs=0,rbWhole=0,express=0,expressWaitNs=0;
         double coverageSum=0,gapSum=0,rbCoverSum=0;   // rbWhole / rbCoverSum: over the locks that TRIGGERED a readback
         void lock(bool whole,double cover,bool hasGap,std::uint64_t gap){++locks;(whole?wholeLocks:partialLocks)++;coverageSum+=cover;if(hasGap){gapSum+=double(gap);++gapCount;}}
-        void readback(std::uint64_t bytes,std::uint64_t rect,std::uint64_t wait,std::uint64_t lk,std::uint64_t cp,bool whole,double cover){++readbacks;readbackBytes+=bytes;rectBytes+=rect;waitNs+=wait;lockNs+=lk;copyNs+=cp;if(whole)++rbWhole;rbCoverSum+=cover;}
+        void readback(std::uint64_t bytes,std::uint64_t rect,std::uint64_t wait,std::uint64_t lk,std::uint64_t cp,bool whole,double cover,bool ex){++readbacks;if(ex){++express;expressWaitNs+=wait;}readbackBytes+=bytes;rectBytes+=rect;waitNs+=wait;lockNs+=lk;copyNs+=cp;if(whole)++rbWhole;rbCoverSum+=cover;}
         bool interesting()const{return readbacks>0||passSyncs>0;}
     };
     struct LevelStat:Sums {Meta m;std::uint64_t gone[4]{};void* rbCaller=nullptr;};   // rbCaller: the caller of the last lock that triggered a readback   // gone[]: readbacks by cause (index = SubRes::Gone: none/never, fresh, relocked, skipped)
@@ -46,7 +46,7 @@ struct TexReadbackDiag {
     std::uint32_t nextId=1,window=1,epoch=1;   // window: the report window number (bumped at each report / restart); epoch: bumped when Diagnostics comes on again (gaps do not span it)
     std::uint64_t windowStart=0;               // frameNo at the window's start
     std::unordered_map<std::uint32_t,LevelStat> levelTab;std::unordered_map<GroupKey,GroupStat,GroupHash> groupTab;std::unordered_set<std::uint32_t> seen,rbSeen;   // seen: levels locked; rbSeen: levels with a readback / pass-through
-    std::uint64_t readbacks=0,readbackBytes=0,rectBytes=0,waitNs=0,lockNs=0,copyNs=0,overflow=0,gapAll[kBuckets]{},gapSkip[kBuckets]{};
+    std::uint64_t readbacks=0,readbackBytes=0,rectBytes=0,waitNs=0,lockNs=0,copyNs=0,overflow=0,express=0,expressWaitNs=0,gapAll[kBuckets]{},gapSkip[kBuckets]{};
     bool active=false;
 
     // One lock of level `id` at frame `frameNo`; `hist` / `lastLock` / `lastEpoch` are the level's SubRes fields (lastLock and lastEpoch persist across windows). Updates the history (or the row, if the level has one) and the group.
@@ -73,11 +73,11 @@ struct TexReadbackDiag {
         const LockHist& k=*h.hist;r.locks=k.locks;r.wholeLocks=k.wholeLocks;r.partialLocks=k.partialLocks;r.coverageSum=k.coverageSum;r.gapSum=k.gapSum;r.gapCount=k.gapCount;
         return h.lv=&r;
     }
-    void readback(Hit& h,std::uint64_t bytes,std::uint64_t rect,unsigned cause,std::uint64_t wait,std::uint64_t lk,std::uint64_t cp){
+    void readback(Hit& h,std::uint64_t bytes,std::uint64_t rect,unsigned cause,std::uint64_t wait,std::uint64_t lk,std::uint64_t cp,bool ex=false){
         if(!h.on)return;
-        ++readbacks;readbackBytes+=bytes;rectBytes+=rect;waitNs+=wait;lockNs+=lk;copyNs+=cp;++gapAll[h.bucket];if(cause==kGoneSkipped)++gapSkip[h.bucket];
-        h.gr->readback(bytes,rect,wait,lk,cp,h.whole,h.cover);
-        if(LevelStat* l=row(h)){l->readback(bytes,rect,wait,lk,cp,h.whole,h.cover);++l->gone[cause<4?cause:0];l->rbCaller=h.caller;}
+        ++readbacks;if(ex){++express;expressWaitNs+=wait;}readbackBytes+=bytes;rectBytes+=rect;waitNs+=wait;lockNs+=lk;copyNs+=cp;++gapAll[h.bucket];if(cause==kGoneSkipped)++gapSkip[h.bucket];
+        h.gr->readback(bytes,rect,wait,lk,cp,h.whole,h.cover,ex);
+        if(LevelStat* l=row(h)){l->readback(bytes,rect,wait,lk,cp,h.whole,h.cover,ex);++l->gone[cause<4?cause:0];l->rbCaller=h.caller;}
     }
     void passSync(Hit& h){if(!h.on)return;++h.gr->passSyncs;if(LevelStat* l=row(h))++l->passSyncs;}
 
@@ -99,17 +99,17 @@ struct TexReadbackDiag {
         char b[640];
         auto hist=[](const std::uint64_t* g,char* o,std::size_t n){std::snprintf(o,n,"0-1=%llu,2-9=%llu,10-59=%llu,60-299=%llu,300+=%llu,first=%llu",(unsigned long long)g[0],(unsigned long long)g[1],(unsigned long long)g[2],(unsigned long long)g[3],(unsigned long long)g[4],(unsigned long long)g[5]);};
         char h1[200],h2[200];hist(gapAll,h1,sizeof h1);hist(gapSkip,h2,sizeof h2);
-        std::snprintf(b,sizeof b,"CSTREAM TEXREADBACK window frames=%u readbacks=%llu rbMB=%.3f rectMB=%.3f waitMs=%.3f lockMs=%.3f copyMs=%.3f gap[%s] gapFreshSkip[%s] levels=%zu overflow=%llu",
-            frames,(unsigned long long)readbacks,readbackBytes/1048576.0,rectBytes/1048576.0,waitNs/1e6,lockNs/1e6,copyNs/1e6,h1,h2,rbSeen.size(),(unsigned long long)overflow);   // waitMs: everything still queued before the readback (e.g. a blocking Present) is in it: the real cost of the drain
+        std::snprintf(b,sizeof b,"CSTREAM TEXREADBACK window frames=%u readbacks=%llu rbMB=%.3f rectMB=%.3f express=%llu expressWaitMs=%.3f waitMs=%.3f lockMs=%.3f copyMs=%.3f gap[%s] gapFreshSkip[%s] levels=%zu overflow=%llu",
+            frames,(unsigned long long)readbacks,readbackBytes/1048576.0,rectBytes/1048576.0,(unsigned long long)express,expressWaitNs/1e6,waitNs/1e6,lockNs/1e6,copyNs/1e6,h1,h2,rbSeen.size(),(unsigned long long)overflow);   // waitMs: everything still queued before the readback (e.g. a blocking Present) is in it: the real cost of the drain
         sink(b);
         std::vector<const LevelStat*> lv;for(const auto& e:levelTab)if(e.second.interesting())lv.push_back(&e.second);
         const std::size_t nl=std::min(kTop,lv.size());
         std::partial_sort(lv.begin(),lv.begin()+nl,lv.end(),[](const LevelStat* a,const LevelStat* c){return before(*a,*c);});
         for(std::size_t i=0;i<nl;++i){
             const LevelStat& s=*lv[i];char w1[64],w2[64];who(s.m.caller,callerModule,w1,sizeof w1);who(s.rbCaller,callerModule,w2,sizeof w2);
-            std::snprintf(b,sizeof b,"CSTREAM TEXREADBACK top#%u fmt=%u size=%ux%u lvl=%u face=%u pool=%u usage=0x%x levelKB=%.1f locks=%llu rb=%llu rbMB=%.3f rectKB=%.1f whole%%=%.4g cover=%.4g rbWhole%%=%.4g rbCover=%.4g gapFrames=%.1f gone[fresh=%llu,relocked=%llu,skip=%llu,never=%llu] passSync=%llu waitMs=%.3f caller=%s rbCaller=%s",
+            std::snprintf(b,sizeof b,"CSTREAM TEXREADBACK top#%u fmt=%u size=%ux%u lvl=%u face=%u pool=%u usage=0x%x levelKB=%.1f locks=%llu rb=%llu rbMB=%.3f rectKB=%.1f whole%%=%.4g cover=%.4g rbWhole%%=%.4g rbCover=%.4g gapFrames=%.1f gone[fresh=%llu,relocked=%llu,skip=%llu,never=%llu] passSync=%llu express=%llu waitMs=%.3f caller=%s rbCaller=%s",
                 unsigned(i+1),s.m.fmt,s.m.w,s.m.h,s.m.level,s.m.face,s.m.pool,s.m.usage,s.m.levelBytes/1024.0,(unsigned long long)s.locks,(unsigned long long)s.readbacks,s.readbackBytes/1048576.0,s.rectBytes/1024.0,pct(s),cover(s),rbPct(s),rbCover(s),gapFrames(s),
-                (unsigned long long)s.gone[kGoneFresh],(unsigned long long)s.gone[kGoneRelocked],(unsigned long long)s.gone[kGoneSkipped],(unsigned long long)s.gone[kGoneNever],(unsigned long long)s.passSyncs,s.waitNs/1e6,w1,w2);
+                (unsigned long long)s.gone[kGoneFresh],(unsigned long long)s.gone[kGoneRelocked],(unsigned long long)s.gone[kGoneSkipped],(unsigned long long)s.gone[kGoneNever],(unsigned long long)s.passSyncs,(unsigned long long)s.express,s.waitNs/1e6,w1,w2);
             sink(b);
         }
         std::vector<std::pair<const GroupKey*,const GroupStat*>> gr;for(const auto& e:groupTab)if(e.second.interesting())gr.emplace_back(&e.first,&e.second);
@@ -117,8 +117,8 @@ struct TexReadbackDiag {
         std::partial_sort(gr.begin(),gr.begin()+ng,gr.end(),[](const auto& a,const auto& c){return before(*a.second,*c.second);});
         for(std::size_t i=0;i<ng;++i){
             const GroupKey& k=*gr[i].first;const GroupStat& s=*gr[i].second;
-            std::snprintf(b,sizeof b,"CSTREAM TEXREADBACK kind#%u fmt=%u size=%ux%u pool=%u usage=0x%x lockedLevels=%llu rbLevels=%llu locks=%llu rb=%llu rbMB=%.3f rectKB=%.1f whole%%=%.4g cover=%.4g rbWhole%%=%.4g rbCover=%.4g gapFrames=%.1f",
-                unsigned(i+1),k.fmt,k.w,k.h,k.pool,k.usage,(unsigned long long)s.levels,(unsigned long long)s.rbLevels,(unsigned long long)s.locks,(unsigned long long)s.readbacks,s.readbackBytes/1048576.0,s.rectBytes/1024.0,pct(s),cover(s),rbPct(s),rbCover(s),gapFrames(s));
+            std::snprintf(b,sizeof b,"CSTREAM TEXREADBACK kind#%u fmt=%u size=%ux%u pool=%u usage=0x%x lockedLevels=%llu rbLevels=%llu locks=%llu rb=%llu rbMB=%.3f rectKB=%.1f whole%%=%.4g cover=%.4g rbWhole%%=%.4g rbCover=%.4g gapFrames=%.1f express=%llu",
+                unsigned(i+1),k.fmt,k.w,k.h,k.pool,k.usage,(unsigned long long)s.levels,(unsigned long long)s.rbLevels,(unsigned long long)s.locks,(unsigned long long)s.readbacks,s.readbackBytes/1048576.0,s.rectBytes/1024.0,pct(s),cover(s),rbPct(s),rbCover(s),gapFrames(s),(unsigned long long)s.express);
             sink(b);
         }
         restart(frameNo);
@@ -126,7 +126,7 @@ struct TexReadbackDiag {
     void restart(std::uint64_t frameNo){clear();++window;windowStart=frameNo;}   // a new window starts at frameNo: SubRes histories of the old one reset lazily
     void resume(std::uint64_t frameNo){restart(frameNo);++epoch;}                // Diagnostics came on again: no stale data, and no gap spans the off period
     void clear(){
-        levelTab.clear();groupTab.clear();seen.clear();rbSeen.clear();readbacks=readbackBytes=rectBytes=waitNs=lockNs=copyNs=overflow=0;
+        levelTab.clear();groupTab.clear();seen.clear();rbSeen.clear();readbacks=express=expressWaitNs=readbackBytes=rectBytes=waitNs=lockNs=copyNs=overflow=0;
         for(auto& x:gapAll)x=0;for(auto& x:gapSkip)x=0;active=false;
     }
     bool empty()const{return levelTab.empty()&&groupTab.empty()&&seen.empty()&&rbSeen.empty()&&!active;}

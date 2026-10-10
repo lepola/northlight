@@ -447,11 +447,12 @@ public:
             HRESULT hr=D3DERR_INVALIDCALL;
             const bool ran=runTask(core,[&](StreamCore&){hr=replayer.createNow(a,id,extra);if(SUCCEEDED(hr))afterSyncCreate(proxy);},Cmd::SyncCreate);
             if(!ran||FAILED(hr)){discard(proxy);*out=nullptr;return ran?hr:D3DERR_INVALIDCALL;}
+            proxy->readySeq=q.recordedSeq();   // 0.3.206 (task 31): the create ran (the task is the last recorded command)
             proxy->pinDevice();*out=static_cast<typename std::remove_pointer<decltype(firstIface(proxy))>::type*>(proxy);return D3D_OK;
         }
         a.extraBytes=extraBytes;
         auto* p=static_cast<CreateArgs*>(q.reserve((std::uint16_t)id,std::uint32_t(sizeof(CreateArgs)+((extraBytes+7u)&~7u))));
-        *p=a;if(extraBytes)std::memcpy(p+1,extra,extraBytes);q.commit();
+        *p=a;if(extraBytes)std::memcpy(p+1,extra,extraBytes);q.commit();proxy->readySeq=q.recordedSeq();   // 0.3.206 (task 31)
         proxy->pinDevice();*out=static_cast<typename std::remove_pointer<decltype(firstIface(proxy))>::type*>(proxy);return D3D_OK;
     }
     static IDirect3DTexture9* firstIface(StreamTexture*);static IDirect3DCubeTexture9* firstIface(StreamCubeTexture*);static IDirect3DVolumeTexture9* firstIface(StreamVolumeTexture*);

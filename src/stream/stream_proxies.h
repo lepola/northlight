@@ -100,6 +100,7 @@ struct ProxyBase {
     // Replayer::destroy's test. `use` is read FIRST (seq_cst): a game AddRef -> bind -> Release of a re-handed proxy then shows either use>0 or, after the
     // Release (a release RMW sequenced after the bind store), binds>0 to the binds load that follows. Two independent loads in either order could miss both.
     LONG inUse()const{const LONG u=use.load(std::memory_order_seq_cst);const LONG b=binds.load(std::memory_order_seq_cst);return u+b;}
+    std::uint64_t readySeq=0;                            // 0.3.206 (task 31): the recorded seq of the command that binds `inner` (Create / Derive); 0 = unknown (replay-side implicit proxies): never an express readback
     std::atomic<bool> dead{false};                       // the real create failed: commands on it are dropped
     ProxyBase* parent=nullptr;std::vector<ProxyBase*> kids;   // children (levels, faces, back buffers): owned by the parent
     Info info;DWORD priority=0;std::vector<PrivEntry> priv;
@@ -362,6 +363,9 @@ struct SubRes {
     // diagId: id in TexReadbackDiag (0 = never recorded); diagHist: the level's lock counters of the report window (reset per window); diagLastLock / diagEpoch: frameNo+1 of the previous recorded lock and the
     // Diagnostics epoch it was in (they survive window resets, so gaps span report windows); diagFirstCaller: return address of the first recorded lock.
     std::uint32_t diagId=0,diagEpoch=0;TexReadbackDiag::LockHist diagHist;void* diagFirstCaller=nullptr;std::uint64_t diagLastLock=0;
+    // 0.3.206 (task 31): the recorded seq of the last command that writes this level's real content (set at every unlock that records one; ~0 = a GPU write); 0 = none recorded.
+    // A readback of the level may run as an express task once replayedSeq() has passed it (and the owner's readySeq): see lockImage.
+    std::uint64_t contentSeq=0;
     std::uint64_t lastLockFrame=0;   // StreamCore::frameNo of the shadow's creation or last lock: a fresh keep may be evicted for a new one only once this is kFreshEvictAgeFrames old
 };
 // What a staged Unlock records (followed by nothing: the bytes are in the command's Block).
@@ -437,7 +441,7 @@ inline void touchTexShadow(StreamCore& c,SubRes& s,bool becomesRelocked){
     texListOf(c,s).remove(&s);if(becomesRelocked)s.relocked=true;texListOf(c,s).pushBack(&s);
 }
 // A GPU-side write (StretchRect, UpdateTexture, ColorFill, mip generation, ...): the CPU copy is stale for good.
-inline void markGpuWritten(StreamCore& c,SubRes& s){s.written=true;dropSubShadow(c,s);s.shadowDead=true;}
+inline void markGpuWritten(StreamCore& c,SubRes& s){s.written=true;s.contentSeq=~std::uint64_t(0);dropSubShadow(c,s);s.shadowDead=true;}
 
 // ---- the proxies ----
 using IidType=typename std::remove_cv<typename std::remove_reference<REFIID>::type>::type;
@@ -578,9 +582,9 @@ inline HRESULT lockImage(ProxyBase& self,ProxyBase& root,SubRes& sub,UINT route,
                     try{sub.shadow.assign(levelBytes+kLockSlack,0);}catch(...){ok=false;}
                     if(ok&&readback){   // ONE synchronous readback: the replay thread copies the whole real level out under a READONLY lock
                         ok=false;
-                        std::uint64_t lockT=0,copyT=0;const std::uint64_t t0=tm?nowNs():0;   // 0.3.206 (task 31): `tm` was read on the game thread; the task only reads this copy
-                        const bool ran=runTask(*self.core,[&](StreamCore&){
-                            if(!self.inner||self.dead.load())return;
+                        std::uint64_t lockT=0,copyT=0;bool innerGone=false,isExpress=false;const std::uint64_t t0=tm?nowNs():0;   // 0.3.206 (task 31): `tm` was read on the game thread; the task only reads this copy
+                        auto body=[&](bool isExpress){
+                            if(!self.inner||self.dead.load()){if(isExpress)innerGone=true;return;}
                             D3DLOCKED_RECT r2{};D3DLOCKED_BOX b2{};
                             const std::uint64_t a0=tm?nowNs():0;
                             if(FAILED(callLock(route,self.inner,level,face,&r2,&b2,nullptr,nullptr,D3::kLockReadOnly)))return;
@@ -589,10 +593,20 @@ inline HRESULT lockImage(ProxyBase& self,ProxyBase& root,SubRes& sub,UINT route,
                             if(src){for(UINT z=0;z<ld;++z)for(UINT y=0;y<lrows;++y)std::memcpy(sub.shadow.data()+(std::size_t(z)*lrows+y)*lrowBytes,src+std::ptrdiff_t(z)*sp+std::ptrdiff_t(y)*rp,lrowBytes);ok=true;}
                             const std::uint64_t a2=tm?nowNs():0;
                             callUnlock(route,self.inner,level,face);
-                            if(tm){const std::uint64_t a3=nowNs();lockT=(a1-a0)+(a3-a2);copyT=a2-a1;}},Cmd::SyncLock);
+                            if(tm){const std::uint64_t a3=nowNs();lockT=(a1-a0)+(a3-a2);copyT=a2-a1;}};
+                        // 0.3.206 (task 31): EXPRESS when every command this readback depends on (the owner's and the root's create / derive, the level's last content write) has already been replayed:
+                        // the replay thread runs the same body at its next command boundary instead of after the whole queue. Exact: no recorded command can change the bytes any more (the game thread is here).
+                        bool ran=false;
+                        const std::uint64_t need=std::max(std::max(self.readySeq,root.readySeq),sub.contentSeq);
+                        const bool express=!inPumpedWait&&self.readySeq!=0&&root.readySeq!=0&&sub.contentSeq!=0&&need<=q.replayedSeq();
+                        if(express){
+                            q.runExpress([](void* a){(*static_cast<decltype(body)*>(a))(true);},&body);
+                            if(!innerGone){ran=true;isExpress=true;}   // (innerGone: should not happen; the drain path below decides)
+                        }
+                        if(!ran)ran=runTask(*self.core,[&](StreamCore&){body(false);},Cmd::SyncLock);
                         if(!ran)return D3DERR_INVALIDCALL;
                         if(ok&&tm){const std::uint64_t total=nowNs()-t0,busy=lockT+copyT;
-                            core.texDiag.readback(hit,levelBytes,std::uint64_t(rows)*rowBytes*slices,unsigned(sub.gone),total>busy?total-busy:0,lockT,copyT);}   // sub.gone is still the cause here
+                            core.texDiag.readback(hit,levelBytes,std::uint64_t(rows)*rowBytes*slices,unsigned(sub.gone),total>busy?total-busy:0,lockT,copyT,isExpress);}   // sub.gone is still the cause here
                         if(ok){add(q.stats.texShadowReadbacks);
                             add(sub.gone==SubRes::GoneFresh?q.stats.readbackAfterFreshDrop:sub.gone==SubRes::GoneRelocked?q.stats.readbackAfterRelockedEvict:sub.gone==SubRes::GoneSkipped?q.stats.readbackAfterFreshSkip:q.stats.readbackNeverShadowed);}
                     }else if(ok)add(q.stats.texShadowFresh);
@@ -647,7 +661,7 @@ inline HRESULT unlockImage(ProxyBase& self,SubRes& sub,UINT route,UINT level,UIN
     if(sub.mode==SubRes::Staged){
         auto* a=static_cast<UnlockImageArgs*>(q.reserveWithBlock(cmd,sizeof(UnlockImageArgs),sub.stage));
         *a=makeUnlockArgs(self,sub,route,level,face);
-        q.commit();sub.stage=nullptr;sub.mode=SubRes::Free;sub.written=true;return D3D_OK;
+        q.commit();sub.stage=nullptr;sub.mode=SubRes::Free;sub.written=true;sub.contentSeq=q.recordedSeq();return D3D_OK;
     }
     if(sub.mode==SubRes::Shadowed){
         sub.mode=SubRes::Free;
@@ -665,11 +679,11 @@ inline HRESULT unlockImage(ProxyBase& self,SubRes& sub,UINT route,UINT level,UIN
             add(self.core->q.stats.passThrough[unsigned(PassReason::Budget)]);
             if(!runTask(*self.core,[&](StreamCore& c){applyImageUnlock(c,a,tmp.data());},Cmd::SyncUnlock))return D3DERR_INVALIDCALL;
         }
-        sub.written=true;return D3D_OK;
+        sub.written=true;sub.contentSeq=q.recordedSeq();return D3D_OK;   // (the no-Block fallback ran as a task: recordedSeq() is that already replayed task)
     }
     HRESULT hr=D3DERR_INVALIDCALL;
     if(!runTask(*self.core,[&](StreamCore&){if(self.inner)hr=callUnlock(route,self.inner,level,face);},Cmd::SyncUnlock))return D3DERR_INVALIDCALL;
-    sub.mode=SubRes::Free;if(!(sub.flags&D3::kLockReadOnly))sub.written=true;
+    sub.mode=SubRes::Free;if(!(sub.flags&D3::kLockReadOnly)){sub.written=true;sub.contentSeq=q.recordedSeq();}
     return hr;
 }
 
@@ -1201,7 +1215,7 @@ struct StreamVolume final:IDirect3DVolume9,ProxyBase {
 enum DeriveOp:UINT{DeriveSurfaceLevel=0,DeriveCubeFace=1,DeriveVolumeLevel=2,DeriveBackBuffer=3};
 struct DeriveArgs {ProxyBase* parent;ProxyBase* child;UINT op,a,b;};
 inline void recordDerive(StreamCore& c,ProxyBase* parent,ProxyBase* child,UINT op,UINT a,UINT b){
-    auto* d=static_cast<DeriveArgs*>(c.q.reserve((std::uint16_t)Cmd::Derive,sizeof(DeriveArgs)));*d=DeriveArgs{parent,child,op,a,b};c.q.commit();
+    auto* d=static_cast<DeriveArgs*>(c.q.reserve((std::uint16_t)Cmd::Derive,sizeof(DeriveArgs)));*d=DeriveArgs{parent,child,op,a,b};c.q.commit();child->readySeq=c.q.recordedSeq();
 }
 
 struct StreamTexture final:IDirect3DTexture9,ProxyBase {

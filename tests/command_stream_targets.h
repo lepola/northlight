@@ -4,6 +4,7 @@
 #pragma once
 struct TargetKnobs {
     std::atomic<bool> hold{false};            // BeginScene blocks while set: keeps the replay thread busy so commands queue up
+    std::atomic<bool> hold2{false};           // 0.3.206 (task 31): EndScene blocks while set (a second, independent stall point behind `hold`)
     std::atomic<int> presents{0};
     std::atomic<bool> failSwapChain{false},failQueries{false},noRaw{false},holdQueries{false};   // holdQueries: a polled query stays S_FALSE
     std::atomic<HRESULT> coop{D3D_OK};        // 0.3.204 (task 21): what the Target's TestCooperativeLevel reports (D3D_OK / D3DERR_DEVICELOST / D3DERR_DEVICENOTRESET); Present fails with DEVICELOST while it is not D3D_OK
@@ -273,6 +274,7 @@ struct TargetDevice:Counted<FakeDevice> {
     HRESULT SetSoftwareVertexProcessing(WINBOOL b) override{return ext.SetSoftwareVertexProcessing(b);}
     HRESULT SetCurrentTexturePalette(UINT n) override{return ext.SetCurrentTexturePalette(n);}
     HRESULT SetPaletteEntries(UINT n,const PALETTEENTRY* e) override{return ext.SetPaletteEntries(n,e);}
+    HRESULT EndScene() override{FakeDevice::EndScene();while(gKnobs.hold2.load())std::this_thread::sleep_for(std::chrono::microseconds(100));return D3D_OK;}
     HRESULT BeginScene() override{FakeDevice::BeginScene();while(gKnobs.hold.load())std::this_thread::sleep_for(std::chrono::microseconds(100));gTrace.push_back(digest());return D3D_OK;}
     HRESULT DrawPrimitive(D3DPRIMITIVETYPE t,UINT a,UINT b) override{FakeDevice::DrawPrimitive(t,a,b);gTrace.push_back(digest());return D3D_OK;}
     HRESULT DrawIndexedPrimitive(D3DPRIMITIVETYPE t,INT a,UINT b,UINT c,UINT d,UINT e) override{FakeDevice::DrawIndexedPrimitive(t,a,b,c,d,e);gTrace.push_back(digest());return D3D_OK;}

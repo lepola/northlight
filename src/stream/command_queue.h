@@ -89,6 +89,8 @@ static_assert(sizeof(Block)==16,"block header keeps data 8-aligned");
 
 enum class WaitKind {Sync,Present,Backpressure};
 
+// 0.3.206 (task 31): a unit of work for the replay thread's next command boundary (Queue::runExpress). Lives on the poster's stack.
+struct ExpressTask {void (*fn)(void*);void* arg;};
 class Queue {
     struct Chunk {
         std::atomic<Chunk*> next{nullptr};
@@ -126,9 +128,11 @@ class Queue {
     // Rarely written flags (sleeping_ only when the consumer goes idle).
     alignas(kLine) std::atomic<bool> sleeping_{false};
     std::atomic<bool> interrupted_{false},bpWaiting_{false},pressure_{false};
+    // 0.3.206 (task 31): the express mailbox (see runExpress): a task the replay thread runs at its next command boundary. Written by the producer (rarely), read by the consumer before every command.
+    std::atomic<ExpressTask*> express_{nullptr};
     std::atomic<std::size_t> shadowCapCur_{ShadowBudgetBytes};std::uint64_t shadowGrowAt_=kShadowGrowFrames;   // adaptive buffer-shadow cap; first frame it may grow
     std::size_t budget_;
-    Event consumerEv_{false},progress_{false};
+    Event consumerEv_{false},progress_{false},expressDone_{false};
     std::mutex pool_;std::vector<Chunk*> freeChunks_;std::vector<Block*> freeBlocks_[kBlockClasses];std::size_t pooledBlockBytes_=0;
 
     static void relax(){
@@ -325,6 +329,19 @@ public:
         else if(kind==WaitKind::Backpressure){add(stats.backpressureWaits);add(stats.backpressureNs,ns);}
         else{add(stats.syncNs,ns);}   // syncCalls itself is counted by the caller, which also knows the call
     }
+    // 0.3.206 (task 31): runs fn(arg) on the replay thread at its NEXT COMMAND BOUNDARY (between two commands, never inside one) and returns once it ran. Unlike a Quiesce task it does not wait for the
+    // queue to drain: the caller must have proved that every command the work depends on has already been replayed. One poster at a time (the game thread). Counted in syncNs (comparable with the
+    // drain waits) and expressReadbacks/expressNs, not in syncCalls or the census. Wake handshake: store the mailbox, fence, wake a sleeper (the consumer sets sleeping_, fences, re-checks the mailbox).
+    void runExpress(void (*fn)(void*),void* arg){
+        ExpressTask t{fn,arg};
+        const auto t0=nowNs();
+        express_.store(&t,std::memory_order_release);
+        std::atomic_thread_fence(std::memory_order_seq_cst);
+        if(sleeping_.load()&&sleeping_.exchange(false))consumerEv_.set();
+        while(express_.load(std::memory_order_acquire)!=nullptr)expressDone_.waitPumped(50);   // the timeout only bounds a missed wake
+        const auto ns=nowNs()-t0;
+        add(stats.syncNs,ns);add(stats.expressReadbacks);add(stats.expressNs,ns);
+    }
     void waitDrained(WaitKind kind=WaitKind::Sync){waitReplayed(recordedSeq(),kind);}   // the last recorded command must carry kFlagWaitTarget (no production caller)
 #ifdef NORTHLIGHT_STREAM_CHECK_WAIT
     unsigned unflaggedWaits()const{return badWaits_;}   // producer thread
@@ -417,7 +434,7 @@ public:
             // Spin ~50 us by the clock (a pause is far shorter under Rosetta): a sync round trip then usually costs no wakeup.
             const std::uint64_t t0=nowNs();
             for(;;){
-                for(int i=0;i<64;++i){if(auto* h=peek())return h;if(interrupted_.load(std::memory_order_relaxed))return nullptr;relax();}
+                for(int i=0;i<64;++i){if(auto* h=peek())return h;if(interrupted_.load(std::memory_order_relaxed)||express_.load(std::memory_order_relaxed))return nullptr;relax();}
                 wakeWaiters();   // 0.3.196 (task 12): a wake retire() skipped (idle now: nothing to retire)
                 if(nowNs()-t0>50000)break;
             }
@@ -425,6 +442,7 @@ public:
             sleeping_.store(true);
             std::atomic_thread_fence(std::memory_order_seq_cst);   // the flag is visible before the cursor is re-read: publish() sees it or we see the data
             if(auto* h=peek()){sleeping_.store(false);return h;}
+            if(express_.load()){sleeping_.store(false);return nullptr;}   // 0.3.206 (task 31): an express task is posted: the replay loop runs it
             wakeWaiters(true);   // 0.3.196 (task 12): after the fence above: the retire that skipped its fence has stored replayed_, so this load sees any waitSeq_/bpWaiting_ a producer published before it
             own(stats.consumerSleeps);
             if(interrupted_.load()){sleeping_.store(false);return nullptr;}
@@ -440,6 +458,7 @@ public:
         sleeping_.store(true);
         std::atomic_thread_fence(std::memory_order_seq_cst);   // as in next(): the flag is visible before the cursor is re-read
         if(auto* h=peek()){sleeping_.store(false);return h;}
+        if(express_.load()){sleeping_.store(false);return nullptr;}   // 0.3.206 (task 31)
         wakeWaiters(true);   // 0.3.196 (task 12): as in next()
         own(stats.consumerSleeps);
         if(!interrupted_.load())consumerEv_.wait(ms);
@@ -465,6 +484,14 @@ public:
         else if(bpWaiting_.load()){const std::uint64_t rec=recorded_.load();if(n>=rec&&rec!=bpSignalledRec_){bpSignalledRec_=rec;progress_.set();}}   // drained: nothing more to free, let the producer re-evaluate
     }
     std::uint64_t replayedSeq()const{return replayed_.load();}
+    // 0.3.206 (task 31): the replay loop, between two commands: runs a posted express task (one acquire load when none).
+    void serveExpress(){
+        ExpressTask* t=express_.load(std::memory_order_acquire);
+        if(!t)return;
+        t->fn(t->arg);
+        express_.store(nullptr,std::memory_order_release);   // t dies with the poster's wait
+        expressDone_.set();
+    }
     // The Block of a kFlagBlock command and the caller part of its payload (after the slot).
     static Block* blockOf(const CommandHeader* h){Block* b=nullptr;if(h->flags&kFlagBlock)std::memcpy(&b,h+1,sizeof b);return b;}
     static const unsigned char* payload(const CommandHeader* h){return reinterpret_cast<const unsigned char*>(h+1)+((h->flags&kFlagBlock)?kBlockSlot:0);}

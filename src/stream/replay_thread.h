@@ -225,7 +225,7 @@ private:
     DWORD auditRS_[StreamState::kRS]={},auditSamp_[StreamState::kSamplers][StreamState::kSampTypes]={},auditTss_[StreamState::kTSStages][StreamState::kTSTypes]={};
     std::vector<unsigned> touched_;std::vector<bool> touchedFlag_=std::vector<bool>(StreamState::kBits,false);
     struct Avg {double depth=0,bytes=0;unsigned n=0;std::uint64_t maxDepth=0,maxBytes=0;} avg_;
-    std::uint64_t lastIdle_=0,lastPubs_=0,lastSleeps_=0,lastWall_=0,lastPass_=0,lastGameNs_=0,lastGameWait_=0,lastGameFrames_=0,lastPresentNs_=0,lastSyncNs_=0,lastBpNs_=0,lastCmds_=0,lastAnswered_=0,lastCoop_=0,lastSyncCalls_=0,lastFiltered_=0,lastDirect_=0,lastBufRbD_=0,lastBufRbS_=0,lastBufEv_=0,lastBufHot_=0,lastBufRef_=0,lastTexSkip_=0,lastRbFresh_=0,lastRbRelocked_=0,lastRbNever_=0,lastRbSkip_=0,lastLockNs_=0,lastRecordNs_=0,lastSnapNs_=0,lastPresentBookNs_=0,lastLockBytes_=0;unsigned deadLogged_=0;
+    std::uint64_t lastIdle_=0,lastPubs_=0,lastSleeps_=0,lastWall_=0,lastPass_=0,lastGameNs_=0,lastGameWait_=0,lastGameFrames_=0,lastPresentNs_=0,lastSyncNs_=0,lastBpNs_=0,lastCmds_=0,lastAnswered_=0,lastCoop_=0,lastSyncCalls_=0,lastFiltered_=0,lastDirect_=0,lastBufRbD_=0,lastBufRbS_=0,lastBufEv_=0,lastBufHot_=0,lastBufRef_=0,lastTexSkip_=0,lastRbFresh_=0,lastRbRelocked_=0,lastRbNever_=0,lastRbSkip_=0,lastExpress_=0,lastExpressNs_=0,lastLockNs_=0,lastRecordNs_=0,lastSnapNs_=0,lastPresentBookNs_=0,lastLockBytes_=0;unsigned deadLogged_=0;
 
     static void captureFpu(unsigned short& cw,unsigned& csr){
         cw=0;csr=0;
@@ -439,10 +439,10 @@ private:
             (unsigned long long)get(s.texShadowHits),(unsigned long long)get(s.texShadowFresh),(unsigned long long)get(s.texShadowReadbacks),(unsigned long long)get(s.texShadowEvicted),(unsigned long long)get(s.texShadowFreshUseful),(unsigned long long)get(s.texShadowRefused),get(s.texShadowRefusedBytes)/1048576.0,
             (unsigned long long)get(s.texShadowSpared),(unsigned long long)get(s.texShadowSpareReuses));   // 0.3.200 (pipeline): spared=kept/reused
         // 0.3.196 (task 12): fresh keeps skipped for lack of room, readbacks by cause (fresh drop + re-locked evict + never shadowed); total and per frame in this window.
-        {const std::uint64_t sk=get(s.texShadowFreshSkipped),rf2=get(s.readbackAfterFreshDrop),rr=get(s.readbackAfterRelockedEvict),rn=get(s.readbackNeverShadowed),rs=get(s.readbackAfterFreshSkip);const double f=sampleEvery?1.0/double(sampleEvery):0.0;
-         put(buf,n," texFreshSkipped=%llu(%.2f/frame) texReadbackCause[freshDrop=%llu(%.2f) relockedEvict=%llu(%.2f) neverShadowed=%llu(%.2f) freshSkip=%llu(%.2f)]",(unsigned long long)sk,double(sk-lastTexSkip_)*f,(unsigned long long)rf2,double(rf2-lastRbFresh_)*f,
-             (unsigned long long)rr,double(rr-lastRbRelocked_)*f,(unsigned long long)rn,double(rn-lastRbNever_)*f,(unsigned long long)rs,double(rs-lastRbSkip_)*f);
-         lastTexSkip_=sk;lastRbFresh_=rf2;lastRbRelocked_=rr;lastRbNever_=rn;lastRbSkip_=rs;}
+        {const std::uint64_t sk=get(s.texShadowFreshSkipped),rf2=get(s.readbackAfterFreshDrop),rr=get(s.readbackAfterRelockedEvict),rn=get(s.readbackNeverShadowed),rs=get(s.readbackAfterFreshSkip),ex=get(s.expressReadbacks),exNs=get(s.expressNs);const double f=sampleEvery?1.0/double(sampleEvery):0.0;
+         put(buf,n," texFreshSkipped=%llu(%.2f/frame) texReadbackCause[freshDrop=%llu(%.2f) relockedEvict=%llu(%.2f) neverShadowed=%llu(%.2f) freshSkip=%llu(%.2f)] express=%llu(%.2f/frame) expressMs=%.3f/frame",(unsigned long long)sk,double(sk-lastTexSkip_)*f,(unsigned long long)rf2,double(rf2-lastRbFresh_)*f,
+             (unsigned long long)rr,double(rr-lastRbRelocked_)*f,(unsigned long long)rn,double(rn-lastRbNever_)*f,(unsigned long long)rs,double(rs-lastRbSkip_)*f,(unsigned long long)ex,double(ex-lastExpress_)*f,double(exNs-lastExpressNs_)*f/1e6);
+         lastExpress_=ex;lastExpressNs_=exNs;lastTexSkip_=sk;lastRbFresh_=rf2;lastRbRelocked_=rr;lastRbNever_=rn;lastRbSkip_=rs;}
         {const std::uint64_t rbD=get(s.dynShadowReadbacks),rbS=get(s.stShadowReadbacks),evD=get(s.dynShadowEvicted),evS=get(s.stShadowEvicted),evH=get(s.hotShadowEvicted),rf=get(s.relockRefused);
          const double f=sampleEvery?1.0/double(sampleEvery):0.0;
          put(buf,n," bufShadow=%.1f/%.0fMB readbacks/frame=%.2f+%.2f evicted/frame=%.2f(hot %.2f) refused/frame=%.2f grows=%llu large=%.1f/%.0fMB(%llu,%llu) total[readbacks=%llu+%llu evicted=%llu+%llu hot=%llu refused=%llu/%.1fMB]",
@@ -542,6 +542,7 @@ private:
     void loop(){
         Queue& q=core.q;
         for(;;){
+            q.serveExpress();   // 0.3.206 (task 31): between two commands only
             const CommandHeader* h=q.next(false);
             if(!h){
                 // Idle: the only clock reads of the replay thread. Pending queries are polled every ms; publish() wakes the wait at once.
