@@ -1,5 +1,5 @@
 {
-  "source_sha256": "aa110b6b82c2e14d131b051dbd3c79783aeb632b27d46f4a37c0e64c77f28a63",
+  "source_sha256": "87d006fffd7136d874508fcf6ce0887279255d927a772aae2b823216b9c17fc5",
   "compiler": "Wine d3dcompiler_47 D3DCompile",
   "game_launched": false,
   "shaders": {
@@ -384,34 +384,6 @@
         "mul": 5,
         "log": 1,
         "exp": 1
-      }
-    },
-    "LocalFogBatchCapped": {
-      "target": "ps_3_0",
-      "bytes": 7932,
-      "sha256": "bf1b7073635c9d064779277099aab540516464d3f0016a150e6666c639e973a7",
-      "static_instruction_slots": 447,
-      "temporary_registers": 5,
-      "samplers": [
-        1,
-        11
-      ],
-      "instructions": {
-        "mul": 113,
-        "frc": 1,
-        "add": 133,
-        "max": 36,
-        "min": 17,
-        "mov": 29,
-        "texldl": 2,
-        "cmp": 52,
-        "if": 1,
-        "rcp": 30,
-        "else": 1,
-        "endif": 1,
-        "dp3": 9,
-        "rsq": 10,
-        "abs": 8
       }
     },
     "SourceVisibilityPS": {

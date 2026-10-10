@@ -736,7 +736,8 @@ float4 LocalFog(float2 uv:TEXCOORD0):COLOR0 {
     float3 ray=endpoint-Camera.xyz;float D=min(length(ray),max(FogInfo.w,0));
     ray*=rsqrt(max(dot(ray,ray),1e-12));
     float3 result=0;float capped=0;
-    // Four lights per pass (SM3 slot budget); up to sixteen across batches.
+    // Four lights per pass (SM3 slot budget); up to sixteen across batches. 0.3.205: about 473 of the 512 slots are used (the capped
+    // peak in alpha added ~26), so a new per-light term here needs a slot count first (shaders/world-shader-build.json).
     [unroll]for(int i=0;i<4;++i){
         float3 oc=Camera.xyz-LocalLightPos[i].xyz;
         float b=dot(oc,ray);float h2=max(dot(oc,oc)-b*b,0);
@@ -774,13 +775,6 @@ float4 LocalFogCombine(float2 uv:TEXCOORD0):COLOR0 {
     scatter*=FogRange.w/(FogRange.w+peak);
     float capPeak=max(scatter.r,max(scatter.g,scatter.b));
     scatter*=pow(max(acc.a/max(capPeak,1e-6),1),.6);
-    return float4(scatter,0);
-}
-// The pre-0.3.205 per-batch cap (the fallback without the accumulator): LocalFog's sum, capped per batch.
-float4 LocalFogBatchCapped(float2 uv:TEXCOORD0):COLOR0 {
-    float3 scatter=LocalFog(uv).rgb;
-    float peak=max(scatter.r,max(scatter.g,scatter.b));
-    scatter*=FogRange.w/(FogRange.w+peak);
     return float4(scatter,0);
 }
 float4 upsampleFog(float2 uv,float centerDepth) {

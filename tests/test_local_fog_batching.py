@@ -12,6 +12,7 @@ import math
 import random
 import statistics
 import unittest
+from pathlib import Path
 
 BATCH = 4
 FOG_X, FOG_Y = 3.5, 1 / 12                      # near start, near ramp 1/length
@@ -19,6 +20,8 @@ GAIN = .755                                      # night lamp gain
 FOG_Z, FOG_W = 10 * GAIN, .12 * GAIN
 COLOR = (1., .6, .3)
 RECEIVER = 60.                                   # fixed far receiver distance
+BOOST = .6                                       # LocalFogCombine's n_eff exponent
+HLSL = Path(__file__).resolve().parents[1] / 'shaders' / 'world_effects.hlsl'
 
 
 def fast_atan(x):
@@ -89,7 +92,7 @@ def total_cap(lights, cam, ray, seq=None):
         a += FOG_W * p / (FOG_W + p)
     c = cap(raw)
     peak = max(c)
-    k = max(a / peak, 1.) ** .6 if peak > 0 else 1.
+    k = max(a / peak, 1.) ** BOOST if peak > 0 else 1.
     return [x * k for x in c]
 
 
@@ -213,6 +216,17 @@ class LocalFogBatching(unittest.TestCase):
         print('brightness new/legacy: mean %.3f median %.3f (n=%d)' % (mean, med, len(ratios)))
         self.assertTrue(.85 <= mean <= 1.15)
         self.assertTrue(.85 <= med <= 1.15)
+
+    def test_model_matches_the_shader(self):
+        # The law above is a transcription of LocalFog (alpha) and LocalFogCombine; pin the shader lines so the two cannot drift apart.
+        h = HLSL.read_text()
+        fog = h[h.index('float4 LocalFog('):h.index('float4 LocalFogCombine(')]
+        combine = h[h.index('float4 LocalFogCombine('):]
+        combine = combine[:combine.index('\n}\n')]
+        self.assertIn('capped+=FogRange.w*lampPeak/(FogRange.w+lampPeak);', fog)
+        self.assertIn('return float4(result*FogRange.z,capped);', fog)
+        self.assertIn('scatter*=FogRange.w/(FogRange.w+peak);', combine)
+        self.assertIn('scatter*=pow(max(acc.a/max(capPeak,1e-6),1),%s);' % ('%g' % BOOST).lstrip('0'), combine)
 
 
 if __name__ == '__main__':

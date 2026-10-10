@@ -18,7 +18,6 @@ FILES=['renderer.cpp','world_renderer.h','world_shadow_experiment.inl','world_po
 GATES=('NorthlightDiagnostics::enabled()','diagnostics()','sampled()','captureSampled','if(diagnostics)','shadowFate.active()','sampledFrame','profiling()','profileSampled()')
 # Ungated lines that stay with Diagnostics=0: format prefix -> label.
 KEEP={
- 'LOCAL fog accumulator unavailable':'one-off: the lamp fog accumulator target could not be created (the glow is capped per batch), 0.3.205 gh#20',
  'WORLD fog clouds noise':'one-off: the noise volume generated (worker) and uploaded, 0.3.199','WORLD fog clouds disabled':'error: shader or volume creation failed, once per device, 0.3.199','WORLD fog temporal disabled':'error: shader creation failed, once per device, 0.3.199','CSTREAM GPU latency limit unavailable':'error: event query creation failed, once per device, 0.3.200 (pipeline)','FRAMEMARKERS on':'one-off: the frame marker file exists at device creation, 0.3.200 (frame markers)','GPUBUDGET timer disabled':'error: query failure, once per device, 0.3.200 (gpu budget)',
  'JOBS workers':'start-up one-off: the replay job pool started (0.3.200 jobs)','JOBS unavailable':'start-up one-off: no job worker could start (0.3.200 jobs)',
  'LOGGER intervalMs':'indirect: reportLogCost() runs only in the gated MIRROR block',
@@ -122,7 +121,7 @@ SPAN_FILES=['world_renderer.h','world_shadow_experiment.inl','world_point_render
 SPAN_ALLOWED={'PREPARE worker':'0.3.177: watchdog (at most 5 a session) / record exception (first 4)','WORLD DISABLED':'error (check())','GEOMETRY MEMORY':'warning: allocation deferral','WORLD pending mesh released':'event (0.3.156)',
  'SHADOW experiment selection allocation failed':'error','WORLD streaming retry':'capped error','WORLD staged mesh committed':'event: one per commit',
  'WORLD fog clouds disabled':'one-off error per device (0.3.199): optional shader creation failed','WORLD fog temporal disabled':'one-off error per device (0.3.199): optional shader creation failed',
- 'GI probe blend texture unavailable':'one-off warning (0.3.197: static once flag)','LOCAL fog accumulator unavailable':'one-off error per device (0.3.205 gh#20): optional render target creation failed'}
+ 'GI probe blend texture unavailable':'one-off warning (0.3.197: static once flag)'}
 SPAN_DEFERRED=['MODEL GPU cache','MODEL bulk sharing','MODEL GPU policy','MODEL GPU clears','MODEL shadow actors','MODEL shadow selection','RIGID memory','RIGID event','WORLD actor packets']
 KEYWORDS={'if','for','while','switch','return','catch','sizeof','defined','decltype','static_assert','alignof','noexcept','do','else','try','new','delete'}
 def uncomment(t):return re.sub(r'/\*.*?\*/','',re.sub(r'//[^\n]*','',t),flags=re.S)
