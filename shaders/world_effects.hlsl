@@ -961,7 +961,7 @@ float3 horizonHaze(float3 color,float2 uv,float viewZ,bool sky) {
     float3 haze=HorizonHaze.rgb*mad(lift,ShadowRange.yzw,1);
     return lerp(color,haze,amount);
 }
-// 509 of the 512 ps_3_0 slots (shaders/world-shader-build.json): free slots before adding to this pass.
+// 511 of the 512 ps_3_0 slots (shaders/world-shader-build.json): free slots before adding to this pass.
 float4 WorldComposite(float2 uv:TEXCOORD0):COLOR0 {
     float4 original=tex2Dlod(Scene,float4(uv,0,0));
     float2 centerUV=depthUV(uv);
@@ -1035,9 +1035,10 @@ float4 WorldComposite(float2 uv:TEXCOORD0):COLOR0 {
         // Bound combined GI/shadow darkening relative to the existing surface;
         // this preserves black and does not introduce an absolute exposure floor.
         color=max(color,mad(-.45,transported,original.rgb));
-        // NightBrightness: gives back the share x of the relight's darkening toward the game's own picture (moon shadows,
-        // dark GI); added light (lamps, bounce) is kept. 0 = off (bit-identical), 1 = never darker than the game's picture.
-        color=mad(GridOrigin.x,max(original.rgb-color,0),color);
+        // NightBrightness: gives back the share x of the darkening toward the stock game's picture: the relight's (moon shadows,
+        // dark GI) and the art layer's night ambient (x .82 x cool tint; the estimated ambient part albedoT*ambient times
+        // 1/factor-1, night_floor.h ArtLayerNightAmbient). Added light (lamps, bounce) is kept. 0 = off (bit-identical).
+        color=mad(GridOrigin.x,max(mad(albedoT,AmbientLight.rgb*float3(.435,.257,.109),original.rgb)-color,0),color);
         if(PassInfo.z==1)color=shadow.xxx;
         if(PassInfo.z==2)color=max(AmbientLight.rgb+bounce,0);
     }

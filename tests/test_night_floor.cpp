@@ -47,15 +47,17 @@ int main(){
     assert(blend(0,1)==0&&blend(100,0)==0&&blend(100,-1)==0&&blend(100,nan)==0&&blend(100,inf)==0);
     assert(b100==1&&blend(150,1)==1&&blend(100,2)==1&&std::fabs(blend(50,.5f)-.25f)<1e-6f);
     // The composite chain for one pixel (bloom/AO already in original, relight, then the limit), as WorldComposite computes it.
-    struct Px{float original[3],fog[3],baseline[3],bounce[3],legacyT;};
+    struct Px{float original[3],fog[3],baseline[3],bounce[3],legacyT,ambient[3];};
     auto chain=[&](const Px& p,float x,float* o){
         for(int i=0;i<3;++i){const float oldLight=std::max(p.baseline[i],.15f),fogPart=std::min(p.fog[i],p.original[i]);
             const float transported=std::max(p.original[i]-fogPart,0.f);
-            float color=p.original[i]+std::min(transported/oldLight,p.legacyT)*p.bounce[i];
+            const float albedoT=std::min(transported/oldLight,p.legacyT);
+            float color=p.original[i]+albedoT*p.bounce[i];
             color=std::max(color,p.original[i]-.45f*transported);
-            o[i]=x*std::max(p.original[i]-color,0.f)+color;}
+            const float stock=albedoT*(p.ambient[i]*ArtLayerNightAmbient[i])+p.original[i];
+            o[i]=x*std::max(stock-color,0.f)+color;}
     };
-    auto px=[](float a,float b,float c,float bounce){Px p={{a,b,c},{0,0,0},{.15f,.15f,.15f},{bounce,bounce,bounce},1};return p;};
+    auto px=[](float a,float b,float c,float bounce){Px p={{a,b,c},{0,0,0},{.15f,.15f,.15f},{bounce,bounce,bounce},1,{0,0,0}};return p;};
     // Moon shadow / dark GI (negative bounce): 0 keeps the relit night, 100 gives the game's own picture, linear between.
     {const Px shade=px(.03f,.04f,.06f,-.1f);float relit[3],o[3];chain(shade,0,relit);
      for(int i=0;i<3;++i)assert(relit[i]<shade.original[i]);
@@ -76,5 +78,12 @@ int main(){
      chain(shade,blend(100,0),o);for(int i=0;i<3;++i)assert(o[i]==ref[i]);
      Px fogOnly=shade;for(int i=0;i<3;++i){fogOnly.original[i]=.2f;fogOnly.fog[i]=.3f;}
      chain(fogOnly,b100,o);for(int i=0;i<3;++i)assert(o[i]==.2f);}
+    // The art layer's night ambient: at 100 the ambient part comes back to the stock level (albedo x stock ambient), cool tint undone.
+    {Px dark=px(.06f,.07f,.08f,0);const float amb[3]={.05f,.06f,.08f};for(int i=0;i<3;++i){dark.ambient[i]=amb[i];dark.baseline[i]=.1f;}
+     float o[3],half[3];chain(dark,b100,o);chain(dark,.5f,half);
+     for(int i=0;i<3;++i){const float albedo=dark.original[i]/.15f,want=dark.original[i]+albedo*amb[i]*ArtLayerNightAmbient[i];
+        assert(std::fabs(o[i]-want)<1e-6f&&o[i]>dark.original[i]);assert(std::fabs(half[i]-(dark.original[i]+want)/2)<1e-6f);}
+     assert(o[0]/dark.original[0]>o[2]/dark.original[2]);   // red, cut most by the cool tint, comes back most
+     chain(dark,0,o);for(int i=0;i<3;++i)assert(o[i]==dark.original[i]);}
     std::printf("PASS night floor maxStep=%.6f full=%u zero=%u seconds; weight ramp, orbit sweep, smoothing, blend, darkening limit\n",maxStep,full,zero);
 }
