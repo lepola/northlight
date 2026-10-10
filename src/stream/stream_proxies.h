@@ -359,15 +359,16 @@ struct SubRes {
     LruNode<SubRes> lru;bool relocked=false,fromFresh=false;   // lru: StreamCore::texFresh (never re-locked) or texRelocked, least recently locked first
     // 0.3.196 (task 12): the list this level's shadow was on when makeRoomForShadow evicted it (None: never shadowed, or shadowed again since); only for the readback-cause counters.
     enum Gone:std::uint8_t{GoneNone,GoneFresh,GoneRelocked,GoneSkipped} gone=GoneNone;
-    // 0.3.206 (task 31): Diagnostics fields, ALWAYS present (memory: about 64 bytes per texture level, 8 more than a bare id; CPU when Diagnostics is off: one branch per lock, nothing else is touched).
-    // diagId: id in TexReadbackDiag (0 = never recorded); diagHist: the level's lock counters of the report window (reset per window); diagLastLock / diagEpoch: frameNo+1 of the previous recorded lock and the
-    // Diagnostics epoch it was in (they survive window resets, so gaps span report windows); diagFirstCaller: return address of the first recorded lock.
-    std::uint32_t diagId=0,diagEpoch=0;TexReadbackDiag::LockHist diagHist;void* diagFirstCaller=nullptr;std::uint64_t diagLastLock=0;
+    // 0.3.206 (task 31): Diagnostics: ONLY the id of the level's history in TexReadbackDiag::hists (0 = never recorded); the lock history itself lives in that side table, allocated while Diagnostics is on
+    // (memory: sizeof(SubRes) is 184, the inline lock history of the first version made it 248, i.e. -64 bytes per texture level; CPU when Diagnostics is off: one branch per lock).
+    std::uint32_t diagId=0;
     // 0.3.206 (task 31): the recorded seq of the last command that writes this level's real content (set at every unlock that records one; ~0 = a GPU write); 0 = none recorded.
     // A readback of the level may run as an express task once replayedSeq() has passed it (and the owner's readySeq): see lockImage.
     std::uint64_t contentSeq=0;
     std::uint64_t lastLockFrame=0;   // StreamCore::frameNo of the shadow's creation or last lock: a fresh keep may be evicted for a new one only once this is kFreshEvictAgeFrames old
 };
+// 0.3.206 (task 31): TexReadbackDiag copies these constants (it knows nothing of SubRes / the queue)
+static_assert(TexReadbackDiag::kGoneNever==SubRes::GoneNone&&TexReadbackDiag::kGoneFresh==SubRes::GoneFresh&&TexReadbackDiag::kGoneRelocked==SubRes::GoneRelocked&&TexReadbackDiag::kGoneSkipped==SubRes::GoneSkipped,"TexReadbackDiag::kGone* = SubRes::Gone");
 // What a staged Unlock records (followed by nothing: the bytes are in the command's Block).
 struct UnlockImageArgs {ProxyBase* proxy;UINT level,face;DWORD flags;UINT hasRect,rows,slices,rowBytes,pitch,slicePitch;LONG l,t,r,b;UINT bf,bk;UINT route;};
 struct UnlockBufferArgs {ProxyBase* proxy;UINT off,size,flags,inlineData;};
@@ -546,12 +547,12 @@ inline HRESULT lockImage(ProxyBase& self,ProxyBase& root,SubRes& sub,UINT route,
     // 0.3.206 (task 31): Diagnostics only (core.timing): the lock's record, completed by the readback / pass-through below
     StreamCore& core=*self.core;const bool tm=core.timing;TexReadbackDiag::Hit hit;
     if(tm){
-        if(!sub.diagId){sub.diagId=core.texDiag.nextId++;sub.diagFirstCaller=caller;}
-        TexReadbackDiag::Meta m;m.fmt=root.info.fmt;m.w=lw;m.h=lh;m.d=ld;m.level=level;m.face=face;m.pool=root.info.pool;m.usage=root.info.usage;m.baseW=root.info.w;m.baseH=root.info.h;m.caller=sub.diagFirstCaller;
+        if(!sub.diagId)sub.diagId=core.texDiag.nextId++;
+        TexReadbackDiag::Meta m;m.fmt=root.info.fmt;m.w=lw;m.h=lh;m.d=ld;m.level=level;m.face=face;m.pool=root.info.pool;m.usage=root.info.usage;m.baseW=root.info.w;m.baseH=root.info.h;
         if(fi.ok)m.levelBytes=std::uint64_t((lh+fi.bh-1)/fi.bh)*(((lw+fi.bw-1)/fi.bw)*fi.bytes)*ld;
         const bool whole=l==0&&t==0&&r==lw&&b==lh&&f==0&&k==ld;
         const double cover=double(r-l)*double(b-t)*double(k-f)/(double(lw)*double(lh)*double(ld));
-        hit=core.texDiag.lock(sub.diagId,sub.diagHist,sub.diagLastLock,sub.diagEpoch,m,whole,cover,core.frameNo,caller);   // m.caller = the first lock's (caller=), `caller` this lock's (rbCaller= if it reads back)
+        hit=core.texDiag.lock(sub.diagId,m,whole,cover,core.frameNo,caller);   // the history supplies m.caller = the first lock's (caller=); `caller` is this lock's (rbCaller= if it reads back)
     }
     auto describe=[&]{
         sub.flags=flags;sub.hasRect=rect!=nullptr||box!=nullptr;
@@ -603,7 +604,9 @@ inline HRESULT lockImage(ProxyBase& self,ProxyBase& root,SubRes& sub,UINT route,
                         if(express){
                             if(tm)e0=nowNs();
                             q.runExpress([](void* a){(*static_cast<decltype(body)*>(a))(true);},&body,tm?&xt:nullptr);
-                            if(!innerGone){ran=true;isExpress=true;}   // (innerGone: should not happen; the drain path below decides)
+                            // innerGone (should not happen): the drain cannot help. The express body only saw inner null / dead because every command it depends on (incl. the owner's create) had already
+                            // replayed, so runTask's body would find the same and end with ok=false: skip it and take that outcome (ran=true, ok=false -> shadowDead below, no readback counters).
+                            ran=true;isExpress=!innerGone;
                         }
                         if(!ran)ran=runTask(*self.core,[&](StreamCore&){body(false);},Cmd::SyncLock);
                         if(!ran)return D3DERR_INVALIDCALL;

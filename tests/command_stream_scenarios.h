@@ -1882,7 +1882,7 @@ static void textureReadbackDiagnostics(){
         CHECK(ta->LockRect(0,&lr,&rc,0)==D3D_OK&&ta->UnlockRect(0)==D3D_OK&&ta->LockRect(0,&lr,&rc,0)==D3D_OK&&get(s.texShadowReadbacks)==1&&ta->UnlockRect(0)==D3D_OK);
         while(core.frameNo<1200)rig.dev->Present(nullptr,nullptr,nullptr,nullptr);
         rig.sync();CHECK(texLines().empty()&&core.texDiag.empty());
-        const StreamTexture* st=static_cast<const StreamTexture*>(ta);CHECK(st->subs[0].diagId==0&&st->subs[0].diagLastLock==0&&st->subs[0].diagHist.window==0&&st->subs[0].diagFirstCaller==nullptr);
+        const StreamTexture* st=static_cast<const StreamTexture*>(ta);CHECK(st->subs[0].diagId==0&&core.texDiag.histsEmpty());   // off: no id, no side table entry
         ta->Release();rig.finish();checkClean();
     }
 }
@@ -1958,6 +1958,20 @@ static void textureReadbackTable(){
         CHECK(top.size()==1&&has(top[0],"locks=1 rb=1 ")&&has(top[0],"gapFrames=2.0 "));
         CHECK(kind.size()==1&&has(kind[0],"lockedLevels=1 rbLevels=1 locks=1 rb=1 "));   // only the group of the second window: tq was not locked again
         ta->Release();tq->Release();rig.finish();checkClean();
+    }
+    {   // Diagnostics on but no log sink: the window still restarts at the 600 boundary (tables cleared), and a level not locked for 10 windows leaves the history table
+        gTrace.clear();StreamDevice::Options opt;opt.diagnostics=[]{return true;};
+        Rig rig(true,opt);auto& core=rig.core();
+        rig.dev->Present(nullptr,nullptr,nullptr,nullptr);CHECK(core.timing);
+        IDirect3DTexture9* ta=nullptr;D3DLOCKED_RECT lr{};RECT rc{0,0,64,4};CHECK(rig.dev->CreateTexture(1024,512,1,0,(D3DFORMAT)22,(D3DPOOL)1,&ta,nullptr)==D3D_OK);
+        CHECK(ta->LockRect(0,&lr,&rc,0)==D3D_OK&&ta->UnlockRect(0)==D3D_OK&&ta->LockRect(0,&lr,&rc,0)==D3D_OK&&ta->UnlockRect(0)==D3D_OK);
+        frames(rig.dev,10);CHECK(!core.texDiag.empty()&&!core.texDiag.histsEmpty());
+        const std::uint32_t w0=core.texDiag.window;
+        while(core.frameNo<600)rig.dev->Present(nullptr,nullptr,nullptr,nullptr);
+        CHECK(core.texDiag.empty()&&core.texDiag.window==w0+1&&!core.texDiag.histsEmpty());   // cleared at the boundary; the recent history stays
+        while(core.frameNo<6600)rig.dev->Present(nullptr,nullptr,nullptr,nullptr);
+        CHECK(core.texDiag.histsEmpty());   // not locked for more than 6000 frames: pruned
+        ta->Release();rig.finish();checkClean();
     }
 }
 static void streamTests(bool threadsOnly){
