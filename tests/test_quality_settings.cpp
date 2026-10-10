@@ -486,14 +486,14 @@ int main(){
      assert(effective(off).contactAO==0&&effective(parse("[Quality]\nActorShadows=0\n")).contactAO==1);
      std::vector<std::string> p;assert(parse("[Quality]\nContactAO=2\n",nullptr,p)==d&&p.size()==1);
      assert(describe(d).find(" StreamFrameSkip=1(default) ContactAO=1(default)")!=std::string::npos&&describe(off).find(" ContactAO=0(file)")!=std::string::npos);}
-    // NightBrightness 0/0/0 (0..100), the last key and origin slot; picture only (ActorShadows=0 does not force it), 0 = the game's own night.
-    assert(d.nightBrightness==0&&preset(Preset::Balanced).nightBrightness==0&&preset(Preset::Performance).nightBrightness==0);
+    // NightBrightness 50/50/50 (0..100), the last key and origin slot; picture only (ActorShadows=0 does not force it), 0 = Northlight's night.
+    assert(d.nightBrightness==50&&preset(Preset::Balanced).nightBrightness==50&&preset(Preset::Performance).nightBrightness==50);
     assert(std::string(Keys[44].name)=="NightBrightness"&&Keys[44].field==&Settings::nightBrightness&&Keys[44].low==0&&Keys[44].high==100&&sizeof(Keys)/sizeof(Keys[0])==45&&sizeof(d.origin)==45);
     {auto lo=parse("[Quality]\nNightBrightness=0\n"),hi=parse("[Quality]\nNightBrightness=100\n");
-     assert(lo.nightBrightness==0&&lo.origin[44]=='f'&&hi.nightBrightness==100&&hi.origin[44]=='f'&&hi!=d&&hi.origin[43]=='d');
-     std::vector<std::string> p;auto bad=parse("[Quality]\nNightBrightness=101\n",nullptr,p);assert(bad==d&&bad.nightBrightness==0&&bad.origin[44]=='d'&&p.size()==1);
+     assert(lo.nightBrightness==0&&lo.origin[44]=='f'&&lo!=d&&hi.nightBrightness==100&&hi.origin[44]=='f'&&hi!=d&&hi.origin[43]=='d');
+     std::vector<std::string> p;auto bad=parse("[Quality]\nNightBrightness=101\n",nullptr,p);assert(bad==d&&bad.nightBrightness==50&&bad.origin[44]=='d'&&p.size()==1);
      assert(effective(parse("[Quality]\nNightBrightness=40\nActorShadows=0\n")).nightBrightness==40);
-     assert(describe(d).find(" ContactAO=1(default) NightBrightness=0(default)")!=std::string::npos&&describe(hi).find(" NightBrightness=100(file)")!=std::string::npos);}
+     assert(describe(d).find(" ContactAO=1(default) NightBrightness=50(default)")!=std::string::npos&&describe(hi).find(" NightBrightness=100(file)")!=std::string::npos);}
     // 0.3.199: FogTemporal and RainBlend were removed (always on, game-tested): unknown keys now, the origin ends at FogCloudDensity.
     {std::vector<std::string> p;assert(parse("[Quality]\nFogTemporal=0\nRainBlend=0\n",nullptr,p)==d);assert(std::string(Keys[38].name)=="FogCloudDensity");}
     // 0.3.200 (gpu budget): GpuBudgetMs 4/3/2 (0..20, 0 = off) appended after FogCloudDensity, its own origin slot.

@@ -9,9 +9,9 @@ import json, re
 ini = (fp.REPO/'renderer'/'windows-package'/'northlight-quality.ini').read_text()
 readme = (fp.REPO/'renderer'/'windows-package'/'README.txt').read_text()
 checks = {}
-checks['ini: key documented, Allowed 0..100. 0 / 0 / 0']=(';NightBrightness=0' in ini and
-    'Allowed 0..100. 0 / 0 / 0' in ini[ini.index(';NightBrightness=0')-500:ini.index(';NightBrightness=0')])
-checks['README.txt: settings row']=bool(re.search(r'^  NightBrightness +0 / 0 / 0 ', readme, re.M))
+checks['ini: key documented, Allowed 0..100. 50 / 50 / 50']=(';NightBrightness=50' in ini and
+    'Allowed 0..100. 50 / 50 / 50' in ini[ini.index(';NightBrightness=50')-500:ini.index(';NightBrightness=50')])
+checks['README.txt: settings row']=bool(re.search(r'^  NightBrightness +50 / 50 / 50 ', readme, re.M))
 checks['README.md: mentioned']='NightBrightness' in (fp.REPO/'README.md').read_text()
 hlsl = (fp.SHADERS/'world_effects.hlsl').read_text()
 checks['hlsl: one c19 declaration (GridOrigin), no NightFloor alias']=(len(re.findall(r'register\(c19\)', hlsl))==1 and
