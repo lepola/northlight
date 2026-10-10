@@ -1,5 +1,5 @@
 {
-  "source_sha256": "311da8e57d3dbd863d2e210e9d2b523938c58f99bd9f0e91694332653b7a93e4",
+  "source_sha256": "a83a9948eff3f5a926cb32fc702486848e68611eafb7b36d29ba16eb25db0ebc",
   "compiler": "Wine d3dcompiler_47 D3DCompile",
   "game_launched": false,
   "shaders": {
@@ -415,7 +415,7 @@
     "WorldComposite": {
       "target": "ps_3_0",
       "bytes": 8544,
-      "sha256": "7e2082c95a61dfa9ad9c5674fadd4478e810043b8846442cb9852009ae3554e8",
+      "sha256": "69d8ef70adb33e0d60a2345caae85282a57906c1f998dadd2a5749b8dcf29d94",
       "static_instruction_slots": 512,
       "temporary_registers": 29,
       "samplers": [

@@ -92,7 +92,7 @@ struct Settings {
     // 0.3.201 (task 18) ContactAO: 1 = the screen-space contact AO (AO pass and its AOBlur denoise) runs; 0 = neither runs (bloom stays, no contact shading in creases and corners).
     // Creation-time key (the renderer reads it once with the device).
     unsigned contactAO=1;
-    // NightBrightness (0..100): lifts the darkest night; 0 = the game's own night. The composite lifts the surface part in proportion (less for lamp/moon-lit pixels), ramped by the sun below the horizon.
+    // NightBrightness (0..100): lifts the darkest night; 0 = the game's own night. The composite lifts dark surfaces in proportion (brighter ones get only a small fixed amount), ramped by the sun below the horizon.
     unsigned nightBrightness=0;
     char origin[45]={'d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d'};
 };
@@ -143,7 +143,7 @@ inline const Key Keys[]={
     {"ReplayJobs",&Settings::replayJobs,0,1,{1,1,1}},
     {"StreamFrameSkip",&Settings::streamFrameSkip,0,1,{1,1,1}}, /* 0.3.200 (frame skip) */
     {"ContactAO",&Settings::contactAO,0,1,{1,1,1}}, /* 0.3.201 (task 18) */
-    {"NightBrightness",&Settings::nightBrightness,0,100,{0,0,0}},
+    {"NightBrightness",&Settings::nightBrightness,0,100,{0,0,0}}, /* task 23 (night brightness) */
 };
 inline bool operator==(const Settings& a,const Settings& b){for(const auto& k:Keys)if(a.*k.field!=b.*k.field)return false;return true;}
 inline bool operator!=(const Settings& a,const Settings& b){return !(a==b);}

@@ -43,18 +43,15 @@ int main(){
         }
     }
     // constants
-    const float amb[3]={.1f,.2f,.3f};float k[2];
-    constants(0,1,amb,k);assert(k[0]==0&&k[1]==0);
-    constants(100,0,amb,k);assert(k[0]==0&&k[1]==0);
-    constants(100,-1,amb,k);assert(k[0]==0&&k[1]==0);
-    constants(100,nan,amb,k);assert(k[0]==0&&k[1]==0);
-    const float nanAmb[3]={.1f,nan,.3f},dark[3]={0,0,0},tiny[3]={1e-5f,1e-5f,1e-5f};
-    constants(100,1,nanAmb,k);assert(k[0]==0&&k[1]==0);
-    constants(100,1,dark,k);assert(k[0]==0&&k[1]==0);
-    constants(100,1,tiny,k);assert(k[0]==0&&k[1]==0);
-    constants(100,1,amb,k);assert(std::fabs(k[0]-1/(3*1.5f*.2f))<1e-4f&&k[1]==2);
-    float cap[2];constants(150,1,amb,cap);assert(cap[0]==k[0]&&cap[1]==k[1]);
-    constants(50,.5f,amb,cap);assert(std::fabs(cap[1]-.5f)<1e-6f);
+    float k[2];
+    constants(0,1,k);assert(k[0]==0&&k[1]==0);
+    constants(100,0,k);assert(k[0]==0&&k[1]==0);
+    constants(100,-1,k);assert(k[0]==0&&k[1]==0);
+    constants(100,nan,k);assert(k[0]==0&&k[1]==0);
+    constants(100,inf,k);assert(k[0]==0&&k[1]==0);
+    constants(100,1,k);assert(std::fabs(k[0]-1/(3*Target))<1e-4f&&k[1]==2);
+    float cap[2];constants(150,1,cap);assert(cap[0]==k[0]&&cap[1]==k[1]);
+    constants(50,.5f,cap);assert(std::fabs(cap[1]-.5f)<1e-6f);
     // The composite chain for one pixel (relight, then the lift), as WorldComposite computes it.
     struct Px{float original[3],fog[3],baseline[3],bounce[3],legacyT;};
     auto chain=[&](const Px& p,const float* kk,float* o){
@@ -63,35 +60,33 @@ int main(){
             transported[i]=std::max(p.original[i]-fogPart[i],0.f);
             color[i]=p.original[i]+std::min(transported[i]/oldLight[i],p.legacyT)*p.bounce[i];
             color[i]=std::max(color[i],p.original[i]-.45f*transported[i]);}
-        lift(color,fogPart,oldLight,kk,o);
+        lift(color,fogPart,kk,o);
     };
     auto lum=[](const float*v){return (v[0]+v[1]+v[2])/3;};
-    const float nAmb[3]={5/255.f,10/255.f,30/255.f};
-    const Px dim={{.03f,.04f,.06f},{0,0,0},{.15f,.15f,.15f},{0,0,0},1};
-    // Northrend-like night: monotonic, >= +30% at 25, hue kept.
-    {float prev=lum(dim.original);
-     for(unsigned pct:{25u,50u,75u,100u}){float kk[2],o[3];constants(pct,1,nAmb,kk);chain(dim,kk,o);
-        assert(lum(o)>prev);prev=lum(o);if(pct==25)assert(lum(o)>=1.3f*lum(dim.original));
+    const float off2[2]={0,0};
+    auto px=[](float a,float b,float c,float bounce){Px p={{a,b,c},{0,0,0},{.15f,.15f,.15f},{bounce,bounce,bounce},1};return p;};
+    const Px dim=px(.03f,.04f,.06f,0);
+    // Dark pixel (below Target): gain exactly 1+A, strictly monotonic, hue kept.
+    {float prev=1;for(unsigned pct:{25u,50u,75u,100u}){float kk[2],o[3];constants(pct,1,kk);chain(dim,kk,o);
+        const float g=lum(o)/lum(dim.original);assert(g>prev);prev=g;
+        assert(std::fabs(g-(1+kk[1]))<1e-5f);
+        if(pct==100)assert(std::fabs(g-(1+Gain))<1e-5f);
         assert(std::fabs(o[0]/o[1]-dim.original[0]/dim.original[1])<1e-5f&&std::fabs(o[2]/o[1]-dim.original[2]/dim.original[1])<1e-5f);}}
-    // Shadow keeps its ratio to the lit neighbour (same baseline, negative bounce), never inverted.
-    {Px lit=dim,sh=dim;for(int i=0;i<3;++i){lit.bounce[i]=.05f;sh.bounce[i]=-.05f;lit.original[i]=sh.original[i]=.3f;}
-     for(unsigned pct:{0u,25u,50u,100u}){float kk[2],a[3],b[3];constants(pct,1,nAmb,kk);chain(lit,kk,a);chain(sh,kk,b);
-        float l0[3],s0[3],z[2]={0,0};chain(lit,z,l0);chain(sh,z,s0);
-        assert(b[1]<a[1]&&std::fabs(b[1]/a[1]-s0[1]/l0[1])<1e-5f);}}
-    // Very dark night (ambient lum .03, baseline at the clamp): full lift is 1+Gain, monotonic.
-    {const float darkAmb[3]={.03f,.03f,.03f};float prev=1,kk[2],o[3];
-     for(unsigned pct:{25u,50u,75u,100u}){constants(pct,1,darkAmb,kk);chain(dim,kk,o);float g=o[1]/dim.original[1];assert(g>prev);prev=g;
-        if(pct==100)assert(std::fabs(g-(1+Gain))<1e-5f);}}
+    // Lamp (large positive bounce, baseline at the clamp) and baked bright WMO pixel: small relative lift, bounded absolute add.
+    {float kk[2],d[3],o[3];constants(100,1,kk);chain(dim,kk,d);const float dimRel=lum(d)/lum(dim.original)-1;
+     Px lamp=px(.3f,.3f,.3f,1.f),baked=px(.6f,.6f,.6f,0);
+     for(const Px* p:{&lamp,&baked}){float base[3];chain(*p,off2,base);chain(*p,kk,o);
+        assert(lum(o)/lum(base)-1<.25f*dimRel);assert(lum(o)-lum(base)<=Gain*Target*(1+1e-5f));}}
+    // Monotonic in surface brightness; shadowed never above its lit neighbour.
+    for(unsigned pct:{25u,50u,100u}){float kk[2];constants(pct,1,kk);float prev=-1;
+        for(unsigned i=0;i<=100;++i){float v=i/100.f,c[3]={v,v,v},f[3]={0,0,0},o[3];lift(c,f,kk,o);assert(o[0]>=prev);prev=o[0];}
+        for(float lit:{.05f,.2f,.5f,.9f})for(float amt:{.01f,.05f,.2f}){Px a=px(.3f,.3f,.3f,lit),b=px(.3f,.3f,.3f,lit-amt);
+            float oa[3],ob[3];chain(a,kk,oa);chain(b,kk,ob);assert(ob[1]<=oa[1]);}}
     // Off cases bit-identical, pure fog unchanged.
-    {float o[3],kk[2],z[2]={0,0};
-     constants(0,1,nAmb,kk);chain(dim,kk,o);for(int i=0;i<3;++i)assert(o[i]==dim.original[i]);
-     constants(100,0,nAmb,kk);chain(dim,kk,o);for(int i=0;i<3;++i)assert(o[i]==dim.original[i]);
-     chain(dim,z,o);for(int i=0;i<3;++i)assert(o[i]==dim.original[i]);
+    {float o[3],kk[2];
+     constants(0,1,kk);chain(dim,kk,o);for(int i=0;i<3;++i)assert(o[i]==dim.original[i]);
+     constants(100,0,kk);chain(dim,kk,o);for(int i=0;i<3;++i)assert(o[i]==dim.original[i]);
      Px fogOnly=dim;for(int i=0;i<3;++i){fogOnly.original[i]=.2f;fogOnly.fog[i]=.3f;}
-     constants(100,1,nAmb,kk);chain(fogOnly,kk,o);for(int i=0;i<3;++i)assert(o[i]==.2f);
-     // lamp-lit pixel (baseline 10x the reference light) gets < 1/5 of the dark pixel's relative lift
-     Px lamp=dim;for(int i=0;i<3;++i)lamp.baseline[i]=10*MinLight; // L is the .15 clamp here
-     float d[3],l[3];chain(dim,kk,d);chain(lamp,kk,l);
-     assert((l[1]/lamp.original[1]-1)<.2f*(d[1]/dim.original[1]-1));}
+     constants(100,1,kk);chain(fogOnly,kk,o);for(int i=0;i<3;++i)assert(o[i]==.2f);}
     std::printf("PASS night floor maxStep=%.6f full=%u zero=%u seconds; weight ramp, orbit sweep, smoothing, constants, lift\n",maxStep,full,zero);
 }
