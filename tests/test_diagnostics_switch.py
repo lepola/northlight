@@ -45,7 +45,7 @@ KEEP={
  'WORLD shadow terrain reach':'warning: terrain shadow reach reduced/restored under address-space pressure (0.3.190), at most one pair per 30 s backoff','WORLD geometry memory stall':'warning: one begin/end pair per geometry-memory stall episode (0.3.190)',
  'GI actor BVH rejected':'warning','WORLD DISABLED':'error','WORLD streaming retry':'capped: first 12','SHADOW experiment':'settings / error',
  'CELESTIAL profiles loaded':'start-up settings','SHADOW regional terrain loaded':'start-up settings','WORLD explicit recovery':'user-triggered',
- 'WORLD worker stopped':'error','WORLD context validated':'one-off','WORLD cache: %s':'worker error message',
+ 'WORLD worker stopped':'error','WORLD context validated':'one-off','WORLD cache: %s':'worker error message, deduplicated: once per distinct message (repeats until a successful build re-arms it)',
  'TERRAIN SHADOW patched':'capped: first 4','TERRAIN UP snapshot rejected':'capped: first 12','TERRAIN snapshot rejected':'capped: first 12',
  'TERRAIN projection':'capped: first 12','STATIC SHADOW draw retry':'capped: first 8','MODEL snapshot rejected':'capped: first 12',
  'WORLD GPU diagnostic':'user-triggered GPU capture (F12 debug)','WORLD slow submission':'capped: first 12','POINT pass skipped':'capped: first 12',
