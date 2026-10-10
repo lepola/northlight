@@ -90,7 +90,10 @@ static_assert(sizeof(Block)==16,"block header keeps data 8-aligned");
 enum class WaitKind {Sync,Present,Backpressure};
 
 // 0.3.206 (task 31): a unit of work for the replay thread's next command boundary (Queue::runExpress). Lives on the poster's stack.
-struct ExpressTask {void (*fn)(void*);void* arg;};
+constexpr std::uint16_t kExpressIdle=0xFFFF;   // ExpressTask::behindCmd: the replay thread was idle (slept / empty queue) when the task was served
+// behindCmd / startNs are written by the replay thread before it clears the mailbox (the poster reads them after that handshake): the last command executed, and nowNs() at serve start (only when `timed`).
+struct ExpressTask {void (*fn)(void*);void* arg;bool timed;std::uint16_t behindCmd;std::uint64_t startNs;};
+struct ExpressTimes {std::uint16_t behindCmd=kExpressIdle;std::uint64_t startNs=0;};   // what a timed runExpress hands back
 class Queue {
     struct Chunk {
         std::atomic<Chunk*> next{nullptr};
@@ -332,14 +335,15 @@ public:
     // 0.3.206 (task 31): runs fn(arg) on the replay thread at its NEXT COMMAND BOUNDARY (between two commands, never inside one) and returns once it ran. Unlike a Quiesce task it does not wait for the
     // queue to drain: the caller must have proved that every command the work depends on has already been replayed. One poster at a time (the game thread). Counted in syncNs (comparable with the
     // drain waits) and expressReadbacks/expressNs, not in syncCalls or the census. Wake handshake: store the mailbox, fence, wake a sleeper (the consumer sets sleeping_, fences, re-checks the mailbox).
-    void runExpress(void (*fn)(void*),void* arg){
-        ExpressTask t{fn,arg};
+    void runExpress(void (*fn)(void*),void* arg,ExpressTimes* times=nullptr){   // times: Diagnostics only (the replay thread then reads the clock once at serve start)
+        ExpressTask t{fn,arg,times!=nullptr,kExpressIdle,0};
         const auto t0=nowNs();
         express_.store(&t,std::memory_order_release);
         std::atomic_thread_fence(std::memory_order_seq_cst);
         if(sleeping_.load()&&sleeping_.exchange(false))consumerEv_.set();
         while(express_.load(std::memory_order_acquire)!=nullptr)expressDone_.waitPumped(50);   // the timeout only bounds a missed wake
         const auto ns=nowNs()-t0;
+        if(times){times->behindCmd=t.behindCmd;times->startNs=t.startNs;}
         add(stats.syncNs,ns);add(stats.expressReadbacks);add(stats.expressNs,ns);
     }
     void waitDrained(WaitKind kind=WaitKind::Sync){waitReplayed(recordedSeq(),kind);}   // the last recorded command must carry kFlagWaitTarget (no production caller)
@@ -485,9 +489,10 @@ public:
     }
     std::uint64_t replayedSeq()const{return replayed_.load();}
     // 0.3.206 (task 31): the replay loop, between two commands: runs a posted express task (one acquire load when none).
-    void serveExpress(){
+    void serveExpress(std::uint16_t lastCmd){   // lastCmd: the command the replay loop executed last, or kExpressIdle when it slept since
         ExpressTask* t=express_.load(std::memory_order_acquire);
         if(!t)return;
+        t->behindCmd=lastCmd;if(t->timed)t->startNs=nowNs();
         t->fn(t->arg);
         express_.store(nullptr,std::memory_order_release);   // t dies with the poster's wait
         expressDone_.set();

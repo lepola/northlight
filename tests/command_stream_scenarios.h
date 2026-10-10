@@ -1886,6 +1886,27 @@ static void textureReadbackDiagnostics(){
         ta->Release();rig.finish();checkClean();
     }
 }
+// 0.3.206 (task 31): with Diagnostics on, the window line splits the express wait by the command the replay thread was executing (hold keeps it in BeginScene until the poster is waiting; it serves at that command's boundary): expressBehind[Device::BeginScene=1,...]
+static void textureExpressBehind(){
+    gTrace.clear();gTexLines.clear();StreamDevice::Options opt;opt.diagnostics=[]{return true;};opt.log=[](const char* l){std::lock_guard<std::mutex> g(gTexLinesMutex);gTexLines.push_back(l);};
+    Rig rig(true,opt);auto& core=rig.core();auto& q=core.q;auto& s=q.stats;
+    rig.dev->Present(nullptr,nullptr,nullptr,nullptr);CHECK(core.timing);
+    IDirect3DTexture9* t=nullptr;D3DLOCKED_RECT lr{};RECT rc{0,0,64,4},r2{10,1,20,3};
+    CHECK(rig.dev->CreateTexture(1024,512,1,0,(D3DFORMAT)22,(D3DPOOL)1,&t,nullptr)==D3D_OK&&t->LockRect(0,&lr,&rc,0)==D3D_OK&&t->UnlockRect(0)==D3D_OK);
+    rig.sync();
+    gKnobs.hold.store(true);gKnobs.hold2.store(true);
+    rig.dev->BeginScene();for(int i=0;i<100;++i)rig.dev->SetRenderState((D3DRENDERSTATETYPE)7,DWORD(i&1));rig.dev->EndScene();for(int i=0;i<100;++i)rig.dev->SetRenderState((D3DRENDERSTATETYPE)7,DWORD(i&1));
+    q.publish();
+    std::thread rel([]{std::this_thread::sleep_for(std::chrono::milliseconds(20));gKnobs.hold.store(false);});
+    const auto ex0=get(s.expressReadbacks);
+    CHECK(t->LockRect(0,&lr,&r2,0)==D3D_OK&&get(s.expressReadbacks)==ex0+1&&t->UnlockRect(0)==D3D_OK);
+    rel.join();gKnobs.hold2.store(false);rig.sync();
+    while(core.frameNo<600)rig.dev->Present(nullptr,nullptr,nullptr,nullptr);
+    rig.sync();
+    const auto win=texLines("window");
+    CHECK(win.size()==1&&has(win[0],"express=1 ")&&has(win[0],"expressLatencyMs=")&&has(win[0],"expressBehind[Device::BeginScene=1,idle=0,other=0]"));
+    t->Release();rig.finish();checkClean();
+}
 // R1: levels locked once (a load burst) must not fill the table: a later readback level still gets its row. Diagnostics off -> on clears (no stale data, frames= from the restart).
 static bool gTexDiagOn=true;
 static void textureReadbackTable(){
@@ -1941,7 +1962,7 @@ static void textureReadbackTable(){
 }
 static void streamTests(bool threadsOnly){
     layoutIsolation();replayTimingAccounting();diagnosticsOffSkipsAudit();idlePollWakes();
-    lifetimeAndIdentity();stateKnownUnknown();locksPreserveBytes();staticBufferShadows();dynamicBufferShadows();largeBufferAllowance();twoLargeBuffers();adaptiveShadowCap();shadowCap();queriesAndSyncCensus();resetAndShutdown();directReplayRaw();redundantFiltering();renderTargetResetsViewport();textureShadows();textureExpressReadback();textureReadbackDiagnostics();textureReadbackTable();statsLine();childrenOutliveTheDevice();queryProbeAndDeadQuery();initFailureFallback();cursorHandling();nestedSyncInPump();testCooperativeLevelLocal(1);testCooperativeLevelLocal(3);upDrawsAndBackpressure();snapshotTriggers();snapshotPoolNotExhausted();memoryPressureRelease();impossibleBlockIsRefusedAtOnce();smallStagedLocksUseScratch();
+    lifetimeAndIdentity();stateKnownUnknown();locksPreserveBytes();staticBufferShadows();dynamicBufferShadows();largeBufferAllowance();twoLargeBuffers();adaptiveShadowCap();shadowCap();queriesAndSyncCensus();resetAndShutdown();directReplayRaw();redundantFiltering();renderTargetResetsViewport();textureShadows();textureExpressReadback();textureReadbackDiagnostics();textureExpressBehind();textureReadbackTable();statsLine();childrenOutliveTheDevice();queryProbeAndDeadQuery();initFailureFallback();cursorHandling();nestedSyncInPump();testCooperativeLevelLocal(1);testCooperativeLevelLocal(3);upDrawsAndBackpressure();snapshotTriggers();snapshotPoolNotExhausted();memoryPressureRelease();impossibleBlockIsRefusedAtOnce();smallStagedLocksUseScratch();
     framesAheadPacing();textureShadowSpares();frameSkipping();frameSkipReleasesPresentWait();   // 0.3.200 (frame skip)
     zeroCopyRenames();zeroCopyRingBudget();zeroCopyAdaptiveRing();zeroCopyRetire();zeroCopyPumpedLock(0);zeroCopyPumpedLock(1);
     for(UINT len:{512u<<10,2u<<20}){zeroCopyRenames(len);zeroCopyRetire(len);zeroCopyPumpedLock(0,len);zeroCopyPumpedLock(1,len);}   // 0.3.204 (task 21): the same for DYNAMIC buffers in the regular shadow cap

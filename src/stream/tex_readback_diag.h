@@ -9,6 +9,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
+#include <cstring>
 #include <functional>
 #include <unordered_map>
 #include <unordered_set>
@@ -47,6 +48,7 @@ struct TexReadbackDiag {
     std::uint64_t windowStart=0;               // frameNo at the window's start
     std::unordered_map<std::uint32_t,LevelStat> levelTab;std::unordered_map<GroupKey,GroupStat,GroupHash> groupTab;std::unordered_set<std::uint32_t> seen,rbSeen;   // seen: levels locked; rbSeen: levels with a readback / pass-through
     std::uint64_t readbacks=0,readbackBytes=0,rectBytes=0,waitNs=0,lockNs=0,copyNs=0,overflow=0,express=0,expressWaitNs=0,gapAll[kBuckets]{},gapSkip[kBuckets]{};
+    std::uint64_t expressLatNs=0;std::unordered_map<std::uint16_t,std::uint64_t> expressBehind;   // express readbacks: summed time until the replay thread reached the boundary; count by the command waited behind (0xFFFF = idle)
     bool active=false;
 
     // One lock of level `id` at frame `frameNo`; `hist` / `lastLock` / `lastEpoch` are the level's SubRes fields (lastLock and lastEpoch persist across windows). Updates the history (or the row, if the level has one) and the group.
@@ -73,9 +75,9 @@ struct TexReadbackDiag {
         const LockHist& k=*h.hist;r.locks=k.locks;r.wholeLocks=k.wholeLocks;r.partialLocks=k.partialLocks;r.coverageSum=k.coverageSum;r.gapSum=k.gapSum;r.gapCount=k.gapCount;
         return h.lv=&r;
     }
-    void readback(Hit& h,std::uint64_t bytes,std::uint64_t rect,unsigned cause,std::uint64_t wait,std::uint64_t lk,std::uint64_t cp,bool ex=false){
+    void readback(Hit& h,std::uint64_t bytes,std::uint64_t rect,unsigned cause,std::uint64_t wait,std::uint64_t lk,std::uint64_t cp,bool ex=false,std::uint16_t behind=0xFFFF,std::uint64_t latNs=0){
         if(!h.on)return;
-        ++readbacks;if(ex){++express;expressWaitNs+=wait;}readbackBytes+=bytes;rectBytes+=rect;waitNs+=wait;lockNs+=lk;copyNs+=cp;++gapAll[h.bucket];if(cause==kGoneSkipped)++gapSkip[h.bucket];
+        ++readbacks;if(ex){++express;expressWaitNs+=wait;expressLatNs+=latNs;++expressBehind[behind];}readbackBytes+=bytes;rectBytes+=rect;waitNs+=wait;lockNs+=lk;copyNs+=cp;++gapAll[h.bucket];if(cause==kGoneSkipped)++gapSkip[h.bucket];
         h.gr->readback(bytes,rect,wait,lk,cp,h.whole,h.cover,ex);
         if(LevelStat* l=row(h)){l->readback(bytes,rect,wait,lk,cp,h.whole,h.cover,ex);++l->gone[cause<4?cause:0];l->rbCaller=h.caller;}
     }
@@ -93,7 +95,7 @@ struct TexReadbackDiag {
     static void who(void* a,const char* (*callerModule)(void*),char* o,std::size_t n){if(callerModule&&a)std::snprintf(o,n,"%s",callerModule(a));else std::snprintf(o,n,"0x%llx",(unsigned long long)(std::uintptr_t)a);}
     static double gapFrames(const Sums& s){return s.gapCount?s.gapSum/double(s.gapCount):0.0;}
     // Writes the window's lines to `sink` (const char*), then clears everything. Nothing is written when the window recorded no lock.
-    template<class Sink> void report(Sink&& sink,const char* (*callerModule)(void*),std::uint64_t frameNo){
+    template<class Sink> void report(Sink&& sink,const char* (*callerModule)(void*),std::uint64_t frameNo,const char* (*cmdNameOf)(unsigned)=nullptr){
         if(!active){restart(frameNo);return;}
         const unsigned frames=unsigned(frameNo-windowStart);
         char b[640];
@@ -101,6 +103,18 @@ struct TexReadbackDiag {
         char h1[200],h2[200];hist(gapAll,h1,sizeof h1);hist(gapSkip,h2,sizeof h2);
         std::snprintf(b,sizeof b,"CSTREAM TEXREADBACK window frames=%u readbacks=%llu rbMB=%.3f rectMB=%.3f express=%llu expressWaitMs=%.3f waitMs=%.3f lockMs=%.3f copyMs=%.3f gap[%s] gapFreshSkip[%s] levels=%zu overflow=%llu",
             frames,(unsigned long long)readbacks,readbackBytes/1048576.0,rectBytes/1048576.0,(unsigned long long)express,expressWaitNs/1e6,waitNs/1e6,lockNs/1e6,copyNs/1e6,h1,h2,rbSeen.size(),(unsigned long long)overflow);   // waitMs: everything still queued before the readback (e.g. a blocking Present) is in it: the real cost of the drain
+        {   // what the express readbacks waited behind: the command being executed when they were posted (idle = the replay thread slept)
+            std::vector<std::pair<std::uint64_t,std::uint16_t>> by;std::uint64_t idle=0;
+            for(const auto& e:expressBehind){if(e.first==0xFFFF)idle=e.second;else by.emplace_back(e.second,e.first);}
+            std::sort(by.begin(),by.end(),[](const auto& x,const auto& y){return x.first!=y.first?x.first>y.first:x.second<y.second;});
+            std::size_t n=std::strlen(b);std::uint64_t other=0;
+            n+=std::snprintf(b+n,sizeof b-n," expressLatencyMs=%.3f expressBehind[",expressLatNs/1e6);
+            for(std::size_t i=0;i<by.size();++i){
+                if(i<3){char nm[48];if(cmdNameOf)std::snprintf(nm,sizeof nm,"%s",cmdNameOf(by[i].second));else std::snprintf(nm,sizeof nm,"#%u",unsigned(by[i].second));
+                    if(n<sizeof b)n+=std::snprintf(b+n,sizeof b-n,"%s=%llu,",nm,(unsigned long long)by[i].first);}
+                else other+=by[i].first;}
+            if(n<sizeof b)std::snprintf(b+n,sizeof b-n,"idle=%llu,other=%llu]",(unsigned long long)idle,(unsigned long long)other);
+        }
         sink(b);
         std::vector<const LevelStat*> lv;for(const auto& e:levelTab)if(e.second.interesting())lv.push_back(&e.second);
         const std::size_t nl=std::min(kTop,lv.size());
@@ -126,7 +140,7 @@ struct TexReadbackDiag {
     void restart(std::uint64_t frameNo){clear();++window;windowStart=frameNo;}   // a new window starts at frameNo: SubRes histories of the old one reset lazily
     void resume(std::uint64_t frameNo){restart(frameNo);++epoch;}                // Diagnostics came on again: no stale data, and no gap spans the off period
     void clear(){
-        levelTab.clear();groupTab.clear();seen.clear();rbSeen.clear();readbacks=express=expressWaitNs=readbackBytes=rectBytes=waitNs=lockNs=copyNs=overflow=0;
+        levelTab.clear();groupTab.clear();seen.clear();rbSeen.clear();expressLatNs=0;expressBehind.clear();readbacks=express=expressWaitNs=readbackBytes=rectBytes=waitNs=lockNs=copyNs=overflow=0;
         for(auto& x:gapAll)x=0;for(auto& x:gapSkip)x=0;active=false;
     }
     bool empty()const{return levelTab.empty()&&groupTab.empty()&&seen.empty()&&rbSeen.empty()&&!active;}

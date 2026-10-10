@@ -404,7 +404,7 @@ public:
         if(core.timing){const std::uint64_t e=frameEnd-nowAtPresent,w=gameWaitsNs(q.stats)-waits0;own(q.stats.presentBookNs,e>w?e-w:0);}   // 0.3.204 (task 21): Present bookkeeping, waits excluded (no extra clock reads)
         waitsAtFrameEnd=get(q.stats.syncNs)+get(q.stats.backpressureNs);
         ++core.frameNo;
-        if(core.timing&&core.frameNo%600==0&&callerLog)core.texDiag.report(callerLog,core.callerModule,core.frameNo);   // 0.3.206 (task 31): the texture readback report, one window per 600 Presents (Diagnostics only)
+        if(core.timing&&core.frameNo%600==0&&callerLog)core.texDiag.report(callerLog,core.callerModule,core.frameNo,[](unsigned c){return cmdName((Cmd)c);});   // 0.3.206 (task 31): the texture readback report, one window per 600 Presents (Diagnostics only)
         tuner.sample(q);   // idle pool memory goes back after a quiet window
         trimIdleRings(core);   // 0.3.204 (task 21): ring slices free for kLargeIdleFrames frames go
         trimRetired(core);   // 0.3.204 (task 21): large-buffer slices dropped while the replay thread still read them are freed once it has passed (it just retired a Present)

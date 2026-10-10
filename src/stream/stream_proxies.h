@@ -599,14 +599,16 @@ inline HRESULT lockImage(ProxyBase& self,ProxyBase& root,SubRes& sub,UINT route,
                         bool ran=false;
                         const std::uint64_t need=std::max(std::max(self.readySeq,root.readySeq),sub.contentSeq);
                         const bool express=!inPumpedWait&&self.readySeq!=0&&root.readySeq!=0&&sub.contentSeq!=0&&need<=q.replayedSeq();
+                        ExpressTimes xt;std::uint64_t e0=0;
                         if(express){
-                            q.runExpress([](void* a){(*static_cast<decltype(body)*>(a))(true);},&body);
+                            if(tm)e0=nowNs();
+                            q.runExpress([](void* a){(*static_cast<decltype(body)*>(a))(true);},&body,tm?&xt:nullptr);
                             if(!innerGone){ran=true;isExpress=true;}   // (innerGone: should not happen; the drain path below decides)
                         }
                         if(!ran)ran=runTask(*self.core,[&](StreamCore&){body(false);},Cmd::SyncLock);
                         if(!ran)return D3DERR_INVALIDCALL;
                         if(ok&&tm){const std::uint64_t total=nowNs()-t0,busy=lockT+copyT;
-                            core.texDiag.readback(hit,levelBytes,std::uint64_t(rows)*rowBytes*slices,unsigned(sub.gone),total>busy?total-busy:0,lockT,copyT,isExpress);}   // sub.gone is still the cause here
+                            core.texDiag.readback(hit,levelBytes,std::uint64_t(rows)*rowBytes*slices,unsigned(sub.gone),total>busy?total-busy:0,lockT,copyT,isExpress,xt.behindCmd,isExpress&&xt.startNs>e0?xt.startNs-e0:0);}   // sub.gone is still the cause here
                         if(ok){add(q.stats.texShadowReadbacks);
                             add(sub.gone==SubRes::GoneFresh?q.stats.readbackAfterFreshDrop:sub.gone==SubRes::GoneRelocked?q.stats.readbackAfterRelockedEvict:sub.gone==SubRes::GoneSkipped?q.stats.readbackAfterFreshSkip:q.stats.readbackNeverShadowed);}
                     }else if(ok)add(q.stats.texShadowFresh);
