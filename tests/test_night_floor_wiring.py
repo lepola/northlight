@@ -18,10 +18,10 @@ checks['hlsl: one c19 declaration (GridOrigin), no NightFloor alias']=(len(re.fi
     'float4 GridOrigin : register(c19);' in hlsl and 'NightFloor' not in hlsl)
 comp = hlsl[hlsl.index('float4 WorldComposite('):]
 a = comp.find('color=max(color,mad(-.45,transported,original.rgb));')
-b = comp.find('color=mad(GridOrigin.x,max(mad(albedoT,AmbientLight.rgb*float3(.435,.257,.109),original.rgb)-color,0),color);')
+b = comp.find('color=mad(albedoT*GridOrigin.x,AmbientLight.rgb*float3(.435,.257,.109),color);')
 c = comp.find('if(PassInfo.z==1)')
 code = re.sub(r'//[^\n]*', '', hlsl)
-checks['hlsl: limit after the -.45 bound, before the debug views; GridOrigin.x only there']=(0 <= a < b < c and code.count('GridOrigin.x')==1)
+checks['hlsl: ambient after the -.45 bound, before the debug views; GridOrigin.x only there']=(0 <= a < b < c and code.count('GridOrigin.x')==1)
 # The shader literal and night_floor.h's ArtLayerNightAmbient are 1/factor-1 of the art layer's night ambient (build_lighting.py).
 import build_lighting
 night = build_lighting.rgb(build_lighting.transform_color(1, 0xC8C8C8, 0, 2, None))

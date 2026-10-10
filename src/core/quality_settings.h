@@ -92,7 +92,7 @@ struct Settings {
     // 0.3.201 (task 18) ContactAO: 1 = the screen-space contact AO (AO pass and its AOBlur denoise) runs; 0 = neither runs (bloom stays, no contact shading in creases and corners).
     // Creation-time key (the renderer reads it once with the device).
     unsigned contactAO=1;
-    // NightBrightness (0..100): how much of Northlight's night darkening (relight and the art layer's night ambient) is given back toward the original game's picture; 0 = Northlight's night, 100 = about the original game's night. Ramped by the sun below the horizon.
+    // NightBrightness (0..100): how much of the art layer's darker night ambient is given back, as added light; 0 = Northlight's night, 100 = the original game's night ambient (shadows stay). Ramped by the sun below the horizon.
     unsigned nightBrightness=0;
     char origin[45]={'d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d'};
 };
