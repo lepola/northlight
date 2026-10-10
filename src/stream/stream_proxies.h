@@ -670,33 +670,34 @@ struct BufferState {
     std::vector<Slice> ring;std::uint64_t sliceSeq=0;bool zc=false,copyP=false;   // copyP: this lock would have been zero-copy but memory pressure keeps it on the copy path
     // DISCARD locks per frame (StreamCore::frameNo): discNow in frame discFrame, discMax the largest count of the last kDiscardWindowFrames frames (it decays); they size the ring (StreamCore::allowedSlices).
     std::uint64_t discFrame=0,discMaxFrame=0;unsigned discNow=0,discMax=0;
-    // 0.3.205 (#34): the zero-copy refs recorded on the CURRENT slice that the replay may not have passed, in seq order (pend from pendHead), each with its byte range; pendMin/pendMax: their hull (a quick "no overlap" exit).
-    // A NOOVERWRITE lock overlapping one would write bytes the replay thread is still reading (prepareSliceWrite). overlapFrame: the frame of the last such lock (0 = never): see kOverlapCopyFrames.
-    struct PendingRef {std::uint64_t seq;UINT off,end;};
-    std::vector<PendingRef> pend;std::size_t pendHead=0;UINT pendMin=0,pendMax=0;std::uint64_t overlapFrame=0;   // overlapFrame: StreamCore::frameNo + 1 (0 = never)
+    // 0.3.205 (#34): the unreplayed commands that touch the CURRENT slice's byte ranges, in seq order, with their hull pendMin/pendMax (a quick "no overlap" exit). A real zero-copy ref (copied=false) reads the slice until it retires:
+    // a NOOVERWRITE lock overlapping one would write bytes the replay thread is still reading (prepareSliceWrite). A copied entry is an unlock of the overlap window that went through the copy path: it protects nothing, it only
+    // shows that the overlapping pattern goes on (a lock over it re-arms overlapFrame without a wait). overlapFrame: StreamCore::frameNo + 1 of the last overlapping lock (0 = never): see kOverlapCopyFrames.
+    struct PendingRef {std::uint64_t seq;UINT off,end;bool copied;};
+    std::vector<PendingRef> pend;UINT pendMin=0,pendMax=0;std::uint64_t overlapFrame=0;
 };
-constexpr std::uint64_t kOverlapCopyFrames=60;   // 0.3.205 (#34): after an overlapping NOOVERWRITE lock, the buffer's DISCARD unlocks COPY for this many frames (= kLargeIdleFrames)
-inline void clearPending(BufferState& s){s.pend.clear();s.pendHead=0;s.pendMin=s.pendMax=0;}
-// 0.3.205 (#34): drops the refs the replay has passed (and recomputes the hull of the rest).
+constexpr std::uint64_t kOverlapCopyFrames=60;   // 0.3.205 (#34): after an overlapping NOOVERWRITE lock, the buffer's DISCARD and NOOVERWRITE unlocks COPY for this many frames (= kLargeIdleFrames); a lock that overlaps a copied unlock extends it
+inline void clearPending(BufferState& s){s.pend.clear();s.pendMin=s.pendMax=0;}
+// 0.3.205 (#34): drops the entries the replay has passed (and recomputes the hull of the rest).
 inline void prunePending(Queue& q,BufferState& s){
-    const std::uint64_t rep=q.replayedSeq();const std::size_t n=s.pend.size();std::size_t h=s.pendHead;
+    const std::uint64_t rep=q.replayedSeq();const std::size_t n=s.pend.size();std::size_t h=0;
     while(h<n&&s.pend[h].seq<=rep)++h;
-    if(h==s.pendHead)return;
+    if(!h)return;
     if(h==n){clearPending(s);return;}
-    s.pend.erase(s.pend.begin(),s.pend.begin()+std::ptrdiff_t(h));s.pendHead=0;s.pendMin=s.pend[0].off;s.pendMax=s.pend[0].end;
+    s.pend.erase(s.pend.begin(),s.pend.begin()+std::ptrdiff_t(h));s.pendMin=s.pend[0].off;s.pendMax=s.pend[0].end;
     for(const auto& r:s.pend){if(r.off<s.pendMin)s.pendMin=r.off;if(r.end>s.pendMax)s.pendMax=r.end;}
 }
-inline void pushPending(Queue& q,BufferState& s,std::uint64_t seq,UINT off,UINT end){
+inline void pushPending(Queue& q,BufferState& s,std::uint64_t seq,UINT off,UINT end,bool copied=false){
     prunePending(q,s);
     if(s.pend.empty()){s.pendMin=off;s.pendMax=end;}else{if(off<s.pendMin)s.pendMin=off;if(end>s.pendMax)s.pendMax=end;}
-    s.pend.push_back({seq,off,end});
+    s.pend.push_back({seq,off,end,copied});
 }
-// 0.3.205 (#34): the highest seq among the unreplayed refs of the current slice that overlap [off,end), 0 = none.
-inline std::uint64_t overlapSeq(Queue& q,BufferState& s,UINT off,UINT end){
-    prunePending(q,s);
-    if(s.pendHead==s.pend.size()||end<=s.pendMin||off>=s.pendMax)return 0;
+// 0.3.205 (#34): the highest seq among the unreplayed REAL refs of the current slice that overlap [off,end), 0 = none; copiedHit: a copied entry overlaps too.
+inline std::uint64_t overlapSeq(Queue& q,BufferState& s,UINT off,UINT end,bool& copiedHit){
+    copiedHit=false;prunePending(q,s);
+    if(s.pend.empty()||end<=s.pendMin||off>=s.pendMax)return 0;
     std::uint64_t best=0;
-    for(std::size_t i=s.pendHead;i<s.pend.size();++i){const auto& r=s.pend[i];if(r.off<end&&off<r.end&&r.seq>best)best=r.seq;}
+    for(const auto& r:s.pend)if(r.off<end&&off<r.end){if(r.copied)copiedHit=true;else if(r.seq>best)best=r.seq;}
     return best;
 }
 // Buffer shadows (game-side memory, persistent CPU copies of the buffer; every lock of one returns shadow memory and Unlock copies the locked range into
@@ -900,7 +901,7 @@ constexpr std::size_t kZeroCopyMin=4096;   // a smaller range keeps the inline c
 // no pending reader: as it is. DISCARD (the contents are undefined): the game gets another slice of the buffer's ring, the old one stays (renamed) for its readers: the oldest free one (its readers retired); else a new one if the
 // ring has room (framesAhead+2 slices in all), memory allows (no pressure; the ring budget: regular rings up to the base buffer-shadow cap, large rings up to the large allowance, both apart from the shadows' own caps) and the allocation succeeds; else the game waits for the OLDEST busy slice (exact).
 // NOOVERWRITE: the D3D9 contract says the game writes only bytes the GPU does not read, but the replay thread's zero-copy unlocks (refs) read game-side bytes of ranges the GPU never uses: a NOOVERWRITE lock overlapping the range of an
-// unreplayed ref waits for the newest such ref (exact; counted zcOverlapLocks/Waits) and flags the buffer: for kOverlapCopyFrames its DISCARD unlocks copy, so the steady whole-DISCARD + NOOVERWRITE pattern waits once, not per frame
+// unreplayed ref waits for the newest such ref (exact; counted zcOverlapLocks/Waits) and flags the buffer: for kOverlapCopyFrames its DISCARD and NOOVERWRITE unlocks copy, and a NOOVERWRITE lock over such a copied unlock extends the window without a wait, so a steady pattern waits once, not per frame
 // (0.3.205, #34). A NOOVERWRITE lock over no ref range: no wait. Any other write: waits for the readers (exact).
 // false = nested in a pumped wait with the slice busy: the caller drops the shadow (it retires with its readers) and takes the unshadowed path.
 // Memory pressure (the 32-bit address space is nearly full): no slice is added and no new reader is created: a DISCARD/NOOVERWRITE unlock COPIES into the queue as before zero-copy (zc=false, so the slice never gets
@@ -909,6 +910,14 @@ inline bool prepareSliceWrite(ProxyBase& self,BufferState& s,DWORD eff,bool& zc)
     StreamCore& c=*self.core;Queue& q=c.q;const bool pressure=q.pressure();
     zc=(eff&(D3::kLockDiscard|D3::kLockNoOverwrite))!=0&&!pressure;
     const unsigned perFrame=(eff&D3::kLockDiscard)?noteDiscard(c,s):0;
+    if(!(eff&D3::kLockDiscard)&&(eff&D3::kLockNoOverwrite)){   // 0.3.205 (#34): the range may still be read by an unreplayed ref (this slice's, whatever its unlock flags were, and also with zc off under memory pressure)
+        bool copiedHit=false;const std::uint64_t ov=overlapSeq(q,s,s.off,s.off+s.size,copiedHit);
+        if(!ov){if(copiedHit){own(q.stats.zcOverlapRearms);s.overlapFrame=c.frameNo+1;}return true;}   // only copied entries overlap: the pattern goes on, nothing to wait for
+        own(q.stats.zcOverlapLocks);
+        if(!waitSliceSeq(c,ov,SliceWait::Overlap))return false;   // nested in a pumped wait: the caller's staged-Block fallback
+        if(s.shadowOn)s.overlapFrame=c.frameNo+1;   // (a nested path may have dropped the shadow during the wait)
+        return true;
+    }
     if(q.replayedSeq()>=s.sliceSeq){clearPending(s);return true;}
     if(eff&D3::kLockDiscard){
         const std::size_t len=self.info.length;trimRetired(c);
@@ -942,14 +951,6 @@ inline bool prepareSliceWrite(ProxyBase& self,BufferState& s,DWORD eff,bool& zc)
             if(!s.shadowOn)return true;   // a nested path (ProcessVertices) dropped the shadow and its ring during the wait: nothing left to swap; the caller takes the unshadowed path
         }
         auto& sl=s.ring[pick];s.shadow.swap(sl.mem);sl.seq=s.sliceSeq;sl.frame=c.frameNo;s.sliceSeq=0;clearPending(s);own(q.stats.renames);return true;
-    }
-    if(eff&D3::kLockNoOverwrite){   // 0.3.205 (#34): the range may still be read by an unreplayed ref (this slice's, whatever its unlock flags were, and also with zc off under memory pressure)
-        const std::uint64_t ov=overlapSeq(q,s,s.off,s.off+s.size);
-        if(!ov)return true;
-        own(q.stats.zcOverlapLocks);
-        if(!waitSliceSeq(c,ov,SliceWait::Overlap))return false;   // nested in a pumped wait: the caller's staged-Block fallback
-        if(s.shadowOn)s.overlapFrame=c.frameNo+1;   // (a nested path may have dropped the shadow during the wait)
-        return true;
     }
     if(!waitSliceSeq(c,s.sliceSeq,SliceWait::Write))return false;
     clearPending(s);return true;
@@ -1015,9 +1016,9 @@ inline HRESULT unlockBufferImpl(ProxyBase& self,BufferState& s,bool& zcDone,bool
         if(!s.shadowOn)return D3D_OK;   // (a GPU write dropped it under a lock: nothing left to copy)
         if((s.flags&D3::kLockReadOnly)||!s.size)return D3D_OK;   // (a zero-length range must not be replayed: Lock(off,0) means to the end)
         noteRecorded(self,s,s.size);   // zero-copy unlocks count too (before/after comparisons stay valid); zeroCopyBytes says how much of it went without a copy
-        overlapCopy=zc&&s.size>=kZeroCopyMin&&(s.flags&D3::kLockDiscard)&&s.overlapFrame&&self.core->frameNo+1<s.overlapFrame+kOverlapCopyFrames;   // 0.3.205 (#34): a recent overlap: this DISCARD unlock copies (below)
+        overlapCopy=zc&&s.size>=kZeroCopyMin&&s.overlapFrame&&self.core->frameNo+1<s.overlapFrame+kOverlapCopyFrames;   // 0.3.205 (#34): a recent overlap: this DISCARD/NOOVERWRITE unlock copies (below)
         if(zc&&s.size>=kZeroCopyMin&&!overlapCopy){   // 0.3.204 (task 21): no copy: the replay thread reads the slice itself; the slice stays alive and unwritten (for conflicting locks) until this command retires
-            // 0.3.205 (#34): the ref reads s.shadow[off, off+size) until it retires. A later NOOVERWRITE lock into that range waits for it (prepareSliceWrite) and then makes this buffer's DISCARD unlocks copy for a while, so the replay thread's memcpy
+            // 0.3.205 (#34): the ref reads s.shadow[off, off+size) until it retires. A later NOOVERWRITE lock into that range waits for it (prepareSliceWrite) and then makes this buffer's DISCARD and NOOVERWRITE unlocks copy for a while, so the replay thread's memcpy
             // never overlaps a game write (no data race), and the steady pattern costs no wait per frame.
             auto* a=static_cast<UnlockBufferRefArgs*>(q.reserve((std::uint16_t)Cmd::UnlockBufferRef,sizeof(UnlockBufferRefArgs),kFlagWaitTarget));   // flagged: prepareSliceWrite may wait for it
             *a=UnlockBufferRefArgs{&self,s.shadow.data(),s.off,s.size,s.flags,0};q.commit();s.sliceSeq=q.recordedSeq();pushPending(q,s,s.sliceSeq,s.off,s.off+s.size);
@@ -1037,6 +1038,7 @@ inline HRESULT unlockBufferImpl(ProxyBase& self,BufferState& s,bool& zcDone,bool
                 *a=UnlockBufferArgs{&self,s.off+done,n,done?(s.flags&~D3::kLockDiscard):s.flags,1};std::memcpy(a+1,s.shadow.data()+s.off+done,n);q.commit();
             }
         }
+        if(overlapCopy)pushPending(q,s,q.recordedSeq(),s.off,s.off+s.size,true);   // 0.3.205 (#34): protects nothing (the bytes are in the queue); a NOOVERWRITE lock over it re-arms the window without a wait
         }
         s.written=true;
         if(s.large&&q.pressure()){std::lock_guard<std::mutex> l(self.core->texMutex);noteShadowEvicted(*self.core,self);dropShadowLocked(self,s);}   // pressure began under the lock: the large shadow goes now
