@@ -217,6 +217,25 @@ class LocalFogBatching(unittest.TestCase):
         self.assertTrue(.85 <= mean <= 1.15)
         self.assertTrue(.85 <= med <= 1.15)
 
+    def test_clustered_lamps_brightness(self):
+        # Lamps a few units apart (brazier groups, campfire rings) fell into one old batch of four and saturated at about one cap; the total law
+        # brightens k overlapping saturated glows as about k^0.6 caps. Kept on purpose (PR #35 review); report the ratios and bound them.
+        def cluster(k):
+            return [{'id': i + 1, 'pos': (2 * math.cos(i * 2.4) * (i % 3 + 1) / 3, 1.5 + .3 * (i % 2), 30 + 2 * math.sin(i * 2.4) * (i % 3 + 1) / 3),
+                     'end': 10.} for i in range(k)]
+        ratios = {}
+        for k in (2, 4, 8, 16):
+            lamps, r = cluster(k), []
+            for ray in RAYS:
+                for f in range(0, 200, 10):
+                    cam = camera(f, 0)
+                    old = sum(legacy(lamps, cam, ray))
+                    if old > 1e-4:
+                        r.append(sum(total_cap(lamps, cam, ray)) / old)
+            ratios[k] = statistics.mean(r)
+        print('clustered lamps new/legacy: ' + ' '.join('k=%d %.2f' % kv for kv in ratios.items()))
+        self.assertTrue(all(1. <= v <= 2.5 for v in ratios.values()))
+
     def test_model_matches_the_shader(self):
         # The law above is a transcription of LocalFog (alpha) and LocalFogCombine; pin the shader lines so the two cannot drift apart.
         h = HLSL.read_text()
