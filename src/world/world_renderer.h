@@ -215,6 +215,7 @@ private:
     Request request,lastRequest;
     std::shared_ptr<Snapshot> published,active;
     std::weak_ptr<Snapshot> observedPublication;
+    std::string loggedCacheMessage; // last logged "WORLD cache" message: uncached maps republish the same error per GI request, log it once
     std::weak_ptr<NorthlightGI::BVH> uploaded; // GPU commit must not retain the CPU scene.
     std::vector<float> uploadedAlphaCutoffs;
     uint64_t uploadedSerial=0;
@@ -2201,7 +2202,7 @@ public:
         std::shared_ptr<Snapshot> retiredSnapshot;
         {std::lock_guard<std::mutex> lock(mutex);
             if(published&&published!=observedPublication.lock()){
-                observedPublication=published;if(!published->message.empty())logf("WORLD cache: %s",published->message.c_str());
+                observedPublication=published;if(!published->message.empty()&&published->message!=loggedCacheMessage)logf("WORLD cache: %s",published->message.c_str());loggedCacheMessage=published->message;
             }
             if(published&&published!=active&&NorthlightWorldStreaming::adopts(published->map,published->center,bool(published->bvh),active&&active->bvh,r.map,r.camera)){
                 bool newGI=published->serial&&(!active||active->serial!=published->serial);retiredSnapshot=std::move(active);active=published;
