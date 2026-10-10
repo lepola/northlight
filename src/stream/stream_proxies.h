@@ -358,7 +358,7 @@ struct SubRes {
     LruNode<SubRes> lru;bool relocked=false,fromFresh=false;   // lru: StreamCore::texFresh (never re-locked) or texRelocked, least recently locked first
     // 0.3.196 (task 12): the list this level's shadow was on when makeRoomForShadow evicted it (None: never shadowed, or shadowed again since); only for the readback-cause counters.
     enum Gone:std::uint8_t{GoneNone,GoneFresh,GoneRelocked,GoneSkipped} gone=GoneNone;
-    std::uint32_t diagId=0;std::uint64_t diagLastLock=0;void* diagFirstCaller=nullptr;   // 0.3.206 (task 31): Diagnostics only: id in TexReadbackDiag (0 = never recorded), frameNo+1 of the previous lock (0 = none), return address of the first recorded lock
+    std::uint32_t diagId=0;TexReadbackDiag::LockHist diagHist;void* diagFirstCaller=nullptr;   // 0.3.206 (task 31): Diagnostics only (+48 bytes per texture level): id in TexReadbackDiag (0 = never recorded), the level's lock history of the report window, return address of the first recorded lock
     std::uint64_t lastLockFrame=0;   // StreamCore::frameNo of the shadow's creation or last lock: a fresh keep may be evicted for a new one only once this is kFreshEvictAgeFrames old
 };
 // What a staged Unlock records (followed by nothing: the bytes are in the command's Block).
@@ -544,8 +544,7 @@ inline HRESULT lockImage(ProxyBase& self,ProxyBase& root,SubRes& sub,UINT route,
         if(fi.ok)m.levelBytes=std::uint64_t((lh+fi.bh-1)/fi.bh)*(((lw+fi.bw-1)/fi.bw)*fi.bytes)*ld;
         const bool whole=l==0&&t==0&&r==lw&&b==lh&&f==0&&k==ld;
         const double cover=double(r-l)*double(b-t)*double(k-f)/(double(lw)*double(lh)*double(ld));
-        const bool hasGap=sub.diagLastLock!=0;const std::uint64_t gap=hasGap?core.frameNo-(sub.diagLastLock-1):0;
-        hit=core.texDiag.lock(sub.diagId,m,whole,cover,hasGap,gap);sub.diagLastLock=core.frameNo+1;
+        hit=core.texDiag.lock(sub.diagId,sub.diagHist,m,whole,cover,core.frameNo,caller);   // m.caller = the first lock's (caller=), `caller` this lock's (rbCaller= if it reads back)
     }
     auto describe=[&]{
         sub.flags=flags;sub.hasRect=rect!=nullptr||box!=nullptr;

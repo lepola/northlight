@@ -373,7 +373,9 @@ public:
     HRESULT STDMETHODCALLTYPE Present(const RECT* src,const RECT* dst,HWND window,const RGNDATA* dirty) override{return presentCommon(nullptr,src,dst,window,dirty,0);}
     HRESULT presentCommon(StreamSwapChain* swap,const RECT* src,const RECT* dst,HWND window,const RGNDATA* dirty,DWORD flags){
         Queue& q=streamQueue();
+        const bool timingWas=core.timing;
         core.timing=replayer.diagnostics&&replayer.diagnostics();   // 0.3.204 (task 21): the split timers follow Diagnostics, asked once per frame on the game thread
+        if(core.timing!=timingWas){if(core.timing)core.texDiag.resume(core.frameNo);else core.texDiag.clear();}   // 0.3.206 (task 31): Diagnostics off or on again: no stale data, no gap across the off period
         if(core.timing&&!core.clockNs){std::uint64_t sum=0;for(int i=0;i<1024;++i){const std::uint64_t a=nowNs(),b=nowNs();sum+=b-a;}core.clockNs=sum/1024?sum/1024:1;}   // one clock read, as a timed span sees it: the mean of 1024 back-to-back pairs (the mean, not the min: the clock may tick in 100 ns steps)
         std::uint64_t nowAtPresent=0;const std::uint64_t waits0=core.timing?gameWaitsNs(q.stats):0;
         {   // the game thread's own time this frame: from the previous Present's return to here, minus the waits it spent (sync, backpressure)
@@ -402,7 +404,7 @@ public:
         if(core.timing){const std::uint64_t e=frameEnd-nowAtPresent,w=gameWaitsNs(q.stats)-waits0;own(q.stats.presentBookNs,e>w?e-w:0);}   // 0.3.204 (task 21): Present bookkeeping, waits excluded (no extra clock reads)
         waitsAtFrameEnd=get(q.stats.syncNs)+get(q.stats.backpressureNs);
         ++core.frameNo;
-        if(core.timing&&core.frameNo%600==0&&callerLog)core.texDiag.report(callerLog,core.callerModule,600);   // 0.3.206 (task 31): the texture readback report, one window per 600 Presents (Diagnostics only)
+        if(core.timing&&core.frameNo%600==0&&callerLog)core.texDiag.report(callerLog,core.callerModule,core.frameNo);   // 0.3.206 (task 31): the texture readback report, one window per 600 Presents (Diagnostics only)
         tuner.sample(q);   // idle pool memory goes back after a quiet window
         trimIdleRings(core);   // 0.3.204 (task 21): ring slices free for kLargeIdleFrames frames go
         trimRetired(core);   // 0.3.204 (task 21): large-buffer slices dropped while the replay thread still read them are freed once it has passed (it just retired a Present)

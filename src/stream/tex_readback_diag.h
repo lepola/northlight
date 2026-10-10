@@ -1,5 +1,7 @@
 // 0.3.206 (task 31): Diagnostics-only report of the command stream's texture re-lock readbacks (lockImage's ONE SyncLock readback of a written level without a shadow, which drains the queue):
 // which texture levels do it, whether the time is the queue wait or the lock + copy, whole vs partial rect locks, and the frames between locks. Pure data: no dependency on SubRes.
+// Rows (LevelStat) exist ONLY for levels that had a readback or a pass-through in the window (cap kMaxLevels): a level's lock history lives in its SubRes (LockHist, lazily reset when the
+// window number changes) and is copied into the row at the level's first readback / pass-through; from then on the row is the source of truth for that level's locks. Groups (kinds) count every lock.
 // Game thread only (StreamCore::texDiag); recorded only while StreamCore::timing (Diagnostics on), reported and cleared every window by StreamDevice::presentCommon.
 #pragma once
 #include <algorithm>
@@ -18,14 +20,19 @@ struct TexReadbackDiag {
     static unsigned bucketOf(bool hasGap,std::uint64_t gap){return !hasGap?5:gap<=1?0:gap<10?1:gap<60?2:gap<300?3:4;}
     // What a lock knows about its level.
     struct Meta {std::uint32_t fmt=0,w=0,h=0,d=1,level=0,face=0,pool=0,usage=0,baseW=0,baseH=0;std::uint64_t levelBytes=0;void* caller=nullptr;};
+    // A level's lock history since its window started (lives in SubRes: 48 bytes per texture level, Diagnostics only; zero cost to the game thread when off).
+    // window: TexReadbackDiag::window the counters belong to (0 = never); epoch: the Diagnostics on/off epoch of lastLock; lastLock: frameNo+1 of the previous lock (0 = none).
+    struct LockHist {
+        std::uint32_t window=0,epoch=0,locks=0,wholeLocks=0,partialLocks=0,gapCount=0;double coverageSum=0,gapSum=0;std::uint64_t lastLock=0;
+    };
     struct Sums {   // counters shared by a level and a group
-        std::uint64_t locks=0,readbacks=0,readbackBytes=0,rectBytes=0,passSyncs=0,wholeLocks=0,partialLocks=0,gapCount=0,waitNs=0,lockNs=0,copyNs=0;
-        double coverageSum=0,gapSum=0;
+        std::uint64_t locks=0,readbacks=0,readbackBytes=0,rectBytes=0,passSyncs=0,wholeLocks=0,partialLocks=0,gapCount=0,waitNs=0,lockNs=0,copyNs=0,rbWhole=0;
+        double coverageSum=0,gapSum=0,rbCoverSum=0;   // rbWhole / rbCoverSum: over the locks that TRIGGERED a readback
         void lock(bool whole,double cover,bool hasGap,std::uint64_t gap){++locks;(whole?wholeLocks:partialLocks)++;coverageSum+=cover;if(hasGap){gapSum+=double(gap);++gapCount;}}
-        void readback(std::uint64_t bytes,std::uint64_t rect,std::uint64_t wait,std::uint64_t lk,std::uint64_t cp){++readbacks;readbackBytes+=bytes;rectBytes+=rect;waitNs+=wait;lockNs+=lk;copyNs+=cp;}
+        void readback(std::uint64_t bytes,std::uint64_t rect,std::uint64_t wait,std::uint64_t lk,std::uint64_t cp,bool whole,double cover){++readbacks;readbackBytes+=bytes;rectBytes+=rect;waitNs+=wait;lockNs+=lk;copyNs+=cp;if(whole)++rbWhole;rbCoverSum+=cover;}
         bool interesting()const{return readbacks>0||passSyncs>0;}
     };
-    struct LevelStat:Sums {Meta m;std::uint64_t gone[4]{};};   // gone[]: readbacks by cause (index = SubRes::Gone: none/never, fresh, relocked, skipped)
+    struct LevelStat:Sums {Meta m;std::uint64_t gone[4]{};void* rbCaller=nullptr;};   // rbCaller: the caller of the last lock that triggered a readback   // gone[]: readbacks by cause (index = SubRes::Gone: none/never, fresh, relocked, skipped)
     struct GroupKey {
         std::uint32_t fmt,w,h,pool,usage;
         bool operator==(const GroupKey& o)const{return fmt==o.fmt&&w==o.w&&h==o.h&&pool==o.pool&&usage==o.usage;}
@@ -33,29 +40,44 @@ struct TexReadbackDiag {
     struct GroupHash {std::size_t operator()(const GroupKey& k)const{std::uint64_t x=k.fmt;x=x*1000003u^k.w;x=x*1000003u^k.h;x=x*1000003u^k.pool;x=x*1000003u^k.usage;return std::size_t(x^(x>>29));}};
     struct GroupStat:Sums {std::uint64_t levels=0;};   // levels: distinct levels locked in the window
     // The records of one lock, kept by lockImage until its readback / pass-through is known (valid until the next report, i.e. within the lock call).
-    struct Hit {LevelStat* lv=nullptr;GroupStat* gr=nullptr;unsigned bucket=5;bool on=false;};
+    struct Hit {LevelStat* lv=nullptr;GroupStat* gr=nullptr;LockHist* hist=nullptr;unsigned bucket=5;bool on=false,whole=false;double cover=0;std::uint32_t id=0;void* caller=nullptr;Meta m;};
 
-    std::uint32_t nextId=1;
-    std::unordered_map<std::uint32_t,LevelStat> levelTab;std::unordered_map<GroupKey,GroupStat,GroupHash> groupTab;std::unordered_set<std::uint32_t> seen;
+    std::uint32_t nextId=1,window=1,epoch=1;   // window: the report window number (bumped at each report / restart); epoch: bumped when Diagnostics comes on again (gaps do not span it)
+    std::uint64_t windowStart=0;               // frameNo at the window's start
+    std::unordered_map<std::uint32_t,LevelStat> levelTab;std::unordered_map<GroupKey,GroupStat,GroupHash> groupTab;std::unordered_set<std::uint32_t> seen,rbSeen;   // seen: levels locked; rbSeen: levels with a readback / pass-through
     std::uint64_t readbacks=0,readbackBytes=0,rectBytes=0,waitNs=0,lockNs=0,copyNs=0,overflow=0,gapAll[kBuckets]{},gapSkip[kBuckets]{};
     bool active=false;
 
-    Hit lock(std::uint32_t id,const Meta& m,bool whole,double cover,bool hasGap,std::uint64_t gap){
-        Hit h;h.on=true;active=true;h.bucket=bucketOf(hasGap,gap);
+    // One lock of level `id` at frame `frameNo`; `hist` is the level's SubRes history. Updates the history (or the row, if the level has one) and the group.
+    Hit lock(std::uint32_t id,LockHist& hist,const Meta& m,bool whole,double cover,std::uint64_t frameNo,void* caller){
+        Hit h;h.on=true;active=true;h.id=id;h.caller=caller;h.m=m;h.whole=whole;h.cover=cover;h.hist=&hist;
+        if(hist.window!=window){hist=LockHist{};hist.window=window;hist.epoch=epoch;}
+        const bool hasGap=hist.lastLock!=0&&hist.epoch==epoch;const std::uint64_t gap=hasGap?frameNo-(hist.lastLock-1):0;
+        hist.lastLock=frameNo+1;hist.epoch=epoch;h.bucket=bucketOf(hasGap,gap);
         GroupStat& g=groupTab[GroupKey{m.fmt,m.baseW,m.baseH,m.pool,m.usage}];h.gr=&g;
         if(seen.insert(id).second)++g.levels;
+        g.lock(whole,cover,hasGap,gap);
         auto it=levelTab.find(id);
-        if(it==levelTab.end()){if(levelTab.size()>=kMaxLevels)++overflow;else{it=levelTab.emplace(id,LevelStat{}).first;it->second.m=m;}}
-        if(it!=levelTab.end())h.lv=&it->second;
-        g.lock(whole,cover,hasGap,gap);if(h.lv)h.lv->lock(whole,cover,hasGap,gap);
+        if(it!=levelTab.end()){h.lv=&it->second;it->second.lock(whole,cover,hasGap,gap);}
+        else{++hist.locks;(whole?hist.wholeLocks:hist.partialLocks)++;hist.coverageSum+=cover;if(hasGap){hist.gapSum+=double(gap);++hist.gapCount;}}
         return h;
     }
-    void readback(const Hit& h,std::uint64_t bytes,std::uint64_t rect,unsigned cause,std::uint64_t wait,std::uint64_t lk,std::uint64_t cp){
+    // The row of a level with a readback / pass-through: made at its first one in the window from the SubRes history (no row, and one overflow, when the table is full).
+    LevelStat* row(Hit& h){
+        if(h.lv)return h.lv;
+        if(!rbSeen.insert(h.id).second)return nullptr;   // had one before and got no row (full)
+        if(levelTab.size()>=kMaxLevels){++overflow;return nullptr;}
+        LevelStat& r=levelTab.emplace(h.id,LevelStat{}).first->second;r.m=h.m;
+        const LockHist& k=*h.hist;r.locks=k.locks;r.wholeLocks=k.wholeLocks;r.partialLocks=k.partialLocks;r.coverageSum=k.coverageSum;r.gapSum=k.gapSum;r.gapCount=k.gapCount;
+        return h.lv=&r;
+    }
+    void readback(Hit& h,std::uint64_t bytes,std::uint64_t rect,unsigned cause,std::uint64_t wait,std::uint64_t lk,std::uint64_t cp){
         if(!h.on)return;
         ++readbacks;readbackBytes+=bytes;rectBytes+=rect;waitNs+=wait;lockNs+=lk;copyNs+=cp;++gapAll[h.bucket];if(cause==kGoneSkipped)++gapSkip[h.bucket];
-        h.gr->readback(bytes,rect,wait,lk,cp);if(h.lv){h.lv->readback(bytes,rect,wait,lk,cp);++h.lv->gone[cause<4?cause:0];}
+        h.gr->readback(bytes,rect,wait,lk,cp,h.whole,h.cover);
+        if(LevelStat* l=row(h)){l->readback(bytes,rect,wait,lk,cp,h.whole,h.cover);++l->gone[cause<4?cause:0];l->rbCaller=h.caller;}
     }
-    void passSync(const Hit& h){if(!h.on)return;++h.gr->passSyncs;if(h.lv)++h.lv->passSyncs;}
+    void passSync(Hit& h){if(!h.on)return;++h.gr->passSyncs;if(LevelStat* l=row(h))++l->passSyncs;}
 
     template<class S> static bool before(const S& a,const S& b){
         if(a.readbackBytes!=b.readbackBytes)return a.readbackBytes>b.readbackBytes;
@@ -64,25 +86,28 @@ struct TexReadbackDiag {
     }
     static double pct(const Sums& s){return s.locks?double(s.wholeLocks)*100.0/double(s.locks):0.0;}
     static double cover(const Sums& s){return s.locks?s.coverageSum/double(s.locks):0.0;}
+    static double rbPct(const Sums& s){return s.readbacks?double(s.rbWhole)*100.0/double(s.readbacks):0.0;}
+    static double rbCover(const Sums& s){return s.readbacks?s.rbCoverSum/double(s.readbacks):0.0;}
+    static void who(void* a,const char* (*callerModule)(void*),char* o,std::size_t n){if(callerModule&&a)std::snprintf(o,n,"%s",callerModule(a));else std::snprintf(o,n,"0x%llx",(unsigned long long)(std::uintptr_t)a);}
     static double gapFrames(const Sums& s){return s.gapCount?s.gapSum/double(s.gapCount):0.0;}
     // Writes the window's lines to `sink` (const char*), then clears everything. Nothing is written when the window recorded no lock.
-    template<class Sink> void report(Sink&& sink,const char* (*callerModule)(void*),unsigned frames){
-        if(!active){clear();return;}
+    template<class Sink> void report(Sink&& sink,const char* (*callerModule)(void*),std::uint64_t frameNo){
+        if(!active){restart(frameNo);return;}
+        const unsigned frames=unsigned(frameNo-windowStart);
         char b[640];
         auto hist=[](const std::uint64_t* g,char* o,std::size_t n){std::snprintf(o,n,"0-1=%llu,2-9=%llu,10-59=%llu,60-299=%llu,300+=%llu,first=%llu",(unsigned long long)g[0],(unsigned long long)g[1],(unsigned long long)g[2],(unsigned long long)g[3],(unsigned long long)g[4],(unsigned long long)g[5]);};
         char h1[200],h2[200];hist(gapAll,h1,sizeof h1);hist(gapSkip,h2,sizeof h2);
-        std::snprintf(b,sizeof b,"CSTREAM TEXREADBACK window frames=%u readbacks=%llu rbMB=%.2f rectMB=%.2f waitMs=%.3f lockMs=%.3f copyMs=%.3f gap[%s] gapFreshSkip[%s] levels=%zu overflow=%llu",
-            frames,(unsigned long long)readbacks,readbackBytes/1048576.0,rectBytes/1048576.0,waitNs/1e6,lockNs/1e6,copyNs/1e6,h1,h2,seen.size(),(unsigned long long)overflow);
+        std::snprintf(b,sizeof b,"CSTREAM TEXREADBACK window frames=%u readbacks=%llu rbMB=%.3f rectMB=%.3f waitMs=%.3f lockMs=%.3f copyMs=%.3f gap[%s] gapFreshSkip[%s] levels=%zu overflow=%llu",
+            frames,(unsigned long long)readbacks,readbackBytes/1048576.0,rectBytes/1048576.0,waitNs/1e6,lockNs/1e6,copyNs/1e6,h1,h2,rbSeen.size(),(unsigned long long)overflow);   // waitMs: everything still queued before the readback (e.g. a blocking Present) is in it: the real cost of the drain
         sink(b);
         std::vector<const LevelStat*> lv;for(const auto& e:levelTab)if(e.second.interesting())lv.push_back(&e.second);
         const std::size_t nl=std::min(kTop,lv.size());
         std::partial_sort(lv.begin(),lv.begin()+nl,lv.end(),[](const LevelStat* a,const LevelStat* c){return before(*a,*c);});
         for(std::size_t i=0;i<nl;++i){
-            const LevelStat& s=*lv[i];char who[64];
-            if(callerModule&&s.m.caller)std::snprintf(who,sizeof who,"%s",callerModule(s.m.caller));else std::snprintf(who,sizeof who,"0x%llx",(unsigned long long)(std::uintptr_t)s.m.caller);
-            std::snprintf(b,sizeof b,"CSTREAM TEXREADBACK top#%u fmt=%u size=%ux%u lvl=%u face=%u pool=%u usage=0x%x levelKB=%.1f locks=%llu rb=%llu rbMB=%.2f rectKB=%.1f whole%%=%.0f cover=%.2f gapFrames=%.1f gone[fresh=%llu,relocked=%llu,skip=%llu,never=%llu] passSync=%llu waitMs=%.3f caller=%s",
-                unsigned(i+1),s.m.fmt,s.m.w,s.m.h,s.m.level,s.m.face,s.m.pool,s.m.usage,s.m.levelBytes/1024.0,(unsigned long long)s.locks,(unsigned long long)s.readbacks,s.readbackBytes/1048576.0,s.rectBytes/1024.0,pct(s),cover(s),gapFrames(s),
-                (unsigned long long)s.gone[kGoneFresh],(unsigned long long)s.gone[kGoneRelocked],(unsigned long long)s.gone[kGoneSkipped],(unsigned long long)s.gone[kGoneNever],(unsigned long long)s.passSyncs,s.waitNs/1e6,who);
+            const LevelStat& s=*lv[i];char w1[64],w2[64];who(s.m.caller,callerModule,w1,sizeof w1);who(s.rbCaller,callerModule,w2,sizeof w2);
+            std::snprintf(b,sizeof b,"CSTREAM TEXREADBACK top#%u fmt=%u size=%ux%u lvl=%u face=%u pool=%u usage=0x%x levelKB=%.1f locks=%llu rb=%llu rbMB=%.3f rectKB=%.1f whole%%=%.4g cover=%.4g rbWhole%%=%.4g rbCover=%.4g gapFrames=%.1f gone[fresh=%llu,relocked=%llu,skip=%llu,never=%llu] passSync=%llu waitMs=%.3f caller=%s rbCaller=%s",
+                unsigned(i+1),s.m.fmt,s.m.w,s.m.h,s.m.level,s.m.face,s.m.pool,s.m.usage,s.m.levelBytes/1024.0,(unsigned long long)s.locks,(unsigned long long)s.readbacks,s.readbackBytes/1048576.0,s.rectBytes/1024.0,pct(s),cover(s),rbPct(s),rbCover(s),gapFrames(s),
+                (unsigned long long)s.gone[kGoneFresh],(unsigned long long)s.gone[kGoneRelocked],(unsigned long long)s.gone[kGoneSkipped],(unsigned long long)s.gone[kGoneNever],(unsigned long long)s.passSyncs,s.waitNs/1e6,w1,w2);
             sink(b);
         }
         std::vector<std::pair<const GroupKey*,const GroupStat*>> gr;for(const auto& e:groupTab)if(e.second.interesting())gr.emplace_back(&e.first,&e.second);
@@ -90,15 +115,17 @@ struct TexReadbackDiag {
         std::partial_sort(gr.begin(),gr.begin()+ng,gr.end(),[](const auto& a,const auto& c){return before(*a.second,*c.second);});
         for(std::size_t i=0;i<ng;++i){
             const GroupKey& k=*gr[i].first;const GroupStat& s=*gr[i].second;
-            std::snprintf(b,sizeof b,"CSTREAM TEXREADBACK kind#%u fmt=%u size=%ux%u pool=%u usage=0x%x levels=%llu locks=%llu rb=%llu rbMB=%.2f rectMB=%.2f whole%%=%.0f cover=%.2f gapFrames=%.1f",
-                unsigned(i+1),k.fmt,k.w,k.h,k.pool,k.usage,(unsigned long long)s.levels,(unsigned long long)s.locks,(unsigned long long)s.readbacks,s.readbackBytes/1048576.0,s.rectBytes/1048576.0,pct(s),cover(s),gapFrames(s));
+            std::snprintf(b,sizeof b,"CSTREAM TEXREADBACK kind#%u fmt=%u size=%ux%u pool=%u usage=0x%x levels=%llu locks=%llu rb=%llu rbMB=%.3f rectKB=%.1f whole%%=%.4g cover=%.4g rbWhole%%=%.4g rbCover=%.4g gapFrames=%.1f",
+                unsigned(i+1),k.fmt,k.w,k.h,k.pool,k.usage,(unsigned long long)s.levels,(unsigned long long)s.locks,(unsigned long long)s.readbacks,s.readbackBytes/1048576.0,s.rectBytes/1024.0,pct(s),cover(s),rbPct(s),rbCover(s),gapFrames(s));
             sink(b);
         }
-        clear();
+        restart(frameNo);
     }
+    void restart(std::uint64_t frameNo){clear();++window;windowStart=frameNo;}   // a new window starts at frameNo: SubRes histories of the old one reset lazily
+    void resume(std::uint64_t frameNo){restart(frameNo);++epoch;}                // Diagnostics came on again: no stale data, and no gap spans the off period
     void clear(){
-        levelTab.clear();groupTab.clear();seen.clear();readbacks=readbackBytes=rectBytes=waitNs=lockNs=copyNs=overflow=0;
+        levelTab.clear();groupTab.clear();seen.clear();rbSeen.clear();readbacks=readbackBytes=rectBytes=waitNs=lockNs=copyNs=overflow=0;
         for(auto& x:gapAll)x=0;for(auto& x:gapSkip)x=0;active=false;
     }
-    bool empty()const{return levelTab.empty()&&groupTab.empty()&&seen.empty()&&!active;}
+    bool empty()const{return levelTab.empty()&&groupTab.empty()&&seen.empty()&&rbSeen.empty()&&!active;}
 };

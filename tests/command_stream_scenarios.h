@@ -1799,11 +1799,12 @@ static void textureReadbackDiagnostics(){
         rig.sync();CHECK(core.frameNo==600);
         const auto win=texLines("window"),top=texLines("top#"),kind=texLines("kind#");
         CHECK(win.size()==1&&top.size()==2&&kind.size()==2&&texLines().size()==5);
-        CHECK(has(win[0],"window frames=600 readbacks=2 rbMB=2.50 rectMB=")&&has(win[0],"gap[0-1=0,2-9=1,10-59=1,60-299=0,300+=0,first=0] gapFreshSkip[0-1=0,2-9=0,10-59=0,60-299=0,300+=0,first=0] levels=2 overflow=0"));
-        CHECK(has(top[0],"top#1 fmt=22 size=1024x512 lvl=0 face=0 pool=1 usage=0x0 levelKB=2048.0 locks=2 rb=1 rbMB=2.00 rectKB=0.1 whole%=0 ")&&has(top[0],"gapFrames=4.0 gone[fresh=0,relocked=0,skip=0,never=1] passSync=0 "));
-        CHECK(has(top[1],"top#2 fmt=827611204 size=1024x1024 lvl=0 face=0 pool=1 usage=0x0 levelKB=512.0 locks=2 rb=1 rbMB=0.50 rectKB=512.0 whole%=100 cover=1.00 gapFrames=12.0 gone[fresh=0,relocked=0,skip=0,never=1] passSync=0 "));
-        CHECK(has(kind[0],"kind#1 fmt=22 size=1024x512 pool=1 usage=0x0 levels=1 locks=2 rb=1 rbMB=2.00 ")&&has(kind[1],"kind#2 fmt=827611204 size=1024x1024 pool=1 usage=0x0 levels=1 locks=2 rb=1 rbMB=0.50 rectMB=0.50 whole%=100 cover=1.00 gapFrames=12.0"));
-        CHECK(has(top[0],"caller=0x")&&!has(top[0],"caller=0x0 "));   // no callerModule in tests: the raw return address
+        CHECK(has(win[0],"window frames=600 readbacks=2 rbMB=2.500 rectMB=")&&has(win[0],"gap[0-1=0,2-9=1,10-59=1,60-299=0,300+=0,first=0] gapFreshSkip[0-1=0,2-9=0,10-59=0,60-299=0,300+=0,first=0] levels=2 overflow=0"));
+        CHECK(has(top[0],"top#1 fmt=22 size=1024x512 lvl=0 face=0 pool=1 usage=0x0 levelKB=2048.0 locks=2 rb=1 rbMB=2.000 rectKB=0.1 whole%=0 ")&&has(top[0],"rbWhole%=0 rbCover=3.815e-05 gapFrames=4.0 gone[fresh=0,relocked=0,skip=0,never=1] passSync=0 "));
+        CHECK(has(top[1],"top#2 fmt=827611204 size=1024x1024 lvl=0 face=0 pool=1 usage=0x0 levelKB=512.0 locks=2 rb=1 rbMB=0.500 rectKB=512.0 whole%=100 cover=1 rbWhole%=100 rbCover=1 gapFrames=12.0 gone[fresh=0,relocked=0,skip=0,never=1] passSync=0 "));
+        CHECK(has(kind[0],"kind#1 fmt=22 size=1024x512 pool=1 usage=0x0 levels=1 locks=2 rb=1 rbMB=2.000 ")&&has(kind[1],"kind#2 fmt=827611204 size=1024x1024 pool=1 usage=0x0 levels=1 locks=2 rb=1 rbMB=0.500 rectKB=512.0 whole%=100 cover=1 rbWhole%=100 rbCover=1 gapFrames=12.0"));
+        CHECK(has(kind[0],"rbMB=2.000 rectKB=0.1 whole%=0 cover=")&&has(kind[0],"rbWhole%=0 rbCover=3.815e-05 gapFrames=4.0"));   // the readback lock was a tiny rect: rbCover shows it, never 0
+        CHECK(has(top[0],"caller=0x")&&!has(top[0],"caller=0x0 ")&&has(top[0],"rbCaller=0x")&&!has(top[0],"rbCaller=0x0"));   // no callerModule in tests: the raw return addresses
         const std::size_t n0=texLines().size();   // the next window has no texture lock at all: nothing is logged
         while(core.frameNo<1200)rig.dev->Present(nullptr,nullptr,nullptr,nullptr);
         rig.sync();CHECK(texLines().size()==n0&&core.texDiag.empty());
@@ -1818,13 +1819,48 @@ static void textureReadbackDiagnostics(){
         CHECK(ta->LockRect(0,&lr,&rc,0)==D3D_OK&&ta->UnlockRect(0)==D3D_OK&&ta->LockRect(0,&lr,&rc,0)==D3D_OK&&get(s.texShadowReadbacks)==1&&ta->UnlockRect(0)==D3D_OK);
         while(core.frameNo<1200)rig.dev->Present(nullptr,nullptr,nullptr,nullptr);
         rig.sync();CHECK(texLines().empty()&&core.texDiag.empty());
-        const StreamTexture* st=static_cast<const StreamTexture*>(ta);CHECK(st->subs[0].diagId==0&&st->subs[0].diagLastLock==0&&st->subs[0].diagFirstCaller==nullptr);
+        const StreamTexture* st=static_cast<const StreamTexture*>(ta);CHECK(st->subs[0].diagId==0&&st->subs[0].diagHist.lastLock==0&&st->subs[0].diagHist.window==0&&st->subs[0].diagFirstCaller==nullptr);
+        ta->Release();rig.finish();checkClean();
+    }
+}
+// R1: levels locked once (a load burst) must not fill the table: a later readback level still gets its row. Diagnostics off -> on clears (no stale data, frames= from the restart).
+static bool gTexDiagOn=true;
+static void textureReadbackTable(){
+    {   gTrace.clear();gTexLines.clear();StreamDevice::Options opt;opt.diagnostics=[]{return true;};opt.log=[](const char* l){std::lock_guard<std::mutex> g(gTexLinesMutex);gTexLines.push_back(l);};
+        Rig rig(true,opt);auto& core=rig.core();auto& s=core.q.stats;
+        rig.dev->Present(nullptr,nullptr,nullptr,nullptr);CHECK(core.timing);
+        std::vector<IDirect3DTexture9*> many;D3DLOCKED_RECT lr{};bool ok=true;
+        for(int i=0;i<5000&&ok;++i){IDirect3DTexture9* t=nullptr;ok=rig.dev->CreateTexture(8,8,1,0,(D3DFORMAT)22,(D3DPOOL)1,&t,nullptr)==D3D_OK&&t->LockRect(0,&lr,nullptr,0)==D3D_OK&&t->UnlockRect(0)==D3D_OK;many.push_back(t);}
+        CHECK(ok&&many.size()==5000);
+        IDirect3DTexture9* big=nullptr;RECT rc{0,0,64,4};CHECK(rig.dev->CreateTexture(1024,512,1,0,(D3DFORMAT)22,(D3DPOOL)1,&big,nullptr)==D3D_OK);
+        CHECK(big->LockRect(0,&lr,&rc,0)==D3D_OK&&big->UnlockRect(0)==D3D_OK&&big->LockRect(0,&lr,&rc,0)==D3D_OK&&get(s.texShadowReadbacks)==1&&big->UnlockRect(0)==D3D_OK);
+        while(core.frameNo<600)rig.dev->Present(nullptr,nullptr,nullptr,nullptr);
+        rig.sync();
+        const auto win=texLines("window"),top=texLines("top#"),kind=texLines("kind#");
+        CHECK(win.size()==1&&has(win[0],"levels=1 overflow=0")&&top.size()==1&&has(top[0],"top#1 fmt=22 size=1024x512 lvl=0 ")&&has(top[0],"locks=2 rb=1 ")&&kind.size()==1);
+        for(auto* t:many)t->Release();big->Release();rig.finish();checkClean();
+    }
+    {   gTrace.clear();gTexLines.clear();gTexDiagOn=true;StreamDevice::Options opt;opt.diagnostics=[]{return gTexDiagOn;};opt.log=[](const char* l){std::lock_guard<std::mutex> g(gTexLinesMutex);gTexLines.push_back(l);};
+        Rig rig(true,opt);auto& core=rig.core();auto& s=core.q.stats;
+        rig.dev->Present(nullptr,nullptr,nullptr,nullptr);CHECK(core.timing);
+        IDirect3DTexture9* ta=nullptr;D3DLOCKED_RECT lr{};RECT rc{0,0,64,4};CHECK(rig.dev->CreateTexture(1024,512,1,0,(D3DFORMAT)22,(D3DPOOL)1,&ta,nullptr)==D3D_OK);
+        CHECK(ta->LockRect(0,&lr,&rc,0)==D3D_OK&&ta->UnlockRect(0)==D3D_OK);
+        frames(rig.dev,5);CHECK(!core.texDiag.empty());
+        gTexDiagOn=false;rig.dev->Present(nullptr,nullptr,nullptr,nullptr);CHECK(!core.timing&&core.texDiag.empty());   // off: the old data is dropped
+        frames(rig.dev,100);gTexDiagOn=true;rig.dev->Present(nullptr,nullptr,nullptr,nullptr);CHECK(core.timing&&core.texDiag.empty());
+        const std::uint64_t start=core.frameNo;
+        CHECK(ta->LockRect(0,&lr,&rc,0)==D3D_OK&&get(s.texShadowReadbacks)==1&&ta->UnlockRect(0)==D3D_OK);
+        while(core.frameNo<600)rig.dev->Present(nullptr,nullptr,nullptr,nullptr);
+        rig.sync();
+        const auto win=texLines("window"),top=texLines("top#");
+        char want[64];std::snprintf(want,sizeof want,"window frames=%u ",unsigned(600-(start-1)));   // the window starts at the Present that turned Diagnostics on
+        CHECK(win.size()==1&&has(win[0],want)&&has(win[0],"first=1] ")&&has(win[0],"levels=1 overflow=0")&&top.size()==1&&has(top[0],"locks=1 rb=1 ")&&has(top[0],"gapFrames=0.0 "));   // the lock before the off period is not counted, no gap spans it
         ta->Release();rig.finish();checkClean();
     }
 }
 static void streamTests(bool threadsOnly){
     layoutIsolation();replayTimingAccounting();diagnosticsOffSkipsAudit();idlePollWakes();
-    lifetimeAndIdentity();stateKnownUnknown();locksPreserveBytes();staticBufferShadows();dynamicBufferShadows();largeBufferAllowance();twoLargeBuffers();adaptiveShadowCap();shadowCap();queriesAndSyncCensus();resetAndShutdown();directReplayRaw();redundantFiltering();renderTargetResetsViewport();textureShadows();textureReadbackDiagnostics();statsLine();childrenOutliveTheDevice();queryProbeAndDeadQuery();initFailureFallback();cursorHandling();nestedSyncInPump();testCooperativeLevelLocal(1);testCooperativeLevelLocal(3);upDrawsAndBackpressure();snapshotTriggers();snapshotPoolNotExhausted();memoryPressureRelease();impossibleBlockIsRefusedAtOnce();smallStagedLocksUseScratch();
+    lifetimeAndIdentity();stateKnownUnknown();locksPreserveBytes();staticBufferShadows();dynamicBufferShadows();largeBufferAllowance();twoLargeBuffers();adaptiveShadowCap();shadowCap();queriesAndSyncCensus();resetAndShutdown();directReplayRaw();redundantFiltering();renderTargetResetsViewport();textureShadows();textureReadbackDiagnostics();textureReadbackTable();statsLine();childrenOutliveTheDevice();queryProbeAndDeadQuery();initFailureFallback();cursorHandling();nestedSyncInPump();testCooperativeLevelLocal(1);testCooperativeLevelLocal(3);upDrawsAndBackpressure();snapshotTriggers();snapshotPoolNotExhausted();memoryPressureRelease();impossibleBlockIsRefusedAtOnce();smallStagedLocksUseScratch();
     framesAheadPacing();textureShadowSpares();frameSkipping();frameSkipReleasesPresentWait();   // 0.3.200 (frame skip)
     zeroCopyRenames();zeroCopyRingBudget();zeroCopyAdaptiveRing();zeroCopyRetire();zeroCopyPumpedLock(0);zeroCopyPumpedLock(1);
     for(UINT len:{512u<<10,2u<<20}){zeroCopyRenames(len);zeroCopyRetire(len);zeroCopyPumpedLock(0,len);zeroCopyPumpedLock(1,len);}   // 0.3.204 (task 21): the same for DYNAMIC buffers in the regular shadow cap
