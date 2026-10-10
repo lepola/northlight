@@ -9,8 +9,10 @@ this repository; runtime/, payload/, variants/, LICENSES/, the launchers); no ga
 magic bytes), no records, logs, caches or machine paths (check_layout.MACHINE) outside runtime/; the pins
 (runtime, DXVK, StormLib) and BUILD-INFO.json agree with the bytes; the payload manifest is exact; the
 StormLib binary verifies (build_stormlib.verify); the Windows runtime has _ctypes, libffi, _hashlib,
-_bz2 and _uuid; launchers: .cmd with CRLF and chcp 65001, .command with LF that passes `bash -n`; neither
-uses the system Python. On a macOS host the macOS package is unpacked and its own Python runs every
+_bz2 and _uuid; the Linux runtime has an executable bin/python3 (libpython linked in) and the stdlib, is
+pruned (no Tcl/Tk, X11 or Berkeley DB code) and ships the licences of what bin/python3 links; Windows and
+Linux carry both pinned DXVK builds; launchers: .cmd with CRLF and chcp 65001, .command with LF that passes
+`bash -n`, .sh with LF, executable, passing `sh -n` and `bash -n`; none uses the system Python. On a macOS host the macOS package is unpacked and its own Python runs every
 shipped entry point with -I -X utf8 --help (that loads the packaged StormLib). A cache zip in
 packages.json is checked against its manifest (allowlist, every sha256).
 """
@@ -38,7 +40,10 @@ FORBIDDEN_PART = {'world-cache', 'records', 'wtf', 'cache', 'logs', 'screenshots
                   'inspection', '__pycache__', 'docs', 'releases'}
 GAME_MAGIC = (b'MPQ\x1a', b'MPQ\x1b', b'WDBC', b'BLP2', b'MD20', b'MD21', b'REVM', b'FGS2', b'FGS3', b'FGL1', b'FCT1',
               b'FCM1')
-TEXT_SUFFIX = {'.py', '.json', '.txt', '.ini', '.inc', '.cmd', '.command', '.md'}
+TEXT_SUFFIX = {'.py', '.json', '.txt', '.ini', '.inc', '.cmd', '.command', '.sh', '.md'}
+LINUX_RUNTIME = ['bin/python3', 'lib/python3.13/os.py', 'lib/python3.13/ctypes/__init__.py',
+                 'lib/python3.13/LICENSE.txt', 'lib/libstorm.so']
+STORMLIB = {'windows': 'runtime/StormLib.dll', 'mac': 'runtime/lib/libstorm.dylib', 'linux': 'runtime/lib/libstorm.so'}
 WINDOWS_RUNTIME = ['python.exe', 'python313.dll', 'python313.zip', 'python313._pth', '_ctypes.pyd', 'libffi-8.dll',
                    '_hashlib.pyd', '_bz2.pyd', '_uuid.pyd', 'StormLib.dll']
 ENTRY_POINTS = ['renderer/northlight_install.py', 'renderer/windows-package/install.py', 'renderer/migrate_mac_proxy.py',
@@ -116,34 +121,39 @@ def verify_installer(path):
     # pins
     runtime_pin = bp.PINS['python_' + plat]
     check(problems, info['runtime']['sha256'] == runtime_pin['sha256'], 'runtime pin differs from BUILD-INFO')
-    lib = 'runtime/StormLib.dll' if plat == 'windows' else 'runtime/lib/libstorm.dylib'
-    check(problems, sha(files.get(lib, b'')) == bp.PINS['stormlib'][('windows' if plat == 'windows' else 'mac') + '_sha256']
-          == info['stormlib_sha256'], 'StormLib differs from its pin')
+    lib = STORMLIB[plat]
+    check(problems, sha(files.get(lib, b'')) == bp.PINS['stormlib'][plat + '_sha256'] == info['stormlib_sha256'],
+          'StormLib differs from its pin')
     with tempfile.TemporaryDirectory() as temp:
         library = Path(temp) / Path(lib).name
         library.write_bytes(files.get(lib, b''))
         storm_problems, _ = build_stormlib.verify(library)
     check(problems, not storm_problems, f'StormLib: {storm_problems}')
-    if plat == 'windows':
-        missing = [n for n in WINDOWS_RUNTIME if 'runtime/' + n not in files]
-        check(problems, not missing, f'Windows runtime lacks {missing}')
+    if plat in bp.PROXY_PLATFORMS:
         check(problems, sha(files.get('payload/' + bp.DXVK_BACKEND, b'')) == bp.PINS['dxvk']['member_sha256'], 'DXVK pin')
         check(problems, info['dxvk']['sha256'] == bp.PINS['dxvk']['sha256'], 'DXVK archive pin')
         check(problems, sha(files.get('payload/' + bp.DXVK2_BACKEND, b'')) == bp.PINS['dxvk2']['member_sha256'], 'DXVK fallback (dxvk2) pin')
         check(problems, info['dxvk_fallback']['sha256'] == bp.PINS['dxvk2']['sha256'], 'DXVK fallback archive pin')
+    if plat == 'windows':
+        missing = [n for n in WINDOWS_RUNTIME if 'runtime/' + n not in files]
+        check(problems, not missing, f'Windows runtime lacks {missing}')
         pinned = runtime_zip()
         if pinned:
             with zipfile.ZipFile(pinned) as z:
                 check(problems, all(files.get('runtime/' + n) == z.read(n) for n in z.namelist() if not n.endswith('/')),
                       'runtime/ differs from the pinned embeddable zip')
     else:
-        licences = {f'LICENSES/python-third-party/{n}.txt': e['sha256'] for n, e in bp.PINS['python_mac_licenses']['files'].items()}
+        licences = {f'LICENSES/python-third-party/{n}.txt': e['sha256'] for n, e in bp.python_licences(plat).items()}
         check(problems, {r: sha(d) for r, d in files.items() if r.startswith('LICENSES/python-third-party/')} == licences,
-              'LICENSES/python-third-party/ differs from python_mac_licenses')
+              f'LICENSES/python-third-party/ differs from python_{plat}_licenses')
         check(problems, modes.get('runtime/bin/python3', 0) & 0o111 and 'runtime/lib/python3.13/os.py' in files,
-              'macOS runtime lacks an executable bin/python3 or its stdlib')
-        check(problems, not [r for r in files if re.match(r'runtime/lib/(tk|tcl|python3\.13/(site-packages|idlelib|tkinter)/)', r)],
-              'macOS runtime not pruned')
+              f'{bp.PLATFORMS[plat]} runtime lacks an executable bin/python3 or its stdlib')
+        kept = sorted(r for r in files if r.startswith('runtime/') and bp.RUNTIME_DROP[plat].match(r[len('runtime/'):]))
+        check(problems, not kept, f'{bp.PLATFORMS[plat]} runtime not pruned: {", ".join(kept[:3])}')
+    if plat == 'linux':
+        missing = [n for n in LINUX_RUNTIME if 'runtime/' + n not in files]
+        check(problems, not missing, f'Linux runtime lacks {missing}')
+        check(problems, files.get('runtime/bin/python3', b'')[:4] == b'\x7fELF', 'Linux runtime bin/python3 is not ELF')
     # launchers
     for name, expected in launchers.items():
         data = files.get(name, b'')
@@ -153,6 +163,12 @@ def verify_installer(path):
         if name.endswith('.cmd'):
             check(problems, data.count(b'\r\n') == data.count(b'\n') and b'chcp 65001' in data and
                   b'runtime\\python.exe" -I -B -X utf8' in data, f'{name}: CRLF/chcp/runtime')
+        elif name.endswith('.sh'):
+            check(problems, b'\r' not in data and modes.get(name, 0) & 0o111, f'{name}: LF and executable')
+            check(problems, data.startswith(b'#!/bin/sh\n') and b'"$PY" -I -B -X utf8' in data and
+                  b'PY="$PKG/runtime/bin/python3"' in data, f'{name}: POSIX sh and the package runtime')
+            shells = ['sh', 'bash'] + (['dash'] if shutil.which('dash') else [])   # macOS's sh is bash: dash where present
+            check(problems, all(shell_syntax(shell, data) for shell in shells), f'{name}: {" / ".join(shells)} -n')
         else:
             check(problems, b'\r' not in data and modes.get(name, 0) & 0o111, f'{name}: LF and executable')
             check(problems, b'"$PKG/runtime/bin/python3" -I -B -X utf8' in data and
@@ -175,6 +191,11 @@ def verify_installer(path):
         problems += smoke
     return {'file': path.name, 'platform': plat, 'files': len(files), 'bytes': path.stat().st_size,
             'sha256': file_sha(path), 'entry_points_run': smoke is not None, 'problems': problems}
+
+
+def shell_syntax(shell, data):
+    """`<shell> -n` accepts the script (a launcher must run under dash's sh as well as bash)."""
+    return subprocess.run([shell, '-n'], input=data, capture_output=True).returncode == 0
 
 
 def runtime_zip():

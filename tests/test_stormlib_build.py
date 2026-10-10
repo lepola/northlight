@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 # northlight-test: requires=zig,stormlib-src slow
-"""scripts/build_stormlib.py: the source tree matches its pin; both targets build, verify (Windows: PE32+
+"""scripts/build_stormlib.py: the source tree matches its pin; every target builds, verifies (Windows: PE32+
 AMD64, the 9 exports mpq.py binds, only KERNEL32/USER32/WININET/UCRT imports, CreateFileW and no ANSI
-file calls; macOS: arm64 @rpath dylib linking only libSystem; neither embeds a build path) and equal
+file calls; macOS: arm64 @rpath dylib linking only libSystem; Linux: x86-64 libstorm.so needing only glibc
+(2.17 or older symbol versions) and exporting only StormLib's API; none embeds a build path) and equal
 the pinned bytes when rebuilt from an empty zig cache. On an arm64 Mac the dylib writes and reads back an
 MPQ through ctypes. With a client configured, the art layer built with the new dylib equals our known
 layers (0.3.199, storm bands and weather textures, rain alpha .4, colour .80, a one-texel core at every mip down to 4 wide, the client's mist puffs at 1:4: the dev HD client 7d49498b..., the stock client bfd8abde...); its game-derived output is deleted
@@ -68,6 +69,24 @@ class StormLibBuild(unittest.TestCase):
         self.assertIn('CreateFileW not imported (not a UNICODE build)', problems)
         self.assertIn('ANSI import CreateFileA (not a UNICODE build)', problems)
         self.assertIn('import MSVCRT.dll not allowed', problems)
+
+    def test_linux_verifier_rejects_leaks_and_new_glibc(self):
+        info = {'machine': 62, 'type': 3, 'soname': 'libstorm.so', 'needed': ['libc.so.6', 'libstdc++.so.6'],
+                'exports': [*bs.REQUIRED_EXPORTS, 'inflate', '_Znwm'], 'versions': ['GLIBC_2.2.5', 'GLIBC_2.34']}
+        original = bs.elf_info
+        try:
+            bs.elf_info = lambda data: info
+            problems, _ = bs.verify_linux(build('linux'))
+        finally:
+            bs.elf_info = original
+        self.assertEqual(problems, ['links libstdc++.so.6', 'exports inflate (not StormLib API)',
+                                    'exports _Znwm (not StormLib API)', 'needs GLIBC_2.34 (newer than glibc 2.17)'])
+
+    def test_linux_library_exports_only_the_api(self):
+        info = bs.elf_info(build('linux').read_bytes())
+        self.assertIn('SFileCreateArchive2', info['exports'])   # mpq.py binds it beyond REQUIRED_EXPORTS
+        self.assertNotIn('inflate', info['exports'])   # the bundled zlib stays private (libpython links its own)
+        self.assertEqual(info['soname'], 'libstorm.so')
 
     @unittest.skipUnless(sys.platform == 'darwin' and platform.machine() == 'arm64', 'needs an arm64 Mac')
     def test_dylib_writes_and_reads_an_mpq(self):

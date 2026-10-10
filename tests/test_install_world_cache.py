@@ -13,7 +13,8 @@
   exits 2; the last stdout line is JSON;
 - --without '' (a foreign z) makes patch-z client content, end to end; a complete cache loses a
   leftover <output>.previous and <output>/<step>.previous; <output>.extract is never touched;
-- stale *.<pid>.tmp files are swept; Windows lock retries.
+- stale *.<pid>.tmp files are swept; Windows lock retries;
+- a failed build names its failed steps' logs and, in human mode, prints their last lines.
 With NORTHLIGHT_STOCK_CLIENT set (read only): the stock test client's install-manifest.json from before
 the digests migrates to exactly the digests its chain has today (patch-z installed since then), so
 only builder source changes can make it stale."""
@@ -239,7 +240,35 @@ def locked_once():
 iwc.LOCK_RETRIES = (0, 0)
 assert iwc.retry(locked_once) == 'ok' and len(calls) == 2
 
-# 6. The stock test client's manifest from before the digests (read only).
+# 6. A failed build names the failed steps' logs; --progress human prints their last lines (tile records left out).
+logs = out / 'failed-logs'
+shutil.rmtree(logs, ignore_errors=True); logs.mkdir()
+scene = logs / 'scene-Azeroth.log'
+scene.write_text(''.join(f'{{"tile": [32, {i}]}}\n' for i in range(40)) + 'Traceback (most recent call last):\n'
+                 '  File "mpq.py", line 12, in <module>\nOSError: libstorm.so: cannot open shared object file\n')
+(logs / 'scene-Kalimdor.log').write_text('fine\n')
+steps = [type('S', (), {'proc': type('P', (), {'returncode': rc})(), 'log': logs / n, 'map': m, 'name': k})()
+         for rc, n, m, k in [(1, 'scene-Azeroth.log', 'Azeroth', 'scene'), (0, 'scene-Kalimdor.log', 'Kalimdor', 'scene'),
+                             (0, 'scene-Northrend.log', 'Northrend', 'scene'), (0, 'lights.log', None, 'lights'),
+                             (0, 'validate.log', None, 'validate')]]
+assert iwc.failed_logs(steps) == [str(scene)]
+for s_ in steps:
+    s_.proc.returncode = 0
+assert iwc.failed_logs(steps, {'Kalimdor': ['32_48']}) == [str(logs / 'scene-Kalimdor.log'), str(logs / 'validate.log')]
+assert iwc.failed_logs(steps[:4]) == [str(scene), str(logs / 'scene-Kalimdor.log'), str(logs / 'scene-Northrend.log')]   # capped
+tail = iwc.log_tail(scene)
+assert tail[-1] == 'OSError: libstorm.so: cannot open shared object file' and not any(t.startswith('{"tile"') for t in tail)
+buffer = io.StringIO()
+iwc.PROGRESS = 'human'
+with contextlib.redirect_stdout(buffer):
+    assert iwc.final('failed', 1, problems=['scene Azeroth failed'], logs=[str(scene)]) == 1
+iwc.PROGRESS = 'json'
+lines = buffer.getvalue().splitlines()
+assert lines[0] == 'World cache build FAILED: scene Azeroth failed' and lines[1] == f'--- last lines of {scene} ---'
+assert '  | OSError: libstorm.so: cannot open shared object file' in lines and json.loads(lines[-1])['logs'] == [str(scene)]
+assert iwc.log_tail(logs / 'missing.log')[0].startswith('(cannot read the log')
+
+# 7. The stock test client's manifest from before the digests (read only).
 stock = os.environ.get('NORTHLIGHT_STOCK_CLIENT')
 if stock:
     stock = Path(stock)

@@ -90,7 +90,7 @@ class Base(unittest.TestCase):
         (root / 'payload').mkdir(parents=True); (root / 'variants').mkdir()
         files = {'celestial-profiles.ini': b'[Sun]\n', 'shadow-range-profiles.ini': b'[Range]\n',
                  'northlight-quality.ini': b'[Quality]\nPreset=Quality\n'}
-        if self.platform == 'windows':
+        if self.platform in fi.PROXY_PLATFORMS:   # Linux: the Windows payload, the game runs under Wine
             files.update({'d3d9.dll': PROXY, 'renderer-backends/dxvk/dxvk_d3d9.dll': b'MZ DXVK: \0v3.1.1\0',
                           'renderer-backends/dxvk2/dxvk2_d3d9.dll': b'MZ DXVK: \0v2.7.1\0'})
         (root / 'payload/d3d9.dll').write_bytes(PROXY)
@@ -260,6 +260,117 @@ class WindowsPreflight(Preflight):
         self.assertIn('too long', self.refused())
 
 
+class LinuxPreflight(WindowsPreflight):
+    platform = 'linux'
+
+    def test_path_length(self):
+        deep = self.base / ('x' * 60) / ('y' * 60) / 'WoW'
+        deep.parent.mkdir(parents=True); self.client.rename(deep); self.client = deep
+        text = self.refused()
+        self.assertIn('too long for the game under Wine', text)
+        self.assertIn('Z:', text)
+        self.assertNotIn('C:\\Games', text)   # Windows advice is wrong on Linux
+
+    def test_path_length_is_the_path_wine_shows(self):
+        # a short drive_c folder that links to a long path elsewhere: Wine shows the game C:\WoW, not Z:\<long path>
+        deep = self.base / ('x' * 60) / ('y' * 60) / 'WoW'
+        deep.parent.mkdir(parents=True); self.client.rename(deep); self.client = deep
+        link = self.base / 'prefix/drive_c/WoW'
+        link.parent.mkdir(parents=True); link.symlink_to(deep)
+        inst = self.installer()
+        self.assertEqual(inst.preflight(inst.resolve_client(link), None), 'enUS')
+        self.assertEqual(fi.wine_path(inst.given), 'C:\\WoW')
+
+    def test_case_variant_of_an_installed_name_is_refused(self):
+        # Wine matches names case-insensitively: a D3D9.dll next to our d3d9.dll could be the one it loads.
+        (self.client / 'D3D9.dll').write_bytes(b'MZ someone else'); (self.client / 'Renderer-Backends').mkdir()
+        (self.client / 'Renderer-Backends/x').write_bytes(b'x')
+        self.before = tree(self.client)
+        text = self.refused()
+        self.assertIn('upper/lower case', text)
+        self.assertIn('D3D9.dll', text)
+        self.assertIn('Renderer-Backends', text)
+
+    def test_case_conflicts_follow_existing_folders(self):
+        (self.client / 'renderer-backends/DXVK').mkdir(parents=True)
+        self.assertEqual(fi.case_conflicts(self.client, ['renderer-backends/dxvk/dxvk_d3d9.dll', 'd3d9.dll']),
+                         ['renderer-backends/DXVK'])
+        self.assertEqual(fi.case_conflicts(self.client, ['wow.exe']), [])   # the exact name is no conflict
+
+
+class LinuxHost(unittest.TestCase):
+    """Linux helpers that need no Linux: the Wine path, dropped folders, the game check."""
+
+    def test_wine_path(self):
+        self.assertEqual(fi.wine_path(Path('/data/u/.wine/drive_c/Games/WoW')), 'C:\\Games\\WoW')
+        self.assertEqual(fi.wine_path(Path('/data/u/Games/WoW')), 'Z:\\data\\u\\Games\\WoW')
+
+    def test_host_platform(self):
+        with patch.object(fi.os, 'name', 'posix'), patch.object(fi.sys, 'platform', 'linux'):
+            self.assertEqual(fi.host_platform(), 'linux')
+
+    def test_dropped_folder_forms(self):
+        base = fp.output_dir() / 'LinuxHost' / 'My WoW'
+        base.mkdir(parents=True, exist_ok=True)
+        inst = fi.Installer(fi.Package(base.parent, 'linux'), 'linux', out=io.StringIO())
+        for raw in [str(base), "'" + str(base) + "'", str(base).replace(' ', '\\ '),
+                    'file://' + str(base).replace(' ', '%20')]:
+            with self.subTest(raw=raw):
+                self.assertEqual(inst.resolve_client(raw), base.resolve())
+
+    def ran(self, procs, mine=()):
+        """linux_running over a fake /proc: {pid: (comm, cmdline argv)}."""
+        root = fp.output_dir() / 'LinuxHost' / self._testMethodName / 'proc'
+        shutil.rmtree(root, ignore_errors=True)
+        for pid, (comm, argv) in procs.items():
+            (root / str(pid)).mkdir(parents=True)
+            (root / str(pid) / 'comm').write_text(comm + '\n')
+            (root / str(pid) / 'cmdline').write_bytes(b''.join(a.encode() + b'\0' for a in argv))
+        (root / 'self').mkdir(parents=True, exist_ok=True)   # not a pid
+        with patch.object(fi, 'ancestors', lambda: set(mine)):
+            return fi.linux_running(root)
+
+    def test_wow_under_wine_is_running(self):
+        self.assertEqual(self.ran({4321: ('wine64-preloader', ['C:\\Games\\WoW\\Wow.exe'])}), ['Wow.exe (Wine)'])
+        self.assertEqual(self.ran({4321: ('Wow.exe', ['wine-preloader'])}), ['Wow.exe (Wine)'])   # comm only
+        self.assertEqual(self.ran({1: ('systemd', ['/sbin/init']), 77: ('wineserver', ['/usr/bin/wineserver'])}), [])
+        self.assertEqual(self.ran({}), [])
+
+    def test_own_launcher_chain_is_not_the_game(self):
+        # `bash install.sh --client /data/u/WoW/Wow.exe`: the launcher matches, but it is an ancestor of this installer
+        launcher = ('bash', ['bash', 'install.sh', '--client', '/data/u/WoW/Wow.exe'])
+        self.assertEqual(self.ran({100: launcher, 101: ('python3', ['python3'])}, mine={100, 101}), [])
+        self.assertEqual(self.ran({100: launcher, 555: ('Wow.exe', ['Z:\\data\\u\\WoW\\Wow.exe'])}, mine={100}),
+                         ['Wow.exe (Wine)'])
+
+    def test_unreadable_process_is_skipped(self):
+        root = fp.output_dir() / 'LinuxHost' / self._testMethodName / 'proc'
+        shutil.rmtree(root, ignore_errors=True); (root / '42').mkdir(parents=True)   # gone or hidden: no comm, no cmdline
+        with patch.object(fi, 'ancestors', lambda: set()):
+            self.assertEqual(fi.linux_running(root), [])
+
+    def test_pattern(self):
+        import re
+        p = re.compile(fi.WINE_WOW, re.I)
+        for cmd in ['C:\\Games\\WoW\\Wow.exe', 'Z:\\data\\u\\WoW\\WOW.EXE -console', '/data/u/WoW/Wow.exe', 'Wow.exe',
+                    '"C:\\Program Files\\WoW\\Wow.exe"', "wine 'Z:\\data\\u\\WoW\\Wow.exe' -opengl"]:
+            self.assertTrue(p.search(cmd), cmd)
+        for cmd in ['/usr/bin/wineserver', 'less /data/u/WoW/Wow.exe.log', 'wine NotWow.exe']:
+            self.assertFalse(p.search(cmd), cmd)
+
+class LinuxOnlyChecks(Base):
+    """The Linux checks stay off on Windows and macOS (case-insensitive file systems, no Wine paths)."""
+    platform = 'windows'
+
+    def test_case_variant_is_not_a_conflict_on_windows(self):
+        (self.client / 'D3D9.DLL').write_bytes(b'MZ someone else'); self.before = tree(self.client)
+        with patch.object(fi, 'case_conflicts', side_effect=AssertionError('Linux only')), \
+                patch.object(fi, 'wine_path', side_effect=AssertionError('Linux only')):
+            report = self.installer().install(self.client)
+        self.assertNotIn('WINEDLLOVERRIDES', self.last_output)
+        self.assertTrue(report['payload'].startswith('installed'))
+
+
 class Install(Base):
     def test_stock_match_extracts_and_rerun_is_noop(self):
         report = self.installer().install(self.client)
@@ -351,6 +462,20 @@ class Install(Base):
         self.zip.unlink()
         self.installer().install(self.client, cache=folder)
         self.assertEqual((self.client / 'world-cache/models/0123.fgs').read_bytes(), CACHE_FILES['models/0123.fgs'])
+
+    def test_patch_z_of_ours_in_another_case_keeps_its_name(self):
+        # Data/Patch-Z.MPQ (an older layer of ours): replaced under that name, never a second patch-z.mpq next to it
+        # (Wine on a case-sensitive file system would see two)
+        old = b'MPQ\x1a older layer'
+        (self.client / 'Data/Patch-Z.MPQ').write_bytes(old); self.before = tree(self.client)
+        with patch.object(fi, 'KNOWN_OURS', fi.KNOWN_OURS | {sha(old)}):
+            report = self.installer().install(self.client)
+        self.assertIn(f'replaced {sha(ART)[:8]} Data/Patch-Z.MPQ', report['art_layer'])
+        self.assertEqual([p.name for p in (self.client / 'Data').iterdir() if p.name.lower() == 'patch-z.mpq'],
+                         ['Patch-Z.MPQ'])
+        self.assertEqual((self.client / 'Data/Patch-Z.MPQ').read_bytes(), ART)
+        self.installer().uninstall(self.client)
+        self.assertEqual(tree(self.client), self.before)
 
     def test_foreign_patch_z_is_part_of_the_client(self):
         (self.client / 'Data/patch-z.mpq').write_bytes(b'someone else'); self.before = tree(self.client)
@@ -746,6 +871,62 @@ class WindowsInstall(Install):
         self.installer().uninstall(self.client)
         self.assertEqual(tree(self.client), self.before)
         self.assertFalse((self.client / 'renderer-backends').exists())
+
+
+class LinuxInstall(WindowsInstall):
+    """Linux runs the Windows payload under Wine: every WindowsInstall test, plus the Wine instructions."""
+    platform = 'linux'
+
+    def test_summary_explains_the_wine_override(self):
+        inst = self.installer()
+        inst.install(self.client)
+        out = inst.out.getvalue()
+        self.assertEqual((self.client / 'northlight-renderer.ini').read_bytes(), b'[Renderer]\r\nBackend=dxvk\r\n')
+        self.assertEqual((self.client / 'renderer-backends/dxvk/dxvk_d3d9.dll').read_bytes(), b'MZ DXVK: \0v3.1.1\0')
+        self.assertIn('WINEDLLOVERRIDES="d3d9=n,b"', out)
+        for launcher in ('Lutris', 'Bottles', 'Proton', 'winecfg'):
+            self.assertIn(launcher, out)
+        self.assertIn('Runner options > DLL overrides', out)   # Lutris rebuilds the variable from this list
+        self.assertIn('does not matter and needs no change', out)   # the prefix's DXVK is not Northlight's
+        self.assertIn('bash install.sh --backend dxvk2', out)
+        self.assertNotIn('Install.cmd', out)
+        uninstall = self.installer()
+        uninstall.uninstall(self.client)
+        self.assertIn('WINEDLLOVERRIDES d3d9=n,b setting', uninstall.out.getvalue())
+        self.assertEqual(tree(self.client), self.before)
+
+    def test_package_stormlib_is_the_shared_object(self):
+        self.assertEqual(fi.Package(self.pkg_root, 'linux').stormlib, self.pkg_root / 'runtime/lib/libstorm.so')
+
+
+class FailureOutput(Base):
+    """A failed pipeline step names its logs and shows their last lines on the console (all platforms)."""
+
+    def test_world_cache_failure_names_the_logs(self):
+        self.variant = None
+        log = self.client / 'world-cache.staging/logs/scene-Azeroth.log'
+
+        def failing(script, args, show=True):
+            if Path(script).name == 'install_world_cache.py':
+                return 1, {'event': 'failed', 'problems': ['scene Azeroth failed'], 'logs': [str(log)]}
+            return self.fake_run(script, args, show)
+        inst = self.installer(); inst.run = failing
+        with self.assertRaises(fi.Failed) as e:
+            inst.install(self.client)
+        text = str(e.exception)
+        self.assertIn('scene Azeroth failed', text)
+        self.assertIn(str(log), text)
+        self.assertNotIn('{"event"', text)   # no JSON dump
+
+    def test_hidden_child_failure_shows_its_tail(self):
+        script = self.base / 'boom.py'
+        script.write_text('print("step one")\nraise SystemExit("libstorm.so: cannot open shared object file")\n')
+        inst = fi.Installer(fi.Package(self.pkg_root, 'mac'), 'mac', out=io.StringIO())
+        code, _ = inst.run(script, [], show=False)
+        out = inst.out.getvalue()
+        self.assertEqual(code, 1)
+        self.assertIn('--- last lines of boom.py (exit 1) ---', out)
+        self.assertIn('  | libstorm.so: cannot open shared object file', out)
 
 
 if __name__ == '__main__':

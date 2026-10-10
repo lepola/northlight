@@ -1,18 +1,19 @@
 #!/usr/bin/env python3
-"""Northlight renderer player installer for macOS (WoWSilicon) and Windows. Never starts the game.
+"""Northlight renderer player installer for macOS (WoWSilicon), Windows and Linux (Wine/Proton). Never starts the game.
 
     northlight_install.py install   [--client C] [--locale xxXX] [--cache ZIP|DIR] [--backend dxvk|dxvk2|native|legacy]
                                  [--no-art-layer] [--no-world-cache] [--jobs N] [--yes]
     northlight_install.py uninstall [--client C] [--yes]
     northlight_install.py status    [--client C]
 
-The launchers (Install Northlight.command, Install.cmd) run this with the package's own Python as
+The launchers (Install Northlight.command, Install.cmd, install.sh) run this with the package's own Python as
 `python -I -B -X utf8`. Install, in this order; nothing is written before the checks pass:
 1. preflight: the game and WoWSilicon are closed; wow.exe and the 3.3.5a base archives are there;
    the locale is known; the client folder is writable, ASCII-only (the renderer opens its files
-   with narrow paths), not under Program Files and short enough (Windows); the package is outside
-   the client; enough disk (and 8 GB RAM for a local build); macOS: WoWSilicon's dlls.txt preload
-   with DXVK is active.
+   with narrow paths), not under Program Files and short enough (Windows; Linux: the path Wine shows
+   the game, wine_path of the folder as given, symlinks kept); the package is outside the client; enough disk (and 8 GB RAM for a local
+   build); macOS: WoWSilicon's dlls.txt preload with DXVK is active; Linux: no name we write exists
+   in another letter case (Wine would see both), and Wow.exe is not running under Wine (/proc).
 2. identify the client's archive chain (client_identity). A client that matches the stock variant
    gets the prebuilt cache: Northlight-cache-stock-<digest12>.zip (or the folder a browser expanded
    it to) from --cache, next to the package, or in Downloads, extracted into world-cache.extract
@@ -24,9 +25,11 @@ The launchers (Install Northlight.command, Install.cmd) run this with the packag
 3. the art layer (patch-z) is always built from the client's own Light*.dbc (build_art_layer.py)
    into the package's work folder and installed through the transaction, unless Data/patch-z.mpq
    or the locale patch-<loc>-z.mpq is someone else's (then it is skipped and reported).
-4. the renderer: Windows installs d3d9.dll, the DXVK backend and the ini files in one transaction
-   (install.py); macOS runs migrate_mac_proxy (mods/d3d9.dll preloaded from
+4. the renderer: Windows and Linux install d3d9.dll, the DXVK backend and the ini files in one transaction
+   (install.py; on Linux the game runs under Wine or Proton, so the payload is the Windows one and the
+   summary says how to make Wine load the game-folder d3d9.dll); macOS runs migrate_mac_proxy (mods/d3d9.dll preloaded from
    dlls.txt; wow.exe is never read or written), then the ini files and the art layer in a transaction.
+A failed pipeline step shows the last lines of its log and the log's path on the console.
 One run per client at a time (<client>/northlight-installer.lock). Rerunning is safe: current parts are skipped. Uninstall restores every transaction of this
 client, newest first, and deletes the world cache only if this installer or install_world_cache
 made it. Every transaction's backups stay in <client>/renderer-backups. Log: <package>/logs/.
@@ -42,6 +45,7 @@ import shutil
 import subprocess
 import sys
 import time
+import urllib.parse
 import zipfile
 from datetime import datetime
 from pathlib import Path, PurePosixPath
@@ -231,14 +235,106 @@ def locked(client):
         path.unlink(missing_ok=True)
 
 
+PROXY_PLATFORMS = ('windows', 'linux')   # the game-folder d3d9.dll proxy with the package's DXVK backends
+# Linux: what the player sets once so that Wine loads the game-folder d3d9.dll (shown after every install).
+WINE_STEPS = [
+    '',
+    'Linux: Wine must load d3d9.dll from the game folder (native before builtin): WINEDLLOVERRIDES="d3d9=n,b".',
+    '  Lutris:  right-click the game > Configure > Runner options > DLL overrides: add d3d9 with the value n,b',
+    '           (Lutris builds WINEDLLOVERRIDES from this list; an environment variable may be overwritten).',
+    '  Bottles: the bottle\'s settings > DLL Overrides (under Advanced in recent versions): d3d9 = Native, then Builtin.',
+    '  Steam (a non-Steam game, Properties > Compatibility: a Proton version): Properties > Launch options:',
+    '           WINEDLLOVERRIDES="d3d9=n,b" %command%',
+    '  Wine:    WINEDLLOVERRIDES="d3d9=n,b" wine Wow.exe, or winecfg > Applications > Wow.exe > Libraries: d3d9 (native, builtin).',
+    'Northlight loads its own DXVK from renderer-backends/, so the DXVK setting of Lutris, Bottles, Proton or the',
+    'Wine prefix does not matter and needs no change. Do not copy a DXVK d3d9.dll into the game folder (it would',
+    'replace Northlight\'s d3d9.dll) and do not use WineD3D modes (PROTON_USE_WINED3D, "DXVK off" with d3d9=b).',
+    'After the first start the game folder has northlight-renderer.log; its first line shows backend=dxvk loaded=1.',
+]
+
+
 def host_platform():
-    return 'windows' if os.name == 'nt' else 'mac' if sys.platform == 'darwin' else None
+    if os.name == 'nt':
+        return 'windows'
+    return 'mac' if sys.platform == 'darwin' else 'linux' if sys.platform.startswith('linux') else None
 
 
 def windows_running():
     out = subprocess.run(['tasklist.exe', '/FI', 'IMAGENAME eq wow.exe', '/FO', 'CSV', '/NH'], capture_output=True,
                          text=True, errors='replace').stdout
     return ['wow.exe'] if 'wow.exe' in out.lower() else []
+
+
+# Wine and Proton start a game as a process whose command line names the Windows path of Wow.exe
+# (C:\...\Wow.exe or Z:\...\Wow.exe, maybe quoted) and whose name (comm) is Wow.exe; a native path ends in /Wow.exe.
+WINE_WOW = r'(^|[\\/"\'])wow\.exe(["\' ]|$)'
+
+
+def ancestors(pid=None):
+    """This process and its parents (/proc/<pid>/stat): a launcher started as `bash install.sh --client .../Wow.exe`
+    must not count as the game."""
+    found, pid = set(), pid or os.getpid()
+    while pid > 1 and pid not in found:
+        found.add(pid)
+        try:
+            pid = int(Path(f'/proc/{pid}/stat').read_text().rsplit(')', 1)[1].split()[1])
+        except (OSError, ValueError, IndexError):
+            break
+    return found
+
+
+def linux_running(proc=Path('/proc')):
+    """Wow.exe running under Wine or Proton: a process other than this installer and its parents whose name (comm,
+    set by Wine) is Wow.exe or whose command line matches WINE_WOW (case-insensitive), in one pass over /proc."""
+    mine, pattern = ancestors(), re.compile(WINE_WOW, re.I)
+    for entry in proc.glob('[0-9]*'):
+        try:
+            if int(entry.name) in mine:
+                continue
+            if (entry / 'comm').read_text(errors='replace').strip().lower() == 'wow.exe' or \
+                    pattern.search((entry / 'cmdline').read_bytes().replace(b'\0', b' ').decode('utf-8', 'replace')):
+                return ['Wow.exe (Wine)']
+        except (OSError, ValueError):
+            continue
+    return []
+
+
+def wine_path(client):
+    """The game folder as Wine shows it to the game: C:\\... inside a prefix's drive_c, else Z:\\<unix path>."""
+    parts = Path(client).parts
+    if 'drive_c' in parts:
+        return 'C:\\' + '\\'.join(parts[len(parts) - parts[::-1].index('drive_c'):])
+    return 'Z:' + str(client).replace('/', '\\')
+
+
+def on_disk(client, name):
+    """name (a client path) as its folder already lists it in another letter case (Data/Patch-Z.MPQ), else name."""
+    path = Path(client) / name
+    try:
+        names = [p.name for p in path.parent.iterdir()]
+    except OSError:
+        return name
+    same = [n for n in names if n.lower() == path.name.lower()]
+    return name if path.name in names or not same else (path.parent / same[0]).relative_to(client).as_posix()
+
+
+def case_conflicts(client, names):
+    """Linux: client paths that differ only in case from a relative path in names (an existing D3D9.dll next to the
+    d3d9.dll we would write, a Renderer-Backends folder, ...). Wine matches names case-insensitively, so it could
+    load either one. Each path is followed as far as it exists with its exact case."""
+    found = set()
+    for name in names:
+        folder = Path(client)
+        for part in PurePosixPath(name).parts:
+            try:
+                entries = [p.name for p in folder.iterdir()]
+            except OSError:
+                break
+            found |= {(folder / e).relative_to(client).as_posix() for e in entries if e != part and e.lower() == part.lower()}
+            if part not in entries:
+                break
+            folder = folder / part
+    return sorted(found)
 
 
 class Package:
@@ -250,7 +346,7 @@ class Package:
         self.version = self.info.get('version', 'dev')
         self.payload = self.root / 'payload'
         self.dll = self.payload / 'd3d9.dll'
-        self.stormlib = self.root / 'runtime' / ('StormLib.dll' if platform == 'windows' else 'lib/libstorm.dylib')
+        self.stormlib = self.root / 'runtime' / {'windows': 'StormLib.dll', 'linux': 'lib/libstorm.so'}.get(platform, 'lib/libstorm.dylib')
         self.variants = {p.stem: read_json(p) for p in sorted((self.root / 'variants').glob('*.json'))}
         self.work = self.root / 'work'
         self.logs = self.root / 'logs'
@@ -288,7 +384,10 @@ class Installer:
         self.yes = yes
         self.out = out or sys.stdout
         self.log = None
-        self.running = (lambda: migrate().running()) if self.platform == 'mac' else windows_running
+        self.given = None   # the game folder as given, symlinks kept (Wine shows the game that path)
+        self.running = (lambda: migrate().running()) if self.platform == 'mac' else \
+            linux_running if self.platform == 'linux' else windows_running
+        self.proxy = self.platform in PROXY_PLATFORMS   # d3d9.dll and DXVK installed by install.py
         self.free_bytes = lambda path: shutil.disk_usage(path).free
         self.ram = None   # installed-memory probe; None = install_world_cache.total_memory
         self.search_dirs = [package.root.parent, package.root, Path.home() / 'Downloads']
@@ -350,8 +449,9 @@ class Installer:
                     pass
         code = proc.wait()
         if code != 0 and not show:
+            self.say(f'--- last lines of {Path(script).name} (exit {code}) ---')
             for line in tail:
-                print('  ' + line, file=self.out, flush=True)
+                print('  | ' + line, file=self.out, flush=True)
         return code, last
 
     # ---- client identity ----
@@ -371,11 +471,14 @@ class Installer:
         if raw is None:
             raw = self.prompt_client()
         text = str(raw).strip().strip('"').strip("'")
-        if self.platform == 'mac':
+        if self.platform == 'linux' and text.startswith('file://'):   # a folder dropped as a URI
+            text = urllib.parse.unquote(text[len('file://'):])
+        if self.platform in ('mac', 'linux'):
             text = text.replace('\\ ', ' ')   # a folder dragged into Terminal
         client = Path(text).expanduser()
         if not client.is_dir():
             raise Refusal(f'Game folder not found: {text}')
+        self.given = Path(os.path.abspath(client))
         return client.resolve()
 
     def prompt_client(self):
@@ -389,6 +492,8 @@ class Installer:
                 self.say(f'  {i}) {path}')
             raw = input('Game folder (a number above, or drag the folder here) and Enter: ').strip()
             return found[int(raw) - 1] if raw.isdigit() and 0 < int(raw) <= len(found) else raw
+        if self.platform == 'linux':
+            return input('Game folder (the folder with Wow.exe, inside your Wine prefix or Steam/Lutris library): ')
         return input('Game folder (the folder with wow.exe): ')
 
     def preflight(self, client, locale):
@@ -412,6 +517,12 @@ class Installer:
                 if base and (client == Path(base) or Path(base) in client.parents):
                     raise Refusal('The game is under Program Files, where writes need administrator rights and '
                                   'are redirected. Move the game folder to for example C:\\Games\\WoW.')
+        if self.platform == 'linux':
+            shown = wine_path(self.given or client)
+            if len(shown) + LONGEST_CACHE_NAME > WINDOWS_MAX_PATH:
+                raise Refusal(f'The game folder path is too long for the game under Wine ({shown}: {len(shown)} '
+                              f'characters; at most {WINDOWS_MAX_PATH - LONGEST_CACHE_NAME}). Move the game folder to a '
+                              'shorter path, for example ~/Games/WoW.')
         entries = {p.name.lower() for p in client.iterdir()}
         if 'wow.exe' not in entries:
             raise Refusal(f'wow.exe is not in {client}. Choose the folder that holds wow.exe.')
@@ -436,6 +547,14 @@ class Installer:
                                f'patch-{locale}-3.mpq') if n.lower() not in local]
         if missing:
             raise Refusal(f'Data/{locale} is missing: ' + ', '.join(missing))
+        if self.platform == 'linux':
+            manifest = read_json(self.pkg.root / 'payload-manifest.json') or []
+            conflicts = case_conflicts(client, [e['path'] for e in manifest] + [
+                INSTALL.CONFIG, INSTALL.LEGACY, CACHE, STAGING, EXTRACT, PREVIOUS, 'renderer-backups', LOCK])
+            if conflicts:
+                raise Refusal('The game folder has files whose names differ only in upper/lower case from the ones '
+                              'Northlight installs, and Wine could load either one. Rename or remove these first: ' +
+                              ', '.join(conflicts))
         busy = self.running()
         if busy:
             raise Refusal('Close these first, then run the installer again: ' + ', '.join(busy))
@@ -461,7 +580,7 @@ class Installer:
             if path.is_file():
                 if INSTALL.package_sha(path) != e['sha256']:
                     raise Refusal(INSTALL.package_problem(e['path'], backend, False, 'payload/' + e['path']))
-            elif self.platform == 'windows' and other:
+            elif self.proxy and other:
                 self.say(f'Note: payload/{e["path"]} is missing (an antivirus product may have removed it); '
                          f'backend {other} will not be available.')
             else:
@@ -577,8 +696,12 @@ class Installer:
                 '--progress', 'human'] + (['--jobs', jobs] if jobs else [])
         code, last = self.run(APP / 'scripts/install_world_cache.py', args)
         if code != 0:
-            raise Failed(f'The world cache build failed (exit {code}): {json.dumps(last) if last else "see the log"}. '
-                         'Run the installer again to resume.')
+            last = last or {}
+            why = last.get('error') or '; '.join(last.get('problems') or []) or 'see the log'
+            logs = ''.join(f'\n  {log}' for log in last.get('logs') or [])
+            raise Failed(f'The world cache build failed (exit {code}): {why}.' +
+                         (f' The last lines of these logs are shown above:{logs}' if logs else '') +
+                         '\nRun the installer again to resume.')
         return (last or {}).get('event', 'done')
 
     def archive_warnings(self, client):
@@ -615,7 +738,9 @@ class Installer:
 
     def art_layer(self, client, locale):
         """({client path: bytes} to install, None, {client path: action}) or ({}, reason it is skipped, {}).
-        The action per target is installed (absent before), replaced (another layer of ours) or kept-identical."""
+        The action per target is installed (absent before), replaced (another layer of ours) or kept-identical.
+        A target that exists in another letter case (Data/Patch-Z.MPQ on Linux) keeps its name on disk, so that
+        Wine never sees two files."""
         if not (client / CACHE / 'fog').is_dir():
             return {}, 'no world cache (its fog zones are an input)', {}
         work = self.pkg.work / 'art-layer'
@@ -625,8 +750,9 @@ class Installer:
                                                          client / CACHE, '--output', work, '--letter', LETTER], show=False)
         report = read_json(work / 'art-layer-manifest.json')
         if code != 0 or not report:
-            raise Failed(f'The art layer build failed (exit {code}); see the log.')
-        layer = {t: (work / t).read_bytes() for t in report['targets']}
+            raise Failed(f'The art layer build failed (exit {code}); its last lines are shown above. '
+                         f'Full output: {self.log.name if self.log else "not logged"}.')
+        layer = {on_disk(client, t): (work / t).read_bytes() for t in report['targets']}
         remove_tree(work)
         steps = report.get('steps', [])
         skipped = sum(1 for step in steps if 'skipped' in step)
@@ -754,14 +880,18 @@ class Installer:
         locale = self.preflight(client, locale)
         self.check_payload(backend)
         marker = INSTALL.safe_path(client, INSTALL.LEGACY_DXVK3_MARKER)   # a linked renderer-backends folder is refused here
-        if self.platform == 'windows' and marker.is_file():
+        if self.proxy and marker.is_file():
             self.say('Note: Northlight no longer switches to DXVK 2.7.1 by itself; the leftover '
                      'renderer-backends\\dxvk\\northlight-dxvk3-init.pending will be removed by this install.')
         if self.platform == 'windows' and backend == 'dxvk':
             self.say('Graphics backend: DXVK 3.1.1. On AMD RX 5000/6000 cards or drivers DXVK 3 does not support, '
                      'run Install.cmd --backend dxvk2 (DXVK 2.7.1). If the game closes at start with DXVK 3, choose '
                      '--backend dxvk2 yourself; Northlight does not switch by itself.')
-        if self.platform == 'windows' and backend == 'legacy':
+        if self.platform == 'linux' and backend == 'dxvk':
+            self.say('Graphics backend: DXVK 3.1.1 from the package (renderer-backends/dxvk), whatever DXVK your Wine '
+                     'prefix or launcher has. It needs a Vulkan 1.3 driver with 32-bit support. If the game closes at '
+                     'start, run bash install.sh --backend dxvk2 (DXVK 2.7.1); Northlight does not switch by itself.')
+        if self.proxy and backend == 'legacy':
             proxy = client / INSTALL.PROXY
             if not ((proxy.is_file() and not INSTALL.is_ours(client)) or (client / INSTALL.LEGACY).is_file()):
                 raise Refusal('--backend legacy keeps the d3d9.dll found in the game folder as the backend, '
@@ -874,7 +1004,7 @@ class Installer:
             backups.append(INSTALL.commit(client, plan, staged, self.pkg.payload, self.pkg.version))
             if files:
                 payload = ('installed: ' if payload.startswith('kept') else payload + '; ') + ', '.join(files)
-        if self.platform == 'windows':   # the leftover of 0.3.189-0.3.194, whatever the backend; only after the commit
+        if self.proxy:   # the leftover of 0.3.189-0.3.194, whatever the backend; only after the commit
             INSTALL.safe_path(client, INSTALL.LEGACY_DXVK3_MARKER).unlink(missing_ok=True)
         report.update(payload=payload, backups=[str(b) for b in backups])
         changed = backups or not report['world_cache'].startswith(('kept', 'not'))
@@ -886,9 +1016,12 @@ class Installer:
             for warning in report['archive_warnings']:
                 self.say('    ' + iwc.archive_warning_text(warning))
         self.say(f'  art layer:   {report["art_layer"]}')
-        self.say(f'  renderer:    {payload}' + (f' (backend {p["backend"]})' if self.platform == 'windows' else ''))
+        self.say(f'  renderer:    {payload}' + (f' (backend {p["backend"]})' if self.proxy else ''))
         for b in backups:
             self.say('  rollback:   ', b)
+        if self.platform == 'linux':
+            for line in WINE_STEPS:
+                self.say(line)
         self.say('Start WoW yourself; this installer never starts the game.')
         return report
 
@@ -925,7 +1058,7 @@ class Installer:
                                       (leftover / 'install-state.json').exists() or
                                       (leftover / 'install-manifest.json').exists()):
                 remove_tree(leftover)
-        if self.platform == 'windows':
+        if self.proxy:
             INSTALL.safe_path(client, INSTALL.LEGACY_DXVK3_MARKER).unlink(missing_ok=True)   # leftover of 0.3.189-0.3.194; no record holds it
             for folder in ('renderer-backends/dxvk', 'renderer-backends/dxvk2', 'renderer-backends/legacy', 'renderer-backends'):
                 try:
@@ -937,6 +1070,9 @@ class Installer:
         if left:
             self.say(left)
         self.say(f'Backups stay in {client / "renderer-backups"}.')
+        if self.platform == 'linux' and (found or owner in ('variant', 'local')):
+            self.say('You can remove the WINEDLLOVERRIDES d3d9=n,b setting you added for Northlight (keep it if '
+                     'another d3d9.dll, such as DXVK in the game folder, needs it).')
         return {'restored': [str(b) for b, _ in found], 'world_cache_deleted': owner in ('variant', 'local'),
                 'proxy_left': bool(left)}
 
@@ -996,7 +1132,7 @@ def main(argv=None):
     ap.add_argument('--locale', help='the game language, e.g. enUS (default: WTF/Config.wtf, else the only one)')
     ap.add_argument('--cache', help='the Northlight-cache-<variant>-<digest>.zip (or its expanded folder)')
     ap.add_argument('--backend', choices=['dxvk', 'dxvk2', 'native', 'legacy'], default=None,
-                    help='Windows: the Direct3D 9 behind the renderer (default dxvk = DXVK 3.1.1, or the dxvk2 or native already '
+                    help='Windows and Linux: the Direct3D 9 behind the renderer (default dxvk = DXVK 3.1.1, or the dxvk2 or native already '
                          'installed; dxvk2 = DXVK 2.7.1 for AMD RX 5000/6000 or drivers DXVK 3 does not support; '
                          'legacy = the d3d9.dll found in the game folder)')
     ap.add_argument('--no-art-layer', action='store_true', help='do not install the lighting art layer (patch-z)')
@@ -1010,11 +1146,11 @@ def main(argv=None):
         ap.error('choose install, uninstall or status')
     platform = host_platform()
     if platform is None:
-        print('ERROR: this installer runs on macOS (WoWSilicon) or Windows.', file=sys.stderr)
+        print('ERROR: this installer runs on macOS (WoWSilicon), Windows or Linux (Wine/Proton).', file=sys.stderr)
         return 2
     root = args.package or package_root()
     if root is None:
-        print('ERROR: run this from an unpacked Northlight package (Install Northlight.command or Install.cmd).',
+        print('ERROR: run this from an unpacked Northlight package (Install Northlight.command, Install.cmd or install.sh).',
               file=sys.stderr)
         return 2
     installer = Installer(Package(root, platform), platform, yes=args.yes)
