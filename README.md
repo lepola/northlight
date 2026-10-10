@@ -29,7 +29,9 @@ Every effect below is on by default and is drawn on top of the game's own frame.
 - **Ambient occlusion.** Screen-space AO with contact shading and a light bloom.
 - **Fog and air.** Volumetric sun and moon light with light shafts through the shadows; soft haze on
   the far landscape and the lowest sky in the game's own fog colour; regional ground fog in forests,
-  wetlands and basins, denser at night, derived from the map.
+  wetlands and basins, denser at night, derived from the map. The sun light comes from the game's sky
+  block; a read that lands between the game's colour copy and its weather rescale keeps the last rescaled
+  colours, so the sun light and its glow in the fog no longer flash brighter for a frame in Duskwood (0.3.207).
 - **Lamps.** Up to 32 nearby lamps, lanterns, braziers and fires light the ground and walls around
   them and glow in the fog. In direct sun lamps dim. Lamp shadows are off by default (`PointShadows=1`
   turns them on): only lights inside buildings cast faint shadows, at dusk and night; street lamps,

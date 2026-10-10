@@ -2,6 +2,9 @@
 #include "world_context.h"
 #include "wmo_shader_signatures.h"
 #include <cstddef>
+#include <cstdint>
+#include <cstring>
+#include <string>
 
 namespace NorthlightWmoContext {
 struct Lighting {
@@ -58,6 +61,37 @@ inline bool decodeCoherentGlobalLighting(const unsigned char* first,const unsign
                                          const float* expectedCamera,Lighting& out) {
     return first&&second&&size>=SkyBytes&&!std::memcmp(first,second,SkyBytes)&&decodeGlobalLighting(first,size,expectedCamera,out);
 }
+// 0.3.207: the game copies the band colours into the sky block and only then rescales its direct
+// (+0x1a8, 0x7f36c6) and ambient (+0x1ac, 0x7f36da) for the weather. Since the command stream the
+// block is read on the replay thread while the game thread may be between the copy and the rescale:
+// a coherent read then holds the unscaled band colours, equal to their own slots (direct = slot 1,
+// ambient = slot 0). In Duskwood (scale ~.8-.93) the sun light and its fog glow flashed brighter for
+// that single frame. A read whose colour equals its slot while the last accepted one was rescaled
+// keeps the last accepted colour; HoldMs of only unscaled reads (the weather ended) accept them again.
+// The direction and the slots of the read are used as read.
+struct LightingHold {
+    static constexpr std::uint32_t HoldMs=500;
+    struct Colour {float value[3]={};bool scaled=false;std::uint32_t at=0;bool valid=false;};
+    Colour direct,ambient;std::string map;unsigned held=0;
+    static bool equalsSlot(const float* colour,std::uint32_t slot){
+        float raw[3];rgb(slot,raw);return colour[0]==raw[0]&&colour[1]==raw[1]&&colour[2]==raw[2];
+    }
+    static bool keep(Colour& c,float* colour,bool unscaled,bool force,std::uint32_t now){
+        const bool hold=c.valid&&c.scaled&&(unscaled||force)&&now-c.at<=HoldMs;
+        if(hold){std::memcpy(colour,c.value,sizeof c.value);return true;}
+        std::memcpy(c.value,colour,sizeof c.value);c.scaled=!unscaled;c.at=now;c.valid=true;return false;
+    }
+    // Returns true when a colour of this read was replaced by the last accepted one.
+    bool filter(Lighting& light,const char* nextMap,std::uint32_t now){
+        if(!nextMap||map!=nextMap){direct=Colour{};ambient=Colour{};map=nextMap?nextMap:"";}
+        if(!light.slotsConsistent)return false; /* the slot layout is unconfirmed: nothing to compare against */
+        const bool heldDirect=keep(direct,light.direct,equalsSlot(light.direct,light.slots[1]),false,now);
+        // The ambient is rescaled after the direct: an unscaled direct means an unscaled ambient.
+        const bool heldAmbient=keep(ambient,light.ambient,equalsSlot(light.ambient,light.slots[0]),heldDirect,now);
+        held+=heldDirect||heldAmbient;
+        return heldDirect||heldAmbient;
+    }
+};
 // Reuse rigid-view validation and coordinate conversion from TerrainContext.
 // view MUST come from the independently verified current camera, never WMO's
 // c31..33 model-view transform.

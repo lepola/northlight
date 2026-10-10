@@ -71,6 +71,29 @@ int main(){
     auto torn=sky;torn[0x1a8]^=1;assert(!decodeCoherentGlobalLighting(sky.data(),torn.data(),sky.size(),eye,light));
     assert(decodeCoherentGlobalLighting(sky.data(),sky.data(),sky.size(),eye,light));
     for(size_t i=0;i<sizeof(kWmoShaderSignatures)/sizeof(kWmoShaderSignatures[0]);++i){assert(signature(kWmoShaderSignatures[i].hash)==kWmoShaderSignatures+i);if(i)assert(kWmoShaderSignatures[i-1].hash<kWmoShaderSignatures[i].hash);}
+    { /* 0.3.207: a read between the colour copy and the weather rescale keeps the last rescaled colours (Duskwood flash) */
+        auto read=[](std::uint32_t direct,std::uint32_t ambient){Lighting l;l.slotsConsistent=true;l.slots[1]=0xff84bce2;l.slots[0]=0xff3a6a9a;
+            rgb(direct,l.direct);rgb(ambient,l.ambient);return l;};
+        const std::uint32_t scaledDirect=0xff7bafd3,scaledAmbient=0xff366290,rawDirect=0xff84bce2,rawAmbient=0xff3a6a9a;
+        LightingHold hold;Lighting l=read(scaledDirect,scaledAmbient);
+        assert(!hold.filter(l,"Azeroth",1000));
+        l=read(rawDirect,rawAmbient);assert(hold.filter(l,"Azeroth",1016)); /* both colours back to the rescaled ones */
+        {float d[3],a[3];rgb(scaledDirect,d);rgb(scaledAmbient,a);for(unsigned i=0;i<3;++i)assert(l.direct[i]==d[i]&&l.ambient[i]==a[i]);}
+        l=read(rawDirect,scaledAmbient);assert(hold.filter(l,"Azeroth",1032)); /* direct caught alone */
+        l=read(scaledDirect,rawAmbient);assert(hold.filter(l,"Azeroth",1040)); /* between the two rescales */
+        {float a[3];rgb(scaledAmbient,a);assert(l.ambient[0]==a[0]&&l.ambient[2]==a[2]);}
+        l=read(0xff7aaed2,0xff356190);assert(!hold.filter(l,"Azeroth",1048)); /* a new rescaled colour is taken as read */
+        l=read(rawDirect,rawAmbient);assert(hold.filter(l,"Azeroth",1500)); /* within HoldMs of the last accepted read */
+        l=read(rawDirect,rawAmbient);assert(!hold.filter(l,"Azeroth",1549)); /* the weather ended: unscaled reads accepted after HoldMs */
+        {float d[3];rgb(rawDirect,d);assert(l.direct[1]==d[1]);}
+        l=read(rawDirect,rawAmbient);assert(!hold.filter(l,"Azeroth",1565)); /* and kept: the last accepted read is unscaled */
+        l=read(scaledDirect,scaledAmbient);assert(!hold.filter(l,"Azeroth",1580));
+        l=read(rawDirect,rawAmbient);assert(!hold.filter(l,"Kalimdor",1596)); /* a new map forgets the hold */
+        l=read(scaledDirect,scaledAmbient);assert(!hold.filter(l,"Kalimdor",1612));
+        l=read(rawDirect,rawAmbient);l.slotsConsistent=false;assert(!hold.filter(l,"Kalimdor",1628)); /* unconfirmed slot layout: as read */
+        assert(hold.held==4);
+    }
+    std::puts("PASS sky block reads between the colour copy and the weather rescale keep the last rescaled colours");
     std::puts("PASS 361 independent camera rotations, exact WMO ambient/direct/source sign and prelit/unknown rejection");
     std::puts("PASS engine sky RGB/255, fresh camera/day/direction checks, torn snapshot and malformed input rejection");
     std::puts("PASS all1967 exact WMO-only shader identities and sorted lookup");
