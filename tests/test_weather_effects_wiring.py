@@ -48,7 +48,7 @@ checks['hlsl: c24.y (softness) still unread']='PassInfo.y' not in h.replace('sof
 gi=h[h.index('float4 WorldGI('):h.index('// Four POINT reads work')]
 checks['hlsl WorldGI: no weather code (it is at 31 temps)']='WeatherInfo' not in gi
 checks['hlsl: no WorldWet shader; WeatherInfo.y only the fog clouds\' folded bank top (0.3.199 optimisation)']='WorldWet' not in h and h.count('WeatherInfo.y')==1 and 'mad(nL,CloudInfo[2].z,WeatherInfo.y)' in h
-checks['render: the weather adds no pass of its own (quad count 16, shader creations 21 with the 0.3.199 fog clouds and fog temporal)']=(w.count('quad(')==16 and w.count('CreatePixelShader')==21) and 'wetPS' not in w
+checks['render: the weather adds no pass of its own (quad count 17, shader creations 22 with the 0.3.199 fog clouds and fog temporal and the 0.3.205 lamp fog combine quad and shader)']=(w.count('quad(')==17 and w.count('CreatePixelShader')==22) and 'wetPS' not in w
 # disc and veil
 checks['discs: gain atomic, default 1, opacity and glare weights only, veil inherits']=(
     'std::atomic<float> weatherGain{1.f};' in dr and 'c[9][3]=glare?disc.opacity:disc.opacity*weatherGain.load(std::memory_order_relaxed);' in dr

@@ -38,7 +38,9 @@ checks['source: debug views (PassInfo.z != 0) do not touch the mask']=('RainMask
 wc=manifest['WorldComposite']
 checks['manifest: WorldComposite samples s13, <= 512 slots, < 32 temporaries']=(13 in wc['samplers'] and wc['static_instruction_slots']<=512 and wc['temporary_registers']<32)
 checks['manifest: WorldComposite bytecode changed']=(wc['sha256']!=BEFORE['WorldComposite'])
-checks['manifest: every other entry byte-identical to 0.3.200']=(set(manifest)==set(BEFORE) and all(manifest[n]['sha256']==s for n,s in BEFORE.items() if n!='WorldComposite'))
+# 0.3.205 (gh#20): LocalFog changed on purpose (it returns the raw batch sum and the capped peaks), LocalFogCombine is new
+checks['manifest: every other entry byte-identical to 0.3.200 (LocalFog changed on purpose, LocalFogCombine new)']=(set(manifest)==set(BEFORE)|{'LocalFogCombine'} and all(manifest[n]['sha256']==s for n,s in BEFORE.items() if n not in ('WorldComposite','LocalFog'))
+    and manifest['LocalFog']['sha256']!=BEFORE['LocalFog'])
 checks['compiled: WorldComposite.bin exists']=(fp.COMPILED/'WorldComposite.bin').exists()
 
 # numeric reference of the blend: lerp(fogged, unfogged, mask)

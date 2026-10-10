@@ -1,5 +1,5 @@
 {
-  "source_sha256": "2e0ab422e561413d3ea21d87e7f744cb63bd5da83bddbe363b17a9e1517868c8",
+  "source_sha256": "87d006fffd7136d874508fcf6ce0887279255d927a772aae2b823216b9c17fc5",
   "compiler": "Wine d3dcompiler_47 D3DCompile",
   "game_launched": false,
   "shaders": {
@@ -340,30 +340,50 @@
     },
     "LocalFog": {
       "target": "ps_3_0",
-      "bytes": 7932,
-      "sha256": "bf1b7073635c9d064779277099aab540516464d3f0016a150e6666c639e973a7",
-      "static_instruction_slots": 447,
+      "bytes": 8332,
+      "sha256": "60fa0c9e83b0d11caa370ee289d5c6cee36aa76d787d03220ec536e15d32316f",
+      "static_instruction_slots": 473,
       "temporary_registers": 5,
       "samplers": [
         1,
         11
       ],
       "instructions": {
-        "mul": 113,
+        "mul": 123,
         "frc": 1,
-        "add": 133,
-        "max": 36,
+        "add": 139,
+        "max": 42,
         "min": 17,
-        "mov": 29,
+        "mov": 30,
         "texldl": 2,
         "cmp": 52,
         "if": 1,
-        "rcp": 30,
+        "rcp": 33,
         "else": 1,
         "endif": 1,
         "dp3": 9,
         "rsq": 10,
         "abs": 8
+      }
+    },
+    "LocalFogCombine": {
+      "target": "ps_3_0",
+      "bytes": 560,
+      "sha256": "fe95988ac7c43519c7b120e07afb65914142ad70670535578cd321e6adc4f9fb",
+      "static_instruction_slots": 23,
+      "temporary_registers": 2,
+      "samplers": [
+        9
+      ],
+      "instructions": {
+        "mov": 5,
+        "texldl": 1,
+        "max": 6,
+        "add": 1,
+        "rcp": 2,
+        "mul": 5,
+        "log": 1,
+        "exp": 1
       }
     },
     "SourceVisibilityPS": {

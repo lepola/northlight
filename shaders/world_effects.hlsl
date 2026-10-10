@@ -722,7 +722,9 @@ float4 WorldFog(float2 uv:TEXCOORD0):COLOR0 {
 // in-scattering of an isotropic point source along the view ray in closed form,
 // integral of a softened inverse-square source, tapered to zero at its range,
 // with the fog extinction sampled at the light. Unshadowed; added to the
-// scattering buffer before its blur, soft-capped like the celestial term.
+// scattering buffer before its blur. 0.3.205 (gh#20): the batches of four lights add their raw sums into a half-resolution accumulator
+// (LocalFog) and LocalFogCombine soft-caps that total once, so the glow does not depend on how the closest-first lights are grouped:
+// a per-batch cap made overlapping glows sum to about 1x the cap in one batch and 2x when a lamp swapped into another batch (flicker).
 float atanFast(float x){
     // Max error ~0.005 rad, no transcendental instructions.
     float a=abs(x);float r=a<=1?a*(.785398+.273*(1-a)):1.570796-(1/a)*(.785398+.273*(1-1/a));
@@ -733,8 +735,9 @@ float4 LocalFog(float2 uv:TEXCOORD0):COLOR0 {
     float depth=normalizedDepth(uv);float3 endpoint=affinePoint(viewPositionDistance(uv,receiverDistance(uv,min(depth,.99999))),InverseView);
     float3 ray=endpoint-Camera.xyz;float D=min(length(ray),max(FogInfo.w,0));
     ray*=rsqrt(max(dot(ray,ray),1e-12));
-    float3 result=0;
-    // Four lights per pass (SM3 slot budget); up to sixteen across batches.
+    float3 result=0;float capped=0;
+    // Four lights per pass (SM3 slot budget); up to sixteen across batches. 0.3.205: about 473 of the 512 slots are used (the capped
+    // peak in alpha added ~26), so a new per-light term here needs a slot count first (shaders/world-shader-build.json).
     [unroll]for(int i=0;i<4;++i){
         float3 oc=Camera.xyz-LocalLightPos[i].xyz;
         float b=dot(oc,ray);float h2=max(dot(oc,oc)-b*b,0);
@@ -752,11 +755,26 @@ float4 LocalFog(float2 uv:TEXCOORD0):COLOR0 {
         // ray's closest approach to the light inside the integrated span. The glow's bright core sits there; with only the hard FogRange.x
         // start it was cut off within a unit or two of walking, so the glow popped while approaching a lamp (game test).
         float nearGlow=saturate((clamp(-b,t0,t1)-FogRange.x)*FogRange.y);nearGlow*=nearGlow*(3-2*nearGlow);
-        result+=LocalLightColor[i].rgb*(integral*LocalLightFog[i].x*nearGlow);
+        float3 lamp=LocalLightColor[i].rgb*(integral*LocalLightFog[i].x*nearGlow);
+        result+=lamp;
+        // 0.3.205 (gh#20): the lamp's own capped peak, summed in alpha for LocalFogCombine's effective lamp count.
+        float lampPeak=max(lamp.r,max(lamp.g,lamp.b))*FogRange.z;capped+=FogRange.w*lampPeak/(FogRange.w+lampPeak);
     }
-    float3 scatter=result*FogRange.z;
+    return float4(result*FogRange.z,capped);
+}
+// 0.3.205 (gh#20): the cap over everything the batches accumulated (rgb: raw sum, a: sum of every lamp's own capped peak); the accumulator is bound as
+// FogBuffer (s9) and read at its own texel. A single cap over the total alone made overlapping saturated glows 0.25-0.45x the old per-batch look (the glows
+// are deep in the cap, peak/w about 70-100), so the capped total is boosted by the effective lamp count n_eff = sum of capped peaks / capped total peak (>= 1,
+// exactly 1 for a single lamp): overlapping saturated glows brighten as n_eff^0.6. That reproduces the pre-0.3.205 per-batch look on average while the result
+// depends only on the set of lamps, not on how the closest-first batches group them. 0.6 was fitted offline against the per-batch cap on a lamp-road model
+// (tests/test_local_fog_batching.py).
+float4 LocalFogCombine(float2 uv:TEXCOORD0):COLOR0 {
+    float4 acc=tex2Dlod(FogBuffer,float4(uv,0,0));
+    float3 scatter=acc.rgb;
     float peak=max(scatter.r,max(scatter.g,scatter.b));
     scatter*=FogRange.w/(FogRange.w+peak);
+    float capPeak=max(scatter.r,max(scatter.g,scatter.b));
+    scatter*=pow(max(acc.a/max(capPeak,1e-6),1),.6);
     return float4(scatter,0);
 }
 float4 upsampleFog(float2 uv,float centerDepth) {

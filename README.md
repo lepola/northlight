@@ -33,7 +33,8 @@ Every effect below is on by default and is drawn on top of the game's own frame.
 - **Lamps.** Up to 32 nearby lamps, lanterns, braziers and fires light the ground and walls around
   them and glow in the fog. In direct sun lamps dim. Lamp shadows are off by default (`PointShadows=1`
   turns them on): only lights inside buildings cast faint shadows, at dusk and night; street lamps,
-  lanterns and torches never do.
+  lanterns and torches never do. Overlapping lamp glows are capped once over all lamps (0.3.205), so the
+  glow no longer flickers when walking or riding past rows of lamps.
 - **Lighting art layer.** An MPQ patch (`patch-z`) built from your client's own `Light*.dbc`: retuned
   outdoor clear-weather light and fog colours, warmer Mulgore, denser Stormwind day fog. Storm weather
   gets darker light and fog bands. Sky models
