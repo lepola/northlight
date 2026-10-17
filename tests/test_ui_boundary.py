@@ -30,17 +30,16 @@ pub=r[r.index('void uiFallbackPublish(){'):r.index('void uiFallbackEndFrame(')]
 checks['stream hash: one writer (uiFallbackPublish: learned VS while armed, else 0), called after the end-of-frame and forget changes']=(r.count('learnedUiVsHash.store(')==1 and 'learnedUiVsHash.store(want,std::memory_order_relaxed)' in pub and 'uiFallback.armed()?uiFallbackVsHash(uiFallback.learnedVs()):0' in pub
     and ef.index('uiFallback.endFrame(kind)')<ef.index('uiFallbackPublish();') and 'uiFallback.forget(reinterpret_cast<std::uintptr_t>(obj));uiFallbackPublish();' in pub)
 checks['end frame: active, lost and no-candidate logs; a disarm after collecting is logged once, stock (never collecting) stays silent']=(all(x in ef for x in ('fallback lost; relearning','fallback active','fallback: no candidate'))
-    and 'const bool active=uiFallback.collecting();' in ef and 'if(active)logf("EFFECT boundary fallback disarmed: stock UI shaders seen frame=%u where=%s"' in ef
-    and ef.index('if(uiFallback.disarmed()){stockPairNoWorld=hashBoundaryThisFrame=fallbackBoundaryThisFrame=false;return;}')<ef.index('const bool active='))
+    and 'const bool active=uiFallback.collecting();' in ef and 'if(active)logf("EFFECT boundary fallback disarmed: stock UI shaders seen frame=%u where=world"' in ef
+    and ef.index('if(uiFallback.disarmed()){hashBoundaryThisFrame=fallbackBoundaryThisFrame=false;return;}')<ef.index('const bool active='))
 checks['end frame runs before clearFrame and the periodic frame line']=r.index('uiFallbackEndFrame();\n')<r.index('logf("frame=%u applied=%u')<r.index('{CpuScope cpu(sampledFrame?&cleanup:nullptr);clearFrame();}') and 'uiAfterTerrain=%u uiFallback=%u uiFallbackState=%c"' in r
 checks['shader creation forgets the identity']=r.count('uiFallbackForget(*out);')==2
 checks['ui_boundary.h is pure']=not any(x in h for x in ('windows.h','d3d9','Windows.h','<vector>','new '))
 hb2=r[r.index('} else if (tag==2) {'):r.index('++uiAfterTerrain;')]
-checks['pre-world stock UI pair: noted while not disarmed, disarms only at the end of a frame without world']=('if(!terrain){if(!uiFallback.disarmed()&&!stockPairNoWorld&&stockUiPair())stockPairNoWorld=true;return;}' in hb2
-    and ef.index('const bool noWorldPair=stockPairNoWorld&&!terrain;')<ef.index('stockPairNoWorld=false;\n')<ef.index('if(noWorldPair)uiFallback.onHashBoundary();else result=uiFallback.endFrame(kind);'))
+checks['pre-world stock UI cannot disarm the fallback: only a world hash boundary does']=('if(!terrain)return;' in hb2
+    and 'stockPairNoWorld' not in r and 'stockUiPair' not in r and '.onHashBoundary(' not in r
+    and 'auto result=uiFallback.endFrame(kind);' in ef)
 checks['periodic frame line shows the fallback state (d disarmed, a armed, l learning), no new line on stock']="uiFallback=%u uiFallbackState=%c" in r and "uiFallback.disarmed()?'d':uiFallback.armed()?'a':'l'" in r
-sp=r[r.index('bool stockUiPair(){'):r.index('unsigned long long uiFallbackVsHash(')]
-checks['stockUiPair: the hash test (UI PS tag, c3 via clipWOne), no state writes']='itp->second==2' in sp and 'GetVertexShaderConstantF(3,w,1)' in sp and 'clipWOne(w)' in sp and 'Set' not in sp
 checks['fallback fires at most once a frame (renderEffects may return without applied)']='fallbackBoundaryThisFrame||' in fb[:fb.index('IDirect3DPixelShader9* ps')]
 for name,ok in checks.items():print(('PASS ' if ok else 'FAIL ')+name)
 assert all(checks.values())

@@ -365,7 +365,7 @@ class Device final : public GuardedMirrorDevice {
     bool rainMaskCleared=false,rainMaskDrawn=false,rainMaskFrame=false,rainMaskOk=false;unsigned rainMaskDraws=0;bool rainMaskMismatchLogged=false; /* rainMaskCleared: this frame's mask start (depth snapshot + clear) ran */
     IDirect3DTexture9* rainDepth=nullptr;IDirect3DPixelShader9 *rainMrtPS=nullptr,*rainScrubPS=nullptr;bool rainMrtBound=false,rainDepthOk=false,rainCapsChecked=false,rainCapsOk=false,rainSkipLogged=false;unsigned rainMrtRuns=0,rainMaskSkips=0;DWORD rainMrtPrev[1]={};bool rainMrtPrevKnown[1]={};
     /* 0.3.203 (task 17): fallback effect boundary when the UI shaders are replaced by another module (font mods); learned from draw state, see uiFallbackDraw. */
-    NorthlightUiBoundary::Arming uiFallback;bool hashBoundaryThisFrame=false,fallbackBoundaryThisFrame=false,stockPairNoWorld=false,uiFallbackNoCandidateLogged=false;unsigned uiFallbackBoundaries=0;std::uint64_t uiFallbackPublished=0; /* the value last stored in NorthlightStream::learnedUiVsHash */
+    NorthlightUiBoundary::Arming uiFallback;bool hashBoundaryThisFrame=false,fallbackBoundaryThisFrame=false,uiFallbackNoCandidateLogged=false;unsigned uiFallbackBoundaries=0;std::uint64_t uiFallbackPublished=0; /* the value last stored in NorthlightStream::learnedUiVsHash */
     IDirect3DVertexShader9* triageVs=nullptr;IDirect3DPixelShader9* triagePs=nullptr;DWORD triageZw=0;float triageC3[4]={};unsigned triageDraws=0; /* most recent post-terrain draw rejected by zwrite or the c3/rows test while learning (identities only, never dereferenced) */
     bool failed = false, projectionValid = false, key10 = false, key12=false;
     // 0.3.200 (frame markers): diagnostics only, while northlight-frame-markers.txt exists in the game folder at device creation: two 40x40
@@ -1862,7 +1862,7 @@ private:
             if(gateFrame)++gateCounts.fullPasses;
         } else if (tag==2) {
             ++uiDraws;
-            if(!terrain){if(!uiFallback.disarmed()&&!stockPairNoWorld&&stockUiPair())stockPairNoWorld=true;return;} /* 0.3.203 (task 17): the stock UI pair in a frame without any world (login, glue, loading screen) disarms the fallback at the frame's end; font mods swap the pair at creation */
+            if(!terrain)return; // Login/loading UI can use stock shaders even when the in-world UI is replaced by a font mod.
             ++uiAfterTerrain;
             IDirect3DPixelShader9* ps=nullptr;
             const bool borrowed=ext->peekPixelShader(ps); // identity lookup only
@@ -1905,14 +1905,6 @@ private:
             logf("EFFECT boundary frame=%u draw=%u kind=ui-fallback z=%lu zwrite=%lu blend=%lu",frame,drawCalls,(unsigned long)z,(unsigned long)zw,(unsigned long)blend);}
         renderEffects();spellReplay();
     }
-    // 0.3.203 (task 17): the hash test of the boundary (UI-tagged PS bound, c3=(0,0,0,1)), for the UI draws before the world; read only until the fallback is disarmed.
-    bool stockUiPair(){
-        IDirect3DPixelShader9* ps=nullptr;
-        const bool borrowed=ext->peekPixelShader(ps); // identity lookup only
-        if(!borrowed&&(FAILED(ext->GetPixelShader(&ps))||!ps))return false;
-        auto itp=psTags.find(ps);const bool isUI=itp!=psTags.end()&&itp->second==2;if(!borrowed)drop(ps);
-        float w[4];return isUI&&SUCCEEDED(ext->GetVertexShaderConstantF(3,w,1))&&NorthlightUiBoundary::clipWOne(w);
-    }
     unsigned long long uiFallbackVsHash(std::uintptr_t id)const{auto it=vsHashes.find(reinterpret_cast<IDirect3DVertexShader9*>(id));return it==vsHashes.end()?0ull:(unsigned long long)it->second;}
     // The one writer of NorthlightStream::learnedUiVsHash (read by StreamDevice::onDraw on the game thread): the learned VS hash while armed, else 0.
     // Called after every change of uiFallback's state.
@@ -1924,17 +1916,14 @@ private:
     // 0.3.203 (task 17): per-frame fallback bookkeeping, before clearFrame() resets terrain/applied.
     void uiFallbackEndFrame(){
         using K=NorthlightUiBoundary::Arming::FrameKind;
-        if(uiFallback.disarmed()){stockPairNoWorld=hashBoundaryThisFrame=fallbackBoundaryThisFrame=false;return;} /* stock after its first frames */
+        if(uiFallback.disarmed()){hashBoundaryThisFrame=fallbackBoundaryThisFrame=false;return;} /* stock after its first world boundary */
         const bool active=uiFallback.collecting(); /* stock never collects: its disarm below stays silent */
-        const bool noWorldPair=stockPairNoWorld&&!terrain; /* a world frame's pre-terrain UI draws (portrait, minimap compositing) never disarm */
-        stockPairNoWorld=false;
         const K kind=(!enabled||failed)?K::Neutral:hashBoundaryThisFrame?K::WorldHash:fallbackBoundaryThisFrame?K::WorldFallback:!terrain?K::NoWorld:applied?K::Neutral:K::WorldMissed;
         auto ph=[&](std::uintptr_t id){auto it=psHashes.find(reinterpret_cast<IDirect3DPixelShader9*>(id));return it==psHashes.end()?0ull:(unsigned long long)it->second;};
-        auto result=NorthlightUiBoundary::Arming::Result::None;
-        if(noWorldPair)uiFallback.onHashBoundary();else result=uiFallback.endFrame(kind);
+        auto result=uiFallback.endFrame(kind);
         uiFallbackPublish();
         if(uiFallback.disarmed()){
-            if(active)logf("EFFECT boundary fallback disarmed: stock UI shaders seen frame=%u where=%s",frame,noWorldPair?"no-world":"world");
+            if(active)logf("EFFECT boundary fallback disarmed: stock UI shaders seen frame=%u where=world",frame);
             hashBoundaryThisFrame=fallbackBoundaryThisFrame=false;return;
         }
         if(result==NorthlightUiBoundary::Arming::Result::Armed)

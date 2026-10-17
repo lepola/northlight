@@ -56,6 +56,21 @@ int main(){
         frames(a,FK::WorldMissed,119,40,&armed);assert(armed==0&&!a.armed());
         frames(a,FK::WorldMissed,1,40,&armed);assert(armed==1&&a.armed());
     }
+    { // Loading-screen stock UI must not poison learning, or disarm a learned in-world font shader.
+        Arming a;unsigned armed=0;
+        frames(a,FK::NoWorld,600,40,&armed);
+        assert(!a.disarmed()&&!a.collecting()&&armed==0);
+        for(unsigned f=0;f<Arming::kArmFrames;++f){
+            if(a.collecting())for(unsigned i=0;i<40;++i)a.noteCandidate(0xB,0x2);
+            if(a.endFrame(FK::WorldMissed)==R::Armed)++armed;
+        }
+        assert(armed==1&&a.isBoundary(0xB,0x2));
+        frames(a,FK::NoWorld,600,40,&armed);
+        assert(a.armed()&&!a.disarmed()&&a.isBoundary(0xB,0x2));
+        frames(a,FK::WorldFallback,1);assert(a.armed());
+        // A genuine stock boundary after world draws still takes precedence.
+        frames(a,FK::WorldHash,1);assert(a.disarmed()&&!a.armed());
+    }
     { // (d) low density does not arm; rising density does
         Arming a;unsigned armed=0;frames(a,FK::WorldMissed,Arming::kArmFrames,2,&armed);assert(armed==0&&a.learning()&&a.candidateStreak()==0);
         frames(a,FK::WorldMissed,Arming::kArmFrames,12,&armed);assert(armed==1&&a.isBoundary(0xA,0x1));
