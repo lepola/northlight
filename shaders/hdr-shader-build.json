@@ -1,0 +1,66 @@
+{
+  "source_sha256": "e6fa4dbeb16256ed853fa32dfa0c7a58eef1b455462c25d9b13da14ec41b562e",
+  "compiler": "Microsoft d3dcompiler_47 10.0.17134.12 IEEE strict",
+  "compiler_sha256": "4432bbd1a390874f3f0a503d45cc48d346abc3a8c0213c289f4b615bf0ee84f3",
+  "game_launched": false,
+  "shaders": {
+    "HdrUi-ps_2_0": {
+      "static_instruction_slots": 24,
+      "temporary_registers": 3,
+      "samplers": [],
+      "instructions": {
+        "add": 4,
+        "rcp": 1,
+        "cmp": 4,
+        "mul": 6,
+        "mov": 3,
+        "log": 3,
+        "exp": 3
+      },
+      "target": "ps_2_0",
+      "sha256": "c42954dc67133c42b5377397c0efd5dd78c193b41106c349cc9642aec2cd7531",
+      "bytes": 560
+    },
+    "HdrUi-ps_3_0": {
+      "static_instruction_slots": 24,
+      "temporary_registers": 3,
+      "samplers": [],
+      "instructions": {
+        "add": 4,
+        "rcp": 1,
+        "cmp": 4,
+        "mul": 6,
+        "mov": 2,
+        "max": 1,
+        "log": 3,
+        "exp": 3
+      },
+      "target": "ps_3_0",
+      "sha256": "8dbddf08208ac1574f79bec264ac01de129c2d5c2f3d8eae447927e313a711d5",
+      "bytes": 588
+    },
+    "HdrWorld": {
+      "static_instruction_slots": 35,
+      "temporary_registers": 3,
+      "samplers": [
+        0
+      ],
+      "instructions": {
+        "texld": 1,
+        "max": 3,
+        "mov": 2,
+        "add": 5,
+        "mul": 10,
+        "log": 4,
+        "exp": 4,
+        "cmp": 3,
+        "dp3": 1,
+        "rcp": 1,
+        "min": 1
+      },
+      "target": "ps_3_0",
+      "sha256": "b6390c35c63415b212fa4a4e505633387baac204ea54b37d788835569248b97d",
+      "bytes": 864
+    }
+  }
+}

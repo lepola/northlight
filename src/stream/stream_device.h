@@ -648,6 +648,7 @@ private:
             if(!k){Info in;in.w=sc0->pp.BackBufferWidth;in.h=sc0->pp.BackBufferHeight;in.fmt=unsigned(sc0->pp.BackBufferFormat);in.usage=D3::kUsageRT;in.pool=D3::kPoolDefault;in.ms=unsigned(sc0->pp.MultiSampleType);in.msq=sc0->pp.MultiSampleQuality;
                    k=new StreamSurface(&c,in,sc0,nullptr);k->refs.store(0);k->use.store(0);sc0->kids[i]=k;}
             k->info.w=sc0->pp.BackBufferWidth;k->info.h=sc0->pp.BackBufferHeight;k->info.fmt=unsigned(sc0->pp.BackBufferFormat);
+            k->info.ms=unsigned(sc0->pp.MultiSampleType);k->info.msq=sc0->pp.MultiSampleQuality;
             if(k->inner)continue;
             IDirect3DSurface9* b=nullptr;
             if(i<n&&SUCCEEDED(sc->GetBackBuffer(i,(D3DBACKBUFFER_TYPE)0,&b))&&b){c.reg.bindInner(k,b);k->dead.store(false);}else k->dead.store(true);

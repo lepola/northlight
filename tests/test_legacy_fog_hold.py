@@ -34,9 +34,10 @@ def body(text, start):
 
 def wiring():
     terrain = body(WORLD, 'void terrainContext()')
-    assert 'if(valid||failed)return;' in terrain
+    assert 'if(failed)return;' in terrain
+    assert 'if(valid){if(!legacyFogKnown){readOriginalFog(12,true);if(legacyFogKnown)traceFog=1;}return;}' in terrain
     assert 'readOriginalFog(12,true);if(legacyFogKnown)traceFog=1;' in terrain[terrain.index('valid=true;projection[0]'):]
-    assert 'legacyFogKnown=fogKnown;' in body(WORLD, 'void readOriginalFog(')
+    assert 'if(fogKnown){legacyFog=measured;legacyFogKnown=true;}' in body(WORLD, 'void readOriginalFog(')
     reset = 'valid=false;traceContext=0;traceFog=0;legacyFogKnown=false;'
     assert reset in WORLD and 'legacyFog=NorthlightLegacyFog::Constants{}' in WORLD[WORLD.index(reset):WORLD.index(reset)+200]
     assert 'NorthlightLegacyFog::Hold legacyFogHold;' in WORLD

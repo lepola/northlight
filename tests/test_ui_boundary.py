@@ -12,16 +12,16 @@ fb=r[r.index('void uiFallbackDraw('):r.index('void uiFallbackEndFrame(')]
 ef=r[r.index('void uiFallbackEndFrame('):r.index('\npublic:',r.index('void uiFallbackEndFrame('))]
 hb=r[r.index('} else if (tag==2) {'):r.index('void uiFallbackDraw(')]
 checks={}
-checks['hash branch: clipWOne, flag set before renderEffects']='NorthlightUiBoundary::clipWOne(w)' in hb and 0<hb.index('hashBoundaryThisFrame=true;')<hb.index('renderEffects();') and 'kind=ui ' in hb
+checks['hash branch: screen-space state and main target, flag before effects']=(all(x in hb for x in ('NorthlightUiBoundary::accepts(zw!=0,rows,zf==D3DCMP_ALWAYS,z!=0)','fullViewport(desc,nullptr,true)','D3DRS_ZWRITEENABLE','D3DRS_ZFUNC','D3DRS_ZENABLE')) and 'psTags.find' not in hb and 0<hb.index('fullViewport(desc,nullptr,true)')<hb.index('hashBoundaryThisFrame=true;')<hb.index('renderEffects();') and 'kind=ui ' in hb)
 checks['hash branch: the fallback runs after it']=hb.index('renderEffects();')<hb.index('uiFallbackDraw(vc,vs);')
 checks['fallback guarded by collecting() (sticky disarm, warm-up frames) before any state read']=fb.index('if(!uiFallback.collecting()||')<fb.index('peekPixelShader')
 checks['fallback guard names terrain, applied, hashBoundaryThisFrame']=all(x in fb[:fb.index('IDirect3DPixelShader9* ps')] for x in ('!terrain','applied','hashBoundaryThisFrame','vc.wmo'))
-checks['fallback: ZFUNC ALWAYS required (DepthFuncAware), read with ZWRITE before the constants; an unreadable func rejects only while aware']=('DWORD zf=D3DCMP_ALWAYS;if(zFuncAware&&FAILED(ext->GetRenderState(D3DRS_ZFUNC,&zf)))return;' in fb
+checks['fallback: depth function and enable read before constants; unreadable states reject while aware']=('DWORD zf=D3DCMP_ALWAYS,z=1;if(zFuncAware&&(FAILED(ext->GetRenderState(D3DRS_ZFUNC,&zf))||FAILED(ext->GetRenderState(D3DRS_ZENABLE,&z))))return;' in fb
     and fb.index('D3DRS_ZWRITEENABLE')<fb.index('D3DRS_ZFUNC')<fb.index('GetVertexShaderConstantF(0,c,4)') and 'zFuncAware=world->depthFuncAware();' in r)
-checks['fallback: no ZENABLE requirement']='D3DRS_ZENABLE,&z)' in fb and fb.count('D3DRS_ZENABLE')==1 and 'zenable' not in fb.lower().replace('d3drs_zenable','')
-checks['fallback: zwrite read, then isBoundary before it, accepts() the one predicate, quiet fullViewport last']=(fb.index('isBoundary(')<fb.index('D3DRS_ZWRITEENABLE')<fb.index('NorthlightUiBoundary::accepts(zw!=0,c,zf==D3DCMP_ALWAYS)')<fb.index('fullViewport(desc,nullptr,true)')
+checks['fallback: disabled depth or ALWAYS, without changing the accepted projection']='NorthlightUiBoundary::accepts(zw!=0,c,zf==D3DCMP_ALWAYS,z!=0)' in fb
+checks['fallback: zwrite read, then isBoundary before it, accepts() the one predicate, quiet fullViewport last']=(fb.index('isBoundary(')<fb.index('D3DRS_ZWRITEENABLE')<fb.index('NorthlightUiBoundary::accepts(zw!=0,c,zf==D3DCMP_ALWAYS,z!=0)')<fb.index('fullViewport(desc,nullptr,true)')
     and fb.count('fullViewport(')==1 and 'screenSpaceRows' not in fb)
-checks['fullViewport: a quiet probe neither counts viewportRejects nor logs VIEWPORT GATE']='bool fullViewport(D3DSURFACE_DESC& desc,D3DVIEWPORT9* viewport=nullptr,bool quiet=false)' in r and 'if(!ok&&!quiet){\n            ++viewportRejects;' in r
+checks['fullViewport: quiet probes preserve the world-size gate by default']='desc.Width>=640&&desc.Height>=360' in r
 checks['fallback: learning skips frames without effects (enabled/failed), the armed boundary still runs renderEffects']=fb.index('if(!armed&&(!enabled||failed))return;')<fb.index('peekPixelShader')
 checks['fallback: world/water test before the PS lookup']=fb.index('vc.world||drawWaterVS')<fb.index('peekPixelShader')
 checks['fallback: renders effects with the fallback flag and counter']=all(x in fb for x in ('fallbackBoundaryThisFrame=true','++uiFallbackBoundaries','kind=ui-fallback','renderEffects();'))

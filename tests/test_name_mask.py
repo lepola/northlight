@@ -145,8 +145,8 @@ checks['names: the UI-hash vertex shader (tag 2) whose c3 is not the screen-spac
 checks['font mods (Lexara, TweakWoW2): a name may also be drawn with the VS the UI boundary fallback learned, only while it is armed; the boundary itself still tests tag 2 only']=(
     'bool uiTextVs(IDirect3DVertexShader9* vs,int tag)const{return tag==2||(vs&&uiFallback.armed()&&reinterpret_cast<std::uintptr_t>(vs)==uiFallback.learnedVs());}' in r
     and r.count('uiTextVs(')==3 and '} else if (tag==2) {' in r)
-checks['the boundary keeps its own test: tag 2, UI pixel shader and clipWOne(c3) call renderEffects (screen UI is never a name)']=(
-    'if (isUI && SUCCEEDED(ext->GetVertexShaderConstantF(3,w,1)) && NorthlightUiBoundary::clipWOne(w)){' in r)
+checks['the boundary keeps its own test: tag 2, orthographic rows, depth state and main-target viewport call renderEffects (screen UI is never a name)']=(
+    'NorthlightUiBoundary::accepts(zw!=0,rows,zf==D3DCMP_ALWAYS,z!=0)' in r and 'fullViewport(desc,nullptr,true)' in r and 'SUCCEEDED(ext->GetVertexShaderConstantF(0,rows,4))' in r)
 indexed=r[r.index('HRESULT STDMETHODCALLTYPE DrawIndexedPrimitive('):r.index('HRESULT STDMETHODCALLTYPE DrawPrimitiveUP(')]
 checks['draw states: a mirror-known render state is read in place under the gate of the draw hook (no lock, no COM call), the same active() and known test as GetRenderState, else GetRenderState']=(
     'v=drawRenderState(t);known=true;' in impl and 'if(unsigned(t)<DeviceMirror::RenderStates&&mirrorState.active()&&mirrorState.renderStateKnown[t]){v=mirrorState.renderStates[t];return true;}' in r

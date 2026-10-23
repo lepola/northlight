@@ -18,6 +18,16 @@ FILES=['renderer.cpp','world_renderer.h','world_shadow_experiment.inl','world_po
 GATES=('NorthlightDiagnostics::enabled()','diagnostics()','sampled()','captureSampled','if(diagnostics)','shadowFate.active()','sampledFrame','profiling()','profileSampled()','if(lightingClock)')
 # Ungated lines that stay with Diagnostics=0: format prefix -> label.
 KEEP={
+ 'TERRAIN SHADOW farCoverage':'capped: first eight shader-patch registrations',
+ 'HDR boundary deferred':'capped: first eight boundary deferrals',
+ 'HDR boundary frame=':'capped: first verified boundaries',
+ 'HDR conversion failed':'capped: first eight conversion failures',
+ 'HDR unconverted UI draw':'capped: first eight rejected UI conversions',
+ 'HDR logical copy after UI':'gated and capped: helper returns unless diagnostics() is on, first eight logical copies after the UI boundary',
+ 'HDR legacy target ':'one-off per legacy target creation/reset',
+ 'HDR experimental requested=':'start-up: experimental HDR configuration',
+ 'HDR experimental device creation refused:':'start-up: command-stream creation failure',
+
  'Depth snapshot DF24 refused':'one-off: depth format changes to INTZ for the rest of the session',
  'GAME thread priority':'start-up: successful device creation',
  'TUNING ':'developer build only: file-change, debounced rebuild or settings event',
@@ -176,7 +186,7 @@ span_checks={
  'U0/S0: no logf( reachable between the selection/upload bucket marks except errors and one-off events':not bad,
  'U0/S0 counterfactual: the sampled lines are reachable there when not deferred':not missed and {'selectShadowReplays','uploadReplay','rigidMemoryInject','finishActorScene','uploadLiveTerrain'}<=reached,
  'U0/S0: the proxy has no log line from the AO mark to world->render()':'logf(' not in ra[ao:ra.index('world->render(',ao)],
- 'U0/S0: deferred lines are written from endFrame() before anything else':'void endFrame(bool retainPool=true){\n        flushDeferredLogs();' in fp.src('world_renderer.h').read_text(),
+ 'U0/S0: deferred lines follow only bounded equipment frame bookkeeping':'void endFrame(bool retainPool=true){\n        if(equipmentLightsOn()){equipmentLights.nextFrame();equipmentCapture.nextFrame();particleLights.nextFrame();NorthlightParticleUploads::cache().nextFrame();}\n        flushDeferredLogs();' in fp.src('world_renderer.h').read_text(),
 }
 for name,ok in span_checks.items():print(('PASS ' if ok else 'FAIL ')+name)
 assert all(span_checks.values()),(bad,missed)

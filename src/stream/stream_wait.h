@@ -49,7 +49,8 @@ public:
         for(;;){
             std::uint32_t left=ms;
             if(ms!=kWaitInfinite){const auto spent=(nowNs()-t0)/1000000u;if(spent>=ms)break;left=(std::uint32_t)(ms-spent);}
-            const DWORD r=MsgWaitForMultipleObjectsEx(1,&h_,left,QS_SENDMESSAGE,0);
+            // Queue inspection can mark an undispatched SendMessage as old; it must still wake this wait.
+            const DWORD r=MsgWaitForMultipleObjectsEx(1,&h_,left,QS_SENDMESSAGE,MWMO_INPUTAVAILABLE);
             if(r==WAIT_OBJECT_0){ok=true;break;}
             if(r==WAIT_OBJECT_0+1){MSG m;PeekMessageW(&m,nullptr,0,0,PM_NOREMOVE|PM_QS_SENDMESSAGE);continue;}   // dispatches sent messages only
             break;   // timeout or failure

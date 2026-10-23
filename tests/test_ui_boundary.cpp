@@ -29,6 +29,7 @@ int main(){
         assert(accepts(false,c));
         assert(!accepts(true,c));
         assert(accepts(false,c,true)&&!accepts(false,c,false)&&!accepts(true,c,true)); // ZENABLE on + ZFUNC not ALWAYS (a depth-tested draw) is no UI draw
+        assert(accepts(false,c,false,false)&&!accepts(true,c,false,false)); // Disabled Z ignores a stale LESS function, but never permits Z writes.
         assert(!accepts(false,nullptr));
         ortho(p);p[15]=0;assert(!accepts(false,p));
     }
@@ -45,7 +46,7 @@ int main(){
             if(a.endFrame(FK::WorldMissed)==R::Armed)++armed;
         }
         assert(armed==1&&a.armed()&&!a.learning()&&!a.disarmed());
-        assert(a.isBoundary(0xA,0x1)&&!a.isBoundary(0xB,0x9)&&!a.isBoundary(0xA,0x9));
+        assert(a.isBoundary(0xA,0x1)&&!a.isBoundary(0xB,0x9)&&a.isBoundary(0xA,0x9));
         assert(a.learnedVs()==0xA&&a.learnedPsCount()==1&&std::fabs(a.drawsPerFrame()-40.f)<.5f);
         frames(a,FK::WorldFallback,50,0,&armed);assert(armed==1&&a.armed());
     }
@@ -84,11 +85,12 @@ int main(){
         for(unsigned f=0;f<Arming::kArmFrames;++f){for(int i=0;i<30;++i)a.noteCandidate(0xB,0x2);if(a.endFrame(FK::WorldMissed)==R::Armed)++armed;}
         assert(armed==2&&a.isBoundary(0xB,0x2)&&!a.isBoundary(0xA,0x1));
     }
-    { // (f) forget un-arms
+    { // (f) a destroyed VS loses the proof; replacing a PS keeps the verified UI VS.
         Arming a;unsigned armed=0;frames(a,FK::WorldMissed,Arming::kArmFrames,40,&armed);assert(a.armed());
         a.forget(0x77);assert(a.armed());a.forget(0xA);assert(a.learning());
         frames(a,FK::WorldMissed,Arming::kArmFrames,40,&armed);assert(a.armed()&&armed==2);
-        a.forget(0x1);assert(a.learning()&&!a.isBoundary(0xA,0x1));
+        a.forget(0x1);assert(a.armed()&&a.learnedPsCount()==0&&a.isBoundary(0xA,0x9));
+        a.forget(0xA);assert(a.learning()&&!a.isBoundary(0xA,0x9));
         a.noteCandidate(0xC,0x3);a.noteCandidate(0xD,0x4);a.forget(0x3);
         Arming::Pair top[4];assert(a.topCandidates(top,4)==1&&top[0].vs==0xD);
     }
@@ -118,13 +120,18 @@ int main(){
         assert(armed==1&&a.droppedPairs()>0&&a.isBoundary(0xA,0x1));
         Arming::Pair top[3];assert(a.topCandidates(top,3)==0); // counts cleared after arming
     }
-    { // several PS on one VS: only shares >= 10% join, at most 4
+    { // PS shares identify the UI VS; an infrequent FPS PS must trigger the same boundary.
         Arming a;
         for(unsigned f=0;f<Arming::kArmFrames;++f){
             for(int i=0;i<50;++i)a.noteCandidate(0xA,0x1);for(int i=0;i<20;++i)a.noteCandidate(0xA,0x2);a.noteCandidate(0xA,0x3);
             a.endFrame(FK::WorldMissed);
         }
-        assert(a.armed()&&a.learnedPsCount()==2&&a.isBoundary(0xA,0x2)&&!a.isBoundary(0xA,0x3));
+        assert(a.armed()&&a.learnedPsCount()==2&&a.isBoundary(0xA,0x2)&&a.isBoundary(0xA,0x3));
+        assert(a.isBoundary(0xA,0)&&!a.isBoundary(0xB,0x3));
+    }
+    { // Fixed-function draws have no VS identity to establish as screen-space UI.
+        Arming a;for(unsigned f=0;f<Arming::kArmFrames;++f){for(unsigned n=0;n<40;++n)a.noteCandidate(0,0x1);a.endFrame(FK::WorldMissed);}
+        assert(!a.armed()&&!a.isBoundary(0,0x1));
     }
     { // collecting(): no state reads before kWarmFrames missed world frames, never after a hash boundary, always while armed
         Arming a;assert(!a.collecting());

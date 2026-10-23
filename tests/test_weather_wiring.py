@@ -87,7 +87,7 @@ checks['rain mask MRT: caps checked once (2 RTs, independent write masks, separa
 cr=r[r.index('bool rainMaskCreate()'):r.index('void rainMaskClearSwap(')]
 checks['rain mask: created lazily at the effect size, failure logged once and disables the mask only (target, rain depth in the snapshot format, both shaders)']=('D3DFMT_A8R8G8B8,D3DPOOL_DEFAULT,&rainMask' in r and 'rainMaskFailed=true;logf("WEATHER rain mask disabled' in r and 'if(!rainMaskSurface&&!rainMaskCreate())why|=64;' in bg
     and 'D3DUSAGE_DEPTHSTENCIL,depthSnapshotFormat,D3DPOOL_DEFAULT,&rainDepth' in cr and 'CreatePixelShader(kRainMaskMrtShader,&rainMrtPS)' in cr and 'CreatePixelShader(kRainScrubShader,&rainScrubPS)' in cr and 'drop(rainDepth);drop(rainMrtPS);drop(rainScrubPS);rainMaskFailed=true;' in cr)
-res=r[r.index('    bool resources(UINT w, UINT h, D3DFORMAT format) {'):]
+res=r[r.index('    bool resources(UINT w, UINT h, D3DFORMAT format,'):]
 res=res[:res.index('\n    }\n')]
 checks['depth snapshot: DF24 only on single-sample packaged DXVK (3.1.1 and 2.7.1) with the world depth known; an unknown depth keeps the current format; a refused DF24 falls back to INTZ for the session']=(
     "const D3DFORMAT depthFormat=!worldDepthDescKnown&&depthSnapshotFormat!=D3DFMT_UNKNOWN?depthSnapshotFormat" in res
@@ -138,9 +138,9 @@ checks['rain mask MRT: Reset, Present and EndScene unbind first; finishFrame (al
     and 'void finishFrame() {\n        Guard mirrorLock(mirrorState.gate);\n        rainMrtUnbind();' in r and 'finishDeviceFrame(owner);' in r)
 checks['rain mask MRT: renderEffects unbinds before its first device work; drawHook unbinds for every draw that is not a rain draw, before any capture or effect work']=(
     'rainMrtUnbind(); /* 0.3.202 (rain mask MRT) */\n        ExtensionDevice::RawScope rawEffects(*ext);' in r and 'if(rainMrtBound&&!rainBlend)rainMrtUnbind();' in hook and hook.index('if(rainMrtBound&&!rainBlend)rainMrtUnbind();')<hook.index('if(!frameDrawGates){')<hook.index('prepareDraw(capture,count)'))
-checks['rain mask MRT: SetRenderTarget and SetDepthStencilSurface stay pure unwrap + forward (they are on the generator DIRECT list: the replay calls ext->, never the Device method); the next draw/Clear/StretchRect unbinds']=(
-    'HRESULT STDMETHODCALLTYPE SetRenderTarget(DWORD RenderTargetIndex, IDirect3DSurface9* pRenderTarget) override{Guard mirrorLock(mirrorState.gate);return ext->SetRenderTarget(RenderTargetIndex, mirrorResources.unwrap(pRenderTarget));}' in r
-    and 'HRESULT STDMETHODCALLTYPE SetDepthStencilSurface(IDirect3DSurface9* pNewZStencil) override{Guard mirrorLock(mirrorState.gate);return ext->SetDepthStencilSurface(mirrorResources.unwrap(pNewZStencil));}' in r)
+checks['rain mask MRT: logical HDR target mapping stays on the Device; depth target remains a pure forward']=(
+    'if(hdr.active&&hdrUiPhase&&RenderTargetIndex==0&&target==hdrLegacyBack)target=hdrPresentBack;return ext->SetRenderTarget(RenderTargetIndex,target);' in r
+    and 'return ext->SetDepthStencilSurface(mirrorResources.unwrap(pNewZStencil));' in r)
 pdi_=r[r.index('template<class Capture> void prepareDrawImpl('):r.index('    // Terrain draws run with the game')]
 checks['rain mask: no scrub left in prepareDrawImpl or the hook']=('rainScrubDraw' not in pdi_ and 'rainScrubDraw' not in hook)
 checks['rain mask: WEATHER line carries the counters; world binds RainMask on s13 for the composite only']=('rainMask=%u rainMrtRuns=%u rainMaskSkips=%u' in r and 'rainMaskScrub' not in r and 'd->SetTexture(13,rainMask?rainMask:neutralZero);rainMask=nullptr;' in w and 'composited=true;d->SetTexture(13,regionalFogTexture);' in w and 'void setRainMask(IDirect3DTexture9* t){rainMask=t;}' in w)
