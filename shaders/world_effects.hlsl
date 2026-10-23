@@ -68,6 +68,15 @@ float4 SourceInfo : register(c67); // disc tangent radius, history weight, horiz
 float4 HorizonSun : register(c67); // zw: horizontal sun direction x lobe strength (WorldComposite only)
 sampler2D LightHistory : register(s14); // previous frame's stabilized lighting buffer (temporal pass only)
 sampler2D CurrentDistance : register(s15); // This frame's R32F view distance: WorldNormals/TemporalLight, never the previous frame.
+sampler2D BumpMaterial : register(s9); // WorldLighting / LocalDirect only; FogBuffer is idle here.
+float4 BumpControl : register(c73); // strength, near-detail fade distance
+sampler2D MaterialFog : register(s4); // MaterialComposite only
+sampler2D MaterialSource : register(s5); // native scene, before AO/fog composition
+sampler2D MaterialOcclusion : register(s6); // sun visibility, moon visibility, cached cavity, coverage
+float4 MaterialOcclusionInfo : register(c78);
+float4 MaterialDirection[2] : register(c74);
+float4 MaterialColor[2] : register(c76);
+#include "auto_bump_normal.hlsl"
 sampler2D DepthHistory : register(s15); // previous frame's linear view distance per half-res texel
 sampler2D SmoothedLighting : register(s9); // 0.3.185 TemporalLight only: the LightingBuffer after RemovalSmooth (s9 is FogBuffer's slot, idle and rebound before its readers)
 row_major float4x4 PreviousView : register(c53);
@@ -408,8 +417,12 @@ LightingOutput WorldLighting(float2 uv:TEXCOORD0) {
     float4 smoothNormal=tex2Dlod(NormalBuffer,float4(uv,0,0));float2 halfUV=uv;
     uv=depthUV(uv);float d=normalizedDepth(uv);
     LightingOutput o;o.correction=float4(0,0,0,SourcePolicy.y);o.baseline=float4(max(AmbientLight.rgb,.15),1);
-    if(d>=.99999||waterDistance(uv,d)>0)return o;
     float3 p=worldPosition(uv,d);float3 n=smoothNormal.xyz;
+    // Fine material light is applied after the half-res spatial/temporal filters.
+    // The legacy route remains available when there is no independent scene copy.
+    float3 detailNormal=n;
+    if(BumpControl.z<.5)detailNormal=autoBumpNormal(uv,p,n,viewDistance(d),InverseView[0].xyz,InverseView[1].xyz,InverseView[2].xyz);
+    if(d>=.99999||waterDistance(uv,d)>0)return o;
     float shadow=1;
     // 0.3.209 (task 29): the moving casters near the player shadow from the actor map (ActorShadow, written per source at this
     // pass's half-res grid; white when off); the near cascade skips those, so take the darker of both.
@@ -427,8 +440,8 @@ LightingOutput WorldLighting(float2 uv:TEXCOORD0) {
     // below, the baseline alpha and GridInfo.z (a divisor elsewhere) keep the true visibility, so the removal and the lamps see the real shadow.
     float moonShadow=shadow,sunVisibility=visibility;
     if(WeatherInfo.z>0){moonShadow=lerp(1,shadow,1-WeatherInfo.z);sunVisibility=lerp(1,shadow,GridInfo.z*(1-WeatherInfo.z));}
-    float3 moon=DirectLight.rgb*saturate(dot(n,SunDirection.xyz))*moonShadow;
-    float3 sun=DirectLight.rgb*saturate(dot(n,LegacyDirection.xyz))*sunVisibility;
+    float3 moon=DirectLight.rgb*saturate(dot(detailNormal,SunDirection.xyz))*moonShadow;
+    float3 sun=DirectLight.rgb*saturate(dot(detailNormal,LegacyDirection.xyz))*sunVisibility;
     float3 replacement=lerp(sun,moon,SunDirection.w);
     o.correction=float4(replacement-painted,lerp(visibility,shadow,SunDirection.w)*SourcePolicy.y);
     // Mode 2 isolates GI: the shared buffer must contain no direct correction.
@@ -588,8 +601,9 @@ float4 LocalDirect(float2 uv:TEXCOORD0):COLOR0 {
     // Sun shadow and interiors keep 1.
     float sunlit=saturate((tex2Dlod(BaselineLighting,float4(uv,0,0)).a-(1-GridInfo.z))/max(GridInfo.z,.001));
     uv=depthUV(uv);
-    float d=normalizedDepth(uv);if(d>=.99999||waterDistance(uv,d)>0)return 0;
-    float3 p=worldPosition(uv,d);float3 n=smoothNormal;
+    float d=normalizedDepth(uv);
+    float3 p=worldPosition(uv,d);float3 n=autoBumpNormal(uv,p,smoothNormal,viewDistance(d),InverseView[0].xyz,InverseView[1].xyz,InverseView[2].xyz);
+    if(d>=.99999||waterDistance(uv,d)>0)return 0;
     float3 result=0;
     // Unused slots are zero constants (reach 0), so no per-light branch is needed.
     // LocalLightColor.w is the precomputed 1/(end-start).
@@ -603,14 +617,14 @@ float4 LocalDirect(float2 uv:TEXCOORD0):COLOR0 {
     return float4(result*(LocalLightInfo.y*(1-LocalLightInfo.z*sunlit)),0);
 }
 // Sixteen lamps in one pass (local_light_batches.h wide(): two neighbouring 8-lamp batches whose joint rect costs less than
-// both): the same term as LocalDirect per lamp, the lamps in entry uniforms c68..c83 (position, w attenuation end) and
-// c84..c99 (colour, w 1/(end-start)); unused slots are zero. c52 (LocalLightInfo.yz) and s12 as for LocalDirect.
-float4 LocalDirect16(float2 uv:TEXCOORD0,uniform float4 LampPos[16]:register(c68),uniform float4 LampColor[16]:register(c84)):COLOR0 {
+// both): the same term as LocalDirect per lamp, the lamps in entry uniforms c84..c99 (position, w attenuation end) and
+// c100..c115 (colour, w 1/(end-start)); c73..c78 retain material controls; unused slots are zero. c52 (LocalLightInfo.yz) and s12 as for LocalDirect.
+float4 LocalDirect16(float2 uv:TEXCOORD0,uniform float4 LampPos[16]:register(c84),uniform float4 LampColor[16]:register(c100)):COLOR0 {
     float3 smoothNormal=tex2Dlod(NormalBuffer,float4(uv,0,0)).xyz;
     float sunlit=saturate((tex2Dlod(BaselineLighting,float4(uv,0,0)).a-(1-GridInfo.z))/max(GridInfo.z,.001));
     uv=depthUV(uv);
     float d=normalizedDepth(uv);if(d>=.99999||waterDistance(uv,d)>0)return 0;
-    float3 p=worldPosition(uv,d);float3 n=smoothNormal;
+    float3 p=worldPosition(uv,d);float3 n=autoBumpNormal(uv,p,smoothNormal,viewDistance(d),InverseView[0].xyz,InverseView[1].xyz,InverseView[2].xyz);
     float3 result=0;
     [unroll]for(int i=0;i<16;++i){
         float3 toLight=LampPos[i].xyz-p;
@@ -1245,6 +1259,39 @@ float4 WorldComposite(float2 uv:TEXCOORD0,float2 pixel:VPOS):COLOR0 {
     // Dither before the 8-bit target rounds: haze and night air vary only with view elevation and would band into
     // horizontal lines. VPOS is the integer pixel; +.5 texel hits the POINT texel centre.
     return float4(max(color+tex2D(DitherNoise,mad(pixel,1.0/64,.5/64)).rgb,0),original.a);
+}
+
+// Full-resolution material relighting. The base composition has already handled
+// shadows, GI, AO and fog; only the normal-dependent directional difference is
+// added here. Both the inferred albedo and atmospheric transmission are bounded.
+float4 MaterialComposite(float2 uv:TEXCOORD0):COLOR0 {
+    float4 color=tex2D(Scene,uv);
+    float2 q=depthUV(uv);float d=normalizedDepth(q);float z=viewDistance(d);
+    float3 v=viewPositionDistance(q,z);
+    // Camera-relative derivatives avoid losing sub-centimetre detail at large map coordinates.
+    float3 relative=v.x*InverseView[0].xyz+v.y*InverseView[1].xyz+v.z*InverseView[2].xyz;
+    float3 normal=tex2Dlod(NormalBuffer,float4(uv,0,0)).xyz;
+    float3 detail=autoBumpNormal(q,relative,normal,z,InverseView[0].xyz,InverseView[1].xyz,InverseView[2].xyz);
+    if(d>=.99999||waterDistance(q,d)>0||(BumpControl.x<=0&&MaterialOcclusionInfo.x<=0))return color;
+    float3 occlusion=1;
+    if(MaterialOcclusionInfo.x>0){
+        float4 material=tex2Dlod(BumpMaterial,float4(q,0,0)),occ=tex2Dlod(MaterialOcclusion,float4(q,0,0));
+        float capturedZ=material.b/max(material.a,.001);
+        float valid=material.a>.02&&occ.a>.02&&abs(capturedZ-z)<max(.025,z*.0015);
+        float fade=saturate((BumpControl.y-z)/max(BumpControl.y*.25,1));
+        occlusion=lerp(1,saturate(occ.rgb/max(occ.a,.001)),valid*fade);
+    }
+    float3 delta=0;
+    [unroll]for(int i=0;i<2;++i)
+        delta+=MaterialColor[i].rgb*(saturate(dot(detail,MaterialDirection[i].xyz))*occlusion[i]-saturate(dot(normal,MaterialDirection[i].xyz)));
+    float visibility=saturate((tex2Dlod(LightingBuffer,float4(uv,0,0)).a*WaterInfo.z-(1-GridInfo.z))/max(GridInfo.z,.001));
+    float legacyT=mad(LegacyFog.w,saturate(pow(max(mad(z*Projection.z,LegacyFog.x,LegacyFog.y),0),LegacyFog.z))-1,1);
+    float3 source=tex2D(MaterialSource,uv).rgb;
+    float3 surface=max(source-min((1-legacyT)*LegacyFogColor.rgb,source),0)*tex2D(AmbientOcclusion,uv).a;
+    float3 albedoT=min(surface/max(tex2D(BaselineLighting,uv).rgb,.15),legacyT);
+    float3 cavity=max(AmbientLight.rgb*AmbientLight.w+GridOrigin.rgb,0)*(occlusion.b-1);
+    color.rgb=max(color.rgb+albedoT*(delta*visibility+cavity)*tex2D(MaterialFog,uv).a,0);
+    return color;
 }
 
 // Separate geometry pass: c0..3 contains the light's world->clip matrix.

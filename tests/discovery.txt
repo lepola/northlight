@@ -8,11 +8,16 @@ test_actor_shadows_wiring.py
 test_actor_texture_worker.py
 test_affected_tests.py
 test_ao_blur.py
+test_ao_fog_capture.py
 test_ao_fold.py
 test_ao_rotation_stripes.py
 test_ao_texel_snap.py
 test_art_layer.py
 test_async_memory_diagnostics.py
+test_auto_normal_index.py
+test_auto_normal_memory.py
+test_auto_normal_profile_gpu.py
+test_auto_normal_reuse_gpu.py
 test_backend_proxy.py
 test_band_retime.py
 test_cache_shadow_optimizations.py
@@ -42,6 +47,7 @@ test_contact_normal_endpoints.py
 test_dev_tuning_build.py
 test_device_mirror.py
 test_diagnostics_switch.py
+test_displacement_state_reuse.py
 test_dll_memcmp.py
 test_draw_gates.py
 test_draw_snapshot.py
@@ -82,6 +88,7 @@ test_legacy_fog_hold.py
 test_legacy_fog_wmo.py
 test_linux_package.py
 test_live_terrain_gpu.py
+test_local_direct_batches_gpu.py
 test_local_fog_batching.py
 test_local_fog_profile.py
 test_local_ini.py
@@ -93,6 +100,9 @@ test_logger_cost.py
 test_m2_shader_families.py
 test_m2_shader_families_client.py
 test_m2_visibility.py
+test_material_geometry.py
+test_material_ray_work.py
+test_material_replay_state.py
 test_memmap_diagnostics.py
 test_memory_admission_probe.py
 test_memory_guard.py
@@ -103,6 +113,7 @@ test_mirror_resources.py
 test_model_index_cache.py
 test_model_replay_pool.py
 test_model_snapshot_cache.py
+test_model_world_context.py
 test_moon_cascade_weight.py
 test_mount_emitter_patch.py
 test_name_mask.py
@@ -189,6 +200,7 @@ test_terrain_metadata.py
 test_terrain_reach_fallback.py
 test_terrain_reach_fallback_wiring.py
 test_terrain_shadow_candidates.py
+test_terrain_shadow_coverage.py
 test_terrain_shared_snapshot.py
 test_terrain_snapshot.py
 test_terrain_tracked_cache.py

@@ -126,7 +126,7 @@ class Frame {
     std::vector<std::uint64_t> indexMaskScratch_;
     std::vector<UINT> remapScratch_,uniqueSourceScratch_;
     size_t sourceSpanVertices_=0,uniqueVertices_=0,savedVertexBytes_=0;unsigned compactedDraws_=0;
-    bool compacted_=false;
+    bool compacted_=false,chargeResidentHits_=true;
     // Compact records retain source ordering; adjacent records can be copied
     // together without observing unused vertices in the gaps.
     struct CopyRun {UINT source, destination, count;};
@@ -297,8 +297,8 @@ private:
         k.ib=ib;k.ibSize=ibSize;k.base=draw.base;k.minimum=draw.minimum;k.vertices=draw.vertices;k.start=draw.start;k.primitives=draw.primitives;
         k.topology=unsigned(draw.topology);k.format=format;k.indexed=draw.indexed?1u:0u;k.declaration=declaration;return k;
     }
-    // Serve a hit. Charges admission and the read budget exactly like a miss
-    // of the same size, so accept/reject decisions do not change with caching.
+    // Default: charge a resident hit like a miss, preserving capture admission.
+    // A private geometry caller may exempt byte reads for fully tracked hits.
     bool serve(const CacheKey& key,Ref<IDirect3DVertexBuffer9>* vertices,IDirect3DIndexBuffer9* ib,const UINT* extent,std::shared_ptr<const Mesh>* shared,Diagnostics* why,bool& served){
         served=false;CacheEntry* found=nullptr;
         // Tracked keys only: for them the revalidation branch below is never taken, so the predicted
@@ -313,7 +313,8 @@ private:
             found=&e;
         }
         CacheEntry& e=*found;
-        if(!admit(why)||!reserve(e.charged,why))return false;
+        const bool charge=chargeResidentHits_||!key.tracked;
+        if(charge&&(!admit(why)||!reserve(e.charged,why)))return false;
         // The next prediction: e's successor in LRU order, read before touch(e) moves e to the end.
         CacheEntry* s1=e.lru.newer;predicted_=s1;
         if(lookup_==Lookup::Prefetch&&s1){
@@ -324,7 +325,7 @@ private:
             for(std::size_t offset=0;offset<sizeof(CacheKey);offset+=64)prefetch(reinterpret_cast<const char*>(&s1->key)+offset);
             if(s2){prefetch(&s2->mesh);prefetch(&s2->lru);}
         }
-        cacheLRU_.touch(e);++cacheHits_;if(key.tracked){++trackedHits_;avoidedReadBytes_+=e.charged;}accepted();*shared=e.mesh;served=true;
+        cacheLRU_.touch(e);++cacheHits_;if(key.tracked){++trackedHits_;avoidedReadBytes_+=e.charged;}if(charge)accepted();*shared=e.mesh;served=true;
         if(why){why->error=Error::None;why->hr=D3D_OK;}return true;
     }
     bool store(const CacheKey& key,Mesh&& mesh,std::uint64_t ibBegin,std::uint64_t ibBytes,UINT low,const std::uint64_t* begins,const std::uint64_t* lockBytes,const std::uint64_t* readBytes,std::shared_ptr<const Mesh>* shared){
@@ -349,6 +350,9 @@ private:
     }
 public:
     void setIdentityProvider(IdentityFn f){identity_=f;}
+    // Private geometry consumers may budget actual reads; write-tracked resident
+    // hits read no VB/IB bytes. Other capture consumers keep their original policy.
+    void setChargeResidentHits(bool value){chargeResidentHits_=value;}
     void setVersionProvider(VersionFn f){clearSnapshotCache();version_=f;}
     // Metadata providers must share the identity/version domain of the legacy
     // providers. A batch is consumed immediately, never reused across draws.

@@ -25,7 +25,7 @@
     static constexpr size_t ReplayPoolBytes=48u*1024u*1024u;
     size_t replayPoolLimit()const{return memoryPressure?ReplayPoolBytes/2:ReplayPoolBytes;}
     MemoryTrim trimMemory(){
-        MemoryTrim t;prepareQuiesce(); /* 0.3.177 */
+        MemoryTrim t;prepareQuiesce();stateBlocks.clear(); /* 0.3.177 */
         {const auto before=terrainBoundsCache.persistentBytes();terrainBoundsCache.clearPersistent();t.terrain=size_t(before-std::min(before,terrainBoundsCache.persistentBytes()));}
         t.snapshots=replaySnapshots.snapshotCacheBytes();
         {const auto before=replaySnapshots.indexCacheBytes();replaySnapshots.clearIndexCache();t.indices=before-std::min(before,replaySnapshots.indexCacheBytes());} /* clears snapshots too */

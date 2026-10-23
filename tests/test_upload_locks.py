@@ -44,6 +44,8 @@ expected={
  ('replay_copy_reader.h','b'):('NorthlightUpload::readBackLock()',Read,None), # 0.3.192 (CS): the 8 capture read-backs go through NorthlightReplayCopies::Reader (CPU copy first, this lock otherwise)
  ('spell_layer.h','upVb_'):('flags',Dynamic,'D3DUSAGE_DYNAMIC|D3DUSAGE_WRITEONLY,0,D3DPOOL_DEFAULT,&upVb_'), # task 34: the layer's own replay upload buffers, DISCARD on the first upload of a frame / after a wrap, NOOVERWRITE appends after (see the audit below)
  ('spell_layer.h','upIb_[fmt]'):('flags',Dynamic,'D3DUSAGE_DYNAMIC|D3DUSAGE_WRITEONLY,fmt?D3DFMT_INDEX32:D3DFMT_INDEX16,D3DPOOL_DEFAULT,&upIb_[fmt]'), # one per index format
+ ('auto_displacement_renderer.h','entry->vb'):(F,Fresh,'D3DUSAGE_WRITEONLY,0,D3DPOOL_DEFAULT,&entry->vb'),
+ ('auto_displacement_renderer.h','entry->ib'):(F,Fresh,'D3DUSAGE_WRITEONLY,indexBytes==sizeof(uint16_t)?D3DFMT_INDEX16:D3DFMT_INDEX32,D3DPOOL_DEFAULT,&entry->ib'),
  ('forwarders.h','real'):('Flags',Forward,None),('tracked_buffers.h','this->real'):('flags',Forward,None),
 }
 seen=set();fresh=calls=0
@@ -56,7 +58,7 @@ for name,text in sources.items():
         assert created is None or created in text,f'{name}:{line}: {key[1]} is no longer created as {kind}: {created}'
         fresh+=flags==F;calls+=1
 assert seen==set(expected),f'stale entries: {sorted(set(expected)-seen)}'
-assert fresh==5
+assert fresh==7
 # spell_layer.h upload(): DISCARD only while *Fresh_ (first of the frame, or after a wrap), NOOVERWRITE otherwise; beginFrame and the wrap re-arm Fresh_, so an append never overlaps submitted draws' bytes
 sl=sources['spell_layer.h']
 assert 'const DWORD flags=fresh?D3DLOCK_DISCARD:D3DLOCK_NOOVERWRITE;' in sl and 'cursor-=base;base=0;fresh=true;' in sl
@@ -72,13 +74,13 @@ for name,text in sources.items():
         if 'D3DPOOL_DEFAULT' in pool and 'D3DUSAGE_DYNAMIC' not in usage:creates.append((name,a[4]))
         else:assert 'D3DPOOL_MANAGED' in pool or 'D3DUSAGE_DYNAMIC' in usage,(name,a)
 assert sorted(creates)==sorted([('replay_gpu_batches.h','&built->vertices[s]'),('replay_gpu_batches.h','&built->indices'),('replay_gpu_batches.h','&batch->vertices'),
-    ('replay_gpu_batches.h','&batch->indices'),('replay_gpu_cache.h','&built->vertices[s]'),('replay_gpu_cache.h','&built->indices')]),creates
+    ('replay_gpu_batches.h','&batch->indices'),('replay_gpu_cache.h','&built->vertices[s]'),('replay_gpu_cache.h','&built->indices'),('auto_displacement_renderer.h','&entry->vb'),('auto_displacement_renderer.h','&entry->ib')]),creates
 print(f'PASS DEFAULT|WRITEONLY creations: {len(creates)}, all fresh write-once sites')
 # The constant and its kill switch; FreshBufferLock appears nowhere else.
 upload=fp.src('upload_lock.h').read_text()
 assert 'inline constexpr bool NoOverwriteFreshBuffers=true;' in upload
 assert 'inline constexpr DWORD FreshBufferLock=NoOverwriteFreshBuffers?DWORD(D3DLOCK_NOOVERWRITE):DWORD(0);' in upload
-assert {n for n,t in sources.items() if 'FreshBufferLock' in t}=={'upload_lock.h','replay_gpu_batches.h','replay_gpu_cache.h'}
+assert {n for n,t in sources.items() if 'FreshBufferLock' in t}=={'upload_lock.h','replay_gpu_batches.h','replay_gpu_cache.h','auto_displacement_renderer.h'}
 assert '#include "upload_lock.h"' in sources['replay_gpu_cache.h'] # world_renderer.h (and its .inl) include replay_gpu_cache.h
 # Publication strictly after the last Unlock of each fresh buffer; nothing else reaches an unpublished one.
 def body(text,start,end):i=text.index(start);return text[i:text.index(end,i)]

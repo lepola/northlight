@@ -63,8 +63,8 @@ checks={
   and 'GeometryLeadMoveStep)?128u' not in context
   and builder.count('static_assert(64-NorthlightWorldStreaming::GeometryRefreshDistance>NorthlightWorldStreaming::GeometryLeadMoveStep,')==1,
  'no other pendingMesh release path changed':w.count('retirePendingCpu();pendingMesh.reset();')==3,
- 'updateWorldContext runs only from the draw-hook context readers (D3D thread, like render())':
-  w.count('updateWorldContext(map,')==2 and 'updateWorldContext(map,camera.camera,globalRead?&light:nullptr);' in method('    bool wmoContext(IDirect3DVertexShader9* shader){') and 'updateWorldContext(map,camera,globalRead?&global:nullptr);' in method('    void terrainContext(){')
+ 'updateWorldContext runs only from the terrain, WMO and model draw-hook context readers (D3D thread, like render())':
+  w.count('updateWorldContext(map,')==3 and 'updateWorldContext(map,camera.camera,globalRead?&light:nullptr);' in method('    bool wmoContext(IDirect3DVertexShader9* shader){') and 'updateWorldContext(map,camera,globalRead?&global:nullptr);' in method('    void terrainContext(){')
   and 'world->wmoContext(vs)' in r and 'world->terrainContext();' in r,
  'builder marks each generation deferral and clears on admission, under the mutex':
   w.count(admission)==1 and re.search(r'if\(!generations\.canAdmit\(\)\)\{\+\+generationDeferrals;\{std::lock_guard<std::mutex> lock\(mutex\);generationStall\.deferred\(GetTickCount\(\)\);\}deferBuild\("generation-deferred",memory,100\);continue;\}\n\s*\{std::lock_guard<std::mutex> lock\(mutex\);generationStall\.admitted\(\);\}',w) is not None,

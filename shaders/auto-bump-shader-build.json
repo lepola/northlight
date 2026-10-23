@@ -1,0 +1,307 @@
+{
+  "normal_source_sha256": "145a87c4f22c6a6061e8e4454356afb91368af70e4ef2ba0d52c0c8770588fe7",
+  "parallax_source_sha256": {
+    "auto_parallax.hlsl": "e7e8566e3c331879119a0277dd9ca7e1498f15098f22f9d3bcd297f8474f1a6f",
+    "auto_parallax_prefix.hlsl": "aaceb5594e0c881e7d05ab582e671fd6713640414e2cd6da79583b5faa74c103",
+    "auto_material_height.hlsl": "bdcee7896b70c29ff3162a9fbf9694d1a451a839ebdb89b7f0d382894a124271"
+  },
+  "source_sha256": "d67fcdf1b026eada63669e10e8ffcc191fff0948c190d611bcf0df847a500bdb",
+  "compiler": "Microsoft d3dcompiler_47 10.0.17134.12 IEEE strict",
+  "compiler_sha256": "4432bbd1a390874f3f0a503d45cc48d346abc3a8c0213c289f4b615bf0ee84f3",
+  "shaders": {
+    "BumpOpaque": {
+      "sha256": "63a7074b1bf213784b998f51982a393dd7149ebc9682dd569be96f75f5cef31e",
+      "static_instruction_slots": 271,
+      "temporary_registers": 11,
+      "samplers": [
+        2
+      ],
+      "instructions": {
+        "mov": 25,
+        "mul": 45,
+        "rcp": 13,
+        "add": 56,
+        "cmp": 25,
+        "texkill": 2,
+        "dsx": 2,
+        "dsy": 2,
+        "dp3": 12,
+        "rsq": 7,
+        "dp2add": 4,
+        "max": 7,
+        "if": 5,
+        "else": 4,
+        "min": 3,
+        "texldd": 5,
+        "rep": 2,
+        "break": 2,
+        "endrep": 2,
+        "endif": 5,
+        "nrm": 1
+      }
+    },
+    "BumpLayer": {
+      "sha256": "fdedd2775c4ec40f56fa26514112d0b782e91d52caf332be40562e95e51dc269",
+      "static_instruction_slots": 271,
+      "temporary_registers": 11,
+      "samplers": [
+        1,
+        2
+      ],
+      "instructions": {
+        "mov": 25,
+        "mul": 44,
+        "rcp": 13,
+        "add": 55,
+        "cmp": 25,
+        "texkill": 2,
+        "dsx": 2,
+        "dsy": 2,
+        "dp3": 12,
+        "rsq": 7,
+        "dp2add": 4,
+        "max": 7,
+        "if": 5,
+        "else": 4,
+        "min": 3,
+        "texldd": 5,
+        "rep": 2,
+        "break": 2,
+        "endrep": 2,
+        "endif": 5,
+        "nrm": 1,
+        "texld": 1,
+        "dp4": 1
+      }
+    },
+    "BumpWall": {
+      "sha256": "fa527427d2c7bbff4a55ba1dadc1a175dfa364cd17c6975a75e2d85c42d8886a",
+      "static_instruction_slots": 274,
+      "temporary_registers": 11,
+      "samplers": [
+        0,
+        2
+      ],
+      "instructions": {
+        "mov": 26,
+        "mul": 45,
+        "rcp": 13,
+        "add": 55,
+        "cmp": 25,
+        "texkill": 2,
+        "dsx": 2,
+        "dsy": 2,
+        "dp3": 12,
+        "rsq": 7,
+        "dp2add": 4,
+        "max": 7,
+        "if": 5,
+        "else": 4,
+        "min": 3,
+        "texldd": 6,
+        "rep": 2,
+        "break": 2,
+        "endrep": 2,
+        "endif": 5,
+        "nrm": 1
+      }
+    },
+    "BumpGrass": {
+      "sha256": "eb4e0e89f9cfb16ca769e0e97ed2ba2b965119a959a170e8020590266da727d5",
+      "static_instruction_slots": 272,
+      "temporary_registers": 11,
+      "samplers": [
+        0,
+        2
+      ],
+      "instructions": {
+        "mov": 26,
+        "mul": 45,
+        "rcp": 13,
+        "add": 55,
+        "cmp": 25,
+        "texkill": 2,
+        "dsx": 2,
+        "dsy": 2,
+        "dp3": 12,
+        "rsq": 7,
+        "dp2add": 4,
+        "max": 7,
+        "if": 5,
+        "else": 4,
+        "min": 3,
+        "texldd": 5,
+        "rep": 2,
+        "break": 2,
+        "endrep": 2,
+        "endif": 5,
+        "nrm": 1,
+        "texld": 1
+      }
+    },
+    "BumpWallOpaque": {
+      "sha256": "c2b9877df85574e04f81bfd205a955bcf79c6d0949fb34c2608f9a8f751bcaf4",
+      "static_instruction_slots": 270,
+      "temporary_registers": 11,
+      "samplers": [
+        2
+      ],
+      "instructions": {
+        "mov": 26,
+        "mul": 44,
+        "rcp": 13,
+        "add": 55,
+        "cmp": 25,
+        "texkill": 2,
+        "dsx": 2,
+        "dsy": 2,
+        "dp3": 12,
+        "rsq": 7,
+        "dp2add": 4,
+        "max": 7,
+        "if": 5,
+        "else": 4,
+        "min": 3,
+        "texldd": 5,
+        "rep": 2,
+        "break": 2,
+        "endrep": 2,
+        "endif": 5,
+        "nrm": 1
+      }
+    },
+    "BumpComposite": {
+      "sha256": "7cb761f74e86c493b0f1b9c7bc1faeb5195f986709e8757533ba2981a4b1cf03",
+      "static_instruction_slots": 508,
+      "temporary_registers": 14,
+      "samplers": [
+        0,
+        1,
+        2,
+        3
+      ],
+      "instructions": {
+        "add": 107,
+        "texkill": 2,
+        "rcp": 22,
+        "mul": 82,
+        "dsx": 3,
+        "dsy": 3,
+        "cmp": 43,
+        "dp3": 21,
+        "rsq": 13,
+        "mov": 43,
+        "dp2add": 8,
+        "max": 14,
+        "if": 10,
+        "else": 8,
+        "min": 6,
+        "texldd": 12,
+        "rep": 4,
+        "break": 4,
+        "endrep": 4,
+        "endif": 10,
+        "nrm": 3
+      }
+    },
+    "BumpNative": {
+      "sha256": "1f71b7a5a5304057604962a9cf20daef29782aaae5794337fd9cb4f560d3d483",
+      "static_instruction_slots": 273,
+      "temporary_registers": 11,
+      "samplers": [
+        2
+      ],
+      "instructions": {
+        "mov": 26,
+        "mul": 45,
+        "rcp": 13,
+        "add": 57,
+        "cmp": 25,
+        "texkill": 2,
+        "dsx": 2,
+        "dsy": 2,
+        "dp3": 12,
+        "rsq": 7,
+        "dp2add": 4,
+        "max": 7,
+        "if": 5,
+        "else": 4,
+        "min": 3,
+        "texldd": 5,
+        "rep": 2,
+        "break": 2,
+        "endrep": 2,
+        "endif": 5,
+        "nrm": 1
+      }
+    },
+    "AutoNormal": {
+      "sha256": "af00dda1b5e14ce85835c87b0074aafa4b97960a99808b997f83db343ed04ed0",
+      "static_instruction_slots": 317,
+      "temporary_registers": 4,
+      "samplers": [
+        0
+      ],
+      "instructions": {
+        "mov": 13,
+        "mul": 108,
+        "add": 95,
+        "texldl": 9,
+        "rcp": 18,
+        "cmp": 18,
+        "dp3": 10,
+        "max": 29,
+        "min": 7,
+        "rsq": 1
+      }
+    },
+    "AutoNormalModel": {
+      "sha256": "7118623b229170d403278fcf61c0f0b2bae6378021988fdc8b90a45afa041cfc",
+      "static_instruction_slots": 167,
+      "temporary_registers": 6,
+      "samplers": [
+        0
+      ],
+      "instructions": {
+        "mov": 7,
+        "mul": 42,
+        "add": 45,
+        "texldl": 25,
+        "dp3": 11,
+        "max": 5,
+        "min": 3,
+        "cmp": 3,
+        "rsq": 1
+      }
+    },
+    "ParallaxUV": {
+      "sha256": "b7e777e2b00828abed08f346ae4d40c39f8ce5a685f3dd423e9574da33dd6f97",
+      "static_instruction_slots": 149,
+      "temporary_registers": 8,
+      "samplers": [
+        14
+      ],
+      "instructions": {
+        "mov": 13,
+        "mul": 26,
+        "rcp": 9,
+        "add": 28,
+        "cmp": 13,
+        "dsy": 2,
+        "dp2add": 3,
+        "rsq": 6,
+        "dsx": 2,
+        "max": 4,
+        "if": 2,
+        "else": 1,
+        "dp3": 8,
+        "min": 2,
+        "texldd": 3,
+        "rep": 1,
+        "break": 1,
+        "endrep": 1,
+        "endif": 2
+      }
+    }
+  }
+}

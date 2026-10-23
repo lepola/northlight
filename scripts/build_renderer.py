@@ -45,6 +45,16 @@ def main(argv=None):
     static_manifest = json.loads((SHADERS/'static-shadow-shader-build.json').read_text())
     if hashlib.sha256((SHADERS/'static_shadow_effects.hlsl').read_bytes()).hexdigest() != static_manifest['source_sha256']:
         raise SystemExit('Static caster shader source differs from offline build.')
+    bump_digest=hashlib.sha256((SHADERS/"auto_bump_normal.hlsl").read_bytes()).hexdigest()
+    if any(m.get("bump_include_sha256")!=bump_digest for m in (world_manifest,)):
+        raise SystemExit("Auto bump include differs from the offline build.")
+    bump_manifest=json.loads((SHADERS/"auto-bump-shader-build.json").read_text())
+    if bump_manifest["source_sha256"]!=hashlib.sha256((SHADERS/"auto_bump_capture.hlsl").read_bytes()).hexdigest():
+        raise SystemExit("Auto bump capture differs from the offline build.")
+    if bump_manifest.get("normal_source_sha256")!=hashlib.sha256((SHADERS/"auto_normal_generate.hlsl").read_bytes()).hexdigest():
+        raise SystemExit("Automatic normal-map generator differs from the offline build.")
+    if any(digest!=hashlib.sha256((SHADERS/name).read_bytes()).hexdigest() for name,digest in bump_manifest.get('parallax_source_sha256',{}).items()):
+        raise SystemExit("Parallax shaders differ from the offline build.")
     env = northlight_paths.zig_env()
     command = [str(zig), 'c++', '-target', 'x86-windows-gnu', '-O2', '-shared',
                '-std=c++17', '-fno-rtti', '-Wall', '-Wextra', '-Wno-microsoft-exception-spec',

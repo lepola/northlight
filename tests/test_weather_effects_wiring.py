@@ -38,7 +38,7 @@ checks['cpp: sigmaAt mirrors the extra extinction through the same airFloor']=('
 lt=h[h.index('LightingOutput WorldLighting('):h.index('// Second pass to the same FP16 lighting buffer')]
 checks['hlsl WorldLighting: only the direct replacement is softened, behind a branch that is off when dry']=(
     'if(WeatherInfo.z>0){moonShadow=lerp(1,shadow,1-WeatherInfo.z);sunVisibility=lerp(1,shadow,GridInfo.z*(1-WeatherInfo.z));}' in lt
-    and 'float3 moon=DirectLight.rgb*saturate(dot(n,SunDirection.xyz))*moonShadow;' in lt and 'float3 sun=DirectLight.rgb*saturate(dot(n,LegacyDirection.xyz))*sunVisibility;' in lt)
+    and 'float3 moon=DirectLight.rgb*saturate(dot(detailNormal,SunDirection.xyz))*moonShadow;' in lt and 'float3 sun=DirectLight.rgb*saturate(dot(detailNormal,LegacyDirection.xyz))*sunVisibility;' in lt)
 checks['hlsl WorldLighting: correction.a and baseline.a keep the true visibility']=(
     'o.correction=float4(replacement-painted,lerp(visibility,shadow,SunDirection.w)*SourcePolicy.y);' in lt
     and 'o.baseline=float4(max(old+AmbientLight.rgb,.15),lerp(visibility,shadow,SunDirection.w)*known);' in lt and 'float visibility=lerp(1,shadow,GridInfo.z);' in lt)
@@ -48,7 +48,8 @@ checks['hlsl: c24.y (softness) still unread']='PassInfo.y' not in h.replace('sof
 gi=h[h.index('float4 WorldGI('):h.index('// Four POINT reads work')]
 checks['hlsl WorldGI: no weather code (it is at 31 temps)']='WeatherInfo' not in gi
 checks['hlsl: no WorldWet shader; WeatherInfo.y only the fog clouds\' folded bank top (0.3.199 optimisation)']='WorldWet' not in h and h.count('WeatherInfo.y')==1 and 'mad(nL,CloudInfo[2].z,WeatherInfo.y)' in h
-checks['render: the weather adds no pass of its own (quad count 21, shader creations 25 with the 0.3.199 fog clouds and fog temporal, the 0.3.205 lamp fog combine quad and shader, the 0.3.209 actor shadow visibility and two tile quads and their two shaders and the 16-lamp LocalDirect quad and shader)']=(w.count('quad(')==21 and w.count('CreatePixelShader')==25) and 'wetPS' not in w
+# The added LocalDirect16 and material passes are independent of weather.
+checks['render: weather adds no pass (22 quad sites, 27 pixel shaders including material and 16-lamp passes)']=(w.count('quad(')==22 and w.count('CreatePixelShader')==27) and 'wetPS' not in w
 # disc and veil
 checks['discs: gain atomic, default 1, opacity and glare weights only, veil inherits']=(
     'std::atomic<float> weatherGain{1.f};' in dr and 'c[9][3]=glare?disc.opacity:disc.opacity*weatherGain.load(std::memory_order_relaxed);' in dr

@@ -56,7 +56,11 @@ struct Block final:IDirect3DStateBlock9 {
 };
 struct Backend final:IDirect3DDevice9 {
  struct UpArguments {D3DPRIMITIVETYPE type=0;UINT minimum=0,vertices=0,count=0,stride=0;const void* indices=nullptr;const void* data=nullptr;D3DFORMAT format=0;} up;
+ INT drawBase=0;UINT drawStart=0;struct ProcessArguments {UINT source,destination,count;IDirect3DVertexBuffer9* buffer;IDirect3DVertexDeclaration9* declaration;DWORD flags;} process{};
  void(*onRenderState)(void*)=nullptr;void* callbackContext=nullptr;
+ void(*onSetVS)(void*)=nullptr;void(*onGetVS)(void*)=nullptr;void(*onDraw)(void*)=nullptr;
+ void(*onGetF)(void*)=nullptr;
+ void callback(void(*&f)(void*)){if(f){auto call=f;f=nullptr;call(callbackContext);}}
  unsigned refs=1;State state,pending;bool recording=false,failNext=false,failGet=false,failApply=false,constantGetSupported=true;
  std::array<bool,256> rsMask{},fMask{};std::atomic<unsigned> entered{0};unsigned calls=0,gets=0,sets=0,applies=0,captures=0;size_t floatReadRegisters=0;
  struct Guard {Backend& d;explicit Guard(Backend& b):d(b){assert(d.entered.fetch_add(1)==0);++d.calls;}~Guard(){assert(d.entered.fetch_sub(1)==1);}};
@@ -66,7 +70,8 @@ struct Backend final:IDirect3DDevice9 {
 #define SG Guard guard(*this);++sets
 #define GG Guard guard(*this);if(badGet())return D3DERR_INVALIDCALL
 #define RESOURCE(n,field,T) HRESULT Set##n(T* p)override{SG;edit().field=p;return result();} HRESULT Get##n(T** out)override{GG;return give(state.field.p,out);}
- RESOURCE(VertexShader,vs,IDirect3DVertexShader9)
+ HRESULT SetVertexShader(IDirect3DVertexShader9* p)override{HRESULT hr;{SG;edit().vs=p;hr=result();}callback(onSetVS);return hr;}
+ HRESULT GetVertexShader(IDirect3DVertexShader9** p)override{HRESULT hr;{GG;hr=give(state.vs.p,p);}callback(onGetVS);return hr;}
  RESOURCE(PixelShader,ps,IDirect3DPixelShader9)
  RESOURCE(Indices,ib,IDirect3DIndexBuffer9)
 #undef RESOURCE
@@ -94,7 +99,7 @@ struct Backend final:IDirect3DDevice9 {
  HRESULT GetDepthStencilSurface(IDirect3DSurface9** p)override{GG;if(!p)return D3DERR_INVALIDCALL;HRESULT h=give(state.depth.p,p);return !state.depth.p?D3DERR_NOTFOUND:h;}
 #define CONSTANT(Name,Type,field,N,W) \
  HRESULT Set##Name(UINT first,const Type* data,UINT count)override{SG;if(!data||first>N||count>N-first)return D3DERR_INVALIDCALL;std::memcpy(reinterpret_cast<Type*>(edit().field)+first*W,data,count*W*sizeof(Type));if(recording&&std::is_same<Type,float>::value)for(unsigned i=first;i<first+count;++i)fMask[i]=true;return result();} \
- HRESULT Get##Name(UINT first,Type* data,UINT count)override{GG;if(!constantGetSupported||!data||first>N||count>N-first)return D3DERR_INVALIDCALL;std::memcpy(data,reinterpret_cast<Type*>(state.field)+first*W,count*W*sizeof(Type));if(std::is_same<Type,float>::value)floatReadRegisters+=count;return D3D_OK;}
+ HRESULT Get##Name(UINT first,Type* data,UINT count)override{{GG;if(!constantGetSupported||!data||first>N||count>N-first)return D3DERR_INVALIDCALL;std::memcpy(data,reinterpret_cast<Type*>(state.field)+first*W,count*W*sizeof(Type));if(std::is_same<Type,float>::value)floatReadRegisters+=count;}if(!std::strcmp(#Name,"VertexShaderConstantF"))callback(onGetF);return D3D_OK;}
  CONSTANT(VertexShaderConstantF,float,vf,512,4)
  CONSTANT(VertexShaderConstantI,int,vi,32,4)
  CONSTANT(PixelShaderConstantF,float,pf,256,4)
@@ -104,8 +109,12 @@ struct Backend final:IDirect3DDevice9 {
  HRESULT CreateStateBlock(D3DSTATEBLOCKTYPE t,IDirect3DStateBlock9** p)override{Guard g(*this);if(!p)return D3DERR_INVALIDCALL;*p=new Block(this,t);return D3D_OK;}
  HRESULT BeginStateBlock()override{Guard g(*this);if(recording)return D3DERR_INVALIDCALL;recording=true;pending=state;rsMask.fill(false);fMask.fill(false);return D3D_OK;}
  HRESULT EndStateBlock(IDirect3DStateBlock9** p)override{Guard g(*this);if(!recording||!p)return D3DERR_INVALIDCALL;*p=new Block(this,D3DSBT_ALL,true);recording=false;return D3D_OK;}
- HRESULT DrawPrimitiveUP(D3DPRIMITIVETYPE type,UINT count,const void* data,UINT stride)override{SG;up={type,0,0,count,stride,nullptr,data,0};state.vb[0]=nullptr;state.offset[0]=state.stride[0]=0;return result();}
- HRESULT DrawIndexedPrimitiveUP(D3DPRIMITIVETYPE type,UINT minimum,UINT vertices,UINT count,const void* indices,D3DFORMAT format,const void* data,UINT stride)override{SG;up={type,minimum,vertices,count,stride,indices,data,format};state.vb[0]=nullptr;state.offset[0]=state.stride[0]=0;state.ib=nullptr;return result();}
+ void implicitConstants(bool fixed=false){if(fixed||!state.vs.p){state.vf[70][0]+=1;state.vi[3][0]+=1;state.vbconst[2]=!state.vbconst[2];}}
+ HRESULT DrawPrimitiveUP(D3DPRIMITIVETYPE type,UINT count,const void* data,UINT stride)override{SG;implicitConstants();up={type,0,0,count,stride,nullptr,data,0};state.vb[0]=nullptr;state.offset[0]=state.stride[0]=0;return result();}
+ HRESULT DrawIndexedPrimitiveUP(D3DPRIMITIVETYPE type,UINT minimum,UINT vertices,UINT count,const void* indices,D3DFORMAT format,const void* data,UINT stride)override{SG;implicitConstants();up={type,minimum,vertices,count,stride,indices,data,format};state.vb[0]=nullptr;state.offset[0]=state.stride[0]=0;state.ib=nullptr;return result();}
+ HRESULT DrawPrimitive(D3DPRIMITIVETYPE type,UINT start,UINT count)override{HRESULT hr;{SG;implicitConstants();up.type=type;up.count=count;drawStart=start;hr=result();}callback(onDraw);return hr;}
+ HRESULT DrawIndexedPrimitive(D3DPRIMITIVETYPE type,INT base,UINT minimum,UINT vertices,UINT start,UINT count)override{SG;implicitConstants();up.type=type;up.minimum=minimum;up.vertices=vertices;up.count=count;drawStart=start;drawBase=base;return result();}
+ HRESULT ProcessVertices(UINT source,UINT destination,UINT count,IDirect3DVertexBuffer9* buffer,IDirect3DVertexDeclaration9* declaration,DWORD flags)override{SG;implicitConstants(true);process={source,destination,count,buffer,declaration,flags};return result();}
  HRESULT SetSoftwareVertexProcessing(WINBOOL)override{SG;state.rs[D3DRS_ZENABLE]=0;return result();}
  HRESULT Reset(D3DPRESENT_PARAMETERS*)override{SG;state=State{};recording=false;return result();}
 #undef SG
@@ -468,6 +477,37 @@ static void auditEveryField(){
   auto calls=b.calls;assert(!ext.audit()&&b.calls==calls);
  }
 }
+static void implicitConstantBanks(){
+ Backend b;DeviceMirror m;MirrorDevice game(&b,&m);ExtensionDevice ext(&b,&m);
+ auto* shader=new Object<IDirect3DVertexShader9>();float f[4];int i[4];BOOL flag;
+ for(unsigned mode=0;mode<7;++mode){
+  assert(SUCCEEDED(game.SetVertexShader(mode==4||mode==6?shader:nullptr)));
+  if(mode==5)m.invalidate(); // Unknown binding must not certify a programmable draw.
+  assert(SUCCEEDED(ext.GetVertexShaderConstantF(70,f,1))&&SUCCEEDED(ext.GetVertexShaderConstantI(3,i,1))&&SUCCEEDED(ext.GetVertexShaderConstantB(2,&flag,1)));
+  NorthlightConstantEpoch::Stamp before,after;assert(ext.constantStamp(before));
+  HRESULT hr=mode==0||mode==5||mode==6?game.DrawPrimitive(D3DPT_TRIANGLELIST,0,1):mode==1?game.DrawIndexedPrimitive(D3DPT_TRIANGLELIST,0,0,3,0,1):mode==2?game.DrawPrimitiveUP(D3DPT_TRIANGLELIST,1,nullptr,12):mode==3?game.DrawIndexedPrimitiveUP(D3DPT_TRIANGLELIST,0,3,1,nullptr,D3DFMT_INDEX16,nullptr,12):game.ProcessVertices(0,0,3,nullptr,nullptr,0);
+  assert(SUCCEEDED(hr)&&ext.constantStamp(after));
+  if(mode==6)assert(NorthlightConstantEpoch::exact(before,after));
+  else assert(before.reset!=after.reset&&!m.vsFloatKnown[70]&&!m.vsIntKnown[3]&&!m.vsBoolKnown[2]);
+  assert(SUCCEEDED(ext.GetVertexShaderConstantF(70,f,1))&&f[0]==b.state.vf[70][0]);
+  assert(SUCCEEDED(ext.GetVertexShaderConstantI(3,i,1))&&i[0]==b.state.vi[3][0]);
+  assert(SUCCEEDED(ext.GetVertexShaderConstantB(2,&flag,1))&&flag==b.state.vbconst[2]);
+ }
+ assert(SUCCEEDED(game.SetVertexShader(nullptr)));shader->Release();
+ struct Reentry {MirrorDevice* game;IDirect3DVertexShader9* shader;} reentry{&game,new Object<IDirect3DVertexShader9>()};b.callbackContext=&reentry;
+ const auto setNull=[](void* p){auto& r=*static_cast<Reentry*>(p);assert(SUCCEEDED(r.game->SetVertexShader(nullptr)));};
+ b.onSetVS=setNull;assert(SUCCEEDED(game.SetVertexShader(reentry.shader)));assert(!b.state.vs.p&&!m.programmableVS&&!m.vertexShaderKnown);
+ assert(SUCCEEDED(game.SetVertexShader(reentry.shader)));b.onGetVS=setNull;IDirect3DVertexShader9* read=nullptr;assert(SUCCEEDED(ext.GetVertexShader(&read)));read->Release();assert(!b.state.vs.p&&!m.programmableVS&&!m.vertexShaderKnown);
+ assert(SUCCEEDED(ext.GetVertexShaderConstantF(70,f,1)));NorthlightConstantEpoch::Stamp before,after;assert(ext.constantStamp(before));
+ b.onDraw=[](void* p){auto& r=*static_cast<Reentry*>(p);assert(SUCCEEDED(r.game->SetVertexShader(r.shader)));};
+ assert(SUCCEEDED(game.DrawPrimitive(D3DPT_TRIANGLELIST,0,1))&&ext.constantStamp(after));assert(before.reset!=after.reset&&!m.vsFloatKnown[70]);
+ assert(SUCCEEDED(ext.GetVertexShaderConstantF(70,f,1))&&f[0]==b.state.vf[70][0]);assert(SUCCEEDED(game.SetVertexShader(nullptr)));reentry.shader->Release();
+ const float a[4]={1,2,3,4};assert(SUCCEEDED(game.SetVertexShaderConstantF(70,a,1)));m.invalidate();
+ b.onGetF=[](void* p){auto& r=*static_cast<Reentry*>(p);const float changed[4]={5,6,7,8};assert(SUCCEEDED(r.game->SetVertexShaderConstantF(70,changed,1)));};
+ assert(SUCCEEDED(ext.GetVertexShaderConstantF(70,f,1))&&f[0]==1&&!m.vsFloatKnown[70]);const auto gets=b.gets;
+ assert(SUCCEEDED(ext.GetVertexShaderConstantF(70,f,1))&&f[0]==5&&b.gets==gets+1&&m.vsFloatKnown[70]);
+ std::puts("PASS implicit constant banks: four draw variants, unknown binding, ProcessVertices with a bound VS, and programmable draw reuse");
+}
 static void constantCertificates(){
  using namespace NorthlightConstantEpoch;
  // Exhaust every legal float interval against an independent per-register oracle.
@@ -711,10 +751,13 @@ static void rawScopeDispatchArguments(){
   assert(SUCCEEDED(ext.SetVertexShaderConstantB(8,booleans,3)));assert(SUCCEEDED(ext.GetVertexShaderConstantB(8,gotBools,3))&&!gotBools[0]&&gotBools[1]==1&&gotBools[2]==1);
   assert(SUCCEEDED(ext.DrawPrimitiveUP(6,2,data,16)));assert(b.up.type==6&&b.up.count==2&&b.up.data==data&&b.up.stride==16);
   assert(SUCCEEDED(ext.DrawIndexedPrimitiveUP(4,7,9,3,ints,102,data,12)));assert(b.up.type==4&&b.up.minimum==7&&b.up.vertices==9&&b.up.count==3&&b.up.indices==ints&&b.up.format==102&&b.up.data==data&&b.up.stride==12);
-  assert(m.rawCalls==37&&m.rawDepth==1); // All 36 generated methods plus the extra FVF read.
+  assert(SUCCEEDED(ext.DrawPrimitive(6,17,2)));assert(b.up.type==6&&b.drawStart==17&&b.up.count==2);
+  assert(SUCCEEDED(ext.DrawIndexedPrimitive(5,-7,2,9,4,3)));assert(b.up.type==5&&b.drawBase==-7&&b.up.minimum==2&&b.up.vertices==9&&b.drawStart==4&&b.up.count==3);
+  assert(SUCCEEDED(ext.ProcessVertices(11,13,17,vb,decl,0x21)));assert(b.process.source==11&&b.process.destination==13&&b.process.count==17&&b.process.buffer==vb&&b.process.declaration==decl&&b.process.flags==0x21);
+  assert(m.rawCalls==40&&m.rawDepth==1); // All 39 generated methods plus the extra FVF read.
  }
  vs->Release();ps->Release();decl->Release();vb->Release();ib->Release();texture->Release();surface->Release();
- std::puts("PASS raw dispatch: all 36 generated state/resource/constant/UP methods preserve nondefault argument positions, output pointers, COM references, normalized values and exact backend data.");
+ std::puts("PASS raw dispatch: all 39 generated methods preserve nondefault argument positions, output pointers, COM references, normalized values and exact backend data.");
 }
 
 // 0.3.136 learned write-through: every scenario compares against the mock's
@@ -997,4 +1040,4 @@ int main(int argc,char** argv){
  if(mode("exclusive")){ownerNesting(true);foreignWaits(true);ownerStress(rounds,true);std::puts("PASS exclusive owner mode");return 0;}
  if(mode("owner")){ownerIdentity();ownerNesting();foreignWaits();ownerStress(rounds);ownerNesting(true);foreignWaits(true);ownerStress(rounds,true);assert(!liveObjects);return 0;}
  if(mode("threads")){singleGate();gateCensus();rawScopeConcurrency();concurrency();ownerNesting();foreignWaits();ownerStress(rounds);ownerNesting(true);foreignWaits(true);ownerStress(rounds,true);std::puts("PASS threads");return 0;}
- ownerIdentity();assert(!liveObjects);ownerNesting();assert(!liveObjects);foreignWaits();assert(!liveObjects);ownerStress(rounds);assert(!liveObjects);ownerNesting(true);foreignWaits(true);ownerStress(rounds,true);assert(!liveObjects);gateCensus();assert(!liveObjects);knownScan();assert(!liveObjects);singleGate();writeThroughLearning();assert(!liveObjects);writeThroughImplicitState();assert(!liveObjects);writeThroughDifferential();assert(!liveObjects);rawScopeDispatchArguments();assert(!liveObjects);rawScopeBanksAndReentry();assert(!liveObjects);rawScopeRestoreAndControls();assert(!liveObjects);rawScopeConcurrency();assert(!liveObjects);rawScopeShadowWorkload();assert(!liveObjects);constantCertificates();assert(!liveObjects);auditCoverageAndSchedule();assert(!liveObjects);static_assert(!std::is_copy_constructible<DeviceMirror>::value,"mirror cannot copy mutex/state");bindingsAndScalars();assert(!liveObjects);constantBanks();assert(!liveObjects);constantCapabilities();assert(!liveObjects);recordingFailures();assert(!liveObjects);savedStateIntegration();assert(!liveObjects);crowdedWorkload();assert(!liveObjects);stateBlocks();assert(!liveObjects);implicitAndDisabled();assert(!liveObjects);auditChecks();assert(!liveObjects);auditEveryField();assert(!liveObjects);concurrency();assert(!liveObjects);std::puts("PASS actual device_mirror.h: authoritative cached queries; COM refs; normalized/failed setters; partial exact-bit banks; ALL/partial/recorded stateblocks including failed Apply; UP and Reset failures; target/FVF implicit changes; two proxies; disabled raw bypass; 30000 randomized banks; 8 threads x5000 iterations, serialized backend calls (80072 with learned write-through, 120008 read-through).");}
+ ownerIdentity();assert(!liveObjects);ownerNesting();assert(!liveObjects);foreignWaits();assert(!liveObjects);ownerStress(rounds);assert(!liveObjects);ownerNesting(true);foreignWaits(true);ownerStress(rounds,true);assert(!liveObjects);gateCensus();assert(!liveObjects);knownScan();assert(!liveObjects);singleGate();writeThroughLearning();assert(!liveObjects);writeThroughImplicitState();assert(!liveObjects);writeThroughDifferential();assert(!liveObjects);rawScopeDispatchArguments();assert(!liveObjects);rawScopeBanksAndReentry();assert(!liveObjects);rawScopeRestoreAndControls();assert(!liveObjects);rawScopeConcurrency();assert(!liveObjects);rawScopeShadowWorkload();assert(!liveObjects);implicitConstantBanks();assert(!liveObjects);constantCertificates();assert(!liveObjects);auditCoverageAndSchedule();assert(!liveObjects);static_assert(!std::is_copy_constructible<DeviceMirror>::value,"mirror cannot copy mutex/state");bindingsAndScalars();assert(!liveObjects);constantBanks();assert(!liveObjects);constantCapabilities();assert(!liveObjects);recordingFailures();assert(!liveObjects);savedStateIntegration();assert(!liveObjects);crowdedWorkload();assert(!liveObjects);stateBlocks();assert(!liveObjects);implicitAndDisabled();assert(!liveObjects);auditChecks();assert(!liveObjects);auditEveryField();assert(!liveObjects);concurrency();assert(!liveObjects);std::puts("PASS actual device_mirror.h: authoritative cached queries; COM refs; normalized/failed setters; partial exact-bit banks; ALL/partial/recorded stateblocks including failed Apply; UP and Reset failures; target/FVF implicit changes; two proxies; disabled raw bypass; 30000 randomized banks; 8 threads x5000 iterations, serialized backend calls (80072 with learned write-through, 120008 read-through).");}

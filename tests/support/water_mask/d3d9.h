@@ -90,6 +90,7 @@ struct IDirect3DStateBlock9:IUnknown {virtual HRESULT GetDevice(IDirect3DDevice9
  X(SetSoftwareVertexProcessing,(WINBOOL a),(a)) \
  X(DrawPrimitive,(D3DPRIMITIVETYPE a,UINT b,UINT c),(a,b,c)) \
  X(DrawIndexedPrimitive,(D3DPRIMITIVETYPE a,INT b,UINT c,UINT d,UINT e,UINT f),(a,b,c,d,e,f)) \
+ X(ProcessVertices,(UINT a,UINT b,UINT c,IDirect3DVertexBuffer9* d,IDirect3DVertexDeclaration9* e,DWORD f),(a,b,c,d,e,f)) \
  X(Clear,(DWORD a,const D3DRECT* b,DWORD c,D3DCOLOR d,float e,DWORD f),(a,b,c,d,e,f)) \
  X(SetScissorRect,(const RECT* a),(a)) \
  X(GetScissorRect,(RECT* a),(a)) \

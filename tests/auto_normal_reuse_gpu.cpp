@@ -1,0 +1,101 @@
+// Real-device cache pressure: every recycled map must equal a fresh render.
+#define main normal_reuse_distance_main
+#include "composite_distance_gpu.cpp"
+#undef main
+#include <unordered_map>
+template<class T>static void drop(T*& p){if(p)p->Release();p=nullptr;}
+static void logf(const char*,...){}
+#include "forwarders.h"
+#include "saved_state.h"
+#include "auto_bump_compiled_shaders.h"
+static BOOL cacheMemory(LPMEMORYSTATUSEX m){m->ullAvailVirtual=715ull<<20;return TRUE;}
+#define GlobalMemoryStatusEx cacheMemory
+#include "auto_normal_cache.h"
+#undef GlobalMemoryStatusEx
+struct Meter:ForwardIDirect3DDevice9 {
+    unsigned allocations=0;bool failDraw=false;
+    std::array<DWORD,8> pixelInputs{};
+    explicit Meter(IDirect3DDevice9* d):ForwardIDirect3DDevice9(d){}
+    HRESULT STDMETHODCALLTYPE CreateTexture(UINT w,UINT h,UINT l,DWORD usage,D3DFORMAT f,D3DPOOL pool,IDirect3DTexture9** out,HANDLE* shared)override{
+        if(usage&D3DUSAGE_RENDERTARGET)++allocations;return real->CreateTexture(w,h,l,usage,f,pool,out,shared);
+    }
+    HRESULT STDMETHODCALLTYPE DrawPrimitiveUP(D3DPRIMITIVETYPE type,UINT count,const void* data,UINT stride)override{
+        ok(real->GetPixelShaderConstantF(0,reinterpret_cast<float*>(pixelInputs.data()),2));
+        if(failDraw){failDraw=false;return E_FAIL;}return real->DrawPrimitiveUP(type,count,data,stride);
+    }
+};
+static std::vector<unsigned char> pixels(IDirect3DDevice9* d,IDirect3DTexture9* texture){
+    D3DSURFACE_DESC desc{};ok(texture->GetLevelDesc(0,&desc));IDirect3DSurface9 *surface=nullptr,*stage=nullptr;
+    ok(texture->GetSurfaceLevel(0,&surface));ok(d->CreateOffscreenPlainSurface(desc.Width,desc.Height,desc.Format,D3DPOOL_SYSTEMMEM,&stage,nullptr));ok(d->GetRenderTargetData(surface,stage));
+    D3DLOCKED_RECT lock{};ok(stage->LockRect(&lock,nullptr,D3DLOCK_READONLY));std::vector<unsigned char> out(size_t(desc.Width)*desc.Height*4);
+    for(UINT y=0;y<desc.Height;++y)std::memcpy(out.data()+size_t(y)*desc.Width*4,static_cast<char*>(lock.pBits)+size_t(y)*lock.Pitch,desc.Width*4);
+    ok(stage->UnlockRect());drop(stage);drop(surface);return out;
+}
+int main(int argc,char** argv){
+    assert(argc==2);auto module=LoadLibraryA(argv[1]);assert(module);auto create=reinterpret_cast<IDirect3D9*(WINAPI*)(UINT)>(GetProcAddress(module,"Direct3DCreate9"));assert(create);auto api=create(D3D_SDK_VERSION);assert(api);
+    HWND window=CreateWindowExW(0,L"STATIC",L"",WS_OVERLAPPED,0,0,64,64,nullptr,nullptr,GetModuleHandleW(nullptr),nullptr);assert(window);
+    D3DPRESENT_PARAMETERS pp{};pp.Windowed=TRUE;pp.hDeviceWindow=window;pp.BackBufferWidth=pp.BackBufferHeight=64;pp.SwapEffect=D3DSWAPEFFECT_DISCARD;pp.BackBufferFormat=D3DFMT_X8R8G8B8;
+    IDirect3DDevice9* raw=nullptr;ok(api->CreateDevice(0,D3DDEVTYPE_HAL,window,D3DCREATE_HARDWARE_VERTEXPROCESSING|D3DCREATE_FPU_PRESERVE,&pp,&raw));
+    unsigned compared=0,churnAllocations=0;
+    {
+    Meter device(raw);NorthlightAutoNormalCache cache(&device),reference(&device);std::vector<IDirect3DTexture9*> sources;
+    std::vector<std::vector<unsigned char>> expected;std::vector<std::array<DWORD,8>> expectedInputs;
+    for(unsigned i=0;i<31;++i){const unsigned height=i==30?256:512;IDirect3DTexture9* source=nullptr;
+        ok(raw->CreateTexture(512,height,1,0,D3DFMT_A8R8G8B8,D3DPOOL_MANAGED,&source,nullptr));D3DLOCKED_RECT lock{};ok(source->LockRect(0,&lock,nullptr,0));
+        for(unsigned y=0;y<height;++y)for(unsigned x=0;x<512;++x){const DWORD value=0xff000000u|(((x*13+y*7+i*31)&255)<<16)|(((x*3+y*17+i*19)&255)<<8)|((x*23+y*5+i*11)&255);std::memcpy(static_cast<char*>(lock.pBits)+size_t(y)*lock.Pitch+x*4,&value,4);}
+        ok(source->UnlockRect(0));sources.push_back(source);
+    }
+    float constants[256*4],restored[256*4];for(unsigned k=0;k<256*4;++k)constants[k]=float(k+1)*.00013f;
+    for(bool model:{false,true}){
+        expected.clear();expectedInputs.clear();cache.reset();reference.reset();
+        for(unsigned i=0;i<30;++i){ok(raw->SetVertexShaderConstantF(0,constants,256));ok(raw->BeginScene());auto normal=reference.acquire(sources[i],model);assert(normal);ok(raw->EndScene());expected.push_back(pixels(raw,normal.get()));expectedInputs.push_back(device.pixelInputs);reference.reset();reference.endFrame();}
+        assert(expected[0]!=expected[1]);
+        const unsigned before=device.allocations;
+        for(unsigned round=0;round<3;++round)for(unsigned i=0;i<30;++i){
+            ok(raw->SetVertexShaderConstantF(0,constants,256));
+            ok(raw->BeginScene());auto normal=cache.acquire(sources[i],model);assert(normal);ok(raw->EndScene());
+            if(device.pixelInputs!=expectedInputs[i]){std::fprintf(stderr,"NORMAL_REUSE_INPUT_MISMATCH model=%u round=%u source=%u\n",unsigned(model),round,i);for(unsigned k=0;k<8;++k)std::fprintf(stderr,"c%u %08lx %08lx\n",k,static_cast<unsigned long>(expectedInputs[i][k]),static_cast<unsigned long>(device.pixelInputs[k]));}assert(device.pixelInputs==expectedInputs[i]);
+            ok(raw->GetVertexShaderConstantF(0,restored,256));assert(!std::memcmp(constants,restored,sizeof constants));
+            const auto actual=pixels(raw,normal.get());if(actual!=expected[i]){unsigned differences=0,peak=0;for(size_t k=0;k<actual.size();++k)if(actual[k]!=expected[i][k]){++differences;peak=std::max(peak,unsigned(std::abs(int(actual[k])-expected[i][k])));}std::fprintf(stderr,"NORMAL_REUSE_MISMATCH model=%u round=%u source=%u differences=%u peak=%u allocations=%u\n",unsigned(model),round,i,differences,peak,device.allocations-before);}assert(actual==expected[i]);++compared;cache.endFrame();
+        }
+#ifdef NORMAL_REUSE_BASELINE
+        assert(device.allocations-before==90);
+#else
+        assert(device.allocations-before==24);
+#endif
+        churnAllocations+=device.allocations-before;
+    }
+    ok(raw->BeginScene());
+    auto fill=[&](){cache.reset();cache.endFrame();for(unsigned i=0;i<24;++i){assert(cache.resolve(sources[i],true));cache.endFrame();}};
+    fill();
+    {
+        auto* old=cache.resolve(sources[0],true);auto saved=pixels(raw,old);for(unsigned i=1;i<24;++i)assert(cache.resolve(sources[i],true));
+        IDirect3DSurface9 *previous=nullptr,*surface=nullptr;ok(raw->GetRenderTarget(0,&previous));ok(old->GetSurfaceLevel(0,&surface));ok(raw->SetRenderTarget(0,surface));
+        const unsigned before=device.allocations;assert(cache.resolve(sources[24],true));assert(device.allocations==before+1);assert(pixels(raw,old)==saved);ok(raw->SetRenderTarget(0,previous));drop(surface);drop(previous);
+    }
+    fill();
+    {
+        auto held=cache.acquire(sources[0],true);auto old=pixels(raw,held.get());
+        for(unsigned i=1;i<24;++i)assert(cache.resolve(sources[i],true));
+        const unsigned before=device.allocations;auto next=cache.acquire(sources[24],true);assert(next&&next.get()!=held.get());assert(device.allocations==before+1);assert(pixels(raw,held.get())==old);
+        cache.reset();assert(pixels(raw,held.get())==old);
+    }
+    fill();
+    {
+        auto* old=cache.resolve(sources[0],true);auto saved=pixels(raw,old);for(unsigned i=1;i<24;++i)assert(cache.resolve(sources[i],true));
+        ok(raw->SetTexture(3,old));const unsigned before=device.allocations;assert(cache.resolve(sources[24],true));assert(device.allocations==before+1);assert(pixels(raw,old)==saved);ok(raw->SetTexture(3,nullptr));
+    }
+    fill();
+    {
+        NorthlightAutoNormalCache::Lease held[9];for(unsigned i=0;i<8;++i)held[i]=cache.acquire(sources[23],true);held[8]=cache.acquire(sources[22],true);auto old=pixels(raw,held[8].get());
+        for(unsigned i=0;i<22;++i)assert(cache.resolve(sources[i],true));assert(cache.resolve(sources[23],true));
+        const unsigned before=device.allocations;auto next=cache.acquire(sources[24],true);assert(next&&device.allocations==before+1);assert(pixels(raw,held[8].get())==old);
+    }
+    fill();
+    {const unsigned before=device.allocations;assert(cache.resolve(sources[30],true));assert(device.allocations==before+1);}
+    fill();device.failDraw=true;assert(!cache.resolve(sources[24],true));cache.endFrame();auto* recovered=cache.resolve(sources[24],true);assert(recovered&&pixels(raw,recovered)==expected[24]);ok(raw->EndScene());
+    cache.reset();for(auto*& source:sources)drop(source);
+    }
+    raw->Release();api->Release();FreeLibrary(module);DestroyWindow(window);
+    std::printf("NORMAL_REUSE_PASS compared=%u churnAllocations=%u freshAllocations=180 lease=checked bound=checked renderTarget=checked overflow=checked resize=checked failedDraw=checked reset=checked\n",compared,churnAllocations);
+}

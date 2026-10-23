@@ -183,14 +183,14 @@ public:
     std::function<IUnknown*(IUnknown*,Kind)> rawOf;
     static bool takesRaw(Kind k){return k==Kind::Surface||k==Kind::Texture||k==Kind::CubeTexture||k==Kind::VolumeTexture||k==Kind::VertexBuffer||k==Kind::IndexBuffer||k==Kind::VertexShader||k==Kind::PixelShader||k==Kind::VertexDeclaration;}
     void bindInner(ProxyBase* p,IUnknown* inner){
-        if(p->kind==Kind::Texture)NorthlightParticleTextures::cache().erase(p->raw,p);
+        if(p->kind==Kind::Texture)NorthlightParticleTextures::cache().erase(p->raw,p);if(p->kind==Kind::Texture)NorthlightMaterialTextures::cache().erase(p->raw);
         {std::lock_guard<std::mutex> l(m_);p->inner=inner;byInner_[inner]=p;}
         p->raw=rawOf&&inner&&takesRaw(p->kind)?rawOf(inner,p->kind):nullptr;
     }   // the newest proxy of an object wins identity
-    void unbindInner(ProxyBase* p){if(p->kind==Kind::Texture)NorthlightParticleTextures::cache().erase(p->raw,p);p->raw=nullptr;std::lock_guard<std::mutex> l(m_);if(p->inner){auto i=byInner_.find(p->inner);if(i!=byInner_.end()&&i->second==p)byInner_.erase(i);}}
+    void unbindInner(ProxyBase* p){if(p->kind==Kind::Texture)NorthlightParticleTextures::cache().erase(p->raw,p);if(p->kind==Kind::Texture)NorthlightMaterialTextures::cache().erase(p->raw);p->raw=nullptr;std::lock_guard<std::mutex> l(m_);if(p->inner){auto i=byInner_.find(p->inner);if(i!=byInner_.end()&&i->second==p)byInner_.erase(i);}}
     ProxyBase* findInner(const void* inner){std::lock_guard<std::mutex> l(m_);auto i=byInner_.find(inner);return i==byInner_.end()?nullptr:i->second;}
     // Replay thread (destroy): forget the proxy; the inner entry only if it still names this proxy.
-    void erase(ProxyBase* p){if(p->kind==Kind::Texture)NorthlightParticleTextures::cache().erase(p->raw,p);std::lock_guard<std::mutex> l(m_);byProxy_.erase(p->unk);if(p->inner){auto i=byInner_.find(p->inner);if(i!=byInner_.end()&&i->second==p)byInner_.erase(i);}}
+    void erase(ProxyBase* p){if(p->kind==Kind::Texture)NorthlightParticleTextures::cache().erase(p->raw,p);if(p->kind==Kind::Texture)NorthlightMaterialTextures::cache().erase(p->raw);std::lock_guard<std::mutex> l(m_);byProxy_.erase(p->unk);if(p->inner){auto i=byInner_.find(p->inner);if(i!=byInner_.end()&&i->second==p)byInner_.erase(i);}}
     // The Target-level object behind a proxy pointer the game stored in its own memory (an opaque value, never dereferenced).
     const void* innerOf(const void* maybeProxy){std::lock_guard<std::mutex> l(m_);auto i=byProxy_.find(maybeProxy);return i==byProxy_.end()||!i->second->inner?maybeProxy:static_cast<const void*>(i->second->inner);}
     // Init failure only (the replay thread is gone or about to be): release every Target object the proxies hold, and hand the proxies out to be deleted.
@@ -395,15 +395,15 @@ struct UnlockBufferRefArgs {ProxyBase* proxy;const unsigned char* src;UINT off,s
 enum ImageRoute:UINT{RouteSurface=0,RouteTexture=1,RouteCube=2,RouteVolumeTexture=3,RouteVolume=4};
 
 inline ProxyBase* particleTextureRoot(ProxyBase* p){if(p&&p->kind==Kind::Surface)p=p->parent;return p&&p->kind==Kind::Texture?p:nullptr;}
-inline void invalidateParticleTexture(ProxyBase* p){if(auto* root=particleTextureRoot(p))NorthlightParticleTextures::cache().invalidate(root->raw);}
+inline void invalidateParticleTexture(ProxyBase* p,bool material=true){if(auto* root=particleTextureRoot(p)){NorthlightParticleTextures::cache().invalidate(root->raw);if(material)NorthlightMaterialTextures::cache().invalidate(root->raw);}}
 inline void captureParticleTexture(const UnlockImageArgs& a,const unsigned char* src,bool success){
     auto* root=particleTextureRoot(a.proxy);if(!root||a.flags&D3::kLockReadOnly)return;
-    if(root->info.usage&(D3::kUsageRT|D3::kUsageDS|D3::kUsageAutoGen)){invalidateParticleTexture(root);return;}
-    // Do not read kids/SubRes: the game thread can already be recording later
-    // levels. A derived surface's immutable dimensions identify its mip.
+    // Only immutable creation metadata is read here, on the replay thread.
     unsigned level=a.level;if(a.proxy!=root){level=0;for(;level<root->info.levels;++level)if(D3::mipDim(root->info.w,level)==a.proxy->info.w&&D3::mipDim(root->info.h,level)==a.proxy->info.h)break;if(level>=root->info.levels){invalidateParticleTexture(root);return;}}
     const unsigned w=D3::mipDim(root->info.w,level),h=D3::mipDim(root->info.h,level);
     const bool whole=a.slices==1&&(!a.hasRect||(a.l==0&&a.t==0&&a.r==LONG(w)&&a.b==LONG(h)));
+    if(!(root->info.usage&(D3::kUsageDS|D3::kUsageRT))&&((root->info.usage&D3::kUsageDynamic)||((root->info.usage&D3::kUsageAutoGen)&&root->info.fmt==21)||(root->info.levels==1&&root->info.fmt==21&&root->info.w>=256&&root->info.h>=256))){auto& cache=NorthlightMaterialTextures::cache();if(whole)cache.upload(root->raw,root,w,h,level,root->info.fmt,src,std::size_t(a.rows)*a.pitch,a.pitch,true,success);else if(a.hasRect&&a.slices==1)cache.updateRect(root->raw,root,w,h,level,root->info.fmt,src,std::size_t(a.rows)*a.pitch,a.pitch,unsigned(a.l),unsigned(a.t),unsigned(a.r),unsigned(a.b),success);else cache.invalidate(root->raw);}
+    if(root->info.usage&(D3::kUsageRT|D3::kUsageDS|D3::kUsageAutoGen)){NorthlightParticleTextures::cache().invalidate(root->raw);return;}
     NorthlightParticleTextures::cache().upload(root->raw,root,w,h,level,root->info.fmt,src,std::size_t(a.rows)*a.pitch,a.pitch,whole,success);
 }
 

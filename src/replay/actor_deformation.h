@@ -80,12 +80,12 @@ inline void slice(Program& p){
     std::vector<Input> inputs;for(auto input:p.inputs)if(used[input.reg])inputs.push_back(input);p.inputs=std::move(inputs);
     buildKernel(p);
 }
-inline bool compile(const Word* words,std::size_t count,Program& output,bool textureCoordinates=false,unsigned projectionKind=2,unsigned outputUsage=5){
+inline bool compile(const Word* words,std::size_t count,Program& output,bool textureCoordinates=false,unsigned projectionKind=2,unsigned outputUsage=5,unsigned outputIndex=0,unsigned requiredMask=0){
     using namespace NorthlightShadowShader;output={};
-    if(!words||count<2||count>65536||projectionKind!=2||(textureCoordinates&&outputUsage!=5&&outputUsage!=10))return false;
-    Program p;p.textureCoordinates=textureCoordinates;p.outputMask=textureCoordinates?(outputUsage==10?15:3):0;p.major=(words[0]>>8)&255;
+    if(!words||count<2||count>65536||(projectionKind!=1&&projectionKind!=2)||(textureCoordinates&&outputUsage!=5&&outputUsage!=10))return false;
+    Program p;p.textureCoordinates=textureCoordinates;p.outputMask=textureCoordinates?(requiredMask?requiredMask:outputUsage==10?15:3):0;p.major=(words[0]>>8)&255;
     if(words[0]!=(p.major==1?0xfffe0101u:p.major==2?0xfffe0200u:0xfffe0300u)||p.major<1||p.major>3)return false;
-    unsigned positionType=p.major<3?4:99,positionIndex=0,uvType=p.major<3&&outputUsage==10?5:6,uvIndex=p.major<3?0:99,uvWritten=0;bool inputUsed[16]={};
+    unsigned positionType=p.major<3?4:99,positionIndex=0,uvType=p.major<3&&outputUsage==10?5:6,uvIndex=p.major<3?outputIndex:99,uvWritten=0;bool inputUsed[16]={};
     auto finish=[&]()->bool{std::vector<Input> needed;for(auto i:p.inputs)if(inputUsed[i.reg]){needed.push_back(i);inputUsed[i.reg]=false;}
         for(bool missing:inputUsed)if(missing)return false;p.inputs=std::move(needed);slice(p);output=std::move(p);return true;};
     for(std::size_t at=1;at<count;){
@@ -101,13 +101,30 @@ inline bool compile(const Word* words,std::size_t count,Program& output,bool tex
         if(op==31){if(n!=2)return false;unsigned type=regType(a[1]);
             if(type==1){if(regIndex(a[1])>=16)return false;p.inputs.push_back({regIndex(a[1]),a[0]&15,(a[0]>>16)&15});}
             else if(type==6&&(a[0]&15)==0&&((a[0]>>16)&15)==0){positionType=6;positionIndex=regIndex(a[1]);}
-            else if(type==6&&(a[0]&15)==outputUsage&&((a[0]>>16)&15)==0)uvIndex=regIndex(a[1]);
+            else if(type==6&&(a[0]&15)==outputUsage&&((a[0]>>16)&15)==outputIndex)uvIndex=regIndex(a[1]);
         }else if(op==81){if(n!=5||regType(a[0])!=2||regIndex(a[0])>=256)return false;
             Definition d;d.reg=regIndex(a[0]);std::memcpy(d.value.data(),a+1,16);p.definitions.push_back(d);
         }else{
+            // DetailDoodad uses the audited column projection, after its
+            // affine model-view prefix. Keep that prefix for whole-mesh
+            // bounds; the GPU replay still executes the original shader.
+            if(!textureCoordinates&&projectionKind==1&&op==5&&n==3&&a[0]==0x800f0001u){
+                const Word chain[]={0x03000005u,0x800f0001u,0xa0e40005u,0x80550000u,
+                    0x04000004u,0x800f0001u,0x80000000u,0xa0e40004u,0x80e40001u,
+                    0x04000004u,0x800f0001u,0x80aa0000u,0xa0e40006u,0x80e40001u,
+                    0x04000004u,replaceReg(0x800f0000u,positionType,positionIndex),0x80ff0000u,0xa0e40007u,0x80e40001u};
+                if(p.major<2||count-at<sizeof(chain)/sizeof(*chain))return false;
+                // The first MUL is commutative in the stock VS2 permutation.
+                if(words[at+2]!=chain[2]||words[at+3]!=chain[3]){
+                    if(words[at+2]!=chain[3]||words[at+3]!=chain[2])return false;
+                }
+                for(unsigned k=0;k<sizeof(chain)/sizeof(*chain);++k)if(k!=2&&k!=3&&words[at+k]!=chain[k])return false;
+                for(const auto& definition:p.definitions)if(definition.reg>=4&&definition.reg<=7)return false;
+                p.positionRegister=0;return finish();
+            }
             // The four original projection DP4 instructions must be consecutive
             // and read the same unmodified temp; stop before applying projection.
-            if(!textureCoordinates&&op==9&&n==3&&regType(a[0])==positionType&&regIndex(a[0])==positionIndex){
+            if(!textureCoordinates&&projectionKind==2&&op==9&&n==3&&regType(a[0])==positionType&&regIndex(a[0])==positionIndex){
                 if(regType(a[2])!=0||regIndex(a[2])>=32||(a[2]&0x0fff2000u)!=0x00e40000u)return false;
                 std::size_t q=at;
                 for(unsigned component=0;component<4;++component){
@@ -341,8 +358,8 @@ inline bool textureUVs(const Program& program,const NorthlightDrawSnapshot::Mesh
 // One currently referenced vertex, used ONLY for experimental distance ranking.
 // No allocations, stale poses, model-origin assumptions, or buffer readbacks.
 inline bool sampledVertexInputsAt(const Program& program,const NorthlightDrawSnapshot::Mesh& mesh,
-    const D3DVERTEXELEMENT9* elements,size_t count,unsigned vertex,Four (&inputs)[16]){
-    if(program.textureCoordinates||!elements||!count||count>MAXD3DDECLLENGTH+1||!mesh.vertexCount)return false;
+    const D3DVERTEXELEMENT9* elements,size_t count,unsigned vertex,Four (&inputs)[16],bool textureInputs=false){
+    if((program.textureCoordinates&&!textureInputs)||!elements||!count||count>MAXD3DDECLLENGTH+1||!mesh.vertexCount)return false;
     if(vertex>=mesh.vertexCount)return false;
     for(auto& input:inputs)input={};
     for(const auto& input:program.inputs){

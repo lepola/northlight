@@ -58,7 +58,7 @@ checks={
  'no direct lock/unlock of a gate outside mirror_guard.h':not any(re.search(r'(\bgate(_|\(\))?|\bmutex)\.(lock|unlock|try_lock)\(',t) for n,t in proxy.items() if n!='mirror_guard.h'),
  'both generators emit MirrorGuard':'MirrorGuard lock(m->gate,MirrorSite::Device);' in fp.tracked('generate_mirror_guarded_device.py').read_text()
    and "prefix='MirrorGuard lock(gate,MirrorSite::Resource); '" in fp.tracked('generate_mirror_resource_forwarders.py').read_text()
-   and proxy['mirror_guarded_device.h'].count('MirrorGuard lock(m->gate,MirrorSite::Device);')==78 and 'MirrorGuard lock(gate,MirrorSite::Resource);' in proxy['mirror_resource_forwarders.h'],
+   and proxy['mirror_guarded_device.h'].count('MirrorGuard lock(m->gate,MirrorSite::Device);')==75 and 'MirrorGuard lock(gate,MirrorSite::Resource);' in proxy['mirror_resource_forwarders.h'],
  'mirror_guarded_device.h is up to date with its generator':regenerated==before,
  'MirrorGate has ownerTid, set by the Device constructor':'std::uint32_t ownerTid;' in guard and 'mirrorState.gate.ownerTid=MirrorGuard::threadId();' in proxy['renderer.cpp'],
  'census only after the nested return (outer entries: elided, locked, foreign)':ctor.count('gate.entered(')==1 and ctor.index('if(kMirrorSingleGate&&previous_==&gate)return;')<ctor.index('gate.mutex.lock();')<ctor.index('gate.entered('),

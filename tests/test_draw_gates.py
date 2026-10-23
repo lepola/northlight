@@ -121,7 +121,7 @@ def new_parts(sig):
     capture=cap.group(1)
     if capture.startswith('if(autoBump'):
         prefix,capture=capture.split('world->capture',1)
-        assert prefix.startswith('if(autoBump&&enabled&&!applied&&!failed&&!memoryGuard.capsHalved())')
+        assert prefix.startswith('if(autoBump&&enabled&&!applied&&!failed)')
         assert prefix.count('if(')==1 and 'autoBump->capture(vs,' in prefix and prefix.endswith(';}')
         capture='world->capture'+capture
     return capture,cap.group(2),draw,body

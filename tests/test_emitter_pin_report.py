@@ -63,9 +63,7 @@ class PinReport(unittest.TestCase):
         compared=0
         for path in sorted(self.assets['all'].providers):
             entry=expected.get(digest(path)[:32])
-            if entry is None:continue
-            sha=hashlib.sha256(self.baseline.read(path)).hexdigest()
-            if sha!=entry['model_sha256']:continue
+            if entry is None or hashlib.sha256(self.assets['all'].read(path)).hexdigest()!=entry['model_sha256']:continue
             batches=json.loads(json.dumps(emitter_pin_report.batches(self.assets['all'],path)))
             self.assertEqual(digest(json.dumps(batches,sort_keys=True,separators=(',',':'))),entry['batches_sha256'],path);compared+=1
         if not compared:self.skipTest('No model from the historical HD evidence is installed')

@@ -386,7 +386,7 @@ def main():
         for name, info in manifest['shaders'].items():
             assert info['static_instruction_slots'] <= 512 and info['temporary_registers'] <= 32, name  # a count (highest rN + 1): ps_3_0 has r0..r31
             # Shaders changed on purpose by other features are excluded from the byte-identical check below.
-            if name not in ('WorldComposite', 'TemporalLight', 'SourceVisibilityPS', 'WorldLighting', 'LocalDirect', 'WorldNormals', 'RemovalSmooth', 'WorldGI', 'WorldFog', 'FogClouds', 'FogTemporal', 'LocalFog', 'LocalFogCombine', 'ActorShadow', 'ActorTiles', 'LocalDirect16'):  # LocalDirect16 (the 16-lamp LocalDirect pass) is new; ActorShadow and ActorTiles (0.3.208, task 29) are new; FogClouds (0.3.199) is new, not in BEFORE; LocalFog (0.3.199) gains the near ramp, 0.3.205 (gh#20) returns the raw batch sum on purpose, LocalFogCombine is new
+            if name not in ('MaterialComposite', 'LocalDirect16', 'WorldComposite', 'TemporalLight', 'SourceVisibilityPS', 'WorldLighting', 'LocalDirect', 'WorldNormals', 'RemovalSmooth', 'WorldGI', 'WorldFog', 'FogClouds', 'FogTemporal', 'LocalFog', 'LocalFogCombine', 'ActorShadow', 'ActorTiles'):  # ActorShadow and ActorTiles (0.3.208, task 29) are new; FogClouds (0.3.199) is new, not in BEFORE; LocalFog (0.3.199) gains the near ramp, 0.3.205 (gh#20) returns the raw batch sum on purpose, LocalFogCombine is new
                 assert info['sha256'] == BEFORE[name], name
                 unchanged.append(name)
         assert sorted(unchanged) == sorted(k for k in BEFORE if k not in ('TemporalLight', 'SourceVisibilityPS', 'WorldLighting', 'LocalDirect', 'WorldNormals', 'WorldGI', 'WorldFog', 'LocalFog'))
