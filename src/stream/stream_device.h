@@ -375,6 +375,7 @@ public:
 
     HRESULT STDMETHODCALLTYPE Present(const RECT* src,const RECT* dst,HWND window,const RGNDATA* dirty) override{return presentCommon(nullptr,src,dst,window,dirty,0);}
     HRESULT presentCommon(StreamSwapChain* swap,const RECT* src,const RECT* dst,HWND window,const RGNDATA* dirty,DWORD flags){
+        if(settingsPump)settingsPump();
         Queue& q=streamQueue();
         const bool timingWas=core.timing;
         core.timing=replayer.diagnostics&&replayer.diagnostics();   // 0.3.204 (task 21): the split timers follow Diagnostics, asked once per frame on the game thread

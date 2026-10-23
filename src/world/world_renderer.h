@@ -1,3 +1,4 @@
+#include "settings_schema.h"
 #pragma once
 #include "stream_hooks.h"
 #include "weather_memory.h"
@@ -195,7 +196,7 @@ class WorldRenderer {
     };
     // probeCenter (0.3.153 GIProbeAhead): probe window origin, solve order and move trigger; geometryCenter (0.3.169 lead):
     // the region build centre and its refresh trigger; camera (eye) for everything else, including every coverage check.
-    struct Request { std::shared_ptr<const NorthlightActorGeometry::ActorJob> actorJob;uint64_t actorSerial=0; V camera,probeCenter,geometryCenter; NorthlightGI::Lighting light; std::string map; uint64_t id=0,baseId=0;DWORD queuedAt=0;unsigned reason=0; };
+    struct Request { std::shared_ptr<const NorthlightActorGeometry::ActorJob> actorJob;uint64_t actorSerial=0; V camera,probeCenter,geometryCenter; NorthlightGI::Lighting light; std::string map; uint64_t id=0,baseId=0;DWORD queuedAt=0;unsigned reason=0;bool giEnabled=true; };
     IDirect3DDevice9* d;
     std::string root;
     std::unique_ptr<StaticShadow::Streamer> staticStream;
@@ -221,7 +222,30 @@ class WorldRenderer {
     std::atomic<bool> workerBusy{false};DWORD actorRequestTick=0;
     std::atomic<unsigned> workerFaultCode{0};
     std::atomic<unsigned> geometryBuildEstimateMs{1000}; /* 0.3.169: builder's smoothed build time, read by the render thread's lead */
+    bool settingsRequestDirty=false;
 public:
+    void applyLiveSettings(const NorthlightSettings::Config& next){
+        // Frame cleanup has joined D3D-free jobs. Worker solver keys stay immutable;
+        // GI enable and bounce count travel in each Request.
+        auto profiles=next.celestial;
+        const auto effective=NorthlightSettings::liveQualityUpdate(quality,next.quality);
+        const bool giRequest=NorthlightSettings::giRequestChanged(quality,effective,celestialProfiles,profiles);
+        const bool actorResources=quality.actorShadows!=effective.actorShadows||quality.actorShadowDetail!=effective.actorShadowDetail;
+        const bool directions=quality.shadowDirectionSteps!=effective.shadowDirectionSteps;
+        const bool giToggle=quality.gi!=effective.gi;
+        for(const auto& k:NorthlightQuality::Keys)if(NorthlightSettings::liveQuality(k.name))quality.*k.field=effective.*k.field;
+        quality.preset=effective.preset;settingsRequestDirty=settingsRequestDirty||giRequest;
+        if(giToggle)effects.gi=quality.gi!=0;
+        minSkinnedShadowTriangles=quality.minSkinnedTriangles;captureBudgetMiB=quality.captureBudgetMiB;actorShadowBudgetMiB=quality.actorShadowBudgetMiB;setNearReserve();
+        replaySnapshots.configureBudget(size_t(captureBudgetMiB)*1048576,size_t(captureBudgetMiB)*524288);
+        shadowFateDiagnostics=NorthlightQuality::shadowFate(quality);
+        NorthlightDiagnostics::configure(quality.diagnostics!=0);NorthlightWeatherMemory::configure(quality.weatherMemory!=0);NorthlightMemorySwitches::configure(quality.memMap!=0);
+        NorthlightRenderThreadProbe::configure(NorthlightQuality::renderProfile(quality),NorthlightQuality::replayProbe(quality));
+        NorthlightWorldContext::SelfReadStats::timed.store(NorthlightQuality::renderProfile(quality),std::memory_order_relaxed);
+        if(actorResources)releaseGPU(true);else if(directions)invalidateShadowCache();
+        staticPrebuild.steps=float(quality.shadowDirectionSteps);
+        celestialProfiles=std::move(profiles);paletteFrameValid=false;
+    }
     // Read-only access to the COMMITTED terrain pages. Never start uploads,
     // loads, shadow updates or mesh publication from the native sky draw hook.
     uint64_t celestialTerrainGeneration()const{
@@ -1219,7 +1243,8 @@ private:
       try {
         // GIThreads>1: helpers at the same below-normal priority; probe values are scheduling-independent.
         std::unique_ptr<NorthlightGI::SolvePool> solvePool;
-        const unsigned solverThreads=NorthlightQuality::giSolverThreads(quality,NorthlightStream::cores());
+        NorthlightQuality::Settings solverQuality;solverQuality.giThreads=quality.giThreads;
+        const unsigned solverThreads=NorthlightQuality::giSolverThreads(solverQuality,NorthlightStream::cores());
         if(solverThreads>1)solvePool=std::make_unique<NorthlightGI::SolvePool>(solverThreads-1,[]{SetThreadPriority(GetCurrentThread(),THREAD_PRIORITY_BELOW_NORMAL);});
         if(quality.giThreads>1)logf("QUALITY GI solver threads requested=%u effective=%u cores=%u priority=below-normal",quality.giThreads,solverThreads,NorthlightStream::cores());
         // 0.3.153: geometry regions are built on their own below-normal thread
@@ -1676,7 +1701,7 @@ private:
              result->map=sceneMap;result->center=sceneCenter;result->requestId=r.id;result->requestedAt=r.queuedAt;
             }
             // END GEOMETRY HANDOFF
-            if(!quality.gi)continue; /* GI=0: geometry for shadows only; no actor, probe or atlas work */
+            if(!r.giEnabled)continue; /* GI=0: geometry for shadows only; no actor, probe or atlas work */
             DWORD actorStarted=GetTickCount();
             bool actorsChanged=false;
             if(!actorMemo.matches(r.actorJob)){
@@ -2703,7 +2728,7 @@ public:
         for(unsigned source=0;source<2;++source){rawSourceDirections[source]=resolvedSources.sources[source].direction;sourceDirections[source]=continuousCelestialShadows?resolvedSources.sources[source].direction:NorthlightWorldMath::quantizeDirection(resolvedSources.sources[source].direction,float(quality.shadowDirectionSteps));sourceColors[source]=resolvedSources.sources[source].color;sourceGlowColors[source]=sourceColors[source];sourceWeights[source]=resolvedSources.sources[source].weight;}
         if(celestialValid){sourceGlowColors[0]=vec(celestialLight.sunGlowColor);sourceGlowColors[1]=vec(celestialLight.moonGlowColor);}
         requestStaticCasters(map);
-        Request r;r.map=map;r.camera=vec(camera);r.light.sunDirection=sourceDirections[0];r.light.sunIrradiance=sourceColors[0]*3.14159265f;r.light.skyRadiance=vec(context.ambient);r.light.maxBounces=quality.giBounces;
+        Request r;r.map=map;r.camera=vec(camera);r.light.sunDirection=sourceDirections[0];r.light.sunIrradiance=sourceColors[0]*3.14159265f;r.light.skyRadiance=vec(context.ambient);r.light.maxBounces=quality.giBounces;r.giEnabled=quality.gi!=0;
         r.light.additionalDirections.push_back({sourceDirections[1],sourceColors[1]*3.14159265f});
         // 0.3.153 GIProbeAhead: centre the probe window ahead of the eye along the horizontal
         // view direction (the third-person camera sits behind the character). 0 = the eye.
@@ -2715,7 +2740,7 @@ public:
          geometryMotion.update(r.map,r.camera,length>1e-6f?r.camera+forward*(pivotDistance/length):r.camera,GetTickCount());
          r.geometryCenter=NorthlightWorldStreaming::leadCenter(r.camera,geometryMotion.velocity(),float(geometryBuildEstimateMs.load(std::memory_order_relaxed))*.001f);
          geometryLead=std::sqrt(NorthlightGI::dot(r.geometryCenter-r.camera,r.geometryCenter-r.camera));}
-        if(lastRequest.map==r.map&&completedActorSceneMap()==r.map){r.actorJob=completedActorJob();r.actorSerial=actorJobSerial();}
+        if(NorthlightQuality::giActorCapture(quality)&&lastRequest.map==r.map&&completedActorSceneMap()==r.map){r.actorJob=completedActorJob();r.actorSerial=actorJobSerial();}
         std::shared_ptr<Snapshot> retiredSnapshot,expiredPublication;
         {std::lock_guard<std::mutex> lock(mutex);
             // The publication is another owner of the old BVH/plan. Retiring only
@@ -2731,11 +2756,11 @@ public:
                 bool newGI=published->serial&&(!active||active->serial!=published->serial);retiredSnapshot=std::move(active);active=published;
                 if(newGI&&NorthlightDiagnostics::enabled())logf("GI activated tick=%lu id=%llu ageMs=%lu queueMs=%lu geometryMs=%lu actorMs=%lu solveMs=%lu reused=%u solved=%u cancelled=%u origin=(%.1f %.1f %.1f) dynamicReused=%u dynamicSolved=%u staticOnly=%u partial=%u processed=%u generation=%llu retargeted=%u actorTextureDecode=worker actorTextures=%u actorTextureBytes=%zu pathRecorded=%llu pathReplayedRays=%llu pathRetracedRays=%llu pathRecordKB=%zu",(unsigned long)GetTickCount(),(unsigned long long)active->requestId,(unsigned long)(GetTickCount()-active->requestedAt),(unsigned long)active->queueMs,(unsigned long)active->geometryMs,(unsigned long)active->actorMs,(unsigned long)active->solveMs,active->reusedProbes,active->solvedProbes,active->superseded,active->origin.x,active->origin.y,active->origin.z,active->dynamicReused,active->dynamicSolved,unsigned(active->staticOnly),unsigned(active->partial),active->processedProbes,(unsigned long long)active->lightingGeneration,active->retargeted,active->actorTexturesDecoded,active->actorTextureEncodedBytes,(unsigned long long)active->movingStats.recorded,(unsigned long long)active->movingStats.replayed,(unsigned long long)active->movingStats.retraced,active->pathRecordBytes/1024);
             }
-            r.reason=(lastRequest.map!=r.map?1u:0u)|(different(quantize(lastRequest.probeCenter,float(quality.giProbeMoveStep)),quantize(r.probeCenter,float(quality.giProbeMoveStep)),.1f)?2u:0u)|
+            r.reason=(settingsRequestDirty?256u:0u)|(lastRequest.map!=r.map?1u:0u)|(different(quantize(lastRequest.probeCenter,float(quality.giProbeMoveStep)),quantize(r.probeCenter,float(quality.giProbeMoveStep)),.1f)?2u:0u)|
                 (different(lastRequest.light.sunDirection,r.light.sunDirection,.02f)?4u:0u)|(different(lastRequest.light.sunIrradiance,r.light.sunIrradiance,.03f)?8u:0u)|(different(lastRequest.light.skyRadiance,r.light.skyRadiance,.01f)?16u:0u)|
                 (lastRequest.light.additionalDirections.empty()||different(lastRequest.light.additionalDirections[0].direction,r.light.additionalDirections[0].direction,.02f)||different(lastRequest.light.additionalDirections[0].irradiance,r.light.additionalDirections[0].irradiance,.03f)?32u:0u)|
                 (NorthlightWorldStreaming::leadMoved(lastRequest.camera,lastRequest.geometryCenter,r.camera,r.geometryCenter)?128u:0u);
-            if(r.reason){r.id=request.id+1;r.baseId=r.id;r.queuedAt=GetTickCount();request=r;lastRequest=r;pending=true;wake.notify_one();
+            if(r.reason){r.id=request.id+1;r.baseId=r.id;r.queuedAt=GetTickCount();request=r;lastRequest=r;settingsRequestDirty=false;pending=true;wake.notify_one();
                 if(NorthlightDiagnostics::enabled())logf("GI request tick=%lu id=%llu reason=%u camera=(%.2f %.2f %.2f) sun=(%.5f %.5f %.5f)",(unsigned long)r.queuedAt,(unsigned long long)r.id,r.reason,r.camera.x,r.camera.y,r.camera.z,r.light.sunDirection.x,r.light.sunDirection.y,r.light.sunDirection.z);
             }
             // 0.3.156 watchdog (log only): the builder waited for a free geometry generation
@@ -3599,7 +3624,7 @@ public:
         // ready/resources/upload, live terrain) up to the replay upload; logged with WORLD profile frame.
         uploadWindowTicks=-1;const int64_t uploadWindowStart=profileSampled()?QpcClock::now():0;
         {std::lock_guard<std::mutex> lock(mutex);
-         if(valid&&completedActorSceneMap()==lastRequest.map&&!pending&&!workerBusy&&actorJobSerial()!=lastRequest.actorSerial&&submissionStart-actorRequestTick>=250){
+         if(valid&&NorthlightQuality::giActorCapture(quality)&&completedActorSceneMap()==lastRequest.map&&!pending&&!workerBusy&&actorJobSerial()!=lastRequest.actorSerial&&submissionStart-actorRequestTick>=250){
              Request r=lastRequest;r.actorJob=completedActorJob();r.actorSerial=actorJobSerial();r.reason=64;
              r.id=request.id+1;r.queuedAt=submissionStart;request=r;lastRequest=r;pending=true;actorRequestTick=submissionStart;wake.notify_one();
          }}

@@ -14,6 +14,8 @@
 #endif
 
 namespace NorthlightStream {
+// Optional configuration mailbox, called only by the game-side Present.
+inline void (*settingsPump)()=nullptr;
 // 0.3.192 (CS): the identity world_renderer.h captureUP keys its cache on, instead of the vertex pointer. The replay
 // thread sets it around a replayed DrawPrimitiveUP/DrawIndexedPrimitiveUP to the pointer the GAME passed (the recorded
 // copy lives at a different address each frame). The data itself is still read from the pointer the call received.

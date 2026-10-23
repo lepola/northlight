@@ -23,6 +23,7 @@
 #include "signatures.h"
 #include "shader_tags.h"
 #include "stream_hooks.h"
+#include "settings_cvar_bridge.h"
 #include "stream_device.h"
 #include "compiled_shaders.h"
 #include "projection.h"
@@ -316,6 +317,8 @@ class Device final : public GuardedMirrorDevice {
             first?(unsigned long)g.firstTid:0ul,mirrorSiteName(first?g.firstSite:MirrorGate::Sites),first?unsigned(g.firstFrame):0u,unsigned(g.frame.load(std::memory_order_relaxed)),NorthlightStream::gameTid.load(std::memory_order_relaxed),NorthlightStream::replayTid.load(std::memory_order_relaxed),event); /* 0.3.192 (CS): 0/0 on the direct path */
     }
 
+    std::shared_ptr<NorthlightSettings::Service> settingsService;
+    std::string settingsRevision;
     std::unique_ptr<WorldRenderer> world;
     std::unique_ptr<NorthlightCelestialDiscRenderer> celestialDiscs;
     std::unique_ptr<NorthlightShadowBlobFilter> shadowBlobs;
@@ -1474,7 +1477,7 @@ private:
     void* spellTexKey=nullptr;IDirect3DSurface9* spellTexFor=nullptr; /* the layer target's container texture (null: T is not a texture level), computed once per target */
     void* spellQuery[8]={};unsigned spellQueryFrame[8]={},spellQueryN=0,spellQueryUnknownFrame=0;bool spellQueryUnknown=false; /* open D3DQUERYTYPE_OCCLUSION brackets (raw queries), by Issue(BEGIN) frame; spellQueryUnknown: a bracket was lost to a full table (its frame in spellQueryUnknownFrame) */
     // SpellTrace: spellTraceLeft frames of SPELLTRACE lines, from the first world frame at or after frame 300 (Diagnostics only); spellTraceWindow: the next frame is traced.
-    unsigned spellTraceLeft=0,spellDrawIndex=0;bool spellTraceWindow=false,spellTraceFrame=false,spellTraceSeen=false;
+    unsigned spellTraceLeft=0,spellTraceSetting=0,spellDrawIndex=0;bool spellTraceWindow=false,spellTraceFrame=false,spellTraceSeen=false;
     LONGLONG spellReplayTicks=0,spellRecordTicks=0,spellGateTicks=0,spellFlushTicks=0;void* spellGlowTex=nullptr;unsigned spellGlowPassN=0,spellGlowLogs=0; /* spellGlowTex: the destination container of this frame's allowed glow copy (identity only; valid when spellGlowFrame==frame+1); spellGlowPassN: passes let through since that copy */ unsigned spellCopiesAllowed=0,spellGlowPasses=0,spellGlowFrame=0,spellGateDraws=0,spellGateTimed=0,spellGateSeq=0,spellRecords=0,spellFlushes=0; /* spellFlushTicks/spellFlushes: the hazard flushes of gate draws, every one timed and kept out of the gate time */ /* sampled frames: spellGateDraws world-draw gate calls, every 8th timed (spellGateTimed, spellGateTicks = their time minus the record time inside them); spellRecordTicks/spellRecords: every Layer::defer() */NorthlightSpellLayer::Mode spellFrameMode=NorthlightSpellLayer::Mode::Off;
     // Hazard diagnostics (Diagnostics=1): the layer's latest event is consumed after each layer call that can raise one; the first 64 of the session are
     // logged as SPELLHAZARD. spellWin* accumulate every frame since the previous SPELLLAYER line (that line itself describes one sampled frame).
@@ -1509,7 +1512,7 @@ private:
     void spellConfigure(){
         spellOn=world&&world->spellLayerSetting()!=0;
         if(!spellOn){logf("SPELLLAYER config on=0");return;}
-        spellClasses=world->spellLayerClassesSetting();spellTraceLeft=world->spellTraceSetting();
+        spellClasses=world->spellLayerClassesSetting();spellTraceLeft=spellTraceSetting=world->spellTraceSetting();
         NorthlightSpellLayer::Config cfg;cfg.on=true;cfg.classMask=spellClasses;
         cfg.conflictCopy=selectedBackend!=NorthlightBackend::Kind::Native; /* the copy-out read-back needs DXVK's direct-mapped dynamic buffers */
         cfg.readBackLockFlags=NorthlightUpload::readBackLock(); /* fixed before CreateDevice (backend()) */
@@ -2118,6 +2121,8 @@ public:
         mirrorState.gate.ownerTid=MirrorGuard::threadId(); /* 0.3.180 (D0): the CreateDevice caller */
         mirrorState.gate.reportContext=this;mirrorState.gate.report=&gateForeignReport;
         parent->AddRef(); QueryPerformanceFrequency(&cpuFrequency);
+        try{NorthlightSettings::bridgeLog=[](const char* line){logf("%s",line);};settingsService=NorthlightSettings::acquire(std::filesystem::path(rootPath));NorthlightStream::settingsPump=&NorthlightSettings::gameThreadPump;}
+        catch(const std::exception& e){logf("SETTINGS unavailable: %s",e.what());}
         gpuProfile=std::make_unique<NorthlightGpuProfile>(ext);gpuSceneProfile=std::make_unique<NorthlightGpuProfile>(ext,"GPU frame",2);gpuTimer=std::make_unique<NorthlightGpuFrameTimer>(ext); world=std::make_unique<WorldRenderer>(ext);world->setEffectsBuckets(&effectsBuckets);
         world->setConstantEpochSource({&mirrorState.constantEpoch,&mirrorState}); /* 0.3.180 (C1): read in place under the draw's gate */
         char skyRoot[MAX_PATH*3];WideCharToMultiByte(CP_UTF8,0,rootPath,-1,skyRoot,sizeof skyRoot,nullptr,nullptr);celestialDiscs=std::make_unique<NorthlightCelestialDiscRenderer>(ext,std::string(skyRoot)+"world-cache/celestial");celestialDiscs->setTerrainSource([this]{return world->celestialTerrainGeneration();},[this](unsigned body,const float* matrix){return world->drawCelestialTerrain(body,matrix);},[this](unsigned body){world->noteCelestialTerrainReuse(body);});celestialDiscs->setIdentityMap([this](std::uintptr_t exposed){return mirrorResources.rawOf(exposed,!mirrorState.enabled);});shadowBlobs=std::make_unique<NorthlightShadowBlobFilter>(ext,world->blobShadowStrength());shadowBlobs->setTexturePeek([](void* e,DWORD stage,IDirect3DBaseTexture9*& out){return static_cast<ExtensionDevice*>(e)->peekTexture(stage,out);},ext); /* 0.3.196 (task 12): borrowed stage-0 identity */water=std::make_unique<NorthlightWaterRenderer>(ext); logf("D3D9 device wrapped. Ctrl+Shift+F7 fog; F8 GI; F9 shadows; F10 all effects; F12 world debug (all with Ctrl+Shift). F11 unassigned. Components start ON; GI cache stays warm.");
@@ -2425,6 +2430,14 @@ public:
             int(applied),int(enabled),int(projectionValid),int(terrain),traceWorld,world?world->frameTraceContext():0u,world?world->frameTraceFog():0u,traceWorld==0&&world?world->lastSkipReason():"-");
         traceWorld=-1;
         {CpuScope cpu(sampledFrame?&cleanup:nullptr);clearFrame();}
+        if(settingsService)if(auto update=settingsService->after(settingsRevision)){
+            world->applyLiveSettings(update->config);dropBlobFaint();shadowBlobs->setStrength(world->blobShadowStrength());
+            contactAO=world->contactAO();
+            frameDrawGates=world->frameDrawGates();zFuncAware=world->depthFuncAware();nameMask.debug=world->nameMaskDebug();
+            spell.liveOptions(world->spellLayerClassesSetting(),world->spellFogSetting()!=0);spellClasses=world->spellLayerClassesSetting();
+            if(spellTraceSetting!=world->spellTraceSetting()){spellTraceSetting=world->spellTraceSetting();spellTraceLeft=spellTraceSetting;}
+            settingsRevision=update->revision;settingsService->acknowledge(*update);
+            logf("SETTINGS frame revision=%s (creation-time changes require restart)",settingsRevision.c_str());}
         if(memoryWorld>=0&&world)world->setMemoryPressure(memoryWorld==1);
         if(memoryCaps>=0&&NorthlightReplayCopies::enabled.load(std::memory_order_relaxed))NorthlightReplayCopies::setPressure(memoryCaps==1); /* 0.3.192 (CS): replay thread: halves the CPU copies' cap and evicts down to it */
         if(memoryCaps>=0)NorthlightStream::memoryPressure.store(memoryCaps==1,std::memory_order_relaxed); /* 0.3.192 (CS): the stream's game side halves its queue budget at its next Present */
@@ -2512,6 +2525,7 @@ public:
     }
     HRESULT STDMETHODCALLTYPE EndScene() override { Guard mirrorLock(mirrorState.gate);nameMaskRunEnd();rainMrtUnbind(); /* 0.3.202 (rain mask MRT) */if(spellOn)spellFlush(NorthlightSpellLayer::Reason::Frame,false,NorthlightSpellLayer::InPlaceKind::None,"endscene");return GuardedMirrorDevice::EndScene(); }
     HRESULT STDMETHODCALLTYPE Present(const RECT* src,const RECT* dst,HWND wnd,const RGNDATA* dirty) override { Guard mirrorLock(mirrorState.gate);mirrorState.gate.noteFirst(mirrorState.gate.presentTid);rainMrtUnbind(); /* 0.3.202 (rain mask MRT) */
+        if(!streamStats)NorthlightSettings::gameThreadPump();
         PresentTicks ticks;const unsigned markerFrame=frame;finishFrame();ticks.finish();
         if(frameMarkers)frameMarker(1,markerFrame);
         if(limitGpuLatency)waitPreviousFrameGpu();

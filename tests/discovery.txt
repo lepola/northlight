@@ -6,6 +6,7 @@ test_actor_shadow_radius_wiring.py
 test_actor_shadow_selection.py
 test_actor_shadows_wiring.py
 test_actor_texture_worker.py
+test_addon_delivery.py
 test_affected_tests.py
 test_ao_blur.py
 test_ao_fold.py
@@ -66,6 +67,7 @@ test_frame_stall_profile.py
 test_game_snapshot.py
 test_geometry_handoff.py
 test_gi_quality.py
+test_gi_settings_dependencies.py
 test_gpu_budget.py
 test_gpu_budget_wiring.py
 test_horizon_haze.py
@@ -81,6 +83,7 @@ test_lamp_daylight.py
 test_legacy_fog_hold.py
 test_legacy_fog_wmo.py
 test_linux_package.py
+test_live_settings.py
 test_live_terrain_gpu.py
 test_local_fog_batching.py
 test_local_fog_profile.py
@@ -111,6 +114,7 @@ test_near_reserve.py
 test_night_floor.py
 test_night_floor_wiring.py
 test_northlight_install.py
+test_northlight_menu.py
 test_outdoor_light_profiles.py
 test_particle_light_capture.py
 test_particle_light_proof.py
@@ -152,6 +156,9 @@ test_replay_priority_safety.py
 test_replay_skin_safety.py
 test_replay_upload.py
 test_rigid_memory.py
+test_settings_client_abi.py
+test_settings_cvar_hook.py
+test_settings_service.py
 test_shader_read_set.py
 test_shader_read_set_client.py
 test_shadow_blob_client.py

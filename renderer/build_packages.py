@@ -70,7 +70,9 @@ APP_FILES = [
 PAYLOAD_COMMON = {'celestial-profiles.ini': 'client-config/celestial-profiles.ini',
                   'shadow-range-profiles.ini': 'client-config/shadow-range-profiles.ini',
                   'northlight-quality.ini': 'renderer/windows-package/northlight-quality.ini'}
-PRESERVE = {'northlight-quality.ini'}
+PRESERVE = set(PAYLOAD_COMMON)
+for addon_file in ('NorthlightSettings.toc', 'NorthlightAPI.lua', 'NorthlightMenu.lua'):
+    PAYLOAD_COMMON['Interface/AddOns/NorthlightSettings/' + addon_file] = 'renderer/addons/NorthlightSettings/' + addon_file
 DXVK_BACKEND = 'renderer-backends/dxvk/dxvk_d3d9.dll'
 DXVK2_BACKEND = 'renderer-backends/dxvk2/dxvk2_d3d9.dll'
 

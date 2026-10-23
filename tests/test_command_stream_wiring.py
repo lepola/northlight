@@ -26,7 +26,7 @@ checks['inactive: every hook defaults to off']=all(x in hooks for x in ('inline 
 checks['inactive: readSelf is the live read behind one thread_local null check']=ctx.count('NorthlightStream::activeSnapshot')==1 and 'inline thread_local GameSnapshot* activeSnapshot=nullptr;' in fp.src('snapshot_store.h').read_text() and 'return readSelfLive(address,output,size);' in ctx
 checks['inactive: celestial identities pass through innerOf (identity when null) before the registry map']=('map_(inner(exposed))' in disc and disc.count('map_(inner(exposed))')==2 and 'NorthlightStream::inner(reinterpret_cast<const void*>(exposed))' in disc)
 checks['core budgets read NorthlightStream::cores() at the three sites, no raw hardware_concurrency']=(
-    'const unsigned prepareCores=NorthlightStream::cores();' in exp and 'NorthlightQuality::giSolverThreads(quality,NorthlightStream::cores());' in w
+    'const unsigned prepareCores=NorthlightStream::cores();' in exp and 'NorthlightQuality::giSolverThreads(solverQuality,NorthlightStream::cores());' in w and 'solverQuality.giThreads=quality.giThreads;' in w
     and 'NorthlightStaticPlanJob::Async&&NorthlightStream::cores()>2;' in gpu
     and sum(p.read_text().count('std::thread::hardware_concurrency()') for p in fp.sources({'.h','.inl','.cpp'}))==1)
 checks['UP identity: the stream value only replaces the vertex pointer in the shadow-fate key']=(w.count('NorthlightStream::upIdentity')==2 and 'NorthlightStream::upIdentity?NorthlightStream::upIdentity:userVertices' in w)
