@@ -33,6 +33,7 @@
 #include "lock_meter.h"
 #include "replay_copies.h"
 #include "dxvk_compatibility.h"
+#include "dxvk_engine_name.h"
 #include "backend_loader.h"
 #include "frame_intervals.h"
 #include "effect_switches.h"
@@ -2715,7 +2716,7 @@ public:
     }
 };
 
-static void configureDxvkCompatibility(const NorthlightBackendLoader::Inspection& info){
+static void configureDxvkCompatibility(const NorthlightBackendLoader::Inspection& info,bool disableFse=false){
     // Do not edit dxvk.conf or global launcher/Wine settings. Only this client
     // process receives the required D3D9 compatibility options. Explicit
     // DXVK_CONFIG assignments remain last and can override them for diagnosis.
@@ -2729,18 +2730,20 @@ static void configureDxvkCompatibility(const NorthlightBackendLoader::Inspection
             if(copied>=buffer.size()){logf("DXVK compatibility configuration changed concurrently; defaults not applied");return;}
             existing.assign(buffer.data(),copied);
         }
-        const auto combined=NorthlightDxvkCompatibility::config(existing);
+        const auto combined=NorthlightDxvkCompatibility::config(existing,disableFse);
         const BOOL set=SetEnvironmentVariableA("DXVK_CONFIG",combined.c_str());
         // DXVK 1.10.x reads only dxvk.conf/DXVK_CONFIG_FILE: the variable is then inert.
         // 0.3.189: DXVK 2.x reads cachedDynamicBuffers, >=3.0 cachedWriteOnlyBuffers; each ignores the other's key.
         logf("DXVK compatibility process defaults applied=%u vendor=1002 cachedDynamicBuffers(2.x)=True cachedWriteOnlyBuffers(>=3.0)=True explicitInlineOverrides=%u dxvk=%s DXVK_CONFIG supported=%u",
              unsigned(set!=FALSE),unsigned(!existing.empty()),info.dxvkVersion.empty()?"unknown":info.dxvkVersion.c_str(),unsigned(info.dxvkConfigEnv));
+        if(disableFse)logf("DXVK3 engine-name FSE forced=False process-config-applied=%u",unsigned(set!=FALSE));
     }catch(...){logf("DXVK compatibility defaults unavailable: allocation failure");}
 }
-// Win32 adapter for NorthlightBackendLoader. Reads files and loads libraries only.
+// Win32 adapter for NorthlightBackendLoader; optional DXVK-only import redirect.
 struct Win32BackendSys {
     using Module=HMODULE;
     NorthlightBackend::Kind kind;std::wstring selfPath;BY_HANDLE_FILE_INFORMATION selfId={};bool haveSelfId=false;
+    bool engineNameWorkaround=false;
     static bool fileId(const std::wstring& path,BY_HANDLE_FILE_INFORMATION& info,unsigned long& error){
         HANDLE h=CreateFileW(path.c_str(),FILE_READ_ATTRIBUTES,FILE_SHARE_READ|FILE_SHARE_WRITE|FILE_SHARE_DELETE,nullptr,OPEN_EXISTING,FILE_ATTRIBUTE_NORMAL,nullptr);
         if(h==INVALID_HANDLE_VALUE){error=GetLastError();return false;}
@@ -2775,9 +2778,18 @@ struct Win32BackendSys {
         // draw while a pipeline compiles; the user test showed far fewer hitches, so it is not forced off.
         // Only Backend=dxvk/dxvk2 (the Windows package's DXVK: 3.1.1 default, 2.7.1 as dxvk2) gets the
         // vendor/buffer defaults; legacy (the macOS WoWSilicon DXVK) keeps today's runtime unchanged.
-        if(NorthlightBackend::isPackagedDxvk(kind))configureDxvkCompatibility(info);
+        const bool requested=GetPrivateProfileIntW(L"Renderer",L"DxvkEngineNameWorkaround",0,(std::wstring(rootPath)+L"northlight-renderer.ini").c_str())==1;
+        const HMODULE ntdll=GetModuleHandleW(L"ntdll.dll");
+        const bool wine=ntdll&&GetProcAddress(ntdll,"wine_get_version");
+        engineNameWorkaround=requested&&NorthlightBackend::isPackagedDxvk(kind)&&info.dxvk&&NorthlightBackend::dxvkMajor(info.dxvkVersion)==3&&!wine;
+        if(requested)logf("DXVK3 engine-name requested=1 eligible=%u wine=%u backend=%s version=%s",unsigned(engineNameWorkaround),unsigned(wine),NorthlightBackend::name(kind),info.dxvkVersion.c_str());
+        if(NorthlightBackend::isPackagedDxvk(kind))configureDxvkCompatibility(info,engineNameWorkaround);
     }
-    HMODULE load(const std::wstring& path,unsigned long& error){HMODULE m=LoadLibraryW(path.c_str());error=m?0:GetLastError();return m;}
+    HMODULE load(const std::wstring& path,unsigned long& error){
+        HMODULE m=LoadLibraryW(path.c_str());error=m?0:GetLastError();
+        if(m&&engineNameWorkaround)logf("DXVK3 engine-name import status=%s",NorthlightDxvkEngineName::install(m,&logf));
+        return m;
+    }
     bool isSelf(HMODULE m){return m==selfModule;}
     void* proc(HMODULE m,const char* name){FARPROC f=GetProcAddress(m,name);void* p=nullptr;static_assert(sizeof(p)==sizeof(f));std::memcpy(&p,&f,sizeof p);return p;}
     bool ownedBySelf(void* address){
