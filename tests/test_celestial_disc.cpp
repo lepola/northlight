@@ -95,15 +95,22 @@ int main(int argc,char** argv){
         assert(std::fabs(a)<1e-5&&std::fabs(b)<1e-5&&std::fabs(c)<1e-5&&std::fabs(r-1)<1e-5&&std::fabs(u-1)<1e-5);
         assert(d.opacity>0&&d.opacity<=1);++cases;
     }
-    // Sets behind the camera's far edge: full on it and until the top limb reaches it, gone one radius later.
+    // A partially set disc keeps its brightness; it is gone when its top limb sets.
     float horizon[3]={1,0,0};assert(prepare(horizon,white,1,.02,d)&&d.opacity==1);
-    const float sr=std::sin(.02f);
-    for(float edge:{0.f,-.03f,-.0523f}){const float z1=edge-.99f*sr,zh=edge-1.5f*sr,z0=edge-2.01f*sr;
-        float limb[3]={std::sqrt(1-z1*z1),0,z1};assert(prepare(limb,white,1,.02,d,edge)&&d.opacity==1);
-        float half[3]={std::sqrt(1-zh*zh),0,zh};assert(prepare(half,white,1,.02,d,edge)&&std::fabs(d.opacity-.5f)<.01f);
-        float below[3]={std::sqrt(1-z0*z0),0,z0};assert(!prepare(below,white,1,.02,d,edge));}
-    {const float z=-1.5f*sr;float dir[3]={std::sqrt(1-z*z),0,z};assert(prepare(dir,white,1,.02,d,.1f)&&std::fabs(d.opacity-.5f)<.01f); // an edge over the horizon counts as on it
-     assert(prepare(dir,white,1,.02,d,NAN)&&std::fabs(d.opacity-.5f)<.01f);}
+    for(float radius:{.02f,.11f,.46f})for(float edge:{0.f,-.03f,-.0523f}){
+        const float angle=std::asin(edge);
+        for(float elevation:{angle,angle-radius*.99f}){
+            float limb[3]={std::cos(elevation),0,std::sin(elevation)};
+            assert(prepare(limb,white,.7f,radius,d,edge)&&d.opacity==.7f);
+        }
+        const float below=angle-radius-.0001f;float dir[3]={std::cos(below),0,std::sin(below)};
+        assert(!prepare(dir,white,1,radius,d,edge));
+    }
+    {const float angle=-9.86f*.01745329252f;float parked[3]={std::cos(angle),0,std::sin(angle)};
+     assert(!prepare(parked,white,1,.11f,d,-.0523f));} // reported enlarged moon below the high-camera horizon
+    {const float z=-.01f;float dir[3]={std::sqrt(1-z*z),0,z};
+     assert(prepare(dir,white,1,.02f,d,.1f)&&d.opacity==1);
+     assert(prepare(dir,white,1,.02f,d,NAN)&&d.opacity==1);}
     horizon[2]=NAN;assert(!prepare(horizon,white,1,.02,d));
     float zenith[3]={0,0,1};assert(prepare(zenith,white,1,.02,d));float inverse[16]={1,0,0,0,0,1,0,0,0,0,1,0,0,0,0,1};int bounds[4];
     assert(screenBounds(d,inverse,1,1,1,1920,1080,bounds));assert(bounds[0]<960&&bounds[2]>960&&bounds[1]<540&&bounds[3]>540);

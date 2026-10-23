@@ -2548,7 +2548,12 @@ public:
     const NorthlightSpellFog::Frame& spellFogFrame()const{return spellFogHold.out;} /* Northlight's fog toward the view axis (previous frame's estimate while the next frame's records are made): the spell layer folds it into the recorded fog constants */
     bool frameDrawGates()const{return quality.frameDrawGates!=0;} /* 0.3.187: read once at device creation */ /* 0.3.158: ActorShadows=0 leaves actor shadows to the game's blobs */
     const float* legacyFogParameters()const{return legacyFog.parameters;}
-    const NorthlightLegacyFog::Constants& legacyFogConstants()const{return legacyFog;}
+    const NorthlightLegacyFog::Constants& legacyFogConstants()const{
+        if(!legacyFogKnown&&active&&legacyFogHold.has&&legacyFogHold.map==active->map&&
+           DWORD(GetTickCount()-legacyFogHold.lastUpdate)<=NorthlightLegacyFog::Hold::HoldMs)return legacyFogHold.held;
+        return legacyFog;
+    }
+    bool hasOriginalFog()const{return legacyFogKnown;}
     const NorthlightCelestialProfiles::Profile& celestialPalette(const char* map,const float* camera){
         // Freeze once per frame: early disc, late halo, direct/GI and fog cannot
         // observe different worker publications or temporal transition states.

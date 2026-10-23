@@ -173,7 +173,6 @@ def real_tables(view, folder, r):
 
 
 report['stock']['retime'] = real_tables('stock', stock, r)
-installed = client_archives.data_dir(client) / 'patch-z.mpq'
 own = out / 'own'
 shutil.rmtree(own, ignore_errors=True)
 r_own = build_art_layer.build(client, own, cache)
@@ -189,5 +188,6 @@ assert not any(n.lower().startswith('world\\') and n.lower().endswith('.m2') for
 got = [hashlib.sha256((own / t).read_bytes()).hexdigest() for t in r_own['targets']]
 assert got == [r_again['archive_sha256']] * 2
 report['own'] = {'rebuilt_sha256': got, 'models': sum(n.lower().endswith('.m2') for n in r_own['files'])}
+assert all(isinstance(s[k], str) and s[k] for s in r_own['steps'] for k in ('skipped', 'sky_clone_skipped') if k in s)
 (out / 'art-layer.json').write_text(json.dumps(report, indent=2) + '\n')
 print(json.dumps(report, indent=2))

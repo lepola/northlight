@@ -103,12 +103,12 @@ inline float sunDiscAlpha(float radius){const float a=std::clamp((1-radius)/.56f
 // The TAIL's visibility beyond ~3R (the core uses the disc only; see sunGlare).
 inline float occlusion(float disc,float ring,float wrap){return std::max(clamp01(disc),clamp01(wrap)*clamp01(ring));}
 
-// The ring keeps a sun hidden behind a hill or a roof glowing; near the horizon it would glow on the sea or the
-// ground over a sun that has set there, so it is full only with the centre 3R over the true horizon and none at 1R
-// (the disc's bottom on it). Down there the glow follows the disc taps alone: as much glow as disc is seen.
+// Keep the diffuse halo when a small foreground silhouette hides the disc.
+// Fade as the disc crosses the true horizon, from its top to its bottom limb.
+// The disc/core and water retain their own strict per-pixel occlusion.
 inline float ringWrap(float elevationSine,float sinRadius){
     if(!std::isfinite(elevationSine)||!(sinRadius>0))return 0;
-    return Wrap*smoothstep(sinRadius,3*sinRadius,elevationSine);
+    return Wrap*smoothstep(-sinRadius,sinRadius,elevationSine);
 }
 // Equal-area annulus RingInner..RingOuter, golden-angle order like the disc taps.
 inline void ringOffset(unsigned i,float& x,float& y){
@@ -117,7 +117,7 @@ inline void ringOffset(unsigned i,float& x,float& y){
     const float angle=float(i)*2.39996322972865332f;
     x=radius*std::cos(angle);y=radius*std::sin(angle);
 }
-// CelestialHaloVisibilityPS (unchanged, 497/512 slots) averages 32 taps and an
+// CelestialHaloVisibilityPS averages 32 geometry/terrain/horizon taps and an
 // off-screen tap (xy = -1) counts as hidden. Refill the slots from the
 // on-screen taps, spread evenly, so its fixed 1/32 mean is the mean over the
 // taps on screen: the value no longer dims as the source nears the screen edge.

@@ -147,7 +147,7 @@ def main():
     # Tie this reference to the actual implementation's interface and essential
     # equations; a future change requires revisiting these numeric expectations.
     for anchor in ('float4 VolumeAir : register(c32)', 'regionalFogAt(float2 uv,out float coverage)',
-                   'float phasePi=mad(.03*visible,narrow,mad(.033,cosine,.22))', '[loop]for(int i=0;i<49&&max(0,(i-offset)*stepLength)<surface;++i)',
+                   'float phasePi=mad(.03,narrow,mad(.033,cosine,.22))', '[loop]for(int i=0;i<49&&max(0,(i-offset)*stepLength)<surface;++i)',
                    'float start=max(0,(i-offset)*stepLength);',
                    'float end=min((i+1-offset)*stepLength,surface);',
                    'visibility+=(receiver<=z?1:0)*w.x*w.y;', 'float4 ScreenSize : register(c33)',

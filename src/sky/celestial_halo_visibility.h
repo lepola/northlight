@@ -16,7 +16,7 @@ struct History {
     bool valid=false;
     uint32_t tick=0,frame=0,width=0,height=0;
     float camera[3]={},day=0;
-    // Weights are independent of FPS. Fast occlusion, slightly slower reveal.
+    // Partial visibility is FPS independent; the shader cuts full coverage to zero.
     // Return reset/fall/rise for the GPU; no readback or synchronization.
     void advance(uint32_t now,uint32_t nextFrame,uint32_t w,uint32_t h,
                  const float* position,float nextDay,float* control){

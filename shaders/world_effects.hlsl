@@ -806,13 +806,12 @@ float4 WorldFog(float2 uv:TEXCOORD0):COLOR0 {
     // Normalized HG(g=.85) + isotropic mixture: most energy is broad enough
     // for side/back views of geometry-cut shafts; a small forward aureole remains.
     float narrow=.2775*pow(max(1.7225-1.7*cosine,.01),-1.5);
-    // Disc visibility only gates the narrow aureole. A branch between the
-    // camera and moon must not dim every lit air column in the world.
-    // Each volume sample's shadow ray decides whether that air receives light.
-    float visible=saturate(tex2Dlod(SourceVisibility,float4(.5,.5,0,0)).r);
+    // The phase describes the air, independent of screen-space disc occlusion.
+    // Each sample's shadow ray determines illumination; receiver depth ends
+    // the march at foreground geometry, including the player.
     // 0.3.145: the broad part leans gently toward the source (x1.15 facing it,
     // x1 at 90 degrees, x.85 facing away); its sphere integral is unchanged.
-    float phasePi=mad(.03*visible,narrow,mad(.033,cosine,.22));
+    float phasePi=mad(.03,narrow,mad(.033,cosine,.22));
     float3 sunSource=max(DirectLight.rgb,0)*phasePi*saturate(FogColor.rgb)*max(FogInfo.y,0);
     // Intervals are cut by fixed world-axis planes, not concentric shells
     // travelling with the camera. Use the dominant ray axis to avoid grazing

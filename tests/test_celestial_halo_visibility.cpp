@@ -5,6 +5,7 @@
 #include <vector>
 using namespace NorthlightCelestialHalo;
 static float update(float previous,float current,const float* c){
+    if(current<=0)return 0;
     float result=c[0]>.5f?previous+(current-previous)*(current<previous?c[1]:c[2]):current;
     return current<=0&&result<.001f?0:result;
 }
@@ -33,8 +34,9 @@ int main(){
     // Alternating twig masks should converge with small frame-to-frame jumps.
     float value=.5f;
     for(unsigned i=1;i<=120;++i){h.advance(100+i*8,i,1920,1080,pos,.5f,c);float next=update(value,i%2?.4f:.6f,c);assert(std::fabs(next-value)<.026f);value=next;}
-    // A full blocker fades monotonically and reaches exact zero within .5s.
+    // A full blocker removes stale glare immediately, while partial masks smooth.
     value=1;
+    assert(update(value,0,c)==0);
     for(unsigned i=121;i<=190;++i){h.advance(100+i*8,i,1920,1080,pos,.5f,c);float next=update(value,0,c);assert(next<=value);value=next;}
     assert(value==0);
     h.advance(1700,191,1920,1080,pos,.5f,c);assert(c[0]==1);

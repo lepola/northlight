@@ -22,7 +22,9 @@ test_capture_admission.py
 test_capture_skip_revalidation.py
 test_capture_skip_wiring.py
 test_cascade_anchor.py
+test_celestial_composition_gpu.py
 test_celestial_native_suppress.py
+test_celestial_phase_recovery.py
 test_celestial_profiles.py
 test_celestial_terrain.py
 test_celestial_veil.py

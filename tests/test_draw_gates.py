@@ -96,8 +96,14 @@ new_members='\n'.join([member(renderer,'template<class Work> bool extensionWork(
     member(renderer,'HRESULT STDMETHODCALLTYPE DrawPrimitive(D3DPRIMITIVETYPE t,UINT start,UINT count) override')])
 old_draws=[l for l in OLD_DRAWS.strip('\n').split('\n')]
 assert len(old_draws)==4
+# Bridge the documented debug policy without changing the raw historical oracle.
+old_claim='celestialDiscs&&enabled&&!applied&&count<=4&&celestialDiscs->nativeClaimPossible'
+debug_claim='celestialDiscs&&enabled&&debugMode==0&&worldDebug==0&&!applied&&count<=4&&celestialDiscs->nativeClaimPossible'
+assert OLD_DRAWS.count(old_claim)==4
+old_draws=[line.replace(old_claim,debug_claim) for line in old_draws]
 
 checks={}
+checks['native sky claims retain the documented debug guard']='celestialDiscs&&enabled&&debugMode==0&&worldDebug==0&&!applied' in member(renderer,'void skyClaim(')
 checks['the rain mask members were found and stubbed (rainMrtBegin inside the cut span)']=checks_rain_stub
 checkflag=fp.src('shadow_blob_filter.h').read_text()
 checks['real source: no compile-time switch left; BlobShadowStrength gates blobFilterActive and the latch (the equivalence runs use strength 0 = skip)']=('HidesNativeBlobs' not in checkflag and 'HidesNativeBlobs' not in renderer
