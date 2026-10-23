@@ -61,6 +61,8 @@ INSTALLATION
      from the game's own light tables in a few seconds,
    - installs the renderer (d3d9.dll), DXVK and the settings files as one
      transaction that can be undone.
+   - sets extShadowQuality=0 in WTF/Config.wtf to prevent native detailed
+     shadows overlapping Northlight. The original config is backed up.
 6. Make Wine load the game folder's d3d9.dll (once, see below).
 7. Start the game yourself as usual.
 

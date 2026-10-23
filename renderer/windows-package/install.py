@@ -28,6 +28,7 @@ DXVK2 = 'renderer-backends/dxvk2/dxvk2_d3d9.dll'   # DXVK 2.7.1, the alternative
 LEGACY_DXVK3_MARKER = 'renderer-backends/dxvk/northlight-dxvk3-init.pending'
 DXVK_FOLDERS = {'dxvk': 'renderer-backends/dxvk/', 'dxvk2': 'renderer-backends/dxvk2/'}
 CONFIG = 'northlight-renderer.ini'
+GAME_CONFIG = 'WTF/Config.wtf'
 MARKER = b'Northlight renderer '
 PROXY_SIGNATURE = b'PROXY module=%ls root=%ls'   # the proxy's start-up log line; carries no product name
 PACKAGE = Path(__file__).resolve().parent
@@ -435,6 +436,22 @@ def resolve_backend(client, backend=None):
 def config_bytes(backend):
     return ('[Renderer]\r\nBackend='+backend+'\r\n').encode('ascii')
 
+def native_shadow_config(data):
+    """Disable WoW's separate detailed shadows; retain all unrelated config bytes."""
+    encoding = 'utf-16-le' if data.startswith(b'\xff\xfe') else 'utf-16-be' if data.startswith(b'\xfe\xff') else None
+    bom = data[:2] if encoding else b'\xef\xbb\xbf' if data.startswith(b'\xef\xbb\xbf') else b''
+    body = data[len(bom):]
+    if encoding:
+        body = body.decode(encoding).encode('utf-8')
+    pattern = rb'(?im)^([ \t]*SET[ \t]+extShadowQuality[ \t]+"?)[^"\r\n \t]+("?[^\r\n]*)'
+    if re.search(pattern, body):
+        body = re.sub(pattern, lambda m: m[1]+b'0'+m[2], body)
+    else:
+        eol = b'\r\n' if b'\r\n' in body else b'\n'
+        if body and not body.endswith((b'\n', b'\r')): body += eol
+        body += b'SET extShadowQuality "0"'+eol
+    return bom+(body.decode('utf-8').encode(encoding) if encoding else body)
+
 def payload_plan(client, package, use_existing=False, backend=None, extra=None, proxy=True):
     """(plan, staged, foreign): the entries that bring client to the package payload.
     backend is already resolved (resolve_backend; None only with proxy=False, which writes no ini): 'dxvk'/'dxvk2'/'native'
@@ -508,6 +525,15 @@ def payload_plan(client, package, use_existing=False, backend=None, extra=None, 
         old, new = (sha(dst) if dst.exists() else None), hashlib.sha256(data).hexdigest()
         if old != new:
             staged[name] = data; plan.append({'path':name, 'before':old, 'after':new, 'source':'staged'})
+    if any(e['path'].casefold() == GAME_CONFIG.casefold() for e in manifest) or any(name.casefold() == GAME_CONFIG.casefold() for name in (extra or {})):
+        raise ValueError('The game shadow setting is generated locally; the package must not supply '+GAME_CONFIG)
+    dst = safe_path(client, GAME_CONFIG)
+    original = dst.read_bytes() if dst.exists() else b''
+    updated = native_shadow_config(original)
+    if updated != original:
+        staged[GAME_CONFIG] = updated
+        plan.append({'path':GAME_CONFIG, 'before':sha(dst) if dst.exists() else None,
+                     'after':hashlib.sha256(updated).hexdigest(), 'source':'staged', 'preserve':True})
     return plan+proxy_entry, staged, foreign
 
 def install(client, package=PACKAGE, use_existing=False, backend=None, extra=None, version='__RELEASE_VERSION__'):

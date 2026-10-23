@@ -32,6 +32,10 @@ Every effect below is on by default and is drawn on top of the game's own frame.
   shadows are crisp and their edges no longer shimmer while the model animates (`ActorShadowDetail`, 0.3.209). The game's baked terrain shadows are
   replaced, its round blob shadows under characters are kept, fainter (`BlobShadowStrength`), and where the sun is blocked the
   game's painted sunlight is removed smoothly, without facet steps, and the thin light line it left on the ground along wall feet and under characters in shadow is mostly gone: the lighting upsample now follows the scene colour there (0.3.208).
+  Installation sets the game's separate detailed shadows to `extShadowQuality=0` in `WTF/Config.wtf`,
+  backed up in the same transaction. This is a game setting: F9/F10 do not restore it. If a video
+  preset enables native detailed shadows again, `/console extShadowQuality 0` removes their overlap.
+  Rollback restores an unchanged config byte-for-byte; a config edited since installation is kept.
 - **Global illumination.** Sky light and bounced light from probes ray traced against the world
   geometry on a background thread, about 76 yards around the camera (52 in the Balanced and Performance
   presets); characters add their own bounce and occlusion (Quality preset).

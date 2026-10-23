@@ -45,6 +45,8 @@ INSTALLATION
      dlls.txt file and writes northlight-renderer.ini (Backend=legacy,
      BackendPath=renderer-backends/dxvk/dxvk_d3d9.dll = WoWSilicon's own DXVK).
      The game folder's d3d9.dll (WoWSilicon's DXVK) and wow.exe stay unchanged.
+   - sets extShadowQuality=0 in WTF/Config.wtf to prevent native detailed
+     shadows overlapping Northlight. The original config is backed up.
 7. Start the game from WoWSilicon as usual.
 
 You can run the installer again at any time: parts that are already up to date

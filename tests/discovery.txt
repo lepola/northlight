@@ -116,6 +116,7 @@ test_native_model_install.py
 test_near_reserve.py
 test_night_floor.py
 test_night_floor_wiring.py
+test_native_shadow_install.py
 test_northlight_install.py
 test_outdoor_light_profiles.py
 test_particle_light_capture.py

@@ -46,6 +46,8 @@ INSTALLATION
      from the game's own light tables in a few seconds,
    - installs the renderer (d3d9.dll), DXVK and the settings files as one
      transaction that can be undone.
+   - sets extShadowQuality=0 in WTF\Config.wtf to prevent native detailed
+     shadows overlapping Northlight. The original config is backed up.
 6. Start wow.exe yourself.
 
 You can run the installer again at any time: parts that are already up to date
