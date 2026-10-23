@@ -150,8 +150,8 @@ Individual settings (Quality / Balanced / Performance):
   MinSkinnedTriangles   100/150/180    small animated parts cast no shadow
   FarShadowInterval     4 / 5 / 6      distant shadows (beyond ~48 m) are drawn every Nth frame (1..16)
   NearShadowInterval    1 / 2 / 2      moving parts of the near shadows (characters) every Nth frame (1..16)
-  LocalLightLimit       48 / 32 / 24   lamps lighting at the same time (8..64; lamps in view first; the GPU budget never lowers it)
-  PointShadows          0 / 0 / 0      lamp shadows (1 = on): only lights inside buildings cast faint shadows, at dusk and night; street lamps, lanterns and torches never do; off by default
+  LocalLightLimit       48 / 32 / 24   lamps lighting at the same time (8..128; lamps in view first; the GPU budget never lowers it)
+  PointShadows          1 / 1 / 1      bounded shadows from selected compact local sources, day and night; diffuse glows are excluded
   PointShadowRefreshMs  0 / 33 / 33    lamp shadow update interval
   PointShadowFacesPerFrame 6 / 6 / 6   lamp shadow directions updated per frame (1..6; 6 = all at once; lower = smaller spikes, a brief seam at the edge)
   ShadowDirectionSteps  2048/2048/2048 sun direction quantization (fewer jumps)
@@ -199,6 +199,7 @@ Individual settings (Quality / Balanced / Performance):
   SpellFog              1 / 1 / 1      the held-back effects get Northlight's fog (haze, rain, ground fog, fog clouds along the view direction) by folding it into the effect's own fog constants when it is recorded, with no extra pass (approximate: the camera's heading stands for the whole effect (rays to effect height above the ground), 128 units at most, no horizon haze, the in-scatter colour is the sky ambient, a quarter-second smoothing; only effects whose vertex shader is proven to use the game's fog ramp; ribbons and beams are not fogged by it); 0 = the recorded game values (0..1; needs SpellLayer=1; read once at start)
   NameMask              1 / 1 / 1      1 = floating unit names and other world text keep the colour the game drew them in (not darkened, lit or hazed by the scene effects; a solid object in front still covers them; with a font mod that replaces the UI shaders, from when the effects start); 0 = as before 0.3.212 (0..1; read once at start)
   NameMaskDebug         0 / 0 / 0      1 = the pixels NameMask protects are painted 50 percent magenta over the finished frame (a diagnostic view); 0 = off (0..1)
+  PointShadowLimit 4 / 4 / 4   See the quality INI for the allowed range.
 When both NearShadowInterval and FarShadowInterval are at least 2, frames that
 draw neither shadow also skip copying the character geometry (about 1–1.5 ms
 of CPU per skipped frame). Light and normal frames alternate: the average FPS

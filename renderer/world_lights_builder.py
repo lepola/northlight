@@ -86,7 +86,7 @@ def extract_wmo(b,stats):
         start,end=r[13:15]
         color=tuple(((packed>>shift)&255)/255*intensity for shift in (16,8,0))
         if not valid_light(position,color,start,end):stats['unsupported_wmo_value_range']+=1;continue
-        result.append((position,color,start,end,index,1,1))
+        result.append((position,color,start,end,index,1,3))
     return result
 
 def extract_m2(b,stats):
@@ -109,7 +109,7 @@ def extract_m2(b,stats):
             position=tuple(position[i]+translation[i] for i in range(3))
             color=tuple(c*intensity for c in color)
             if not valid_light(position,color,start,end):raise Unsupported('m2_value_range')
-            result.append((position,color,start,end,index,2,0))
+            result.append((position,color,start,end,index,2,2))
         except Unsupported as exc:stats['unsupported_'+str(exc)]+=1
     return result
 

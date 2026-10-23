@@ -87,6 +87,7 @@ test_local_fog_profile.py
 test_local_ini.py
 test_local_light_batches.py
 test_local_light_selection.py
+test_local_source_shadows.py
 test_log_format_literals.py
 test_log_rotation.py
 test_logger_cost.py

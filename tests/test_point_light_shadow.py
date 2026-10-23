@@ -38,21 +38,27 @@ class PointReferenceTests(unittest.TestCase):
         visible=lambda water,alpha,opaque:water>.1 and water<=opaque+max(.012,water*.0007) and alpha>.003
         self.assertTrue(visible(10,.5,20));self.assertFalse(visible(20,.5,10))
         self.assertFalse(visible(0,0,20));self.assertFalse(visible(10,0,20))
-        # Authored range contribution must be zero beyond its endpoint; source
-        # intensity cannot cause more than .35 signed correction per channel.
+        # Subtraction cannot exceed the source contribution already added by LocalDirect.
         for distance in (0,1,4,7,10,20):
             attenuation=max(0,min(1,(10-distance)/6))
             for intensity in (0,.2,1,10000):
-                for visibility in (0,.25,1):
-                    correction=-min(min(intensity,2)*attenuation,.35)*(1-visibility)
-                    self.assertTrue(math.isfinite(correction));self.assertGreaterEqual(correction,-.35)
-                    if distance>=10 or visibility==1:self.assertEqual(correction,0)
+                for facing in (0,.3,1):
+                    for gain in (0,.5,2):
+                        contribution=intensity*attenuation*attenuation*facing*gain
+                        for visibility in (0,.25,1):
+                            for relevance in (0,.4,1):
+                                correction=-contribution*(1-visibility)*relevance
+                                self.assertTrue(math.isfinite(correction))
+                                self.assertGreaterEqual(correction,-contribution);self.assertLessEqual(correction,0)
+                                if distance>=10 or visibility==1:self.assertEqual(correction,0)
     def test_backfacing_skips_pcf(self):
         # Task 43: localVisibility returns 1 (no cube taps) where dot(normal,delta)>=0. There facing=saturate(dot(n,-delta/d)) is 0,
         # so estimate and the correction are 0 whatever the visibility; every face toward the lamp still runs the PCF.
         src=fp.src('local_light_effects.hlsl').read_text()
         self.assertEqual(src.count('if(distance<=LocalShadow.x||distance>=LocalShadow.y||dot(normal,delta)>=0)return 1;'),1)
-        self.assertIn('float occlusion=1-localVisibility(delta,n);',src);self.assertIn('float3 estimate=min(max(LocalColor.rgb,0),2)*atten*facing;',src)
+        self.assertIn('float occlusion=1-localVisibility(delta,n);',src)
+        self.assertIn('float3 contribution=LocalColor.rgb*(atten*atten*facing*LocalGain.x*(1-LocalGain.y*sunlit));',src)
+        self.assertIn('return float4(-contribution*(occlusion*relevance),0);',src)
         import random
         rng=random.Random(43);skipped=kept=0
         for _ in range(20000):

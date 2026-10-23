@@ -52,7 +52,7 @@ consumers=['if(replayShadows)selectShadowReplays();','if(effects.shadows&&replay
            'if(effects.shadows&&replayShadows){auto proofs','if(effects.shadows&&replayShadows)pointCalculateReplayBounds();']
 schedules=['!reason&&key.valid&&!pull&&!actorLost,diagnosticCapture!=0,replaysComplete);','if(cascade==0)nearRendered=captureMode==CaptureFresh&&interval>1&&actorShadows;',
            'if(captureMode==CaptureFresh||!actorShadows)reuse.commit(interval,shadowPasses,matrices[cascade]);else captureDemand=true;',
-           'renderPointShadow(replaysComplete,actorShadows);else pointReady=false;']
+           'renderPointShadows(atmosphere.lights,replaysComplete,actorShadows);else pointReady=false;']
 for needle in consumers+schedules:once(body,needle,'render()')
 checks['consumers gated on replayShadows, schedules on replaysComplete']=body.count('replayShadows')==1+len(consumers) and body.count('replaysComplete')==3
 checks['no bare freshReplays consumer left in render()']=body.count('freshReplays')==3 # its definition and the two predicates
@@ -69,7 +69,7 @@ checks['cascade replay block gated, terrain before, union after']=(render.count(
 # The probe moved before the live dump: legal because it never runs on a diagnostic capture frame.
 checks['probe never on a diagnostic capture frame']='probeRecord=replayProbeActive()&&slot==0&&captureMode==CaptureFresh&&!diagnosticCapture;' in block
 # Point cube: withReplays gates both replay loops and the schedule's replay count.
-pb=pt[pt.index('    bool renderPointShadow(bool fresh=true,bool withReplays=true){'):pt.index('    bool renderPointLighting(')]
+pb=pt[pt.index('    bool renderPointShadow(const NorthlightLocalLights::Light& light,bool fresh=true,bool withReplays=true){'):pt.index('    bool renderPointLighting(')]
 gs,ge=pb.index('            if(withReplays){\n'),pb.index('            } /* withReplays */')
 cand='if(withReplays)for(size_t i=0;i<replays.size();++i){const auto& bounds=replays[i]->pointBounds;'
 count='if(fresh)pointReplayCount=withReplays?replays.size():0;'
