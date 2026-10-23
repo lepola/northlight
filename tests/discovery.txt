@@ -15,6 +15,8 @@ test_ao_rotation_stripes.py
 test_ao_texel_snap.py
 test_art_layer.py
 test_async_memory_diagnostics.py
+test_atlas_low_memory.py
+test_atlas_upload_proof.py
 test_backend_proxy.py
 test_band_retime.py
 test_cache_shadow_optimizations.py

@@ -110,7 +110,7 @@ def stub():
         tokens |= set(re.findall(r'\w+', ret + ' ' + ' '.join(p.type for p in params)))
     out = ['#pragma once', '#include <cstdint>', '#define STDMETHODCALLTYPE', 'using REFIID=const int&;using REFGUID=const int&;',
            'constexpr int32_t S_OK=0,D3D_OK=0,S_FALSE=1,E_POINTER=-1,E_NOINTERFACE=-2,D3DERR_INVALIDCALL=-3,E_OUTOFMEMORY=-4,D3DERR_NOTFOUND=-5,D3DERR_MOREDATA=-6,D3DERR_NOTAVAILABLE=-7,D3DERR_DEVICELOST=-8,D3DERR_DEVICENOTRESET=-9;',
-           '#define SUCCEEDED(hr) ((hr)>=0)', '#define FAILED(hr) ((hr)<0)', 'template<class T>struct IID;', '#define __uuidof(T) IID<T>::value',
+           '#define SUCCEEDED(hr) ((hr)>=0)', '#define FAILED(hr) ((hr)<0)', 'template<class T>struct IID;', '#undef __uuidof', '#define __uuidof(T) IID<T>::value',
            'constexpr unsigned D3DRTYPE_SURFACE=1,D3DRTYPE_VOLUME=2,D3DRTYPE_TEXTURE=3,D3DRTYPE_VOLUMETEXTURE=4,D3DRTYPE_CUBETEXTURE=5,D3DRTYPE_VERTEXBUFFER=6,D3DRTYPE_INDEXBUFFER=7;']
     out += [f'using {k}={v};' for k, v in SCALARS.items() if k != 'float']
     out.append('using D3DDEVTYPE=unsigned;')
@@ -266,22 +266,22 @@ def compile_run(tmp, name, flags, args=(), expect_fail=False, source="test_comma
     return run
 
 
-with tempfile.TemporaryDirectory(prefix='command-stream-') as tmp:
-    (Path(tmp) / 'd3d9_stub.h').write_text('#ifndef FALSE\n#define FALSE 0\n#endif\n'+stub())
-    (Path(tmp) / 'cs_generated.inc').write_text(generated_cpp())
-    compile_run(tmp, 'o2', ['-O2'])
-    compile_run(tmp, 'query-caller', ['-O2'], source='test_query_caller.cpp')
-    # The fake extension encodes raw identities by shifting pointers; it never dereferences them.
-    # vptr instrumentation would dereference those deliberate non-object values during downcasts.
-    compile_run(tmp, 'asan', ['-O1', '-g', '-fsanitize=address,undefined', '-fno-sanitize=vptr', '-fno-omit-frame-pointer'])
-    # Redundant-state filtering compiled out: the Target sees every Set, and the equivalence run requires the exact trace again.
-    compile_run(tmp, 'nofilter', ['-O2', '-DNORTHLIGHT_STREAM_FILTER=0'])
-    compile_run(tmp, 'nodirect', ['-O2', '-DNORTHLIGHT_STREAM_DIRECT=0'])   # every call replayed through the Device: the same traces
-    compile_run(tmp, 'tsan', ['-O1', '-g', '-fsanitize=thread'], ['threads'])
-    # The same generated code against the real d3d9.h, 32-bit Windows: compile only (the DLL's own toolchain).
-    zig = fp.zig()
-    obj = Path(tmp) / 'compile.o'
-    command = [str(zig), 'c++', '-target', 'x86-windows-gnu', '-O2', '-std=c++17', '-fno-rtti', '-Wall', '-Wextra', '-Werror',
-               '-Wno-microsoft-exception-spec', *fp.include_flags(), '-c', str(HERE / 'test_command_stream_compile.cpp'), '-o', str(obj)]
-    subprocess.run(command, check=True, env=fp.zig_env())
-print('test_command_stream: ok')
+if __name__ == '__main__':
+    with tempfile.TemporaryDirectory(prefix='command-stream-') as tmp:
+        (Path(tmp) / 'd3d9_stub.h').write_text('#ifndef FALSE\n#define FALSE 0\n#endif\n'+stub())
+        (Path(tmp) / 'cs_generated.inc').write_text(generated_cpp())
+        compile_run(tmp, 'o2', ['-O2'])
+        compile_run(tmp, 'query-caller', ['-O2'], source='test_query_caller.cpp')
+        # Fake raw identities are deliberately shifted pointers; vptr checks would dereference them.
+        compile_run(tmp, 'asan', ['-O1', '-g', '-fsanitize=address,undefined', '-fno-sanitize=vptr', '-fno-omit-frame-pointer'])
+        # Redundant-state filtering compiled out: the Target sees every Set, and the equivalence run requires the exact trace again.
+        compile_run(tmp, 'nofilter', ['-O2', '-DNORTHLIGHT_STREAM_FILTER=0'])
+        compile_run(tmp, 'nodirect', ['-O2', '-DNORTHLIGHT_STREAM_DIRECT=0'])   # every call replayed through the Device: the same traces
+        compile_run(tmp, 'tsan', ['-O1', '-g', '-fsanitize=thread'], ['threads'])
+        # The same generated code against the real d3d9.h, 32-bit Windows: compile only (the DLL's own toolchain).
+        zig = fp.zig()
+        obj = Path(tmp) / 'compile.o'
+        command = [str(zig), 'c++', '-target', 'x86-windows-gnu', '-O2', '-std=c++17', '-fno-rtti', '-Wall', '-Wextra', '-Werror',
+                   '-Wno-microsoft-exception-spec', *fp.include_flags(), '-c', str(HERE / 'test_command_stream_compile.cpp'), '-o', str(obj)]
+        subprocess.run(command, check=True, env=fp.zig_env())
+    print('test_command_stream: ok')

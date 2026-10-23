@@ -44,6 +44,7 @@ expected={
  ('replay_copy_reader.h','b'):('NorthlightUpload::readBackLock()',Read,None), # 0.3.192 (CS): the 8 capture read-backs go through NorthlightReplayCopies::Reader (CPU copy first, this lock otherwise)
  ('spell_layer.h','upVb_'):('flags',Dynamic,'D3DUSAGE_DYNAMIC|D3DUSAGE_WRITEONLY,0,D3DPOOL_DEFAULT,&upVb_'), # task 34: the layer's own replay upload buffers, DISCARD on the first upload of a frame / after a wrap, NOOVERWRITE appends after (see the audit below)
  ('spell_layer.h','upIb_[fmt]'):('flags',Dynamic,'D3DUSAGE_DYNAMIC|D3DUSAGE_WRITEONLY,fmt?D3DFMT_INDEX32:D3DFMT_INDEX16,D3DPOOL_DEFAULT,&upIb_[fmt]'), # one per index format
+ ('ui_draw_diagnostic.h','buffer'):('out.flags',Read,None),
  ('forwarders.h','real'):('Flags',Forward,None),('tracked_buffers.h','this->real'):('flags',Forward,None),
 }
 seen=set();fresh=calls=0
@@ -56,6 +57,8 @@ for name,text in sources.items():
         assert created is None or created in text,f'{name}:{line}: {key[1]} is no longer created as {kind}: {created}'
         fresh+=flags==F;calls+=1
 assert seen==set(expected),f'stale entries: {sorted(set(expected)-seen)}'
+if 'ui_draw_diagnostic.h' in sources:
+    assert 'out.flags=NorthlightUpload::readBackLock();' in sources['ui_draw_diagnostic.h']
 assert fresh==5
 # spell_layer.h upload(): DISCARD only while *Fresh_ (first of the frame, or after a wrap), NOOVERWRITE otherwise; beginFrame and the wrap re-arm Fresh_, so an append never overlaps submitted draws' bytes
 sl=sources['spell_layer.h']
