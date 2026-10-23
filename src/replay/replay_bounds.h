@@ -84,7 +84,8 @@ inline bool evaluateIntervals(const NorthlightActorDeformation::Program& p,const
             sum.error+=roundError(magnitude)*8;result.fill(sum);
         }else for(unsigned j=0;j<4;++j){switch(op.code){
             case 1:case 46:result[j]=a[j];break;case 2:result[j]=add(a[j],b[j]);break;case 3:result[j]=add(a[j],b[j],true);break;case 5:result[j]=mul(a[j],b[j]);break;
-            case 4:{auto product=mul(a[j],b[j]);result[j]=add(product,c[j]);result[j].error+=roundError(std::fabs(double(a[j].value)*b[j].value)+std::fabs(c[j].value));break;}
+            case 4:{auto product=mul(a[j],b[j]);if(product.value==0&&product.error==0){result[j]=c[j];break;} // exact 0*x+c: fused and separate both preserve c
+                result[j]=add(product,c[j]);result[j].error+=roundError(std::fabs(double(a[j].value)*b[j].value)+std::fabs(c[j].value));break;}
             default:return false;}}
         const unsigned type=regType(op.destination),index=regIndex(op.destination),mask=(op.destination>>16)&15;
         if((type!=0&&type!=3)||(type==0&&index>=32)||(type==3&&index))return false;

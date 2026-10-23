@@ -176,6 +176,8 @@ struct Counters{
     unsigned hazards[kReasons]={};
     unsigned flushes=0,replays=0,replayedDraws=0,replaySkipped=0,discarded=0;
     unsigned restoreFallbacks=0,texSplits=0;      // drains that had to use the state block instead of the minimal restore; texture writes answered with a split (drain, keep deferring)
+    unsigned fogEarly=0,copyDrains=0;
+    unsigned rtInPlace=0,rtSplits=0;             // draws sampling unsafe textures kept in place; pending sequences drained before them
     unsigned restoreSets=0;                       // device Set* calls of the minimal restore (apart from replaySets)
     uint64_t recordSlots=0;                       // slots a record examined (read and compared): with the synced bits only the ones that may have changed
     unsigned fogCapped=0;                         // fits skipped because the frame's cap on new fits was reached (the game's value was kept)
@@ -200,6 +202,8 @@ struct Counters{
         for(int i=0;i<3;++i)orderBy[i]+=o.orderBy[i];
         for(unsigned i=0;i<kReasons;++i)hazards[i]+=o.hazards[i];
         fixed+=o.fixed;flushes+=o.flushes;replays+=o.replays;drains+=o.drains;recordSlots+=o.recordSlots;stride0Refused+=o.stride0Refused;fogEntries+=o.fogEntries;fogFlat+=o.fogFlat;fogRefused+=o.fogRefused;fogUnproven+=o.fogUnproven;fogNoRead+=o.fogNoRead;fogBareSkip+=o.fogBareSkip;fogNoPsReg+=o.fogNoPsReg;fogOtherBlend+=o.fogOtherBlend;fogCapped+=o.fogCapped;checkAllocFails+=o.checkAllocFails;dirtyMismatches+=o.dirtyMismatches;restoreFallbacks+=o.restoreFallbacks;texSplits+=o.texSplits;restoreSets+=o.restoreSets;replayedDraws+=o.replayedDraws;replaySkipped+=o.replaySkipped;discarded+=o.discarded;
+        fogEarly+=o.fogEarly;copyDrains+=o.copyDrains;
+        rtInPlace+=o.rtInPlace;rtSplits+=o.rtSplits;
         conflicts+=o.conflicts;materialized+=o.materialized;recorded+=o.recorded;replaySets+=o.replaySets;conflictBytes+=o.conflictBytes;
         for(int i=0;i<4;++i)capBy[i]+=o.capBy[i];overflowFrames+=o.overflowFrames;overflowAt+=o.overflowAt;overflowCandidates+=o.overflowCandidates;
         deltaWords+=o.deltaWords;arenaHigh=std::max(arenaHigh,o.arenaHigh);recordHigh=std::max(recordHigh,o.recordHigh);
@@ -290,7 +294,7 @@ public:
 
 // ---- d) the layer (execution) ----
 // A texture created with D3DUSAGE_RENDERTARGET or D3DUSAGE_DEPTHSTENCIL (2D or cube; a volume texture cannot be one): its contents change by rendering, which is invisible to the
-// layer (SetRenderTarget is not hooked in stream mode), so a pending draw sampling it is refused. A level the driver cannot describe counts as one.
+// layer (SetRenderTarget is not hooked in stream mode), so a draw sampling it stays in place. A level the driver cannot describe counts as one.
 inline bool isRenderTargetTexture(IDirect3DBaseTexture9* t){
     D3DSURFACE_DESC d{};HRESULT hr=D3DERR_INVALIDCALL;
     switch(t->GetType()){
@@ -364,7 +368,7 @@ struct Config{
     SyncedSlots* synced=nullptr;                  // the bits; null (or the state cache unusable for a record): the full compare
     bool minimalRestore=true;                     // a drain restores exactly the slots it set (read before the first Set, restored after the last draw) instead of a D3DSBT_ALL state block; false: always the state block
     unsigned maxOrderSplits=8;                    // water, rain and name splits per frame; the next one is the Order hazard (flush, fallback, cooldown), like maxTexSplits
-    unsigned maxTexSplits=8;                      // texture writes to a texture a pending draw samples are answered with a split (drain, keep deferring) up to this many per frame; the next one is a TexWrite hazard
+    unsigned maxTexSplits=8;                      // separate budgets for texture-write and unsafe-texture-reader splits; excess writes raise TexWrite, excess readers close only this frame
     unsigned deltaChunkWords=16384;               // 64 KiB chunks (at most 65535: entries address a delta with 16-bit offsets)
     const struct MirrorView* source=nullptr;      // the device state cache for bulk reads (optional; null: every state is read with Get calls)
     uint64_t (*clock)(void* ctx)=nullptr;bool (*timing)(void* ctx)=nullptr;void* clockCtx=nullptr; // phase timing of the drains (diagnostics): timing() is asked once per drain, only when it says yes does the layer read clock() around save, upload and restore; null = never
@@ -593,6 +597,7 @@ class Layer{
     static constexpr unsigned kFfChunk=8; // fixed-function records and delta words are allocated in chunks as a frame needs them and released by trim()
     struct Held{IUnknown* p=nullptr;uint16_t aux=0;uint8_t flags=0;};   // a reference the frame holds once per object (see intern())
     static constexpr uint8_t kNotRt=1,kInSamples=2,kHasAux=4;
+    struct FogRows{int ps=-1;float nativeVs[4]={},nativePs[4]={},foldedVs[4]={},foldedPs[4]={};};
     struct Entry{
         DrawType type=DrawType::Primitive;D3DPRIMITIVETYPE prim=D3DPT_TRIANGLELIST;
         INT base=0;UINT minIndex=0,numVertices=0,first=0,primCount=0;
@@ -601,6 +606,7 @@ class Layer{
         uint32_t upVtx=0,upStride=0,upIdx=0;D3DFORMAT upFmt=D3DFMT_INDEX16;
         uint16_t dChunk=0,dOff=0,dLen=0;               // the state delta: dLen words at dOff of delta chunk dChunk
         FfRec* ff=nullptr;                             // ff: set for fixed-function draws (no vertex and no pixel shader), else null
+        FogRows fog; // early drains use native fog; the folded rows belong only after the world effects
     };
     // What replay itself set on the device (streams and index buffer are rebound for materialized spans, so they are tracked apart from the records).
     struct Shadow{
@@ -636,7 +642,7 @@ private:
         return true;
     }
     std::vector<std::unique_ptr<uint32_t[]>> deltaChunks_;unsigned deltaChunk_=0,deltaUsed_=0; // state deltas of the pending entries; deltaChunk_/deltaUsed_: the chunk being filled and its used words
-    struct SyncPend{uint64_t rs[4]={},vsF[4]={},psF[4]={};uint16_t ss[16]={};uint16_t tex=0;bool vp=false;unsigned slots=0;bool fogVs=false;int fogPs=-1,fogApplied=0;uint8_t fogFlat=0,fogRefused=0,fogUnproven=0,fogNoRead=0,fogNoPsReg=0,fogOtherBlend=0,fogBareSkip=0;}; // fogVs/fogPs: the fog rows of this record (they hold Northlight's value, never synced)
+    struct SyncPend{FogRows fog;uint64_t rs[4]={},vsF[4]={},psF[4]={};uint16_t ss[16]={};uint16_t tex=0;bool vp=false;unsigned slots=0;bool fogVs=false;int fogPs=-1,fogApplied=0;uint8_t fogFlat=0,fogRefused=0,fogUnproven=0,fogNoRead=0,fogNoPsReg=0,fogOtherBlend=0,fogBareSkip=0;}; // fogVs/fogPs: the fog rows of this record (they hold Northlight's value, never synced)
     std::unique_ptr<uint32_t[]> checkScratch_;         // the dirty cross-check's copy of the first delta (kScratchWords)
     DeltaDiff dirtyFirst_;bool dirtyTaken_=false;       // the first synced-bit mismatch of the session (takeDirtyMismatch)
     // SpellFog state: the fit cache (one game constant per frame revision), the alpha colour cache, the sub-class and fog colour register of the draw being recorded, the first samples per sub-class.
@@ -756,7 +762,7 @@ private:
         if(!firstHazard_){firstHazard_=true;firstReason_=r;}
     }
     void noteEvent(Reason r,InPlaceKind by){event_=Event{r,by,count_};++eventSeq_;}
-    // Every failure of defer() lands here: flush what is pending (in order, before the caller's in-place draw), then the frame falls back.
+    // A failed capture: flush what is pending (in order, before the caller's in-place draw), then the frame falls back.
     // Capacity: the rest of the frame is drawn the old way (never part before and part after); the overflowing draw is the first of the candidates counted from here on.
     bool capFail(unsigned kind){
         count([&](Counters& c){++c.capBy[kind];++c.overflowFrames;c.overflowAt+=count_;++c.overflowCandidates;});
@@ -769,7 +775,17 @@ private:
         fm_.fallback(r!=Reason::Frame);
         return false;
     }
-    void drain(){count([](Counters& c){++c.drains;});timing_=cfg_.clock&&cfg_.timing&&cfg_.timing(cfg_.clockCtx);runReplay();clearFrame();}
+    // Mutable/unknown texels cannot be deferred. Keep this draw in order without turning the whole layer off for 30 frames.
+    bool textureInPlace(){
+        count([](Counters& c){++c.rtInPlace;});
+        if(count_){
+            const bool limit=frame_.rtSplits>=cfg_.maxTexSplits;
+            count([](Counters& c){++c.rtSplits;++c.flushes;});drain();
+            if(limit)fm_.fallback(false); // bound alternating draws' replay cost for this frame only
+        }else releaseHeld();
+        return false;
+    }
+    void drain(bool afterEffects=false){count([](Counters& c){++c.drains;});timing_=cfg_.clock&&cfg_.timing&&cfg_.timing(cfg_.clockCtx);runReplay(afterEffects);clearFrame();}
 
     // Phase timing (sampled frames): ticks of the drains' state save, upload and state restore, read by the integration with phaseTicks().
     bool timing_=false;uint64_t tSave_=0,tUpload_=0,tRestore_=0,tCheck_=0;
@@ -860,7 +876,7 @@ private:
     // Fetch rule: vertex i of a stream reads offset+(base+i)*stride. Materialized stream bytes [lo,hi) now sit at P in the upload buffer. With f=base+min
     // (Indexed) or StartVertex (Primitive): mode A keeps base and puts offset P-f*stride (needs >=0); mode B uses base=-min (StartVertex 0), offset P,
     // and moves the other streams to offset+f*stride (always >=0). Index values are never rewritten.
-    bool drawEntry(const Entry& e,Shadow& sh,bool vbOk,const bool (&ibOk)[2]){
+    bool drawEntry(const Entry& e,Shadow& sh,bool vbOk,const bool (&ibOk)[2],bool afterEffects){
         applyState(e);
         const bool idx=e.type==DrawType::Indexed,up=e.type==DrawType::PrimitiveUP||e.type==DrawType::IndexedUP;
         bool matV=false;
@@ -892,6 +908,8 @@ private:
                 start=UINT((int64_t(b.uploadOff)+(int64_t(e.ibLo)-b.base))/e.isz);
             }else bindIndices(sh,e.ib);
         }
+        const bool nativeFog=!afterEffects&&e.fog.ps>=0;
+        if(nativeFog){count([](Counters& c){++c.fogEarly;});dev_->SetVertexShaderConstantF(30,e.fog.nativeVs,1);dev_->SetPixelShaderConstantF(unsigned(e.fog.ps),e.fog.nativePs,1);sets_+=2;}
         switch(e.type){
         case DrawType::Primitive:dev_->DrawPrimitive(e.prim,start,e.primCount);break;
         case DrawType::Indexed:dev_->DrawIndexedPrimitive(e.prim,base,e.minIndex,e.numVertices,start,e.primCount);break;
@@ -900,6 +918,8 @@ private:
             dev_->DrawIndexedPrimitiveUP(e.prim,e.minIndex,e.numVertices,e.primCount,arena_.get()+e.upIdx,e.upFmt,
                 arena_.get()+e.upVtx,e.upStride);break;
         }
+        // Restore the delta model's folded values before the next entry or the minimal state restore.
+        if(nativeFog){dev_->SetVertexShaderConstantF(30,e.fog.foldedVs,1);dev_->SetPixelShaderConstantF(unsigned(e.fog.ps),e.fog.foldedPs,1);sets_+=2;}
         if(up){ // the API side effects of the UP call: stream 0 (and the indices) are unbound afterwards
             sh.st[0].valid=false;
             if(e.type==DrawType::IndexedUP)sh.ibValid=false;
@@ -1027,7 +1047,7 @@ private:
         d->SetViewport(&u.vp);d->SetScissorRect(&u.sc);n+=2; // last: SetRenderTarget(0) reset both
         count([&](Counters& c){c.restoreSets+=n;});
     }
-    void runReplay(){
+    void runReplay(bool afterEffects){
         if(!count_)return;
         bool minimal=false;
         if(cfg_.minimalRestore){
@@ -1047,7 +1067,7 @@ private:
         dev_->SetDepthStencilSurface(ds_);
         Shadow sh;sets_=0;ffPrev_=nullptr;
         for(unsigned i=0;i<count_;++i){
-            const bool ok=bound&&drawEntry(entryAt(i),sh,vbOk,ibOk);
+            const bool ok=bound&&drawEntry(entryAt(i),sh,vbOk,ibOk,afterEffects);
             count([&](Counters& c){if(ok)++c.replayedDraws;else ++c.replaySkipped;});
         }
         count([&](Counters& c){c.replaySets+=sets_;});
@@ -1293,7 +1313,7 @@ private:
             unsigned ovr=~0u;float row[4]={};
             if(fogVsRow){
                 std::memcpy(gameV,src[30],12);
-                if(fogFit(gameV,fitV)){fitOk=true;flatNow=NorthlightSpellFog::flatConstant(gameV);if(flatNow)pend_.fogFlat=1;row[0]=fitV[0];row[1]=fitV[1];row[2]=fitV[2];row[3]=src[30][3];ovr=30;++pend_.fogApplied;fogSample(src[30],nullptr,row,nullptr,flatNow?1u:0u);}
+                if(fogFit(gameV,fitV)){std::memcpy(pend_.fog.nativeVs,src[30],16);fitOk=true;flatNow=NorthlightSpellFog::flatConstant(gameV);if(flatNow)pend_.fogFlat=1;row[0]=fitV[0];row[1]=fitV[1];row[2]=fitV[2];row[3]=src[30][3];ovr=30;std::memcpy(pend_.fog.foldedVs,row,16);++pend_.fogApplied;fogSample(src[30],nullptr,row,nullptr,flatNow?1u:0u);}
                 else if(!fogCappedNow_){if(fogSkipNow_)pend_.fogBareSkip=1;else pend_.fogRefused=1;fogSample(src[30],nullptr,src[30],nullptr,2);}
             }
             diffRows<4>(Op::VsF,src,m.vsF,m.vsFV,rd.vsF,sync4,kVsFloat,ovr,row);
@@ -1313,6 +1333,7 @@ private:
                 else if(target==FogTarget::White)out[0]=out[1]=out[2]=1.f;
                 else if(target==FogTarget::Grey)out[0]=out[1]=out[2]=.5f;
                 row[0]=out[0];row[1]=out[1];row[2]=out[2];row[3]=src[fogReg][3];ovr=unsigned(fogReg);++pend_.fogApplied;
+                pend_.fog.ps=fogReg;std::memcpy(pend_.fog.nativePs,src[fogReg],16);std::memcpy(pend_.fog.foldedPs,row,16);
                 float emitV[4]={fitV[0],fitV[1],fitV[2],0};fogSample(gameV,src[fogReg],emitV,row,flatNow?1u:0u);
             }
             diffRows<4>(Op::PsF,src,m.psF,m.psFV,rd.psF,sync4,kPsFloat,ovr,row);
@@ -1570,7 +1591,7 @@ public:
             if(!tx)continue;
             Held* h=intern(tx,owned);if(!h)return capFail(3);
             if(!(h->flags&kNotRt)){ // once per object and frame (and per object and generation in the verdict cache)
-                if(renderTargetTexture(tx))return fail(Reason::Capture); // the game may render into or clear it later without any call the layer sees
+                if(renderTargetTexture(tx))return textureInPlace(); // the game may render into or clear it later without any call the layer sees
                 h->flags|=kNotRt;
             }
             tex[t]=tx;texHeld[t]=h;
@@ -1604,7 +1625,7 @@ public:
             if(!readFf(*e.ff))return fail(Reason::Capture);
         }
         if(!reserveDelta(n_,e.dChunk,e.dOff))return capFail(1);
-        e.dLen=uint16_t(n_);
+        e.dLen=uint16_t(n_);e.fog=pend_.fog;
         // Committed from here: nothing below fails.
         {   uint32_t* dst=deltaChunks_[e.dChunk].get()+e.dOff;std::memcpy(dst,scratch_.get(),size_t(n_)*4);
             ModelSink ms{model_};decodeOps(dst,dst+n_,ms);}
@@ -1691,8 +1712,10 @@ public:
         fm_.close();
         if(!count_)return;
         count([](Counters& c){++c.replays;});
-        drain();
+        drain(true);
     }
+    // A native glow copy must see every preceding draw. This boundary keeps later deferral armed.
+    void beforeColorCopy(){if(count_){count([](Counters& c){++c.copyDrains;++c.flushes;});drain();}}
     // Releases entry, delta and arena storage (and the upload buffers) beyond `keep` records; never below what is pending. For idle frames and memory pressure.
     void trim(size_t keep=0){
         const size_t chunks=std::max<size_t>(keep?1:0,count_?deltaChunk_+1:0);

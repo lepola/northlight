@@ -35,6 +35,10 @@ Every effect below is on by default and is drawn on top of the game's own frame.
 - **Global illumination.** Sky light and bounced light from probes ray traced against the world
   geometry on a background thread, about 76 yards around the camera (52 in the Balanced and Performance
   presets); characters add their own bounce and occlusion (Quality preset).
+- **Experimental grass shadows.** Set `GrassShadows=1` in `northlight-quality.ini` and restart WoW
+  to enable bounded nearby native grass casters; `ActorShadows=1` and shadows must also be on.
+  It defaults to `1` in Quality and `0` in Balanced/Performance. `GrassShadows=0` skips
+  the additional capture and replay work; sampled receiver diagnostics remain available.
 - **Ambient occlusion.** Screen-space AO with contact shading and a light bloom.
 - **Fog and air.** Volumetric sun and moon light with light shafts through the shadows; soft haze on
   the far landscape and the lowest sky in the game's own fog colour; regional ground fog in forests,

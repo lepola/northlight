@@ -421,6 +421,14 @@ private:
     unsigned drawCalls=0, missingVS=0, terrainDraws=0, terrainShadowDraws=0, viewportRejects=0, depthRejects=0, uiDraws=0, uiAfterTerrain=0;
     unsigned viewportReports=0;
     unsigned postEffectWorldDraws=0,postEffectSkinnedDraws=0;
+    NorthlightDetailShadow::ReceiverCensus grassReceiverCensus;
+    void observeGrassReceiver(IDirect3DVertexShader9* vs,bool late){
+        const auto found=vsHashes.find(vs);
+        if(found==vsHashes.end()||!NorthlightDetailShadow::shader(found->second))return;
+        DWORD zw=0,blend=0,alpha=0;
+        const bool states=readDrawRenderState(D3DRS_ZWRITEENABLE,zw)&&readDrawRenderState(D3DRS_ALPHABLENDENABLE,blend)&&readDrawRenderState(D3DRS_ALPHATESTENABLE,alpha);
+        grassReceiverCensus.observe(late,states,zw!=0,blend!=0,alpha!=0,captured,worldDepthBound());
+    }
     // 0.3.188 (task 3): per-sample-frame census of the early depth resolve, read-only, logged as TRANSLUCENT. Positions are 1-based census draw
     // indices (0 = none), over the whole frame (with a Clear(Z) between world passes read them against clearResolve): lastOpaqueZ is the last
     // non-water Z-writing draw writing RGB effectively opaque (the undo rule); clearResolve marks a Clear(Z)-triggered resolve.
@@ -980,6 +988,7 @@ private:
                     const VsClass& vc=classifyVs(late);
                     if(vc.world)++postEffectWorldDraws;
                     if(vc.skinned)++postEffectSkinnedDraws;
+                    observeGrassReceiver(late,true);
                 }if(!borrowed)drop(late);
             }return;
         }
@@ -991,6 +1000,7 @@ private:
         if(!borrowedVS&&(FAILED(ext->GetVertexShader(&vs))||!vs)){++missingVS;drop(vs);if(spellOn)spellFixedDomain();return;}
         struct ShaderRelease {IDirect3DVertexShader9*& p;bool borrowed;~ShaderRelease(){if(!borrowed)drop(p);}} shaderRelease{vs,borrowedVS};
         if(spellOn)spellVs=vs; /* identity only */
+        if(sampled())observeGrassReceiver(vs,false);
         beforeDraw(vs);planTerrainShadowSwap(vs);
         if(world&&!applied&&enabled&&!failed&&projectionValid){
             D3DVIEWPORT9 viewport={};DWORD depthEnabled=FALSE;
@@ -1633,12 +1643,14 @@ private:
         IDirect3DBaseTexture9* container=nullptr;
         if(destination&&FAILED(destination->GetContainer(__uuidof(IDirect3DBaseTexture9),reinterpret_cast<void**>(&container))))container=nullptr;
         struct Drop{IDirect3DBaseTexture9* p;~Drop(){if(p)p->Release();}} dropContainer{container};
-        /* The layer's colour target copied into a texture (the game's glow copy, ffxGlow 1): allowed, the pending draws stay deferred. The copy then holds the world
-           without them (they replay at B, after the glow passes), so they get no game glow; a depth source, a copy into the target or depth, or into a non-texture
-           surface (GetRenderTargetData into system memory) is still the Copy hazard. */
+        // Include all preceding translucent draws in the native glow copy. Leaving them queued
+        // made bloom depend on which earlier resource boundary happened to drain the layer.
         D3DSURFACE_DESC destDesc={};
         if(container&&source&&source==spell.target()&&!mine(destination)&&SUCCEEDED(destination->GetDesc(&destDesc))&&destDesc.Pool==D3DPOOL_DEFAULT){ /* a default-pool texture level only: not a managed or system-memory one (GetRenderTargetData) */
-            ++spellCopiesAllowed;spellGlowFrame=frame+1;spellGlowTex=static_cast<void*>(container);spellGlowPassN=0;spellTextureWrite(static_cast<void*>(container));return;
+            ++spellCopiesAllowed;spellGlowFrame=frame+1;spellGlowTex=static_cast<void*>(container);spellGlowPassN=0;
+            nameMaskRunEnd();
+            extensionWork("spell glow copy",[&]{ExtensionDevice::RawScope raw(*ext);spell.beforeColorCopy();});
+            spellSync();return;
         }
         if(mine(source)||mine(destination)){spellFlush(NorthlightSpellLayer::Reason::Copy,true,NorthlightSpellLayer::InPlaceKind::None,"copy",mine(source),mine(destination));return;}
         if(container)spellTextureWrite(static_cast<void*>(container));
@@ -2408,6 +2420,11 @@ public:
         // Read before clearFrame() resets the water renderer's frame counters.
         const unsigned waterRedraws=water?water->frameCaptures():0,waterMrt=water?water->frameMrtDraws():0,waterDegraded=water?water->frameMrtDegraded():0,waterDraws=waterRedraws+waterMrt,waterScans=water?water->frameMaskScans():0,waterClears=water?water->frameClears():0,waterReadFailures=water?water->frameReadFailures():0,waterBinds=water?water->frameMrtBinds():0,waterLongestRun=water?water->frameMrtLongestRun():0;
         if(sampled())logf("EFFECT trailing world frame=%u worldDraws=%u skinnedDraws=%u",frame,postEffectWorldDraws,postEffectSkinnedDraws);
+        if(sampled()&&(grassReceiverCensus.before||grassReceiverCensus.after)){
+            const auto& g=grassReceiverCensus;
+            logf("GRASS receive frame=%u beforeComposite=%u afterComposite=%u depthWrites=%u blended=%u alphaCut=%u alreadyResolved=%u worldDepth=%u stateFailures=%u",frame,g.before,g.after,g.depthWrites,g.blended,g.alphaCut,g.alreadyResolved,g.worldDepth,g.stateFailures);
+        }
+        grassReceiverCensus={};
         if(sampled()&&nameMask.armed()){
             const double us=cpuFrequency.QuadPart>0?1e6/double(cpuFrequency.QuadPart):0.0;
             const double decide=nameDecideTimed?double(cpuNameDecide)*double(nameDecideCalls)/double(nameDecideTimed)*us:0.0,mark=double(cpuNameMark)*us,unmark=double(cpuNameUnmark)*us;

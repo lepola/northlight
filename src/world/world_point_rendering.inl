@@ -412,7 +412,7 @@
             UINT boundPage=UINT_MAX;
             for(size_t index:pointStaticCandidates[face]){const auto& batch=batches[index];
                 if(batch.material>=materials.size()||batch.material>=uploadedAlphaCutoffs.size())return pointCheck(E_FAIL,"cube material range");
-                float material[]={1,1,1,uploadedAlphaCutoffs[batch.material]};
+                float material[]={0,0,0,uploadedAlphaCutoffs[batch.material]};
                 if(!pointCheck(d->SetTexture(0,materials[batch.material]),"cube static alpha")||
                    !pointCheck(d->SetPixelShaderConstantF(0,material,1),"cube material")||
                    !bindMeshPage(batch,boundPage)||!pointCheck(d->DrawIndexedPrimitive(D3DPT_TRIANGLELIST,0,batch.minVertex,batch.vertexCount,batch.start,batch.count),"cube static draw"))return false;
@@ -429,7 +429,7 @@
             UINT terrainBoundPage=UINT_MAX;
             for(size_t index:pointTerrainCandidates[face]){const auto& batch=batches[index];
                 if(batch.material>=materials.size()||batch.material>=uploadedAlphaCutoffs.size())return pointCheck(E_FAIL,"cube material range");
-                float material[]={1,1,1,uploadedAlphaCutoffs[batch.material]};
+                float material[]={0,0,0,uploadedAlphaCutoffs[batch.material]};
                 if(!pointCheck(d->SetTexture(0,materials[batch.material]),"cube terrain alpha")||
                    !pointCheck(d->SetPixelShaderConstantF(0,material,1),"cube terrain material")||
                    !bindMeshPage(batch,terrainBoundPage)||!pointCheck(d->DrawIndexedPrimitive(D3DPT_TRIANGLELIST,0,batch.minVertex,batch.vertexCount,batch.start,batch.count),"cube terrain draw"))return false;

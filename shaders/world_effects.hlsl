@@ -1262,8 +1262,13 @@ float4 Material:register(c0); // rgb unused in depth pass, w alpha cutoff
 float4 ShadowPS(float2 uv:TEXCOORD0,float depth:TEXCOORD1):COLOR0 {
     clip(tex2D(Scene,uv).a-Material.w);return depth.xxxx;
 }
-float4 ShadowReplayPS(float2 uv:TEXCOORD0,float4 lightClip:TEXCOORD7):COLOR0 {
-    clip(tex2D(Scene,uv).a-Material.w);return lightClip.zzzz;
+float4 ShadowReplayPS(float2 uv:TEXCOORD0,float4 lightClip:TEXCOORD7,float4 diffuse:COLOR0):COLOR0 {
+    if(Material.w>=0){
+        float alpha=Material.x==2?diffuse.a:tex2D(Scene,uv).a;
+        if(Material.x==1)alpha*=diffuse.a;
+        clip(alpha-Material.w);
+    }
+    return lightClip.zzzz;
 }
 // Union of a per-frame dynamic depth map (s0, working size) with a cached
 // static depth map (s1, cachedSize) at an integer texel offset and an exact

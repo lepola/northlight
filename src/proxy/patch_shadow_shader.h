@@ -40,7 +40,7 @@ inline unsigned instructionSlots(unsigned op) {
 struct PatchInfo {
     unsigned major=0, tempRegister=0, texcoordRegister=0;
     unsigned originalInstructions=0, positionWrites=0;
-    bool texcoord0XY=false;
+    bool texcoord0XY=false,color0W=false;
 };
 
 inline bool patch(const Word* input,std::size_t wordCount,std::vector<Word>& output,
@@ -51,7 +51,8 @@ inline bool patch(const Word* input,std::size_t wordCount,std::vector<Word>& out
     bool temps[32]={},outputs[12]={};
     unsigned posType=major<3?4:99,posIndex=0,positionDeclarations=0;
     int uvIndex=major<3?0:-1;
-    unsigned instructions=0,slots=0,writeMask=0,writes=0,uvMask=0;
+    unsigned instructions=0,slots=0,writeMask=0,writes=0,uvMask=0,colorMask=0;
+    int colorIndex=major<3?0:-1;
     std::vector<std::size_t> parameters, destinations;
     std::size_t cursor=1,end=0;
     bool executableSeen=false;
@@ -93,6 +94,7 @@ inline bool patch(const Word* input,std::size_t wordCount,std::vector<Word>& out
                     if(++positionDeclarations!=1)return false;
                     posType=6;posIndex=regIndex(dest);
                 }
+                if(semantic==10&&index==0)colorIndex=int(regIndex(dest));
                 if(semantic==5&&index==7)return false;
                 if(semantic==5&&index==0) {
                     if(uvIndex!=-1)return false;
@@ -147,6 +149,7 @@ inline bool patch(const Word* input,std::size_t wordCount,std::vector<Word>& out
             writeMask|=(token>>16)&15;++writes;
         }
         if(regType(token)==6&&int(regIndex(token))==uvIndex)uvMask|=(token>>16)&15;
+        if(regType(token)==(major<3?5u:6u)&&int(regIndex(token))==colorIndex)colorMask|=(token>>16)&15;
     }
     if(writeMask!=15)return false;
     unsigned temp=0;while(temp<(major<3?12u:32u)&&temps[temp])++temp;
@@ -172,7 +175,7 @@ inline bool patch(const Word* input,std::size_t wordCount,std::vector<Word>& out
         (major==1?1u:0x02000001u),replaceReg(0x800f0000,posType,posIndex),replaceReg(0x80e40000,0,temp),
         (major==1?1u:0x02000001u),replaceReg(0x800f0000,6,tex),replaceReg(0x80e40000,0,temp),0x0000ffff};
     patched.insert(patched.end(),suffix,suffix+7);
-    if(info)*info={major,temp,tex,instructions,writes,(uvMask&3)==3};
+    if(info)*info={major,temp,tex,instructions,writes,(uvMask&3)==3,(colorMask&8)!=0};
     output.swap(patched);return true;
 }
 } // namespace NorthlightShadowShader

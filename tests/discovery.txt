@@ -39,6 +39,7 @@ test_concurrent_geometry_build.py
 test_contact_fog.py
 test_contact_lighting.py
 test_contact_normal_endpoints.py
+test_detail_doodad_shadow.py
 test_dev_tuning_build.py
 test_device_mirror.py
 test_diagnostics_switch.py
@@ -68,6 +69,7 @@ test_geometry_handoff.py
 test_gi_quality.py
 test_gpu_budget.py
 test_gpu_budget_wiring.py
+test_grass_receiving_order.py
 test_horizon_haze.py
 test_index_working_set.py
 test_install_delivery.py
@@ -154,6 +156,7 @@ test_replay_upload.py
 test_rigid_memory.py
 test_shader_read_set.py
 test_shader_read_set_client.py
+test_shadow_alpha.py
 test_shadow_blob_client.py
 test_shadow_blob_model.py
 test_shadow_culling_batch.py
