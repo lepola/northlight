@@ -1,10 +1,12 @@
 # AO methods for the D3D9 Northlight renderer
 
-Set these keys in `[Quality]` in `northlight-quality.ini`, then restart WoW:
+Set these keys in `[Quality]` in `northlight-quality.ini`, or use Lighting & AO
+in the Northlight menu and Apply. Changes apply between frames:
 
 ```ini
 ContactAO=1
 AOMethod=GTAO
+AOQuality=High
 AOStrength=100
 AORadius=200
 ```
@@ -16,10 +18,25 @@ AORadius=200
 | HBAOPlus / HBAO+ / 2 | D3D9 adaptation of the NVIDIA HBAO+ coarse kernel: 8 directions, 4 radial steps, normal bias, squared-distance falloff. |
 | GTAO / 3 | Cosine-weighted horizon integration, 4 slices and 4 paired steps. |
 
-Names are case insensitive. Invalid values retain the default and produce a
+Names are case insensitive. Invalid values retain the previous value and produce a
 QUALITY warning. `AOStrength` is 0..200 percent; 100 preserves the existing
 strength scale. `AORadius` is 10..1000 hundredths of a yard; 200 means 2 yards.
 `ContactAO=0` disables any selected method and its filter; bloom remains enabled.
+
+`AOQuality` accepts High/0, Medium/1 and Low/2. Every preset keeps High, preserving
+the existing sample counts. Lower levels are explicit choices that reduce depth
+taps; SSAO ignores the quality setting.
+
+| Quality | GTAO slices x paired steps | HBAO+ directions x steps | HDAO pairs |
+| --- | --- | --- | --- |
+| High (default) | 4 x 4 | 8 x 4 | 16 |
+| Medium | 3 x 4 | 6 x 3 | 8 |
+| Low | 2 x 4 | 4 x 4 | 8 |
+
+Lower counts can increase fine noise and shimmer during camera motion. The blur
+and half-resolution targets are unchanged. Quality selection is saved on Apply;
+it does not use the method selector's unsaved live preview. No measured whole-game
+FPS gain is implied by the lower sample counts.
 
 All methods use the existing half-resolution targets and the depth/normal-aware
 AO filter. Sky and water receivers are excluded. Each method runs in both the
@@ -31,7 +48,7 @@ The startup log records the selected method, strength, radius and enabled state.
 
 These are D3D9 adaptations, not the complete NVIDIA HBAO+ SDK or Intel XeGTAO
 pipelines. There is no DX11 deinterleaving, depth-mip hierarchy or extra temporal
-AO pass. The kernels have fixed sample counts. Quality and GPU cost still need
+AO pass. Each quality level has fixed sample counts. Quality and GPU cost still need
 comparison in actual gameplay; a synthetic device test is not an in-game FPS test.
 
 VXAO is not implemented: NVIDIA VXAO requires voxelizing scene geometry and

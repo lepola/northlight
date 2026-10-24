@@ -58,8 +58,15 @@ static std::multiset<std::array<float,12>> content(const Selection& s){
 static Selection fill(const std::vector<Light>& lights){
     Selection s;s.count=unsigned(lights.size());
     for(unsigned i=0;i<s.count;++i){const auto& l=lights[i];s.position[i]={l.position[0],l.position[1],l.position[2],l.attenuationEnd};
-        s.color[i]={float(i+1),0,0,1};s.fog[i]={float(i)*.5f,0,0,0};}
+        s.color[i]={float(i+1),0,0,1};s.fog[i]={float(i)*.5f,0,0,0};s.sources[i]=l;
+        for(unsigned k=0;k<3;++k)s.sources[i].diffuse[k]=s.color[i][k];}
     return s;
+}
+static void sourcesAligned(const Selection& s){
+    for(unsigned i=0;i<s.count;++i){const auto& source=s.sources[i];
+        for(unsigned k=0;k<3;++k)assert(source.position[k]==s.position[i][k]&&source.diffuse[k]==s.color[i][k]);
+        assert(source.attenuationEnd==s.position[i][3]&&source.sourceId==std::uint64_t(s.color[i][0])&&source.kind==2);
+    }
 }
 static void arrangeTests(){
     const auto v=view();
@@ -68,6 +75,7 @@ static void arrangeTests(){
     Selection s=fill(lights);const auto before=content(s);
     const auto r=B::arrange(s,v);
     assert(r.arranged&&r.after<r.before*.75&&content(s)==before);
+    sourcesAligned(s); // source IDs and point-shadow metadata follow the same permutation
     // Each slot keeps its own colour and fog with its position (fill() tags them by slot).
     for(unsigned i=0;i<s.count;++i){unsigned k=0;while(lights[k].position[0]!=s.position[i][0]||lights[k].position[2]!=s.position[i][2])++k;assert(s.color[i][0]==float(k+1)&&s.fog[i][0]==float(k)*.5f);}
     // Invalid view and a single lamp: unchanged.
@@ -79,12 +87,16 @@ static void arrangeTests(){
         std::vector<Light> l;const unsigned n=1+rng()%72;for(unsigned i=0;i<n;++i)l.push_back(lamp(i+1,x(rng),x(rng)*.3f,z(rng),e(rng)));
         Selection t=fill(l);const auto c=content(t);const auto res=B::arrange(t,v);
         assert(res.after<=res.before&&content(t)==c);
+        sourcesAligned(t);
         if(!res.arranged)assert(t.position==fill(l).position);
     }
 }
 static void wideTests(){
     const B::Rect all{0,0,640,360},left{0,0,40,40},right{600,320,640,360},none{};
     assert(B::wide(all,all));                  // two whole-target passes: one 16-lamp pass is cheaper
+    // Current shader slots prefer the joint rect; the stale 244/364 model did not.
+    const B::Rect edgeA{0,0,100,10},edgeB{41,0,141,10},pastEdge{42,0,142,10};
+    assert(B::wide(edgeA,edgeB)&&!B::wide(edgeA,pastEdge));
     assert(!B::wide(left,right));              // far apart: the joint rect is the whole target
     assert(!B::wide(none,none)&&!B::wide(left,none)); // one 8-lamp pass already covers it
     assert(B::unite(none,left).area()==left.area()&&B::unite(left,right).area()==all.area());

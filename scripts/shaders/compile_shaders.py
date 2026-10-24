@@ -17,6 +17,7 @@ def main():
     compatible = '--compatible-compiler' in sys.argv
     selected = next((a.split("=", 1)[1].split(",") for a in sys.argv[1:] if a.startswith("--entries=")), None)
     names = {"AO", "AOContactBloom", "HDAOContactBloom", "HBAOPlusContactBloom", "GTAOContactBloom", "ContactBloom", "AOBlur", "Composite", "RainMaskMRT", "RainScrub"}
+    names |= {method + "ContactBloom" + quality for method in ("HDAO", "HBAOPlus", "GTAO") for quality in ("Medium", "Low")}
     if selected and not set(selected) <= names: raise SystemExit("Unknown shader entry")
     previous = json.loads((fp.SHADERS / "shader-build.json").read_text()) if selected else None
     if previous and previous.get("compiler_sha256") not in ({DLL_SHA256, COMPATIBLE_DLL_SHA256} if compatible else {DLL_SHA256}): raise SystemExit("Retained shaders used another compiler: rebuild all entries")
@@ -29,12 +30,14 @@ def main():
     # oC1); their manifest entries carry their own "target" and they compile from rain_mask.hlsl. The ps_3_0 entries are unchanged.
     for entry, symbol, target in (("AO", "kAoShader", "ps_3_0"), ("AOContactBloom", "kAoContactBloomShader", "ps_3_0"), ("ContactBloom", "kContactBloomShader", "ps_3_0"),
                                   ("HDAOContactBloom", "kHdaoContactBloomShader", "ps_3_0"), ("HBAOPlusContactBloom", "kHbaoPlusContactBloomShader", "ps_3_0"), ("GTAOContactBloom", "kGtaoContactBloomShader", "ps_3_0"),
+                                  ("HDAOContactBloomMedium", "kHdaoContactBloomMediumShader", "ps_3_0"), ("HBAOPlusContactBloomMedium", "kHbaoPlusContactBloomMediumShader", "ps_3_0"), ("GTAOContactBloomMedium", "kGtaoContactBloomMediumShader", "ps_3_0"),
+                                  ("HDAOContactBloomLow", "kHdaoContactBloomLowShader", "ps_3_0"), ("HBAOPlusContactBloomLow", "kHbaoPlusContactBloomLowShader", "ps_3_0"), ("GTAOContactBloomLow", "kGtaoContactBloomLowShader", "ps_3_0"),
                                   ("AOBlur", "kAoBlurShader", "ps_3_0"), ("Composite", "kCompositeShader", "ps_3_0"),
                                   ("RainMaskMRT", "kRainMaskMrtShader", "ps_2_0"), ("RainScrub", "kRainScrubShader", "ps_2_0")):
         output = fp.COMPILED / f"{entry}.bin"
         legacy = target == "ps_3_0"
         source_key = "source_sha256" if legacy else "rain_source_sha256"
-        compile_entry = not selected or entry in selected
+        compile_entry = not selected or entry in selected or entry not in previous["shaders"]
         if compile_entry:
             data, words = compiler.compile(fp.SHADERS / ("effects.hlsl" if legacy else "rain_mask.hlsl"), entry, target, output)
         else:

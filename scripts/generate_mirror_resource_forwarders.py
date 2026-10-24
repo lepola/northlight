@@ -7,6 +7,8 @@ SDK=northlight_paths.windows_headers()/'d3d9.h'
 # Task 34: calls that write a texture (or open a bracket the spell layer must know) report to mirror_write_hook.h BEFORE they are forwarded, after the gate.
 # A write lock is reported unless READONLY; its Unlock is reported too (a lock opened before a draw was deferred may be written until it closes).
 WRITE_HOOKS={('IDirect3DSurface9','LockRect'):'level(real)',('IDirect3DSurface9','UnlockRect'):'level(real)',
+    ('IDirect3DSurface9','GetDC'):'level(real)',('IDirect3DSurface9','ReleaseDC'):'level(real)',
+    ('IDirect3DTexture9','SetLOD'):'texture(real)',('IDirect3DCubeTexture9','SetLOD'):'texture(real)',('IDirect3DVolumeTexture9','SetLOD'):'texture(real)',
     ('IDirect3DTexture9','LockRect'):'texture(real)',('IDirect3DTexture9','UnlockRect'):'texture(real)',('IDirect3DTexture9','AddDirtyRect'):'texture(real)',('IDirect3DTexture9','GenerateMipSubLevels'):'texture(real)',
     ('IDirect3DCubeTexture9','LockRect'):'texture(real)',('IDirect3DCubeTexture9','UnlockRect'):'texture(real)',('IDirect3DCubeTexture9','AddDirtyRect'):'texture(real)',('IDirect3DCubeTexture9','GenerateMipSubLevels'):'texture(real)',
     ('IDirect3DVolumeTexture9','LockBox'):'texture(real)',('IDirect3DVolumeTexture9','UnlockBox'):'texture(real)',('IDirect3DVolumeTexture9','AddDirtyBox'):'texture(real)',('IDirect3DVolumeTexture9','GenerateMipSubLevels'):'texture(real)',

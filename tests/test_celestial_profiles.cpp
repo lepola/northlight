@@ -1,4 +1,7 @@
 #include "celestial_profiles.h"
+#ifdef near
+#undef near
+#endif
 #include <cassert>
 #include <iostream>
 using namespace NorthlightCelestialProfiles;

@@ -74,7 +74,9 @@ checks['cpp: states restored after the pass: source state (setSource of the loop
     'const bool sameSource=lastFogSource==firstSource&&lastFogFirst;','if(!sameSource)setSource(firstSource,true,true);','if(!sameSource)setSource(lastFogSource,lastFogFirst,true);','D3DRS_SRCBLEND,D3DBLEND_ONE','D3DRS_DESTBLEND,D3DBLEND_ONE','D3DRS_BLENDOP,D3DBLENDOP_ADD','D3DRS_SEPARATEALPHABLENDENABLE,FALSE','D3DRS_ALPHABLENDENABLE,!lastFogFirst','D3DRS_COLORWRITEENABLE,lastFogFirst?15:7','SetPixelShader(fogPS)',
     'SetTexture(14,nullptr)','D3DSAMP_ADDRESSU,D3DTADDRESS_CLAMP','D3DSAMP_MINFILTER,D3DTEXF_POINT')) and pas.index('setSource(lastFogSource')<pas.rindex('SetTexture(14,nullptr)') and 'GetRenderState' not in pas
 checks['cpp: the source loop records the state its last iteration left']='lastFogSource=source;lastFogFirst=first;first=false;' in w
-checks['cpp: profile marks FogMarch / FogClouds only with the pass (<= 20 marks per frame stays true: 16 existing names + 2)']=(pas.count('profile->mark("FogMarch")')==1 and pas.count('profile->mark("FogClouds")')==1)
+checks['cpp: FogMarch closes the base source loop even without clouds; FogClouds stays inside the cloud guard']=(
+    w.count('profile->mark("FogMarch")')==1 and w.index('lastFogSource=source;lastFogFirst=first;first=false;')<w.index('profile->mark("FogMarch")')<a
+    and 'profile->mark("FogMarch")' not in pas and pas.count('profile->mark("FogClouds")')==1)
 # sigmaAt mirror
 mirror=[l for l in w.splitlines() if 'cloudy+=NorthlightFogClouds::sigmaAt(' in l] # the WorldFog sum; SpellFog's own lambda (below) is a second caller
 # 0.3.200 (jobs): the mirror runs in atmosphereWork (a job with ReplayJobs=1) before ensureCloudNoise (the device) is decided: the cloud term is

@@ -14,6 +14,19 @@ SHADERS = northlight_paths.SHADERS                         # *.hlsl and their *-
 DLL = northlight_paths.RENDERER / 'frd9.dll'
 DEV_DLL = northlight_paths.RENDERER / 'frd9-dev-tuning.dll'  # the dev variant never overwrites frd9.dll
 
+def source_identity(repo=northlight_paths.REPO):
+    digest = hashlib.sha256()
+    paths = [p for folder in ('src', 'shaders') for p in (repo/folder).rglob('*') if p.is_file()]
+    paths += [repo/'scripts/build_renderer.py', repo/'northlight_paths.py']
+    for path in sorted(paths, key=lambda path: path.relative_to(repo).as_posix()):
+        data = path.read_bytes()
+        if path.suffix in ('.h', '.cpp', '.inl', '.inc', '.def', '.hlsl', '.asm', '.py', '.json'):
+            data = data.replace(b'\r\n', b'\n')
+        digest.update(path.relative_to(repo).as_posix().encode() + b'\0')
+        digest.update(len(data).to_bytes(8, 'little'))
+        digest.update(data)
+    return digest.hexdigest()
+
 def main(argv=None):
     dev_tuning = '--dev-tuning' in (sys.argv[1:] if argv is None else argv)
     # A source recreated at its old renderer/ path would silently fork.
@@ -45,8 +58,27 @@ def main(argv=None):
     static_manifest = json.loads((SHADERS/'static-shadow-shader-build.json').read_text())
     if hashlib.sha256((SHADERS/'static_shadow_effects.hlsl').read_bytes()).hexdigest() != static_manifest['source_sha256']:
         raise SystemExit('Static caster shader source differs from offline build.')
+    surface_manifest = json.loads((SHADERS/'surface-shader-build.json').read_text())
+    if hashlib.sha256((SHADERS/'surface_effects.hlsl').read_bytes()).hexdigest() != surface_manifest['source_sha256']:
+        raise SystemExit('Precipitation shader source differs from offline build.')
+    hdr_manifest = json.loads((SHADERS/'hdr-shader-build.json').read_text())
+    if hashlib.sha256((SHADERS/'hdr_effects.hlsl').read_bytes()).hexdigest() != hdr_manifest['source_sha256']:
+        raise SystemExit('HDR shader source differs from offline build; run scripts/shaders/compile_hdr_shaders.py.')
+    bump_digest=hashlib.sha256((SHADERS/"auto_bump_normal.hlsl").read_bytes()).hexdigest()
+    if any(m.get("bump_include_sha256")!=bump_digest for m in (world_manifest,local_manifest)):
+        raise SystemExit("Auto bump include differs from the offline build.")
+    bump_manifest=json.loads((SHADERS/"auto-bump-shader-build.json").read_text())
+    if bump_manifest["source_sha256"]!=hashlib.sha256((SHADERS/"auto_bump_capture.hlsl").read_bytes()).hexdigest():
+        raise SystemExit("Auto bump capture differs from the offline build.")
+    if bump_manifest.get("normal_source_sha256")!=hashlib.sha256((SHADERS/"auto_normal_generate.hlsl").read_bytes()).hexdigest():
+        raise SystemExit("Automatic normal-map generator differs from the offline build.")
+    if any(digest!=hashlib.sha256((SHADERS/name).read_bytes()).hexdigest() for name,digest in bump_manifest.get('parallax_source_sha256',{}).items()):
+        raise SystemExit("Parallax shaders differ from the offline build.")
     env = northlight_paths.zig_env()
+    identity = source_identity()
+    print('Source identity', identity, flush=True)
     command = [str(zig), 'c++', '-target', 'x86-windows-gnu', '-O2', '-shared',
+               '-DNORTHLIGHT_SOURCE_ID="' + identity + '"',
                '-std=c++17', '-fno-rtti', '-Wall', '-Wextra', '-Wno-microsoft-exception-spec',
                *northlight_paths.include_flags(),
                *[str(northlight_paths.src(n)) for n in ('renderer.cpp', 'world_gi.cpp', 'world_mesh_plan.cpp', 'static_shadow_scene.cpp', 'frd9.def')],

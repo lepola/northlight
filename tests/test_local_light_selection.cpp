@@ -60,7 +60,7 @@ static bool sameSelection(const Selection& a,const Selection& b){
     return a.count==b.count&&a.nearest==b.nearest&&a.fogDistance==b.fogDistance&&a.position==b.position&&a.color==b.color&&a.fog==b.fog;
 }
 static void trackerTests(){
-    static_assert(Slots==72&&Spare==8,"72 slots");
+    static_assert(Slots==136&&Spare==8,"136 slots");
     assert(capBand(8)==2&&capBand(32)==8&&capBand(64)==16&&capBand(1)==1&&capBand(3)==1);
     // 1a. Target continuity without fades: every frame is a restart (continuous=false), so factor == target.
     const auto movingLamp=[](unsigned f){ // 33 lamps (rank 33 moves from 220 down through everyone to 90 and back)

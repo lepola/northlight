@@ -26,6 +26,7 @@
 #include <vector>
 #include "stream_stats.h"
 #include "stream_wait.h"
+#include "stream_idle_profile.h"
 
 namespace NorthlightStream {
 struct CommandHeader {std::uint16_t id;std::uint16_t flags;std::uint32_t size;};   // size includes the header; a multiple of 8
@@ -88,11 +89,12 @@ struct Block {
 static_assert(sizeof(Block)==16,"block header keeps data 8-aligned");
 
 enum class WaitKind {Sync,Present,Backpressure};
+enum class ExpressKind {Readback,Query};
 
 // 0.3.206 (task 31): a unit of work for the replay thread's next command boundary (Queue::runExpress). Lives on the poster's stack.
 constexpr std::uint16_t kExpressIdle=0xFFFF;   // ExpressTask::behindCmd: the replay thread was idle (slept / empty queue) when the task was served
 // behindCmd / startNs are written by the replay thread before it clears the mailbox (the poster reads them after that handshake): the last command executed, and nowNs() at serve start (only when `timed`).
-struct ExpressTask {void (*fn)(void*);void* arg;bool timed;std::uint16_t behindCmd;std::uint64_t startNs;};
+struct ExpressTask {void (*fn)(void*);void* arg;bool (*ready)(void*);bool timed;std::uint16_t behindCmd;std::uint64_t startNs;};
 struct ExpressTimes {std::uint16_t behindCmd=kExpressIdle;std::uint64_t startNs=0;};   // what a timed runExpress hands back
 class Queue {
     struct Chunk {
@@ -117,12 +119,15 @@ class Queue {
 #endif
     // Written by the producer at every commit.
     alignas(kLine) std::atomic<std::uint64_t> recorded_{0};
+    std::atomic<std::uint64_t> diagnosticPublished_{0},diagnosticPublishSerial_{0};
+    bool idleTracking_=false;   // configured by the producer before the consumer starts; immutable during replay
     // Consumer-private.
     alignas(kLine) Chunk* rchunk_;
     std::uint32_t rpos_=0;
     std::uint64_t lastSignalledSeq_=0,bpSignalledRec_=~std::uint64_t(0);   // 0.3.196 (task 12): wakeWaiters' memory (consumer only)
 #ifdef NORTHLIGHT_STREAM_CHECK_WAIT
     std::atomic<unsigned> backstopSignals_{0};
+    void (*idleSnapshotHook_)(void*)=nullptr;void* idleSnapshotContext_=nullptr;
 #endif
     // Written by the consumer at every retire.
     alignas(kLine) std::atomic<std::uint64_t> replayed_{0};
@@ -174,8 +179,10 @@ class Queue {
     }
     void nextChunk(){
         Chunk* n=acquireChunk();Chunk* c=wchunk_;
+        beginDiagnosticPublish();
         c->next.store(n,std::memory_order_relaxed);
         c->published.store(wpos_);c->end.store(wpos_);   // closing publishes everything committed so far
+        endDiagnosticPublish();
         std::atomic_thread_fence(std::memory_order_seq_cst);
         wchunk_=n;wpos_=0;pubPos_=0;sinceCmds_=0;sinceBytes_=0;
         add(stats.publishes);wake();
@@ -193,13 +200,17 @@ class Queue {
     // commit()'s automatic publish: the same publication, but a sleeping consumer is woken only past kLazyWakeCommands/kLazyWakeBytes (see there).
     void publishLazy(){
         const std::uint32_t c=sinceCmds_,b=sinceBytes_;
+        beginDiagnosticPublish();
         wchunk_->published.store(wpos_);pubPos_=wpos_;sinceCmds_=0;sinceBytes_=0;
+        endDiagnosticPublish();
         std::atomic_thread_fence(std::memory_order_seq_cst);   // as in publish()
         own(stats.publishes);raiseMax(stats.highWaterDepth,recorded_.load(std::memory_order_relaxed)-replayed_.load(std::memory_order_relaxed));
         lazyCmds_+=c;lazyBytes_+=b;
         if(lazyCmds_<kLazyWakeCommands&&lazyBytes_<kLazyWakeBytes){lazyWake_=true;return;}
         wake();
     }
+    void beginDiagnosticPublish(){if(idleTracking_)diagnosticPublishSerial_.store(diagnosticPublishSerial_.load(std::memory_order_relaxed)+1,std::memory_order_release);}
+    void endDiagnosticPublish(){if(idleTracking_){diagnosticPublished_.store(recorded_.load(std::memory_order_relaxed),std::memory_order_release);diagnosticPublishSerial_.store(diagnosticPublishSerial_.load(std::memory_order_relaxed)+1,std::memory_order_release);}}
     void recycle(Chunk* c){
         c->next.store(nullptr,std::memory_order_relaxed);c->published.store(0,std::memory_order_relaxed);c->end.store(0,std::memory_order_relaxed);
         bool kept=false;
@@ -311,12 +322,30 @@ public:
     // Makes everything committed visible to the consumer and wakes it if it sleeps.
     void publish(){
         if(wpos_==pubPos_){if(lazyWake_)wake();return;}   // 0.3.200 (pipeline): an automatic publish held its wake back: this explicit one delivers it
+        beginDiagnosticPublish();
         wchunk_->published.store(wpos_);pubPos_=wpos_;sinceCmds_=0;sinceBytes_=0;
+        endDiagnosticPublish();
         std::atomic_thread_fence(std::memory_order_seq_cst);   // pairs with the fence in next(): the store above or the sleeper flag is seen
         own(stats.publishes);raiseMax(stats.highWaterDepth,recorded_.load(std::memory_order_relaxed)-replayed_.load(std::memory_order_relaxed));
         wake();
     }
     std::uint64_t recordedSeq()const{return recorded_.load(std::memory_order_acquire);}
+    // Producer only, before start/restart of the consumer. No producer-private
+    // queue cursor is read by the consumer or written by this diagnostic.
+    void trackIdlePublications(bool on){idleTracking_=on;if(on){diagnosticPublished_.store(recorded_.load(std::memory_order_relaxed)-sinceCmds_,std::memory_order_relaxed);diagnosticPublishSerial_.store(0,std::memory_order_relaxed);}}
+    IdlePoint idlePoint()const{
+        IdlePoint p;if(!idleTracking_)return p;p.known=true;
+        const auto serial=diagnosticPublishSerial_.load(std::memory_order_acquire);
+        p.recorded=recorded_.load(std::memory_order_acquire);p.published=diagnosticPublished_.load(std::memory_order_acquire);p.replayed=replayed_.load(std::memory_order_acquire);
+#ifdef NORTHLIGHT_STREAM_CHECK_WAIT
+        if(idleSnapshotHook_)idleSnapshotHook_(idleSnapshotContext_);
+#endif
+        p.waitSeq=waitSeq_.load(std::memory_order_relaxed);p.backpressure=bpWaiting_.load(std::memory_order_relaxed);p.express=express_.load(std::memory_order_acquire)!=nullptr;
+        p.consistent=!(serial&1)&&serial==diagnosticPublishSerial_.load(std::memory_order_acquire)&&p.recorded==recorded_.load(std::memory_order_acquire)&&p.replayed==replayed_.load(std::memory_order_acquire)&&p.replayed<=p.published&&p.published<=p.recorded;
+        p.syncNs=get(stats.syncNs);p.presentNs=get(stats.presentNs);p.backpressureNs=get(stats.backpressureNs);
+        p.recordNs=get(stats.recordSampledNs);p.lockNs=get(stats.lockNs);p.snapshotNs=get(stats.snapNs);p.publishes=get(stats.publishes);
+        return p;
+    }
     // Waits (pumped) until command number seq (a recordedSeq() value) has been retired. Publishes first. seq must be a command recorded with
     // kFlagWaitTarget (see there); builds with NORTHLIGHT_STREAM_CHECK_WAIT count a wait on an unflagged seq (unflaggedWaits(), the wait itself still completes).
     void waitReplayed(std::uint64_t seq,WaitKind kind=WaitKind::Sync){
@@ -339,11 +368,12 @@ public:
         else if(kind==WaitKind::Backpressure){add(stats.backpressureWaits);add(stats.backpressureNs,ns);}
         else{add(stats.syncNs,ns);}   // syncCalls itself is counted by the caller, which also knows the call
     }
-    // 0.3.206 (task 31): runs fn(arg) on the replay thread at its NEXT COMMAND BOUNDARY (between two commands, never inside one) and returns once it ran. Unlike a Quiesce task it does not wait for the
-    // queue to drain: the caller must have proved that every command the work depends on has already been replayed. One poster at a time (the game thread). Counted in syncNs (comparable with the
-    // drain waits) and expressReadbacks/expressNs, not in syncCalls or the census. Wake handshake: store the mailbox, fence, wake a sleeper (the consumer sets sleeping_, fences, re-checks the mailbox).
-    void runExpress(void (*fn)(void*),void* arg,ExpressTimes* times=nullptr){   // times: Diagnostics only (the replay thread then reads the clock once at serve start)
-        ExpressTask t{fn,arg,times!=nullptr,kExpressIdle,0};
+    // 0.3.206 (task 31): runs fn(arg) on the replay thread at its next eligible command boundary (between two commands, never inside one) and returns once it ran. Unlike a Quiesce task it does not wait for the
+    // queue to drain: dependencies must already be replayed, or ready must defer until they are. A deferred task must leave published commands to make progress, or become ready on a drained queue.
+    // One poster at a time (the game thread). Counted in syncNs (comparable with the
+    // drain waits) and expressNs, with separate readback/query counters. The query caller owns syncCalls/census. Wake handshake: store the mailbox, fence, wake a sleeper (the consumer sets sleeping_, fences, re-checks the mailbox).
+    void runExpress(void (*fn)(void*),void* arg,ExpressTimes* times=nullptr,ExpressKind kind=ExpressKind::Readback,bool (*ready)(void*)=nullptr){   // times: Diagnostics only (the replay thread then reads the clock once at serve start)
+        ExpressTask t{fn,arg,ready,times!=nullptr,kExpressIdle,0};
         const auto t0=nowNs();
         express_.store(&t,std::memory_order_release);
         std::atomic_thread_fence(std::memory_order_seq_cst);
@@ -351,13 +381,16 @@ public:
         while(express_.load(std::memory_order_acquire)!=nullptr)expressDone_.waitPumped(50);   // the timeout only bounds a missed wake
         const auto ns=nowNs()-t0;
         if(times){times->behindCmd=t.behindCmd;times->startNs=t.startNs;}
-        add(stats.syncNs,ns);add(stats.expressReadbacks);add(stats.expressNs,ns);
+        add(stats.syncNs,ns);add(stats.expressNs,ns);
+        if(kind==ExpressKind::Query){add(stats.expressQueries);add(stats.queryExpressNs,ns);}
+        else{add(stats.expressReadbacks);add(stats.readbackExpressNs,ns);}
     }
     void waitDrained(WaitKind kind=WaitKind::Sync){waitReplayed(recordedSeq(),kind);}   // the last recorded command must carry kFlagWaitTarget (no production caller)
 #ifdef NORTHLIGHT_STREAM_CHECK_WAIT
     unsigned unflaggedWaits()const{return badWaits_;}   // producer thread
     unsigned backstopSignals()const{return backstopSignals_.load();}   // progress_ signals made by the idle backstop (wakeWaiters)
     unsigned wakeSignals()const{return wakeSignals_;}   // 0.3.200 (pipeline): consumer wakes signalled by the producer (producer thread)
+    void testIdleSnapshotHook(void (*fn)(void*),void* context){idleSnapshotHook_=fn;idleSnapshotContext_=context;}
     void testArmWait(std::uint64_t w){waitSeq_.store(w);}   // test seam: a producer 'waiting' on seq w that never wakes
 #endif
     // A pooled Block of at least bytes (capacity is the power of two above), budgeted. nullptr when the request alone
@@ -515,7 +548,7 @@ public:
     // 0.3.206 (task 31): the replay loop, between two commands: runs a posted express task (one acquire load when none).
     void serveExpress(std::uint16_t lastCmd){   // lastCmd: the command the replay loop executed last, or kExpressIdle when it slept since
         ExpressTask* t=express_.load(std::memory_order_acquire);
-        if(!t)return;
+        if(!t||(t->ready&&!t->ready(t->arg)))return;
         t->behindCmd=lastCmd;if(t->timed)t->startNs=nowNs();
         t->fn(t->arg);
         express_.store(nullptr,std::memory_order_release);   // t dies with the poster's wait

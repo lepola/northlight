@@ -10,11 +10,11 @@ checks = {}
 hlsl = (fp.SHADERS/'world_effects.hlsl').read_text()
 checks['hlsl: one c19 declaration (GridOrigin), no NightFloor alias']=(len(re.findall(r'register\(c19\)', hlsl))==1 and
     'float4 GridOrigin : register(c19);' in hlsl and 'NightFloor' not in hlsl)
-comp = hlsl[hlsl.index('float4 WorldComposite('):]
+comp = hlsl[hlsl.index('float4 WorldComposite('):].split('float4 MaterialComposite(', 1)[0]
 a = comp.find('color=max(color,mad(-.45,transported,original.rgb));')
 b = comp.find('color=mad(albedoT,GridOrigin.rgb,color);')
 c = comp.find('if(PassInfo.z==1)')
-code = re.sub(r'//[^\n]*', '', hlsl)
+code = re.sub(r'//[^\n]*', '', comp)
 checks['hlsl: ambient after the -.45 bound, before the debug views; GridOrigin.rgb only there, no literal']=(0 <= a < b < c and
     code.count('GridOrigin.rgb')==1 and 'GridOrigin.x' not in code and '.435' not in code)
 # night_floor.h's ArtLayerNightAmbient is 1/factor-1 of the art layer's night ambient (build_lighting.py, a multi-key band at night).

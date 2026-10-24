@@ -29,7 +29,7 @@ constexpr uint32_t AnchorModulus=6144;
 // whose key is in it is freed the moment it is finished (key computed first), so the worker never holds more than the pages
 // that must be uploaded plus the one being filled. Anchors and page boundaries never depend on it. peakLiveBytes (optional)
 // receives the largest live page capacity during the build (kept pages + the page just finished), for measurements.
-struct Options {uint32_t anchorModulus=AnchorModulus,minFillVertices=MinFillVertices;const NorthlightMeshPageKey::KeySet* resident=nullptr;uint64_t* peakLiveBytes=nullptr;};
+struct Options {uint32_t anchorModulus=AnchorModulus,minFillVertices=MinFillVertices;const NorthlightMeshPageKey::KeySet* resident=nullptr;uint64_t* peakLiveBytes=nullptr;NorthlightWorldMesh::PreparationCache* preparation=nullptr;};
 struct Page {
     std::vector<NorthlightGI::WorldVertex> vertices;
     std::vector<uint32_t> indices;
@@ -101,6 +101,10 @@ inline bool build(const NorthlightWorldMesh::WorldMeshUploadPlan& input,Plan& ou
             if(!input.batches.empty())return fail("Paged mesh empty indices with batches");
             output=std::move(next);error.clear();return true;
         }
+        // Immutable layout memo has no CPU geometry. Require every page still
+        // resident and the exact production partition options before reuse.
+        if(options.preparation&&options.resident&&options.anchorModulus==AnchorModulus&&options.minFillVertices==MinFillVertices&&
+           options.preparation->reuseResident(input,output,*options.resident,admit)){if(options.peakLiveBytes)*options.peakLiveBytes=0;error.clear();return true;}
         auto allowed=[&](uint64_t bytes){return !admit||admit(bytes);};
         // Reserve admission for both bounded index tables.
         if(!allowed(2u*1024u*1024u))return fail("Paged mesh working memory deferred");
@@ -239,6 +243,7 @@ inline bool build(const NorthlightWorldMesh::WorldMeshUploadPlan& input,Plan& ou
         if(expectedStart!=input.indices.size())return fail("Paged mesh batches do not cover all indices");
         if(!next.pages.empty())finishPage(next.pages.back()); // never fails: compaction is optional
         if(options.peakLiveBytes)*options.peakLiveBytes=peakLive;
+        if(options.preparation&&options.anchorModulus==AnchorModulus&&options.minFillVertices==MinFillVertices)options.preparation->rememberPages(input,next);
         output=std::move(next);error.clear();return true;
     } catch(const std::bad_alloc&) {return fail("Paged mesh worker allocation failed");}
       catch(const std::length_error&) {return fail("Paged mesh worker allocation size overflow");}
@@ -324,7 +329,7 @@ inline bool seal(NorthlightWorldMesh::WorldMeshUploadPlan& input,std::shared_ptr
         for(const auto& material:input.materials)payload->bytes+=material.bgra.capacity();
         payload->pages=std::move(pages);payload->materials.swap(input.materials);
         input.completePlacements=std::move(owners);input.payload.set(std::move(payload));input.pagedCpuBytes=cpuBytes;
-        input.source=nullptr;input.ownedSource.reset();input.pagingVertices.reset();std::vector<uint32_t>().swap(input.indices);
+        input.source=nullptr;input.ownedSource.reset();input.pagingVertices.reset();input.preparationLayout.reset();std::vector<uint32_t>().swap(input.indices);
         input.pagesSealed=true;error.clear();return true;
     } catch(const std::bad_alloc&) {return fail("paged ownership allocation failed");}
       catch(const std::length_error&) {return fail("paged ownership size overflow");}

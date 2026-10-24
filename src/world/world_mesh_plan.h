@@ -1,6 +1,7 @@
 #pragma once
 #include "world_gi.h"
 #include "local_shadow_signature.h"
+#include "mesh_page_key.h"
 #include <atomic>
 #include <cstdint>
 #include <limits>
@@ -10,6 +11,7 @@
 #include <vector>
 
 namespace NorthlightWorldMeshPages { struct Plan; }
+namespace NorthlightWorldMesh { struct PreparationIdentity; }
 
 // Worker-thread preparation only. No D3D, game callbacks or mutable global data.
 namespace NorthlightWorldMesh {
@@ -67,6 +69,15 @@ private:
         const uint64_t bytes=payload?(payload->bytes?payload->bytes:1):0;
         std::atomic_store(&p_,std::move(payload));bytes_.store(bytes,std::memory_order_release);}
 };
+struct PreparationIdentity {
+    std::shared_ptr<const void> owner;
+    uint32_t firstTriangle=0,triangleCount=0;
+    uint64_t retainedBytes=0;
+    std::vector<uint32_t> materials;
+};
+using PreparationLayout=std::vector<PreparationIdentity>;
+
+
 struct WorldMeshUploadPlan {
     // Caller must retain the SAME immutable source scene/BVH until upload and
     // drawing finish. Vertices remain there to avoid a second large CPU copy.
@@ -80,6 +91,7 @@ struct WorldMeshUploadPlan {
     const std::vector<NorthlightGI::WorldVertex>* verticesForPaging()const{
         return pagingVertices?pagingVertices.get():(source?&source->vertices:nullptr);
     }
+    std::shared_ptr<const std::vector<PreparationIdentity>> preparationLayout;
     std::set<std::pair<int,int>> fixedTerrainChunks;
     uint32_t vertexCount=0,triangleCount=0;
     std::vector<uint32_t> indices;
@@ -103,16 +115,14 @@ struct WorldMeshUploadPlan {
     uint64_t cpuBytes()const{
         uint64_t bytes=payload.bytes()+sizeof(*this)+indices.capacity()*sizeof(uint32_t)+batches.capacity()*sizeof(Batch)+materials.capacity()*sizeof(MaterialUpload);
         bytes+=completePlacements.capacity()*sizeof(NorthlightGI::WorldPlacementCoverage);
+        if(preparationLayout){bytes+=sizeof(*preparationLayout)+preparationLayout->capacity()*sizeof(PreparationIdentity)+64;for(size_t i=0;i<preparationLayout->size();++i){const auto& piece=(*preparationLayout)[i];bytes+=piece.materials.capacity()*4;
+            bool seen=false;for(size_t j=0;j<i;++j)if((*preparationLayout)[j].owner==piece.owner){seen=true;break;}if(!seen)bytes+=piece.retainedBytes;}}
         if(pagingVertices)bytes+=sizeof(*pagingVertices)+pagingVertices->capacity()*sizeof(NorthlightGI::WorldVertex)+64;
         for(const auto& owner:completePlacements)bytes+=owner.modelKey.capacity();
         for(const auto& material:materials)bytes+=material.bgra.capacity();
         bytes+=fixedTerrainChunks.size()*(sizeof(std::pair<int,int>)+4*sizeof(void*));
         if(localShadowRecords)bytes+=sizeof(NorthlightLocalShadowSignature::Records)+localShadowRecords->capacity()*sizeof(NorthlightLocalShadowSignature::Record)+64;
-        if(ownedSource){const auto& s=*ownedSource;
-            bytes+=sizeof(s)+s.vertices.capacity()*sizeof(NorthlightGI::WorldVertex)+s.triangles.capacity()*sizeof(NorthlightGI::WorldTriangle)+s.materials.capacity()*sizeof(NorthlightGI::WorldMaterial)+s.completePlacements.capacity()*sizeof(NorthlightGI::WorldPlacementCoverage)+64;
-            for(const auto& m:s.materials)bytes+=m.rgba.capacity();
-            for(const auto& p:s.completePlacements)bytes+=p.modelKey.capacity();
-        }
+        if(ownedSource)bytes+=ownedSource->retainedBytes()+64;
         return bytes;
     }
 };
@@ -127,6 +137,32 @@ struct WorldMeshUploadPlan {
 // parameter of buildUploadPlan (default: production); only tests and measurements pass another one.
 struct PlanOrder {unsigned cellChunks=4;bool chunkMajor=false;};
 
+// A proven immutable contiguous source range. Tokens are small content/revision
+// identities; they never own source vertices or textures. Borrowed local BLAS
+// keys additionally carry a weak owner to reject allocator-address reuse.
+struct PreparationPiece {
+    std::string identity;
+    std::weak_ptr<const void> owner;bool weakIdentity=false;
+    uint32_t firstTriangle=0,triangleCount=0;
+    std::vector<uint32_t> materials; // canonical local material slots -> this scene
+};
+// Optional worker-owned memo. Geometry identity is weak: cached preparation never
+// pins a retired BVH. The caller lends unused bytes from its existing geometry
+// cache budget; setLimit(0) releases all retained preparation.
+class PreparationCache {
+public:
+    struct Stats {uint64_t hits=0,misses=0,reusedTriangles=0,preparedTriangles=0,bytes=0,entries=0,pageHits=0,reusedPages=0,reusedPageBytes=0;};
+    PreparationCache();~PreparationCache();
+    PreparationCache(const PreparationCache&)=delete;PreparationCache& operator=(const PreparationCache&)=delete;
+    void setLimit(uint64_t bytes);void reset();const Stats& stats()const;
+    bool reuseResident(const WorldMeshUploadPlan&,NorthlightWorldMeshPages::Plan&,const NorthlightMeshPageKey::KeySet&,const NorthlightGI::AllocationAdmission& admit={});
+    void rememberPages(const WorldMeshUploadPlan&,const NorthlightWorldMeshPages::Plan&);
+
+private:
+    struct Impl;std::unique_ptr<Impl> impl_;
+    friend bool buildUploadPlan(const NorthlightGI::WorldScene&,WorldMeshUploadPlan&,std::string&,const NorthlightGI::AllocationAdmission&,const std::vector<NorthlightGI::WorldMaterial>*,const PlanOrder&,const std::vector<PreparationPiece>*,PreparationCache*);
+};
+
 // Builds immutable packed indices, exact terrain-chunk batches and upload-ready
 // textures on the worker. Input triangle order is preserved within each batch.
 // Shadow rasterization samples alpha only: opaque materials use a white 1x1
@@ -140,5 +176,7 @@ bool buildUploadPlan(const NorthlightGI::WorldScene& source,
                      WorldMeshUploadPlan& output,std::string& error,
                      const NorthlightGI::AllocationAdmission& admit = {},
                      const std::vector<NorthlightGI::WorldMaterial>* textures = nullptr,
-                     const PlanOrder& order = {});
+                     const PlanOrder& order = {},
+                     const std::vector<PreparationPiece>* sharedPieces = nullptr,
+                     PreparationCache* preparation = nullptr);
 } // namespace NorthlightWorldMesh

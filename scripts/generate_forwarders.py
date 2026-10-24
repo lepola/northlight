@@ -131,13 +131,14 @@ REDUNDANT = {('IDirect3DDevice9', n) for n in (
 #     an unwrapped input, cannot fire for a stream proxy whose raw was resolved as wrapped: a proxy without a proven raw replays through the Device)
 # NEVER direct: draws (hooks, counters, census), Clear, Present, Reset, Begin/EndScene, every Create*, CreateVertexShader/PixelShader
 # (registration), ProcessVertices, StretchRect/ColorFill/UpdateSurface/UpdateTexture, queries, state blocks, cursor, Get*.
+# SetRenderTarget retains Device interception for logical HDR backbuffers.
 # tests/test_command_stream.py checks this set against the audited list and against renderer.cpp's Device source.
 DIRECT = {('IDirect3DDevice9', n) for n in (
     'SetRenderState', 'SetSamplerState', 'SetTextureStageState', 'SetTransform', 'MultiplyTransform', 'SetMaterial', 'SetLight', 'LightEnable',
     'SetClipPlane', 'SetScissorRect', 'SetViewport', 'SetFVF', 'SetStreamSourceFreq', 'SetVertexShaderConstantF', 'SetVertexShaderConstantI',
     'SetVertexShaderConstantB', 'SetPixelShaderConstantF', 'SetPixelShaderConstantI', 'SetPixelShaderConstantB', 'SetNPatchMode',
     'SetSoftwareVertexProcessing', 'SetCurrentTexturePalette', 'SetPaletteEntries', 'SetTexture', 'SetVertexShader', 'SetPixelShader',
-    'SetVertexDeclaration', 'SetStreamSource', 'SetIndices', 'SetRenderTarget', 'SetDepthStencilSurface')}
+    'SetVertexDeclaration', 'SetStreamSource', 'SetIndices', 'SetDepthStencilSurface')}
 PUBLISH = {('IDirect3DDevice9', n) for n in ('BeginScene', 'EndScene', 'Clear', 'SetRenderTarget')}
 # Ids of commands the hand-written stream code records (no generated encoder). Append here; ids are regenerated with
 # the file and nothing persists them.

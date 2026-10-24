@@ -48,7 +48,7 @@
           def c49, -28, -29, -30, -31
           def c50, 0, 2, -2, -0.99999994
           def c51, -1, 1, 0.00300000003, -9.99999997e-007
-          def c52, 1000000, 0.03125, -0.00100000005, 0
+          def c52, 1000000, 0.03125, 0, 0
           def c53, 0.5, -0, -1, 0
           defi i0, 32, 0, 0, 0
           dcl_2d s0
@@ -226,21 +226,19 @@
  170:     mul r0.x, r5.x, c52.y
  171:     add r0.y, -r0.x, c50.y
  172:     mul r0.x, r0.y, r0.x
- 173:     if_lt r1.x, c45.x
- 176:       texldl r1, c53.xxww, s3
- 176:       mov_sat r1.x, r1.x
- 177:       add r0.y, r0.x, -r1.x
- 178:       cmp r0.z, r0.y, c45.z, c45.y
- 179:       mul r0.y, r0.y, r0.z
- 180:       add r0.y, r0.y, r1.x
- 181:     else
- 182:       mov r0.y, r0.x
- 183:     endif
- 184:     add r0.z, r0.y, c52.z
- 185:     cmp r0.z, r0.z, c53.y, c53.z
- 186:     cmp r0.x, -r0.x, r0.z, c53.w
- 187:     mov_sat r0.y, r0.y
- 188:     cmp oC0, r0.x, r0.y, c53.w
+ 173:     if_ge -r0.x, c53.w
+ 176:       mov oC0, c53.w
+ 177:     else
+ 178:       if_lt r1.x, c45.x
+ 181:         texldl r1, c53.xxww, s3
+ 181:         mov_sat r1.x, r1.x
+ 182:         add r0.y, r0.x, -r1.x
+ 183:         cmp r0.z, r0.y, c45.z, c45.y
+ 184:         mul r0.y, r0.y, r0.z
+ 185:         add r0.x, r0.y, r1.x
+ 186:       endif
+ 187:       mov_sat oC0, r0.x
+ 188:     endif
 
 // approximately 209 instruction slots used (20 texture, 189 arithmetic)
  

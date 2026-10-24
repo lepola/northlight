@@ -20,6 +20,7 @@ int main(int argc,char** argv){
     assert(!band.observe(NAN,1,worldMax));
     assert(band.depth(worldMax)==depth); // bad observation does not erase known band
     SkyBand initial;assert(initial.depth(worldMax)>worldMax);
+    assert(!repairVisible(.999f,initial.depth(worldMax)));
     Texture moon;assert(loadTexture(argv[1],moon));const auto original=moon.rgba;
     softenMoonRim(moon);unsigned softened=0,opaque=0;
     for(std::size_t i=0;i<moon.rgba.size();i+=4){

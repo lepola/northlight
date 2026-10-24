@@ -2,13 +2,14 @@
 #include "actor_deformation.h"
 #include "actor_texture.h"
 #include "world_gi.h"
+#include <chrono>
 #include <memory>
 
 // Immutable, CPU-only packets. Texture readback and stream snapshots are complete
 // before queueing. Texture decoding and resolve() run on the existing GI worker,
 // never the render thread. No D3D interfaces or game pointers survive in this job.
 namespace NorthlightActorGeometry {
-struct Result {std::shared_ptr<const NorthlightGI::WorldScene> scene;std::uint64_t hash=0;unsigned texturesDecoded=0;std::size_t textureEncodedBytes=0;};
+struct Result {std::shared_ptr<const NorthlightGI::WorldScene> scene;std::uint64_t hash=0;unsigned texturesDecoded=0;std::size_t textureEncodedBytes=0;double decodeMs=0,geometryMs=0,hashMs=0;};
 inline std::uint64_t sceneHash(const NorthlightGI::WorldScene& scene){
     std::uint64_t hash=0xcbf29ce484222325ull;
     auto mix=[&](std::uint32_t value){for(unsigned j=0;j<4;++j){hash^=(value>>(j*8))&255;hash*=0x100000001b3ull;}};
@@ -38,6 +39,7 @@ struct ActorJob {
     std::vector<Packet> packets;
     Result resolve()const{
         using namespace NorthlightGI;
+        const auto resolveStart=std::chrono::steady_clock::now();double decodeMs=0;
         auto scene=std::make_shared<WorldScene>();
         // One bounded, metadata-only cache per worker; it keeps no jobs or
         // mutable resources alive and does not memoize any evaluated pose.
@@ -69,7 +71,10 @@ struct ActorJob {
             unsigned offset=unsigned(scene->vertices.size()),material=unsigned(scene->materials.size());WorldMaterial m=packet.material;
             if(exactUV&&!packet.texture.bytes.empty()){
                 const auto& texture=packet.texture;
-                if(NorthlightActorTexture::decode(texture.bytes.data(),texture.bytes.size(),texture.width,texture.height,texture.pitch,texture.format,m.rgba)){
+                const auto decodeStart=std::chrono::steady_clock::now();
+                const bool decoded=NorthlightActorTexture::decode(texture.bytes.data(),texture.bytes.size(),texture.width,texture.height,texture.pitch,texture.format,m.rgba);
+                decodeMs+=std::chrono::duration<double,std::milli>(std::chrono::steady_clock::now()-decodeStart).count();
+                if(decoded){
                     m.width=texture.width;m.height=texture.height;m.albedo=Vec3(1,1,1);
                     ++texturesDecoded;textureEncodedBytes+=texture.bytes.size();
                 }else{m.rgba.clear();m.width=m.height=0;m.albedo=Vec3(.35f,.35f,.35f);}
@@ -83,7 +88,9 @@ struct ActorJob {
                 a.normal=a.normal+normal;b.normal=b.normal+normal;c.normal=c.normal+normal;scene->triangles.push_back(t);}
             for(unsigned i=offset;i<scene->vertices.size();++i)scene->vertices[i].normal=normalized(scene->vertices[i].normal);
         }
-        std::uint64_t hash=sceneHash(*scene);return {std::move(scene),hash,texturesDecoded,textureEncodedBytes};
+        const auto hashStart=std::chrono::steady_clock::now();const double geometryMs=std::chrono::duration<double,std::milli>(hashStart-resolveStart).count()-decodeMs;
+        std::uint64_t hash=sceneHash(*scene);const double hashMs=std::chrono::duration<double,std::milli>(std::chrono::steady_clock::now()-hashStart).count();
+        return {std::move(scene),hash,texturesDecoded,textureEncodedBytes,decodeMs,geometryMs,hashMs};
     }
 };
 } // namespace NorthlightActorGeometry

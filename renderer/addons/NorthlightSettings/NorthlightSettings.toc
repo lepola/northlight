@@ -1,0 +1,7 @@
+## Interface: 30300
+## Title: Northlight
+## Notes: Renderer settings in Esc - Video - Northlight
+## Version: 10
+## SavedVariables: NorthlightSettingsDiagnostics, NorthlightSettingsCache
+NorthlightAPI.lua
+NorthlightMenu.lua

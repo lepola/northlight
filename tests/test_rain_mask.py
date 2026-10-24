@@ -43,8 +43,11 @@ checks['manifest: WorldComposite bytecode changed']=(wc['sha256']!=BEFORE['World
 # 0.3.208: WorldNormals (colour-picked one-sided tangent side) changed on purpose
 # 0.3.209 (task 29): WorldLighting reads the actor visibility (s12) on purpose, ActorShadow and ActorTiles are new
 # task 43: RemovalSmooth branches around a zero-weight tap's reads on purpose (the same output)
-checks['manifest: shaders outside the reviewed feature changes retain their historical hashes']=(set(manifest)==set(BEFORE)|{'LocalFogCombine', 'ActorTiles', 'ActorShadow', 'LocalDirect16'} and all(manifest[n]['sha256']==s for n,s in BEFORE.items() if n not in ('FogClouds', 'LocalFog', 'RemovalSmooth', 'WorldComposite', 'WorldFog', 'WorldLighting', 'WorldNormals'))
-    and manifest['LocalFog']['sha256']!=BEFORE['LocalFog'])
+# 7c5c699 adds diagnostic-only MaterialAudit; 11f79a8 adds the bit-exact FogTemporal history-equality guard.
+REVIEWED_AFTER={'FogTemporal':'492128b1154ec3e10f526b12c5bdf56946b405f79fa9d3d3fdbbb82761891d8b',
+                'MaterialAudit':'26b986f3a05c04918a82f1f44a1e434fe9aef1e3459c14a163daf21b78cf952d'}
+checks['manifest: shaders outside the reviewed feature changes retain their historical hashes']=(set(manifest)==set(BEFORE)|{'LocalFogCombine', 'ActorTiles', 'MaterialComposite', 'LocalDirect16', 'ActorShadow', 'MaterialAudit'} and all(manifest[n]['sha256']==REVIEWED_AFTER.get(n,s) for n,s in BEFORE.items() if n not in ('FogClouds', 'LocalDirect', 'LocalFog', 'RemovalSmooth', 'ShadowReplayPS', 'WorldComposite', 'WorldFog', 'WorldLighting', 'WorldNormals'))
+    and manifest['LocalFog']['sha256']!=BEFORE['LocalFog'] and manifest['MaterialAudit']['sha256']==REVIEWED_AFTER['MaterialAudit'])
 checks['compiled: WorldComposite.bin exists']=(fp.COMPILED/'WorldComposite.bin').exists()
 
 # numeric reference of the blend: lerp(fogged, unfogged, mask)

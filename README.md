@@ -35,6 +35,10 @@ Every effect below is on by default and is drawn on top of the game's own frame.
 - **Global illumination.** Sky light and bounced light from probes ray traced against the world
   geometry on a background thread, about 76 yards around the camera (52 in the Balanced and Performance
   presets); characters add their own bounce and occlusion (Quality preset).
+- **Experimental grass shadows.** Set `GrassShadows=1` in `northlight-quality.ini` and restart WoW
+  to enable bounded nearby native grass casters; `ActorShadows=1` and shadows must also be on.
+  It defaults to `1` in Quality and `0` in Balanced/Performance. `GrassShadows=0` skips
+  the additional capture and replay work; sampled receiver diagnostics remain available.
 - **Ambient occlusion.** Screen-space AO with contact shading and a light bloom.
 - **Fog and air.** Volumetric sun and moon light with light shafts through the shadows; soft haze on
   the far landscape and the lowest sky in the game's own fog colour; regional ground fog in forests,
@@ -48,12 +52,13 @@ Every effect below is on by default and is drawn on top of the game's own frame.
   shadows and its round blob shadows under characters are drawn as the game draws them there. Dungeons and raids are an optional part of the cache:
   the installer asks which of six groups (Classic, TBC and Wrath dungeons and raids; about 0.3-1.3 GB and 1-2
   build minutes each) to build, `--instances` answers for it, and changing the choice never rebuilds the continents.
-- **Lamps.** Up to 48 nearby lamps (Quality; `LocalLightLimit`, 8..64), lanterns, braziers and fires light the ground and walls around
-  them and glow in the fog. Lamps in view take the slots first, and lamps close together on screen are drawn
-  together (0.3.217), so the same `LocalLightLimit` lights more of what you see for less GPU time. In direct sun lamps dim. Lamp shadows are off by default (`PointShadows=1`
-  turns them on): only lights inside buildings cast faint shadows, at dusk and night; street lamps,
-  lanterns and torches never do. Overlapping lamp glows are capped once over all lamps (0.3.205), so the
-  glow no longer flickers when walking or riding past rows of lamps.
+- **Lamps.** Up to 48 nearby lamps (Quality; `LocalLightLimit`, 8..128), lanterns, braziers and fires light the ground and walls around
+  them and glow in the fog. Lamps in view take the slots first, and nearby lamps on screen are batched together. In direct sun lamps dim. Local shadows are enabled by default:
+  four compact sources at once, adjustable with `PointShadowLimit` in the Shadows menu.
+  Torches, candles, lamps and compact fires cast shadows; diffuse glows, runes and sparkles do not.
+  Shadows work day and night, fading where their source is weak compared with sunlight at the
+  receiver. Each pass removes only the blocked contribution added by Northlight's matching direct
+  light; it does not subtract an estimate of baked light. Overlapping lamp glows are capped once.
 - **Lighting art layer.** An MPQ patch (`patch-z`) built from your client's own `Light*.dbc`: retuned
   outdoor clear-weather light and fog colours, warmer Mulgore, denser Stormwind day fog. Storm weather
   gets darker light and fog bands. Sky models
@@ -100,7 +105,7 @@ Every effect below is on by default and is drawn on top of the game's own frame.
 | `tests/` | test runners (`test_*.py`), native tests (`test_*.cpp/.h`), release validators (`validate_*.py`, `verify_*.py`) |
 | `tests/support/`, `tests/fixtures/` | d3d9.h/windows.h shims for native builds; the archived baselines (old sources of this project, digests) that tests compare against. Real client data (shaders, doodad placements) is read from your client by `tests/client_fixtures.py`, never stored |
 | `northlight_paths.py` | the only place that knows where the client, toolchain and outputs are |
-| `client-config/` | tracked copies of the client-root profile `.ini` files |
+| `client-config/` | factory profile `.ini` files for packages and settings reset; personal client profiles may differ |
 | `*.py` (top level) | the art layer (MPQ patch) builder `build_art_layer.py` and its steps, `mpq.py`, `client_archives.py`, `renderer_status.py` (install/uninstall on macOS) |
 | `out/` | build and test output (ignored) |
 

@@ -3,7 +3,7 @@
 #include <cstdint>
 #include <cstring>
 #include <mutex>
-using HRESULT=int32_t;using LONG=int32_t;using ULONG=uint32_t;using DWORD=uint32_t;using UINT=uint32_t;using BOOL=int32_t;using WINBOOL=BOOL;using REFIID=const int&;
+using HRESULT=int32_t;using LONG=int32_t;using ULONG=uint32_t;using DWORD=uint32_t;using UINT=uint32_t;using INT=int32_t;using BOOL=int32_t;using WINBOOL=BOOL;using REFIID=const int&;
 #define STDMETHODCALLTYPE
 #define __uuidof(T) iid_##T
 constexpr int iid_IUnknown=1,iid_IDirect3DStateBlock9=2,iid_IDirect3DDevice9=3;
@@ -62,6 +62,9 @@ struct IDirect3DStateBlock9:IUnknown {virtual HRESULT GetDevice(IDirect3DDevice9
  X(BeginStateBlock,(),()) \
  X(EndStateBlock,(IDirect3DStateBlock9** a),(a)) \
  X(DrawPrimitiveUP,(D3DPRIMITIVETYPE a,UINT b,const void* c,UINT d),(a,b,c,d)) \
+ X(DrawPrimitive,(D3DPRIMITIVETYPE a,UINT b,UINT c),(a,b,c)) \
+ X(DrawIndexedPrimitive,(D3DPRIMITIVETYPE a,INT b,UINT c,UINT d,UINT e,UINT f),(a,b,c,d,e,f)) \
+ X(ProcessVertices,(UINT a,UINT b,UINT c,IDirect3DVertexBuffer9* d,IDirect3DVertexDeclaration9* e,DWORD f),(a,b,c,d,e,f)) \
  X(DrawIndexedPrimitiveUP,(D3DPRIMITIVETYPE a,UINT b,UINT c,UINT d,const void* e,D3DFORMAT f,const void* g,UINT h),(a,b,c,d,e,f,g,h)) \
  X(Reset,(D3DPRESENT_PARAMETERS* a),(a)) \
  X(SetSoftwareVertexProcessing,(WINBOOL a),(a))

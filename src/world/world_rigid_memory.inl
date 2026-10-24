@@ -14,7 +14,7 @@
     struct RigidDraw {
         RigidRef<IDirect3DVertexShader9> shader,originalShader;RigidRef<IDirect3DVertexDeclaration9> decl;RigidRef<IDirect3DBaseTexture9> texture;
         std::shared_ptr<const NorthlightDrawSnapshot::Mesh> shared;std::vector<float> constants;BOOL bools[16]={};int ints[64]={};
-        NorthlightShaderConstants::Usage usage;unsigned projectionKind=2;float cutoff=-1;DWORD addressU=D3DTADDRESS_WRAP,addressV=D3DTADDRESS_WRAP;
+        NorthlightShaderConstants::Usage usage;unsigned projectionKind=2;float cutoff=-1;unsigned alphaMode=0;DWORD addressU=D3DTADDRESS_WRAP,addressV=D3DTADDRESS_WRAP;
         D3DPRIMITIVETYPE type=D3DPT_TRIANGLELIST;UINT count=0;bool indexed=false;
     };
     struct RigidPayload {std::vector<RigidDraw> draws;unsigned bone=0;};
@@ -108,7 +108,7 @@
         c.shader.reset(p.shader);c.originalShader.reset(p.originalShader);c.decl.reset(p.decl);
         c.texture.reset(p.cutoff>=0?p.texture:nullptr); /* opaque: stage 0 is irrelevant (replay_draw_state.h) */
         c.shared=p.shared;c.constants.assign(p.constants,p.constants+1024);std::memcpy(c.bools,p.bools,sizeof c.bools);std::memcpy(c.ints,p.ints,sizeof c.ints);
-        c.usage=p.constantUsage;c.projectionKind=p.projectionKind;c.cutoff=p.cutoff;c.addressU=p.addressU;c.addressV=p.addressV;c.type=p.type;c.count=p.count;c.indexed=p.indexed;
+        c.usage=p.constantUsage;c.projectionKind=p.projectionKind;c.cutoff=p.cutoff;c.alphaMode=p.alphaMode;c.addressU=p.addressU;c.addressV=p.addressV;c.type=p.type;c.count=p.count;c.indexed=p.indexed;
     }
     size_t rigidGroupEnd(size_t n)const{return n+1<rigidGroups.size()?rigidGroups[n+1].first:rigidGroupDraws.size();}
     RigidPayload rigidCopy(size_t n){
@@ -171,7 +171,7 @@
                     p->texture=c.texture.p;if(p->texture)p->texture->AddRef();p->shared=c.shared;
                     std::memcpy(p->constantStorage,c.constants.data(),sizeof p->constantStorage);std::memcpy(p->boolStorage,c.bools,sizeof p->boolStorage);std::memcpy(p->intStorage,c.ints,sizeof p->intStorage);
                     std::memcpy(p->constantStorage+4*(31+3*e.payload.bone),rows,sizeof rows);
-                    p->constantUsage=c.usage;p->projectionKind=c.projectionKind;p->cutoff=c.cutoff;p->addressU=c.addressU;p->addressV=c.addressV;
+                    p->constantUsage=c.usage;p->projectionKind=c.projectionKind;p->cutoff=c.cutoff;p->alphaMode=c.alphaMode;p->addressU=c.addressU;p->addressV=c.addressV;
                     p->type=c.type;p->base=0;p->min=0;p->vertices=p->mesh().vertexCount;p->start=0;p->count=c.count;p->indexed=c.indexed;
                     p->captureRootValid=false;p->selfShadow=false;std::memcpy(p->anchor,e.world+9,sizeof p->anchor);p->anchorValid=true;p->pointBounds={};p->gpuCached=false;p->shadowSkinned=p->shadowSelected=true;p->shadowSmall=false;p->fateSlot=-1;p->fateClass=NorthlightShadowFate::NotRanked;p->fateDistance=0;
                     p->staticProofMask=p->staticM2Mask=0;p->staticM2Model=nullptr;p->boneKnown=false;p->bone=NAN;p->constantGroup=++group;

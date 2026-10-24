@@ -80,7 +80,8 @@ struct SkyBand {
     float depth(float worldMax)const{
         float value;
         if(valid&&skyDepth(low,high,worldMax,value))return value;
-        return skyDepth(worldMax,1,worldMax,value)?value:-1.f;
+        // Unknown sky band: every nearer sky surface remains an occluder.
+        return skyDepth(worldMax,1,worldMax,value)?std::nextafter(1.f,0.f):-1.f;
     }
 };
 struct Disc {float direction[3],right[3],up[3],tint[3],tangentRadius,opacity;};
@@ -106,21 +107,19 @@ inline bool prepare(const float* direction,const float* tint,float alpha,float a
     }
     if(length2<.99f||length2>1.01f)return false;
     for(int i=0;i<3;++i)d.direction[i]=direction[i]/std::sqrt(length2);
-    // Whole-disc opacity: opaque until the top limb reaches horizonSine, out one more radius below. The renderer passes
-    // the true horizon (0): the shader fades each pixel like the native billboard (1.9 deg down to the horizon, none
-    // under it), so this only ends the glare, which takes this opacity, once the disc is gone.
+    // The shader retains the native per-pixel horizon fade. Stop submitting the
+    // disc and its glare as soon as the top limb has completely set.
     if(!std::isfinite(horizonSine))horizonSine=0;
-    const float sinRadius=std::sin(angularRadius),limb=std::min(horizonSine,0.f)-sinRadius;
-    if(d.direction[2]<=limb-sinRadius)return false;
+    horizonSine=std::clamp(horizonSine,-1.f,0.f);
+    const float limb=horizonSine*std::cos(angularRadius)-std::sqrt(1-horizonSine*horizonSine)*std::sin(angularRadius);
+    if(d.direction[2]<=limb)return false;
     // Continuous tangent basis across the visible upper hemisphere, including
     // zenith. No arbitrary axis-switch jump rotates the moon near the pole.
     // Native billboard roll is not inferred by the exact center/size proof.
     const float a=1/(1+d.direction[2]),b=-d.direction[0]*d.direction[1]*a;
     d.right[0]=1-d.direction[0]*d.direction[0]*a;d.right[1]=b;d.right[2]=-d.direction[0];
     d.up[0]=b;d.up[1]=1-d.direction[1]*d.direction[1]*a;d.up[2]=-d.direction[1];
-    // It was a fade over 4.6 deg above the horizon: the setting sun lost almost all its brightness while whole.
-    float horizon=std::max(0.f,std::min(1.f,(d.direction[2]-limb+sinRadius)/sinRadius));horizon=horizon*horizon*(3-2*horizon);
-    d.opacity=alpha*horizon;d.tangentRadius=std::tan(angularRadius);output=d;return d.opacity>0;
+    d.opacity=alpha;d.tangentRadius=std::tan(angularRadius);output=d;return true;
 }
 // Conservative full-resolution scissor [left,top,right,bottom], with two-pixel
 // padding. Projects the four actual billboard-plane corners; if the plane

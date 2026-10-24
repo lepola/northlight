@@ -3,6 +3,7 @@
 // policy only: file loading at startup; region loading belongs to the worker.
 #include "regional_fog.h"
 #include "celestial_context.h"
+#include "quality_settings.h"
 #include <fstream>
 #include <sstream>
 #include <map>
@@ -51,10 +52,10 @@ struct Table {
 };
 // One "sun_/moon_<name> = value" assignment with its range checks; nullptr on success, else the reason.
 // Shared by the ini parser and the dev tuning overlay (zone_tuning.h).
-inline const char* assignKey(Profile& profile,const std::string& key,std::string value){
+inline float* keyTarget(Profile& profile,const std::string& key,unsigned& count,float& minimum,float& maximum){
     Profile* p=&profile;
-    unsigned s;if(key.rfind("sun_",0)==0)s=0;else if(key.rfind("moon_",0)==0)s=1;else return "unknown key";
-    auto name=key.substr(s?5:4);float* target=nullptr;unsigned count=1;float maximum=1;
+    unsigned s;if(key.rfind("sun_",0)==0)s=0;else if(key.rfind("moon_",0)==0)s=1;else return nullptr;
+    auto name=key.substr(s?5:4);float* target=nullptr;count=1;minimum=0;maximum=1;
     if(name=="disc"){target=p->disc[s];count=3;}
     else if(name=="disc_gain"){target=&p->gain[s];maximum=4;}
     else if(name=="light"){target=p->light[s];count=3;}
@@ -66,13 +67,20 @@ inline const char* assignKey(Profile& profile,const std::string& key,std::string
     else if(name=="glow_strength"){target=&p->glowStrength[s];maximum=4;}
     else if(name=="glow"){target=p->glow[s];count=3;}
     else if(name=="glow_mix")target=&p->glowMix[s];
-    else return "unknown key";
+    else return nullptr;
+    if(name=="fog_height_scale")minimum=.25f;
+    return target;
+}
+inline const char* assignKey(Profile& profile,const std::string& key,std::string value){
+    unsigned count=0;float minimum=0,maximum=0;
+    float* target=keyTarget(profile,key,count,minimum,maximum);if(!target)return "unknown key";
+    const auto name=key.substr(key.rfind("sun_",0)==0?4:5);
     for(char& c:value)if(c==',')c=' ';std::istringstream values(value);
     for(unsigned i=0;i<count;++i)if(!(values>>target[i])||!std::isfinite(target[i])||target[i]<0||target[i]>maximum)return "invalid numeric value";
     std::string extra;if(values>>extra)return "too many values";
     if(name=="light"&&target[0]+target[1]+target[2]<.01f)return "light hue cannot be black; use light_strength=0";
     if(name=="glow"&&target[0]+target[1]+target[2]<.01f)return "glow hue cannot be black; use glow_strength=0";
-    if(name=="fog_height_scale"&&target[0]<.25f)return "fog height scale must be at least .25";
+    if(target[0]<minimum)return "fog height scale must be at least .25";
     return nullptr;
 }
 // Atomic validation: a malformed file cannot install half a palette. A zone
@@ -100,7 +108,16 @@ inline bool parse(std::istream& input,Table& out,std::string& error){
     }
     if(input.bad()){error="read failed";return false;}out=std::move(t);error.clear();return true;
 }
-inline bool load(const std::string& path,Table& out,std::string& error){std::ifstream f(path);if(!f){error="file unavailable; neutral defaults retained";return false;}return parse(f,out,error);}
+inline bool readIniText(std::istream& input,std::string& text,std::string& error){
+    std::string raw;char buffer[4096];while(input){input.read(buffer,sizeof buffer);const auto n=size_t(input.gcount());if(raw.size()+n>524288){error="INI exceeds 512 KiB";return false;}raw.append(buffer,n);}
+    if(!input.eof()){error="INI read failed";return false;}
+    if(NorthlightQuality::bigEndianUtf16(raw)||(raw.rfind("\xff\xfe",0)==0&&raw.size()%2)){error="unsupported or truncated INI encoding";return false;}
+    text=NorthlightQuality::narrow(raw);if(text.rfind("\xef\xbb\xbf",0)==0)text.erase(0,3);return true;
+}
+inline bool load(const std::string& path,Table& out,std::string& error){
+    std::ifstream f(path,std::ios::binary);if(!f){error="file unavailable; neutral defaults retained";return false;}
+    std::string text;if(!readIniText(f,text,error))return false;std::istringstream decoded(text);return parse(decoded,out,error);
+}
 
 // Bilinear palettes at ADT chunk centers: continuous across authored chunk and
 // tile boundaries, about 33 world units wide. No camera-anchored pattern or I/O.

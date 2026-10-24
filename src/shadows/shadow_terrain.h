@@ -81,7 +81,8 @@ template<class Snapshot> void appendLiveDirectional(const Snapshot& snapshot,
 inline bool build(const NorthlightGI::WorldScene& local,const NorthlightGI::WorldScene& terrain,
                   Vec3 center,NorthlightWorldMesh::WorldMeshUploadPlan& output,std::string& error,
                   const NorthlightGI::AllocationAdmission& admit = {},float radius=Radius,
-                  const NorthlightWorldMesh::PlanOrder& order = {},bool pagingOnly=false){
+                  const NorthlightWorldMesh::PlanOrder& order = {},bool pagingOnly=false,
+                  const NorthlightGI::BVH* sharedLocal=nullptr,NorthlightWorldMesh::PreparationCache* preparation=nullptr){
     try {
     const Vec3 low=center-Vec3(288,288,320),high=center+Vec3(288,288,320);
     auto allowed=[&](uint64_t bytes){if(!admit||admit(bytes))return true;error="Geometry allocation deferred";return false;};
@@ -103,13 +104,35 @@ inline bool build(const NorthlightGI::WorldScene& local,const NorthlightGI::Worl
     }
     if(!allowed(local.completePlacements.size()*sizeof(NorthlightGI::WorldPlacementCoverage)))return false;
     merged->completePlacements=local.completePlacements;
+    struct KeptRange {uint32_t first=UINT32_MAX,count=0;NorthlightMeshPageKey::Hasher membership;};
+    std::vector<KeptRange> kept;
+    std::vector<NorthlightWorldMesh::PreparationPiece> prepared;
+    auto appendBytes=[](std::string& key,const auto& value){key.append(reinterpret_cast<const char*>(&value),sizeof(value));};
+    auto identity=[&](const NorthlightGI::SourcePieceRange& range,char kind){std::string key(1,kind);appendBytes(key,range.sourceIdentity);appendBytes(key,range.membership);
+        appendBytes(key,range.placement.uid);appendBytes(key,range.placement.category);appendBytes(key,range.placement.matrix);appendBytes(key,range.placement.translation);return key;};
+    if(preparation)try{
+        const auto localCount=!local.sourcePieces.empty()?local.sourcePieces.size():(sharedLocal?sharedLocal->pieces().size():0);
+        const auto count=localCount+terrain.sourcePieces.size();
+        uint64_t materialBytes=terrain.sourcePieces.size()*sizeof(uint32_t);
+        if(!local.sourcePieces.empty())for(const auto& range:local.sourcePieces)materialBytes+=range.materialMap.size()*sizeof(uint32_t);
+        else if(sharedLocal)for(const auto& range:sharedLocal->pieces())materialBytes+=range.materialMap.size()*sizeof(uint32_t);
+        if(admit&&(!admit(count*sizeof(NorthlightWorldMesh::PreparationPiece))||!admit(terrain.sourcePieces.size()*sizeof(KeptRange))||!admit(count*160+materialBytes)))preparation=nullptr;
+        if(preparation){prepared.reserve(count);kept.resize(terrain.sourcePieces.size());}
+        if(preparation){
+        if(!local.sourcePieces.empty())for(const auto& range:local.sourcePieces){if(!range.sourceIdentity||!range.triangleCount)continue;NorthlightWorldMesh::PreparationPiece piece;piece.identity=identity(range,'P');piece.firstTriangle=range.triangleBase;piece.triangleCount=range.triangleCount;piece.materials=range.materialMap;prepared.push_back(std::move(piece));}
+        else if(sharedLocal&&&sharedLocal->scene()==&local)for(const auto& range:sharedLocal->pieces()){if(!range.geometry||range.geometry->scene().triangles.empty())continue;
+            NorthlightWorldMesh::PreparationPiece piece;piece.identity="L";const auto address=reinterpret_cast<uintptr_t>(range.geometry.get());appendBytes(piece.identity,address);piece.owner=range.geometry;piece.weakIdentity=true;piece.firstTriangle=range.triangleBase;piece.triangleCount=uint32_t(range.geometry->scene().triangles.size());piece.materials=range.materialMap;prepared.push_back(std::move(piece));}
+        }
+    }catch(const std::bad_alloc&){preparation=nullptr;decltype(prepared)().swap(prepared);decltype(kept)().swap(kept);}
     std::set<std::pair<int,int>> fixed;
     if(!allowed(terrain.vertices.size()*sizeof(uint32_t)))return false;
     std::vector<uint32_t> remap(terrain.vertices.size(),UINT32_MAX);
     const uint32_t material=uint32_t(merged->materials.size());
     NorthlightGI::WorldMaterial opaque;opaque.terrain=true;
     merged->materials.push_back(opaque);
-    for(const auto& t:terrain.triangles){
+    size_t rangeIndex=0;
+    for(size_t triangle=0;triangle<terrain.triangles.size();++triangle){const auto& t=terrain.triangles[triangle];
+        if(preparation)while(rangeIndex<terrain.sourcePieces.size()&&uint64_t(terrain.sourcePieces[rangeIndex].triangleBase)+terrain.sourcePieces[rangeIndex].triangleCount<=triangle)++rangeIndex;
         if(t.v0>=terrain.vertices.size()||t.v1>=terrain.vertices.size()||t.v2>=terrain.vertices.size()||
            t.material>=terrain.materials.size()||!terrain.materials[t.material].terrain){error="Invalid shadow terrain";return false;}
         const Vec3 a=terrain.vertices[t.v0].position,b=terrain.vertices[t.v1].position,c=terrain.vertices[t.v2].position;
@@ -123,6 +146,7 @@ inline bool build(const NorthlightGI::WorldScene& local,const NorthlightGI::Worl
             if(remap[src[i]]==UINT32_MAX){remap[src[i]]=uint32_t(merged->vertices.size());merged->vertices.push_back(terrain.vertices[src[i]]);}
             *dest[i]=remap[src[i]];
         }
+        if(rangeIndex<kept.size()){const auto& range=terrain.sourcePieces[rangeIndex];if(triangle>=range.triangleBase&&range.sourceIdentity){auto& record=kept[rangeIndex];if(record.first==UINT32_MAX)record.first=uint32_t(merged->triangles.size());++record.count;record.membership.word(uint32_t(triangle-range.triangleBase));}}
         merged->triangles.push_back(added);
         const auto key=chunk(a,b,c);
         if(key.first<0||key.second<0)continue;
@@ -133,11 +157,12 @@ inline bool build(const NorthlightGI::WorldScene& local,const NorthlightGI::Worl
         if(outside(cl,ch,low,high)&&cl.x>=center.x-radius&&ch.x<=center.x+radius&&
            cl.y>=center.y-radius&&ch.y<=center.y+radius)fixed.insert(key);
     }
+    try{for(size_t i=0;i<kept.size();++i)if(kept[i].count){const auto& range=terrain.sourcePieces[i];const auto& keptRange=kept[i];NorthlightWorldMesh::PreparationPiece piece;piece.identity=identity(range,'T');const auto membership=keptRange.membership.finish(range.triangleCount,keptRange.count);appendBytes(piece.identity,membership.lo);appendBytes(piece.identity,membership.hi);piece.firstTriangle=keptRange.first;piece.triangleCount=keptRange.count;piece.materials={material};prepared.push_back(std::move(piece));}}catch(const std::bad_alloc&){preparation=nullptr;decltype(prepared)().swap(prepared);}
     // The terrain vertex remap is dead after assembly; do not carry it into
     // the packed-index/signature allocations.
     std::vector<uint32_t>().swap(remap);
     NorthlightWorldMesh::WorldMeshUploadPlan plan;
-    if(!NorthlightWorldMesh::buildUploadPlan(*merged,plan,error,admit,&local.materials,order))return false;
+    if(!NorthlightWorldMesh::buildUploadPlan(*merged,plan,error,admit,&local.materials,order,&prepared,preparation))return false;
     if(pagingOnly){
         // The unique merged scene is temporary. Its triangles are now packed
         // in plan.indices; retaining both through paging costs tens of MiB in

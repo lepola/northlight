@@ -173,7 +173,6 @@ def real_tables(view, folder, r):
 
 
 report['stock']['retime'] = real_tables('stock', stock, r)
-installed = client_archives.data_dir(client) / 'patch-z.mpq'
 own = out / 'own'
 shutil.rmtree(own, ignore_errors=True)
 r_own = build_art_layer.build(client, own, cache)

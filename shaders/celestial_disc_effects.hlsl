@@ -11,7 +11,7 @@ sampler2D DiscWater : register(s2);
 sampler2D DiscHaloVisibility : register(s3); // current halo, previous 1x1 value in visibility pass
 sampler2D DiscTerrain : register(s4); // viewer-ray coverage of already loaded terrain
 sampler2D DiscRingVisibility : register(s5); // 1x1 visibility of the 2-4R ring (sun), else the halo value
-float4 DiscTerrainPolicy : register(c46); // ready, mask extent in body radii, body texture LOD
+float4 DiscTerrainPolicy : register(c46); // ready, mask extent in body radii, body texture LOD, sky-phase compact glare
 float4 DiscImage : register(c0); // inv fullWidth/Height, world depthMin, inverse depthRange
 float4 DiscProjection : register(c1); // signed X,Y,Zsign, waterReady
 row_major float4x4 DiscInverseView : register(c2);
@@ -65,17 +65,19 @@ float filteredSkyVisibility(float4 source){
 // plateau or clipping rim). Solar: a small hot core (weight c12.z, rate c12.x,
 // ~1-1.5R) plus a long soft tail (weight c47.w) to the 20R support. Lunar: the
 // M1 skirt .35*2^(-1.11(r-1)) times c12.z. The edge fades both to 0 at the support.
-// Occlusion (r47): the hot core is the disc itself and uses the disc taps'
-// visibility only, so it is never drawn over geometry that hides the disc (a
-// near mountain). The 2-4R ring (x wrap) carries only a core-free tail: the
+// The compact core uses per-pixel depth. The shared halo taps also test source
+// visibility against native geometry, terrain and the horizon.
+// The 2-4R ring (x wrap) carries only a core-free tail: the
 // tail shifted out by 3R, tail(sqrt(r^2+9)), flat-topped at the tail's 3R
 // level. Both parts fall monotonically with radius, so a barely hidden sun
 // (small disc, bright ring) shows no dark ring around it.
 float glareProfile(float radius){
     float r2=radius*radius;
     float edge=1-smoothstep(.35*DiscEmission.y,DiscEmission.y,radius);
-    float disc=saturate(tex2Dlod(DiscHaloVisibility,float4(.5,.5,0,0)).r);
-    float ring=DiscGlowCore.w*saturate(tex2Dlod(DiscRingVisibility,float4(.5,.5,0,0)).r);
+    // The sky-phase core precedes opaque geometry and cloud blending. Later
+    // geometry covers it; no previous-frame visibility texture is needed.
+    float disc=DiscTerrainPolicy.w>.5?1:saturate(tex2Dlod(DiscHaloVisibility,float4(.5,.5,0,0)).r);
+    float ring=DiscTerrainPolicy.w>.5?0:DiscGlowCore.w*saturate(tex2Dlod(DiscRingVisibility,float4(.5,.5,0,0)).r);
     float3 tail=float3(exp2(-.12*r2),exp2(-.025*r2),exp2(-.008*r2));
     // tail(sqrt(r^2+9)) = sum w_i*2^(-k_i*9)*2^(-k_i*r^2): the same three terms.
     float tailed=max(disc*dot(tail,float3(.25,.35,.40)),ring*dot(tail,float3(.118257,.299458,.380527)));
@@ -106,6 +108,8 @@ float4 CelestialHaloVisibilityPS(float2 uv:TEXCOORD0):COLOR0 {
         float terrain=DiscTerrainPolicy.x>.5?1-saturate(tex2Dlod(DiscTerrain,float4(source.zw,0,0)).r):1;
         // As the disc: no visibility under the true horizon, the native fade over the 1.9 deg above it.
         float3 ray=discRay(source.xy);
+        // Both the disc and wrap ring must see the source through native
+        // geometry. Per-output depth alone cannot stop the diffuse veil indoors.
         current+=filteredSkyVisibility(source)*terrain*saturate(30*ray.z/max(dot(ray,DiscDirection.xyz),1e-6));
     }
     current*=1.0/32;
@@ -113,14 +117,14 @@ float4 CelestialHaloVisibilityPS(float2 uv:TEXCOORD0):COLOR0 {
     // 75% instead of 50%. Endpoints stay exact; a full blocker still hides it.
     // Apply before temporal filtering so the existing full-occlusion fade holds.
     current=current*(2-current);
+    // A fully covered source must not retain the previous frame's glare on a wall.
+    if(current<=0)return 0;
     // Do not read uninitialized ping-pong storage on first use or a reset.
     float value=current;
     if(DiscHistory.x>.5){
         float previous=saturate(tex2Dlod(DiscHaloVisibility,float4(.5,.5,0,0)).r);
         value=lerp(previous,current,current<previous?DiscHistory.y:DiscHistory.z);
     }
-    // Make sustained full occlusion exactly zero after the short fade.
-    if(current<=0&&value<.001)value=0;
     return saturate(value).xxxx;
 }
 float4 CelestialDiscPS(float2 uv:TEXCOORD0):COLOR0 {
@@ -152,17 +156,16 @@ float4 CelestialDiscPS(float2 uv:TEXCOORD0):COLOR0 {
     // so the glare washes the disc out when facing the sun.
     // The moon retains its authored silhouette and surface detail.
     if(DiscRepair.w>.5){float a=saturate((1-length(local))/.56);texel.a=a*a*(3-2*a);}
-    // Only opaque celestial pixels may reserve sky depth. A translucent rim that
-    // writes depth blocks later sky/cloud color and leaves a dark outline.
-    // The late depth-checked repair draws the soft rim over the finished sky.
-    if(DiscPolicy.w<.5)clip(texel.a-.99999);
+    // The sky-phase disc draws its full soft rim without writing depth, so
+    // later cloud layers blend over it without a late surface repaint.
     float3 encoded;float alpha;
     if(DiscEmission.w>.5){
         float radius=length(local);
         clip(DiscEmission.y-radius);
-        // Visibility of the source itself is independent of the output pixel:
-        // a fully hidden sun (disc and ring) cannot leak glow around a roof.
-        encoded=glowColor(radius);
+        // Shared source visibility includes native geometry and distant terrain.
+        // The output pixel already passed its own strict depth test above.
+        // The late atmospheric tail carries no compact white colour core.
+        encoded=DiscTerrainPolicy.w>.5?glowColor(radius):DiscGlowHue.rgb;
         alpha=saturate(DiscColor.w)*glareProfile(radius);
         // Preserve lunar craters/tint; solar glare also fills its center. Only where the disc is drawn: under the
         // horizon fade below the disc leaves its place, and a full hole showed as a dark disc in the glare.
@@ -184,8 +187,8 @@ float4 CelestialDiscPS(float2 uv:TEXCOORD0):COLOR0 {
     if(DiscEmission.w>.5)encoded=glowShoulder(alpha,encoded);
     return float4(outputColor(encoded),alpha);
 }
-// Veil over geometry (sun): the complement of the sky glare's own coverage,
-// drawn into the target water just used. Geometry is classified by RAW depth
+// Diffuse bloom crosses silhouettes; the compact source core stays occluded.
+// Draw into the target water just used. Geometry is classified by RAW depth
 // against the sky-band sprite depth, so WDL and beyond-far silhouettes, which
 // the glare's repair test removes from the sky, are veiled too; visible water
 // and loaded terrain behind the sky likewise; visible water takes none. Blend INVDESTCOLOR/ONE like the glare,
@@ -210,7 +213,7 @@ float4 CelestialVeilPS(float2 uv:TEXCOORD0):COLOR0 {
     // No cut at the camera's far edge: it drew a sharp line across a near hill. The sea under the edge takes no veil (above).
     float alpha=geometry*glareProfile(radius);
     clip(alpha-.001);
-    return float4(outputColor(glowShoulder(alpha,glowColor(radius))),alpha);
+    return float4(outputColor(glowShoulder(alpha,DiscGlowHue.rgb)),alpha);
 }
 
 row_major float4x4 TerrainMaskMatrix : register(c0);

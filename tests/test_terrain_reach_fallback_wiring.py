@@ -29,7 +29,17 @@ assert 'logGeometryMemory("after-bvh"' in plan and 'liftEntry("plan",planBudget.
 entry = body('auto memory=workerMemory(entryLift.apply(NorthlightGeometryMemory::buildBudget(64', 'stallBegin("build-deferred"')
 assert entry.count('NorthlightGeometryMemory::buildBudget(') >= 2 and 'inBuildBudget(' not in entry
 assert 'const auto entryBudget=entryLift.apply(plainEntry,GetTickCount());' in entry
-assert 'if(!NorthlightGeometryMemory::admits(memory,plainEntry)){localGeometry.reset();' in entry  # a lift alone keeps the cache
+# Small shortfalls may reclaim raw payloads first. Every step resamples the same
+# plain floor; complete reset remains the final fallback and a lift alone clears nothing.
+assert 'if(!NorthlightGeometryMemory::admits(memory,plainEntry)){' in entry
+raw = 'unsigned reclaimed=1;sceneSources.trimPayloads();memory=workerMemory(plainEntry);'
+local = 'if(!NorthlightGeometryMemory::admits(memory,plainEntry)){reclaimed=2;localGeometry.reset();memory=workerMemory(plainEntry);}'
+full = 'if(!NorthlightGeometryMemory::admits(memory,plainEntry)){reclaimed=3;resetPreparation();memory=workerMemory(plainEntry);}'
+assert entry.index(raw) < entry.index(local) < entry.index(full)
+assert entry.count('sceneSources.trimPayloads();') == 1 and entry.count('localGeometry.reset();') == 1
+assert entry.count('resetPreparation();') == 1  # a lift alone keeps every optional owner
+reset = body('auto resetPreparation=')
+assert all(text in reset for text in ('meshPreparation.reset();', 'sceneSources.reset();', 'localGeometry.reset();'))
 assert 'stallBegin("build-deferred",memory,entryBudget.available,entryBudget.largest)' in w
 # Every refusal after entry that does not fall back to the base reach raises the next entry.
 for stage in ('local-geometry', 'shadow-terrain', 'mesh-page', 'mesh-page-seal'):

@@ -369,7 +369,9 @@ def main():
     assert cpu.count('d->SetPixelShaderConstantF(0,&c[0][0],68)') == 2  # register bank unchanged
     upload = cpu.index('c[30][0]=waterMask?1.f:0.f;d->SetPixelShaderConstantF(0,&c[0][0],68);')
     assert cpu.index('c[57][1]=haze.shape[0];c[57][2]=haze.shape[1];c[57][3]=haze.shape[2];c[67][2]=haze.sun[0];c[67][3]=haze.sun[1];') < upload
-    blur_end = cpu.index('"volume blur vertical"))return false;}')
+    blur = block(cpu, 'if(effects.fog){float blur[4]')
+    assert blur.index('"volume blur horizontal"))return false;') < blur.index('"volume blur vertical"))return false;') < blur.index('profile->mark("FogBlur")')
+    blur_end = cpu.index(blur)+len(blur)
     assert blur_end < cpu.index('d->SetPixelShaderConstantF(34,haze.haze,1);') < cpu.index('"world composite"')
     assert 'farZ,hazeZone,effects.fog,celestialValid,hazeSun,hazeSunWeight,hazeLift,wx.hazeTauScale());' in cpu
     assert 'float hazeLift[3];NorthlightSunHue::horizonLift(glowHueFrame,hazeLift);' in cpu
@@ -386,12 +388,12 @@ def main():
         for name, info in manifest['shaders'].items():
             assert info['static_instruction_slots'] <= 512 and info['temporary_registers'] <= 32, name  # a count (highest rN + 1): ps_3_0 has r0..r31
             # Shaders changed on purpose by other features are excluded from the byte-identical check below.
-            if name not in ('WorldComposite', 'TemporalLight', 'SourceVisibilityPS', 'WorldLighting', 'LocalDirect', 'WorldNormals', 'RemovalSmooth', 'WorldGI', 'WorldFog', 'FogClouds', 'FogTemporal', 'LocalFog', 'LocalFogCombine', 'ActorShadow', 'ActorTiles', 'LocalDirect16'):  # LocalDirect16 (the 16-lamp LocalDirect pass) is new; ActorShadow and ActorTiles (0.3.208, task 29) are new; FogClouds (0.3.199) is new, not in BEFORE; LocalFog (0.3.199) gains the near ramp, 0.3.205 (gh#20) returns the raw batch sum on purpose, LocalFogCombine is new
+            if name not in ('ShadowReplayPS', 'MaterialComposite', 'MaterialAudit', 'LocalDirect16', 'WorldComposite', 'TemporalLight', 'SourceVisibilityPS', 'WorldLighting', 'LocalDirect', 'WorldNormals', 'RemovalSmooth', 'WorldGI', 'WorldFog', 'FogClouds', 'FogTemporal', 'LocalFog', 'LocalFogCombine', 'ActorShadow', 'ActorTiles'):  # MaterialAudit, ActorShadow and ActorTiles are new; FogClouds (0.3.199) is new, not in BEFORE; LocalFog (0.3.199) gains the near ramp, 0.3.205 (gh#20) returns the raw batch sum on purpose, LocalFogCombine is new
                 assert info['sha256'] == BEFORE[name], name
                 unchanged.append(name)
-        assert sorted(unchanged) == sorted(k for k in BEFORE if k not in ('TemporalLight', 'SourceVisibilityPS', 'WorldLighting', 'LocalDirect', 'WorldNormals', 'WorldGI', 'WorldFog', 'LocalFog'))
+        assert sorted(unchanged) == sorted(k for k in BEFORE if k not in ('ShadowReplayPS', 'TemporalLight', 'SourceVisibilityPS', 'WorldLighting', 'LocalDirect', 'WorldNormals', 'WorldGI', 'WorldFog', 'LocalFog'))
         assert manifest['shaders']['WorldNormals']['static_instruction_slots'] == 305  # Microsoft d3dcompiler_47 (Wine's builtin: 483); r77: both wide samples or neither; 0.3.208: colour-picked one-sided side (was 434)
-        assert manifest['shaders']['WorldFog']['static_instruction_slots'] == 431  # PR #89: regional-field and near-fade interval clip (was 391); Microsoft d3dcompiler_47 (Wine's builtin: 512); 0.3.198 (rain): the same 512 slots (the literal .0017 became c59.w)
+        assert manifest['shaders']['WorldFog']['static_instruction_slots'] == 431  # Regional-field/near-fade clip and exact invalid-field guard.
         assert SOURCE_VISIBILITY_SLOTS is not None, 'TODO(lead): pin SOURCE_VISIBILITY_SLOTS to the compiled count (%d)' % manifest['shaders']['SourceVisibilityPS']['static_instruction_slots']
         assert manifest['shaders']['SourceVisibilityPS']['static_instruction_slots'] == SOURCE_VISIBILITY_SLOTS <= 512
         assert manifest['shaders']['WorldComposite']['sha256'] != '772d438995ed33d36db7e26f9b169a5effd94a876ce5d8b8af9fd8aad5381990'

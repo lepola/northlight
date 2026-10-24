@@ -14,7 +14,19 @@ up=w[w.index('    bool uploadLiveTerrain(){'):w.index('    // Win32 wide-path re
 reset='liveTerrainIndexCount=liveDirectionalIndexCount=0;liveIndexBase=0;liveTerrainChunks.clear();uploadedTerrain.clear();return true;'
 release=w[w.index('    void releaseGPU(bool keepMesh=false){'):]
 release=release[:release.index('\n')]
+assert w.count('void endFrame(')==1
+frame_start=w.index('void endFrame(')
+frame_prefix=w[frame_start:w.index('frameFence.endFrame();',frame_start)]
 checks={
+ 'live terrain uses lossless20B caster vertices and a dedicated declaration in both consumers':
+    'NorthlightLiveTerrainGPU::Cache<NorthlightTerrainCapture::MeshSnapshot,StaticShadow::Vertex> liveTerrainGPU;' in w
+    and 'return StaticShadow::Vertex{p.x,p.y,p.z,0,0};' in up
+    and 'CreateVertexDeclaration(liveElements,&liveTerrainDecl)' in w
+    and 'drop(liveTerrainDecl);' in release
+    and w.count('SetVertexDeclaration(liveTerrainDecl)')==1 and pr.count('SetVertexDeclaration(liveTerrainDecl)')==1
+    and w.count('liveTerrainGPU.vertices(),0,sizeof(StaticShadow::Vertex)')==1 and pr.count('liveTerrainGPU.vertices(),0,sizeof(StaticShadow::Vertex)')==1
+    and '"restore terrain declaration"' in w and '"cube restore terrain declaration"' in pr
+    and 'frameTerrainVertices+snapshot->positions.size()>262144' in w,
  'no index vectors left: counts only':'liveTerrainIndices' not in w+pr and 'liveDirectionalIndices' not in w+pr
     and 'size_t liveTerrainIndexCount=0,liveDirectionalIndexCount=0;' in w,
  'S_FALSE and index-growth refusal keep the 0.3.175 reset':up.count(reset)==2
@@ -23,7 +35,8 @@ checks={
     'UINT ib=UINT((liveTerrainIndexCount+liveDirectionalIndexCount)*sizeof(uint32_t));' in up
     and 'if(!check(liveIndicesGPU->Lock(slot.offset,ib,&data,slot.flags),"live index upload"))return false;\n        liveTerrainGPU.write(static_cast<uint32_t*>(data));\n        if(!check(liveIndicesGPU->Unlock(),"live index unlock"))return false;' in up
     and up.index('liveTerrainGPU.prepare(')<up.index('->Lock('),
- 'membership failure and the empty case as before':'},liveTerrainIndexCount,liveDirectionalIndexCount))return check(E_FAIL,"live terrain arena membership");' in up
+ 'membership failure and the empty case as before':'},liveTerrainIndexCount,liveDirectionalIndexCount,[&](const auto& snapshot){' in up
+    and '}))return check(E_FAIL,"live terrain arena membership");' in up
     and 'if(!liveTerrainIndexCount){uploadedTerrain=frameTerrain;liveTerrainGeneration=meshGeneration;return true;}' in up,
  'readers use the counts':'if(liveTerrainIndexCount){' in pr and 'if(liveDirectionalIndexCount){' in w
     and 'UINT(liveIndexBase+liveTerrainIndexCount),UINT(liveDirectionalIndexCount/3)),"live terrain shadow")' in w,
@@ -39,9 +52,9 @@ checks={
     and 'liveIndexBase=0;' in release and 'NorthlightDynamicRing::reset(liveIndexRing,0,' in release,
  'every other write of liveIndexBase is a reset to 0 (releaseGPU, recreate, S_FALSE, growth refusal)':
     w.count('liveIndexBase=')==6 and w.count('liveIndexBase=0;')==5, # the member, recreateLiveIndices, S_FALSE, growth refusal, releaseGPU; the one non-zero write is the slot
- '0.3.192 frame fence: one member, endFrame() first in WorldRenderer::endFrame, drop() in the release paths, touch() on the reuse path and at both live IB draw sites':
+ '0.3.192 frame fence: one member, endFrame() after deferred logs before any early return, drop() in the release paths, touch() on the reuse path and at both live IB draw sites':
     w.count('NorthlightDynamicRing::FrameFence frameFence;')==1 and w.count('DeviceQueries')==0
-    and 'void endFrame(bool retainPool=true){\n        flushDeferredLogs(); /* 0.3.176 (U0/S0): after every bucketed span of the frame */\n        frameFence.endFrame();' in w
+    and 'flushDeferredLogs();' in frame_prefix and 'return' not in frame_prefix
     and 'queries.drop();' in release and w.count('queries.drop();')==2
     and 'if(reuse){terrainUploadReused=true;if(liveTerrainIndexCount||liveDirectionalIndexCount)NorthlightDynamicRing::touch(liveIndexRing,fence());return true;}' in up
     and w.count('NorthlightDynamicRing::touch(')==2 and pr.count('NorthlightDynamicRing::touch(liveIndexRing,fence());')==1
@@ -52,11 +65,16 @@ checks={
  'bitmap only for the set it describes, the set otherwise':'const auto& fixed=fixedTerrainChunks();const bool bits=fixedTerrainBits.source()==&fixed;' in up
     and 'return bits?fixedTerrainBits.contains(c):fixed.count(c)!=0;' in up,
  'fixedTerrain stays the shared immutable set':'std::shared_ptr<const std::set<std::pair<int,int>>> fixedTerrain;' in w,
+ 'directional aliases require exact nonempty known chunk metadata and retain generation invalidation':
+    'liveTerrainGPU.prepare(frameTerrain,meshGeneration,' in up
+    and '!snapshot.bounds.chunks.empty()&&std::none_of(snapshot.bounds.chunks.begin(),snapshot.bounds.chunks.end(),' in up
+    and 'c.x<0||c.y<0||c.x>=1024||c.y>=1024||containsFixed({c.x,c.y})' in up
+    and 'appendLiveDirectionalBy(snapshot,containsFixed,' in up,
 }
 for name,ok in checks.items():print(('PASS ' if ok else 'FAIL ')+name)
 assert all(checks.values())
 with tempfile.TemporaryDirectory(prefix='northlight-live-terrain-') as tmp:
-    for source in ['test_live_terrain_gpu.cpp','test_fixed_chunk_bits.cpp']:
+    for source in ['test_live_terrain_gpu.cpp','test_live_terrain_layout.cpp','test_live_terrain_directional_alias.cpp','test_fixed_chunk_bits.cpp']:
         for label,flags in [('O2',['-O2']),('asan',['-O1','-g','-fsanitize=address,undefined'])]:
             exe=Path(tmp)/(Path(source).stem+'-'+label)
             subprocess.run(['clang++','-std=c++17','-Wall','-Wextra','-Werror','-UNDEBUG',*flags,*fp.test_include_flags(),str(HERE/source),'-o',str(exe)],check=True)

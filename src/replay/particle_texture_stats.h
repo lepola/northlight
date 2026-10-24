@@ -146,3 +146,111 @@ public:
 static_assert(Cache::PixelBudget+Cache::MaxDimension*Cache::MaxDimension*4<(9u<<20),"particle texture bytes plus decode scratch stay below 9 MiB");
 inline Cache& cache(){static thread_local Cache value;return value;}
 } // namespace NorthlightParticleTextures
+
+// Equipment atlases retain their own bounded mip and exact upload revisions.
+namespace NorthlightMaterialTextures {
+inline std::atomic<bool> enabled{true};
+using View=NorthlightParticleTextures::View;
+using Counters=NorthlightParticleTextures::Counters;
+class Cache {
+public:
+    static constexpr unsigned MaxDimension=128,DecodeDimension=1024,MaxEntries=128;
+    static constexpr std::size_t PixelBudget=4u<<20;
+private:
+    struct Entry {
+        const void* raw=nullptr;
+        const void* owner=nullptr;
+        std::uint64_t lifetime=0,revision=0,used=0,rgbaHash=0;
+        unsigned width=0,height=0,mip=0,format=0;
+        std::vector<std::uint8_t> pixels;
+    };
+    std::array<Entry,MaxEntries> entries_{};
+    std::size_t bytes_=0;
+    std::uint64_t serial_=0,clock_=0;
+    Entry* find(const void* raw){if(raw)for(auto& e:entries_)if(e.raw==raw)return &e;return nullptr;}
+    void drop(Entry& e){bytes_-=e.pixels.size();std::vector<std::uint8_t>().swap(e.pixels);e.width=e.height=0;}
+    Entry* oldest(const Entry* except=nullptr){Entry* result=nullptr;for(auto& e:entries_)if(e.raw && &e!=except&&(!result||e.used<result->used))result=&e;return result;}
+    Entry& slot(const void* raw,const void* owner){
+        if(auto* e=find(raw)){if(e->owner==owner)return *e;drop(*e);*e={};}
+        Entry* selected=nullptr;for(auto& e:entries_)if(!e.raw){selected=&e;break;}
+        if(!selected){selected=oldest();drop(*selected);++counts.evictions;}
+        *selected={};selected->raw=raw;selected->owner=owner;selected->lifetime=++serial_;selected->used=++clock_;return *selected;
+    }
+    static bool format(unsigned d3d,NorthlightActorTexture::Format& out){
+        using F=NorthlightActorTexture::Format;
+        switch(d3d){case 21:out=F::BGRA8;break;case 22:out=F::BGRX8;break;case 23:out=F::RGB565;break;
+        case 24:out=F::XRGB1555;break;case 25:out=F::ARGB1555;break;case 26:out=F::ARGB4444;break;
+        case 0x31545844:out=F::BC1;break;case 0x33545844:out=F::BC2;break;case 0x35545844:out=F::BC3;break;default:return false;}return true;
+    }
+    static bool decodeImage(const void* source,std::size_t bytes,unsigned width,unsigned height,std::size_t pitch,NorthlightActorTexture::Format format,std::vector<std::uint8_t>& output){
+        if(width<=128&&height<=128)return NorthlightActorTexture::decode(source,bytes,width,height,pitch,format,output);
+        if(!source)return false;output.resize(size_t(width)*height*4);std::vector<std::uint8_t> tile,packed;
+        for(unsigned y=0;y<height;y+=128)for(unsigned x=0;x<width;x+=128){const unsigned w=std::min(128u,width-x),h=std::min(128u,height-y);const auto offset=NorthlightActorTexture::rowCount(y,format)*pitch+NorthlightActorTexture::rowBytes(x,format);
+            const auto rowBytes=NorthlightActorTexture::rowBytes(w,format);const auto rows=NorthlightActorTexture::rowCount(h,format);packed.resize(rowBytes*rows);
+            for(unsigned r=0;r<rows;++r){const auto start=offset+size_t(r)*pitch;if(start>bytes||rowBytes>bytes-start)return false;std::copy_n(static_cast<const unsigned char*>(source)+start,rowBytes,packed.data()+size_t(r)*rowBytes);}
+            if(!NorthlightActorTexture::decode(packed.data(),packed.size(),w,h,rowBytes,format,tile))return false;
+            for(unsigned r=0;r<h;++r)std::copy_n(tile.data()+size_t(r)*w*4,w*4,output.data()+(size_t(y+r)*width+x)*4);}
+        return true;
+    }
+public:
+    Counters counts;
+    std::size_t bytes()const{return bytes_;}
+    unsigned size()const{unsigned n=0;for(const auto& e:entries_)n+=!e.pixels.empty();return n;}
+    void clear(){for(auto& e:entries_){drop(e);e={};}}
+    void erase(const void* raw,const void* owner=nullptr){if(auto* e=find(raw))if(!owner||e->owner==owner){drop(*e);*e={};++counts.releases;}}
+    void invalidate(const void* raw){if(auto* e=find(raw)){drop(*e);++e->revision;++counts.invalidations;}}
+    std::uint64_t version(const void* raw){if(!enabled.load(std::memory_order_relaxed))return 0;auto* e=find(raw);if(e)e->used=++clock_;return e?e->lifetime*UINT64_C(0x9e3779b97f4a7c15)^e->revision:0;}
+    bool copy(const void* source,const void* destination,const void* owner)noexcept{try{
+        if(source==destination)return false;auto* original=find(source);if(!original||original->pixels.empty()){invalidate(destination);return false;}
+        // Copy before slot/eviction can invalidate the borrowed source.
+        auto pixels=original->pixels;const auto w=original->width,h=original->height,mip=original->mip,fmt=original->format;const auto hash=original->rgbaHash;
+        if(auto* same=find(destination))if(same->width==w&&same->height==h&&same->mip==mip&&same->format==fmt&&same->rgbaHash==hash&&same->pixels==pixels){same->used=++clock_;return true;}
+        Entry& e=slot(destination,owner);drop(e);while(bytes_+pixels.size()>PixelBudget){auto* victim=oldest(&e);if(!victim)break;drop(*victim);*victim={};++counts.evictions;}
+        e.pixels=std::move(pixels);e.width=w;e.height=h;e.mip=mip;e.format=fmt;e.rgbaHash=hash;++e.revision;e.used=++clock_;bytes_+=e.pixels.size();return true;
+    }catch(...){invalidate(destination);++counts.failed;return false;}}
+    bool updateRect(const void* raw,const void* owner,unsigned width,unsigned height,unsigned mip,unsigned d3dFormat,
+            const void* source,std::size_t sourceBytes,std::size_t pitch,unsigned left,unsigned top,unsigned right,unsigned bottom,bool success)noexcept{try{
+        auto fail=[&](){invalidate(raw);return false;};auto* e=find(raw);NorthlightActorTexture::Format decodedFormat;
+        if(!success||!source||!e||e->pixels.empty()||(e->owner&&e->owner!=owner)||e->mip!=mip||!width||!height||width>DecodeDimension||height>DecodeDimension||width%e->width||height%e->height||!format(d3dFormat,decodedFormat)||left>=right||top>=bottom||right>width||bottom>height)return fail();
+        const unsigned sx=width/e->width,sy=height/e->height;
+        // Atlas rectangles aligned to the retained mip are exact. An unaligned
+        // edit invalidates it instead of inventing the missing old subpixels.
+        if(left%sx||right%sx||top%sy||bottom%sy)return fail();std::vector<std::uint8_t> patch;
+        if(!decodeImage(source,sourceBytes,right-left,bottom-top,pitch,decodedFormat,patch))return fail();
+        bool changed=false;for(unsigned y=top/sy;y<bottom/sy;++y)for(unsigned x=left/sx;x<right/sx;++x){unsigned sum[4]={};for(unsigned j=0;j<sy;++j)for(unsigned i=0;i<sx;++i)for(unsigned c=0;c<4;++c)sum[c]+=patch[((size_t(y*sy-top+j))*(right-left)+x*sx-left+i)*4+c];for(unsigned c=0;c<4;++c){auto& old=e->pixels[(size_t(y)*e->width+x)*4+c];auto value=std::uint8_t((sum[c]+sx*sy/2)/(sx*sy));changed|=old!=value;old=value;}}
+        e->owner=owner;if(!changed){e->used=++clock_;return true;}e->rgbaHash=14695981039346656037ull;for(auto b:e->pixels)e->rgbaHash=(e->rgbaHash^b)*1099511628211ull;++e->revision;e->used=++clock_;return true;
+    }catch(...){invalidate(raw);++counts.failed;return false;}}
+    // Other full mips do not change this mip. Partial/failed writes invalidate
+    // the texture conservatively. Only a later complete CPU upload can restore it.
+    void upload(const void* raw,const void* owner,unsigned width,unsigned height,unsigned mip,unsigned d3dFormat,
+                const void* source,std::size_t sourceBytes,std::size_t pitch,bool whole,bool success)noexcept{
+        if(!enabled.load(std::memory_order_relaxed)){invalidate(raw);return;}
+        ++counts.uploads;
+        try{
+        if(!success){++counts.failed;invalidate(raw);return;}
+        if(!whole){++counts.partial;invalidate(raw);return;}
+        if(auto* old=find(raw))if(old->owner!=owner)erase(raw);
+        NorthlightActorTexture::Format decodedFormat;
+        if(!raw||!owner||!format(d3dFormat,decodedFormat)){++counts.unsupported;invalidate(raw);return;}
+        if(!width||!height||width>DecodeDimension||height>DecodeDimension){++counts.large;return;}
+        auto* previous=find(raw);
+        if(previous&&previous->owner==owner&&!previous->pixels.empty()&&mip>previous->mip){++previous->revision;return;}
+        std::vector<std::uint8_t> decoded;
+        if(!decodeImage(source,sourceBytes,width,height,pitch,decodedFormat,decoded)){++counts.failed;invalidate(raw);return;}
+        if constexpr(DecodeDimension>MaxDimension){if(width>MaxDimension||height>MaxDimension){const unsigned w=std::min(width,MaxDimension),h=std::min(height,MaxDimension);std::vector<std::uint8_t> small(size_t(w)*h*4);
+            for(unsigned y=0;y<h;++y)for(unsigned x=0;x<w;++x){unsigned sum[4]={},n=0;for(unsigned sy=y*height/h;sy<(y+1)*height/h;++sy)for(unsigned sx=x*width/w;sx<(x+1)*width/w;++sx){for(unsigned c=0;c<4;++c)sum[c]+=decoded[(size_t(sy)*width+sx)*4+c];++n;}for(unsigned c=0;c<4;++c)small[(size_t(y)*w+x)*4+c]=std::uint8_t((sum[c]+n/2)/n);}decoded=std::move(small);width=w;height=h;}}
+        std::uint64_t hash=14695981039346656037ull;for(auto byte:decoded)hash=(hash^byte)*1099511628211ull;
+        if constexpr(DecodeDimension>MaxDimension){if(previous&&previous->owner==owner&&previous->width==width&&previous->height==height&&previous->mip==mip&&previous->format==d3dFormat&&previous->rgbaHash==hash&&previous->pixels==decoded){previous->used=++clock_;return;}}
+        Entry& e=slot(raw,owner);drop(e);
+        while(bytes_+decoded.size()>PixelBudget){auto* victim=oldest(&e);if(!victim)break;drop(*victim);*victim={};++counts.evictions;}
+        e.rgbaHash=hash;
+        e.pixels=std::move(decoded);e.width=width;e.height=height;e.mip=mip;e.format=d3dFormat;++e.revision;e.used=++clock_;bytes_+=e.pixels.size();++counts.retained;
+        }catch(...){++counts.failed;invalidate(raw);}
+    }
+    bool lookup(const void* raw,View& out){
+        out={};if(!enabled.load(std::memory_order_relaxed))return false;auto* e=find(raw);if(!e||e->pixels.empty()){++counts.misses;return false;}
+        e->used=++clock_;out={e->pixels.data(),e->width,e->height,e->mip,e->format,e->lifetime,e->revision,e->rgbaHash};++counts.hits;return true;
+    }
+};
+inline Cache& cache(){static thread_local Cache value;return value;}
+}

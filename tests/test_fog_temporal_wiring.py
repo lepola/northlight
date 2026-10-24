@@ -58,6 +58,10 @@ bl=g[g.index('// Separable depth-aware blur'):g.index('// c34 belongs')]
 checks['host: blur unchanged when the pass did not run (fog -> fogBlurred -> fog), resolved: fogHistory -> fog -> fogBlurred']=(
     'SetRenderTarget(0,fogResolved?fogSurface:fogBlurredSurface);d->SetTexture(9,fogResolved?fogHistory:fog)' in bl
     and 'SetRenderTarget(0,fogResolved?fogBlurredSurface:fogSurface);d->SetTexture(9,fogResolved?fog:fogBlurred)' in bl)
+checks['host: FogBlur closes both quads inside the fog guard, before c34/composite; worst case fits 42 marks']=(
+    bl.count('profile->mark("FogBlur")')==1 and bl.count('quad(w/2,h/2)')==2
+    and bl.index('if(effects.fog){')<bl.index('"volume blur vertical"')<bl.index('profile->mark("FogBlur")')<bl.rindex('}')
+    and maxMarks==42 and len(set(re.findall(r'profile->mark\("(\w+)"\)',w)))+8+8<=maxMarks)
 checks['host: composite and the diagnostic dump read the final buffer']=('SetTexture(9,fogResolved?fogBlurred:fog);d->SetPixelShader(finalPS)' in g and 'dump(d,fogResolved?fogBlurredSurface:fogSurface,directory,"fog",capture)' in g)
 checks['host: history target created with the others, dropped and invalidated in releaseGPU; shader optional']=(
     '&fogHistory,&fogHistorySurface)' in w and 'drop(fogHistorySurface);drop(fogHistory);drop(fogTemporalPS);fogHistoryValid=false;' in w and 'fogTemporalPS=nullptr;logf("WORLD fog temporal disabled' in w)

@@ -8,8 +8,8 @@
 
 namespace NorthlightLocalLightSelection {
 // Limit: the default selection (0.3.136..0.3.139). Capacity: the most a user may select
-// (northlight-quality.ini LocalLightLimit up to 64); extra lights only add 8-/4-light batches.
-inline constexpr unsigned Limit=32,Capacity=64,DirectBatchSize=8,FogBatchSize=4;
+// (northlight-quality.ini LocalLightLimit up to 128); extra lights only add 8-/4-light batches.
+inline constexpr unsigned Limit=32,Capacity=128,DirectBatchSize=8,FogBatchSize=4;
 static_assert(Capacity%DirectBatchSize==0&&Capacity%FogBatchSize==0&&Limit<=Capacity,"whole batches");
 // Viewer distance to the influence sphere, not the bulb. Keep nearby energy
 // unchanged; introduce distant lights with a smooth ramp instead of a pop.
@@ -20,7 +20,7 @@ inline float visibilityGain(float reach){
 }
 using Constant=std::array<float,4>;
 // 0.3.197: soft cap, incumbent bias and time-based fades (task 13).
-inline constexpr unsigned Spare=8,Slots=Capacity+Spare;       // 72: whole 8-/4-light batches
+inline constexpr unsigned Spare=8,Slots=Capacity+Spare;       // 136: whole 8-/4-light batches
 static_assert(Slots%DirectBatchSize==0&&Slots%FogBatchSize==0,"whole batches");
 inline constexpr float FadeSeconds=.4f;    // full 0<->1 change
 inline constexpr float StickyBias=4.f;     // world units subtracted from an incumbent's score
@@ -41,6 +41,7 @@ template<unsigned N> struct Batch {
     unsigned count=0;
 };
 struct Selection {
+    std::array<NorthlightLocalLights::Light,Slots> sources{}; // Same source, colour and fade as the direct-light pass.
     std::array<Constant,Slots> position{},color{},fog{}; // 0.3.197: Slots, select() fills at most Capacity
     unsigned count=0;float nearest=0,fogDistance=128.f;
     template<unsigned N> Batch<N> batch(unsigned first)const{
@@ -74,6 +75,7 @@ inline Selection select(const std::vector<NorthlightLocalLights::Light>& lights,
         // Complete the selected influence sphere even for scaled bonfires.
         out.fogDistance=std::max(out.fogDistance,picks[i].score+2*l.attenuationEnd);
         out.color[i]={l.diffuse[0]*gain,l.diffuse[1]*gain,l.diffuse[2]*gain,1.f/std::max(l.attenuationEnd-std::min(l.attenuationStart,l.attenuationEnd*.9f),.05f)};
+        out.sources[i]=l;for(unsigned k=0;k<3;++k)out.sources[i].diffuse[k]=out.color[i][k];
     }
     return out;
 }
@@ -191,7 +193,8 @@ struct Tracker {
         const auto emit=[&](unsigned slot,const NorthlightLocalLights::Light& l,float score,float gain){
             out.position[slot]={l.position[0],l.position[1],l.position[2],l.attenuationEnd};
             out.fogDistance=std::max(out.fogDistance,score+2*l.attenuationEnd);
-            out.color[slot]={l.diffuse[0]*gain,l.diffuse[1]*gain,l.diffuse[2]*gain,1.f/std::max(l.attenuationEnd-std::min(l.attenuationStart,l.attenuationEnd*.9f),.05f)};};
+            out.color[slot]={l.diffuse[0]*gain,l.diffuse[1]*gain,l.diffuse[2]*gain,1.f/std::max(l.attenuationEnd-std::min(l.attenuationStart,l.attenuationEnd*.9f),.05f)};
+            out.sources[slot]=l;for(unsigned k=0;k<3;++k)out.sources[slot].diffuse[k]=out.color[slot][k];};
         for(unsigned i=0;i<selected;++i){const Sel& s=sel[order[i]];emit(i,*s.light,s.score,s.shown);}
         for(unsigned i=0;i<fades;++i){const Fade& f=fade[tail[i]];emit(selected+i,entries[f.index].light,f.score,f.shown);}
         if(out.count)out.nearest=selected?sel[order[0]].score:fade[tail[0]].score;

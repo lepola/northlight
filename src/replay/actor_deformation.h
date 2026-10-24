@@ -23,7 +23,10 @@ struct Definition {unsigned reg=0;Four value{};};
 struct Kernel {
     struct Src {std::uint8_t kind=0,relative=0,channel=0,modifier=0,swizzle[4]={};std::uint16_t index=0;std::int16_t definition=-1;};
     struct Op {unsigned code=0;int operands=0;std::uint8_t target=0,mask=0;bool address=false,saturate=false;Src source[3];};
-    std::vector<Op> ops;std::vector<std::uint8_t> cleared;bool valid=false,skin=false; /* cleared: temps ever read (zero at entry, as evaluate); skin: the audited four-bone template */
+    enum Evaluator:std::uint8_t {Generic,SingleFirst,SingleIndexFirst,WeightedCommuted,Weighted};
+    std::vector<Op> ops;std::vector<std::uint8_t> cleared;bool valid=false,skin=false;Evaluator evaluator=Generic; /* skin alone also authorizes the existing envelope. */
+    bool singleSkin()const{return evaluator==SingleFirst||evaluator==SingleIndexFirst;}
+    bool commutedSkin()const{return evaluator==WeightedCommuted;}
 };
 struct Program {
     unsigned major=0,positionRegister=0;bool textureCoordinates=false,skinned=false;std::uint8_t outputMask=0;
@@ -48,19 +51,33 @@ inline void buildKernel(Program& p){
     // The audited four-bone skinning template (NorthlightReplayBounds::SkinEnvelope::supports):
     // c0 = (3,1,..) defined, a0 = round(c0.x*v2), three rows of mul/mad x3 from
     // c[31+row+a0] and dp4 with v0 into r1.xyz, r1.w = c0.y.
-    k.skin=[&]{if((p.major!=2&&p.major!=3)||p.positionRegister!=1||p.textureCoordinates||p.operations.size()!=18||p.inputs.size()!=3)return false;
+    bool commuted=false;
+    const bool weightedSkin=[&]{if((p.major!=2&&p.major!=3)||p.positionRegister!=1||p.textureCoordinates||p.operations.size()!=18||p.inputs.size()!=3)return false;
         bool inputs[3]={};for(const auto& i:p.inputs){if(i.reg>=3||i.usage!=i.reg||i.index)return false;inputs[i.reg]=true;}if(!inputs[0]||!inputs[1]||!inputs[2])return false;
         bool def=false;for(const auto& d:p.definitions)if(d.reg==0){if(d.value[0]!=3||d.value[1]!=1)return false;def=true;}if(!def)return false;
         std::size_t at=0;
         const auto match=[&](unsigned code,std::uint32_t dst,std::uint32_t a,std::uint32_t b=0,std::uint32_t c=0,std::uint32_t aa=0,std::uint32_t ba=0){
             if(at>=p.operations.size())return false;const auto& o=p.operations[at++];
             return o.code==code&&o.destination==dst&&o.source[0].token==a&&o.source[0].address==aa&&o.source[1].token==b&&o.source[1].address==ba&&o.source[2].token==c&&o.source[2].address==0;};
-        if(!match(5,0x800f0000,0xa0000000,0x90e40002)||!match(46,0xb00f0000,0x80e40000))return false;
+        commuted=p.operations[0].source[0].token==0x90e40002;
+        if(!match(5,0x800f0000,commuted?0x90e40002:0xa0000000,commuted?0xa0000000:0x90e40002)||!match(46,0xb00f0000,0x80e40000))return false;
         for(unsigned row=0;row<3;++row){const unsigned r=row?2:0;const std::uint32_t dst=0x800f0000|r,src=0x80e40000|r,matrix=0xa0e4201f+row;
             if(!match(5,dst,0x90550001,matrix,0,0,0xb0550000)||!match(4,dst,matrix,0x90000001,src,0xb0000000)||
                !match(4,dst,matrix,0x90aa0001,src,0xb0aa0000)||!match(4,dst,matrix,0x90ff0001,src,0xb0ff0000)||
                !match(9,0x80000001|(1u<<(16+row)),src,0x90e40000))return false;}
         return match(1,0x80080001,0xa0550000)&&at==p.operations.size();}();
+    k.skin=weightedSkin&&!commuted;k.evaluator=weightedSkin?(commuted?Kernel::WeightedCommuted:Kernel::Weighted):Kernel::Generic;
+    const auto singleSkin=[&]()->std::uint8_t{if(p.major<1||p.major>3||p.positionRegister!=0||p.textureCoordinates||p.operations.size()!=6||p.inputs.size()!=2)return 0;
+        bool inputs[2]={};for(const auto& i:p.inputs){if(i.reg>=2||i.usage!=(i.reg?D3DDECLUSAGE_BLENDINDICES:D3DDECLUSAGE_POSITION)||i.index)return 0;inputs[i.reg]=true;}if(!inputs[0]||!inputs[1])return 0;
+        const auto match=[](const Operation& o,unsigned code,Word target,Word a,Word b=0){return o.code==code&&o.destination==target&&o.source[0].token==a&&!o.source[0].address&&o.source[1].token==b&&!o.source[1].address&&!o.source[2].token&&!o.source[2].address;};
+        // The independent w write occurs first, last or between DP4s in stock variants.
+        const Operation* ops[5];unsigned count=0;bool w=false;for(const auto& o:p.operations){if(match(o,1,0x80080000,0xa0550000)){if(w)return 0;w=true;}else{if(count==5)return 0;ops[count++]=&o;}}if(!w||count!=5)return 0;
+        const Word temporary=ops[0]->destination;if(temporary!=0x80010000&&temporary!=0x80010001)return 0;
+        const bool indexFirst=ops[0]->source[0].token==0x90000001;
+        if(!match(*ops[0],5,temporary,indexFirst?0x90000001:0xa0000000,indexFirst?0xa0000000:0x90000001)||!match(*ops[1],p.major==1?1:46,0xb0010000,0x80000000|(temporary&1)))return 0;
+        for(unsigned row=0;row<3;++row){const auto& o=*ops[2+row];if(o.code!=9||o.destination!=(0x80000000u|(1u<<(16+row)))||o.source[0].token!=0xa0e4201f+row||o.source[0].address!=(p.major==1?0:0xb0000000u)||o.source[1].token!=0x90e40000||o.source[1].address||o.source[2].token||o.source[2].address)return 0;}
+        return indexFirst?2:1;}();
+    if(singleSkin)k.evaluator=singleSkin==2?Kernel::SingleIndexFirst:Kernel::SingleFirst;
     k.valid=p.positionRegister<33;p.kernel=std::move(k);
 }
 inline void slice(Program& p){
@@ -80,12 +97,12 @@ inline void slice(Program& p){
     std::vector<Input> inputs;for(auto input:p.inputs)if(used[input.reg])inputs.push_back(input);p.inputs=std::move(inputs);
     buildKernel(p);
 }
-inline bool compile(const Word* words,std::size_t count,Program& output,bool textureCoordinates=false,unsigned projectionKind=2,unsigned outputUsage=5){
+inline bool compile(const Word* words,std::size_t count,Program& output,bool textureCoordinates=false,unsigned projectionKind=2,unsigned outputUsage=5,unsigned outputIndex=0,unsigned requiredMask=0){
     using namespace NorthlightShadowShader;output={};
-    if(!words||count<2||count>65536||projectionKind!=2||(textureCoordinates&&outputUsage!=5&&outputUsage!=10))return false;
-    Program p;p.textureCoordinates=textureCoordinates;p.outputMask=textureCoordinates?(outputUsage==10?15:3):0;p.major=(words[0]>>8)&255;
+    if(!words||count<2||count>65536||(projectionKind!=1&&projectionKind!=2)||(textureCoordinates&&outputUsage!=5&&outputUsage!=10))return false;
+    Program p;p.textureCoordinates=textureCoordinates;p.outputMask=textureCoordinates?(requiredMask?requiredMask:outputUsage==10?15:3):0;p.major=(words[0]>>8)&255;
     if(words[0]!=(p.major==1?0xfffe0101u:p.major==2?0xfffe0200u:0xfffe0300u)||p.major<1||p.major>3)return false;
-    unsigned positionType=p.major<3?4:99,positionIndex=0,uvType=p.major<3&&outputUsage==10?5:6,uvIndex=p.major<3?0:99,uvWritten=0;bool inputUsed[16]={};
+    unsigned positionType=p.major<3?4:99,positionIndex=0,uvType=p.major<3&&outputUsage==10?5:6,uvIndex=p.major<3?outputIndex:99,uvWritten=0;bool inputUsed[16]={};
     auto finish=[&]()->bool{std::vector<Input> needed;for(auto i:p.inputs)if(inputUsed[i.reg]){needed.push_back(i);inputUsed[i.reg]=false;}
         for(bool missing:inputUsed)if(missing)return false;p.inputs=std::move(needed);slice(p);output=std::move(p);return true;};
     for(std::size_t at=1;at<count;){
@@ -101,13 +118,30 @@ inline bool compile(const Word* words,std::size_t count,Program& output,bool tex
         if(op==31){if(n!=2)return false;unsigned type=regType(a[1]);
             if(type==1){if(regIndex(a[1])>=16)return false;p.inputs.push_back({regIndex(a[1]),a[0]&15,(a[0]>>16)&15});}
             else if(type==6&&(a[0]&15)==0&&((a[0]>>16)&15)==0){positionType=6;positionIndex=regIndex(a[1]);}
-            else if(type==6&&(a[0]&15)==outputUsage&&((a[0]>>16)&15)==0)uvIndex=regIndex(a[1]);
+            else if(type==6&&(a[0]&15)==outputUsage&&((a[0]>>16)&15)==outputIndex)uvIndex=regIndex(a[1]);
         }else if(op==81){if(n!=5||regType(a[0])!=2||regIndex(a[0])>=256)return false;
             Definition d;d.reg=regIndex(a[0]);std::memcpy(d.value.data(),a+1,16);p.definitions.push_back(d);
         }else{
+            // DetailDoodad uses the audited column projection, after its
+            // affine model-view prefix. Keep that prefix for whole-mesh
+            // bounds; the GPU replay still executes the original shader.
+            if(!textureCoordinates&&projectionKind==1&&op==5&&n==3&&a[0]==0x800f0001u){
+                const Word chain[]={0x03000005u,0x800f0001u,0xa0e40005u,0x80550000u,
+                    0x04000004u,0x800f0001u,0x80000000u,0xa0e40004u,0x80e40001u,
+                    0x04000004u,0x800f0001u,0x80aa0000u,0xa0e40006u,0x80e40001u,
+                    0x04000004u,replaceReg(0x800f0000u,positionType,positionIndex),0x80ff0000u,0xa0e40007u,0x80e40001u};
+                if(p.major<2||count-at<sizeof(chain)/sizeof(*chain))return false;
+                // The first MUL is commutative in the stock VS2 permutation.
+                if(words[at+2]!=chain[2]||words[at+3]!=chain[3]){
+                    if(words[at+2]!=chain[3]||words[at+3]!=chain[2])return false;
+                }
+                for(unsigned k=0;k<sizeof(chain)/sizeof(*chain);++k)if(k!=2&&k!=3&&words[at+k]!=chain[k])return false;
+                for(const auto& definition:p.definitions)if(definition.reg>=4&&definition.reg<=7)return false;
+                p.positionRegister=0;return finish();
+            }
             // The four original projection DP4 instructions must be consecutive
             // and read the same unmodified temp; stop before applying projection.
-            if(!textureCoordinates&&op==9&&n==3&&regType(a[0])==positionType&&regIndex(a[0])==positionIndex){
+            if(!textureCoordinates&&projectionKind==2&&op==9&&n==3&&regType(a[0])==positionType&&regIndex(a[0])==positionIndex){
                 if(regType(a[2])!=0||regIndex(a[2])>=32||(a[2]&0x0fff2000u)!=0x00e40000u)return false;
                 std::size_t q=at;
                 for(unsigned component=0;component<4;++component){
@@ -192,25 +226,43 @@ template<bool Strict=false> inline bool evaluate(const Program& p,const Four inp
 // same order), writes and failures, so results are bit-identical; without it
 // (a hand-made program) evaluate() itself.
 // The skinning template written out: evaluate()'s reads, expressions and order.
-inline bool evaluateSkin(const Program& p,const Four inputs[16],const float* constants,Four& viewPosition){
+template<bool Commuted=false> inline bool evaluateSkin(const Program& p,const Four inputs[16],const float* constants,Four& viewPosition){
 NO_FUSED_MULTIPLY_ADD
     auto constant=[&](int index,Four& value){if(index<0||index>=256)return false;std::memcpy(value.data(),constants+4*index,16);for(auto& d:p.definitions)if(d.reg==unsigned(index))value=d.value;return true;};
     const Four& v0=inputs[0];const Four& v1=inputs[1];const Four& v2=inputs[2];Four c0,address;constant(0,c0);
-    for(unsigned j=0;j<4;++j){const float value=c0[0]*v2[j];if(!std::isfinite(value)||std::fabs(value-std::floor(value)-.5f)<1e-6f)return false;address[j]=std::round(value);}
+    for(unsigned j=0;j<4;++j){const float value=Commuted?v2[j]*c0[0]:c0[0]*v2[j];if(!std::isfinite(value)||std::fabs(value-std::floor(value)-.5f)<1e-6f)return false;address[j]=std::round(value);}
     auto row=[&](int base,unsigned channel,Four& m){const float a=address[channel];if(!std::isfinite(a)||a<-4096||a>4096)return false;return constant(base+int(a),m);};
+    Four local;Four& result=Commuted?local:viewPosition;
     for(unsigned r=0;r<3;++r){const int base=31+int(r);Four t,m;
         if(!row(base,1,m))return false;for(unsigned j=0;j<4;++j)t[j]=v1[1]*m[j];
         if(!row(base,0,m))return false;for(unsigned j=0;j<4;++j)t[j]=m[j]*v1[0]+t[j];
         if(!row(base,2,m))return false;for(unsigned j=0;j<4;++j)t[j]=m[j]*v1[2]+t[j];
         if(!row(base,3,m))return false;for(unsigned j=0;j<4;++j)t[j]=m[j]*v1[3]+t[j];
-        float sum=0;for(unsigned j=0;j<4;++j)sum+=t[j]*v0[j];viewPosition[r]=sum;}
-    viewPosition[3]=c0[1];for(unsigned i=0;i<4;++i)if(!std::isfinite(viewPosition[i]))return false;
+        float sum=0;for(unsigned j=0;j<4;++j)sum+=t[j]*v0[j];result[r]=sum;}
+    result[3]=c0[1];if constexpr(Commuted)viewPosition=result;for(unsigned i=0;i<4;++i)if(!std::isfinite(viewPosition[i]))return false;
     return std::fabs(viewPosition[3]-1.f)<.0001f;
+}
+inline Four singleSkinControl(const Program& p,const float* constants){
+    Four value;std::memcpy(value.data(),constants,16);for(const auto& d:p.definitions)if(!d.reg)value=d.value;return value;
+}
+template<bool Prepared=false> inline bool evaluateSingleSkin(const Program& p,const Four inputs[16],const float* constants,Four& viewPosition,const Four* control=nullptr){
+    NO_FUSED_MULTIPLY_ADD
+    auto constant=[&](unsigned index){Four value;std::memcpy(value.data(),constants+4*index,16);for(const auto& d:p.definitions)if(d.reg==index)value=d.value;return value;};
+    const Four c0=Prepared?*control:constant(0);const float value=p.kernel.evaluator==Kernel::SingleIndexFirst?inputs[1][0]*c0[0]:c0[0]*inputs[1][0];
+    if(!std::isfinite(value)||(p.major>=2&&std::fabs(value-std::floor(value)-.5f)<1e-6f))return false;
+    const float address=p.major==1?std::floor(value):std::round(value);if(address<-4096||address>4096)return false;
+    const int first=31+int(address);if(first<0||first+2>=256)return false;
+    Four result;for(unsigned axis=0;axis<3;++axis){const Four row=constant(unsigned(first)+axis);float sum=0;for(unsigned j=0;j<4;++j)sum+=row[j]*inputs[0][j];result[axis]=sum;}
+    result[3]=c0[1];viewPosition=result;for(float f:viewPosition)if(!std::isfinite(f))return false;return std::fabs(viewPosition[3]-1.f)<.0001f;
 }
 template<bool Strict=false> inline bool evaluateFast(const Program& p,const Four inputs[16],const float* constants,Four& viewPosition){
     NO_FUSED_MULTIPLY_ADD
     const Kernel& kernel=p.kernel;if(!kernel.valid||kernel.ops.size()!=p.operations.size())return evaluate<Strict>(p,inputs,constants,viewPosition);
-    if(kernel.skin)return evaluateSkin(p,inputs,constants,viewPosition);
+    if(kernel.evaluator!=Kernel::Generic){
+        if constexpr(Strict)if(kernel.evaluator!=Kernel::Weighted)return evaluate<true>(p,inputs,constants,viewPosition);
+        switch(kernel.evaluator){case Kernel::Weighted:if(kernel.skin)return evaluateSkin(p,inputs,constants,viewPosition);break;
+        case Kernel::WeightedCommuted:return evaluateSkin<true>(p,inputs,constants,viewPosition);
+        case Kernel::SingleFirst:case Kernel::SingleIndexFirst:return evaluateSingleSkin(p,inputs,constants,viewPosition);default:break;}}
     Four temp[33],address={};for(auto r:kernel.cleared)temp[r]={};
     auto source=[&](const Kernel::Src& s,Four& result)->bool{
         int index=s.index;Four value={};
@@ -290,6 +342,16 @@ public:
         ++preparations;*oldest={prepared,key,stamp_};return prepared;
     }
 };
+// The complete audited single-bone kernel reads only v0/v1. Both are fully
+// decoded each vertex; the draw-local c0 never outlives its current pose bank.
+inline bool singleSkinBoundsPrepared(const Program& program,const NorthlightDrawSnapshot::Mesh& mesh,const PreparedBindings& prepared,const float* constants,float* low,float* high){
+    if(!program.kernel.singleSkin()||!constants||!prepared.validFor(program,mesh)||prepared.bindings.size()!=2||prepared.bindings[0].input.reg>=2||prepared.bindings[1].input.reg>=2||prepared.bindings[0].input.reg==prepared.bindings[1].input.reg)return false;
+    const Four control=singleSkinControl(program,constants);Four inputs[2];
+    for(UINT vertex=0;vertex<mesh.vertexCount;++vertex){for(const auto& b:prepared.bindings){const auto& s=mesh.streams[b.element.Stream];if(!decodeElement(s.bytes.data()+size_t(vertex)*s.stride+b.element.Offset,b.element.Type,inputs[b.input.reg]))return false;}
+        Four view;if(!evaluateSingleSkin<true>(program,inputs,constants,view,&control))return false;
+        for(unsigned k=0;k<3;++k){if(!std::isfinite(view[k]))return false;low[k]=std::min(low[k],view[k]);high[k]=std::max(high[k],view[k]);}}
+    return true;
+}
 inline bool worldPositionsPrepared(const Program& program,const NorthlightDrawSnapshot::Mesh& mesh,const PreparedBindings& prepared,const float* constants,const float* inverseView,std::vector<Position>& output){
     output.clear();if(!constants||!inverseView||!prepared.validFor(program,mesh))return false;
     const auto& bindings=prepared.bindings;
@@ -341,8 +403,8 @@ inline bool textureUVs(const Program& program,const NorthlightDrawSnapshot::Mesh
 // One currently referenced vertex, used ONLY for experimental distance ranking.
 // No allocations, stale poses, model-origin assumptions, or buffer readbacks.
 inline bool sampledVertexInputsAt(const Program& program,const NorthlightDrawSnapshot::Mesh& mesh,
-    const D3DVERTEXELEMENT9* elements,size_t count,unsigned vertex,Four (&inputs)[16]){
-    if(program.textureCoordinates||!elements||!count||count>MAXD3DDECLLENGTH+1||!mesh.vertexCount)return false;
+    const D3DVERTEXELEMENT9* elements,size_t count,unsigned vertex,Four (&inputs)[16],bool textureInputs=false){
+    if((program.textureCoordinates&&!textureInputs)||!elements||!count||count>MAXD3DDECLLENGTH+1||!mesh.vertexCount)return false;
     if(vertex>=mesh.vertexCount)return false;
     for(auto& input:inputs)input={};
     for(const auto& input:program.inputs){

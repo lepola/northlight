@@ -20,9 +20,12 @@ start = source.index('    void releaseExpiredMesh(){')
 release = source[start:source.index('\n    }', start) + 6]
 assert 'retirementBacklog.retireOrFree(reaper,expiredPublication,snapshotRetireBytes(*expiredPublication));' in source
 assert 'expiredMeshMapChanged|=heldDrawable&&active->map!=r.map;' in source and 'active.reset();expiredMeshPending|=heldDrawable;' in source
-end_frame = source[source.index('    void endFrame(bool retainPool=true){'):source.index('    bool ready()const')]
+end_frame = source[source.index('    void endFrame(bool retainPool=true,unsigned rendererFrame=0){'):source.index('    bool ready()const')]
 assert end_frame.index('replays.clear();') < end_frame.index('releaseExpiredMesh();')
-assert 'if(workerMemoryTrim.exchange(false,std::memory_order_relaxed))localGeometry.reset();' in source  # a trim keeps the entry lift
+assert 'if(workerMemoryTrim.exchange(false,std::memory_order_relaxed))resetPreparation();' in source
+reset_preparation = source.split('auto resetPreparation=[&]{', 1)[1].split('};', 1)[0]
+assert all(owner + '.reset();' in reset_preparation for owner in ('meshPreparation', 'sceneSources', 'localGeometry'))
+assert 'entryLift' not in reset_preparation  # a trim keeps the entry lift
 
 fixture = r'''
 #include "world_streaming.h"

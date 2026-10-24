@@ -24,7 +24,7 @@ class NorthlightShadowBlobFilter {
     std::vector<std::uint8_t> raw,decoded;
     const std::vector<std::uint8_t> reference=NorthlightShadowBlobModel::referencePixels();   // ~10 us once, at construction
     unsigned frame=0,skippedThisFrame=0,skippedTotal=0,identified=0,unsupported=0,reported=0;
-    const unsigned strength;                 // 0.3.193 BlobShadowStrength 0..100 (clamped by the quality parser), read once at construction; the Device asks strength()/active()
+    unsigned strength;
     IDirect3DTexture9* faint=nullptr;unsigned faintFailures=0,faintFailedFrame=0;
     unsigned faintThisFrame=0,faintTotal=0,statesLogged=0;
     static void release(IUnknown* p){if(p)p->Release();}
@@ -96,6 +96,7 @@ public:
     NorthlightShadowBlobFilter(const NorthlightShadowBlobFilter&)=delete;
     NorthlightShadowBlobFilter& operator=(const NorthlightShadowBlobFilter&)=delete;
     void reset(){verdicts.clear();}
+    void setStrength(unsigned value){if(value==strength)return;release(faint);faint=nullptr;strength=std::min(value,100u);faintFailures=faintFailedFrame=0;}
     void setTexturePeek(bool(*fn)(void*,DWORD,IDirect3DBaseTexture9*&),void* context){peekTexture=fn;peekContext=context;}
     void endFrame(){++frame;if(frame%600==0&&NorthlightDiagnostics::enabled()&&(skippedTotal||faintTotal||reported++<3))logf("SHADOWBLOB skippedThisFrame=%u skippedTotal=%u faintThisFrame=%u faintTotal=%u verdicts=%zu",skippedThisFrame,skippedTotal,faintThisFrame,faintTotal,verdicts.size());skippedThisFrame=0;faintThisFrame=0;
         if(verdicts.size()>4096)verdicts.clear();}

@@ -2,7 +2,7 @@
 # northlight-test: requires=cxx,client
 """Run the actual pure chunk classifier natively; compile D3D API side separately.
 
-The native harness extracts the unchanged classifier/struct declarations from
+The native harness extracts the classifier/struct declarations from
 the production header; it does not substitute a second Python implementation.
 """
 import sys; from pathlib import Path; sys.path.insert(0, str(Path(__file__).resolve().parents[1]))  # repo root
@@ -13,7 +13,9 @@ from pathlib import Path
 HERE=Path(__file__).resolve().parent
 header=fp.src('terrain_capture_bounds.h').read_text()
 structs=header[header.index('struct ChunkBounds'):header.index('struct MeshSnapshot')]
-classifier=header[header.index('template<class VertexAt>'):header.index('class FrameCache')]
+classifier_start=header.rfind('template<',0,header.index('inline bool classifyTriangleSequence('))
+assert classifier_start>=0
+classifier=header[classifier_start:header.index('class FrameCache')]
 source=r'''
 #include <algorithm>
 #include <cmath>

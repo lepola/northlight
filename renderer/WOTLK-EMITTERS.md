@@ -55,3 +55,27 @@ This generator is original MIT-licensed Northlight code. ComfyAtmosphere was a
 conceptual reference; no GPL source or Classic assets were copied. Game model
 payloads are not covered by the software's MIT license and are deliberately not
 included in the repository. Generate and retain those files locally.
+
+## Local shadow policy
+
+Every reviewed world profile carries `casts_shadows`. Torches, candles, lanterns,
+chandeliers, braziers and compact hearth flames opt in regardless of flame colour.
+Extended molten surfaces, emissive crystal volumes, distributed sparkles, glowing
+runes and smoke-only glows opt out. Missing policy opts out. Unclassified native
+equipment observations and short-lived particle lights do not get shadow maps.
+The builder preserves source IDs and records the policy in FGL1 flag bit 1;
+bit 0 retains its original potentially baked WMO meaning.
+
+`PointShadows=1` and `PointShadowLimit=2` are defaults in all presets. The menu can
+change the limit from 1 to 4 between frames. Each selected source owns a complete
+256x256 six-face cube and static-face cache. Ranking retains incumbent sources;
+a change of rank does not exchange another source's cube. Map/resource changes,
+source motion and range changes invalidate the corresponding state.
+
+The local pass removes only its own occluded Northlight direct-light contribution,
+with identical colour, selection fade, squared attenuation, smooth normal and sun
+dimming. Existing baked/native lighting is not decomposed or guessed. At the
+receiver, shadow contrast fades below 15% of incident direct sunlight and reaches
+full strength at 50%; night and sun-occluded surfaces use the local brightness
+floor instead. Solar visibility comes from the sun shadow buffer, not the camera
+location or the clock. Different lamps' light still fills one another's shadows.

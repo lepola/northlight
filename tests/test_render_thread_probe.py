@@ -69,7 +69,9 @@ checks={
    and 'if(pointUpdates!=pointUpdatesBefore&&profileSampled())profilePointUsed();' in w and 'if(profiled)split.used=&replayProfileUsed;' in w,
  # call counts
  'raw counts only on RenderProfile sample frames':'void countRaw(unsigned i){if(rawCounting)++rawMethodCalls[i];}' in mirror and r.count('mirrorState.rawCounting=')==1
-   and 'mirrorState.rawCounting=sampled()&&NorthlightRenderThreadProbe::profiling();' in r and len(counted)==7
+   and 'mirrorState.rawCounting=sampled()&&NorthlightRenderThreadProbe::profiling();' in r
+   # Draw methods use the raw mirror path; only these direct methods need separate counters.
+   and {re.search(r'STDMETHODCALLTYPE (\w+)\(',l).group(1) for l in counted}=={'Clear','StretchRect','ColorFill','SetScissorRect','SetTextureStageState'}
    and all('{ if(m->rawCounting&&rawActive())m->countRaw(' in l for l in counted) and raw.count('#ifndef NORTHLIGHT_DEVICE_MIRROR_TEST_API')==1,
  # per-frame times
  'Present ticks and frame cost only with RenderProfile':'bool on=NorthlightRenderThreadProbe::profiling();' in ticks and ticks.count('QueryPerformanceCounter(')==3 and ticks.count('if(on)QueryPerformanceCounter(')==3
@@ -85,7 +87,7 @@ checks={
  'probe target: cascade formats and size, private, restored':'static constexpr unsigned ReplayProbeSize=1024' in probe and 'D3DUSAGE_RENDERTARGET,D3DFMT_R32F,D3DPOOL_DEFAULT,&replayProbeTexture' in probe
    and 'D3DFMT_D24S8,D3DMULTISAMPLE_NONE,0,TRUE,&replayProbeDepth' in probe and all(x not in w for x in ('replayProbeSurface','replayProbeTexture','replayProbeDepth'))
    and 'SavedState save(d,&stateBlocks);' in probe and re.findall(r'SetRenderTarget\(([^)]*)\)',probe)==['0,replayProbeSurface']
-   and 'SetTexture(' not in probe and 'SetSamplerState(' not in probe and 'SetRenderState(' not in probe and 'void releaseGPU(bool keepMesh=false){replayBoundsAbandon();releaseReplayProbe();' in w,
+   and 'SetTexture(' not in probe and 'SetSamplerState(' not in probe and 'SetRenderState(' not in probe and 'void releaseGPU(bool keepMesh=false){materialPixelAudit.reset();replayBoundsAbandon();releaseReplayProbe();' in w,
  'probe never fails the frame (no check(), no failed flag; the call site ignores its result)':'check(' not in probe and 'failed=true' not in probe and 'void replayProbe(const float* rows,double realLoopMs){' in probe,
  'probe issues the same per-draw sequence, own counters':'submitReplay(p,probeBindings,probePoses,rows,mode,constantBytes,constantCalls,' in issue
    and all(x not in probe for x in ('replayDraws','replayConstantBytes','replayConstantCalls','culledReplayDraws','replaySlot','staticDedup','persistentSkipped','replayMeshKeys','replayPosePrepared')),

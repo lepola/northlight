@@ -189,12 +189,19 @@ int main(){
         assert(!NorthlightCelestialVeil::draw(&d,&target,&ps,textures,c,empty,1728,1117,stats));
         assert(d.calls.empty()&&stats.skipped==2&&stats.draws==0);
     }
-    {   // The ring: none with the disc's bottom on the horizon, full with the centre 3R over it.
+    {   // Diffuse halo fades while the disc crosses the true horizon.
         const float r=.0211f;
-        // Over the true horizon, like the disc: none at 1R, full at 3R.
-        assert(ringWrap(r,r)==0&&ringWrap(-r,r)==0&&std::fabs(ringWrap(3*r,r)-Wrap)<1e-6f);
-        assert(ringWrap(2*r,r)>0&&ringWrap(2*r,r)<Wrap);
+        assert(ringWrap(-r,r)==0&&std::fabs(ringWrap(r,r)-Wrap)<1e-6f);
+        assert(std::fabs(ringWrap(0,r)-Wrap*.5f)<1e-6f);
+        assert(ringWrap(-.5f*r,r)>0&&ringWrap(.5f*r,r)<Wrap);
         assert(ringWrap(.5f,r)==Wrap&&ringWrap(NAN,r)==0&&ringWrap(.5f,0)==0);
+        // A low, fully risen sun behind a wing keeps a broad halo. Previously
+        // the unrelated 1R..3R gate removed 84% before any occlusion was measured.
+        const float old=Wrap*smoothstep(r,3*r,1.5f*r);
+        const float halo=sunGlare(3.f,0.f,1.f,ringWrap(1.5f*r,r));
+        assert(halo>sunGlare(3.f,0.f,1.f,old)*6.f);
+        assert(halo>sunGlare(3.f,1.f,1.f,Wrap)*.5f);
+        assert(sunGlare(3.f,0.f,0.f,Wrap)==0); // a fully covered halo still goes dark
     }
     {   // The apparent horizon: the lowest surface under the eye and toward the sun, seen at the far clip; 0..-sin 3 deg.
         namespace H=NorthlightApparentHorizon;const float eye[3]={0,0,30},sun[3]={1,0,.1f};

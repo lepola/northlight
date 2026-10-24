@@ -15,8 +15,8 @@
 
 namespace NorthlightLocalLightBatches {
 // Per-pixel cost of one pass in shader slots (shaders/world-shader-build.json static_instruction_slots) plus Blend, the
-// blended FP16 read-modify-write and the four screen fetches every pass repeats.
-inline constexpr double DirectSlots=202,Direct16Slots=314,FogSlots=397,Blend=40;
+// blended FP16 read-modify-write and shared screen fetches every pass repeats.
+inline constexpr double DirectSlots=253,Direct16Slots=373,FogSlots=397,Blend=40;
 using Rect=NorthlightLocalLightScissor::Rect;
 inline Rect unite(const Rect& a,const Rect& b){
     if(!a.area())return b;if(!b.area())return a;
@@ -70,7 +70,7 @@ inline Result arrange(NorthlightLocalLightSelection::Selection& s,const Northlig
     std::sort(after.begin(),after.begin()+count,[&](unsigned a,unsigned b){return key[a]<key[b];});
     out.before=cost(rects.data(),before.data(),count);out.after=cost(rects.data(),after.data(),count);
     if(!(out.after<out.before)){out.after=out.before;return out;}
-    const auto position=s.position,color=s.color,fog=s.fog;
-    for(unsigned i=0;i<count;++i){s.position[i]=position[after[i]];s.color[i]=color[after[i]];s.fog[i]=fog[after[i]];}
+    const auto position=s.position,color=s.color,fog=s.fog;const auto sources=s.sources;
+    for(unsigned i=0;i<count;++i){s.position[i]=position[after[i]];s.color[i]=color[after[i]];s.fog[i]=fog[after[i]];s.sources[i]=sources[after[i]];}
     out.arranged=true;return out;}
 } // namespace NorthlightLocalLightBatches

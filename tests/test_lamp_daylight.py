@@ -78,7 +78,7 @@ def main():
     assert 'const float info[4]={float(batch.count),c[52][1],lampSunlitCut,0};' in cpu
     assert cpu.index('d->SetTexture(12,baselineLight); /* sun visibility') < cpu.index('"local direct light batch"')
     # Lamp fog and the point-shadow lamp are pinned unchanged against 0.3.164 (live 7ba4d92).
-    assert 'std::memcpy(constants[8],pointSelected.diffuse,12);constants[8][3]=pointSelected.attenuationEnd;' in point
+    assert 'std::memcpy(constants[8],pointSlot().selected.diffuse,12);constants[8][3]=pointSlot().selected.attenuationEnd;' in point
     assert 'const float lampFogInfo[4]={c[21][0],c[21][1],c[21][2],localLights.fogDistance};' in cpu
     result = dict(game_launched=False, gpu_tested=False, native_policy_passed=True, gains=values)
     (fp.output_dir()/'lamp-daylight-validation.json').write_text(json.dumps(result, indent=2)+'\n')

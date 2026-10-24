@@ -1,0 +1,53 @@
+{
+  "source_sha256": "f76e8f78911a23efb31ad0fd71d629822423328c68933e824460440ed8e3c579",
+  "target": "ps_3_0",
+  "compiler": "Microsoft d3dcompiler_47 10.0.17134.12 IEEE strict",
+  "compiler_sha256": "4432bbd1a390874f3f0a503d45cc48d346abc3a8c0213c289f4b615bf0ee84f3",
+  "game_launched": false,
+  "shaders": {
+    "PrecipitationQuality": {
+      "bytes": 5048,
+      "sha256": "09dc5ddac9346c9b5d7aba438c579461572090170ec3310922e0c4467a3d09ab",
+      "static_instruction_slots": 276,
+      "temporary_registers": 8,
+      "samplers": [
+        3
+      ],
+      "instructions": {
+        "mov": 7,
+        "mul": 108,
+        "add": 94,
+        "rcp": 9,
+        "cmp": 12,
+        "frc": 12,
+        "dp3": 12,
+        "dp2add": 3,
+        "rsq": 6,
+        "max": 9,
+        "texld": 1
+      }
+    },
+    "PrecipitationPerformance": {
+      "bytes": 3848,
+      "sha256": "63d280b89a5f2ac18d7ece6c93aca0d933794dbde701f597159b2f7da9a8f4b5",
+      "static_instruction_slots": 199,
+      "temporary_registers": 7,
+      "samplers": [
+        3
+      ],
+      "instructions": {
+        "mov": 7,
+        "mul": 78,
+        "add": 67,
+        "rcp": 7,
+        "cmp": 9,
+        "frc": 8,
+        "dp3": 8,
+        "dp2add": 2,
+        "rsq": 4,
+        "max": 6,
+        "texld": 1
+      }
+    }
+  }
+}

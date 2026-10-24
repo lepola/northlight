@@ -15,7 +15,7 @@ import ast,hashlib,json,re,subprocess,tempfile
 HERE=Path(__file__).resolve().parent
 def literal(file,key):return next(ast.literal_eval(n.value) for n in ast.parse(file.read_text()).body if isinstance(n,ast.Assign) and any(isinstance(t,ast.Name) and t.id==key for t in n.targets))
 stub=literal(HERE/'test_terrain_snapshot.py','stub');prefix=literal(HERE/'test_draw_snapshot.py','harness').split('int main()')[0]
-FILES=['draw_snapshot.h','northlight_mem.h','world_renderer.h','test_snapshot_prediction.cpp','test_snapshot_prediction.py']
+FILES=['source_identity.h','draw_snapshot.h','northlight_mem.h','world_renderer.h','test_snapshot_prediction.cpp','test_snapshot_prediction.py']
 report={'scope':'Fake-device tests of draw_snapshot.h; no D3D runtime, Wine or game.',
         'source_sha256':{n:hashlib.sha256(fp.tracked(n).read_bytes()).hexdigest() for n in FILES},'runs':[]}
 ASAN=['-O1','-g','-fsanitize=address,undefined','-fno-sanitize-recover=all','-fno-omit-frame-pointer']
@@ -46,17 +46,18 @@ def body(name):
     for k in range(i,len(s)):
         depth+=(s[k]=='{')-(s[k]=='}')
         if depth==0:return s[i:k+1]
-functions={n:body(n) for n in ('evictOldest','serve','store','clearSnapshotCache','dropPrediction')}
+functions={n:body(n) for n in ('evictOldest','serve','store','clearSnapshotCache','dropPrediction','shareSnapshotPool')}
 def enclosing(pos):
     return next((n for n,b in functions.items() if b and s.find(b)<=pos<s.find(b)+len(b)),None)
-erasers=[enclosing(m.start()) for m in re.finditer(r'cache_\.(erase|clear)\(',s)]
+erasers=[enclosing(m.start()) for m in re.finditer(r'sources_->entries\.(erase|clear)\(',s)]
 key=s[s.index('bool operator==(const CacheKey& o)const{'):s.index('struct CacheEntry {')]
 sources={p.name:p.read_text() for d in fp.SRC_DIRS for p in Path(d).glob('*') if p.suffix in ('.h','.cpp','.inl')}
 checks={
- 'every cache_ erase/clear is in evictOldest, serve, store or clearSnapshotCache, and each resets the prediction':
+ 'every source-pool erase/clear is in evictOldest, serve, store or clearSnapshotCache, and each resets local prediction':
    sorted(set(erasers))==['clearSnapshotCache','evictOldest','serve','store'] and all('dropPrediction(Erase::' in functions[n] for n in set(erasers))
    and s.count('dropPrediction(Erase::')==4,
- 'predicted_ is assigned only in serve and dropPrediction':all(enclosing(m.start()) in ('serve','dropPrediction') for m in re.finditer(r'(?<!CacheEntry\* )\bpredicted_=',s)) and s.count('CacheEntry* predicted_=nullptr;')==1,
+ 'predicted_ is assigned only in serve, dropPrediction and empty-group joining':all(enclosing(m.start()) in ('serve','dropPrediction','shareSnapshotPool') for m in re.finditer(r'(?<!CacheEntry\* )\bpredicted_=',s)) and s.count('CacheEntry* predicted_=nullptr;')==1,
+ 'cross-consumer invalidation checks group generation before predicted dereference':'if(!NORTHLIGHT_SNAPSHOT_COUNTERFACTUAL&&predictionGeneration_!=sources_->generation){predicted_=nullptr;predictionGeneration_=sources_->generation;}' in functions['serve'],
  'prediction on tracked keys only (the revalidation branch stays on the map path)':'if(lookup_!=Lookup::Map&&(key.tracked||NORTHLIGHT_SNAPSHOT_COUNTERFACTUAL==6)&&predicted_)' in functions['serve'],
  'CacheKey == has no memcmp':'memcmp' not in key and 'diff|=x^y' in key,
  '__builtin_prefetch only in the one helper':sum(t.count('__builtin_prefetch') for t in sources.values())==1

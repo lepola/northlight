@@ -72,7 +72,9 @@ def audit():
         assert forbidden not in loader,forbidden   # the executable and candidates are only read
     # 0.3.175: DXVK_ASYNC is never set (the runtime's own setting applies); vendor/buffer defaults only for Backend=dxvk.
     assert 'DXVK_ASYNC' not in src.replace('DXVK_ASYNC is left to the runtime','')
-    assert 'if(NorthlightBackend::isPackagedDxvk(kind))configureDxvkCompatibility(info);' in loader and src.count('configureDxvkCompatibility(')==2
+    assert 'if(NorthlightBackend::isPackagedDxvk(kind))configureDxvkCompatibility(info,engineNameWorkaround);' in loader and src.count('configureDxvkCompatibility(')==2
+    assert 'DxvkEngineNameWorkaround' in loader and 'dxvkMajor(info.dxvkVersion)==3&&!wine' in loader
+    assert 'if(m&&engineNameWorkaround)' in loader and 'NorthlightDxvkEngineName::install(m,&logf)' in loader
     # 0.3.189: both option names (2.x / >=3.0), dxvk2 shares the DXVK rules, default-path dxvk falls back to dxvk2 once.
     compat=fp.src('dxvk_compatibility.h').read_text()
     assert 'd3d9.cachedDynamicBuffers = True' in compat and 'd3d9.cachedWriteOnlyBuffers = True' in compat and 'd3d9.customVendorId = 1002' in compat

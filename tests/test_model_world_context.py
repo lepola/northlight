@@ -97,21 +97,19 @@ __MODEL__
 struct Device {
     struct MaterialProjection {void setProjection(float,float,float){}};
     MaterialProjection* autoBump=nullptr;
-    bool drawWaterMaterial=false;bool liquidMaterial(IDirect3DVertexShader9*,bool){return false;}
     Ext state;Ext* ext=&state;World owned{&state};World* world=&owned;
     static constexpr int kTagMask=3,kWaterTag=4;
     struct VsClass{int entry=0;bool wmo=false,skinned=true;} vc;
     struct Counts{unsigned wmo=0,fullPasses=0;} gateCounts;
     bool gateFrame=false,projectionValid=false,terrain=false,captured=false,drawWaterVS=false,drawUiHashVS=false;
-    bool viewportOK=true,depthOK=true,hashBoundaryThisFrame=false;
+    bool viewportOK=true,depthOK=true,hashBoundaryThisFrame=false,zFuncAware=true;
     unsigned terrainDraws=0,projectionRejects=0,earlyResolveUndone=0,earlyResolveUndoneTotal=0,uiDraws=0,uiAfterTerrain=0,frame=0,drawCalls=0,binds=0,allocations=0;
     float nearZ=0,farZ=0,scaleX=0,scaleY=0,fogForward=1,worldMinDepth=0,worldMaxDepth=.94f;
     struct Early{bool earlyCaptured=false;void undo(){}}earlyDepth;
     std::map<IDirect3DPixelShader9*,int> psTags;
     const VsClass& classifyVs(IDirect3DVertexShader9*){return vc;}
     bool uiTextVs(IDirect3DVertexShader9*,int){return false;}
-    bool zFuncAware=true;
-    bool fullViewport(D3DSURFACE_DESC& d,D3DVIEWPORT9* p=nullptr,bool quiet=false){d.Width=1920;d.Height=1080;d.Format=D3DFMT_A8R8G8B8;if(p)*p=state.vp;return viewportOK;}
+    bool fullViewport(D3DSURFACE_DESC& d,D3DVIEWPORT9* p=nullptr,bool=false){d.Width=1920;d.Height=1080;d.Format=D3DFMT_A8R8G8B8;if(p)*p=state.vp;return viewportOK;}
     bool bindWorldDepth(const D3DSURFACE_DESC&){++binds;return depthOK;}
     void resources(UINT,UINT,D3DFORMAT){++allocations;}
     void uiFallbackDraw(const VsClass&,IDirect3DVertexShader9*){}

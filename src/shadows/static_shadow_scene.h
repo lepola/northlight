@@ -53,6 +53,7 @@ struct Request {
     bool allowLoads=true; // admission pressure never removes already-ready casters
 };
 struct Stats {
+    uint64_t sharedModelSources=0,compactDecodes=0;
     uint64_t metadataReads=0,modelReads=0,modelReuses=0,publications=0,cancellations=0,failures=0,deferred=0;
     uint64_t bytesRead=0,cpuBytes=0,cpuPeak=0,transientPeak=0,largestModel=0,metadataBytes=0,metadataPeak=0;
     uint32_t cells=0,tiles=0,placements=0,models=0,pendingModels=0,pendingTiles=0;
@@ -85,9 +86,11 @@ bool selected(const Request&,Vec3 low,Vec3 high,float margin=96.f);
 Vec3 transformPoint(const Placement&,Vec3);
 void transformBounds(const Placement&,Vec3 low,Vec3 high,Vec3& outLow,Vec3& outHigh);
 bool packModel(NorthlightGI::WorldScene&&,const std::string& key,Model&,std::string& error);
+// Reads an already validated immutable decode without taking its payload ownership.
+bool packSharedModel(const NorthlightGI::WorldScene&,const std::string& key,Model&,std::string& error);
 class Streamer {
 public:
-    explicit Streamer(std::string cacheRoot,Limits limits=Limits());
+    explicit Streamer(std::string cacheRoot,Limits limits=Limits(),NorthlightGI::SceneSourceProvider sourceProvider={});
     ~Streamer();
     Streamer(const Streamer&)=delete;
     Streamer& operator=(const Streamer&)=delete;

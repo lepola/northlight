@@ -63,5 +63,16 @@ int main(){
     tracker.reset();tracker.presented({},0,0,0,1000000,0,0,true,0,0);
     tracker.presented(f,24000,24500,25000,1000000,20000,0,true,20020000,25020000);
     row=tracker.take().worst[0];assert(row.sceneIdleMs==20&&row.frameIdleMs==25); // bound clock-read skew
+    // Recorded material-off rotation frame 2457, 2026-10-23. Queue idle and
+    // pending queries overlap the phase partition; adding them invents work.
+    tracker.reset();tracker.presented({},1000000,1000000,1000000,1000000,0,0,true,0,0);
+    f={};f.id=2457;f.effectsMs=.767;f.applied=f.focus=true;
+    f.queries.pendingNs=2685000;f.queries.wallNs=10000;
+    tracker.presented(f,1248084,1248298,1248312,1000000,1221665,0,true,217807000,242411000);
+    row=tracker.take().worst[0];assert(row.id==2457&&row.phases);
+    assert(std::fabs(row.totalMs-248.312)<1e-9&&std::fabs(row.sceneIdleMs-217.807)<1e-9);
+    assert(std::fabs(row.frameIdleMs-242.411)<1e-9&&std::fabs(row.sceneMs-row.sceneIdleMs-3.858)<1e-9);
+    assert(std::fabs(row.sceneMs+row.effectsMs+row.tailMs+row.finishMs+row.presentMs-row.totalMs)<1e-9);
+    assert(row.queries.pendingNs==2685000&&row.queries.wallNs==10000);
     std::puts("PASS frame-stall profile: exact phase partition, top four of 120, query waits, queue-idle deltas, direct path and counter/clock resets; no GPU/game.");
 }

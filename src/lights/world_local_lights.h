@@ -10,10 +10,11 @@
 #include <vector>
 
 namespace NorthlightLocalLights {
+inline constexpr uint32_t Baked=1,CastShadow=2;
 struct Light {
     float position[3],diffuse[3],attenuationStart,attenuationEnd;
     uint64_t sourceId;
-    uint32_t kind,flags; // kind 1=WMO, 2=M2, 3=authored model emitter; flags bit0=possibly baked WMO source.
+    uint32_t kind,flags; // kind 1=WMO, 2=M2, 3=authored; flags: Baked, CastShadow.
 };
 static_assert(sizeof(Light)==48,"FGL1 record layout");
 inline bool valid(const Light& l) {
@@ -22,7 +23,7 @@ inline bool valid(const Light& l) {
     for(float x:l.diffuse) {if(!std::isfinite(x)||x<0||x>10000)return false;peak=std::max(peak,x);}
     return peak>0&&std::isfinite(l.attenuationStart)&&std::isfinite(l.attenuationEnd)&&
         l.attenuationStart>=0&&l.attenuationStart<l.attenuationEnd&&l.attenuationEnd<=2000&&
-        (l.kind==1||l.kind==2||l.kind==3)&&l.flags==(l.kind==1?1u:0u);
+        (l.kind==1||l.kind==2||l.kind==3)&&(l.flags&~CastShadow)==(l.kind==1?Baked:0u);
 }
 // Authored range with bounded linear fade. This is explicit transport policy,
 // not a claim that a baked classic WMO originally used this precise falloff.

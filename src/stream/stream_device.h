@@ -68,6 +68,7 @@ public:
         bool filterRedundant=true;                                      // see redundant(); off: every Set is recorded
         DWORD (*readBackLock)()=nullptr;                                // NorthlightUpload::readBackLock in the DLL: READONLY, plus NOOVERWRITE on DXVK >= 3
         bool (*diagnostics)()=nullptr;                                  // NorthlightDiagnostics::enabled in the DLL
+        bool (*idleProfiling)()=nullptr;                                // RenderProfile, latched before start
         const char* (*callerModule)(void* address)=nullptr;             // 0.3.204 (task 21): "module+0xoffset" of a TestCooperativeLevel caller's return address (Windows only); null = no caller line. 0.3.206 (task 31): also names a texture lock's caller in the TEXREADBACK lines
         // 0.3.200 (pipeline): StreamFramesAhead (clamped to 1..kMaxFramesAhead): Present waits for the Present this many frames back; the snapshot pool follows
         // (SnapshotPool::capFor). 1 = the 0.3.199 pacing. The queue budget is `budget` (the DLL passes budgetForFramesAhead).
@@ -375,6 +376,7 @@ public:
 
     HRESULT STDMETHODCALLTYPE Present(const RECT* src,const RECT* dst,HWND window,const RGNDATA* dirty) override{return presentCommon(nullptr,src,dst,window,dirty,0);}
     HRESULT presentCommon(StreamSwapChain* swap,const RECT* src,const RECT* dst,HWND window,const RGNDATA* dirty,DWORD flags){
+        if(settingsPump)settingsPump();
         Queue& q=streamQueue();
         const bool timingWas=core.timing;
         core.timing=replayer.diagnostics&&replayer.diagnostics();   // 0.3.204 (task 21): the split timers follow Diagnostics, asked once per frame on the game thread
@@ -409,6 +411,7 @@ public:
         if(core.timing){const std::uint64_t e=frameEnd-nowAtPresent,w=gameWaitsNs(q.stats)-waits0;own(q.stats.presentBookNs,e>w?e-w:0);}   // 0.3.204 (task 21): Present bookkeeping, waits excluded (no extra clock reads)
         waitsAtFrameEnd=get(q.stats.syncNs)+get(q.stats.backpressureNs);
         ++core.frameNo;
+        if(core.timing)core.reportQueryFrame(callerLog);
         if(core.timing){++core.queryWaitFrames;if(core.frameNo%600==0)core.reportQueryWait(callerLog);}
         if(core.timing&&core.frameNo%600==0){if(callerLog)core.texDiag.report(callerLog,core.callerModule,core.frameNo,[](unsigned c){return cmdName((Cmd)c);});else core.texDiag.restart(core.frameNo);}   // 0.3.206 (task 31): the texture readback report, one window per 600 Presents (Diagnostics only); without a log sink the window still restarts (tables and old histories must not grow)
         tuner.sample(q);   // idle pool memory goes back after a quiet window
@@ -626,7 +629,7 @@ private:
         :coreOwner(new StreamCore(opt.budget)),core(*coreOwner),replayer(core,SnapshotPool::capFor(clampFramesAhead(opt.framesAhead))),parent(par),framesAhead_(clampFramesAhead(opt.framesAhead)),capture(opt.capture){
         core.target=target;core.game=this;core.framesAhead=framesAhead_;core.logLine=nullptr;core.callerModule=opt.callerModule;core.queryCaller=opt.queryCaller;core.occlusionLocal=opt.occlusionLocal;callerLog=opt.log;callerDiag=opt.diagnostics;core.readBackLock=opt.readBackLock;st.core=&core;
         if(opt.cursorApi)cursor=*opt.cursorApi;
-        restoreOwner=opt.threadStart;replayer.frameSkip=opt.frameSkip!=0;replayer.threadStart=std::move(opt.threadStart);replayer.log=opt.log;replayer.diagnostics=opt.diagnostics;filter=opt.filterRedundant;
+        restoreOwner=opt.threadStart;replayer.frameSkip=opt.frameSkip!=0;replayer.threadStart=std::move(opt.threadStart);replayer.log=opt.log;replayer.diagnostics=opt.diagnostics;replayer.idleProfiling=opt.idleProfiling;filter=opt.filterRedundant;
         if(kDirectReplay&&opt.directReplay&&opt.extension&&opt.rawOf){core.ext=opt.extension;auto f=opt.rawOf;core.reg.rawOf=[f](IUnknown* e,Kind k){return f(e,unsigned(k));};}
         if(p)pp=*p;
         sc0=new StreamSwapChain(&core);sc0->baseline=1;sc0->pp=pp;
@@ -648,6 +651,7 @@ private:
             if(!k){Info in;in.w=sc0->pp.BackBufferWidth;in.h=sc0->pp.BackBufferHeight;in.fmt=unsigned(sc0->pp.BackBufferFormat);in.usage=D3::kUsageRT;in.pool=D3::kPoolDefault;in.ms=unsigned(sc0->pp.MultiSampleType);in.msq=sc0->pp.MultiSampleQuality;
                    k=new StreamSurface(&c,in,sc0,nullptr);k->refs.store(0);k->use.store(0);sc0->kids[i]=k;}
             k->info.w=sc0->pp.BackBufferWidth;k->info.h=sc0->pp.BackBufferHeight;k->info.fmt=unsigned(sc0->pp.BackBufferFormat);
+            k->info.ms=unsigned(sc0->pp.MultiSampleType);k->info.msq=sc0->pp.MultiSampleQuality;
             if(k->inner)continue;
             IDirect3DSurface9* b=nullptr;
             if(i<n&&SUCCEEDED(sc->GetBackBuffer(i,(D3DBACKBUFFER_TYPE)0,&b))&&b){c.reg.bindInner(k,b);k->dead.store(false);}else k->dead.store(true);

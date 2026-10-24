@@ -440,6 +440,8 @@ static void nestedSync(){
 #include "particle_texture_stream_scenarios.h"
 
 int main(int argc,char** argv){
+    if(argc>1&&std::string(argv[1])=="effecthooks"){effectHookReplay();return 0;}
+    if(argc>1&&std::string(argv[1])=="materialtextures"){materialTextureStream();return 0;}
     if(argc>1&&std::string(argv[1])=="particletextures"){particleTextureStream();return 0;}
     const bool threadsOnly=argc>1&&std::string(argv[1])=="threads";
     spscStress();wakeHandshakeStress();presentStyleWait();retireThenSleepAndBackpressure();unflaggedWaitIsCaught();backstopSignalsOncePerSeq();retireSignalRemembered();wakeOncePerSleep();memoryCapsAndPools();producerNotSerializedByShadows();
@@ -449,7 +451,7 @@ int main(int argc,char** argv){
         orderingAcrossChunks();blocksAndInline();reuseAfterWarmup();counters();generatedRecordCases();gameFacing();
     }
     streamTests(threadsOnly);
-    if(!threadsOnly)particleTextureStream();
+    if(!threadsOnly){particleTextureStream();materialTextureStream();}
     std::puts("test_command_stream: all passed");
     return 0;
 }

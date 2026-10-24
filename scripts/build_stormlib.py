@@ -81,10 +81,10 @@ def sources(root):
 
 def tree_sha256(root):
     """Identity of the StormLib source tree: sorted (relative path, sha256) of src/, CMakeLists.txt, LICENSE."""
-    paths = sorted([p for p in (root / 'src').rglob('*') if p.is_file() and p.name != '.DS_Store'] +
-                   [root / 'CMakeLists.txt', root / 'LICENSE'])
+    paths = [p for p in (root / 'src').rglob('*') if p.is_file() and p.name != '.DS_Store'] + [root / 'CMakeLists.txt', root / 'LICENSE']
     h = hashlib.sha256()
-    for p in paths:
+    # Windows Path ordering folds case; source identity must be the same on every host.
+    for p in sorted(paths, key=lambda p: p.relative_to(root).parts):
         h.update(p.relative_to(root).as_posix().encode() + b'\0' + hashlib.sha256(p.read_bytes()).digest())
     return h.hexdigest()
 

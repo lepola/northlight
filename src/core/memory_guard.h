@@ -32,7 +32,7 @@ struct Decision {
     bool trim=false,entered=false,recovered=false;
     bool afterTrim=false; // first sample walked after the last completed trim
     bool demand=false;    // this entry/trim was caused by the builder's demand, not the guard's own thresholds
-    bool capsChanged=false; // 0.3.216: the stream/replay-copy/world caps must switch now; halfCaps tells to what (true: halved, false: full)
+    bool capsChanged=false; // The stream/replay-copy/terrain caps must switch now; halfCaps tells to what (true: halved, false: full).
     bool halfCaps=false;
     bool report=false;    // periodic diagnostic line due (caller gates on Diagnostics)
 };

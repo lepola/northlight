@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 # northlight-test: requires=cxx
-"""0.3.187 per-frame draw gates: the draw hooks do the same work as 0.3.184.
+"""Per-frame draw gates preserve the reference hooks under the current debug policy.
 
-The 0.3.184 hook members and the four Draw* overrides are kept below verbatim. The test compiles
-them, and the current members extracted from renderer.cpp (drawHook and its helpers, the gates,
+The 0.3.184 hook members and four Draw* overrides are kept below verbatim. The derived reference
+adds only the later debug-mode sky-claim guard, also required by the celestial phase regression.
+The test compiles this reference and the current renderer.cpp members (drawHook and its helpers, the gates,
 prepareDraw, terrainShadowDraw, planTerrainShadowSwap, DrawPrimitive), against the same mocks of
 the device, the world, the sky renderer and the blob filter. It then runs both through randomized
 frames with FrameDrawGates=0 and =1: the per-frame inputs change only at the frame boundary, the
@@ -96,8 +97,14 @@ new_members='\n'.join([member(renderer,'template<class Work> bool extensionWork(
     member(renderer,'HRESULT STDMETHODCALLTYPE DrawPrimitive(D3DPRIMITIVETYPE t,UINT start,UINT count) override')])
 old_draws=[l for l in OLD_DRAWS.strip('\n').split('\n')]
 assert len(old_draws)==4
+# Bridge the documented debug policy without changing the raw historical oracle.
+old_claim='celestialDiscs&&enabled&&!applied&&count<=4&&celestialDiscs->nativeClaimPossible'
+debug_claim='celestialDiscs&&enabled&&debugMode==0&&worldDebug==0&&!applied&&count<=4&&celestialDiscs->nativeClaimPossible'
+assert OLD_DRAWS.count(old_claim)==4
+old_draws=[line.replace(old_claim,debug_claim) for line in old_draws]
 
 checks={}
+checks['native sky claims retain the documented debug guard']='celestialDiscs&&enabled&&debugMode==0&&worldDebug==0&&!applied' in member(renderer,'void skyClaim(')
 checks['the rain mask members were found and stubbed (rainMrtBegin inside the cut span)']=checks_rain_stub
 checkflag=fp.src('shadow_blob_filter.h').read_text()
 checks['real source: no compile-time switch left; BlobShadowStrength gates blobFilterActive and the latch (the equivalence runs use strength 0 = skip)']=('HidesNativeBlobs' not in checkflag and 'HidesNativeBlobs' not in renderer
@@ -121,7 +128,7 @@ def new_parts(sig):
     capture=cap.group(1)
     if capture.startswith('if(autoBump'):
         prefix,capture=capture.split('world->capture',1)
-        assert prefix.startswith('if(autoBump&&enabled&&!applied&&!failed&&!memoryGuard.capsHalved())')
+        assert prefix.startswith('if(autoBump&&enabled&&!applied&&!failed)')
         assert prefix.count('if(')==1 and 'autoBump->capture(vs,' in prefix and prefix.endswith(';}')
         capture='world->capture'+capture
     return capture,cap.group(2),draw,body
@@ -257,7 +264,7 @@ struct MockBlobs{Env* env=nullptr;MockExt* ext=nullptr;bool faintMode=false;unsi
     IDirect3DTexture9* faintTexture(){return env->bit("faint texture",8)?nullptr:&faint;}};
 namespace NorthlightSpellLayer{struct DrawArgs{template<class... A> static DrawArgs primitive(A...){return {};}template<class... A> static DrawArgs indexed(A...){return {};}template<class... A> static DrawArgs primitiveUP(A...){return {};}template<class... A> static DrawArgs indexedUP(A...){return {};}};} /* task 34: the spell layer is off in this model (spellOn=false): the draw hook's one bool test */
 struct Gate{int drawTid=7;void noteFirst(int){}};
-struct MirrorStateMock{Gate gate;bool textureKnown[1]={};void* textures[1]={};bool viewportKnown=false;struct{float MinZ=0,MaxZ=1;}viewport;};
+struct MirrorStateMock{Gate gate;std::uint64_t forwarded=0;bool textureKnown[1]={};void* textures[1]={};bool viewportKnown=false;struct{float MinZ=0,MaxZ=1;}viewport;};
 struct WeatherDetectMock{const void* hot=nullptr;NorthlightWeather::Kind hotKind=NorthlightWeather::Kind::None;bool mistArmed=false;bool isMist(const void*)const{return false;}void proveMist(const void*){}};struct WeatherSampleMock{unsigned primitives=0,draws=0;}; /* 0.3.198 (rain): drawHook's one comparison; hot stays null here (test_weather_detect drives it) */
 struct Guard{explicit Guard(Gate&){}};
 namespace NorthlightRenderThreadProbe{inline bool sampleFrame(unsigned f){return f%3==0;}inline bool profiling(){return true;}}
@@ -284,6 +291,7 @@ struct Base{
     std::unordered_map<IDirect3DVertexShader9*,int> vsTags;
     std::unordered_map<IDirect3DVertexShader9*,std::uint64_t> vsHashes;std::unordered_map<IDirect3DPixelShader9*,std::uint64_t> psHashes;
     unsigned blobSignatureReports=0,terrainShadowDraws=0,frame=0,drawCalls=0;
+    struct{unsigned getRequests=0,getNative=0,setVS=0,setPS=0,setPSConstants=0,constantRegisters=0,failures=0;} terrainSwapCalls;
     IDirect3DPixelShader9 *shadowSwapOriginal=nullptr,*shadowSwapReplacement=nullptr;
     IDirect3DVertexShader9 *shadowSwapVertexOriginal=nullptr,*shadowSwapVertexReplacement=nullptr;UINT shadowSwapConstantBase=0,shadowSwapConstantCount=0;float shadowSwapConstants[24]={};
     Keys effectKeys;GateCounts gateCounts;WeatherDetectMock weatherDetect;WeatherSampleMock weatherSample;unsigned weatherMistSkips=0,weatherMistUnknown=0,weatherMistOtherStage=0,weatherMistReports=0,weatherStateReports=0;void weatherDrawStates(UINT){}void weatherProbeDraw(UINT){}
@@ -415,7 +423,7 @@ int main(){
     assert(cover[1].skipped>cover[1].draws/10);
     std::printf("mutation (a latched input rising inside a frame) detected in %u/400 runs\n",caught);
     assert(caught>40);
-    std::printf("PASS draw gates: 0.3.184 and 0.3.187 hooks issue the same calls, results and faults\n");
+    std::printf("PASS draw gates: reference and current hooks issue the same calls, results and faults under the documented debug policy\n");
 }
 '''
 
@@ -428,4 +436,4 @@ with tempfile.TemporaryDirectory(prefix='northlight-draw-gates-') as tmp:
         print(label,subprocess.check_output([str(exe)],text=True),end='',flush=True)
 for name,ok in checks.items():print(('PASS ' if ok else 'FAIL ')+name)
 assert all(checks.values())
-print('PASS FrameDrawGates: same hook work as 0.3.184, latched inputs rise only at the latch points')
+print('PASS FrameDrawGates: reference hook work with documented debug policy; latched inputs rise only at the latch points')

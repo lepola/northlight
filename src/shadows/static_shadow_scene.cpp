@@ -35,12 +35,12 @@ void discardOpaqueTexture(NorthlightGI::WorldMaterial& material){
 
 // Run only on the loading thread. Keep original content hashes unchanged: RGB
 // does not affect shadows; alpha, addressing, cutoff and indices stay exact.
-void prepareUpload(Model& model){
+void prepareUpload(Model& model,const std::vector<NorthlightGI::WorldMaterial>* sources=nullptr){
     if(model.index16){model.uploadIndices16.reserve(model.indices.size());for(uint32_t i:model.indices)model.uploadIndices16.push_back(uint16_t(i));model.bytes+=model.uploadIndices16.capacity()*sizeof(uint16_t);model.bytes-=model.indices.capacity()*sizeof(uint32_t);std::vector<uint32_t>().swap(model.indices);}
     auto compact=std::make_shared<Model>();compact->key=model.key;compact->contentRevision=model.contentRevision;compact->batches=model.batches;compact->index16=model.index16;
-    for(auto& material:model.materials){
+    for(size_t materialIndex=0;materialIndex<model.materials.size();++materialIndex){auto& material=model.materials[materialIndex];const auto& rgba=sources?(*sources)[materialIndex].rgba:material.rgba;
         auto alpha=std::make_shared<std::vector<uint8_t>>(size_t(std::max(1u,material.width))*std::max(1u,material.height),255);
-        for(size_t i=0;i<alpha->size();++i){size_t j=i*4;if(j+3<material.rgba.size())(*alpha)[i]=material.rgba[j+3];}
+        for(size_t i=0;i<alpha->size();++i){size_t j=i*4;if(j+3<rgba.size())(*alpha)[i]=rgba[j+3];}
         // Only alpha reaches the shadow target. Expand to white RGB during the
         // bounded upload instead of retaining a second four-byte texel array.
         model.bytes-=material.rgba.capacity();std::vector<uint8_t>().swap(material.rgba);
@@ -86,27 +86,40 @@ bool readTile(const std::string& path,std::vector<Placement>& out,size_t& bytes,
     return true;
 }
 float distance2(Vec3 a,Vec3 b){return NorthlightGI::dot(a-b,a-b);}
+class SelectionVolume {
+    const Request& request;
+    struct Axes {Vec3 direction,right,up;bool prepared=false,valid=false;};
+    Axes axes[2];
+public:
+    explicit SelectionVolume(const Request& r):request(r){}
+    bool contains(Vec3 low,Vec3 high,float margin=96.f){
+        Vec3 center=(low+high)*.5f,extent=(high-low)*.5f,delta=center-request.center;
+        // Retain near fallback geometry and nearby unlit street surfaces.
+        if(std::fabs(delta.x)<=288+margin+extent.x&&std::fabs(delta.y)<=288+margin+extent.y&&std::fabs(delta.z)<=320+margin+extent.z)return true;
+        for(unsigned i=0;i<2;++i)if(request.active[i]){
+            auto& a=axes[i];
+            if(!a.prepared){
+                a.prepared=true;a.direction=NorthlightGI::normalized(request.directions[i]);
+                a.valid=NorthlightGI::dot(a.direction,a.direction)>=.5f;
+                if(a.valid){Vec3 ref=std::fabs(a.direction.z)>.95f?Vec3(0,1,0):Vec3(0,0,1);a.right=NorthlightGI::normalized(NorthlightGI::cross(a.direction,ref));a.up=NorthlightGI::cross(a.right,a.direction);}
+            }
+            if(!a.valid)continue;
+            auto overlaps=[&](Vec3 axis,float reach){float projected=std::fabs(axis.x)*extent.x+std::fabs(axis.y)*extent.y+std::fabs(axis.z)*extent.z;return std::fabs(NorthlightGI::dot(delta,axis))<=reach+margin+projected;};
+            // Same symmetric +/-640 depth; axes depend on light, never camera.
+            if(overlaps(a.right,240)&&overlaps(a.up,240)&&overlaps(a.direction,640))return true;
+        }
+        return false;
+    }
+};
 }
 
 Vec3 transformPoint(const Placement& p,Vec3 v){const float* m=p.matrix;return {m[0]*v.x+m[1]*v.y+m[2]*v.z+p.translation.x,m[3]*v.x+m[4]*v.y+m[5]*v.z+p.translation.y,m[6]*v.x+m[7]*v.y+m[8]*v.z+p.translation.z};}
 void transformBounds(const Placement& p,Vec3 low,Vec3 high,Vec3& outLow,Vec3& outHigh){Vec3 c=transformPoint(p,(low+high)*.5f),r=(high-low)*.5f;const float* m=p.matrix;Vec3 e={std::fabs(m[0])*r.x+std::fabs(m[1])*r.y+std::fabs(m[2])*r.z,std::fabs(m[3])*r.x+std::fabs(m[4])*r.y+std::fabs(m[5])*r.z,std::fabs(m[6])*r.x+std::fabs(m[7])*r.y+std::fabs(m[8])*r.z};outLow=c-e;outHigh=c+e;}
 bool selected(const Request& r,Vec3 low,Vec3 high,float margin){
-    Vec3 center=(low+high)*.5f,extent=(high-low)*.5f,delta=center-r.center;
-    // Near fallback geometry and nearby unlit street surfaces must always stay.
-    if(std::fabs(delta.x)<=288+margin+extent.x&&std::fabs(delta.y)<=288+margin+extent.y&&std::fabs(delta.z)<=320+margin+extent.z)return true;
-    for(unsigned i=0;i<2;++i)if(r.active[i]){
-        Vec3 d=NorthlightGI::normalized(r.directions[i]);if(NorthlightGI::dot(d,d)<.5f)continue;
-        Vec3 ref=std::fabs(d.z)>.95f?Vec3(0,1,0):Vec3(0,0,1);
-        Vec3 right=NorthlightGI::normalized(NorthlightGI::cross(d,ref)),up=NorthlightGI::cross(right,d);
-        auto overlaps=[&](Vec3 a,float reach){float projected=std::fabs(a.x)*extent.x+std::fabs(a.y)*extent.y+std::fabs(a.z)*extent.z;return std::fabs(NorthlightGI::dot(delta,a))<=reach+margin+projected;};
-        // Symmetric depth matches the existing +/-640 light-space clipping.
-        // The screen-orthogonal axes depend on light, never camera orientation.
-        if(overlaps(right,240)&&overlaps(up,240)&&overlaps(d,640))return true;
-    }
-    return false;
+    return SelectionVolume(r).contains(low,high,margin);
 }
 
-bool packModel(NorthlightGI::WorldScene&& scene,const std::string& key,Model& output,std::string& error){
+static bool packModelImpl(const NorthlightGI::WorldScene& scene,NorthlightGI::WorldScene* owned,const std::string& key,Model& output,std::string& error){
     try {
         Model model;model.key=key;model.index16=scene.vertices.size()<=65536;
         model.vertices.reserve(scene.vertices.size());
@@ -115,33 +128,47 @@ bool packModel(NorthlightGI::WorldScene&& scene,const std::string& key,Model& ou
         // Long crossing triangles remain whole and enlarge their batch bounds.
         using Group=std::tuple<uint32_t,int,int,int>;
         std::map<Group,std::vector<uint32_t>> groups;
+        Group previousGroup{};std::vector<uint32_t>* previousIndices=nullptr;
         for(const auto& t:scene.triangles){
             if(t.v0>=model.vertices.size()||t.v1>=model.vertices.size()||t.v2>=model.vertices.size()||t.material>=scene.materials.size()){error="Invalid model triangle";return false;}
-            Vec3 center=(scene.vertices[t.v0].position+scene.vertices[t.v1].position+scene.vertices[t.v2].position)/3.f;
+            const auto a=scene.vertices[t.v0].position,b=scene.vertices[t.v1].position,c=scene.vertices[t.v2].position;
+            // The streaming decoder used scalar division; the public move-pack
+            // helper historically used Vec3's reciprocal multiply. Keep both.
+            Vec3 center=owned?(a+b+c)/3.f:Vec3((a.x+b.x+c.x)/3,(a.y+b.y+c.y)/3,(a.z+b.z+c.z)/3);
             // Finite positions may still exceed safe float-to-int conversion.
             if(std::fabs(center.x)>1000000||std::fabs(center.y)>1000000||std::fabs(center.z)>1000000){error="Model outside supported coordinates";return false;}
             Group g(t.material,int(std::floor(center.x/64)),int(std::floor(center.y/64)),int(std::floor(center.z/64)));
-            if(groups.size()>=65536&&!groups.count(g)){error="Too many model spatial batches";return false;}
-            auto& ids=groups[g];ids.push_back(t.v0);ids.push_back(t.v1);ids.push_back(t.v2);
+            if(!previousIndices||g!=previousGroup){
+                if(groups.size()>=65536&&!groups.count(g)){error="Too many model spatial batches";return false;}
+                previousIndices=&groups[g];previousGroup=g; // std::map insertion preserves this vector's address.
+            }
+            auto& ids=*previousIndices;ids.push_back(t.v0);ids.push_back(t.v1);ids.push_back(t.v2);
         }
-        model.indices.reserve(scene.triangles.size()*3);
+        model.indices.reserve(scene.triangles.size()*3);if(!owned)model.batches.reserve(groups.size());
         for(auto& group:groups){Batch b;b.firstIndex=uint32_t(model.indices.size());b.indexCount=uint32_t(group.second.size());b.material=std::get<0>(group.first);b.low=Vec3(1e30f,1e30f,1e30f);b.high=-b.low;
             for(uint32_t index:group.second){const auto& v=model.vertices[index];b.low=mn(b.low,{v.x,v.y,v.z});b.high=mx(b.high,{v.x,v.y,v.z});model.indices.push_back(index);}model.batches.push_back(b);
         }
-        model.materials=std::move(scene.materials);
-        for(auto& material:model.materials)discardOpaqueTexture(material);
+        if(owned){model.materials=std::move(owned->materials);for(auto& material:model.materials)discardOpaqueTexture(material);}
+        else {model.materials.resize(scene.materials.size());for(size_t i=0;i<scene.materials.size();++i){const auto& source=scene.materials[i];auto& m=model.materials[i];
+            if(source.width>4096||source.height>4096||uint64_t(source.width)*source.height*4!=source.rgba.size()||((source.width==0)!=(source.height==0))||!std::isfinite(source.alphaCutoff)||source.alphaCutoff<0||source.alphaCutoff>1){error="Invalid shared model material";return false;}
+            m.albedo=source.albedo;m.width=source.width;m.height=source.height;m.alphaCutoff=source.alphaCutoff;m.addressU=source.addressU;m.addressV=source.addressV;m.terrain=source.terrain;m.wmo=source.wmo;
+            bool opaque=true;for(size_t p=3;p<source.rgba.size();p+=4)if(source.rgba[p]!=255){opaque=false;break;}if(opaque)m.width=m.height=0;
+        }}
         uint64_t revision=hashBytes(HashSeed,model.vertices.data(),model.vertices.size()*sizeof(Vertex));
         revision=hashBytes(revision,model.indices.data(),model.indices.size()*sizeof(uint32_t));
         model.bytes=model.vertices.capacity()*sizeof(Vertex)+model.indices.capacity()*sizeof(uint32_t)+model.batches.capacity()*sizeof(Batch)+model.materials.capacity()*sizeof(NorthlightGI::WorldMaterial);
-        for(auto& material:model.materials){uint64_t h=HashSeed;h=hashBytes(h,&material.width,sizeof(material.width));h=hashBytes(h,&material.height,sizeof(material.height));h=hashBytes(h,&material.alphaCutoff,sizeof(material.alphaCutoff));h=hashBytes(h,&material.addressU,sizeof(material.addressU));h=hashBytes(h,&material.addressV,sizeof(material.addressV));
+        for(size_t materialIndex=0;materialIndex<model.materials.size();++materialIndex){auto& material=model.materials[materialIndex];const auto& rgba=owned?material.rgba:scene.materials[materialIndex].rgba;uint64_t h=HashSeed;h=hashBytes(h,&material.width,sizeof(material.width));h=hashBytes(h,&material.height,sizeof(material.height));h=hashBytes(h,&material.alphaCutoff,sizeof(material.alphaCutoff));h=hashBytes(h,&material.addressU,sizeof(material.addressU));h=hashBytes(h,&material.addressV,sizeof(material.addressV));
             // Only alpha participates in a shadow texture's shared identity.
-            for(size_t i=3;i<material.rgba.size();i+=4)h=hashBytes(h,&material.rgba[i],1);
+            if(owned||(material.width&&material.height))for(size_t i=3;i<rgba.size();i+=4)h=hashBytes(h,&rgba[i],1);
             model.materialKeys.push_back(h);revision=hashBytes(revision,&h,sizeof h);model.bytes+=material.rgba.capacity();}
         // Material assignments also define content identity, not just triangles.
         for(const auto& b:model.batches){revision=hashBytes(revision,&b.firstIndex,4);revision=hashBytes(revision,&b.indexCount,4);revision=hashBytes(revision,&b.material,4);}
-        model.contentRevision=revision;prepareUpload(model);output=std::move(model);return true;
+        model.contentRevision=revision;prepareUpload(model,owned?nullptr:&scene.materials);output=std::move(model);return true;
     } catch(...) {error="Cannot allocate compact static shadow model";return false;}
 }
+
+bool packModel(NorthlightGI::WorldScene&& scene,const std::string& key,Model& output,std::string& error){return packModelImpl(scene,&scene,key,output,error);}
+bool packSharedModel(const NorthlightGI::WorldScene& scene,const std::string& key,Model& output,std::string& error){return packModelImpl(scene,nullptr,key,output,error);}
 
 namespace {
 // Streaming decoder never materializes the 32-byte GI vertices or a complete
@@ -159,12 +186,17 @@ bool loadCompact(const std::string& path,const std::string& key,size_t cap,Model
         for(uint32_t i=0;i<count;++i){float values[8];for(unsigned j=0;j<8;++j){uint32_t u=word(block.data()+size_t(i)*32+j*4);std::memcpy(&values[j],&u,4);if(!std::isfinite(values[j])){error="Invalid FGS2 vertex";return false;}}model.vertices[start+i]={values[0],values[1],values[2],values[6],values[7]};}start+=count;
     }
     using Group=std::tuple<uint32_t,int,int,int>;std::map<Group,std::vector<uint32_t>> groups;
+    Group previousGroup{};std::vector<uint32_t>* previousIndices=nullptr;
     for(uint32_t i=0;i<nt;++i){if(i%1024==0&&!r.bytes(block.data(),size_t(std::min(1024u,nt-i))*16)){error="Truncated FGS2 triangles";return false;}
         const unsigned char* record=block.data()+(i%1024)*16;uint32_t a=word(record),b=word(record+4),c=word(record+8),material=word(record+12);if(a>=nv||b>=nv||c>=nv||material>=nm){error="Invalid FGS2 triangle";return false;}
         const auto& va=model.vertices[a];const auto& vb=model.vertices[b];const auto& vc=model.vertices[c];Vec3 center={(va.x+vb.x+vc.x)/3,(va.y+vb.y+vc.y)/3,(va.z+vb.z+vc.z)/3};
         if(!finite(center)||std::fabs(center.x)>1000000||std::fabs(center.y)>1000000||std::fabs(center.z)>1000000){error="FGS2 coordinates outside supported world";return false;}
-        Group group(material,int(std::floor(center.x/64)),int(std::floor(center.y/64)),int(std::floor(center.z/64)));if(groups.size()>=65536&&!groups.count(group)){error="Too many FGS2 spatial batches";return false;}
-        auto& ids=groups[group];ids.push_back(a);ids.push_back(b);ids.push_back(c);
+        Group group(material,int(std::floor(center.x/64)),int(std::floor(center.y/64)),int(std::floor(center.z/64)));
+        if(!previousIndices||group!=previousGroup){
+            if(groups.size()>=65536&&!groups.count(group)){error="Too many FGS2 spatial batches";return false;}
+            previousIndices=&groups[group];previousGroup=group;
+        }
+        auto& ids=*previousIndices;ids.push_back(a);ids.push_back(b);ids.push_back(c);
     }
     model.indices.reserve(size_t(nt)*3);model.batches.reserve(groups.size());
     for(auto& group:groups){Batch b;b.firstIndex=uint32_t(model.indices.size());b.indexCount=uint32_t(group.second.size());b.material=std::get<0>(group.first);b.low={1e30f,1e30f,1e30f};b.high=-b.low;for(uint32_t index:group.second){const auto& v=model.vertices[index];b.low=mn(b.low,{v.x,v.y,v.z});b.high=mx(b.high,{v.x,v.y,v.z});model.indices.push_back(index);}model.batches.push_back(b);std::vector<uint32_t>().swap(group.second);}
@@ -182,7 +214,7 @@ bool loadCompact(const std::string& path,const std::string& key,size_t cap,Model
 struct Streamer::State {
     struct Tile {std::vector<Identity> refs;Stamp used;size_t bytes=0;};
     struct Resident {std::shared_ptr<const Model> model;Stamp used;};
-    std::string root;Limits limits;
+    std::string root;Limits limits;NorthlightGI::SceneSourceProvider sourceProvider;
     mutable std::mutex mutex;mutable std::condition_variable wake;
     Request requested;uint64_t generation=0,requestSerial=0,doneSerial=0;bool stop=false,hasRequest=false,paused=false,reclaimPending=false,busy=false;
     std::shared_ptr<const Snapshot> published;
@@ -195,7 +227,7 @@ struct Streamer::State {
     std::set<std::string> failedModels,lastNeeded;
     std::set<Cell> lastWanted;
     Stamp retryAfter{};Stats stats;uint64_t activeGeneration=0,revision=0;size_t residentBytes=0;
-    State(std::string r,Limits l):root(std::move(r)),limits(l){if(!root.empty()&&root.back()!='/'&&root.back()!='\\')root+='/';limits.cellSize=std::max(32u,std::min(512u,limits.cellSize));worker=std::thread([this]{run();});}
+    State(std::string r,Limits l,NorthlightGI::SceneSourceProvider provider):root(std::move(r)),limits(l),sourceProvider(std::move(provider)){if(!root.empty()&&root.back()!='/'&&root.back()!='\\')root+='/';limits.cellSize=std::max(32u,std::min(512u,limits.cellSize));worker=std::thread([this]{run();});}
     ~State(){{std::lock_guard<std::mutex> lock(mutex);stop=true;wake.notify_all();}if(worker.joinable())worker.join();}
     bool current(uint64_t gen){std::lock_guard<std::mutex> lock(mutex);return !stop&&generation==gen;}
     size_t metadataSize()const {size_t n=0;for(const auto& t:tiles)n+=t.second.refs.capacity()*sizeof(Identity);return n;}
@@ -282,7 +314,8 @@ struct Streamer::State {
         const float reach=928.f;int x0=int(std::floor((r.center.x-reach)/limits.cellSize)),x1=int(std::floor((r.center.x+reach)/limits.cellSize));int y0=int(std::floor((r.center.y-reach)/limits.cellSize)),y1=int(std::floor((r.center.y+reach)/limits.cellSize));
         for(int y=y0;y<=y1;++y)for(int x=x0;x<=x1;++x){auto it=cells.find({x,y});if(it!=cells.end())candidates.insert(it->second.begin(),it->second.end());}candidates.insert(giants.begin(),giants.end());
         std::vector<Placement> chosen;std::map<std::string,float> priority;std::set<std::string> needed;
-        for(const auto& id:candidates){const auto& p=placements.at(id);if(!selected(r,p.low,p.high))continue;chosen.push_back(p);needed.insert(p.modelKey);float d=distance2((p.low+p.high)*.5f,r.center);auto it=priority.find(p.modelKey);if(it==priority.end()||d<it->second)priority[p.modelKey]=d;}
+        SelectionVolume volume(r); // Light-space axes depend on this request, never on the placement.
+        for(const auto& id:candidates){const auto& p=placements.at(id);if(!volume.contains(p.low,p.high))continue;chosen.push_back(p);needed.insert(p.modelKey);float d=distance2((p.low+p.high)*.5f,r.center);auto it=priority.find(p.modelKey);if(it==priority.end()||d<it->second)priority[p.modelKey]=d;}
         lastNeeded=needed;
         for(const auto& key:needed){auto it=models.find(key);if(it!=models.end()){it->second.used=now;++stats.modelReuses;}}
         std::vector<std::pair<float,std::string>> queue;for(const auto& p:priority)if(!models.count(p.first)&&!failedModels.count(p.first))queue.emplace_back(p.second,p.first);std::sort(queue.begin(),queue.end());stats.pendingModels=uint32_t(queue.size());stats.selectionMs+=ms(selectionStart);
@@ -302,9 +335,11 @@ struct Streamer::State {
             if(residentBytes+packedEstimate>limits.residentBytes)evict(needed,true);
             if(residentBytes+packedEstimate>limits.residentBytes){++stats.deferred;continue;}
             stats.transientPeak=std::max(stats.transientPeak,uint64_t(transientEstimate));
-            std::string error;Stamp readStart=Clock::now();++stats.modelReads;stats.bytesRead+=fileBytes;
-            auto model=std::make_shared<Model>();
-            if(!loadCompact(path,queued.second,limits.maxDecodeBytes,*model,error)){++stats.failures;failedModels.insert(queued.second);--stats.pendingModels;continue;}stats.readMs+=ms(readStart);
+            std::string error;Stamp readStart=Clock::now();
+            auto model=std::make_shared<Model>();bool packed=false;
+            if(sourceProvider){const auto source=sourceProvider(path,error,[this](uint64_t bytes){return bytes<=limits.maxDecodeBytes;});if(source){packed=packSharedModel(*source,queued.second,*model,error);if(packed)++stats.sharedModelSources;}}
+            if(!packed){++stats.modelReads;++stats.compactDecodes;stats.bytesRead+=fileBytes;packed=loadCompact(path,queued.second,limits.maxDecodeBytes,*model,error);}
+            if(!packed){++stats.failures;failedModels.insert(queued.second);--stats.pendingModels;continue;}stats.readMs+=ms(readStart);
             if(!current(gen)){++stats.cancellations;return;}
             if(residentBytes+model->bytes>limits.residentBytes){++stats.deferred;continue;}
             residentBytes+=model->bytes;stats.largestModel=std::max(stats.largestModel,uint64_t(model->bytes));models.emplace(queued.second,Resident{model,Clock::now()});--stats.pendingModels;stats.maxJobMs=std::max(stats.maxJobMs,ms(job));if(firstReady||ms(lastPublish)>=25){publish(r,chosen,gen,start,false);lastPublish=Clock::now();firstReady=false;}
@@ -326,7 +361,7 @@ struct Streamer::State {
         }
     }
 };
-Streamer::Streamer(std::string root,Limits limits):state_(new State(std::move(root),limits)){}
+Streamer::Streamer(std::string root,Limits limits,NorthlightGI::SceneSourceProvider provider):state_(new State(std::move(root),limits,std::move(provider))){}
 Streamer::~Streamer()=default;
 void Streamer::request(const Request& r){
     if(r.map.empty()||r.map.find("..")!=std::string::npos||r.map.find_first_of("/\\")!=std::string::npos||!finite(r.center)||std::fabs(r.center.x)>100000||std::fabs(r.center.y)>100000||std::fabs(r.center.z)>100000)return;

@@ -3,9 +3,9 @@
 """native sun/moon/moon02/sunGlare suppression by the wrapped (proxy)
 identity. Native policy test (test_celestial_native_suppress.cpp) plus static
 checks: the identity map is wired through the mirror registry without
-dereferencing, suppression needs a live late disc (render() of the previous
-frame), effects off (Ctrl+Shift+F10) never reaches the claim hooks, and the
-early sky-phase disc (F1) stays off. No device or game."""
+dereferencing, suppression needs a validated sky context (current planet phase
+or previous render), effects off (Ctrl+Shift+F10) never reaches the claim hooks, and the
+celestial surfaces draw in the native planet phase before clouds. No device or game."""
 import sys; from pathlib import Path; sys.path.insert(0, str(Path(__file__).resolve().parents[1]))  # repo root
 import northlight_paths as fp
 import json,re,subprocess,tempfile
@@ -29,7 +29,7 @@ assert 'celestialDiscs->setIdentityMap([this](std::uintptr_t exposed){return mir
 assert 'if((!early&&!observer.lateDisc(i,suppressed))||' in fp.src('celestial_disc_renderer.h').read_text()
 # F10: every native claim is gated by the effects switch and the pre-effects phase.
 # 0.3.187: one claim helper (count<=4 first) used by drawHook, the shared body of the four draw entry points.
-hooks=re.findall(r'if\(count<=4&&celestialDiscs&&enabled&&!applied&&celestialDiscs->nativeClaimPossible\(t,count\)\)',renderer)
+hooks=re.findall(r'if\(count<=4&&celestialDiscs&&enabled&&debugMode==0&&worldDebug==0&&!applied&&celestialDiscs->nativeClaimPossible\(t,count\)\)',renderer)
 assert len(hooks)==1,len(hooks)
 # item 8: viewport-band pre-filter ahead of the texture-identity claim
 assert 'skyClaimPossible(worldMinDepth,worldMaxDepth,vp.MinZ,vp.MaxZ)' in renderer and renderer.index('skyClaimPossible(')<renderer.index('claimNativeGlare(t,count)')
@@ -39,11 +39,19 @@ assert effects.index('if (applied || !enabled || failed || !projectionValid) ret
 
 host=fp.src('celestial_disc_renderer.h').read_text()
 claim=host[host.index('template<class Palette> bool claimNativeDraw('):host.index('    bool claimNativeGlare(')]
-assert 'if(!owning())return false;' in claim
-assert claim.index('if(!owning())return false;')<claim.index('if(!EarlyDisc){suppressed|=1u<<body;++suppressedDraws;return true;}')
-assert 'static constexpr bool EarlyDisc=false;' in host  # F1 (early disc) stays off
-assert host.count('ownFrame=frames;')==1 and 'observer.finishObservations();ownFrame=frames;' in host  # owned only via render()
-assert 'bool owning()const{return ownFrame+1==frames;}' in host
+assert 'if(body==2){if(!owning())return false;' in claim
+assert claim.index('readSkyPhase(')<claim.index('ownFrame=frames;')<claim.index('for(unsigned i=0;i<2;++i)')
+assert 'EarlyDisc' not in host
+assert 'drawnEarly|=1u<<i;' in claim
+assert '{D3DRS_ZWRITEENABLE,FALSE}' in host
+late=host[host.index('    bool render(IDirect3DSurface9*'):host.index('    bool renderRing(')]
+assert late.count('drawDisc(')==1 and 'legacyFog,true,emission,true,skyBand.depth(maxZ)' in late
+assert 'if(i==1)continue;' in late  # never repaint an unattenuated lunar halo after clouds
+assert 'MoonGlareSupport:4.f' in claim and 'surfaceVisible' in claim and 'glareVisible' in claim
+assert 'disc,glareBounds,nullptr,nullptr,0,earlyWorldMaxDepth,1,2,nullptr,false,bodies[i]->emission,true)' in claim
+assert '(occlude?0.f:NorthlightCelestialGlow::SunCoreWeight)' in host
+assert host.count('ownFrame=frames;')==2 and 'observer.finishObservations();ownFrame=frames;' in host
+assert 'bool owning()const{return ownFrame==frames||ownFrame+1==frames;}' in host
 glare=host[host.index('    bool claimNativeGlare('):host.index('    bool drawDisc(')]
 assert 'const unsigned owned=drawnEarly|drawnLate|offscreenOwned|suppressed|suppressedPrevious;' in glare
 assert '!owning()' in glare and 'NorthlightCelestialGlare::claim(glareIdentities,current,bound,owned)' in glare

@@ -3,6 +3,7 @@
 #include "local_shadow_signature.h"
 #include "world_local_lights.h"
 #include <algorithm>
+#include <array>
 #include <limits>
 namespace NorthlightPointShadow {
 // The only temporal quality tradeoff: in a crowd, reuse a *complete* world-space
@@ -170,21 +171,37 @@ inline bool intersectsSphereAABB(const NorthlightLocalLights::Light& l,const flo
     }
     return squared<=double(l.attenuationEnd)*l.attenuationEnd;
 }
-inline int select(const std::vector<NorthlightLocalLights::Light>& lights,const float* camera,uint64_t previousSourceId=0,float maxCameraDistance=48) {
-    if(!camera||!std::isfinite(maxCameraDistance)||maxCameraDistance<=0)return -1;
-    for(int i=0;i<3;++i)if(!std::isfinite(camera[i]))return -1;
-    int best=-1,previous=-1;double bestScore=-1,previousScore=-1;
-    for(size_t i=0;i<lights.size();++i){
-        const auto& l=lights[i];if(l.kind==3)continue; // Authored emitters have no baked contribution to subtract.
+inline constexpr unsigned MaxLights=128;
+struct Picks {std::array<int,MaxLights> index{};unsigned count=0;};
+inline bool eligible(const NorthlightLocalLights::Light& l){
+    // Legacy baked WMO lamps remain supported. Unclassified model/particle/equipment
+    // observations never become shadow sources just because they happen to be bright.
+    return (l.flags&NorthlightLocalLights::CastShadow)||l.kind==1;
+}
+inline Picks selectMany(const NorthlightLocalLights::Light* lights,size_t count,const float* camera,unsigned limit,
+                        const std::array<uint64_t,MaxLights>& previous={},float maxCameraDistance=48){
+    Picks out;limit=std::min(limit,MaxLights);std::array<double,MaxLights> scores{};
+    if(!lights||!camera||!std::isfinite(maxCameraDistance)||maxCameraDistance<=0)return out;
+    for(int i=0;i<3;++i)if(!std::isfinite(camera[i]))return out;
+    for(size_t i=0;i<count;++i){
+        const auto& l=lights[i];if(!eligible(l))continue;
         if(!NorthlightLocalLights::valid(l)||l.attenuationEnd<=.11f)continue;
         double distance2=0;for(int k=0;k<3;++k){double d=l.position[k]-camera[k];distance2+=d*d;}
         if(distance2>double(maxCameraDistance)*maxCameraDistance)continue;
         // Apparent influence weighted by brightness, bounded at the source.
         const double color=std::min(16.f,std::max(l.diffuse[0],std::max(l.diffuse[1],l.diffuse[2])));
-        const double score=color*double(l.attenuationEnd)*l.attenuationEnd/(1+distance2);
-        if(score>bestScore||(score==bestScore&&(best<0||l.sourceId<lights[best].sourceId))){best=int(i);bestScore=score;}
-        if(l.sourceId==previousSourceId){previous=int(i);previousScore=score;}
+        if(color<.005f)continue;
+        const bool incumbent=std::find(previous.begin(),previous.end(),l.sourceId)!=previous.end();
+        const double score=color*double(l.attenuationEnd)*l.attenuationEnd/(1+distance2)*(incumbent?1.25:1.);
+        unsigned at=0;while(at<out.count&&(scores[at]>score||(scores[at]==score&&lights[out.index[at]].sourceId<l.sourceId)))++at;
+        if(at>=limit)continue;
+        for(unsigned j=std::min(out.count,limit-1);j>at;--j){out.index[j]=out.index[j-1];scores[j]=scores[j-1];}
+        out.index[at]=int(i);scores[at]=score;out.count=std::min(out.count+1,limit);
     }
-    return previous>=0&&previousScore>=bestScore*.8?previous:best;
+    return out;
+}
+inline int select(const std::vector<NorthlightLocalLights::Light>& lights,const float* camera,uint64_t previousSourceId=0,float maxCameraDistance=48){
+    const auto p=selectMany(lights.data(),lights.size(),camera,1,{previousSourceId},maxCameraDistance);
+    return p.count?p.index[0]:-1;
 }
 } // namespace NorthlightPointShadow

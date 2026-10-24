@@ -2,6 +2,20 @@
 #include <cstdint>
 
 namespace NorthlightStream {
+// Game-thread diagnostics. The replay timestamps return through the existing
+// synchronous task; these spans partition one trip and never imply GPU cost.
+struct QueryWaitProfile {
+    std::uint64_t calls=0,flush=0,unissued=0,pending=0,errors=0,waitNs=0;
+    std::uint64_t beforeNs=0,replayNs=0,afterNs=0,tripNs=0,maxTripNs=0;
+    void record(unsigned flags,bool neverIssued,bool ran,HRESULT result,std::uint64_t waited,
+                std::uint64_t start,std::uint64_t replayStart,std::uint64_t replayEnd,std::uint64_t end){
+        ++calls;flush+=bool(flags&1);unissued+=neverIssued;pending+=ran&&result==S_FALSE;errors+=!ran||result<0;waitNs+=waited;
+        if(ran&&replayStart>=start&&replayEnd>=replayStart&&end>=replayEnd){
+            beforeNs+=replayStart-start;replayNs+=replayEnd-replayStart;afterNs+=end-replayEnd;
+            const auto trip=end-start;tripNs+=trip;if(trip>maxTripNs)maxTripNs=trip;
+        }
+    }
+};
 // Amortize EVENT/FLUSH round trips without inventing completion or holding the replay thread indefinitely.
 template<class Poll,class Clock>
 inline HRESULT pollEventQueryBriefly(Poll&& poll,Clock&& now,unsigned& calls){
