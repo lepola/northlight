@@ -777,32 +777,35 @@ static void eventQueryBatch(){
     CHECK(q->GetData(nullptr,0,D3::kGetDataFlush)==S_FALSE&&get(s.eventPollBatches)==0&&gKnobs.eventPendingFlush.load()==6);   // unissued: one real call
     gKnobs.eventPendingFlush.store(7);CHECK(q->Issue(D3::kIssueEnd)==D3D_OK);DWORD data=0;
     const auto deadline=std::chrono::steady_clock::now()+std::chrono::seconds(3);
-    do{hr=q->GetData(&data,4,D3::kGetDataFlush);CHECK(std::chrono::steady_clock::now()<deadline);std::this_thread::yield();}while(hr==S_FALSE);
-    // Async completion can race one already-queued pumped check; both return the same real result.
-    CHECK(hr==D3D_OK&&data==0xABCD0000u&&get(s.eventPollCalls)>=8&&get(s.eventPollCalls)<=9&&get(s.eventPollBatches)>0&&get(s.eventPollBatches)<=get(s.eventRequests));
+    const auto trips=get(s.eventWaitTrips);
+    hr=q->GetData(&data,4,D3::kGetDataFlush);
+    CHECK(hr==D3D_OK&&data==0xABCD0000u&&get(s.eventPollCalls)==8&&get(s.eventWaitTrips)==trips+1&&get(s.eventRequests)==0);
     gKnobs.eventFlushResult.store(D3DERR_DEVICELOST);const auto polls=get(s.eventPollCalls);data=456;
     // A new END must not return the previous generation's completed value.
     CHECK(q->Issue(D3::kIssueEnd)==D3D_OK);
-    CHECK(q->GetData(&data,4,D3::kGetDataFlush)==S_FALSE&&data==456);
-    do{hr=q->GetData(&data,4,D3::kGetDataFlush);CHECK(std::chrono::steady_clock::now()<deadline);std::this_thread::yield();}while(hr==S_FALSE);
-    CHECK(hr==D3DERR_DEVICELOST&&data==456&&get(s.eventPollCalls)>=polls+1&&get(s.eventPollCalls)<=polls+2);
+    hr=q->GetData(&data,4,D3::kGetDataFlush);
+    CHECK(hr==D3DERR_DEVICELOST&&data==456&&get(s.eventPollCalls)==polls+1);
     gKnobs.eventFlushResult.store(D3D_OK);
     q->Release();q=nullptr;CHECK(rig.dev->CreateQuery((D3DQUERYTYPE)8,&q)==D3D_OK&&q);
-    // Fast queries retain the original window; a completed slow wait shortens the next generation.
+    // Pending availability stays asynchronous. FLUSH immediately enters a bounded
+    // pumped wait, including the first call and a newly issued generation.
     gKnobs.eventPendingFlush.store(1000000);CHECK(q->Issue(D3::kIssueEnd)==D3D_OK);const auto sy=get(s.syncCalls);
-    CHECK(q->GetData(nullptr,0,D3::kGetDataFlush)==S_FALSE&&get(s.syncCalls)==sy);   // a fresh wait: answered locally
-    static_cast<StreamQuery*>(q)->eventLocalSince=nowNs()-200000;
-    CHECK(q->GetData(nullptr,0,D3::kGetDataFlush)==S_FALSE&&get(s.syncCalls)==sy);   // no extra round trip for a fast query
-    static_cast<StreamQuery*>(q)->eventLocalSince=nowNs()-3000000;
+    CHECK(q->GetData(nullptr,0,0)==S_FALSE&&get(s.syncCalls)==sy);
     CHECK(q->GetData(nullptr,0,D3::kGetDataFlush)==S_FALSE&&get(s.syncCalls)==sy+1);
+    CHECK(q->GetData(nullptr,0,D3::kGetDataFlush)==S_FALSE&&get(s.syncCalls)==sy+2);
     gKnobs.eventPendingFlush.store(0);
     do{hr=q->GetData(nullptr,0,D3::kGetDataFlush);CHECK(std::chrono::steady_clock::now()<deadline);std::this_thread::yield();}while(hr==S_FALSE);
     CHECK(hr==D3D_OK);
+    gKnobs.holdQueries.store(false);
+    auto* event=static_cast<StreamQuery*>(q);
+    CHECK(waitFor([&]{return event->eventDoneGen.load(std::memory_order_acquire)==event->gen.load();}));
+    const auto completedSync=get(s.syncCalls);
+    CHECK(q->GetData(nullptr,0,D3::kGetDataFlush)==D3D_OK&&get(s.syncCalls)==completedSync);
+    gKnobs.holdQueries.store(true);
     gKnobs.eventPendingFlush.store(1000000);CHECK(q->Issue(D3::kIssueEnd)==D3D_OK);const auto slowSync=get(s.syncCalls);
-    CHECK(q->GetData(nullptr,0,D3::kGetDataFlush)==S_FALSE&&get(s.syncCalls)==slowSync);
-    static_cast<StreamQuery*>(q)->eventLocalSince=nowNs()-200000;
-    CHECK(q->GetData(nullptr,0,D3::kGetDataFlush)==S_FALSE&&get(s.syncCalls)==slowSync+1);   // the real query remains pending after the pumped sync
-    CHECK(q->Issue(D3::kIssueEnd)==D3D_OK&&q->GetData(nullptr,0,D3::kGetDataFlush)==S_FALSE&&get(s.syncCalls)==slowSync+1);   // a new END starts local again
+    CHECK(q->GetData(nullptr,0,0)==S_FALSE&&get(s.syncCalls)==slowSync);
+    CHECK(q->GetData(nullptr,0,D3::kGetDataFlush)==S_FALSE&&get(s.syncCalls)==slowSync+1);
+    CHECK(q->Issue(D3::kIssueEnd)==D3D_OK&&q->GetData(nullptr,0,D3::kGetDataFlush)==S_FALSE&&get(s.syncCalls)==slowSync+2);
     gKnobs.eventPendingFlush.store(0);q->Release();gKnobs.holdQueries.store(false);rig.finish();checkClean();
 }
 static void queryProbeAndDeadQuery(){

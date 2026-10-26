@@ -60,6 +60,7 @@ test_entrypoints_isolated.py
 test_equipment_emitter_patch.py
 test_equipment_light_proof_client.py
 test_equipment_lights.py
+test_event_polling_budget.py
 test_expired_world_geometry.py
 test_fast_memcmp.py
 test_five_path_perf.py

@@ -19,7 +19,10 @@ inline HRESULT pollEventQueryBriefly(Poll&& poll,Clock&& now,unsigned& calls){
     }
     return hr;
 }
-// The pumped round trip of an EVENT that stayed pending past the local window (stream_proxies.h): D3D9 has no blocking
+// A normal frame's EVENT wait must not re-enter the client's costly Sleep(0) retry
+// path after only 2 ms. Return at completion; 16 ms bounds an unresponsive query.
+inline constexpr std::uint64_t kEventFlushWaitNs=16000000;
+// The pumped round trip of a pending EVENT/FLUSH (stream_proxies.h): D3D9 has no blocking
 // query wait, so the replay thread holds the trip until the event completes or budgetNs passes, polling at a growing gap
 // (20, 40, then at most 50 us between polls) and yielding the core in between. The game thread sleeps in
 // its pumped wait meanwhile; a long GPU frame takes a few trips instead of one per driver call.
@@ -27,10 +30,13 @@ template<class Poll,class Clock,class Yield>
 inline HRESULT waitEventQuery(Poll&& poll,Clock&& now,Yield&& yield,unsigned& calls,std::uint64_t budgetNs=2000000){
     calls=1;HRESULT hr=poll();
     if(hr!=S_FALSE)return hr;
-    const std::uint64_t start=now();std::uint64_t gap=20000,next=start+gap;
-    for(unsigned checks=0;checks<(1u<<16);++checks){   // the check limit also bounds a stalled clock
+    const std::uint64_t start=now();std::uint64_t gap=20000,next=start+gap,previous=start;
+    for(unsigned stalled=0;stalled<(1u<<16);){
         const std::uint64_t current=now();
-        if(current-start>=budgetNs)break;
+        if(current-start>=budgetNs||current<previous)break;
+        // Count only a stalled clock. A fast yield must not exhaust the check
+        // limit before the actual deadline (observed at 7-8 ms for a 16 ms wait).
+        stalled=current==previous?stalled+1:0;previous=current;
         if(current<next){yield();continue;}
         ++calls;hr=poll();
         if(hr!=S_FALSE)break;

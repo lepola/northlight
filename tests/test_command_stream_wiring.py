@@ -72,3 +72,8 @@ checks['image proxies free a still-staged lock Block at destruction (surface, 3 
 for name,ok in checks.items():print(('PASS ' if ok else 'FAIL ')+name)
 assert all(checks.values())
 print('PASS command stream wiring: key, banner, GATE fields, inert hooks, no DllMain thread')
+
+# Pending EVENT FLUSH enters the pumped task immediately; completed generations remain local.
+assert "if(!done&&flags==D3::kGetDataFlush){" in sp and "goto pumped;" in sp
+assert "eventLocalSince" not in sp and "finishEventWait" not in sp
+assert "calls,kEventFlushWaitNs" in sp
