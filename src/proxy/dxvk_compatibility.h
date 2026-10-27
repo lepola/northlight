@@ -9,7 +9,8 @@ namespace NorthlightDxvkCompatibility {
 // read on the CPU); each version ignores the other's unknown key, so both are set.
 // DXVK_CONFIG is process-local and overrides only these file options. All other
 // file options and explicit inline overrides survive.
-inline std::string config(const std::string& existing){
-    return "d3d9.customVendorId = 1002; d3d9.cachedDynamicBuffers = True; d3d9.cachedWriteOnlyBuffers = True; "+existing;
+inline std::string config(const std::string& existing,bool disableFse=false){
+    return "d3d9.customVendorId = 1002; d3d9.cachedDynamicBuffers = True; d3d9.cachedWriteOnlyBuffers = True; "+existing+
+        (disableFse?"; dxvk.allowFse = False; ":"");
 }
 }

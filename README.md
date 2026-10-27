@@ -249,6 +249,8 @@ Then make Wine load the game-folder `d3d9.dll` once, with the override `d3d9=n,b
 
 Northlight loads its own DXVK from `renderer-backends/`, so the DXVK option of Lutris, Bottles, Proton or
 the prefix does not matter. Leave it as it is, and do not copy a DXVK `d3d9.dll` into the game folder.
+
+On native Windows with bundled DXVK 3.1.1 and an NVIDIA adapter, Northlight disables Vulkan present-wait features to avoid a driver wait that can stall the client when its window is obscured. This can affect frame pacing. Set `[Renderer] DxvkPresentWaitWorkaround=0` in `northlight-renderer.ini` to restore the driver's present-wait path.
 WineD3D modes (`PROTON_USE_WINED3D=1`) bypass Northlight. 32-bit (lib32/i386) Vulkan drivers are needed,
 as for any DXVK game. Because Linux names are case-sensitive and Wine's are not, the installer stops
 when the game folder already has a case variant of a name it writes (for example `D3D9.dll`). The player
