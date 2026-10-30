@@ -49,14 +49,15 @@ inline unsigned cores(){const unsigned hw=std::thread::hardware_concurrency();re
 // 0.3.200 (pipeline): framesAhead (optional) receives StreamFramesAhead from the same load (1 when nothing could be read).
 // 0.3.200 (frame skip): frameSkip (optional) receives StreamFrameSkip the same way (0 when nothing could be read).
 // 0.3.212 (task 32): nameMask (optional) receives NameMask != 0 the same way (false when nothing could be read: no depth format upgrade), so CreateDevice reads the ini once.
-inline bool commandStreamFromText(const std::string& own,bool hasFile=true,unsigned* framesAhead=nullptr,unsigned* frameSkip=nullptr,bool* nameMask=nullptr,bool* occlusionLocal=nullptr){
-    if(framesAhead)*framesAhead=1;if(frameSkip)*frameSkip=0;if(nameMask)*nameMask=false;if(occlusionLocal)*occlusionLocal=false;
+inline bool commandStreamFromText(const std::string& own,bool hasFile=true,unsigned* framesAhead=nullptr,unsigned* frameSkip=nullptr,bool* nameMask=nullptr,bool* occlusionLocal=nullptr,bool* contactAO=nullptr){
+    if(framesAhead)*framesAhead=1;if(frameSkip)*frameSkip=0;if(nameMask)*nameMask=false;if(occlusionLocal)*occlusionLocal=false;if(contactAO)*contactAO=false;
     try{std::istringstream in(NorthlightQuality::narrow(own));std::vector<std::string> problems;
         const NorthlightQuality::Settings s=NorthlightQuality::load(hasFile?&in:nullptr,nullptr,problems);
         if(framesAhead)*framesAhead=s.streamFramesAhead;
         if(frameSkip)*frameSkip=s.streamFrameSkip;
         if(nameMask)*nameMask=s.nameMask!=0;
         if(occlusionLocal)*occlusionLocal=s.streamOcclusionLocal!=0;
+        if(contactAO)*contactAO=s.contactAO!=0;
         return s.commandStream!=0;}
     catch(...){return false;}
 }
@@ -75,10 +76,10 @@ inline bool readQualityText(const wchar_t* rootPath,std::string& text){
         CloseHandle(f);return true;
     }catch(...){return false;}
 }
-inline bool commandStreamRequested(const wchar_t* rootPath,unsigned* framesAhead=nullptr,unsigned* frameSkip=nullptr,bool* nameMask=nullptr,bool* occlusionLocal=nullptr){
-    std::string text;if(framesAhead)*framesAhead=1;if(frameSkip)*frameSkip=0;if(nameMask)*nameMask=false;if(occlusionLocal)*occlusionLocal=false;
+inline bool commandStreamRequested(const wchar_t* rootPath,unsigned* framesAhead=nullptr,unsigned* frameSkip=nullptr,bool* nameMask=nullptr,bool* occlusionLocal=nullptr,bool* contactAO=nullptr){
+    std::string text;if(framesAhead)*framesAhead=1;if(frameSkip)*frameSkip=0;if(nameMask)*nameMask=false;if(occlusionLocal)*occlusionLocal=false;if(contactAO)*contactAO=false;
     const bool has=readQualityText(rootPath,text);
-    return commandStreamFromText(text,has,framesAhead,frameSkip,nameMask,occlusionLocal);
+    return commandStreamFromText(text,has,framesAhead,frameSkip,nameMask,occlusionLocal,contactAO);
 }
 #endif
 } // namespace NorthlightStream

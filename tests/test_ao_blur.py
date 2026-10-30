@@ -539,7 +539,8 @@ def audit_wiring():
                                     'ext->SetTexture(2,nullptr);ext->SetTexture(0,scene);',
                                     'auto legacyComposite', 'world->render(')]
     assert seq == sorted(seq), seq
-    assert 'SetPixelShader(constants[7]==0.f?aoContactBloomPS:aoPS)' in fn[a:seq[0]]
+    assert 'contactShader=aoActorUsed?(constants[7]==0.f?aoActorPS:aoActorAlphaPS):aoContactBloomPS;' in fn[:a]
+    assert 'SetPixelShader(constants[7]==0.f?contactShader:aoPS)' in fn[a:seq[0]]
     assert 'ext->SetTexture(2,ao); ext->SetPixelShader(compositePS)' in fn
     assert re.search(r'fold\?scene:nullptr,fold\?ao:nullptr\)', fn), 'the world fold reads the blurred ao'
     assert re.search(r'if\(fold&&!world->composited\)\{effectState\(\);bindEffects\(ao\);', fn), 'fold fallback binds ao'
@@ -558,16 +559,19 @@ def audit_contact_ao():
     the legacy path a neutral clear; ContactAO=1 keeps the raw AO then AOBlur sequence checked by audit_wiring."""
     text = fp.src('renderer.cpp').read_text()
     fn = text[text.index('bindEffects(nullptr);\n        if (!contactAO) {'):text.index('// 0.3.174 FOLD:')]
-    off, on = fn.split('        } else {\n            if (error(ext->SetRenderTarget(0,aoRawSurface)', 1)
-    on = '            if (error(ext->SetRenderTarget(0,aoRawSurface)' + on
+    off, on = fn.split('        } else {\n            IDirect3DTexture9* actorTexture=', 1)
+    on = '            IDirect3DTexture9* actorTexture=' + on
     assert 'constants[7]==0.f' in off
     ready, legacy = off.split('} else {', 1)
     assert 'SetRenderTarget(0,aoSurface)' in ready and 'SetPixelShader(contactBloomPS)' in ready and 'quad(width/2,height/2)' in ready
     assert 'aoRaw' not in off and 'aoPS' not in off and 'aoBlurPS' not in off and 'aoContactBloomPS' not in off, 'off path runs neither AO nor AOBlur'
+    assert 'aoActor' not in off, 'off path must not run actor preparation or actor AO'
     assert 'SetRenderTarget(0,aoSurface)' in legacy and 'ext->Clear(0,nullptr,D3DCLEAR_TARGET,D3DCOLOR_ARGB(255,0,0,0),1.f,0)' in legacy
     assert 'quad(' not in legacy and 'D3DCLEAR_ZBUFFER' not in legacy and 'D3DCLEAR_STENCIL' not in legacy
     assert off.count('effectsBuckets.mark(Bucket::AO)') == 1 and on.count('effectsBuckets.mark(Bucket::AO)') == 1
-    assert 'SetPixelShader(constants[7]==0.f?aoContactBloomPS:aoPS)' in on and 'SetPixelShader(aoBlurPS)' in on and 'contactBloomPS' not in on
+    assert 'contactShader=aoActorUsed?(constants[7]==0.f?aoActorPS:aoActorAlphaPS):aoContactBloomPS;' in on
+    assert 'SetPixelShader(constants[7]==0.f?contactShader:aoPS)' in on and 'SetPixelShader(aoBlurPS)' in on and 'contactBloomPS' not in on
+    assert 'if(aoActorUsed){ext->SetTexture(2,nullptr);ext->SetTexture(4,nullptr);}' in on, 'unbind preparation before the blur writes its target'
     assert 'bool contactAO=true;' in text and 'contactAO=world->contactAO();' in text
     assert 'drop(contactBloomPS)' in text and 'CreatePixelShader(kContactBloomShader, &contactBloomPS)' in text
     assert 'bool contactAO()const{return quality.contactAO!=0;}' in fp.src('world_renderer.h').read_text()

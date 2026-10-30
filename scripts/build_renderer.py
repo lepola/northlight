@@ -34,6 +34,12 @@ def main(argv=None):
     source_hash = hashlib.sha256((SHADERS/'effects.hlsl').read_bytes()).hexdigest()
     if source_hash not in json.dumps(manifest):
         raise SystemExit('Shader source differs from the offline build; run scripts/shaders/compile_shaders.py.')
+    actor_hash = hashlib.sha256((SHADERS/'effects.hlsl').read_bytes() + b'\n' + (SHADERS/'ao_actor.hlsl').read_bytes()).hexdigest()
+    if actor_hash != manifest.get('actor_source_sha256'):
+        raise SystemExit('Actor AO source differs from the offline build; rebuild all actor shader entries.')
+    for entry in ('AOActorPrepare', 'HBAOActorContactBloom', 'GTAOActorContactBloom', 'HBAOActorOnly', 'GTAOActorOnly'):
+        if manifest['shaders'].get(entry, {}).get('source_sha256') != actor_hash:
+            raise SystemExit(f'{entry} has stale actor AO dependencies; rebuild all actor shader entries.')
     world_manifest = json.loads((SHADERS/'world-shader-build.json').read_text())
     if hashlib.sha256((SHADERS/'world_effects.hlsl').read_bytes()).hexdigest() not in json.dumps(world_manifest):
         raise SystemExit('World shader source differs from offline build.')

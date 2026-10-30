@@ -44,6 +44,16 @@ struct Dev{
 static void apply(Dev& d,const Set* sets,size_t n,DWORD* prev,unsigned){for(size_t i=0;i<n;++i)prev[i]=d.get(sets[i].state);for(size_t i=0;i<n;++i)d.set(sets[i].state,sets[i].value);}
 static void restore(Dev& d,const Set* sets,size_t n,const DWORD* prev){for(size_t i=0;i<n;++i)d.set(sets[i].state,prev[i]);}
 int main(){
+    // Both consumers request the same spare stencil bits independently. Turning
+    // off floating-name protection must not disable the actor AO correction.
+    for(unsigned names=0;names<2;++names)for(unsigned ao=0;ao<2;++ao){
+        const std::string ini="[Quality]\nNameMask="+std::to_string(names)+"\nContactAO="+std::to_string(ao)+"\n";
+        bool nameWanted=true,aoWanted=true;
+        NorthlightStream::commandStreamFromText(ini,true,nullptr,nullptr,&nameWanted,nullptr,&aoWanted);
+        assert(nameWanted==bool(names)&&aoWanted==bool(ao));
+        assert((nameWanted||aoWanted)==bool(names||ao));
+    }
+
     // ids and values are the Direct3D 9 ones (renderer.cpp static_asserts them against the SDK headers)
     assert(ZEnable==7&&ZWriteEnable==14&&AlphaTestEnable==15&&AlphaRef==24&&AlphaFunc==25&&StencilEnable==52&&StencilFunc==56&&StencilRef==57&&StencilMask==58&&StencilWriteMask==59&&kBit==0x80);
     // a name: alpha-blended Z-writing (or not) glyph quads, SRCALPHA source, RGB written, destination neither ZERO nor SRCCOLOR
@@ -174,9 +184,9 @@ checks['draw: unmark states around the game draw; a name draws with the run set 
     and md.index('nameMaskRunBegin()')<md.index('readDrawRenderState(D3DRS_ALPHATESTENABLE,alphaTest)')<md.index('maskApply(NorthlightNameStencil::kAlphaGuard,alphaPrevious)')<md.index('const HRESULT hr=rainBlendDraw(rain,claimed,draw);',md.index('kAlphaGuard'))<md.index('maskRestore(NorthlightNameStencil::kAlphaGuard,alphaPrevious)')<md.index('if(SUCCEEDED(hr)&&nameRun)nameMask.noteMark();')
     and 'if(!kind)return rainBlendDraw(rain,claimed,draw);' in md and 'if(claimed||!nameMask.armed())return rainBlendDraw(rain,claimed,draw);' in md)
 hook=r[r.index('template<class Capture,class Draw> HRESULT drawHook('):];hook=hook[:hook.index('\n    }\n')+7]
-checks['drawHook: both gate paths end in nameMaskDraw (optional draw wrappers retain the game call)']=hook.count('nameMaskDraw(rainBlend,claimed||mist,draw)')==2 and 'rainBlendDraw' not in hook
+checks['drawHook: both gate paths end in nameMaskDraw (optional draw wrappers retain the game call)']=hook.count('nameMaskDraw(rainBlend,claimed||mist,nativeDraw)')==2 and 'auto nativeDraw=[&]{return aoActorNativeDraw(draw);};' in hook and 'rainBlendDraw' not in hook
 checks['draw lambdas retain all four device entry points']=len(re.findall(r'return drawHook\(t,count,\[&\]\(IDirect3DVertexShader9\* vs\)\{[^\n]*?\},draw\);\}',r))==4 and all(x in r for x in ('ext->DrawPrimitive(','ext->DrawIndexedPrimitive('))
-clr=r[r.index('HRESULT STDMETHODCALLTYPE Clear('):][:2800]
+clr=r[r.index('HRESULT STDMETHODCALLTYPE Clear('):r.index('HRESULT STDMETHODCALLTYPE CreateVertexBuffer(')]
 checks['Clear hook: the stencil flag joins the game\'s full Clear(Z) of the world depth (no rects, scissor off) while the frame has no marks; with marks it is dropped; the mask bit in the game\'s value disables']=(
     'boundDepthIs(maskDsId)' in clr and 'n==0&&SUCCEEDED(ext->GetRenderState(D3DRS_SCISSORTESTENABLE,&scissor))&&!scissor&&SUCCEEDED(ext->GetViewport(&viewport))&&nameMaskFullViewport(viewport)' in clr and 'flags|=D3DCLEAR_STENCIL;stencil=0;' in clr and 'flags&=~DWORD(D3DCLEAR_STENCIL)' in clr
     and 'nameMask.noteClear(false)' in clr and 'nameMask.disable("the game clears stencil with the mask bit")' in clr and clr.index('flags|=D3DCLEAR_STENCIL')<clr.index('ext->Clear(n,rects,flags,color,z,stencil)'))
@@ -198,19 +208,19 @@ checks['debug view: the last effect pass before applied=true when the frame has 
     'if(maskOn&&nameMask.debug)nameMaskDebugView(saved.targets[0]);' in r and r.index('nameMaskDebugView(saved.targets[0]);')<r.index('applied = true; ++appliedFrames;')
     and 'D3DRS_STENCILFUNC,D3DCMP_EQUAL' in r and 'D3DRS_STENCILWRITEMASK,0' in r)
 checks['depth upgrade: the key read from the ini at CreateDevice, D24S8 checked with CheckDeviceFormat and CheckDepthStencilMatch before the auto depth and CreateDepthStencilSurface change, Reset too, the stream applies it on the game thread']=(
-    'const bool stream=NorthlightStream::commandStreamRequested(rootPath,&framesAhead,&frameSkip,&nameMaskWanted,&occlusionLocal);' in r and r.index('commandStreamRequested(rootPath,&framesAhead,&frameSkip,&nameMaskWanted,&occlusionLocal)')<r.index('upgradeAutoDepth(real,adapter,type,pp,nameMaskWanted,"CreateDevice");')
-    and 'nameMaskRequested' not in r and 'if(nameMask)*nameMask=s.nameMask!=0;' in sh and 'return commandStreamFromText(text,has,framesAhead,frameSkip,nameMask,occlusionLocal);' in sh
+    'const bool stream=NorthlightStream::commandStreamRequested(rootPath,&framesAhead,&frameSkip,&nameMaskWanted,&occlusionLocal,&contactAOWanted);' in r and r.index('commandStreamRequested(rootPath,&framesAhead,&frameSkip,&nameMaskWanted,&occlusionLocal,&contactAOWanted)')<r.index('upgradeAutoDepth(real,adapter,type,pp,nameMaskWanted||contactAOWanted,"CreateDevice");')
+    and 'nameMaskRequested' not in r and 'if(nameMask)*nameMask=s.nameMask!=0;' in sh and 'if(contactAO)*contactAO=s.contactAO!=0;' in sh and 'return commandStreamFromText(text,has,framesAhead,frameSkip,nameMask,occlusionLocal,contactAO);' in sh
     and 'if(nameMask.setting){const D3DFORMAT upgraded' not in r and 'D3DUSAGE_DEPTHSTENCIL,D3DRTYPE_SURFACE,D3DFMT_D24S8' in r and 'CheckDepthStencilMatch(' in r
-    and 'upgradeAutoDepth(parent,cp.AdapterOrdinal,cp.DeviceType,pp,true,"Reset");' in r and 'if(pp&&world&&world->nameMask())' in r
+    and 'upgradeAutoDepth(parent,cp.AdapterOrdinal,cp.DeviceType,pp,world->nameMask()||world->contactAO(),"Reset");' in r and 'if(pp&&world)' in r
     and 'NorthlightStream::upgradedDepthFormat(unsigned(Format))' in r and 'D3DFORMAT(NorthlightStream::upgradedDepthFormat(unsigned(fmt)))' in sd
     and 'inline unsigned upgradedDepthFormat(unsigned format)' in sh)
-checks['kill switch: NameMask=0 never upgrades the depth (wanted=false), marks nothing, adds no clear flag and leaves the composite alone']=(
+checks['kill switch: NameMask=0 marks nothing, adds no name clear flag and leaves the composite alone; independent AO can request stencil']=(
     'if(nameMask)*nameMask=false;' in sh and 'nameMask.setting=world->nameMask();' in r and 'bool armed()const{return setting&&!disabled;}' in h
     and 'if(terrain&&nameMask.armed()&&' in r and '(flags&D3DCLEAR_ZBUFFER)&&nameMask.armed()&&maskDsId' in r and 'nameMask.armed()&&nameMask.hasMarks()&&maskStencil' in r)
 fin=r[r.index('NAMEMASK frame=')-300:r.index('NAMEMASK frame=')+1800]
 checks['frame end: one sampled NAMEMASK line (marked, unmarked, composite, depthFormat, stencil), state reset after it']=(
     'marked=%u runs=%u unmarked=%u composite=%d depthFormat=%lu stencil=%d' in fin and fin.index('NAMEMASK frame=')<fin.index('nameMask.endFrame();'))
-checks['one-shot lines: depth upgrade (or why not), stencil in the game, a world depth without stencil (capped), failed clear']=all(x in r for x in ('NAMEMASK depth upgraded D24X8->D24S8','NAMEMASK depth upgrade unavailable','NAMEMASK disabled: the game draws with stencil enabled','(no stencil bits: no name mask while this surface is the world depth)','NAMEMASK disabled: stencil clear failed'))
+checks['one-shot lines: depth upgrade (or why not), stencil in the game, a world depth without stencil (capped), failed clear']=all(x in r for x in ('STENCIL depth upgraded D24X8->D24S8','STENCIL depth upgrade unavailable','NAMEMASK disabled: the game draws with stencil enabled','(no stencil bits: no name mask while this surface is the world depth)','NAMEMASK disabled: stencil clear failed'))
 checks['release forgets the depth identities; the setting is read once at device creation']=('maskFormatFor=nullptr;maskFormatValue=0;maskStencil=false;maskDsId=nullptr;' in r[r.index('void releaseResources()'):][:400]
     and 'nameMask.debug=world->nameMaskDebug();' in r)
 # Each key's own entry (name, member, range, presets) and initialiser; Keys[] order and origin[] length belong to test_quality_docs.py.

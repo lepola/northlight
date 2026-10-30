@@ -55,3 +55,73 @@ Algorithm references:
 - [NVIDIA VXAO requirements](https://developer.nvidia.com/vxao-voxel-ambient-occlusion)
 
 Third-party notices for the adapted kernels are in `licenses/ao-methods.txt`.
+
+## Thin actor occluders (#106)
+
+Advanced AO can interpret a shin's front depth as a solid wall extending behind
+the character. The actor correction measures a bounded visible silhouette width
+and integrates a finite occlusion band instead. GTAO keeps the original
+environment horizon; HBAO+ keeps its normal bias and distance kernel and scales
+only the actor contribution by finite slice coverage. A global depth-difference
+cutoff is deliberately avoided because it erases genuine wall/ledge occlusion.
+
+Ownership comes from stencil bit `0x40` written by the native depth-writing draw;
+there is no second M2 geometry draw or native shader patch. Floating names keep
+their separate `0x80` bit. The first pending name-mask clear runs before actor
+tagging, and materialization clears the actor bit again. Only fully actor-owned
+MSAA pixels receive thickness correction. Unknown state, missing stencil or a
+depth snapshot mismatch retains the original AO. Native MSAA with an already
+occupied MRT is declined; packaged DXVK 2/3 explicitly verified by the oracle can
+use that combination. [D3D9's MRT restrictions](https://learn.microsoft.com/en-us/windows/win32/direct3d9/multiple-render-targets)
+do not guarantee antialiasing with MRT.
+
+Contact protection samples a quarter-yard region on the receiver, including a
+small lifted volume so shallow camera pitch does not hide the foot. Actor
+receivers retain their existing self-occlusion. A width above one yard or a
+silhouette without both measured boundaries retains baseline thickness. The
+width is a conservative screen-space estimate, not a back-face depth measurement.
+
+HBAO correction has full confidence through 2yd and fades to baseline between
+2 and 3yd. At 3yd and above the original HBAO shader runs with no ownership work:
+the unrestricted finite approximation underestimates real large-radius AO in
+the regression scenes. Those settings retain their existing halo behavior.
+GTAO keeps the finite band at larger radii; it improves reference error but does
+not promise to eliminate every high-radius halo. Radii <=0.5yd and strength zero
+use the original path. These limits are automatic and do not rewrite settings.
+
+Device creation reserves D24S8 when either ContactAO or NameMask needs it,
+subject to the existing format support checks. It has the same 24-bit depth
+precision and 32-bit storage as D24X8. This also permits a live SSAO-to-GTAO
+switch with NameMask disabled. If both consumers were disabled at creation,
+enabling the correction can require a device reset to obtain stencil.
+
+The correction reuses the existing half-resolution AO ping-pong target for
+temporary normals/contact flags. Its full-resolution ownership texture and
+matching MSAA surface are lazy; frames without eligible actors need neither
+private mask pass. Switching off the feature's consumers releases its retained
+resources. `AO_ACTOR` diagnostics report stamp counts, validity, use and sampled
+CPU cost; `AOActorPrepare` and `AO` distinguish GPU preparation from the kernel.
+Legacy alpha-only variants retain color bounce and skip discarded bloom reads.
+
+Offline validation, without a client or game launch:
+
+```sh
+python tests/test_ao_actor_build.py
+python tests/test_ao_actor_reference.py
+python tests/test_ao_actor_gpu.py
+python tests/test_ao_actor_stencil_gpu.py
+```
+
+The GPU tests require Windows and use hidden independent D3D9 devices;
+`--compile-only` builds them without executing GPU work. `--backend` selects an
+explicit backend DLL. The authored compressed fixtures contain six camera views,
+a true wall, a thick skinned control and sky, with independent cosine-ray truth.
+Additional radius cases check the HBAO confidence transition and exact baseline
+dispatch at larger radii. The far fixture uses 1728x1117 so its contact ROI is
+not under-sampled. Both world
+and legacy composition paths must preserve nonuniform bloom/bounce RGB exactly.
+Regenerate the fixtures with `python scripts/generate_ao_actor_fixtures.py`.
+
+Use `--benchmark` for paired warm microbenchmarks. They report CPU submission and
+GPU timestamp intervals separately; those intervals can include submission gaps.
+These measurements are not proof of unchanged in-game FPS or Apple GPU cost.

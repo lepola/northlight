@@ -7,6 +7,11 @@ test_actor_shadow_selection.py
 test_actor_shadows_wiring.py
 test_actor_texture_worker.py
 test_affected_tests.py
+test_ao_actor_build.py
+test_ao_actor_gpu.py
+test_ao_actor_reference.py
+test_ao_actor_stencil.py
+test_ao_actor_stencil_gpu.py
 test_ao_blur.py
 test_ao_fog_capture.py
 test_ao_fold.py

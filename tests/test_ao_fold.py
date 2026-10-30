@@ -141,7 +141,8 @@ checks['proxy: FOLD condition, legacy composite before render only when not fold
     all(effects_cpp.count(s) == 1 for s in (fold_line, legacy_before, render_call, legacy_after))
     and effects_cpp.index('gpuProfile->mark("AO");') < effects_cpp.index(fold_line) < effects_cpp.index(legacy_before)
     < effects_cpp.index(render_call) < effects_cpp.index(legacy_after) < effects_cpp.index('celestialDiscs->renderVeil(')
-    and 'ext->SetPixelShader(constants[7]==0.f?aoContactBloomPS:aoPS);' in effects_cpp)
+    and 'contactShader=aoActorUsed?(constants[7]==0.f?aoActorPS:aoActorAlphaPS):aoContactBloomPS;' in effects_cpp
+    and 'ext->SetPixelShader(constants[7]==0.f?contactShader:aoPS);' in effects_cpp)
 checks['proxy: one shared effect-state setup, used before the AO pass and before the late legacy composite'] = (
     renderer.count('    void effectState() {') == 1 and effects_cpp.count('effectState();') == 2
     and effects_cpp.index('effectState();') < effects_cpp.index('bindEffects(nullptr);')

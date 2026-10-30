@@ -95,6 +95,8 @@ __MODEL__
 #undef NorthlightWmoContext
 };
 struct Device {
+    struct ActorAO {unsigned resumes=0;void resume(){++resumes;}} actorAO;
+    ActorAO* aoActorMask=&actorAO;bool aoActorOn=false;
     struct MaterialProjection {void setProjection(float,float,float){}};
     MaterialProjection* autoBump=nullptr;
     bool drawWaterMaterial=false;bool liquidMaterial(IDirect3DVertexShader9*,bool){return false;}
@@ -155,6 +157,8 @@ int main(){
     {Device p;p.world->captureShaders[shader].fog=false;p.beforeDraw(shader);assert(p.terrain&&!p.world->fogProof&&p.world->traceFog==0);++cases;}
     {Device p;p.depthOK=false;p.world->captureShaders[shader]={};p.beforeDraw(shader);assert(!p.terrain&&p.allocations==0);++cases;}
     for(int tag:{1,0}){Device p;p.vc.entry=tag;p.vc.wmo=tag==0;p.vc.skinned=false;p.beforeDraw(shader);assert(p.terrain&&p.projectionValid);++cases;}
+    for(bool on:{false,true}){Device p;p.aoActorOn=on;p.captured=true;p.vc.entry=1;p.vc.skinned=false;
+        p.beforeDraw(shader);assert(p.terrain&&!p.captured&&p.actorAO.resumes==unsigned(on));++cases;}
     std::printf("production context/gate: %u cases passed; no terrain dependency; sky/UI/bad camera rejected\n",cases);
 }
 '''
