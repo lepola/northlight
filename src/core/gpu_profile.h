@@ -15,7 +15,8 @@ class NorthlightGpuProfile {
     // 0.3.209 (task 29): 32 marks: SunActor/MoonActor, ActorTiles, ActorShadow, WorldNormals and SunNearReplays/MoonNearReplays.
     // Task 43: 40 marks: GI splits into GI/LocalLights and PointLighting into PointLight/RemovalSmooth/TemporalLight.
     // Task 45: PreCelestial (renderer.cpp) closes the rain/water mask preparation before the celestial passes; the worst case still fits 40.
-    static constexpr unsigned RingSize=6,MaxMarks=40,StampCount=MaxMarks+2;
+    // Direction transitions can copy static history for four slots in one frame.
+    static constexpr unsigned RingSize=6,MaxMarks=44,StampCount=MaxMarks+2;
     static constexpr uint64_t SamplePeriod=120;
     struct Slot {
         IDirect3DQuery9* stamps[StampCount]={};
@@ -79,7 +80,7 @@ class NorthlightGpuProfile {
         for(unsigned i=0;i<intervals;++i)if(ticks[i+1]<ticks[i]){
             logf("%s frame=%llu discarded: nonmonotonic timestamps",prefix_,static_cast<unsigned long long>(s.frame));return;
         }
-        char line[1536];
+        char line[128+(MaxMarks+1)*72]; // Every bounded label and interval fits, including four history copies.
         int wrote=std::snprintf(line,sizeof line,"%s frame=%llu total=%.3fms",
             prefix_,static_cast<unsigned long long>(s.frame),double(ticks[intervals]-ticks[0])*1000.0/double(frequency));
         size_t used=wrote>0?static_cast<size_t>(wrote):0;

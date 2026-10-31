@@ -191,9 +191,9 @@ float shadowMap(float3 lp,bool useNear,float radius,float2 gradient) {
     float start=useNear?-2:-1;
     float visibility=0,total=0;
     // The exit lives in the loop condition: Microsoft's compiler turned the nested bare break into break_ne with identical operands.
-    [loop]for(int i=0;i<25&&i<size*size;++i){
-        float row=floor((i+.5)/size); // +.5: rcp may give 10/5 = 1.99999, which floors to row 1
-        float2 offset=float2(i-row*size,row)+start;
+    [loop]for(int y=0;y<5&&y<size;++y)
+    [loop]for(int x=0;x<5&&x<size;++x){
+        float2 offset=float2(x,y)+start;
         float2 tapUV=(base+offset+.5)*DepthParams.w;
         float2 weight=max(reach-abs(offset-fraction),0);
         float w=weight.x*weight.y;
@@ -507,10 +507,10 @@ float4 ActorShadow(float2 uv:TEXCOORD0,uniform row_major float4x4 ActorMatrix:re
     if(tileNearest>=receiver+(abs(gradient.x)+abs(gradient.y))*searchReach*ActorInfo.y+1e-5)return 1;
     float2 nearest=floor(pixel+.5);
     float blockers=0,count=0;
-    [loop]for(int i=0;i<41;++i){
-        float2 tap;
-        if(i<25){float row=floor((i+.5)/5);tap=nearest+float2(i-row*5,row)-2;}
-        else{float j=i-25,row=floor((j+.5)/4);tap=floor(pixel+(float2(j-row*4,row)-1.5)*stride+.5);}
+    [loop]for(int grid=0;grid<2;++grid)
+    [loop]for(int row=0;row<5-grid;++row)
+    [loop]for(int col=0;col<5-grid;++col){
+        float2 tap=grid==0?nearest+float2(col,row)-2:floor(pixel+(float2(col,row)-1.5)*stride+.5);
         float2 tapUV=(tap+.5)*ActorInfo.y;
         float z=tex2Dlod(ActorMap,float4(tapUV,0,0)).r;
         if(z<receiver+dot(gradient,tapUV-mapUV)){blockers+=z;++count;}
@@ -524,9 +524,10 @@ float4 ActorShadow(float2 uv:TEXCOORD0,uniform row_major float4x4 ActorMatrix:re
     float size=floor(2*reach)+1;
     float2 first=floor(pixel-reach)+1;
     float visibility=0,total=0;
-    [loop]for(int k=0;k<81&&k<size*size;++k){ // exit in the loop condition, as in shadowMap
-        float row=floor((k+.5)/size); // +.5: rcp may give 10/5 = 1.99999, which floors to row 1
-        float2 tap=first+float2(k-row*size,row);
+    int taps=0;
+    [loop]for(int tapRow=0;tapRow<9&&tapRow<size;++tapRow)
+    [loop]for(int tapCol=0;tapCol<size&&taps<81;++tapCol,++taps){
+        float2 tap=first+float2(tapCol,tapRow);
         float2 tapUV=(tap+.5)*ActorInfo.y;
         float2 weight=max(reach-abs(tap-pixel),0);
         float w=weight.x*weight.y;

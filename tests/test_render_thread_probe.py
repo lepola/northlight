@@ -28,7 +28,8 @@ r,w,probe,probeH,mirror,raw,q=read('renderer.cpp'),read('world_renderer.h'),read
 CLOCKS=('QueryPerformanceCounter','steady_clock','QpcClock','::now(')
 loop=w[w.index('auto replayLoop=[&](auto& split)->bool{'):w.index('ReplaySplit split;split.timed=profiled;')]
 submit=w[w.index('template<class Split,class Check> bool submitReplay('):w.index('    bool render(IDirect3DSurface9* targetSurface,')]
-ticks=r[r.index('struct PresentTicks {'):r.index('static void finishDeviceFrame(IDirect3DDevice9* owner);')]
+ticks_start=r.index('struct PresentTicks {')
+ticks=r[ticks_start:r.index('\n};',ticks_start)+3]
 issue=probe[probe.index('NorthlightReplayDrawState::Cache probeBindings(d);'):probe.index('        if(draws==replayProbeList.size())return true;')]
 probeBody=probe[probe.index('    template<class Mode> bool replayProbeIssue('):probe.index('    // endFrame(): a finished window')]
 counted=[l for l in raw.splitlines() if 'm->countRaw(' in l and 'rawActive()){++m->rawCalls;' not in l]

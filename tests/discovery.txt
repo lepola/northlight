@@ -76,6 +76,7 @@ test_gi_quality.py
 test_gi_settings_dependencies.py
 test_gpu_budget.py
 test_gpu_budget_wiring.py
+test_gpu_profile.py
 test_gtao_grazing.py
 test_horizon_haze.py
 test_index_working_set.py
@@ -177,6 +178,11 @@ test_shadow_paging_memory.py
 test_shadow_pivot.py
 test_shadow_removal_smoothing.py
 test_shadow_shimmer.py
+test_shadow_transition.py
+test_shadow_transition_build.py
+test_shadow_transition_gpu.py
+test_shadow_transition_math.py
+test_shadow_transition_resources.py
 test_snapshot_allocation.py
 test_snapshot_prediction.py
 test_solar_volume.py

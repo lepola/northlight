@@ -37,6 +37,14 @@ def main(argv=None):
     world_manifest = json.loads((SHADERS/'world-shader-build.json').read_text())
     if hashlib.sha256((SHADERS/'world_effects.hlsl').read_bytes()).hexdigest() not in json.dumps(world_manifest):
         raise SystemExit('World shader source differs from offline build.')
+    transition_manifest = json.loads((SHADERS/'shadow-transition-shader-build.json').read_text())
+    for name in ('world_effects.hlsl', 'shadow_transition.hlsl'):
+        if hashlib.sha256((SHADERS/name).read_bytes()).hexdigest() != transition_manifest['sources'].get(name):
+            raise SystemExit('Shadow transition source differs from offline build.')
+    for entry in ('WorldLightingFade', 'WorldFogFade', 'FogCloudsFade'):
+        record = transition_manifest['shaders'][entry]
+        if record['static_instruction_slots'] > 512 or record['temporary_registers'] > 32 or hashlib.sha256((SHADERS/'compiled'/f'{entry}.bin').read_bytes()).hexdigest() != record['sha256']:
+            raise SystemExit('Shadow transition shader differs from the verified SM3 build.')
     local_manifest = json.loads((SHADERS/'local-light-shader-build.json').read_text())
     if hashlib.sha256((SHADERS/'local_light_effects.hlsl').read_bytes()).hexdigest() != local_manifest['source_sha256']:
         raise SystemExit('Local light shader source differs from offline build.')

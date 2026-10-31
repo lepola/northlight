@@ -15,11 +15,13 @@ update='        const V cascadePivot=cascadeAnchor.update(pivot,vec(context.came
 checks['anchor updated once per render, right after the raw pivot']=(w.count('cascadeAnchor.update(')==1 and update in render
     and render.index('const V pivot=staticPivotReady?staticFramePivot:shadowPivot();')<render.index('actorShadowOrigin[0]=pivot.x;actorShadowOrigin[1]=pivot.y;actorShadowOrigin[2]=pivot.z;')<render.index(update)
     and 'const bool anchorNewMap=cascadeAnchorMap!=lastRequest.map;if(anchorNewMap)cascadeAnchorMap=lastRequest.map;' in render)
-checks['cascade frames, prebuild frame and prebuild matrix use the anchor']=('cascadeFrames[source][cascade]=NorthlightWorldMath::shadowFrame(cascadePivot,sourceDirections[source],radius);' in render
+checks['cascade frames, prebuild frame and prebuild matrix use the anchor']=('cascadeFrames[source][cascade]=NorthlightWorldMath::shadowFrame(cascadePivot,slotDirections[source*2+cascade],radius);' in render
     and 'staticPrebuild.frame(cascadePivot,' in render and 'NorthlightWorldMath::shadowMatrixFrom(NorthlightWorldMath::shadowFrame(cascadePivot,direction,radius),' in render
     and 'slotPlacement[slot]=NorthlightWorldMath::shadowCachePlacement(cascadeFrames[source][cascade],' in render)
 after=render[render.index(update)+len(update):]
-checks['no other consumer of the raw pivot after the anchor']=re.search(r'\bpivot\b',re.sub(r'//[^\n]*','',after)) is None
+actor_start=after.index('        float actorFrameMatrix[2][16]');actor_end=after.index('        int firstSource=',actor_start)
+checks['only the separate actor map keeps the raw pivot after the anchor']=re.search(r'\bpivot\b',re.sub(r'//[^\n]*','',after[:actor_start]+after[actor_end:])) is None
+checks['transition travel proof and cascade matrices share the anchored pivot']='shadowFrame(cascadePivot,key.direction,radius)' in after and after.index('f.state.request(')<after.index('cascadeFrames[source][cascade]=')
 checks['static caster request keeps the raw pivot']='staticFramePivot=shadowPivot();staticPivotReady=true;' in w
 checks['reset() restarts the window']='pivotValid=false;pivotDistance=12.f;pivotCorrection.reset();pivotSelfCaptured=false;cascadeAnchor.reset();' in w and '#include "cascade_anchor.h"' in w
 a=fp.src('cascade_anchor.h').read_text()

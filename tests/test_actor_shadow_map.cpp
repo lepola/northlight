@@ -18,6 +18,11 @@ static void project(const float* m,Vec3 p,float* c){for(int a=0;a<3;++a)c[a]=p.x
 int main(){
     const Vec3 sun=normalized(Vec3(.3f,-.4f,.8f));
     const Vec3 pivot(1234.567f,-876.543f,52.25f);
+    // Sub-lattice celestial motion still moves the detailed actor projection.
+    {const Vec3 d0=normalized(Vec3(.3f,-.4f,.8f)),d1=normalized(Vec3(.30001f,-.4f,.8f));
+     const Vec3 q0=NorthlightWorldMath::quantizeDirection(d0),q1=NorthlightWorldMath::quantizeDirection(d1);
+     assert(q0.x==q1.x&&q0.y==q1.y&&q0.z==q1.z);
+     float a[16],b[16];M::matrix(pivot,d0,a);M::matrix(pivot,d1,b);assert(std::memcmp(a,b,sizeof a)!=0);}
     float m[16];M::matrix(pivot,sun,m);
     float c[3];project(m,pivot,c);
     assert(std::fabs(c[0])<1e-4f&&std::fabs(c[1])<1e-4f&&std::fabs(c[2]-.5f)<1e-5f);

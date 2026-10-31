@@ -1,0 +1,128 @@
+{
+  "sources": {
+    "world_effects.hlsl": "d176323284f4dce4e2ffe9cb704a719d20e63a250189e028b2c25a41ce2ff871",
+    "shadow_transition.hlsl": "f276fc56e56188227d924afc0e456256be005f67308589e19ea79be8ee7eff16"
+  },
+  "compiler": "Microsoft d3dcompiler_47 10.0.17134.12 IEEE strict",
+  "compiler_sha256": "4432bbd1a390874f3f0a503d45cc48d346abc3a8c0213c289f4b615bf0ee84f3",
+  "game_launched": false,
+  "shaders": {
+    "WorldLightingFade": {
+      "target": "ps_3_0",
+      "bytes": 8244,
+      "sha256": "d446380f6a99456b1564dd1e77c0c7d70f9cba108c005e8d3f7f2168bd79d364",
+      "static_instruction_slots": 471,
+      "temporary_registers": 31,
+      "samplers": [
+        1,
+        2,
+        3,
+        6,
+        7,
+        8,
+        9,
+        11,
+        12,
+        14
+      ],
+      "instructions": {
+        "mul": 97,
+        "frc": 3,
+        "add": 112,
+        "max": 11,
+        "mov": 46,
+        "min": 3,
+        "texldl": 10,
+        "if": 14,
+        "else": 13,
+        "rcp": 7,
+        "cmp": 63,
+        "endif": 14,
+        "dp3": 8,
+        "abs": 2,
+        "rep": 3,
+        "dp2add": 6,
+        "break": 1,
+        "endrep": 3
+      }
+    },
+    "WorldFogFade": {
+      "target": "ps_3_0",
+      "bytes": 8660,
+      "sha256": "c54728648d54feaf8de032c7241376ff4e25ffd6eb660a0f61370c9941f468d2",
+      "static_instruction_slots": 492,
+      "temporary_registers": 23,
+      "samplers": [
+        1,
+        3,
+        7,
+        9,
+        11,
+        13
+      ],
+      "instructions": {
+        "mov": 43,
+        "if": 8,
+        "else": 6,
+        "mul": 132,
+        "frc": 6,
+        "add": 125,
+        "max": 17,
+        "min": 10,
+        "texldl": 9,
+        "rcp": 16,
+        "cmp": 48,
+        "endif": 8,
+        "dp3": 3,
+        "rsq": 1,
+        "mad": 4,
+        "pow": 1,
+        "rep": 3,
+        "break": 1,
+        "dp4": 5,
+        "exp": 1,
+        "dp2add": 2,
+        "endrep": 3
+      }
+    },
+    "FogCloudsFade": {
+      "target": "ps_3_0",
+      "bytes": 8796,
+      "sha256": "f669fb9d5083e3c2277416139bff783e6d4e40427ba4d9c3fcf428843db0bc13",
+      "static_instruction_slots": 503,
+      "temporary_registers": 23,
+      "samplers": [
+        1,
+        3,
+        7,
+        9,
+        11,
+        13,
+        14
+      ],
+      "instructions": {
+        "mul": 132,
+        "frc": 6,
+        "add": 121,
+        "mov": 52,
+        "max": 18,
+        "min": 11,
+        "texldl": 11,
+        "if": 8,
+        "else": 7,
+        "rcp": 16,
+        "cmp": 47,
+        "endif": 8,
+        "dp3": 2,
+        "rsq": 1,
+        "mad": 7,
+        "rep": 3,
+        "break": 1,
+        "dp4": 5,
+        "exp": 2,
+        "dp2add": 2,
+        "endrep": 3
+      }
+    }
+  }
+}

@@ -422,6 +422,7 @@ private:
         bb->Release();
     }
     int traceWorld=-1; /* 0.3.200 (frame trace): this frame's world->render result (-1 not called, 0 skipped, 1 drawn) */
+    bool traceApplied=false;DWORD traceAppliedTick=0;unsigned traceAppliedCount=0;
     unsigned frame = 0, appliedFrames = 0, matchedTerrain = 0, matchedUI = 0, projectionRejects = 0;
     unsigned worldSkippedFrames=0;
     // 0.3.169: one line per run of skipped world frames, with the first and last skipReason().
@@ -2489,6 +2490,12 @@ public:
         postEffectWorldDraws=postEffectSkinnedDraws=0;
         spellFrameEnd(); /* task 34: after the frame's diagnostics lines */
         const bool sampledFrame=sampled(),frameApplied=applied;
+        if(applied!=traceApplied){
+            const DWORD now=GetTickCount();
+            if(DWORD(now-traceAppliedTick)>=1000){traceAppliedTick=now;traceAppliedCount=0;}
+            if(diagnostics()&&traceAppliedCount++<16)logf("EFFECT transition frame=%u tick=%lu applied=%d enabled=%d projection=%d terrain=%d world=%d skip=%s",frame,(unsigned long)now,int(applied),int(enabled),int(projectionValid),int(terrain),traceWorld,traceWorld==0&&world?world->lastSkipReason():"-");
+            traceApplied=applied;
+        }
         // 0.3.200 (frame trace): with Diagnostics, 240 consecutive frames out of every 1800 get one line each: whether the effects ran, the world drew,
         // and through which context (1 terrain + global light, 2 terrain native light, 3 WMO, 4 model), to see frame-to-frame alternation in the log.
         if(diagnostics()&&frame%1800<240)logf("FRAMETRACE frame=%u tick=%lu applied=%d enabled=%d projection=%d terrain=%d world=%d context=%u fog=%u skip=%s",frame,(unsigned long)GetTickCount(),

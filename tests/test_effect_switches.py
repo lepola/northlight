@@ -69,6 +69,8 @@ struct Fixture {
     Surface* shadowSurface[4]={&maps[0],&maps[1],&maps[2],&maps[3]};
     Surface* fogSurface=&fog;
     UINT w=1920,h=1080;
+    unsigned transitionReleases=0;
+    void releaseShadowTransitions(){++transitionReleases;}
     void invalidateShadowCache(){cacheValid=false;}
     bool check(HRESULT hr,const char*){return hr==0;}
     SETTER
@@ -108,6 +110,7 @@ int main(){
         assert(f.effects==next);
         assert(f.temporalValid==!mask&&f.sourceVisValid==!mask);
         assert(f.cacheValid==!(mask&Shadows));
+        assert(f.transitionReleases==unsigned(bool(mask&Shadows)));
         assert(f.shadowFrameReady==!(mask&Shadows));
         assert(f.pointReady==!(mask&Shadows));
         f.temporalValid=f.sourceVisValid=true;

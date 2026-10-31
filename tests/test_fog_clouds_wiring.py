@@ -67,14 +67,14 @@ checks['cpp: c59.y and c60..c63 written only while active, by shaderConstants (0
 a=w.index('if(cf.active&&c[21][0]>=.5f){');b=w.index('d->SetPixelShaderConstantF(17,c[17],2);',a);c_=w.index('if(localDirectCount&&debug==0){',b)
 pas=w[a:b]
 checks['cpp: the pass is guarded by cf.active and the field-ready flag, between the source loop and the c17/c18 restore (before lamp fog)']=(
-    w.index('"celestial volumetric raymarch"')<a<b<c_ and w.count('d->SetPixelShader(fogCloudsPS)')==1 and w.count('"fog clouds raymarch"')==1)
+    w.index('"celestial volumetric raymarch"')<a<b<c_ and w.count('d->SetPixelShader(shadowVolumeTransitionActive(firstSource)?cloudFadePS:fogCloudsPS)')==1 and w.count('"fog clouds raymarch"')==1)
 checks['cpp: the pass draws with ONE / SRCALPHA colour and ZERO / SRCALPHA alpha, volume on s14 WRAP + LINEAR, first source']=all(s in pas for s in (
     'setSource(firstSource,true,true);','SetTexture(14,cloudNoise)','D3DSAMP_ADDRESSW,D3DTADDRESS_WRAP','D3DRS_DESTBLEND,D3DBLEND_SRCALPHA','D3DRS_SEPARATEALPHABLENDENABLE,TRUE','D3DRS_SRCBLENDALPHA,D3DBLEND_ZERO','D3DRS_DESTBLENDALPHA,D3DBLEND_SRCALPHA'))
 checks['cpp: states restored after the pass: source state (setSource of the loop\'s last source unless it is the pass\'s own), ONE/ONE/ADD, separate alpha off (its operands then unused), blend enable, write mask, fogPS, s14']=all(s in pas for s in (
-    'const bool sameSource=lastFogSource==firstSource&&lastFogFirst;','if(!sameSource)setSource(firstSource,true,true);','if(!sameSource)setSource(lastFogSource,lastFogFirst,true);','D3DRS_SRCBLEND,D3DBLEND_ONE','D3DRS_DESTBLEND,D3DBLEND_ONE','D3DRS_BLENDOP,D3DBLENDOP_ADD','D3DRS_SEPARATEALPHABLENDENABLE,FALSE','D3DRS_ALPHABLENDENABLE,!lastFogFirst','D3DRS_COLORWRITEENABLE,lastFogFirst?15:7','SetPixelShader(fogPS)',
+    'const bool sameSource=lastFogSource==firstSource&&lastFogFirst;','if(!sameSource){setSource(firstSource,true,true);if(anyShadowVolumeTransition)bindShadowTransition(firstSource);}','if(!sameSource)setSource(lastFogSource,lastFogFirst,true);','D3DRS_SRCBLEND,D3DBLEND_ONE','D3DRS_DESTBLEND,D3DBLEND_ONE','D3DRS_BLENDOP,D3DBLENDOP_ADD','D3DRS_SEPARATEALPHABLENDENABLE,FALSE','D3DRS_ALPHABLENDENABLE,!lastFogFirst','D3DRS_COLORWRITEENABLE,lastFogFirst?15:7','SetPixelShader(shadowVolumeTransitionActive(lastFogSource)?fogFadePS:fogPS)',
     'SetTexture(14,nullptr)','D3DSAMP_ADDRESSU,D3DTADDRESS_CLAMP','D3DSAMP_MINFILTER,D3DTEXF_POINT')) and pas.index('setSource(lastFogSource')<pas.rindex('SetTexture(14,nullptr)') and 'GetRenderState' not in pas
 checks['cpp: the source loop records the state its last iteration left']='lastFogSource=source;lastFogFirst=first;first=false;' in w
-checks['cpp: profile marks FogMarch / FogClouds only with the pass (<= 20 marks per frame stays true: 16 existing names + 2)']=(pas.count('profile->mark("FogMarch")')==1 and pas.count('profile->mark("FogClouds")')==1)
+checks['cpp: profile marks FogMarch / FogClouds only with the pass (<= 20 marks per frame stays true: 16 existing names + 2)']=(pas.count('profile->mark(anyShadowVolumeTransition?"FogMarchFade":"FogMarch")')==1 and pas.count('profile->mark(shadowVolumeTransitionActive(firstSource)?"FogCloudsFade":"FogClouds")')==1)
 # sigmaAt mirror
 mirror=[l for l in w.splitlines() if 'cloudy+=NorthlightFogClouds::sigmaAt(' in l] # the WorldFog sum; SpellFog's own lambda (below) is a second caller
 # 0.3.200 (jobs): the mirror runs in atmosphereWork (a job with ReplayJobs=1) before ensureCloudNoise (the device) is decided: the cloud term is

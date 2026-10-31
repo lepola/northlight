@@ -1,7 +1,7 @@
 {
-  "source_sha256": "a7e06063f557c70fceb90d6e05a3852985880e91b2eb99d52adaef2d155ce845",
+  "source_sha256": "d176323284f4dce4e2ffe9cb704a719d20e63a250189e028b2c25a41ce2ff871",
   "compiler": "Microsoft d3dcompiler_47 10.0.17134.12 IEEE strict",
-  "compiler_sha256": "3c5f066a121a446e55db9c699b392da5d3aca6ad9019437b722360d09698e3c3",
+  "compiler_sha256": "4432bbd1a390874f3f0a503d45cc48d346abc3a8c0213c289f4b615bf0ee84f3",
   "game_launched": false,
   "shaders": {
     "WorldNormals": {
@@ -37,10 +37,10 @@
     },
     "WorldLighting": {
       "target": "ps_3_0",
-      "bytes": 5492,
-      "sha256": "408425df88ee74682237683394353b9fb4257069c67382219083857546c2d2df",
-      "static_instruction_slots": 303,
-      "temporary_registers": 16,
+      "bytes": 5484,
+      "sha256": "f68e125a40d9eb5b2b2bab3ace7ded04f44a80195210ee419bb63e3f61c3ed62",
+      "static_instruction_slots": 311,
+      "temporary_registers": 15,
       "samplers": [
         1,
         2,
@@ -50,11 +50,11 @@
         14
       ],
       "instructions": {
-        "mul": 71,
-        "frc": 3,
+        "mul": 69,
+        "frc": 2,
         "add": 83,
         "max": 10,
-        "mov": 23,
+        "mov": 26,
         "min": 3,
         "texldl": 6,
         "if": 7,
@@ -63,19 +63,19 @@
         "cmp": 32,
         "endif": 7,
         "dp3": 6,
-        "rep": 2,
+        "rep": 3,
         "dp2add": 3,
-        "break": 1,
-        "endrep": 2
+        "break": 2,
+        "endrep": 3
       },
       "compiler_sha256": "4432bbd1a390874f3f0a503d45cc48d346abc3a8c0213c289f4b615bf0ee84f3",
-      "source_sha256": "4fa7f40d2c7f7e7e60590b4c20fbe3fd8f9c91253bc4bcc6f334ed7eedeec475"
+      "source_sha256": "d176323284f4dce4e2ffe9cb704a719d20e63a250189e028b2c25a41ce2ff871"
     },
     "ActorShadow": {
       "target": "ps_3_0",
-      "bytes": 5136,
-      "sha256": "e325d043602dd2f0794797fc2da0243b12ab07a0aaef321bf655b70f80d42b4d",
-      "static_instruction_slots": 306,
+      "bytes": 5248,
+      "sha256": "6bdddcff40ba5868cfc9550075e7c5e6b88432e8dec8ee0787830e734ebc6388",
+      "static_instruction_slots": 332,
       "temporary_registers": 10,
       "samplers": [
         1,
@@ -85,26 +85,26 @@
         14
       ],
       "instructions": {
-        "mul": 67,
-        "frc": 10,
-        "add": 89,
+        "mul": 60,
+        "frc": 7,
+        "add": 88,
         "max": 9,
-        "mov": 30,
+        "mov": 41,
         "min": 6,
         "texldl": 9,
-        "cmp": 17,
+        "cmp": 20,
         "if": 6,
         "else": 6,
-        "rcp": 10,
+        "rcp": 9,
         "endif": 6,
         "dp3": 3,
-        "rep": 2,
+        "rep": 5,
+        "break": 4,
         "dp2add": 2,
-        "endrep": 2,
-        "break": 1
+        "endrep": 5
       },
       "compiler_sha256": "4432bbd1a390874f3f0a503d45cc48d346abc3a8c0213c289f4b615bf0ee84f3",
-      "source_sha256": "4fa7f40d2c7f7e7e60590b4c20fbe3fd8f9c91253bc4bcc6f334ed7eedeec475"
+      "source_sha256": "d176323284f4dce4e2ffe9cb704a719d20e63a250189e028b2c25a41ce2ff871"
     },
     "ActorTiles": {
       "target": "ps_3_0",

@@ -12,12 +12,13 @@ import northlight_paths as fp
 from pathlib import Path
 import re,sys
 HERE=Path(__file__).resolve().parent
-FILES=['renderer.cpp','world_renderer.h','world_shadow_experiment.inl','world_point_rendering.inl','celestial_disc_renderer.h',
+FILES=['renderer.cpp','world_renderer.h','world_shadow_transition.inl','world_shadow_experiment.inl','world_point_rendering.inl','celestial_disc_renderer.h',
        'shadow_blob_filter.h','water_renderer.h','gpu_profile.h','gpu_frame_timer.h','world_diagnostics.h','world_replay_probe.inl','world_rigid_memory.inl']
 # 0.3.149: profiling()/profileSampled() = RenderProfile, which requires Diagnostics=1 (NorthlightQuality::renderProfile).
 GATES=('NorthlightDiagnostics::enabled()','diagnostics()','sampled()','captureSampled','if(diagnostics)','shadowFate.active()','sampledFrame','profiling()','profileSampled()','if(lightingClock)')
 # Ungated lines that stay with Diagnostics=0: format prefix -> label.
 KEEP={
+ 'WORLD shadow transition unavailable:':'one-off optional resource failure per device/retry; baseline effects remain active',
  'SETTINGS unavailable:':'one-off initialization error',
  'SETTINGS startup recovery incomplete:':'one-off: a crash-interrupted settings commit could not be finished at start-up',
  'SETTINGS frame %s revision=':'settings event: a preview or saved config reached the frame boundary (user action)',

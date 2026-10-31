@@ -13,10 +13,10 @@ assert 'float3 sun=DirectLight.rgb*saturate(dot(n,LegacyDirection.xyz))*sunVisib
 assert 'lerp(sun,moon,SunDirection.w)' in shader
 assert 'if(dot(DirectLight.rgb,1)>0){shadow=directionalShadow' in shader and 'shadow=min(shadow,SunDirection.w>.5?actor.g:actor.r);}' in shader # 0.3.209 (task 29): the actor map's visibility joins in the same branch
 # 0.3.170: near cascade 5x5 tent (radius 2.5), far cascade unchanged 4x4 (radius 2).
-assert '[loop]for(int i=0;i<25&&i<size*size;++i)' in shader and 'break;' not in shader[shader.index('float shadowMap('):shader.index('float directionalShadow(')]
+assert '[loop]for(int y=0;y<5&&y<size;++y)' in shader and '[loop]for(int x=0;x<5&&x<size;++x)' in shader and 'break;' not in shader[shader.index('float shadowMap('):shader.index('float directionalShadow(')]
 assert 'float size=useNear?5:4,reach=size*.5;' in shader and 'float start=useNear?-2:-1;' in shader
 assert 'float2 base=floor(pixel+(useNear?.5:0)),fraction=pixel-base;' in shader
-assert 'float row=floor((i+.5)/size);' in shader
+assert 'float2 offset=float2(x,y)+start;' in shader
 assert 'max(reach-abs(offset-fraction),0)' in shader
 assert 'dot(gradient,tapUV-uv)' in shader
 
