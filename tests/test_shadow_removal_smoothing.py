@@ -78,7 +78,7 @@ checks['RemovalSmooth host: shader, half-res fp16 target, release, F12 dump, dra
 # task 43: GPU profile marks split the old GI and PointLighting intervals: GI (the GI pass), LocalLights (the lamp batches),
 # PointLight (the shadowed point lamp), RemovalSmooth (its pass, or nothing without a drawn source) and TemporalLight.
 order=[w.index(n) for n in ('quad(w/2,h/2),"world GI pass"','if(profile)profile->mark("GI");','d->SetPixelShader(localDirectPS);','if(profile)profile->mark("LocalLights");',
-    'renderPointLighting(depth,waterMask,w,h,nearZ,farZ,minZ,maxZ);','if(profile)profile->mark("PointLight");',smoothdraw,'if(profile)profile->mark("RemovalSmooth");',
+    'renderPointLighting(depth,waterMask,w,h,nearZ,farZ,minZ,maxZ,c[52][1],lampSunlitCut,c[20][2],sunEnergy);','if(profile)profile->mark("PointLight");',smoothdraw,'if(profile)profile->mark("RemovalSmooth");',
     'quad(w/2,h/2),"temporal light pass"','if(profile)profile->mark("TemporalLight");','bucket(NorthlightEffectsBuckets::PointLighting);')]
 checks['GPU marks: GI, LocalLights, PointLight, RemovalSmooth, TemporalLight in pass order, each once; PointLighting gone']=(order==sorted(order)
     and all(w.count('profile->mark("%s")'%m)==1 for m in ('GI','LocalLights','PointLight','RemovalSmooth','TemporalLight')) and 'mark("PointLighting")' not in w)

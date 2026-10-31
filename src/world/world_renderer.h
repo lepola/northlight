@@ -165,6 +165,7 @@ struct NameMaskCompositeBind {
 
 // Included after SavedState. Worker never accesses D3D or game memory.
 class WorldRenderer {
+    friend struct PointTerrainCoverageTest;
     using V=NorthlightGI::Vec3;
     /* 0.3.137: render-thread commit data built by the GI worker from the same
        immutable plan (see PreparedCommitData). Null fields fall back to the
@@ -591,7 +592,7 @@ private:
         ++shadowCacheVerified;if(differing){++shadowCacheVerifyMismatches;logf("WORLD shadow cache VERIFY MISMATCH slot=%d texels=%llu",slot,differing);}
         return true;
     }
-    void invalidateShadowCache(){staticCasters.settle();dropStaticDirtyJobs();for(auto& k:shadowCacheKey){k.valid=false;k.staticContent.valid=false;}for(auto& c:staticSlices)c.reset();pointCacheValid=false;for(int s=0;s<2;++s){farShadow[s].invalidate();nearShadow[s].invalidate();actorValid[s]=false;nearActorSkip[s]=false;actorCenterValid[s]=false;}}
+    void invalidateShadowCache(){staticCasters.settle();dropStaticDirtyJobs();for(auto& k:shadowCacheKey){k.valid=false;k.staticContent.valid=false;}for(auto& c:staticSlices)c.reset();for(auto& p:pointSlots){p.cacheValid=false;p.schedule.invalidate();p.contentMemo.valid=false;}for(int s=0;s<2;++s){farShadow[s].invalidate();nearShadow[s].invalidate();actorValid[s]=false;nearActorSkip[s]=false;actorCenterValid[s]=false;}}
     uint64_t liveChunkHash()const{uint64_t h=1469598103934665603ull;for(const auto& c:liveTerrainChunks){h^=uint64_t(uint32_t(c.first))*0x9E3779B97F4A7C15ull+uint64_t(uint32_t(c.second));h*=1099511628211ull;}return h;}
     IDirect3DPixelShader9 *cachedFastPS=nullptr,*cachedOpaqueFastPS=nullptr,*cachedOpaquePS=nullptr;
     IDirect3DPixelShader9 *lightingPS=nullptr,*giPS=nullptr,*fogPS=nullptr,*fogBlurPS=nullptr,*localDirectPS=nullptr,*localDirect16PS=nullptr,*removalPS=nullptr,*temporalPS=nullptr,*localFogPS=nullptr,*normalsPS=nullptr,*sourceVisPS=nullptr,*finalPS=nullptr,*shadowPS=nullptr,*cachedShadowPS=nullptr,*replayPS=nullptr;
@@ -905,6 +906,7 @@ private:
     std::vector<ReplayMeshKey> replayMeshKeys;
     std::vector<NorthlightReplayShadowPolicy::Candidate> shadowCandidates;
     unsigned minSkinnedShadowTriangles=0,captureBudgetMiB=32,actorShadowBudgetMiB=0;bool shadowFateDiagnostics=false;
+    NorthlightActorDeformation::RigidBoneCache smallShadowBones{256};
     NorthlightQuality::Settings quality; /* northlight-quality.ini; Settings{} is the full-quality default */
     bool shadowSelectionDone=false;
     unsigned replayTriangleBins[6]={},skinnedTriangleBins[6]={},acceptedTriangleBins[6]={},acceptedSkinnedTriangleBins[6]={};
@@ -2380,7 +2382,7 @@ public:
         }
         effects=next;
     }
-    void reset(){equipmentLights.reset();equipmentMap.clear();particleLights.reset();particleMap.clear();shadowsComposited=false;pivotValid=false;pivotDistance=12.f;pivotCorrection.reset();pivotSelfCaptured=false;cascadeAnchor.reset();endFrame();replaySnapshots.clearIndexCache();actorJobComplete.reset();actorJobSerial_=0;actorSceneMap_.clear();lastActorCapture=0;terrainBoundsCache.clearPersistent();previousCacheHits=0;freeReplays.clear();pooledSnapshotBytes=0;valid=false;failed=false;releaseGPU(true); /* task 42: the committed MANAGED mesh survives any Reset, failed or not */}
+    void reset(){smallShadowBones.clear();equipmentLights.reset();equipmentMap.clear();particleLights.reset();particleMap.clear();shadowsComposited=false;pivotValid=false;pivotDistance=12.f;pivotCorrection.reset();pivotSelfCaptured=false;cascadeAnchor.reset();endFrame();replaySnapshots.clearIndexCache();actorJobComplete.reset();actorJobSerial_=0;actorSceneMap_.clear();lastActorCapture=0;terrainBoundsCache.clearPersistent();previousCacheHits=0;freeReplays.clear();pooledSnapshotBytes=0;valid=false;failed=false;releaseGPU(true); /* task 42: the committed MANAGED mesh survives any Reset, failed or not */}
     // 0.3.176 (U0/S0): the sample-frame lines of the selection and upload spans (and the RIGID event
     // lines) are formatted where they are today and written here, from endFrame, so no log write (a
     // vfprintf and fflush under the log lock) is inside a bucketed span. The text is the same.
@@ -3359,13 +3361,14 @@ public:
         if(sample&&priority)++skinnedCandidates;
         const unsigned triangleBin=NorthlightReplayShadowPolicy::bucket(count);
         if(sample){++replayTriangleBins[triangleBin];if(priority)++skinnedTriangleBins[triangleBin];}
-        const bool smallShadow=(type==D3DPT_TRIANGLELIST||type==D3DPT_TRIANGLESTRIP)&&
+        bool smallShadow=(type==D3DPT_TRIANGLELIST||type==D3DPT_TRIANGLESTRIP)&&
             NorthlightReplayShadowPolicy::small(priority,count,minSkinnedShadowTriangles);
+        const bool smallNeedsProof=smallShadow&&metadata.program&&metadata.program->skinned;
         // Preserve actor GI captures at their existing 200 ms cadence. On other
         // frames skip only this shadow capture, before its device state queries.
         // The game's original draw and the shared draw-domain gate are untouched.
         fate.reason=NorthlightShadowFate::Small;
-        if(smallShadow&&!actorCaptureEnabled()){if(sample)++smallShadowEarly;++rejSmall;return;}
+        if(!smallNeedsProof){if(smallShadow&&!actorCaptureEnabled()){if(sample)++smallShadowEarly;++rejSmall;return;}}
         // 0.3.215 (task 47): a faded actor (stealth, ghosts) draws a depth-only pre-pass (no RGB) before its blended colour pass.
         // It looks opaque, so reject it here, before the admission, the budget and the near reserve (its weapons and parts too).
         fate.reason=NorthlightShadowFate::Fade;
@@ -3429,7 +3432,17 @@ public:
         if(captured&&admit.rooted)admission.admitted(admit,reinterpret_cast<std::uintptr_t>(current),count,root,replaySnapshots.bytesRead()-readBefore);
         if(!captured){if(why.error==NorthlightDrawSnapshot::Error::Budget){fate.reason=NorthlightShadowFate::CaptureBudget;captureShortfall=true;if(admit.rooted)admission.budgetRefused(admit,root,vertexTotal,count);}
             if(sample){captureRejectedBytes+=replaySnapshots.bytesRead()-readBefore;if(priority){++skinnedSnapshotRejected;skinnedBudgetRejected+=why.error==NorthlightDrawSnapshot::Error::Budget;}else otherBudgetRejected+=why.error==NorthlightDrawSnapshot::Error::Budget;}if(snapshotRejects++<12)logf("MODEL snapshot rejected: %s hr=%08lx stream=%u",NorthlightDrawSnapshot::errorName(why.error),(unsigned long)why.hr,why.stream);return;}
-        snapshotSpan.end();phase.next(CaptureConstants);fate.reason=NorthlightShadowFate::Constants;
+        snapshotSpan.end();
+        // M2 fixtures share actor shaders. A single-influence shader alone is
+        // insufficient: every captured vertex must use the same bone.
+        if(smallNeedsProof){
+            const D3DVERTEXELEMENT9* elements=nullptr;UINT n=0;
+            const float bone=declarationCache.get(p->decl,elements,n)?smallShadowBones.bone(*metadata.program,p->mesh(),p->shared,p->decl,elements,n,NorthlightRigidGeometry::oneBoneTemplate(*metadata.program)?1:4):NAN;
+            smallShadow=NorthlightReplayShadowPolicy::small(priority,count,minSkinnedShadowTriangles,std::isfinite(bone)&&bone>=0&&bone<=74&&std::floor(bone)==bone);
+            p->shadowSelected=!smallShadow;p->shadowSmall=smallShadow;p->fateClass=smallShadow?NorthlightShadowFate::Small:NorthlightShadowFate::NotRanked;
+            if(smallShadow&&!actorCaptureEnabled()){fate.reason=NorthlightShadowFate::Small;++rejSmall;return;}
+        }
+        phase.next(CaptureConstants);fate.reason=NorthlightShadowFate::Constants;
         const auto& usage=metadata.usage;
         p->constantUsage=usage;
         const auto f=usage.floats,b=usage.booleans,i=usage.integers;
@@ -3518,7 +3531,7 @@ public:
         // Same camera, projection, near plane and glow start as c0..c6/c58: the selection prefers lights in view (debug views keep the old order), and
         // each batch's rect of the direct (8) and fog (4) passes.
         localScissorView=NorthlightLocalLightScissor::view(context.inverseView,projection,nearZ,LampFogNear,w,h);
-        a.lights=active?localLightTracker.update(active->localLights,context.camera,NorthlightGpuBudget::lightLimit(quality.localLightLimit,gpuBudgetLevel),float(selectDt),selectContinuous,debug==0?&localScissorView:nullptr,equipmentLightsOn()?particleLights.output.data():nullptr,equipmentLightsOn()?particleLights.outputCount:0,equipmentLightsOn()?particleLights.immediate.data():nullptr,equipmentLightsOn()?particleLights.immediateCount:0) /* one shared dynamic cap; particles carry current-frame alpha */:NorthlightLocalLightSelection::Selection{};
+        a.lights=active?localLightTracker.update(active->localLights,context.camera,NorthlightGpuBudget::lightLimit(quality.localLightLimit,gpuBudgetLevel,effects.shadows&&quality.pointShadows?quality.pointShadowLimit:0),float(selectDt),selectContinuous,debug==0?&localScissorView:nullptr,equipmentLightsOn()?particleLights.output.data():nullptr,equipmentLightsOn()?particleLights.outputCount:0,equipmentLightsOn()?particleLights.immediate.data():nullptr,equipmentLightsOn()?particleLights.immediateCount:0) /* one shared dynamic cap; particles carry current-frame alpha */:NorthlightLocalLightSelection::Selection{};
         auto& localLights=a.lights;
         {const auto arranged=NorthlightLocalLightBatches::arrange(localLights,localScissorView); /* screen-coherent batches (the passes are sums) */
          if(NorthlightDiagnostics::enabled()){localOffscreenSum+=localLightTracker.offscreen;localArranged+=arranged.arranged;localArrangeBefore+=arranged.before;localArrangeAfter+=arranged.after;}} /* counted with selectUs */
@@ -4221,12 +4234,10 @@ public:
                 (unsigned long long)selection.scanned,terrainCandidates.candidates(),(unsigned long long)selection.membershipChecks,selection.passes,
                 (unsigned long long)selection.reusedMembershipChecks,selection.fallbackPasses,terrainCandidates.bytes(),terrainPrepareMs);}
         shadowFrameReady=effects.shadows;
-        // The local-lamp shadow correction subtracts an estimate of the lamp's
-        // baked light where the lamp is occluded. By day that darkens sunlit
-        // ground next to lamp posts (and costs ~6 ms), so it runs only while the
-        // sun's weight is below one half (dusk, night, dawn).
+        // Point shadows use this frame's selected/faded direct-light sources, in daylight too.
+        if(jobs)replayJobs_.wait(atmosphereDone);else atmosphereWork(atmosphere,nearZ,w,h,debug);
         const unsigned pointUpdatesBefore=pointUpdates;
-        if(effects.shadows&&debug==0&&sourceWeights[0]<.5f&&quality.pointShadows)renderPointShadow(replaysComplete,actorShadows);else pointReady=false;
+        if(effects.shadows&&debug==0&&quality.pointShadows)renderPointShadows(atmosphere.lights,replaysComplete,actorShadows);else pointReady=false;
         if(pointUpdates!=pointUpdatesBefore&&profileSampled())profilePointUsed(); /* capture waste (RenderProfile) */
         if(profile)profile->mark("PointShadow");
         bucket(NorthlightEffectsBuckets::Point);
@@ -4257,7 +4268,6 @@ public:
         // 0.3.200 (jobs): the selection, the clouds' state and frame, the lamps' fog extinction, the veil and the scissor rects come from
         // atmosphereWork(): on a job kicked after upload() (ReplayJobs=1), joined here, or inline here (ReplayJobs=0, the old place).
         lightingMark(0);
-        if(jobs)replayJobs_.wait(atmosphereDone);else atmosphereWork(atmosphere,nearZ,w,h,debug);
         lightingMark(1);
         auto& localLights=atmosphere.lights;
         localDirectCount=localLights.count;localDirectNearest=localLights.nearest;
@@ -4497,11 +4507,14 @@ public:
         }
         if(profile)profile->mark("LocalLights");bucket(NorthlightEffectsBuckets::GI);d->SetRenderState(D3DRS_COLORWRITEENABLE,15);
         if(debug==0&&pointReady){
-            renderPointLighting(depth,waterMask,w,h,nearZ,farZ,minZ,maxZ);
-            // Optional pass temporarily owns PS c0..9 and s0..2. Restore the
+            const float sunEnergy=sourceActive[0]?std::max({sourceColors[0].x,sourceColors[0].y,sourceColors[0].z}):0.f;
+            for(pointIndex=0;pointIndex<pointSlots.size();++pointIndex)if(pointSlot().ready)
+                renderPointLighting(depth,waterMask,w,h,nearZ,farZ,minZ,maxZ,c[52][1],lampSunlitCut,c[20][2],sunEnergy);
+            pointIndex=0;
+            // Optional passes temporarily own PS c0..11 and s0..4. Restore the
             // entire world bank and texture/filter contract before fog/final.
             d->SetPixelShaderConstantF(0,&c[0][0],68);
-            for(unsigned sampler=0;sampler<3;++sampler){
+            for(unsigned sampler=0;sampler<6;++sampler){
                 d->SetTexture(sampler,textures[sampler]);
                 d->SetSamplerState(sampler,D3DSAMP_MINFILTER,sampler==0?D3DTEXF_LINEAR:D3DTEXF_POINT);
                 d->SetSamplerState(sampler,D3DSAMP_MAGFILTER,sampler==0?D3DTEXF_LINEAR:D3DTEXF_POINT);

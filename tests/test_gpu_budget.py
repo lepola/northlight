@@ -38,7 +38,8 @@ int main(){
     {   // level map: level 0 is exactly the full image
         assert(B::cloudSteps(0)==40&&B::cloudSteps(1)==32&&B::cloudSteps(2)==24&&B::cloudSteps(3)==24);
         assert(B::fogSteps(0)==48&&B::fogSteps(2)==48&&B::fogSteps(3)==40);
-        for(unsigned limit=8;limit<=64;++limit){assert(B::lightLimit(limit,0)==limit&&B::lightLimit(limit,2)==limit&&B::lightLimit(limit,3)==limit);}
+        for(unsigned limit=8;limit<=128;++limit){assert(B::lightLimit(limit,0)==limit&&B::lightLimit(limit,2)==limit&&B::lightLimit(limit,3)==limit);}
+        for(unsigned level=0;level<=3;++level)for(unsigned reserved:{4u,8u,16u,32u,64u,128u})assert(B::lightLimit(32,level,reserved)>=reserved);
         assert(B::spacingDelta(128,40,40)==0.f&&B::spacingDelta(128,48,48)==0.f&&B::spacingDelta(128,0,40)==0.f);
         for(unsigned n:{24u,32u,40u}){const float spacing=std::fma(128.f,1.f/40,B::spacingDelta(128,n,40));assert(std::fabs(spacing-128.f/float(n))<1e-4f);}
         {const float spacing=std::fma(128.f,1.f/48,B::spacingDelta(128,40,48));assert(std::fabs(spacing-3.2f)<1e-4f);}

@@ -97,6 +97,7 @@ test_local_fog_profile.py
 test_local_ini.py
 test_local_light_batches.py
 test_local_light_selection.py
+test_local_source_shadows.py
 test_log_format_literals.py
 test_log_rotation.py
 test_logger_cost.py
@@ -131,6 +132,7 @@ test_particle_texture_stats.py
 test_pending_release_wiring.py
 test_point_light_shadow.py
 test_point_shadow_schedule.py
+test_point_terrain_coverage_gpu.py
 test_prepare_worker.py
 test_probe_blend.py
 test_probe_blend_equivalence.py
@@ -242,3 +244,4 @@ test_world_probe_coverage.py
 test_zone_tuner.py
 test_zone_tuning.py
 test_zone_tuning_wiring.py
+test_point_clip_prepared.py

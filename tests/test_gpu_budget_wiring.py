@@ -21,7 +21,7 @@ checks={}
 # controller and timer headers
 checks['gpu_budget.h: portable (no D3D, Win32, clock or allocation)']=all(x not in code(b) for x in ('d3d9','windows.h','chrono','QueryPerformance','new ','malloc','std::vector'))
 checks['gpu_budget.h: level 0 is the full image (40 cloud / 48 fog intervals, the light limit at every level since 0.3.217, no alternation, zero interval constant)']=all(x in b for x in (
-    'return level==0?40u:level==1?32u:24u;','return level>=3?40u:48u;','inline unsigned lightLimit(unsigned limit,unsigned){return limit;}','return steps==fullSteps||!steps||!fullSteps?0.f:'))
+    'return level==0?40u:level==1?32u:24u;','return level>=3?40u:48u;','inline unsigned lightLimit(unsigned limit,unsigned,unsigned shadowReserve=0){return std::max(limit,shadowReserve);}','return steps==fullSteps||!steps||!fullSteps?0.f:'))
 tc=code(t)
 reads=re.findall(r'->GetData\(([^;]*?)\)',tc)
 checks['timer: every GetData with flags 0, no D3DGETDATA_FLUSH, no wait loop, sleep or spin']=(len(reads)==4 and all(x.rstrip().endswith(',0') for x in reads)
@@ -56,7 +56,7 @@ checks['world: the level is 0 whenever GpuBudgetMs is 0, clamped to MaxLevel']='
 checks['world: the interval constants are written only at a reduced level (bank unchanged at level 0), c60.x only with the clouds active']=(
     'if(gpuBudgetLevel){if(cf.active)c[60][0]=NorthlightGpuBudget::spacingDelta(c[21][3],NorthlightGpuBudget::cloudSteps(gpuBudgetLevel),40);c[64][2]=NorthlightGpuBudget::spacingDelta(c[21][3],NorthlightGpuBudget::fogSteps(gpuBudgetLevel),48);}' in wc
     and len(re.findall(r'c\[64\]\[[0-2]\]=',wc))==1 and wc.index('c[21][3]=128;')<wc.index('if(gpuBudgetLevel){')<wc.index('d->SetPixelShaderConstantF(0,&c[0][0],68);'))
-checks['world: the lamp limit passes through lightLimit (the setting at level 0)']='NorthlightGpuBudget::lightLimit(quality.localLightLimit,gpuBudgetLevel)' in wc and wc.count('quality.localLightLimit,float(selectDt)')==0
+checks['world: the lamp limit passes through lightLimit (the setting at level 0)']='NorthlightGpuBudget::lightLimit(quality.localLightLimit,gpuBudgetLevel,effects.shadows&&quality.pointShadows?quality.pointShadowLimit:0)' in wc and wc.count('quality.localLightLimit,float(selectDt)')==0
 cp=wc[wc.index('if(cf.active&&c[21][0]>=.5f){'):wc.index('d->SetPixelShaderConstantF(17,c[17],2);')]
 checks['world: the clouds are one draw into the fog at every level (0.3.200: no amortised reuse, it lagged a frame in motion)']=(
     cp.count('const bool cloudsDrawn=check(quad(w/2,h/2),"fog clouds raymarch");')==1 and cp.count('SetPixelShader(fogCloudsPS)')==1

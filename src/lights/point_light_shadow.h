@@ -3,6 +3,7 @@
 #include "local_shadow_signature.h"
 #include "world_local_lights.h"
 #include <algorithm>
+#include <array>
 #include <limits>
 namespace NorthlightPointShadow {
 // The only temporal quality tradeoff: in a crowd, reuse a *complete* world-space
@@ -124,6 +125,56 @@ inline unsigned faceMask(const float* lo,const float* hi,bool valid,const float 
     for(unsigned face=0;face<6;++face)if(!clipReject(lo,hi,matrices[face]))mask|=1u<<face;
     return mask;
 }
+// The cube matrices do not change between AABBs in one update. Prepare their
+// double planes and conservative float-cancellation bounds once, without a heap allocation.
+class FaceClip {
+    struct Face {
+        bool finite=false;
+        double absolute[4][4]={},coefficient[6][4]={},magnitude[6][4]={};
+        void prepare(const float* matrix){
+            for(unsigned i=0;i<16;++i)if(!std::isfinite(matrix[i]))return;
+            for(unsigned column=0;column<4;++column)for(unsigned row=0;row<4;++row)
+                absolute[column][row]=std::fabs(double(matrix[row*4+column]));
+            for(unsigned plane=0;plane<6;++plane){
+                const unsigned column=plane<4?plane/2:2;
+                const double sign=(plane==1||plane==3||plane==5)?-1.:1.;
+                for(unsigned row=0;row<4;++row){
+                    const double a=matrix[row*4+column],w=plane!=4?matrix[row*4+3]:0.;
+                    coefficient[plane][row]=sign*a+w;magnitude[plane][row]=std::fabs(a)+std::fabs(w);
+                }
+            }
+            finite=true;
+        }
+        bool reject(const float* lo,const float* hi,const double* extent)const{
+            if(!finite)return false;
+            for(unsigned column=0;column<4;++column){
+                double bound=absolute[column][3];
+                for(unsigned row=0;row<3;++row)bound+=absolute[column][row]*extent[row];
+                if(bound>std::numeric_limits<float>::max()/32.)return false;
+            }
+            for(unsigned plane=0;plane<6;++plane){
+                double maximum=0,total=0;
+                for(unsigned row=0;row<4;++row){
+                    const double c=coefficient[plane][row],coord=row==3?1.:c>=0?hi[row]:lo[row];
+                    maximum+=c*coord;total+=magnitude[plane][row]*(row==3?1.:extent[row]);
+                }
+                if(total>std::numeric_limits<float>::max()/16.)return false;
+                if(maximum < -32.*std::numeric_limits<float>::epsilon()*(total+1.))return true;
+            }
+            return false;
+        }
+    };
+    Face faces[6];
+public:
+    explicit FaceClip(const float (&matrices)[6][16]){for(unsigned face=0;face<6;++face)faces[face].prepare(matrices[face]);}
+    unsigned mask(const float* lo,const float* hi,bool valid)const{
+        double extent[3];if(!valid||!lo||!hi)return 63;
+        for(unsigned k=0;k<3;++k){if(!std::isfinite(lo[k])||!std::isfinite(hi[k])||lo[k]>hi[k])return 63;
+            extent[k]=std::max(std::fabs(double(lo[k])),std::fabs(double(hi[k])));}
+        unsigned mask=0;for(unsigned face=0;face<6;++face)if(!faces[face].reject(lo,hi,extent))mask|=1u<<face;
+        return mask;
+    }
+};
 // 0.3.151 static cube faces keyed on content (world_mesh_plan.cpp records), not
 // on the mesh generation. LocalShadowPS stores no fragment beyond attenuationEnd
 // (a caster out of range can never shadow a lit surface: the attenuation there is
@@ -144,10 +195,11 @@ inline bool recordOutsideSphere(const NorthlightGI::Vec3& lo,const NorthlightGI:
 inline void faceContent(const NorthlightLocalShadowSignature::Records& records,const NorthlightLocalLights::Light& l,
                         const float (&matrices)[6][16],NorthlightLocalShadowSignature::Digest (&out)[6]){
     for(auto& digest:out)digest={};
+    const FaceClip clip(matrices);
     for(const auto& r:records){
         if(r.terrain||recordOutsideSphere(r.low,r.high,l,FaceContentSphereMargin))continue;
         const float lo[]={r.low.x,r.low.y,r.low.z},hi[]={r.high.x,r.high.y,r.high.z};
-        const unsigned mask=faceMask(lo,hi,true,matrices);
+        const unsigned mask=clip.mask(lo,hi,true);
         for(unsigned face=0;face<6;++face)if(mask&(1u<<face))out[face].add(r.content);
     }
 }
@@ -170,21 +222,37 @@ inline bool intersectsSphereAABB(const NorthlightLocalLights::Light& l,const flo
     }
     return squared<=double(l.attenuationEnd)*l.attenuationEnd;
 }
-inline int select(const std::vector<NorthlightLocalLights::Light>& lights,const float* camera,uint64_t previousSourceId=0,float maxCameraDistance=48) {
-    if(!camera||!std::isfinite(maxCameraDistance)||maxCameraDistance<=0)return -1;
-    for(int i=0;i<3;++i)if(!std::isfinite(camera[i]))return -1;
-    int best=-1,previous=-1;double bestScore=-1,previousScore=-1;
-    for(size_t i=0;i<lights.size();++i){
-        const auto& l=lights[i];if(l.kind==3)continue; // Authored emitters have no baked contribution to subtract.
+inline constexpr unsigned MaxLights=128;
+struct Picks {std::array<int,MaxLights> index{};unsigned count=0;};
+inline bool eligible(const NorthlightLocalLights::Light& l){
+    // Legacy baked WMO lamps remain supported. Unclassified model/particle/equipment
+    // observations never become shadow sources just because they happen to be bright.
+    return (l.flags&NorthlightLocalLights::CastShadow)||l.kind==1;
+}
+inline Picks selectMany(const NorthlightLocalLights::Light* lights,size_t count,const float* camera,unsigned limit,
+                        const std::array<uint64_t,MaxLights>& previous={},float maxCameraDistance=48){
+    Picks out;limit=std::min(limit,MaxLights);std::array<double,MaxLights> scores{};
+    if(!lights||!camera||!std::isfinite(maxCameraDistance)||maxCameraDistance<=0)return out;
+    for(int i=0;i<3;++i)if(!std::isfinite(camera[i]))return out;
+    for(size_t i=0;i<count;++i){
+        const auto& l=lights[i];if(!eligible(l))continue;
         if(!NorthlightLocalLights::valid(l)||l.attenuationEnd<=.11f)continue;
         double distance2=0;for(int k=0;k<3;++k){double d=l.position[k]-camera[k];distance2+=d*d;}
         if(distance2>double(maxCameraDistance)*maxCameraDistance)continue;
         // Apparent influence weighted by brightness, bounded at the source.
         const double color=std::min(16.f,std::max(l.diffuse[0],std::max(l.diffuse[1],l.diffuse[2])));
-        const double score=color*double(l.attenuationEnd)*l.attenuationEnd/(1+distance2);
-        if(score>bestScore||(score==bestScore&&(best<0||l.sourceId<lights[best].sourceId))){best=int(i);bestScore=score;}
-        if(l.sourceId==previousSourceId){previous=int(i);previousScore=score;}
+        if(color<.005f)continue;
+        const bool incumbent=std::find(previous.begin(),previous.end(),l.sourceId)!=previous.end();
+        const double score=color*double(l.attenuationEnd)*l.attenuationEnd/(1+distance2)*(incumbent?1.25:1.);
+        unsigned at=0;while(at<out.count&&(scores[at]>score||(scores[at]==score&&lights[out.index[at]].sourceId<l.sourceId)))++at;
+        if(at>=limit)continue;
+        for(unsigned j=std::min(out.count,limit-1);j>at;--j){out.index[j]=out.index[j-1];scores[j]=scores[j-1];}
+        out.index[at]=int(i);scores[at]=score;out.count=std::min(out.count+1,limit);
     }
-    return previous>=0&&previousScore>=bestScore*.8?previous:best;
+    return out;
+}
+inline int select(const std::vector<NorthlightLocalLights::Light>& lights,const float* camera,uint64_t previousSourceId=0,float maxCameraDistance=48){
+    const auto p=selectMany(lights.data(),lights.size(),camera,1,{previousSourceId},maxCameraDistance);
+    return p.count?p.index[0]:-1;
 }
 } // namespace NorthlightPointShadow
