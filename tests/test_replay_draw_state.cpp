@@ -81,7 +81,7 @@ struct Vertex {float x,y,z,w,u,v;};
 struct Mesh {std::vector<std::array<Vertex,3>> triangles;};
 struct Replay {
     IDirect3DVertexDeclaration9* decl=nullptr;IDirect3DVertexShader9* shader=nullptr;IDirect3DIndexBuffer9* index=nullptr;
-    IDirect3DVertexBuffer9* stream[4]={};UINT offset[4]={},stride[4]={};IDirect3DBaseTexture9* texture=nullptr;DWORD addressU=WRAP,addressV=WRAP;float cutoff=-1;
+    IDirect3DVertexBuffer9* stream[4]={};UINT offset[4]={},stride[4]={};IDirect3DBaseTexture9* texture=nullptr;DWORD addressU=WRAP,addressV=WRAP;float cutoff=-1;unsigned alphaMode=0;
     UINT start=0;int base=0;float dx=0,dy=0,dz=0; /* base: BaseVertexIndex (0.3.211, task 31); the vertices start at offset+base*stride */
 };
 // Geometry is found only through the bound stream/index state, never through the replay.
@@ -174,6 +174,10 @@ static Scene makeScene(World& w,std::mt19937& rng,unsigned draws,double opaqueSh
 }
 static unsigned materialCalls(const Calls& c){return c.textures+c.samplers;}
 int main(){
+    {IDirect3DDevice9 d;NorthlightReplayDrawState::Cache cache(&d);Replay p;p.cutoff=.5f;
+        for(unsigned mode:{0u,1u,2u,0u}){p.alphaMode=mode;const auto before=d.calls.constants;assert(!cache.material(p));assert(d.calls.constants==before+1&&d.c0[0]==float(mode)&&d.c0[3]==.5f);}
+        const auto before=d.calls.constants;assert(!cache.material(p));assert(d.calls.constants==before);
+        std::puts("PASS alpha source: equal cutoffs rebind when texture/color mask changes");}
     using New=NorthlightReplayDrawState::Cache;using Old=Legacy::Cache;
     static_assert(NorthlightReplayDrawState::SkipOpaqueMaterial,"shipped switch");
     assert(NorthlightReplayDrawState::skipOpaque());

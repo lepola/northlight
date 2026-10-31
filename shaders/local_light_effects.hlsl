@@ -28,11 +28,21 @@ LocalCaster LocalShadowVS(float3 position:POSITION0,float2 uv:TEXCOORD0) {
     o.position=position.x*LocalFaceMatrix[0]+position.y*LocalFaceMatrix[1]+position.z*LocalFaceMatrix[2]+LocalFaceMatrix[3];
     o.clip=o.position;o.uv=uv;return o;
 }
-float4 LocalShadowPS(float2 uv:TEXCOORD0,float4 clipPosition:TEXCOORD7):COLOR0 {
+float4 LocalShadowPS(float2 uv:TEXCOORD0,float4 clipPosition:TEXCOORD7,float4 diffuse:COLOR0):COLOR0 {
     // Light-space offset from the face clip position (faceMatrix: right=x+h*w, up=y-h*w, forward=w).
     float3 offset=float3(clipPosition.x+LocalSphere.y*clipPosition.w,clipPosition.y-LocalSphere.y*clipPosition.w,clipPosition.w);
     clip(LocalSphere.x-dot(offset,offset));
-    [branch]if(LocalMaterial.w>=0)clip(tex2D(LocalAlpha,uv).a-LocalMaterial.w); // a real branch: opaque replay skips bind no texture (replay_draw_state.h)
+    [branch]if(LocalMaterial.w>=0){
+        float alpha=LocalMaterial.x==2?diffuse.a:tex2D(LocalAlpha,uv).a;
+        if(LocalMaterial.x==1||LocalMaterial.x==3)alpha*=diffuse.a;
+        if(LocalMaterial.x==3){
+            // UV-anchored 4x4 Bayer coverage: native distance fade survives
+            // shadow-map/camera movement; zero alpha never casts a rectangle.
+            float2 cell=floor(uv*64),bit0=frac(cell*.5)*2,bit1=frac(floor(cell*.5)*.5)*2;
+            float rank=frac((bit0.x*2+bit0.y*3)*.25)*16+frac((bit1.x*2+bit1.y*3)*.25)*4;
+            clip(alpha-(rank+.5)/16);
+        }else clip(alpha-LocalMaterial.w);
+    }
     return saturate(clipPosition.z/clipPosition.w);
 }
 float2 localDepthUV(float2 uv) {

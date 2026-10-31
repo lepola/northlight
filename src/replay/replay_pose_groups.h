@@ -42,10 +42,10 @@ public:
     NorthlightReplayConstants::DirtySpan floats,booleans,integers;
     size_t prepared=0,reused=0;
     const float* desired()const{return floatBank_.data();}
-    template<class Replay> bool prepare(const Replay& p,const float* rows){
+    template<class Replay> bool prepare(const Replay& p,const float* rows,const float* worldMatrix=nullptr){
         floats={};booleans={};integers={};
         if(valid_&&group_==p.constantGroup){++reused;return true;}
-        if(!NorthlightReplayConstants::updateProjectedConstants(floatBank_,p.constants,p.constantUsage,p.projectionKind,rows,floats))return false;
+        if(!NorthlightReplayConstants::updateProjectedConstants(floatBank_,p.constants,p.constantUsage,p.projectionKind,rows,floats,worldMatrix))return false;
         booleans=boolBank_.update(p.bools,p.constantUsage.booleans);
         integers=intBank_.update(p.ints,p.constantUsage.integers);
         group_=p.constantGroup;valid_=true;++prepared;return true;

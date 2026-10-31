@@ -117,14 +117,15 @@ public:
 // unchanged range, so its stable data() pointer can serve the existing Pass API.
 inline bool updateProjectedConstants(BoundedDirtyRegisters<float,256,4>& bank,
         const float* captured,const NorthlightShaderConstants::Usage& usage,
-        unsigned projectionKind,const float* projectionRows,DirtySpan& dirty) noexcept {
+        unsigned projectionKind,const float* projectionRows,DirtySpan& dirty,const float* worldMatrix=nullptr) noexcept {
     dirty={};
     if(!captured||!projectionRows||(projectionKind!=1&&projectionKind!=2))return false;
     const auto range=usage.floats;
     const unsigned projectionStart=projectionKind==1?4:2;
     if(range.first>256||range.count>256-range.first||range.first>projectionStart||range.first+range.count<projectionStart+4)return false;
     float transposed[16];const float* replacement=projectionRows;
-    if(projectionKind==1){
+    if(projectionKind==1&&worldMatrix)replacement=worldMatrix; // DetailDoodad shadow VS consumes world POSITION0.
+    else if(projectionKind==1){
         for(unsigned a=0;a<4;++a)for(unsigned b=0;b<4;++b)
             std::memcpy(transposed+a*4+b,projectionRows+b*4+a,sizeof(float));
         replacement=transposed;

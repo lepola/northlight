@@ -28,7 +28,7 @@ r,w,probe,probeH,mirror,raw,q=read('renderer.cpp'),read('world_renderer.h'),read
 CLOCKS=('QueryPerformanceCounter','steady_clock','QpcClock','::now(')
 loop=w[w.index('auto replayLoop=[&](auto& split)->bool{'):w.index('ReplaySplit split;split.timed=profiled;')]
 submit=w[w.index('template<class Split,class Check> bool submitReplay('):w.index('    bool render(IDirect3DSurface9* targetSurface,')]
-ticks=r[r.index('struct PresentTicks {'):r.index('static void finishDeviceFrame(IDirect3DDevice9* owner);')]
+ticks=r[r.index('struct PresentTicks {'):r.index('static void finishDeviceFrame(IDirect3DDevice9* owner,bool implicitChain);')]
 issue=probe[probe.index('NorthlightReplayDrawState::Cache probeBindings(d);'):probe.index('        if(draws==replayProbeList.size())return true;')]
 probeBody=probe[probe.index('    template<class Mode> bool replayProbeIssue('):probe.index('    // endFrame(): a finished window')]
 counted=[l for l in raw.splitlines() if 'm->countRaw(' in l and 'rawActive()){++m->rawCalls;' not in l]
@@ -51,7 +51,7 @@ checks={
    and 'ReplaySplit split;split.timed=profiled;' in w and 'bool profileSampled()const{return captureSampled&&NorthlightRenderThreadProbe::profiling();}' in probe
    and 'bool replayProbeActive()const{return NorthlightRenderThreadProbe::probing()&&!replayProbeDisabled;}' in probe,
  'Off hooks empty; probe modes drop calls at compile time':re.search(r'struct Off \{\s*static constexpr bool Draws=true,Calls=true;\s*void start\(\)\{\}\s*void mark\(Bucket\)\{\}\s*void constant\(Constant\)\{\}\s*template<class Packet> void drawn\(const Packet\*\)\{\}\s*\};',probeH) is not None
-   and 'if constexpr(!Split::Calls)return poseConstants.prepare(*p,rows);' in submit and 'if constexpr(Split::Draws)hr=p->indexed?' in submit,
+   and 'if constexpr(!Split::Calls)return poseConstants.prepare(*p,rows,worldMatrix);' in submit and 'if constexpr(Split::Draws)hr=p->indexed?' in submit,
  'Split reads the clock only when timed':'void start(){if(timed)last=Clock::now();}' in probeH and 'void mark(Bucket b){if(!timed)return;const int64_t now=Clock::now();' in probeH,
  'no clock read in the replay loop or submitReplay':not any(c in loop or c in submit for c in CLOCKS),
  'whole-loop timing only when the probe records':'const int64_t loopStart=probeRecord?QpcClock::now():0;' in w, # 0.3.199 (fog clouds): +1 the wind clock (functional, every frame). 0.3.197: +2 for the local-light tracker: its frame time (functional, every frame) and selectUs (Diagnostics only)
@@ -79,15 +79,15 @@ checks={
    and 'static thread_local unsigned long long threadLogLines=0;' in r and '++logCost.calls;++threadLogLines;' in r,
  'both Present paths timed':r.count('PresentTicks ticks;')==2 and 'presentedDeviceFrame(owner,ticks)' in r and 'ticks.present();presented(ticks);' in r,
  # probe
- 'probe after the bounds join and the sun near loop, before the union':w.index('replayBoundsJoin(); /* 0.3.143: first pointBounds reader */')<w.index('auto replayLoop=[&]')<w.index('replayProbe(rows,realLoopMs);')
-   <w.index('if(!check(d->SetRenderTarget(0,shadowSurface[slot]),"shadow target"))return false;') and w.count('replayProbe(rows,realLoopMs)')==1,
- 'probe GPU marks only in probing windows':'const bool marks=profile&&replayProbeMode!=NorthlightRenderThreadProbe::ProbeOff;\n                if(marks)profile->mark("SunNearLoop");replayProbe(rows,realLoopMs);if(marks)profile->mark("ReplayProbe");' in w,
+ 'probe after the bounds join and the sun near loop, before the union':w.index('replayBoundsJoin(); /* 0.3.143: first pointBounds reader */')<w.index('auto replayLoop=[&]')<w.index('replayProbe(rows,matrices[cascade],realLoopMs);')
+   <w.index('if(!check(d->SetRenderTarget(0,shadowSurface[slot]),"shadow target"))return false;') and w.count('replayProbe(rows,matrices[cascade],realLoopMs)')==1,
+ 'probe GPU marks only in probing windows':'const bool marks=profile&&replayProbeMode!=NorthlightRenderThreadProbe::ProbeOff;\n                if(marks)profile->mark("SunNearLoop");replayProbe(rows,matrices[cascade],realLoopMs);if(marks)profile->mark("ReplayProbe");' in w,
  'probe target: cascade formats and size, private, restored':'static constexpr unsigned ReplayProbeSize=1024' in probe and 'D3DUSAGE_RENDERTARGET,D3DFMT_R32F,D3DPOOL_DEFAULT,&replayProbeTexture' in probe
    and 'D3DFMT_D24S8,D3DMULTISAMPLE_NONE,0,TRUE,&replayProbeDepth' in probe and all(x not in w for x in ('replayProbeSurface','replayProbeTexture','replayProbeDepth'))
    and 'SavedState save(d,&stateBlocks);' in probe and re.findall(r'SetRenderTarget\(([^)]*)\)',probe)==['0,replayProbeSurface']
    and 'SetTexture(' not in probe and 'SetSamplerState(' not in probe and 'SetRenderState(' not in probe and 'void releaseGPU(bool keepMesh=false){replayBoundsAbandon();releaseReplayProbe();' in w,
- 'probe never fails the frame (no check(), no failed flag; the call site ignores its result)':'check(' not in probe and 'failed=true' not in probe and 'void replayProbe(const float* rows,double realLoopMs){' in probe,
- 'probe issues the same per-draw sequence, own counters':'submitReplay(p,probeBindings,probePoses,rows,mode,constantBytes,constantCalls,' in issue
+ 'probe never fails the frame (no check(), no failed flag; the call site ignores its result)':'check(' not in probe and 'failed=true' not in probe and 'void replayProbe(const float* rows,const float* worldMatrix,double realLoopMs){' in probe,
+ 'probe issues the same per-draw sequence, own counters':'submitReplay(p,probeBindings,probePoses,rows,worldMatrix,mode,constantBytes,constantCalls,' in issue
    and all(x not in probe for x in ('replayDraws','replayConstantBytes','replayConstantCalls','culledReplayDraws','replaySlot','staticDedup','persistentSkipped','replayMeshKeys','replayPosePrepared')),
  'probe failures counted, disabled after 8':'ReplayProbeFailureLimit=8' in probe and 'if(++replayProbeFailures<ReplayProbeFailureLimit&&hr!=E_OUTOFMEMORY)return;' in probe,
  'sample lines tag the mirror audit frame (no skipping)':'mirrorAudit=%u counted=%d' in r and 'CPU timers frame=%u mirrorAudit=%u' in r and r.count('unsigned(sampleFrame%120==60)')==2,

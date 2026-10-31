@@ -1028,7 +1028,7 @@ static void testOrderKindsIdle(){ // nothing pending: plain in-place draws, no h
     CHECK(r.layer.totalCounters().orderBy[0]+r.layer.totalCounters().orderBy[1]+r.layer.totalCounters().orderBy[2]==0);
     deferQuad(r,1);CHECK(r.layer.pending()==1);
 }
-// A pending draw sampling a render-target texture is refused (Capture): the game may render into it later without any call the layer sees.
+// A draw sampling a render-target texture stays in place: the game may render into it later without any call the layer sees.
 static void sRtTexture(Rig& r){
     deferQuad(r,1);
     r.texB->usage=D3DUSAGE_RENDERTARGET;r.dev.SetTexture(3,r.texB);
@@ -1038,21 +1038,57 @@ static void sRtTexture(Rig& r){
 }
 static void testRenderTargetTexture(){
     Pair p=runBoth(sRtTexture);const Counters& c=p.lay->layer.totalCounters();
-    CHECK(c.hazards[unsigned(Reason::Capture)]==1&&c.totalHazards()==1&&p.lay->deferredTags==std::vector<int>({1}));
-    checkEquivalent(p);CHECK(p.lay->order()==p.ref->order());
+    CHECK(c.totalHazards()==0&&c.rtInPlace==1&&c.rtSplits==1&&p.lay->deferredTags==std::vector<int>({1,3}));
+    checkEquivalent(p);CHECK(p.lay->order()==expectedDeferredOrder(p.ref->order(),{3}));
     {   // a cube render target, a level that cannot be described, and non-render-target cube and volume textures
         Rig r(Opts{});auto* cube=new Fake::CubeTexture;cube->usage=D3DUSAGE_RENDERTARGET;
         r.dev.SetTexture(5,cube);cube->Release();
-        deferQuad(r,1);CHECK(r.layer.pending()==0&&r.layer.totalCounters().hazards[unsigned(Reason::Capture)]==1);
+        deferQuad(r,1);CHECK(r.layer.pending()==0&&r.layer.totalCounters().rtInPlace==1&&r.layer.armed());
         r.dev.SetTexture(5,nullptr);r.texA->descResult=E_FAIL;
         r.layer.beginFrame(false);while(r.layer.mode()!=Mode::Armed)r.layer.beginFrame(false);
-        deferQuad(r,2);CHECK(r.layer.pending()==0&&r.layer.totalCounters().hazards[unsigned(Reason::Capture)]==2);
+        deferQuad(r,2);CHECK(r.layer.pending()==0&&r.layer.totalCounters().rtInPlace==2&&r.layer.armed());
         r.texA->descResult=D3D_OK;
         while(r.layer.mode()!=Mode::Armed)r.layer.beginFrame(false);
         auto* cube2=new Fake::CubeTexture;auto* vol=new Fake::VolumeTexture;
         r.dev.SetTexture(5,cube2);r.dev.SetTexture(6,vol);cube2->Release();vol->Release();
         deferQuad(r,3);CHECK(r.layer.pending()==1);
     }
+}
+static void sRtStableFrames(Rig& r){
+    r.texB->usage=D3DUSAGE_RENDERTARGET;
+    for(int frame=0;frame<64;++frame){
+        r.layer.beginFrame(false);
+        if(r.o.on)CHECK(r.layer.armed());
+        const int tag=frame*3+1;
+        deferQuad(r,tag);
+        r.dev.SetTexture(3,r.texB);deferQuad(r,tag+1);r.dev.SetTexture(3,nullptr);
+        if(r.o.on)CHECK(r.layer.armed()&&r.layer.pending()==0&&r.layer.cooldownLeft()==0);
+        deferQuad(r,tag+2);r.boundary();
+        const auto order=r.order();const size_t n=order.size();
+        CHECK(n==size_t(frame+1)*4&&order[n-4]==tag&&order[n-3]==tag+1);
+        CHECK(order[n-2]==(r.o.on?Rig::kMarker+frame:tag+2)&&order[n-1]==(r.o.on?tag+2:Rig::kMarker+frame));
+    }
+}
+static void testRtStableFrames(){
+    Pair p=runBoth(sRtStableFrames);checkEquivalent(p);
+    const Counters& c=p.lay->layer.totalCounters();
+    CHECK(c.rtInPlace==64&&c.rtSplits==64&&c.recorded==128&&c.replayedDraws==128&&c.totalHazards()==0);
+    CHECK(c.replaySkipped==0&&c.discarded==0&&p.lay->layer.eventSeq()==0);
+}
+static void testRtSplitCap(){
+    Pair p=runBoth([](Rig& r){
+        r.texB->usage=D3DUSAGE_RENDERTARGET;
+        for(int i=0;i<12;++i){
+            deferQuad(r,i*2+1);
+            r.dev.SetTexture(3,r.texB);deferQuad(r,i*2+2);r.dev.SetTexture(3,nullptr);
+        }
+        if(r.o.on)CHECK(r.layer.mode()==Mode::Fallback&&r.layer.cooldownLeft()==0);
+        r.boundary();r.layer.beginFrame(false);
+        if(r.o.on)CHECK(r.layer.armed());
+    });
+    checkEquivalent(p);CHECK(p.lay->order()==p.ref->order());
+    const Counters& c=p.lay->layer.totalCounters();
+    CHECK(c.rtSplits==p.lay->layer.config().maxTexSplits+1&&c.totalHazards()==0&&c.replaySkipped==0);
 }
 // The render-target verdict of a texture is asked once per texture identity (a texture's usage never changes); a new generation (a texture was created or
 // destroyed: an address may be reused) asks again, so a render target created at the address of an earlier plain texture is still refused.
@@ -1065,7 +1101,7 @@ static void testVerdictCache(){
     deferQuad(r,6);CHECK(r.layer.pending()==6&&r.texB->descCalls==1);                  // no new generation: the verdict stands (usage of one object never changes)
     r.layer.beginFrame(false);deferQuad(r,6);CHECK(r.layer.pending()==1&&r.texB->descCalls==1); // next frame, same generation: still no new Get
     gTexGeneration=2;r.layer.beginFrame(false);deferQuad(r,7);
-    CHECK(r.layer.pending()==0&&r.layer.totalCounters().hazards[unsigned(Reason::Capture)]==1&&r.texB->descCalls==2); // new generation: asked again, refused, flushed
+    CHECK(r.layer.pending()==0&&r.layer.totalCounters().rtInPlace==1&&r.layer.armed()&&r.texB->descCalls==2); // new generation: asked again, kept in place
     Rig q(Opts{});q.dev.SetTexture(3,q.texB);                                            
     for(int i=1;i<=3;++i)deferQuad(q,i);CHECK(q.texA->descCalls==1&&q.texB->descCalls==1); // still once per object and frame
     q.layer.beginFrame(false);deferQuad(q,4);CHECK(q.texA->descCalls==2&&q.texB->descCalls==2);
@@ -1086,7 +1122,7 @@ static void testVertexTextureSampler(){
     CHECK(p.lay->layer.totalCounters().texSplits==1&&p.lay->layer.totalCounters().totalHazards()==0&&p.lay->deferredTags==std::vector<int>({1,2}));
     checkEquivalent(p);CHECK(p.lay->order()==expectedDeferredOrder(p.ref->order(),{2}));
     Rig r(Opts{});r.texB->usage=D3DUSAGE_RENDERTARGET;r.dev.SetTexture(260,r.texB);
-    deferQuad(r,1);CHECK(r.layer.pending()==0&&r.layer.totalCounters().hazards[unsigned(Reason::Capture)]==1);
+    deferQuad(r,1);CHECK(r.layer.pending()==0&&r.layer.totalCounters().rtInPlace==1&&r.layer.armed());
 }
 // bufferWriteConflicts() mirrors onBufferWrite() without side effects: the ring append is clear, a DISCARD or an overlap conflicts.
 static void testBufferWriteProbe(){
@@ -1431,6 +1467,40 @@ static void sFog(Rig& r){
     r.translucent(kSrcAlpha,kBlendOne);deferQuad(r,6);                         // 6 additive
     r.translucent(kSrcAlpha,kInvSrcAlpha);deferQuad(r,7);                      // 7 alpha
     r.boundary();
+}
+// Early drains are still processed by the world fog pass. They must keep the
+// native constants; applying the late SpellFog fit here attenuates them twice.
+static void testSpellFogEarlyDrain(){
+    const auto frame=fogFrame(.006f);Opts o;o.fogOn=true;o.fog=&frame;
+    Pair p=runBoth([](Rig& r){
+        const float c30[4]={-1/150.f,1.f,1.f,.25f},color[4]={.4f,.5f,.6f,.75f};
+        r.psFogReg=16;r.dev.SetVertexShaderConstantF(30,c30,1);r.dev.SetPixelShaderConstantF(16,color,1);
+        for(int i=1;i<=3;++i){r.translucent(kSrcAlpha,i==2?kInvSrcAlpha:kBlendOne);deferQuad(r,i);}
+        r.texB->usage=D3DUSAGE_RENDERTARGET;r.dev.SetTexture(3,r.texB);deferQuad(r,4);r.dev.SetTexture(3,nullptr);
+        r.boundary();
+    },o);
+    checkEquivalent(p);CHECK(p.lay->order()==p.ref->order());
+    CHECK(p.lay->layer.totalCounters().fogEntries==3&&p.lay->layer.totalCounters().fogEarly==3&&p.lay->layer.totalCounters().dirtyMismatches==0);
+}
+// A native bloom copy observes all prior draws; later effects can still defer.
+static void testSpellGlowCopy(){
+    const auto frame=fogFrame(.006f);Opts o;o.fogOn=true;o.fog=&frame;
+    Pair p=runBoth([](Rig& r){
+        const float fog[4]={-1/150.f,1,1,0},color[4]={.4f,.5f,.6f,1};
+        r.psFogReg=16;r.dev.SetVertexShaderConstantF(30,fog,1);r.dev.SetPixelShaderConstantF(16,color,1);
+        r.translucent(kSrcAlpha,kBlendOne);deferQuad(r,1);deferQuad(r,2);
+        r.layer.beforeColorCopy();
+        CHECK(r.dev.draws.size()==2&&r.dev.draws[0].tag==1&&r.dev.draws[1].tag==2);
+        if(r.o.on)CHECK(r.layer.armed()&&r.layer.pending()==0&&r.layer.cooldownLeft()==0);
+        r.layer.beforeColorCopy(); // empty copy is harmless
+        deferQuad(r,3);r.boundary();
+    },o);
+    CHECK(p.lay->dev.draws.size()==4);
+    for(unsigned i=0;i<2;++i)CHECK(sameRec(*p.ref,p.ref->dev.draws[i],*p.lay,p.lay->dev.draws[i],true));
+    const auto& late=p.lay->dev.draws.back();
+    CHECK(late.tag==3&&late.st.vsc[30][0]!=p.ref->dev.draws[2].st.vsc[30][0]);
+    CHECK(p.lay->layer.totalCounters().copyDrains==1&&p.lay->layer.totalCounters().fogEarly==2);
+    CHECK(p.lay->layer.totalCounters().dirtyMismatches==0&&p.lay->layer.totalCounters().replaySkipped==0);
 }
 static void testSpellFogRecord(){
     using namespace NorthlightSpellFog;
@@ -1948,7 +2018,7 @@ static void testUploadCursor(){
 // A texture created as a depth-stencil surface (sampled depth) is written by rendering: refused like a render-target texture.
 static void testDepthStencilTexture(){
     Rig r(Opts{});r.texB->usage=D3DUSAGE_DEPTHSTENCIL;r.dev.SetTexture(3,r.texB);
-    deferQuad(r,1);CHECK(r.layer.pending()==0&&r.layer.totalCounters().hazards[unsigned(Reason::Capture)]==1);
+    deferQuad(r,1);CHECK(r.layer.pending()==0&&r.layer.totalCounters().rtInPlace==1&&r.layer.armed());
     r.dev.SetTexture(3,nullptr);
 }
 // trim(0) while idle frees the guard table, the blob/hit/segment/order vectors, the held table and the undo log; the layer then grows again as needed.
@@ -2301,7 +2371,7 @@ int main(int argc,char** argv){
     const char* only=argc>1?argv[1]:nullptr; // a test name (substring) to run alone, and an optional cache mode
     const bool fixedMode=argc>2;if(fixedMode)gMirrorMode=std::atoi(argv[2]);
     struct T{const char* name;void(*fn)();};
-    const T tests[]={{"classify",testClassify},{"lazy classify",testLazyClassify},{"glow verdict",testGlowVerdict},{"spell fog fit",testSpellFogFit},{"spell fog record",testSpellFogRecord},{"spell fog toggle",testSpellFogToggle},{"spell fog march",testSpellFogMarch},{"vs fog proof",testVsFogProof},{"spell fog fresh",testSpellFogFresh},{"spell fog cache and blend",testSpellFogCacheAndBlend},{"spell fog flat",testSpellFogFlat},{"spell fog colour",testSpellFogColour},{"spell fog precomputed",testSpellFogPrecomputed},{"spell fog review",testSpellFogReview},{"order split cap",testOrderSplitCap},{"stride 0 stream",testStride0},{"fvf vertex size",testFvfVertexSize},{"allocation failures",testAllocFailures},{"stride 0 fvf",testStride0Fvf},{"upload cursor",testUploadCursor},{"depth stencil texture",testDepthStencilTexture},{"trim and reuse",testTrimReuse},{"dirty record random",testDirtyRandom},{"record slots",testRecordSlots},{"dirty fail safe",testDirtyFailSafe},{"frame state",testFrameState},{"guard table",testGuardTable},{"equivalence",testEquivalence},
+    const T tests[]={{"classify",testClassify},{"lazy classify",testLazyClassify},{"glow verdict",testGlowVerdict},{"spell fog fit",testSpellFogFit},{"spell glow copy",testSpellGlowCopy},{"spell fog early drain",testSpellFogEarlyDrain},{"spell fog record",testSpellFogRecord},{"spell fog toggle",testSpellFogToggle},{"spell fog march",testSpellFogMarch},{"vs fog proof",testVsFogProof},{"spell fog fresh",testSpellFogFresh},{"spell fog cache and blend",testSpellFogCacheAndBlend},{"spell fog flat",testSpellFogFlat},{"spell fog colour",testSpellFogColour},{"spell fog precomputed",testSpellFogPrecomputed},{"spell fog review",testSpellFogReview},{"order split cap",testOrderSplitCap},{"stride 0 stream",testStride0},{"fvf vertex size",testFvfVertexSize},{"allocation failures",testAllocFailures},{"stride 0 fvf",testStride0Fvf},{"upload cursor",testUploadCursor},{"depth stencil texture",testDepthStencilTexture},{"trim and reuse",testTrimReuse},{"dirty record random",testDirtyRandom},{"record slots",testRecordSlots},{"dirty fail safe",testDirtyFailSafe},{"frame state",testFrameState},{"guard table",testGuardTable},{"equivalence",testEquivalence},
         {"discard copy",testDiscard},{"partial overlap",testPartialOverlap},{"two entries",testTwoEntries},{"count-based marks",testMarkIsCountBased},
         {"rebase negative base",testRebaseNegativeBase},{"rebase kept base",testRebasePositiveBase},{"index buffer copy",testIbMaterialized},
         {"mixed streams",testMixedStreams},{"32-bit UP",test32bitUP},{"non-dynamic buffer",testNonDynamic},{"copy disabled",testConflictCopyDisabled},
@@ -2313,7 +2383,7 @@ int main(int argc,char** argv){
         {"reset and teardown",testResetAndTeardown},{"512 entries",testStress512},
         {"32-bit index copy",testIb32},{"both index formats",testIbBothFormats},{"water rain name flush",testOrderKinds},{"diagnostics",testDiagnostics},{"minimal restore",testMinimalRestore},{"minimal matches state block",testMinimalMatchesStateBlock},{"minimal fallback",testMinimalFallback},{"declaration restored exactly",testDeclarationRestoredExactly},{"minimal needs no state block",testMinimalNeedsNoStateBlock},{"minimal leaves other slots alone",testMinimalLeavesOthersAlone},{"nothing pending: in place",testOrderKindsIdle},
         {"replay scope failure",testReplayScopeFailure},{"state changed between draws",testStateChangedBetweenDraws},{"scissor and clip only when enabled",testScissorAndClipOnlyWhenEnabled},{"delta encoding",testDeltas},{"4096 entries",testFourThousandEntries},{"capacity limits",testCapacityLimits},{"guard table with many buffers",testGuardTableMany},{"sampled textures lookup",testSamplesLookup},{"shader read sets",testReadSets},{"diff replay",testDiffReplay},{"admission",testAdmission},{"hazard events",testHazardEvents},{"record size and timing",testRecordSizeAndTiming},{"fixed function",testFixedFunction},{"fixed function admission",testFixedAdmission},{"fixed function capacity",testFixedCapacity},{"water ripples",testRipples},
-        {"render target texture",testRenderTargetTexture},{"render target verdict cache",testVerdictCache},{"vertex texture sampler",testVertexTextureSampler},{"buffer write conflict probe",testBufferWriteProbe}};
+        {"render target texture",testRenderTargetTexture},{"render target stable frames",testRtStableFrames},{"render target split cap",testRtSplitCap},{"render target verdict cache",testVerdictCache},{"vertex texture sampler",testVertexTextureSampler},{"buffer write conflict probe",testBufferWriteProbe}};
     const struct {bool minimal,dirty;} passes[]={{true,true},{true,false},{false,true}};
     for(const auto& pass:passes){
         gMinimal=pass.minimal;gDirty=pass.dirty;
