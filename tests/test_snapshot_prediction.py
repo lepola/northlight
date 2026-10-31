@@ -62,12 +62,13 @@ checks={
  '__builtin_prefetch only in the one helper':sum(t.count('__builtin_prefetch') for t in sources.values())==1
    and 'inline void prefetch(const void* address){__builtin_prefetch(address);}' in s,
  'the counterfactual and hash macros default to 0':'#define NORTHLIGHT_SNAPSHOT_COUNTERFACTUAL 0' in s and '#define NORTHLIGHT_SNAPSHOT_HASH_BITS 0' in s,
- 'mode: Prefetch unless a RenderProfile=1 non-sample frame (Map/Predict/Prefetch by frame%3), set at the frame\'s first read':
-   'const bool metered=NorthlightRenderThreadProbe::profiling()&&!sample;' in w and 'replaySnapshots.setLookup(metered?Lookup(snapshotFrameSerial%3):Lookup::Prefetch);' in w
-   and 'if(!snapshotFrameBegun)snapshotBeginFrame(sample);' in w,
- 'the snapshot span covers the snapshot phase and ends at the constants phase':'snapshotSpan.end();phase.next(CaptureConstants);' in w,
- 'the SNAPSHOT ab line is Diagnostics-gated, every 600 frames and at destruction':'if(NorthlightDiagnostics::enabled())logf("SNAPSHOT ab class=%s' in w
-   and 'if(++snapshotReportFrames>=600){snapshotReportFrames=0;logSnapshotAb();}' in w and 'logSnapshotAb(); /* 0.3.181: the SNAPSHOT ab window at device destroy */' in w,
+ 'production uses Frame default Prefetch without profiling-dependent algorithm rotation':
+   'Lookup lookup_=Lookup::Prefetch;' in s and '.setLookup(' not in w,
+ 'production capture retains its constants phase without snapshot benchmark spans':
+   'phase.next(CaptureConstants);' in w and 'SnapshotSpan<' not in w,
+ 'offline benchmark helpers have no production users or retained meter state':
+   not any(any(needle in text for needle in ('SnapshotMeter<','SnapshotSpan<','benchKeys('))
+           for name,text in sources.items() if name!='draw_snapshot.h'),
  'keyEqLegacyNs times the byte loop copy, not memcmp':'k.legacyNs=time([&]{return NorthlightMem::byteCompare(&a,&b,sizeof(CacheKey))==0;});' in s,
 }
 for name,ok in checks.items():print(('PASS ' if ok else 'FAIL ')+name)

@@ -144,8 +144,11 @@ finish=member(renderer,'void finishFrameImpl() {')
 reset=member(renderer,'HRESULT STDMETHODCALLTYPE Reset(D3DPRESENT_PARAMETERS* pp) override')
 ctor=renderer[renderer.index('    Device(IDirect3DDevice9* d,IDirect3D9* p'):renderer.index('    ~Device() {')]
 code=re.sub(r'"(?:[^"\\]|\\.)*"','""',re.sub(r'/\*.*?\*/|//[^\n]*','',renderer))  # no comments, no string literals
-writes=lambda name,text=None:re.findall(r'(?<![.>\w])'+name+r'\s*=(?!=)\s*([^;,]*)',code if text is None else text)
-checks['enabled: rises only by F10 in finishFrameImpl; else only lowered']=sorted(writes('enabled'))==['!enabled','false','true'] and 'if(k10&&!key10){enabled=!enabled;' in finish
+writes=lambda name,text=None:re.findall(r'(?<![.>:\w])'+name+r'\s*=(?!=)\s*([^;,]*)',code if text is None else text)
+checks['enabled: rises only by retained F10 in finishFrameImpl; else only lowered']=(
+    sorted(writes('enabled'))==['!enabled','false','true'] and 'enabled=!enabled;' in member(finish,'if(masterPressed)')
+    and 'if(!overlay||!overlay->masterHotkey(focus,masterPressed))masterPressed=k10&&!key10;' in finish
+    and finish.index('if(masterPressed)')<finish.index('latchDrawGates();'))
 checks['failed=false only in Reset (latched there) and the retry in finishFrameImpl']=(len(re.findall(r'\bfailed\s*=\s*false',code))==3  # + the member initialiser
     and 'failed=false;latchDrawGates();' in reset and 'failed=false;logf("Effects retry requested after frame cleanup");' in finish
     and finish.index('failed=false;logf("Effects retry')<finish.index('latchDrawGates();'))

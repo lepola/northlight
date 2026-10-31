@@ -1,5 +1,6 @@
 #pragma once
 
+#include "memory_footprint.h"
 #include <cstdint>
 #include <functional>
 #include <string>
@@ -54,6 +55,12 @@ struct WorldScene {
     std::vector<WorldTriangle> triangles;
     std::vector<WorldMaterial> materials;
     std::vector<WorldPlacementCoverage> completePlacements;
+    void accountMemory(NorthlightMemoryFootprint::Counter& memory)const {
+        using namespace NorthlightMemoryFootprint;
+        memory.vector(Vertices,vertices);memory.vector(Triangles,triangles);memory.vector(Metadata,materials);
+        for(const auto& material:materials)memory.vector(Texels,material.rgba);
+        memory.vector(Metadata,completePlacements);for(const auto& p:completePlacements)memory.string(p.modelKey);
+    }
     size_t retainedBytes()const {
         size_t n=sizeof(*this)+vertices.capacity()*sizeof(WorldVertex)+triangles.capacity()*sizeof(WorldTriangle)+materials.capacity()*sizeof(WorldMaterial)+completePlacements.capacity()*sizeof(WorldPlacementCoverage);
         for(const auto& m:materials)n+=m.rgba.capacity();
@@ -120,6 +127,7 @@ public:
     bool occluded(Vec3 origin, Vec3 direction, float maxDistance = 256.f,
                   float minDistance = .001f) const;
     const WorldScene& scene() const { return scene_; }
+    void accountMemory(NorthlightMemoryFootprint::Counter&)const;
     size_t triangleCount() const { return order_.size(); }
     size_t retainedBytes()const{return sizeof(*this)+scene_.retainedBytes()+nodes_.capacity()*sizeof(Node)+pairs_.capacity()*sizeof(Pair)+order_.capacity()*sizeof(uint32_t)+opaque_.capacity();}
 private:
@@ -158,6 +166,7 @@ private:
 // scene() remains the exact legacy flat transport used by GPU upload and fog.
 class LocalSceneCache {
 public:
+    void accountMemory(NorthlightMemoryFootprint::Counter&)const;
     struct Limits { size_t retainedBytes=32u*1024u*1024u; };
     struct Stats {
         uint64_t modelReads=0,pieceBuilds=0,pieceReuses=0,reusedTriangles=0,builtTriangles=0,hintedBuilds=0;

@@ -55,6 +55,7 @@ struct WindowHook {
     std::atomic<bool> captured{false};   // the overlay holds the mouse capture for heldButtons (window thread)
     std::atomic<unsigned> hotkey{0};   // packed In::Hotkey (vk | ctrl<<8 | shift<<9 | alt<<10), set before install()
     In::Queue queue;
+    In::MasterHotkey master;
 };
 WindowHook hook;
 unsigned pack(const In::Hotkey& k){return k.vk|(k.mods.ctrl?1u<<8:0)|(k.mods.shift?1u<<9:0)|(k.mods.alt?1u<<10:0);}
@@ -69,7 +70,7 @@ LRESULT CALLBACK windowProcedure(HWND window,UINT msg,WPARAM wparam,LPARAM lpara
     };
     if(msg==WM_NCDESTROY){
         // The window is going away: unhook if nobody subclassed after us (the chain dies with the window anyway).
-        hook.active.store(false);hook.open.store(false);
+        hook.active.store(false);hook.open.store(false);hook.master.clear();
         const LONG_PTR current=unicode?GetWindowLongPtrW(window,GWLP_WNDPROC):GetWindowLongPtrA(window,GWLP_WNDPROC);
         if(current==reinterpret_cast<LONG_PTR>(&windowProcedure)&&previous){
             if(unicode)SetWindowLongPtrW(window,GWLP_WNDPROC,reinterpret_cast<LONG_PTR>(previous));else SetWindowLongPtrA(window,GWLP_WNDPROC,reinterpret_cast<LONG_PTR>(previous));
@@ -80,6 +81,7 @@ LRESULT CALLBACK windowProcedure(HWND window,UINT msg,WPARAM wparam,LPARAM lpara
     if(!hook.active.load(std::memory_order_relaxed))return forward();
     In::Modifiers mods;
     if(msg>=WM_KEYFIRST&&msg<=WM_KEYLAST){mods.ctrl=GetKeyState(VK_CONTROL)<0;mods.shift=GetKeyState(VK_SHIFT)<0;mods.alt=GetKeyState(VK_MENU)<0;}
+    hook.master.message(msg,wparam,lparam,mods,GetForegroundWindow()==window);
     In::State state;state.open=hook.open.load(std::memory_order_relaxed);state.captureMouse=hook.captureMouse.load(std::memory_order_relaxed);
     state.captureText=hook.captureText.load(std::memory_order_relaxed);state.hotkey=unpack(hook.hotkey.load(std::memory_order_relaxed));
     state.self=reinterpret_cast<std::intptr_t>(window);
@@ -115,13 +117,13 @@ bool install(HWND window,const char*& why){
     if(!window||!IsWindow(window)){why="no device window";return false;}
     if(hook.installed.load()){
         // Still chained from an earlier device (another module subclassed after us): reuse that link.
-        if(hook.window.load()==window){hook.active.store(true);return true;}
+        if(hook.window.load()==window){hook.master.clear();hook.active.store(true);return true;}
         why="the procedure is still chained into an earlier window";return false;
     }
     const bool unicode=IsWindowUnicode(window)!=FALSE;
     const LONG_PTR current=unicode?GetWindowLongPtrW(window,GWLP_WNDPROC):GetWindowLongPtrA(window,GWLP_WNDPROC);
     if(!current){why="GetWindowLongPtr failed";return false;}
-    hook.unicode.store(unicode);hook.window.store(window);hook.heldButtons.store(0);hook.queue.clear();
+    hook.unicode.store(unicode);hook.window.store(window);hook.heldButtons.store(0);hook.queue.clear();hook.master.clear();
     hook.previous.store(reinterpret_cast<WNDPROC>(current),std::memory_order_release);
     SetLastError(0);
     const LONG_PTR replaced=unicode?SetWindowLongPtrW(window,GWLP_WNDPROC,reinterpret_cast<LONG_PTR>(&windowProcedure))
@@ -134,7 +136,7 @@ bool install(HWND window,const char*& why){
 // Device destruction: restores the previous procedure only while ours is still the window's current one; otherwise
 // another module subclassed after us and we stay in its chain as a pass-through (never break its chain).
 void uninstall(){
-    hook.active.store(false);hook.open.store(false);hook.captureMouse.store(false);hook.captureText.store(false);hook.queue.clear();
+    hook.active.store(false);hook.open.store(false);hook.captureMouse.store(false);hook.captureText.store(false);hook.queue.clear();hook.master.clear();
     hook.heldButtons.store(0);hook.captured.store(false);   // a capture we hold ends with the button's release (pass-through from now on)
     if(!hook.installed.load())return;
     const HWND window=hook.window.load();const bool unicode=hook.unicode.load();
@@ -327,7 +329,8 @@ class Impl final : public Overlay {
         device->SetTextureStageState(0,D3DTSS_RESULTARG,D3DTA_CURRENT);
         device->SetStreamSourceFreq(0,1);
         if(FAILED(device->BeginScene()))return;
-        ImGui_ImplDX9_RenderDrawData(ImGui::GetDrawData());
+        // Overlay::draw requires the caller's SavedState; keep transform backup in the backend.
+        ImGui_ImplDX9_RenderDrawData(ImGui::GetDrawData(),false);
         device->EndScene();
         checkpoint();
     }
@@ -384,6 +387,11 @@ public:
         }catch(...){}
         context=nullptr;
         device->Release();
+    }
+    bool masterHotkey(bool foreground,bool& pressed) override{
+        const bool active=hook.active.load(std::memory_order_relaxed);
+        pressed=hook.master.take(foreground&&active);
+        return active;
     }
     bool visible()const override{return hook.open.load(std::memory_order_relaxed)||background.load(std::memory_order_relaxed);}
     void draw() override{

@@ -154,7 +154,7 @@ static void ImGui_ImplDX9_SetupRenderState(ImDrawData* draw_data)
 }
 
 // Render function.
-void ImGui_ImplDX9_RenderDrawData(ImDrawData* draw_data)
+void ImGui_ImplDX9_RenderDrawData(ImDrawData* draw_data, bool restore_state)
 {
     // Avoid rendering when minimized
     if (draw_data->DisplaySize.x <= 0.0f || draw_data->DisplaySize.y <= 0.0f)
@@ -181,12 +181,15 @@ void ImGui_ImplDX9_RenderDrawData(ImDrawData* draw_data)
 
     // Backup the DX9 state
     IDirect3DStateBlock9* state_block = nullptr;
-    if (device->CreateStateBlock(D3DSBT_ALL, &state_block) < 0)
-        return;
-    if (state_block->Capture() < 0)
+    if (restore_state)
     {
-        state_block->Release();
-        return;
+        if (device->CreateStateBlock(D3DSBT_ALL, &state_block) < 0)
+            return;
+        if (state_block->Capture() < 0)
+        {
+            state_block->Release();
+            return;
+        }
     }
 
     // Backup the DX9 transform (DX9 documentation suggests that it is included in the StateBlock but it doesn't appear to)
@@ -200,13 +203,13 @@ void ImGui_ImplDX9_RenderDrawData(ImDrawData* draw_data)
     ImDrawIdx* idx_dst;
     if (bd->pVB->Lock(0, (UINT)(draw_data->TotalVtxCount * sizeof(CUSTOMVERTEX)), (void**)&vtx_dst, D3DLOCK_DISCARD) < 0)
     {
-        state_block->Release();
+        if (state_block) state_block->Release();
         return;
     }
     if (bd->pIB->Lock(0, (UINT)(draw_data->TotalIdxCount * sizeof(ImDrawIdx)), (void**)&idx_dst, D3DLOCK_DISCARD) < 0)
     {
         bd->pVB->Unlock();
-        state_block->Release();
+        if (state_block) state_block->Release();
         return;
     }
 
@@ -289,8 +292,11 @@ void ImGui_ImplDX9_RenderDrawData(ImDrawData* draw_data)
     device->SetTransform(D3DTS_PROJECTION, &last_projection);
 
     // Restore the DX9 state
-    state_block->Apply();
-    state_block->Release();
+    if (state_block)
+    {
+        state_block->Apply();
+        state_block->Release();
+    }
 }
 
 static bool ImGui_ImplDX9_CheckFormatSupport(LPDIRECT3DDEVICE9 pDevice, D3DFORMAT format)

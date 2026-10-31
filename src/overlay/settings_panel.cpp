@@ -12,6 +12,15 @@
 #include "imgui.h"
 #include "settings_service.h"
 #include "settings_draft.h"
+#include "memory_profile_snapshot.h"
+#include "diagnostic_capture_request.h"
+
+#ifndef NORTHLIGHT_SOURCE_ID
+#define NORTHLIGHT_SOURCE_ID "unrecorded"
+#endif
+#ifndef NORTHLIGHT_BUILD_UTC
+#define NORTHLIGHT_BUILD_UTC "unrecorded"
+#endif
 
 namespace NorthlightOverlay {
 namespace {
@@ -227,6 +236,8 @@ struct SettingsPanel::State {
     std::uint64_t commitSerial=0;
     std::string region="default",note;                 // note: a local message (a refused request), cleared by the next action
     Page page=Page::Overview;                             // kept for the session
+    NorthlightMemoryProfile::Snapshot memorySnapshot;
+    uint64_t memoryReadAt=0;
     std::string presetChoice;bool presetCelestial=true,presetRange=true;   // the preset dialog
     Confirm confirm=Confirm::None;
     float scale=1;
@@ -492,12 +503,95 @@ struct SettingsPanel::State {
         std::vector<const Field*> rest;for(auto& k:byKey)if(!used[k.first])rest.push_back(k.second);
         titled("Other",rest);
     }
+    void memoryDiagnostics(){
+        ImGui::TextColored(Color::Heading,"Build");
+        ImGui::Text("ID: %.12s",NORTHLIGHT_SOURCE_ID);
+        ImGui::Text("Built: %s",NORTHLIGHT_BUILD_UTC);
+        ImGui::Spacing();ImGui::Separator();
+        using namespace NorthlightDiagnosticCapture;
+        if(ImGui::Button("Capture world lighting"))request(World);
+        ImGui::SameLine();if(ImGui::Button("Capture AO"))request(AO);
+        if(ImGui::Button("Capture materials"))request(Materials);
+        ImGui::SameLine();if(ImGui::Button("Capture fog"))request(Fog);
+        if(ImGui::Button("Capture UI atlas"))request(Atlas);
+        ImGui::TextWrapped("Saves the current frame in northlight-diagnostics. Skipped passes produce empty images. Capture frames are excluded from FPS statistics.");
+
+        namespace M=NorthlightMemoryProfile;
+        const uint64_t now=M::nowMs();
+        if(!memoryReadAt||now-memoryReadAt>=1000){if(M::store().tryRead(memorySnapshot))memoryReadAt=now;}
+        const auto& memory=memorySnapshot;
+        ImGui::Spacing();ImGui::TextColored(Color::Heading,"Memory snapshot");ImGui::Separator();
+        ImGui::TextWrapped("Sampled about every 10 seconds. Values below describe the last sample, not a live allocation limit.");
+        const auto age=[&](uint64_t at){return at&&now>=at?double(now-at)/1000:0.;};
+        const auto bytesRow=[](const char* label,uint64_t bytes){ImGui::TableNextRow();ImGui::TableSetColumnIndex(0);ImGui::TextUnformatted(label);ImGui::TableSetColumnIndex(1);ImGui::Text("%.2f MiB",double(bytes)/1048576);};
+        const auto& admission=memory.admission;
+        if(admission.at){
+            ImGui::TextWrapped("Scene builder: %s (%.0f s ago)",admission.stage,age(admission.at));
+            if(age(admission.at)>30)ImGui::TextColored(Color::Edited,"This sample is old; the scene builder may be idle.");
+            if(!admission.valid)ImGui::TextColored(Color::Edited,"The process memory sample was unavailable.");
+            else if(admission.available<admission.entryRequired)ImGui::TextColored(Color::Edited,"Free address space is below the next-build threshold.");
+            if(beginRows("memory-admission")){
+                if(admission.valid){bytesRow("Free virtual address space",admission.available);bytesRow(admission.largestExact?"Largest free block":"Free block (at least)",admission.largest);}
+                bytesRow("Required to start a scene build",admission.entryRequired);bytesRow("Process safety reserve",admission.reserve);bytesRow("Temporary entry headroom",admission.entryHeadroom);
+                if(admission.minimumAvailable)bytesRow("Lowest sampled free address space",admission.minimumAvailable);
+                bytesRow("Largest sampled builder capacity",admission.maximumKnownCapacity);
+                ImGui::EndTable();
+            }
+            ImGui::TextWrapped("The entry threshold is free address space required before building. It is not memory allocated to GI.");
+        }
+        if(!memory.builder.at&&!memory.solver.at&&!memory.gpu.at){
+            ImGui::TextColored(Color::Muted,"No memory sample yet.");
+            ImGui::TextWrapped("Enable Diagnostic logging, then enter a world area and wait for a sample. Saved settings are not changed by this view.");
+            return;
+        }
+        if(ImGui::TreeNode("CPU memory breakdown")){
+            if(memory.builder.at)ImGui::Text("Builder sample: %.0f s ago",age(memory.builder.at));else ImGui::TextDisabled("Builder: no sample yet.");
+            if(memory.solver.at)ImGui::Text("GI worker sample: %.0f s ago",age(memory.solver.at));else ImGui::TextDisabled("GI worker: no sample yet.");
+            ImGui::TextWrapped("Shared storage counts once within each column; the two columns overlap and must not be added.");
+            if((memory.builder.at&&!memory.builder.complete)||(memory.solver.at&&!memory.solver.complete))ImGui::TextColored(Color::Edited,"Incomplete sample: some diagnostic bookkeeping could not be allocated.");
+            if(ImGui::BeginTable("memory-cpu",3,ImGuiTableFlags_SizingStretchProp|ImGuiTableFlags_RowBg)){
+                ImGui::TableSetupColumn("Retained capacity",ImGuiTableColumnFlags_WidthStretch,1.8f);ImGui::TableSetupColumn("Builder");ImGui::TableSetupColumn("GI worker");ImGui::TableHeadersRow();
+                const char* labels[]={"Geometry vertices","Geometry triangles","BVH / acceleration","CPU texture pixels","Upload pages / indices","GI probes / path records","Regional fog","Metadata"};
+                uint64_t totals[2]={};
+                for(unsigned i=0;i<NorthlightMemoryFootprint::KindCount;++i){
+                    ImGui::TableNextRow();ImGui::TableSetColumnIndex(0);ImGui::TextUnformatted(labels[i]);
+                    const M::Cpu* columns[]={&memory.builder,&memory.solver};
+                    for(unsigned column=0;column<2;++column){ImGui::TableSetColumnIndex(int(column+1));if(columns[column]->at)ImGui::Text("%.2f MiB",double(columns[column]->bytes[i])/1048576);else ImGui::TextDisabled("No sample");totals[column]+=columns[column]->bytes[i];}
+                }
+                ImGui::TableNextRow();ImGui::TableSetColumnIndex(0);ImGui::TextUnformatted("Known capacity in this scope");
+                for(unsigned column=0;column<2;++column){ImGui::TableSetColumnIndex(int(column+1));if((column?memory.solver:memory.builder).at)ImGui::Text("%.2f MiB",double(totals[column])/1048576);else ImGui::TextDisabled("No sample");}
+                ImGui::EndTable();
+            }
+            ImGui::TextWrapped("Capacity estimates exclude allocator overhead and owners outside each sampled scope. They are not total process RAM usage.");
+            ImGui::TreePop();
+        }
+        if(ImGui::TreeNodeEx("World GPU resource pools",ImGuiTreeNodeFlags_DefaultOpen)){
+            const auto& gpu=memory.gpu;
+            if(!gpu.at)ImGui::TextDisabled("No resource sample yet.");
+            else{
+                ImGui::Text("Last sample: %.0f s ago",age(gpu.at));
+                if(!gpu.complete)ImGui::TextColored(Color::Edited,"Incomplete inventory (%u unknown descriptions).",gpu.unknown);
+                if(beginRows("memory-gpu-pools")){bytesRow("Managed resources (logical)",gpu.managed);bytesRow("Default resources (logical)",gpu.defaults);bytesRow("System-memory resources (logical)",gpu.system);bytesRow("CPU material reuse cache",gpu.materialReuseCpu);bytesRow("Retired material resource ledger",gpu.retiredMaterials);ImGui::EndTable();}
+                ImGui::TextWrapped("Managed resources can retain a system-memory copy. Default placement is chosen by the driver. These are logical sizes, not measured resident VRAM or RAM backing. Static and replay caches are reported separately in the log.");
+                if(ImGui::TreeNode("Additional cache ledgers")){
+                    if(beginRows("memory-cache-ledgers")){bytesRow("Static shadows (managed)",gpu.staticManagedLedger);bytesRow("Replay cache (default)",gpu.replayDefaultLedger);bytesRow("Live terrain buffer (default)",gpu.liveTerrainDefault);ImGui::EndTable();}
+                    ImGui::TextWrapped("The GPU caches above are outside the world-resource inventory. CPU capture data may also be referenced by the sampled scene scopes.");ImGui::TreePop();
+                }
+                if(ImGui::TreeNode("Resources by purpose")){
+                    if(beginRows("memory-gpu-groups")){bytesRow("Geometry / cutout textures",gpu.geometry);bytesRow("GI probe textures",gpu.probes);bytesRow("Shadow maps / depth",gpu.shadows);bytesRow("Lighting / fog render targets",gpu.post);bytesRow("Fog fields / noise / constants",gpu.noise);bytesRow("Dynamic upload buffers",gpu.dynamic);ImGui::EndTable();}
+                    ImGui::TextWrapped("This is another grouping of the same resources; do not add it to the pool totals.");ImGui::TreePop();
+                }
+            }
+            ImGui::TreePop();
+        }
+    }
     void drawPage(){
         switch(page){
         case Page::Overview:overviewPage();break;
         case Page::Celestial:celestialTab();break;
         case Page::ShadowRange:shadowRangeTab();break;
         case Page::Renderer:rendererPage();break;
+        case Page::Diagnostics:memoryDiagnostics();if(const Section* s=qualitySection("diagnostics"))qualityPage(*s,false);break;
         default:if(const Section* s=qualitySection(Pages[unsigned(page)].quality))qualityPage(*s,page==Page::Performance);break;
         }
     }
@@ -685,7 +779,8 @@ bool SettingsPanel::draw(float scale){
     ImGui::SetNextWindowPos(ImVec2(48*scale,96*scale),ImGuiCond_FirstUseEver);
     ImGui::SetNextWindowSize(ImVec2(760*scale,680*scale),ImGuiCond_FirstUseEver);
     ImGui::SetNextWindowSizeConstraints(ImVec2(560*scale,360*scale),ImVec2(FLT_MAX,FLT_MAX));
-    if(!ImGui::Begin("Northlight settings###NorthlightSettings",&open,ImGuiWindowFlags_NoCollapse)){ImGui::End();return open;}
+    char title[96];std::snprintf(title,sizeof title,"Northlight settings | build %.12s###NorthlightSettings",NORTHLIGHT_SOURCE_ID);
+    if(!ImGui::Begin(title,&open,ImGuiWindowFlags_NoCollapse)){ImGui::End();return open;}
     const auto& style=ImGui::GetStyle();
     const float footer=ImGui::GetTextLineHeightWithSpacing()+ImGui::GetFrameHeightWithSpacing()+style.ItemSpacing.y*2+style.SeparatorTextBorderSize+2;
     // Sidebar (fixed width, scaled) and the selected page; the footer below stays put on every page.

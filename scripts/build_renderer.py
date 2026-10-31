@@ -2,6 +2,7 @@
 import hashlib
 import json
 import os
+from datetime import datetime, timezone
 from pathlib import Path
 import subprocess
 import sys
@@ -13,6 +14,20 @@ import check_layout  # noqa: E402  (scripts/ is this script's directory)
 SHADERS = northlight_paths.SHADERS                         # *.hlsl and their *-shader-build.json manifests
 DLL = northlight_paths.RENDERER / 'frd9.dll'
 DEV_DLL = northlight_paths.RENDERER / 'frd9-dev-tuning.dll'  # the dev variant never overwrites frd9.dll
+def source_identity(repo=northlight_paths.REPO):
+    digest = hashlib.sha256()
+    paths = [p for folder in ('src', 'shaders') for p in (repo/folder).rglob('*') if p.is_file()]
+    paths += [repo/'scripts/build_renderer.py', repo/'northlight_paths.py']
+    for path in sorted(paths, key=lambda path: path.relative_to(repo).as_posix()):
+        data = path.read_bytes()
+        if path.suffix in ('.h', '.cpp', '.inl', '.inc', '.def', '.hlsl', '.asm', '.py', '.json'):
+            data = data.replace(b'\r\n', b'\n')
+        digest.update(path.relative_to(repo).as_posix().encode() + b'\0')
+        digest.update(len(data).to_bytes(8, 'little'))
+        digest.update(data)
+    return digest.hexdigest()
+
+
 OVERLAY_SOURCES = ('settings_overlay.cpp', 'settings_panel.cpp', 'imgui.cpp', 'imgui_draw.cpp', 'imgui_tables.cpp', 'imgui_widgets.cpp', 'imgui_impl_dx9.cpp')
 
 def main(argv=None):
@@ -47,7 +62,13 @@ def main(argv=None):
     if hashlib.sha256((SHADERS/'static_shadow_effects.hlsl').read_bytes()).hexdigest() != static_manifest['source_sha256']:
         raise SystemExit('Static caster shader source differs from offline build.')
     env = northlight_paths.zig_env()
+    identity = source_identity()
+    built_utc = datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S UTC')
+    print('Source identity', identity, flush=True)
+    print('Build time', built_utc, flush=True)
     command = [str(zig), 'c++', '-target', 'x86-windows-gnu', '-O2', '-shared',
+               '-DNORTHLIGHT_SOURCE_ID="' + identity + '"',
+               '-DNORTHLIGHT_BUILD_UTC="' + built_utc + '"',
                '-std=c++17', '-fno-rtti', '-Wall', '-Wextra', '-Wno-microsoft-exception-spec',
                *northlight_paths.include_flags(),
                *[str(northlight_paths.src(n)) for n in ('renderer.cpp', 'world_gi.cpp', 'world_mesh_plan.cpp', 'static_shadow_scene.cpp', 'frd9.def')],

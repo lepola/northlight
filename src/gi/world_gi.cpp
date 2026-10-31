@@ -662,6 +662,14 @@ using CacheClock=std::chrono::steady_clock;
 double milliseconds(CacheClock::time_point a){return std::chrono::duration<double,std::milli>(CacheClock::now()-a).count();}
 }
 
+void BVH::accountMemory(NorthlightMemoryFootprint::Counter& memory)const {
+    using namespace NorthlightMemoryFootprint;
+    if(!memory.visit(this))return;
+    memory.add(Metadata,sizeof(*this));scene_.accountMemory(memory);
+    memory.vector(Acceleration,nodes_);memory.vector(Acceleration,pairs_);memory.vector(Acceleration,order_);
+    memory.vector(Acceleration,opaque_);memory.vector(Acceleration,centers_);
+}
+
 struct LocalSceneCache::Impl {
     struct Piece {
         WorldScene scene;
@@ -676,6 +684,16 @@ struct LocalSceneCache::Impl {
     bool sized=false;uint64_t sizedVertices=0,sizedTriangles=0;Vec3 sizedLow,sizedHigh;
     explicit Impl(Limits l):limits(l){}
 };
+void LocalSceneCache::accountMemory(NorthlightMemoryFootprint::Counter& memory)const {
+    using namespace NorthlightMemoryFootprint;
+    if(!memory.visit(impl_.get()))return;
+    memory.add(Metadata,sizeof(Impl));memory.string(impl_->map);memory.string(impl_->directory);
+    for(const auto& entry:impl_->pieces){
+        memory.allocation(Metadata,&entry,sizeof(entry));memory.string(entry.first);
+        const auto& piece=*entry.second;if(!memory.visit(&piece))continue;
+        memory.add(Metadata,sizeof(piece));piece.scene.accountMemory(memory);memory.vector(Metadata,piece.materialSources);
+    }
+}
 LocalSceneCache::LocalSceneCache():LocalSceneCache(Limits{}){}
 LocalSceneCache::LocalSceneCache(Limits limits):impl_(new Impl(limits)){}
 LocalSceneCache::~LocalSceneCache()=default;

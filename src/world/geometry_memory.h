@@ -164,6 +164,9 @@ template<class T,size_t Limit=2> class Generations {
 public:
     size_t live(){size_t count=0;for(auto& e:entries_){if(e.expired())e.reset();else ++count;}return count;}
     bool canAdmit(){return live()<Limit;}
+    // Diagnostics visit only immutable completed generations. The short local
+    // lease protects a concurrent final retirement without changing the limit.
+    template<class Visit> void forEach(Visit&& visit)const {for(const auto& entry:entries_)if(auto owner=entry.lock())visit(*owner);}
     bool track(const std::shared_ptr<T>& value){
         if(!value)return false;
         live();

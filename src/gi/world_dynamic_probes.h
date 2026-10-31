@@ -143,6 +143,13 @@ public:
     }
     size_t pathRecords()const{return paths_.size();}
     size_t pathBytes()const{return pathBytes_;}
+    void accountMemory(NorthlightMemoryFootprint::Counter& memory)const{
+        using namespace NorthlightMemoryFootprint;
+        if(!memory.visit(this))return;
+        memory.add(Metadata,sizeof(*this));memory.vector(Metadata,bounds_);
+        for(const auto& entry:solved_)memory.allocation(Probes,&entry,sizeof(entry));
+        for(const auto& entry:paths_){memory.allocation(Metadata,&entry,sizeof(entry));memory.vector(Probes,entry.second.record.rays);memory.vector(Probes,entry.second.record.queries);}
+    }
     size_t retained()const{return solved_.size();}
     uint32_t generation()const{return generation_;}
     float distanceSquared(Vec3 p)const {

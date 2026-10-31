@@ -28,6 +28,7 @@
 #include "query_poll.h"
 #include "command_stream.inl"
 #include "tex_readback_diag.h"
+#include "atlas_upload_proof.h"
 #include "particle_texture_stats.h"
 
 namespace NorthlightStream {
@@ -540,6 +541,14 @@ inline HRESULT callUnlock(UINT route,IUnknown* in,UINT level,UINT face){
 // DISCARD and NOOVERWRITE only mean something in the default pool; elsewhere the old bytes stay, so such a lock is a plain lock.
 inline DWORD effectiveLockFlags(DWORD flags,DWORD pool){return pool==D3::kPoolDefault?flags:(flags&~(D3::kLockDiscard|D3::kLockNoOverwrite));}
 constexpr std::size_t kMaxStagedImage=std::size_t(8)<<20;
+inline void noteAtlasUpload(const UnlockImageArgs& a,const unsigned char* src,HRESULT result){
+    if(!NorthlightAtlasProof::enabled.load(std::memory_order_relaxed))return;
+    ProxyBase* p=a.proxy;ProxyBase* root=p->parent?p->parent:p;
+    if(root->kind!=Kind::Texture||a.level||p->info.w!=root->info.w||p->info.h!=root->info.h)return;
+    const std::size_t bytes=a.rows?std::size_t(a.rows-1)*a.pitch+a.rowBytes:0;
+    NorthlightAtlasProof::cache().upload(root->raw,root,root->info.fmt,root->info.w,root->info.h,0,
+        unsigned(a.l),unsigned(a.t),unsigned(a.r),unsigned(a.b),src,bytes,a.pitch,SUCCEEDED(result),unsigned(result));
+}
 // What the replay thread does for a recorded image unlock: lock the real level with the game's flags/rect, copy rows from the
 // tight source (rows of rowBytes, `pitch` apart), unlock. Also the synchronous fallback when no Block is available.
 inline bool applyImageUnlock(StreamCore& core,const UnlockImageArgs& a,const unsigned char* src){
@@ -547,12 +556,15 @@ inline bool applyImageUnlock(StreamCore& core,const UnlockImageArgs& a,const uns
     if(!p->inner||p->dead.load()||!src){captureParticleTexture(a,src,false);add(core.q.stats.replayFailures);return false;}
     D3DLOCKED_RECT lr{};D3DLOCKED_BOX lb{};RECT rect=RECT{a.l,a.t,a.r,a.b};D3DBOX box{};box.Left=UINT(a.l);box.Top=UINT(a.t);box.Right=UINT(a.r);box.Bottom=UINT(a.b);box.Front=a.bf;box.Back=a.bk;
     const bool volume=a.route==RouteVolume||a.route==RouteVolumeTexture;
-    if(FAILED(callLock(a.route,p->inner,a.level,a.face,&lr,&lb,a.hasRect&&!volume?&rect:nullptr,a.hasRect&&volume?&box:nullptr,a.flags))){captureParticleTexture(a,src,false);add(core.q.stats.replayFailures);return false;}
+    const HRESULT locked=callLock(a.route,p->inner,a.level,a.face,&lr,&lb,a.hasRect&&!volume?&rect:nullptr,a.hasRect&&volume?&box:nullptr,a.flags);
+    if(FAILED(locked)){captureParticleTexture(a,src,false);noteAtlasUpload(a,src,locked);add(core.q.stats.replayFailures);return false;}
     auto* dst=static_cast<unsigned char*>(volume?lb.pBits:lr.pBits);const INT rowPitch=volume?lb.RowPitch:lr.Pitch;const INT slicePitch=volume?lb.SlicePitch:0;
     if(dst)for(UINT s=0;s<a.slices;++s)for(UINT r=0;r<a.rows;++r)
         std::memcpy(dst+std::ptrdiff_t(s)*slicePitch+std::ptrdiff_t(r)*rowPitch,src+std::size_t(s)*a.slicePitch+std::size_t(r)*a.pitch,a.rowBytes);
     const HRESULT unlockResult=callUnlock(a.route,p->inner,a.level,a.face);const bool success=dst&&SUCCEEDED(unlockResult);
-    captureParticleTexture(a,src,success);if(!success)add(core.q.stats.replayFailures);return success;
+    captureParticleTexture(a,src,success);
+    noteAtlasUpload(a,src,success?D3D_OK:(FAILED(unlockResult)?unlockResult:D3DERR_INVALIDCALL));
+    if(!success)add(core.q.stats.replayFailures);return success;
 }
 inline UnlockImageArgs makeUnlockArgs(ProxyBase& self,const SubRes& sub,UINT route,UINT level,UINT face){
     UnlockImageArgs a{};a.proxy=&self;a.level=level;a.face=face;a.flags=sub.flags;a.hasRect=sub.hasRect;a.rows=sub.rows;a.slices=sub.slices;a.rowBytes=sub.rowBytes;a.pitch=sub.pitch;a.slicePitch=sub.slicePitch;
@@ -720,7 +732,12 @@ inline HRESULT unlockImage(ProxyBase& self,SubRes& sub,UINT route,UINT level,UIN
         sub.written=true;sub.contentSeq=q.recordedSeq();return D3D_OK;   // (the no-Block fallback ran as a task: recordedSeq() is that already replayed task)
     }
     HRESULT hr=D3DERR_INVALIDCALL;
-    if(!runTask(*self.core,[&](StreamCore&){if(!(sub.flags&D3::kLockReadOnly))invalidateParticleTexture(&self);if(self.inner)hr=callUnlock(route,self.inner,level,face);},Cmd::SyncUnlock))return D3DERR_INVALIDCALL;
+    if(!runTask(*self.core,[&](StreamCore&){
+        if(!(sub.flags&D3::kLockReadOnly))invalidateParticleTexture(&self);
+        if(self.inner)hr=callUnlock(route,self.inner,level,face);
+        if(!(sub.flags&D3::kLockReadOnly)&&NorthlightAtlasProof::enabled.load(std::memory_order_relaxed))
+            NorthlightAtlasProof::cache().invalidate((self.parent?self.parent:&self)->raw);
+    },Cmd::SyncUnlock))return D3DERR_INVALIDCALL;
     sub.mode=SubRes::Free;if(!(sub.flags&D3::kLockReadOnly)){sub.written=true;sub.contentSeq=q.recordedSeq();}
     return hr;
 }

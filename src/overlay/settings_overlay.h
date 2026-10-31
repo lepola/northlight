@@ -18,6 +18,9 @@ public:
     // Relaxed atomic loads: false while the window is closed and the panel has nothing pending (nothing else runs then).
     // While closed with an unsaved draft it stays true: draw() then keeps the service work moving and shows a one-line reminder.
     virtual bool visible()const=0;
+    // Returns whether the window hook owns F10; drains presses even without foreground focus.
+    // A missing/failed hook leaves the renderer's polling fallback in charge.
+    virtual bool masterHotkey(bool foreground,bool& pressed)=0;
     // Draws onto back buffer 0 of the implicit swap chain, in its own BeginScene/EndScene. Call only for a Present of that
     // swap chain. The caller holds a RawScope and a SavedState: state need not be restored.
     virtual void draw()=0;

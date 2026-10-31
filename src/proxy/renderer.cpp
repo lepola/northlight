@@ -39,6 +39,8 @@
 #include "frame_intervals.h"
 #include "effect_switches.h"
 #include "diagnostics_switch.h"
+#include "diagnostic_capture_request.h"
+#include "atlas_gpu_diagnostic.h"
 #include "render_thread_probe.h"
 #include "effects_buckets.h"
 #include "draw_gates.h"
@@ -298,6 +300,9 @@ static void upgradeAutoDepth(IDirect3D9* d3d,UINT adapter,D3DDEVTYPE type,D3DPRE
     if(ok&&pp->EnableAutoDepthStencil&&pp->AutoDepthStencilFormat==D3DFMT_D24X8){pp->AutoDepthStencilFormat=D3DFMT_D24S8;if(!upgradedLogged){upgradedLogged=true;logf("NAMEMASK depth upgraded D24X8->D24S8 where=%s",where);}}
 }
 class Device final : public GuardedMirrorDevice {
+#ifdef NORTHLIGHT_REPLAY_STAND
+    friend struct EffectDiagnosticsTest;
+#endif
     LONG refs = 1;
     LONG diagnosticId=0;
     NorthlightFrameIntervals::Window frameIntervals;bool intervalFocus=true; /* every frame since the last FRAME interval line had focus */
@@ -476,7 +481,23 @@ private:
     LARGE_INTEGER gateSceneEnd={};LONGLONG gatePresentDone=0;unsigned gateSceneDraws=0;unsigned long long gateSceneReads=0;
     std::recursive_mutex gateBenchLock; /* private, uncontended: the microbenchmark's lock */
     MirrorGate gateBenchGate; /* 0.3.180: private, for ownerNs (0.3.182: the real owner entry and exit on it) */
-    const int debugMode = 0;int worldDebug=0;
+    const int debugMode = 0;int worldDebug=0;bool gpuDiagnosticFrame=false;
+    bool diagnosticAoRaw=false,diagnosticAo=false,diagnosticWorld=false;
+    unsigned atlasCaptureFrames=0;std::array<IDirect3DTexture9*,4> atlasCaptureTextures{};
+    void releaseAtlasCapture(){for(auto*& texture:atlasCaptureTextures)drop(texture);atlasCaptureFrames=0;NorthlightAtlasProof::enabled=false;NorthlightAtlasProof::cache().clear();}
+    void atlasCaptureDraw(){
+        if(!atlasCaptureFrames)return;
+        gpuDiagnosticFrame=true;
+        for(unsigned slot=0;slot<8;++slot){
+            IDirect3DBaseTexture9* base=nullptr;if(FAILED(ext->GetTexture(slot,&base))||!base)continue;
+            if(base->GetType()!=D3DRTYPE_TEXTURE){base->Release();continue;}
+            auto* texture=static_cast<IDirect3DTexture9*>(base);D3DSURFACE_DESC desc{};
+            if(FAILED(texture->GetLevelDesc(0,&desc))||desc.Width!=512||desc.Height!=512||!NorthlightAtlasProof::blockBytes(desc.Format)){base->Release();continue;}
+            auto found=std::find(atlasCaptureTextures.begin(),atlasCaptureTextures.end(),texture);
+            if(found==atlasCaptureTextures.end()){found=std::find(atlasCaptureTextures.begin(),atlasCaptureTextures.end(),nullptr);if(found==atlasCaptureTextures.end()){base->Release();continue;}*found=texture;}else base->Release();
+            NorthlightAtlasProof::cache().viewedUnknown(texture,desc.Format,frame);
+        }
+    }
     NorthlightEffectSwitches::Hotkeys effectKeys;
     float nearZ = .1f, farZ = 1000.f, scaleX = 1.f, scaleY = 1.f, fogForward = 1.f;
     float worldMinDepth=0.f,worldMaxDepth=1.f;
@@ -498,6 +519,7 @@ private:
         });
     }
     void clearFrame() {
+        diagnosticAoRaw=diagnosticAo=diagnosticWorld=false;
         if(gpuSceneProfile)gpuSceneProfile->endFrame();
         gpuFrameStarted=gpuSceneSplit=gpuEffectsSplit=false;
         if(!applied||failed)stateBlocks.clear();
@@ -505,7 +527,49 @@ private:
         if(world)world->endFrame(!extensionFault);if(water)water->endFrame();if(celestialDiscs)celestialDiscs->endFrame();if(shadowBlobs)shadowBlobs->endFrame();
         drop(worldDepth);worldDepthDescKnown=false; rainMrtUnbind();terrain = captured = applied = projectionValid = false;rainMaskCleared=rainMaskDrawn=rainMaskFrame=rainMaskOk=rainDepthOk=false; /* 0.3.202 (rain mask MRT): RT1 never outlives a frame */earlyDepth.reset();resetTranslucentCensus(); /* the TRANSLUCENT line is logged before clearFrame */
     }
+    void captureEffectDiagnostics(){
+        using namespace NorthlightDiagnosticCapture;
+        unsigned scopes=take();const bool atlasComplete=atlasCaptureFrames&&!--atlasCaptureFrames;
+        if(scopes&Atlas){scopes&=~Atlas;if(!atlasCaptureFrames&&!atlasComplete){releaseAtlasCapture();NorthlightAtlasProof::enabled=true;atlasCaptureFrames=2;}}
+        if(atlasCaptureFrames||atlasComplete)gpuDiagnosticFrame=true;
+        if(atlasComplete)scopes|=Atlas;
+        if(!scopes)return;
+        ExtensionDevice::RawScope raw(*ext);
+        UINT w=std::max(1u,width),h=std::max(1u,height);
+        IDirect3DSurface9* back=nullptr;D3DSURFACE_DESC desc{};
+        if(SUCCEEDED(ext->GetBackBuffer(0,0,D3DBACKBUFFER_TYPE_MONO,&back))&&back){if(SUCCEEDED(back->GetDesc(&desc))){w=desc.Width;h=desc.Height;}back->Release();}
+        gpuDiagnosticFrame=true;
+        try{
+            const auto directory=NorthlightWorldDiagnostics::directory(std::filesystem::path(rootPath).u8string());
+            if(directory.empty()){if(scopes&Atlas)releaseAtlasCapture();return;}
+            if(FILE* f=std::fopen((directory+"/capture-1-frame.json").c_str(),"wb")){
+                auto finite=[](float value){return std::isfinite(value)?value:0.f;};
+                std::fprintf(f,"{\"renderer_frame\":%u,\"scopes\":%u,\"effects_enabled\":%s,\"projection_valid\":%s,\"ao_enabled\":%s,\"ao_method\":%u,\"ao_strength\":%.9g,\"ao_radius\":%.9g,\"near\":%.9g,\"far\":%.9g,\"projection_scale\":[%.9g,%.9g],\"depth_range\":[%.9g,%.9g],\"fps_eligible\":false}\n",frame,scopes,enabled?"true":"false",projectionValid?"true":"false",contactAO?"true":"false",aoMethod,finite(aoStrength),finite(aoRadius),finite(nearZ),finite(farZ),finite(scaleX),finite(scaleY),finite(worldMinDepth),finite(worldMaxDepth));
+                std::fclose(f);
+            }
+            if((scopes&World)&&world)world->captureProducts(directory,1,frame,w,h,diagnosticWorld);
+            if((scopes&Fog)&&!(scopes&World)&&world)world->captureProducts(directory,1,frame,w,h,diagnosticWorld,true);
+            if(scopes&AO){
+                NorthlightWorldDiagnostics::product(ext,aoRawSurface,directory,"ao-raw",1,diagnosticAoRaw,w/2,h/2,D3DFMT_A16B16G16R16F,frame);
+                NorthlightWorldDiagnostics::product(ext,aoSurface,directory,"ao-denoised",1,diagnosticAo,w/2,h/2,D3DFMT_A16B16G16R16F,frame);
+            }
+            if(scopes&Materials){
+                IDirect3DTexture9 *normal=nullptr,*occlusion=nullptr;
+#ifdef NORTHLIGHT_HAS_AUTO_MATERIALS
+                normal=enabled&&autoBump&&autoBump->capturedThisFrame()?autoBump->texture():nullptr;
+                occlusion=normal?autoBump->occlusionTexture():nullptr;
+#endif
+                NorthlightWorldDiagnostics::textureProduct(ext,normal,directory,"materials-normal-height",1,normal!=nullptr,w,h,D3DFMT_A16B16G16R16F,frame);
+                NorthlightWorldDiagnostics::textureProduct(ext,occlusion,directory,"materials-cavity-self-shadow",1,occlusion!=nullptr,w,h,D3DFMT_A16B16G16R16F,frame);
+            }
+            if(scopes&Atlas){const auto result=NorthlightAtlasDiagnostic::dump(ext,directory+"/atlas",frame);
+                logf("ATLAS_GPU_CAPTURE rendererFrame=%u captured=%u failed=%u knownTiles=%u rawMismatches=%u pixelMismatches=%u diagnostic=1 fpsEligible=0",frame,result.captured,result.failed,result.knownTiles,result.rawMismatches,result.pixelMismatches);}
+            if(scopes&Atlas)releaseAtlasCapture();
+            logf("EFFECT_GPU_CAPTURE rendererFrame=%u scopes=%u directory=%s aoRaw=%u aoDenoised=%u world=%u diagnostic=1 fpsEligible=0",frame,scopes,directory.c_str(),unsigned(diagnosticAoRaw),unsigned(diagnosticAo),unsigned(diagnosticWorld));
+        }catch(...){if(scopes&Atlas)releaseAtlasCapture();logf("EFFECT_GPU_CAPTURE failed rendererFrame=%u diagnostic=1 fpsEligible=0",frame);}
+    }
     void releaseResources() {
+        releaseAtlasCapture();
         rainMrtUnbind();stateBlocks.clear();clearFrame();maskFormatFor=nullptr;maskFormatValue=0;maskStencil=false;maskDsId=nullptr; /* 0.3.212 (task 32): the depth may change with the device */
         drop(sceneSurface); drop(aoSurface); drop(aoRawSurface); drop(scene); drop(depthTex); drop(ao); drop(aoRaw);drop(rainMaskMS);drop(rainMaskSurface);drop(rainMask);drop(rainDepth);rainMaskFailed=false; /* 0.3.202 (rain) */
         drop(aoPS); drop(aoBlurPS); drop(aoContactBloomPS); drop(contactBloomPS); drop(compositePS);drop(rainMrtPS);drop(rainScrubPS); width = height = 0;
@@ -731,6 +795,11 @@ private:
         using NorthlightEffectsBuckets::Bucket;
         // 0.3.154: sceneMs end = the last entry before effects apply; the read is billed to cpuEffects.
         if((gateFrame||NorthlightRenderThreadProbe::profiling())&&!applied){QueryPerformanceCounter(&gateSceneEnd);stallSceneIdle=streamStats?NorthlightStream::get(streamStats->replayIdleNs):0;gateSceneDraws=drawCalls;gateSceneReads=CpuScope::reads;}
+        if(!applied&&worldDebug&&world&&(!enabled||failed||!projectionValid)){
+            ExtensionDevice::RawScope raw(*ext);IDirect3DSurface9* target=nullptr;D3DSURFACE_DESC desc{};
+            if(fullViewport(desc,nullptr,true)&&SUCCEEDED(ext->GetRenderTarget(0,&target))&&target){applied=world->emptyDiagnosticView(target,desc.Width,desc.Height,worldDebug);target->Release();}
+            return;
+        }
         if (applied || !enabled || failed || !projectionValid) return;
         // task 45: the always-on effects span for the CPU budget (applying frames only; every return path below ends it).
         struct EffectsSpan { std::int64_t& out; std::int64_t start; ~EffectsSpan(){out=qpcNow()-start;} } effectsSpan{cpuEffectsQpc,qpcNow()};
@@ -740,6 +809,14 @@ private:
         // Game captures remain outside; the device gate stays held throughout.
         rainMrtUnbind(); /* 0.3.202 (rain mask MRT) */
         ExtensionDevice::RawScope rawEffects(*ext);
+        struct DebugViewEnd {
+            Device& owner;IDirect3DSurface9* target=nullptr;D3DSURFACE_DESC desc{};
+            explicit DebugViewEnd(Device& device):owner(device){
+                if(owner.worldDebug&&owner.world&&SUCCEEDED(owner.ext->GetRenderTarget(0,&target))&&target)
+                    if(FAILED(target->GetDesc(&desc))){target->Release();target=nullptr;}
+            }
+            ~DebugViewEnd(){if(target){if(!owner.diagnosticWorld)owner.world->emptyDiagnosticView(target,desc.Width,desc.Height,owner.worldDebug);target->Release();}}
+        } debugViewEnd(*this);
         D3DSURFACE_DESC desc;
         if (!fullViewport(desc) || !resources(desc.Width, desc.Height, desc.Format) || !resolveDepth()) return;
         SavedState saved(ext,&stateBlocks);
@@ -807,7 +884,7 @@ private:
                 ext->SetRenderState(D3DRS_COLORWRITEENABLE,15);
                 if (error(aoResult,"fallback AO alpha pass")) return;
             }
-            gpuProfile->mark("AO");
+            gpuProfile->mark("AO");diagnosticAoRaw=true;
             // 0.3.201 (task 18): the raw IGN-rotated AO is denoised by a half-resolution bilateral pass into `ao`,
             // which every consumer (legacy composite, world fold) keeps reading. s2 is released afterwards.
             // Task 43: s0 (LINEAR) carries the raw AO too for the blur's 9-read bilinear early-out (AOBlur never reads Scene); the scene copy is rebound after.
@@ -836,7 +913,8 @@ private:
             traceWorld=0;
             world->setNameMask(maskOn?worldDepth:nullptr); /* 0.3.212 (task 32) */
             world->setRainMask(rainMaskTex); /* 0.3.202 (rain): RainMask for this frame's composite only (resolved and scrubbed at the top of renderEffects) */
-            if(!world->render(saved.targets[0],depthTex,width,height,sceneFormat,nearZ,farZ,worldMinDepth,worldMaxDepth,worldDebug,gpuProfile.get(),waterMask,fold?scene:nullptr,fold?ao:nullptr)){
+            diagnosticWorld=world->render(saved.targets[0],depthTex,width,height,sceneFormat,nearZ,farZ,worldMinDepth,worldMaxDepth,worldDebug,gpuProfile.get(),waterMask,fold?scene:nullptr,fold?ao:nullptr);
+            if(!diagnosticWorld){
                 if(++worldSkippedFrames<=8||(worldSkippedFrames%120==0&&diagnostics()))
                     logf("WORLD skipped frame=%u tick=%lu context=%d ready=%d count=%u reason=%s",frame,(unsigned long)GetTickCount(),world->hasContext(),world->ready(),worldSkippedFrames,world->lastSkipReason());
                 worldSkipLast=world->lastSkipReason();if(!worldSkipRun++){worldSkipStart=GetTickCount();worldSkipFirst=worldSkipLast;
@@ -1986,6 +2064,7 @@ private:
             resources(desc.Width,desc.Height,desc.Format);
             if(gateFrame)++gateCounts.fullPasses;
         } else if (tag==2) {
+            atlasCaptureDraw();
             ++uiDraws;
             if(!terrain)return; // Login/loading UI can use stock shaders even when the in-world UI is replaced by a font mod.
             ++uiAfterTerrain;
@@ -2407,17 +2486,20 @@ public:
     }
     void finishFrameImpl() {
         nameMaskRunEnd(); /* 0.3.212 (task 32) */
+        captureEffectDiagnostics();
+        const bool diagnosticFrame=gpuDiagnosticFrame;gpuDiagnosticFrame=false;
+        if(diagnosticFrame){frameIntervals.reset();frameCost.reset();stallFrames.reset();}
         const auto frameEffects=effectKeys.settings;const bool frameEnabled=enabled;
         // Focus also goes on the FRAME interval line (0 if any frame since the last line lacked it): a background
         // window runs at the client's own frame cap (maxFPSBk), which is not renderer cost.
         D3DDEVICE_CREATION_PARAMETERS cp={}; ext->GetCreationParameters(&cp);
         const bool focus=GetForegroundWindow()==cp.hFocusWindow;intervalFocus&=focus;
         LARGE_INTEGER intervalTick={};NorthlightFrameIntervals::Report intervalReport;
-        if(diagnostics()&&QueryPerformanceCounter(&intervalTick)&&frameIntervals.sample(intervalTick.QuadPart,cpuFrequency.QuadPart,intervalReport)){
+        if(!diagnosticFrame&&diagnostics()&&QueryPerformanceCounter(&intervalTick)&&frameIntervals.sample(intervalTick.QuadPart,cpuFrequency.QuadPart,intervalReport)){
             logf("FRAME interval device=%ld frame=%u tick=%lu enabled=%d samples=%u meanMs=%.3f p50Ms=%.3f p95Ms=%.3f maxMs=%.3f fps=%.2f gi=%u shadows=%u fog=%u focus=%d",diagnosticId,frame,(unsigned long)GetTickCount(),enabled,intervalReport.count,intervalReport.meanMs,intervalReport.p50Ms,intervalReport.p95Ms,intervalReport.maxMs,1000.0/intervalReport.meanMs,unsigned(frameEffects.gi),unsigned(frameEffects.shadows),unsigned(frameEffects.fog),int(intervalFocus));intervalFocus=true;}
         if(diagnostics()){gpuProfile->poll();if(gpuSceneProfile)gpuSceneProfile->poll();}
         if(diagnostics()&&frame%600==0)logClientLatency(frame,"periodic");
-        gpuBudgetFrame();cpuBudgetFrame(); /* task 45 */
+        if(!diagnosticFrame){gpuBudgetFrame();cpuBudgetFrame();} /* explicit readbacks are not rendering benchmarks */
         // Poll only while this game owns foreground focus.
         bool modifiers=(GetAsyncKeyState(VK_CONTROL)&0x8000)&&(GetAsyncKeyState(VK_SHIFT)&0x8000);
         bool k10=focus&&modifiers&&(GetAsyncKeyState(VK_F10)&0x8000);
@@ -2431,10 +2513,12 @@ public:
             logf("Effects components tick=%lu master=%u GI=%s shadows=%s fog=%s giCache=warm",
                 (unsigned long)GetTickCount(),unsigned(enabled),settings.gi?"ON":"OFF",settings.shadows?"ON":"OFF",settings.fog?"ON":"OFF");
         }
-        bool retry=k10&&!key10&&!enabled;
-        if(k10&&!key10){enabled=!enabled;frameIntervals.reset();frameCost.reset();stallFrames.reset();mirrorResources.queryProfile={};logf("Effects %s tick=%lu",enabled?"ON":"OFF",(unsigned long)GetTickCount());}
+        bool masterPressed=false;
+        if(!overlay||!overlay->masterHotkey(focus,masterPressed))masterPressed=k10&&!key10;
+        bool retry=masterPressed&&!enabled;
+        if(masterPressed){enabled=!enabled;frameIntervals.reset();frameCost.reset();stallFrames.reset();mirrorResources.queryProfile={};logf("Effects %s tick=%lu",enabled?"ON":"OFF",(unsigned long)GetTickCount());}
         bool k12=focus&&modifiers&&(GetAsyncKeyState(VK_F12)&0x8000);
-        if(k12&&!key12){worldDebug=(worldDebug+1)%4;logf("World debug %d tick=%lu (0 normal,1 shadows,2 GI,3 volume)",worldDebug,(unsigned long)GetTickCount());}
+        if(k12&&!key12){if(GetAsyncKeyState(VK_MENU)&0x8000)NorthlightDiagnosticCapture::request(NorthlightDiagnosticCapture::World);else worldDebug=(worldDebug+1)%4;logf("World debug %d tick=%lu (0 normal,1 shadows,2 GI,3 volume)",worldDebug,(unsigned long)GetTickCount());}
         key12=k12;key10=k10;
         uiFallbackEndFrame();
         if(frame==1||(frame%600==0&&diagnostics()))logf("frame=%u applied=%u terrainShaders=%u uiShaders=%u projectionRejects=%u terrainThisFrame=%d depth=%d draws=%u missingVS=%u terrainDraws=%u terrainShadowDraws=%u viewportRejects=%u depthRejects=%u uiDraws=%u uiAfterTerrain=%u uiFallback=%u uiFallbackState=%c",frame,appliedFrames,matchedTerrain,matchedUI,projectionRejects,terrain,captured,drawCalls,missingVS,terrainDraws,terrainShadowDraws,viewportRejects,depthRejects,uiDraws,uiAfterTerrain,uiFallbackBoundaries,uiFallback.disarmed()?'d':uiFallback.armed()?'a':'l');
@@ -2944,6 +3028,13 @@ static HMODULE backend() {
     // 0.3.192 (DXVK3): the NOOVERWRITE read-back flag only for the backend that actually loaded and is DXVK >= 3 (see upload_lock.h).
     NorthlightUpload::ReadBackNoOverwrite.store(module&&!result.fallback&&last.info.dxvk&&NorthlightBackend::dxvkMajor(last.info.dxvkVersion)>=3,std::memory_order_relaxed);
     logf("LOCK METER read-back lock flags readBackLock=0x%x (NOOVERWRITE only on a loaded DXVK >= 3 backend)",unsigned(NorthlightUpload::readBackLock()));
+#ifndef NORTHLIGHT_SOURCE_ID
+#define NORTHLIGHT_SOURCE_ID "unrecorded"
+#endif
+#ifndef NORTHLIGHT_BUILD_UTC
+#define NORTHLIGHT_BUILD_UTC "unrecorded"
+#endif
+    logf("BUILD identity source=%s built=%s",NORTHLIGHT_SOURCE_ID,NORTHLIGHT_BUILD_UTC);
     if(result.fallback&&module)logf("BACKEND SELF-LOAD REFUSED: the configured backend resolves to this proxy (or another Northlight build); fell back to the system d3d9 runtime. Fix northlight-renderer.ini Backend/BackendPath.");
     else if(result.fallback)logf("BACKEND SELF-LOAD REFUSED: the configured backend resolves to this proxy (or another Northlight build) and the system d3d9 fallback FAILED too (expected under Wine with d3d9=n: the system d3d9 is builtin; the fallback is Windows-only). Fix northlight-renderer.ini Backend/BackendPath.");
     if(module&&last.info.dxvk&&!NorthlightBackend::isPackagedDxvk(configured))

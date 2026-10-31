@@ -60,6 +60,15 @@ overlay = uncomment(fp.src('settings_overlay.cpp').read_text())
 create = overlay[overlay.index('std::unique_ptr<Overlay> create('):]
 check(create.index('if(!enabled)') < create.index('install('), 'create(): SettingsOverlay=0 must return before install()')
 
+# Master effects: window events own edges while hooked; polling remains the disabled/failed-overlay fallback.
+check('hook.master.message(msg,wparam,lparam,mods,GetForegroundWindow()==window)' in overlay,
+      'master hotkey must retain foreground window events')
+check('pressed=hook.master.take(foreground&&active)' in overlay and 'return active;' in overlay,
+      'master hotkey drains even when inactive or unfocused')
+check('if(!overlay||!overlay->masterHotkey(focus,masterPressed))masterPressed=k10&&!key10;' in renderer,
+      'master hotkey event and polling paths must not double-toggle')
+check('bool retry=masterPressed&&!enabled;' in renderer, 'master retry uses the same retained edge')
+
 # Window procedure: forwards everything it does not swallow; the swallow decision is overlay_input.h route().
 proc = overlay[overlay.index('LRESULT CALLBACK windowProcedure'):overlay.index('bool install(')]
 check('In::route(msg,wparam,lparam,mods,state)' in proc, 'windowProcedure: decisions come from overlay_input.h route()')

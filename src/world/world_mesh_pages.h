@@ -47,6 +47,12 @@ struct Plan {
     std::vector<Page> pages;
     std::vector<Batch> batches;
     uint64_t vertexBytes=0,indexBytes=0;
+    void accountMemory(NorthlightMemoryFootprint::Counter& memory,bool includeObject=true)const{
+        using namespace NorthlightMemoryFootprint;
+        if(includeObject){if(!memory.visit(this))return;memory.add(Metadata,sizeof(*this));}
+        memory.vector(Metadata,pages);memory.vector(Metadata,batches);
+        for(const auto& page:pages){memory.vector(Upload,page.vertices);memory.vector(Upload,page.indices);}
+    }
     uint64_t cpuBytes() const {
         uint64_t bytes=sizeof(*this)+pages.capacity()*sizeof(Page)+batches.capacity()*sizeof(Batch);
         for(const auto& p:pages)bytes+=p.vertices.capacity()*sizeof(NorthlightGI::WorldVertex)+p.indices.capacity()*sizeof(uint32_t);
@@ -320,6 +326,10 @@ inline bool seal(NorthlightWorldMesh::WorldMeshUploadPlan& input,std::shared_ptr
         const uint64_t cpuBytes=pages->cpuBytes();
         // 0.3.214 (task 42): pages and cutout textures move into the separately owned payload.
         auto payload=std::make_shared<NorthlightWorldMesh::UploadPayload>();
+        payload->pageMetadataBytes=sizeof(*pages)+pages->pages.capacity()*sizeof(Page)+pages->batches.capacity()*sizeof(Batch);
+        for(const auto& page:pages->pages)payload->pageStorageBytes+=page.vertices.capacity()*sizeof(NorthlightGI::WorldVertex)+page.indices.capacity()*sizeof(uint32_t);
+        payload->materialMetadataBytes=input.materials.capacity()*sizeof(NorthlightWorldMesh::MaterialUpload);
+        for(const auto& material:input.materials)payload->materialPixelBytes+=material.bgra.capacity();
         payload->bytes=cpuBytes+sizeof(NorthlightWorldMesh::UploadPayload)+input.materials.capacity()*sizeof(NorthlightWorldMesh::MaterialUpload)+64;
         for(const auto& material:input.materials)payload->bytes+=material.bgra.capacity();
         payload->pages=std::move(pages);payload->materials.swap(input.materials);

@@ -246,6 +246,7 @@ static void hitAllocations(){
     std::puts("hits allocate nothing in Map, Predict and Prefetch");
 }
 int main(int argc,char** argv){
+    assert(Frame{}.lookup()==Frame::Lookup::Prefetch);
     const std::string mode=argc>1?argv[1]:"all";
     if(mode=="directed"){directed();return 0;}
     if(mode=="differential"){bool ok=false;differential(1811,ok);return 0;}

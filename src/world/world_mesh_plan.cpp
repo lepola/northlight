@@ -7,6 +7,24 @@
 #include <utility>
 
 namespace NorthlightWorldMesh {
+void WorldMeshUploadPlan::accountMemory(NorthlightMemoryFootprint::Counter& memory,bool includeObject)const{
+    using namespace NorthlightMemoryFootprint;
+    if(includeObject){if(!memory.visit(this))return;memory.add(Metadata,sizeof(*this));}
+    memory.vector(Upload,indices);memory.vector(Metadata,batches);memory.vector(Metadata,materials);
+    for(const auto& material:materials)memory.vector(Texels,material.bgra);
+    memory.vector(Metadata,completePlacements);for(const auto& p:completePlacements)memory.string(p.modelKey);
+    for(const auto& chunk:fixedTerrainChunks)memory.allocation(Metadata,&chunk,sizeof(chunk));
+    if(localShadowRecords){memory.allocation(Metadata,localShadowRecords.get(),sizeof(*localShadowRecords));memory.vector(Metadata,*localShadowRecords);}
+    if(ownedSource&&memory.visit(ownedSource.get())){memory.add(Metadata,sizeof(*ownedSource));ownedSource->accountMemory(memory);}
+    if(pagingVertices){memory.allocation(Metadata,pagingVertices.get(),sizeof(*pagingVertices));memory.vector(Upload,*pagingVertices);}
+    const auto upload=payload.share();
+    if(upload&&memory.visit(upload.get())){
+        memory.add(Metadata,sizeof(*upload));
+        if(upload->pages&&memory.visit(upload->pages.get())){memory.add(Metadata,upload->pageMetadataBytes);memory.add(Upload,upload->pageStorageBytes);}
+        if(memory.visit(&upload->materials)){memory.add(Metadata,upload->materialMetadataBytes);memory.add(Texels,upload->materialPixelBytes);}
+    }
+}
+
 namespace {
 using NorthlightGI::Vec3;
 bool finite(Vec3 p){return std::isfinite(p.x)&&std::isfinite(p.y)&&std::isfinite(p.z);}

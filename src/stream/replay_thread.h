@@ -335,6 +335,7 @@ private:
     void destroy(ProxyBase* p){
         if(p->pendingDestroy.fetch_sub(1)!=1||p->inUse()>0)return;   // a later Destroy is queued, or the proxy was handed out again
         core.reg.erase(p);
+        NorthlightAtlasProof::cache().erase(p->raw,p);
         for(ProxyBase* k:p->kids)if(k){core.reg.erase(k);if(k->inner)k->inner->Release();delete k;}
         if(p->inner)p->inner->Release();
         if(p->kind==Kind::Query){auto it=std::find(pending_.begin(),pending_.end(),static_cast<StreamQuery*>(static_cast<ProxyBase*>(p)));if(it!=pending_.end())pending_.erase(it);}

@@ -130,6 +130,15 @@ public:
     void clear(){lookup_.clear();entries_.clear();}
     size_t size()const{return entries_.size();}
     size_t capacity()const{return capacity_;}
+    void accountMemory(NorthlightMemoryFootprint::Counter& memory)const{
+        using namespace NorthlightMemoryFootprint;
+        if(!memory.visit(this))return;
+        memory.add(Metadata,sizeof(*this));
+        for(const auto& entry:entries_)memory.allocation(Probes,&entry,sizeof(entry));
+        for(const auto& entry:lookup_)memory.allocation(Metadata,&entry,sizeof(entry));
+        // Node links and the implementation's bucket array are allocator/STL
+        // overhead; their sizes are deliberately not claimed as measured bytes.
+    }
     // Export persistent world slots, independent of the current solve window.
     // Most recently touched entry wins a modulo collision. Consumers MUST
     // compare the full key before sampling; matching modulo index is not enough.
@@ -201,6 +210,13 @@ public:
         {std::lock_guard<std::mutex> lock(mutex_);
          auto& e=entries_[probeAtlasIndex(key)%entries_.size()];e.key=key;e.seed=seed;e.response=response;e.epoch=epoch_;}
         return result;
+    }
+    void accountMemory(NorthlightMemoryFootprint::Counter& memory)const{
+        using namespace NorthlightMemoryFootprint;
+        std::lock_guard<std::mutex> lock(mutex_);
+        if(!memory.visit(this))return;
+        memory.add(Metadata,sizeof(*this));memory.vector(Probes,entries_);
+        memory.vector(Metadata,shape_.points);memory.vector(Metadata,shape_.additionalDirections);
     }
     Stats stats()const{std::lock_guard<std::mutex> lock(mutex_);return stats_;}
 };

@@ -15,8 +15,11 @@ test_ao_rotation_stripes.py
 test_ao_texel_snap.py
 test_art_layer.py
 test_async_memory_diagnostics.py
+test_atlas_low_memory.py
+test_atlas_upload_proof.py
 test_backend_proxy.py
 test_band_retime.py
+test_build_source_identity.py
 test_cache_shadow_optimizations.py
 test_cache_variant.py
 test_camera_upstream_capture.py
@@ -51,6 +54,8 @@ test_dll_memcmp.py
 test_draw_gates.py
 test_draw_snapshot.py
 test_dxvk3_lock_flags.py
+test_effect_capture_gpu.py
+test_effect_diagnostic_wiring.py
 test_effect_switches.py
 test_effects_buckets.py
 test_effects_cost_report.py
@@ -105,6 +110,7 @@ test_m2_shader_families_client.py
 test_m2_visibility.py
 test_memmap_diagnostics.py
 test_memory_admission_probe.py
+test_memory_footprint.py
 test_memory_guard.py
 test_mesh_buffer_store.py
 test_mesh_pool_trim.py
@@ -165,6 +171,7 @@ test_replay_skin_safety.py
 test_replay_upload.py
 test_rigid_memory.py
 test_settings_overlay.py
+test_settings_overlay_gpu.py
 test_settings_service.py
 test_shader_read_set.py
 test_shader_read_set_client.py

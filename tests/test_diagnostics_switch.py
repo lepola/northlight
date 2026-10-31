@@ -18,6 +18,9 @@ FILES=['renderer.cpp','world_renderer.h','world_shadow_experiment.inl','world_po
 GATES=('NorthlightDiagnostics::enabled()','diagnostics()','sampled()','captureSampled','if(diagnostics)','shadowFate.active()','sampledFrame','profiling()','profileSampled()','if(lightingClock)')
 # Ungated lines that stay with Diagnostics=0: format prefix -> label.
 KEEP={
+ 'ATLAS_GPU_CAPTURE ':'explicit user-requested capture only; never a periodic frame log',
+ 'EFFECT_GPU_CAPTURE ':'explicit user-requested capture only; never a periodic frame log',
+ 'WORLD MEMORY ':'indirect: cold inventory callers require Diagnostics=1 and a ten-second sampling interval',
  'SETTINGS unavailable:':'one-off initialization error',
  'SETTINGS startup recovery incomplete:':'one-off: a crash-interrupted settings commit could not be finished at start-up',
  'SETTINGS frame %s revision=':'settings event: a preview or saved config reached the frame boundary (user action)',
@@ -111,7 +114,7 @@ checks={
  'constant self-check keeps its 0.3.140 cadence (0.3.180 C0: its own flag and serial; the profile Stats only on diagnostic samples)':'},sample?&constantEpochProfile:nullptr,constantSelfCheck,constantSelfCheckState))return;' in w,
  'GPU timestamp queries only when on':'if(diagnostics())gpuProfile->beginFrame(frame,NorthlightRenderThreadProbe::sampleFrame(frame))' in r and 'if(diagnostics()){gpuProfile->poll();if(gpuSceneProfile)gpuSceneProfile->poll();}' in r and 'if(gpuSceneProfile&&diagnostics())gpuSceneProfile->beginFrame(frame,' in r,
  'async memory sampler always on (memory guard), periodic line only when on':'try{memoryDiagnostics=std::make_unique<NorthlightMemoryDiagnostics::Sampler>(&queryAddressSpace);}' in r and 'if(diagnostics())try{memoryDiagnostics=' not in r and 'if(decision.report&&diagnostics())logf("MEMORY frame=' in r and 'else if(diagnostics())logf("MEMORY sample failed' in r,
- 'frame interval sampling only when on':'if(diagnostics()&&QueryPerformanceCounter(&intervalTick)&&frameIntervals.sample(' in r,
+ 'frame interval sampling only when on':'if(!diagnosticFrame&&diagnostics()&&QueryPerformanceCounter(&intervalTick)&&frameIntervals.sample(' in r,
  'mirror audit stays functional (ungated)':'mirrorAuditSchedule.afterWorldCapture(frame,' in r and not re.search(r'diagnostics\(\)[^;]*mirrorAuditSchedule',r),
  'command stream: the periodic CSTREAM line and the state audit only when on; the other CSTREAM lines are capped errors (via the options.log lambda, whose logf is labelled %s)':(lambda t:
     'if(audit&&diag&&frames%sampleEvery==1)runAudit();' in t and 'if(diag&&log&&frames%sampleEvery==0)cstreamLine(frames);' in t and t.count('cstreamLine(')==2
@@ -189,3 +192,8 @@ span_checks={
 for name,ok in span_checks.items():print(('PASS ' if ok else 'FAIL ')+name)
 assert all(span_checks.values()),(bad,missed)
 
+
+# The allow-listed memory helpers must retain their cold producer gates.
+w=fp.src("world_renderer.h").read_text()
+assert "NorthlightDiagnostics::enabled()&&(!memoryFootprintReportAt||started-memoryFootprintReportAt>=10000)" in w
+for gate in ["now-resourceMemoryProfileAt<10000","now-giMemoryProfileAt<10000"]:assert gate in w
