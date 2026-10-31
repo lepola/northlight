@@ -69,7 +69,9 @@ checks={
    and 'if(pointUpdates!=pointUpdatesBefore&&profileSampled())profilePointUsed();' in w and 'if(profiled)split.used=&replayProfileUsed;' in w,
  # call counts
  'raw counts only on RenderProfile sample frames':'void countRaw(unsigned i){if(rawCounting)++rawMethodCalls[i];}' in mirror and r.count('mirrorState.rawCounting=')==1
-   and 'mirrorState.rawCounting=sampled()&&NorthlightRenderThreadProbe::profiling();' in r and len(counted)==7
+   and 'mirrorState.rawCounting=sampled()&&NorthlightRenderThreadProbe::profiling();' in r
+   # Draw methods use the raw mirror path; only these direct methods need separate counters.
+   and {re.search(r'STDMETHODCALLTYPE (\w+)\(',l).group(1) for l in counted}=={'Clear','StretchRect','ColorFill','SetScissorRect','SetTextureStageState'}
    and all('{ if(m->rawCounting&&rawActive())m->countRaw(' in l for l in counted) and raw.count('#ifndef NORTHLIGHT_DEVICE_MIRROR_TEST_API')==1,
  # per-frame times
  'Present ticks and frame cost only with RenderProfile':'bool on=NorthlightRenderThreadProbe::profiling();' in ticks and ticks.count('QueryPerformanceCounter(')==3 and ticks.count('if(on)QueryPerformanceCounter(')==3

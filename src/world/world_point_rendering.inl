@@ -489,22 +489,30 @@
         if(frames==0||(frames%600==0&&NorthlightDiagnostics::enabled()))logf("POINT source=%llu kind=%u range=%.2f faces=%u size=256 draws=%u culled=%u replayBounds=%u boundVertices=%zu boundOperations=%zu",(unsigned long long)pointSelected.sourceId,pointSelected.kind,pointSelected.attenuationEnd,unsigned(__builtin_popcount(faces)),pointDraws,pointCulled,pointBoundsValid,pointBoundVertices,pointBoundOperations);
         return true;
     }
-    bool renderPointLighting(IDirect3DTexture9* depth,IDirect3DTexture9* waterMask,UINT w,UINT h,float nearZ,float farZ,float minZ,float maxZ){
+    bool renderPointLighting(IDirect3DTexture9* depth,IDirect3DTexture9* waterMask,UINT w,UINT h,float nearZ,float farZ,float minZ,float maxZ,float strength,float sunlitCut,float shadowStrength,float sunEnergy){
         if(!pointReady)return false;
-        float constants[10][4]={};constants[0][0]=1.f/w;constants[0][1]=1.f/h;constants[0][2]=nearZ;constants[0][3]=farZ;
+        float constants[12][4]={};constants[0][0]=1.f/w;constants[0][1]=1.f/h;constants[0][2]=nearZ;constants[0][3]=farZ;
         constants[1][0]=projection[0];constants[1][1]=projection[1];constants[1][2]=projection[2];constants[1][3]=minZ;
         constants[2][0]=1.f/(maxZ-minZ);constants[2][1]=waterMask?1.f:0.f;constants[2][2]=1;constants[2][3]=.025f;
-        std::memcpy(constants[3],context.inverseView,64);std::memcpy(constants[7],pointSelected.position,12);constants[7][3]=pointSelected.attenuationStart;
+        std::memcpy(constants[3],context.inverseView,64);std::memcpy(constants[7],pointSelected.position,12);constants[7][3]=1.f/std::max(pointSelected.attenuationEnd-std::min(pointSelected.attenuationStart,pointSelected.attenuationEnd*.9f),.05f);
         std::memcpy(constants[8],pointSelected.diffuse,12);constants[8][3]=pointSelected.attenuationEnd;
         constants[9][0]=.1f;constants[9][1]=pointSelected.attenuationEnd;constants[9][2]=1.f/PointResolution;constants[9][3]=1;
-        if(!pointCheck(d->SetPixelShaderConstantF(0,&constants[0][0],10),"local constants")||
+        constants[10][0]=strength;constants[10][1]=sunlitCut;constants[10][2]=shadowStrength;constants[10][3]=sunEnergy;
+        constants[11][0]=sourceDirections[0].x;constants[11][1]=sourceDirections[0].y;constants[11][2]=sourceDirections[0].z;
+        const float bumpControl[]={materialDetail?materialBumpGain:0.f,materialBumpDistance,0,0};
+        d->SetPixelShaderConstantF(12,bumpControl,1);d->SetTexture(5,materialDetail);
+        for(auto state:{D3DSAMP_MINFILTER,D3DSAMP_MAGFILTER})d->SetSamplerState(5,state,D3DTEXF_POINT);
+        d->SetSamplerState(5,D3DSAMP_MIPFILTER,D3DTEXF_NONE);d->SetSamplerState(5,D3DSAMP_SRGBTEXTURE,FALSE);
+        d->SetSamplerState(5,D3DSAMP_ADDRESSU,D3DTADDRESS_CLAMP);d->SetSamplerState(5,D3DSAMP_ADDRESSV,D3DTADDRESS_CLAMP);
+        if(!pointCheck(d->SetPixelShaderConstantF(0,&constants[0][0],12),"local constants")||
            !pointCheck(d->SetPixelShader(pointLightingPS),"local lighting PS")||
            !pointCheck(d->SetTexture(0,depth),"local depth")||!pointCheck(d->SetTexture(1,pointCube),"local cube")||
            !pointCheck(d->SetTexture(2,waterMask),"local water")||
+           !pointCheck(d->SetTexture(3,normalBuffer),"local normals")||!pointCheck(d->SetTexture(4,baselineLight),"local sun visibility")||
            !pointCheck(d->SetRenderTarget(1,nullptr),"local baseline unbind")||
            !pointCheck(d->SetRenderState(D3DRS_ALPHABLENDENABLE,TRUE),"local additive blend")||
            !pointCheck(d->SetRenderState(D3DRS_COLORWRITEENABLE,7),"local RGB mask"))return false;
-        for(unsigned sampler=0;sampler<3;++sampler){
+        for(unsigned sampler=0;sampler<5;++sampler){
             const struct{D3DSAMPLERSTATETYPE state;DWORD value;} states[]={{D3DSAMP_ADDRESSU,D3DTADDRESS_CLAMP},{D3DSAMP_ADDRESSV,D3DTADDRESS_CLAMP},{D3DSAMP_ADDRESSW,D3DTADDRESS_CLAMP},{D3DSAMP_MINFILTER,D3DTEXF_POINT},{D3DSAMP_MAGFILTER,D3DTEXF_POINT},{D3DSAMP_MIPFILTER,D3DTEXF_NONE},{D3DSAMP_SRGBTEXTURE,FALSE}};
             for(const auto& state:states)if(!pointCheck(d->SetSamplerState(sampler,state.state,state.value),"local sampler"))return false;
         }

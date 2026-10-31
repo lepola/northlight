@@ -49,7 +49,7 @@ inline bool linear(const NorthlightActorDeformation::Program& p){
     for(const auto& op:p.operations)if(op.code!=1&&op.code!=2&&op.code!=3&&op.code!=4&&op.code!=5&&op.code!=8&&op.code!=9&&op.code!=46)return false;
     return true;
 }
-inline bool evaluateIntervals(const NorthlightActorDeformation::Program& p,const Vector inputs[16],const float* constants,Vector& position,bool definitionsApplied=false){
+template<bool SingleInput=false> inline bool evaluateIntervals(const NorthlightActorDeformation::Program& p,const Vector inputs[16],const float* constants,Vector& position,bool definitionsApplied=false,unsigned inputRegister=16){
     // Most rigid programs touch only a few temporaries. Construct their values
     // on first write; the lane masks still prove every subsequent read.
     using namespace NorthlightShadowShader;std::optional<Vector> temp[33];Vector address={};
@@ -60,16 +60,17 @@ inline bool evaluateIntervals(const NorthlightActorDeformation::Program& p,const
     if(p.positionRegister>=32||!inputs||!constants)return false;
     for(const auto& input:p.inputs){if(input.reg>=16)return false;inputInitialized|=1u<<input.reg;}
     auto source=[&](const NorthlightActorDeformation::Source& s,Vector& result,unsigned lanes)->bool{
-        unsigned type=regType(s.token);int index=int(regIndex(s.token));Vector value={};
+        unsigned type=regType(s.token);int index=int(regIndex(s.token));Vector constantValue={};const Vector* value=nullptr;
         if(s.token&0x2000){unsigned c=p.major>=2?((s.address>>16)&3):0;if(!(addressInitialized&(1u<<c))||address[c].error!=0||!std::isfinite(address[c].value)||std::fabs(address[c].value)>4096)return false;index+=int(address[c].value);}
         unsigned valid=15;
-        if(type==0){if(index<0||index>=32||!initialized[index])return false;value=*temp[index];valid=initialized[index];}
-        else if(type==1){if(index<0||index>=16||!(inputInitialized&(1u<<index)))return false;value=inputs[index];}
-        else if(type==3){if(index)return false;value=address;valid=addressInitialized;}
-        else if(type==2){if(index<0||index>=256)return false;for(unsigned j=0;j<4;++j)value[j].value=constants[4*index+j];if(!definitionsApplied)for(auto& d:p.definitions)if(d.reg==unsigned(index))for(unsigned j=0;j<4;++j)value[j].value=d.value[j];}
+        if(type==0){if(index<0||index>=32||!initialized[index])return false;value=&*temp[index];valid=initialized[index];}
+        else if(type==1){if(index<0||index>=16||!(inputInitialized&(1u<<index)))return false;if constexpr(SingleInput){if(unsigned(index)!=inputRegister)return false;value=&inputs[0];}else value=&inputs[index];}
+        else if(type==3){if(index)return false;value=&address;valid=addressInitialized;}
+        else if(type==2){if(index<0||index>=256)return false;for(unsigned j=0;j<4;++j)constantValue[j].value=constants[4*index+j];if(!definitionsApplied)for(auto& d:p.definitions)if(d.reg==unsigned(index))for(unsigned j=0;j<4;++j)constantValue[j].value=d.value[j];value=&constantValue;}
         else return false;
-        for(unsigned j=0;j<4;++j){if(!(lanes&(1u<<j)))continue;const unsigned channel=(s.token>>(16+2*j))&3;if(!(valid&(1u<<channel)))return false;auto v=value[channel];unsigned modifier=(s.token>>24)&15;
-            if(modifier==11||modifier==12)v.value=std::fabs(v.value);else if(modifier!=0&&modifier!=1)return false;
+        const unsigned modifier=(s.token>>24)&15;if(modifier!=0&&modifier!=1&&modifier!=11&&modifier!=12)return false;
+        for(unsigned j=0;j<4;++j){if(!(lanes&(1u<<j)))continue;const unsigned channel=(s.token>>(16+2*j))&3;if(!(valid&(1u<<channel)))return false;auto v=(*value)[channel];
+            if(modifier==11||modifier==12)v.value=std::fabs(v.value);
             if(modifier==1||modifier==12)v.value=-v.value;if(!std::isfinite(v.value)||!std::isfinite(v.error))return false;
             if(v.value!=0&&std::fabs(v.value)<std::numeric_limits<float>::min())v.error+=std::fabs(v.value);
             result[j]=v;}
@@ -84,7 +85,8 @@ inline bool evaluateIntervals(const NorthlightActorDeformation::Program& p,const
             sum.error+=roundError(magnitude)*8;result.fill(sum);
         }else for(unsigned j=0;j<4;++j){switch(op.code){
             case 1:case 46:result[j]=a[j];break;case 2:result[j]=add(a[j],b[j]);break;case 3:result[j]=add(a[j],b[j],true);break;case 5:result[j]=mul(a[j],b[j]);break;
-            case 4:{auto product=mul(a[j],b[j]);result[j]=add(product,c[j]);result[j].error+=roundError(std::fabs(double(a[j].value)*b[j].value)+std::fabs(c[j].value));break;}
+            case 4:{auto product=mul(a[j],b[j]);if(product.value==0&&product.error==0){result[j]=c[j];break;} // exact 0*x+c: fused and separate both preserve c
+                result[j]=add(product,c[j]);result[j].error+=roundError(std::fabs(double(a[j].value)*b[j].value)+std::fabs(c[j].value));break;}
             default:return false;}}
         const unsigned type=regType(op.destination),index=regIndex(op.destination),mask=(op.destination>>16)&15;
         if((type!=0&&type!=3)||(type==0&&index>=32)||(type==3&&index))return false;

@@ -6,7 +6,7 @@
 #include <memory>
 #include <mutex>
 #include <thread>
-#ifdef _WIN32
+#if defined(_WIN32) && !defined(NL_STUB)
 #include <windows.h>
 #endif
 
@@ -35,7 +35,7 @@ class CpuRetirement {
     const bool oversizedWhenIdle_;
     std::thread worker_;
     void run(){
-#ifdef _WIN32
+#if defined(_WIN32) && !defined(NL_STUB)
         SetThreadPriority(GetCurrentThread(),THREAD_PRIORITY_BELOW_NORMAL);
 #endif
         for(;;){Entry item;
@@ -118,4 +118,34 @@ public:
     void clear(){for(auto& item:items_)item.owner.reset();}
 };
 inline CpuRetirement& cpuRetirement(){static CpuRetirement queue;return queue;}
+// One frame-boundary clear is one retirement. Otherwise the first cache can
+// consume the byte cap and force every following cache to free synchronously.
+// Uses the queue's existing oversized-when-idle rule; busy/full/disabled queues
+// still fall back on the caller. Only detached immutable CPU owners belong here.
+class CpuRetirementBatch {
+    struct Item {std::shared_ptr<const void> owner;size_t bytes=0;};
+    struct Owners {std::array<Item,16> items;};
+    CpuRetirement* queue_;std::shared_ptr<Owners> owners_;size_t count_=0,bytes_=0,queuedBytes_=0;
+public:
+    explicit CpuRetirementBatch(CpuRetirement* queue=nullptr)noexcept:queue_(queue){if(queue_)try{owners_=std::make_shared<Owners>();}catch(...) {}}
+    CpuRetirementBatch(const CpuRetirementBatch&)=delete;
+    template<class T> bool retire(std::shared_ptr<T>& owner,size_t bytes){
+        if(!owner)return true;
+        if(!owners_||count_==owners_->items.size()||bytes>size_t(-1)-bytes_)return false;
+        owners_->items[count_++]={std::move(owner),bytes};bytes_+=bytes;return true;
+    }
+    size_t bytes()const{return bytes_;}size_t count()const{return count_;}
+    size_t queuedBytes()const{return queuedBytes_;}
+    bool finish(){
+        if(!count_||!owners_||!queue_){owners_.reset();return false;}
+        if(queue_->retire(owners_,bytes_)){queuedBytes_=bytes_;return true;}
+        // Preserve individual admissions when another retirement is in flight.
+        // Rejected owners are destroyed outside the queue's lock, on this caller.
+        bool allQueued=true;
+        for(size_t i=0;i<count_;++i){auto& item=owners_->items[i];
+            if(queue_->retire(item.owner,item.bytes))queuedBytes_+=item.bytes;
+            else {allQueued=false;item.owner.reset();}}
+        owners_.reset();return allQueued;
+    }
+};
 }

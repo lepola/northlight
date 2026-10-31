@@ -16,6 +16,8 @@
 #include <vector>
 #include "capture_buffer_metadata.h"
 #include "northlight_mem.h"
+#include "source_identity.h"
+#include "cpu_retirement.h"
 // Test-only counterfactuals of the 0.3.181 snapshot lookup (tests/test_snapshot_prediction.py); 0 in the
 // DLL. 1-4: no prediction reset in evictOldest / the revalidation erase / the same-hash replacement /
 // clearSnapshotCache; 5: prediction accepted on the key bytes before the draw arguments; 6: prediction
@@ -34,6 +36,10 @@
 namespace NorthlightDrawSnapshot {
 struct Stream { UINT stride=0; std::vector<std::uint8_t> bytes; };
 struct Mesh {
+    NorthlightSourceIdentity::Handle sourceIdentity;
+    // Optional byte-equality proof for GPU contents. sourceIdentity always
+    // retains the current resource/layout/revision contract independently.
+    NorthlightSourceIdentity::Handle replayIdentity;
     Stream streams[4]; std::vector<std::uint32_t> indices;
     UINT vertexCount=0,primitiveCount=0; D3DPRIMITIVETYPE topology=D3DPT_TRIANGLELIST;
     // Replay indexed with base=0,min=0,start=0,INDEX32. Nonindexed start=0.
@@ -42,7 +48,7 @@ struct Mesh {
     std::size_t capacityBytes()const{std::size_t n=indices.capacity()*4;for(auto& s:streams)n+=s.bytes.capacity();return n;}
     // Only metadata is reset. Every observed byte/index is overwritten below;
     // retaining vector sizes avoids zero-filling the complete mesh each frame.
-    void prepare(){vertexCount=primitiveCount=0;indexed=dynamic=false;topology=D3DPT_TRIANGLELIST;for(auto& s:streams)s.stride=0;}
+    void prepare(){sourceIdentity.reset();replayIdentity.reset();vertexCount=primitiveCount=0;indexed=dynamic=false;topology=D3DPT_TRIANGLELIST;for(auto& s:streams)s.stride=0;}
 };
 struct Draw { D3DPRIMITIVETYPE topology=D3DPT_TRIANGLELIST; INT base=0; UINT minimum=0,vertices=0,start=0,primitives=0; bool indexed=true; };
 enum class Error { None, Arguments, Declaration, Stream, Instancing, IndexBuffer, IndexRange, VertexRange, Budget, Lock, Unlock };
@@ -126,7 +132,8 @@ class Frame {
     std::vector<std::uint64_t> indexMaskScratch_;
     std::vector<UINT> remapScratch_,uniqueSourceScratch_;
     size_t sourceSpanVertices_=0,uniqueVertices_=0,savedVertexBytes_=0;unsigned compactedDraws_=0;
-    bool compacted_=false;
+    bool compacted_=false,chargeResidentHits_=true;
+    Frame* residentPeer_=nullptr;unsigned peerHits_=0;
     // Compact records retain source ordering; adjacent records can be copied
     // together without observing unused vertices in the gaps.
     struct CopyRun {UINT source, destination, count;};
@@ -146,6 +153,10 @@ class Frame {
     static constexpr size_t IndexCacheLimit=16u*1024u*1024u;
     std::array<std::unique_ptr<DecodedEntry>,1024> decoded_;
     std::unordered_multimap<std::uint64_t,DecodedEntry*> decodedLookup_;
+    struct RetiredIndices {
+        decltype(decoded_) entries;
+        decltype(decodedLookup_) lookup;
+    };
     size_t decodedBytes_=sizeof(decoded_);
     NorthlightIntrusiveLRU::List<DecodedEntry> decodedLRU_;
     std::array<size_t,1024> decodedFree_{};size_t decodedFreeCount_=1024;
@@ -166,6 +177,7 @@ private:
         std::uint64_t version[5]={};UINT tracked=0;
         std::uint64_t vb[4]={},ib=0;UINT offset[4]={},stride[4]={},size[4]={},extent[4]={},ibSize=0;
         INT base=0;UINT minimum=0,vertices=0,start=0,primitives=0;unsigned topology=0,format=0;UINT indexed=0;const void* declaration=nullptr;
+        std::uintptr_t tracking[3]={};const void* privateDomain=nullptr;
         CacheKey(){std::memset(this,0,sizeof *this);}
         // 0.3.181 (S1, r89): every byte, padding included (zero-filled above, only ever copied whole),
         // as memcmp()==0 was: 4-byte words, XOR/OR, no early exit. The DLL's memcmp was a byte loop.
@@ -180,9 +192,12 @@ private:
     };
     struct CacheEntry {
         CacheKey key;std::shared_ptr<const Mesh> mesh;
+        Ref<IDirect3DVertexDeclaration9> declaration;
+        const Frame* producer=nullptr;
         std::vector<std::uint8_t> rawIndices;std::vector<CopyRun> runs;bool compacted=false;UINT low=0;
         std::uint64_t begins[4]={},lockBytes[4]={},readBytes[4]={},ibBegin=0,ibBytes=0;
         size_t bytes=0;unsigned serial=0;
+        size_t metadataBytes=0;
         NorthlightIntrusiveLRU::Links<CacheEntry> lru;
         // Budget charged on a hit: exactly what the miss reserved (raw index bytes
         // plus per-stream read spans), so accept/reject decisions never differ.
@@ -205,9 +220,29 @@ private:
     DeclarationFn declaration_=nullptr;void* declarationContext_=nullptr;
     using LayoutFn=bool(*)(void*,IDirect3DVertexDeclaration9*,UINT*);
     LayoutFn captureLayout_=nullptr;void* layoutContext_=nullptr;
-    std::unordered_map<std::uint64_t,std::unique_ptr<CacheEntry>> cache_;
-    size_t cacheBytes_=0,cacheLimit_=SnapshotCacheLimit;unsigned cacheSerial_=0,frame_=0; /* cacheLimit_: lowered under address-space pressure */
-    NorthlightIntrusiveLRU::List<CacheEntry> cacheLRU_;
+    struct SourcePool {
+        using ReplayCandidates=std::array<std::weak_ptr<const Mesh>,2048>;
+        std::unique_ptr<ReplayCandidates> replayCandidates;
+        std::unordered_map<std::uint64_t,std::unique_ptr<CacheEntry>> entries;
+        std::unordered_multimap<std::uint64_t,CacheEntry*> identities;
+        NorthlightIntrusiveLRU::List<CacheEntry> lru;
+        std::vector<Frame*> members;size_t bytes=0,limit=0;unsigned serial=0;std::uint64_t generation=0;
+        std::shared_ptr<NorthlightSourceIdentity::Ledger> live=std::make_shared<NorthlightSourceIdentity::Ledger>();size_t metadataBytes=0;
+    };
+    struct RetiredSources {
+        decltype(SourcePool::entries) entries;
+        decltype(SourcePool::identities) identities;
+        decltype(SourcePool::replayCandidates) replayCandidates;
+    };
+    // A weak slot can keep a make_shared allocation after its Mesh dies.
+    // Reserve the entire possible control/object allocation for every slot.
+    static constexpr size_t ReplayCandidateBytes=sizeof(SourcePool::ReplayCandidates)+32+2048*(sizeof(NorthlightSourceIdentity::Retained<Mesh>)+32);
+    std::shared_ptr<SourcePool> sources_=std::make_shared<SourcePool>();
+    size_t cacheLimit_=SnapshotCacheLimit;unsigned frame_=0;
+    std::uint64_t predictionGeneration_=0;unsigned sharedSourceHits_=0;
+    void refreshSourceLimit(){sources_->limit=0;for(const auto* member:sources_->members)sources_->limit+=std::min(member->cacheLimit_,std::numeric_limits<size_t>::max()-sources_->limit);
+        if(sources_->replayCandidates&&sources_->limit<ReplayCandidateBytes){sources_->replayCandidates.reset();sources_->bytes-=ReplayCandidateBytes;sources_->metadataBytes-=ReplayCandidateBytes;}
+        while(sources_->bytes>sources_->limit&&!sources_->entries.empty())evictOldest();}
     struct History {std::uint64_t logical=0,full=0;bool valid=false,evicted=false;};
     // Diagnostic history is bounded and never authorizes a cache hit. Collisions
     // are reported as unknown, never guessed to be a new resource or a write.
@@ -235,6 +270,8 @@ private:
     void noteEvicted(const CacheKey& key){const auto logical=logicalHash(key);auto& h=history_[logical%history_.size()];if(h.valid&&h.logical==logical&&h.full==hashKey(key))h.evicted=true;}
 
     unsigned cacheHits_=0,cacheMisses_=0,revalidated_=0,revalidationMismatches_=0,trackedHits_=0;
+    bool replayContentReuse_=false;
+    unsigned replayContentTests_=0,replayContentHits_=0;size_t replayContentComparedBytes_=0;
     size_t avoidedReadBytes_=0;
     unsigned metadataBatches_=0,metadataHits_=0,metadataFallbacks_=0,fastCacheHits_=0;
 public:
@@ -259,12 +296,14 @@ private:
         return entry==key;
     }
     void evictOldest(){
-        auto* oldest=cacheLRU_.oldest();if(!oldest)return;
+        auto* oldest=sources_->lru.oldest();if(!oldest)return;
         const auto hash=hashKey(oldest->key);noteEvicted(oldest->key);
         ++maintenance_.snapshotEvictions;maintenance_.snapshotEvictedBytes+=oldest->bytes;
-        cacheBytes_-=oldest->bytes;cacheLRU_.remove(*oldest);cache_.erase(hash);
+        eraseIdentity(*oldest);sources_->bytes-=oldest->bytes;sources_->metadataBytes-=oldest->metadataBytes;sources_->lru.remove(*oldest);sources_->entries.erase(hash);++sources_->generation;
         dropPrediction(Erase::Evict); /* the evicted entry may be the predicted one */
     }
+    void eraseIdentity(const CacheEntry& entry){if(!entry.mesh||!entry.mesh->sourceIdentity)return;auto range=sources_->identities.equal_range(entry.mesh->sourceIdentity->hash);
+        for(auto it=range.first;it!=range.second;++it)if(it->second==&entry){sources_->identities.erase(it);return;}}
     // Byte-exact proof that the cached snapshot still equals the live buffers.
     // Locks are READONLY; any lock failure rejects the entry conservatively.
     bool revalidate(const CacheEntry& e,Ref<IDirect3DVertexBuffer9>* vertices,IDirect3DIndexBuffer9* ib,const UINT* extent){
@@ -295,25 +334,81 @@ private:
             if(!k.vb[s])ok=false;k.offset[s]=offsets[s];k.stride[s]=strides[s];k.size[s]=descriptions[s].Size;k.extent[s]=extent[s];}
         k.tracked=version_?1u:0u;for(UINT s=0;s<4;++s)if(extent[s]&&!k.version[s])k.tracked=0;
         k.ib=ib;k.ibSize=ibSize;k.base=draw.base;k.minimum=draw.minimum;k.vertices=draw.vertices;k.start=draw.start;k.primitives=draw.primitives;
-        k.topology=unsigned(draw.topology);k.format=format;k.indexed=draw.indexed?1u:0u;k.declaration=declaration;return k;
+        k.topology=unsigned(draw.topology);k.format=format;k.indexed=draw.indexed?1u:0u;k.declaration=declaration;
+        k.tracking[0]=reinterpret_cast<std::uintptr_t>(identity_);k.tracking[1]=reinterpret_cast<std::uintptr_t>(version_);k.tracking[2]=reinterpret_cast<std::uintptr_t>(metadata_);return k;
     }
-    // Serve a hit. Charges admission and the read budget exactly like a miss
-    // of the same size, so accept/reject decisions do not change with caching.
-    bool serve(const CacheKey& key,Ref<IDirect3DVertexBuffer9>* vertices,IDirect3DIndexBuffer9* ib,const UINT* extent,std::shared_ptr<const Mesh>* shared,Diagnostics* why,bool& served){
+    bool stable(const CacheKey& key,Ref<IDirect3DVertexBuffer9>* vertices,IDirect3DIndexBuffer9* ib){
+        if(!key.tracked)return false;NorthlightCaptureMetadata::Info info[5];NorthlightCaptureMetadata::Request requests[5];unsigned count=0;
+        for(unsigned s=0;s<4;++s)if(key.extent[s])requests[count++]={vertices[s].p,false};if(key.indexed)requests[count++]={ib,true};
+        if(metadata_){metadata_(requests,info,count);++metadataBatches_;}unsigned at=0;
+        for(unsigned s=0;s<5;++s){if(s<4?!key.extent[s]:!key.indexed)continue;const auto& m=info[at++];void* resource=s<4?static_cast<void*>(vertices[s].p):static_cast<void*>(ib);
+            const auto identity=m.known&&m.identity?m.identity:identity_(resource,s==4),revision=m.known&&m.identity?m.revision:version_(resource,s==4);
+            if(identity!=(s<4?key.vb[s]:key.ib)||revision!=key.version[s])return false;}return true;
+    }
+    // Optional alias lookup borrows bounded words instead of allocating a Key.
+    // Persisted keys retain their original vector capacity and ownership.
+    struct IdentityWords {
+        static constexpr size_t Capacity=4+sizeof(CacheKey)/4+MAXD3DDECLLENGTH+1;
+        std::array<std::uint64_t,Capacity> values;size_t count=0;
+        void reserve(size_t requested){if(requested>Capacity)throw std::bad_alloc();}
+        void push_back(std::uint64_t value){if(count==Capacity)throw std::bad_alloc();values[count++]=value;}
+        const std::uint64_t* begin()const{return values.data();}
+        const std::uint64_t* end()const{return values.data()+count;}
+    };
+    template<class Words> bool sourceIdentityWords(CacheKey& key,IDirect3DVertexDeclaration9* declaration,Words& words){
+        D3DVERTEXELEMENT9 local[MAXD3DDECLLENGTH+1];const D3DVERTEXELEMENT9* elements=local;UINT count=MAXD3DDECLLENGTH+1;
+        if(declaration_){if(!declaration_(declarationContext_,declaration,elements,count))return false;}
+        else if(FAILED(declaration->GetDeclaration(local,&count)))return false;
+        if(!elements||count>MAXD3DDECLLENGTH+1)return false;
+        key.declaration=nullptr;key.privateDomain=nullptr;words.reserve(4+sizeof key/4+count);words.push_back(1);words.push_back(1);
+        for(size_t at=0;at<sizeof key;at+=4){std::uint32_t word;std::memcpy(&word,reinterpret_cast<const unsigned char*>(&key)+at,4);words.push_back(word);}
+        words.push_back(count);for(UINT i=0;i<count;++i){const auto& e=elements[i];words.push_back(std::uint64_t(e.Stream)|(std::uint64_t(e.Offset)<<16)|(std::uint64_t(e.Type)<<32)|(std::uint64_t(e.Method)<<40)|(std::uint64_t(e.Usage)<<48)|(std::uint64_t(e.UsageIndex)<<56));}
+        return true;
+    }
+    NorthlightSourceIdentity::Handle sourceIdentity(CacheKey key,IDirect3DVertexDeclaration9* declaration){
+      try{
+        std::vector<std::uint64_t> words;if(!sourceIdentityWords(key,declaration,words))return {};
+        return NorthlightSourceIdentity::make(std::move(words));
+      }catch(...){return {};}
+    }
+    CacheEntry* sourceAlias(CacheKey key){
+      try{
+        IdentityWords words;if(!sourceIdentityWords(key,static_cast<IDirect3DVertexDeclaration9*>(const_cast<void*>(key.declaration)),words))return nullptr;
+        const auto hash=NorthlightSourceIdentity::Key::fingerprint(words);auto range=sources_->identities.equal_range(hash);
+        for(auto alias=range.first;alias!=range.second;++alias){const auto& stored=alias->second->mesh->sourceIdentity;
+            if(stored&&stored->hash==hash&&stored->words.size()==words.count&&std::equal(words.begin(),words.end(),stored->words.begin()))return alias->second;}
+      }catch(...){}
+        return nullptr;
+    }
+    // Default: charge a resident hit like a miss, preserving capture admission.
+    // A private geometry caller may exempt byte reads for fully tracked hits.
+    bool serve(const CacheKey& key,Ref<IDirect3DVertexBuffer9>* vertices,IDirect3DIndexBuffer9* ib,const UINT* extent,std::shared_ptr<const Mesh>* shared,Diagnostics* why,bool& served,bool allowPeer=true){
         served=false;CacheEntry* found=nullptr;
+        if(!NORTHLIGHT_SNAPSHOT_COUNTERFACTUAL&&predictionGeneration_!=sources_->generation){predicted_=nullptr;predictionGeneration_=sources_->generation;}
         // Tracked keys only: for them the revalidation branch below is never taken, so the predicted
         // path needs no map iterator.
         if(lookup_!=Lookup::Map&&(key.tracked||NORTHLIGHT_SNAPSHOT_COUNTERFACTUAL==6)&&predicted_){++predictTried_;
             if(predictedEqual(predicted_->key,key)){found=predicted_;++predictHits_;}else ++predictMisses_;}
         if(!found){
-            const auto hash=hashKey(key);auto it=cache_.find(hash);if(it==cache_.end()||!(it->second->key==key)){noteMiss(key,hash,it!=cache_.end());return true;}
-            CacheEntry& e=*it->second;
-            if(!key.tracked&&(version_||(e.serial&15u)==(frame_&15u))&&!revalidate(e,vertices,ib,extent)){++revalidationMismatches_;cacheBytes_-=e.bytes;cacheLRU_.remove(e);cache_.erase(it);
+            const auto hash=hashKey(key);auto it=sources_->entries.find(hash);if(it==sources_->entries.end()||!(it->second->key==key)){
+                noteMiss(key,hash,it!=sources_->entries.end());
+                if(key.tracked)found=sourceAlias(key);
+                if(!found){
+                // Only identical tracking domains and complete current write
+                // generations may borrow. Never revalidate/read/populate a peer,
+                // change admission accounting, or follow a second peer link.
+                if(allowPeer&&residentPeer_&&key.tracked&&!chargeResidentHits_&&!residentPeer_->chargeResidentHits_&&
+                   identity_==residentPeer_->identity_&&version_==residentPeer_->version_&&metadata_==residentPeer_->metadata_){
+                    const bool ok=residentPeer_->serve(key,vertices,ib,extent,shared,why,served,false);peerHits_+=served;return ok;}
+                return true;}}
+            if(!found){CacheEntry& e=*it->second;
+            if(!key.tracked&&(version_||(e.serial&15u)==(frame_&15u))&&!revalidate(e,vertices,ib,extent)){++revalidationMismatches_;eraseIdentity(e);sources_->bytes-=e.bytes;sources_->metadataBytes-=e.metadataBytes;sources_->lru.remove(e);sources_->entries.erase(it);++sources_->generation;
                 dropPrediction(Erase::Revalidation); /* the erased entry may be the predicted one */return true;}
-            found=&e;
+            found=&e;}
         }
-        CacheEntry& e=*found;
-        if(!admit(why)||!reserve(e.charged,why))return false;
+        CacheEntry& e=*found;if(e.producer!=this)++sharedSourceHits_;
+        const bool charge=chargeResidentHits_||!key.tracked;
+        if(charge&&(!admit(why)||!reserve(e.charged,why)))return false;
         // The next prediction: e's successor in LRU order, read before touch(e) moves e to the end.
         CacheEntry* s1=e.lru.newer;predicted_=s1;
         if(lookup_==Lookup::Prefetch&&s1){
@@ -324,48 +419,125 @@ private:
             for(std::size_t offset=0;offset<sizeof(CacheKey);offset+=64)prefetch(reinterpret_cast<const char*>(&s1->key)+offset);
             if(s2){prefetch(&s2->mesh);prefetch(&s2->lru);}
         }
-        cacheLRU_.touch(e);++cacheHits_;if(key.tracked){++trackedHits_;avoidedReadBytes_+=e.charged;}accepted();*shared=e.mesh;served=true;
+        sources_->lru.touch(e);++cacheHits_;if(key.tracked){++trackedHits_;avoidedReadBytes_+=e.charged;}if(charge)accepted();*shared=e.mesh;served=true;
         if(why){why->error=Error::None;why->hr=D3D_OK;}return true;
+    }
+    static bool replayContract(const NorthlightSourceIdentity::Handle& a,const NorthlightSourceIdentity::Handle& b){
+        if(!a||!b||a->words.size()!=b->words.size()||a->words.size()<2+sizeof(CacheKey)/4+1)return false;
+        if(a->words[0]!=1||a->words[1]!=1||b->words[0]!=1||b->words[1]!=1)return false;
+        // sourceIdentity serializes each CacheKey uint32 as one uint64 word.
+        // Only the five write revisions differ; all resource, tracking-domain,
+        // layout/declaration and original draw-range words must still match.
+        for(size_t i=0;i<a->words.size();++i)if(i<2+offsetof(CacheKey,version)/4||i>=2+(offsetof(CacheKey,version)+sizeof(CacheKey::version))/4){if(a->words[i]!=b->words[i])return false;}
+        return true;
+    }
+    void replayContent(const CacheKey& key,Mesh& mesh){
+        if(!replayContentReuse_||!key.tracked||!mesh.sourceIdentity)return;
+        if(!sources_->replayCandidates){
+            if(ReplayCandidateBytes>sources_->limit)return;
+            std::unique_ptr<SourcePool::ReplayCandidates> candidates;
+            try{candidates=std::make_unique<SourcePool::ReplayCandidates>();}catch(...){return;}
+            // A world-only reader may already have filled the shared pool.
+            // Reserve optional metadata only after this material was admitted.
+            {MaintenanceTimer timer(sampleMaintenance_&&sources_->bytes>sources_->limit-ReplayCandidateBytes?&maintenance_.snapshotMs:nullptr);
+                while(sources_->bytes>sources_->limit-ReplayCandidateBytes&&!sources_->entries.empty())evictOldest();}
+            if(sources_->bytes>sources_->limit-ReplayCandidateBytes)return;
+            sources_->replayCandidates=std::move(candidates);
+            sources_->bytes+=ReplayCandidateBytes;sources_->metadataBytes+=ReplayCandidateBytes;
+        }
+        const auto previous=(*sources_->replayCandidates)[logicalHash(key)%sources_->replayCandidates->size()].lock();
+        if(!previous||!replayContract(mesh.sourceIdentity,previous->sourceIdentity))return;
+        ++replayContentTests_;
+        if(mesh.vertexCount!=previous->vertexCount||mesh.primitiveCount!=previous->primitiveCount||mesh.topology!=previous->topology||mesh.indexed!=previous->indexed||mesh.dynamic!=previous->dynamic)return;
+        replayContentComparedBytes_+=mesh.byteSize();
+        if(mesh.indices!=previous->indices)return;
+        for(unsigned s=0;s<4;++s)if(mesh.streams[s].stride!=previous->streams[s].stride||mesh.streams[s].bytes!=previous->streams[s].bytes)return;
+        mesh.replayIdentity=previous->replayIdentity?previous->replayIdentity:previous->sourceIdentity;++replayContentHits_;
     }
     bool store(const CacheKey& key,Mesh&& mesh,std::uint64_t ibBegin,std::uint64_t ibBytes,UINT low,const std::uint64_t* begins,const std::uint64_t* lockBytes,const std::uint64_t* readBytes,std::shared_ptr<const Mesh>* shared){
         try{
-            auto entry=std::make_unique<CacheEntry>();entry->key=key;entry->compacted=compacted_;entry->low=low;
+            replayContent(key,mesh);
+            auto entry=std::make_unique<CacheEntry>();entry->key=key;entry->producer=this;entry->compacted=compacted_;entry->low=low;
+            entry->declaration.p=static_cast<IDirect3DVertexDeclaration9*>(const_cast<void*>(key.declaration));entry->declaration.p->AddRef();
             entry->ibBegin=ibBegin;entry->ibBytes=ibBytes;
             if(key.indexed)entry->rawIndices.assign(rawIndexScratch_.begin(),rawIndexScratch_.begin()+std::ptrdiff_t(ibBytes));
             if(compacted_)entry->runs=*activeRuns_;
             for(UINT s=0;s<4;++s){entry->begins[s]=begins[s];entry->lockBytes[s]=lockBytes[s];entry->readBytes[s]=readBytes[s];}
             entry->charged=std::size_t(ibBytes);for(UINT s=0;s<4;++s)entry->charged+=std::size_t(readBytes[s]);
-            entry->bytes=sizeof(CacheEntry)+mesh.capacityBytes()+entry->rawIndices.capacity()+entry->runs.capacity()*sizeof(CopyRun)+64;
-            if(entry->bytes>cacheLimit_)return false;
-            {MaintenanceTimer timer(sampleMaintenance_&&cacheBytes_+entry->bytes>cacheLimit_?&maintenance_.snapshotMs:nullptr);
-                while(cacheBytes_+entry->bytes>cacheLimit_&&!cache_.empty())evictOldest();}
-            auto owned=std::make_shared<Mesh>();entry->mesh=owned;
-            entry->serial=cacheSerial_++;
-            const auto hash=hashKey(key);auto existing=cache_.find(hash);if(existing!=cache_.end()){cacheBytes_-=existing->second->bytes;cacheLRU_.remove(*existing->second);cache_.erase(existing);
+            const size_t payload=NorthlightSourceIdentity::allocationBytes<Mesh>(mesh.capacityBytes());
+            entry->metadataBytes=sizeof(CacheEntry)+entry->rawIndices.capacity()+entry->runs.capacity()*sizeof(CopyRun)+96;
+            entry->bytes=entry->metadataBytes+payload+(mesh.sourceIdentity?mesh.sourceIdentity->bytes():0)+(mesh.replayIdentity&&mesh.replayIdentity!=mesh.sourceIdentity?mesh.replayIdentity->bytes():0);
+            if(entry->bytes>sources_->limit)return false;
+            {MaintenanceTimer timer(sampleMaintenance_&&sources_->bytes+entry->bytes>sources_->limit?&maintenance_.snapshotMs:nullptr);
+                while(sources_->bytes+entry->bytes>sources_->limit&&!sources_->entries.empty())evictOldest();}
+            if(entry->bytes>sources_->limit-sources_->bytes)return false;
+            auto owned=NorthlightSourceIdentity::allocate<Mesh>(sources_->live,payload);entry->mesh=owned;
+            entry->serial=sources_->serial++;
+            const auto hash=hashKey(key);auto existing=sources_->entries.find(hash);if(existing!=sources_->entries.end()){eraseIdentity(*existing->second);sources_->bytes-=existing->second->bytes;sources_->metadataBytes-=existing->second->metadataBytes;sources_->lru.remove(*existing->second);sources_->entries.erase(existing);++sources_->generation;
                 dropPrediction(Erase::Replacement);} /* the replaced entry may be the predicted one */
-            const auto bytes=entry->bytes;auto inserted=cache_.emplace(hash,std::move(entry));cacheLRU_.append(*inserted.first->second);cacheBytes_+=bytes;noteStored(key);
-            *owned=std::move(mesh);*shared=owned;return true;
+            const auto bytes=entry->bytes,metadataBytes=entry->metadataBytes;auto inserted=sources_->entries.emplace(hash,std::move(entry));sources_->lru.append(*inserted.first->second);sources_->bytes+=bytes;sources_->metadataBytes+=metadataBytes;noteStored(key);
+            *owned=std::move(mesh);*shared=owned;if(owned->sourceIdentity)try{sources_->identities.emplace(owned->sourceIdentity->hash,inserted.first->second.get());}catch(...){}
+            if(replayContentReuse_&&sources_->replayCandidates&&key.tracked&&owned->sourceIdentity)(*sources_->replayCandidates)[logicalHash(key)%sources_->replayCandidates->size()]=owned;
+            return true;
         }catch(...){return false;}
     }
 public:
+    void setReplayContentReuse(bool on){replayContentReuse_=on;}
+    unsigned replayContentTests()const{return replayContentTests_;}
+    unsigned replayContentHits()const{return replayContentHits_;}
+    size_t replayContentComparedBytes()const{return replayContentComparedBytes_;}
     void setIdentityProvider(IdentityFn f){identity_=f;}
+    // Private geometry consumers may budget actual reads; write-tracked resident
+    // hits read no VB/IB bytes. Other capture consumers keep their original policy.
+    void setChargeResidentHits(bool value){chargeResidentHits_=value;}
+    // Non-owning; the peer must outlive reads. Both caches retain their own
+    // limits, and a borrowed mesh is not inserted or copied into this cache.
+    void setResidentPeer(Frame* peer){residentPeer_=peer==this?nullptr:peer;}
+    bool shareSnapshotPool(Frame& peer){
+        if(sources_==peer.sources_)return true;
+        if(!sources_->entries.empty()||sources_->live->objects.load(std::memory_order_relaxed))return false;
+        auto old=sources_;try{peer.sources_->members.insert(peer.sources_->members.end(),old->members.begin(),old->members.end());}catch(...){return false;}
+        for(auto* member:old->members){member->sources_=peer.sources_;member->predicted_=nullptr;}old->members.clear();old->limit=0;refreshSourceLimit();return true;
+    }
     void setVersionProvider(VersionFn f){clearSnapshotCache();version_=f;}
     // Metadata providers must share the identity/version domain of the legacy
     // providers. A batch is consumed immediately, never reused across draws.
     void setMetadataProvider(NorthlightCaptureMetadata::Read f){clearSnapshotCache();metadata_=f;}
     void setDeclarationProvider(void* context,DeclarationFn f){declarationContext_=context;declaration_=f;}
     void setLayoutProvider(void* context,LayoutFn f){layoutContext_=context;captureLayout_=f;}
-    void clearSnapshotCache(){cacheLRU_.clear();cache_.clear();cacheBytes_=0;for(auto& h:history_)h={};
-        dropPrediction(Erase::Clear);} /* every entry is gone */
+    size_t clearSnapshotCache(NorthlightStreaming::CpuRetirement* retirement=nullptr,NorthlightStreaming::CpuRetirementBatch* batch=nullptr){
+        size_t deferred=0;
+        if((retirement||batch)&&!sources_->entries.empty())try{
+            auto retired=std::make_shared<RetiredSources>();
+            // D3D ownership ends on this device thread before the worker can
+            // receive immutable CPU meshes, index plans and map allocations.
+            for(auto& item:sources_->entries){auto*& declaration=item.second->declaration.p;if(declaration){declaration->Release();declaration=nullptr;}}
+            retired->entries.swap(sources_->entries);retired->identities.swap(sources_->identities);
+            retired->replayCandidates.swap(sources_->replayCandidates);sources_->lru.clear();
+            if(batch?batch->retire(retired,sources_->bytes):retirement->retire(retired,sources_->bytes))deferred=sources_->bytes;
+            // Queue contention/cap/allocation failure keeps synchronous release.
+        }catch(...){}
+        sources_->replayCandidates.reset();sources_->lru.clear();sources_->identities.clear();sources_->entries.clear();sources_->bytes=sources_->metadataBytes=0;++sources_->generation;for(auto& h:history_)h={};
+        dropPrediction(Erase::Clear);return deferred;} /* every entry is gone */
     // Memory guard: at most SnapshotCacheLimit; evicts oldest down to the new cap now.
     // Entries are shared immutable meshes, so holders of an evicted mesh keep it valid.
-    void setSnapshotCacheLimit(size_t bytes){cacheLimit_=std::min(bytes,SnapshotCacheLimit);while(cacheBytes_>cacheLimit_&&!cache_.empty())evictOldest();}
+    void setSnapshotCacheLimit(size_t bytes){cacheLimit_=std::min(bytes,SnapshotCacheLimit);refreshSourceLimit();}
     size_t snapshotCacheLimit()const{return cacheLimit_;}
     void sampleMaintenance(bool value){sampleMaintenance_=value;}
     const Maintenance& maintenance()const{return maintenance_;}
-    size_t snapshotCacheBytes()const{return cacheBytes_;}
-    size_t snapshotCacheEntries()const{return cache_.size();}
+    size_t snapshotCacheBytes()const{return sources_->members.front()==this?sources_->bytes:0;}
+    size_t sharedSourceBytes()const{return sources_->bytes;}
+    size_t sharedSourceLimit()const{return sources_->limit;}
+    size_t sharedSourceParticipants()const{return sources_->members.size();}
+    unsigned sharedSourceHits()const{return sharedSourceHits_;}
+    size_t uniqueSourceBytes()const{return sources_->members.front()==this?sources_->live->bytes.load(std::memory_order_relaxed)+sources_->metadataBytes:0;}
+    size_t sourceLiveBytes()const{return sources_->live->bytes.load(std::memory_order_relaxed);}
+    size_t sourceLiveObjects()const{return sources_->live->objects.load(std::memory_order_relaxed);}
+    size_t sharedSourceMetadataBytes()const{return sources_->metadataBytes;}
+    std::shared_ptr<const Mesh> retain(Mesh&& mesh){auto owned=NorthlightSourceIdentity::allocate<Mesh>(sources_->live,NorthlightSourceIdentity::allocationBytes<Mesh>(mesh.capacityBytes()));*owned=std::move(mesh);return owned;}
+    size_t snapshotCacheEntries()const{return sources_->entries.size();}
     unsigned snapshotCacheHits()const{return cacheHits_;}
+    unsigned residentPeerHits()const{return peerHits_;}
     unsigned trackedHits()const{return trackedHits_;}
     size_t avoidedReadBytes()const{return avoidedReadBytes_;}
     unsigned snapshotCacheMisses()const{return cacheMisses_;}
@@ -392,7 +564,7 @@ public:
         return k;
     }
     // Tests: the cached meshes from oldest to newest (the LRU order).
-    template<class Visit> void visitLRU(Visit&& visit)const{for(const CacheEntry* e=cacheLRU_.oldest();e;e=e->lru.newer)visit(e->mesh.get());}
+    template<class Visit> void visitLRU(Visit&& visit)const{for(const CacheEntry* e=sources_->lru.oldest();e;e=e->lru.newer)visit(e->mesh.get());}
 private:
     static std::uint64_t fingerprint(const void* source,size_t bytes){
         const auto* data=static_cast<const std::uint8_t*>(source);
@@ -517,7 +689,8 @@ private:
 public:
     // Reserve half the default frame budget for caller-audited skeletal
     // priority. DYNAMIC means mutable storage, and never grants actor priority.
-    explicit Frame(std::size_t maxBytes=32u*1024u*1024u,std::size_t priorityBytes=16u*1024u*1024u):limit_(maxBytes),reserved_(std::min(maxBytes,priorityBytes)){for(size_t i=0;i<decodedFree_.size();++i)decodedFree_[i]=i;}
+    explicit Frame(std::size_t maxBytes=32u*1024u*1024u,std::size_t priorityBytes=16u*1024u*1024u):limit_(maxBytes),reserved_(std::min(maxBytes,priorityBytes)){sources_->members.push_back(this);refreshSourceLimit();for(size_t i=0;i<decodedFree_.size();++i)decodedFree_[i]=i;}
+    ~Frame(){auto& members=sources_->members;members.erase(std::find(members.begin(),members.end(),this));clearSnapshotCache();refreshSourceLimit();}
     bool configureBudget(std::size_t maxBytes,std::size_t priorityBytes){
         if(used_||draws_)return false;
         limit_=maxBytes;reserved_=std::min(maxBytes,priorityBytes);return true;
@@ -537,10 +710,24 @@ public:
     // Extra bytes for near priority draws once the main budget is spent (0: off, the 0.3.171 budget).
     void setNearReserve(std::size_t bytes){nearReserve_=bytes;}
     std::size_t nearReserve()const{return nearReserve_;}
-    void clearFrame(){maintenance_={};sampleMaintenance_=false;used_=regularUsed_=0;draws_=regularDraws_=0;sourceSpanVertices_=uniqueVertices_=savedVertexBytes_=0;compactedDraws_=0;indexHits_=indexMisses_=0;cacheHits_=cacheMisses_=revalidated_=revalidationMismatches_=trackedHits_=0;avoidedReadBytes_=0;metadataBatches_=metadataHits_=metadataFallbacks_=fastCacheHits_=0;predictTried_=predictHits_=predictMisses_=0;++frame_;}
+    void clearFrame(){maintenance_={};sampleMaintenance_=false;used_=regularUsed_=0;draws_=regularDraws_=0;sourceSpanVertices_=uniqueVertices_=savedVertexBytes_=0;compactedDraws_=0;indexHits_=indexMisses_=0;cacheHits_=cacheMisses_=revalidated_=revalidationMismatches_=trackedHits_=peerHits_=sharedSourceHits_=0;replayContentTests_=replayContentHits_=0;replayContentComparedBytes_=0;avoidedReadBytes_=0;metadataBatches_=metadataHits_=metadataFallbacks_=fastCacheHits_=0;predictTried_=predictHits_=predictMisses_=0;++frame_;}
     // Cache lifetime never establishes validity: reads still lock/compare current
     // IB contents and copy current VB data. Reset/destruction may drop plans.
-    void clearIndexCache(){activeRuns_=&copyRuns_;recent_=nullptr;decodedLookup_.clear();decodedLRU_.clear();for(auto& entry:decoded_)entry.reset();decodedBytes_=sizeof(decoded_);decodedFreeCount_=decodedFree_.size();for(size_t i=0;i<decodedFree_.size();++i)decodedFree_[i]=i;clearSnapshotCache();}
+    size_t clearIndexCache(NorthlightStreaming::CpuRetirement* retirement=nullptr,NorthlightStreaming::CpuRetirementBatch* batch=nullptr){
+        activeRuns_=&copyRuns_;recent_=nullptr;decodedLRU_.clear();
+        // Preserve the existing source retirement's priority under the byte cap.
+        size_t deferred=clearSnapshotCache(retirement,batch);
+        // These immutable plans own no COM objects. Detach their allocations
+        // before reset so a noncritical trim need not destroy them in-frame.
+        if((retirement||batch)&&indexCacheEntries())try{
+            auto retired=std::make_shared<RetiredIndices>();
+            retired->entries.swap(decoded_);retired->lookup.swap(decodedLookup_);
+            if(batch?batch->retire(retired,decodedBytes_):retirement->retire(retired,decodedBytes_))deferred+=decodedBytes_;
+        }catch(...){} // Full queue or allocation failure frees synchronously.
+        decodedLookup_.clear();for(auto& entry:decoded_)entry.reset();decodedBytes_=sizeof(decoded_);decodedFreeCount_=decodedFree_.size();
+        for(size_t i=0;i<decodedFree_.size();++i)decodedFree_[i]=i;
+        return deferred;
+    }
     size_t indexCacheBytes()const{return decodedBytes_;}
     unsigned indexCacheEntries()const{return unsigned(decoded_.size()-decodedFreeCount_);}
     unsigned indexCacheHits()const{return indexHits_;}
@@ -554,7 +741,9 @@ public:
     // (also DYNAMIC) may be served from / stored into the persistent
     // cache as an immutable shared mesh and output is left empty. Hits charge
     // admission and the read budget exactly like the equivalent miss.
-    bool read(IDirect3DDevice9* device,IDirect3DVertexDeclaration9* declaration,const Draw& draw,Mesh& output,Diagnostics* why=nullptr,bool priority=false,std::shared_ptr<const Mesh>* shared=nullptr,bool nearby=false) {
+    // Optional admission probes may reuse tracked resident data without reads,
+    // revalidation locks or cache population. A miss leaves the normal path intact.
+    bool read(IDirect3DDevice9* device,IDirect3DVertexDeclaration9* declaration,const Draw& draw,Mesh& output,Diagnostics* why=nullptr,bool priority=false,std::shared_ptr<const Mesh>* shared=nullptr,bool nearby=false,bool residentOnly=false) {
         if(shared)shared->reset();
         Mesh mesh=std::move(output);mesh.prepare();output=Mesh{};if(why)*why={};if(!device)return fail(why,Error::Arguments);
         UINT extent[4]={},n=0;if(!layout(declaration,extent,why)||!indexCount(draw,n,why))return false;
@@ -601,7 +790,9 @@ public:
                 const std::uint64_t token=known?metadata[4].identity:identity_(ib.p,true);
                 key=makeKey(vertices,extent,draw,declaration,strides,offsets,descriptions,token,desc.Size,unsigned(desc.Format),ok,batch?metadata:nullptr);
                 key.version[4]=known?metadata[4].revision:(version_?version_(ib.p,true):0);if(!key.version[4])key.tracked=0;cacheable=ok&&token!=0&&(!mesh.dynamic||key.tracked);
+                key.privateDomain=!key.tracked&&sources_->members.size()>1?this:nullptr;if(residentOnly&&!key.tracked)return false;
                 if(cacheable){bool served=false;if(!serve(key,vertices,ib.p,extent,shared,why,served))return false;if(served){fastCacheHits_+=metadataKnown&&key.tracked;output=std::move(mesh);return true;}}}
+            if(residentOnly)return false;
             cacheIbBegin=begin;cacheIbBytes=bytes;
             if(!admit(why))return false;
             if(!reserve(std::size_t(bytes),why))return false;
@@ -614,7 +805,9 @@ public:
         }else{
             // DYNAMIC resources may be cached only with complete write tracking.
             if(cacheable){bool ok=true;key=makeKey(vertices,extent,draw,declaration,strides,offsets,descriptions,0,0,0,ok,batch?metadata:nullptr);cacheable=ok&&(!mesh.dynamic||key.tracked);
+                key.privateDomain=!key.tracked&&sources_->members.size()>1?this:nullptr;if(residentOnly&&!key.tracked)return false;
                 if(cacheable){bool served=false;if(!serve(key,vertices,nullptr,extent,shared,why,served))return false;if(served){fastCacheHits_+=metadataKnown&&key.tracked;output=std::move(mesh);return true;}}}
+            if(residentOnly)return false;
             if(!admit(why))return false;if(std::uint64_t(low)+n>std::uint64_t(UINT(-1))+1)return fail(why,Error::VertexRange);high=low+n-1;}
         std::int64_t first=std::int64_t(low)+(draw.indexed?draw.base:0),last=std::int64_t(high)+(draw.indexed?draw.base:0);
         if(first<0||last<first||last>UINT(-1))return fail(why,Error::VertexRange);
@@ -643,7 +836,7 @@ public:
         }
         sourceSpanVertices_+=size_t(sourceSpan);uniqueVertices_+=mesh.vertexCount;savedVertexBytes_+=size_t(savedBytes);compactedDraws_+=compacted_;
         accepted();if(why){why->error=Error::None;why->hr=D3D_OK;}
-        if(cacheable){++cacheMisses_;if(store(key,std::move(mesh),cacheIbBegin,cacheIbBytes,low,begins,lockBytes,readBytes,shared))return true;}
+        if(cacheable){if(key.tracked&&stable(key,vertices,boundIndices.p))mesh.sourceIdentity=sourceIdentity(key,declaration);++cacheMisses_;if(store(key,std::move(mesh),cacheIbBegin,cacheIbBytes,low,begins,lockBytes,readBytes,shared))return true;}
         output=std::move(mesh);return true;
     }
     bool readUP(IDirect3DVertexDeclaration9* declaration,const Draw& draw,const void* indices,D3DFORMAT format,const void* vertices,UINT stride,Mesh& output,Diagnostics* why=nullptr,bool priority=false,bool nearby=false){

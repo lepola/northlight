@@ -76,6 +76,7 @@ def audit():
     # 0.3.189: both option names (2.x / >=3.0), dxvk2 shares the DXVK rules, default-path dxvk falls back to dxvk2 once.
     compat=fp.src('dxvk_compatibility.h').read_text()
     assert 'd3d9.cachedDynamicBuffers = True' in compat and 'd3d9.cachedWriteOnlyBuffers = True' in compat and 'd3d9.customVendorId = 1002' in compat
+    assert 'dxvk.enableDescriptorHeap = False' in compat
     assert 'L"renderer-backends\\\\dxvk2\\\\dxvk2_d3d9.dll"' in policy and 'isPackagedDxvk(configured)' in src
     proc=src[src.index('template<class T> static T procedure'):src.index('#define NORTHLIGHT_EXPORT')]
     assert proc.count('backend()')==1 and 'GetModuleHandle' not in proc and 'Module' not in proc.replace('HMODULE','')

@@ -25,6 +25,7 @@ struct Hook{
     unsigned shadowSwapConstantBase=0,shadowSwapConstantCount=0,terrainShadowDraws=0;
     float shadowSwapConstants[24]={};
     int sampledHookTimer(){return 0;}
+    template<class Draw> HRESULT materialNativeDraw(Draw draw,Shader* =nullptr,Shader* =nullptr){return draw();}
     // Exact current production method, extracted by the Python driver.
 #include "terrain_shadow_draw.inc"
 };

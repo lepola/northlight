@@ -173,7 +173,7 @@ static Scene makeScene(World& w,std::mt19937& rng,unsigned draws,double opaqueSh
     return scene;
 }
 static unsigned materialCalls(const Calls& c){return c.textures+c.samplers;}
-int main(){
+int main(int argc,char** argv){
     using New=NorthlightReplayDrawState::Cache;using Old=Legacy::Cache;
     static_assert(NorthlightReplayDrawState::SkipOpaqueMaterial,"shipped switch");
     assert(NorthlightReplayDrawState::skipOpaque());
@@ -255,7 +255,7 @@ int main(){
      assert(a.image==b.image&&a.counts.streams==6&&b.counts.streams==4&&b.calls.total()<a.calls.total());
      std::puts("PASS base layout: three same-stride bulk replays bind stream 0 once and rasterize identically to per-replay offsets");}
     // Microbenchmark: binding work per 579-draw pass on a virtual (COM-like) device.
-    {Scene scene=makeScene(world,rng,579,.75,false,false);IDirect3DDevice9 d;const int iterations=4000;
+    if(argc==2&&std::string(argv[1])=="--benchmark"){Scene scene=makeScene(world,rng,579,.75,false,false);IDirect3DDevice9 d;const int iterations=4000;
      auto time=[&](auto tag){using C=decltype(tag);auto start=std::chrono::steady_clock::now();unsigned calls=0;
          for(int it=0;it<iterations;++it){d.calls={};C cache(&d);for(const auto& p:scene.replays){if(cache.geometry(p)||cache.material(p))std::abort();}calls+=d.calls.total();}
          return std::make_pair(std::chrono::duration<double,std::micro>(std::chrono::steady_clock::now()-start).count()/iterations,calls/iterations);};

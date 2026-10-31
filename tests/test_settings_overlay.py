@@ -137,6 +137,12 @@ with tempfile.TemporaryDirectory(prefix='northlight-overlay-') as tmp:
     if built.returncode == 0:
         check(subprocess.run([str(font_exe)]).returncode == 0, 'test_settings_overlay_font.cpp: the embedded font did not load')
 
+for key in ['AutoBumpModels','AutoHeightBalance','AutoDisplacementDistance','AutoDisplacementDetail','AutoDisplacementStrength','AutoModelDisplacementDistance','AutoModelDisplacementDetail','AutoModelDisplacementStrength']:
+    check(key in panel,'Material menu must expose '+key)
+renderer=fp.src('renderer.cpp').read_text()
+boundary=renderer[renderer.index('if(settingsService)if(auto update=settingsService->after(settingsRevision))'):]
+check(boundary.index('autoBump->configure(world->surfaceSettings())')<boundary.index('settingsService->acknowledge(*update)'),'Material preview must reach its renderer before acknowledgement')
+
 if problems:
     print('\n'.join('FAIL ' + p for p in problems))
     sys.exit(1)

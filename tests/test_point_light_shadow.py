@@ -38,21 +38,35 @@ class PointReferenceTests(unittest.TestCase):
         visible=lambda water,alpha,opaque:water>.1 and water<=opaque+max(.012,water*.0007) and alpha>.003
         self.assertTrue(visible(10,.5,20));self.assertFalse(visible(20,.5,10))
         self.assertFalse(visible(0,0,20));self.assertFalse(visible(10,0,20))
-        # Authored range contribution must be zero beyond its endpoint; source
-        # intensity cannot cause more than .35 signed correction per channel.
+        # The point pass removes only its own admitted radiance. A second lamp
+        # and the directional history must survive that correction independently.
+        cases=0
         for distance in (0,1,4,7,10,20):
             attenuation=max(0,min(1,(10-distance)/6))
             for intensity in (0,.2,1,10000):
                 for visibility in (0,.25,1):
-                    correction=-min(min(intensity,2)*attenuation,.35)*(1-visibility)
-                    self.assertTrue(math.isfinite(correction));self.assertGreaterEqual(correction,-.35)
-                    if distance>=10 or visibility==1:self.assertEqual(correction,0)
+                    for relevance in (0,.2,1):
+                        for gain in (0,.3,1):
+                            contribution=intensity*attenuation**2*gain
+                            correction=-contribution*(1-visibility)*relevance
+                            other=.37
+                            combined=contribution+other+correction
+                            self.assertTrue(math.isfinite(correction))
+                            self.assertGreaterEqual(correction,-contribution)
+                            self.assertLessEqual(correction,0)
+                            self.assertGreaterEqual(combined,other-1e-9)
+                            if distance>=10 or visibility==1 or relevance==0:
+                                self.assertEqual(correction,0)
+                            cases+=1
+        self.assertEqual(cases,648)
     def test_backfacing_skips_pcf(self):
         # Task 43: localVisibility returns 1 (no cube taps) where dot(normal,delta)>=0. There facing=saturate(dot(n,-delta/d)) is 0,
         # so estimate and the correction are 0 whatever the visibility; every face toward the lamp still runs the PCF.
         src=fp.src('local_light_effects.hlsl').read_text()
         self.assertEqual(src.count('if(distance<=LocalShadow.x||distance>=LocalShadow.y||dot(normal,delta)>=0)return 1;'),1)
-        self.assertIn('float occlusion=1-localVisibility(delta,n);',src);self.assertIn('float3 estimate=min(max(LocalColor.rgb,0),2)*atten*facing;',src)
+        self.assertIn('float occlusion=1-localVisibility(delta,geometricNormal);',src)
+        self.assertIn('return float4(-contribution*(occlusion*relevance),0);',src)
+        self.assertIn('float3 contribution=LocalColor.rgb*(atten*atten*facing*LocalGain.x*(1-LocalGain.y*sunlit));',src)
         import random
         rng=random.Random(43);skipped=kept=0
         for _ in range(20000):
@@ -62,7 +76,7 @@ class PointReferenceTests(unittest.TestCase):
             facing=max(0,min(1,dot(n,[-v/d for v in delta])))
             if dot(n,delta)>=0:
                 skipped+=1;self.assertEqual(facing,0)
-                for visibility in (0,.25,1):self.assertEqual(-min(1.5*facing,.35)*(1-visibility),0)
+                for visibility in (0,.25,1):self.assertEqual(-1.5*facing*(1-visibility),0)
             else:kept+=1;self.assertGreater(facing,0)
         self.assertGreater(skipped,5000);self.assertGreater(kept,5000)
     def test_compiled_artifacts(self):

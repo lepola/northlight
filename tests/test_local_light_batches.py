@@ -36,12 +36,12 @@ assert cpu.index('NorthlightLocalLightBatches::arrange(localLights,localScissorV
 assert cpu.index('NorthlightLocalLightBatches::arrange(localLights,localScissorView)')<cpu.index('localLights.fog[i][0]=sigmaAt(')
 loop=cpu[cpu.index('profileSplit(profile,lightSurface); /* sample frames'):cpu.index('if(profile)profile->mark("LocalLights");')]
 assert 'NorthlightLocalLightBatches::wide(a,b)' in loop and 'localLights.batch<2*N>(firstLight)' in loop
-assert 'd->SetPixelShaderConstantF(68,batch.position[0].data(),2*N);d->SetPixelShaderConstantF(84,batch.color[0].data(),2*N);' in loop
+assert 'd->SetPixelShaderConstantF(84,batch.position[0].data(),2*N);d->SetPixelShaderConstantF(100,batch.color[0].data(),2*N);' in loop
 assert loop.count('profileSplit(profile,lightSurface);')==2
 assert 'if(!profile||!profile->recording()||!resume||profileSplitFailed)return;' in cpu  # sample frames only
 assert 'drop(profileSplitSurface);' in cpu and 'drop(localDirect16PS);' in cpu
 shader=fp.src('world_effects.hlsl').read_text()
 lo16=shader[shader.index('float4 LocalDirect16('):shader.index('float3 removalScale(')]
-assert 'uniform float4 LampPos[16]:register(c68),uniform float4 LampColor[16]:register(c84)' in lo16
+assert 'uniform float4 LampPos[16]:register(c84),uniform float4 LampColor[16]:register(c100)' in lo16
 assert 'return float4(result*(LocalLightInfo.y*(1-LocalLightInfo.z*sunlit)),0);' in lo16
 print('wiring ok')

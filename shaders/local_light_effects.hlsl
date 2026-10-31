@@ -1,17 +1,23 @@
-// One authored static point source. Cube shadow is world geometry, including
-// offscreen casters. Receiver normal is depth-derived. Original baked direct
-// light decomposition is unavailable: subtraction is an explicitly bounded
-// estimate, never an extra duplicate light contribution.
+// Correct only this authored point lamp in the current local-light buffer.
+// Directional history and other emitters remain independent. Receiver normals
+// use the same relative material codec as the unshadowed local-light pass.
 sampler2D LocalDepth : register(s0);
 samplerCUBE LocalCube : register(s1);
 sampler2D LocalWater : register(s2);
+sampler2D LocalNormals : register(s3);
+sampler2D LocalBaseline : register(s4);
+sampler2D BumpMaterial : register(s5);
+float4 BumpControl : register(c12);
+#include "auto_bump_normal.hlsl"
 // LocalLighting PS constants:
 float4 LocalImage : register(c0); // inverse full width/height, near,far
 float4 LocalProjection : register(c1); // signed proj X,Y,Zsign, depth viewport MinZ
-float4 LocalDepthInfo : register(c2); // inverse viewport depth range, water mask ready, correction strength, world-unit bias
+float4 LocalDepthInfo : register(c2); // inverse viewport depth range, water mask ready, reserved, world-unit bias
 row_major float4x4 LocalInverseView : register(c3);
-float4 LocalPosition : register(c7); // xyz source position,w attenuation start
+float4 LocalPosition : register(c7); // xyz source position,w inverse attenuation span
 float4 LocalColor : register(c8); // rgb source color*intensity,w attenuation end
+float4 LocalGain : register(c10);
+float4 LocalSun : register(c11);
 float4 LocalShadow : register(c9); // cube near,far,inverse resolution,PCF angular radius in texels
 // Shadow VS constants c0..c3 are separately bound, row-major clip matrix.
 row_major float4x4 LocalFaceMatrix : register(c0);
@@ -85,16 +91,28 @@ float localVisibility(float3 delta,float3 normal) {
     return visibility*.25;
 }
 float4 LocalLighting(float2 uv:TEXCOORD0):COLOR0 {
-    uv=localDepthUV(uv);float depth=localDepth(uv);if(depth>=.999999)return 0;
+    float2 screen=uv;
+    uv=localDepthUV(uv);float depth=localDepth(uv);
+    if(depth>=.99999)return 0;
     if(LocalDepthInfo.y>.5){float2 w=tex2Dlod(LocalWater,float4(uv,0,0)).rg;
         if(w.x>LocalImage.z&&w.x<=localDistance(depth)+max(.012,w.x*.0007)&&w.y>.003)return 0;}
-    float3 v=localView(uv,depth),p=localWorld(v),delta=p-LocalPosition.xyz;
+    float3 v=localView(uv,depth),p=localWorld(v);
+    float3 delta=p-LocalPosition.xyz;
     float distance=length(delta);if(distance>=LocalColor.w||distance<=.0001)return 0;
-    float3 n=localNormal(uv,v);float facing=saturate(dot(n,-delta/distance));
-    float atten=saturate((LocalColor.w-distance)/max(LocalColor.w-LocalPosition.w,.0001));
-    float occlusion=1-localVisibility(delta,n);
-    float3 estimate=min(max(LocalColor.rgb,0),2)*atten*facing;
-    // Signed correction is irradiance/pi in the existing world lighting buffer.
-    // The cap prevents a single uncalibrated legacy emitter erasing daylight.
-    return float4(-min(estimate,.35)*occlusion*saturate(LocalDepthInfo.z),0);
+    // Rejected receivers need neither material decoding nor lamp shading inputs.
+    float3 n=tex2Dlod(LocalNormals,float4(screen,0,0)).xyz;
+    float3 geometricNormal=n;n=autoBumpNormal(uv,p,n,localDistance(depth),LocalInverseView[0].xyz,LocalInverseView[1].xyz,LocalInverseView[2].xyz);
+    float sunlit=saturate((tex2Dlod(LocalBaseline,float4(screen,0,0)).a-(1-LocalGain.z))/max(LocalGain.z,.001));
+    float inv=rsqrt(max(dot(delta,delta),.0025));
+    float facing=saturate(dot(n,-delta)*inv);
+    float atten=saturate((LocalColor.w-1/inv)*LocalPosition.w);
+    float3 contribution=LocalColor.rgb*(atten*atten*facing*LocalGain.x*(1-LocalGain.y*sunlit));
+    float energy=max(contribution.r,max(contribution.g,contribution.b));
+    float sunlight=LocalGain.w*sunlit*saturate(dot(n,LocalSun.xyz));
+    // Evaluate at the receiver, so a daytime interior/sun shadow works even
+    // while the camera or the lamp is outdoors. No time-of-day cutoff.
+    float relevance=smoothstep(.15,.5,energy/max(sunlight,.02))*smoothstep(.002,.01,energy);
+    if(relevance<=0)return 0;
+    float occlusion=1-localVisibility(delta,geometricNormal);
+    return float4(-contribution*(occlusion*relevance),0);
 }

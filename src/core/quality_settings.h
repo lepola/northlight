@@ -96,7 +96,11 @@ struct Settings {
     // Creation-time key (the renderer reads it once with the device).
     unsigned contactAO=1;
     // NightBrightness (0..100): how much of the art layer's darker night ambient is given back, as added light; 0 = Northlight's night, 100 = the original game's night ambient (shadows stay); default 50. Ramped by the sun below the horizon.
+    unsigned autoBump=1,autoBumpStrength=75,autoBumpDistance=48,autoBumpTerrain=3,autoBumpWalls=3,autoBumpGrass=1;
+    unsigned autoParallaxDepth=100,autoParallaxDistance=16,autoParallaxSteps=16;
+    unsigned autoParallaxShadows=1,autoParallaxShadowStrength=70,autoParallaxShadowSteps=8,autoCavity=1,autoCavityStrength=35;
     unsigned aoMethod=0,aoStrength=100,aoRadius=200; // Live AO method, percent, hundredths of a yard.
+    unsigned autoMaterialOcclusionDistance=8;
     unsigned nightBrightness=50;
     // 0.3.209 (task 29) ActorShadowDetail: 1 = a dedicated 4x finer shadow map around the player holds the moving casters (characters, mounts) and a
     // contact-hardening soft filter pass reads it (sharp at the feet, softer further from the caster); 0 = the 0.3.207 shadows (near cascade, 5x5 tent). ActorShadows=0 disables it too.
@@ -126,7 +130,10 @@ struct Settings {
     // WeatherMemory: 1 = the game's own weather state (kind incl. sand, intensity), read from memory, drives the weather effects on frames where the world drew a sky-band draw (the client skips weather
     // while the viewer is inside a building); 0 = the texture/draw detector only, as before.
     unsigned weatherMemory=1;
-    char origin[61]={'d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d'};
+    unsigned autoDisplacementStrength=100,autoDisplacementDistance=12,autoDisplacementDetail=4;
+    unsigned autoBumpModels=3,autoModelDisplacementStrength=25,autoModelDisplacementDistance=8,autoModelDisplacementDetail=2;
+    unsigned autoHeightPolarity=0,autoHeightDetails=75,autoHeightBalance=50;
+    char origin[86]={'d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d'};
 };
 struct Key { const char* name; unsigned Settings::*field; unsigned low,high; unsigned preset[3]; };
 // preset[] = Quality, Balanced, Performance. Quality must equal Settings{}.
@@ -188,10 +195,35 @@ inline const Key Keys[]={
     {"DepthFuncAware",&Settings::depthFuncAware,0,1,{1,1,1}},
     {"WeatherMemory",&Settings::weatherMemory,0,1,{1,1,1}},
     {"ActorShadowCpuMs",&Settings::actorShadowCpuMs,0,20,{3,3,2}}, /* task 45 */
+    {"AutoBump",&Settings::autoBump,0,1,{1,0,0}},
+    {"AutoBumpStrength",&Settings::autoBumpStrength,0,150,{75,60,40}},
+    {"AutoBumpDistance",&Settings::autoBumpDistance,8,96,{48,36,24}},
+    {"AutoBumpTerrain",&Settings::autoBumpTerrain,0,3,{3,1,1}},
+    {"AutoBumpWalls",&Settings::autoBumpWalls,0,3,{3,1,1}},
+    {"AutoBumpGrass",&Settings::autoBumpGrass,0,3,{1,1,1}},
+    {"AutoParallaxDepth",&Settings::autoParallaxDepth,0,200,{100,75,50}},
+    {"AutoParallaxDistance",&Settings::autoParallaxDistance,4,32,{16,12,8}},
+    {"AutoParallaxSteps",&Settings::autoParallaxSteps,8,32,{16,12,8}},
+    {"AutoParallaxShadows",&Settings::autoParallaxShadows,0,1,{1,0,0}},
+    {"AutoParallaxShadowStrength",&Settings::autoParallaxShadowStrength,0,100,{70,60,50}},
+    {"AutoParallaxShadowSteps",&Settings::autoParallaxShadowSteps,4,16,{8,6,4}},
+    {"AutoCavity",&Settings::autoCavity,0,1,{1,0,0}},
+    {"AutoCavityStrength",&Settings::autoCavityStrength,0,100,{35,30,25}},
+    {"AutoDisplacementStrength",&Settings::autoDisplacementStrength,0,1000,{100,75,50}},
+    {"AutoDisplacementDistance",&Settings::autoDisplacementDistance,4,24,{12,8,6}},
+    {"AutoDisplacementDetail",&Settings::autoDisplacementDetail,1,5,{4,3,2}},
+    {"AutoBumpModels",&Settings::autoBumpModels,0,3,{3,1,1}},
+    {"AutoModelDisplacementStrength",&Settings::autoModelDisplacementStrength,0,100,{25,15,10}},
+    {"AutoModelDisplacementDistance",&Settings::autoModelDisplacementDistance,2,16,{8,6,4}},
+    {"AutoModelDisplacementDetail",&Settings::autoModelDisplacementDetail,1,4,{2,2,1}},
+    {"AutoHeightPolarity",&Settings::autoHeightPolarity,0,2,{0,0,0}},
+    {"AutoHeightDetails",&Settings::autoHeightDetails,0,100,{75,75,75}},
+    {"AutoHeightBalance",&Settings::autoHeightBalance,0,100,{50,50,50}},
     {"EquipmentLights",&Settings::equipmentLights,0,1,{1,0,0}},
     {"AOMethod",&Settings::aoMethod,0,3,{0,0,0}},
     {"AOStrength",&Settings::aoStrength,0,200,{100,100,100}},
     {"AORadius",&Settings::aoRadius,10,1000,{200,200,200}},
+    {"AutoMaterialOcclusionDistance",&Settings::autoMaterialOcclusionDistance,2,16,{8,6,4}},
 };
 inline bool operator==(const Settings& a,const Settings& b){for(const auto& k:Keys)if(a.*k.field!=b.*k.field)return false;return true;}
 inline bool operator!=(const Settings& a,const Settings& b){return !(a==b);}

@@ -43,7 +43,7 @@ checks['manifest: WorldComposite bytecode changed']=(wc['sha256']!=BEFORE['World
 # 0.3.208: WorldNormals (colour-picked one-sided tangent side) changed on purpose
 # 0.3.209 (task 29): WorldLighting reads the actor visibility (s12) on purpose, ActorShadow and ActorTiles are new
 # task 43: RemovalSmooth branches around a zero-weight tap's reads on purpose (the same output)
-checks['manifest: shaders outside the reviewed feature changes retain their historical hashes']=(set(manifest)==set(BEFORE)|{'LocalFogCombine', 'ActorTiles', 'ActorShadow', 'LocalDirect16'} and all(manifest[n]['sha256']==s for n,s in BEFORE.items() if n not in ('FogClouds', 'LocalFog', 'RemovalSmooth', 'WorldComposite', 'WorldFog', 'WorldLighting', 'WorldNormals'))
+checks['manifest: shaders outside the reviewed feature changes retain their historical hashes']=(set(manifest)==set(BEFORE)|{'LocalFogCombine', 'ActorTiles', 'MaterialComposite', 'LocalDirect16', 'ActorShadow'} and all(manifest[n]['sha256']==s for n,s in BEFORE.items() if n not in ('LocalDirect', 'FogClouds', 'LocalFog', 'RemovalSmooth', 'WorldComposite', 'WorldFog', 'WorldLighting', 'WorldNormals'))
     and manifest['LocalFog']['sha256']!=BEFORE['LocalFog'])
 checks['compiled: WorldComposite.bin exists']=(fp.COMPILED/'WorldComposite.bin').exists()
 

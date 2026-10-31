@@ -1,4 +1,5 @@
 #pragma once
+#include "material_profile.h"
 #include "settings_schema.h"
 #include "stream_hooks.h"
 #include "weather_memory.h"
@@ -594,7 +595,7 @@ private:
     void invalidateShadowCache(){staticCasters.settle();dropStaticDirtyJobs();for(auto& k:shadowCacheKey){k.valid=false;k.staticContent.valid=false;}for(auto& c:staticSlices)c.reset();pointCacheValid=false;for(int s=0;s<2;++s){farShadow[s].invalidate();nearShadow[s].invalidate();actorValid[s]=false;nearActorSkip[s]=false;actorCenterValid[s]=false;}}
     uint64_t liveChunkHash()const{uint64_t h=1469598103934665603ull;for(const auto& c:liveTerrainChunks){h^=uint64_t(uint32_t(c.first))*0x9E3779B97F4A7C15ull+uint64_t(uint32_t(c.second));h*=1099511628211ull;}return h;}
     IDirect3DPixelShader9 *cachedFastPS=nullptr,*cachedOpaqueFastPS=nullptr,*cachedOpaquePS=nullptr;
-    IDirect3DPixelShader9 *lightingPS=nullptr,*giPS=nullptr,*fogPS=nullptr,*fogBlurPS=nullptr,*localDirectPS=nullptr,*localDirect16PS=nullptr,*removalPS=nullptr,*temporalPS=nullptr,*localFogPS=nullptr,*normalsPS=nullptr,*sourceVisPS=nullptr,*finalPS=nullptr,*shadowPS=nullptr,*cachedShadowPS=nullptr,*replayPS=nullptr;
+    IDirect3DPixelShader9 *lightingPS=nullptr,*giPS=nullptr,*fogPS=nullptr,*fogBlurPS=nullptr,*localDirectPS=nullptr,*localDirect16PS=nullptr,*removalPS=nullptr,*temporalPS=nullptr,*localFogPS=nullptr,*normalsPS=nullptr,*sourceVisPS=nullptr,*finalPS=nullptr,*materialPS=nullptr,*shadowPS=nullptr,*cachedShadowPS=nullptr,*replayPS=nullptr;
     IDirect3DPixelShader9 *actorShadowPS=nullptr,*actorTilesPS=nullptr; /* 0.3.209 (task 29): optional (with their targets); without them the actor shadow map stays off */
     // 0.3.199 (fog clouds): the moving fog banks' own half-resolution pass (FogClouds), its noise volume and the wind clock. The volume's bytes are
     // generated once per process on a worker thread (first active frame, never DllMain) and shared by every device; the holder is leaked on
@@ -1859,7 +1860,7 @@ private:
     bool resources(UINT w,UINT h,D3DFORMAT fmt){
         if(width==w&&height==h&&color)return true;
         releaseGPU(true);width=w;height=h; /* 0.3.214 (task 42): the uploaded MANAGED mesh survives a resolution change */
-        if(!check(d->CreatePixelShader(kWorldGIShader,&giPS),"world GI shader")||!check(d->CreatePixelShader(kWorldLightingShader,&lightingPS),"world lighting shader")||!check(d->CreatePixelShader(kWorldFogShader,&fogPS),"volume shader")||!check(d->CreatePixelShader(kFogBlurShader,&fogBlurPS),"volume blur shader")||!check(d->CreatePixelShader(kLocalDirectShader,&localDirectPS),"local direct light shader")||!check(d->CreatePixelShader(kLocalDirect16Shader,&localDirect16PS),"local direct 16-light shader")||!check(d->CreatePixelShader(kRemovalSmoothShader,&removalPS),"removal smoothing shader")||!check(d->CreatePixelShader(kTemporalLightShader,&temporalPS),"temporal light shader")||!check(d->CreatePixelShader(kLocalFogShader,&localFogPS),"local fog glow shader")||!check(d->CreatePixelShader(kLocalFogCombineShader,&localFogCombinePS),"local fog combine shader")||!check(d->CreatePixelShader(kWorldNormalsShader,&normalsPS),"world normals shader")||!check(d->CreatePixelShader(kSourceVisibilityPSShader,&sourceVisPS),"source visibility shader")||!check(d->CreatePixelShader(kWorldCompositeShader,&finalPS),"world composite shader")||!check(d->CreatePixelShader(kShadowPSShader,&shadowPS),"shadow shader")||!check(d->CreatePixelShader(kShadowReplayPSShader,&replayPS),"replay shader")||!check(d->CreateVertexShader(kShadowVSShader,&shadowVS),"shadow vertex shader")||!check(d->CreateVertexShader(kShadowCacheVSShader,&cachedShadowVS),"cached shadow vertex shader")||!check(d->CreatePixelShader(kStaticCasterPSShader,&cachedShadowPS),"cached shadow depth shader"))return false;
+        if(!check(d->CreatePixelShader(kWorldGIShader,&giPS),"world GI shader")||!check(d->CreatePixelShader(kWorldLightingShader,&lightingPS),"world lighting shader")||!check(d->CreatePixelShader(kWorldFogShader,&fogPS),"volume shader")||!check(d->CreatePixelShader(kFogBlurShader,&fogBlurPS),"volume blur shader")||!check(d->CreatePixelShader(kLocalDirectShader,&localDirectPS),"local direct light shader")||!check(d->CreatePixelShader(kLocalDirect16Shader,&localDirect16PS),"local direct 16-light shader")||!check(d->CreatePixelShader(kRemovalSmoothShader,&removalPS),"removal smoothing shader")||!check(d->CreatePixelShader(kTemporalLightShader,&temporalPS),"temporal light shader")||!check(d->CreatePixelShader(kLocalFogShader,&localFogPS),"local fog glow shader")||!check(d->CreatePixelShader(kLocalFogCombineShader,&localFogCombinePS),"local fog combine shader")||!check(d->CreatePixelShader(kWorldNormalsShader,&normalsPS),"world normals shader")||!check(d->CreatePixelShader(kSourceVisibilityPSShader,&sourceVisPS),"source visibility shader")||!check(d->CreatePixelShader(kWorldCompositeShader,&finalPS),"world composite shader")||!check(d->CreatePixelShader(kMaterialCompositeShader,&materialPS),"full-resolution material shader")||!check(d->CreatePixelShader(kShadowPSShader,&shadowPS),"shadow shader")||!check(d->CreatePixelShader(kShadowReplayPSShader,&replayPS),"replay shader")||!check(d->CreateVertexShader(kShadowVSShader,&shadowVS),"shadow vertex shader")||!check(d->CreateVertexShader(kShadowCacheVSShader,&cachedShadowVS),"cached shadow vertex shader")||!check(d->CreatePixelShader(kStaticCasterPSShader,&cachedShadowPS),"cached shadow depth shader"))return false;
         if(quality.actorShadows&&quality.actorShadowDetail&&(FAILED(d->CreatePixelShader(kActorShadowShader,&actorShadowPS))||FAILED(d->CreatePixelShader(kActorTilesShader,&actorTilesPS)))){drop(actorShadowPS);drop(actorTilesPS);logf("WORLD actor shadow map disabled: shader creation failed");} /* 0.3.209 (task 29) */
         if(FAILED(d->CreatePixelShader(kFogCloudsShader,&fogCloudsPS))){fogCloudsPS=nullptr;logf("WORLD fog clouds disabled: shader creation failed");} /* 0.3.199 (fog clouds): optional, the rest of the world never depends on it */
         if(FAILED(d->CreatePixelShader(kFogTemporalShader,&fogTemporalPS))){fogTemporalPS=nullptr;logf("WORLD fog temporal disabled: shader creation failed");} /* 0.3.199 (fog temporal): optional as well, the raw fog is the fallback */
@@ -2363,7 +2364,7 @@ public:
     // too; its cursor continues). Everything else (DEFAULT targets, dynamic rings, queries, state blocks, caches derived from
     // them) is released as before. recover() and the destructor release the mesh as well; the CPU payload is gone by then, so
     // upload() asks the builder for a fresh generation.
-    void releaseGPU(bool keepMesh=false){replayBoundsAbandon();releaseReplayProbe();staticCasters.settle();rigidMemoryClear();admission.reset();admissionOn=false;gatedBodies.clear();prepareQuiesce();neutralShadowMaps=false;prepareCaches->sampled.clear();prepareCaches->bones.clear();prepareCachesStale=false;if(replays.empty()&&heldShadowReplays.empty())prepareFrameRelease(); /* 0.3.179: no replay left to point at them */actorShadowHistory.clear();actorShadowOriginValid=false;replayBoundsMetadata.clear();replayBoundsCache.clear();declarationCache.clear();if(!keepMesh)uploadedStaticOwners.reset();staticOwnerGeneration=UINT64_MAX;staticCasters.reset();staticMatcher.clear();staticM2Memory.clear();staticScene.reset();staticRetryTick=0;stateBlocks.clear();uploadedTerrain.clear();liveTerrainIndexCount=liveDirectionalIndexCount=0;if(!keepMesh){fixedTerrain.reset();fixedTerrainBits.reset();}liveTerrainGeneration=0;drop(regionalFogTexture);drop(neutralAO);drop(neutralZero);drop(ditherNoise);rainMask=nullptr;uploadedFogField.reset();releasePointGPU();probeActivation.reset();probeBlend.reset();drop(baselineSurface);drop(baselineLight);releaseReplayGPU();liveTerrainGPU.clear();{auto& queries=fence();NorthlightDynamicRing::reset(liveIndexRing,0,queries);queries.drop();}drop(liveIndicesGPU);liveIndexBytes=0;liveIndexBase=0;if(!keepMesh){pendingMesh.reset();clearMesh();}retiredMaterials.clear();if(!keepMesh){releaseMeshPool();uploadedMap.clear();}for(auto& t:shadow)drop(t);for(auto& s:shadowSurface)drop(s);for(auto& t:shadowCache)drop(t);for(auto& s:shadowCacheSurface)drop(s);drop(shadowCacheDepth);drop(shadowVerifySurface);drop(shadowVerify);for(auto& r:shadowVerifyRead)drop(r);drop(shadowScratch);drop(shadowScratchSurface);releaseActorTargets();drop(neutralWhite);actorValid[0]=actorValid[1]=false;actorCenterValid[0]=actorCenterValid[1]=false;drop(unionPS);invalidateShadowCache();for(auto& t:probe)drop(t);drop(probePrev);drop(shadowDepth);drop(lightSurface);drop(smoothSurface);drop(fogSurface);drop(fogBlurredSurface);drop(fogHistorySurface);drop(fogHistory);drop(fogTemporalPS);fogHistoryValid=false;drop(colorSurface);drop(light);drop(smoothLight);drop(fog);drop(fogBlurred);drop(color);drop(lightingPS);drop(giPS);drop(fogPS);drop(fogBlurPS);drop(fogCloudsPS);drop(cloudNoise);drop(localDirectPS);drop(localDirect16PS);drop(profileSplitSurface);profileSplitFailed=false;drop(removalPS);drop(temporalPS);drop(localFogPS);drop(localFogCombinePS);drop(localFogAccumSurface);drop(localFogAccum);drop(normalsPS);drop(normalBuffer);drop(normalSurface);drop(sourceVisPS);for(int a=0;a<2;++a)for(int b=0;b<2;++b){drop(sourceVis[a][b]);drop(sourceVisSurface[a][b]);}sourceVisValid=false;for(int i=0;i<2;++i){drop(temporalLight[i]);drop(temporalLightSurface[i]);drop(temporalDepth[i]);drop(temporalDepthSurface[i]);}temporalValid=false;drop(finalPS);drop(shadowPS);drop(replayPS);drop(shadowVS);drop(cachedShadowVS);drop(cachedShadowPS);drop(cachedFastPS);drop(cachedOpaqueFastPS);drop(cachedOpaquePS);drop(shadowDecl);width=height=0;uploadedSerial=0;}
+    void releaseGPU(bool keepMesh=false){replayBoundsAbandon();releaseReplayProbe();staticCasters.settle();rigidMemoryClear();admission.reset();admissionOn=false;gatedBodies.clear();prepareQuiesce();neutralShadowMaps=false;prepareCaches->sampled.clear();prepareCaches->bones.clear();prepareCachesStale=false;if(replays.empty()&&heldShadowReplays.empty())prepareFrameRelease(); /* 0.3.179: no replay left to point at them */actorShadowHistory.clear();actorShadowOriginValid=false;replayBoundsMetadata.clear();replayBoundsCache.clear();declarationCache.clear();if(!keepMesh)uploadedStaticOwners.reset();staticOwnerGeneration=UINT64_MAX;staticCasters.reset();staticMatcher.clear();staticM2Memory.clear();staticScene.reset();staticRetryTick=0;stateBlocks.clear();uploadedTerrain.clear();liveTerrainIndexCount=liveDirectionalIndexCount=0;if(!keepMesh){fixedTerrain.reset();fixedTerrainBits.reset();}liveTerrainGeneration=0;drop(regionalFogTexture);drop(neutralAO);drop(neutralZero);drop(ditherNoise);rainMask=nullptr;uploadedFogField.reset();releasePointGPU();probeActivation.reset();probeBlend.reset();drop(baselineSurface);drop(baselineLight);releaseReplayGPU();liveTerrainGPU.clear();{auto& queries=fence();NorthlightDynamicRing::reset(liveIndexRing,0,queries);queries.drop();}drop(liveIndicesGPU);liveIndexBytes=0;liveIndexBase=0;if(!keepMesh){pendingMesh.reset();clearMesh();}retiredMaterials.clear();if(!keepMesh){releaseMeshPool();uploadedMap.clear();}for(auto& t:shadow)drop(t);for(auto& s:shadowSurface)drop(s);for(auto& t:shadowCache)drop(t);for(auto& s:shadowCacheSurface)drop(s);drop(shadowCacheDepth);drop(shadowVerifySurface);drop(shadowVerify);for(auto& r:shadowVerifyRead)drop(r);drop(shadowScratch);drop(shadowScratchSurface);releaseActorTargets();drop(neutralWhite);actorValid[0]=actorValid[1]=false;actorCenterValid[0]=actorCenterValid[1]=false;drop(unionPS);invalidateShadowCache();for(auto& t:probe)drop(t);drop(probePrev);drop(shadowDepth);drop(lightSurface);drop(smoothSurface);drop(fogSurface);drop(fogBlurredSurface);drop(fogHistorySurface);drop(fogHistory);drop(fogTemporalPS);fogHistoryValid=false;drop(colorSurface);drop(light);drop(smoothLight);drop(fog);drop(fogBlurred);drop(color);drop(lightingPS);drop(giPS);drop(fogPS);drop(fogBlurPS);drop(fogCloudsPS);drop(cloudNoise);drop(localDirectPS);drop(localDirect16PS);drop(profileSplitSurface);profileSplitFailed=false;drop(removalPS);drop(temporalPS);drop(localFogPS);drop(localFogCombinePS);drop(localFogAccumSurface);drop(localFogAccum);drop(normalsPS);drop(normalBuffer);drop(normalSurface);drop(sourceVisPS);for(int a=0;a<2;++a)for(int b=0;b<2;++b){drop(sourceVis[a][b]);drop(sourceVisSurface[a][b]);}sourceVisValid=false;for(int i=0;i<2;++i){drop(temporalLight[i]);drop(temporalLightSurface[i]);drop(temporalDepth[i]);drop(temporalDepthSurface[i]);}temporalValid=false;drop(finalPS);drop(materialPS);drop(shadowPS);drop(replayPS);drop(shadowVS);drop(cachedShadowVS);drop(cachedShadowPS);drop(cachedFastPS);drop(cachedOpaqueFastPS);drop(cachedOpaquePS);drop(shadowDecl);width=height=0;uploadedSerial=0;}
     // Explicit enable/retry only, called after the wrapper's clearFrame(). This
     // never calls endFrame(), so packet capture and cleanup run exactly once.
     void recover(){meshRetry.clear();if(!failed)return;releaseGPU(true);failed=false;valid=false;streamingReports=0;logf("WORLD explicit recovery requested");}
@@ -2433,6 +2434,9 @@ public:
             (unsigned long long)replayBoundsCache.hits(),(unsigned long long)replayBoundsCache.misses(),(unsigned long long)replayBoundsCache.avoidedVertices(),replayBoundsCache.lookupMilliseconds(),
             (unsigned long long)staticCasters.stats().maintenanceVisits,(unsigned long long)staticCasters.stats().publications);
         if(captureSampled){const auto& t=terrainBoundsCache.maintenance();
+            const auto& p=terrainBoundsCache.capturePhases();const double ms=captureFrequency.QuadPart>0?1000.0/double(captureFrequency.QuadPart):0;
+            logf("TERRAIN cpuPhases stateMs=%.6f lookupMs=%.6f indexMs=%.6f vertexMs=%.6f buildMs=%.6f retainMs=%.6f clockReads=%u lookupProbes=%u eraseProbes=%u roomChecks=%u sourceCompareVolume=%llu decodedCompareVolume=%llu offsetComparisons=%llu worldFrame=%u scope=exclusive-sampled-buffered-capture",
+                p.ticks[0]*ms,p.ticks[1]*ms,p.ticks[2]*ms,p.ticks[3]*ms,p.ticks[4]*ms,p.ticks[5]*ms,p.clockReads,t.lookupProbes,t.eraseProbes,t.roomChecks,(unsigned long long)t.sourceComparedBytes,(unsigned long long)t.decodedComparedBytes,(unsigned long long)t.offsetCompared,frames);
             logf("TERRAIN content cache entryLimit=%zu byteLimit=33554432 entries=%zu bytes=%llu lookupMisses=%u evictions=%u countPressure=%u bytePressure=%u readBytes=%llu",
                 terrainBoundsCache.persistentEntryLimit(),terrainBoundsCache.persistentEntries(),(unsigned long long)terrainBoundsCache.persistentBytes(),
                 t.lookupMisses,t.evictions,t.countPressure,t.bytePressure,(unsigned long long)terrainBoundsCache.bytesRead());
@@ -2522,6 +2526,23 @@ public:
     bool captureSkippedLastFrame()const{return lastCaptureSkipped;} /* for the sampled CPU profile, logged after endFrame */
     unsigned capturePhaseReadsLastFrame()const{return lastCapturePhaseReads;} /* 0.3.150: clock reads of the capture-phase subset (inside the capture timers), likewise */
     bool hasContext()const{return valid&&!failed&&!workerFault();}
+    NorthlightQuality::Preset qualityPreset()const{return quality.preset;}
+    NorthlightMaterialProfile* materialProfile=nullptr;
+    void setMaterialProfiler(NorthlightMaterialProfile* profile){materialProfile=profile;}
+    NorthlightDrawSnapshot::Frame& captureSources(){return replaySnapshots;}
+    const NorthlightQuality::Settings& surfaceSettings()const{return quality;}
+    IDirect3DTexture9* materialDetail=nullptr,*materialOcclusion=nullptr,*modelNormals=nullptr;float materialBumpGain=0,materialBumpDistance=48,materialOcclusionDistance=8;
+    void setModelNormals(IDirect3DTexture9* texture){modelNormals=texture;}
+    void setMaterialDetail(IDirect3DTexture9* texture,float gain,float distance,IDirect3DTexture9* occlusion=nullptr,float occlusionDistance=8.f){materialDetail=texture;materialBumpGain=gain;materialBumpDistance=distance;materialOcclusion=occlusion;materialOcclusionDistance=occlusionDistance;}
+    void materialLight(float* light,float* inverseView=nullptr)const{
+        if(inverseView)std::memcpy(inverseView,context.inverseView,48);
+        std::fill(light,light+4,0.f);if(!hasContext())return;
+        const unsigned body=NorthlightGI::dot(sourceColors[1],sourceColors[1])>NorthlightGI::dot(sourceColors[0],sourceColors[0])?1:0;
+        if(NorthlightGI::dot(sourceColors[body],sourceColors[body])<=1e-10f)return;
+        const V direction=body?sourceDirections[1]:vec(context.lightDirection);
+        for(unsigned i=0;i<3;++i)light[i]=direction.x*context.inverseView[i*4]+direction.y*context.inverseView[i*4+1]+direction.z*context.inverseView[i*4+2];
+        light[3]=float(body+1);
+    }
     unsigned frameTraceFog()const{return traceFog;}
     unsigned frameTraceContext()const{return traceContext;} /* 0.3.200 (frame trace) */
     bool actorShadowsEnabled()const{return quality.actorShadows!=0;}
@@ -2973,7 +2994,9 @@ public:
         if(!ok){if(terrainFailures++<12)logf("TERRAIN UP snapshot rejected: %s hr=%08lx type=%u stride=%u",NorthlightTerrainCapture::rejectName(why.reason),(unsigned long)why.hr,why.positionType,why.stride);return;}
         appendTerrain(std::make_shared<const NorthlightTerrainCapture::MeshSnapshot>(std::move(snapshot)));
     }
-    void capture(D3DPRIMITIVETYPE type,INT base,UINT min,UINT vertexTotal,UINT start,UINT count,bool indexed,IDirect3DVertexShader9* current,bool selfCheck,bool sample){
+    bool terrainShader(IDirect3DVertexShader9* shader){return lookupShader(shader).terrain;}
+    void capture(D3DPRIMITIVETYPE type,INT base,UINT min,UINT vertexTotal,UINT start,UINT count,bool indexed,IDirect3DVertexShader9* current,bool selfCheck,bool sample,NorthlightCaptureMetadata::PositionBounds* positions=nullptr){
+        if(positions)positions->known=false;
         constantSelfCheck=selfCheck;sample=sample&&NorthlightDiagnostics::enabled();
         if(!ready()||replays.size()>=4096||(type!=D3DPT_TRIANGLELIST&&type!=D3DPT_TRIANGLESTRIP))return;
         captureSampled|=sample;bool isTerrain=lookupShader(current).terrain;
@@ -2984,8 +3007,10 @@ public:
             float projectionRows[16];if(FAILED(d->GetVertexShaderConstantF(4,projectionRows,4))){if(terrainFailures++<12)logf("TERRAIN projection constants unavailable");return;}
             if(std::fabs(projectionRows[0]-projection[0])>.005f||std::fabs(projectionRows[5]-projection[1])>.005f||std::fabs(projectionRows[11]-projection[2])>.005f){if(terrainFailures++<12)logf("TERRAIN projection mismatch");return;}
             TerrainSnapshot snapshot;NorthlightTerrainCapture::Diagnostics why;
+            terrainBoundsCache.profileCapture(sample);
             if(!terrainBoundsCache.readMeshShared(d,type,base,min,vertexTotal,start,count,context.view,snapshot,&why)){
                 if(terrainFailures++<12)logf("TERRAIN snapshot rejected: %s hr=%08lx vertexUsage=%lx indexUsage=%lx type=%u stride=%u",NorthlightTerrainCapture::rejectName(why.reason),(unsigned long)why.hr,(unsigned long)why.vertexUsage,(unsigned long)why.indexUsage,why.positionType,why.stride);return;}
+            if(positions){std::copy(why.low,why.low+3,positions->low);std::copy(why.high,why.high+3,positions->high);positions->known=true;}
             appendTerrain(snapshot);return;
         }
         captureModel(type,base,min,vertexTotal,start,count,indexed,current,sample,nullptr,D3DFMT_INDEX16,nullptr,0);
@@ -4398,7 +4423,10 @@ public:
         d->SetRenderState(D3DRS_COLORWRITEENABLE1,15);
         if(!check(d->SetRenderTarget(0,normalSurface),"world normals target")||
            !check(d->SetRenderTarget(1,c[30][1]>0?temporalDepthSurface[temporalIndex]:nullptr),"current distance target"))return false;
+        const float modelNormalInfo[]={modelNormals?1.f:0.f,0,0,0};d->SetPixelShaderConstantF(79,modelNormalInfo,1);
+        d->SetTexture(13,modelNormals);d->SetSamplerState(13,D3DSAMP_ADDRESSU,D3DTADDRESS_CLAMP);d->SetSamplerState(13,D3DSAMP_ADDRESSV,D3DTADDRESS_CLAMP);d->SetSamplerState(13,D3DSAMP_MINFILTER,D3DTEXF_POINT);d->SetSamplerState(13,D3DSAMP_MAGFILTER,D3DTEXF_POINT);d->SetSamplerState(13,D3DSAMP_MIPFILTER,D3DTEXF_NONE);d->SetSamplerState(13,D3DSAMP_SRGBTEXTURE,FALSE);
         d->SetPixelShader(normalsPS);if(!check(quad(w/2,h/2),"world normals pass"))return false;
+        d->SetTexture(13,nullptr);
         if(!check(d->SetRenderTarget(1,nullptr),"current distance unbind"))return false;
         d->SetTexture(14,normalBuffer);d->SetSamplerState(14,D3DSAMP_ADDRESSU,D3DTADDRESS_CLAMP);d->SetSamplerState(14,D3DSAMP_ADDRESSV,D3DTADDRESS_CLAMP);d->SetSamplerState(14,D3DSAMP_MINFILTER,D3DTEXF_POINT);d->SetSamplerState(14,D3DSAMP_MAGFILTER,D3DTEXF_POINT);d->SetSamplerState(14,D3DSAMP_MIPFILTER,D3DTEXF_NONE);d->SetSamplerState(14,D3DSAMP_SRGBTEXTURE,FALSE);
         // 0.3.209 (task 29): actor visibility (half res, r sun, g moon). Per drawn source with an actor map, first its 64x64 tile minimum (ActorTiles in
@@ -4444,6 +4472,16 @@ public:
         if(profile)profile->mark("ActorShadow");bucket(NorthlightEffectsBuckets::ActorShadow);
         d->SetTexture(12,anyActorPass?actorVisibility:neutralWhite);
         d->SetRenderTarget(0,lightSurface);d->SetPixelShader(lightingPS);
+        const bool fullMaterial=materialDetail&&(materialBumpGain>0||materialOcclusion)&&foldScene&&materialPS&&debug==0;
+        const float bumpControl[]={materialDetail?materialBumpGain:0.f,materialBumpDistance,fullMaterial?1.f:0.f,0};
+        float materialLight[4][4]={{c[28][0],c[28][1],c[28][2],0},{sourceDirections[1].x,sourceDirections[1].y,sourceDirections[1].z,0},{},{}};
+        for(unsigned source=0;source<2;++source)if(sourceActive[source]){materialLight[2+source][0]=sourceColors[source].x;materialLight[2+source][1]=sourceColors[source].y;materialLight[2+source][2]=sourceColors[source].z;}
+        d->SetPixelShaderConstantF(74,materialLight[0],4);
+        const float occlusionInfo[]={materialOcclusion?1.f:0.f,materialOcclusionDistance,0,0};d->SetPixelShaderConstantF(78,occlusionInfo,1);
+        d->SetPixelShaderConstantF(73,bumpControl,1);d->SetTexture(9,materialDetail);
+        for(auto state:{D3DSAMP_MINFILTER,D3DSAMP_MAGFILTER})d->SetSamplerState(9,state,D3DTEXF_POINT);
+        d->SetSamplerState(9,D3DSAMP_MIPFILTER,D3DTEXF_NONE);d->SetSamplerState(9,D3DSAMP_SRGBTEXTURE,FALSE);
+        d->SetSamplerState(9,D3DSAMP_ADDRESSU,D3DTADDRESS_CLAMP);d->SetSamplerState(9,D3DSAMP_ADDRESSV,D3DTADDRESS_CLAMP);
         bool first=true;
         // A strength-zero source still subtracts its authored surface share.
         for(int source=0;source<2;++source){if(sourceWeights[source]<=0&&source!=firstSource)continue;
@@ -4462,54 +4500,6 @@ public:
         if(effects.gi&&!check(quad(w/2,h/2),"world GI pass"))return false;
         d->SetTexture(8,textures[8]); /* 0.3.197: restore the frame-start binding */
         if(profile)profile->mark("GI"); /* task 43: the GI pass alone; the lamp batches are LocalLights */
-        if(localDirectCount&&debug==0){
-            profileSplit(profile,lightSurface); /* sample frames: GI's timestamp ends here, LocalLights' below */
-            d->SetPixelShader(localDirectPS);d->SetRenderState(D3DRS_SCISSORTESTENABLE,NorthlightLocalLightScissor::Enabled);
-            d->SetTexture(12,baselineLight); /* sun visibility (baseline alpha); the temporal pass rebinds it anyway */
-            // Two neighbouring 8-lamp batches whose joint rect costs less than both (local_light_batches.h wide()) draw as one LocalDirect16
-            // pass (its lamps in c68..c99; c52 as for LocalDirect). Without a proven view every rect is the whole target, so pairs merge.
-            constexpr unsigned N=NorthlightLocalLightSelection::DirectBatchSize;IDirect3DPixelShader9* bound=localDirectPS;
-            for(unsigned firstLight=0;firstLight<localDirectCount;){
-                const unsigned index=firstLight/N;
-                const bool pair=localDirect16PS&&firstLight+N<localDirectCount;
-                const NorthlightLocalLightScissor::Rect whole{0,0,long(w/2),long(h/2)};
-                const auto& a=localScissorView.valid?atmosphere.directRects[index]:whole;const auto& b=localScissorView.valid?atmosphere.directRects[index+1]:whole;
-                if(pair&&NorthlightLocalLightBatches::wide(a,b)){
-                    const auto batch=localLights.batch<2*N>(firstLight);const auto joint=NorthlightLocalLightBatches::unite(a,b);
-                    const float info[4]={float(batch.count),c[52][1],lampSunlitCut,0};
-                    if(bound!=localDirect16PS){d->SetPixelShader(localDirect16PS);bound=localDirect16PS;}
-                    d->SetPixelShaderConstantF(68,batch.position[0].data(),2*N);d->SetPixelShaderConstantF(84,batch.color[0].data(),2*N);
-                    d->SetPixelShaderConstantF(52,info,1);++localWidePasses;
-                    if(localScissor(batch.position,batch.count,&joint)&&!check(quad(w/2,h/2),"local direct 16-light batch")){d->SetRenderState(D3DRS_SCISSORTESTENABLE,FALSE);return false;}
-                    firstLight+=2*N;continue;
-                }
-                const auto batch=localLights.batch<N>(firstLight);
-                const float info[4]={float(batch.count),c[52][1],lampSunlitCut,0};
-                if(bound!=localDirectPS){d->SetPixelShader(localDirectPS);bound=localDirectPS;}
-                d->SetPixelShaderConstantF(36,batch.position[0].data(),N);
-                d->SetPixelShaderConstantF(44,batch.color[0].data(),N);
-                d->SetPixelShaderConstantF(52,info,1);
-                if(localScissor(batch.position,batch.count,&atmosphere.directRects[index])&&!check(quad(w/2,h/2),"local direct light batch")){d->SetRenderState(D3DRS_SCISSORTESTENABLE,FALSE);return false;}
-                firstLight+=N;
-            }
-            d->SetRenderState(D3DRS_SCISSORTESTENABLE,FALSE);
-            profileSplit(profile,lightSurface);
-        }
-        if(profile)profile->mark("LocalLights");bucket(NorthlightEffectsBuckets::GI);d->SetRenderState(D3DRS_COLORWRITEENABLE,15);
-        if(debug==0&&pointReady){
-            renderPointLighting(depth,waterMask,w,h,nearZ,farZ,minZ,maxZ);
-            // Optional pass temporarily owns PS c0..9 and s0..2. Restore the
-            // entire world bank and texture/filter contract before fog/final.
-            d->SetPixelShaderConstantF(0,&c[0][0],68);
-            for(unsigned sampler=0;sampler<3;++sampler){
-                d->SetTexture(sampler,textures[sampler]);
-                d->SetSamplerState(sampler,D3DSAMP_MINFILTER,sampler==0?D3DTEXF_LINEAR:D3DTEXF_POINT);
-                d->SetSamplerState(sampler,D3DSAMP_MAGFILTER,sampler==0?D3DTEXF_LINEAR:D3DTEXF_POINT);
-            }
-            d->SetRenderState(D3DRS_COLORWRITEENABLE,15);
-        }
-        // Task 43: the old PointLighting interval in three marks: PointLight (the shadowed point lamp), RemovalSmooth, TemporalLight.
-        if(profile)profile->mark("PointLight");
         {   // Temporal stabilization: light + history -> temporalLight[cur] (MRT with view distance).
             const unsigned cur=temporalIndex,prev=1-temporalIndex;
             d->SetRenderState(D3DRS_ALPHABLENDENABLE,FALSE);d->SetRenderState(D3DRS_COLORWRITEENABLE,15);
@@ -4542,6 +4532,71 @@ public:
             temporalIndex=prev;temporalValid=true;memcpy(previousView,context.view,64);previousCamera=vec(context.camera);temporalMap=active->map;
         }
         if(profile)profile->mark("TemporalLight");
+        const bool currentLocalLighting=debug==0&&(localDirectCount||pointReady);
+        d->SetTexture(8,nullptr);
+        if(currentLocalLighting){
+            d->SetRenderState(D3DRS_SCISSORTESTENABLE,FALSE);
+            if(!check(d->SetRenderTarget(0,lightSurface),"current local light target")||!check(d->Clear(0,nullptr,D3DCLEAR_TARGET,0,1,0),"current local light clear"))return false;
+            d->SetRenderState(D3DRS_SRCBLEND,D3DBLEND_ONE);d->SetRenderState(D3DRS_DESTBLEND,D3DBLEND_ONE);d->SetRenderState(D3DRS_BLENDOP,D3DBLENDOP_ADD);
+            d->SetRenderState(D3DRS_ALPHABLENDENABLE,TRUE);d->SetRenderState(D3DRS_COLORWRITEENABLE,7);
+        }
+        d->SetPixelShaderConstantF(0,&c[0][0],68);d->SetPixelShaderConstantF(73,bumpControl,1);d->SetPixelShaderConstantF(74,materialLight[0],4);d->SetPixelShaderConstantF(78,occlusionInfo,1);
+        d->SetTexture(9,materialDetail);d->SetTexture(12,baselineLight);d->SetTexture(14,normalBuffer);
+        for(unsigned sampler:{9u,14u}){
+            d->SetSamplerState(sampler,D3DSAMP_MINFILTER,D3DTEXF_POINT);d->SetSamplerState(sampler,D3DSAMP_MAGFILTER,D3DTEXF_POINT);
+            d->SetSamplerState(sampler,D3DSAMP_MIPFILTER,D3DTEXF_NONE);d->SetSamplerState(sampler,D3DSAMP_SRGBTEXTURE,FALSE);
+            d->SetSamplerState(sampler,D3DSAMP_ADDRESSU,D3DTADDRESS_CLAMP);d->SetSamplerState(sampler,D3DSAMP_ADDRESSV,D3DTADDRESS_CLAMP);
+        }
+        if(localDirectCount&&debug==0){
+            profileSplit(profile,lightSurface); /* sample frames: GI's timestamp ends here, LocalLights' below */
+            d->SetPixelShader(localDirectPS);d->SetRenderState(D3DRS_SCISSORTESTENABLE,NorthlightLocalLightScissor::Enabled);
+            d->SetTexture(12,baselineLight); /* sun visibility (baseline alpha); the temporal pass rebinds it anyway */
+            // Two neighbouring 8-lamp batches whose joint rect costs less than both (local_light_batches.h wide()) draw as one LocalDirect16
+            // pass (its lamps in c84..c115, preserving material c73..c78; c52 as for LocalDirect). Without a proven view every rect is the whole target, so pairs merge.
+            constexpr unsigned N=NorthlightLocalLightSelection::DirectBatchSize;IDirect3DPixelShader9* bound=localDirectPS;
+            for(unsigned firstLight=0;firstLight<localDirectCount;){
+                const unsigned index=firstLight/N;
+                const bool pair=localDirect16PS&&firstLight+N<localDirectCount;
+                const NorthlightLocalLightScissor::Rect whole{0,0,long(w/2),long(h/2)};
+                const auto& a=localScissorView.valid?atmosphere.directRects[index]:whole;const auto& b=localScissorView.valid?atmosphere.directRects[index+1]:whole;
+                if(pair&&NorthlightLocalLightBatches::wide(a,b)){
+                    const auto batch=localLights.batch<2*N>(firstLight);const auto joint=NorthlightLocalLightBatches::unite(a,b);
+                    const float info[4]={float(batch.count),c[52][1],lampSunlitCut,0};
+                    if(bound!=localDirect16PS){d->SetPixelShader(localDirect16PS);bound=localDirect16PS;}
+                    d->SetPixelShaderConstantF(84,batch.position[0].data(),2*N);d->SetPixelShaderConstantF(100,batch.color[0].data(),2*N);
+                    d->SetPixelShaderConstantF(52,info,1);++localWidePasses;
+                    if(localScissor(batch.position,batch.count,&joint)&&!check(quad(w/2,h/2),"local direct 16-light batch")){d->SetRenderState(D3DRS_SCISSORTESTENABLE,FALSE);return false;}
+                    firstLight+=2*N;continue;
+                }
+                const auto batch=localLights.batch<N>(firstLight);
+                const float info[4]={float(batch.count),c[52][1],lampSunlitCut,0};
+                if(bound!=localDirectPS){d->SetPixelShader(localDirectPS);bound=localDirectPS;}
+                d->SetPixelShaderConstantF(36,batch.position[0].data(),N);
+                d->SetPixelShaderConstantF(44,batch.color[0].data(),N);
+                d->SetPixelShaderConstantF(52,info,1);
+                if(localScissor(batch.position,batch.count,&atmosphere.directRects[index])&&!check(quad(w/2,h/2),"local direct light batch")){d->SetRenderState(D3DRS_SCISSORTESTENABLE,FALSE);return false;}
+                firstLight+=N;
+            }
+            d->SetRenderState(D3DRS_SCISSORTESTENABLE,FALSE);
+            profileSplit(profile,lightSurface);
+        }
+        if(profile)profile->mark("LocalLights");bucket(NorthlightEffectsBuckets::GI);d->SetRenderState(D3DRS_COLORWRITEENABLE,15);
+        if(debug==0&&pointReady){
+            const float sunEnergy=sourceActive[0]?std::max({sourceColors[0].x,sourceColors[0].y,sourceColors[0].z}):0.f;
+            renderPointLighting(depth,waterMask,w,h,nearZ,farZ,minZ,maxZ,c[52][1],lampSunlitCut,c[20][2],sunEnergy);
+            // Optional pass temporarily owns PS c0..12 and s0..5. Restore the
+            // entire world bank and texture/filter contract before fog/final.
+            d->SetPixelShaderConstantF(0,&c[0][0],68);
+            for(unsigned sampler=0;sampler<6;++sampler){
+                d->SetTexture(sampler,textures[sampler]);
+                d->SetSamplerState(sampler,D3DSAMP_MINFILTER,sampler==0?D3DTEXF_LINEAR:D3DTEXF_POINT);
+                d->SetSamplerState(sampler,D3DSAMP_MAGFILTER,sampler==0?D3DTEXF_LINEAR:D3DTEXF_POINT);
+            }
+            d->SetRenderState(D3DRS_COLORWRITEENABLE,15);
+        }
+        // Task 43: the old PointLighting interval in three marks: PointLight (the shadowed point lamp), RemovalSmooth, TemporalLight.
+        if(profile)profile->mark("PointLight");
+
         bucket(NorthlightEffectsBuckets::PointLighting);
         // Source visibility (1x1 per source, temporally smoothed): drives the
         // fog aureole when the body is behind geometry; broad scattering uses
@@ -4679,16 +4734,31 @@ public:
         d->SetSamplerState(15,D3DSAMP_MINFILTER,D3DTEXF_POINT);d->SetSamplerState(15,D3DSAMP_MAGFILTER,D3DTEXF_POINT);
         d->SetSamplerState(15,D3DSAMP_MIPFILTER,D3DTEXF_NONE);d->SetSamplerState(15,D3DSAMP_SRGBTEXTURE,FALSE);
         d->SetSamplerState(15,D3DSAMP_ADDRESSU,D3DTADDRESS_CLAMP);d->SetSamplerState(15,D3DSAMP_ADDRESSV,D3DTADDRESS_CLAMP);
-        d->SetRenderTarget(0,targetSurface);d->SetTexture(8,temporalLight[1-temporalIndex]);d->SetTexture(9,fogResolved?fogBlurred:fog);d->SetPixelShader(finalPS);
+        d->SetTexture(3,currentLocalLighting?light:neutralZero);
+        d->SetRenderTarget(0,fullMaterial?colorSurface:targetSurface);d->SetTexture(8,temporalLight[1-temporalIndex]);d->SetTexture(9,fogResolved?fogBlurred:fog);d->SetPixelShader(finalPS);
         /* 0.3.212 (task 32): with this frame's name marks the quad draws with the world depth-stencil bound and a stencil test that rejects marked pixels (they keep the game's colour in the target); no marks: the quad as before. */
         bool compositeOk=false;
-        {IDirect3DSurface9* maskDepth=nameMaskDepth;nameMaskDepth=nullptr;NameMaskCompositeBind mask(d,maskDepth);compositeOk=check(quad(w,h),"world composite");}
+        {IDirect3DSurface9* maskDepth=nameMaskDepth;nameMaskDepth=nullptr;NameMaskCompositeBind mask(d,maskDepth);compositeOk=check(quad(w,h),"world composite");
+         if(profile)profile->mark("WorldComposite");
+         if(compositeOk&&fullMaterial){
+            // Reuse the existing full-size colour target; no additional target or replay.
+            d->SetRenderTarget(0,targetSurface);d->SetTexture(0,color);d->SetTexture(4,fogResolved?fogBlurred:fog);d->SetTexture(5,foldScene);d->SetTexture(6,materialOcclusion);d->SetTexture(9,materialDetail);d->SetTexture(14,normalBuffer);
+            for(unsigned sampler:{4u,5u,6u,9u,12u,14u}){
+                const DWORD filter=(sampler==6||sampler==9||sampler==14)?D3DTEXF_POINT:D3DTEXF_LINEAR;
+                d->SetSamplerState(sampler,D3DSAMP_MINFILTER,filter);d->SetSamplerState(sampler,D3DSAMP_MAGFILTER,filter);
+                d->SetSamplerState(sampler,D3DSAMP_MIPFILTER,D3DTEXF_NONE);d->SetSamplerState(sampler,D3DSAMP_SRGBTEXTURE,FALSE);
+                d->SetSamplerState(sampler,D3DSAMP_ADDRESSU,D3DTADDRESS_CLAMP);d->SetSamplerState(sampler,D3DSAMP_ADDRESSV,D3DTADDRESS_CLAMP);
+            }
+            d->SetPixelShader(materialPS);compositeOk=check(quad(w,h),"full-resolution material light");
+         }
+         if(profile)profile->mark("MaterialDetail");}
+        d->SetTexture(3,textures[3]);
         d->SetTexture(15,nullptr);d->SetTexture(2,nullptr);d->SetSamplerState(2,D3DSAMP_ADDRESSU,D3DTADDRESS_CLAMP);d->SetSamplerState(2,D3DSAMP_ADDRESSV,D3DTADDRESS_CLAMP);
         if(!compositeOk)return false;composited=true;d->SetTexture(13,regionalFogTexture);if(profile)profile->mark("WorldComposite");
         if(diagnosticCapture){
             gpuDiagnosticArmed=false;unsigned capture=++gpuDiagnosticCaptures;
             const std::string& directory=gpuDiagnosticDirectory;
-            float actual[68][4]={};HRESULT read=d->GetPixelShaderConstantF(0,actual[0],68);
+            float actual[79][4]={};HRESULT read=d->GetPixelShaderConstantF(0,actual[0],79);
             if(SUCCEEDED(read)){
                 char suffix[80];std::snprintf(suffix,sizeof suffix,"/capture-%u-constants.f32",capture);
                 if(FILE* f=std::fopen((directory+suffix).c_str(),"wb")){std::fwrite(actual,sizeof actual,1,f);std::fclose(f);}
@@ -4698,6 +4768,8 @@ public:
             dump(d,shadowSurface[firstSource*2],directory,"shadow-near",capture);
             dump(d,shadowSurface[firstSource*2+1],directory,"shadow-far",capture);
             dump(d,normalSurface,directory,"normals",capture);
+            if(materialDetail){IDirect3DSurface9* detail=nullptr;if(SUCCEEDED(materialDetail->GetSurfaceLevel(0,&detail))){dump(d,detail,directory,"material-height",capture);detail->Release();}}
+            if(materialOcclusion){IDirect3DSurface9* detail=nullptr;if(SUCCEEDED(materialOcclusion->GetSurfaceLevel(0,&detail))){dump(d,detail,directory,"material-occlusion",capture);detail->Release();}}
             dump(d,baselineSurface,directory,"baseline",capture);
             dump(d,lightSurface,directory,"light",capture);
             dump(d,c[30][1]>0?smoothSurface:lightSurface,directory,"smoothed-light",capture); // what TemporalLight read: the raw light when no source is drawn

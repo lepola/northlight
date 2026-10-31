@@ -30,6 +30,7 @@ template<class Prepared,class Shader,class Declaration> class Cache {
     };
     static constexpr size_t EntryLimit=128,ByteLimit=2u*1024u*1024u,PreparationsPerFrame=4;
     std::unordered_map<Key,std::unique_ptr<Entry>,Hash> entries_;
+    Entry* recent_=nullptr;
     size_t bytes_=0,attempts_=0;
     std::uint64_t clock_=0;
 public:
@@ -40,26 +41,27 @@ private:
         auto oldest=entries_.end();
         for(auto it=entries_.begin();it!=entries_.end();++it)
             if(oldest==entries_.end()||it->second->touched<oldest->second->touched)oldest=it;
-        if(oldest!=entries_.end()){bytes_-=oldest->second->bytes;entries_.erase(oldest);++stats_.evictions;}
+        if(oldest!=entries_.end()){bytes_-=oldest->second->bytes;if(recent_==oldest->second.get())recent_=nullptr;entries_.erase(oldest);++stats_.evictions;}
     }
 public:
     Cache()=default;
     Cache(const Cache&)=delete;
     Cache& operator=(const Cache&)=delete;
     void beginFrame(){stats_={};attempts_=0;}
-    void clear(){entries_.clear();bytes_=0;clock_=0;beginFrame();}
+    void clear(){recent_=nullptr;entries_.clear();bytes_=0;clock_=0;beginFrame();}
     void invalidateShader(Shader* shader){
         for(auto it=entries_.begin();it!=entries_.end();)
-            if(it->first.shader==shader){bytes_-=it->second->bytes;it=entries_.erase(it);}else ++it;
+            if(it->first.shader==shader){bytes_-=it->second->bytes;if(recent_==it->second.get())recent_=nullptr;it=entries_.erase(it);}else ++it;
     }
     const Stats& stats()const{return stats_;}
     size_t entries()const{return entries_.size();}
     size_t bytes()const{return bytes_;}
     template<class Build> std::shared_ptr<const Prepared> get(Shader* shader,Declaration* declaration,Build build){
         if(!shader||!declaration){++stats_.fallbacks;return {};}
+        if(recent_&&recent_->shader==shader&&recent_->declaration==declaration){++stats_.hits;recent_->touched=++clock_;return recent_->prepared;}
         const Key key{shader,declaration};
         auto found=entries_.find(key);
-        if(found!=entries_.end()){++stats_.hits;found->second->touched=++clock_;return found->second->prepared;}
+        if(found!=entries_.end()){++stats_.hits;recent_=found->second.get();recent_->touched=++clock_;return recent_->prepared;}
         ++stats_.misses;
         if(attempts_>=PreparationsPerFrame){++stats_.fallbacks;return {};}
         ++attempts_;
@@ -70,7 +72,7 @@ public:
             const size_t bytes=prepared->bytes()+overhead;
             while(!entries_.empty()&&(entries_.size()>=EntryLimit||bytes>ByteLimit-bytes_))evict();
             auto entry=std::make_unique<Entry>(key,prepared,bytes,++clock_);
-            entries_.emplace(key,std::move(entry));bytes_+=bytes;++stats_.prepared;return prepared;
+            const auto inserted=entries_.emplace(key,std::move(entry));recent_=inserted.first->second.get();bytes_+=bytes;++stats_.prepared;return prepared;
         }catch(...){++stats_.fallbacks;return {};}
     }
 };
