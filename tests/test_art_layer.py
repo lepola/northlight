@@ -6,8 +6,10 @@ the test output):
   changes colour bands 1-7 and 12 and fog bands 0-1 of its profile; Stormwind (Light 51/52/77)
   the fog end of its profiles. Both record their sky clone as skipped, every other HD sky step is
   skipped with a reason (not a KeyError), and the archive holds the four band tables, no sky clone
-  and no moon02, plus the weather textures. Reviewed world-model lights stay in the light cache,
-  without native M2 injection in either archive. Against the relighting plus the retime, exactly
+  and no moon02, plus weather textures, native attached-model lights and renderer-owned emitter
+  metadata. World/selected Spells metadata and native model patches have disjoint owners; source
+  hashes, canonical schema and the index digest match both archives and the manifest. Harvestable
+  herbs and other supported gameobjects use native model lifetime, disjoint from world metadata. Against the relighting plus the retime, exactly
   those band rows differ, and every outdoor Light row differs in column 9 only (its private storm
   profile, see build_lighting.stormify; the storm step runs after the sky steps).
 - both views (stock and the client's own chain), against the relighting alone: no band whose key
@@ -21,11 +23,13 @@ the test output):
   payloads and archives; an older patch-Z may contain world-model lights that must be removed."""
 import sys; from pathlib import Path; sys.path.insert(0, str(Path(__file__).resolve().parents[1]))  # repo root
 import northlight_paths as fp; fp.use_source_modules()
-import hashlib, json, shutil
+import hashlib, json, shutil, struct
+from types import SimpleNamespace
 import build_art_layer, build_lighting, build_weather_textures, client_archives
 from build_lighting import DBC, u, f
 from mpq import Archive
 from world_scene_builder import Assets, decode_blp
+import world_emitter_index
 
 client = fp.client_root()
 out = fp.output_dir()
@@ -38,23 +42,62 @@ _mist_assets.close()
 assert set(build_weather_textures.MIST) <= set(blps), 'the client has both mist puffs'
 files = tables | set(blps)
 report = {}
+model_steps = {'world_model_lights', 'equipment_model_lights', 'spell_model_lights',
+               'creature_model_lights', 'glue_model_lights', 'mount_model_lights', 'gameobject_model_lights'}
+metadata = {world_emitter_index.ARCHIVE_PATH}
+
+
+def model_checks(view, folder, result):
+    """MPQ metadata and native gameobject/attached patches have disjoint model owners."""
+    models = set(result['files']) - files - metadata
+    assert metadata <= set(result['files']), result['files']
+    assert all(n.lower().startswith(('item\\', 'spells\\', 'creature\\', 'interface\\', 'world\\')) and n.lower().endswith('.m2')
+               for n in models), sorted(models)
+    assert 'creature_model_lights' in {s['step'] for s in result['steps']}
+    assert 'glue_model_lights' in {s['step'] for s in result['steps']}
+    assert sum(s.get('models', 0) for s in result['steps'] if s['step'] in model_steps) == len(models)
+    step, = [s for s in result['steps'] if s['step'] == 'world_emitter_index']
+    assets = Assets(client, view, result['locale'], without='z')
+    try:
+        payloads = []
+        for target in result['targets']:
+            with Archive(folder / target) as archive:
+                assert {n for n in archive.names() if not n.startswith('(')} == files | models | metadata
+                payload = archive.read(world_emitter_index.ARCHIVE_PATH)
+                value = world_emitter_index.Index(SimpleNamespace(read=lambda _: payload))
+                assert value.payload() == payload, 'Metadata must use canonical JSON'
+                assert value.digest == step['sha256'] == result['files'][world_emitter_index.ARCHIVE_PATH]
+                assert step['owner'] == 'northlight-local-direct'
+                assert not set(value.models) & {n.lower() for n in models}, 'An emitter has two lighting owners'
+                assert sum(len(v['emitters']) for v in value.models.values()) == step.get('emitters', 0)
+                for path in value.models:
+                    original = assets.read(path)
+                    value.get(path, original)
+                    assert not struct.unpack_from('<I', original, 264)[0], path
+                for path in models:
+                    blob = archive.read(path)
+                    assert len(blob) >= 304 and blob[:4] == b'MD20', path
+                    assert struct.unpack_from('<I', blob, 4)[0] == 264 and struct.unpack_from('<I', blob, 264)[0] > 0, path
+                    assert hashlib.sha256(blob).hexdigest() == result['files'][path]
+                payloads.append(payload)
+        assert payloads[0] == payloads[1]
+        return {'native_models': len(models), 'metadata_files': len(metadata),
+                'metadata_models': len(value.models), 'metadata_emitters': step.get('emitters', 0),
+                'metadata_sha256': value.digest}
+    finally:
+        assets.close()
 
 stock = out / 'stock'
 shutil.rmtree(stock, ignore_errors=True)
 r = build_art_layer.build(client, stock, cache, archives='stock')
-model_steps = {'world_model_lights', 'equipment_model_lights', 'spell_model_lights', 'mount_model_lights'}
+stock_models = model_checks('stock', stock, r)
 skipped = {s['step']: s['skipped'] for s in r['steps'] if 'skipped' in s and s['step'] not in model_steps}
 assert set(skipped) == {'orgrimmar', 'outdoor_sun', 'outdoor_moon'}, r['steps']
 sky_skipped = {s['step']: s['sky_clone_skipped'] for s in r['steps'] if 'sky_clone_skipped' in s}
 assert set(sky_skipped) == {'mulgore', 'stormwind'}, r['steps']
-models = set(r['files']) - files
-assert not any(n.lower().startswith('world\\') and n.lower().endswith('.m2') for n in models), sorted(models)
-assert all(n.lower().startswith(('item\\objectcomponents\\', 'spells\\', 'creature\\')) and n.lower().endswith('.m2') for n in models), sorted(models)
-assert sum(s.get('models', 0) for s in r['steps'] if s['step'] in model_steps) == len(models)
 assert r['steps'][0]['profiles'] > 0 and not r['steps'][0]['skipped_incomplete_profiles']
 for target in r['targets']:
     with Archive(stock / target) as a:
-        assert {n for n in a.names() if not n.startswith('(')} == files | models
         for n, data in blps.items():   # the generated textures, ARGB at the aspect ratios the renderer detects
             assert a.read(n) == data
             w, h = decode_blp(data, 4096)[:2]
@@ -129,7 +172,7 @@ for n, table in relit.items():
         assert changed == want[n], (n, sorted(changed), sorted(want[n]))
 report['stock'] = {'storm': storm_checks('stock', stock, r), 'profiles': r['steps'][0]['profiles'], 'skipped': skipped, 'sky_clone_skipped': sky_skipped,
                    'mulgore_profile': m, 'stormwind_profiles': sorted(stormwind),
-                   'changed_band_rows': {n: sorted(v) for n, v in want.items() if v}, 'files': sorted(r['files'])}
+                   'changed_band_rows': {n: sorted(v) for n, v in want.items() if v}, 'files': sorted(r['files']), **stock_models}
 
 
 def night_like(pairs, floating, time):
@@ -176,6 +219,7 @@ report['stock']['retime'] = real_tables('stock', stock, r)
 own = out / 'own'
 shutil.rmtree(own, ignore_errors=True)
 r_own = build_art_layer.build(client, own, cache)
+own_models = model_checks('all', own, r_own)
 report['own_retime'] = real_tables('all', own, r_own)
 report['own_storm'] = storm_checks('all', own, r_own)
 # A new installer removes world-model light injection from an older patch-Z.
@@ -183,11 +227,12 @@ report['own_storm'] = storm_checks('all', own, r_own)
 again = out / 'own-again'
 again.mkdir(exist_ok=True)
 r_again = build_art_layer.build(client, again, cache)
+assert model_checks('all', again, r_again) == own_models
 assert r_again['files'] == r_own['files']
-assert not any(n.lower().startswith('world\\') and n.lower().endswith('.m2') for n in r_own['files'])
+assert any(s['step'] == 'gameobject_model_lights' and s.get('models', 0) > 0 for s in r_own['steps'])
 got = [hashlib.sha256((own / t).read_bytes()).hexdigest() for t in r_own['targets']]
 assert got == [r_again['archive_sha256']] * 2
-report['own'] = {'rebuilt_sha256': got, 'models': sum(n.lower().endswith('.m2') for n in r_own['files'])}
+report['own'] = {'rebuilt_sha256': got, **own_models}
 # Optional sky resources may be absent, but skipped steps must explain why.
 assert all(isinstance(s[k], str) and s[k] for s in r_own['steps'] for k in ('skipped', 'sky_clone_skipped') if k in s)
 (out / 'art-layer.json').write_text(json.dumps(report, indent=2) + '\n')

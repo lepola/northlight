@@ -12,6 +12,7 @@
 namespace NorthlightShadowTerrain {
 using NorthlightGI::Vec3;
 constexpr float Radius=928.f;
+constexpr float LocalHorizontal=288.f,LocalVertical=320.f;
 // Far cached cascade: radius 240 including its margin, depth half-span 640.
 // Its enclosing sphere is <725u. Add 80u maximum camera orbit distance and
 // 96u publication/upload applicability margin: 928u covers every direction.
@@ -81,20 +82,21 @@ template<class Snapshot> void appendLiveDirectional(const Snapshot& snapshot,
 inline bool build(const NorthlightGI::WorldScene& local,const NorthlightGI::WorldScene& terrain,
                   Vec3 center,NorthlightWorldMesh::WorldMeshUploadPlan& output,std::string& error,
                   const NorthlightGI::AllocationAdmission& admit = {},float radius=Radius,
-                  const NorthlightWorldMesh::PlanOrder& order = {},bool pagingOnly=false){
+                  const NorthlightWorldMesh::PlanOrder& order = {},bool pagingOnly=false,const NorthlightGI::WorldScene* pointOnly=nullptr){
     try {
-    const Vec3 low=center-Vec3(288,288,320),high=center+Vec3(288,288,320);
+    const Vec3 low=center-Vec3(LocalHorizontal,LocalHorizontal,LocalVertical),high=center+Vec3(LocalHorizontal,LocalHorizontal,LocalVertical);
     auto allowed=[&](uint64_t bytes){if(!admit||admit(bytes))return true;error="Geometry allocation deferred";return false;};
     auto merged=std::make_shared<NorthlightGI::WorldScene>();
     // Reserve final upper bounds once; do not copy then immediately reallocate.
-    if(!allowed((local.vertices.size()+terrain.vertices.size())*sizeof(NorthlightGI::WorldVertex)))return false;
-    merged->vertices.reserve(local.vertices.size()+terrain.vertices.size());
-    if(!allowed((local.triangles.size()+terrain.triangles.size())*sizeof(NorthlightGI::WorldTriangle)))return false;
-    merged->triangles.reserve(local.triangles.size()+terrain.triangles.size());
+    const size_t pointVertices=pointOnly?pointOnly->vertices.size():0,pointTriangles=pointOnly?pointOnly->triangles.size():0;
+    if(!allowed((local.vertices.size()+terrain.vertices.size()+pointVertices)*sizeof(NorthlightGI::WorldVertex)))return false;
+    merged->vertices.reserve(local.vertices.size()+terrain.vertices.size()+pointVertices);
+    if(!allowed((local.triangles.size()+terrain.triangles.size()+pointTriangles)*sizeof(NorthlightGI::WorldTriangle)))return false;
+    merged->triangles.reserve(local.triangles.size()+terrain.triangles.size()+pointTriangles);
     merged->vertices.insert(merged->vertices.end(),local.vertices.begin(),local.vertices.end());
     merged->triangles.insert(merged->triangles.end(),local.triangles.begin(),local.triangles.end());
-    if(!allowed((local.materials.size()+1)*sizeof(NorthlightGI::WorldMaterial)))return false;
-    merged->materials.reserve(local.materials.size()+1);
+    if(!allowed((local.materials.size()+1+(pointOnly?pointOnly->materials.size():0))*sizeof(NorthlightGI::WorldMaterial)))return false;
+    merged->materials.reserve(local.materials.size()+1+(pointOnly?pointOnly->materials.size():0));
     // Metadata only: texel data stays in `local` (alive for this call) and is read through buildUploadPlan's
     // texture source, so the merged scene carries no third copy of up to 256 MiB of rgba.
     for(const auto& m:local.materials){
@@ -136,6 +138,19 @@ inline bool build(const NorthlightGI::WorldScene& local,const NorthlightGI::Worl
     // The terrain vertex remap is dead after assembly; do not carry it into
     // the packed-index/signature allocations.
     std::vector<uint32_t>().swap(remap);
+    if(pointOnly){
+        const uint32_t vertexBase=uint32_t(merged->vertices.size()),materialBase=uint32_t(merged->materials.size());
+        merged->vertices.insert(merged->vertices.end(),pointOnly->vertices.begin(),pointOnly->vertices.end());
+        for(const auto& triangle:pointOnly->triangles){
+            if(triangle.v0>=pointVertices||triangle.v1>=pointVertices||triangle.v2>=pointVertices||triangle.material>=pointOnly->materials.size()){
+                error="Invalid point transmission geometry";return false;}
+            merged->triangles.push_back({triangle.v0+vertexBase,triangle.v1+vertexBase,triangle.v2+vertexBase,triangle.material+materialBase});
+        }
+        for(const auto& source:pointOnly->materials){
+            if(!allowed(source.rgba.size()))return false;
+            auto material=source;material.terrain=false;material.pointOnly=true;merged->materials.push_back(std::move(material));
+        }
+    }
     NorthlightWorldMesh::WorldMeshUploadPlan plan;
     if(!NorthlightWorldMesh::buildUploadPlan(*merged,plan,error,admit,&local.materials,order))return false;
     if(pagingOnly){

@@ -287,8 +287,8 @@ class Builder:
         self.assets=assets;self.meshes={};self.mesh_names={};self.textures={};self.skipped_groups=[];self.skip_bad_groups=False;self.reset()
     def reset(self):
         self.vertices=[];self.triangles=[];self.materials=[];self.material_ids={};self.tile_stats=collections.Counter();self.tile_errors=0
-    def material(self,path='',blend=0,flat=False):
-        key=(path,blend,flat)
+    def material(self,path='',blend=0,flat=False,point_glass=False):
+        key=(path,blend,flat,point_glass)
         if key in self.material_ids:return self.material_ids[key]
         if path not in self.textures:
             try:self.textures[path]=decode_blp(self.assets.read(path)) if path else (0,0,b'')
@@ -299,7 +299,14 @@ class Builder:
         if flat and rgba:
             count=len(rgba)//4;color=tuple(sum(srgb_to_linear(v/255) for v in rgba[channel::4])/count for channel in range(3));w=h=0;rgba=b''
         result=len(self.materials);self.material_ids[key]=result
-        self.materials.append((color,w,h,ALPHA_KEY_CUTOFF if blend==1 else 0.,rgba))
+        # Negative exact integers carry fixture IDs. Older readers reject them
+        # even when the game's floating-point mode flushes subnormal values.
+        cutoff=ALPHA_KEY_CUTOFF if blend==1 else 0.
+        if point_glass:
+            code=point_glass-0x90000000+1
+            if not 0<code<=0x7fffff:raise ValueError('Lamp fixture tag range')
+            cutoff=-float(code)
+        self.materials.append((color,w,h,cutoff,rgba))
         return result
     def add_mesh(self,mesh,matrix,translation,category,instance_id=0):
         if not any(value for row in matrix for value in row):
@@ -357,15 +364,22 @@ class Builder:
         mesh=(vertices,triangles,materials);self.meshes[path]=mesh;self.mesh_names[id(vertices)]=path;return mesh
     def wmo(self,path):
         if path in self.meshes:return self.meshes[path]
-        root=dict(chunks(self.assets.read(path)));groups=unpack('<I',root['MOHD'],4)[0]
+        rootBlob=self.assets.read(path);root=dict(chunks(rootBlob));groups=unpack('<I',root['MOHD'],4)[0]
+        import wmo_lamp_emission
+        lampMaterials=wmo_lamp_emission.candidates(rootBlob)
         mt=root.get('MOTX',b'');materials=[]
         for material in array(root['MOMT'],0,len(root['MOMT'])//64,'<16I'):
             materials.append((string(mt,material[3]),material[2],False))
         vertices=[];triangles=[];refs=set()
         for group in range(groups):
             name=path[:-4]+'_%03d.wmo'%group
-            try:g,overrun=wmo_group(self.assets.read(name))
+            try:groupBlob=self.assets.read(name);g,overrun=wmo_group(groupBlob)
             except FileNotFoundError:self.assets.missing.add(name);continue
+            glass={}
+            if lampMaterials:
+                try:_,glass=wmo_lamp_emission.analyze(rootBlob,groupBlob,self.assets.read,group,lampMaterials)
+                except (ValueError,FileNotFoundError,IndexError,KeyError,struct.error) as exc:
+                    self.assets.unsupported.add('wmo_lamp:'+name+':'+str(exc))
             if overrun:self.assets.clamped.add(name)
             sub={}
             for tag,payload in chunks(g['MOGP'],68):sub.setdefault(tag,payload)
@@ -381,7 +395,7 @@ class Builder:
             # Render batches define visible faces; collision-only triangles outside
             # MOBA ranges must not become artificial lighting occluders.
             batches=array(sub.get('MOBA',b''),0,len(sub.get('MOBA',b''))//24,'<6hI3H2B')
-            emitted=set()
+            emitted=set();tagged={}
             for batch in batches:
                 first,size,material=batch[6],batch[7],batch[11]
                 if material>=len(materials):raise ValueError('WMO material range')
@@ -391,7 +405,12 @@ class Builder:
                     if i in emitted:continue
                     emitted.add(i);t=inds[i:i+3]
                     if max(t)>=len(pos):raise ValueError('WMO vertex range')
-                    triangles.append((base+t[0],base+t[1],base+t[2],material))
+                    use=material
+                    if i in glass:
+                        identity=(material,glass[i])
+                        if identity not in tagged:tagged[identity]=len(materials);materials.append((*materials[material],glass[i]))
+                        use=tagged[identity]
+                    triangles.append((base+t[0],base+t[1],base+t[2],use))
         mesh=(vertices,triangles,materials,root,refs);self.meshes[path]=mesh;self.mesh_names[id(vertices)]=path;return mesh
     def wmo_doodads(self,root,refs,doodadset,matrix,translation,root_id=0):
         names=root.get('MODN',b'');data=root.get('MODD',b'');sets=root.get('MODS',b'')

@@ -103,4 +103,24 @@ template<std::size_t N> Rect batchRect(const View& v,const std::array<std::array
     Bounds b;for(unsigned i=0;i<count&&i<N;++i)add(v,position[i].data(),b);
     return rect(v,b);
 }
+// Direct batches contain two consecutive fog batches. Project each sphere once,
+// then merge in NDC before rounding, preserving batchRect's exact rectangles.
+template<unsigned Small,std::size_t N>
+void pairedBatchRects(const View& v,const std::array<std::array<float,4>,N>& position,unsigned count,Rect* small,Rect* large){
+    count=std::min<unsigned>(count,N);
+    for(unsigned first=0;first<count;first+=2*Small){
+        Bounds pair;
+        for(unsigned half=0;half<2&&first+half*Small<count;++half){
+            Bounds b;
+            for(unsigned i=first+half*Small;i<count&&i<first+(half+1)*Small&&!b.full;++i)add(v,position[i].data(),b);
+            small[first/Small+half]=rect(v,b);
+            if(b.full)pair.full=true;
+            else if(!pair.full&&!b.empty()){
+                pair.x0=std::min(pair.x0,b.x0);pair.y0=std::min(pair.y0,b.y0);
+                pair.x1=std::max(pair.x1,b.x1);pair.y1=std::max(pair.y1,b.y1);
+            }
+        }
+        large[first/(2*Small)]=rect(v,pair);
+    }
+}
 } // namespace NorthlightLocalLightScissor

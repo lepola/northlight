@@ -52,6 +52,12 @@ struct DeviceMirror {
     IDirect3DSurface9* targets[Targets]={};bool targetKnown[Targets]={};
     IDirect3DSurface9* depth=nullptr;bool depthKnown=false;
     float vsFloat[VsFloat][4]={};bool vsFloatKnown[VsFloat]={};
+    // Diagnostic setter evidence is independent of successful Get* support.
+    bool vsFloatWriteObservation=false,vsFloatProgrammable=false,vsFloatWritten[VsFloat]={};
+    void setVsFloatWriteObservation(bool on){
+        if(vsFloatWriteObservation==on)return;
+        vsFloatWriteObservation=on;vsFloatProgrammable=on&&vertexShaderKnown&&vertexShader;std::memset(vsFloatWritten,0,sizeof vsFloatWritten);
+    }
     int vsInt[Ints][4]={};bool vsIntKnown[Ints]={};
     BOOL vsBool[Bools]={};bool vsBoolKnown[Bools]={};
     float psFloat[PsFloat][4]={};bool psFloatKnown[PsFloat]={};
@@ -117,15 +123,21 @@ struct DeviceMirror {
     // Callers hold gate, including ALL block Apply, Reset, and disable paths.
     void invalidate(){
         constantEpoch.invalidate();if(synced)synced->clearAll();
+        vsFloatProgrammable=false;
         vertexShaderKnown=pixelShaderKnown=declarationKnown=fvfKnown=indicesKnown=viewportKnown=depthKnown=false;
         for(auto& s:streams)s.known=false;
         std::memset(frequencyKnown,0,sizeof frequencyKnown);std::memset(textureKnown,0,sizeof textureKnown);
         std::memset(samplerKnown,0,sizeof samplerKnown);std::memset(renderStateKnown,0,sizeof renderStateKnown);
-        std::memset(targetKnown,0,sizeof targetKnown);std::memset(vsFloatKnown,0,sizeof vsFloatKnown);
+        std::memset(targetKnown,0,sizeof targetKnown);std::memset(vsFloatKnown,0,sizeof vsFloatKnown);std::memset(vsFloatWritten,0,sizeof vsFloatWritten);
         std::memset(vsIntKnown,0,sizeof vsIntKnown);std::memset(vsBoolKnown,0,sizeof vsBoolKnown);std::memset(psFloatKnown,0,sizeof psFloatKnown);
         std::memset(pending,0,sizeof pending);++mutations;++invalidations;
     }
     void disable(const char* reason){MirrorGuard lock(gate);if(enabled){enabled=false;disableReason=reason;}invalidate();}
+    // Only the frontend probe uses this proof; no getter support is inferred.
+    void observeVsFloatDraw(bool unsafe){
+        if(!vsFloatWriteObservation||!unsafe)return;
+        vsFloatProgrammable=false;std::memset(vsFloatKnown+17,0,11);std::memset(vsFloatWritten,0,sizeof vsFloatWritten);++mutations;
+    }
 };
 
 class MirrorStateBlock final : public IDirect3DStateBlock9 {
@@ -176,7 +188,9 @@ public:
     // differ on null stream/target/depth/index reads (retention, NOTFOUND).
     HRESULT STDMETHODCALLTYPE SetVertexShader(IDirect3DVertexShader9* value) override{
         Guard lock(m->gate);const std::uint64_t serial=m->mutations+1;HRESULT hr=real->SetVertexShader(value);m->vertexShaderKnown=false;
-        if(accepted(hr)){m->vertexShader=value;m->vertexShaderKnown=m->written(DeviceMirror::VertexShaderSlot,serial);}else m->forget(DeviceMirror::VertexShaderSlot);return hr;
+        if(accepted(hr)){m->vertexShader=value;m->vertexShaderKnown=m->written(DeviceMirror::VertexShaderSlot,serial);
+            if(m->vsFloatWriteObservation){if(m->mutations!=serial)m->observeVsFloatDraw(true);m->vsFloatProgrammable=value&&m->mutations==serial;}
+        }else m->forget(DeviceMirror::VertexShaderSlot);return hr;
     }
     HRESULT STDMETHODCALLTYPE GetVertexShader(IDirect3DVertexShader9** out) override{
         Guard lock(m->gate);if(out&&m->active()&&m->vertexShaderKnown){++m->answered;giveRef(m->vertexShader,out);return D3D_OK;}
@@ -332,9 +346,19 @@ public:
     // Writes refresh previously observed registers. They never establish Get*
     // support: pure-device/unsupported getter errors must still reach backend.
     HRESULT STDMETHODCALLTYPE SetVertexShaderConstantF(UINT start,const float* data,UINT count) override{
-        Guard lock(m->gate);if(m->synced)m->synced->vsFloat(start,count);HRESULT hr=real->SetVertexShaderConstantF(start,data,count);
+        Guard lock(m->gate);const auto serial=m->mutations+1;if(m->synced)m->synced->vsFloat(start,count);HRESULT hr=real->SetVertexShaderConstantF(start,data,count);
         if(SUCCEEDED(hr)&&m->active())m->constantEpoch.writeFloat(start,count);
-        if(accepted(hr)&&data&&start<DeviceMirror::VsFloat){const UINT copied=count<DeviceMirror::VsFloat-start?count:DeviceMirror::VsFloat-start;std::memcpy(m->vsFloat[start],data,size_t(copied)*4*sizeof(float));}return hr;
+        const bool store=accepted(hr),unchanged=m->mutations==serial;
+        if(store&&!unchanged)std::memset(m->vsFloatWritten,0,sizeof m->vsFloatWritten);
+        if(store&&data&&start<DeviceMirror::VsFloat){
+            const UINT copied=count<DeviceMirror::VsFloat-start?count:DeviceMirror::VsFloat-start;
+            if(unchanged){std::memcpy(m->vsFloat[start],data,size_t(copied)*4*sizeof(float));
+                if(m->vsFloatWriteObservation)std::memset(m->vsFloatWritten+start,1,copied);
+            }else{
+                // An inner call may have changed the bank after the outer write.
+                std::memset(m->vsFloatKnown+start,0,copied);
+            }
+        }return hr;
     }
     HRESULT STDMETHODCALLTYPE GetVertexShaderConstantF(UINT start,float* out,UINT count) override{
         Guard lock(m->gate);bool valid=out&&count&&start<DeviceMirror::VsFloat&&count<=DeviceMirror::VsFloat-start;
@@ -442,10 +466,19 @@ public:
         IDirect3DStateBlock9* block=nullptr;HRESULT hr=real->CreateStateBlock(type,&block);return wrapBlock(hr,block,out);
     }
     HRESULT STDMETHODCALLTYPE DrawPrimitiveUP(D3DPRIMITIVETYPE type,UINT count,const void* data,UINT stride) override{
-        Guard lock(m->gate);HRESULT hr=real->DrawPrimitiveUP(type,count,data,stride);m->streams[0].known=false;m->forget(DeviceMirror::StreamSlot);accepted(hr);return hr;
+        Guard lock(m->gate);const bool unsafe=!m->vsFloatProgrammable;const auto serial=m->mutations;HRESULT hr=real->DrawPrimitiveUP(type,count,data,stride);m->observeVsFloatDraw(unsafe||FAILED(hr)||m->mutations!=serial);m->streams[0].known=false;m->forget(DeviceMirror::StreamSlot);accepted(hr);return hr;
     }
     HRESULT STDMETHODCALLTYPE DrawIndexedPrimitiveUP(D3DPRIMITIVETYPE type,UINT minimum,UINT vertices,UINT count,const void* indices,D3DFORMAT format,const void* data,UINT stride) override{
-        Guard lock(m->gate);HRESULT hr=real->DrawIndexedPrimitiveUP(type,minimum,vertices,count,indices,format,data,stride);m->streams[0].known=false;m->indicesKnown=false;m->forget(DeviceMirror::StreamSlot);m->forget(DeviceMirror::IndicesSlot);accepted(hr);return hr;
+        Guard lock(m->gate);const bool unsafe=!m->vsFloatProgrammable;const auto serial=m->mutations;HRESULT hr=real->DrawIndexedPrimitiveUP(type,minimum,vertices,count,indices,format,data,stride);m->observeVsFloatDraw(unsafe||FAILED(hr)||m->mutations!=serial);m->streams[0].known=false;m->indicesKnown=false;m->forget(DeviceMirror::StreamSlot);m->forget(DeviceMirror::IndicesSlot);accepted(hr);return hr;
+    }
+    HRESULT STDMETHODCALLTYPE DrawPrimitive(D3DPRIMITIVETYPE type,UINT start,UINT count) override{
+        Guard lock(m->gate);const bool unsafe=!m->vsFloatProgrammable;const auto serial=m->mutations;HRESULT hr=real->DrawPrimitive(type,start,count);m->observeVsFloatDraw(unsafe||FAILED(hr)||m->mutations!=serial);return hr;
+    }
+    HRESULT STDMETHODCALLTYPE DrawIndexedPrimitive(D3DPRIMITIVETYPE type,INT base,UINT minimum,UINT vertices,UINT start,UINT count) override{
+        Guard lock(m->gate);const bool unsafe=!m->vsFloatProgrammable;const auto serial=m->mutations;HRESULT hr=real->DrawIndexedPrimitive(type,base,minimum,vertices,start,count);m->observeVsFloatDraw(unsafe||FAILED(hr)||m->mutations!=serial);return hr;
+    }
+    HRESULT STDMETHODCALLTYPE ProcessVertices(UINT source,UINT destination,UINT count,IDirect3DVertexBuffer9* buffer,IDirect3DVertexDeclaration9* decl,DWORD flags) override{
+        Guard lock(m->gate);HRESULT hr=real->ProcessVertices(source,destination,count,buffer,decl,flags);m->observeVsFloatDraw(true);return hr;
     }
     HRESULT STDMETHODCALLTYPE Reset(D3DPRESENT_PARAMETERS* params) override{
         Guard lock(m->gate);m->invalidate();HRESULT hr=real->Reset(params);m->invalidate();if(SUCCEEDED(hr))m->recording=false;return hr;

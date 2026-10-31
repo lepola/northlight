@@ -41,6 +41,7 @@ struct Record {
     Digest content;
     int chunkX=-1,chunkY=-1;
     bool terrain=false;
+    bool pointOnly=false;
 };
 using Records=std::vector<Record>;
 using FixedChunks=std::set<std::pair<int,int>>;
@@ -54,6 +55,7 @@ inline bool needsRefresh(bool previousKnown,const Digest& previous,uint64_t prev
 inline Digest signature(const Records& records,const FixedChunks& fixed,const float* matrix){
     Digest result;
     for(const auto& r:records){
+        if(r.pointOnly)continue;
         if(r.terrain&&!fixed.count({r.chunkX,r.chunkY}))continue;
         // Match cached static drawing, including upstream near-plane pancaking.
         if(NorthlightShadowBounds::directionalClipReject(r.low,r.high,matrix))continue;

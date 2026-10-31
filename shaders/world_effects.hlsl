@@ -578,8 +578,8 @@ float4 regionalFogAt(float2 uv,out float coverage) {
 }
 // Direct light from the nearest authored local sources (lanterns, braziers,
 // fires) on nearby surfaces. The game only glows the lamp model itself; this
-// lights the ground and walls around it. Unshadowed; the separate point pass
-// still subtracts the baked estimate of the one selected shadowed lamp.
+// lights the ground and walls around it. The separate point passes subtract
+// exactly the occluded contribution of each selected shadow-casting source.
 float4 LocalDirect(float2 uv:TEXCOORD0):COLOR0 {
     float3 smoothNormal=tex2Dlod(NormalBuffer,float4(uv,0,0)).xyz;
     // r47 K4: lamps read weaker in direct sun (30%). The first lighting pass (the sun, by day) left
@@ -588,8 +588,9 @@ float4 LocalDirect(float2 uv:TEXCOORD0):COLOR0 {
     // Sun shadow and interiors keep 1.
     float sunlit=saturate((tex2Dlod(BaselineLighting,float4(uv,0,0)).a-(1-GridInfo.z))/max(GridInfo.z,.001));
     uv=depthUV(uv);
-    float d=normalizedDepth(uv);if(d>=.99999||waterDistance(uv,d)>0)return 0;
-    float3 p=worldPosition(uv,d);float3 n=smoothNormal;
+    float d=normalizedDepth(uv);
+    float3 p=worldPosition(uv,d);float3 n=smoothNormal.xyz;
+    if(d>=.99999||waterDistance(uv,d)>0)return 0;
     float3 result=0;
     // Unused slots are zero constants (reach 0), so no per-light branch is needed.
     // LocalLightColor.w is the precomputed 1/(end-start).

@@ -62,11 +62,25 @@ class Profiles(unittest.TestCase):
         # so every HD profile places exactly the same emitter as before.
         data=json.loads(fp.tracked('outdoor-light-profiles.json').read_text())
         variants={name:x.pop('variants') for name,x in data['profiles'].items() if 'variants' in x}
+        for x in data['profiles'].values():x.pop('casts_shadows',None)
         self.assertEqual(hashlib.sha256((json.dumps(data,indent=2)+'\n').encode()).hexdigest(),
                          '592dfdc945bd7ed81de005570bb18ef69916920f0b04dce0d4d44b4ba88c6f7a')
         self.assertEqual(len(variants),6)
         for name,v in variants.items():
             for sha,x in v.items():self.assertEqual(x['asset'],'stock 3.3.5a (data/common-2.mpq)',name)
+    def test_explicit_shadow_policy(self):
+        catalog=p.load()
+        self.assertTrue(all(type(x['casts_shadows']) is bool for x in catalog.values()))
+        self.assertTrue(catalog['world\\generic\\passivedoodads\\lights\\generaltorch01.m2']['casts_shadows'])
+        self.assertFalse(catalog['world\\expansion02\\doodads\\crystalsongforest\\sparkles\\crystalsong_sparkles01.m2']['casts_shadows'])
+        blob=b'reviewed';path='world\\test.m2';profile=dict(asset_sha256=hashlib.sha256(blob).hexdigest(),position=[0,0,1],rgb=[1,.5,.2],intensity=1,start=1,end=10)
+        self.assertEqual(p.fallback({path:profile},path,blob,[])[0][-1],0)
+        profile['casts_shadows']=True
+        self.assertEqual(p.fallback({path:profile},path,blob,[])[0][-1],2)
+        profile['casts_shadows']=False
+        self.assertEqual(p.fallback({path:profile},path,blob,[])[0][-1],0)
+        profile['casts_shadows']='yes'
+        with self.assertRaises(ValueError):p.check(profile)
     def test_parent_identity_required(self):
         native=(0,0,0,1,.5,.2,1,12,1,1,1)
         child=(0,0,0,1,.5,.2,1,12,2,3,0)

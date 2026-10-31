@@ -41,7 +41,7 @@ _MAP = '(?:' + '|'.join(MAPS) + ')'
 # What the DLL reads from world-cache/ (src/world, src/lights, src/sky); nothing else is shipped.
 # Continents only, on purpose: the dungeon and raid maps (instance_maps.py) are an optional layer the installer builds
 # on the player's machine on top of this cache; a prebuilt variant never carries them.
-ALLOWLIST = re.compile(rf'{_MAP}/\d+_\d+\.fg3|models/[0-9a-f]{{64}}\.fgs|lights/{_MAP}\.fgl'
+ALLOWLIST = re.compile(rf'{_MAP}/\d+_\d+\.fg3|models/[0-9a-f]{{64}}\.fgs|lights/{_MAP}\.fg[la]'
                        rf'|fog/{_MAP}/\d+_\d+\.frf|celestial/(?:sun|moon)\.fct')
 ZIP_TIME = (2026, 1, 1, 0, 0, 0)
 

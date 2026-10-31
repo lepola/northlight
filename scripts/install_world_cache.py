@@ -81,8 +81,11 @@ FORMAT = 'northlight-world-cache-install/1'
 # The sources each step's output depends on. lights and fog also depend on the scene digests
 # (they read the FGS3 tiles), which cover world_scene_builder.py, the module they import.
 STEP_SOURCES = {
-    'scene': ['world_scene_builder.py', 'm2_visibility.py', 'mpq.py', 'client_archives.py'],
-    'lights': ['world_lights_builder.py', 'world_light_placements.py', 'outdoor_light_profiles.py',
+    'scene': ['world_scene_builder.py', 'wmo_lamp_emission.py', 'world_emitter_coverage.py',
+              'point_transmission_builder.py', 'm2_visibility.py', 'mpq.py', 'client_archives.py'],
+    'lights': ['world_lights_builder.py', 'light_attachments.py', 'wmo_lamp_emission.py', 'world_light_placements.py', 'outdoor_light_profiles.py',
+               'world_emitter_coverage.py', 'world_emitter_index.py', 'build_equipment_emitters.py', 'emitter_pin_report.py',
+                 'attached_emitter_sources.py', 'emitter_tracks.py', 'equipment_emitter_patch.py', 'point_transmission_builder.py', 'build_glue_emitters.py',
                'outdoor-light-profiles.json', 'wotlk-emitter-profiles.json'],
     'fog': ['regional_fog_builder.py', 'world_light_placements.py', 'forest_regions.inc'],
     'celestial': ['build_celestial_disc_assets.py', 'world_scene_builder.py', 'mpq.py', 'client_archives.py'],
@@ -776,10 +779,52 @@ def carry_instances(old_root, new_root):
 
 def carry_instance_lights(old, new):
     """Move the instance .fgl files and their lights manifest from one lights/ folder to another."""
-    for name in [f'{m}.fgl' for m in instance_maps.ALL_MAPS] + [INSTANCE_MANIFEST]:
+    for name in [f'{m}.{extension}' for m in instance_maps.ALL_MAPS for extension in ('fgl','fga')] + [INSTANCE_MANIFEST]:
         if (old / name).is_file() and not (new / name).exists():
             new.mkdir(parents=True, exist_ok=True)
             retry(os.replace, old / name, new / name)
+    merge_point_transmission(old,new,instance_maps.ALL_MAPS)
+
+
+def merge_point_transmission(old, new, maps, replace=False):
+    """Keep auxiliary geometry with its map's light transaction and source models."""
+    maps=tuple(maps)
+    if any(name not in instance_maps.ALL_MAPS for name in maps):raise ValueError('Unknown transmission instance map')
+    old_index,new_index=old/'world-emitters-v1.json',new/'world-emitters-v1.json'
+    previous=json.loads(old_index.read_text()) if old_index.is_file() else None
+    current=json.loads(new_index.read_text()) if new_index.is_file() else None
+    for document in (previous,current):
+        if document is not None and (not isinstance(document,dict) or type(document.get('version')) is not int or document['version']!=1 or document.get('owner')!='northlight-local-direct' or not isinstance(document.get('models'),dict)):
+            raise ValueError('Transmission emitter index owner/version/models')
+    source=old/'point-transmission';target=new/'point-transmission'
+    needed=set()
+    for name in maps:
+        src,dst=source/name,target/name
+        if replace and dst.exists():
+            if not dst.resolve().is_relative_to(target.resolve()):raise ValueError('Transmission path escapes cache')
+            retry(shutil.rmtree,dst)
+        if src.is_dir() and not dst.exists():
+            dst.parent.mkdir(parents=True,exist_ok=True);retry(src.rename,dst)
+        if dst.is_dir():needed.update(tile_keys(dst))
+    for key in needed:
+        src,dst=source/'models'/(key+'.fgs'),target/'models'/(key+'.fgs')
+        if src.is_file() and (replace or not dst.exists()):
+            dst.parent.mkdir(parents=True,exist_ok=True);retry(os.replace,src,dst)
+    if previous is not None:
+        if current is None:current=previous
+        elif replace:current['models'].update(previous['models'])
+        else:
+            for path,value in previous['models'].items():current['models'].setdefault(path,value)
+        new_index.parent.mkdir(parents=True,exist_ok=True)
+        new_index.write_text(json.dumps(current,sort_keys=True,separators=(',',':'),allow_nan=False),encoding='utf-8')
+        digest=hashlib.sha256(new_index.read_bytes()).hexdigest()
+        for name in ('manifest.json',INSTANCE_MANIFEST):
+            path=new/name
+            if path.is_file():
+                manifest=json.loads(path.read_text())
+                if 'world_emitter_index' in manifest:
+                    manifest['world_emitter_index']['sha256']=digest
+                    path.write_text(json.dumps(manifest,indent=2)+'\n',encoding='utf-8')
 
 
 def drop_instance_record(root):
@@ -847,6 +892,9 @@ def merge_lights_manifest(output, staging, affected):
     fresh, base = read_json(new), read_json(old)
     kept = [e for e in (base or {}).get('maps', []) if e.get('map') not in affected]
     merged = dict(fresh or base or {}, maps=kept + list((fresh or {}).get('maps', [])))
+    index=output/'lights'/'world-emitters-v1.json'
+    if index.is_file() and 'world_emitter_index' in merged:
+        merged['world_emitter_index']['sha256']=hashlib.sha256(index.read_bytes()).hexdigest()
     if merged['maps']:
         old.parent.mkdir(parents=True, exist_ok=True)
         tmp = old.with_name(old.name + f'.{os.getpid()}.tmp')
@@ -876,6 +924,7 @@ def apply_instances(staging, output):
         if (output / m).exists():
             retry(shutil.rmtree, output / m)
         (lights / f'{m}.fgl').unlink(missing_ok=True)
+        (lights / f'{m}.fga').unlink(missing_ok=True)
     for m in ready['built_maps']:
         if (staging / m).is_dir():
             if (output / m).exists():
@@ -883,6 +932,13 @@ def apply_instances(staging, output):
             retry((staging / m).rename, output / m)
         if (staging / 'lights' / f'{m}.fgl').is_file():
             retry(os.replace, staging / 'lights' / f'{m}.fgl', lights / f'{m}.fgl')
+        if (staging / 'lights' / f'{m}.fga').is_file():
+            retry(os.replace, staging / 'lights' / f'{m}.fga', lights / f'{m}.fga')
+    merge_point_transmission(staging/'lights',lights,[*ready['drop_maps'],*ready['built_maps']],replace=True)
+    point_root=lights/'point-transmission'
+    point_keys=all_tile_keys(point_root)
+    for path in (point_root/'models').glob('*.fgs'):
+        if path.stem not in point_keys:path.unlink()
     merge_lights_manifest(output, staging, {*ready['drop_maps'], *ready['built_maps']})
     if (staging / 'validation.json').is_file():   # the validator's report, beside the continents' validation.json
         retry(os.replace, staging / 'validation.json', output / 'instances-validation.json')

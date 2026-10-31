@@ -8,7 +8,7 @@ CONTROL = {'BeginStateBlock', 'EndStateBlock', 'CreateStateBlock', 'Reset', 'Set
 # 0.3.149: not mirrored, so they already went straight to the backend. Counted
 # pass-through overrides only (per-type call counts on sampled frames). The mock
 # test API has no such methods, so they are left out of that build.
-COUNTED = ['DrawIndexedPrimitive', 'DrawPrimitive', 'Clear', 'StretchRect', 'ColorFill', 'SetScissorRect', 'SetTextureStageState']
+COUNTED = ['Clear', 'StretchRect', 'ColorFill', 'SetScissorRect', 'SetTextureStageState']
 
 def generated():
     mirror = northlight_paths.src('device_mirror.h').read_text().split('class MirrorDevice :')[1].split('// Extension calls')[0]
@@ -29,7 +29,7 @@ def generated():
         lines.append(signature + '{ if(rawActive()){++m->rawCalls;m->countRaw(' + str(len(names)) + ');return real->' + call + '}return MirrorDevice::' + call + ' }')
         names.append(name.group(1))
     assert found == selected, (found, selected)
-    assert len(found) == 36, len(found)
+    assert len(found) == 39, len(found)
     assert sorted(counted) == sorted(COUNTED), counted
     lines.append('#ifndef NORTHLIGHT_DEVICE_MIRROR_TEST_API')
     for name in COUNTED:

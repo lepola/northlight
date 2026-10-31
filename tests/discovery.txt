@@ -15,6 +15,7 @@ test_ao_rotation_stripes.py
 test_ao_texel_snap.py
 test_art_layer.py
 test_async_memory_diagnostics.py
+test_attached_emitter_sources.py
 test_backend_proxy.py
 test_band_retime.py
 test_cache_shadow_optimizations.py
@@ -44,6 +45,7 @@ test_concurrent_geometry_build.py
 test_contact_fog.py
 test_contact_lighting.py
 test_contact_normal_endpoints.py
+test_dalaran_candle_geometry.py
 test_dev_tuning_build.py
 test_device_mirror.py
 test_diagnostics_switch.py
@@ -56,6 +58,7 @@ test_effects_buckets.py
 test_effects_cost_report.py
 test_emitter_patch.py
 test_emitter_pin_report.py
+test_emitter_tracks.py
 test_entrypoints_isolated.py
 test_equipment_emitter_patch.py
 test_equipment_light_proof_client.py
@@ -74,6 +77,7 @@ test_game_snapshot.py
 test_geometry_handoff.py
 test_gi_quality.py
 test_gi_settings_dependencies.py
+test_glue_emitters.py
 test_gpu_budget.py
 test_gpu_budget_wiring.py
 test_gtao_grazing.py
@@ -89,6 +93,9 @@ test_job_system.py
 test_lamp_daylight.py
 test_legacy_fog_hold.py
 test_legacy_fog_wmo.py
+test_light_direct_constants.py
+test_light_retirement.py
+test_light_scissor_pairs.py
 test_linux_package.py
 test_live_settings.py
 test_live_terrain_gpu.py
@@ -97,6 +104,7 @@ test_local_fog_profile.py
 test_local_ini.py
 test_local_light_batches.py
 test_local_light_selection.py
+test_local_source_shadows.py
 test_log_format_literals.py
 test_log_rotation.py
 test_logger_cost.py
@@ -111,12 +119,15 @@ test_mesh_pool_trim.py
 test_migrate_mac_proxy.py
 test_mirror_resources.py
 test_model_index_cache.py
+test_model_light_attachments.py
+test_model_light_attachments_gpu.py
 test_model_replay_pool.py
 test_model_snapshot_cache.py
 test_model_world_context.py
 test_moon_cascade_weight.py
 test_mount_emitter_patch.py
 test_name_mask.py
+test_native_local_light_probe.py
 test_native_model_install.py
 test_near_reserve.py
 test_night_floor.py
@@ -131,6 +142,10 @@ test_particle_texture_stats.py
 test_pending_release_wiring.py
 test_point_light_shadow.py
 test_point_shadow_schedule.py
+test_point_transmission_cache.py
+test_point_transmission_gpu.py
+test_point_transmission_install.py
+test_point_transmission_runtime.py
 test_prepare_worker.py
 test_probe_blend.py
 test_probe_blend_equivalence.py
@@ -232,7 +247,11 @@ test_weather_textures.py
 test_weather_wiring.py
 test_windows_installer.py
 test_wmo_group_tolerance.py
+test_wmo_lamp_emission.py
+test_wmo_lamp_runtime.py
 test_world_cache_diff.py
+test_world_emitter_coverage.py
+test_world_emitter_index.py
 test_world_light_placements.py
 test_world_local_lights.py
 test_world_mesh_pages.py

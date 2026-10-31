@@ -6,7 +6,6 @@ colour/replacement/ribbon materials are preserved; detailed exclusions are kept.
 """
 import argparse
 import collections
-import hashlib
 import json
 import math
 from pathlib import Path
@@ -17,8 +16,7 @@ sys.path[:0] = [str(Path(__file__).resolve().parents[1]), str(Path(__file__).res
 import client_archives
 from world_scene_builder import Assets, array, unpack, string, decode_blp, srgb_to_linear
 from world_lights_builder import constant_track
-from equipment_emitter_patch import append_bone_lights
-from mpq import Archive
+from emitter_tracks import pulse_for
 
 NATIVE_REFERENCE = 'https://github.com/SatyPardus/wowdecomp/blob/b1c71b8bd108823bca952f16c6f83a7ad33b9648/'
 REFERENCES = [NATIVE_REFERENCE + 'README.md',
@@ -81,20 +79,21 @@ def item_visuals(assets):
 
 def texture_rgb(assets, name, alpha_blend=True):
     _, _, rgba = decode_blp(assets.read(name), 64)
-    rgb, weight = [0., 0., 0.], 0.
+    rgb = [0., 0., 0.]
     for p in range(0, len(rgba), 4):
         values = [srgb_to_linear(v / 255.) for v in rgba[p:p+3]]
         alpha = rgba[p+3] / 255.
-        w = (alpha if alpha_blend else float(alpha > 0)) * max(values)
-        weight += w
+        w = alpha if alpha_blend else 1.
         for k in range(3):
             rgb[k] += values[k] * w
-    if not weight:
+    if not max(rgb):
         raise ValueError('No visible texture emission')
-    return tuple(v / weight for v in rgb)
+    # Mean radiance retains dark texels and alpha coverage. Normalizing only
+    # the bright pixels turned weak glows into equally strong white emitters.
+    return tuple(v / (len(rgba)//4) for v in rgb)
 
 
-def sources(assets, blob, max_sources=2):
+def sources(assets, blob, max_sources=16):
     if len(blob) < 304 or blob[:4] != b'MD20' or unpack('<I', blob, 4)[0] != 264:
         raise ValueError('Not WotLK v264')
     if unpack('<I', blob, 264)[0]:
@@ -150,14 +149,14 @@ def sources(assets, blob, max_sources=2):
             rgb = tuple(color[k] * tex_rgb[k] for k in range(3))
             peak = max(rgb)
             intensity = min(1., peak) * opacity * .35
-            if peak < .01 or intensity < .01:
+            if intensity < .00005:
                 raise ValueError('Negligible actual emission')
             position = unpack('<3f', particle, 8)
             neighbour = next((e for e in result if e['bone'] == bone and sum((a-b)**2 for a,b in zip(e['position'], position)) < .25**2), None)
             if neighbour:
                 combined = [neighbour['rgb'][k]*neighbour['intensity'] + rgb[k]/peak*intensity for k in range(3)]
                 power = max(combined)
-                neighbour['rgb'], neighbour['intensity'] = tuple(v/power for v in combined), min(1., power)
+                neighbour['rgb'], neighbour['intensity'] = tuple(v/power for v in combined), power
                 neighbour['particles'].append(i)
                 neighbour['particle_blends'].append(blend)
                 neighbour['particle_flags'].append(flags)
@@ -168,13 +167,33 @@ def sources(assets, blob, max_sources=2):
                            'intensity': intensity, 'start': .5, 'end': 8.,
                            'particles': [i], 'particle_blends': [blend], 'particle_flags': [flags], 'textures': [name], 'basis': 'native 12340 additive particle, lifetime colour × actual texture; original animated bone',
                            'rate': rate})
+            result[-1]['emission'] = 'fire' if any(s in name for s in ('flame', 'fire', 'candle')) else 'energy'
         except (ValueError, FileNotFoundError, struct.error) as exc:
             refusals[str(exc)] += 1
     if not result:
         raise ValueError('No proven continuous additive source: ' + json.dumps(refusals, sort_keys=True))
     if max_sources is not None:
-        result = sorted(result, key=lambda e:(-e['intensity'], e['particles'][0]))[:max_sources]
+        if len(result) > max_sources:
+            raise ValueError('Source budget exceeded: %d independent sources (limit %d); none silently omitted' % (len(result), max_sources))
     return result
+
+
+def validate_rgb(blob, offset, source, index=0):
+    pulse = pulse_for(source, index)
+    if not pulse:
+        if not all(math.isclose(x,y,rel_tol=1e-6,abs_tol=1e-6) for x,y in zip(constant_track(blob, offset, '<3f'), source['rgb'])):
+            raise ValueError('Actual emission colour mismatch')
+        return
+    mode, sequence, nt, ot, nk, ok = unpack('<hh4I', blob, offset)
+    tc, to = unpack('<II', blob, ot)
+    kc, ko = unpack('<II', blob, ok)
+    globals_count, globals_offset = unpack('<II', blob, 20)
+    if mode != 1 or nt != 1 or nk != 1 or not 0 <= sequence < globals_count or unpack('<I', blob, globals_offset+sequence*4)[0] != pulse['period_ms']:
+        raise ValueError('Native pulse clock mismatch')
+    times = [v for (v,) in array(blob,to,tc,'<I')]
+    keys = array(blob,ko,kc,'<3f')
+    if times != pulse['times_ms'] or kc != len(pulse['factors']) or any(not math.isclose(v, source['rgb'][k]*factor,rel_tol=1e-6,abs_tol=1e-6) for rgb,factor in zip(keys,pulse['factors']) for k,v in enumerate(rgb)):
+        raise ValueError('Native pulse colour mismatch')
 
 
 def validate_lights(original, patched, emitters):
@@ -189,7 +208,8 @@ def validate_lights(original, patched, emitters):
         kind, bone, *position = unpack('<HH3f', patched, record)
         if kind != 1 or bone != source['bone'] or not all(math.isclose(a,b,rel_tol=1e-6,abs_tol=1e-6) for a,b in zip(position,source['position'])):
             raise ValueError('Native source anchor mismatch')
-        for relative, fmt, wanted in ((16,'<3f',(0,0,0)), (36,'<f',(0,)), (56,'<3f',source['rgb']),
+        validate_rgb(patched, record+56, source, i)
+        for relative, fmt, wanted in ((16,'<3f',(0,0,0)), (36,'<f',(0,)),
                                       (76,'<f',(source['intensity'],)), (96,'<f',(source['start'],)),
                                       (116,'<f',(source['end'],)), (136,'<B',(1,))):
             actual = constant_track(patched, record+relative, fmt)
@@ -198,51 +218,22 @@ def validate_lights(original, patched, emitters):
 
 
 def build(assets, output):
-    output.mkdir(parents=True, exist_ok=True)
-    visual_models = {p for p in item_visuals(assets) if p.startswith(('spells\\', 'item\\objectcomponents\\'))}
-    candidates = sorted(set(n for n in assets.providers if n.startswith('item\\objectcomponents\\') and n.endswith('.m2')) | visual_models)
-    report = {'format': 'native WotLK v264 bone-attached lights', 'models': {}, 'skipped': {},
-              'source_archives': assets.fingerprint(), 'counts': {},
-              'limitations': ['Lifetime colour is an average, not individual particle colours; alpha weights Gx Add but not NoAlphaAdd.',
-                              'Only constant positive emission and constant enabled-state; ribbon/shader-only/dynamic replacement excluded.',
-                              'Native engine must expose the source in a proven Model VS2/3 draw for Northlight to add local/fog lighting.',
-                              'At most two authored sources per model; runtime shares LocalLightLimit and caps dynamic sources at eight.',
-                              'No in-game test or installation was performed.'],
-              'format_references': REFERENCES,
-              'particle_blends': {'3': '12340 particle -> Gx NoAlphaAdd(10)', '4': '12340 particle -> Gx Add(3)'},
-              'license': 'Original MIT helper; patch generated from the user\'s own game assets. Do not redistribute game model binaries.'}
-    payload = {}
-    for path in candidates:
-        try:
-            original = assets.read(path)
-            qualified = sources(assets, original, max_sources=None)
-            emitters = sorted(qualified, key=lambda e:(-e['intensity'], e['particles'][0]))[:2]
-            patched = append_bone_lights(original, emitters)
-            validate_lights(original, patched, emitters)
-        except (ValueError, FileNotFoundError, struct.error) as exc:
-            report['skipped'][path] = str(exc)
-            continue
-        payload[path] = patched
-        report['models'][path] = {'before_sha256': hashlib.sha256(original).hexdigest(), 'after_sha256': hashlib.sha256(patched).hexdigest(), 'emitters': emitters,
-                                  'source_archive': assets.origin(path), 'item_visual': path in visual_models,
-                                  'qualified_sources':len(qualified), 'omitted_sources':len(qualified)-len(emitters)}
-    if not payload:
-        raise ValueError('No supported equipment emitters')
-    mpq = output/'equipment-lights-staged.mpq'
-    with Archive(mpq, create=True, capacity=max(4096, len(payload)*2)) as archive:
-        temporary = output/'model.tmp'
-        for name, data in payload.items():
-            temporary.write_bytes(data)
-            archive.add(temporary, name)
-        temporary.unlink()
-    with Archive(mpq) as archive:
-        for name, data in payload.items():
-            if archive.read(name) != data:
-                raise ValueError('MPQ byte roundtrip failed: ' + name)
-    report['counts'] = {'scanned': len(candidates), 'patched': len(payload), 'native_lights': sum(len(v['emitters']) for v in report['models'].values()), 'item_visual_models': sum(v['item_visual'] for v in report['models'].values()), 'validated_native_models': len(payload), 'mpq_byte_roundtrips': len(payload)}
-    report['mpq_sha256'] = hashlib.sha256(mpq.read_bytes()).hexdigest()
-    (output/'equipment-lights-report.json').write_text(json.dumps(report, indent=2)+'\n')
-    return report
+    from attached_emitter_sources import write_stage
+    visual_models = {p for p in item_visuals(assets) if p.startswith(('spells\\', 'item\\'))}
+    candidates = {p:{'item_visual':p in visual_models} for p in
+        set(n for n in assets.providers if n.startswith('item\\') and n.endswith('.m2')) | visual_models}
+    return write_stage(assets,output,candidates,{
+        'format':'native WotLK v264 equipment lights with original bones and lifecycle',
+        'scope':'Every listed Item/*.m2 plus ItemVisualEffects model paths',
+        'format_references':REFERENCES,
+        'limitations':['Inline step/linear particle rate and enabled-state are retained; lifetime RGB and alpha are integrated.',
+            'Mesh emission requires proven constant unlit additive material, actual UV texture/tint/opacity and rigid original skin bone.',
+            'Replacement textures/colors, deforming or display-controlled luminous mesh and unsupported schedules remain reported exclusions.',
+            'All independent regions are retained up to sixteen native sources per model; models beyond the budget are explicitly excluded.',
+            'Runtime dynamic admission remains capped at eight, shared with local-light limits; no runtime model scans.',
+            'Unlisted archive additions cannot be enumerated; native existing lights are preserved.',
+            'No installation or in-game test performed.']},'equipment','No supported equipment emitters')
+
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])

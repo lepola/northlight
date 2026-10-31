@@ -48,6 +48,7 @@ fp.use_source_modules()
 import client_archives  # noqa: E402
 from mpq import Archive  # noqa: E402
 import native_model_lights  # noqa: E402
+import world_emitter_index  # noqa: E402
 from world_scene_builder import Assets, decode_blp  # noqa: E402
 import build_lighting  # noqa: E402
 import build_mulgore_lighting  # noqa: E402
@@ -128,9 +129,16 @@ def build(client, output, world_cache, locale=None, letter='z', archives='all'):
             if manifest.get('sky_clone_skipped'):
                 report['steps'][-1]['sky_clone_skipped'] = manifest['sky_clone_skipped']
                 print(f"{name}: sky clone skipped ({manifest['sky_clone_skipped']})", flush=True)
-        dynamic_models, dynamic_steps = native_model_lights.build(assets, work, read_archive)
+        index_file=world_cache/'lights'/'world-emitters-v1.json'
+        extra_paths=json.loads(index_file.read_text())['models'] if index_file.is_file() else ()
+        emitter_metadata, emitter_counts = world_emitter_index.build(assets,extra_paths)
+        world_owned=set(json.loads(emitter_metadata)['models'])
+        dynamic_models, dynamic_steps = native_model_lights.build(assets, work, read_archive,excluded=world_owned)
         payload.update(dynamic_models)
         report['steps'].extend(dynamic_steps)
+        payload[world_emitter_index.ARCHIVE_PATH] = emitter_metadata
+        report['steps'].append({'step': 'world_emitter_index', 'owner': 'northlight-local-direct',
+                                'sha256': hashlib.sha256(emitter_metadata).hexdigest(), **emitter_counts})
         # 0.3.198 (rain): after the sky steps, so their skybox edits are kept: private storm profiles, then the weather textures.
         final = {n: DBC(payload[DBC_NAME.format(n)]) for n in build_lighting.TABLES}
         storm = build_lighting.stormify(final, stock)

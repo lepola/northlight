@@ -57,14 +57,19 @@ APP_FILES = [
     'build_outdoor_single_sun.py', 'build_outdoor_single_moon.py', 'build_weather_textures.py',  # 0.3.198 (rain): the art layer's procedural weather textures
     'scripts/install_world_cache.py', 'scripts/client_identity.py',
     'renderer/northlight_install.py', 'renderer/migrate_mac_proxy.py', 'renderer/windows-package/install.py',
-    'renderer/world_scene_builder.py', 'renderer/m2_visibility.py', 'renderer/world_lights_builder.py',
+    'renderer/world_scene_builder.py', 'renderer/wmo_lamp_emission.py', 'renderer/m2_visibility.py', 'renderer/world_lights_builder.py', 'renderer/light_attachments.py',
     'renderer/instance_maps.py', 'renderer/world_light_placements.py', 'renderer/outdoor_light_profiles.py', 'renderer/outdoor-light-profiles.json',
     'renderer/wotlk-emitter-profiles.json', 'renderer/m2_emitter_patch.py',
     'renderer/build_emitter_patch.py', 'renderer/emitter_pin_report.py',
+    'renderer/world_emitter_coverage.py', 'renderer/world_emitter_index.py', 'renderer/emitter_tracks.py',
     'renderer/regional_fog_builder.py', 'renderer/build_celestial_disc_assets.py',
     'renderer/native_model_lights.py', 'renderer/build_equipment_emitters.py',
     'renderer/build_spell_emitters.py', 'renderer/build_mount_emitters.py',
+    'renderer/build_glue_emitters.py',
+    'renderer/build_gameobject_emitters.py',
     'renderer/equipment_emitter_patch.py',
+    'renderer/point_transmission_builder.py',
+    'renderer/attached_emitter_sources.py',
     'tests/validate_world_cache.py', 'src/sky/forest_regions.inc',
 ]
 PAYLOAD_COMMON = {'celestial-profiles.ini': 'client-config/celestial-profiles.ini',
@@ -86,8 +91,9 @@ def runtime_drop(config, extra=''):
 
 # Linux also drops _dbm with its Berkeley DB (a shared module there; on macOS it is part of the runtime).
 RUNTIME_DROP = {'mac': runtime_drop('darwin'), 'linux': runtime_drop('x86_64-linux-gnu', '|lib-dynload/_dbm')}
-CACHE_MEMBER = re.compile(r'^([A-Za-z0-9]+/\d+_\d+\.fg3|models/[0-9a-f]+\.fgs|lights/[A-Za-z0-9]+\.fgl|'
-                          r'fog/[A-Za-z0-9]+/\d+_\d+\.frf|celestial/(sun|moon)\.fct|northlight-cache\.json)$')
+CACHE_MEMBER = re.compile(r"^([A-Za-z0-9_ ']{1,63}/\d+_\d+\.fg3|models/[0-9a-f]+\.fgs|lights/[A-Za-z0-9_ ']{1,63}\.fg[la]|"
+                          r"lights/point-transmission/([A-Za-z0-9_ ']{1,63}/\d+_\d+\.fg3|models/[0-9a-f]{64}\.fgs)|lights/world-emitters-v1\.json|"
+                          r'fog/[A-Za-z0-9]+/\d+_\d+\.frf|celestial/(sun|moon)\.fct|northlight-cache\.json)\Z')
 MARKER = re.compile(rb'Northlight renderer (\d+\.\d+\.\d+);')
 DEV_MARKER = b'NORTHLIGHT DEV TUNING BUILD'  # embedded by build_renderer.py --dev-tuning; never ships
 

@@ -32,10 +32,10 @@ cpu=fp.src('world_renderer.h').read_text()
 assert 'localScissorView=NorthlightLocalLightScissor::view(' in cpu
 assert cpu.index('localScissorView=NorthlightLocalLightScissor::view(')<cpu.index('a.lights=active?localLightTracker.update(')
 assert 'selectContinuous,debug==0?&localScissorView:nullptr,' in cpu  # debug views keep the plain order
-assert cpu.index('NorthlightLocalLightBatches::arrange(localLights,localScissorView)')<cpu.index('a.directRects[first/NorthlightLocalLightSelection::DirectBatchSize]=')
+assert cpu.index('NorthlightLocalLightBatches::arrange(localLights,localScissorView)')<cpu.index('NorthlightLocalLightScissor::pairedBatchRects<NorthlightLocalLightSelection::FogBatchSize>')
 assert cpu.index('NorthlightLocalLightBatches::arrange(localLights,localScissorView)')<cpu.index('localLights.fog[i][0]=sigmaAt(')
 loop=cpu[cpu.index('profileSplit(profile,lightSurface); /* sample frames'):cpu.index('if(profile)profile->mark("LocalLights");')]
-assert 'NorthlightLocalLightBatches::wide(a,b)' in loop and 'localLights.batch<2*N>(firstLight)' in loop
+assert 'NorthlightLocalLightBatches::wide(a,b)' in loop and 'localLights.directBatch<2*N>(firstLight)' in loop
 assert 'd->SetPixelShaderConstantF(68,batch.position[0].data(),2*N);d->SetPixelShaderConstantF(84,batch.color[0].data(),2*N);' in loop
 assert loop.count('profileSplit(profile,lightSurface);')==2
 assert 'if(!profile||!profile->recording()||!resume||profileSplitFailed)return;' in cpu  # sample frames only

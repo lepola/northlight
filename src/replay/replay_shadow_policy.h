@@ -11,8 +11,8 @@ namespace NorthlightReplayShadowPolicy {
 inline unsigned bucket(unsigned triangles){
     return triangles<25?0:triangles<50?1:triangles<100?2:triangles<500?3:triangles<2000?4:5;
 }
-inline bool small(bool skinned,unsigned triangles,unsigned minimum){
-    return skinned&&minimum&&triangles<minimum;
+inline bool small(bool skinned,unsigned triangles,unsigned minimum,bool rigid=false){
+    return skinned&&!rigid&&minimum&&triangles<minimum;
 }
 struct Candidate {std::size_t index=0,bytes=0;float distanceSquared=0;bool known=false,keep=true;};
 struct Result {std::size_t kept=0,dropped=0,keptBytes=0,droppedBytes=0,unknown=0;};

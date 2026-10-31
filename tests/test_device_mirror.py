@@ -7,7 +7,7 @@ from pathlib import Path
 import hashlib,json,os,re,subprocess,tempfile
 HERE=Path(__file__).resolve().parent
 OUT=fp.output_dir()
-FILES=['extension_raw_methods.inl','mirror_guard.h','generate_extension_raw_methods.py','forwarders.h','device_mirror.h','captured_constant_epoch.h','mirror_audit_schedule.h','saved_state.h','test_device_mirror.cpp','test_device_mirror_api.h','test_device_mirror.py',
+FILES=['extension_raw_methods.inl','mirror_guard.h','generate_extension_raw_methods.py','forwarders.h','device_mirror.h','native_local_light_probe.h','captured_constant_epoch.h','mirror_audit_schedule.h','saved_state.h','test_device_mirror.cpp','test_device_mirror_api.h','test_device_mirror.py',
        'mirror_guarded_device.h','generate_mirror_guarded_device.py','mirror_resources.h','mirror_resource_forwarders.h','tracked_buffers.h','renderer.cpp']
 report={'command':'python3 tests/test_device_mirror.py','scope':'Actual production device_mirror.h and saved_state.h with a native independent mock backend and minimal API declarations. Not a real D3D driver, Wine, or game execution. Native timings are informational; expected backend query elimination is the measured structural result.','source_sha256':{str(fp.tracked(n)):hashlib.sha256(fp.tracked(n).read_bytes()).hexdigest() for n in FILES},'runs':[]}
 import generate_extension_raw_methods
@@ -58,7 +58,7 @@ checks={
  'no direct lock/unlock of a gate outside mirror_guard.h':not any(re.search(r'(\bgate(_|\(\))?|\bmutex)\.(lock|unlock|try_lock)\(',t) for n,t in proxy.items() if n!='mirror_guard.h'),
  'both generators emit MirrorGuard':'MirrorGuard lock(m->gate,MirrorSite::Device);' in fp.tracked('generate_mirror_guarded_device.py').read_text()
    and "prefix='MirrorGuard lock(gate,MirrorSite::Resource); '" in fp.tracked('generate_mirror_resource_forwarders.py').read_text()
-   and proxy['mirror_guarded_device.h'].count('MirrorGuard lock(m->gate,MirrorSite::Device);')==78 and 'MirrorGuard lock(gate,MirrorSite::Resource);' in proxy['mirror_resource_forwarders.h'],
+   and proxy['mirror_guarded_device.h'].count('MirrorGuard lock(m->gate,MirrorSite::Device);')==75 and 'MirrorGuard lock(gate,MirrorSite::Resource);' in proxy['mirror_resource_forwarders.h'],
  'mirror_guarded_device.h is up to date with its generator':regenerated==before,
  'MirrorGate has ownerTid, set by the Device constructor':'std::uint32_t ownerTid;' in guard and 'mirrorState.gate.ownerTid=MirrorGuard::threadId();' in proxy['renderer.cpp'],
  'census only after the nested return (outer entries: elided, locked, foreign)':ctor.count('gate.entered(')==1 and ctor.index('if(kMirrorSingleGate&&previous_==&gate)return;')<ctor.index('gate.mutex.lock();')<ctor.index('gate.entered('),

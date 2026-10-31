@@ -14,6 +14,7 @@ struct CheckedGateMutex {
 #define NORTHLIGHT_GATE_MUTEX CheckedGateMutex
 #define NORTHLIGHT_DEVICE_MIRROR_TEST_API
 #include "device_mirror.h"
+#include "native_local_light_probe.h"
 #include "mirror_audit_schedule.h"
 #include "saved_state.h"
 #include <cassert>
@@ -57,6 +58,8 @@ struct Block final:IDirect3DStateBlock9 {
 struct Backend final:IDirect3DDevice9 {
  struct UpArguments {D3DPRIMITIVETYPE type=0;UINT minimum=0,vertices=0,count=0,stride=0;const void* indices=nullptr;const void* data=nullptr;D3DFORMAT format=0;} up;
  void(*onRenderState)(void*)=nullptr;void* callbackContext=nullptr;
+ void(*onSetF)(void*)=nullptr;
+ void callback(void(*&f)(void*)){if(f){auto call=f;f=nullptr;call(callbackContext);}}
  unsigned refs=1;State state,pending;bool recording=false,failNext=false,failGet=false,failApply=false,constantGetSupported=true;
  std::array<bool,256> rsMask{},fMask{};std::atomic<unsigned> entered{0};unsigned calls=0,gets=0,sets=0,applies=0,captures=0;size_t floatReadRegisters=0;
  struct Guard {Backend& d;explicit Guard(Backend& b):d(b){assert(d.entered.fetch_add(1)==0);++d.calls;}~Guard(){assert(d.entered.fetch_sub(1)==1);}};
@@ -93,7 +96,7 @@ struct Backend final:IDirect3DDevice9 {
  HRESULT SetDepthStencilSurface(IDirect3DSurface9* p)override{SG;edit().depth=p;return result();}
  HRESULT GetDepthStencilSurface(IDirect3DSurface9** p)override{GG;if(!p)return D3DERR_INVALIDCALL;HRESULT h=give(state.depth.p,p);return !state.depth.p?D3DERR_NOTFOUND:h;}
 #define CONSTANT(Name,Type,field,N,W) \
- HRESULT Set##Name(UINT first,const Type* data,UINT count)override{SG;if(!data||first>N||count>N-first)return D3DERR_INVALIDCALL;std::memcpy(reinterpret_cast<Type*>(edit().field)+first*W,data,count*W*sizeof(Type));if(recording&&std::is_same<Type,float>::value)for(unsigned i=first;i<first+count;++i)fMask[i]=true;return result();} \
+ HRESULT Set##Name(UINT first,const Type* data,UINT count)override{HRESULT hr;{SG;if(!data||first>N||count>N-first)return D3DERR_INVALIDCALL;std::memcpy(reinterpret_cast<Type*>(edit().field)+first*W,data,count*W*sizeof(Type));if(recording&&std::is_same<Type,float>::value)for(unsigned i=first;i<first+count;++i)fMask[i]=true;hr=result();}if(!std::strcmp(#Name,"VertexShaderConstantF"))callback(onSetF);return hr;} \
  HRESULT Get##Name(UINT first,Type* data,UINT count)override{GG;if(!constantGetSupported||!data||first>N||count>N-first)return D3DERR_INVALIDCALL;std::memcpy(data,reinterpret_cast<Type*>(state.field)+first*W,count*W*sizeof(Type));if(std::is_same<Type,float>::value)floatReadRegisters+=count;return D3D_OK;}
  CONSTANT(VertexShaderConstantF,float,vf,512,4)
  CONSTANT(VertexShaderConstantI,int,vi,32,4)
@@ -106,6 +109,9 @@ struct Backend final:IDirect3DDevice9 {
  HRESULT EndStateBlock(IDirect3DStateBlock9** p)override{Guard g(*this);if(!recording||!p)return D3DERR_INVALIDCALL;*p=new Block(this,D3DSBT_ALL,true);recording=false;return D3D_OK;}
  HRESULT DrawPrimitiveUP(D3DPRIMITIVETYPE type,UINT count,const void* data,UINT stride)override{SG;up={type,0,0,count,stride,nullptr,data,0};state.vb[0]=nullptr;state.offset[0]=state.stride[0]=0;return result();}
  HRESULT DrawIndexedPrimitiveUP(D3DPRIMITIVETYPE type,UINT minimum,UINT vertices,UINT count,const void* indices,D3DFORMAT format,const void* data,UINT stride)override{SG;up={type,minimum,vertices,count,stride,indices,data,format};state.vb[0]=nullptr;state.offset[0]=state.stride[0]=0;state.ib=nullptr;return result();}
+ HRESULT DrawPrimitive(D3DPRIMITIVETYPE,UINT,UINT)override{SG;return result();}
+ HRESULT DrawIndexedPrimitive(D3DPRIMITIVETYPE,INT,UINT,UINT,UINT,UINT)override{SG;return result();}
+ HRESULT ProcessVertices(UINT,UINT,UINT,IDirect3DVertexBuffer9*,IDirect3DVertexDeclaration9*,DWORD)override{SG;return result();}
  HRESULT SetSoftwareVertexProcessing(WINBOOL)override{SG;state.rs[D3DRS_ZENABLE]=0;return result();}
  HRESULT Reset(D3DPRESENT_PARAMETERS*)override{SG;state=State{};recording=false;return result();}
 #undef SG
@@ -322,6 +328,91 @@ static void constantBanks(){
   if(mode<3){uint32_t raw=rng();std::memcpy(values+rng()%1024,&raw,4);b.failNext=draw%101==0;const HRESULT h=game.SetVertexShaderConstantF(first,values,count);assert((FAILED(h))==(draw%101==0));}
   const auto readFirst=rng()%256,readCount=1+rng()%(256-readFirst);assert(SUCCEEDED(ext.GetVertexShaderConstantF(readFirst,out,readCount)));assert(!std::memcmp(out,b.state.vf[readFirst],readCount*16));
  }
+}
+static void diagnosticConstantWrites(){
+ Backend b;DeviceMirror m;MirrorDevice game(&b,&m);ExtensionDevice ext(&b,&m);
+ b.pureDevice=true;float values[44],out[44];for(unsigned i=0;i<44;++i)values[i]=float(i+1)/10;
+ const auto empty=[&]{for(bool flag:m.vsFloatWritten)assert(!flag);};
+ const auto write=[&]{assert(SUCCEEDED(game.SetVertexShaderConstantF(17,values,11)));};
+ const auto bank=[&]{for(unsigned i=0;i<256;++i)assert(m.vsFloatWritten[i]==(i>=17&&i<28));};
+ assert(!m.vsFloatWriteObservation);write();empty();
+ b.pureDevice=false;assert(SUCCEEDED(ext.GetVertexShaderConstantF(17,out,1)));b.pureDevice=true;
+ const auto ordinary=m.mutations;assert(SUCCEEDED(game.DrawPrimitive(D3DPT_TRIANGLELIST,0,1))&&m.vsFloatKnown[17]&&m.mutations==ordinary);
+ m.invalidate();
+ m.setVsFloatWriteObservation(true);write();bank();
+ const auto reads=b.gets;std::fill(std::begin(out),std::end(out),-123.f);
+ assert(ext.GetVertexShaderConstantF(17,out,11)==D3DERR_INVALIDCALL&&b.gets==reads+1&&out[0]==-123.f);
+ for(bool flag:m.vsFloatKnown)assert(!flag);
+ NorthlightNativeLocalLight::Probe probe;NorthlightNativeLocalLight::Sample sample;
+ assert(probe.sample(true,false,true,m.active(),0,1,m.vsFloat,m.vsFloatKnown,m.vsFloatWritten,0x7ff,true,sample));
+ assert(sample.known==0x7ff&&!sample.fromGet&&sample.fromWrite==0x7ff&&sample.finite==0x7ff);
+ assert(!std::memcmp(sample.rows,values,sizeof values)&&b.gets==reads+1);
+ m.setVsFloatWriteObservation(false);empty();write();empty();
+ m.setVsFloatWriteObservation(true);empty();
+ assert(probe.sample(true,false,true,m.active(),0,1,m.vsFloat,m.vsFloatKnown,m.vsFloatWritten,0x7ff,true,sample));
+ assert(!sample.known&&sample.rows[0][0]==0); // Old storage is not a zero-light observation.
+ write();m.invalidate();empty();
+ for(unsigned mode=0;mode<8;++mode){
+  write();bank();
+  switch(mode){
+  case 0:{IDirect3DStateBlock9* block=nullptr;assert(SUCCEEDED(game.CreateStateBlock(D3DSBT_ALL,&block)));assert(SUCCEEDED(block->Apply()));block->Release();break;}
+  case 1:{IDirect3DStateBlock9* block=nullptr;assert(SUCCEEDED(game.CreateStateBlock(D3DSBT_ALL,&block)));b.failApply=true;assert(FAILED(block->Apply()));block->Release();break;}
+  case 2:{assert(SUCCEEDED(game.BeginStateBlock()));empty();write();empty();IDirect3DStateBlock9* block=nullptr;assert(SUCCEEDED(game.EndStateBlock(&block)));block->Release();break;}
+  case 3:{D3DPRESENT_PARAMETERS p;assert(SUCCEEDED(game.Reset(&p)));break;}
+  case 4:{D3DPRESENT_PARAMETERS p;b.failNext=true;assert(FAILED(game.Reset(&p)));break;}
+  case 5:{ExtensionDevice::RawScope raw(ext);assert(SUCCEEDED(ext.SetVertexShaderConstantF(17,values,11)));empty();break;}
+  case 6:assert(SUCCEEDED(game.SetSoftwareVertexProcessing(true)));break;
+  case 7:b.failNext=true;assert(FAILED(game.SetVertexShaderConstantF(17,values,11)));break;
+  }
+  empty();for(bool flag:m.vsFloatKnown)assert(!flag);
+ }
+ // All fixed-function draw variants and explicit vertex processing invalidate evidence.
+ for(unsigned route=0;route<2;++route)for(unsigned mode=0;mode<5;++mode){
+  MirrorDevice& device=route?ext:game;
+  write();
+  b.pureDevice=false;assert(SUCCEEDED(ext.GetVertexShaderConstantF(17,out,1)));b.pureDevice=true;
+  HRESULT hr=mode==0?device.DrawPrimitive(D3DPT_TRIANGLELIST,0,1):mode==1?device.DrawIndexedPrimitive(D3DPT_TRIANGLELIST,0,0,3,0,1):
+    mode==2?device.DrawPrimitiveUP(D3DPT_TRIANGLELIST,1,nullptr,12):mode==3?device.DrawIndexedPrimitiveUP(D3DPT_TRIANGLELIST,0,3,1,nullptr,D3DFMT_INDEX16,nullptr,12):device.ProcessVertices(0,0,3,nullptr,nullptr,0);
+  assert(SUCCEEDED(hr));empty();assert(!m.vsFloatKnown[17]);
+ }
+ auto* shader=new Object<IDirect3DVertexShader9>();assert(SUCCEEDED(game.SetVertexShader(shader)));write();
+ assert(SUCCEEDED(game.DrawPrimitive(D3DPT_TRIANGLELIST,0,1)));bank();
+ // Static positions/attenuation are uploaded once, before later sampled frames.
+ const auto staticReads=b.gets;
+ for(unsigned frame=1;frame<127;++frame){
+  m.setVsFloatWriteObservation(true); // Ordinary diagnostic frontend frames keep evidence.
+  values[0]+=.001f;assert(SUCCEEDED(game.SetVertexShaderConstantF(17,values,4)));
+  assert(SUCCEEDED(game.DrawPrimitive(D3DPT_TRIANGLELIST,0,1)));
+ }
+ assert(probe.sample(true,false,true,m.active(),127,1,m.vsFloat,m.vsFloatKnown,m.vsFloatWritten,0x7ff,true,sample));
+ assert(sample.fromWrite==0x7ff&&!sample.fromGet&&!std::memcmp(sample.rows+4,values+16,28*sizeof(float))&&b.gets==staticReads);
+ b.failNext=true;assert(FAILED(game.DrawPrimitive(D3DPT_TRIANGLELIST,0,1)));empty();
+ assert(SUCCEEDED(game.SetVertexShader(nullptr)));shader->Release();
+ // Successful overlapping SWVP writes prove only the stored prefix; empty/invalid writes add nothing.
+ assert(SUCCEEDED(game.SetVertexShaderConstantF(254,values,4)));assert(m.vsFloatWritten[254]&&m.vsFloatWritten[255]);
+ m.invalidate();assert(SUCCEEDED(game.SetVertexShaderConstantF(17,values,0)));empty();
+ assert(FAILED(game.SetVertexShaderConstantF(17,nullptr,1)));empty();
+ assert(FAILED(game.SetVertexShaderConstantF(~0u,values,1)));empty();
+ assert(FAILED(game.SetVertexShaderConstantF(17,values,~0u)));empty();
+ // Reentry may change the same bank, unrelated state, or invalidate it. None certifies the outer write.
+ struct Reentry {MirrorDevice* game;DeviceMirror* mirror;float changed[4]={9,8,7,6};} r{&game,&m};b.callbackContext=&r;
+ for(unsigned mode=0;mode<3;++mode){
+  write();b.pureDevice=false;assert(SUCCEEDED(ext.GetVertexShaderConstantF(17,out,1)));b.pureDevice=true;assert(m.vsFloatKnown[17]);
+  b.onSetF=mode==0?+[](void* p){auto& x=*static_cast<Reentry*>(p);assert(SUCCEEDED(x.game->SetVertexShaderConstantF(17,x.changed,1)));}:
+   mode==1?+[](void* p){auto& x=*static_cast<Reentry*>(p);assert(SUCCEEDED(x.game->SetRenderState(40,1)));}:
+   +[](void* p){static_cast<Reentry*>(p)->mirror->invalidate();};
+  assert(SUCCEEDED(game.SetVertexShaderConstantF(17,values,1)));empty();assert(!m.vsFloatKnown[17]);
+  if(mode==0)assert(!std::memcmp(m.vsFloat[17],r.changed,sizeof r.changed)&&!std::memcmp(b.state.vf[17],r.changed,sizeof r.changed));
+  const auto gets=b.gets;assert(ext.GetVertexShaderConstantF(17,out,1)==D3DERR_INVALIDCALL&&b.gets==gets+1);
+ }
+ write();b.onSetF=+[](void* p){auto& x=*static_cast<Reentry*>(p);assert(SUCCEEDED(x.game->SetVertexShaderConstantF(17,x.changed,1)));};
+ assert(SUCCEEDED(game.SetVertexShaderConstantF(300,values,1)));empty();
+ // A later authoritative getter and setter may both prove a row, without conflating their origins.
+ write();b.pureDevice=false;assert(SUCCEEDED(ext.GetVertexShaderConstantF(17,out,1)));
+ assert(probe.sample(true,false,true,m.active(),1,1,m.vsFloat,m.vsFloatKnown,m.vsFloatWritten,0x7ff,true,sample));
+ assert(sample.fromGet==1&&sample.fromWrite==0x7ff&&sample.known==0x7ff);
+ m.setVsFloatWriteObservation(false);empty();assert(m.vsFloatKnown[17]);
+ std::puts("PASS diagnostic constant writes: PUREDEVICE setter evidence with original getter errors; disabled gate; exact provenance; stateblocks/reset/raw/fixed/failed invalidation; bounds and reentrant mutations");
 }
 static void constantCapabilities(){
  Backend b;DeviceMirror m;MirrorDevice game(&b,&m);ExtensionDevice ext(&b,&m);
@@ -991,10 +1082,11 @@ int main(int argc,char** argv){
  const auto mode=[&](const char* name){return argc>1&&!std::strcmp(argv[1],name);};
  const unsigned rounds=argc>2?unsigned(std::atoi(argv[2])):10000;
  if(mode("census")){gateCensus();return 0;}
+ if(mode("local-lights")){diagnosticConstantWrites();assert(!liveObjects);return 0;}
  if(mode("nesting")){ownerNesting();return 0;}
  if(mode("waits")){foreignWaits();return 0;}
  if(mode("stress")){ownerStress(rounds);return 0;}
  if(mode("exclusive")){ownerNesting(true);foreignWaits(true);ownerStress(rounds,true);std::puts("PASS exclusive owner mode");return 0;}
  if(mode("owner")){ownerIdentity();ownerNesting();foreignWaits();ownerStress(rounds);ownerNesting(true);foreignWaits(true);ownerStress(rounds,true);assert(!liveObjects);return 0;}
  if(mode("threads")){singleGate();gateCensus();rawScopeConcurrency();concurrency();ownerNesting();foreignWaits();ownerStress(rounds);ownerNesting(true);foreignWaits(true);ownerStress(rounds,true);std::puts("PASS threads");return 0;}
- ownerIdentity();assert(!liveObjects);ownerNesting();assert(!liveObjects);foreignWaits();assert(!liveObjects);ownerStress(rounds);assert(!liveObjects);ownerNesting(true);foreignWaits(true);ownerStress(rounds,true);assert(!liveObjects);gateCensus();assert(!liveObjects);knownScan();assert(!liveObjects);singleGate();writeThroughLearning();assert(!liveObjects);writeThroughImplicitState();assert(!liveObjects);writeThroughDifferential();assert(!liveObjects);rawScopeDispatchArguments();assert(!liveObjects);rawScopeBanksAndReentry();assert(!liveObjects);rawScopeRestoreAndControls();assert(!liveObjects);rawScopeConcurrency();assert(!liveObjects);rawScopeShadowWorkload();assert(!liveObjects);constantCertificates();assert(!liveObjects);auditCoverageAndSchedule();assert(!liveObjects);static_assert(!std::is_copy_constructible<DeviceMirror>::value,"mirror cannot copy mutex/state");bindingsAndScalars();assert(!liveObjects);constantBanks();assert(!liveObjects);constantCapabilities();assert(!liveObjects);recordingFailures();assert(!liveObjects);savedStateIntegration();assert(!liveObjects);crowdedWorkload();assert(!liveObjects);stateBlocks();assert(!liveObjects);implicitAndDisabled();assert(!liveObjects);auditChecks();assert(!liveObjects);auditEveryField();assert(!liveObjects);concurrency();assert(!liveObjects);std::puts("PASS actual device_mirror.h: authoritative cached queries; COM refs; normalized/failed setters; partial exact-bit banks; ALL/partial/recorded stateblocks including failed Apply; UP and Reset failures; target/FVF implicit changes; two proxies; disabled raw bypass; 30000 randomized banks; 8 threads x5000 iterations, serialized backend calls (80072 with learned write-through, 120008 read-through).");}
+ ownerIdentity();assert(!liveObjects);ownerNesting();assert(!liveObjects);foreignWaits();assert(!liveObjects);ownerStress(rounds);assert(!liveObjects);ownerNesting(true);foreignWaits(true);ownerStress(rounds,true);assert(!liveObjects);gateCensus();assert(!liveObjects);knownScan();assert(!liveObjects);singleGate();writeThroughLearning();assert(!liveObjects);writeThroughImplicitState();assert(!liveObjects);writeThroughDifferential();assert(!liveObjects);rawScopeDispatchArguments();assert(!liveObjects);rawScopeBanksAndReentry();assert(!liveObjects);rawScopeRestoreAndControls();assert(!liveObjects);rawScopeConcurrency();assert(!liveObjects);rawScopeShadowWorkload();assert(!liveObjects);constantCertificates();assert(!liveObjects);auditCoverageAndSchedule();assert(!liveObjects);static_assert(!std::is_copy_constructible<DeviceMirror>::value,"mirror cannot copy mutex/state");bindingsAndScalars();assert(!liveObjects);constantBanks();assert(!liveObjects);diagnosticConstantWrites();assert(!liveObjects);constantCapabilities();assert(!liveObjects);recordingFailures();assert(!liveObjects);savedStateIntegration();assert(!liveObjects);crowdedWorkload();assert(!liveObjects);stateBlocks();assert(!liveObjects);implicitAndDisabled();assert(!liveObjects);auditChecks();assert(!liveObjects);auditEveryField();assert(!liveObjects);concurrency();assert(!liveObjects);std::puts("PASS actual device_mirror.h: authoritative cached queries; COM refs; normalized/failed setters; partial exact-bit banks; ALL/partial/recorded stateblocks including failed Apply; UP and Reset failures; target/FVF implicit changes; two proxies; disabled raw bypass; 30000 randomized banks; 8 threads x5000 iterations, serialized backend calls (80072 with learned write-through, 120008 read-through).");}

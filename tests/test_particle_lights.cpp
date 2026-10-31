@@ -4,6 +4,22 @@
 #include <iostream>
 using namespace NorthlightParticleLights;
 int main(){
+    {
+        float lo[3]={0,0,0},hi[3]={1,1,1};
+        assert(compactMesh(lo,hi,2,2));assert(!compactMesh(lo,hi,1,2));
+        assert(!compactMesh(lo,hi,17,17));assert(!compactMesh(lo,hi,0,0));
+        hi[0]=4;assert(!compactMesh(lo,hi,2,2));hi[0]=NAN;assert(!compactMesh(lo,hi,2,2));
+        float camera[3]={};Frame mesh;NorthlightLocalLightSelection::Tracker selected;std::vector<Light> fixed;
+        Sample herb{{0,0,2},{.2f,.4f,.8f},0,true};
+        mesh.observe(herb,camera);mesh.publish(nullptr,0,fixed,camera,selected);
+        assert(mesh.outputCount==1&&(mesh.output[0].flags&NorthlightLocalLights::CastShadow));
+        const auto id=mesh.output[0].sourceId;
+        mesh.nextFrame();herb.castsShadows=false;mesh.observe(herb,camera);mesh.publish(nullptr,0,fixed,camera,selected);
+        assert(mesh.outputCount==1&&mesh.output[0].sourceId==id&&!mesh.output[0].flags);
+        mesh.nextFrame();herb.castsShadows=true;mesh.observe(herb,camera);herb.castsShadows=false;mesh.observe(herb,camera);
+        mesh.publish(nullptr,0,fixed,camera,selected);assert(mesh.outputCount==1&&!mesh.output[0].flags);
+        mesh.nextFrame();mesh.publish(nullptr,0,fixed,camera,selected);assert(!mesh.outputCount);
+    }
     std::uint64_t indices[3],v=0;
     assert(triangleIndices(4,3,indices)&&indices[0]==9&&indices[2]==11);
     assert(triangleIndices(5,3,indices)&&indices[0]==3&&indices[2]==5);
