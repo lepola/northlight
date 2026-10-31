@@ -20,7 +20,8 @@ public:
     virtual bool visible()const=0;
     // Draws onto back buffer 0 of the implicit swap chain, in its own BeginScene/EndScene. Call only for a Present of that
     // swap chain. The caller holds a RawScope and a SavedState: state need not be restored.
-    virtual void draw()=0;
+    // uiWhite=0 uses SDR; positive nits select linear scRGB output.
+    virtual void draw(float uiWhite=0)=0;
     // Before the device's Reset: releases every D3DPOOL_DEFAULT object (recreated lazily by the next draw).
     virtual void invalidate()=0;
 };

@@ -5,7 +5,7 @@ the hash boundary sets its flag before renderEffects(), the fallback is guarded 
 and the Armed path publishes the learned VS hash to the stream. No game or GPU."""
 import sys; from pathlib import Path; sys.path.insert(0, str(Path(__file__).resolve().parents[1]))  # repo root
 import northlight_paths as fp
-import subprocess,tempfile
+import subprocess,tempfile,os
 HERE=Path(__file__).resolve().parent
 r=fp.src('renderer.cpp').read_text();h=fp.src('ui_boundary.h').read_text()
 fb=r[r.index('void uiFallbackDraw('):r.index('void uiFallbackEndFrame(')]
@@ -45,7 +45,9 @@ for name,ok in checks.items():print(('PASS ' if ok else 'FAIL ')+name)
 assert all(checks.values())
 with tempfile.TemporaryDirectory(prefix='northlight-uiboundary-') as tmp:
     for label,flags in [('O2',['-O2']),('asan',['-O1','-g','-fsanitize=address,undefined'])]:
-        exe=Path(tmp)/('test-'+label)
-        subprocess.run(['clang++','-std=c++17','-Wall','-Wextra','-Werror','-UNDEBUG',*flags,*fp.test_include_flags(),str(HERE/'test_ui_boundary.cpp'),'-o',str(exe)],check=True)
+        if os.name=='nt' and label=='asan':continue
+        exe=Path(tmp)/('test-'+label+('.exe' if os.name=='nt' else ''))
+        compiler=[str(fp.zig()),'c++','-target','x86_64-windows-gnu'] if os.name=='nt' else ['clang++']
+        subprocess.run([*compiler,'-std=c++17','-Wall','-Wextra','-Werror','-UNDEBUG',*flags,*fp.test_include_flags(),str(HERE/'test_ui_boundary.cpp'),'-o',str(exe)],env=fp.zig_env() if os.name=='nt' else None,check=True)
         print(label,subprocess.check_output([str(exe)],text=True),end='',flush=True)
 print('PASS ui boundary: learning, arming, loss, forget, wiring')

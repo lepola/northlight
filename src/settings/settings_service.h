@@ -19,11 +19,12 @@ struct Status{
     uint64_t serial=0;          // increments on every completed job (snapshot, preview, commit)
     bool restartRequired=false; // a saved "R" field differs from what the running renderer uses
 };
+struct HdrStatus{bool active=false;unsigned code=0;std::string reason;};
 class Service {
     struct Commit{std::string base;std::vector<Change> changes;};
     struct Preview{bool clear=false;std::vector<Change> draft;};
     std::filesystem::path directory;
-    Store store;std::string legacy;
+    Store store;std::string legacy;HdrStatus hdr;
     mutable std::mutex mutex;std::condition_variable wake;bool stopping=false,busy=false,snapshotJob=false;
     std::optional<Commit> commitJob;std::optional<Preview> previewJob; // latest wins; a commit is never replaced
     Documents initial;std::string initialRevision;          // creation-time state of the running renderer ("R" fields compare against it)
@@ -118,6 +119,8 @@ public:
         std::lock_guard<std::mutex> lock(mutex);legacy=leg;initial=std::move(docs);initialRevision=Store::revision(images);activeRevision=initialRevision;
         active=std::make_shared<Config>(std::move(config));update=nullptr;previewing=false;
     }
+    void setHdrStatus(bool active,unsigned code,const std::string& reason=""){std::lock_guard<std::mutex> lock(mutex);hdr={active,code,reason};}
+    HdrStatus hdrStatus()const{std::lock_guard<std::mutex> lock(mutex);return hdr;}
     std::string revision()const{std::lock_guard<std::mutex> lock(mutex);return activeRevision;}
     // false while any job is queued or running; the overlay retries next frame.
     bool requestSnapshot(){std::lock_guard<std::mutex> lock(mutex);if(busy||snapshotJob||commitJob||previewJob)return false;snapshotJob=true;wake.notify_one();return true;}

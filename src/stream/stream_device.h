@@ -445,15 +445,29 @@ public:
 
     HRESULT STDMETHODCALLTYPE Reset(D3DPRESENT_PARAMETERS* p) override{
         if(!p)return D3DERR_INVALIDCALL;
+        const bool profile=callerLog&&callerDiag&&callerDiag();
+        const auto start=profile?nowNs():0;
+        if(profile){
+            // Capture the client caller before crossing to the replay thread.
+            char line[768];std::snprintf(line,sizeof line,"CSTREAM RESET begin frame=%llu caller=%s coop=0x%08lx previous=%ux%u/%u windowed=%u msaa=%u/%lu buffers=%u interval=%u requested=%ux%u/%u windowed=%u msaa=%u/%lu buffers=%u interval=%u refresh=%u flags=0x%08lx",
+                (unsigned long long)core.frameNo,core.callerModule?core.callerModule(__builtin_return_address(0)):"unknown",(unsigned long)std::uint32_t(core.coopState.load()),
+                pp.BackBufferWidth,pp.BackBufferHeight,unsigned(pp.BackBufferFormat),unsigned(pp.Windowed),unsigned(pp.MultiSampleType),(unsigned long)pp.MultiSampleQuality,pp.BackBufferCount,pp.PresentationInterval,
+                p->BackBufferWidth,p->BackBufferHeight,unsigned(p->BackBufferFormat),unsigned(p->Windowed),unsigned(p->MultiSampleType),(unsigned long)p->MultiSampleQuality,p->BackBufferCount,p->PresentationInterval,p->FullScreen_RefreshRateInHz,(unsigned long)p->Flags);callerLog(line);
+        }
         st.clear();recording=false;
         HRESULT hr=D3DERR_INVALIDCALL;
+        std::uint64_t replayStart=0,replayEnd=0;
         const bool ran=runTask(core,[&](StreamCore& c){   // everything recorded so far has run; the game waits, pumped
+            if(profile)replayStart=nowNs();
             for(ProxyBase* k:sc0->kids)if(k&&k->inner&&k->refs.load()==0){c.reg.unbindInner(k);k->inner->Release();k->inner=nullptr;}   // one the game still holds keeps its object, as in D3D9   // back buffers must not outlive the swap chain's reset
             c.queryEpoch.fetch_add(1); // invalidate EVENT cache across Reset
             hr=c.target->Reset(p);c.coopState.store(c.target->TestCooperativeLevel());   // 0.3.204 (task 21): the replay thread publishes the new cooperative level; StreamDevice is not an IDirect3DDevice9Ex, so there is no ResetEx
             if(SUCCEEDED(hr)){IDirect3DSwapChain9* sc=nullptr;if(SUCCEEDED(c.target->GetSwapChain(0,&sc))&&sc){sc->GetPresentParameters(&sc0->pp);sc->Release();}}
             ensureBackBuffers(c);
-            st.loadDefaults(c.target);c.replayFailure.store(false);},Cmd::SyncReset);
+            st.loadDefaults(c.target);c.replayFailure.store(false);if(profile)replayEnd=nowNs();},Cmd::SyncReset);
+        if(profile){const auto end=nowNs();char line[384];std::snprintf(line,sizeof line,"CSTREAM RESET end frame=%llu ran=%u result=0x%08lx coop=0x%08lx totalMs=%.3f beforeReplayMs=%.3f replayMs=%.3f afterReplayMs=%.3f",
+            (unsigned long long)core.frameNo,unsigned(ran),(unsigned long)std::uint32_t(hr),(unsigned long)std::uint32_t(core.coopState.load()),double(end-start)/1e6,
+            replayStart?double(replayStart-start)/1e6:0.0,replayEnd?double(replayEnd-replayStart)/1e6:0.0,replayEnd?double(end-replayEnd)/1e6:0.0);callerLog(line);}
         if(!ran)return D3DERR_INVALIDCALL;
         if(SUCCEEDED(hr))pp=sc0->pp;
         return hr;
@@ -648,6 +662,7 @@ private:
             if(!k){Info in;in.w=sc0->pp.BackBufferWidth;in.h=sc0->pp.BackBufferHeight;in.fmt=unsigned(sc0->pp.BackBufferFormat);in.usage=D3::kUsageRT;in.pool=D3::kPoolDefault;in.ms=unsigned(sc0->pp.MultiSampleType);in.msq=sc0->pp.MultiSampleQuality;
                    k=new StreamSurface(&c,in,sc0,nullptr);k->refs.store(0);k->use.store(0);sc0->kids[i]=k;}
             k->info.w=sc0->pp.BackBufferWidth;k->info.h=sc0->pp.BackBufferHeight;k->info.fmt=unsigned(sc0->pp.BackBufferFormat);
+            k->info.ms=unsigned(sc0->pp.MultiSampleType);k->info.msq=sc0->pp.MultiSampleQuality;
             if(k->inner)continue;
             IDirect3DSurface9* b=nullptr;
             if(i<n&&SUCCEEDED(sc->GetBackBuffer(i,(D3DBACKBUFFER_TYPE)0,&b))&&b){c.reg.bindInner(k,b);k->dead.store(false);}else k->dead.store(true);

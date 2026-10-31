@@ -1,5 +1,6 @@
 // Settings overlay: the device window's subclass, the input queue, the ImGui context and drawing. See settings_overlay.h.
 #include "settings_overlay.h"
+#include "hdr_compiled_shaders.h"
 #include <windows.h>
 #include <algorithm>
 #include <atomic>
@@ -214,6 +215,7 @@ bool loadSystemFont(const wchar_t* name,float pixels,const ImWchar* ranges){
 
 class Impl final : public Overlay {
     IDirect3DDevice9* device;
+    IDirect3DPixelShader9* hdrShader=nullptr;float hdrWhite=0;
     std::shared_ptr<NorthlightSettings::Service> service;
     Log log;
     std::string hotkeyName;
@@ -311,6 +313,12 @@ class Impl final : public Overlay {
     }
     // Outside the game's scene (Present comes after its EndScene), onto the implicit swap chain's back buffer, over
     // everything the game drew. The caller's SavedState restores all of this.
+    static void hdrDrawState(const ImDrawList*,const ImDrawCmd* command){
+        auto& self=*static_cast<Impl*>(command->UserCallbackData);
+        const float color[]={self.hdrWhite/80,self.hdrWhite/80,self.hdrWhite/80,0};
+        self.device->SetPixelShader(self.hdrShader);self.device->SetPixelShaderConstantF(0,color,1);
+        self.device->SetRenderState(D3DRS_SRGBWRITEENABLE,FALSE);
+    }
     void render(IDirect3DSurface9* back,const D3DSURFACE_DESC& desc){
         device->SetRenderTarget(0,back);
         for(DWORD i=1;i<4;++i)device->SetRenderTarget(i,nullptr);
@@ -326,6 +334,13 @@ class Impl final : public Overlay {
         device->SetTextureStageState(0,D3DTSS_TEXCOORDINDEX,0);device->SetTextureStageState(0,D3DTSS_TEXTURETRANSFORMFLAGS,D3DTTFF_DISABLE);
         device->SetTextureStageState(0,D3DTSS_RESULTARG,D3DTA_CURRENT);
         device->SetStreamSourceFreq(0,1);
+        if(hdrWhite>0){
+            if(!hdrShader&&FAILED(device->CreatePixelShader(reinterpret_cast<const DWORD*>(kHdrOverlay),&hdrShader))){fail("HDR overlay shader unavailable");return;}
+            // The backend initializes fixed-function state before processing callbacks.
+            // Insert our transfer after that setup for each command list.
+            auto* data=ImGui::GetDrawData();
+            for(int i=0;i<data->CmdListsCount;++i){ImDrawCmd command;command.UserCallback=&hdrDrawState;command.UserCallbackData=this;data->CmdLists[i]->CmdBuffer.insert(data->CmdLists[i]->CmdBuffer.begin(),command);}
+        }
         if(FAILED(device->BeginScene()))return;
         ImGui_ImplDX9_RenderDrawData(ImGui::GetDrawData());
         device->EndScene();
@@ -383,11 +398,13 @@ public:
             if(context){ImGui::SetCurrentContext(context);if(backend)ImGui_ImplDX9_Shutdown();ImGui::DestroyContext(context);}
         }catch(...){}
         context=nullptr;
+        if(hdrShader)hdrShader->Release();
         device->Release();
     }
     bool visible()const override{return hook.open.load(std::memory_order_relaxed)||background.load(std::memory_order_relaxed);}
-    void draw() override{
+    void draw(float uiWhite=0) override{
         std::lock_guard<std::mutex> lock(mutex);
+        hdrWhite=uiWhite;
         if(failed)return;
         try{frame();}
         catch(const std::exception& e){fail(e.what());}

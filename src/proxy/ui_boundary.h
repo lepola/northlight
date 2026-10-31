@@ -5,7 +5,10 @@
 #include <cstddef>
 #include <cstdint>
 #include <cmath>
+#include <atomic>
 namespace NorthlightUiBoundary {
+// Only a previously learned shader may bypass the next device's learning period.
+inline std::atomic<std::uint64_t> rememberedVsHash{0};
 inline bool clipWOne(const float c3[4]){return std::fabs(c3[0])+std::fabs(c3[1])+std::fabs(c3[2])<.001f&&std::fabs(c3[3]-1.f)<.001f;}
 // c = VS constants c0..c3 (16 floats): finite, c3 = (0,0,0,1), and the x/y rows carry a scale (not all zero).
 inline bool screenSpaceRows(const float c[16]){
@@ -19,6 +22,25 @@ inline bool screenSpaceRows(const float c[16]){
 // UI disables depth testing either with ZENABLE off or ZFUNC ALWAYS. A stale
 // comparison function is irrelevant while Z is disabled.
 inline bool accepts(bool zWrite,const float* c,bool zFuncAlways=true,bool zEnabled=true){return !zWrite&&(!zEnabled||zFuncAlways)&&c&&screenSpaceRows(c);}
+// Native pixel-space text (including Ctrl+R) has a distinct VS from the
+// scalable UI. Its full-window orthographic transform is sufficient proof;
+// world names retain the world depth band and cannot satisfy this predicate.
+inline bool fullWindowOrthoRows(const float c[16],unsigned width,unsigned height,float minZ,float maxZ){
+    if(!width||!height||minZ!=0||maxZ!=1||!screenSpaceRows(c))return false;
+    const float sx=2.f/width,sy=2.f/height;
+    // Scalable UI uses logical units (observed scales 2.29469/4.07946 at
+    // 3840x2160), while Ctrl+R uses physical pixels. Both preserve aspect and
+    // the full-window origin, including the native half-pixel adjustment.
+    const float aspect=float(height)/width;
+    return c[0]>0&&std::fabs(c[5])>0&&std::fabs(c[0]/std::fabs(c[5])-aspect)<aspect*.001f&&
+        std::fabs(std::fabs(c[3])-1)<=2*sx&&std::fabs(std::fabs(c[7])-1)<=2*sy&&
+        c[1]==0&&c[2]==0&&c[4]==0&&c[6]==0&&c[8]==0&&c[9]==0;
+}
+// The former physical-pixel gate remains the regression counterfactual.
+inline bool pixelSpaceRows(const float c[16],unsigned width,unsigned height,float minZ,float maxZ){
+    return fullWindowOrthoRows(c,width,height,minZ,maxZ)&&std::fabs(c[0]-2.f/width)<2.f/width*.001f&&
+        std::fabs(std::fabs(c[5])-2.f/height)<2.f/height*.001f;
+}
 class Arming{
 public:
     static constexpr unsigned kWarmFrames=2,kArmFrames=120,kLostFrames=120,kMinDrawsPerFrame=8,kSlots=32,kMaxPs=4,kMinSharePercent=10;
@@ -59,6 +81,10 @@ public:
         return tryArm()?Result::Armed:Result::None;
     }
     bool isBoundary(std::uintptr_t vs,std::uintptr_t /*ps*/)const{return armedNow&&vs==lVs;}
+    bool restore(std::uintptr_t vs,std::uintptr_t ps){
+        if(disarmedForever||armedNow||!vs)return false;
+        lVs=vs;lPsCount=ps?1:0;if(ps)lPs[0]=ps;armedNow=true;streak=lostStreak=0;clearCounts();return true;
+    }
     void forget(std::uintptr_t obj){
         if(disarmedForever)return;
         if(armedNow){

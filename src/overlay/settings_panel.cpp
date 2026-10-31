@@ -485,6 +485,7 @@ struct SettingsPanel::State {
         std::map<std::string,bool> used;
         if(auto b=byKey.find("Backend");b!=byKey.end()){used["Backend"]=true;titled("Renderer",{b->second});}
         for(const auto& g:HdrGroups)group(g,byKey,used);
+        if(service){const auto hdr=service->hdrStatus();ImGui::Text("HDR output: %s",hdr.active?"active":"inactive");if(!hdr.reason.empty())ImGui::TextWrapped("%s",hdr.reason.c_str());}
         ImGui::Spacing();
         ImGui::PushTextWrapPos(0);
         ImGui::TextColored(Color::Muted,"HDR needs DXVK 2 or 3, the separate render thread, windowed mode and HDR output from the system or Wine. Restart after switching HDR on or off; its sliders apply live.");

@@ -38,7 +38,7 @@ create=r[r.index('HRESULT STDMETHODCALLTYPE CreateDevice(UINT adapter'):];create
 device=r[r.index('class Device final'):r.index('class Factory final')]
 checks['CreateDevice: stream flag read before the real create, streamActive before the Device, MULTITHREADED added only when streaming']=(
     'unsigned framesAhead=1,frameSkip=0;bool nameMaskWanted=false,occlusionLocal=false;const bool stream=NorthlightStream::commandStreamRequested(rootPath,&framesAhead,&frameSkip,&nameMaskWanted,&occlusionLocal);' in create
-    and create.index('streamActive.store(true')<create.index('real->CreateDevice(adapter,type,window,flags,pp,out)')<create.index('new Device(*out,this)')
+    and create.index('streamActive.store(true')<create.index('real->CreateDevice(adapter,type,window,flags,pp,out)')<create.index('new Device(*out,this,presentation)')
     and 'if(stream)flags|=D3DCREATE_MULTITHREADED;' in create)
 checks['CreateDevice: any stream failure logs CSTREAM disabled and returns the Device unchanged']=(
     'logf("CSTREAM disabled reason=%s",reason);return device;' in r and 'streamActive.store(false' in r and 'catch(...){reason="exception";}' in r)
@@ -51,7 +51,7 @@ checks['the stream\'s buffer read-backs use NorthlightUpload::readBackLock (NOOV
 checks['StreamFramesAhead: key 1..3 2/2/2, read with CommandStream, passed with budgetForFramesAhead']=(
     re.search(r'\{\s*"StreamFramesAhead"\s*,\s*&Settings::streamFramesAhead\s*,\s*1\s*,\s*3\s*,\s*\{\s*2\s*,\s*2\s*,\s*2\s*\}\s*\}',q) is not None and 'unsigned streamFramesAhead=2;' in q
     and 'if(framesAhead)*framesAhead=s.streamFramesAhead;' in hooks and hooks.count('if(framesAhead)*framesAhead=1;')==2
-    and 'options.framesAhead=framesAhead;options.budget=NorthlightStream::budgetForFramesAhead(framesAhead);' in r and 'startStream(*out,pp,framesAhead,frameSkip,occlusionLocal)' in create)
+    and 'options.framesAhead=framesAhead;options.budget=NorthlightStream::budgetForFramesAhead(framesAhead);' in r and 'device=*out;*out=startStream(device,pp,framesAhead,frameSkip,occlusionLocal);' in create)
 # 0.3.200 (frame skip): StreamFrameSkip: 0..1, presets 1/1/1, read by the early reader with CommandStream (0 when unreadable), handed to the
 # stream (Options::frameSkip, whose own default stays 0) and logged on the CSTREAM active line.
 sd=fp.src('stream_device.h').read_text();rt=fp.src('replay_thread.h').read_text()

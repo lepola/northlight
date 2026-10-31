@@ -77,6 +77,9 @@ test_gi_settings_dependencies.py
 test_gpu_budget.py
 test_gpu_budget_wiring.py
 test_gtao_grazing.py
+test_hdr_boundary.py
+test_hdr_color_resources.py
+test_hdr_reset.py
 test_horizon_haze.py
 test_index_working_set.py
 test_install_delivery.py
@@ -165,6 +168,7 @@ test_replay_skin_safety.py
 test_replay_upload.py
 test_rigid_memory.py
 test_settings_overlay.py
+test_settings_overlay_gpu.py
 test_settings_service.py
 test_shader_read_set.py
 test_shader_read_set_client.py
@@ -212,6 +216,7 @@ test_tracked_snapshot.py
 test_translucent_actor_depth.py
 test_translucent_depth_census.py
 test_ui_boundary.py
+test_ui_water_boundary.py
 test_uncached_map_skip_wiring.py
 test_underwater_fade.py
 test_unlisted_archive.py

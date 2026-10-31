@@ -31,12 +31,12 @@ AUDITED_DIRECT = set('SetRenderState SetSamplerState SetTextureStageState SetTra
                      'SetScissorRect SetViewport SetFVF SetStreamSourceFreq SetVertexShaderConstantF SetVertexShaderConstantI SetVertexShaderConstantB '
                      'SetPixelShaderConstantF SetPixelShaderConstantI SetPixelShaderConstantB SetNPatchMode SetSoftwareVertexProcessing '
                      'SetCurrentTexturePalette SetPaletteEntries SetTexture SetVertexShader SetPixelShader SetVertexDeclaration SetStreamSource '
-                     'SetIndices SetRenderTarget SetDepthStencilSurface'.split())
+                     'SetIndices SetDepthStencilSurface'.split())
 assert {n for _, n in gf.DIRECT} == AUDITED_DIRECT, sorted({n for _, n in gf.DIRECT} ^ AUDITED_DIRECT)
 assert all(i == 'IDirect3DDevice9' for i, _ in gf.DIRECT)
 for never in ('DrawPrimitive', 'DrawIndexedPrimitive', 'DrawPrimitiveUP', 'DrawIndexedPrimitiveUP', 'Clear', 'Present', 'Reset', 'BeginScene', 'EndScene',
               'CreateVertexShader', 'CreatePixelShader', 'CreateTexture', 'CreateVertexBuffer', 'CreateIndexBuffer', 'ProcessVertices', 'StretchRect',
-              'ColorFill', 'UpdateSurface', 'UpdateTexture', 'BeginStateBlock', 'EndStateBlock', 'ShowCursor', 'SetCursorPosition', 'SetCursorProperties'):
+              'ColorFill', 'UpdateSurface', 'UpdateTexture', 'SetRenderTarget', 'BeginStateBlock', 'EndStateBlock', 'ShowCursor', 'SetCursorPosition', 'SetCursorProperties'):
     assert ('IDirect3DDevice9', never) not in gf.DIRECT, never
 RENDERER = fp.src('renderer.cpp').read_text()
 DEVICE_SRC = RENDERER[RENDERER.index('class Device final'):RENDERER.index('class Factory final')]
@@ -89,7 +89,7 @@ BODIES = {
     'RECT': 'LONG left;LONG top;LONG right;LONG bottom;', 'POINT': 'LONG x;LONG y;', 'D3DRECT': 'LONG x1;LONG y1;LONG x2;LONG y2;',
     'D3DVIEWPORT9': 'DWORD X;DWORD Y;DWORD Width;DWORD Height;float MinZ;float MaxZ;',
     'D3DVERTEXELEMENT9': 'WORD Stream;WORD Offset;BYTE Type;BYTE Method;BYTE Usage;BYTE UsageIndex;',
-    'D3DPRESENT_PARAMETERS': 'UINT BackBufferWidth;UINT BackBufferHeight;D3DFORMAT BackBufferFormat;UINT BackBufferCount;D3DMULTISAMPLE_TYPE MultiSampleType;DWORD MultiSampleQuality;BOOL Windowed;DWORD pad[8];',
+    'D3DPRESENT_PARAMETERS': 'UINT BackBufferWidth;UINT BackBufferHeight;D3DFORMAT BackBufferFormat;UINT BackBufferCount;D3DMULTISAMPLE_TYPE MultiSampleType;DWORD MultiSampleQuality;BOOL Windowed;DWORD Flags;UINT FullScreen_RefreshRateInHz;DWORD PresentationInterval;DWORD pad[5];',
     'D3DDEVICE_CREATION_PARAMETERS': 'UINT AdapterOrdinal;unsigned DeviceType;HWND hFocusWindow;DWORD BehaviorFlags;',
     'RGNDATAHEADER': 'DWORD dwSize;DWORD iType;DWORD nCount;DWORD nRgnSize;RECT rcBound;', 'RGNDATA': 'RGNDATAHEADER rdh;char Buffer[1];',
 }

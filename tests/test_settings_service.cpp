@@ -29,8 +29,9 @@ int main(int argc,char** argv){
     auto next=active.quality;next.weather=1;next.commandStream=0;auto applied=liveQualityUpdate(active.quality,next);assert(applied.weather==1&&applied.commandStream==active.quality.commandStream);
     unsigned live=0;for(const auto& k:NorthlightQuality::Keys)live+=liveQuality(k.name);assert(live>40&&live<std::size(NorthlightQuality::Keys));
     for(const auto& f:fields)if(f.file==2&&f.section=="default"&&f.key=="sun_fog_gain")assert(f.inherited=="1"&&std::stof(f.factory)==4.3f);
-    // HDR keys have no consumer in this build: listed (files stay preserved, UI shows them disabled) but never writable.
-    {unsigned hdrFields=0;for(const auto& f:fields)if(f.file==1&&f.section=="Renderer"&&f.key!="Backend"){++hdrFields;assert(!f.available);fails([&]{applyChanges(docs,fields,f.id()+"\t"+f.factory+"\n");});}assert(hdrFields==6);
+    // This integration retains the HDR consumer: output mode restarts, grading applies live.
+    {unsigned hdrFields=0;for(const auto& f:fields)if(f.file==1&&f.section=="Renderer"&&f.key!="Backend"){++hdrFields;assert(f.available&&f.apply==(f.key=="ExperimentalHDR"?"R":"F"));auto edited=applyChanges(docs,fields,f.id()+"\t"+f.factory+"\n");assert(configOf(edited,"").hdr.size()==6);}assert(hdrFields==6);
+     auto unavailable=fields;for(auto& f:unavailable)if(f.key=="HDRMaxNits")f.available=false;fails([&]{applyChanges(docs,unavailable,"R\tRenderer\tHDRMaxNits\t600\n");});
      Document hdrDoc("[Renderer]\nHDRContrast=1.35\nHDRExposure=-1.25\nHDRPaperWhite=240\n");auto g=configOf({Document(""),hdrDoc,Document(""),Document("")},"");assert(g.hdr[4]==1.35f&&g.hdr[5]==-1.25f&&g.hdr[1]==240);}
     // Lock waits: a holder that lets go within the wait is tolerated, one that does not is not.
     {std::thread holder([&]{TransactionLock lease(root);std::this_thread::sleep_for(std::chrono::milliseconds(150));});std::this_thread::sleep_for(std::chrono::milliseconds(30));
@@ -97,11 +98,13 @@ int main(int argc,char** argv){
      assert(service.status().restartRequired&&service.status().message.find("restart")!=std::string::npos);
      auto after=service.snapshot();assert(after->revision==saved->revision&&find(after,"Weather").saved==flipped&&find(after,"CommandStream").saved=="0"&&find(after,"CommandStream").active!="0");
      service.acknowledge(*saved);assert(service.revision()==saved->revision);
-     // unavailable (HDR) fields are rejected by commit and preview; they stay listed in the snapshot
-     {bool listed=false;for(const auto& f:service.snapshot()->fields)if(f.key=="HDRMaxNits"){listed=true;assert(!f.available);}assert(listed);
-      const auto before=store.read();const auto s=service.status().serial;assert(service.commit(service.snapshot()->revision,{{"R\tRenderer\tHDRMaxNits","600"}}));assert(waitFor([&]{return idle()&&service.status().serial>s;}));
-      assert(service.status().state==Status::State::Error&&service.status().message.find("not supported")!=std::string::npos&&store.read()==before);
-      const auto s2=service.status().serial;assert(service.preview({{"R\tRenderer\tHDRMaxNits","600"}}));assert(waitFor([&]{return idle()&&service.status().serial>s2;}));assert(service.status().state!=Status::State::Error&&store.read()==before);} // preview skips unavailable fields silently
+     // HDR preview changes the running grading while preserving every saved byte.
+     {bool listed=false;for(const auto& f:service.snapshot()->fields)if(f.key=="HDRMaxNits"){listed=true;assert(f.available);}assert(listed);
+      const auto before=store.read();const auto serial=service.status().serial;assert(service.preview({{"R\tRenderer\tHDRMaxNits","600"},{"R\tRenderer\tExperimentalHDR","1"}}));
+      assert(waitFor([&]{return idle()&&service.status().serial>serial;}));auto p=service.after(saved->revision);assert(p&&p->preview&&p->runtime->hdr[3]==600&&p->runtime->hdr[0]==saved->runtime->hdr[0]&&store.read()==before);
+      service.acknowledge(*p);assert(service.clearPreview());assert(waitFor([&]{auto v=service.after(p->revision);return idle()&&v&&!v->preview;}));auto restored=service.after(p->revision);assert(restored->runtime->hdr==saved->runtime->hdr&&store.read()==before);service.acknowledge(*restored);
+      const auto bad=service.status().serial;assert(service.commit(saved->revision,{{"R\tRenderer\tHDRMaxNits","99999999"}}));assert(waitFor([&]{return idle()&&service.status().serial>bad;}));assert(service.status().state==Status::State::Error&&store.read()==before);
+      service.setHdrStatus(true,0,"active scRGB");const auto status=service.hdrStatus();assert(status.active&&status.code==0&&status.reason=="active scRGB");}
      // stale base and bad values fail without touching the files
      const auto committed=store.read();const auto serial3=service.status().serial;
      assert(service.commit(snap->revision,{{"Q\tQuality\tWeather",savedWeather?"1":"0"}}));assert(waitFor([&]{return idle()&&service.status().serial>serial3;}));

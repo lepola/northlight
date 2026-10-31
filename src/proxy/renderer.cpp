@@ -221,6 +221,8 @@ template<class T> static uint64_t shaderHash(T* shader, std::vector<DWORD>& word
 }
 
 #include "saved_state.h"
+#include "hdr_presentation.h"
+#include "hdr_color.h"
 
 #include "gpu_profile.h"
 #include "gpu_frame_timer.h" // 0.3.200 (gpu budget)
@@ -252,14 +254,17 @@ struct PresentTicks {
     void present(){if(on)QueryPerformanceCounter(&done);}
 };
 static void finishDeviceFrame(IDirect3DDevice9* owner,bool implicitChain);
+static bool hdrGamePresentation(IDirect3DDevice9* owner,D3DPRESENT_PARAMETERS* out);
+static bool hdrGameBackBuffer(IDirect3DDevice9* owner,unsigned index,IDirect3DSurface9** out);
 static void presentedDeviceFrame(IDirect3DDevice9* owner,const PresentTicks& ticks);
 class SwapChain final : public ForwardIDirect3DSwapChain9 {
     LONG refs=1;
     IDirect3DDevice9* owner;
     NorthlightMirrorResources::Registry* resources;
+    bool primary;
 public:
     bool implicitChain; /* swap chain 0 (GetSwapChain(0)): the settings overlay draws only for its Present */
-    SwapChain(IDirect3DSwapChain9* r,IDirect3DDevice9* d,NorthlightMirrorResources::Registry* registry,bool implicit):ForwardIDirect3DSwapChain9(r),owner(d),resources(registry),implicitChain(implicit){owner->AddRef();}
+    SwapChain(IDirect3DSwapChain9* r,IDirect3DDevice9* d,NorthlightMirrorResources::Registry* registry,bool implicit):ForwardIDirect3DSwapChain9(r),owner(d),resources(registry),primary(implicit),implicitChain(implicit){owner->AddRef();}
     ~SwapChain(){real->Release();owner->Release();}
     HRESULT STDMETHODCALLTYPE QueryInterface(REFIID id,void** out) override {
         if(!out)return E_POINTER;
@@ -269,8 +274,9 @@ public:
     ULONG STDMETHODCALLTYPE AddRef() override{return InterlockedIncrement(&refs);}
     ULONG STDMETHODCALLTYPE Release() override{auto n=InterlockedDecrement(&refs);if(!n)delete this;return n;}
     HRESULT STDMETHODCALLTYPE GetDevice(IDirect3DDevice9** out) override{if(!out)return D3DERR_INVALIDCALL;*out=owner;owner->AddRef();return D3D_OK;}
+    HRESULT STDMETHODCALLTYPE GetPresentParameters(D3DPRESENT_PARAMETERS* out) override{if(!out)return D3DERR_INVALIDCALL;if(primary&&hdrGamePresentation(owner,out))return S_OK;return real->GetPresentParameters(out);}
     HRESULT STDMETHODCALLTYPE GetBackBuffer(UINT index,D3DBACKBUFFER_TYPE type,IDirect3DSurface9** out) override{
-        MirrorGuard lock(resources->gate(),MirrorSite::SwapChain);HRESULT hr=real->GetBackBuffer(index,type,out);if(SUCCEEDED(hr))resources->wrap(out);return hr;
+        MirrorGuard lock(resources->gate(),MirrorSite::SwapChain);HRESULT hr=primary&&type==D3DBACKBUFFER_TYPE_MONO&&out&&hdrGameBackBuffer(owner,index,out)?S_OK:real->GetBackBuffer(index,type,out);if(SUCCEEDED(hr))resources->wrap(out);return hr;
     }
     HRESULT STDMETHODCALLTYPE GetFrontBufferData(IDirect3DSurface9* surface) override{
         MirrorGuard lock(resources->gate(),MirrorSite::SwapChain);return real->GetFrontBufferData(resources->unwrap(surface));
@@ -306,6 +312,11 @@ class Device final : public GuardedMirrorDevice {
     DeviceMirror mirrorState;
     NorthlightMirrorResources::Registry mirrorResources;
     ExtensionDevice* ext;
+    NorthlightHdr::Presentation hdr;NorthlightHdr::Color hdrColor;
+    IDirect3DSurface9* hdrLegacyBack=nullptr;IDirect3DSurface9* hdrPresentBack=nullptr;
+    std::vector<IDirect3DSurface9*> hdrLegacyExtra;
+    bool hdrUiPhase=false;unsigned hdrFailuresLogged=0,hdrLogicalCopies=0;
+    const char* hdrLastBoundary=nullptr;unsigned hdrBoundaryLogs=0,hdrDeferredLogs=0,hdrDeferredFrame=~0u;
     NorthlightStateBlockPool stateBlocks;
     static void mirrorEscape(void* context,const char* reason)noexcept{static_cast<DeviceMirror*>(context)->disable(reason);}
     static void bufferEscape(IDirect3DDevice9* owner,const char* reason)noexcept{static_cast<Device*>(owner)->mirrorState.disable(reason);}
@@ -366,7 +377,7 @@ class Device final : public GuardedMirrorDevice {
         lastVs.wmo=world&&world->recognizesWmo(vs);lastVs.world=world&&world->isWorldShader(vs);lastVs.skinned=world&&world->isSkinnedShader(vs);lastVs.family=unsigned(lastVs.entry>>kFamilyShift)&7u;return lastVs;
     }
     std::unordered_map<IDirect3DPixelShader9*, uint64_t> psHashes;
-    std::unordered_map<void*, NorthlightShaderReads::ReadSet> shaderReads; // vertex and pixel shaders by raw pointer: what each can read of the API state (scanned at creation, only with SpellLayer=1 (spellOn is fixed at device creation and only ever drops to false, so no shader is missed); a re-created shader at a freed address overwrites its entry, like vsHashes; the spell layer records only that)
+    std::unordered_map<void*, NorthlightShaderReads::ReadSet> shaderReads; // Exact API reads for spell replay and HDR boundary admission; creation overwrites reused shader addresses.
     std::unordered_map<IDirect3DVertexShader9*, uint8_t> vsFogProven; // vertex shaders whose fog output is provably the c30 ramp (spell_fog_proof.h, scanned at creation; SpellLayer=1 only)
     NorthlightSpellFog::Freshness spellFogFreshness; // has the world render published a new fog estimate since the last frame end?
     std::unordered_map<IDirect3DPixelShader9*, int> psFogReg; // ps_3_0 shaders: the proven fog colour constant of the combiner epilogue (legacy_fog.h ps3FogColorRegister), -1 unknown (SpellLayer=1 only)
@@ -486,6 +497,119 @@ private:
     // periodic lines. Never a rendering decision; Diagnostics=0 turns every sample off.
     bool sampled()const{return NorthlightRenderThreadProbe::sampleFrame(frame)&&NorthlightDiagnostics::enabled();}
     static bool diagnostics(){return NorthlightDiagnostics::enabled();}
+    bool hdrBackTarget(){
+        IDirect3DSurface9* target=nullptr;const bool borrowed=ext->peekRenderTarget(0,target);
+        if(!borrowed&&FAILED(ext->GetRenderTarget(0,&target)))return false;
+        const bool back=target&&(target==hdrLegacyBack||target==hdrPresentBack);if(!borrowed)drop(target);return back;
+    }
+    void releaseHdrTargets(){
+        if(hdrLegacyBack&&hdrPresentBack)ext->SetRenderTarget(0,hdrPresentBack);
+        drop(hdrLegacyBack);drop(hdrPresentBack);
+        for(auto*& target:hdrLegacyExtra)drop(target);hdrLegacyExtra.clear();
+    }
+    HRESULT hdrBindBack(IDirect3DSurface9* target){
+        D3DVIEWPORT9 vp{};RECT scissor{};HRESULT hr=ext->GetViewport(&vp);
+        if(SUCCEEDED(hr))hr=ext->GetScissorRect(&scissor);
+        if(SUCCEEDED(hr))hr=ext->SetRenderTarget(0,target);
+        if(SUCCEEDED(hr))hr=ext->SetViewport(&vp);
+        if(SUCCEEDED(hr))hr=ext->SetScissorRect(&scissor);
+        return hr;
+    }
+    const char* hdrBoundarySource(){
+        IDirect3DVertexShader9* vs=nullptr;
+        const bool borrowed=ext->peekVertexShader(vs);
+        const HRESULT hr=borrowed?S_OK:ext->GetVertexShader(&vs);
+        if(FAILED(hr)){
+            if(!borrowed)drop(vs);
+            if(hdrDeferredLogs<8&&hdrDeferredFrame!=frame){hdrDeferredFrame=frame;++hdrDeferredLogs;
+                logf("HDR boundary deferred frame=%u reason=shader-query-failed VS=0x%08lx",frame,(unsigned long)hr);}
+            return nullptr;
+        }
+        const VsClass& vc=classifyVs(vs);
+        // Once the world UI is known, keep that proof even with effects off.
+        // prepareDraw does not establish terrain while the master switch is off.
+        const char* source=(vc.entry&kTagMask)==2?"stock-ui":
+            uiFallback.isBoundary(reinterpret_cast<std::uintptr_t>(vs),0)?"learned-ui":
+            vs&&!vc.world&&!vc.wmo&&!vc.skinned&&!(vc.entry&kWaterTag)&&orthographicUiGeometry()?"orthographic-ui":
+            !terrain&&!uiFallback.armed()&&!uiFallback.disarmed()&&!vc.world&&!vc.wmo&&!vc.skinned&&!(vc.entry&kWaterTag)?"screen-space":nullptr;
+        if(!borrowed)drop(vs);return source;
+    }
+    void hdrLogicalCopy(const char* operation,IDirect3DSurface9* source,IDirect3DSurface9* destination){
+        if(!hdr.active||!hdrUiPhase||!diagnostics()||(source!=hdrLegacyBack&&destination!=hdrLegacyBack))return;
+        if(++hdrLogicalCopies<=8)logf("HDR logical copy after UI frame=%u operation=%s readLegacy=%u writeLegacy=%u count=%u",frame,operation,unsigned(source==hdrLegacyBack),unsigned(destination==hdrLegacyBack),hdrLogicalCopies);
+    }
+    void hdrBoundaryLog(const char* boundary,unsigned boundaryFrame,bool effectsApplied,bool worldSeen){
+        if(hdrBoundaryLogs<12||(hdrBoundaryLogs<64&&hdrLastBoundary!=boundary)){
+            ++hdrBoundaryLogs;hdrLastBoundary=boundary;
+            logf("HDR boundary frame=%u source=%s %s=%u terrain=%u sceneFormat=%u",boundaryFrame,boundary,std::strcmp(boundary,"present")==0?"appliedBeforeFinish":"applied",unsigned(effectsApplied),unsigned(worldSeen),unsigned(sceneFormat));
+        }
+    }
+    HRESULT hdrBegin(bool present,const char* boundary="present"){
+        if(!hdr.active||hdrUiPhase)return S_FALSE;
+        if(!hdrLegacyBack||!hdrPresentBack)return E_FAIL;
+        D3DSURFACE_DESC desc{};HRESULT hr=hdrLegacyBack->GetDesc(&desc);
+        if(SUCCEEDED(hr)&&!resources(desc.Width,desc.Height,desc.Format,true))hr=E_FAIL;
+        bool ownScene=false;if(SUCCEEDED(hr)&&present)ownScene=SUCCEEDED(ext->BeginScene());
+        if(SUCCEEDED(hr)){ExtensionDevice::RawScope raw(*ext);hr=hdrColor.convertWorld(ext,hdrLegacyBack,hdrPresentBack,scene,sceneSurface,desc.Width,desc.Height,hdr.settings.paperWhite,hdr.settings.maxNits,&stateBlocks,hdr.settings.contrast,hdr.settings.exposure);}
+        if(ownScene)ext->EndScene();
+        if(SUCCEEDED(hr)&&!present)hr=hdrBindBack(hdrPresentBack);
+        if(SUCCEEDED(hr)){
+            hdrUiPhase=true;
+            if(!present)hdrBoundaryLog(boundary,frame,applied,terrain);
+        }
+        else if(hdrFailuresLogged++<8)logf("HDR conversion failed frame=%u HRESULT=0x%08lx",frame,(unsigned long)hr);
+        return hr;
+    }
+    bool orthographicUiGeometry(){
+        DWORD z=1,zw=1,zf=0;float rows[16];D3DVIEWPORT9 vp{};
+        return SUCCEEDED(ext->GetRenderState(D3DRS_ZWRITEENABLE,&zw))&&!zw&&
+            SUCCEEDED(ext->GetRenderState(D3DRS_ZENABLE,&z))&&SUCCEEDED(ext->GetRenderState(D3DRS_ZFUNC,&zf))&&(!z||zf==D3DCMP_ALWAYS)&&
+            SUCCEEDED(ext->GetViewport(&vp))&&vp.X==0&&vp.Y==0&&
+            SUCCEEDED(ext->GetVertexShaderConstantF(0,rows,4))&&NorthlightUiBoundary::fullWindowOrthoRows(rows,vp.Width,vp.Height,vp.MinZ,vp.MaxZ);
+    }
+    bool hdrUiInputs(){
+        // Death/glow screen passes can share the UI vertex shader and ortho rows.
+        // A sampled scene target is still scene work: migrate only at atlas UI.
+        auto safe=[&](void* shader,bool vertex){
+            const auto found=shaderReads.find(shader);
+            if(found==shaderReads.end()||!found->second.exact||found->second.vertex!=vertex)return false;
+            const unsigned samplers=found->second.samplers;
+            for(unsigned i=0;i<(vertex?4u:16u);++i)if(samplers&(1u<<i)){
+                const DWORD stage=vertex?D3DVERTEXTEXTURESAMPLER0+i:i;
+                IDirect3DBaseTexture9* texture=nullptr;
+                const HRESULT read=ext->GetTexture(stage,&texture);
+                const bool sceneInput=texture&&NorthlightSpellLayer::isRenderTargetTexture(texture);
+                drop(texture);
+                if(sceneInput&&hdrDeferredLogs<8&&hdrDeferredFrame!=frame){hdrDeferredFrame=frame;++hdrDeferredLogs;
+                    logf("HDR boundary deferred frame=%u reason=scene-texture stage=%s sampler=%u",frame,vertex?"vs":"ps",i);}
+                if(FAILED(read)||sceneInput)return false;
+            }
+            return true;
+        };
+        IDirect3DVertexShader9* vs=nullptr;IDirect3DPixelShader9* ps=nullptr;
+        const bool known=SUCCEEDED(ext->GetVertexShader(&vs))&&SUCCEEDED(ext->GetPixelShader(&ps));
+        const bool ui=known&&safe(vs,true)&&safe(ps,false);
+        drop(vs);drop(ps);return ui;
+    }
+    template<class Draw> HRESULT hdrDraw(Draw draw){
+        if(!hdr.active)return draw();
+        bool linear=false;
+        extensionWork("HDR UI preparation",[&]{
+            if(!hdrUiPhase)if(const char* boundary=hdrBoundarySource()){
+                D3DSURFACE_DESC desc{};float rows[16];DWORD zwrite=1,zfunc=0,z=1;
+                if(SUCCEEDED(ext->GetRenderState(D3DRS_ZWRITEENABLE,&zwrite))&&SUCCEEDED(ext->GetRenderState(D3DRS_ZFUNC,&zfunc))&&
+                   SUCCEEDED(ext->GetRenderState(D3DRS_ZENABLE,&z))&&SUCCEEDED(ext->GetVertexShaderConstantF(0,rows,4))&&NorthlightUiBoundary::accepts(zwrite!=0,rows,zfunc==D3DCMP_ALWAYS,z!=0)&&fullViewport(desc,nullptr,true,false)&&hdrBackTarget()&&hdrUiInputs()){
+                    if(!applied){renderEffects();spellReplay();}hdrBegin(false,boundary);
+                }
+            }
+            linear=hdrUiPhase&&hdrBackTarget();
+        });
+        if(!linear)return draw();
+        bool submitted=false;HRESULT hr=E_FAIL;const unsigned rejected=hdrColor.rejected;
+        extensionWork("HDR UI draw",[&]{hr=hdrColor.draw(ext,hdr.settings.uiWhite,[&]{submitted=true;return draw();});});
+        if(hdrColor.rejected!=rejected&&hdrFailuresLogged++<8)logf("HDR unconverted UI draw frame=%u rejected=%u; experimental shader coverage incomplete",frame,hdrColor.rejected);
+        return submitted?hr:draw();
+    }
     // 0.3.154: the per-draw timing scopes; off on drawGate U frames (gateUntimed needs RenderProfile).
     bool sampledDrawTimers()const{return NorthlightRenderThreadProbe::profiling()&&sampled()&&!gateUntimed;}
     // stage is read when a fault is reported (0.3.187: drawHook names the step that was running).
@@ -515,7 +639,7 @@ private:
         if (!failed) logf("DISABLED: %s failed HRESULT=0x%08lx", stage, (unsigned long)hr);
         failed = true; return true;
     }
-    bool resources(UINT w, UINT h, D3DFORMAT format) {
+    bool resources(UINT w, UINT h, D3DFORMAT format, bool colorOnly=false) {
         // DXVK 3's 1x depth+stencil RESZ copy can leave INTZ unchanged (proved
         // with a nonzero sentinel). DF24 copies depth alone, which is all our
         // snapshots consume; NameMask still uses the original world stencil.
@@ -527,22 +651,27 @@ private:
         const D3DFORMAT intz=(D3DFORMAT)MAKEFOURCC('I','N','T','Z'),df24=(D3DFORMAT)MAKEFOURCC('D','F','2','4');
         const D3DFORMAT depthFormat=!worldDepthDescKnown&&depthSnapshotFormat!=D3DFMT_UNKNOWN?depthSnapshotFormat
             :NorthlightBackend::isPackagedDxvk(selectedBackend)&&!df24Refused&&worldDepthDescKnown&&worldDepthDesc.MultiSampleType==D3DMULTISAMPLE_NONE?df24:intz;
-        // Method switches replace shaders while keeping the existing scene/depth targets.
-        const DWORD* aoContactShaders[]={kAoContactBloomShader,kHdaoContactBloomShader,kHbaoPlusContactBloomShader,kGtaoContactBloomShader};
-        if (!aoPS && error(ext->CreatePixelShader(kAoShader, &aoPS), "AO shader")) return false;
-        if (!aoContactBloomPS && error(ext->CreatePixelShader(aoContactShaders[aoMethod], &aoContactBloomPS), "AO contact bloom shader")) return false;
-        if (!aoBlurPS && error(ext->CreatePixelShader(kAoBlurShader, &aoBlurPS), "AO blur shader")) return false;
-        if (!contactBloomPS && error(ext->CreatePixelShader(kContactBloomShader, &contactBloomPS), "contact bloom shader")) return false;
-        if (!compositePS && error(ext->CreatePixelShader(kCompositeShader, &compositePS), "composite shader")) return false;
-        if (sceneSurface && aoSurface && aoRawSurface && depthTex && w == width && h == height && format == sceneFormat && depthFormat == depthSnapshotFormat) return true;
+        if(!colorOnly){
+            // Method switches replace shaders while keeping the existing scene/depth targets.
+            const DWORD* aoContactShaders[]={kAoContactBloomShader,kHdaoContactBloomShader,kHbaoPlusContactBloomShader,kGtaoContactBloomShader};
+            if (!aoPS && error(ext->CreatePixelShader(kAoShader, &aoPS), "AO shader")) return false;
+            if (!aoContactBloomPS && error(ext->CreatePixelShader(aoContactShaders[aoMethod], &aoContactBloomPS), "AO contact bloom shader")) return false;
+            if (!aoBlurPS && error(ext->CreatePixelShader(kAoBlurShader, &aoBlurPS), "AO blur shader")) return false;
+            if (!contactBloomPS && error(ext->CreatePixelShader(kContactBloomShader, &contactBloomPS), "contact bloom shader")) return false;
+            if (!compositePS && error(ext->CreatePixelShader(kCompositeShader, &compositePS), "composite shader")) return false;
+        }
+        if (sceneSurface && w == width && h == height && format == sceneFormat && (colorOnly || (aoSurface && aoRawSurface && depthTex && depthFormat == depthSnapshotFormat))) return true;
         // Resource replacement must not invalidate this frame's retained depth surface.
-        drop(sceneSurface); drop(scene);
-        if (w!=width || h!=height || depthFormat!=depthSnapshotFormat) {
+        if (w!=width || h!=height || format!=sceneFormat) {drop(sceneSurface); drop(scene);}
+        if (w!=width || h!=height || (!colorOnly && depthFormat!=depthSnapshotFormat)) {
             rainMrtUnbind();rainDepthOk=rainMaskCleared=rainMaskDrawn=false;rainMaskFailed=false;
             drop(aoSurface); drop(ao); drop(aoRawSurface); drop(aoRaw); drop(depthTex); captured=false;drop(rainMaskMS);drop(rainMaskSurface);drop(rainMask);drop(rainDepth); /* 0.3.202 (rain): the mask follows the effect size */
         }
-        width = w; height = h; sceneFormat = format;depthSnapshotFormat=depthFormat;
-        if (error(ext->CreateTexture(w, h, 1, D3DUSAGE_RENDERTARGET, format, D3DPOOL_DEFAULT, &scene, nullptr), "scene texture")) return false;
+        width = w; height = h; sceneFormat = format;
+        if (!scene && error(ext->CreateTexture(w, h, 1, D3DUSAGE_RENDERTARGET, format, D3DPOOL_DEFAULT, &scene, nullptr), "scene texture")) return false;
+        if (!sceneSurface && error(scene->GetSurfaceLevel(0, &sceneSurface), "scene surface")) return false;
+        if(colorOnly)return true; // HDR conversion needs no depth snapshot, AO targets or effect shaders.
+        depthSnapshotFormat=depthFormat;
         if (!depthTex) {
             HRESULT hr=ext->CreateTexture(w, h, 1, D3DUSAGE_DEPTHSTENCIL, depthSnapshotFormat, D3DPOOL_DEFAULT, &depthTex, nullptr);
             // A DXVK without the DF formats (d3d9.supportDFFormats off) refuses DF24: INTZ, not the effects disabled.
@@ -555,7 +684,6 @@ private:
         }
         if (!ao && error(ext->CreateTexture(w/2, h/2, 1, D3DUSAGE_RENDERTARGET, D3DFMT_A16B16G16R16F, D3DPOOL_DEFAULT, &ao, nullptr), "half resolution AO texture")) return false;
         if (!aoRaw && error(ext->CreateTexture(w/2, h/2, 1, D3DUSAGE_RENDERTARGET, D3DFMT_A16B16G16R16F, D3DPOOL_DEFAULT, &aoRaw, nullptr), "half resolution raw AO texture")) return false;
-        if (error(scene->GetSurfaceLevel(0, &sceneSurface), "scene surface")) return false;
         if (!aoSurface && error(ao->GetSurfaceLevel(0, &aoSurface), "AO surface")) return false;
         if (!aoRawSurface && error(aoRaw->GetSurfaceLevel(0, &aoRawSurface), "raw AO surface")) return false;
         logf("Resources %ux%u, AO %ux%u, format=%u depthSnapshot=%s sourceMSAA=%u", w,h,w/2,h/2,unsigned(format),depthSnapshotFormat==(D3DFORMAT)MAKEFOURCC('D','F','2','4')?"DF24":"INTZ",unsigned(worldDepthDesc.MultiSampleType));
@@ -566,7 +694,7 @@ private:
     // 0.3.196 (task 12): backSurface is swap chain 0's back buffer identity (no reference; cleared with backDescKnown in Reset, which frees it).
     D3DSURFACE_DESC backDesc={};bool backDescKnown=false;IDirect3DSurface9* backSurface=nullptr;
     // quiet: a probe (the UI boundary fallback while learning) that neither counts viewportRejects nor spends the VIEWPORT GATE log lines.
-    bool fullViewport(D3DSURFACE_DESC& desc,D3DVIEWPORT9* viewport=nullptr,bool quiet=false) {
+    bool fullViewport(D3DSURFACE_DESC& desc,D3DVIEWPORT9* viewport=nullptr,bool quiet=false,bool requireWorldSize=true) {
         desc={};
         IDirect3DSurface9* rt = nullptr;
         HRESULT rtHR;
@@ -590,7 +718,7 @@ private:
             if(SUCCEEDED(backHR)){backDesc=bd;backDescKnown=true;}else backSurface=nullptr;
         }
         D3DVIEWPORT9 vp={};HRESULT vpHR=ext->GetViewport(&vp);
-        bool ok=SUCCEEDED(rtHR)&&SUCCEEDED(backHR)&&SUCCEEDED(vpHR)&&desc.Width>=640&&desc.Height>=360&&
+        bool ok=SUCCEEDED(rtHR)&&SUCCEEDED(backHR)&&SUCCEEDED(vpHR)&&(!requireWorldSize||(desc.Width>=640&&desc.Height>=360))&&
             desc.Width == bd.Width && desc.Height == bd.Height && vp.X == 0 && vp.Y == 0 &&
             vp.Width == desc.Width && vp.Height == desc.Height &&
             std::isfinite(vp.MinZ)&&std::isfinite(vp.MaxZ)&&vp.MinZ>=0&&vp.MaxZ<=1&&vp.MaxZ>vp.MinZ;
@@ -2003,6 +2131,12 @@ private:
                 renderEffects();spellReplay();
             }
         }
+        if(tag!=1&&tag!=2&&!vc.world&&!vc.wmo&&!vc.skinned&&!(entry&kWaterTag)&&terrain&&!applied&&orthographicUiGeometry()&&hdrUiInputs()){
+            D3DSURFACE_DESC desc{};if(fullViewport(desc,nullptr,true)){
+                if(sampled())logf("EFFECT boundary frame=%u draw=%u kind=orthographic-ui",frame,drawCalls);
+                renderEffects();spellReplay();
+            }
+        }
         uiFallbackDraw(vc,vs);
     }
     // 0.3.203 (task 17): fallback boundary for font mods that replace the UI VS and PS (or only the PS): the first screen-space draw after the world with
@@ -2082,21 +2216,33 @@ public:
     }
     bool setExclusiveOwner(bool on){return mirrorState.gate.setExclusive(on);} /* 0.3.192 (CS): one thread makes every Device call (mirror_guard.h) */
     HRESULT STDMETHODCALLTYPE SetCursorProperties(UINT XHotSpot, UINT YHotSpot, IDirect3DSurface9* pCursorBitmap) override{Guard mirrorLock(mirrorState.gate);return ext->SetCursorProperties(XHotSpot, YHotSpot, mirrorResources.unwrap(pCursorBitmap));}
-    HRESULT STDMETHODCALLTYPE GetBackBuffer(UINT iSwapChain, UINT iBackBuffer, D3DBACKBUFFER_TYPE Type, IDirect3DSurface9** ppBackBuffer) override{Guard mirrorLock(mirrorState.gate);HRESULT hr=ext->GetBackBuffer(iSwapChain, iBackBuffer, Type, ppBackBuffer);if(SUCCEEDED(hr)){mirrorResources.wrap(ppBackBuffer);}return hr;}
+    HRESULT STDMETHODCALLTYPE GetBackBuffer(UINT iSwapChain, UINT iBackBuffer, D3DBACKBUFFER_TYPE Type, IDirect3DSurface9** ppBackBuffer) override{Guard mirrorLock(mirrorState.gate);HRESULT hr=iSwapChain==0&&Type==D3DBACKBUFFER_TYPE_MONO&&ppBackBuffer&&gameBackBuffer(iBackBuffer,ppBackBuffer)?S_OK:ext->GetBackBuffer(iSwapChain, iBackBuffer, Type, ppBackBuffer);if(SUCCEEDED(hr)){mirrorResources.wrap(ppBackBuffer);}return hr;}
     HRESULT STDMETHODCALLTYPE CreateTexture(UINT Width, UINT Height, UINT Levels, DWORD Usage, D3DFORMAT Format, D3DPOOL Pool, IDirect3DTexture9** ppTexture, HANDLE* pSharedHandle) override{Guard mirrorLock(mirrorState.gate);HRESULT hr=ext->CreateTexture(Width, Height, Levels, Usage, Format, Pool, ppTexture, pSharedHandle);if(SUCCEEDED(hr)){NorthlightReplayDrawState::noteTextureFormat(Format);weatherDetect.noteCreate(static_cast<IDirect3DBaseTexture9*>(*ppTexture),Width,Height,Levels,Format); /* 0.3.198 (rain): the raw pointer, before wrap */mirrorResources.wrap(ppTexture);}return hr;}
     HRESULT STDMETHODCALLTYPE CreateVolumeTexture(UINT Width, UINT Height, UINT Depth, UINT Levels, DWORD Usage, D3DFORMAT Format, D3DPOOL Pool, IDirect3DVolumeTexture9** ppVolumeTexture, HANDLE* pSharedHandle) override{Guard mirrorLock(mirrorState.gate);HRESULT hr=ext->CreateVolumeTexture(Width, Height, Depth, Levels, Usage, Format, Pool, ppVolumeTexture, pSharedHandle);if(SUCCEEDED(hr)){NorthlightReplayDrawState::noteTextureFormat(Format);weatherDetect.forget(static_cast<IDirect3DBaseTexture9*>(*ppVolumeTexture)); /* 0.3.198 (rain): address reuse */mirrorResources.wrap(ppVolumeTexture);}return hr;}
     HRESULT STDMETHODCALLTYPE CreateCubeTexture(UINT EdgeLength, UINT Levels, DWORD Usage, D3DFORMAT Format, D3DPOOL Pool, IDirect3DCubeTexture9** ppCubeTexture, HANDLE* pSharedHandle) override{Guard mirrorLock(mirrorState.gate);HRESULT hr=ext->CreateCubeTexture(EdgeLength, Levels, Usage, Format, Pool, ppCubeTexture, pSharedHandle);if(SUCCEEDED(hr)){NorthlightReplayDrawState::noteTextureFormat(Format);weatherDetect.forget(static_cast<IDirect3DBaseTexture9*>(*ppCubeTexture)); /* 0.3.198 (rain): address reuse */mirrorResources.wrap(ppCubeTexture);}return hr;}
     HRESULT STDMETHODCALLTYPE CreateRenderTarget(UINT Width, UINT Height, D3DFORMAT Format, D3DMULTISAMPLE_TYPE MultiSample, DWORD MultisampleQuality, WINBOOL Lockable, IDirect3DSurface9** ppSurface, HANDLE* pSharedHandle) override{Guard mirrorLock(mirrorState.gate);HRESULT hr=ext->CreateRenderTarget(Width, Height, Format, MultiSample, MultisampleQuality, Lockable, ppSurface, pSharedHandle);if(SUCCEEDED(hr)){mirrorResources.wrap(ppSurface);}return hr;}
     HRESULT STDMETHODCALLTYPE CreateDepthStencilSurface(UINT Width, UINT Height, D3DFORMAT Format, D3DMULTISAMPLE_TYPE MultiSample, DWORD MultisampleQuality, WINBOOL Discard, IDirect3DSurface9** ppSurface, HANDLE* pSharedHandle) override{Guard mirrorLock(mirrorState.gate);{const D3DFORMAT upgraded=D3DFORMAT(NorthlightStream::upgradedDepthFormat(unsigned(Format)));if(upgraded!=Format){Format=upgraded;static bool logged=false;if(!logged){logged=true;logf("NAMEMASK depth upgraded D24X8->D24S8 where=CreateDepthStencilSurface");}}} /* 0.3.212 (task 32): depthUpgrade is set only with NameMask on, as on the StreamDevice path */HRESULT hr=ext->CreateDepthStencilSurface(Width, Height, Format, MultiSample, MultisampleQuality, Discard, ppSurface, pSharedHandle);if(SUCCEEDED(hr)){mirrorResources.wrap(ppSurface);}return hr;}
-    HRESULT STDMETHODCALLTYPE UpdateSurface(IDirect3DSurface9 *src_surface, const RECT *src_rect, IDirect3DSurface9 *dst_surface, const POINT *dst_point) override{Guard mirrorLock(mirrorState.gate);rainMrtUnbind(); /* 0.3.202 (rain mask MRT) */IDirect3DSurface9* rawSource=mirrorResources.unwrap(src_surface);IDirect3DSurface9* rawDestination=mirrorResources.unwrap(dst_surface);if(spellOn)spellCopy(rawSource,rawDestination);return ext->UpdateSurface(rawSource, src_rect, rawDestination, dst_point);}
+    HRESULT STDMETHODCALLTYPE UpdateSurface(IDirect3DSurface9 *src_surface, const RECT *src_rect, IDirect3DSurface9 *dst_surface, const POINT *dst_point) override{Guard mirrorLock(mirrorState.gate);rainMrtUnbind(); /* 0.3.202 (rain mask MRT) */IDirect3DSurface9* rawSource=mirrorResources.unwrap(src_surface);IDirect3DSurface9* rawDestination=mirrorResources.unwrap(dst_surface);hdrLogicalCopy("UpdateSurface",rawSource,rawDestination);if(spellOn)spellCopy(rawSource,rawDestination);return ext->UpdateSurface(rawSource, src_rect, rawDestination, dst_point);}
     HRESULT STDMETHODCALLTYPE UpdateTexture(IDirect3DBaseTexture9* pSourceTexture, IDirect3DBaseTexture9* pDestinationTexture) override{Guard mirrorLock(mirrorState.gate);rainMrtUnbind(); /* 0.3.202 (rain mask MRT) */IDirect3DBaseTexture9* rawDestination=mirrorResources.unwrap(pDestinationTexture);if(spellOn)spellTextureWrite(static_cast<void*>(rawDestination));return ext->UpdateTexture(mirrorResources.unwrap(pSourceTexture), rawDestination);}
-    HRESULT STDMETHODCALLTYPE GetRenderTargetData(IDirect3DSurface9* pRenderTarget, IDirect3DSurface9* pDestSurface) override{Guard mirrorLock(mirrorState.gate);rainMrtUnbind(); /* 0.3.202 (rain mask MRT) */IDirect3DSurface9* rawSource=mirrorResources.unwrap(pRenderTarget);IDirect3DSurface9* rawDestination=mirrorResources.unwrap(pDestSurface);if(spellOn)spellCopy(rawSource,rawDestination);return ext->GetRenderTargetData(rawSource, rawDestination);}
+    HRESULT STDMETHODCALLTYPE GetRenderTargetData(IDirect3DSurface9* pRenderTarget, IDirect3DSurface9* pDestSurface) override{Guard mirrorLock(mirrorState.gate);rainMrtUnbind(); /* 0.3.202 (rain mask MRT) */IDirect3DSurface9* rawSource=mirrorResources.unwrap(pRenderTarget);IDirect3DSurface9* rawDestination=mirrorResources.unwrap(pDestSurface);
+        // Explicit FP16 captures see the HDR image; ordinary SDR readbacks keep the legacy format.
+        IDirect3DSurface9* resolved=nullptr;
+        if(hdr.active&&hdrUiPhase&&rawSource==hdrLegacyBack&&rawDestination){D3DSURFACE_DESC desc{};if(SUCCEEDED(rawDestination->GetDesc(&desc))&&desc.Format==D3DFMT_A16B16G16R16F){
+            rawSource=hdrPresentBack;HRESULT hr=rawSource->GetDesc(&desc);if(FAILED(hr))return hr;
+            // Explicit HDR captures resolve MSAA before the CPU readback.
+            if(desc.MultiSampleType!=D3DMULTISAMPLE_NONE){
+                hr=ext->CreateRenderTarget(desc.Width,desc.Height,desc.Format,D3DMULTISAMPLE_NONE,0,FALSE,&resolved,nullptr);
+                if(SUCCEEDED(hr))hr=ext->StretchRect(rawSource,nullptr,resolved,nullptr,D3DTEXF_NONE);
+                if(FAILED(hr)){drop(resolved);return hr;}rawSource=resolved;
+            }
+        }}
+        hdrLogicalCopy("GetRenderTargetData",rawSource,rawDestination);if(spellOn)spellCopy(rawSource,rawDestination);const HRESULT hr=ext->GetRenderTargetData(rawSource,rawDestination);drop(resolved);return hr;}
     HRESULT STDMETHODCALLTYPE GetFrontBufferData(UINT iSwapChain, IDirect3DSurface9* pDestSurface) override{Guard mirrorLock(mirrorState.gate);return ext->GetFrontBufferData(iSwapChain, mirrorResources.unwrap(pDestSurface));}
-    HRESULT STDMETHODCALLTYPE StretchRect(IDirect3DSurface9 *src_surface, const RECT *src_rect, IDirect3DSurface9 *dst_surface, const RECT *dst_rect, D3DTEXTUREFILTERTYPE filter) override{Guard mirrorLock(mirrorState.gate);rainMrtUnbind(); /* 0.3.202 (rain mask MRT) */IDirect3DSurface9* rawSource=mirrorResources.unwrap(src_surface);IDirect3DSurface9* rawDestination=mirrorResources.unwrap(dst_surface);if(spellOn)spellCopy(rawSource,rawDestination);return ext->StretchRect(rawSource, src_rect, rawDestination, dst_rect, filter);}
-    HRESULT STDMETHODCALLTYPE ColorFill(IDirect3DSurface9 *surface, const RECT *rect, D3DCOLOR color) override{Guard mirrorLock(mirrorState.gate);rainMrtUnbind(); /* 0.3.202 (rain mask MRT) */IDirect3DSurface9* rawSurface=mirrorResources.unwrap(surface);if(spellOn)spellCopy(nullptr,rawSurface);return ext->ColorFill(rawSurface, rect, color);}
+    HRESULT STDMETHODCALLTYPE StretchRect(IDirect3DSurface9 *src_surface, const RECT *src_rect, IDirect3DSurface9 *dst_surface, const RECT *dst_rect, D3DTEXTUREFILTERTYPE filter) override{Guard mirrorLock(mirrorState.gate);rainMrtUnbind(); /* 0.3.202 (rain mask MRT) */IDirect3DSurface9* rawSource=mirrorResources.unwrap(src_surface);IDirect3DSurface9* rawDestination=mirrorResources.unwrap(dst_surface);hdrLogicalCopy("StretchRect",rawSource,rawDestination);if(spellOn)spellCopy(rawSource,rawDestination);return ext->StretchRect(rawSource, src_rect, rawDestination, dst_rect, filter);}
+    HRESULT STDMETHODCALLTYPE ColorFill(IDirect3DSurface9 *surface, const RECT *rect, D3DCOLOR color) override{Guard mirrorLock(mirrorState.gate);rainMrtUnbind(); /* 0.3.202 (rain mask MRT) */IDirect3DSurface9* rawSurface=mirrorResources.unwrap(surface);hdrLogicalCopy("ColorFill",nullptr,rawSurface);if(spellOn)spellCopy(nullptr,rawSurface);return ext->ColorFill(rawSurface, rect, color);}
     HRESULT STDMETHODCALLTYPE CreateOffscreenPlainSurface(UINT Width, UINT Height, D3DFORMAT Format, D3DPOOL Pool, IDirect3DSurface9** ppSurface, HANDLE* pSharedHandle) override{Guard mirrorLock(mirrorState.gate);HRESULT hr=ext->CreateOffscreenPlainSurface(Width, Height, Format, Pool, ppSurface, pSharedHandle);if(SUCCEEDED(hr)){mirrorResources.wrap(ppSurface);}return hr;}
-    HRESULT STDMETHODCALLTYPE SetRenderTarget(DWORD RenderTargetIndex, IDirect3DSurface9* pRenderTarget) override{Guard mirrorLock(mirrorState.gate);return ext->SetRenderTarget(RenderTargetIndex, mirrorResources.unwrap(pRenderTarget));}
-    HRESULT STDMETHODCALLTYPE GetRenderTarget(DWORD RenderTargetIndex, IDirect3DSurface9** ppRenderTarget) override{Guard mirrorLock(mirrorState.gate);HRESULT hr=ext->GetRenderTarget(RenderTargetIndex, ppRenderTarget);if(SUCCEEDED(hr)){mirrorResources.wrap(ppRenderTarget);}return hr;}
+    HRESULT STDMETHODCALLTYPE SetRenderTarget(DWORD RenderTargetIndex, IDirect3DSurface9* pRenderTarget) override{Guard mirrorLock(mirrorState.gate);auto* target=mirrorResources.unwrap(pRenderTarget);if(hdr.active&&hdrUiPhase&&RenderTargetIndex==0&&target==hdrLegacyBack)target=hdrPresentBack;return ext->SetRenderTarget(RenderTargetIndex,target);}
+    HRESULT STDMETHODCALLTYPE GetRenderTarget(DWORD RenderTargetIndex, IDirect3DSurface9** ppRenderTarget) override{Guard mirrorLock(mirrorState.gate);HRESULT hr=ext->GetRenderTarget(RenderTargetIndex, ppRenderTarget);if(SUCCEEDED(hr)&&ppRenderTarget&&*ppRenderTarget){if(hdr.active&&RenderTargetIndex==0&&*ppRenderTarget==hdrPresentBack){(*ppRenderTarget)->Release();*ppRenderTarget=hdrLegacyBack;hdrLegacyBack->AddRef();}mirrorResources.wrap(ppRenderTarget);}return hr;}
     HRESULT STDMETHODCALLTYPE SetDepthStencilSurface(IDirect3DSurface9* pNewZStencil) override{Guard mirrorLock(mirrorState.gate);return ext->SetDepthStencilSurface(mirrorResources.unwrap(pNewZStencil));}
     HRESULT STDMETHODCALLTYPE GetDepthStencilSurface(IDirect3DSurface9** ppZStencilSurface) override{Guard mirrorLock(mirrorState.gate);HRESULT hr=ext->GetDepthStencilSurface(ppZStencilSurface);if(SUCCEEDED(hr)){mirrorResources.wrap(ppZStencilSurface);}return hr;}
     HRESULT STDMETHODCALLTYPE GetTexture(DWORD Stage, IDirect3DBaseTexture9** ppTexture) override{Guard mirrorLock(mirrorState.gate);HRESULT hr=ext->GetTexture(Stage, ppTexture);if(SUCCEEDED(hr)){mirrorResources.wrap(ppTexture);}return hr;}
@@ -2165,7 +2311,7 @@ public:
         if(point)memmapAsync(point);
     }
     bool worldDrawSeen=false,memmapEntryDone=false,memmapDeferredSeen=false;unsigned worldDrawFrame=0;DWORD memmapPeriodicAt=0,memmapDeferredAt=0;
-    Device(IDirect3DDevice9* d,IDirect3D9* p):GuardedMirrorDevice(d,&mirrorState),parent(p),mirrorResources(this,mirrorState.gate,&mirrorEscape,&mirrorState,d),ext(new ExtensionDevice(d,&mirrorState)),stateBlocks(ext) {
+    Device(IDirect3DDevice9* d,IDirect3D9* p,const NorthlightHdr::Presentation& presentation):GuardedMirrorDevice(d,&mirrorState),parent(p),mirrorResources(this,mirrorState.gate,&mirrorEscape,&mirrorState,d),ext(new ExtensionDevice(d,&mirrorState)),hdr(presentation),stateBlocks(ext) {
         mirrorState.gate.ownerTid=MirrorGuard::threadId(); /* 0.3.180 (D0): the CreateDevice caller */
         mirrorState.gate.reportContext=this;mirrorState.gate.report=&gateForeignReport;
         parent->AddRef(); QueryPerformanceFrequency(&cpuFrequency);
@@ -2208,10 +2354,24 @@ public:
         memoryDiagnostics.reset();
         spellTeardown();
         dropBlobFaint();shadowBlobs.reset();celestialDiscs.reset();gpuProfile.reset();gpuSceneProfile.reset();gpuTimer.reset();drop(latencyQuery);water.reset();world.reset();releaseResources();
-        stateBlocks.clear();ext->Release();ext=nullptr;
+        hdrColor.reset();releaseHdrTargets();stateBlocks.clear();ext->Release();ext=nullptr;
         const ULONG backendReferences=real->Release();parent->Release();
         logf("DEVICE lifetime event=destroy-end id=%ld live=%ld backendReleaseCount=%lu tick=%lu",diagnosticId,InterlockedDecrement(&liveDevices),(unsigned long)backendReferences,(unsigned long)GetTickCount());
         memmap("destroy-end");
+    }
+    bool gamePresentation(D3DPRESENT_PARAMETERS* out){Guard mirrorLock(mirrorState.gate);if(!hdr.active)return false;*out=hdr.logical;return true;}
+    bool gameBackBuffer(unsigned index,IDirect3DSurface9** out){Guard mirrorLock(mirrorState.gate);if(!hdr.active||!hdrLegacyBack||index>hdrLegacyExtra.size())return false;*out=index?hdrLegacyExtra[index-1]:hdrLegacyBack;(*out)->AddRef();return true;}
+    HRESULT initHdrTargets(){
+        if(settingsService)settingsService->setHdrStatus(hdr.active,unsigned(hdr.lastStatus),hdr.reason);
+        if(!hdr.active)return S_OK;
+        HRESULT hr=ext->GetBackBuffer(0,0,D3DBACKBUFFER_TYPE_MONO,&hdrPresentBack);D3DSURFACE_DESC desc{};
+        if(SUCCEEDED(hr)&&hdrPresentBack)hr=hdrPresentBack->GetDesc(&desc);else if(SUCCEEDED(hr))hr=E_FAIL;
+        if(SUCCEEDED(hr))hr=ext->CreateRenderTarget(desc.Width,desc.Height,hdr.logical.BackBufferFormat,hdr.logical.MultiSampleType,hdr.logical.MultiSampleQuality,FALSE,&hdrLegacyBack,nullptr);
+        // DISCARD contents are undefined after Present; every exposed buffer keeps the game's 8-bit format.
+        for(unsigned i=1;SUCCEEDED(hr)&&i<hdr.logical.BackBufferCount;++i){IDirect3DSurface9* target=nullptr;hr=ext->CreateRenderTarget(desc.Width,desc.Height,hdr.logical.BackBufferFormat,hdr.logical.MultiSampleType,hdr.logical.MultiSampleQuality,FALSE,&target,nullptr);if(SUCCEEDED(hr))hdrLegacyExtra.push_back(target);}
+        if(SUCCEEDED(hr))hr=ext->SetRenderTarget(0,hdrLegacyBack);
+        if(FAILED(hr)){releaseHdrTargets();if(settingsService)settingsService->setHdrStatus(false,unsigned(hr));}
+        logf("HDR legacy target %ux%u format=%u msaa=%u quality=%lu status=0x%08lx",desc.Width,desc.Height,unsigned(hdr.logical.BackBufferFormat),unsigned(hdr.logical.MultiSampleType),(unsigned long)hdr.logical.MultiSampleQuality,(unsigned long)hr);return hr;
     }
     HRESULT STDMETHODCALLTYPE QueryInterface(REFIID id,void** out) override { Guard mirrorLock(mirrorState.gate);
         if (!out) return E_POINTER;
@@ -2222,15 +2382,25 @@ public:
     ULONG STDMETHODCALLTYPE Release() override {auto n=InterlockedDecrement(&refs);if(!n)delete this;return n;}
     HRESULT STDMETHODCALLTYPE GetDirect3D(IDirect3D9** out) override { Guard mirrorLock(mirrorState.gate);if(!out)return D3DERR_INVALIDCALL;*out=parent;parent->AddRef();return D3D_OK;}
     HRESULT STDMETHODCALLTYPE Reset(D3DPRESENT_PARAMETERS* pp) override { Guard mirrorLock(mirrorState.gate);
+        const bool resetProfile=diagnostics()&&cpuFrequency.QuadPart>0;LARGE_INTEGER resetTicks[10]={};
+        auto resetMark=[&](unsigned index){if(resetProfile)QueryPerformanceCounter(&resetTicks[index]);};resetMark(0);
         nameMaskRunEnd();nameMask.stencilChecked=false; /* 0.3.212 (task 32) */
         rainMrtUnbind(); /* 0.3.202 (rain mask MRT) */
         NorthlightMirrorResources::generation.fetch_add(1,std::memory_order_relaxed); /* task 34: Reset drops the render-target verdicts of every texture */
         if(spellOn){spell.reset();spellSync();spellQueryN=0;spellQueryUnknown=false;spellTexFor=nullptr;spellTexKey=nullptr;spellFade.reset();} /* task 34: no state block, upload buffer or surface may outlive the device state */
+        resetMark(1);
         frameIntervals.reset();frameCost.reset();stallFrames.reset();mirrorResources.queryProfile={};backDescKnown=false;backSurface=nullptr;
-        NorthlightParticleTextures::cache().clear();NorthlightTrackedBuffers::invalidateAll();gpuProfile->reset();gpuSceneProfile->reset();gpuFrameStarted=gpuSceneSplit=gpuEffectsSplit=false;gpuTimer->reset();gpuBudgetQpc=0;boundQpc=0;cpuBudgetQpc=0;cpuEffectsQpc=0;gpuBound.reset();replayWait.reset();replaySkipPrev=0;replayWaitPrevNs=0;drop(latencyQuery);latencyPending=false;latencyFailed=false; releaseResources(); if(world)world->reset();if(water)water->reset();if(celestialDiscs)celestialDiscs->reset();if(shadowBlobs)shadowBlobs->reset(); weatherDetect.reset();weatherSample={}; /* 0.3.198 (rain) */failed=false;latchDrawGates();
+        NorthlightParticleTextures::cache().clear();NorthlightTrackedBuffers::invalidateAll();gpuProfile->reset();gpuSceneProfile->reset();gpuFrameStarted=gpuSceneSplit=gpuEffectsSplit=false;gpuTimer->reset();gpuBudgetQpc=0;boundQpc=0;cpuBudgetQpc=0;cpuEffectsQpc=0;gpuBound.reset();replayWait.reset();replaySkipPrev=0;replayWaitPrevNs=0;drop(latencyQuery);latencyPending=false;latencyFailed=false;resetMark(2);
+        releaseResources();resetMark(3);
+        if(world)world->reset();resetMark(4);
+        if(water)water->reset();if(celestialDiscs)celestialDiscs->reset();if(shadowBlobs)shadowBlobs->reset(); weatherDetect.reset();weatherSample={}; /* 0.3.198 (rain) */failed=false;latchDrawGates();resetMark(5);
         if(pp&&world&&world->nameMask()){D3DDEVICE_CREATION_PARAMETERS cp={};if(SUCCEEDED(ext->GetCreationParameters(&cp)))upgradeAutoDepth(parent,cp.AdapterOrdinal,cp.DeviceType,pp,true,"Reset");} /* 0.3.212 (task 32) */
-        if(overlay)overlay->invalidate(); /* its D3DPOOL_DEFAULT buffers and font texture; recreated by its next draw */
-        HRESULT hr=ext->Reset(pp); logf("Reset HRESULT=0x%08lx",(unsigned long)hr); return hr;
+        if(overlay)overlay->invalidate();
+        resetMark(6);hdrColor.reset();hdrUiPhase=false;releaseHdrTargets();resetMark(7);
+        HRESULT hr=hdr.settings.requested?hdr.reset(real,ext,pp):ext->Reset(pp);resetMark(8);if(SUCCEEDED(hr))hr=initHdrTargets();resetMark(9);
+        if(resetProfile){auto ms=[&](unsigned a,unsigned b){return 1000.*double(resetTicks[b].QuadPart-resetTicks[a].QuadPart)/double(cpuFrequency.QuadPart);};
+            logf("RESET stages frame=%llu prepareMs=%.3f cachesMs=%.3f resourcesMs=%.3f worldMs=%.3f auxiliaryMs=%.3f overlayMs=%.3f hdrReleaseMs=%.3f backendMs=%.3f hdrTargetsMs=%.3f totalMs=%.3f",(unsigned long long)frame,ms(0,1),ms(1,2),ms(2,3),ms(3,4),ms(4,5),ms(5,6),ms(6,7),ms(7,8),ms(8,9),ms(0,9));}
+        logf("Reset HRESULT=0x%08lx HDR=%d",(unsigned long)hr,int(hdr.active)); return hr;
     }
     // Frame boundary only (after clearFrame()): no draw of the finished frame
     // still references a trimmed cache. Warnings are logged with Diagnostics=0.
@@ -2313,7 +2483,7 @@ public:
     void drawOverlay(bool implicitChain){
         if(!implicitChain||!overlay||!overlay->visible())return;
         ExtensionDevice::RawScope raw(*ext);SavedState saved(ext,&stateBlocks);
-        if(saved.ok)overlay->draw();
+        if(saved.ok)overlay->draw(hdr.active?hdr.settings.uiWhite:0.f);
     }
     void finishFrame(bool implicitChain=true) {
         Guard mirrorLock(mirrorState.gate);
@@ -2321,7 +2491,9 @@ public:
         if(spellOn)spellFlush(NorthlightSpellLayer::Reason::Frame,false,NorthlightSpellLayer::InPlaceKind::None,"present"); /* task 34: Present before the boundary */
         struct InvalidateOnReturn {DeviceMirror& state;~InvalidateOnReturn(){state.invalidate();}} invalidate{mirrorState};
         if(extensionFault){clearFrame();drawOverlay(implicitChain);return;}
+        const unsigned finishedFrame=frame;const bool effectsApplied=applied,worldSeen=terrain;
         extensionWork("frame finish",[&]{finishFrameImpl();});
+        if(hdr.active&&!hdrUiPhase)extensionWork("HDR frame finish",[&]{if(SUCCEEDED(hdrBegin(true)))hdrBoundaryLog("present",finishedFrame,effectsApplied,worldSeen);});
         drawOverlay(implicitChain);
     }
     // 0.3.198 (rain): frame end, on the finishing thread, under the gate: the frame's sample into the tracker, the state to the
@@ -2438,6 +2610,7 @@ public:
         key12=k12;key10=k10;
         uiFallbackEndFrame();
         if(frame==1||(frame%600==0&&diagnostics()))logf("frame=%u applied=%u terrainShaders=%u uiShaders=%u projectionRejects=%u terrainThisFrame=%d depth=%d draws=%u missingVS=%u terrainDraws=%u terrainShadowDraws=%u viewportRejects=%u depthRejects=%u uiDraws=%u uiAfterTerrain=%u uiFallback=%u uiFallbackState=%c",frame,appliedFrames,matchedTerrain,matchedUI,projectionRejects,terrain,captured,drawCalls,missingVS,terrainDraws,terrainShadowDraws,viewportRejects,depthRejects,uiDraws,uiAfterTerrain,uiFallbackBoundaries,uiFallback.disarmed()?'d':uiFallback.armed()?'a':'l');
+        if(hdr.active&&diagnostics()&&frame%600==0)logf("HDR state frame=%u uiPhase=%u effectsEnabled=%u patched=%u rejected=%u logicalCopiesAfterUI=%u",frame,unsigned(hdrUiPhase),unsigned(enabled),hdrColor.patched,hdrColor.rejected,hdrLogicalCopies);
         // The address-space sweep is asynchronous; the render thread only compares
         // its result. Trims run below, after clearFrame(), at the frame boundary.
         bool memoryTrim=false;int memoryCaps=-1,memoryWorld=-1; /* -1 unchanged, 0 full, 1 half (stream, replay copies); memoryWorld: 1 in any pressure episode (the world's caches and pool shrink, no lock cost), 0 after recovery */
@@ -2496,6 +2669,7 @@ public:
         traceWorld=-1;
         {CpuScope cpu(sampledFrame?&cleanup:nullptr);clearFrame();}
         if(settingsService)if(auto update=settingsService->after(settingsRevision)){
+            hdr.settings.paperWhite=update->config.hdr[1];hdr.settings.uiWhite=update->config.hdr[2];hdr.settings.maxNits=update->config.hdr[3];hdr.settings.contrast=update->config.hdr[4];hdr.settings.exposure=update->config.hdr[5];
             world->applyLiveSettings(update->config);dropBlobFaint();shadowBlobs->setStrength(world->blobShadowStrength());
             contactAO=world->contactAO();aoStrength=world->aoStrength();aoRadius=world->aoRadius();
             if(aoMethod!=world->aoMethod()){aoMethod=world->aoMethod();drop(aoContactBloomPS);} /* the contact-bloom kernel is per method; resources() recreates it before the next AO pass */
@@ -2600,6 +2774,8 @@ public:
     }
     // After the real Present, under the gate. Arithmetic only; windows are logged by finishFrame.
     void presented(const PresentTicks& t){
+        if(hdr.active&&hdrUiPhase){IDirect3DSurface9* target=nullptr;if(SUCCEEDED(ext->GetRenderTarget(0,&target))&&target){if(target==hdrPresentBack)hdrBindBack(hdrLegacyBack);target->Release();}}
+        hdrUiPhase=false;
         if(t.on)frameCost.presented(t.entry.QuadPart,t.finished.QuadPart,t.done.QuadPart,cpuFrequency.QuadPart,threadLogLines);
         if(t.on){
             stallFrame.queries=mirrorResources.queryProfile;
@@ -2687,33 +2863,35 @@ public:
     }
     HRESULT STDMETHODCALLTYPE CreateVertexShader(const DWORD* code,IDirect3DVertexShader9** out) override { Guard mirrorLock(mirrorState.gate);
         HRESULT hr=ext->CreateVertexShader(code,out);
-        if(SUCCEEDED(hr)&&out&&*out)extensionWork("vertex shader registration",[&]{++vsGeneration;std::vector<DWORD> words;auto h=shaderHash(*out,words);int tag=NorthlightShaderTags::deviceTag(h);vsHashes[*out]=h;if(spellOn){shaderReads[static_cast<void*>(*out)]=NorthlightShaderReads::scan(reinterpret_cast<const uint32_t*>(words.data()),words.size());{bool bare=false;const bool ok=NorthlightSpellFog::vsFogProven(reinterpret_cast<const uint32_t*>(words.data()),words.size(),&bare);vsFogProven[*out]=uint8_t(ok?(bare?2:1):0);}}uiFallbackForget(*out);vsMajor[*out]=!words.empty()&&(words[0]>>16)==0xFFFEu?unsigned((words[0]>>8)&0xFFu):0u;if(world){world->registerShader(*out,h);world->registerEquipmentShader(*out,m2ShaderFamily(h)==3?words.data():nullptr,m2ShaderFamily(h)==3?words.size():0);if(particleOn)particleCapture.registerVertex(*out,m2ShaderFamily(h));}if(water)water->registerVertex(*out,h,words.data(),words.size());vsTags[*out]=tag|(water&&water->hasVertex(*out)?kWaterTag:0)|int(m2ShaderFamily(h)<<kFamilyShift);if(tag==1)++matchedTerrain;else if(tag==2)++matchedUI;});
+        if(SUCCEEDED(hr)&&out&&*out)extensionWork("vertex shader registration",[&]{++vsGeneration;std::vector<DWORD> words;auto h=shaderHash(*out,words);int tag=NorthlightShaderTags::deviceTag(h);vsHashes[*out]=h;if(spellOn||hdr.active)shaderReads[static_cast<void*>(*out)]=NorthlightShaderReads::scan(reinterpret_cast<const uint32_t*>(words.data()),words.size());if(spellOn){{bool bare=false;const bool ok=NorthlightSpellFog::vsFogProven(reinterpret_cast<const uint32_t*>(words.data()),words.size(),&bare);vsFogProven[*out]=uint8_t(ok?(bare?2:1):0);}}uiFallbackForget(*out);vsMajor[*out]=!words.empty()&&(words[0]>>16)==0xFFFEu?unsigned((words[0]>>8)&0xFFu):0u;if(world){world->registerShader(*out,h);world->registerEquipmentShader(*out,m2ShaderFamily(h)==3?words.data():nullptr,m2ShaderFamily(h)==3?words.size():0);if(particleOn)particleCapture.registerVertex(*out,m2ShaderFamily(h));}if(water)water->registerVertex(*out,h,words.data(),words.size());vsTags[*out]=tag|(water&&water->hasVertex(*out)?kWaterTag:0)|int(m2ShaderFamily(h)<<kFamilyShift);if(tag==1)++matchedTerrain;else if(tag==2)++matchedUI;});
         if(SUCCEEDED(hr))mirrorResources.wrap(out);return hr;
     }
     HRESULT STDMETHODCALLTYPE CreatePixelShader(const DWORD* code,IDirect3DPixelShader9** out) override { Guard mirrorLock(mirrorState.gate);
         HRESULT hr=ext->CreatePixelShader(code,out);
-        if(SUCCEEDED(hr)&&out&&*out)extensionWork("pixel shader registration",[&]{std::vector<DWORD> words;auto h=shaderHash(*out,words);uiFallbackForget(*out);psTags[*out]=contains(kUiPS,h)?2:0;psHashes[*out]=h;if(spellOn)shaderReads[static_cast<void*>(*out)]=NorthlightShaderReads::scan(reinterpret_cast<const uint32_t*>(words.data()),words.size());psMajor[*out]=!words.empty()&&(words[0]>>16)==0xFFFFu?unsigned((words[0]>>8)&0xFFu):0u;if(spellOn)psFogReg[*out]=psMajor[*out]==3?NorthlightLegacyFog::ps3FogColorRegister(reinterpret_cast<const uint32_t*>(words.data()),words.size()):-1;if(water)water->registerPixel(*out,h,words.data(),words.size());if(world)world->registerPixelShader(*out);if(particleOn)particleCapture.registerPixel(*out,words.data(),words.size());});
+        if(SUCCEEDED(hr)&&out&&*out)extensionWork("pixel shader registration",[&]{std::vector<DWORD> words;auto h=shaderHash(*out,words);uiFallbackForget(*out);if(hdr.active)hdrColor.forget(*out);psTags[*out]=contains(kUiPS,h)?2:0;psHashes[*out]=h;if(spellOn||hdr.active)shaderReads[static_cast<void*>(*out)]=NorthlightShaderReads::scan(reinterpret_cast<const uint32_t*>(words.data()),words.size());psMajor[*out]=!words.empty()&&(words[0]>>16)==0xFFFFu?unsigned((words[0]>>8)&0xFFu):0u;if(spellOn)psFogReg[*out]=psMajor[*out]==3?NorthlightLegacyFog::ps3FogColorRegister(reinterpret_cast<const uint32_t*>(words.data()),words.size()):-1;if(water)water->registerPixel(*out,h,words.data(),words.size());if(world)world->registerPixelShader(*out);if(particleOn)particleCapture.registerPixel(*out,words.data(),words.size());});
         if(SUCCEEDED(hr))mirrorResources.wrap(out);return hr;
     }
     // 0.3.187: the four draw entry points share drawHook(); each passes its capture and its real draw.
     HRESULT STDMETHODCALLTYPE DrawPrimitive(D3DPRIMITIVETYPE t,UINT start,UINT count) override { Guard mirrorLock(mirrorState.gate);
-        auto draw=[&]{return ext->DrawPrimitive(t,start,count);};
+        auto draw=[&]{return hdrDraw([&]{return ext->DrawPrimitive(t,start,count);});};
         if(spellOn||particleOn)spellArgs=NorthlightSpellLayer::DrawArgs::primitive(t,start,count);
         return drawHook(t,count,[&](IDirect3DVertexShader9* vs){world->capture(t,0,0,0,start,count,false,vs,frame%120==0,NorthlightRenderThreadProbe::sampleFrame(frame));captureWater(vs,NorthlightWaterRenderer::NoUserPointer,draw);},draw);}
     HRESULT STDMETHODCALLTYPE DrawIndexedPrimitive(D3DPRIMITIVETYPE t,INT base,UINT min,UINT vertices,UINT start,UINT count) override { Guard mirrorLock(mirrorState.gate);
-        auto draw=[&]{return ext->DrawIndexedPrimitive(t,base,min,vertices,start,count);};
+        auto draw=[&]{return hdrDraw([&]{return ext->DrawIndexedPrimitive(t,base,min,vertices,start,count);});};
         if(spellOn||particleOn)spellArgs=NorthlightSpellLayer::DrawArgs::indexed(t,base,min,vertices,start,count);
         return drawHook(t,count,[&](IDirect3DVertexShader9* vs){world->capture(t,base,min,vertices,start,count,true,vs,frame%120==0,NorthlightRenderThreadProbe::sampleFrame(frame));captureWater(vs,NorthlightWaterRenderer::NoUserPointer,draw);},draw);}
     HRESULT STDMETHODCALLTYPE DrawPrimitiveUP(D3DPRIMITIVETYPE t,UINT count,const void* data,UINT stride) override { Guard mirrorLock(mirrorState.gate);
-        auto draw=[&]{return ext->DrawPrimitiveUP(t,count,data,stride);};
+        auto draw=[&]{return hdrDraw([&]{return ext->DrawPrimitiveUP(t,count,data,stride);});};
         if(spellOn||particleOn)spellArgs=NorthlightSpellLayer::DrawArgs::primitiveUP(t,count,data,stride);
         return drawHook(t,count,[&](IDirect3DVertexShader9* vs){world->captureUP(t,0,0,count,nullptr,D3DFMT_UNKNOWN,data,stride,false,vs,frame%120==0,NorthlightRenderThreadProbe::sampleFrame(frame));captureWater(vs,NorthlightWaterRenderer::UserVertices,draw);},draw);}
     HRESULT STDMETHODCALLTYPE DrawIndexedPrimitiveUP(D3DPRIMITIVETYPE t,UINT min,UINT vertices,UINT count,const void* indices,D3DFORMAT fmt,const void* data,UINT stride) override { Guard mirrorLock(mirrorState.gate);
-        auto draw=[&]{return ext->DrawIndexedPrimitiveUP(t,min,vertices,count,indices,fmt,data,stride);};
+        auto draw=[&]{return hdrDraw([&]{return ext->DrawIndexedPrimitiveUP(t,min,vertices,count,indices,fmt,data,stride);});};
         if(spellOn||particleOn)spellArgs=NorthlightSpellLayer::DrawArgs::indexedUP(t,min,vertices,count,indices,fmt,data,stride);
         return drawHook(t,count,[&](IDirect3DVertexShader9* vs){world->captureUP(t,min,vertices,count,indices,fmt,data,stride,true,vs,frame%120==0,NorthlightRenderThreadProbe::sampleFrame(frame));captureWater(vs,NorthlightWaterRenderer::UserVerticesAndIndices,draw);},draw);}
 };
 
+static bool hdrGamePresentation(IDirect3DDevice9* owner,D3DPRESENT_PARAMETERS* out){return static_cast<Device*>(owner)->gamePresentation(out);}
+static bool hdrGameBackBuffer(IDirect3DDevice9* owner,unsigned index,IDirect3DSurface9** out){return static_cast<Device*>(owner)->gameBackBuffer(index,out);}
 static void finishDeviceFrame(IDirect3DDevice9* owner,bool implicitChain) {static_cast<Device*>(owner)->finishFrame(implicitChain);}
 static void presentedDeviceFrame(IDirect3DDevice9* owner,const PresentTicks& ticks) {static_cast<Device*>(owner)->presented(ticks);}
 
@@ -2783,11 +2961,24 @@ public:
         if(stream)NorthlightStream::streamActive.store(true,std::memory_order_relaxed); /* before the Device exists: worker core budgets read it once */
         if(stream)NorthlightReplayCopies::enabled.store(true,std::memory_order_relaxed); /* 0.3.192 (CS): before the first game buffer is wrapped: the replay-side CPU copies of replay_copies.h; never on with CommandStream=0 */
         if(stream)flags|=D3DCREATE_MULTITHREADED; /* DXVK's window-proc hook may touch the swap chain on the game thread while the replay thread presents */
+        NorthlightHdr::Presentation presentation;presentation.settings=NorthlightHdr::Settings::load(rootPath);presentation.stream=stream;presentation.dxvk=NorthlightBackend::isPackagedDxvk(selectedBackend);
+        if(presentation.settings.requested&&stream&&presentation.dxvk)presentation.formatsPrepared=NorthlightHdr::unlockFormats(real);
         memmapProcess("pre-create",InterlockedCompareExchange(&deviceSerial,0,0)+1); /* task 42 (MEMMAP): what the backend's CreateDevice (and our Device) add shows in the create diff */
         HRESULT hr=real->CreateDevice(adapter,type,window,flags,pp,out);
         logf("CreateDevice HRESULT=0x%08lx flags=0x%lx",(unsigned long)hr,(unsigned long)flags);
-        if(SUCCEEDED(hr)&&out&&*out)*out=new Device(*out,this);
-        if(SUCCEEDED(hr)&&out&&*out&&stream)*out=startStream(*out,pp,framesAhead,frameSkip,occlusionLocal);
+        if(SUCCEEDED(hr)&&out&&*out&&presentation.settings.requested){
+            presentation.logical=*pp;const HRESULT hdrHr=presentation.activate(*out,*out);
+            logf("HDR experimental requested=1 active=%d stream=%d windowed=%d msaa=%u buffers=%u status=0x%08lx reason=%s paperWhite=%.0f uiWhite=%.0f maxNits=%.0f contrast=%.2f exposure=%.2f mode=scRGB source=legacy-encoded",int(presentation.active),int(stream),int(pp->Windowed),unsigned(pp->MultiSampleType),unsigned(pp->BackBufferCount),(unsigned long)presentation.lastStatus,presentation.reason,presentation.settings.paperWhite,presentation.settings.uiWhite,presentation.settings.maxNits,presentation.settings.contrast,presentation.settings.exposure);
+            if(FAILED(hdrHr)){(*out)->Release();*out=nullptr;return hdrHr;}
+        }
+        if(SUCCEEDED(hr)&&out&&*out){auto* device=new Device(*out,this,presentation);*out=device;hr=device->initHdrTargets();if(FAILED(hr)){device->Release();*out=nullptr;return hr;}}
+        if(SUCCEEDED(hr)&&out&&*out&&stream){
+            IDirect3DDevice9* device=*out;*out=startStream(device,pp,framesAhead,frameSkip,occlusionLocal);
+            if(presentation.active&&*out==device){
+                logf("HDR experimental device creation refused: CommandStream startup failed");
+                device->Release();*out=nullptr;return D3DERR_NOTAVAILABLE;
+            }
+        }
         /* task 45: the game's own thread (the CreateDevice caller) at ABOVE_NORMAL, the replay thread's level, so the replay and its effects no longer
            preempt it for the cores (Wine on macOS maps thread priorities to Mach thread policies). Only the scheduling of this thread changes. */
         if(SUCCEEDED(hr)){const BOOL raised=SetThreadPriority(GetCurrentThread(),THREAD_PRIORITY_ABOVE_NORMAL);logf("GAME thread priority ABOVE_NORMAL %s (tid=%lu priority=%d)",raised?"set":"failed",(unsigned long)GetCurrentThreadId(),GetThreadPriority(GetCurrentThread()));}
