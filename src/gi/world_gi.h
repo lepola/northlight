@@ -1,13 +1,17 @@
 #pragma once
+#include "adaptive_geometry_array.h"
 
 #include <cstdint>
 #include <functional>
 #include <string>
 #include <vector>
 #include <memory>
+#include <atomic>
+#include "memory_footprint.h"
 
 // Independent, portable world-geometry transport. No D3D or game addresses.
 namespace NorthlightGI {
+namespace detail {template<bool> struct PairRay;}
 
 struct Vec3 {
     float x = 0, y = 0, z = 0;
@@ -41,6 +45,9 @@ struct WorldMaterial {
     // Runtime-only FGS3 category 2. Needed to distinguish city streets/roofs
     // from trees, actors and doodads when constructing the outdoor fog floor.
     bool wmo = false;
+    bool pointOnly = false; // Runtime auxiliary transmission geometry; never part of the GI BVH.
+    uint32_t lampLocalId = 0; // FGS2 lamp fixture tag, zero for ordinary materials.
+    uint64_t lampSourceId = 0; // Exact FGL source for this FGS3 instance, or zero when unknown.
 };
 struct WorldTriangle { uint32_t v0 = 0, v1 = 0, v2 = 0, material = 0; };
 // Exact placements whose entire model triangle set survived the local crop.
@@ -49,15 +56,34 @@ struct WorldPlacementCoverage {
     uint64_t uid=0; uint32_t category=0; std::string modelKey;
     float matrix[9]={}; Vec3 translation,low,high;
 };
+struct SourcePieceRange {
+    uint64_t sourceIdentity=0,membership[2]={};
+    WorldPlacementCoverage placement;
+    uint32_t vertexBase=0,vertexCount=0,triangleBase=0,triangleCount=0;
+    std::vector<uint32_t> materialMap; // Ordered global material IDs for preparation signatures; may omit unused slots.
+    bool complete=false;
+};
 struct WorldScene {
-    std::vector<WorldVertex> vertices;
-    std::vector<WorldTriangle> triangles;
+    uint64_t sourceIdentity=0; // Validated decoded-source revision; 0 means unknown.
+    AdaptiveGeometryArray<WorldVertex> vertices;
+    AdaptiveGeometryArray<WorldTriangle> triangles;
     std::vector<WorldMaterial> materials;
     std::vector<WorldPlacementCoverage> completePlacements;
+    std::vector<SourcePieceRange> sourcePieces; // Lightweight loader provenance; no raw source ownership.
+    // Dynamic storage only: the containing BVH/cache already counts the object.
+    void accountMemory(NorthlightMemoryFootprint::Counter& memory)const {
+        using namespace NorthlightMemoryFootprint;
+        vertices.accountMemory(memory,Vertices);triangles.accountMemory(memory,Triangles);memory.vector(Metadata,materials);
+        for(const auto& material:materials)memory.vector(Texels,material.rgba);
+        memory.vector(Metadata,completePlacements);for(const auto& p:completePlacements)memory.string(p.modelKey);
+        memory.vector(Metadata,sourcePieces);for(const auto& p:sourcePieces){memory.string(p.placement.modelKey);memory.vector(Metadata,p.materialMap);}
+    }
     size_t retainedBytes()const {
-        size_t n=sizeof(*this)+vertices.capacity()*sizeof(WorldVertex)+triangles.capacity()*sizeof(WorldTriangle)+materials.capacity()*sizeof(WorldMaterial)+completePlacements.capacity()*sizeof(WorldPlacementCoverage);
+        size_t n=sizeof(*this)+vertices.capacity()*sizeof(WorldVertex)+vertices.overhead()+triangles.capacity()*sizeof(WorldTriangle)+triangles.overhead()+materials.capacity()*sizeof(WorldMaterial)+completePlacements.capacity()*sizeof(WorldPlacementCoverage);
         for(const auto& m:materials)n+=m.rgba.capacity();
         for(const auto& p:completePlacements)n+=p.modelKey.capacity();
+        n+=sourcePieces.capacity()*sizeof(SourcePieceRange);
+        for(const auto& p:sourcePieces)n+=p.placement.modelKey.capacity()+p.materialMap.capacity()*sizeof(uint32_t);
         return n;
     }
 };
@@ -65,6 +91,8 @@ struct WorldScene {
 // FGS2 little-endian binary produced by world_scene_builder.py. Failure leaves
 // output unchanged. Limits prevent corrupt counts from requesting unbounded RAM.
 using AllocationAdmission = std::function<bool(uint64_t)>;
+using SceneSourceRevision = std::function<uint64_t(const std::string&)>;
+using SceneSourceProvider = std::function<std::shared_ptr<const WorldScene>(const std::string&,std::string&,const AllocationAdmission&)>;
 // Optional stage-local guard immediately before actual large allocations.
 bool loadScene(const char* path, WorldScene& output, std::string& error,
                const AllocationAdmission& admit = {});
@@ -94,7 +122,28 @@ bool loadInstancedScenes(const std::vector<std::string>& tileFiles,
                          const AllocationAdmission& admit = {},
                          const std::function<bool(Vec3,Vec3)>& instanceFilter = {},
                          const std::function<bool(Vec3,Vec3)>& terrainChunkFilter = {},
-                         SceneSizeHint* sizeHint = nullptr);
+                         SceneSizeHint* sizeHint = nullptr,
+                         const SceneSourceProvider& sourceProvider = {},
+                         bool terrainChunkProvenance = false, bool chunkedTerrain = false);
+
+// Counts actual live optional acceleration storage, including published regions
+// after a cache reset. A refused reservation selects the legacy full-scene path.
+struct SceneMemoryBudget {
+    const uint64_t limit;
+    std::atomic<uint64_t> used{0};
+    explicit SceneMemoryBudget(uint64_t bytes):limit(bytes){}
+};
+struct SceneMemoryCharge {
+    std::shared_ptr<SceneMemoryBudget> budget;uint64_t bytes=0;
+    ~SceneMemoryCharge(){if(budget)budget->used.fetch_sub(bytes,std::memory_order_relaxed);}
+    static std::shared_ptr<const SceneMemoryCharge> acquire(const std::shared_ptr<SceneMemoryBudget>& budget,uint64_t bytes){
+        auto used=budget->used.load(std::memory_order_relaxed);
+        do{if(bytes>budget->limit||used>budget->limit-bytes)return {};}
+        while(!budget->used.compare_exchange_weak(used,used+bytes,std::memory_order_relaxed));
+        try{auto charge=std::make_shared<SceneMemoryCharge>();charge->budget=budget;charge->bytes=bytes;return charge;}
+        catch(...){budget->used.fetch_sub(bytes,std::memory_order_relaxed);throw;}
+    }
+};
 
 struct RayHit {
     bool hit = false;
@@ -107,12 +156,22 @@ struct RayHit {
 
 class BVH {
 public:
+    struct PieceReference {
+        std::shared_ptr<const BVH> geometry;
+        uint32_t vertexBase=0,triangleBase=0;
+        std::vector<uint32_t> materialMap;
+        WorldPlacementCoverage placement;
+        bool complete=false;
+    };
+    BVH()=default;
+    BVH(const BVH&)=delete;BVH& operator=(const BVH&)=delete;
+    BVH(BVH&&)=default;BVH& operator=(BVH&&)=default;
     // Takes scene ownership. A completed BVH is immutable and concurrent reads
     // are safe. Do not call build concurrently with trace/solveProbe.
     // fast=false (northlight-quality GIFastBVH=0) builds the 0.3.137 median tree;
     // every RayHit and Probe is then bit-identical to 0.3.137. fast=true builds
     // the SAH tree: equal-distance ties go to the lowest triangle index.
-    bool build(WorldScene&& scene, std::string& error, bool fast = true);
+    bool build(WorldScene&& scene, std::string& error, bool fast = true,const AllocationAdmission& admit = {});
     // Direction is normalized internally, so distances are in world units.
     // Surfaces are double-sided; texture alpha cutouts apply to every ray type.
     RayHit trace(Vec3 origin, Vec3 direction, float minDistance = .001f,
@@ -120,12 +179,31 @@ public:
     bool occluded(Vec3 origin, Vec3 direction, float maxDistance = 256.f,
                   float minDistance = .001f) const;
     const WorldScene& scene() const { return scene_; }
-    size_t triangleCount() const { return order_.size(); }
-    size_t retainedBytes()const{return sizeof(*this)+scene_.retainedBytes()+nodes_.capacity()*sizeof(Node)+pairs_.capacity()*sizeof(Pair)+order_.capacity()*sizeof(uint32_t)+opaque_.capacity();}
+    const std::vector<PieceReference>& pieces()const{return pieces_;}
+    const WorldMaterial& material(size_t index)const;
+    size_t triangleCount() const { return region_?regionTriangles_:order_.size(); }
+    size_t fallbackTriangleCount()const{return region_?order_.size():0;}
+    size_t ownBytes()const;
+    size_t retainedBytes()const;
+    void accountMemory(NorthlightMemoryFootprint::Counter&)const;
+    static uint64_t buildScratchBytes(size_t triangles);
 private:
     friend class LocalSceneCache;
     template<bool AnyHit,bool Sah>
-    RayHit traceImpl(Vec3 origin,Vec3 direction,float minDistance,float maxDistance)const;
+    RayHit traceImpl(Vec3 origin,Vec3 direction,float minDistance,float maxDistance,bool normalizedRay=false,float checkedEntry=-1,float* barycentricOut=nullptr,const detail::PairRay<Sah>* preparedRay=nullptr)const;
+    template<bool AnyHit> RayHit traceRegion(Vec3 origin,Vec3 direction,float minDistance,float maxDistance)const;
+    struct MaterialBank {std::vector<WorldMaterial> values;std::shared_ptr<const SceneMemoryCharge> charge;};
+    std::shared_ptr<const MaterialBank> materialBank_;
+    std::vector<uint32_t> materialSources_;
+    std::shared_ptr<const SceneMemoryCharge> retainedCharge_;
+    std::vector<PieceReference> pieces_;
+    std::vector<uint32_t> regionOrder_;
+    bool region_=false;size_t regionTriangles_=0;
+    bool buildImpl(WorldScene&&,std::string&,bool,std::shared_ptr<const MaterialBank>,std::vector<uint32_t>,const AllocationAdmission& admit={});
+    bool buildRegion(WorldScene&&,std::vector<PieceReference>&&,std::string&,const AllocationAdmission&,const std::shared_ptr<SceneMemoryBudget>&);
+    void buildSahTree();
+    void shadeHit(RayHit&,Vec3 origin,Vec3 direction,uint32_t triangle,float u,float v,float distance)const;
+    uint32_t makeRegionNode(uint32_t start,uint32_t count,uint32_t depth=0);
     struct Node { Vec3 low, high; uint32_t start = 0, count = 0, left = 0, right = 0; };
     // Interior node holding both child boxes (lanes per axis: left low, right
     // low, left high, right high) so one fetch serves one two-box slab test.
@@ -134,15 +212,17 @@ private:
     struct Pair { float axis[3][4]; uint32_t child[2]; uint32_t pad[2]; };
     static constexpr uint32_t LeafBit = 0x80000000u;
     WorldScene scene_;
-    std::vector<Node> nodes_;
-    std::vector<Pair> pairs_;
+    AdaptiveGeometryArray<Node> nodes_;
+    AdaptiveGeometryArray<Pair> pairs_;
+    AdaptiveGeometryArray<Pair> regionPairs_;
+    Vec3 regionLow_,regionHigh_;uint32_t regionRoot_=0;
     Vec3 rootLow_, rootHigh_;
     uint32_t root_ = 0, depth_ = 0;
     bool sah_ = false;
-    std::vector<uint32_t> order_;
+    AdaptiveGeometryArray<uint32_t> order_;
     // Per material: no bilinear alpha sample can be below alphaCutoff.
     std::vector<uint8_t> opaque_;
-    std::vector<Vec3> centers_; // build-time only
+    AdaptiveGeometryArray<Vec3> centers_; // build-time only
     uint32_t partition(uint32_t start, uint32_t count, Vec3& low, Vec3& high);
     struct BuildBox { Vec3 low, high, cl, ch; };
     BuildBox bounds(uint32_t start, uint32_t count) const;
@@ -154,10 +234,12 @@ private:
 
 // Worker-owned incremental local geometry. Immutable placement pieces share
 // transformed geometry between adjacent crops.
-// The flat BVH is rebuilt per crop (fast selects the tree, see BVH::build).
+// Fast regions reuse admitted piece BLAS and build a TLAS plus a flat fallback
+// tree over unadmitted triangles. Median regions retain the original flat BVH.
 // scene() remains the exact legacy flat transport used by GPU upload and fog.
 class LocalSceneCache {
 public:
+    void accountMemory(NorthlightMemoryFootprint::Counter&)const;
     struct Limits { size_t retainedBytes=32u*1024u*1024u; };
     struct Stats {
         uint64_t modelReads=0,pieceBuilds=0,pieceReuses=0,reusedTriangles=0,builtTriangles=0,hintedBuilds=0;
@@ -165,6 +247,9 @@ public:
         // generations, allocator overhead and temporary vector growth.
         uint64_t retainedBytes=0,peakBytes=0,flatBytes=0,bvhBytes=0;
         double loadMs=0,pieceMs=0,assembleMs=0,bvhMs=0,totalMs=0;
+        uint64_t blasBuilds=0,blasReuses=0,blasTrianglesBuilt=0,blasTrianglesReused=0,tlasPieces=0,legacyFallbacks=0;
+        uint64_t sharedLiveBytes=0,compatibilityBytes=0,tlasBytes=0,fallbackTriangles=0,mandatoryTreeBytes=0;
+        uint64_t chunkBuilds=0,chunkReuses=0,chunkTrianglesBuilt=0,chunkTrianglesReused=0;
     };
     LocalSceneCache();
     explicit LocalSceneCache(Limits);
@@ -173,7 +258,8 @@ public:
     LocalSceneCache& operator=(const LocalSceneCache&)=delete;
     bool build(const std::vector<std::string>& tiles,const std::string& modelDirectory,
                const std::string& map,Vec3 low,Vec3 high,BVH& output,
-               std::string& error,const AllocationAdmission& admit={},bool fast=true);
+               std::string& error,const AllocationAdmission& admit={},bool fast=true,
+               const SceneSourceProvider& sourceProvider={},const SceneSourceRevision& sourceRevision={},bool chunked=false);
     void reset();
     const Stats& stats() const;
 private:

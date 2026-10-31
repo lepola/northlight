@@ -31,6 +31,7 @@ test_celestial_profiles.py
 test_celestial_skybox.py
 test_celestial_terrain.py
 test_celestial_veil.py
+test_chunked_local_entry.py
 test_client_archive_order.py
 test_client_archives.py
 test_client_config.py
@@ -72,8 +73,10 @@ test_fog_temporal_wiring.py
 test_frame_stall_profile.py
 test_game_snapshot.py
 test_geometry_handoff.py
+test_geometry_memory.py
 test_gi_quality.py
 test_gi_settings_dependencies.py
+test_gi_trig.py
 test_gpu_budget.py
 test_gpu_budget_wiring.py
 test_gtao_grazing.py
@@ -103,6 +106,7 @@ test_logger_cost.py
 test_m2_shader_families.py
 test_m2_shader_families_client.py
 test_m2_visibility.py
+test_material_byte_ops.py
 test_memmap_diagnostics.py
 test_memory_admission_probe.py
 test_memory_guard.py
@@ -134,7 +138,12 @@ test_point_shadow_schedule.py
 test_prepare_worker.py
 test_probe_blend.py
 test_probe_blend_equivalence.py
+test_probe_grid_math.py
+test_probe_moment_pack.py
+test_probe_pool_dispatch.py
 test_probe_relight_cache.py
+test_probe_solve_axes.py
+test_probe_sphere.py
 test_probe_texture_upload.py
 test_production_draw_timers.py
 test_progressive_gi_worker.py
@@ -164,6 +173,9 @@ test_replay_priority_safety.py
 test_replay_skin_safety.py
 test_replay_upload.py
 test_rigid_memory.py
+test_scene_assembly.py
+test_scene_source_cache.py
+test_scene_source_stamp_fault.py
 test_settings_overlay.py
 test_settings_service.py
 test_shader_read_set.py
@@ -177,8 +189,11 @@ test_shadow_paging_memory.py
 test_shadow_pivot.py
 test_shadow_removal_smoothing.py
 test_shadow_shimmer.py
+test_shared_scene_chunks.py
+test_shared_scene_memory.py
 test_snapshot_allocation.py
 test_snapshot_prediction.py
+test_snapshot_wide_decode.py
 test_solar_volume.py
 test_spell_asset_manifest.py
 test_spell_asset_manifest_client.py

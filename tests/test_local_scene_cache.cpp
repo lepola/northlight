@@ -51,15 +51,39 @@ static void run(LocalSceneCache& cache,const std::vector<std::string>& files,con
     printf("%s tris=%zu pieces=%zu reads=%llu reused=%llu/%llu reusedTris=%llu old=%.1f+%.1fms incremental=%.1fms(load%.1f piece%.1f flat%.1f bvh%.1f) retain=%.2fMiB flat=%.2f bvhReserve=%.2f peak=%.2f",label,old.triangleCount(),size_t(s.pieceBuilds+s.pieceReuses),(unsigned long long)s.modelReads,(unsigned long long)s.pieceReuses,(unsigned long long)(s.pieceReuses+s.pieceBuilds),(unsigned long long)s.reusedTriangles,load,build,s.totalMs,s.loadMs,s.pieceMs,s.assembleMs,s.bvhMs,s.retainedBytes/1048576.,s.flatBytes/1048576.,s.bvhBytes/1048576.,s.peakBytes/1048576.);compareRays(old,incremental,center,rayCount);puts("");fflush(stdout);
 }
 static void fixtures(const fs::path& root){
-    fs::create_directories(root/"models");FILE* f=fopen((root/"models"/(std::string(64,'0')+".fgs")).c_str(),"wb");assert(f);fwrite("FGS2",1,4,f);u32(f,2);u32(f,8);u32(f,4);u32(f,2);
+    fs::create_directories(root/"models");FILE* f=fopen((root/"models"/(std::string(64,'0')+".fgs")).string().c_str(),"wb");assert(f);fwrite("FGS2",1,4,f);u32(f,2);u32(f,8);u32(f,4);u32(f,2);
     for(int plane=0;plane<2;++plane)for(Vec3 p:{Vec3(-80,-60,0),Vec3(80,-60,0),Vec3(80,60,0),Vec3(-80,60,0)}){vec(f,p+Vec3(0,0,float(plane)*2));vec(f,{.2f,.3f,1});f32(f,p.x/37);f32(f,p.y/43);}
     for(int plane=0;plane<2;++plane)for(auto tri:{std::array<uint32_t,3>{0,1,2},std::array<uint32_t,3>{0,2,3}}){for(auto index:tri)u32(f,index+plane*4);u32(f,plane);}
     for(int m=0;m<2;++m){vec(f,m?Vec3(.1f,.8f,.2f):Vec3(.8f,.3f,.2f));u32(f,2);u32(f,2);f32(f,.5f);u32(f,16);const uint8_t bytes[16]={200,50,100,255,80,210,40,0,30,30,180,255,240,140,20,255};fwrite(bytes,1,16,f);}fclose(f);
-    f=fopen((root/"tile.fg3").c_str(),"wb");assert(f);fwrite("FGS3",1,4,f);u32(f,3);u32(f,20);
+    f=fopen((root/"tile.fg3").string().c_str(),"wb");assert(f);fwrite("FGS3",1,4,f);u32(f,3);u32(f,20);
     for(uint32_t i=0;i<20;++i){uint8_t hash[32]={};fwrite(hash,1,32,f);u32(f,i);u32(f,0);u32(f,i%4);Vec3 offset(float((i%5)*90)-180,float((i/5)*100)-150,float(i%2)*3);if(i==19)offset={0,0,0};vec(f,offset-Vec3(160,120,8));vec(f,offset+Vec3(160,120,8));const float matrix[9]={0,-1.2f,0,2,0,0,0,0,1};for(auto value:matrix)f32(f,value);vec(f,offset);}fclose(f);
 }
+[[maybe_unused]] static void fragmentedRegion(const fs::path& root){
+    FILE* f=fopen((root/"tile.fg3").string().c_str(),"wb");assert(f);fwrite("FGS3",1,4,f);u32(f,3);u32(f,1036);
+    for(uint32_t i=0;i<1036;++i){uint8_t hash[32]={};fwrite(hash,1,32,f);u32(f,i);u32(f,0);u32(f,2);vec(f,{-100,-100,-10});vec(f,{100,100,10});for(float v:{1.f,0.f,0.f,0.f,1.f,0.f,0.f,0.f,1.f})f32(f,v);vec(f,{});}fclose(f);
+    const std::vector<std::string> files={(root/"tile.fg3").string()};const auto models=(root/"models").string();std::string error;WorldScene expected;
+    assert(loadInstancedScenes(files,models,{-288,-288,-320},{288,288,320},expected,error));assert(expected.vertices.size()==8288);
+    LocalSceneCache cache;BVH result;unsigned refused=0;
+    assert(cache.build(files,models,"fragmented",{-288,-288,-320},{288,288,320},result,error,[&](uint64_t n){if(n>300000){++refused;return false;}return true;},false));
+    sceneEqual(expected,result.scene());assert(!refused);
+    LocalSceneCache stricter;assert(!stricter.build(files,models,"fragmented",{-288,-288,-320},{288,288,320},result,error,[](uint64_t n){return n<=250000;},false));sceneEqual(expected,result.scene());
+    LocalSceneCache pagedCache;BVH paged;
+    assert(pagedCache.build(files,models,"fragmented",{-288,-288,-320},{288,288,320},paged,error,[](uint64_t n){return n<=2u*1024u*1024u;},false,{}, {},true));
+    assert(paged.scene().vertices.chunked()&&paged.scene().triangles.chunked()&&!paged.scene().vertices.data());sceneEqual(expected,paged.scene());
+    for(unsigned i=0;i<200;++i){const Vec3 origin(float(i%20)*8-80,float(i/20)*8-40,100);hitEqual(result.trace(origin,{0,0,-1},0,700),paged.trace(origin,{0,0,-1},0,700));assert(result.occluded(origin,{0,0,-1},700,0)==paged.occluded(origin,{0,0,-1},700,0));}
+    assert(!pagedCache.build(files,models,"fragmented",{-288,-288,-320},{288,288,320},paged,error,[](uint64_t n){return n<1024u*1024u;},false,{}, {},true));sceneEqual(expected,paged.scene());
+    // Valid tiles can have no geometry in a high-altitude local box. An empty BVH
+    // must trace safely while the separate terrain shadow scene remains available.
+    LocalSceneCache skyCache;BVH sky;assert(skyCache.build(files,models,"fragmented",{-288,-288,680},{288,288,1320},sky,error,{},true,{}, {},true));
+    assert(!sky.triangleCount()&&sky.scene().triangles.empty());
+    assert(!sky.trace({0,0,1000},{0,0,-1},0,700).hit&&!sky.occluded({0,0,1000},{0,0,-1},700,0));
+    BVH empty;assert(empty.build(WorldScene{},error));hitEqual(empty.trace({0,0,1000},{0,0,-1},0,700),sky.trace({0,0,1000},{0,0,-1},0,700));
+    Lighting light;const auto expectedSky=solveProbe(empty,{0,0,1000},light,32,1),actualSky=solveProbe(sky,{0,0,1000},light,32,1);
+    assert(expectedSky.valid==actualSky.valid);for(unsigned i=0;i<4;++i)assert(exact(expectedSky.sh[i],actualSky.sh[i]));
+    std::puts("PASS fragmented local scene: bounded allocation preserves geometry and refuses safely below the required size");
+}
 int main(int argc,char** argv){
-    auto root=fs::temp_directory_path()/("fr-local-cache-"+std::to_string(Clock::now().time_since_epoch().count()));fixtures(root);std::vector<std::string> files={(root/"tile.fg3").string(),(root/"tile.fg3").string()};LocalSceneCache cache;
+    auto root=fs::temp_directory_path()/("fr-local-cache-"+std::to_string(Clock::now().time_since_epoch().count()));fixtures(root);fragmentedRegion(root);fixtures(root);std::vector<std::string> files={(root/"tile.fg3").string(),(root/"tile.fg3").string()};LocalSceneCache cache;
     for(unsigned step=0;step<5;++step){char name[32];snprintf(name,sizeof name,"synthetic%u",step);run(cache,files,(root/"models").string(),"test",{float(step)*64,0,0},name,2000);if(step)assert(cache.stats().pieceReuses>0);}
     run(cache,files,(root/"models").string(),"different-map",{0,0,0},"map reset",200);assert(cache.stats().pieceReuses==0);
     BVH previous;std::string error;assert(cache.build(files,(root/"models").string(),"test",{-288,-288,-320},{288,288,320},previous,error));size_t count=previous.triangleCount();assert(!cache.build(files,(root/"models").string(),"test",{-100,-100,-100},{100,100,100},previous,error,[](uint64_t){return false;}));assert(previous.triangleCount()==count);
@@ -71,10 +95,10 @@ int main(int argc,char** argv){
     // turn a subsequently evicted placement into an empty model.
     for(unsigned failAt:{3u,8u,15u,30u,60u}){LocalSceneCache pressured({2048});BVH world;unsigned calls=0;pressured.build(files,(root/"models").string(),"test",{-288,-288,-320},{288,288,320},world,error,[&](uint64_t){return ++calls!=failAt;});assert(pressured.stats().retainedBytes<=2048);assert(pressured.build(files,(root/"models").string(),"test",{-288,-288,-320},{288,288,320},world,error));WorldScene reference;assert(loadInstancedScenes(files,(root/"models").string(),{-288,-288,-320},{288,288,320},reference,error));sceneEqual(reference,world.scene());assert(pressured.build(files,(root/"models").string(),"test",{-288,-288,-320},{288,288,320},world,error));sceneEqual(reference,world.scene());}
     // Bulk decode retains scalar decoder validation and failure atomicity.
-    auto modelPath=root/"models"/(std::string(64,'0')+".fgs");FILE* input=fopen(modelPath.c_str(),"rb");assert(input);fseek(input,0,SEEK_END);std::vector<uint8_t> original(size_t(ftell(input)));rewind(input);assert(fread(original.data(),1,original.size(),input)==original.size());fclose(input);
-    WorldScene saved;assert(loadScene(modelPath.c_str(),saved,error));
-    for(auto mutation:{std::pair<size_t,uint32_t>{20,0x7fc00000u},{32,0x7f800000u},{44,0x7fc00000u},{20+8*32,8u},{20+8*32+12,2u},{8,UINT32_MAX},{20+8*32+4*16+20,0x7fc00000u}}){auto bytes=original;for(unsigned j=0;j<4;++j)bytes[mutation.first+j]=uint8_t(mutation.second>>(8*j));FILE* file=fopen(modelPath.c_str(),"wb");assert(file);fwrite(bytes.data(),1,bytes.size(),file);fclose(file);assert(!loadScene(modelPath.c_str(),saved,error));assert(saved.vertices.size()==8&&saved.triangles.size()==4);}
-    for(size_t length:{size_t(19),size_t(100),original.size()-1}){FILE* file=fopen(modelPath.c_str(),"wb");assert(file);fwrite(original.data(),1,length,file);fclose(file);assert(!loadScene(modelPath.c_str(),saved,error));assert(saved.vertices.size()==8&&saved.triangles.size()==4);}
+    auto modelPath=root/"models"/(std::string(64,'0')+".fgs");FILE* input=fopen(modelPath.string().c_str(),"rb");assert(input);fseek(input,0,SEEK_END);std::vector<uint8_t> original(size_t(ftell(input)));rewind(input);assert(fread(original.data(),1,original.size(),input)==original.size());fclose(input);
+    WorldScene saved;assert(loadScene(modelPath.string().c_str(),saved,error));
+    for(auto mutation:{std::pair<size_t,uint32_t>{20,0x7fc00000u},{32,0x7f800000u},{44,0x7fc00000u},{20+8*32,8u},{20+8*32+12,2u},{8,UINT32_MAX},{20+8*32+4*16+20,0x7fc00000u}}){auto bytes=original;for(unsigned j=0;j<4;++j)bytes[mutation.first+j]=uint8_t(mutation.second>>(8*j));FILE* file=fopen(modelPath.string().c_str(),"wb");assert(file);fwrite(bytes.data(),1,bytes.size(),file);fclose(file);assert(!loadScene(modelPath.string().c_str(),saved,error));assert(saved.vertices.size()==8&&saved.triangles.size()==4);}
+    for(size_t length:{size_t(19),size_t(100),original.size()-1}){FILE* file=fopen(modelPath.string().c_str(),"wb");assert(file);fwrite(original.data(),1,length,file);fclose(file);assert(!loadScene(modelPath.string().c_str(),saved,error));assert(saved.vertices.size()==8&&saved.triangles.size()==4);}
     fs::remove_all(root);
     if(argc>1){for(unsigned city=0;city<2;++city){std::string map=city?"Kalimdor":"Azeroth";Vec3 center=city?Vec3(1500,-4415,32):Vec3(-8833,628,97);LocalSceneCache real({size_t(argc>2?std::stoul(argv[2]):32)*1024*1024});for(unsigned step=0;step<4;++step){Vec3 c=center+Vec3(float(step)*64,0,0);char name[32];snprintf(name,sizeof name,"%s move%u",city?"OG":"SW",step);run(real,tiles(argv[1],map,c),(fs::path(argv[1])/"models").string(),map,c,name,12000);}}}
     puts("PASS incremental exact crop/vertices/triangles/normals/materials/owners, rays, probes, movement reuse, map reset, allocation failure, bounded retention, malformed bulk input and concurrent tracing");

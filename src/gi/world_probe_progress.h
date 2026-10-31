@@ -14,26 +14,33 @@ inline Vec3 probeWindowOrigin(Vec3 camera) {
 }
 inline Vec3 probeWindowPosition(Vec3 origin,unsigned index) {
     const unsigned g=probeLayout().n;
-    return origin+Vec3(float(index%g)*8,float((index/g)%g)*8,float(index/(g*g))*8);
+    const unsigned row=index/g;
+    return {origin.x+float(index%g)*8,origin.y+float(row%g)*8,origin.z+float(row/g)*8};
 }
 inline std::vector<unsigned> probeSolveOrder(Vec3 camera) {
-    struct Item {unsigned index;float distance;bool corner;};
+    // Valid layouts contain fewer than 2^31 probes; the high bit marks non-corners.
+    struct Item {unsigned index;float distance;};
     const auto& l=probeLayout();const unsigned count=l.count();
     std::vector<Item> items(count);
     const Vec3 origin=probeWindowOrigin(camera);
     const unsigned g=l.n,base=g/2-1,baseZ=l.nz/2-1;
-    for(unsigned i=0;i<count;++i) {
-        unsigned x=i%g,y=(i/g)%g,z=i/(g*g);
-        Vec3 delta=probeWindowPosition(origin,i)-camera;
-        items[i]={i,dot(delta,delta),x>=base&&x<=base+1&&y>=base&&y<=base+1&&z>=baseZ&&z<=baseZ+1};
+    float axes[3][ProbeGridMaxN];
+    for(unsigned axis=0;axis<3;++axis)for(unsigned at=0;at<(axis==2?l.nz:g);++at){
+        const float o=axis==0?origin.x:axis==1?origin.y:origin.z,c=axis==0?camera.x:axis==1?camera.y:camera.z;
+        const float delta=(o+float(at)*8)-c;axes[axis][at]=delta*delta;
+    }
+    unsigned i=0;
+    for(unsigned z=0;z<l.nz;++z)for(unsigned y=0;y<g;++y)for(unsigned x=0;x<g;++x,++i) {
+        const bool corner=x>=base&&x<=base+1&&y>=base&&y<=base+1&&z>=baseZ&&z<=baseZ+1;
+        items[i]={i|(corner?0u:0x80000000u),axes[0][x]+axes[1][y]+axes[2][z]};
     }
     std::sort(items.begin(),items.end(),[](const Item& a,const Item& b){
-        if(a.corner!=b.corner)return a.corner;
+        if((a.index^b.index)&0x80000000u)return a.index<b.index;
         if(a.distance!=b.distance)return a.distance<b.distance;
         return a.index<b.index;
     });
     std::vector<unsigned> order(count);
-    for(unsigned i=0;i<count;++i)order[i]=items[i].index;
+    for(unsigned i=0;i<count;++i)order[i]=items[i].index&0x7fffffffu;
     return order;
 }
 

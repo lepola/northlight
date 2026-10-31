@@ -65,7 +65,10 @@ public:
             // at the start of a sufficiently large tail window, not its last
             // byte, when an allocation has occupied/split the old base.
             const auto needed=std::max<std::uint64_t>(1,required.largest);
-            if(needed-1<=last-first){
+            // Keep the end address useful after a small tail witness. A later
+            // larger budget may ask farther back; the fresh answer still has
+            // to prove the entire requirement, even outside the old suffix.
+            if(needed-1<=last){
                 const auto tail=last-(needed-1);
                 if(tail!=first&&witness(tail))return out;
             }

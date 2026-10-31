@@ -11,7 +11,10 @@
 // The owner queries process address space immediately before each costly stage.
 namespace NorthlightGeometryMemory {
 constexpr uint64_t MiB=1024ull*1024ull;
-constexpr uint64_t ProcessReserve=512*MiB;
+// Keep 256 MiB for unrelated game/driver allocations. Entry adds a separate
+// 256 MiB working allowance; interior/upload checks still re-sample current VA
+// and enforce request-sized headroom plus the unchanged contiguous margins.
+constexpr uint64_t ProcessReserve=256*MiB;
 // Contiguous headroom above the largest single allocation of a stage. A 32-bit
 // process whose largest free region shrank to ~20 MiB still reported 2.5 GiB
 // free before one silent exit; every large allocation now needs this margin.
@@ -53,6 +56,15 @@ inline Budget budgetWith(uint64_t headroom,uint64_t largestAllocation){
     b.valid=true;return b;
 }
 inline Budget buildBudget(uint64_t largestAllocation=0){return budgetWith(EntryHeadroom,largestAllocation);}
+// Chunked local builds avoid large contiguous buffers; keep the process and interior reserves unchanged.
+inline Budget chunkBuildBudget(){return budgetWith(EntryHeadroom-32*MiB,MiB);}
+// Bounded recovery (including a replacement with one retained generation).
+// Real x86 seven-region replays at 395 MiB leave >=301 MiB free with the old
+// BVH held. Keep the 256 MiB process reserve plus a 32 MiB working guard;
+// every large request is checked and a failed candidate is never published.
+constexpr uint64_t ColdInBuildHeadroom=32*MiB,ColdEntryHeadroom=136*MiB;
+inline Budget coldChunkBuildBudget(){return budgetWith(ColdEntryHeadroom,MiB);}
+inline Budget coldInBuildBudget(uint64_t request=0){return budgetWith(request>ColdInBuildHeadroom?request:ColdInBuildHeadroom,request);}
 // Interior allocation: the process reserve must survive the request itself, so a request above the guard raises the floor.
 inline Budget inBuildBudget(uint64_t largestAllocation=0){
     return budgetWith(largestAllocation>InBuildHeadroom?largestAllocation:InBuildHeadroom,largestAllocation);
@@ -164,6 +176,9 @@ template<class T,size_t Limit=2> class Generations {
 public:
     size_t live(){size_t count=0;for(auto& e:entries_){if(e.expired())e.reset();else ++count;}return count;}
     bool canAdmit(){return live()<Limit;}
+    // Diagnostics visit only immutable completed generations. The short local
+    // lease protects a concurrent final retirement without changing the limit.
+    template<class Visit> void forEach(Visit&& visit)const {for(const auto& entry:entries_)if(auto owner=entry.lock())visit(*owner);}
     bool track(const std::shared_ptr<T>& value){
         if(!value)return false;
         live();

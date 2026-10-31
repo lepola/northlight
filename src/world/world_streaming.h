@@ -54,6 +54,17 @@ inline NorthlightGI::Vec3 leadCenter(NorthlightGI::Vec3 camera,NorthlightGI::Vec
     const float scale=std::min(speed*expectedSeconds,GeometryLeadMax)/speed;
     return NorthlightGI::Vec3(camera.x+velocity.x*scale,camera.y+velocity.y*scale,camera.z+velocity.z*scale);
 }
+// A camera orbit rotates the eye around a nearly stationary pivot. Keep the
+// geometry there, then cap the TOTAL eye offset by the original lead budget.
+// Thus the unchanged 32-unit refresh still keeps the eye within 60+32 < 96.
+inline NorthlightGI::Vec3 anchoredCenter(NorthlightGI::Vec3 eye,NorthlightGI::Vec3 pivot,NorthlightGI::Vec3 velocity,float expectedSeconds){
+    const auto wanted=leadCenter(pivot,velocity,expectedSeconds);
+    const NorthlightGI::Vec3 delta(wanted.x-eye.x,wanted.y-eye.y,wanted.z-eye.z);const float squared=delta.x*delta.x+delta.y*delta.y+delta.z*delta.z;
+    if(!std::isfinite(squared))return eye;
+    if(squared<=GeometryLeadMax*GeometryLeadMax)return wanted;
+    const float scale=GeometryLeadMax/std::sqrt(squared);
+    return NorthlightGI::Vec3(eye.x+delta.x*scale,eye.y+delta.y*scale,eye.z+delta.z*scale);
+}
 // Travel velocity for the lead: smoothed eye and pivot (eye + forward*pivotDistance)
 // velocities, the slower of the two. A third-person flick moves the eye but not the
 // pivot; a first-person turn with a wrong pivot distance moves the pivot but not the eye.
@@ -85,10 +96,9 @@ struct Motion {
     }
     NorthlightGI::Vec3 velocity()const{if(!armed)return NorthlightGI::Vec3();return length(eyeVelocity)<=length(pivotVelocity)?eyeVelocity:pivotVelocity;}
 };
-// Request trigger for a moved lead point (reason 128). Only while a lead exists in the new or
-// the previous request: with no lead the geometry centre is the eye, already covered by the
-// probe-centre trigger, so the 0.3.168 request cadence is unchanged below the lead speed.
-// The previous request's lead keeps the stop transition (lead -> 0) as a request.
+// Request a moved geometry target (reason 128) when it differs from the eye.
+// Eye-centred motion is already covered by the probe-centre trigger. Test
+// both offsets so stopping a lead or changing camera mode still requests it.
 inline bool leadMoved(NorthlightGI::Vec3 lastCamera,NorthlightGI::Vec3 lastCenter,NorthlightGI::Vec3 camera,NorthlightGI::Vec3 center){
     auto apart=[](NorthlightGI::Vec3 a,NorthlightGI::Vec3 b,float e){const float x=a.x-b.x,y=a.y-b.y,z=a.z-b.z;return x*x+y*y+z*z>e*e;};
     return (apart(lastCenter,lastCamera,0)||apart(center,camera,0))&&apart(lastCenter,center,GeometryLeadMoveStep);

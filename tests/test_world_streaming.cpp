@@ -21,7 +21,7 @@ int Resource::live=0;
 // than 96 from the eye after its adoption latency. Third-person eye at distance d behind the
 // player; a flick turns the camera 180 degrees in 0.25 s, holds 2 s and turns back.
 struct Coverage {float maxDistance=0,lateMax=0;unsigned skipped=0,lateSkipped=0,builds=0;std::vector<NorthlightGI::Vec3> centres;}; /* late: from 4 s, after the lead can arm */
-static Coverage simulate(float speed,float buildSeconds,bool lead,float spinAt=-1,float seconds=14,float pivotDistance=34){
+static Coverage simulate(float speed,float buildSeconds,bool lead,float spinAt=-1,float seconds=14,float pivotDistance=34,bool anchored=false){
     using V=NorthlightGI::Vec3;const float d=34,dt=1.f/30,latency=.15f,pi=3.14159265f;
     auto pose=[&](float t,V& eye,V& pivot){const float p=std::max(0.f,t-.5f)*speed;float angle=0;
         if(spinAt>=0){const float s=t-spinAt;if(s>=0&&s<.25f)angle=pi*s/.25f;else if(s>=.25f&&s<2.25f)angle=pi;else if(s>=2.25f&&s<2.5f)angle=pi*(1-(s-2.25f)/.25f);}
@@ -32,7 +32,7 @@ static Coverage simulate(float speed,float buildSeconds,bool lead,float spinAt=-
     V buildCenter,handCenter;float buildStart=0,handAt=0;int checks=0;long lastCell=LONG_MIN;
     for(int frame=0;frame*dt<seconds;++frame){const float t=frame*dt;pose(t,eye,pivot);
         motion.update(map,eye,pivot,uint32_t(1000+std::lround(t*1000)));
-        const V target=lead?leadCenter(eye,motion.velocity(),buildSeconds):eye;
+        const V target=anchored?anchoredCenter(eye,pivot,motion.velocity(),buildSeconds):lead?leadCenter(eye,motion.velocity(),buildSeconds):eye;
         const long cell=long(std::floor(eye.x/8))*100000+long(std::floor(eye.y/8));const bool request=cell!=lastCell;lastCell=cell;
         if(building){
             for(;checks<2&&t-buildStart>=(checks?.85f:.5f)*buildSeconds;++checks)if(!applicable(map,buildCenter,map,eye)){building=false;break;}
@@ -141,6 +141,19 @@ int main(){
     // (pivot <= eye+80, radius 48) inside the +-288 local box.
     static_assert(GeometryLeadMax+GeometryRefreshDistance<GeometryCoverageDistance,"lead cap");
     static_assert(GeometryRetainDistance+80+48<=288,"near cascade inside the local box");
+    // Orbit centring shares the original total offset and coverage bounds.
+    {const auto old=simulate(0,.35f,true,4),centered=simulate(0,.35f,true,4,14,34,true);
+     assert(old.builds>=2&&centered.builds==1&&!centered.skipped);
+     for(float speed:{7.f,21.7f,70.f}){
+         const auto travel=simulate(speed,.35f,true,4,14,34,true);assert(!travel.skipped&&travel.maxDistance<=GeometryCoverageDistance);
+     }
+     assert(anchoredCenter(V(1,2,3),V(std::numeric_limits<float>::quiet_NaN(),0,0),V(),1).x==1);
+     for(float distance:{0.f,12.f,34.f,80.f,1000.f})for(float speed:{0.f,7.f,70.f,200.f})for(int sign:{-1,1}){
+         const V eye(17000,-17000,500),pivot(eye.x+distance*sign,eye.y,eye.z);
+         const V c=anchoredCenter(eye,pivot,V(speed,0,0),1.5f),delta(c.x-eye.x,c.y-eye.y,c.z-eye.z);
+         assert(std::sqrt(delta.x*delta.x+delta.y*delta.y+delta.z*delta.z)<=GeometryLeadMax+.005f);
+         assert(applicable("A",c,"A",eye));
+     }}
     // Motion: a third-person flick moves the eye but not the pivot; a teleport or a gap resets.
     {Motion m;m.update("A",V(),V(34,0,0),1000);for(uint32_t t=1033;t<=1250;t+=33)m.update("A",V(34*(1-std::cos(3.14159f*(t-1000)/250.f)),0,0),V(34,0,0),t);
      const V v=m.velocity();assert(std::sqrt(v.x*v.x+v.y*v.y)<1e-3f);

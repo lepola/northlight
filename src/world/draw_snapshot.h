@@ -483,7 +483,28 @@ private:
                 else copyRuns_.push_back({source,i,1});}
             rememberPlan(data,rawBytes,hash,format,draw,mesh,low,high);
         };
-        for(UINT i=0;i<count;++i){UINT index=0;if(format==D3DFMT_INDEX16){std::uint16_t v;std::memcpy(&v,static_cast<const std::uint8_t*>(data)+i*2,2);index=v;}else std::memcpy(&index,static_cast<const std::uint8_t*>(data)+i*4,4);
+        UINT i=0;
+#if defined(__SSE2__)
+        const std::uint64_t end=std::uint64_t(draw.minimum)+draw.vertices;
+        if(format==D3DFMT_INDEX32){
+            const auto bias=_mm_set1_epi32(int(0x80000000u));
+            const auto lo=_mm_set1_epi32(int(draw.minimum^0x80000000u));
+            const auto hi=_mm_set1_epi32(int(UINT(end-1)^0x80000000u));
+            auto mins=_mm_set1_epi32(0x7fffffff),maxs=bias;
+            for(;count-i>=4;i+=4){
+                const auto values=_mm_loadu_si128(reinterpret_cast<const __m128i*>(static_cast<const std::uint8_t*>(data)+size_t(i)*4));
+                const auto signedValues=_mm_xor_si128(values,bias);
+                if(_mm_movemask_epi8(_mm_or_si128(_mm_cmpgt_epi32(lo,signedValues),_mm_cmpgt_epi32(signedValues,hi))))return fail(why,Error::IndexRange);
+                const auto less=_mm_cmpgt_epi32(mins,signedValues),more=_mm_cmpgt_epi32(signedValues,maxs);
+                mins=_mm_or_si128(_mm_and_si128(less,signedValues),_mm_andnot_si128(less,mins));
+                maxs=_mm_or_si128(_mm_and_si128(more,signedValues),_mm_andnot_si128(more,maxs));
+                _mm_storeu_si128(reinterpret_cast<__m128i*>(mesh.indices.data()+i),values);
+            }
+            if(i){alignas(16) UINT a[4],b[4];_mm_store_si128(reinterpret_cast<__m128i*>(a),_mm_xor_si128(mins,bias));_mm_store_si128(reinterpret_cast<__m128i*>(b),_mm_xor_si128(maxs,bias));
+                for(unsigned lane=0;lane<4;++lane){low=std::min(low,a[lane]);high=std::max(high,b[lane]);}}
+        }
+#endif
+        for(;i<count;++i){UINT index=0;if(format==D3DFMT_INDEX16){std::uint16_t v;std::memcpy(&v,static_cast<const std::uint8_t*>(data)+i*2,2);index=v;}else std::memcpy(&index,static_cast<const std::uint8_t*>(data)+i*4,4);
             if(index<draw.minimum||std::uint64_t(index)>=std::uint64_t(draw.minimum)+draw.vertices)return fail(why,Error::IndexRange);
             low=std::min(low,index);high=std::max(high,index);mesh.indices[i]=index;}
         const uint64_t span=uint64_t(high)-low+1;
@@ -634,11 +655,17 @@ public:
         if(totalReadBytes>std::numeric_limits<size_t>::max()||!canReserve(size_t(totalReadBytes),why))return false;
         for(UINT s=0;s<4;++s){if(!extent[s])continue;if(why)why->stream=s;
             auto& vb=vertices[s];auto& target=mesh.streams[s];UINT stride=strides[s];HRESULT hr=D3D_OK;
-            target.stride=stride;target.bytes.resize(size_t(mesh.vertexCount)*stride);
+            target.stride=stride;const size_t size=size_t(mesh.vertexCount)*stride;
+            const bool retainedCopy=!compacted_&&target.bytes.capacity()>=size;
+            if(!retainedCopy)target.bytes.resize(size);
             if(!reserve(size_t(readBytes[s]),why))return false;void* ptr=nullptr;
             NorthlightReplayCopies::Reader<IDirect3DVertexBuffer9> read(vb.p);
             if(FAILED(hr=read.lock(UINT(begins[s]),UINT(lockBytes[s]),&ptr)))return fail(why,Error::Lock,hr);
-            if(ptr)copyVertices(target.bytes.data(),static_cast<const std::uint8_t*>(ptr),stride,extent[s],low,mesh.vertexCount);HRESULT unlocked=read.unlock();
+            if(ptr){
+                if(retainedCopy){const auto* source=static_cast<const std::uint8_t*>(ptr);target.bytes.assign(source,source+size_t(readBytes[s]));target.bytes.resize(size);}
+                else copyVertices(target.bytes.data(),static_cast<const std::uint8_t*>(ptr),stride,extent[s],low,mesh.vertexCount);
+            }
+            HRESULT unlocked=read.unlock();
             if(FAILED(unlocked))return fail(why,Error::Unlock,unlocked);if(!ptr)return fail(why,Error::Lock);
         }
         sourceSpanVertices_+=size_t(sourceSpan);uniqueVertices_+=mesh.vertexCount;savedVertexBytes_+=size_t(savedBytes);compactedDraws_+=compacted_;
@@ -661,8 +688,11 @@ public:
         const uint64_t bytes=uint64_t(mesh.vertexCount)*stride,readBytes=bytes-stride+extent[0];
         if(offset+lockBytes>std::numeric_limits<size_t>::max()||bytes>UINT(-1))return fail(why,Error::VertexRange);
         if(!reserve(size_t(readBytes),why))return false;
-        mesh.streams[0].stride=stride;mesh.streams[0].bytes.resize(size_t(bytes));
-        copyVertices(mesh.streams[0].bytes.data(),static_cast<const std::uint8_t*>(vertices)+size_t(offset),stride,extent[0],low,mesh.vertexCount);
+        auto& target=mesh.streams[0];target.stride=stride;
+        if(!compacted_&&target.bytes.capacity()>=size_t(bytes)){
+            const auto* source=static_cast<const std::uint8_t*>(vertices)+size_t(offset);
+            target.bytes.assign(source,source+size_t(readBytes));target.bytes.resize(size_t(bytes));
+        }else{target.bytes.resize(size_t(bytes));copyVertices(target.bytes.data(),static_cast<const std::uint8_t*>(vertices)+size_t(offset),stride,extent[0],low,mesh.vertexCount);}
         sourceSpanVertices_+=size_t(sourceSpan);uniqueVertices_+=mesh.vertexCount;savedVertexBytes_+=size_t(lockBytes-readBytes);compactedDraws_+=compacted_;
         accepted();output=std::move(mesh);return true;
     }

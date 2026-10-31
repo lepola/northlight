@@ -245,11 +245,31 @@ static void hitAllocations(){
         assert(allocations==before);}
     std::puts("hits allocate nothing in Map, Predict and Prefetch");
 }
+static void retainedCopies(){
+    Device d;Frame reused(4096,0),up(4096,0);Mesh retained,retainedUp;
+    for(auto& stream:retained.streams)stream.bytes.reserve(8192);retainedUp.streams[0].bytes.reserve(8192);
+    Declaration single;single.e.erase(single.e.begin()+1);
+    for(unsigned frame=0;frame<32;++frame){
+        for(unsigned stream=0;stream<2;++stream)retained.streams[stream].bytes.assign(frame%3?512:0,0xa5);
+        retainedUp.streams[0].bytes.assign(frame%3?512:0,0xa5);
+        for(unsigned stream=0;stream<2;++stream)for(auto& byte:d.vb[stream].bytes)byte=std::uint8_t(byte+frame+stream+1);
+        Draw draw{D3DPT_TRIANGLELIST,0,0,12,frame%6,2,false};reused.clearFrame();
+        const auto allocationsBefore=allocations;assert(reused.read(&d,&d.decl,draw,retained));assert(allocations==allocationsBefore);
+        Frame fresh(4096,0);Mesh expected;assert(fresh.read(&d,&d.decl,draw,expected));assert(reused.bytesRead()==fresh.bytesRead());
+        for(unsigned stream=0;stream<4;++stream)assert(retained.streams[stream].bytes==expected.streams[stream].bytes);
+        assert(retained.vertexCount==expected.vertexCount&&retained.streams[0].bytes.capacity()==8192);
+        draw.start=0;up.clearFrame();const auto* input=d.vb[0].bytes.data()+d.offset[0];
+        const auto beforeUp=allocations;assert(up.readUP(&single,draw,nullptr,D3DFMT_INDEX16,input,d.stride[0],retainedUp));assert(allocations==beforeUp);
+        Mesh expectedUp;Frame originalUp(4096,0);assert(originalUp.readUP(&single,draw,nullptr,D3DFMT_INDEX16,input,d.stride[0],expectedUp));
+        assert(retainedUp.streams[0].bytes==expectedUp.streams[0].bytes&&up.bytesRead()==originalUp.bytesRead());
+    }
+    std::puts("retained contiguous snapshots: 64 byte-exact VB/UP draws, poisoned growth/tails, stable capacities, zero allocations, equal budgets");
+}
 int main(int argc,char** argv){
     const std::string mode=argc>1?argv[1]:"all";
     if(mode=="directed"){directed();return 0;}
     if(mode=="differential"){bool ok=false;differential(1811,ok);return 0;}
-    equality();meter();hitAllocations();directed();
+    equality();meter();hitAllocations();retainedCopies();directed();
     bool ok1=false,ok2=false;differential(1811,ok1);differential(90181,ok2);
     assert((ok1&&ok2)||NORTHLIGHT_SNAPSHOT_HASH_BITS);
     std::puts("PASS snapshot prediction: Map, Predict and Prefetch equal per read; liveness cases clean");

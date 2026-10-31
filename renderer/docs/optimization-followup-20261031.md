@@ -1,0 +1,7 @@
+# Capture and GI preparation follow-up (2026-10-31)
+
+Thirteen changes reduce repeated CPU preparation: reuse retained contiguous snapshot capacity without clearing the range immediately overwritten; compare wide and short byte spans in words; decode INDEX32 in SSE2; borrow probe-pool tasks and claim jobs atomically; scan material alpha minima and repack resident BGRA in SSE2; pack distance moments with paired double operations; pair GI sine/cosine evaluation; cache squared solve-order axes; use exact integral probe-grid math and fixed common atlas divisors. Sparse snapshot writes, task exceptions, material semantics, generic atlas layouts and failure rollback remain checked.
+
+This branch retains its own material.rgba and mesh assembly APIs. It does not import the combined branch's material-spooling architecture. Optimized/sanitizer differential suites cover retained snapshots, guard-page byte compares, 17,792 index cases, 10,000 pool generations (also TSan), 65,552 material byte layouts, 205,909 moment pairs/four rounding modes, 1,220,000 grid cases, 4,224 solve orders and GI publication. The paired trig path has a bounded numerical difference (maximum below 1.2e-7 in the million-angle x86 check), rather than a pixel-identity claim for GI. All other exact contracts remain exact.
+
+The independent x86 DLL builds. No new game run or duration/FPS benchmark is used. This is structural work reduction, not a measured whole-game speedup or new driver-allocation guarantee.

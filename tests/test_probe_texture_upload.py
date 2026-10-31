@@ -10,7 +10,9 @@ import tempfile
 
 with tempfile.TemporaryDirectory(prefix='northlight-probe-upload-') as tmp:
     binary=Path(tmp)/'test'
-    subprocess.run(['clang++','-std=c++17','-O2','-UNDEBUG','-Wall','-Wextra','-Werror',
-                    *fp.test_include_flags(),str(Path(__file__).with_suffix('.cpp')),
-                    '-o',str(binary)],check=True)
-    subprocess.run([str(binary)],check=True)
+    for mode,flags in [('release',['-O2']),('sanitized',['-O1','-g','-fsanitize=address,undefined','-fno-omit-frame-pointer'])]:
+        subprocess.run(['clang++','-std=c++17',*flags,'-UNDEBUG','-Wall','-Wextra','-Werror',
+                        *fp.test_include_flags(),str(Path(__file__).with_suffix('.cpp')),
+                        '-o',str(binary)],check=True)
+        print(mode,flush=True)
+        subprocess.run([str(binary)],check=True)

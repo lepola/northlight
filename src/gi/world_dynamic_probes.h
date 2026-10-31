@@ -1,21 +1,38 @@
 #pragma once
 #include "world_probe_cache.h"
 #include <type_traits>
+#if defined(__SSE2__)
+#include <emmintrin.h>
+#endif
 
 namespace NorthlightGI {
 
 inline bool staticVectorWithin(Vec3 a,Vec3 b,float tolerance) {
     if(!std::isfinite(a.x)||!std::isfinite(a.y)||!std::isfinite(a.z)||
        !std::isfinite(b.x)||!std::isfinite(b.y)||!std::isfinite(b.z))return false;
-    const Vec3 delta=a-b;return dot(delta,delta)<=tolerance*tolerance;
+    const Vec3 delta={a.x-b.x,a.y-b.y,a.z-b.z};return delta.x*delta.x+delta.y*delta.y+delta.z*delta.z<=tolerance*tolerance;
+}
+// The four global lighting vectors benefit from a packed three-lane compare;
+// local lights retain the scalar helper to avoid extra packing overhead.
+inline bool staticGlobalVectorWithin(Vec3 a,Vec3 b,float tolerance) {
+#if defined(__SSE2__)
+    if(!std::isfinite(a.x)||!std::isfinite(a.y)||!std::isfinite(a.z)||
+       !std::isfinite(b.x)||!std::isfinite(b.y)||!std::isfinite(b.z))return false;
+    const __m128 aa=_mm_set_ps(0.f,a.z,a.y,a.x),bb=_mm_set_ps(0.f,b.z,b.y,b.x);
+    const __m128 delta=_mm_sub_ps(aa,bb);float squared[4];
+    _mm_storeu_ps(squared,_mm_mul_ps(delta,delta));
+    return squared[0]+squared[1]+squared[2]<=tolerance*tolerance;
+#else
+    return staticVectorWithin(a,b,tolerance);
+#endif
 }
 // This is also the cache invalidation policy. Check every source, including a
 // removed secondary light; a request's reason bits do not identify generation.
 inline bool sameStaticLighting(const Lighting& a,const Lighting& b) {
-    if(!staticVectorWithin(a.sunDirection,b.sunDirection,.02f)||
-       !staticVectorWithin(a.sunIrradiance,b.sunIrradiance,.03f)||
-       !staticVectorWithin(a.skyRadiance,b.skyRadiance,.01f)||
-       !staticVectorWithin(a.worldUp,b.worldUp,0)||
+    if(!staticGlobalVectorWithin(a.sunDirection,b.sunDirection,.02f)||
+       !staticGlobalVectorWithin(a.sunIrradiance,b.sunIrradiance,.03f)||
+       !staticGlobalVectorWithin(a.skyRadiance,b.skyRadiance,.01f)||
+       !staticGlobalVectorWithin(a.worldUp,b.worldUp,0)||
        !std::isfinite(a.maxDistance)||a.maxDistance!=b.maxDistance||
        !std::isfinite(a.rayBias)||a.rayBias!=b.rayBias||a.maxBounces!=b.maxBounces||
        a.additionalDirections.size()!=b.additionalDirections.size()||a.points.size()!=b.points.size())return false;
@@ -120,10 +137,25 @@ class DynamicProbeLayer {
         }
     }
     static float boxDistanceSquared(const Bounds& b,Vec3 p) {
+#if defined(__SSE2__)
+        const __m128 q=_mm_set_ps(0.f,p.z,p.y,p.x),lo=_mm_set_ps(0.f,b.low.z,b.low.y,b.low.x);
+        const __m128 hi=_mm_set_ps(0.f,b.high.z,b.high.y,b.high.x),zero=_mm_setzero_ps();
+        const __m128 a=_mm_sub_ps(lo,q),c=_mm_sub_ps(q,hi);
+        // Ordered selects preserve std::max's first-operand NaN behavior.
+        const __m128 m0=_mm_cmplt_ps(a,zero),first=_mm_or_ps(_mm_and_ps(m0,zero),_mm_andnot_ps(m0,a));
+        const __m128 m1=_mm_cmplt_ps(first,c),d=_mm_or_ps(_mm_and_ps(m1,c),_mm_andnot_ps(m1,first));
+        float squared[4];_mm_storeu_ps(squared,_mm_mul_ps(d,d));
+        return squared[0]+squared[1]+squared[2];
+#else
         float dx=std::max({b.low.x-p.x,0.f,p.x-b.high.x});
         float dy=std::max({b.low.y-p.y,0.f,p.y-b.high.y});
         float dz=std::max({b.low.z-p.z,0.f,p.z-b.high.z});
         return dx*dx+dy*dy+dz*dz;
+#endif
+    }
+    static float weightDistance(float distance) {
+        float t=std::max(0.f,std::min(1.f,(DynamicZeroDistance-std::sqrt(distance))/(DynamicZeroDistance-DynamicFullDistance)));
+        return t*t*(3.f-2.f*t);
     }
 public:
     // Static world/light generation changed: every correction is stale.
@@ -143,6 +175,13 @@ public:
     }
     size_t pathRecords()const{return paths_.size();}
     size_t pathBytes()const{return pathBytes_;}
+    void accountMemory(NorthlightMemoryFootprint::Counter& memory)const{
+        using namespace NorthlightMemoryFootprint;
+        if(!memory.visit(this))return;
+        memory.add(Metadata,sizeof(*this));memory.vector(Metadata,bounds_);
+        for(const auto& entry:solved_)memory.allocation(Probes,&entry,sizeof(entry));
+        for(const auto& entry:paths_){memory.allocation(Metadata,&entry,sizeof(entry));memory.vector(Probes,entry.second.record.rays);memory.vector(Probes,entry.second.record.queries);}
+    }
     size_t retained()const{return solved_.size();}
     uint32_t generation()const{return generation_;}
     float distanceSquared(Vec3 p)const {
@@ -153,10 +192,7 @@ public:
         for(const auto& b:bounds_)if(b.valid)closest=std::min(closest,boxDistanceSquared(b,p));
         return closest;
     }
-    float weight(Vec3 p)const {
-        float t=std::max(0.f,std::min(1.f,(DynamicZeroDistance-std::sqrt(distanceSquared(p)))/(DynamicZeroDistance-DynamicFullDistance)));
-        return t*t*(3.f-2.f*t);
-    }
+    float weight(Vec3 p)const {return weightDistance(distanceSquared(p));}
     // Order-independent identity of every actor box that can influence p.
     uint32_t signature(Vec3 p)const {
         uint32_t h=0x9e3779b9u;
@@ -169,7 +205,7 @@ public:
     template<class Solve,class Cancel>
     bool apply(std::vector<ProbeAtlasEntry>& atlas,Solve solve,Cancel cancel,
                unsigned& reused,unsigned& computed) {
-        return applyBudget(atlas,solve,cancel,reused,computed,DynamicSolveBudget);
+        return applyBudget<true>(atlas,solve,cancel,reused,computed,DynamicSolveBudget);
     }
     // Progressive static publication must not erase previously solved moving
     // contributions or spend another dynamic solve budget on every batch.
@@ -178,7 +214,7 @@ public:
     template<class Cancel>
     bool applyCached(std::vector<ProbeAtlasEntry>& atlas,Cancel cancel,unsigned& reused) {
         unsigned computed=0;
-        return applyBudget(atlas,[](ProbeGridKey,Vec3){return Probe{};},cancel,reused,computed,0);
+        return applyBudget<false>(atlas,[](ProbeGridKey,Vec3){return Probe{};},cancel,reused,computed,0);
     }
 private:
     // A solve receives this probe's path record, or null when the budget is
@@ -195,9 +231,11 @@ private:
         struct Account { size_t& bytes;const StaticPathRecord& record;~Account(){bytes+=record.retainedBytes();} } account{pathBytes_,path.record};
         return solve(key,position,&path.record);
     }
-    template<class Solve,class Cancel>
+    template<bool WithBudget,class Solve,class Cancel>
     bool applyBudget(std::vector<ProbeAtlasEntry>& atlas,Solve solve,Cancel cancel,
                      unsigned& reused,unsigned& computed,unsigned budget) {
+        // Without valid actor bounds, every probe has zero dynamic weight.
+        if(std::none_of(bounds_.begin(),bounds_.end(),[](const Bounds& b){return b.valid;}))return !cancel();
         struct Candidate {ProbeAtlasEntry* entry;float distance,amount;uint32_t signature,solvedGeneration;bool fresh,chosen;};
         std::vector<Candidate> candidates;
         for(auto& entry:atlas) {
@@ -205,7 +243,7 @@ private:
             float distance=distanceSquared(entry.probe.position);
             if(distance>=DynamicZeroDistance*DynamicZeroDistance)continue;
             // The outer shell blends at under 1/64: not worth a solve.
-            float amount=weight(entry.probe.position);if(amount<1.f/64)continue;
+            float amount=weightDistance(distance);if(amount<1.f/64)continue;
             candidates.push_back({&entry,distance,amount,0,0,false,false});
         }
         // Hard ceiling of moving-object probes per publication. Selection is
@@ -228,7 +266,8 @@ private:
             if(!c.fresh)mismatched.push_back(&c);
         }
         for(size_t i=0;i<mismatched.size()&&i<DynamicNearestTier&&budget;++i){mismatched[i]->chosen=true;--budget;}
-        std::stable_sort(mismatched.begin(),mismatched.end(),[](const Candidate* a,const Candidate* b){return a->solvedGeneration<b->solvedGeneration;});
+        // Cached-only publication cannot choose a solve, so ordering is unused.
+        if constexpr(WithBudget)std::stable_sort(mismatched.begin(),mismatched.end(),[](const Candidate* a,const Candidate* b){return a->solvedGeneration<b->solvedGeneration;});
         for(auto* c:mismatched){if(!budget)break;if(!c->chosen){c->chosen=true;--budget;}}
         unsigned visited=0;
         for(const auto& candidate:candidates) {

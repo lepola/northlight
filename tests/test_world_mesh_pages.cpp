@@ -28,8 +28,8 @@ static void verify(const WorldMeshUploadPlan& input,const P::Plan& output) {
     for(const auto& page:output.pages){
         assert(!page.vertices.empty()&&!page.indices.empty());
         assert(page.vertices.size()*sizeof(WorldVertex)<=P::PageVertexByteLimit);
-        assert(page.indices.size()*sizeof(uint32_t)<=P::PageIndexByteLimit);
-        vb+=page.vertices.size()*sizeof(WorldVertex);ib+=page.indices.size()*sizeof(uint32_t);
+        assert(page.indices.size()*sizeof(uint16_t)<=P::PageIndexByteLimit);
+        vb+=page.vertices.size()*sizeof(WorldVertex);ib+=page.indices.size()*sizeof(uint16_t);
     }
     std::vector<size_t> pageNext(output.pages.size());
     for(const auto& b:output.batches){
@@ -165,7 +165,7 @@ static void testAnchors(){
     }
     // Different content never shares a key; the key covers sizes, vertex bytes and index bytes.
     WorldScene s;WorldMeshUploadPlan in;makePlan(s,in,{1,2});P::Plan p;std::string error;assert(P::build(in,p,error)&&p.pages.size()>=1);
-    auto page=p.pages[0];auto key=[&](const P::Page& g){return NorthlightMeshPageKey::keyOf(g.vertices.data(),g.vertices.size()*32,g.indices.data(),g.indices.size()*4);};
+    auto page=p.pages[0];auto key=[&](const P::Page& g){return NorthlightMeshPageKey::keyOf(g.vertices.data(),g.vertices.size()*32,g.indices.data(),g.indices.size()*sizeof(uint16_t));};
     assert(key(page)==page.key);
     auto changed=page;changed.vertices[3].position.z+=1;assert(key(changed)!=page.key);
     changed=page;changed.indices[5]^=1;assert(key(changed)!=page.key);
@@ -295,7 +295,7 @@ static void testCompactSource(){
     input.vertexBytes=96;input.indexBytes=12;for(auto& m:input.materials)m.bgra={255,255,255,255};
     std::string error;P::Plan reference;assert(P::build(input,reference,error));
     const auto* vertices=scene->vertices.data();
-    input.pagingVertices=std::make_shared<const std::vector<WorldVertex>>(std::move(scene->vertices));
+    input.pagingVertices=std::make_shared<const std::vector<WorldVertex>>(std::move(*scene->vertices.flat()));
     input.completePlacements=std::move(scene->completePlacements);input.source=nullptr;scene.reset();
     assert(input.verticesForPaging()->data()==vertices);
     auto pages=std::make_shared<P::Plan>();assert(P::build(input,*pages,error));

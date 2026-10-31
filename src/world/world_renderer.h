@@ -1290,7 +1290,7 @@ private:
           };
           DWORD memoryReportAt=0;
           NorthlightTerrainReach::State reachState;NorthlightGI::SceneSizeHint terrainSizeHint; /* terrain scene counts of the last build; keyed by reach, reset per map */NorthlightTerrainReach::Episode memoryStall;
-          NorthlightGeometryMemory::EntryLift entryLift;
+          NorthlightGeometryMemory::EntryLift entryLift,chunkLift;
           std::string entryLiftMap;V entryLiftCenter;
           // Episode logs (begin on the first memory refusal, end when the build is delivered or dropped).
           // `required` is the refused check's aggregate floor: published (at most the plain entry floor)
@@ -1313,7 +1313,7 @@ private:
           auto abandonGeometry=[&](){
               // A measured peak belongs to the abandoned spatial region. It
               // must not refuse a different region before that build starts.
-              entryLift.clear();terrainSizeHint={};stallEnd("superseded");
+              entryLift.clear();chunkLift.clear();terrainSizeHint={};stallEnd("superseded");
           };
           NorthlightLocalLights::Cache lightCache(root+"world-cache/lights");
           // Last delivered region. Any build that does not deliver forces the next
@@ -1370,7 +1370,7 @@ private:
             // once per entry; its error is published once and no build runs until the map changes.
             if(r.map!=cacheCheckedMap){
                 if(!cacheMapHasTiles&&NorthlightDiagnostics::enabled())logf("WORLD cache absent end map=\"%s\" skippedBuilds=%u",cacheCheckedMap.c_str(),uncachedSkips);
-                cacheCheckedMap=r.map;cacheMapHasTiles=worldCacheHasTiles(r.map);uncachedPublished=false;uncachedSkips=0;entryLift.clear();reachState={};terrainSizeHint={};
+                cacheCheckedMap=r.map;cacheMapHasTiles=worldCacheHasTiles(r.map);uncachedPublished=false;uncachedSkips=0;entryLift.clear();chunkLift.clear();reachState={};terrainSizeHint={};
                 if(!cacheMapHasTiles)logf("WORLD cache absent map=\"%s\"; geometry builds skipped until the map changes",r.map.c_str());
             }
             if(!cacheMapHasTiles){
@@ -1381,9 +1381,10 @@ private:
             // Keep the refused attempt's anchor: a stream of small requests
             // must not carry its peak estimate across arbitrarily far travel.
             if(entryLift.armed&&!NorthlightWorldStreaming::applicable(entryLiftMap,entryLiftCenter,r.map,r.camera)){
-                entryLift.clear();terrainSizeHint={};
+                entryLift.clear();chunkLift.clear();terrainSizeHint={};
             }
             auto built=std::make_unique<Built>();
+            bool chunkedLocal=false,coldRecovery=false;
 #if NORTHLIGHT_DEV_TUNING
             const auto tuning=devSnapshot(); // ONE snapshot per build: the terrain reach and the ground fog scales both use it
 #endif
@@ -1408,15 +1409,29 @@ private:
                 // The incremental cache is dropped only when the plain entry budget fails; a raised
                 // entry floor (entryLift) alone keeps it for the attempt that eventually runs.
                 const auto plainEntry=NorthlightGeometryMemory::buildBudget(64*NorthlightGeometryMemory::MiB);
-                const auto entryBudget=entryLift.apply(plainEntry,GetTickCount());
+                auto entryBudget=entryLift.apply(plainEntry,GetTickCount());
                 if(!NorthlightGeometryMemory::admits(memory,plainEntry)){localGeometry.reset();memory=workerMemory(plainEntry);}
+                // BEGIN CHUNKED ENTRY SELECTION
+                if(!NorthlightGeometryMemory::admits(memory,entryBudget)){
+                    const auto chunkBudget=chunkLift.apply(NorthlightGeometryMemory::chunkBuildBudget(),GetTickCount());
+                    memory=workerMemory(chunkBudget);entryBudget=chunkBudget;chunkedLocal=true;
+                }
+                if(!NorthlightGeometryMemory::admits(memory,entryBudget)){
+                    // A bounded candidate also replaces a retained generation.
+                    // Waiting for that generation to expire made lighting blink
+                    // at every 160-unit boundary below the normal 480 MiB floor.
+                    const auto cold=chunkLift.apply(NorthlightGeometryMemory::coldChunkBuildBudget(),GetTickCount());
+                    memory=workerMemory(cold);entryBudget=cold;coldRecovery=true;
+                }
+                // END CHUNKED ENTRY SELECTION
                 if(!NorthlightGeometryMemory::admits(memory,entryBudget)){stallBegin("build-deferred",memory,entryBudget.available,entryBudget.largest);deferBuild("build-deferred",memory,1000,&entryBudget);continue;}
+                const auto geometryBudget=[&](uint64_t bytes=0){return coldRecovery?NorthlightGeometryMemory::coldInBuildBudget(bytes):NorthlightGeometryMemory::inBuildBudget(bytes);};
                 const uint64_t entryAvailable=memory.available,entryLargest=memory.largest;
                 geometryMemoryDemand.store(0,std::memory_order_relaxed); // admitted: the build's own use is not a demand (the episode stays open)
                 // A memory refusal after entry: the next entry waits for what this attempt lacked.
                 auto liftEntry=[&](const char* stage,uint64_t required,uint64_t observed,uint64_t requiredLargest){
                     entryLiftMap=r.map;entryLiftCenter=r.geometryCenter;
-                    entryLift.refused(entryAvailable,required,observed,GetTickCount(),requiredLargest);
+                    auto& lift=chunkedLocal?chunkLift:entryLift;lift.refused(entryAvailable,required,observed,GetTickCount(),requiredLargest);
                     logf("WORLD geometry entry raised stage=%s requiredAvailableMiB=%llu requiredLargestMiB=%llu entryMiB=%llu refusedMiB=%llu stageRequiredMiB=%llu holdMs=%u",
                         stage,(unsigned long long)(entryLift.available>>20),(unsigned long long)(entryLift.largest>>20),(unsigned long long)(entryAvailable>>20),
                         (unsigned long long)(observed>>20),(unsigned long long)(required>>20),unsigned(NorthlightGeometryMemory::LiftMs));
@@ -1435,13 +1450,24 @@ private:
                 // Interior checks use inBuildBudget (stage entry already reserved the build headroom).
                 NorthlightGI::AllocationAdmission localAdmission=[&](uint64_t bytes){
                     if(bytes<NorthlightGeometryMemory::MiB)return true;
-                    const auto budget=NorthlightGeometryMemory::inBuildBudget(bytes);auto sample=workerMemory(budget);
+                    const auto budget=geometryBudget(bytes);auto sample=workerMemory(budget);
                     if(NorthlightGeometryMemory::admits(sample,budget))return true;
                     localDeferred=true;localSample=sample;localRequired=budget.available;localLargest=budget.largest;logGeometryMemory("local-geometry-allocation-deferred",sample,generations.live(),workerMemoryExact,&budget);return false;
                 };
                 auto replacement=std::make_shared<NorthlightGI::BVH>();
                 if(!generations.track(replacement))throw std::runtime_error("Geometry generation admission invariant");
-                if(tiles.empty()||!localGeometry.build(tiles,root+"world-cache/models",r.map,center-V(288,288,320),center+V(288,288,320),*replacement,error,localAdmission,quality.giFastBVH!=0)||!replacement->triangleCount()){
+                auto buildLocal=[&]{return !tiles.empty()&&localGeometry.build(tiles,root+"world-cache/models",r.map,center-V(288,288,320),center+V(288,288,320),*replacement,error,localAdmission,quality.giFastBVH!=0,{},{},chunkedLocal);};
+                bool localBuilt=buildLocal();
+                auto noteLocalAllocationFailure=[&]{if(!localBuilt&&!localDeferred&&(error.find("Geometry allocation deferred")!=std::string::npos||error.find("Cannot allocate")!=std::string::npos)){const auto budget=geometryBudget();localSample=workerMemory(budget);localRequired=budget.available;localLargest=budget.largest;localDeferred=true;}};
+                noteLocalAllocationFailure();
+                if(!localBuilt&&localDeferred&&!chunkedLocal){
+                    localGeometry.reset();chunkedLocal=true;localDeferred=false;const auto budget=chunkLift.apply(NorthlightGeometryMemory::chunkBuildBudget(),GetTickCount());
+                    const auto retryMemory=workerMemory(budget);if(NorthlightGeometryMemory::admits(retryMemory,budget))localBuilt=buildLocal();
+                    else{localDeferred=true;localSample=retryMemory;localRequired=budget.available;localLargest=budget.largest;}
+                }
+                noteLocalAllocationFailure();
+                if(localBuilt)localDeferred=false;
+                if(!localBuilt||!replacement->triangleCount()){
                     replacement.reset();
                     if(localDeferred){localGeometry.reset();liftEntry("local-geometry",localRequired,localSample.available,localLargest);stallBegin("local-geometry",localSample,localRequired,localLargest);deferBuild("local-geometry-retry",workerMemory(),1000);continue;}
                     result->message=error.empty()?"No cached geometry for "+r.map:error;publishError();continue;
@@ -1455,7 +1481,7 @@ private:
                 // The local BVH and its cache are this build's own memory: entry reserved their headroom,
                 // so this gate keeps the in-build floor. The entry floor here refused every attempt that
                 // entered within one BVH of 768 MiB and rebuilt it each second (0.3.212 player log).
-                const auto planBudget=NorthlightGeometryMemory::inBuildBudget();
+                const auto planBudget=geometryBudget();
                 memory=workerMemory(planBudget);if(NorthlightDiagnostics::enabled())logGeometryMemory("after-bvh",memory,generations.live(),workerMemoryExact,&planBudget);
                 if(!NorthlightGeometryMemory::admits(memory,planBudget)){
                     replacement.reset();liftEntry("plan",planBudget.available,memory.available,planBudget.largest);stallBegin("plan",memory,planBudget.available,planBudget.largest);deferBuild("plan-deferred",memory,1000,&planBudget);continue;
@@ -1475,7 +1501,7 @@ private:
                     // every large growth inside the stage is checked against inBuildBudget.
                     if(bytes<NorthlightGeometryMemory::MiB)return true;
                     ++terrainChecks;
-                    const auto budget=NorthlightGeometryMemory::inBuildBudget(bytes);auto sample=workerMemory(budget);
+                    const auto budget=geometryBudget(bytes);auto sample=workerMemory(budget);
                     if(!NorthlightGeometryMemory::admits(sample,budget)&&localGeometry.stats().retainedBytes){
                         // Pieces accelerate the NEXT local build; the finished
                         // BVH owns its scene. Release this optional duplicate
@@ -1529,10 +1555,10 @@ private:
                 }
                 NorthlightGI::WorldScene shadowTerrain;
                 { uint32_t reachBits;std::memcpy(&reachBits,&reach,sizeof reachBits);terrainSizeHint.key=reachBits; } // same map (reset above) and same reach only
-                const bool terrainLoaded=NorthlightGI::loadInstancedScenes(shadowTiles,root+"world-cache/models",center-V(reach,reach,reach),center+V(reach,reach,reach),shadowTerrain,error,1,terrainAdmission,terrainFilter,terrainChunkFilter,&terrainSizeHint);
+                const bool terrainLoaded=NorthlightGI::loadInstancedScenes(shadowTiles,root+"world-cache/models",center-V(reach,reach,reach),center+V(reach,reach,reach),shadowTerrain,error,1,terrainAdmission,terrainFilter,terrainChunkFilter,&terrainSizeHint,{},true,chunkedLocal);
                 if(terrainLoaded)terrainDeferred=false; // a refusal inside a successful load can only be the optional size-hint reserve (every other refusal fails the load)
                 const double terrainLoadMs=phaseElapsed();
-                if(!terrainLoaded||!NorthlightShadowTerrain::build(replacement->scene(),shadowTerrain,center,*plan,error,terrainAdmission,reach,{},true)){
+                if(!terrainLoaded||!(chunkedLocal?NorthlightShadowTerrain::buildConsuming(replacement->scene(),shadowTerrain,center,*plan,error,terrainAdmission,reach,{},replacement.get()):NorthlightShadowTerrain::build(replacement->scene(),shadowTerrain,center,*plan,error,terrainAdmission,reach,{},true))){
                     if(terrainDeferred){
                         stallBegin("shadow-terrain",terrainSample,terrainRequired,terrainRequiredLargest);
                         if(reduceReach())goto terrainStage;
@@ -1605,7 +1631,7 @@ private:
             devBuilds.fetch_add(1,std::memory_order_relaxed);
 #endif
             wake.notify_one();built.reset();
-            stallEnd(memoryStall.reduced?"reduced":"published");entryLift.clear();
+            stallEnd(memoryStall.reduced?"reduced":"published");entryLift.clear();chunkLift.clear();
             builtMap=r.map;builtCenter=r.geometryCenter;builtValid=true;wanted=false;superseded=0;
           }
           }catch(const std::bad_alloc&){workerFaultCode.store(1);}
@@ -2197,7 +2223,7 @@ private:
             probeBlend.begin(active->map);const unsigned blendedSlots=probePrev?probeBlend.publish(active->atlas,activationNow):0; // 0.3.197
             const unsigned n=NorthlightGI::probeLayout().atlas;
             for(int channel=0;channel<5;++channel){D3DLOCKED_RECT lock;if(!check(probe[channel]->LockRect(0,&lock,nullptr,0),"probe upload"))return false;
-                NorthlightProbeUpload::write(unsigned(channel),lock.pBits,size_t(lock.Pitch),n,active->atlas,probeBlend,probeActivation,activationNow,probePrev!=nullptr);
+                NorthlightProbeUpload::write(unsigned(channel),lock.pBits,size_t(lock.Pitch),n,active->atlas,probeBlend,probeActivation,activationNow,probePrev!=nullptr,true); // Locked D3D storage cannot alias the CPU atlas.
                 probe[channel]->UnlockRect(0);
             }
             if(probePrev){D3DLOCKED_RECT lock; /* 0.3.197: what was on screen before each slot's latest SH, R|G|B in three horizontal thirds */
