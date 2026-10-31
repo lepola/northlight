@@ -218,9 +218,14 @@ class Preflight(Base):
         self.assertIn('--locale', self.refused())
 
     def test_non_ascii_path(self):
-        moved = self.base / 'Spiel-Äpfel' / 'WoW'
+        moved = self.base / 'Игра-Äpfel-世界-🎮' / 'WoW'
         moved.parent.mkdir(parents=True); self.client.rename(moved); self.client = moved
-        self.assertIn('non-ASCII', self.refused())
+        self.installer().install(self.client, instances='classic-raids')
+        report = self.installer().install(self.client)
+        self.assertEqual(report['instances']['kept'], ['classic-raids'])
+        with patch.object(sys, 'stdout', io.StringIO()):
+            self.installer().uninstall(self.client)
+        self.assertEqual(tree(self.client), self.before)
 
     def test_game_running(self):
         inst = self.installer(); inst.running = lambda: ['wow.exe']

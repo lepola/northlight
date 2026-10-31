@@ -1,6 +1,7 @@
 #pragma once
 // Client-local artistic palettes, selected from authored ADT zone IDs. Portable
 // policy only: file loading at startup; region loading belongs to the worker.
+#include <filesystem>
 #include "regional_fog.h"
 #include "celestial_context.h"
 #include "quality_settings.h"
@@ -115,7 +116,7 @@ inline bool readIniText(std::istream& input,std::string& text,std::string& error
     text=NorthlightQuality::narrow(raw);if(text.rfind("\xef\xbb\xbf",0)==0)text.erase(0,3);return true;
 }
 inline bool load(const std::string& path,Table& out,std::string& error){
-    std::ifstream f(path,std::ios::binary);if(!f){error="file unavailable; neutral defaults retained";return false;}
+    std::ifstream f(std::filesystem::u8path(path),std::ios::binary);if(!f){error="file unavailable; neutral defaults retained";return false;}
     std::string text;if(!readIniText(f,text,error))return false;std::istringstream decoded(text);return parse(decoded,out,error);
 }
 

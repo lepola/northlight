@@ -9,8 +9,8 @@
 The launchers (Install Northlight.command, Install.cmd, install.sh) run this with the package's own Python as
 `python -I -B -X utf8`. Install, in this order; nothing is written before the checks pass:
 1. preflight: the game and WoWSilicon are closed; wow.exe and the 3.3.5a base archives are there;
-   the locale is known; the client folder is writable, ASCII-only (the renderer opens its files
-   with narrow paths), not under Program Files and short enough (Windows; Linux: the path Wine shows
+   the locale is known; the client folder is writable, not under Program Files and short enough
+   (Windows; Linux: the path Wine shows
    the game, wine_path of the folder as given, symlinks kept); the package is outside the client; enough disk (and 8 GB RAM for a local
    build); macOS: WoWSilicon's dlls.txt preload with DXVK is active; Linux: no name we write exists
    in another letter case (Wine would see both), and Wow.exe is not running under Wine (/proc).
@@ -530,13 +530,10 @@ class Installer:
                           '(for example Downloads) and run it from there.')
         if root in client.parents:
             raise Refusal('The game folder is inside the package folder. Choose the real game folder.')
-        if not str(client).isascii():
-            raise Refusal(f'The game folder path has non-ASCII characters: {client}\n'
-                          'The renderer cannot open its files there. Move or rename the folder so that the whole '
-                          'path uses only A-Z, 0-9, spaces and simple punctuation, then run the installer again.')
         if self.platform == 'windows':
-            if len(str(client)) + LONGEST_CACHE_NAME > WINDOWS_MAX_PATH:
-                raise Refusal(f'The game folder path is too long ({len(str(client))} characters; at most '
+            path_length = len(str(client).encode('utf-16-le')) // 2
+            if path_length + LONGEST_CACHE_NAME > WINDOWS_MAX_PATH:
+                raise Refusal(f'The game folder path is too long ({path_length} characters; at most '
                               f'{WINDOWS_MAX_PATH - LONGEST_CACHE_NAME}). Move the game to a shorter path such as C:\\Games\\WoW.')
             for var in ('ProgramFiles', 'ProgramFiles(x86)', 'ProgramW6432'):
                 base = os.environ.get(var)
@@ -545,8 +542,9 @@ class Installer:
                                   'are redirected. Move the game folder to for example C:\\Games\\WoW.')
         if self.platform == 'linux':
             shown = wine_path(self.given or client)
-            if len(shown) + LONGEST_CACHE_NAME > WINDOWS_MAX_PATH:
-                raise Refusal(f'The game folder path is too long for the game under Wine ({shown}: {len(shown)} '
+            path_length = len(shown.encode('utf-16-le')) // 2
+            if path_length + LONGEST_CACHE_NAME > WINDOWS_MAX_PATH:
+                raise Refusal(f'The game folder path is too long for the game under Wine ({shown}: {path_length} '
                               f'characters; at most {WINDOWS_MAX_PATH - LONGEST_CACHE_NAME}). Move the game folder to a '
                               'shorter path, for example ~/Games/WoW.')
         entries = {p.name.lower() for p in client.iterdir()}

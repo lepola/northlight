@@ -15,7 +15,7 @@ DOWNLOADS
 REQUIREMENTS
 - An Apple Silicon Mac and WoWSilicon, with this client patched with the DXVK
   backend (WoWSilicon: Patch, with DXVK as the graphics backend, not MTLD3D).
-- Only ASCII characters in the game folder path (no ä, ö, å or other special characters).
+- Unicode game folder paths are supported, including Cyrillic.
 - About 13 GB of free disk space and at least 8 GB of memory while the
   installer builds the cache.
 

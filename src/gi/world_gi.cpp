@@ -1,3 +1,4 @@
+#include "utf8_path.h"
 #include "world_gi.h"
 #include <algorithm>
 #include <array>
@@ -77,7 +78,7 @@ struct Reader {
 }
 
 static bool readScene(const char* path,WorldScene& output,std::string& error,const AllocationAdmission& admit,bool materialsOnly) {
-    error.clear(); Reader r; r.file=std::fopen(path,"rb");
+    error.clear(); Reader r; r.file=NorthlightFiles::open(path,"rb");
     if(!r.file){error="Cannot open FGS2 scene";return false;}
     if(std::fseek(r.file,0,SEEK_END)!=0){error="Cannot seek FGS2 scene";return false;}
     long fileSize=std::ftell(r.file);
@@ -233,7 +234,7 @@ using InstanceGroups=std::map<std::string,std::vector<Instance>>;
 bool selectInstances(const std::vector<std::string>& files,Vec3 low,Vec3 high,uint32_t categoryMask,InstanceGroups& groups,std::string& error,const std::function<bool(Vec3,Vec3)>& instanceFilter = {}){
     std::set<std::pair<uint32_t,uint64_t>> seen;size_t selected=0;
         for(const auto& path:files){
-            Reader r;r.file=std::fopen(path.c_str(),"rb");if(!r.file){error="Cannot open FGS3 tile: "+path;return false;}
+            Reader r;r.file=NorthlightFiles::open(path.c_str(),"rb");if(!r.file){error="Cannot open FGS3 tile: "+path;return false;}
             if(std::fseek(r.file,0,SEEK_END)!=0){error="Cannot seek FGS3 tile";return false;}
             long length=std::ftell(r.file);
             if(length<12||length>128L*1024L*1024L||std::fseek(r.file,0,SEEK_SET)!=0){error="Invalid FGS3 file size";return false;}

@@ -1,4 +1,5 @@
 #pragma once
+#include "utf8_path.h"
 // Explicit F12 shadow view only. Read actual GPU products without changing the
 // lighting state; errors are diagnostic failures, never renderer-disable events.
 namespace NorthlightWorldDiagnostics {
@@ -8,7 +9,7 @@ inline bool shadowFrame(const std::string& directory,unsigned capture,int source
                         const float* cached,const float* working,long x,long y,float dz,
                         uint64_t geometry,uint64_t signature,const char* reason){
     char suffix[128];std::snprintf(suffix,sizeof suffix,"/capture-%u-s%d-c%d-frame.json",capture,source,cascade);
-    FILE* f=std::fopen((directory+suffix).c_str(),"wb");if(!f)return false;
+    FILE* f=NorthlightFiles::open((directory+suffix).c_str(),"wb");if(!f)return false;
     std::fprintf(f,"{\"source\":%d,\"cascade\":%d,\"geometry\":%llu,\"signature\":\"%llu\",\"reason\":\"%s\",\"offset\":[%ld,%ld,%.9g],\"cached\":[",source,cascade,(unsigned long long)geometry,(unsigned long long)signature,reason?reason:"reuse",x,y,dz);
     for(unsigned i=0;i<16;++i)std::fprintf(f,"%s%.9g",i?",":"",cached[i]);
     std::fprintf(f,"],\"upstream_retained\":true,\"working\":[");for(unsigned i=0;i<16;++i)std::fprintf(f,"%s%.9g",i?",":"",working[i]);
@@ -29,7 +30,7 @@ inline bool dump(IDirect3DDevice9* device,IDirect3DSurface9* source,
     bool ok=false;
     if(locked&&lock.pBits&&lock.Pitch>=INT(desc.Width*bytes)){
         char suffix[128];std::snprintf(suffix,sizeof suffix,"/capture-%u-%s.fgr",capture,name);
-        FILE* f=std::fopen((directory+suffix).c_str(),"wb");
+        FILE* f=NorthlightFiles::open((directory+suffix).c_str(),"wb");
         if(f){uint32_t header[]={0x31524746,desc.Width,desc.Height,unsigned(desc.Format),bytes};
             ok=std::fwrite(header,sizeof header,1,f)==1;
             for(unsigned y=0;y<desc.Height&&ok;++y)

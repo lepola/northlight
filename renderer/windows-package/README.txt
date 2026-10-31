@@ -21,9 +21,8 @@ REQUIREMENTS
   Install.cmd --backend dxvk2 (DXVK 2.7.1).
 - AMD RX 5000/6000 (RDNA 1/2): DXVK's own release notes say DXVK 3 performs
   badly on them on Windows. Install with Install.cmd --backend dxvk2.
-- Only ASCII characters in the game folder path (no ä, ö, å or other special
-  characters), a path of at most about 150 characters, and the game must not
-  be in Program Files.
+- Unicode game folder paths are supported, including Cyrillic. The path may
+  have at most about 150 characters, and the game must not be in Program Files.
 - About 13 GB of free space on the game's drive and at least 8 GB of memory
   while the installer builds the cache.
 

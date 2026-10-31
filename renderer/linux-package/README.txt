@@ -28,9 +28,9 @@ REQUIREMENTS
   DXVK game. Lutris, Bottles and Steam usually ask for it already.
 - The default DXVK 3.1.1 asks for Vulkan 1.3 and extra device features; on an
   older driver or GPU use --backend dxvk2 (DXVK 2.7.1).
-- Only ASCII characters in the game folder path, and a short path (the game
-  sees it as C:\... inside a Wine prefix or Z:\... elsewhere, and that path may
-  have at most about 150 characters).
+- Unicode game folder paths are supported, including Cyrillic. Keep a short
+  path (the game sees it as C:\... inside a Wine prefix or Z:\... elsewhere,
+  and that path may have at most about 150 characters).
 - About 13 GB of free space on the game's drive and at least 8 GB of memory
   while the installer builds the cache.
 - Unzip the package onto a normal Linux file system (for example into

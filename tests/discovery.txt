@@ -217,6 +217,7 @@ test_underwater_fade.py
 test_unlisted_archive.py
 test_upload_locks.py
 test_upload_payload_release.py
+test_utf8_paths.py
 test_vs_class_cache.py
 test_water_geometry.py
 test_water_mask_state.py

@@ -1,3 +1,4 @@
+#include "utf8_path.h"
 #include "static_shadow_scene.h"
 #include "cpu_retirement.h"
 #include <algorithm>
@@ -57,7 +58,7 @@ using Identity=std::pair<uint32_t,uint64_t>;
 struct Reader {
     FILE* f=nullptr;size_t remaining=0;
     ~Reader(){if(f)std::fclose(f);}
-    bool open(const std::string& path,size_t cap){f=std::fopen(path.c_str(),"rb");if(!f)return false;if(std::fseek(f,0,SEEK_END))return false;long n=std::ftell(f);if(n<0||size_t(n)>cap||std::fseek(f,0,SEEK_SET))return false;remaining=size_t(n);return true;}
+    bool open(const std::string& path,size_t cap){f=NorthlightFiles::open(path.c_str(),"rb");if(!f)return false;if(std::fseek(f,0,SEEK_END))return false;long n=std::ftell(f);if(n<0||size_t(n)>cap||std::fseek(f,0,SEEK_SET))return false;remaining=size_t(n);return true;}
     bool bytes(void* p,size_t n){if(n>remaining||std::fread(p,1,n,f)!=n)return false;remaining-=n;return true;}
     bool u32(uint32_t& v){unsigned char b[4];if(!bytes(b,4))return false;v=uint32_t(b[0])|(uint32_t(b[1])<<8)|(uint32_t(b[2])<<16)|(uint32_t(b[3])<<24);return true;}
     bool u64(uint64_t& v){uint32_t l,h;if(!u32(l)||!u32(h))return false;v=uint64_t(l)|(uint64_t(h)<<32);return true;}

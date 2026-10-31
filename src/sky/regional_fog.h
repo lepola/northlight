@@ -1,6 +1,7 @@
 #pragma once
 // Portable asset-derived regional fog. All cache I/O and geometry rasterization
 // belong on the worker. No game pointers, weather guesses, or camera-floor ray.
+#include "utf8_path.h"
 #include "world_gi.h"
 #include <array>
 #include <algorithm>
@@ -33,7 +34,7 @@ inline float nightFactor(float gameDayFraction){
     if(hour<18)return 0;if(hour<20)return smooth((hour-18)*.5f);return 1;
 }
 inline bool loadTile(const std::string& path,int x,int y,Tile& out){
-    FILE* file=std::fopen(path.c_str(),"rb");if(!file)return false;
+    FILE* file=NorthlightFiles::open(path.c_str(),"rb");if(!file)return false;
     struct Close {FILE* f;~Close(){std::fclose(f);}} close{file};
     if(std::fseek(file,0,SEEK_END))return false;long bytes=std::ftell(file);
     if(bytes<1048||bytes>2*1024*1024||std::fseek(file,0,SEEK_SET))return false;

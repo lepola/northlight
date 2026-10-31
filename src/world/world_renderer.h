@@ -1,4 +1,5 @@
 #pragma once
+#include "utf8_path.h"
 #include "settings_schema.h"
 #include "stream_hooks.h"
 #include "weather_memory.h"
@@ -1153,7 +1154,7 @@ private:
     // build runs and reports it instead of the map's geometry being off until the map changes.
     bool worldCacheHasTiles(const std::string& map)const{
         if(map.empty())return false;
-        WIN32_FIND_DATAA data;const HANDLE h=FindFirstFileA((root+"world-cache/"+map+"/*.fg3").c_str(),&data);
+        WIN32_FIND_DATAW data;const HANDLE h=FindFirstFileW(std::filesystem::u8path(root+"world-cache/"+map+"/*.fg3").c_str(),&data);
         if(h==INVALID_HANDLE_VALUE){const DWORD error=GetLastError();return error!=ERROR_FILE_NOT_FOUND&&error!=ERROR_PATH_NOT_FOUND;}
         FindClose(h);return true;}
     NorthlightGeometryMemory::Sample geometryAdmission(NorthlightGeometryMemory::Budget budget,bool* exact=nullptr){
@@ -1428,8 +1429,8 @@ private:
                 int ty=int(std::floor((17066.6666667-center.x)/533.3333333));
                 std::vector<std::string> tiles;
                 for(int y=ty-1;y<=ty+1;++y)for(int x=tx-1;x<=tx+1;++x){
-                    char name[512];std::snprintf(name,sizeof name,"%sworld-cache/%s/%d_%d.fg3",root.c_str(),r.map.c_str(),x,y);
-                    FILE* f=std::fopen(name,"rb");if(f){std::fclose(f);tiles.emplace_back(name);}
+                    char name[MAX_PATH*3];std::snprintf(name,sizeof name,"%sworld-cache/%s/%d_%d.fg3",root.c_str(),r.map.c_str(),x,y);
+                    FILE* f=NorthlightFiles::open(name,"rb");if(f){std::fclose(f);tiles.emplace_back(name);}
                 }
                 bool localDeferred=false;NorthlightGeometryMemory::Sample localSample;uint64_t localRequired=0,localLargest=0;
                 // Interior checks use inBuildBudget (stage entry already reserved the build headroom).
@@ -1524,8 +1525,8 @@ private:
                 for(int y=ty-tileReach;y<=ty+tileReach;++y)for(int x=tx-tileReach;x<=tx+tileReach;++x){
                     const double zero=NorthlightRegionalFog::WorldZero,size=NorthlightRegionalFog::TileSize;
                     if(extended&&!terrainFilter(V(float(zero-(y+1)*size),float(zero-(x+1)*size),-100000),V(float(zero-y*size),float(zero-x*size),100000)))continue;
-                    char name[512];std::snprintf(name,sizeof name,"%sworld-cache/%s/%d_%d.fg3",root.c_str(),r.map.c_str(),x,y);
-                    FILE* f=std::fopen(name,"rb");if(f){std::fclose(f);shadowTiles.emplace_back(name);}
+                    char name[MAX_PATH*3];std::snprintf(name,sizeof name,"%sworld-cache/%s/%d_%d.fg3",root.c_str(),r.map.c_str(),x,y);
+                    FILE* f=NorthlightFiles::open(name,"rb");if(f){std::fclose(f);shadowTiles.emplace_back(name);}
                 }
                 NorthlightGI::WorldScene shadowTerrain;
                 { uint32_t reachBits;std::memcpy(&reachBits,&reach,sizeof reachBits);terrainSizeHint.key=reachBits; } // same map (reset above) and same reach only
@@ -3836,9 +3837,9 @@ public:
         const unsigned diagnosticCapture=debug==1&&gpuDiagnosticArmed&&gpuDiagnosticCaptures<4?gpuDiagnosticCaptures+1:0;
         if(diagnosticCapture&&gpuDiagnosticDirectory.empty()){
             const std::string parent=root+"northlight-diagnostics";   /* beside northlight-renderer.log */
-            CreateDirectoryA(parent.c_str(),nullptr);
+            CreateDirectoryW(std::filesystem::u8path(parent).c_str(),nullptr);
             gpuDiagnosticDirectory=parent+"/session-"+std::to_string(GetCurrentProcessId())+"-"+std::to_string(GetTickCount());
-            CreateDirectoryA(gpuDiagnosticDirectory.c_str(),nullptr);
+            CreateDirectoryW(std::filesystem::u8path(gpuDiagnosticDirectory).c_str(),nullptr);
             logf("WORLD GPU diagnostic directory=%s",gpuDiagnosticDirectory.c_str());
         }
         d->SetDepthStencilSurface(nullptr);for(int i=1;i<4;++i)d->SetRenderTarget(i,nullptr);
@@ -4691,7 +4692,7 @@ public:
             float actual[68][4]={};HRESULT read=d->GetPixelShaderConstantF(0,actual[0],68);
             if(SUCCEEDED(read)){
                 char suffix[80];std::snprintf(suffix,sizeof suffix,"/capture-%u-constants.f32",capture);
-                if(FILE* f=std::fopen((directory+suffix).c_str(),"wb")){std::fwrite(actual,sizeof actual,1,f);std::fclose(f);}
+                if(FILE* f=NorthlightFiles::open((directory+suffix).c_str(),"wb")){std::fwrite(actual,sizeof actual,1,f);std::fclose(f);}
             }
             logf("WORLD GPU diagnostic capture=%u map=\"%s\" eye=(%.3f %.3f %.3f) moon=(%.6f %.6f %.6f) constantsHRESULT=%08lx",capture,active->map.c_str(),context.camera[0],context.camera[1],context.camera[2],sourceDirections[1].x,sourceDirections[1].y,sourceDirections[1].z,(unsigned long)read);
             using NorthlightWorldDiagnostics::dump;

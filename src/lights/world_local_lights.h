@@ -1,6 +1,7 @@
 #pragma once
 // Portable FGL1 reader. Offline builder retains real asset source coordinates,
 // intensities and authored attenuation ranges. No D3D/client APIs are used here.
+#include <filesystem>
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
@@ -39,7 +40,7 @@ inline bool safeMap(const std::string& map) {
 inline bool readFile(const std::string& path,std::vector<Light>& output) {
     // FGL1 is little endian, as are the supported macOS/Windows x86/ARM hosts.
     const uint32_t endian=1;if(*reinterpret_cast<const unsigned char*>(&endian)!=1)return false;
-    std::ifstream f(path,std::ios::binary|std::ios::ate);if(!f)return false;
+    std::ifstream f(std::filesystem::u8path(path),std::ios::binary|std::ios::ate);if(!f)return false;
     const auto length=f.tellg();if(length<16)return false;f.seekg(0);
     char magic[4];uint32_t header[3];f.read(magic,4);f.read(reinterpret_cast<char*>(header),12);
     if(!f||std::memcmp(magic,"FGL1",4)||header[0]!=1||header[1]!=sizeof(Light)||header[2]>1000000||
