@@ -81,7 +81,7 @@ struct Vertex {float x,y,z,w,u,v;};
 struct Mesh {std::vector<std::array<Vertex,3>> triangles;};
 struct Replay {
     IDirect3DVertexDeclaration9* decl=nullptr;IDirect3DVertexShader9* shader=nullptr;IDirect3DIndexBuffer9* index=nullptr;
-    IDirect3DVertexBuffer9* stream[4]={};UINT offset[4]={},stride[4]={};IDirect3DBaseTexture9* texture=nullptr;DWORD addressU=WRAP,addressV=WRAP;float cutoff=-1;
+    IDirect3DVertexBuffer9* stream[4]={};UINT offset[4]={},stride[4]={};IDirect3DBaseTexture9* texture=nullptr;DWORD addressU=WRAP,addressV=WRAP;float cutoff=-1;unsigned alphaMode=0;
     UINT start=0;int base=0;float dx=0,dy=0,dz=0; /* base: BaseVertexIndex (0.3.211, task 31); the vertices start at offset+base*stride */
 };
 // Geometry is found only through the bound stream/index state, never through the replay.
@@ -173,7 +173,11 @@ static Scene makeScene(World& w,std::mt19937& rng,unsigned draws,double opaqueSh
     return scene;
 }
 static unsigned materialCalls(const Calls& c){return c.textures+c.samplers;}
-int main(){
+int main(int argc,char** argv){
+    {IDirect3DDevice9 d;NorthlightReplayDrawState::Cache cache(&d);Replay p;p.cutoff=.5f;
+        for(unsigned mode:{0u,1u,2u,0u}){p.alphaMode=mode;const auto before=d.calls.constants;assert(!cache.material(p));assert(d.calls.constants==before+1&&d.c0[0]==float(mode)&&d.c0[3]==.5f);}
+        const auto before=d.calls.constants;assert(!cache.material(p));assert(d.calls.constants==before);
+        std::puts("PASS alpha source: equal cutoffs rebind when texture/color mask changes");}
     using New=NorthlightReplayDrawState::Cache;using Old=Legacy::Cache;
     static_assert(NorthlightReplayDrawState::SkipOpaqueMaterial,"shipped switch");
     assert(NorthlightReplayDrawState::skipOpaque());
@@ -255,7 +259,7 @@ int main(){
      assert(a.image==b.image&&a.counts.streams==6&&b.counts.streams==4&&b.calls.total()<a.calls.total());
      std::puts("PASS base layout: three same-stride bulk replays bind stream 0 once and rasterize identically to per-replay offsets");}
     // Microbenchmark: binding work per 579-draw pass on a virtual (COM-like) device.
-    {Scene scene=makeScene(world,rng,579,.75,false,false);IDirect3DDevice9 d;const int iterations=4000;
+    if(argc==2&&std::string(argv[1])=="--benchmark"){Scene scene=makeScene(world,rng,579,.75,false,false);IDirect3DDevice9 d;const int iterations=4000;
      auto time=[&](auto tag){using C=decltype(tag);auto start=std::chrono::steady_clock::now();unsigned calls=0;
          for(int it=0;it<iterations;++it){d.calls={};C cache(&d);for(const auto& p:scene.replays){if(cache.geometry(p)||cache.material(p))std::abort();}calls+=d.calls.total();}
          return std::make_pair(std::chrono::duration<double,std::micro>(std::chrono::steady_clock::now()-start).count()/iterations,calls/iterations);};

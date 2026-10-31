@@ -69,6 +69,7 @@ int main(){ActorJob job;job.center={102,13,4};Packet p;auto words=code(3);assert
  auto changedElements=packet.elements;changedElements[0].Offset=12;assert(bindings.acquire(packet.position,packet.meshView(),changedElements.data(),changedElements.size())!=prepared);
  auto truncated=packet.meshView();truncated.streams[0].bytes.resize(1);assert(!bindings.acquire(packet.position,truncated,packet.elements.data(),packet.elements.size()));assert(!worldPositionsPrepared(packet.position,truncated,*prepared,packet.constants.data(),packet.inverseView.data(),cachedPositions)&&cachedPositions.empty());
  auto invalidElements=packet.elements;invalidElements.insert(invalidElements.begin(),invalidElements[0]);assert(!bindings.acquire(packet.position,packet.meshView(),invalidElements.data(),invalidElements.size()));
+ ActorJob many=job;for(unsigned i=1;i<5000;++i)many.packets.push_back(job.packets[0]);auto bulk=many.resolve();assert(bulk.scene->vertices.size()==15000&&bulk.scene->triangles.size()==5000&&bulk.scene->vertices.capacity()<=16384);for(unsigned i=0;i<bulk.scene->vertices.size();++i)assert(std::memcmp(&bulk.scene->vertices[i],&first.scene->vertices[i%3],sizeof(NorthlightGI::WorldVertex))==0);
  ActorJob empty;auto removal=empty.resolve();assert(removal.scene&&removal.scene->triangles.empty()&&removal.hash!=first.hash);
  std::puts("Deferred actor job: immutable pose, camera-invariant generation, UV/material invalidation, real alpha BVH visibility, removal and malformed packet gates passed");
 }

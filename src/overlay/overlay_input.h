@@ -3,6 +3,7 @@
 // tested natively (tests/test_settings_overlay.py). The window procedure runs on the game's window thread; it only
 // asks route() what to do with a message, queues a copy for the render thread and either passes the message on to
 // the game or swallows it. ImGui itself only ever runs on the render thread.
+#include <atomic>
 #include <cstddef>
 #include <cstdint>
 #include <mutex>
@@ -47,6 +48,20 @@ inline std::string hotkeyName(const Hotkey& k){
     std::string s;if(k.mods.ctrl)s+="Ctrl+";if(k.mods.shift)s+="Shift+";if(k.mods.alt)s+="Alt+";
     return s+"F"+std::to_string(k.vk-VkF1+1);
 }
+
+// Retain even a complete Ctrl+Shift+F10 press between two rendered frames.
+// Only the window thread produces edges; the render thread drains their parity.
+class MasterHotkey {
+    std::atomic<unsigned> presses{0};
+public:
+    void message(unsigned msg,std::uintptr_t vk,std::intptr_t flags,Modifiers mods,bool foreground){
+        if(msg==Msg::KillFocus||(msg==Msg::ActivateApp&&!vk)){clear();return;}
+        if(foreground&&(msg==Msg::KeyDown||msg==Msg::SysKeyDown)&&vk==VkF1+9&&mods.ctrl&&mods.shift&&
+           !(flags&(std::intptr_t(1)<<30)))presses.fetch_add(1,std::memory_order_relaxed);
+    }
+    bool take(bool foreground){return (presses.exchange(0,std::memory_order_relaxed)&1u)&&foreground;}
+    void clear(){presses.store(0,std::memory_order_relaxed);}
+};
 
 // Read by the window procedure. open: the window is shown. captureMouse/captureText: what ImGui wanted at its last
 // frame (published by the render thread). heldButtons: buttons whose press went to the overlay. captured: the overlay

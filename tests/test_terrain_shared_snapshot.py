@@ -18,11 +18,11 @@ void ownership(){
  FrameCache cache;Diagnostics why;std::shared_ptr<const MeshSnapshot> first,out;
  static_assert(std::is_const<typename decltype(out)::element_type>::value,"snapshot API must be immutable");
  auto read=[&](UINT count=3){return cache.readMeshShared(&d,D3DPT_TRIANGLELIST,-3,7,count,1,1,d.view,out,&why);};
- assert(read()&&!why.contentCacheHit);first=out;auto vertices=out->positions.data();auto indices=out->indices.data();const auto bytes=cache.bytesRead();
+ assert(read()&&!why.contentCacheHit);first=out;auto vertices=out->positions.data();auto indices=out->indices.storageIdentity();const auto bytes=cache.bytesRead();
  unsigned locks=d.vb.locks;cache.clearFrame();assert(read()&&why.contentCacheHit&&out==first);
- assert(out->positions.data()==vertices&&out->indices.data()==indices&&cache.bytesRead()==bytes&&d.vb.locks==locks+1);
+ assert(out->positions.data()==vertices&&out->indices.storageIdentity()==indices&&cache.bytesRead()==bytes&&d.vb.locks==locks+1);
  MeshSnapshot value;assert(cache.readMesh(&d,D3DPT_TRIANGLELIST,-3,7,3,1,1,d.view,value,&why));
- assert(value.positions.data()!=vertices&&value.indices.data()!=indices);value.positions[0].z=999;value.indices[0]=999;value.bounds.chunks.clear();
+ assert(value.positions.data()!=vertices&&value.indices.storageIdentity()!=indices);value.positions[0].z=999;value.indices.set(0,999);value.bounds.chunks.clear();
  assert(read()&&out==first&&out->positions[0].z==3&&out->indices[0]==0&&out->bounds.chunks.size()==1);
  d.put(4,{-10200,-1180,30});assert(read()&&!why.contentCacheHit&&out!=first&&first->positions[0].z==3&&out->positions[0].z==30);
  auto changed=out;std::uint16_t swap[]={123,8,7,9};std::memcpy(d.ib.bytes.data(),swap,sizeof swap);
@@ -32,7 +32,7 @@ void ownership(){
  float wrong[16];std::memcpy(wrong,d.view,64);wrong[12]=1;out=first;
  assert(!cache.readMeshShared(&d,D3DPT_TRIANGLELIST,-3,7,3,1,1,wrong,out,&why)&&!out&&why.reason==RejectReason::ViewMismatch);
  cache.clearPersistent();cache.clearFrame();assert(read());auto retained=out;std::weak_ptr<const MeshSnapshot> weak=retained;
- for(unsigned i=1;i<=4184;++i){cache.clearFrame();assert(read(3+i));assert(cache.persistentEntries()<=4096&&cache.persistentBytes()<=32u*1024u*1024u);}
+ for(unsigned i=1;i<=FrameCache::persistentEntryLimit()+88;++i){cache.clearFrame();assert(read(3+i));assert(cache.persistentEntries()<=FrameCache::persistentEntryLimit()&&cache.persistentBytes()<=32u*1024u*1024u);}
  assert(retained->positions[0].z==30&&!weak.expired());cache.clearPersistent();assert(retained->positions[0].z==30);
  retained.reset();assert(weak.expired()); // Evicted payload has no hidden retained owner.
  assert(first->positions[0].z==3);first.reset();changed.reset();out.reset();

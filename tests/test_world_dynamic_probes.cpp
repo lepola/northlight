@@ -59,6 +59,12 @@ int main() {
     assert(!staticFallbackCompatible("Azeroth","Azeroth","Azeroth",{},{},{std::numeric_limits<float>::infinity(),0,0},generation,generation));
     WorldScene actor;actor.materials.push_back({});quad(actor,{-1,-1,0},{1,-1,0},{1,1,0},{-1,1,0});
     DynamicProbeLayer layer;layer.reset(&actor);
+    // Non-finite probe positions never gain dynamic influence or a signature.
+    DynamicProbeLayer emptyLayer;emptyLayer.reset(nullptr);
+    for(float value:{std::numeric_limits<float>::quiet_NaN(),std::numeric_limits<float>::infinity(),-std::numeric_limits<float>::infinity()})
+        for(unsigned axis=0;axis<3;++axis){Vec3 position{};if(axis==0)position.x=value;else if(axis==1)position.y=value;else position.z=value;
+            assert(layer.distanceSquared(position)==DynamicZeroDistance*DynamicZeroDistance);
+            assert(layer.signature(position)==emptyLayer.signature(position));}
     assert(layer.weight({0,0,0})==1&&layer.weight({13,0,0})==1);
     assert(std::fabs(layer.weight({19,0,0})-.5f)<1e-6f&&layer.weight({25,0,0})==0);
     assert(std::fabs(layer.weight({13.001f,0,0})-1)<1e-6f&&layer.weight({24.999f,0,0})<1e-6f);

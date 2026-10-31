@@ -34,12 +34,12 @@ import build_packages as bp  # noqa: E402
 import build_stormlib  # noqa: E402
 import check_layout  # noqa: E402
 
-FORBIDDEN_SUFFIX = {'.mpq', '.fg3', '.fgs', '.fgl', '.fct', '.fcm', '.frf', '.dbc', '.blp', '.m2', '.skin', '.wmo',
+FORBIDDEN_SUFFIX = {'.mpq', '.fg3', '.fgs', '.fgl', '.fga', '.fct', '.fcm', '.frf', '.dbc', '.blp', '.m2', '.skin', '.wmo',
                     '.adt', '.log', '.pdb', '.dmp', '.pyc'}
 FORBIDDEN_PART = {'world-cache', 'records', 'wtf', 'cache', 'logs', 'screenshots', '.git', 'tools', 'out', 'backups',
                   'inspection', '__pycache__', 'docs', 'releases'}
 GAME_MAGIC = (b'MPQ\x1a', b'MPQ\x1b', b'WDBC', b'BLP2', b'MD20', b'MD21', b'REVM', b'FGS2', b'FGS3', b'FGL1', b'FCT1',
-              b'FCM1')
+              b'FCM1', b'FGA1')
 TEXT_SUFFIX = {'.py', '.json', '.txt', '.ini', '.inc', '.cmd', '.command', '.sh', '.md'}
 LINUX_RUNTIME = ['bin/python3', 'lib/python3.13/os.py', 'lib/python3.13/ctypes/__init__.py',
                  'lib/python3.13/LICENSE.txt', 'lib/libstorm.so']
@@ -115,7 +115,7 @@ def verify_installer(path):
     check(problems, sha(dll) == info['dll_sha256'] and bp.MARKER.search(dll) is not None, 'payload/d3d9.dll')
     for p, e in payload.items():
         check(problems, sha(files.get('payload/' + p, b'')) == e['sha256'], f'payload/{p} does not match its manifest')
-    check(problems, [p for p, e in payload.items() if e.get('preserve')] == ['northlight-quality.ini'], 'preserve flags')
+    check(problems, {p for p, e in payload.items() if e.get('preserve')} == {'northlight-quality.ini', 'celestial-profiles.ini', 'shadow-range-profiles.ini'}, 'preserve flags')
     d3d9 = [r for r in files if r.lower().endswith('/d3d9.dll') and not r.startswith('runtime/')]
     check(problems, d3d9 == ['payload/d3d9.dll'], f'd3d9.dll copies: {d3d9}')
     # pins

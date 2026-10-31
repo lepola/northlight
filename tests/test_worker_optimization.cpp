@@ -14,6 +14,10 @@ static void memoTest(){
     auto copy=a;assert(memo.matches(copy));a.reset();assert(memo.matches(copy));copy.reset();assert(Job::alive==1&&!memo.matches(b));
     memo.remember(b);assert(memo.matches(b));b.reset();assert(Job::alive==0);memo.remember(none);assert(memo.matches(none));
     auto next=std::make_shared<Job>();assert(!memo.matches(next));
+    // Pointer equality is the old contract, even for a separately owned alias.
+    memo.remember(next);auto alias=std::shared_ptr<const Job>(next.get(),[](const Job*){});assert(memo.matches(alias));
+    auto emptyOwner=std::shared_ptr<const Job>(std::shared_ptr<const Job>{},next.get());
+    memo.remember(emptyOwner);assert(!memo.matches(emptyOwner));memo.remember(none);
     // Failed decode never commits its identity; the next attempt must decode.
     try{throw std::bad_alloc();memo.remember(next);}catch(const std::bad_alloc&){}
     assert(!memo.matches(next)&&memo.matches(none));

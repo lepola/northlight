@@ -73,6 +73,87 @@ A test declares what it needs on one line within its first 30 lines:
 A test whose requirement is missing is reported SKIP with the reason; `--require <name>` turns that
 into a FAIL.
 
+The StormLib source is reproducible from `renderer/package-pins.json`: download its
+`source_archive_url`, verify `source_archive_sha256`, and extract `source_archive_root` as
+`<NORTHLIGHT_TOOLS>/StormLib-master` (default: `tools/StormLib-master`). The tree hash uses
+case-sensitive path-component ordering on every host. The build test retains the original
+Windows, macOS and Linux binary hashes, ABI checks and empty-cache rebuild comparisons.
+Run the complete build test on a POSIX host with Zig 0.15.2; on WSL, use a short native
+`NORTHLIGHT_OUT` path for its cold compiler caches. This requires no client settings changes.
+
+## MPQ-backed camera rotation reproduction
+
+Prepare a private fixture from the active client archives and a recorded camera interval:
+
+```sh
+python scripts/prepare_rotation_fixture.py --log /path/to/northlight-renderer.log --start-tick 128064984 --end-tick 128068265 --terrain-radius 1277 --output out/rotation-fixture
+python tests/validate_mpq_rotation.py --fixture out/rotation-fixture --output out/rotation-comparison --rounds 3
+python scripts/run_tests.py test_terrain_pressure_policy.py
+```
+
+The ticks above select the investigated 23 October orbit; choose the bounds of the recorded
+`WORLD camera` samples in another log. The radius is the client farclip for that run, not a
+changed render distance. Output must be new or empty. The generator opens the MPQs read-only,
+uses the existing archive-priority resolver and static-world builder, and writes original ADTs,
+exact terrain heights/holes, an independent FGS3 corpus, camera samples and hashed provenance.
+Neither preparation nor replay starts the game or writes installed settings/world-cache files.
+Comparisons reject missing/unsupported inputs and unreadable archives; an unreadable override
+must not silently substitute a lower-priority asset. Every generated output is hash-checked.
+
+The Windows replay compiles both the frozen delivered cache/world-cap setter and current code.
+It reproduces the logged demand-only trim and separately tests genuine low-address-space
+pressure. It covers stable revisions, rewritten vertices, rewritten vertices plus indices, and
+a separately labelled synthetic two-layout buffer ring. All emitted triangle positions must
+match the current MPQ inputs exactly. Fixed-layout warm demand-only misses, evictions and
+rebuilds must disappear; the synthetic ring may create new cache identities. Rewrites still
+require exact content validation and reads, which are reported separately. Changed XYZ and
+cyclic index mutations must rebuild; deliberately stale revision tokens must fail specifically
+at the independent triangle oracle. Genuine-low-memory behavior must remain unchanged.
+Alternating runs report CPU capture time and deterministic work counts, without a game-FPS claim.
+
+This is a CPU reproduction using fake D3D buffers and an explicit 110-degree candidate cone.
+The original D3D draw stream, game occlusion/LOD and driver waits are unavailable. Recorded
+camera motion and actual MPQ geometry are used; this does not certify live visual performance.
+Keep the generated game assets and raw logs outside Git. The automatic pressure-policy test
+also executes production wiring, admission rules and negative controls without private data.
+
+The same full fixture can exercise worker preparation under real x86 address-space pressure:
+
+```sh
+python tests/validate_scene_entry_reclaim.py --baseline-ref de0d60f881ceae554ab319ce84275063c844f6df --fixture out/rotation-fixture --camera-log /path/to/northlight-renderer.log --output out/entry-comparison --rounds 3
+python scripts/run_tests.py test_scene_entry_reclaim.py test_scene_entry_reclaim_inputs.py --require windows-exe,zig --jobs 1
+```
+
+Use a full fixture containing the selected cameras' static models and tiles, rather than a
+terrain-only extraction. The stand holds reserve-only ballast during builds, uses the actual
+production admission sampler and keeps the previous BVH pinned. It checks exact scene,
+material, shadow-plan, page, ray and probe results; retained immutable allocations stay charged.
+Run `--no-pressure` in a separate output folder for the warm control. `--check-inputs-only`
+verifies the complete hashed corpus without compiling. Invalid inputs, source drift and reused
+nonempty output folders fail. Per-translation-unit compiler dependencies, commands, executable
+hashes, reclaim-inclusive timings, setup and process wall time are recorded separately.
+
+Shader experiments have a separate hidden-device differential stand:
+
+```sh
+python tests/validate_regional_fog_cache_gpu.py --baseline-ref de0d60f881ceae554ab319ce84275063c844f6df --mpq out/rotation-fixture --fog-metadata /path/to/world-cache/fog --output out/fog-comparison --phase compile
+```
+
+Repeat with `--phase fixture`, then `--phase check --backend C:/Windows/SysWOW64/d3d9.dll`
+and `--phase benchmark --backend C:/Windows/SysWOW64/d3d9.dll`. Additional `--backend` paths
+can select a standalone DXVK DLL without changing the game. The fixture uses production-built
+regional fields and MPQ BVH depth, recorded cameras plus explicitly labelled terrain-relative
+controls. It requires non-neutral grounded coverage and exact FP16/FP32 output equality.
+Synthetic boundary, mask and format controls complement the static MPQ scenes. Projection,
+lighting, animation and resampling limits are recorded; this is not a live-game image capture.
+Run compiler, GPU and timing jobs serially to avoid contention corrupting comparisons.
+Use `--source /path/to/candidate/world_effects.hlsl` with its companion
+`auto_bump_normal.hlsl` to replay a saved experiment without editing production shaders.
+Bytecode-identical entries are explicitly skipped. Benchmarking a changed entry requires the
+complete quality check on the same backend. Resume rejects changed arguments, sources,
+executables, shader inputs and fixture inventories; legacy reports require a fresh compile.
+The source hash set is a conservative project superset, not per-TU dependency discovery.
+
 ## Adding a test
 
 1. Create `tests/test_<name>.py` with `#!/usr/bin/env python3`, a `# northlight-test:` line, a

@@ -94,6 +94,16 @@ int main(){
     {const float tint2[3]={.8f,.9f,1};GlowHue n=compute(nullptr,tint2);assert(!n.valid&&n.strength==0&&n.moonStrength==1&&n.moon[2]==1&&std::fabs(n.moon[0]-.8f)<1e-6f);
         n=compute(nullptr,nullptr);assert(n.moonStrength==0);
         for(const GlowHue* h:{&brill,&durotar,&orgrimmar})assert(h->moonStrength==1);}
+    // Proven body colour and native glare must bypass all reference-look tinting.
+    for(unsigned value=0;value<256;++value){
+        std::uint32_t slots[Slots]={};slots[SlotSun]=pack(value,255-value,value/2);slots[SlotSunHalo]=pack(255,0,0);
+        const float body[]={float(value)/255,.25f,.75f};const float moon[]={.94f,.97f,1};
+        const auto h=compute(slots,moon,body);float expected[3];unpack(slots[SlotSun],expected);
+        assert(h.valid&&h.strength==1&&h.native==1&&h.nativeColors);
+        for(unsigned k=0;k<3;++k){assert(h.sun[k]==expected[k]);assert(h.sunCore[k]==body[k]);}
+        slots[SlotSunHalo]=0xff00ffff;const auto other=compute(slots,moon,body);
+        for(unsigned k=0;k<3;++k)assert(other.sun[k]==h.sun[k]&&other.sunCore[k]==h.sunCore[k]);
+    }
     assert(HoldMs==2000);
     // 0.3.163 stock Tirisfal log: band10=0.118,0.196,0.157 (30,50,40) is dark but chromatic: a valid green hue.
     {const GlowHue t=at(30,50,40);assert(t.valid&&t.strength==1&&t.sun[1]==1&&t.sun[0]<.85f&&t.sun[2]<.75f);
@@ -124,14 +134,15 @@ def main():
     assert 'struct GlowHue {' in hue and 'SlotSun=9,SlotSunHalo=10' in hue
     for field in ('float sun[3]=', 'float sunCore[3]=', 'float moon[3]=', 'float strength=0;', 'bool valid=false;'):
         assert field in hue, field
-    assert 'const NorthlightSunHue::GlowHue& glowHue()const{return glowHueFrame;}' in cpu
+    assert 'const NorthlightSunHue::GlowHue& glowHue()const{return celestialGlowHueFrame;}' in cpu
     # Band read: the same coherent 0x1b8-byte sky read, slots at +0xd4, gated by the code proofs.
     assert 'SkyBytes=0x1b8,LightSlotBytes=0xd4' in wmo and 'std::memcpy(value.slots,bytes+LightSlotBytes,sizeof value.slots);' in wmo
     context = cpu[cpu.index('    void updateWorldContext('):]
     context = context[:context.index('\n    }\n')]
     assert 'if(global&&global->slotsProven){memcpy(lightSlots,global->slots,sizeof lightSlots);lightSlotsValid=true;lightSlotsAt=slotsNow;}' in context
     assert 'if(lightSlotsMap!=map||DWORD(slotsNow-lightSlotsAt)>NorthlightSunHue::HoldMs){lightSlotsValid=false;lightSlotsMap=map;}' in context
-    assert 'glowHueFrame=NorthlightSunHue::compute(lightSlotsValid?lightSlots:nullptr,celestialPalette(map,camera).disc[1]);' in context
+    assert 'celestialGlowHueFrame=NorthlightSunHue::compute(lightSlotsValid?lightSlots:nullptr,glowPalette.disc[1],celestial.sun.nativeTint);' in context
+    assert 'glowHueFrame=NorthlightSunHue::compute(lightSlotsValid?lightSlots:nullptr,glowPalette.disc[1]);' in context
     # One sampled candidate line, gated like MEMREAD.
     assert cpu.count('logf("SUNHUE ') == 1 and 'if(profileSampled()){ /* hue candidates' in cpu
     # And the 600-frame line: first frame always, then with Diagnostics=1 (test_diagnostics_switch policy).

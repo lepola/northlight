@@ -95,7 +95,7 @@ struct FrameFence {
     void release(IDirect3DQuery9* q){q->Release();}
     // End of the frame, after every draw that reads a span of this frame: the only Issue. A failed Issue leaves the query
     // never signalling, so its spans stay pending (DISCARD-on-wrap).
-    void endFrame(){if(current){current->Issue(D3DISSUE_END);current->Release();current=nullptr;}failed=false;}
+    bool endFrame(){bool ok=true;if(current){ok=SUCCEEDED(current->Issue(D3DISSUE_END));current->Release();current=nullptr;}failed=false;return ok;}
     // Reset/release paths: forget the unissued query without issuing.
     void drop(){if(current){current->Release();current=nullptr;}failed=false;}
 };

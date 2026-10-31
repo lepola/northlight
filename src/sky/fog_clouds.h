@@ -6,7 +6,11 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
+#include <cstring>
 #include <vector>
+#if defined(__SSE2__)
+#include <emmintrin.h>
+#endif
 
 namespace NorthlightFogClouds {
 constexpr unsigned N=64;                            /* noise volume edge, L8 voxels, index x+N*(y+N*z) */
@@ -27,55 +31,179 @@ inline uint32_t hash(uint32_t a,uint32_t b,uint32_t c,uint32_t d){ /* integer mi
 inline float unit(uint32_t h){return float(h>>8)*(1.f/16777216.f);}
 inline float fade(float t){return t*t*t*(t*(t*6-15)+10);}
 inline float lerp(float a,float b,float t){return a+(b-a)*t;}
+// Clipping first makes the unsigned conversion the same as floor then clip.
+inline uint8_t normalizedByte(float v){return uint8_t(std::clamp(v,0.f,255.f));}
 // periodic gradient noise, P cells per tile, evaluated at voxel (x,y,z); about -1..1
-inline float perlin(unsigned P,uint32_t seed,unsigned oct,float x,float y,float z){
-    static const int G[12][3]={{1,1,0},{-1,1,0},{1,-1,0},{-1,-1,0},{1,0,1},{-1,0,1},{1,0,-1},{-1,0,-1},{0,1,1},{0,-1,1},{0,1,-1},{0,-1,-1}};
-    const float s=float(P)/float(N);x*=s;y*=s;z*=s;
-    const int ix=int(std::floor(x)),iy=int(std::floor(y)),iz=int(std::floor(z));
-    const float fx=x-float(ix),fy=y-float(iy),fz=z-float(iz);
-    float v[8];
+struct PerlinAxis {int cell;float fraction,faded;};
+inline PerlinAxis perlinAxis(float p,float scale){p*=scale;const int cell=int(std::floor(p));const float fraction=p-float(cell);return {cell,fraction,fade(fraction)};}
+inline constexpr float G[12][3]={{1,1,0},{-1,1,0},{1,-1,0},{-1,-1,0},{1,0,1},{-1,0,1},{1,0,-1},{-1,0,-1},{0,1,1},{0,-1,1},{0,1,-1},{0,-1,-1}};
+template<bool Cube=false> inline float perlinPrepared(unsigned P,uint32_t seed,unsigned oct,const PerlinAxis& X,const PerlinAxis& Y,const PerlinAxis& Z,const uint8_t* gradients){
+
+    const int ix=X.cell,iy=Y.cell,iz=Z.cell;const float fx=X.fraction,fy=Y.fraction,fz=Z.fraction;
+    float v[8];const bool powerOfTwo=P&&(P&(P-1))==0;const uint8_t* cube=nullptr;
+    if constexpr(Cube){const unsigned cx=uint32_t(ix)&(P-1),cy=uint32_t(iy)&(P-1),cz=uint32_t(iz)&(P-1);cube=gradients+8*((oct==0?0:oct==1?64:576)+cx+P*(cy+P*cz));}
     for(int k=0;k<8;++k){
         const int dx=k&1,dy=(k>>1)&1,dz=(k>>2)&1;
-        const uint32_t cx=uint32_t(ix+dx)%P,cy=uint32_t(iy+dy)%P,cz=uint32_t(iz+dz)%P;
-        const int* g=G[hash(cx,cy,cz,seed+oct*0x9e37u)%12];
+        const uint32_t cx=powerOfTwo?(uint32_t(ix+dx)&(P-1)):uint32_t(ix+dx)%P,cy=powerOfTwo?(uint32_t(iy+dy)&(P-1)):uint32_t(iy+dy)%P,cz=powerOfTwo?(uint32_t(iz+dz)&(P-1)):uint32_t(iz+dz)%P;
+        const float* g=G[Cube?cube[k]:(gradients?gradients[(oct==0?0:oct==1?64:576)+cx+P*(cy+P*cz)]:hash(cx,cy,cz,seed+oct*0x9e37u)%12)];
         v[k]=float(g[0])*(fx-float(dx))+float(g[1])*(fy-float(dy))+float(g[2])*(fz-float(dz));}
-    const float u=fade(fx),vv=fade(fy),w=fade(fz);
+    const float u=X.faded,vv=Y.faded,w=Z.faded;
     return lerp(lerp(lerp(v[0],v[1],u),lerp(v[2],v[3],u),vv),lerp(lerp(v[4],v[5],u),lerp(v[6],v[7],u),vv),w);}
+#if defined(__SSE2__)
+// Four aligned generator voxels share one cube at every authored octave.
+inline __m128 perlinFourPrepared(unsigned P,unsigned oct,const PerlinAxis* X,const PerlinAxis& Y,const PerlinAxis& Z,const uint8_t* gradients){
+    const unsigned cell=(oct==0?0:oct==1?64:576)+unsigned(X[0].cell)+P*(unsigned(Y.cell)+P*unsigned(Z.cell));
+    const uint8_t* cube=gradients+8*cell;
+    const __m128 fx=_mm_set_ps(X[3].fraction,X[2].fraction,X[1].fraction,X[0].fraction),u=_mm_set_ps(X[3].faded,X[2].faded,X[1].faded,X[0].faded);
+    __m128 v[8];
+    for(unsigned k=0;k<8;++k){const float* g=G[cube[k]];
+        const __m128 dx=_mm_sub_ps(fx,_mm_set1_ps(float(k&1)));
+        v[k]=_mm_add_ps(_mm_add_ps(_mm_mul_ps(_mm_set1_ps(g[0]),dx),_mm_set1_ps(g[1]*(Y.fraction-float((k>>1)&1)))),_mm_set1_ps(g[2]*(Z.fraction-float((k>>2)&1))));
+    }
+    const auto mix=[](__m128 a,__m128 b,__m128 f){return _mm_add_ps(a,_mm_mul_ps(_mm_sub_ps(b,a),f));};
+    const __m128 y=_mm_set1_ps(Y.faded),z=_mm_set1_ps(Z.faded);
+    return mix(mix(mix(v[0],v[1],u),mix(v[2],v[3],u),y),mix(mix(v[4],v[5],u),mix(v[6],v[7],u),y),z);
+}
+#endif
+inline float perlin(unsigned P,uint32_t seed,unsigned oct,float x,float y,float z,const uint8_t* gradients=nullptr){
+    const float scale=float(P)/float(N);return perlinPrepared(P,seed,oct,perlinAxis(x,scale),perlinAxis(y,scale),perlinAxis(z,scale),gradients);}
+// Cache each cell's eight gradient indices while the output is scratch.
+inline void preparePerlinCubes(uint8_t* out){
+#if defined(__SSE2__)
+    for(unsigned o=0,P=4;o<3;++o,P*=2)for(unsigned z=0;z<P;++z)for(unsigned y=0;y<P;++y)for(unsigned x=0;x<P;x+=4){
+        const unsigned base=o==0?0:o==1?64:576,cell=base+x+P*(y+P*z);__m128i rows[4];
+        for(unsigned row=0;row<4;++row){
+            const unsigned at=base+P*(((y+(row&1))&(P-1))+P*((z+(row>>1))&(P-1)));
+            uint32_t first;std::memcpy(&first,out+at+x,sizeof first);
+            const uint32_t next=(first>>8)|(uint32_t(out[at+((x+4)&(P-1))])<<24);
+            rows[row]=_mm_unpacklo_epi8(_mm_cvtsi32_si128(int32_t(first)),_mm_cvtsi32_si128(int32_t(next)));
+        }
+        const __m128i low=_mm_unpacklo_epi16(rows[0],rows[1]),high=_mm_unpacklo_epi16(rows[2],rows[3]);
+        _mm_storeu_si128(reinterpret_cast<__m128i*>(out+19072+8*cell),_mm_unpacklo_epi32(low,high));
+        _mm_storeu_si128(reinterpret_cast<__m128i*>(out+19072+8*cell+16),_mm_unpackhi_epi32(low,high));
+    }
+#else
+    for(unsigned o=0,P=4;o<3;++o,P*=2)for(unsigned z=0;z<P;++z)for(unsigned y=0;y<P;++y)for(unsigned x=0;x<P;++x){
+        const unsigned base=o==0?0:o==1?64:576,cell=base+x+P*(y+P*z);
+        for(unsigned k=0;k<8;++k){const unsigned xx=(x+(k&1))&(P-1),yy=(y+((k>>1)&1))&(P-1),zz=(z+((k>>2)&1))&(P-1);out[19072+8*cell+k]=out[base+xx+P*(yy+P*zz)];}}
+#endif
+}
+// The generator visits cells -1..8 around the periodic grid; cache the same
+// cell-plus-feature floats in three padded planes in the existing output scratch.
+inline void prepareWorleyFeatures(uint8_t* out,uint32_t seed){
+    for(int z=-1;z<=8;++z)for(int y=-1;y<=8;++y){
+        for(int x=-1;x<=8;++x){
+            const uint32_t h=hash(uint32_t(x)&7,uint32_t(y)&7,uint32_t(z)&7,seed^0xabcdu);
+            const float v[3]={float(x)+unit(h),float(y)+unit(h*0x2545f491u+1),float(z)+unit(h*0x9e3779b1u+7)};
+            const int at=(x+1)+12*((y+1)+10*(z+1));for(int i=0;i<3;++i)std::memcpy(out+4*(at+i*1200),v+i,4);
+        }
+        // Features overwrite the first ten cells; zero only SIMD padding.
+        const uint64_t zero=0;const int padding=10+12*((y+1)+10*(z+1));
+        for(int i=0;i<3;++i)std::memcpy(out+4*(padding+i*1200),&zero,sizeof zero);
+    }
+}
 // periodic cellular F1 distance in cell units, P cells per tile
-inline float worley(unsigned P,uint32_t seed,float x,float y,float z){
+// Absolute expects the generator's eight-cell grid and its padded feature table.
+template<bool Absolute=false> inline float worleyPrepared(unsigned P,uint32_t seed,float x,float y,float z,int ix,int iy,int iz,const uint8_t* features){
+    float best=4.f;
+#if defined(__SSE2__)
+    if constexpr(Absolute){const __m128 vx=_mm_set1_ps(x),vy=_mm_set1_ps(y),vz=_mm_set1_ps(z);__m128 minima=_mm_set1_ps(4.f);for(int dz=-1;dz<=1;++dz)for(int dy=-1;dy<=1;++dy){
+        const int at=ix+12*((iy+dy+1)+10*(iz+dz+1));__m128 X,Y,Z;std::memcpy(&X,features+4*at,16);std::memcpy(&Y,features+4*(at+1200),16);std::memcpy(&Z,features+4*(at+2400),16);
+        X=_mm_sub_ps(X,vx);Y=_mm_sub_ps(Y,vy);Z=_mm_sub_ps(Z,vz);const __m128 d=_mm_add_ps(_mm_add_ps(_mm_mul_ps(X,X),_mm_mul_ps(Y,Y)),_mm_mul_ps(Z,Z));
+        minima=_mm_min_ps(minima,d);
+    }
+    float values[4];_mm_storeu_ps(values,minima);best=std::min(best,values[0]);best=std::min(best,values[1]);best=std::min(best,values[2]);return std::sqrt(best);}
+#endif
+    const bool powerOfTwo=P&&(P&(P-1))==0;
+    for(int dz=-1;dz<=1;++dz){const int cz=iz+dz;const uint32_t hz=powerOfTwo?(uint32_t(cz)&(P-1)):uint32_t((cz%int(P)+int(P))%int(P));
+      for(int dy=-1;dy<=1;++dy){const int cy=iy+dy;const uint32_t hy=powerOfTwo?(uint32_t(cy)&(P-1)):uint32_t((cy%int(P)+int(P))%int(P));
+       for(int dx=-1;dx<=1;++dx){const int cx=ix+dx;const uint32_t hx=powerOfTwo?(uint32_t(cx)&(P-1)):uint32_t((cx%int(P)+int(P))%int(P));
+        float px,py,pz;
+        if constexpr(Absolute){const int at=(cx+1)+12*((cy+1)+10*(cz+1));std::memcpy(&px,features+4*at,4);std::memcpy(&py,features+4*(at+1200),4);std::memcpy(&pz,features+4*(at+2400),4);}
+        else{float u[3];if(features)std::memcpy(u,features+12*(hx+8*(hy+8*hz)),12);
+          else{const uint32_t h=hash(hx,hy,hz,seed^0xabcdu);u[0]=unit(h);u[1]=unit(h*0x2545f491u+1);u[2]=unit(h*0x9e3779b1u+7);}
+          px=float(cx)+u[0];py=float(cy)+u[1];pz=float(cz)+u[2];}
+        const float ex=px-x,ey=py-y,ez=pz-z;best=std::min(best,ex*ex+ey*ey+ez*ez);}}}
+    return std::sqrt(best);}
+inline float worley(unsigned P,uint32_t seed,float x,float y,float z,const uint8_t* features=nullptr){
     const float s=float(P)/float(N);x*=s;y*=s;z*=s;
     const int ix=int(std::floor(x)),iy=int(std::floor(y)),iz=int(std::floor(z));
-    float best=4.f;
-    for(int dz=-1;dz<=1;++dz)for(int dy=-1;dy<=1;++dy)for(int dx=-1;dx<=1;++dx){
-        const int cx=ix+dx,cy=iy+dy,cz=iz+dz;
-        const uint32_t hx=uint32_t((cx%int(P)+int(P))%int(P)),hy=uint32_t((cy%int(P)+int(P))%int(P)),hz=uint32_t((cz%int(P)+int(P))%int(P));
-        const uint32_t h=hash(hx,hy,hz,seed^0xabcdu);
-        const float px=float(cx)+unit(h),py=float(cy)+unit(h*0x2545f491u+1),pz=float(cz)+unit(h*0x9e3779b1u+7);
-        const float ex=px-x,ey=py-y,ez=pz-z;best=std::min(best,ex*ex+ey*ey+ez*ez);}
-    return std::sqrt(best);}
+    return worleyPrepared(P,seed,x,y,z,ix,iy,iz,features);}
 }
 
 // N*N*N bytes, deterministic, tileable (periodic in all axes): 3-octave Perlin FBM (4, 8, 16 cells over the tile) blended with an
 // inverted Worley term (8 cells) for a billowy look, normalised min..max to 0..255.
 inline std::vector<uint8_t> generate(uint32_t seed=Seed){
-    std::vector<float> f(size_t(N)*N*N);float lo=1e9f,hi=-1e9f;
+    // Reuse the output bytes as fixed-period gradient and feature tables until the final conversion; peak allocation is unchanged.
+    std::vector<float> f(size_t(N)*N*N);std::vector<uint8_t> out(f.size());float lo=1e9f,hi=-1e9f;
+#if defined(__SSE2__)
+    static_assert(N%64==0,"Four-voxel groups stay inside every authored octave cube");
+    __m128 minima=_mm_set1_ps(lo),maxima=_mm_set1_ps(hi);
+#endif
+    for(unsigned o=0,P=4;o<3;++o,P*=2)for(unsigned z=0;z<P;++z)for(unsigned y=0;y<P;++y)for(unsigned x=0;x<P;++x)out[(o==0?0:o==1?64:576)+x+P*(y+P*z)]=uint8_t(detail::hash(x,y,z,seed+o*0x9e37u)%12);
+    static_assert(size_t(N)*N*N>=4672+14400+8*4672,"Noise tables fit the output scratch");
+    detail::prepareWorleyFeatures(out.data()+4672,seed);
+    detail::preparePerlinCubes(out.data());
+    static_assert(N&&(N&(N-1))==0,"Noise-axis fractions are exact binary values");
+    detail::PerlinAxis axis[3][N];for(unsigned o=0,P=4;o<3;++o,P*=2)for(unsigned i=0;i<N;++i){
+        const unsigned scaled=i*P;const float fraction=float(scaled%N)*(1.f/float(N));
+        axis[o][i]={int(scaled/N),fraction,detail::fade(fraction)};
+    }
+#if defined(__SSE2__)
+    float perlinFour[4];
+#endif
     for(unsigned z=0;z<N;++z)for(unsigned y=0;y<N;++y)for(unsigned x=0;x<N;++x){
-        const float fx=float(x),fy=float(y),fz=float(z);
+        // Octave 1 shares Worley's 8-cell grid; its scaled coordinates are exact binary fractions.
+        const auto& wx=axis[1][x];const auto& wy=axis[1][y];const auto& wz=axis[1][z];
+#if defined(__SSE2__)
+        if((x&3)==0){__m128 values=_mm_setzero_ps();float a=1;unsigned P=4;
+            for(unsigned o=0;o<3;++o,P*=2,a*=.5f)values=_mm_add_ps(values,_mm_mul_ps(_mm_set1_ps(a),detail::perlinFourPrepared(P,o,&axis[o][x],axis[o][y],axis[o][z],out.data()+19072)));
+            _mm_storeu_ps(perlinFour,values);
+        }
+        const float p=perlinFour[x&3],sum=1.75f;
+#else
         float p=0,a=1,sum=0;unsigned P=4;
-        for(unsigned o=0;o<3;++o,P*=2,a*=.5f){p+=a*detail::perlin(P,seed,o,fx,fy,fz);sum+=a;}
+        for(unsigned o=0;o<3;++o,P*=2,a*=.5f){p+=a*detail::perlinPrepared<true>(P,seed,o,axis[o][x],axis[o][y],axis[o][z],out.data()+19072);sum+=a;}
+#endif
         const float pn=std::clamp(.5f+.5f*(p/sum)*1.4f,0.f,1.f);
-        const float w=1.f-std::min(detail::worley(8,seed,fx,fy,fz),1.f);
+        const float w=1.f-std::min(detail::worleyPrepared<true>(8,seed,float(wx.cell)+wx.fraction,float(wy.cell)+wy.fraction,float(wz.cell)+wz.fraction,wx.cell,wy.cell,wz.cell,out.data()+4672),1.f);
         const float v=.6f*pn+.4f*w;
-        f[x+N*(y+size_t(N)*z)]=v;lo=std::min(lo,v);hi=std::max(hi,v);}
-    std::vector<uint8_t> out(f.size());const float k=hi>lo?255.f/(hi-lo):0.f;
-    for(size_t i=0;i<f.size();++i)out[i]=uint8_t(std::clamp(std::floor((f[i]-lo)*k+.5f),0.f,255.f));
+        const size_t index=x+N*(y+size_t(N)*z);f[index]=v;
+#if defined(__SSE2__)
+        if((x&3)==3){const __m128 values=_mm_loadu_ps(f.data()+index-3);minima=_mm_min_ps(minima,values);maxima=_mm_max_ps(maxima,values);}
+#else
+        lo=std::min(lo,v);hi=std::max(hi,v);
+#endif
+    }
+#if defined(__SSE2__)
+    float lows[4],highs[4];_mm_storeu_ps(lows,minima);_mm_storeu_ps(highs,maxima);for(int i=0;i<4;++i){lo=std::min(lo,lows[i]);hi=std::max(hi,highs[i]);}
+#endif
+    const float k=hi>lo?255.f/(hi-lo):0.f;
+#if defined(__SSE2__)
+    static_assert((size_t(N)*N*N)%4==0,"Four normalized noise bytes per store");
+    const __m128 low=_mm_set1_ps(lo),scale=_mm_set1_ps(k),half=_mm_set1_ps(.5f),zero=_mm_setzero_ps(),cap=_mm_set1_ps(255.f);
+    for(size_t i=0;i<f.size();i+=4){
+        const __m128 value=_mm_add_ps(_mm_mul_ps(_mm_sub_ps(_mm_loadu_ps(f.data()+i),low),scale),half);
+        const __m128i integer=_mm_cvttps_epi32(_mm_min_ps(_mm_max_ps(value,zero),cap));
+        const __m128i words=_mm_packs_epi32(integer,integer),bytes=_mm_packus_epi16(words,words);
+        const uint32_t packed=uint32_t(_mm_cvtsi128_si32(bytes));std::memcpy(out.data()+i,&packed,sizeof packed);
+    }
+#else
+    for(size_t i=0;i<f.size();++i)out[i]=detail::normalizedByte((f[i]-lo)*k+.5f);
+#endif
     return out;}
 
 // trilinear with WRAP, matching D3D LINEAR+WRAP: texel coordinate u*N-.5; 0..1
-inline float sample(const uint8_t* volume,float u,float v,float w){
+template<bool QuantileInput=false> inline float sample(const uint8_t* volume,float u,float v,float w){
     const float c[3]={u,v,w};int i0[3],i1[3];float fr[3];
     for(int a=0;a<3;++a){
-        const float x=c[a]-std::floor(c[a]);const float t=x*float(N)-.5f;const float fl=std::floor(t);
+        // Quantile coordinates are finite and in [0, 5), so truncation gives the same floor.
+        float base;bool finite=true;
+        if constexpr(QuantileInput)base=float(int(c[a]));
+        else if(std::fabs(c[a])<8388608.f){const int i=int(c[a]);base=float(i-(c[a]<float(i)));}
+        else if(std::isfinite(c[a]))base=c[a]; // Every finite float at this magnitude is integral.
+        else{base=std::floor(c[a]);finite=false;}
+        const float x=c[a]-base;const float t=x*float(N)-.5f;const float fl=finite?float(int(t)-(t<0)):std::floor(t);
         fr[a]=t-fl;const int i=int(fl);i0[a]=((i%int(N))+int(N))%int(N);i1[a]=(i0[a]+1)%int(N);}
     auto at=[&](int x,int y,int z){return float(volume[x+N*(y+N*z)]);};
     auto l=[](float a,float b,float t){return a+(b-a)*t;};
@@ -93,11 +221,19 @@ struct Wind {
         const double f=std::isfinite(fog)?std::clamp(double(fog),0.0,1.0):0.0;
         const double sp=kWindDry+(kWindRain-kWindDry)*f,a=0.35+0.436*std::sin(2*3.14159265358979323846*clock/600.0); /* slow +-25 degree veer over ~10 min */
         const double sa=a+0.35,ss=sp*1.6;
-        speed=float(sp);dir[0]=float(std::cos(a));dir[1]=float(std::sin(a));
-        large[0]+=sp*std::cos(a)*d;large[1]+=sp*std::sin(a)*d;
+#if defined(_WIN32) && defined(__SSE2__) && (defined(__clang__) || defined(__GNUC__))
+        double ca,sa0,caSmall,saSmall;__builtin_sincos(a,&sa0,&ca);__builtin_sincos(sa,&saSmall,&caSmall);
+        speed=float(sp);dir[0]=float(ca);dir[1]=float(sa0);
+        large[0]+=sp*ca*d;large[1]+=sp*sa0*d;
+        small[0]+=ss*caSmall*d;small[1]+=ss*saSmall*d;small[2]+=0.21*d;
+#else
+        const double ca=std::cos(a),sa0=std::sin(a);
+        speed=float(sp);dir[0]=float(ca);dir[1]=float(sa0);
+        large[0]+=sp*ca*d;large[1]+=sp*sa0*d;
         small[0]+=ss*std::cos(sa)*d;small[1]+=ss*std::sin(sa)*d;small[2]+=0.21*d;
-        for(int i=0;i<3;++i){large[i]=std::fmod(large[i],double(LargePeriod));if(large[i]<0)large[i]+=LargePeriod;
-                             small[i]=std::fmod(small[i],double(SmallPeriod));if(small[i]<0)small[i]+=SmallPeriod;}
+#endif
+        for(int i=0;i<3;++i){if(!(large[i]>=0&&large[i]<LargePeriod))large[i]=std::fmod(large[i],double(LargePeriod));if(large[i]<0)large[i]+=LargePeriod;
+                             if(!(small[i]>=0&&small[i]<SmallPeriod))small[i]=std::fmod(small[i],double(SmallPeriod));if(small[i]<0)small[i]+=SmallPeriod;}
         clock+=d;}
 };
 // 257 quantiles of the mixed two-scale noise value (.65 nL + .35 nS at world points spread over the tiles as the GPU sees them: the small scale
@@ -107,9 +243,9 @@ inline Quantiles quantiles(const uint8_t* volume){
     constexpr unsigned count=8192;std::vector<float> v(count);
     for(unsigned i=0;i<count;++i){
         const float x=detail::unit(detail::hash(i,1,0,Seed)),y=detail::unit(detail::hash(i,2,0,Seed)),z=detail::unit(detail::hash(i,3,0,Seed));
-        v[i]=.65f*sample(volume,x,y,z)+.35f*sample(volume,x*4+.37f,y*4+.61f,z*4+.13f);}
+        v[i]=.65f*sample<true>(volume,x,y,z)+.35f*sample<true>(volume,x*4+.37f,y*4+.61f,z*4+.13f);}
     std::sort(v.begin(),v.end());
-    Quantiles t;for(unsigned i=0;i<=256;++i)t.q[i]=v[size_t(std::lround(double(i)/256.0*double(count-1)))];
+    Quantiles t;for(unsigned i=0;i<=256;++i)t.q[i]=v[(size_t(i)*(count-1)+128)/256];
     return t;}
 inline float quantile(const Quantiles& t,float x){
     const float f=std::clamp(x,0.f,1.f)*256.f;const unsigned i=std::min(unsigned(f),255u);const float k=f-float(i);return t.q[i]+(t.q[i+1]-t.q[i])*k;}
@@ -171,9 +307,18 @@ inline void colour(const float game[3],bool gameValid,float night,float out[4]){
 // setting are multiplied by denseZoneDamp: 1 - kDenseDamp at full profile, exactly 1 outside dense zones.
 constexpr float kDenseDamp=0.6f,kDenseSeconds=3.f;
 inline float denseZoneDamp(float profile){return std::isfinite(profile)?1-kDenseDamp*std::clamp(profile,0.f,1.f):1.f;}
-inline float smoothDense(float current,float target,float dt){
+namespace detail {
+inline float denseWeight(float dt){const float d=std::isfinite(dt)?std::clamp(dt,0.f,.1f):0.f;return 1-std::exp(-d/kDenseSeconds);}
+inline float denseBlend(float current,float target,float weight){
     if(!std::isfinite(current))current=0;if(!std::isfinite(target))target=0;
-    const float d=std::isfinite(dt)?std::clamp(dt,0.f,.1f):0.f;return current+(target-current)*(1-std::exp(-d/kDenseSeconds));}
+    return current+(target-current)*weight;
+}
+}
+inline float smoothDense(float current,float target,float dt){return detail::denseBlend(current,target,detail::denseWeight(dt));}
+inline void smoothDensePair(float& first,float firstTarget,float& second,float secondTarget,float dt){
+    const float weight=detail::denseWeight(dt);
+    first=detail::denseBlend(first,firstTarget,weight);second=detail::denseBlend(second,secondTarget,weight);
+}
 // the per-sample density, identical to the shader: nL, nS noise values 0..1; tag = regional field .w (0 indoors/unknown)
 inline float sigma(float nL,float nS,float altitude,float threshold,float sharpness,float height,float tag,float sigmaMax){
     auto sat=[](float x){return std::clamp(x,0.f,1.f);};
@@ -184,6 +329,7 @@ inline float sigma(float nL,float nS,float altitude,float threshold,float sharpn
 // CPU mirror of one GPU sample at world point p (ground = regional field ground height at p, tag = field .w, fieldCoverage = 0..1 valid weight)
 inline float sigmaAt(const uint8_t* volume,const Frame& f,const float camera[3],const float p[3],float ground,float tag,float fieldCoverage){
     if(!f.active)return 0.f;
+    if(!(p[2]-ground>=0&&tag>0))return 0.f*fieldCoverage;
     float l[3],s[3];
     for(int i=0;i<3;++i){const float d=p[i]-camera[i];l[i]=d*f.invLarge+f.largeOrigin[i];s[i]=d*f.invSmall+f.smallOrigin[i];}
     const float nL=sample(volume,l[0],l[1],l[2]),nS=sample(volume,s[0],s[1],s[2]);

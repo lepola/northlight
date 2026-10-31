@@ -1361,13 +1361,6 @@ template<class Tr> inline bool dispatchGenerated(const CommandHeader* h, Tr& tr)
     }
     case Cmd::Device_SetRenderTarget: {
         const auto* _a=reinterpret_cast<const Args_Device_SetRenderTarget*>(h+1);const auto* _b=reinterpret_cast<const unsigned char*>(_a);(void)_b;
-        if constexpr(kDirectReplay) {
-            if(IDirect3DDevice9* _e=tr.ext()) {
-                bool _ok=true;
-                auto* _r_pRenderTarget=tr.raw(_a->pRenderTarget,_ok);
-                if(_ok) { tr.direct(); tr.result(Cmd::Device_SetRenderTarget,_e->SetRenderTarget(_a->RenderTargetIndex, _r_pRenderTarget)); return true; }
-            }
-        }
         tr.result(Cmd::Device_SetRenderTarget,tr.device()->SetRenderTarget(_a->RenderTargetIndex, tr.inner(_a->pRenderTarget)));
         return true;
     }

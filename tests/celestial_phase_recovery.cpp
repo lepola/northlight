@@ -30,6 +30,7 @@ struct Context {Body sun,moon;float skyboxCover=0;bool nativePlanets=true;};
 struct FrameMode {int mode=-1;bool skybox()const{return mode==1;}bool decide(const Context& c){if(mode<0)mode=(!c.nativePlanets||c.skyboxCover>.01f)?1:0;return mode==1;}void reset(){mode=-1;}};
 bool read(const float*,const float*,Context& sky){sky=Context{};sky.skyboxCover=skyCover;return skyValid;}
 void resolveRendererSky(Context&,const float*){}
+bool skyboxVerified(){return true;}
 }
 namespace NorthlightCelestialProfiles {struct Profile {};void apply(Profile,const float*,NorthlightCelestial::Context&){} }
 struct Device {
@@ -43,7 +44,7 @@ struct Phase {
     bool earlyValid=true,failed=false;unsigned frames=1,ownFrame=0;
     NorthlightCelestial::Context earlySkyHeld;std::string earlySkyMap;DWORD earlySkyAt=0;bool earlySkyOk=false;
     float earlyProjection[3]={1,1,1},earlyWorldMaxDepth=.94f;UINT earlyWidth=1280,earlyHeight=720;
-    unsigned drawnEarly=0,offscreenOwned=0,claimedDraws=0,earlyFailures=0;
+    unsigned drawnEarly=0,drawnSkyboxEarly=0,offscreenOwned=0,claimedDraws=0,earlyFailures=0;
     unsigned claimGate=0,claimNoBody=0,claimCamera=0,claimOffscreen=0,claimDrawn=0,claimSecondary=0,claimSkyHeld=0;
     static constexpr float MoonGlareSupport=NorthlightCelestialGlow::MoonGlareSupport;
     NorthlightCelestialDisc::SkyBand skyBand;unsigned surfaceDraws=0,haloDraws=0;
@@ -56,7 +57,7 @@ struct Phase {
                   void*,void*,float,float,float,float,void*,bool,float,bool glare=false){if(glare)++haloDraws;else ++surfaceDraws;return true;}
 #include "celestial_phase_methods.inc"
     bool claim(){return claimNativeDraw(D3DPT_TRIANGLELIST,2,true,[](const char*,const float*){return NorthlightCelestialProfiles::Profile{};});}
-    void next(){++frames;drawnEarly=offscreenOwned=0;now+=16;skyMode.reset();suppressed=0;}
+    void next(){++frames;drawnEarly=drawnSkyboxEarly=offscreenOwned=0;now+=16;skyMode.reset();suppressed=0;}
 };
 int main(){
     Phase p;
@@ -83,5 +84,12 @@ int main(){
     assert(p.surfaceDraws==surfaces&&p.haloDraws==halos);
     p.next();p.renderFrame=~0u;p.observer.body=1;skyCover=.5f;assert(!p.claim()&&p.suppressed==0&&p.drawnEarly==0); // no late render yet: the native draw stays
     p.next();skyCover=0;p.renderFrame=p.frames-1;assert(p.claim()&&p.drawnEarly==3&&p.suppressed==0); // skybox gone: planet phase again
+    // A verified cloud-layer trigger must repaint after a planet-phase disc covered by a later skybox.
+    p.next();skyCover=1;p.drawnEarly=1;p.renderFrame=p.frames-1;
+    const unsigned before=p.surfaceDraws;
+    assert(p.claimNativeDraw(D3DPT_TRIANGLELIST,768,true,[](const char*,const float*){return NorthlightCelestialProfiles::Profile{};},true));
+    assert(p.drawnSkyboxEarly==3&&p.surfaceDraws==before+2);
+    assert(p.claimNativeDraw(D3DPT_TRIANGLELIST,768,true,[](const char*,const float*){return NorthlightCelestialProfiles::Profile{};},true));
+    assert(p.surfaceDraws==before+2);
     std::puts("PASS celestial phase: 120 sky-only frames, one draw per body, transient sky hold, expiry/map/camera/reset/target gates, clock wrap");
 }

@@ -48,9 +48,18 @@ struct IDirect3DDevice9 {
     HRESULT CreateQuery(unsigned kind,IDirect3DQuery9** out){assert(kind==D3DQUERYTYPE_EVENT);if(!driver.querySupport)return E_FAIL;*out=new IDirect3DQuery9(&driver);++driver.queries;return S_OK;}
 };
 #include "live_terrain_gpu.h"
+#ifdef NORTHLIGHT_TERRAIN_COMPACT_TEST
+#include "terrain_indices.h"
+#endif
 struct Position {float x,y,z;};
 struct Vertex {Position position;float normal[3]={};float uv[2]={};};
-struct Snapshot {std::vector<Position> positions;std::vector<uint32_t> indices;};
+struct Snapshot {std::vector<Position> positions;
+#ifdef NORTHLIGHT_TERRAIN_COMPACT_TEST
+    NorthlightTerrainIndices::Indices indices;
+#else
+    std::vector<uint32_t> indices;
+#endif
+};
 using Owner=std::shared_ptr<const Snapshot>;using Cache=NorthlightLiveTerrainGPU::Cache<Snapshot,Vertex>;
 Owner triangle(float value){auto s=std::make_shared<Snapshot>();s->positions={{value,1,2},{value+1,2,3},{value+2,3,4}};s->indices={0,1,2};return s;}
 Vertex convert(Position p){Vertex v;v.position=p;return v;}
@@ -224,4 +233,14 @@ void freshArenaFlags(){
     // A pressure-refused creation (S_FALSE) never locks.
     {IDirect3DDevice9 d;Cache cache(arena);Owner a=triangle(1);std::vector<Owner> active={a};cache.beginFrame();assert(cache.update(&d,active,[](size_t){return false;},convert)==S_FALSE);assert(d.driver.flagLog.empty()&&!arenaCharge());}
 }
-int main(){allocator();freshArenaFlags();partialAndOrdering();retirement(true);retirement(false);retirement(true,false);busyRolloverAndFailure();admissionAndBounds();longWalk();prepareMatchesIndices();std::puts("live terrain GPU: geometry/order/LOD, incremental writes, fence-safe reuse, 500-frame bounded walk, busy/unsupported rollover, pressure/failure/reset, prepare/write == indices() passed");}
+void wideGpuIndices(){
+    IDirect3DDevice9 d;Cache cache(70000*sizeof(Vertex));auto wide=std::make_shared<Snapshot>();
+    for(unsigned i=0;i<65538;++i){wide->positions.push_back({float(i),1,2});wide->indices.push_back(i);}
+    std::vector<Owner> active={triangle(7),wide};std::vector<uint32_t> point,directional;
+    cache.beginFrame();assert(cache.update(&d,active,admit,convert)==S_OK);assert(cache.indices(active,1,allIndices,point,directional));verify(cache,active,point);
+    assert(point.back()==65540&&point==directional);std::vector<uint32_t> written(point.size()+directional.size());size_t p,q;
+    assert(cache.prepare(active,1,allIndices,p,q));cache.write(written.data());
+    assert(std::equal(point.begin(),point.end(),written.begin())&&std::equal(directional.begin(),directional.end(),written.begin()+point.size()));
+    std::puts("PASS CPU terrain indices -> original uint32 GPU rebase including65540");
+}
+int main(){wideGpuIndices();allocator();freshArenaFlags();partialAndOrdering();retirement(true);retirement(false);retirement(true,false);busyRolloverAndFailure();admissionAndBounds();longWalk();prepareMatchesIndices();std::puts("live terrain GPU: geometry/order/LOD, incremental writes, fence-safe reuse, 500-frame bounded walk, busy/unsupported rollover, pressure/failure/reset, prepare/write == indices() passed");}

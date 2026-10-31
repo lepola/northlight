@@ -63,22 +63,22 @@ def main():
     cpu = fp.src('world_renderer.h').read_text()
     point = fp.src('world_point_rendering.inl').read_text()
     lighting = shader[shader.index('LightingOutput WorldLighting('):shader.index('float4 WorldGI(')]
-    local = shader[shader.index('float4 LocalDirect('):shader.index('float3 removalScale(')]
+    local = shader[shader.index('float4 localDirectValue('):shader.index('float3 removalScale(')]
     # WorldLighting keeps this pass's visibility in the (otherwise unread) baseline alpha.
     assert 'o.baseline=float4(max(old+AmbientLight.rgb,.15),lerp(visibility,shadow,SunDirection.w)*known);return o;' in lighting
     assert 'float3 cover=affinePoint(p,FarMatrix);' in lighting and 'float known=max(abs(cover.x),abs(cover.y))<=1&&cover.z>=0&&cover.z<=1?1:0;' in lighting
     for use in [l for l in shader.splitlines() if 'tex2Dlod(BaselineLighting' in l and 'sunlit=' not in l]:
         assert '.rgb' in use, use  # nothing else reads the baseline alpha
-    assert 'float sunlit=saturate((tex2Dlod(BaselineLighting,float4(uv,0,0)).a-(1-GridInfo.z))/max(GridInfo.z,.001));' in local
+    assert 'float sunlit=saturate((tex2Dlod(BaselineLighting,float4(halfUV,0,0)).a-(1-GridInfo.z))/max(GridInfo.z,.001));' in local
     assert 'return float4(result*(LocalLightInfo.y*(1-LocalLightInfo.z*sunlit)),0);' in local
     # CPU: no global daylight gain (lamp fog c58 and the point lamp as in 0.3.164); c52.z per batch; s12 bound.
     assert 'const float lampGain=.9f*NorthlightLocalLightSelection::nightGain(lampNight);' in cpu and 'daylightGain' not in cpu and 'lampDaylight' not in cpu
     assert 'c[52][1]=.9f*lampGain;' in cpu and 'c[58][2]=10.f*lampGain*wx.lampFogGain();c[58][3]=.12f*lampGain*wx.lampFogGain();' in cpu
-    assert 'NorthlightLocalLightSelection::sunlitCut(celestialValid?sourceWeights[0]:0.f,sourceActive[0]&&effects.shadows);' in cpu
+    assert 'NorthlightLocalLightSelection::sunlitCut(celestialValid?sourceWeights[0]:0.f,sourceActive[0]&&geometryReady&&effects.shadows);' in cpu
     assert 'const float info[4]={float(batch.count),c[52][1],lampSunlitCut,0};' in cpu
-    assert cpu.index('d->SetTexture(12,baselineLight); /* sun visibility') < cpu.index('"local direct light batch"')
+    assert cpu.index('d->SetTexture(12,baselineLight);') < cpu.index('"local direct light batch"')
     # Lamp fog and the point-shadow lamp are pinned unchanged against 0.3.164 (live 7ba4d92).
-    assert 'std::memcpy(constants[8],pointSelected.diffuse,12);constants[8][3]=pointSelected.attenuationEnd;' in point
+    assert 'std::memcpy(constants[8],pointSlot().selected.diffuse,12);constants[8][3]=pointSlot().selected.attenuationEnd;' in point
     assert 'const float lampFogInfo[4]={c[21][0],c[21][1],c[21][2],localLights.fogDistance};' in cpu
     result = dict(game_launched=False, gpu_tested=False, native_policy_passed=True, gains=values)
     (fp.output_dir()/'lamp-daylight-validation.json').write_text(json.dumps(result, indent=2)+'\n')

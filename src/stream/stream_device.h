@@ -23,7 +23,27 @@ namespace NorthlightStream {
 constexpr bool kFilterRedundantState=NORTHLIGHT_STREAM_FILTER!=0;
 // The stream the process runs, for the opaque-pointer hook (celestial identities the game stored in its own memory).
 inline std::atomic<StreamCore*> activeCore{nullptr};
+#ifdef NORTHLIGHT_REPLAY_STAND
+inline bool captureTextureAliasGeneration(std::uintptr_t pointer,std::uint64_t& generation){
+    auto* context=StandInputs::currentContext();auto* core=activeCore.load(std::memory_order_acquire);
+    return context&&context->valid()&&core&&core->reg.textureGeneration(reinterpret_cast<const void*>(pointer),generation);
+}
+inline const void* innerOfActive(const void* p){
+    if(!p)return nullptr;
+    auto* context=StandInputs::currentContext();auto* core=activeCore.load(std::memory_order_acquire);
+    if(context&&context->valid()&&core&&activeSnapshot&&activeSnapshot->mode==GameSnapshot::Mode::Playing){
+        const auto& table=activeSnapshot->textureAliases();
+        if(table.sealed&&table.count<=GameSnapshot::MaxTextureAliases)for(unsigned i=0;i<table.count;++i){
+            const auto& alias=table.entries[i];if(alias.oldId!=reinterpret_cast<std::uintptr_t>(p))continue;
+            if(const auto* inner=core->reg.textureInner(reinterpret_cast<const void*>(std::uintptr_t(alias.proxy)),alias.generation))return inner;
+            break;
+        }
+    }
+    if(context)context->missing();return nullptr;
+}
+#else
 inline const void* innerOfActive(const void* p){StreamCore* c=activeCore.load(std::memory_order_acquire);return c?c->reg.innerOf(p):p;}
+#endif
 
 // The Win32 calls DXVK's hardware cursor makes (d3d9_cursor.cpp), behind function pointers so the host tests can observe them. Plain Win32 on
 // the calling thread's input queue: the stream does them on the GAME thread, at the call, exactly as DXVK would on the direct path.
@@ -55,9 +75,17 @@ struct CursorApi {
 
 class StreamDevice final:public IDirect3DDevice9 {
 public:
+    // Opt-in capture transport only. The owner outlives this device; the
+    // noexcept callback must copy before returning and must not wait or do IO.
+    using SnapshotCompleted=void(*)(void*,const GameSnapshot&,std::uintptr_t,std::uint64_t,std::uint32_t,std::uint32_t) noexcept;
+    // Separate explicit trace observation: an external recorder may serialize
+    // here. This is outside the allocation/IO/wait-free completion contract.
+    using SnapshotObserved=SnapshotCompleted;
     struct Options {
         std::size_t budget=BudgetBytes;
         bool (*capture)(GameSnapshot&,Trigger,std::uint64_t)=nullptr;   // game_snapshot.h capture() in the DLL; null = no snapshots
+        SnapshotCompleted snapshotCompleted=nullptr;void* snapshotSink=nullptr;
+        SnapshotObserved snapshotObserved=nullptr;
         std::function<void()> threadStart;                              // runs on the replay thread first (owner handoff)
         std::function<void(const char*)> log;
         void (*queryCaller)(std::uint64_t,void*,void*)=nullptr;
@@ -68,6 +96,7 @@ public:
         bool filterRedundant=true;                                      // see redundant(); off: every Set is recorded
         DWORD (*readBackLock)()=nullptr;                                // NorthlightUpload::readBackLock in the DLL: READONLY, plus NOOVERWRITE on DXVK >= 3
         bool (*diagnostics)()=nullptr;                                  // NorthlightDiagnostics::enabled in the DLL
+        bool (*idleProfiling)()=nullptr;                                // RenderProfile, latched before start
         const char* (*callerModule)(void* address)=nullptr;             // 0.3.204 (task 21): "module+0xoffset" of a TestCooperativeLevel caller's return address (Windows only); null = no caller line. 0.3.206 (task 31): also names a texture lock's caller in the TEXREADBACK lines
         // 0.3.200 (pipeline): StreamFramesAhead (clamped to 1..kMaxFramesAhead): Present waits for the Present this many frames back; the snapshot pool follows
         // (SnapshotPool::capFor). 1 = the 0.3.199 pacing. The queue budget is `budget` (the DLL passes budgetForFramesAhead).
@@ -82,7 +111,11 @@ public:
     // was handed over (nullptr, reason filled) and the caller keeps using the target directly.
     static StreamDevice* make(IDirect3DDevice9* target,IDirect3D9* parent,const D3DPRESENT_PARAMETERS* pp,Options opt,const char** reason){
         std::unique_ptr<StreamDevice> d;
-        try{d.reset(new StreamDevice(target,parent,pp,std::move(opt)));}catch(...){if(reason)*reason="allocation";return nullptr;}
+        try{d.reset(new StreamDevice(target,parent,pp,std::move(opt)));}catch(...){
+#ifdef NORTHLIGHT_REPLAY_STAND
+            if(auto* context=StandInputs::currentContext())context->reject();
+#endif
+            if(reason)*reason="allocation";return nullptr;}
         // Any failure from here: the Target's implicit objects (back buffers, depth buffer, swap chain) are released on the replay thread
         // before it stops (no Destroy commands into a queue nobody replays), the proxies are deleted, and the owner callback runs again on
         // this thread so the Device's gate names a live thread, not the joined replay thread.
@@ -90,7 +123,11 @@ public:
             if(reason)*reason=why;
             const bool ran=d->replayer.running();
             if(ran){runTask(d->core,[](StreamCore& c){c.reg.releaseInners();},Cmd::SyncInit);d->replayer.stop();}
-            d->abandon();if(ran&&d->restoreOwner)d->restoreOwner();return nullptr;};
+            d->abandon();if(ran&&d->restoreOwner)d->restoreOwner();
+#ifdef NORTHLIGHT_REPLAY_STAND
+            if(auto* context=StandInputs::currentContext())context->reject();
+#endif
+            return nullptr;};
         if(!d->replayer.start())return fail("thread");
         bool ok=false;
         const bool ran=runTask(d->core,[&](StreamCore& c){
@@ -102,6 +139,9 @@ public:
             d->st.loadDefaults(c.target);ok=!d->sc0->dead.load();},Cmd::SyncInit);
         if(!ran||!ok)return fail("init");
         gameTid.store(Replayer::currentTid());activeCore.store(&d->core,std::memory_order_release);innerOf=&innerOfActive;
+#ifdef NORTHLIGHT_REPLAY_STAND
+        StandInputs::textureAliasGeneration=&captureTextureAliasGeneration;
+#endif
         return d.release();
     }
     ~StreamDevice(){}
@@ -267,6 +307,7 @@ public:
         return true;}
     // Diagnostics: who calls it. The first locally answered call with Diagnostics on, and once more 600 frames later; with Diagnostics off it looks again every 600 frames.
     unsigned callerLogs=0;std::uint64_t callerNextFrame=0;std::function<void(const char*)> callerLog;bool (*callerDiag)()=nullptr;
+    unsigned resetTraceCount=0;
     void logCaller(void* address){
         callerNextFrame=core.frameNo+600;if(!callerLog||!callerDiag||!callerDiag())return;
         ++callerLogs;char b[300];std::snprintf(b,sizeof b,"CSTREAM TestCooperativeLevel caller=%s",core.callerModule(address));callerLog(b);}
@@ -409,6 +450,7 @@ public:
         if(core.timing){const std::uint64_t e=frameEnd-nowAtPresent,w=gameWaitsNs(q.stats)-waits0;own(q.stats.presentBookNs,e>w?e-w:0);}   // 0.3.204 (task 21): Present bookkeeping, waits excluded (no extra clock reads)
         waitsAtFrameEnd=get(q.stats.syncNs)+get(q.stats.backpressureNs);
         ++core.frameNo;
+        if(core.timing)core.reportQueryFrame(callerLog);
         if(core.timing){++core.queryWaitFrames;if(core.frameNo%600==0)core.reportQueryWait(callerLog);}
         if(core.timing&&core.frameNo%600==0){if(callerLog)core.texDiag.report(callerLog,core.callerModule,core.frameNo,[](unsigned c){return cmdName((Cmd)c);});else core.texDiag.restart(core.frameNo);}   // 0.3.206 (task 31): the texture readback report, one window per 600 Presents (Diagnostics only); without a log sink the window still restarts (tables and old histories must not grow)
         tuner.sample(q);   // idle pool memory goes back after a quiet window
@@ -445,15 +487,38 @@ public:
 
     HRESULT STDMETHODCALLTYPE Reset(D3DPRESENT_PARAMETERS* p) override{
         if(!p)return D3DERR_INVALIDCALL;
+        const bool profile=callerLog&&callerDiag&&callerDiag();
+        const auto start=profile?nowNs():0;
+        if(profile){
+#ifdef _WIN32
+            if(resetTraceCount<32){
+                ++resetTraceCount;
+                void* stack[12]={};const USHORT count=CaptureStackBackTrace(0,12,stack,nullptr);
+                char detail[768];std::snprintf(detail,sizeof detail,"CSTREAM RESET_DETAIL frame=%llu tick=%lu sequence=%u focus=%p active=%p foreground=%p oldWindow=%p newWindow=%p oldSwap=%u newSwap=%u oldAutoDepth=%u newAutoDepth=%u oldDepthFormat=%u newDepthFormat=%u oldFlags=0x%08lx newFlags=0x%08lx oldRefresh=%u newRefresh=%u oldInterval=%u newInterval=%u stackCount=%u",
+                    (unsigned long long)core.frameNo,(unsigned long)GetTickCount(),resetTraceCount,GetFocus(),GetActiveWindow(),GetForegroundWindow(),pp.hDeviceWindow,p->hDeviceWindow,unsigned(pp.SwapEffect),unsigned(p->SwapEffect),unsigned(pp.EnableAutoDepthStencil),unsigned(p->EnableAutoDepthStencil),unsigned(pp.AutoDepthStencilFormat),unsigned(p->AutoDepthStencilFormat),(unsigned long)pp.Flags,(unsigned long)p->Flags,pp.FullScreen_RefreshRateInHz,p->FullScreen_RefreshRateInHz,pp.PresentationInterval,p->PresentationInterval,unsigned(count));callerLog(detail);
+                for(unsigned i=0;i<count;++i){char entry[384];std::snprintf(entry,sizeof entry,"CSTREAM RESET_STACK frame=%llu sequence=%u index=%u address=%p module=%s",(unsigned long long)core.frameNo,resetTraceCount,i,stack[i],core.callerModule?core.callerModule(stack[i]):"unknown");callerLog(entry);}
+            }else if(resetTraceCount==32){++resetTraceCount;callerLog("CSTREAM RESET_STACK suppressed after=32 reason=limit");}
+#endif
+            // Capture the client caller before crossing to the replay thread.
+            char line[768];std::snprintf(line,sizeof line,"CSTREAM RESET begin frame=%llu caller=%s coop=0x%08lx previous=%ux%u/%u windowed=%u msaa=%u/%lu buffers=%u interval=%u requested=%ux%u/%u windowed=%u msaa=%u/%lu buffers=%u interval=%u refresh=%u flags=0x%08lx",
+                (unsigned long long)core.frameNo,core.callerModule?core.callerModule(__builtin_return_address(0)):"unknown",(unsigned long)std::uint32_t(core.coopState.load()),
+                pp.BackBufferWidth,pp.BackBufferHeight,unsigned(pp.BackBufferFormat),unsigned(pp.Windowed),unsigned(pp.MultiSampleType),(unsigned long)pp.MultiSampleQuality,pp.BackBufferCount,pp.PresentationInterval,
+                p->BackBufferWidth,p->BackBufferHeight,unsigned(p->BackBufferFormat),unsigned(p->Windowed),unsigned(p->MultiSampleType),(unsigned long)p->MultiSampleQuality,p->BackBufferCount,p->PresentationInterval,p->FullScreen_RefreshRateInHz,(unsigned long)p->Flags);callerLog(line);
+        }
         st.clear();recording=false;
         HRESULT hr=D3DERR_INVALIDCALL;
+        std::uint64_t replayStart=0,replayEnd=0;
         const bool ran=runTask(core,[&](StreamCore& c){   // everything recorded so far has run; the game waits, pumped
+            if(profile)replayStart=nowNs();
             for(ProxyBase* k:sc0->kids)if(k&&k->inner&&k->refs.load()==0){c.reg.unbindInner(k);k->inner->Release();k->inner=nullptr;}   // one the game still holds keeps its object, as in D3D9   // back buffers must not outlive the swap chain's reset
             c.queryEpoch.fetch_add(1); // invalidate EVENT cache across Reset
             hr=c.target->Reset(p);c.coopState.store(c.target->TestCooperativeLevel());   // 0.3.204 (task 21): the replay thread publishes the new cooperative level; StreamDevice is not an IDirect3DDevice9Ex, so there is no ResetEx
             if(SUCCEEDED(hr)){IDirect3DSwapChain9* sc=nullptr;if(SUCCEEDED(c.target->GetSwapChain(0,&sc))&&sc){sc->GetPresentParameters(&sc0->pp);sc->Release();}}
             ensureBackBuffers(c);
-            st.loadDefaults(c.target);c.replayFailure.store(false);},Cmd::SyncReset);
+            st.loadDefaults(c.target);c.replayFailure.store(false);if(profile)replayEnd=nowNs();},Cmd::SyncReset);
+        if(profile){const auto end=nowNs();char line[384];std::snprintf(line,sizeof line,"CSTREAM RESET end frame=%llu ran=%u result=0x%08lx coop=0x%08lx totalMs=%.3f beforeReplayMs=%.3f replayMs=%.3f afterReplayMs=%.3f",
+            (unsigned long long)core.frameNo,unsigned(ran),(unsigned long)std::uint32_t(hr),(unsigned long)std::uint32_t(core.coopState.load()),double(end-start)/1e6,
+            replayStart?double(replayStart-start)/1e6:0.0,replayEnd?double(replayEnd-replayStart)/1e6:0.0,replayEnd?double(end-replayEnd)/1e6:0.0);callerLog(line);}
         if(!ran)return D3DERR_INVALIDCALL;
         if(SUCCEEDED(hr))pp=sc0->pp;
         return hr;
@@ -613,6 +678,8 @@ private:
     unsigned framesAhead_=1;PresentMark presentHist[kMaxFramesAhead];   // 0.3.200 (pipeline): see presentCommon
     std::thread::id gameThread=std::this_thread::get_id();
     PoolTuner tuner;TriggerPolicy policy;bool (*capture)(GameSnapshot&,Trigger,std::uint64_t)=nullptr;
+    SnapshotCompleted snapshotCompleted=nullptr;void* snapshotSink=nullptr;
+    SnapshotObserved snapshotObserved=nullptr;
     // 0.3.200 (frame skip): a swap chain's back buffer (the frame's own image); a texture level or cube face (sampled later: never a skippable depth target).
     // A frame may be skipped only while every draw and clear lands in a back buffer and a standalone depth surface.
     static bool backBuffer(const ProxyBase* p){return p&&p->parent&&p->parent->kind==Kind::SwapChain;}
@@ -623,10 +690,10 @@ private:
         return false;}
 
     StreamDevice(IDirect3DDevice9* target,IDirect3D9* par,const D3DPRESENT_PARAMETERS* p,Options opt)
-        :coreOwner(new StreamCore(opt.budget)),core(*coreOwner),replayer(core,SnapshotPool::capFor(clampFramesAhead(opt.framesAhead))),parent(par),framesAhead_(clampFramesAhead(opt.framesAhead)),capture(opt.capture){
+        :coreOwner(new StreamCore(opt.budget)),core(*coreOwner),replayer(core,SnapshotPool::capFor(clampFramesAhead(opt.framesAhead))),parent(par),framesAhead_(clampFramesAhead(opt.framesAhead)),capture(opt.capture),snapshotCompleted(opt.snapshotCompleted),snapshotSink(opt.snapshotSink),snapshotObserved(opt.snapshotObserved){
         core.target=target;core.game=this;core.framesAhead=framesAhead_;core.logLine=nullptr;core.callerModule=opt.callerModule;core.queryCaller=opt.queryCaller;core.occlusionLocal=opt.occlusionLocal;callerLog=opt.log;callerDiag=opt.diagnostics;core.readBackLock=opt.readBackLock;st.core=&core;
         if(opt.cursorApi)cursor=*opt.cursorApi;
-        restoreOwner=opt.threadStart;replayer.frameSkip=opt.frameSkip!=0;replayer.threadStart=std::move(opt.threadStart);replayer.log=opt.log;replayer.diagnostics=opt.diagnostics;filter=opt.filterRedundant;
+        restoreOwner=opt.threadStart;replayer.frameSkip=opt.frameSkip!=0;replayer.threadStart=std::move(opt.threadStart);replayer.log=opt.log;replayer.diagnostics=opt.diagnostics;replayer.idleProfiling=opt.idleProfiling;filter=opt.filterRedundant;
         if(kDirectReplay&&opt.directReplay&&opt.extension&&opt.rawOf){core.ext=opt.extension;auto f=opt.rawOf;core.reg.rawOf=[f](IUnknown* e,Kind k){return f(e,unsigned(k));};}
         if(p)pp=*p;
         sc0=new StreamSwapChain(&core);sc0->baseline=1;sc0->pp=pp;
@@ -648,6 +715,7 @@ private:
             if(!k){Info in;in.w=sc0->pp.BackBufferWidth;in.h=sc0->pp.BackBufferHeight;in.fmt=unsigned(sc0->pp.BackBufferFormat);in.usage=D3::kUsageRT;in.pool=D3::kPoolDefault;in.ms=unsigned(sc0->pp.MultiSampleType);in.msq=sc0->pp.MultiSampleQuality;
                    k=new StreamSurface(&c,in,sc0,nullptr);k->refs.store(0);k->use.store(0);sc0->kids[i]=k;}
             k->info.w=sc0->pp.BackBufferWidth;k->info.h=sc0->pp.BackBufferHeight;k->info.fmt=unsigned(sc0->pp.BackBufferFormat);
+            k->info.ms=unsigned(sc0->pp.MultiSampleType);k->info.msq=sc0->pp.MultiSampleQuality;
             if(k->inner)continue;
             IDirect3DSurface9* b=nullptr;
             if(i<n&&SUCCEEDED(sc->GetBackBuffer(i,(D3DBACKBUFFER_TYPE)0,&b))&&b){c.reg.bindInner(k,b);k->dead.store(false);}else k->dead.store(true);
@@ -664,6 +732,9 @@ private:
         runTask(core,[&](StreamCore& c){c.target->Release();c.target=nullptr;},Cmd::SyncRelease);   // the Device's final release happens on the replay thread
         replayer.stop();
         innerOf=nullptr;activeCore.store(nullptr,std::memory_order_release);
+#ifdef NORTHLIGHT_REPLAY_STAND
+        StandInputs::textureAliasGeneration=nullptr;
+#endif
         if(hCursor){cursor.destroy(hCursor);hCursor=nullptr;}
         IDirect3D9* p=parent;
         delete this;
@@ -680,6 +751,8 @@ private:
         const std::uint64_t t0=core.timing?nowNs():0;   // 0.3.204 (task 21): snapshot capture time (acquire + capture + record), Diagnostics only
         GameSnapshot* s=replayer.snapshots.acquire();if(!s)return;
         if(!capture(*s,t,drawOrdinal)){replayer.snapshots.release(s);if(t0)own(core.q.stats.snapNs,nowNs()-t0);return;}
+        if(snapshotCompleted)snapshotCompleted(snapshotSink,*s,reinterpret_cast<std::uintptr_t>(this),core.presentsRecorded.load(std::memory_order_relaxed),core.queryEpoch.load(std::memory_order_acquire),Replayer::currentTid());
+        if(snapshotObserved)snapshotObserved(snapshotSink,*s,reinterpret_cast<std::uintptr_t>(this),core.presentsRecorded.load(std::memory_order_relaxed),core.queryEpoch.load(std::memory_order_acquire),Replayer::currentTid());
         Queue& q=core.q;auto* p=static_cast<GameSnapshot**>(q.reserve((std::uint16_t)Cmd::Snapshot,sizeof(GameSnapshot*)));*p=s;q.commit();
         if(t0)own(q.stats.snapNs,nowNs()-t0);
     }

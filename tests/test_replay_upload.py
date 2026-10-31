@@ -79,6 +79,10 @@ int main(){
 source=fp.src('world_renderer.h').read_text()
 start=source.index('    bool uploadReplay(bool allowCache=true){');end=source.index('    bool actorMaterial',start)
 method=source[start:end]
+# Legacy cache variants exercise the unchanged bulk/ring algorithm. The native
+# scene's additional ownership telemetry is verified by test_shared_gpu_wiring.
+import re
+method=re.sub(r'^\s*deferLogf\("GPU_SCENE[^\n]*\n','',method,flags=re.M)
 shell=r"""
 #include <cstdarg>
 #include <chrono>

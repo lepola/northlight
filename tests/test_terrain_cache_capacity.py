@@ -46,7 +46,7 @@ with tempfile.TemporaryDirectory(prefix='terrain-capacity-') as temp:
         names = [m for m in archive.getmembers() if m.name.endswith('/renderer/terrain_capture_bounds.h')]
         assert len(names) == 1
         baseline = archive.extractfile(names[0]).read()
-    for name, header, expected in [('baseline-512', baseline, 0), ('current-4096', fp.src('terrain_capture_bounds.h').read_bytes(), 778)]:
+    for name, header, expected in [('baseline-512', baseline, 0), ('current-bounded', fp.src('terrain_capture_bounds.h').read_bytes(), 778)]:
         directory = root / name
         directory.mkdir()
         (directory / 'terrain_capture_bounds.h').write_bytes(header)

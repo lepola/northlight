@@ -16,10 +16,11 @@ assert 'setEffects(requestedEffects)' in method and 'effects.gi=' not in method 
 for field in ('giRays','giFastBVH','giThreads'):assert '"'+{'giRays':'GIRays','giFastBVH':'GIFastBVH','giThreads':'GIThreads'}[field]+'"' in fp.src('settings_schema.h').read_text()
 # Every Device member copied from the world at creation is either refreshed in the frame-boundary block or its key is restart-only ("R").
 renderer=fp.src('renderer.cpp').read_text(encoding='utf-8');block=renderer[renderer.index('settingsService->after(settingsRevision)'):][:2200]
-for refreshed in ('contactAO=world->contactAO()','aoStrength=world->aoStrength()','aoRadius=world->aoRadius()','aoMethod=world->aoMethod()','drop(aoContactBloomPS)','frameDrawGates=world->frameDrawGates()','zFuncAware=world->depthFuncAware()','nameMask.debug=','setStrength(world->blobShadowStrength())'):assert refreshed in block,refreshed
+for refreshed in ('contactAO=world->contactAO()','aoStrength=world->aoStrength()','aoRadius=world->aoRadius()','selectAO(world->aoMethod(),world->aoQuality())','frameDrawGates=world->frameDrawGates()','zFuncAware=world->depthFuncAware()','nameMask.debug=','setStrength(world->blobShadowStrength())'):assert refreshed in block,refreshed
 assert 'spellOptionsPending' in block and 'bool liveOptions(' in fp.src('spell_layer.h').read_text(encoding='utf-8')
 restart=fp.src('settings_schema.h').read_text(encoding='utf-8')
-for key in ('EquipmentLights','NameMask','SpellLayer','CommandStream'):assert '"'+key+'"' in restart[restart.index('restart={'):][:400],key
+assert 'particleOn=world->equipmentLightsOn()' in block
+for key in ('NameMask','SpellLayer','CommandStream'):assert '"'+key+'"' in restart[restart.index('restart={'):][:400],key
 harness=r'''
 #include "settings_schema.h"
 #include <atomic>

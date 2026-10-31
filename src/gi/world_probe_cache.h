@@ -47,10 +47,17 @@ struct ProbeAtlasEntry {
     Probe probe;
     bool occupied=false;
 };
-inline size_t probeAtlasIndex(ProbeGridKey key) {
+template<int32_t N> inline size_t fixedProbeAtlasIndex(ProbeGridKey key){
+    const auto wrap=[](int32_t cell){const int32_t r=cell%N;return size_t(r<0?r+N:r);};
+    return wrap(key.x)+wrap(key.y)*N+wrap(key.z)*N*N;
+}
+inline __attribute__((always_inline)) size_t probeAtlasIndex(ProbeGridKey key) {
     // Signed remainder must be corrected for negative world coordinates. This
     // also handles INT_MIN without negation or signed multiplication overflow.
     const int32_t n=int32_t(probeLayout().atlas);
+    switch(n){case 16:return fixedProbeAtlasIndex<16>(key);case 18:return fixedProbeAtlasIndex<18>(key);case 20:return fixedProbeAtlasIndex<20>(key);case 22:return fixedProbeAtlasIndex<22>(key);case 24:return fixedProbeAtlasIndex<24>(key);}
+    if(n>0&&(n&(n-1))==0){const auto mask=uint32_t(n-1);
+        return size_t(uint32_t(key.x)&mask)+size_t(uint32_t(key.y)&mask)*size_t(n)+size_t(uint32_t(key.z)&mask)*size_t(n)*size_t(n);}
     const auto wrap=[n](int32_t cell)->size_t {
         const int32_t remainder=cell%n;
         return size_t(remainder<0?remainder+n:remainder);
@@ -74,6 +81,9 @@ inline bool probeGridKey(Vec3 position,ProbeGridKey& key) {
     for(unsigned i=0;i<3;++i) {
         const double cell=double(values[i])/8.0;
         if(!std::isfinite(cell))return false;
+        if(cell>=double(std::numeric_limits<int32_t>::min())&&cell<=double(std::numeric_limits<int32_t>::max())){
+            const auto whole=int32_t(cell);if(double(whole)==cell){cells[i]=whole;continue;}
+        }
         const double rounded=std::round(cell);
         if(std::fabs(cell-rounded)>.00001 ||
            rounded<double(std::numeric_limits<int32_t>::min()) ||
@@ -112,12 +122,22 @@ public:
         entries_.splice(entries_.begin(),entries_,found->second);
         output=found->second->value;return true;
     }
+    // The worker needs validity only; update LRU without copying a whole probe.
+    bool touchValidity(ProbeGridKey key,bool& valid) {
+        auto found=lookup_.find(key);if(found==lookup_.end())return false;
+        entries_.splice(entries_.begin(),entries_,found->second);
+        valid=found->second->value.valid;return true;
+    }
     void put(ProbeGridKey key,const Probe& value) {
         auto found=lookup_.find(key);
         if(found!=lookup_.end()) {
             found->second->value=value;
             entries_.splice(entries_.begin(),entries_,found->second);return;
         }
+        putMissing(key,value);
+    }
+    // Only after get() returned false and before this cache is changed.
+    void putMissing(ProbeGridKey key,const Probe& value) {
         entries_.push_front({key,value});
         try{lookup_.emplace(key,entries_.begin());}
         catch(...){entries_.pop_front();throw;}
@@ -130,6 +150,15 @@ public:
     void clear(){lookup_.clear();entries_.clear();}
     size_t size()const{return entries_.size();}
     size_t capacity()const{return capacity_;}
+    void accountMemory(NorthlightMemoryFootprint::Counter& memory)const{
+        using namespace NorthlightMemoryFootprint;
+        if(!memory.visit(this))return;
+        memory.add(Metadata,sizeof(*this));
+        for(const auto& entry:entries_)memory.allocation(Probes,&entry,sizeof(entry));
+        for(const auto& entry:lookup_)memory.allocation(Metadata,&entry,sizeof(entry));
+        // Node links and the implementation's bucket array are allocator/STL
+        // overhead; their sizes are deliberately not claimed as measured bytes.
+    }
     // Export persistent world slots, independent of the current solve window.
     // Most recently touched entry wins a modulo collision. Consumers MUST
     // compare the full key before sampling; matching modulo index is not enough.
@@ -169,6 +198,15 @@ public:
     struct Stats {uint64_t hits=0,misses=0,resets=0;size_t bytes=0;};
 private:
     Stats stats_;
+    size_t slotIndex(ProbeGridKey key)const{
+        // The default 16-wide atlas wraps signed keys with a low-bit mask.
+        const size_t index=probeLayout().atlas==16?
+            size_t(uint32_t(key.x)&15)+(size_t(uint32_t(key.y)&15)<<4)+(size_t(uint32_t(key.z)&15)<<8):
+            probeAtlasIndex(key),size=entries_.size();
+        if(index<size)return index;
+        if(size&&(size&(size-1))==0)return index&(size-1);
+        return index%size;
+    }
 public:
     void reset(){std::lock_guard<std::mutex> lock(mutex_);ready_=false;++epoch_;}
     // Frees the slots (memory trim, map change); the next configure() allocates them again.
@@ -191,7 +229,7 @@ public:
     Probe solve(const BVH& bvh,ProbeGridKey key,Vec3 position,const PreparedLighting& prepared,unsigned rays,uint32_t seed){
         bool cached=false;
         {std::lock_guard<std::mutex> lock(mutex_);cached=ready_;
-         if(cached){const auto& e=entries_[probeAtlasIndex(key)%entries_.size()];
+         if(cached){const auto& e=entries_[slotIndex(key)];
              if(e.epoch==epoch_&&e.key==key&&e.seed==seed&&same(e.response.fixed.position,position)){
                  ++stats_.hits;return relightProbe(e.response,prepared);
              }}++stats_.misses;}
@@ -199,8 +237,15 @@ public:
         ProbeResponse response;
         Probe result=solveProbeResponse(bvh,position,prepared,rays,seed,response);
         {std::lock_guard<std::mutex> lock(mutex_);
-         auto& e=entries_[probeAtlasIndex(key)%entries_.size()];e.key=key;e.seed=seed;e.response=response;e.epoch=epoch_;}
+         auto& e=entries_[slotIndex(key)];e.key=key;e.seed=seed;e.response=response;e.epoch=epoch_;}
         return result;
+    }
+    void accountMemory(NorthlightMemoryFootprint::Counter& memory)const{
+        using namespace NorthlightMemoryFootprint;
+        std::lock_guard<std::mutex> lock(mutex_);
+        if(!memory.visit(this))return;
+        memory.add(Metadata,sizeof(*this));memory.vector(Probes,entries_);
+        memory.vector(Metadata,shape_.points);memory.vector(Metadata,shape_.additionalDirections);
     }
     Stats stats()const{std::lock_guard<std::mutex> lock(mutex_);return stats_;}
 };

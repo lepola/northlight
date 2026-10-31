@@ -46,11 +46,11 @@ def march(camera_x, schedule, shadow):
 
 def main():
     shader = fp.src('world_effects.hlsl').read_text()
-    fog = shader.split('float4 WorldFog(', 1)[1].split('// Glow of', 1)[0]
+    fog = shader.split('float4 worldFog(', 1)[1].split('// Glow of', 1)[0]
     for contract in ('frac(major.y*(major.x<0?-1:1)/spacing)',
                      'float altitude=p.z-field.x;',
                      'heightFade=saturate(altitude*(1.0/12))',
-                     'fogShadowProjected(shadowOrigin+shadowRay*((start+end)*.5))*heightFade', 'SourcePolicy.x*.35'):
+                     'directWeight+=transmittance*absorb*(visibility*heightFade)', 'SourcePolicy.x*.35'):
         assert contract in fog
     assert 'sin(' not in fog and 'SourcePolicy.z' not in fog
     assert '.35+.65*visible' not in fog

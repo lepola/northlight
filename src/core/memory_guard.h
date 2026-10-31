@@ -17,7 +17,7 @@ struct Policy {
     // Address-space walk cadence (sampler thread, ~6-50 ms each on Windows).
     std::uint32_t sampleMs=3000,pressureSampleMs=1000,reportMs=10000;
     // Demand pressure: the geometry builder stalls for memory below its own floor
-    // (768 MiB at entry), far above enterAvailable. Recovery from a pressure episode
+    // (512 MiB at entry), far above enterAvailable. Recovery from a pressure episode
     // that a demand entered needs the largest demand seen plus this, so the restored
     // full caps cannot regrow straight back into the next region's stall.
     std::uint64_t demandRegrowth=128*MiB;
@@ -32,7 +32,7 @@ struct Decision {
     bool trim=false,entered=false,recovered=false;
     bool afterTrim=false; // first sample walked after the last completed trim
     bool demand=false;    // this entry/trim was caused by the builder's demand, not the guard's own thresholds
-    bool capsChanged=false; // 0.3.216: the stream/replay-copy/world caps must switch now; halfCaps tells to what (true: halved, false: full)
+    bool capsChanged=false; // The stream/replay-copy/terrain caps must switch now; halfCaps tells to what (true: halved, false: full).
     bool halfCaps=false;
     bool report=false;    // periodic diagnostic line due (caller gates on Diagnostics)
 };

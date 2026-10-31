@@ -21,8 +21,12 @@ world=fp.src('world_renderer.h').read_text()
 batched=fp.src('replay_gpu_batches.h').read_text()
 # Production wiring: the selected cache, the shared binding helper, and pool/usage identical to the per-mesh buffers.
 assert 'inline constexpr bool BatchedReplayCache=true;' in batched
-assert '    NorthlightReplayGPU::SelectedCache replayGpuCache;' in world
-assert 'auto bindReplay=[&](Replay& p){NorthlightReplayGPU::bindResident(replayGpuCache,d,p,allowCache,growthAdmission);};' in world
+assert '    NorthlightGpuScene::NativeClient& replayGpuCache=gpuScene->shadows;' in world
+bind=world[world.index('auto bindReplay=[&](Replay& p){'):world.index('replayTimeDeferredIndices.clear();',world.index('auto bindReplay=[&](Replay& p){'))]
+scene=fp.src('scene_native_store.h').read_text()
+assert 'sharedReplayGeometry' not in world
+assert 'p.start=p.indexed?at.indexStart:at.vertexBase;p.base=p.indexed?INT(at.vertexBase):0;' in scene
+assert 'NorthlightReplayGPU::bindResident(replayGpuCache,d,p,allowCache,growthAdmission);' in bind
 assert batched.count('D3DUSAGE_WRITEONLY,0,D3DPOOL_DEFAULT')==2 and batched.count('D3DUSAGE_WRITEONLY,D3DFMT_INDEX32,D3DPOOL_DEFAULT')==2
 # Every buffer is written once, fresh, like the per-mesh buffers: NOOVERWRITE through upload_lock.h (a flags-0 lock drains DXVK's CS thread), never DISCARD.
 cache=fp.src('replay_gpu_cache.h').read_text()

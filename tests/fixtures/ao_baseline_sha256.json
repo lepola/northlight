@@ -1,6 +1,9 @@
 {
   "AO": "fa7a14b42bb3b1238fb440c91deebbc6dc85ad6be2b7770ade831e592e5826c6",
   "AOContactBloom": "69f09b7b034b86e714fe56b0aa596fe0896b927940db9b0cc80ee98984545105",
-  "AOBlur": "f90638a01cda1c5360231f2b3b3c11bdf7bcc381dd9a9be0cba4d846af57cab8",
-  "Composite": "36d90667788788500a5e0a6a7c8f100fe858ed9ec550dd489edb8fe5a6ca02f2"
+  "AOBlur": "f856c90b86ccfa9c6a7e0651edbade57af96b508d2862838c057f44d01883ec5",
+  "Composite": "36d90667788788500a5e0a6a7c8f100fe858ed9ec550dd489edb8fe5a6ca02f2",
+  "HDAOContactBloom": "6cfc9c10211eff231ddae623f539006cd2132e9407f46026c12cd23f1ffe8f87",
+  "HBAOPlusContactBloom": "34395679e49aecc47e473bcb43601bdecbd6fb5650c1c31d6ddea9c1fd76b593",
+  "GTAOContactBloom": "186a1f4111dfafa46dddcb17f82b26d3e408e5cda801730885820898492db1f8"
 }

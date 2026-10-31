@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# northlight-test: requires=client,cxx
+# northlight-test: requires=client,cxx,stormlib
 """Task 34 SpellFog: the vertex shader fog proof (src/sky/spell_fog_proof.h) over every M2 family vertex shader of the configured client (read only). Every vs_2_0 and vs_3_0 variant
 of the Particle, ParticleUnlit, Model and Projected families must be proven to write fog = min(pow(max(viewZ*c30.x + c30.y, 0), c30.z), 1) from c30 and to read c30 nowhere else; no vs_1_1 variant
 (the linear form) is accepted. Reports proven / unproven per family and shader model, and how many take the bare ramp in the pow (the fit then keeps the game's ramp end)."""

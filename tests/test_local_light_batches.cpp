@@ -31,6 +31,17 @@ static void inViewTests(){
     const Light side=lamp(5,99.7f,0,7.7f,4);
     assert(!inView(v,side,ViewMarginSin)&&inView(v,side,IncumbentMarginSin));
     S::View invalid;assert(inView(invalid,lamp(6,0,0,-40),ViewMarginSin)); // no view: every light in view
+    // Prepared planes must exactly match the generic view path as projection,
+    // camera basis, source position and incumbent margin change.
+    std::mt19937 random(4107);
+    for(unsigned i=0;i<10000;++i){auto current=v;current.valid=i%37!=0;
+        current.projX=(.1+double(random()%800)/100)*(i%2?1:-1);current.projY=.1+double(random()%800)/100;
+        for(auto& row:current.inverse)for(auto& value:row)value=double(int(random()%200)-100)/100;
+        Light l=lamp(i,float(int(random()%800)-400),float(int(random()%800)-400),float(int(random()%800)-400),float(random()%100));
+        const double px=1/std::fabs(current.projX),py=1/std::fabs(current.projY);
+        const double planes[]={px,py,1/std::sqrt(1+px*px),1/std::sqrt(1+py*py)};
+        for(float margin:{ViewMarginSin,IncumbentMarginSin})assert(inView(current,l,margin)==inView(current,l,margin,planes));
+    }
 }
 static void trackerTests(){
     const auto v=view();const float camera[3]={0,0,0};
@@ -58,8 +69,15 @@ static std::multiset<std::array<float,12>> content(const Selection& s){
 static Selection fill(const std::vector<Light>& lights){
     Selection s;s.count=unsigned(lights.size());
     for(unsigned i=0;i<s.count;++i){const auto& l=lights[i];s.position[i]={l.position[0],l.position[1],l.position[2],l.attenuationEnd};
-        s.color[i]={float(i+1),0,0,1};s.fog[i]={float(i)*.5f,0,0,0};}
+        s.color[i]={float(i+1),0,0,1};s.fog[i]={float(i)*.5f,0,0,0};s.sources[i]=l;
+        for(unsigned k=0;k<3;++k)s.sources[i].diffuse[k]=s.color[i][k];}
     return s;
+}
+static void sourcesAligned(const Selection& s){
+    for(unsigned i=0;i<s.count;++i){const auto& source=s.sources[i];
+        for(unsigned k=0;k<3;++k)assert(source.position[k]==s.position[i][k]&&source.diffuse[k]==s.color[i][k]);
+        assert(source.attenuationEnd==s.position[i][3]&&source.sourceId==std::uint64_t(s.color[i][0])&&source.kind==2);
+    }
 }
 static void arrangeTests(){
     const auto v=view();
@@ -68,6 +86,7 @@ static void arrangeTests(){
     Selection s=fill(lights);const auto before=content(s);
     const auto r=B::arrange(s,v);
     assert(r.arranged&&r.after<r.before*.75&&content(s)==before);
+    sourcesAligned(s); // source IDs and point-shadow metadata follow the same permutation
     // Each slot keeps its own colour and fog with its position (fill() tags them by slot).
     for(unsigned i=0;i<s.count;++i){unsigned k=0;while(lights[k].position[0]!=s.position[i][0]||lights[k].position[2]!=s.position[i][2])++k;assert(s.color[i][0]==float(k+1)&&s.fog[i][0]==float(k)*.5f);}
     // Invalid view and a single lamp: unchanged.
@@ -76,25 +95,52 @@ static void arrangeTests(){
     // Never worse than the old order, random scenes (behind, around and in front of the camera).
     std::mt19937 rng(0x1a3b);std::uniform_real_distribution<float> x(-120,120),z(-60,160),e(1,14);
     for(unsigned trial=0;trial<400;++trial){
-        std::vector<Light> l;const unsigned n=1+rng()%72;for(unsigned i=0;i<n;++i)l.push_back(lamp(i+1,x(rng),x(rng)*.3f,z(rng),e(rng)));
-        Selection t=fill(l);const auto c=content(t);const auto res=B::arrange(t,v);
+        std::vector<Light> l;const unsigned n=1+rng()%Slots;for(unsigned i=0;i<n;++i)l.push_back(lamp(i+1,x(rng),x(rng)*.3f,z(rng),e(rng)));
+        Selection t=fill(l);
+        for(unsigned i=n;i<Slots;++i){t.color[i]={123,456,789,321};t.sources[i].sourceId=9000+i;}
+        const auto c=content(t);const auto res=B::arrange(t,v);
+        for(unsigned i=n;i<Slots;++i)assert((t.color[i]==std::array<float,4>{123,456,789,321})&&t.sources[i].sourceId==9000+i);
         assert(res.after<=res.before&&content(t)==c);
+        sourcesAligned(t);
         if(!res.arranged)assert(t.position==fill(l).position);
     }
 }
 static void wideTests(){
     const B::Rect all{0,0,640,360},left{0,0,40,40},right{600,320,640,360},none{};
     assert(B::wide(all,all));                  // two whole-target passes: one 16-lamp pass is cheaper
+    // The manifest's 288/400-slot programs cross the merge boundary here.
+    const B::Rect edgeA{0,0,100,10},edgeB{49,0,149,10},pastEdge{50,0,150,10};
+    assert(B::wide(edgeA,edgeB)&&!B::wide(edgeA,pastEdge));
     assert(!B::wide(left,right));              // far apart: the joint rect is the whole target
     assert(!B::wide(none,none)&&!B::wide(left,none)); // one 8-lamp pass already covers it
     assert(B::unite(none,left).area()==left.area()&&B::unite(left,right).area()==all.area());
+}
+static void costTests(){
+    std::mt19937 random(7903);
+    for(unsigned count=0;count<=Slots+8;++count){
+        std::vector<B::Rect> rects(count);std::vector<unsigned> slots(count);
+        for(unsigned i=0;i<count;++i){const long x=long(random()%1280),y=long(random()%720);
+            rects[i]={x,y,x+long(random()%300)-10,y+long(random()%200)-10};slots[i]=i;}
+        std::shuffle(slots.begin(),slots.end(),random);
+        const double reference=B::directCost(rects.data(),slots.data(),count)+B::batchCost<FogBatchSize>(rects.data(),slots.data(),count,B::FogSlots);
+        assert(B::cost(rects.data(),slots.data(),count)==reference);
+    }
 }
 static void hilbertTests(){
     std::set<std::uint32_t> seen;std::vector<std::pair<unsigned,unsigned>> at(256);
     for(unsigned x=0;x<16;++x)for(unsigned y=0;y<16;++y){const auto d=B::hilbert(x,y,4);assert(d<256&&seen.insert(d).second);at[d]={x,y};}
     for(unsigned d=1;d<256;++d){const int dx=int(at[d].first)-int(at[d-1].first),dy=int(at[d].second)-int(at[d-1].second);assert(std::abs(dx)+std::abs(dy)==1);}
+    const auto reference=[](std::uint32_t x,std::uint32_t y){
+        std::uint32_t d=0;
+        for(std::uint32_t step=128;step;step>>=1){const auto rx=(x&step)?1u:0u,ry=(y&step)?1u:0u;d+=step*step*((3*rx)^ry);
+            if(!ry){if(rx){x=step-1-x;y=step-1-y;}std::swap(x,y);}}
+        return d;
+    };
+    for(unsigned x=0;x<256;++x)for(unsigned y=0;y<256;++y)assert(B::hilbert(x,y)==reference(x,y));
+    std::mt19937 random(4801);
+    for(unsigned i=0;i<10000;++i){const std::uint32_t x=random(),y=random();assert(B::hilbert(x,y)==reference(x,y));}
 }
 int main(){
-    inViewTests();trackerTests();arrangeTests();wideTests();hilbertTests();
+    inViewTests();trackerTests();arrangeTests();wideTests();costTests();hilbertTests();
     std::puts("local light batches: ok");
 }

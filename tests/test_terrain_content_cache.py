@@ -27,7 +27,7 @@ int main(){
     auto read=[&](UINT count=3,INT base=-3){return cache.readMesh(&d,D3DPT_TRIANGLELIST,base,7,count,1,1,d.view,out,&why);};
     assert(read()&&!why.contentCacheHit&&cache.persistentEntries()==1);
     assert(read()&&why.contentCacheHit&&cache.persistentHits()==1);
-    out.positions[0].z=999;out.indices[0]=999;out.bounds.chunks.clear();
+    out.positions[0].z=999;out.indices.set(0,999);out.bounds.chunks.clear();
     assert(read()&&why.contentCacheHit&&out.positions[0].z==3&&out.indices[0]==0&&out.bounds.chunks.size()==1);
     cache.clearFrame();assert(read()&&why.contentCacheHit); // Present does not trust identity alone.
     d.put(4,{a.x,a.y,30});assert(read()&&!why.contentCacheHit&&out.positions[0].z==30);
@@ -66,10 +66,11 @@ int main(){
     assert(budget.readMesh(&d,D3DPT_TRIANGLELIST,-3,7,3,1,1,d.view,out,&why));
     assert(!budget.readMesh(&d,D3DPT_TRIANGLELIST,-3,7,3,1,1,d.view,out,&why)&&why.reason==RejectReason::ByteBudget);
     budget.clearFrame();assert(budget.readMesh(&d,D3DPT_TRIANGLELIST,-3,7,3,1,1,d.view,out,&why)&&why.contentCacheHit);
-    // Different vertex-range contracts fill at most 4096 entries.
+    // Different vertex-range contracts fill the bounded slot array, under the same byte cap.
     cache.clearPersistent();
-    for(UINT i=0;i<4296;++i){cache.clearFrame();assert(read(3+i));assert(cache.persistentEntries()<=4096&&cache.persistentBytes()<=32u*1024*1024);}
-    assert(cache.persistentEntries()==4096);cache.clearFrame();assert(read(4298)&&why.contentCacheHit);
+    const UINT entryLimit=UINT(FrameCache::persistentEntryLimit());
+    for(UINT i=0;i<entryLimit+200;++i){cache.clearFrame();assert(read(3+i));assert(cache.persistentEntries()<=entryLimit&&cache.persistentBytes()<=32u*1024*1024);}
+    assert(cache.persistentEntries()==entryLimit);cache.clearFrame();assert(read(entryLimit+202)&&why.contentCacheHit);
     cache.clearFrame();assert(read()&&!why.contentCacheHit); // Evicted oldest.
     // Wide, valid index spans exercise the memory cap before the entry cap.
     d.declaration.type=D3DDECLTYPE_FLOAT3;d.declaration.offset=4;d.declaration.stream=0;d.stride=24;d.streamOffset=16;
@@ -93,7 +94,7 @@ int main(){
     assert(recycled.readMesh(object,D3DPT_TRIANGLELIST,-3,7,3,1,1,object->view,out,&why)&&!why.contentCacheHit&&out.positions[0].z==73);
     object->Device::~Device();
     std::puts("PASS content-cache hits verify current IB/VB bytes; same-pointer mutations, index LOD/format, layout/stream/base/stride/offset and immutable output");
-    std::puts("PASS cache hits preserve view/range/budget/capture/lock/unlock failures; reset, 4096-entry/32MiB eviction, balanced COM/locks");
+    std::puts("PASS cache hits preserve view/range/budget/capture/lock/unlock failures; reset, bounded-entry/32MiB eviction, balanced COM/locks");
 }
 '''
 with tempfile.TemporaryDirectory(prefix='northlight-terrain-content-') as temp:
@@ -103,5 +104,5 @@ with tempfile.TemporaryDirectory(prefix='northlight-terrain-content-') as temp:
         result=subprocess.run([str(binary)],capture_output=True,text=True);print(label+':\n'+result.stdout+result.stderr,end='');result.check_returncode()
 report={'source_sha256':hashlib.sha256(fp.src('terrain_capture_bounds.h').read_bytes()).hexdigest(),
         'byte_verified_hit_mutation_contract_failure_lifetime_bounds_tests':True,'ASan_UBSan':True,
-        'max_entries':4096,'max_accounted_cache_bytes':33554432,'game_launched':False}
+        'max_entries':8192,'max_accounted_cache_bytes':33554432,'game_launched':False}
 (fp.output_dir()/'terrain-content-cache-validation.json').write_text(json.dumps(report,indent=2)+'\n')

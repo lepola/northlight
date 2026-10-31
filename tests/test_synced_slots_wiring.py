@@ -48,7 +48,7 @@ def caseBlock(name):
 for k in HOOKED:
     blk=caseBlock(k)
     calls=re.findall(r'([\w.]+(?:\(\))?)->'+k+r'\(',blk)
-    checks2['stream dispatch of '+k+' goes to the extension device or the Device, never a backend pointer']=bool(blk) and set(calls)<={'_e','tr.device()'} and '_e' in calls and 'tr.device()' in calls
+    checks2['stream dispatch of '+k+' goes to the extension device or the Device, never a backend pointer']=bool(blk) and set(calls)==({'tr.device()'} if k=='SetRenderTarget' else {'_e','tr.device()'})
 sd=fp.src('stream_device.h').read_text()
 checks2['the stream replays direct calls on the ExtensionDevice the renderer gives it (same mirror)']='core.ext=opt.extension;' in sd and 'options.extension=target->extensionDevice();' in r and re.search(r'IDirect3DDevice9\* extensionDevice\(\)\s*\{\s*return ext;',r) is not None
 sp=fp.src('stream_proxies.h').read_text()

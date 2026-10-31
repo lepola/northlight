@@ -9,9 +9,10 @@ import hashlib,json,math,re
 from pathlib import Path
 
 EMITTER=('position','rgb','intensity','start','end')
-VARIANT_FIELDS={'asset','family','position','position_basis','rgb','intensity','start','end','emitters'}
+VARIANT_FIELDS={'asset','family','position','position_basis','rgb','intensity','start','end','emitters','casts_shadows'}
 
 def check(p):
+    if 'casts_shadows' in p and type(p['casts_shadows']) is not bool:raise ValueError('Invalid shadow policy')
     if len(p['position'])!=3 or len(p['rgb'])!=3:raise ValueError('Emitter vector size')
     if not all(math.isfinite(v) for v in [*p['position'],*p['rgb'],p['intensity'],p['start'],p['end']]):raise ValueError('Nonfinite emitter')
     if any(abs(v)>100 for v in p['position']) or not all(0<=v<=1 for v in p['rgb']) or max(p['rgb'])<=0 or not 0<p['intensity']<=4 or not 0<=p['start']<p['end']<=32:raise ValueError('Emitter outside bounded policy')
@@ -46,12 +47,26 @@ def load(path=None):
 
 def pinned(p):
     """{asset sha256: emitter fields} of every asset a profile covers, the profile's own first."""
-    fields=(*EMITTER,'emitters') if 'emitters' in p else EMITTER
+    fields=(*EMITTER,*(['emitters'] if 'emitters' in p else []),*(['casts_shadows'] if 'casts_shadows' in p else []))
     result={p['asset_sha256']:{k:p[k] for k in fields}}
     for sha,v in p.get('variants',{}).items():
         result[sha]={k:v.get(k,p[k]) for k in EMITTER}
+        if 'casts_shadows' in v or 'casts_shadows' in p:result[sha]['casts_shadows']=v.get('casts_shadows',p.get('casts_shadows'))
         if 'emitters' in v or 'emitters' in p:result[sha]['emitters']=v.get('emitters',p.get('emitters'))
     return result
+
+def fixture_emitters(p):
+    """One bounded light for a compact authored fixture, never across models."""
+    emitters=p.get('emitters',[p])
+    if len(emitters)<2:return emitters
+    shadow=emitters[0].get('casts_shadows',p.get('casts_shadows',False))
+    if any(e.get('casts_shadows',p.get('casts_shadows',False))!=shadow for e in emitters):return emitters
+    if any(math.dist(a['position'],b['position'])>3 for i,a in enumerate(emitters) for b in emitters[:i]):return emitters
+    strongest=max(emitters,key=lambda e:e['intensity']*max(e['rgb']))
+    return [{**strongest,
+             'position':tuple(math.fsum(e['position'][k] for e in emitters)/len(emitters) for k in range(3)),
+             'start':max(e['start'] for e in emitters),'end':max(e['end'] for e in emitters),
+             'casts_shadows':shadow}]
 
 def fallback(catalog,path,blob,native):
     # A supported native light always wins. Profiles never add a second emitter
@@ -63,8 +78,8 @@ def fallback(catalog,path,blob,native):
     if native and catalog[path].get('injected_sha256')!=sha:return native
     p=pinned(catalog[path]).get(sha)
     if p is None:raise ValueError('Emitter profile asset changed: '+path)
-    return [(tuple(e['position']),tuple(c*e['intensity'] for c in e['rgb']),e['start'],e['end'],0x80000000+i,3,0)
-            for i,e in enumerate(p.get('emitters',[p]))]
+    return [(tuple(e['position']),tuple(c*e['intensity'] for c in e['rgb']),e['start'],e['end'],0x80000000+i,3,2 if e.get('casts_shadows',p.get('casts_shadows',False)) else 0)
+            for i,e in enumerate(fixture_emitters(p))]
 
 def deduplicate_parent_lights(records,owners):
     # Only compare a WMO child against native lights from ITS OWN parent.

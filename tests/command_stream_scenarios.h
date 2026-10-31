@@ -777,32 +777,35 @@ static void eventQueryBatch(){
     CHECK(q->GetData(nullptr,0,D3::kGetDataFlush)==S_FALSE&&get(s.eventPollBatches)==0&&gKnobs.eventPendingFlush.load()==6);   // unissued: one real call
     gKnobs.eventPendingFlush.store(7);CHECK(q->Issue(D3::kIssueEnd)==D3D_OK);DWORD data=0;
     const auto deadline=std::chrono::steady_clock::now()+std::chrono::seconds(3);
-    do{hr=q->GetData(&data,4,D3::kGetDataFlush);CHECK(std::chrono::steady_clock::now()<deadline);std::this_thread::yield();}while(hr==S_FALSE);
-    // Async completion can race one already-queued pumped check; both return the same real result.
-    CHECK(hr==D3D_OK&&data==0xABCD0000u&&get(s.eventPollCalls)>=8&&get(s.eventPollCalls)<=9&&get(s.eventPollBatches)>0&&get(s.eventPollBatches)<=get(s.eventRequests));
+    const auto trips=get(s.eventWaitTrips);
+    hr=q->GetData(&data,4,D3::kGetDataFlush);
+    CHECK(hr==D3D_OK&&data==0xABCD0000u&&get(s.eventPollCalls)==8&&get(s.eventWaitTrips)==trips+1&&get(s.eventRequests)==0);
     gKnobs.eventFlushResult.store(D3DERR_DEVICELOST);const auto polls=get(s.eventPollCalls);data=456;
     // A new END must not return the previous generation's completed value.
     CHECK(q->Issue(D3::kIssueEnd)==D3D_OK);
-    CHECK(q->GetData(&data,4,D3::kGetDataFlush)==S_FALSE&&data==456);
-    do{hr=q->GetData(&data,4,D3::kGetDataFlush);CHECK(std::chrono::steady_clock::now()<deadline);std::this_thread::yield();}while(hr==S_FALSE);
-    CHECK(hr==D3DERR_DEVICELOST&&data==456&&get(s.eventPollCalls)>=polls+1&&get(s.eventPollCalls)<=polls+2);
+    hr=q->GetData(&data,4,D3::kGetDataFlush);
+    CHECK(hr==D3DERR_DEVICELOST&&data==456&&get(s.eventPollCalls)==polls+1);
     gKnobs.eventFlushResult.store(D3D_OK);
     q->Release();q=nullptr;CHECK(rig.dev->CreateQuery((D3DQUERYTYPE)8,&q)==D3D_OK&&q);
-    // Fast queries retain the original window; a completed slow wait shortens the next generation.
+    // Pending availability stays asynchronous. FLUSH immediately enters a bounded
+    // pumped wait, including the first call and a newly issued generation.
     gKnobs.eventPendingFlush.store(1000000);CHECK(q->Issue(D3::kIssueEnd)==D3D_OK);const auto sy=get(s.syncCalls);
-    CHECK(q->GetData(nullptr,0,D3::kGetDataFlush)==S_FALSE&&get(s.syncCalls)==sy);   // a fresh wait: answered locally
-    static_cast<StreamQuery*>(q)->eventLocalSince=nowNs()-200000;
-    CHECK(q->GetData(nullptr,0,D3::kGetDataFlush)==S_FALSE&&get(s.syncCalls)==sy);   // no extra round trip for a fast query
-    static_cast<StreamQuery*>(q)->eventLocalSince=nowNs()-3000000;
+    CHECK(q->GetData(nullptr,0,0)==S_FALSE&&get(s.syncCalls)==sy);
     CHECK(q->GetData(nullptr,0,D3::kGetDataFlush)==S_FALSE&&get(s.syncCalls)==sy+1);
+    CHECK(q->GetData(nullptr,0,D3::kGetDataFlush)==S_FALSE&&get(s.syncCalls)==sy+2);
     gKnobs.eventPendingFlush.store(0);
     do{hr=q->GetData(nullptr,0,D3::kGetDataFlush);CHECK(std::chrono::steady_clock::now()<deadline);std::this_thread::yield();}while(hr==S_FALSE);
     CHECK(hr==D3D_OK);
+    gKnobs.holdQueries.store(false);
+    auto* event=static_cast<StreamQuery*>(q);
+    CHECK(waitFor([&]{return event->eventDoneGen.load(std::memory_order_acquire)==event->gen.load();}));
+    const auto completedSync=get(s.syncCalls);
+    CHECK(q->GetData(nullptr,0,D3::kGetDataFlush)==D3D_OK&&get(s.syncCalls)==completedSync);
+    gKnobs.holdQueries.store(true);
     gKnobs.eventPendingFlush.store(1000000);CHECK(q->Issue(D3::kIssueEnd)==D3D_OK);const auto slowSync=get(s.syncCalls);
-    CHECK(q->GetData(nullptr,0,D3::kGetDataFlush)==S_FALSE&&get(s.syncCalls)==slowSync);
-    static_cast<StreamQuery*>(q)->eventLocalSince=nowNs()-200000;
-    CHECK(q->GetData(nullptr,0,D3::kGetDataFlush)==S_FALSE&&get(s.syncCalls)==slowSync+1);   // the real query remains pending after the pumped sync
-    CHECK(q->Issue(D3::kIssueEnd)==D3D_OK&&q->GetData(nullptr,0,D3::kGetDataFlush)==S_FALSE&&get(s.syncCalls)==slowSync+1);   // a new END starts local again
+    CHECK(q->GetData(nullptr,0,0)==S_FALSE&&get(s.syncCalls)==slowSync);
+    CHECK(q->GetData(nullptr,0,D3::kGetDataFlush)==S_FALSE&&get(s.syncCalls)==slowSync+1);
+    CHECK(q->Issue(D3::kIssueEnd)==D3D_OK&&q->GetData(nullptr,0,D3::kGetDataFlush)==S_FALSE&&get(s.syncCalls)==slowSync+2);
     gKnobs.eventPendingFlush.store(0);q->Release();gKnobs.holdQueries.store(false);rig.finish();checkClean();
 }
 static void queryProbeAndDeadQuery(){
@@ -835,6 +838,17 @@ static void occlusionFlushLocal(bool on){
     const auto sy3=get(s.syncCalls),l3=get(s.queryFlushLocal);CHECK(eq->GetData(&d,4,D3::kGetDataFlush)==D3D_OK&&get(s.syncCalls)==sy3&&get(s.queryFlushLocal)==l3);
     CHECK(rig.core().queryWait[8].calls==0&&rig.core().queryWait[8].unissued==0);
     CHECK(rig.core().queryWait[9].calls==(on?2u:3u)&&rig.core().queryWait[9].unissued==1);
+    const auto& profile=rig.core().queryWait[9];const auto& frame=rig.core().queryFrame[9];
+    CHECK(profile.beforeNs+profile.replayNs+profile.afterNs==profile.tripNs&&profile.maxTripNs<=profile.tripNs);
+    CHECK(frame.calls==profile.calls&&frame.tripNs==profile.tripNs);
+    const auto frameNo=rig.core().frameNo;std::vector<std::string> lines;rig.core().frameNo=127;
+    rig.core().reportQueryFrame([&](const char* text){lines.emplace_back(text);});
+    CHECK(lines.size()==1&&lines[0].find("CSTREAM QUERYFRAME gameFrame=127")!=std::string::npos);
+    CHECK(lines[0].find("beforeReplayMs=")!=std::string::npos&&lines[0].find("afterReplayMs=")!=std::string::npos);
+    CHECK(!rig.core().queryFrame[9].calls&&rig.core().queryWait[9].calls==profile.calls);
+    rig.core().queryFrame[9]=profile;rig.core().frameNo=128;
+    rig.core().reportQueryFrame([&](const char* text){lines.emplace_back(text);});
+    CHECK(lines.size()==(profile.maxTripNs>=20000000?2u:1u)&&!rig.core().queryFrame[9].calls);rig.core().frameNo=frameNo;
     rig.core().reportQueryWait(nullptr);CHECK(rig.core().queryWait[8].calls==0&&rig.core().queryWait[9].calls==0);
     rig.core().timing=false;CHECK(eq->GetData(&d,4,D3::kGetDataFlush)==D3D_OK&&rig.core().queryWait[8].calls==0);
     eq->Release();oq->Release();rig.finish();checkClean();
@@ -853,9 +867,10 @@ static void initFailureFallback(){
 }
 // The periodic stats line: >600 presents with Diagnostics on give exactly one line, and it carries the CSTREAM tag the log is searched by.
 static std::vector<std::string> gStatLines;
-static void statsLine(){
+static void statsLine(bool idle=false){
     gTrace.clear();gStatLines.clear();StreamDevice::Options opt;
     opt.log=[](const char* l){gStatLines.push_back(l);};opt.diagnostics=[]{return true;};
+    if(idle)opt.idleProfiling=[]{return true;};
     Rig rig(true,opt);
     for(int i=0;i<610;++i){rig.dev->DrawPrimitive((D3DPRIMITIVETYPE)4,0,2);rig.dev->Present(nullptr,nullptr,nullptr,nullptr);}
     rig.sync();
@@ -864,6 +879,11 @@ static void statsLine(){
     for(const char* field:{"game[per frame]: ms=","coop=","split[per frame]: lockMs=","recordMs~=","snapMs=","presentMs=","syncMs=","presentWaitMs=","bpMs=","sleeps=","publishes=","replayBusyMs/frame=","recorded=","answered=","texShadow=","readbacks=","bufShadow=","readbacks/frame=","evicted/frame=","(hot ","refused/frame=","grows=","large=","memMB=","texFreshSkipped=","texReadbackCause[freshDrop=","relockedEvict=","neverShadowed=","freshSkip="," skipped="})CHECK(lines[0].find(field)!=std::string::npos);   // per-window numbers
     CHECK(lines[0].size()<2000);
     {bool top=false;for(auto& l:gStatLines)if(l.rfind("CSTREAM top[per frame]: Device::DrawPrimitive=",0)==0)top=true;CHECK(top);}   // 0.3.204 (task 21): the sampled per-command split, the draws first
+    {unsigned wakeLines=0;for(const auto& line:gStatLines)if(line.rfind("CSTREAM WAKE_PUBLICATIONS ",0)==0){
+        ++wakeLines;unsigned long long frame=0,batches=0,commands=0,bytes=0,signals=0;
+        CHECK(std::sscanf(line.c_str(),"CSTREAM WAKE_PUBLICATIONS streamFrame=%llu heldBatches=%llu heldCommands=%llu heldBytes=%llu wakeSignals=%llu",&frame,&batches,&commands,&bytes,&signals)==5);
+        CHECK(frame==600&&line.find("scope=cumulative-independent-counters duration=unmeasured")!=std::string::npos&&line.size()<384);
+    }CHECK(wakeLines==unsigned(idle));}
     rig.finish();checkClean();
 }
 // Redundant-state filtering: a repeated Set of the value the game last set is not recorded; anything else is.
@@ -1224,6 +1244,19 @@ static void equivalence(int steps,std::uint64_t seed,unsigned framesAhead=1){
 }
 // Direct replay: a proxy caches the backend object behind its inner right when the create/derive/first-sight bound it, a proxy without one
 // replays through the Device, and the cache follows Reset.
+static void effectHookReplay(){
+    for(bool direct:{false,true}){
+        std::thread::id replay;StreamDevice::Options opt;opt.threadStart=[&]{replay=std::this_thread::get_id();};
+        Rig rig(true,opt,direct);const auto syncs=get(rig.core().q.stats.syncCalls);
+        const unsigned calls=rig.target->renderTargetCalls;
+        CHECK(rig.dev->SetRenderTarget(0,nullptr)==D3D_OK);
+        CHECK(get(rig.core().q.stats.syncCalls)==syncs); // recording the HDR-sensitive setter stays asynchronous
+        rig.sync();CHECK(rig.target->renderTargetCalls==calls+1);
+        CHECK(rig.target->renderTargetThread==replay&&replay!=std::this_thread::get_id());
+        rig.finish();checkClean();
+    }
+    std::puts("effect hooks: SetRenderTarget reaches Device on replay thread with direct dispatch on/off PASS");
+}
 static void directReplayRaw(){
     if(!kDirectReplay)return;
     gTrace.clear();Rig rig(true);auto& s=rig.core().q.stats;IDirect3DDevice9* d=rig.dev;
@@ -1238,7 +1271,8 @@ static void directReplayRaw(){
     // the direct calls count, and the Target saw what it would have through the Device
     const auto d0=get(s.directCalls);
     d->SetRenderState((D3DRENDERSTATETYPE)7,3);d->SetTexture(0,tex);d->SetStreamSource(0,vb,0,20);d->SetIndices(ib);d->SetVertexShader(vs);d->SetPixelShader(ps);d->SetVertexDeclaration(dc);d->SetRenderTarget(1,lvl);rig.sync();
-    CHECK(get(s.directCalls)==d0+8);
+    // SetRenderTarget must visit Device for logical HDR target remapping.
+    CHECK(get(s.directCalls)==d0+7);
     // a dead create has no raw and its calls are not direct (they go through the Device, which drops them)
     IDirect3DCubeTexture9* cube=nullptr;CHECK(d->CreateCubeTexture(8,1,0,(D3DFORMAT)22,(D3DPOOL)1,&cube,nullptr)==D3D_OK);rig.sync();CHECK(!ProxyBase::of(cube)->raw);
     const auto d1=get(s.directCalls);d->SetTexture(5,cube);rig.sync();CHECK(get(s.directCalls)==d1);d->SetTexture(5,nullptr);
@@ -1251,7 +1285,7 @@ static void directReplayRaw(){
     ProxyBase* kid=ProxyBase::of(bb);CHECK(rawOk(kid));
     D3DPRESENT_PARAMETERS pp{};pp.BackBufferWidth=800;pp.BackBufferHeight=600;pp.BackBufferFormat=(D3DFORMAT)22;pp.BackBufferCount=2;lvl->Release();
     CHECK(d->Reset(&pp)==D3D_OK);CHECK(rawOk(kid));   // raw follows the re-derived back buffer (an address compare with the old raw is not valid: the allocator may reuse it)
-    d->SetTexture(0,tex);d->SetRenderTarget(0,bb);rig.sync();   // calls on the re-derived back buffer are direct again
+    d->SetTexture(0,tex);d->SetRenderTarget(0,bb);rig.sync();   // raw identities follow Reset; render targets retain the HDR handler
     d->SetRenderTarget(0,nullptr);
     plain->Release();cube->Release();tex->Release();vb->Release();ib->Release();vs->Release();ps->Release();dc->Release();
     rig.finish();checkClean();
@@ -2090,8 +2124,8 @@ static void textureReadbackTable(){
     }
 }
 static void streamTests(bool threadsOnly){
-    layoutIsolation();replayTimingAccounting();diagnosticsOffSkipsAudit();idlePollWakes();
-    lifetimeAndIdentity();pressureKeepsShadows();syncStormDetector();stateKnownUnknown();locksPreserveBytes();staticBufferShadows();dynamicBufferShadows();largeBufferAllowance();twoLargeBuffers();adaptiveShadowCap();shadowCap();queriesAndSyncCensus();eventQueryBatch();occlusionFlushLocal(true);occlusionFlushLocal(false);resetAndShutdown();directReplayRaw();redundantFiltering();renderTargetResetsViewport();textureShadows();textureExpressReadback();textureReadbackDiagnostics();textureExpressBehind();textureReadbackTable();statsLine();childrenOutliveTheDevice();queryProbeAndDeadQuery();initFailureFallback();cursorHandling();nestedSyncInPump();testCooperativeLevelLocal(1);testCooperativeLevelLocal(3);upDrawsAndBackpressure();snapshotTriggers();snapshotPoolNotExhausted();memoryPressureRelease();impossibleBlockIsRefusedAtOnce();smallStagedLocksUseScratch();
+    layoutIsolation();replayTimingAccounting();diagnosticsOffSkipsAudit();idlePollWakes();effectHookReplay();
+    lifetimeAndIdentity();pressureKeepsShadows();syncStormDetector();stateKnownUnknown();locksPreserveBytes();staticBufferShadows();dynamicBufferShadows();largeBufferAllowance();twoLargeBuffers();adaptiveShadowCap();shadowCap();queriesAndSyncCensus();eventQueryBatch();occlusionFlushLocal(true);occlusionFlushLocal(false);resetAndShutdown();directReplayRaw();redundantFiltering();renderTargetResetsViewport();textureShadows();textureExpressReadback();textureReadbackDiagnostics();textureExpressBehind();textureReadbackTable();statsLine();statsLine(true);childrenOutliveTheDevice();queryProbeAndDeadQuery();initFailureFallback();cursorHandling();nestedSyncInPump();testCooperativeLevelLocal(1);testCooperativeLevelLocal(3);upDrawsAndBackpressure();snapshotTriggers();snapshotPoolNotExhausted();memoryPressureRelease();impossibleBlockIsRefusedAtOnce();smallStagedLocksUseScratch();
     framesAheadPacing();textureShadowSpares();frameSkipping();frameSkipReleasesPresentWait();   // 0.3.200 (frame skip)
     zeroCopyRenames();zeroCopyRingBudget();zeroCopyAdaptiveRing();zeroCopyRetire();zeroCopyPumpedLock(0);zeroCopyPumpedLock(1);
     for(UINT len:{512u<<10,2u<<20}){zeroCopyRenames(len);zeroCopyRetire(len);zeroCopyPumpedLock(0,len);zeroCopyPumpedLock(1,len);}   // 0.3.204 (task 21): the same for DYNAMIC buffers in the regular shadow cap

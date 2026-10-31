@@ -1,5 +1,6 @@
 // The settings window's contents. See settings_panel.h; the draft rules are in settings_draft.h.
 #include "settings_panel.h"
+#include <deque>
 #include <algorithm>
 #include <array>
 #include <cfloat>
@@ -11,7 +12,16 @@
 #include <vector>
 #include "imgui.h"
 #include "settings_service.h"
+#include "diagnostic_capture_request.h"
 #include "settings_draft.h"
+#include "memory_profile_snapshot.h"
+
+#ifndef NORTHLIGHT_SOURCE_ID
+#define NORTHLIGHT_SOURCE_ID "unrecorded"
+#endif
+#ifndef NORTHLIGHT_BUILD_UTC
+#define NORTHLIGHT_BUILD_UTC "unrecorded"
+#endif
 
 namespace NorthlightOverlay {
 namespace {
@@ -32,14 +42,16 @@ const std::map<std::string,const char*> Labels={
     {"AutoCavity","Cavity shading"},{"AutoCavityStrength","Cavity strength (%)"},
     {"Preset","Quality preset"},{"GI","Global illumination"},{"GIStrength","Indirect light strength (%)"},
     {"ActorShadows","Character shadows"},{"ActorShadowDetail","Detailed character shadows"},{"GrassShadows","Grass shadows"},{"ActorShadowRadius","Character shadow distance"},
-    {"ContactAO","Ambient occlusion"},{"AOMethod","AO method"},{"AOStrength","AO strength (%)"},{"AORadius","AO radius (0.01 yd)"},
-    {"Weather","Enhanced rain and snow"},{"WeatherMemory","Read native weather state"},{"RainFog","Weather fog strength"},{"FogClouds","Drifting fog banks"},{"FogCloudDensity","Fog density (%)"},
+    {"ContactAO","Ambient occlusion"},{"AOMethod","AO method"},{"AOQuality","AO quality"},{"AutoBumpModels","M2 models (all types)"},{"AutoMaterialOcclusionDistance","Cavity and self-shadow distance (yards)"},{"AutoModelDisplacementDistance","Model geometry distance (yards)"},{"AutoModelDisplacementDetail","Model subdivision"},{"AutoModelDisplacementStrength","Model height (%)"},{"AutoDisplacementDistance","Terrain and object geometry distance (yards)"},{"AutoDisplacementStrength","Terrain and object height (%)"},{"AutoDisplacementDetail","Terrain and object subdivision"},{"AutoHeightBalance","Height balance (%)"},{"AOStrength","AO strength (%)"},{"AORadius","AO radius (0.01 yd)"},
+    {"Weather","Enhanced rain and snow"},{"WeatherMemory","Read native weather state"},{"RainFog","Weather fog strength"},{"RainLens","Rain on camera"},{"RainLensStrength","Rain on camera strength (%)"},{"SnowLens","Snow on camera"},{"SnowLensStrength","Snow on camera strength (%)"},{"FogClouds","Drifting fog banks"},{"FogCloudDensity","Fog density (%)"},
     {"HorizonHaze","Horizon haze (%)"},{"HorizonHazeStart","Haze start (%)"},{"HorizonHazeBand","Haze height (degrees)"},{"HorizonHazeTerrain","Haze over terrain"},
-    {"Backend","Graphics backend"},{"ExperimentalHDR","Enable HDR"},{"HDRPaperWhite","White point (nits)"},{"HDRUIWhite","UI brightness (nits)"},{"HDRMaxNits","HDR peak brightness (nits)"},{"HDRContrast","Contrast"},{"HDRExposure","Exposure (EV)"},
+    {"Backend","Graphics backend"},{"ExperimentalHDR","Enable HDR"},{"HDRPaperWhite","White point (nits)"},{"HDRUIWhite","UI brightness (nits)"},{"HDRMaxNits","Manual peak (nits)"},{"HDRContrast","Contrast"},{"HDRExposure","Exposure / compensation (EV)"},
+    {"HDRExposureMode","Exposure mode"},{"HDRPeakMode","Peak mode"},{"HDRBloomStrength","Bloom strength"},{"HDRLegacyExpansion","Legacy highlight expansion (EV)"},
+    {"HDRAutoMinEV","Auto exposure minimum (EV)"},{"HDRAutoMaxEV","Auto exposure maximum (EV)"},{"HDRLightAdaptation","Bright adaptation T90 (s)"},{"HDRDarkAdaptation","Dark adaptation T90 (s)"},
     {"NightBrightness","Night brightness (%)"},{"EquipmentLights","Equipment and effect lights"},
     {"CaptureBudgetMiB","Capture memory (MiB)"},{"ActorShadowBudgetMiB","Character shadow memory (MiB)"},{"MinSkinnedTriangles","Minimum character triangles"},{"LocalLightLimit","Maximum local lights"},{"GpuBudgetMs","GPU effect budget (ms)"},{"ActorShadowCpuMs","Shadow CPU budget (ms)"},
     {"CommandStream","Separate render thread"},{"StreamFramesAhead","Buffered frames"},{"StreamFrameSkip","Skip delayed frames"},{"StreamOcclusionLocal","Local occlusion results"},{"ReplayJobs","Parallel effect preparation"},{"FrameDrawGates","Skip inactive draw work"},
-    {"PointShadowLimit","Shadow light sources"},{"PointShadows","Local light shadows"},{"PointShadowRefreshMs","Light shadow refresh (ms)"},{"PointShadowFacesPerFrame","Cube faces per frame"},{"BlobShadowStrength","Native blob shadows (%)"},
+    {"PointShadowLimit","Shadow light sources"},{"PointShadows","Local light shadows"},{"PointShadowRefreshMs","Light shadow refresh (ms)"},{"PointShadowFacesPerFrame","Cube faces per frame"},{"BlobShadows","Round ground shadows"},{"BlobShadowStrength","Ground shadow strength (%)"},
     {"FarShadowInterval","Distant shadow interval (frames)"},{"NearShadowInterval","Near shadow interval (frames)"},{"StaticCacheSlices","Static cache update slices"},{"ShadowDirectionSteps","Shadow direction precision"},{"ShadowPivotCorrection","Correct shadow pivot"},
     {"GIDistance","GI distance (yards)"},{"GIProbeAhead","GI look-ahead (yards)"},{"GIRays","GI rays per probe"},{"GIBounces","GI light bounces"},{"GIThreads","GI solver threads"},{"GIFastBVH","Fast geometry tracing"},{"GIProbeMoveStep","GI update movement step"},{"GIDynamicProbes","Dynamic GI probes"},
     {"SpellLayer","Separate spell effects"},{"SpellLayerClasses","Spell blend types (mask)"},{"SpellFog","Fog on spell effects"},{"NameMask","Protect unit names"},{"DepthFuncAware","Respect draw depth tests"},{"terrain_radius","Terrain shadow reach (yards)"},
@@ -49,7 +61,7 @@ const std::map<std::string,const char*> Labels={
 const std::map<std::string,const char*> ShortLabels={
     {"GIStrength","Indirect light (%)"},{"GIDistance","GI distance (yd)"},{"GIBounces","Light bounces"},{"AOStrength","Strength (%)"},{"AORadius","Radius (0.01 yd)"},
     {"ActorShadowRadius","Distance (yd)"},{"ActorShadowDetail","Detailed shadows"},{"EquipmentLights","Equipment lights"},{"FogCloudDensity","Density (%)"},
-    {"HDRMaxNits","Peak brightness (nits)"},{"AutoBumpDistance","Relief distance (yd)"},
+    {"HDRMaxNits","Manual peak (nits)"},{"AutoBumpDistance","Relief distance (yd)"},
 };
 const std::map<std::string,const char*> CelestialLabels={
     {"disc","Disc tint"},{"disc_gain","Disc brightness"},{"light","Light tint"},{"light_mix","Light tint mix"},{"light_strength","Light strength"},{"fog_gain","Fog illumination"},
@@ -58,19 +70,27 @@ const std::map<std::string,const char*> CelestialLabels={
 const std::map<std::string,std::vector<const char*>> Help={
     {"AutoBump",{"Generates and caches normal maps from installed textures. Directional detail is applied at full screen resolution. MPQs remain unchanged. Supports MSAA."}},
     {"AutoBumpStrength",{"Higher values make details more pronounced and can exaggerate painted shadows. Start at 75%."}},
-    {"AutoBumpTerrain",{"Includes grass, dirt and stone painted on the ground.","Off: original material. Normal maps: detailed light response. Normal maps + POM: shifts the original diffuse lookup to show depth at an angle."}},
-    {"AutoBumpWalls",{"Off: original material. Normal maps: detailed light response. Normal maps + POM: shifts the original diffuse lookup to show depth at an angle."}},
+    {"AutoBumpTerrain",{"Includes grass, dirt and stone painted on the ground.","Off: original material. Normal maps: detailed light response. Normal maps + POM: shifts the original diffuse lookup to show depth at an angle. Displacement + normals: changes nearby geometry and keeps surface normal detail."}},
+    {"AutoBumpWalls",{"Off: original material. Normal maps: detailed light response. Normal maps + POM: shifts the original diffuse lookup to show depth at an angle. Displacement + normals: changes nearby geometry and keeps surface normal detail."}},
     {"AutoBumpGrass",{"Applies to separate native grass tufts and respects their fade."}},
     {"AutoParallaxSteps",{"More steps improve grazing angles and cost more GPU time. POM fades out at its distance limit; grass tufts use normals only."}},
-    {"AutoParallaxShadows",{"Relief blocks the dominant sunlight or moonlight. Requires Normal maps + POM for the material. More shadow steps cost more GPU time. Local lights retain their existing shadows."}},
+    {"AutoParallaxShadows",{"Relief blocks the dominant sunlight or moonlight. Requires Normal maps + POM for the material. Cavity and self-shadowing share the near material shading distance. More shadow steps cost more GPU time. Local lights retain their existing shadows."}},
     {"AutoCavity",{"Reduces ambient light inside small cracks inferred from the texture. Works with normal maps and POM; fog and direct light are preserved. Painted shadows can become too dark at high strength."}},
     {"PointShadows",{"Torches, candles, lamps and compact fires cast shadows. Diffuse glows and short-lived effects do not.","Only nearby eligible sources allocate maps (about 3.5 MiB each). More sources increase rendering cost."}},
+    {"BlobShadows",{"Shows the game's round shadow directly below characters, creatures and mounts. Off removes only this decal; detailed sun, moon and local light shadows remain enabled. Takes effect immediately while Northlight effects are on."}},
+    {"BlobShadowStrength",{"Adjusts the native round shadow when detailed character shadows are composited. Turning Round ground shadows off hides it independently and preserves this strength for later."}},
+    {"RainLens",{"Random droplets merge into larger beads and curved rivulets. Heavier rain increases their speed. Requires Enhanced rain and snow; the effect disappears under shelter."}},
+    {"SnowLens",{"Snowflakes collect into clumps. Nearby classified flames melt them into moving droplets and rivulets; walls block this heat. Requires Enhanced rain and snow; the effect disappears under shelter."}},
     {"PointShadowLimit",{"4 by default; adjustable from 4 to 128. Only nearby eligible sources allocate maps (about 3.5 MiB each, up to 448 MiB).",
         "For a shadow-only comparison, set Maximum local lights to 128 and GPU effect budget to 0 first; then compare 4 / 8 / 16 / 32 / 64 / 128 in the same scene."}},
     {"HDRContrast",{"1.00 is neutral. Adjusts world contrast around middle grey; UI brightness is unchanged."}},
     {"HDRExposure",{"0 EV is neutral. +1 EV doubles world light; -1 EV halves it. UI brightness is unchanged."}},
     {"HDRMaxNits",{"Limits world HDR output. UI brightness remains independent; this does not raise SDR highlights to the chosen peak."}},
-    {"ExperimentalHDR",{"Requires DXVK 2 or 3, the separate render thread, windowed mode and HDR output from the system or Wine. MSAA is supported."}},
+    {"ExperimentalHDR",{"Requires DXVK 2 or 3, the separate render thread, windowed mode and HDR enabled for the current Windows display. MSAA is supported."}},
+    {"HDRLegacyExpansion",{"0 disables expansion. Up to +2 EV selectively lifts bright legacy SDR details. It cannot restore clipped detail or identify every emitter; UI and Northlight HDR sources are excluded."}},
+    {"HDRExposureMode",{"Auto meters the world before bloom and UI. Exposure becomes compensation. Manual uses only the selected EV."}},
+    {"HDRPeakMode",{"Auto follows Windows calibration / display metadata, with a 1000 nit fallback. Manual uses your saved per-display peak."}},
+    {"HDRBloomStrength",{"Bloom reads unclipped HDR radiance. Setting 0 removes its halo while preserving the source's brightness."}},
     {"Backend",{"Which Direct3D 9 implementation the renderer runs on. Takes effect after a game restart."}},
     {"terrain_radius",{"How far terrain casts shadows in this region. Larger values cost more GPU time."}},
 };
@@ -78,22 +98,28 @@ const std::map<std::string,std::vector<const char*>> Help={
 struct Group { const char* id; const char* title; const char* master; const char* fields; const char* advanced; };
 struct Section { const char* id; const char* title; const char* keys; std::vector<Group> groups; bool open; };
 const std::vector<Section> QualitySections={
-    {"lighting","Lighting & AO","GI GIStrength GIRays GIBounces GIProbeMoveStep GIDynamicProbes GIThreads GIFastBVH GIDistance GIProbeAhead NightBrightness ContactAO AOMethod AOStrength AORadius EquipmentLights",{
+    {"lighting","Lighting & AO","GI GIStrength GIRays GIBounces GIProbeMoveStep GIDynamicProbes GIThreads GIFastBVH GIDistance GIProbeAhead NightBrightness ContactAO AOMethod AOQuality AOStrength AORadius EquipmentLights",{
         {"gi","Global illumination","GI","GIStrength GIDistance GIBounces","GIRays GIProbeMoveStep GIDynamicProbes GIThreads GIFastBVH GIProbeAhead"},
-        {"ao","Ambient occlusion","ContactAO","AOMethod AOStrength AORadius",""},
+        {"ao","Ambient occlusion","ContactAO","AOMethod AOQuality AOStrength AORadius",""},
         {"ambient","Environment",nullptr,"NightBrightness EquipmentLights",""}},true},
-    {"materials","Materials & parallax","AutoBump AutoBumpTerrain AutoBumpWalls AutoBumpGrass AutoBumpStrength AutoBumpDistance AutoParallaxDepth AutoParallaxDistance AutoParallaxSteps AutoParallaxShadows AutoParallaxShadowStrength AutoParallaxShadowSteps AutoCavity AutoCavityStrength",{
-        {"bump","Material modes","AutoBump","AutoBumpTerrain AutoBumpWalls AutoBumpGrass AutoBumpStrength AutoBumpDistance",""},
+    {"materials","Materials & parallax","AutoBump AutoBumpTerrain AutoBumpWalls AutoBumpGrass AutoBumpModels AutoBumpStrength AutoBumpDistance AutoParallaxDepth AutoParallaxDistance AutoParallaxSteps AutoParallaxShadows AutoParallaxShadowStrength AutoParallaxShadowSteps AutoCavity AutoCavityStrength AutoMaterialOcclusionDistance AutoDisplacementStrength AutoDisplacementDistance AutoDisplacementDetail AutoHeightBalance AutoModelDisplacementStrength AutoModelDisplacementDistance AutoModelDisplacementDetail",{
+        {"bump","Material modes","AutoBump","AutoBumpTerrain AutoBumpWalls AutoBumpGrass AutoBumpModels AutoBumpStrength AutoBumpDistance",""},
+        {"geometry","Terrain and object displacement",nullptr,"AutoDisplacementStrength AutoDisplacementDistance AutoDisplacementDetail AutoHeightBalance",""},
+        {"models","Model displacement",nullptr,"AutoModelDisplacementStrength AutoModelDisplacementDistance AutoModelDisplacementDetail",""},
+        {"occlusionrange","Near material shading",nullptr,"AutoMaterialOcclusionDistance",""},
         {"parallax","POM",nullptr,"AutoParallaxDepth AutoParallaxDistance AutoParallaxSteps",""},
         {"pomshadow","POM self-shadowing","AutoParallaxShadows","AutoParallaxShadowStrength AutoParallaxShadowSteps",""},
         {"cavity","Cavity shading","AutoCavity","AutoCavityStrength",""}},false},
-    {"shadows","Shadows","ActorShadows ActorShadowDetail GrassShadows ActorShadowRadius BlobShadowStrength FarShadowInterval NearShadowInterval PointShadows PointShadowLimit PointShadowRefreshMs PointShadowFacesPerFrame ShadowDirectionSteps StaticCacheSlices ShadowPivotCorrection",{
+    {"shadows","Shadows","ActorShadows ActorShadowDetail GrassShadows ActorShadowRadius BlobShadows BlobShadowStrength FarShadowInterval NearShadowInterval PointShadows PointShadowLimit PointShadowRefreshMs PointShadowFacesPerFrame ShadowDirectionSteps StaticCacheSlices ShadowPivotCorrection",{
         {"actors","Character shadows","ActorShadows","ActorShadowRadius ActorShadowDetail GrassShadows","ActorShadowBudgetMiB ActorShadowCpuMs"},
+        {"blobs","Round ground shadows","BlobShadows","BlobShadowStrength",""},
         {"point","Local light shadows","PointShadows","PointShadowLimit","PointShadowRefreshMs PointShadowFacesPerFrame"},
-        {"cache","Shadow updates",nullptr,"BlobShadowStrength","FarShadowInterval NearShadowInterval ShadowDirectionSteps StaticCacheSlices ShadowPivotCorrection"}},false},
-    {"atmosphere","Atmosphere & weather","Weather WeatherMemory RainFog FogClouds FogCloudDensity HorizonHaze HorizonHazeStart HorizonHazeBand HorizonHazeTerrain",{
+        {"cache","Shadow updates",nullptr,"","FarShadowInterval NearShadowInterval ShadowDirectionSteps StaticCacheSlices ShadowPivotCorrection"}},false},
+    {"atmosphere","Atmosphere & weather","Weather WeatherMemory RainFog RainLens RainLensStrength SnowLens SnowLensStrength FogClouds FogCloudDensity HorizonHaze HorizonHazeStart HorizonHazeBand HorizonHazeTerrain",{
         {"fog","Fog banks","FogClouds","FogCloudDensity",""},
         {"weather","Rain and snow","Weather","RainFog","WeatherMemory"},
+        {"rainlens","Rain on camera","RainLens","RainLensStrength",""},
+        {"snowlens","Snow on camera","SnowLens","SnowLensStrength",""},
         {"haze","Horizon haze",nullptr,"HorizonHaze HorizonHazeStart HorizonHazeTerrain","HorizonHazeBand"}},false},
     {"spells","Spells & names","SpellLayer SpellLayerClasses SpellFog NameMask DepthFuncAware",{
         {"spells","Spell effects","SpellLayer","SpellFog","SpellLayerClasses DepthFuncAware"},
@@ -105,7 +131,9 @@ const std::vector<Section> QualitySections={
         {"logging","Diagnostics","Diagnostics","RenderProfile","DiagReplayProbe ShadowFateDiagnostics"},
         {"debug","Additional diagnostics",nullptr,"SpellTrace NameMaskDebug MemMap",""}},false},
 };
-const std::vector<Group> HdrGroups={{"hdr","HDR output","ExperimentalHDR","HDRPaperWhite HDRUIWhite HDRMaxNits HDRContrast HDRExposure",""}};
+const std::vector<Group> HdrGroups={
+    {"hdr","HDR output","ExperimentalHDR","HDRPaperWhite HDRUIWhite HDRPeakMode HDRMaxNits",""},
+    {"hdr-look","World appearance","","HDRExposureMode HDRExposure HDRContrast HDRBloomStrength HDRLegacyExpansion","HDRAutoMinEV HDRAutoMaxEV HDRLightAdaptation HDRDarkAdaptation"}};
 const std::vector<Group> CelestialGroups={
     {"sun","Sun",nullptr,"sun_disc sun_disc_gain sun_light sun_light_strength","sun_light_mix sun_fog_gain sun_fog_height_scale sun_horizon_haze sun_glow_strength sun_glow sun_glow_mix"},
     {"moon","Moon",nullptr,"moon_disc moon_disc_gain moon_light moon_light_strength","moon_light_mix moon_fog_gain moon_fog_height_scale moon_horizon_haze moon_glow_strength moon_glow moon_glow_mix"},
@@ -172,7 +200,7 @@ std::string regionLabel(const std::string& section){
     return section;
 }
 std::string optionLabel(const Field& f,const std::string& value){
-    if(D::modeField(f))return value=="0"?"Off":value=="1"?"Normal maps":"Normal maps + POM";
+    if(D::modeField(f))return value=="0"?"Off":value=="1"?"Normal maps":value=="2"?"Normal maps + POM":"Displacement + normals";
     if(value=="HBAOPlus")return "HBAO+ (D3D9)";
     if(f.file==D::Renderer&&f.key=="Backend"){
         if(value=="dxvk")return "DXVK 3";
@@ -222,11 +250,17 @@ struct SettingsPanel::State {
     std::shared_ptr<const NorthlightSettings::Snapshot> snapshot;
     NorthlightSettings::Status status;
     D::Draft draft;
+    SettingsPanel::CalibrationDraw calibrationDraw;
+    struct Patch{State* owner;float rect[4],color[4];};std::deque<Patch> calibrationPatches;
+    bool calibrationOpen=false,calibrationLarge=false;float calibrationPeak=1000;
+    std::map<std::string,std::vector<std::pair<std::string,std::string>>> displayDrafts;
     std::map<std::string,std::array<float,3>> live;   // a slider or colour being dragged: committed on release
     bool wantSnapshot=false,wantPreview=false,wantClear=false,previewing=false,saving=false,awaitingSnapshot=false;
     std::uint64_t commitSerial=0;
     std::string region="default",note;                 // note: a local message (a refused request), cleared by the next action
     Page page=Page::Overview;                             // kept for the session
+    NorthlightMemoryProfile::Snapshot memorySnapshot;
+    uint64_t memoryReadAt=0;
     std::string presetChoice;bool presetCelestial=true,presetRange=true;   // the preset dialog
     Confirm confirm=Confirm::None;
     float scale=1;
@@ -237,14 +271,20 @@ struct SettingsPanel::State {
         if(!service)return;
         if(wantSnapshot&&service->requestSnapshot())wantSnapshot=false;
         if(auto latest=service->snapshot();latest&&latest!=snapshot){
+            const bool moved=snapshot&&snapshot->hdrProfile!=latest->hdrProfile;
+            std::vector<std::pair<std::string,std::string>> restore;
+            if(moved){auto& previous=displayDrafts[snapshot->hdrProfile];previous.clear();
+                for(const auto& change:draft.changes())if(change.first.rfind("R\tHDR.",0)==0)previous.push_back(change);else restore.push_back(change);
+                const auto& current=displayDrafts[latest->hdrProfile];restore.insert(restore.end(),current.begin(),current.end());draft.clear();live.clear();}
             snapshot=latest;draft.bind(&snapshot->fields);
+            if(moved){for(const auto& change:restore)for(const auto& field:snapshot->fields)if(field.id()==change.first){draft.set(field,change.second);break;}wantPreview=true;}
             if(awaitingSnapshot){draft.clear();live.clear();awaitingSnapshot=false;}
             if(region!="default"&&!draft.field(D::Celestial,region,"sun_disc"))region="default";
         }
         status=service->status();
         if(saving&&status.serial>commitSerial&&status.state!=NorthlightSettings::Status::State::Busy){
             saving=false;
-            if(status.state==NorthlightSettings::Status::State::Saved){awaitingSnapshot=true;wantSnapshot=true;previewing=false;wantPreview=false;}
+            if(status.state==NorthlightSettings::Status::State::Saved){if(snapshot)displayDrafts.erase(snapshot->hdrProfile);awaitingSnapshot=true;wantSnapshot=true;previewing=false;wantPreview=false;}
         }
         if(wantClear&&!saving&&service->clearPreview()){wantClear=false;previewing=false;}
         if(wantPreview&&!saving&&!wantClear&&service->preview(changes())){wantPreview=false;previewing=!draft.empty();}
@@ -296,6 +336,7 @@ struct SettingsPanel::State {
         else ImGui::TextColored(Color::Good,"Applies live: previewed while you edit, kept when you save.");
         if(block==D::Block::Unavailable)ImGui::TextColored(Color::Bad,"Not available in this installation.");
         else if(block==D::Block::NeedsHdr)ImGui::TextColored(Color::Bad,"Enable HDR first.");
+        else if(block==D::Block::NeedsManual)ImGui::TextColored(Color::Muted,"Choose Manual peak mode to edit this value.");
         else if(block==D::Block::NeedsKey){const char* l=find(Labels,missing);ImGui::TextColored(Color::Bad,"Requires: %s",l?l:missing.c_str());}
         if(D::canInherit(f)&&block==D::Block::None)ImGui::TextColored(Color::Muted,"Right-click: restore the inherited value.");
         ImGui::PopTextWrapPos();
@@ -485,12 +526,117 @@ struct SettingsPanel::State {
         std::map<std::string,bool> used;
         if(auto b=byKey.find("Backend");b!=byKey.end()){used["Backend"]=true;titled("Renderer",{b->second});}
         for(const auto& g:HdrGroups)group(g,byKey,used);
+        if(service){const auto hdr=service->hdrStatus();ImGui::Text("HDR output: %s",hdr.active?"active":"inactive");if(!hdr.reason.empty())ImGui::TextWrapped("%s",hdr.reason.c_str());
+            ImGui::TextWrapped("Display: %s",hdr.display.empty()?"Detecting...":hdr.display.c_str());
+            ImGui::Text("Peak: %.0f nits (%s)",hdr.effectivePeak,hdr.peakSource.c_str());
+            ImGui::Text("Effective white: %.0f nits   UI: %.0f nits",hdr.paperWhite,hdr.uiWhite);
+            if(ImGui::TreeNode("Output details")){ImGui::TextUnformatted(hdr.active?"RGBA16F / linear scRGB, Rec.709 primaries":"SDR output");ImGui::TextWrapped("Display profile: %s",hdr.profile.empty()?"Stable identity unavailable":hdr.profile.c_str());ImGui::Text("Reported peak: %.0f nits",hdr.detectedPeak);ImGui::Text("HDR frame / output payload: %.2f MiB",double(hdr.payloadBytes)/1048576);ImGui::TextWrapped("Payload excludes other renderer resources and driver allocations; it is not residency.");ImGui::TextUnformatted("Values describe application signals, not measured panel brightness.");ImGui::TreePop();}
+            ImGui::BeginDisabled(!hdr.active||!calibrationDraw);ImGui::Checkbox("Show HDR calibration",&calibrationOpen);ImGui::EndDisabled();
+            if(calibrationOpen&&hdr.active&&calibrationDraw){
+                ImGui::TextWrapped("Adjust white and UI brightness for comfortable ordinary content. Then compare the peak gradient. These patches bypass world exposure, contrast, bloom and the scene peak limit.");
+                ImGui::SliderFloat("Test peak (nits)",&calibrationPeak,80,10000,"%.0f",ImGuiSliderFlags_Logarithmic);
+                ImGui::Checkbox("Wide field (panel ABL comparison)",&calibrationLarge);
+                auto patch=[&](float nits,float r,float g,float b,float w,float h){
+                    const auto p=ImGui::GetCursorScreenPos();auto* list=ImGui::GetWindowDrawList();const auto lo=list->GetClipRectMin(),hi=list->GetClipRectMax();
+                    calibrationPatches.push_back({this,{std::max(p.x,lo.x),std::max(p.y,lo.y),std::min(p.x+w,hi.x),std::min(p.y+h,hi.y)},{r*nits/80,g*nits/80,b*nits/80,1}});
+                    list->AddCallback([](const ImDrawList*,const ImDrawCmd* command){auto& item=*static_cast<Patch*>(command->UserCallbackData);if(item.rect[2]>item.rect[0]&&item.rect[3]>item.rect[1])item.owner->calibrationDraw(item.rect,item.color);},&calibrationPatches.back());ImGui::Dummy(ImVec2(w,h));
+                };
+                const float available=ImGui::GetContentRegionAvail().x,side=std::max(12.f,(available-24)/3);
+                ImGui::TextUnformatted("80 nits / 203 nits / test peak");
+                patch(80,1,1,1,side,36);ImGui::SameLine();patch(203,1,1,1,side,36);ImGui::SameLine();patch(calibrationPeak,1,1,1,side,36);
+                ImGui::TextUnformatted("Peak gradient: 50% to 150% of test peak");
+                for(unsigned i=0;i<32;++i){if(i)ImGui::SameLine(0,0);patch(calibrationPeak*(.5f+float(i)/31),1,1,1,available/32,32);}
+                ImGui::TextUnformatted("Color highlights");
+                patch(calibrationPeak,1,.2f,.05f,side,32);ImGui::SameLine();patch(calibrationPeak,.05f,1,.2f,side,32);ImGui::SameLine();patch(calibrationPeak,.2f,.05f,1,side,32);
+                patch(calibrationPeak,1,1,1,calibrationLarge?available:48,calibrationLarge?160:48);
+            }
+        }
         ImGui::Spacing();
         ImGui::PushTextWrapPos(0);
-        ImGui::TextColored(Color::Muted,"HDR needs DXVK 2 or 3, the separate render thread, windowed mode and HDR output from the system or Wine. Restart after switching HDR on or off; its sliders apply live.");
+        ImGui::TextColored(Color::Muted,"HDR needs DXVK 2 or 3, the separate render thread, windowed mode and HDR enabled for the current display in Windows. HDR and its brightness settings apply live.");
         ImGui::PopTextWrapPos();
         std::vector<const Field*> rest;for(auto& k:byKey)if(!used[k.first])rest.push_back(k.second);
         titled("Other",rest);
+    }
+    void memoryDiagnostics(){
+        ImGui::TextColored(Color::Heading,"Build");
+        ImGui::Text("ID: %.12s",NORTHLIGHT_SOURCE_ID);
+        ImGui::Text("Built: %s",NORTHLIGHT_BUILD_UTC);
+        ImGui::Spacing();ImGui::Separator();
+        using namespace NorthlightDiagnosticCapture;
+        if(ImGui::Button("Capture world lighting"))request(World);
+        ImGui::SameLine();if(ImGui::Button("Capture AO"))request(AO);
+        if(ImGui::Button("Capture materials"))request(Materials);
+        ImGui::SameLine();if(ImGui::Button("Capture fog"))request(Fog);
+        ImGui::TextWrapped("Saves the current frame in northlight-diagnostics. Skipped passes produce empty images. Capture frames are excluded from FPS statistics.");
+        namespace M=NorthlightMemoryProfile;
+        const uint64_t now=M::nowMs();
+        if(!memoryReadAt||now-memoryReadAt>=1000){if(M::store().tryRead(memorySnapshot))memoryReadAt=now;}
+        const auto& memory=memorySnapshot;
+        ImGui::Spacing();ImGui::TextColored(Color::Heading,"Memory snapshot");ImGui::Separator();
+        ImGui::TextWrapped("Sampled about every 10 seconds. Values below describe the last sample, not a live allocation limit.");
+        const auto age=[&](uint64_t at){return at&&now>=at?double(now-at)/1000:0.;};
+        const auto bytesRow=[](const char* label,uint64_t bytes){ImGui::TableNextRow();ImGui::TableSetColumnIndex(0);ImGui::TextUnformatted(label);ImGui::TableSetColumnIndex(1);ImGui::Text("%.2f MiB",double(bytes)/1048576);};
+        const auto& admission=memory.admission;
+        if(admission.at){
+            ImGui::TextWrapped("Scene builder: %s (%.0f s ago)",admission.stage,age(admission.at));
+            if(age(admission.at)>30)ImGui::TextColored(Color::Edited,"This sample is old; the scene builder may be idle.");
+            if(!admission.valid)ImGui::TextColored(Color::Edited,"The process memory sample was unavailable.");
+            else if(admission.available<admission.entryRequired)ImGui::TextColored(Color::Edited,"Free address space is below the next-build threshold.");
+            if(beginRows("memory-admission")){
+                if(admission.valid){bytesRow("Free virtual address space",admission.available);bytesRow(admission.largestExact?"Largest free block":"Free block (at least)",admission.largest);}
+                bytesRow("Required to start a scene build",admission.entryRequired);bytesRow("Process safety reserve",admission.reserve);bytesRow("Temporary entry headroom",admission.entryHeadroom);
+                if(admission.minimumAvailable)bytesRow("Lowest sampled free address space",admission.minimumAvailable);
+                bytesRow("Largest sampled builder capacity",admission.maximumKnownCapacity);
+                ImGui::EndTable();
+            }
+            ImGui::TextWrapped("The entry threshold is free address space required before building. It is not memory allocated to GI.");
+        }
+        if(!memory.builder.at&&!memory.solver.at&&!memory.gpu.at){
+            ImGui::TextColored(Color::Muted,"No memory sample yet.");
+            ImGui::TextWrapped("Enable Diagnostic logging, then enter a world area and wait for a sample. Saved settings are not changed by this view.");
+            return;
+        }
+        if(ImGui::TreeNode("CPU memory breakdown")){
+            if(memory.builder.at)ImGui::Text("Builder sample: %.0f s ago",age(memory.builder.at));else ImGui::TextDisabled("Builder: no sample yet.");
+            if(memory.solver.at)ImGui::Text("GI worker sample: %.0f s ago",age(memory.solver.at));else ImGui::TextDisabled("GI worker: no sample yet.");
+            ImGui::TextWrapped("Shared storage counts once within each column; the two columns overlap and must not be added.");
+            if((memory.builder.at&&!memory.builder.complete)||(memory.solver.at&&!memory.solver.complete))ImGui::TextColored(Color::Edited,"Incomplete sample: some diagnostic bookkeeping could not be allocated.");
+            if(ImGui::BeginTable("memory-cpu",3,ImGuiTableFlags_SizingStretchProp|ImGuiTableFlags_RowBg)){
+                ImGui::TableSetupColumn("Retained capacity",ImGuiTableColumnFlags_WidthStretch,1.8f);ImGui::TableSetupColumn("Builder");ImGui::TableSetupColumn("GI worker");ImGui::TableHeadersRow();
+                const char* labels[]={"Geometry vertices","Geometry triangles","BVH / acceleration","CPU texture pixels","Upload pages / indices","GI probes / path records","Regional fog","Metadata"};
+                uint64_t totals[2]={};
+                for(unsigned i=0;i<NorthlightMemoryFootprint::KindCount;++i){
+                    ImGui::TableNextRow();ImGui::TableSetColumnIndex(0);ImGui::TextUnformatted(labels[i]);
+                    const M::Cpu* columns[]={&memory.builder,&memory.solver};
+                    for(unsigned column=0;column<2;++column){ImGui::TableSetColumnIndex(int(column+1));if(columns[column]->at)ImGui::Text("%.2f MiB",double(columns[column]->bytes[i])/1048576);else ImGui::TextDisabled("No sample");totals[column]+=columns[column]->bytes[i];}
+                }
+                ImGui::TableNextRow();ImGui::TableSetColumnIndex(0);ImGui::TextUnformatted("Known capacity in this scope");
+                for(unsigned column=0;column<2;++column){ImGui::TableSetColumnIndex(int(column+1));if((column?memory.solver:memory.builder).at)ImGui::Text("%.2f MiB",double(totals[column])/1048576);else ImGui::TextDisabled("No sample");}
+                ImGui::EndTable();
+            }
+            ImGui::TextWrapped("Capacity estimates exclude allocator overhead and owners outside each sampled scope. They are not total process RAM usage.");
+            ImGui::TreePop();
+        }
+        if(ImGui::TreeNodeEx("World GPU resource pools",ImGuiTreeNodeFlags_DefaultOpen)){
+            const auto& gpu=memory.gpu;
+            if(!gpu.at)ImGui::TextDisabled("No resource sample yet.");
+            else{
+                ImGui::Text("Last sample: %.0f s ago",age(gpu.at));
+                if(!gpu.complete)ImGui::TextColored(Color::Edited,"Incomplete inventory (%u unknown descriptions).",gpu.unknown);
+                if(beginRows("memory-gpu-pools")){bytesRow("Managed resources (logical)",gpu.managed);bytesRow("Default resources (logical)",gpu.defaults);bytesRow("System-memory resources (logical)",gpu.system);bytesRow("CPU material reuse cache",gpu.materialReuseCpu);bytesRow("Retired material resource ledger",gpu.retiredMaterials);ImGui::EndTable();}
+                ImGui::TextWrapped("Managed resources can retain a system-memory copy. Default placement is chosen by the driver. These are logical sizes, not measured resident VRAM or RAM backing. Static and replay caches are reported separately in the log.");
+                if(ImGui::TreeNode("Additional cache ledgers")){
+                    if(beginRows("memory-cache-ledgers")){bytesRow("Static shadows (managed)",gpu.staticManagedLedger);bytesRow("Replay cache (default)",gpu.replayDefaultLedger);bytesRow("Live terrain buffer (default)",gpu.liveTerrainDefault);bytesRow("Captured geometry on CPU",gpu.captureCpu);bytesRow("Capture identity metadata",gpu.captureIdentity);ImGui::EndTable();}
+                    ImGui::TextWrapped("The GPU caches above are outside the world-resource inventory. CPU capture data may also be referenced by the sampled scene scopes.");ImGui::TreePop();
+                }
+                if(ImGui::TreeNode("Resources by purpose")){
+                    if(beginRows("memory-gpu-groups")){bytesRow("Geometry / cutout textures",gpu.geometry);bytesRow("GI probe textures",gpu.probes);bytesRow("Shadow maps / depth",gpu.shadows);bytesRow("Lighting / fog render targets",gpu.post);bytesRow("Fog fields / noise / constants",gpu.noise);bytesRow("Dynamic upload buffers",gpu.dynamic);ImGui::EndTable();}
+                    ImGui::TextWrapped("This is another grouping of the same resources; do not add it to the pool totals.");ImGui::TreePop();
+                }
+            }
+            ImGui::TreePop();
+        }
     }
     void drawPage(){
         switch(page){
@@ -498,6 +644,7 @@ struct SettingsPanel::State {
         case Page::Celestial:celestialTab();break;
         case Page::ShadowRange:shadowRangeTab();break;
         case Page::Renderer:rendererPage();break;
+        case Page::Diagnostics:memoryDiagnostics();if(const Section* s=qualitySection("diagnostics"))qualityPage(*s,false);break;
         default:if(const Section* s=qualitySection(Pages[unsigned(page)].quality))qualityPage(*s,page==Page::Performance);break;
         }
     }
@@ -661,7 +808,7 @@ struct SettingsPanel::State {
     }
 };
 
-SettingsPanel::SettingsPanel(std::shared_ptr<NorthlightSettings::Service> service,std::string hotkey):s(std::make_unique<State>()){s->service=std::move(service);s->hotkey=std::move(hotkey);}
+SettingsPanel::SettingsPanel(std::shared_ptr<NorthlightSettings::Service> service,std::string hotkey,CalibrationDraw calibration):s(std::make_unique<State>()){s->service=std::move(service);s->hotkey=std::move(hotkey);s->calibrationDraw=std::move(calibration);}
 SettingsPanel::~SettingsPanel()=default;
 void SettingsPanel::opened(){s->wantSnapshot=true;}
 void SettingsPanel::poll(){s->poll();}
@@ -679,13 +826,15 @@ void SettingsPanel::notice(float scale){
 }
 
 bool SettingsPanel::draw(float scale){
+    s->calibrationPatches.clear();
     State& st=*s;st.scale=scale;
     st.poll();
     bool open=true;
     ImGui::SetNextWindowPos(ImVec2(48*scale,96*scale),ImGuiCond_FirstUseEver);
     ImGui::SetNextWindowSize(ImVec2(760*scale,680*scale),ImGuiCond_FirstUseEver);
     ImGui::SetNextWindowSizeConstraints(ImVec2(560*scale,360*scale),ImVec2(FLT_MAX,FLT_MAX));
-    if(!ImGui::Begin("Northlight settings###NorthlightSettings",&open,ImGuiWindowFlags_NoCollapse)){ImGui::End();return open;}
+    char title[96];std::snprintf(title,sizeof title,"Northlight settings | build %.12s###NorthlightSettings",NORTHLIGHT_SOURCE_ID);
+    if(!ImGui::Begin(title,&open,ImGuiWindowFlags_NoCollapse)){ImGui::End();return open;}
     const auto& style=ImGui::GetStyle();
     const float footer=ImGui::GetTextLineHeightWithSpacing()+ImGui::GetFrameHeightWithSpacing()+style.ItemSpacing.y*2+style.SeparatorTextBorderSize+2;
     // Sidebar (fixed width, scaled) and the selected page; the footer below stays put on every page.

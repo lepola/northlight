@@ -2,6 +2,7 @@
 import hashlib
 import json
 import os
+from datetime import datetime, timezone
 from pathlib import Path
 import subprocess
 import sys
@@ -13,10 +14,28 @@ import check_layout  # noqa: E402  (scripts/ is this script's directory)
 SHADERS = northlight_paths.SHADERS                         # *.hlsl and their *-shader-build.json manifests
 DLL = northlight_paths.RENDERER / 'frd9.dll'
 DEV_DLL = northlight_paths.RENDERER / 'frd9-dev-tuning.dll'  # the dev variant never overwrites frd9.dll
+STAND_DLL = northlight_paths.RENDERER / 'frd9-stand-replay.dll'
+
+def source_identity(repo=northlight_paths.REPO):
+    digest = hashlib.sha256()
+    paths = [p for folder in ('src', 'shaders') for p in (repo/folder).rglob('*') if p.is_file()]
+    paths += [repo/'scripts/build_renderer.py', repo/'northlight_paths.py']
+    for path in sorted(paths, key=lambda path: path.relative_to(repo).as_posix()):
+        data = path.read_bytes()
+        if path.suffix in ('.h', '.cpp', '.inl', '.inc', '.def', '.hlsl', '.asm', '.py', '.json'):
+            data = data.replace(b'\r\n', b'\n')
+        digest.update(path.relative_to(repo).as_posix().encode() + b'\0')
+        digest.update(len(data).to_bytes(8, 'little'))
+        digest.update(data)
+    return digest.hexdigest()
 OVERLAY_SOURCES = ('settings_overlay.cpp', 'settings_panel.cpp', 'imgui.cpp', 'imgui_draw.cpp', 'imgui_tables.cpp', 'imgui_widgets.cpp', 'imgui_impl_dx9.cpp')
 
 def main(argv=None):
-    dev_tuning = '--dev-tuning' in (sys.argv[1:] if argv is None else argv)
+    arguments = sys.argv[1:] if argv is None else argv
+    dev_tuning = '--dev-tuning' in arguments
+    stand_replay = '--stand-replay' in arguments
+    if dev_tuning and stand_replay:
+        raise SystemExit('Choose either dev tuning or the imported-input stand variant.')
     # A source recreated at its old renderer/ path would silently fork.
     problems = check_layout.layout_problems()
     if problems:
@@ -34,6 +53,12 @@ def main(argv=None):
     source_hash = hashlib.sha256((SHADERS/'effects.hlsl').read_bytes()).hexdigest()
     if source_hash not in json.dumps(manifest):
         raise SystemExit('Shader source differs from the offline build; run scripts/shaders/compile_shaders.py.')
+    actor_hash = hashlib.sha256((SHADERS/'effects.hlsl').read_bytes() + b'\n' + (SHADERS/'ao_actor.hlsl').read_bytes()).hexdigest()
+    if actor_hash != manifest.get('actor_source_sha256'):
+        raise SystemExit('Actor AO source differs from the offline build; rebuild all actor shader entries.')
+    for entry in ('AOActorPrepare', 'HBAOActorContactBloom', 'GTAOActorContactBloom', 'HBAOActorOnly', 'GTAOActorOnly'):
+        if manifest['shaders'].get(entry, {}).get('source_sha256') != actor_hash:
+            raise SystemExit(f'{entry} has stale actor AO dependencies; rebuild all actor shader entries.')
     world_manifest = json.loads((SHADERS/'world-shader-build.json').read_text())
     if hashlib.sha256((SHADERS/'world_effects.hlsl').read_bytes()).hexdigest() not in json.dumps(world_manifest):
         raise SystemExit('World shader source differs from offline build.')
@@ -46,21 +71,46 @@ def main(argv=None):
     static_manifest = json.loads((SHADERS/'static-shadow-shader-build.json').read_text())
     if hashlib.sha256((SHADERS/'static_shadow_effects.hlsl').read_bytes()).hexdigest() != static_manifest['source_sha256']:
         raise SystemExit('Static caster shader source differs from offline build.')
+    surface_manifest = json.loads((SHADERS/'surface-shader-build.json').read_text())
+    if hashlib.sha256((SHADERS/'surface_effects.hlsl').read_bytes()).hexdigest() != surface_manifest['source_sha256']:
+        raise SystemExit('Precipitation shader source differs from offline build.')
+    hdr_manifest = json.loads((SHADERS/'hdr-shader-build.json').read_text())
+    if hashlib.sha256((SHADERS/'hdr_effects.hlsl').read_bytes()).hexdigest() != hdr_manifest['source_sha256']:
+        raise SystemExit('HDR shader source differs from offline build; run scripts/shaders/compile_hdr_shaders.py.')
+    bump_digest=hashlib.sha256((SHADERS/"auto_bump_normal.hlsl").read_bytes()).hexdigest()
+    if any(m.get("bump_include_sha256")!=bump_digest for m in (world_manifest,local_manifest)):
+        raise SystemExit("Auto bump include differs from the offline build.")
+    bump_manifest=json.loads((SHADERS/"auto-bump-shader-build.json").read_text())
+    if bump_manifest["source_sha256"]!=hashlib.sha256((SHADERS/"auto_bump_capture.hlsl").read_bytes()).hexdigest():
+        raise SystemExit("Auto bump capture differs from the offline build.")
+    if bump_manifest.get("normal_source_sha256")!=hashlib.sha256((SHADERS/"auto_normal_generate.hlsl").read_bytes()).hexdigest():
+        raise SystemExit("Automatic normal-map generator differs from the offline build.")
+    if any(digest!=hashlib.sha256((SHADERS/name).read_bytes()).hexdigest() for name,digest in bump_manifest.get('parallax_source_sha256',{}).items()):
+        raise SystemExit("Parallax shaders differ from the offline build.")
     env = northlight_paths.zig_env()
+    identity = source_identity()
+    built_utc = datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S UTC')
+    print('Source identity', identity, flush=True)
+    print('Build time', built_utc, flush=True)
     command = [str(zig), 'c++', '-target', 'x86-windows-gnu', '-O2', '-shared',
+               '-DNORTHLIGHT_SOURCE_ID="' + identity + '"',
+               '-DNORTHLIGHT_BUILD_UTC="' + built_utc + '"',
                '-std=c++17', '-fno-rtti', '-Wall', '-Wextra', '-Wno-microsoft-exception-spec',
                *northlight_paths.include_flags(),
                *[str(northlight_paths.src(n)) for n in ('renderer.cpp', 'world_gi.cpp', 'world_mesh_plan.cpp', 'static_shadow_scene.cpp', 'frd9.def')],
                # Settings overlay (src/overlay/) and the vendored Dear ImGui it draws with (src/imgui/, configured by northlight_imconfig.h).
                '-DIMGUI_USER_CONFIG="northlight_imconfig.h"',
                *[str(northlight_paths.src(n)) for n in OVERLAY_SOURCES],
-               '-luser32', '-luuid', '-o', str(DEV_DLL if dev_tuning else DLL)]
+               '-luser32', '-luuid', '-o', str(STAND_DLL if stand_replay else DEV_DLL if dev_tuning else DLL)]
     if dev_tuning:
         # Developer-only zone tuning (scripts/dev_tuning/). The DLL carries a marker that renderer/build_packages.py refuses.
         command.insert(command.index('-luser32'), '-DNORTHLIGHT_DEV_TUNING=1')
         print('Building the DEV TUNING variant (NORTHLIGHT DEV TUNING BUILD): not for release packages.')
+    if stand_replay:
+        command.insert(command.index('-luser32'), '-DNORTHLIGHT_REPLAY_STAND=1')
+        print('Building the STAND REPLAY variant: imported context only, not for game installation.')
     subprocess.run(command, env=env, check=True)
-    print('Built', DEV_DLL if dev_tuning else DLL)
+    print('Built', STAND_DLL if stand_replay else DEV_DLL if dev_tuning else DLL)
 
 if __name__ == '__main__':
     main()

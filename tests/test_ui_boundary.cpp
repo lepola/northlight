@@ -3,6 +3,7 @@
 #include <cmath>
 #include <cstdio>
 #include <limits>
+#include <initializer_list>
 #include "ui_boundary.h"
 using namespace NorthlightUiBoundary;
 using FK=Arming::FrameKind;using R=Arming::Result;
@@ -32,6 +33,31 @@ int main(){
         assert(accepts(false,c,false,false)&&!accepts(true,c,false,false)); // Disabled Z ignores a stale LESS function, but never permits Z writes.
         assert(!accepts(false,nullptr));
         ortho(p);p[15]=0;assert(!accepts(false,p));
+    }
+    { // Observed native Ctrl+R transform, distinct from the scalable UI VS.
+        const float native[16]={2.f/3840,0,0,-.99974f,0,2.f/2160,0,-1.00046f,0,0,.0001f,.5f,0,0,0,1};
+        assert(pixelSpaceRows(native,3840,2160,0,1));
+        assert(!pixelSpaceRows(native,3840,2160,0,.94f));
+        assert(!pixelSpaceRows(native,1920,1080,0,1));
+        assert(!pixelSpaceRows(c,3840,2160,0,1));
+        float invalid[16];for(unsigned i=0;i<16;++i)invalid[i]=native[i];invalid[14]=1;invalid[15]=0;
+        assert(!pixelSpaceRows(invalid,3840,2160,0,1));
+    }
+    { // The background/portrait draw precedes Ctrl+R and uses logical UI units.
+        const float scaled[16]={2.29469f,0,0,-1.00026f,0,4.07946f,0,-.999537f,0,0,-.001f,.5f,0,0,0,1};
+        assert(!pixelSpaceRows(scaled,3840,2160,0,1)); // Previous gate misses this real UI draw.
+        assert(fullWindowOrthoRows(scaled,3840,2160,0,1));
+        assert(!fullWindowOrthoRows(scaled,3840,2160,0,.94f));
+        assert(!fullWindowOrthoRows(scaled,2160,3840,0,1));
+        for(float scale:{.5f,1.f,2.8125f,4405.8048f}){
+            float rows[16];ortho(rows,3840/scale,2160/scale);
+            assert(fullWindowOrthoRows(rows,3840,2160,0,1));
+        }
+        for(unsigned index:{0u,1u,2u,3u,4u,5u,6u,7u,8u,9u,12u,13u,14u,15u}){
+            float rows[16];for(unsigned i=0;i<16;++i)rows[i]=scaled[i];
+            rows[index]+=index==0||index==5?1.f:.1f;
+            assert(!fullWindowOrthoRows(rows,3840,2160,0,1));
+        }
     }
     { // (a) stock: the hash boundary fires in frame 1
         Arming a;unsigned armed=0;assert(a.learning()&&!a.armed()&&!a.disarmed());

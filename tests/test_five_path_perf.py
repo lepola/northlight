@@ -2,12 +2,20 @@
 """Paired production-bytecode regression and timestamp benchmark; no game."""
 from pathlib import Path
 import json
+import hashlib
 import os
 import subprocess
 import struct
 import sys
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import northlight_paths as fp
+
+metadata = json.loads((fp.TESTS/'fixtures/performance-before/integrated-baseline.json').read_text())
+assert hashlib.sha256((fp.SHADERS/'world_effects.hlsl').read_bytes()).hexdigest() == metadata['optimized_source_sha256'], 'Rebuild the integrated performance baseline after shader changes.'
+assert hashlib.sha256((fp.SHADERS/'auto_bump_normal.hlsl').read_bytes()).hexdigest() == metadata['bump_include_sha256'], 'Rebuild the integrated performance baseline after include changes.'
+fixture_hashes = json.loads((fp.TESTS/'fixtures/performance-before/performance-before-sha256.json').read_text())
+for name, expected in fixture_hashes.items():
+    assert hashlib.sha256((fp.TESTS/'fixtures/performance-before'/name).read_bytes()).hexdigest() == expected, name
 
 out = fp.out() / 'five-path-perf'
 out.mkdir(parents=True, exist_ok=True)

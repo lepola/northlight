@@ -2,7 +2,6 @@
 #include "probe_blend.h"
 #include "probe_activation.h"
 #include <cassert>
-#include <chrono>
 #include <cmath>
 #include <cstdio>
 #include <cstring>
@@ -55,23 +54,18 @@ static void run(){
     // The shader's "no blend" start saturates to 1 for any realistic time.
     assert(std::fmin(std::fmax((0.f-PB::None)/PB::BlendSeconds,0.f),1.f)==1.f);
 }
-static void bench(unsigned n){
-    ProbeLayout layout=probeLayoutFor(n);if(!configureProbeLayout(layout)){std::printf("bench probeBlend atlas=%u unsupported\n",n);return;}
+// Full-atlas correctness is separate from performance experiments.
+static void allSlots(unsigned n){
+    ProbeLayout layout=probeLayoutFor(n);assert(configureProbeLayout(layout));
     PB::Mirror mirror;mirror.begin("Azeroth");auto atlas=blank();unsigned filled=0;
     for(int z=0;z<int(layout.nz);++z)for(int y=0;y<int(layout.n);++y)for(int x=0;x<int(layout.n);++x){ProbeGridKey key{x,z,y};atlas[probeAtlasIndex(key)]=entry(key,float(x+y+z));++filled;}
-    mirror.publish(atlas,1);double best=1e30;unsigned blended=0;
-    for(int rep=0;rep<50;++rep){for(auto& e:atlas)if(e.occupied&&(rep&1)==0)e.probe.sh[0].x+=1;else if(e.occupied)e.probe.sh[0].x-=1; /* every probe changes */
-        const auto a=std::chrono::steady_clock::now();blended=mirror.publish(atlas,1+rep*.1f);const auto b=std::chrono::steady_clock::now();
-        best=std::min(best,std::chrono::duration<double,std::micro>(b-a).count());}
-    assert(blended==filled);
-    // Steady state: nothing changed, only the comparison pass.
-    double idle=1e30;for(int rep=0;rep<50;++rep){const auto a=std::chrono::steady_clock::now();assert(mirror.publish(atlas,100.f)==0);const auto b=std::chrono::steady_clock::now();idle=std::min(idle,std::chrono::duration<double,std::micro>(b-a).count());}
-    std::printf("bench probeBlend atlas=%u slots=%zu allChangedPublishUs=%.1f unchangedPublishUs=%.1f\n",layout.atlas,layout.atlasSize(),best,idle);
+    assert(mirror.publish(atlas,1)==0);
+    for(int rep=0;rep<50;++rep){for(auto& e:atlas)if(e.occupied)e.probe.sh[0].x+=(rep&1)?-1.f:1.f;
+        assert(mirror.publish(atlas,1+rep*.1f)==filled);}
+    for(int rep=0;rep<50;++rep)assert(mirror.publish(atlas,100.f)==0);
 }
 int main(){
     run();
-    // Re-run on a non-default layout: the mirror follows probeLayout().
-    for(unsigned n:{14u,22u}){bench(n);}
-    assert(configureProbeLayout(probeLayoutFor(14)));run();
-    std::puts("PASS probe blend");
+    for(unsigned n:{14u,22u}){allSlots(n);run();}
+    std::puts("PASS probe blend: lifecycle, changed/unchanged full atlases, layouts 16/24; no timing");
 }

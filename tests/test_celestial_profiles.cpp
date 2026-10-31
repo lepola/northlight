@@ -73,6 +73,14 @@ int main(int argc,char** argv){
     }
     // Sun and moon recolor independently, conserve luminance until strength is
     // changed, and allocate no energy below the horizon. Default is identity.
+    for(unsigned v=0;v<256;++v){
+        NorthlightCelestial::Context sky;sky.sun.nativeAppearance=true;sky.sun.nativeTint[0]=float(v)/255;sky.sun.nativeTint[1]=.25f;sky.sun.nativeTint[2]=.75f;
+        sky.sun.angularRadius=sky.sun.nativeAngularRadius=.023456f;sky.sun.direction[2]=1;sky.moon.direction[2]=-1;
+        const float light[]={.7f,.6f,.4f};NorthlightCelestial::applyRendererPolicy(sky,light);auto custom=green;
+        custom.disc[0][0]=0;custom.disc[0][1]=1;custom.disc[0][2]=0;apply(custom,light,sky);
+        for(unsigned k=0;k<3;++k)assert(sky.sun.tint[k]==sky.sun.nativeTint[k]);
+        assert(sky.sun.angularRadius==.023456f&&sky.sun.nativeAngularRadius==.023456f&&sky.sun.emission==custom.gain[0]);
+    }
     unsigned cases=0;float native[]={.32157f,.75294f,.98824f};
     for(unsigned i=0;i<=1000;++i){
         NorthlightCelestial::Context sky;sky.sunWeight=float(i)/1000;sky.moonWeight=1-sky.sunWeight;

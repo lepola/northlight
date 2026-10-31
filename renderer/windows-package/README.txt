@@ -21,9 +21,8 @@ REQUIREMENTS
   Install.cmd --backend dxvk2 (DXVK 2.7.1).
 - AMD RX 5000/6000 (RDNA 1/2): DXVK's own release notes say DXVK 3 performs
   badly on them on Windows. Install with Install.cmd --backend dxvk2.
-- Only ASCII characters in the game folder path (no ä, ö, å or other special
-  characters), a path of at most about 150 characters, and the game must not
-  be in Program Files.
+- Unicode game folder paths are supported, including Cyrillic. The path may
+  have at most about 150 characters, and the game must not be in Program Files.
 - About 13 GB of free space on the game's drive and at least 8 GB of memory
   while the installer builds the cache.
 
@@ -64,8 +63,8 @@ Installation status without changes:  Install.cmd status --client "C:\Games\WoW"
 
 Dungeon and raid world cache (optional): the continents get static world
 shadows and GI from the world cache. Dungeons and raids do not, unless you
-add them. The installer asks while it checks the client, before anything is
-built, and builds the chosen groups after the continents:
+add them. On the first install, the installer asks while it checks the client,
+before anything is built. Updates keep the saved selection without asking:
   1  Classic dungeons  ~0.6 GB  ~1.7 min
   2  Classic raids     ~0.3 GB  ~0.9 min
   3  TBC dungeons      ~0.6 GB  ~1.8 min
@@ -77,8 +76,9 @@ now (none on a first install). The sizes are disk space on top of the
 continents; the times are build time of one group on one CPU core. Groups
 that were built earlier are kept when you install again or update the
 continents; leaving a group out of the answer removes it and the files only it
-used. --instances answers the question for scripted installs; --yes keeps the
-current choice.
+used. --instances changes the saved selection; --yes keeps the current choice.
+Only outdated parts are rebuilt: a light update keeps the instance geometry,
+and a validation update checks the existing data without running the builders.
 If the game folder already holds someone else's patch-z.mpq, the installer
 leaves it in place, skips the lighting layer and builds the cache itself so
 that its content is included (it says so at the end).
@@ -146,12 +146,13 @@ Individual settings (Quality / Balanced / Performance):
   ActorShadowBudgetMiB  0 / 16 / 8     character shadows, nearest first (0 = no limit)
   ActorShadowRadius     40 / 35 / 20   characters more than N yards from your own character cast no shadow (0..200; 0 = no limit; 1..3 = your own character, mount, weapons and whatever is right next to you)
   ActorShadows          1 / 1 / 1      shadows of characters and moving objects (0 = static shadows only: terrain, buildings, and the trees and objects placed on the map; characters, creatures, mounts and pets lose their shadow, your own character too, and so do objects the server places, such as doors, elevators, ships, zeppelins, mailboxes and event decorations; swaying trees, windmills and flags keep a shadow frozen in their rest pose; with 0 the game's own round shadows under characters are drawn unchanged, with 1 they follow BlobShadowStrength; saves about 4–5 ms per frame in crowds and about 1 ms in quiet areas; with GIDynamicProbes=1 characters are still copied about every 200 ms for indirect light, GIDynamicProbes=0 removes that too; 0 also turns off the ShadowFateDiagnostics and DiagReplayProbe settings; no preset changes this); with 1, shop signs and other small still objects the server places keep their shadow when the camera turns away
-  BlobShadowStrength    50 / 50 / 50   how dark the game's own round shadow under characters is while the renderer's character shadows are on (0..100; 100 = as the game draws it, 0 = hidden, in between = fainter, or hidden if the game's blend cannot be lightened; FPS cost not measured: a cached texture check on small draws and two SetTexture calls per blob draw, as in 0.3.192 and earlier; 100 skips it)
+  BlobShadows           1 / 1 / 1      show the native round ground decal beneath characters, creatures and mounts; 0 hides it independently of detailed shadows or active sun/moon sources while Northlight effects are on; detailed and local light shadows are unaffected; live menu switch
+  BlobShadowStrength    50 / 50 / 50   how dark the game's own round shadow under characters is while the renderer's character shadows are on (0..100; 100 = as the game draws it, 0 = hidden, in between = fainter, or hidden if the game's blend cannot be lightened; BlobShadows=0 hides it independently without overwriting this value; FPS cost not measured: a cached texture check on small draws and two SetTexture calls per blob draw, as in 0.3.192 and earlier; 100 skips it)
   MinSkinnedTriangles   100/150/180    small animated parts cast no shadow
   FarShadowInterval     4 / 5 / 6      distant shadows (beyond ~48 m) are drawn every Nth frame (1..16)
   NearShadowInterval    1 / 2 / 2      moving parts of the near shadows (characters) every Nth frame (1..16)
-  LocalLightLimit       48 / 32 / 24   lamps lighting at the same time (8..64; lamps in view first; the GPU budget never lowers it)
-  PointShadows          0 / 0 / 0      lamp shadows (1 = on): only lights inside buildings cast faint shadows, at dusk and night; street lamps, lanterns and torches never do; off by default
+  LocalLightLimit       48 / 32 / 24   lamps lighting at the same time (8..128; lamps in view first; the GPU budget never lowers it)
+  PointShadows          1 / 1 / 1      shadows from selected compact local sources, including supported street lamps, torches and braziers; enabled day and night with source visibility and sunlight fading
   PointShadowRefreshMs  0 / 33 / 33    lamp shadow update interval
   PointShadowFacesPerFrame 6 / 6 / 6   lamp shadow directions updated per frame (1..6; 6 = all at once; lower = smaller spikes, a brief seam at the edge)
   ShadowDirectionSteps  2048/2048/2048 sun direction quantization (fewer jumps)
@@ -179,8 +180,12 @@ Individual settings (Quality / Balanced / Performance):
   FrameDrawGates        1 / 1 / 1      per-frame draw checks (0 = check every draw as before 0.3.187, for comparisons; the image does not change)
   ShadowPivotCorrection 1 / 1 / 1      near shadow detail follows camera zoom and collisions (0 = the distance of the sharp shadow area is only estimated while orbiting, as before 0.3.190, for comparisons)
   CommandStream         1 / 1 / 1      the game records its graphics calls and a second thread runs the renderer (0 = everything on the game's thread as before 0.3.192, for comparisons; read at game start)
-  Weather               1 / 1 / 1      Northlight's haze, fog, light shafts, sun and moon, shadows, sky light and lamps follow the game's own rain and snow (read from its memory; the art layer's weather textures are the fallback); the game's rain streaks are drawn alpha-blended (crisp, their own colour) and its mist puffs (black balls in night and storm rain) are left out while it rains (0 = nothing reacts, the game's own rain; the fallback needs the art layer; no extra passes)
+  Weather               1 / 1 / 1      Northlight's haze, fog, light shafts, sun and moon, shadows, sky light and lamps follow the game's own rain and snow (read from its memory; the art layer's weather textures are the fallback); the game's rain streaks are drawn alpha-blended (crisp, their own colour) and its mist puffs (black balls in night and storm rain) are left out while it rains (0 = nothing reacts, the game's own rain; the fallback needs the art layer)
   RainFog               1 / 1 / 1      how strongly rain and snow thicken the fog and haze and dim shafts, sun and moon (0..2; 0 = no change, 2 = twice as strong; snow acts at 60 percent)
+  RainLens              1 / 1 / 1      moving refractive camera droplets and trails during outdoor rain (requires Weather; skipped indoors)
+  RainLensStrength      60 / 60 / 60   camera rain strength in percent (0..100)
+  SnowLens              1 / 1 / 1      soft camera ice flakes adhere and melt during outdoor snow (requires Weather; skipped indoors)
+  SnowLensStrength      60 / 60 / 60   camera snow strength in percent (0..100)
   FogClouds             1 / 1 / 0      low fog banks that drift with the wind, thicker and faster in rain, few and faint in clear weather and then only in forest and grass zones (0 = none; its own half-resolution pass; Ctrl+Shift+F7 and F10 turn them off with the rest)
   FogCloudDensity       100 / 100 / 100 how much of the ground the fog clouds cover, in percent (0..200; 0 = none, 200 = twice as much)
   GpuBudgetMs           4 / 3 / 2      graphics card time per frame for Northlight's own effects, in ms (0..20; 0 = off, always the full picture); while the measured time stays over it, fewer fog cloud steps in two stages, then fewer fog steps (never fewer lamps); the full picture comes back when the time is well under it, or the graphics card is not what limits the frame rate, for a few seconds
@@ -191,6 +196,7 @@ Individual settings (Quality / Balanced / Performance):
   StreamOcclusionLocal  1 / 1 / 1      with CommandStream=1, 1 = the game's sun/moon glare visibility query is answered with the latest measured result instead of waiting for the renderer thread (0 = always wait, as before; read at game start)
   DepthFuncAware        1 / 1 / 1      1 = draws that ignore depth (the game's depth comparison set to ALWAYS) are recognised: the effect layer holds back only effects that test depth (a world draw that ignores depth while effects are held back flushes them: that frame is drawn the old way and the layer pauses briefly), and the font-mod UI fallback requires the UI's depth setting; 0 = judged by the Z on/off flag only, as before (0..1; read once at start)
   WeatherMemory         1 / 1 / 1      1 = the weather effects follow the game's own weather state (type including sand, intensity), read from its memory, on frames where the sky is drawn (indoors they fade out); the art layer's weather textures are the fallback when the read fails (0 = only those textures' draws decide, as before)
+  GrassShadows           1 / 0 / 0      experimental: native alpha-cut DetailDoodad grass casts nearby shadows with ActorShadows=1; bounded to 32 draws, 8192 vertices and 512 KiB per frame within 64 yards (0..1, read at start; needs visual testing)
   EquipmentLights        1 / 0 / 0      experimental: native M2 point lights and proven additive particles light nearby surfaces and fog; live particles require CommandStream=1 and contribute only while drawn; bounded to 8 sources, shares LocalLightLimit, deduplicates native/static lights (0..1, read at start; needs visual testing)
   ContactAO             1 / 1 / 1      1 = the darkening in creases and corners (contact shading) is computed, 0 = off: it and its smoothing pass are skipped, which saves about 0.5 ms of graphics card time per frame; the bloom glow stays (0..1; read once at start)
   NightBrightness       50 / 50 / 50   gives back the night ambient light the lighting layer takes away (0..100; 0 = Northlight's full night darkness, 100 = the original game's night ambient); added like light, so shadows and lamps keep their contrast; fades in with sunset and out with sunrise; daytime, sky, water and places without a sky of their own (dungeons, raids) are unchanged
@@ -200,8 +206,35 @@ Individual settings (Quality / Balanced / Performance):
   NameMask              1 / 1 / 1      1 = floating unit names and other world text keep the colour the game drew them in (not darkened, lit or hazed by the scene effects; a solid object in front still covers them; with a font mod that replaces the UI shaders, from when the effects start); 0 = as before 0.3.212 (0..1; read once at start)
   NameMaskDebug         0 / 0 / 0      1 = the pixels NameMask protects are painted 50 percent magenta over the finished frame (a diagnostic view); 0 = off (0..1)
   AOMethod 0 / 0 / 0   See the quality INI for the allowed range.
+  AOQuality 0 / 0 / 0   High=0, Medium=1, Low=2. High preserves the current image; Medium/Low reduce HDAO/HBAO+/GTAO samples and can add noise or shimmer. SSAO is unchanged. Apply in Lighting & AO.
   AOStrength 100 / 100 / 100   See the quality INI for the allowed range.
   AORadius 200 / 200 / 200   See the quality INI for the allowed range.
+  PointShadowLimit 4 / 4 / 4   See the quality INI for the allowed range.
+  AutoBump 1 / 0 / 0   See the quality INI for the allowed range.
+  AutoBumpStrength 75 / 60 / 40   See the quality INI for the allowed range.
+  AutoBumpDistance 48 / 36 / 24   See the quality INI for the allowed range.
+  AutoBumpTerrain 3 / 1 / 1   See the quality INI for the allowed range.
+  AutoBumpWalls 3 / 1 / 1   See the quality INI for the allowed range.
+  AutoBumpGrass 1 / 1 / 1   See the quality INI for the allowed range.
+  AutoParallaxDepth 100 / 75 / 50   See the quality INI for the allowed range.
+  AutoParallaxDistance 16 / 12 / 8   See the quality INI for the allowed range.
+  AutoParallaxSteps 16 / 12 / 8   See the quality INI for the allowed range.
+  AutoDisplacementStrength 100 / 75 / 50   See the quality INI for the allowed range.
+  AutoDisplacementDistance 12 / 8 / 6   See the quality INI for the allowed range.
+  AutoDisplacementDetail 4 / 3 / 2   See the quality INI for the allowed range.
+  AutoBumpModels 3 / 1 / 1   See the quality INI for the allowed range.
+  AutoModelDisplacementStrength 25 / 15 / 10   See the quality INI for the allowed range.
+  AutoModelDisplacementDistance 8 / 6 / 4   See the quality INI for the allowed range.
+  AutoModelDisplacementDetail 2 / 2 / 1   See the quality INI for the allowed range.
+  AutoHeightPolarity 0 / 0 / 0   See the quality INI for the allowed range.
+  AutoHeightDetails 75 / 75 / 75   See the quality INI for the allowed range.
+  AutoHeightBalance 50 / 50 / 50   See the quality INI for the allowed range.
+  AutoParallaxShadows 1 / 0 / 0   See the quality INI for the allowed range.
+  AutoParallaxShadowStrength 70 / 60 / 50   See the quality INI for the allowed range.
+  AutoParallaxShadowSteps 8 / 6 / 4   See the quality INI for the allowed range.
+  AutoCavity 1 / 0 / 0   See the quality INI for the allowed range.
+  AutoCavityStrength 35 / 30 / 25   See the quality INI for the allowed range.
+  AutoMaterialOcclusionDistance 8 / 6 / 4   Shared near range for cavity and POM self-shadowing (2..16 yards).
 When both NearShadowInterval and FarShadowInterval are at least 2, frames that
 draw neither shadow also skip copying the character geometry (about 1–1.5 ms
 of CPU per skipped frame). Light and normal frames alternate: the average FPS

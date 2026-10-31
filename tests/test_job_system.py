@@ -28,8 +28,8 @@ check('wait helps (pops and runs) instead of sleeping','while(!counter.done()){J
 # --- renderer wiring ------------------------------------------------------------------------
 render=w[w.index('    bool render(IDirect3DSurface9* targetSurface,'):]
 check('lazy start on the renderer thread inside render() after the upload, never at construction',w.count('replayJobs_.start(')==1 and w.count('jobsStart()')==2
-      and 'const unsigned cores=NorthlightStream::cores();' in w and 'if(replayJobs_.start(cores))logf("JOBS workers=%u cores=%u"' in w and 'const bool jobs=jobsStart();' in render
-      and render.index('const bool jobs=jobsStart();')>render.index('bucket(NorthlightEffectsBuckets::Upload);'))
+      and 'const unsigned cores=NorthlightStream::cores();' in w and 'if(replayJobs_.start(cores))logf("JOBS workers=%u cores=%u"' in w and 'jobs=jobsStart();' in render
+      and render.index('jobs=jobsStart();')>render.index('bucket(NorthlightEffectsBuckets::Upload);'))
 check('ReplayJobs=0 or no worker: nothing kicked','bool jobsOn()const{return quality.replayJobs!=0&&replayJobs_.started();}' in w
       and w.count('replayJobs_.kick(')==3 and all('if(jobs)replayJobs_.kick(' in l or 'job.kicked=true;replayJobs_.kick(' in l for l in w.splitlines() if 'replayJobs_.kick(' in l)
       and 'if(jobs&&actorShadows&&!replayCullsKicked)' in render)

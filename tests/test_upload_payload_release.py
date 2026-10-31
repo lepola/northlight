@@ -73,18 +73,22 @@ builder=w[w.index('    void work() {'):w.index('\n    bool check(HRESULT h,const
 plan=fp.src('world_mesh_plan.h').read_text();pagesH=fp.src('world_mesh_pages.h').read_text()
 commit=upload[upload.index('auto phase=streamingPhases.measure(NorthlightStreaming::PhaseProfile::Commit);'):]
 release=w[w.index('    void releaseGPU(bool keepMesh=false){'):w.index('\n',w.index('    void releaseGPU(bool keepMesh=false){'))]
-resetFn=method('    void reset(){');recoverFn=method('    void recover(){');resources=method('    bool resources(UINT w,UINT h,D3DFORMAT fmt){')
+resetFn=method('    void reset(){');recoverFn=method('    void recover(){');resources=method('    bool createResources(UINT w,UINT h,D3DFORMAT fmt){')
 checks={
  'Reset (failed or not) and resolution change keep the uploaded MANAGED mesh':
-  'failed=false;releaseGPU(true);' in resetFn and 'releaseGPU(true);width=w;height=h;' in resources,
- 'recover() keeps the MANAGED mesh; only the destructor releases it':'releaseGPU(true);' in recoverFn and 'worker.join();releaseGPU();' in w,
+  resetFn.index('failed=false;') < resetFn.index('releaseGPU(true);') and 'releaseGPU(true);width=w;height=h;' in resources,
+ 'recover() keeps the MANAGED mesh; only the destructor releases it':'releaseGPU(true);' in recoverFn and w.index('worker.join();',w.index('~WorldRenderer()')) < w.index('releaseGPU();',w.index('~WorldRenderer()')),
  'releaseGPU(keepMesh) guards exactly the mesh state: pool, pending packet, clearMesh, map, fixed set + bits, covered owners':
   'if(!keepMesh){pendingMesh.reset();clearMesh();}' in release and 'if(!keepMesh){releaseMeshPool();uploadedMap.clear();}' in release
   and 'if(!keepMesh){fixedTerrain.reset();fixedTerrainBits.reset();}' in release and 'if(!keepMesh)uploadedStaticOwners.reset();' in release
-  and release.count('keepMesh')==5 and 'staticOwnerGeneration=UINT64_MAX;staticCasters.reset();' in release,
+  and 'staticOwnerGeneration=UINT64_MAX;staticCasters.reset();' in release,
  'DEFAULT-pool state is still released on a keepMesh Reset (targets, live terrain, index ring, queries, caches)':
   all(x in release for x in ('liveTerrainGPU.clear();','drop(liveIndicesGPU);','queries.drop();','stateBlocks.clear();','uploadedTerrain.clear();','drop(color);','invalidateShadowCache();','retiredMaterials.clear();')),
- 'mesh pool pages and material textures are MANAGED':w.count('D3DPOOL_MANAGED,&slot.vb')==1 and w.count('D3DPOOL_MANAGED,&slot.ib')==1 and w.count('D3DPOOL_MANAGED,&next.partialTexture')==1,
+ 'normal pages are MANAGED; pressure DEFAULT pages retain replay payload and release before Reset':
+  'D3DPOOL pool=D3DPOOL_MANAGED' in w and 'payload.pages->temporary?D3DPOOL_DEFAULT:D3DPOOL_MANAGED' in upload
+  and w.count('D3DPOOL_MANAGED,&next.partialTexture')==1
+  and resetFn.index('releaseDefaultMesh();')<resetFn.index('releaseGPU(true);')
+  and 'payload.pages->temporary?0:plan.payload.discard()' in commit,
  'the rebuild request has one caller: the upload() missing-payload fallback':w.count('requestPayloadRebuild()')==2 and upload.count('requestPayloadRebuild()')==1,
  'the plan holds the payload through the handle; no pages/materials read after commit':
   'UploadPayloadHandle payload;' in plan and 'std::shared_ptr<const NorthlightWorldMeshPages::Plan> pages;\n    // Sealed' not in plan

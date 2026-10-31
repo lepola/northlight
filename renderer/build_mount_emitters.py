@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Stage mount lights from server-cached creature models; never edit DBC or WDB."""
+"""Stage proven creature/mount model lights without server mappings or DBC/WDB edits."""
 import argparse
 import collections
 import hashlib
@@ -105,70 +105,73 @@ def mount_models(assets, cache):
     return candidates, missing
 
 
-def build(assets, cache_blob, output):
-    output.mkdir(parents=True, exist_ok=True)
-    candidates, missing = mount_models(assets, creature_cache(cache_blob))
-    report = {'format':'native WotLK v264 mount lights', 'models':{}, 'skipped':{},
-              'unresolved_creatures':missing, 'creature_cache_sha256':hashlib.sha256(cache_blob).hexdigest(),
-              'source_archives':assets.fingerprint(), 'references':REFERENCES,
-              'limitations':['Only mount entries known in this server cache can resolve to models.',
-                             'At most two strongest proven emitters per model; original particles unchanged.',
-                             'Shared models also gain their light when used by NPCs.',
-                             'Authored rate and enabled-state are mirrored; external model/emitter visibility still follows the native engine.',
-                             'Native light update cost is per animated model, outside the bridge cap.',
-                             'No in-game visual or FPS validation performed.']}
-    payload = {}
-    for path, info in sorted(candidates.items()):
-        try:
-            original = assets.read(path)
-            emitters, refused = spell_sources(assets, original, max_sources=None)
-            # Keep real source anchors/colours instead of inventing a centre light.
-            selected = sorted(emitters, key=lambda s:(-s['intensity'],s['particles'][0]))[:2]
-            _, particle_offset = unpack('<II', original, 296)
-            stride = 492 if unpack('<I', original, 16)[0]&512 else 476
-            if info['replacement_colors'] and any(unpack('<h', original, particle_offset+i*stride+42)[0] >= 0 for s in selected for i in s['particles']):
-                raise ValueError('Shared display variants replace particle colour; no universal M2 light colour')
-            patched = append_spell_lights(original, selected)
-            validate_spell_lights(original, patched, selected)
-        except (ValueError, FileNotFoundError, struct.error) as exc:
-            report['skipped'][path] = str(exc)
+def build(assets, cache_blob, output, excluded=()):
+    from attached_emitter_sources import write_stage
+    candidates, missing = mount_models(assets,creature_cache(cache_blob))
+    candidates = {p:i for p,i in candidates.items() if p not in excluded}
+    return write_stage(assets,output,candidates,{
+        'format':'native WotLK v264 cached mount lights',
+        'unresolved_creatures':missing,'excluded_owned_models':sorted(excluded),'creature_cache_sha256':hashlib.sha256(cache_blob).hexdigest(),
+        'references':REFERENCES,'limitations':[
+            'Cached creature-entry mappings annotate this legacy scope only; build_creatures audits all creature model paths without WDB.',
+            'Every supported independent anchor is preserved up to sixteen sources; unsupported regions remain reported.',
+            'Shared model paths also emit when used by NPCs; original native model lifetime owns the lights.',
+            'No installation or in-game validation performed.']},'mount','No proven mount emitters in the resolved client/server models')
+
+
+def creature_models(assets):
+    """All listed and client-DBC creature paths; never infer server creature IDs."""
+    models,names = dbc(assets,'creaturemodeldata',28)
+    displays,_ = dbc(assets,'creaturedisplayinfo',16)
+    result = {p:{'model_ids':[],'replacement_colors':[]} for p in assets.providers
+              if p.startswith('creature\\') and p.endswith('.m2')}
+    by_id = {}
+    for row in models:
+        path = string(names,row[2])
+        if path.endswith('.mdx'):
+            path = path[:-4]+'.m2'
+        if not path.startswith('creature\\') or not path.endswith('.m2') or any(p in ('.','..') for p in path.split('\\')):
             continue
-        payload[path] = patched
-        report['models'][path] = {**info, 'emitters':selected, 'qualified_sources':len(emitters),
-            'omitted_sources':len(emitters)-len(selected), 'rejected_particles':refused,
-            'before_sha256':hashlib.sha256(original).hexdigest(), 'after_sha256':hashlib.sha256(patched).hexdigest(),
-            'source_archive':assets.origin(path)}
-    if not payload:
-        raise ValueError('No proven mount emitters in the resolved client/server models')
-    target = output/'mount-lights-staged.mpq'
-    with Archive(target, create=True, capacity=max(4096,len(payload)*2)) as archive:
-        temporary = output/'model.tmp'
-        for path, blob in payload.items():
-            temporary.write_bytes(blob)
-            archive.add(temporary, path)
-        temporary.unlink()
-    with Archive(target) as archive:
-        for path, blob in payload.items():
-            if archive.read(path) != blob:
-                raise ValueError('MPQ readback mismatch: '+path)
-    report['counts'] = {'resolved_models':len(candidates), 'patched':len(payload),
-        'native_lights':sum(len(v['emitters']) for v in report['models'].values()),
-        'mpq_byte_roundtrips':len(payload), 'dbc_files':0, 'wdb_files':0}
-    report['mpq_sha256'] = hashlib.sha256(target.read_bytes()).hexdigest()
-    (output/'mount-lights-report.json').write_text(json.dumps(report,indent=2)+'\n')
-    return report
+        by_id[row[0]] = path
+        result.setdefault(path,{'model_ids':[],'replacement_colors':[]})['model_ids'].append(row[0])
+    for row in displays:
+        if row[1] in by_id and row[13]:
+            result[by_id[row[1]]]['replacement_colors'].append(row[13])
+    for info in result.values():
+        info['replacement_colors'] = sorted(set(info['replacement_colors']))
+    return result
+
+
+def build_creatures(assets, output, excluded=()):
+    from attached_emitter_sources import write_stage
+    candidates = {p:i for p,i in creature_models(assets).items() if p not in excluded}
+    return write_stage(assets,output,candidates,{
+        'format':'native WotLK v264 creature lights with original bone anchors and lifecycle',
+        'scope':'Every listed Creature/*.m2 plus every CreatureModelData creature model path; independent of server cache',
+        'server_creature_mappings_inferred':False,'excluded_owned_models':sorted(excluded),
+        'references':REFERENCES,'limitations':[
+            'Actual model proof applies to mounts and creatures sharing that path; no server creature-entry mapping is guessed.',
+            'Particle rate/enabled tracks and original bones are retained; actual lifetime color, texture coverage and alpha determine energy.',
+            'Rigid constant unlit additive meshes are supported; replacement, deforming, hidden-geoset and animated-material uncertainty is reported.',
+            'All supported independent anchors are preserved up to sixteen; bridge admission remains capped at eight.',
+            'Unlisted archive additions cannot be enumerated; existing native lights win.',
+            'No installation or in-game validation performed.']},'creature','No supported creature emitters')
 
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description=__doc__)
     client_archives.add_arguments(parser)
     parser.add_argument('--creature-cache', type=Path)
+    parser.add_argument('--cached-mounts-only',action='store_true',help='Legacy scope: resolve only mounts known by this server cache')
     parser.add_argument('--output', type=Path, required=True)
     args = parser.parse_args()
     assets = Assets.from_args(args)
     try:
-        cache = args.creature_cache or assets.client/'Cache/WDB'/assets.locale/'creaturecache.wdb'
-        result = build(assets, cache.read_bytes(), args.output)
+        if args.creature_cache or args.cached_mounts_only:
+            cache = args.creature_cache or assets.client/'Cache/WDB'/assets.locale/'creaturecache.wdb'
+            result = build(assets, cache.read_bytes(), args.output)
+        else:
+            result = build_creatures(assets,args.output)
     finally:
         assets.close()
     print(json.dumps(result['counts'],indent=2))

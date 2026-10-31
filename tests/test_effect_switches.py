@@ -61,7 +61,7 @@ struct Device {
 struct Fixture {
     NorthlightEffectSwitches::Settings effects,requestedEffects;
     NorthlightQuality::Settings quality; // 0.3.138 northlight-quality.ini; defaults: giPass is a pass-through
-    bool temporalValid=true,sourceVisValid=true,shadowsComposited=true;
+    bool temporalValid=true,shadowsComposited=true,settingsRequestDirty=false;
     bool shadowFrameReady=true,pointReady=true,neutralShadowMaps=false;
     bool cacheValid=true;
     Device device;Device* d=&device;
@@ -106,12 +106,13 @@ int main(){
         Fixture f;Settings next{!(mask&GI),!(mask&Shadows),!(mask&Fog)};
         f.setEffects(next);
         assert(f.effects==next);
-        assert(f.temporalValid==!mask&&f.sourceVisValid==!mask);
+        assert(f.temporalValid==!mask);
+        assert(f.settingsRequestDirty==bool(mask&Fog));
         assert(f.cacheValid==!(mask&Shadows));
         assert(f.shadowFrameReady==!(mask&Shadows));
         assert(f.pointReady==!(mask&Shadows));
-        f.temporalValid=f.sourceVisValid=true;
-        f.setEffects(next);assert(f.temporalValid&&f.sourceVisValid);
+        f.temporalValid=true;f.settingsRequestDirty=false;
+        f.setEffects(next);assert(f.temporalValid&&!f.settingsRequestDirty);
     }
     // GI=0 (northlight-quality.ini): F8 can never enable the GI pass; shadows/fog still switch.
     for(unsigned mask=0;mask<=All;++mask){
@@ -120,7 +121,8 @@ int main(){
         assert(!g.effects.gi&&g.effects.shadows==next.shadows&&g.effects.fog==next.fog);
         assert(g.cacheValid==!(mask&Shadows));
         const bool onlyGI=(mask&~GI)==0; // GI toggles alone are no transition when GI=0
-        assert(g.temporalValid==onlyGI&&g.sourceVisValid==onlyGI);
+        assert(g.temporalValid==onlyGI);
+        assert(g.settingsRequestDirty==bool(mask&Fog));
     }
     Fixture f;
     assert(f.neutralShadows()&&f.device.clearCalls==0);

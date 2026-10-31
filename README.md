@@ -35,6 +35,10 @@ Every effect below is on by default and is drawn on top of the game's own frame.
 - **Global illumination.** Sky light and bounced light from probes ray traced against the world
   geometry on a background thread, about 76 yards around the camera (52 in the Balanced and Performance
   presets); characters add their own bounce and occlusion (Quality preset).
+- **Experimental grass shadows.** Set `GrassShadows=1` in `northlight-quality.ini` and restart WoW
+  to enable bounded nearby native grass casters; `ActorShadows=1` and shadows must also be on.
+  It defaults to `1` in Quality and `0` in Balanced/Performance. `GrassShadows=0` skips
+  the additional capture and replay work; sampled receiver diagnostics remain available.
 - **Ambient occlusion.** Screen-space AO with contact shading and a light bloom.
 - **Fog and air.** Volumetric sun and moon light with light shafts through the shadows; soft haze on
   the far landscape and the lowest sky in the game's own fog colour; regional ground fog in forests,
@@ -46,14 +50,16 @@ Every effect below is on by default and is drawn on top of the game's own frame.
   In maps without a world cache (battlegrounds, arenas, and the dungeons and raids that were not added to it), the geometry builder checks the cache once
   per entry and skips the repeated build attempts (0.3.210). These maps get no Northlight shadows, so the game's own
   shadows and its round blob shadows under characters are drawn as the game draws them there. Dungeons and raids are an optional part of the cache:
-  the installer asks which of six groups (Classic, TBC and Wrath dungeons and raids; about 0.3-1.3 GB and 1-2
-  build minutes each) to build, `--instances` answers for it, and changing the choice never rebuilds the continents.
-- **Lamps.** Up to 48 nearby lamps (Quality; `LocalLightLimit`, 8..64), lanterns, braziers and fires light the ground and walls around
-  them and glow in the fog. Lamps in view take the slots first, and lamps close together on screen are drawn
-  together (0.3.217), so the same `LocalLightLimit` lights more of what you see for less GPU time. In direct sun lamps dim. Lamp shadows are off by default (`PointShadows=1`
-  turns them on): only lights inside buildings cast faint shadows, at dusk and night; street lamps,
-  lanterns and torches never do. Overlapping lamp glows are capped once over all lamps (0.3.205), so the
-  glow no longer flickers when walking or riding past rows of lamps.
+  on the first install, the installer asks which of six groups (Classic, TBC and Wrath dungeons and raids; about 0.3-1.3 GB and 1-2
+  build minutes each) to build. Updates keep the saved choice; `--instances` changes it.
+  Current caches are reused, and light-only updates keep instance geometry. Changing the choice never rebuilds the continents.
+- **Lamps.** Up to 48 nearby lamps (Quality; `LocalLightLimit`, 8..128), lanterns, braziers and fires light the ground and walls around
+  them and glow in the fog. Lamps in view take the slots first, and nearby lamps on screen are batched together. In direct sun lamps dim. Local shadows are enabled by default:
+  four compact sources at once, adjustable with `PointShadowLimit` in the Shadows menu.
+  Torches, candles, lamps and compact fires cast shadows; diffuse glows, runes and sparkles do not.
+  Shadows work day and night, fading where their source is weak compared with sunlight at the
+  receiver. Each pass removes only the blocked contribution added by Northlight's matching direct
+  light; it does not subtract an estimate of baked light. Overlapping lamp glows are capped once.
 - **Lighting art layer.** An MPQ patch (`patch-z`) built from your client's own `Light*.dbc`: retuned
   outdoor clear-weather light and fog colours, warmer Mulgore, denser Stormwind day fog. Storm weather
   gets darker light and fog bands. Sky models
@@ -64,6 +70,7 @@ Every effect below is on by default and is drawn on top of the game's own frame.
   from memory (type including sand, intensity; plain reads, nothing is hooked or patched), so the art layer is not required for
   detection; the effects still follow the weather only on frames where the sky is drawn (indoors they fade out). It falls back to
   the textures the art layer ships when that read fails, and `WeatherMemory=0` uses only those and reads nothing from the weather state (they need the Northlight art layer; `Weather`, `RainFog`). Because the game's weather state does not depend on the `weatherDensity` setting, the rain look also comes on when the game's own rain particles are turned off; `Weather=0` (or F10) turns Northlight's weather look off. The game's rain streaks are drawn alpha-blended so they stay crisp instead of taking the background's colour, and the game's mist puffs, which darkened night and storm rain into black balls, are left out while it rains; snow and sand storms keep them.
+- **Camera weather.** Outdoor rain adds moving refractive droplets and trails; snow adds soft ice that adheres and melts. `RainLens` and `SnowLens` toggle them independently in the settings window, with `RainLensStrength` and `SnowLensStrength` from 0 to 100 (default 60). Both are on in every preset, require `Weather`, and disappear when the outdoor/shelter check fails. The pass is skipped when disabled or invisible.
 - **Fog clouds.** Low fog banks that drift with the wind, thicker and faster in rain, few and faint in clear
   weather and only in forest and grass zones then (its own half-resolution pass; `FogClouds`, `FogCloudDensity`). Ctrl+Shift+F7 (fog) and F10 turn
   them off with the rest; the Performance preset has them off. The fog is also smoothed over frames so lamp glows
@@ -103,7 +110,7 @@ Every effect below is on by default and is drawn on top of the game's own frame.
 | `tests/` | test runners (`test_*.py`), native tests (`test_*.cpp/.h`), release validators (`validate_*.py`, `verify_*.py`) |
 | `tests/support/`, `tests/fixtures/` | d3d9.h/windows.h shims for native builds; the archived baselines (old sources of this project, digests) that tests compare against. Real client data (shaders, doodad placements) is read from your client by `tests/client_fixtures.py`, never stored |
 | `northlight_paths.py` | the only place that knows where the client, toolchain and outputs are |
-| `client-config/` | tracked copies of the client-root profile `.ini` files |
+| `client-config/` | factory profile `.ini` files for packages and settings reset; personal client profiles may differ |
 | `*.py` (top level) | the art layer (MPQ patch) builder `build_art_layer.py` and its steps, `mpq.py`, `client_archives.py`, `renderer_status.py` (install/uninstall on macOS) |
 | `out/` | build and test output (ignored) |
 
@@ -249,6 +256,8 @@ Then make Wine load the game-folder `d3d9.dll` once, with the override `d3d9=n,b
 
 Northlight loads its own DXVK from `renderer-backends/`, so the DXVK option of Lutris, Bottles, Proton or
 the prefix does not matter. Leave it as it is, and do not copy a DXVK `d3d9.dll` into the game folder.
+
+On native Windows with bundled DXVK 3.1.1 and an NVIDIA adapter, Northlight disables Vulkan present-wait features to avoid a driver wait that can stall the client when its window is obscured. This can affect frame pacing. Set `[Renderer] DxvkPresentWaitWorkaround=0` in `northlight-renderer.ini` to restore the driver's present-wait path.
 WineD3D modes (`PROTON_USE_WINED3D=1`) bypass Northlight. 32-bit (lib32/i386) Vulkan drivers are needed,
 as for any DXVK game. Because Linux names are case-sensitive and Wine's are not, the installer stops
 when the game folder already has a case variant of a name it writes (for example `D3D9.dll`). The player

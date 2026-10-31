@@ -1,4 +1,5 @@
 #pragma once
+#include <filesystem>
 #include "celestial_profiles.h"
 #include "celestial_time_warp.h"
 
@@ -35,7 +36,7 @@ inline bool parse(std::istream& input,Table& out,std::string& error){
     if(input.bad()||!assigned)return fail();out=std::move(next);error.clear();return true;
 }
 inline bool load(const std::string& path,Table& out,std::string& error){
-    std::ifstream f(path,std::ios::binary);if(!f){error="no override; 928-unit defaults";return false;}
+    std::ifstream f(std::filesystem::u8path(path),std::ios::binary);if(!f){error="no override; 928-unit defaults";return false;}
     std::string text;if(!NorthlightCelestialProfiles::readIniText(f,text,error))return false;std::istringstream decoded(text);return parse(decoded,out,error);
 }
 // Keep the entire original cube. Outside it, retain a vertical corridor toward

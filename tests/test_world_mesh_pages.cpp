@@ -1,4 +1,5 @@
 #include "world_mesh_pages.h"
+#include "shadow_terrain.h"
 #include <cassert>
 #include <cstdio>
 #include <cstring>
@@ -28,8 +29,8 @@ static void verify(const WorldMeshUploadPlan& input,const P::Plan& output) {
     for(const auto& page:output.pages){
         assert(!page.vertices.empty()&&!page.indices.empty());
         assert(page.vertices.size()*sizeof(WorldVertex)<=P::PageVertexByteLimit);
-        assert(page.indices.size()*sizeof(uint32_t)<=P::PageIndexByteLimit);
-        vb+=page.vertices.size()*sizeof(WorldVertex);ib+=page.indices.size()*sizeof(uint32_t);
+        assert(page.indices.size()*sizeof(uint16_t)<=P::PageIndexByteLimit);
+        vb+=page.vertices.size()*sizeof(WorldVertex);ib+=page.indices.size()*sizeof(uint16_t);
     }
     std::vector<size_t> pageNext(output.pages.size());
     for(const auto& b:output.batches){
@@ -165,7 +166,7 @@ static void testAnchors(){
     }
     // Different content never shares a key; the key covers sizes, vertex bytes and index bytes.
     WorldScene s;WorldMeshUploadPlan in;makePlan(s,in,{1,2});P::Plan p;std::string error;assert(P::build(in,p,error)&&p.pages.size()>=1);
-    auto page=p.pages[0];auto key=[&](const P::Page& g){return NorthlightMeshPageKey::keyOf(g.vertices.data(),g.vertices.size()*32,g.indices.data(),g.indices.size()*4);};
+    auto page=p.pages[0];auto key=[&](const P::Page& g){return NorthlightMeshPageKey::keyOf(g.vertices.data(),g.vertices.size()*32,g.indices.data(),g.indices.size()*sizeof(uint16_t));};
     assert(key(page)==page.key);
     auto changed=page;changed.vertices[3].position.z+=1;assert(key(changed)!=page.key);
     changed=page;changed.indices[5]^=1;assert(key(changed)!=page.key);
@@ -295,7 +296,7 @@ static void testCompactSource(){
     input.vertexBytes=96;input.indexBytes=12;for(auto& m:input.materials)m.bgra={255,255,255,255};
     std::string error;P::Plan reference;assert(P::build(input,reference,error));
     const auto* vertices=scene->vertices.data();
-    input.pagingVertices=std::make_shared<const std::vector<WorldVertex>>(std::move(scene->vertices));
+    input.pagingVertices=std::make_shared<const std::vector<WorldVertex>>(std::move(*scene->vertices.flat()));
     input.completePlacements=std::move(scene->completePlacements);input.source=nullptr;scene.reset();
     assert(input.verticesForPaging()->data()==vertices);
     auto pages=std::make_shared<P::Plan>();assert(P::build(input,*pages,error));
@@ -318,4 +319,30 @@ static void testCompactSource(){
     assert(!input.pagingVertices&&input.completePlacements[0].modelKey=="preserve-owner");
     std::puts("PASS compact paging: zero-copy vertices, exact pages, a refused compaction keeps the page, strict ownership/count checks, transactional sealing");
 }
-int main(){testIndexMap();testVertexLimits();testIndexLimits();testKeepBatches();testDegenerateAndExactBoundary();testAnchors();testElision();testTransactionalFailure();testSeal();testCompactSource();std::puts("All world mesh page tests passed");}
+static void testSpooledPointTransmission(){
+    auto scene=[](float x,bool terrain){WorldScene s;s.vertices={{{x,0,0},{0,0,1},0,0},{{x+1,0,0},{0,0,1},1,0},{{x,1,0},{0,0,1},0,1}};s.triangles={{0,1,2,0}};WorldMaterial m;m.terrain=terrain;m.width=m.height=2;m.alphaCutoff=.5f;m.rgba={11,29,47,255,61,79,97,0,113,131,149,255,167,181,199,127};s.materials.push_back(m);return s;};
+    auto local=scene(0,false),terrain=scene(400,true),point=scene(2,false);point.materials[0].lampSourceId=17;
+    WorldMeshUploadPlan regular,spooled;std::string error;
+    assert(NorthlightShadowTerrain::build(local,terrain,{},regular,error,{},928,{},true,nullptr,nullptr,&point));
+    assert(NorthlightShadowTerrain::build(local,terrain,{},spooled,error,{},928,{},true,nullptr,nullptr,&point,true));
+    assert(regular.vertexCount==spooled.vertexCount&&regular.triangleCount==spooled.triangleCount);
+    for(size_t i=0;i<regular.pagingIndexCount();++i)assert(regular.pagingIndex(i)==spooled.pagingIndex(i));
+    assert(regular.materials.size()==spooled.materials.size());
+    for(size_t i=0;i<regular.materials.size();++i){const auto& a=regular.materials[i];const auto& b=spooled.materials[i];std::vector<uint8_t> bytes(b.pixelBytes());if(b.spooled)spooled.temporary->read(b.fileOffset,bytes.data(),bytes.size());else bytes=b.bgra;assert(a.bgra==bytes&&a.alphaCutoff==b.alphaCutoff&&a.textureIdentity==b.textureIdentity);}
+    auto a=std::make_shared<P::Plan>(),b=std::make_shared<P::Plan>();P::Options options;options.spooled=true;
+    assert(P::build(regular,*a,error)&&P::build(spooled,*b,error,{},options));assert(a->pages.size()==b->pages.size());
+    for(size_t i=0;i<a->pages.size();++i){const auto& before=a->pages[i];const auto& after=b->pages[i];assert(before.key==after.key&&after.spooled);std::vector<WorldVertex> vertices(before.vertices.size());std::vector<uint16_t> indices(before.indices.size());
+        assert(b->copy(after,true,0,vertices.size()*sizeof(WorldVertex),vertices.data())&&b->copy(after,false,0,indices.size()*2,indices.data()));
+        assert(!std::memcmp(vertices.data(),before.vertices.data(),vertices.size()*sizeof(WorldVertex))&&indices==before.indices);
+    }
+    assert(P::seal(spooled,b,error)&&!P::validateSealed(spooled));
+    assert(spooled.payload.live()&&spooled.payload.share()->pages->temporary);
+    const auto payload=spooled.payload.share();
+    for(size_t i=0;i<regular.materials.size();++i){const auto& material=payload->materials[i];std::vector<uint8_t> bytes(material.pixelBytes());
+        assert(payload->pages->copyMaterial(material,0,bytes.size(),bytes.data())&&bytes==regular.materials[i].bgra);
+        assert(material.spooled==(bytes.size()>4)&&material.textureIdentity==regular.materials[i].textureIdentity);
+        assert(!payload->pages->copyMaterial(material,bytes.size(),1,bytes.data()));
+    }
+    std::puts("PASS spooled point transmission: exact geometry, UVs, cutout texels, packed order, page bytes and retained recovery ownership");
+}
+int main(){testSpooledPointTransmission();testIndexMap();testVertexLimits();testIndexLimits();testKeepBatches();testDegenerateAndExactBoundary();testAnchors();testElision();testTransactionalFailure();testSeal();testCompactSource();std::puts("All world mesh page tests passed");}

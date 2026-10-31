@@ -1,0 +1,157 @@
+{
+  "source_sha256": "954f23cd108a31e101128aaf495fbd5baf8aa9b9a9917c09feb68dc53adc6069",
+  "target": "ps_3_0",
+  "compiler": "Microsoft d3dcompiler_47 10.0.17134.12 IEEE strict",
+  "compiler_sha256": "4432bbd1a390874f3f0a503d45cc48d346abc3a8c0213c289f4b615bf0ee84f3",
+  "game_launched": false,
+  "shaders": {
+    "RainQuality": {
+      "bytes": 3488,
+      "sha256": "b4114756ac7a2436c43ca3569aaaa7643f65956fd196ada4d0080eee84d1263b",
+      "static_instruction_slots": 181,
+      "temporary_registers": 6,
+      "samplers": [
+        3
+      ],
+      "instructions": {
+        "mov": 6,
+        "mul": 72,
+        "add": 59,
+        "rcp": 6,
+        "frc": 9,
+        "dp3": 9,
+        "dp2add": 3,
+        "max": 6,
+        "rsq": 3,
+        "texld": 1,
+        "cmp": 4
+      }
+    },
+    "SnowQuality": {
+      "bytes": 4384,
+      "sha256": "266a9c1284a7bb113ba62afc14134091421fa0f1819f3126aff1cfa79952b1c4",
+      "static_instruction_slots": 233,
+      "temporary_registers": 6,
+      "samplers": [
+        3
+      ],
+      "instructions": {
+        "mov": 5,
+        "mul": 98,
+        "add": 89,
+        "rcp": 6,
+        "frc": 12,
+        "dp3": 12,
+        "rsq": 3,
+        "texld": 1,
+        "cmp": 7
+      }
+    },
+    "RainPerformance": {
+      "bytes": 2720,
+      "sha256": "9840fc871916dcabaef3476481994aaa536005a49b5025e52e55cdc42ec23160",
+      "static_instruction_slots": 131,
+      "temporary_registers": 5,
+      "samplers": [
+        3
+      ],
+      "instructions": {
+        "mov": 5,
+        "mul": 53,
+        "add": 42,
+        "rcp": 5,
+        "frc": 6,
+        "dp3": 6,
+        "dp2add": 2,
+        "max": 4,
+        "rsq": 2,
+        "texld": 1,
+        "cmp": 3
+      }
+    },
+    "SnowPerformance": {
+      "bytes": 3344,
+      "sha256": "b9f653ca3cee66d8a592ca5dbd4490a5ff78bd223392ba3cce7c80afc30a028b",
+      "static_instruction_slots": 167,
+      "temporary_registers": 5,
+      "samplers": [
+        3
+      ],
+      "instructions": {
+        "mov": 5,
+        "mul": 70,
+        "add": 63,
+        "rcp": 5,
+        "frc": 8,
+        "dp3": 8,
+        "rsq": 2,
+        "texld": 1,
+        "cmp": 5
+      }
+    },
+    "RainLens": {
+      "bytes": 2604,
+      "sha256": "fccc18bb213b0e7cff13952f87f5b4dbbe9fbc0d8c4caae1e1e4fd19aa54f20d",
+      "static_instruction_slots": 139,
+      "temporary_registers": 4,
+      "samplers": [
+        0
+      ],
+      "instructions": {
+        "mov": 5,
+        "mul": 64,
+        "frc": 6,
+        "add": 48,
+        "dp2add": 2,
+        "dp3": 1,
+        "rcp": 6,
+        "max": 1,
+        "cmp": 1,
+        "rsq": 1,
+        "texld": 2
+      }
+    },
+    "SnowLens": {
+      "bytes": 2360,
+      "sha256": "139ebb74b075120060a237d438c7f4c75d0369476bb8b93d7280126a826e3204",
+      "static_instruction_slots": 127,
+      "temporary_registers": 5,
+      "samplers": [
+        0
+      ],
+      "instructions": {
+        "mov": 8,
+        "mul": 48,
+        "frc": 6,
+        "add": 44,
+        "dp2add": 4,
+        "dp3": 1,
+        "max": 1,
+        "rsq": 3,
+        "rcp": 7,
+        "texld": 1
+      }
+    },
+    "WeatherLensParticle": {
+      "bytes": 2908,
+      "sha256": "541807725d3b39f54ea99b200a484a86d5ecb9a578287b28b4c6a40272f25e0c",
+      "static_instruction_slots": 159,
+      "temporary_registers": 5,
+      "samplers": [
+        0
+      ],
+      "instructions": {
+        "add": 51,
+        "cmp": 6,
+        "mul": 69,
+        "dp2add": 4,
+        "rsq": 4,
+        "rcp": 16,
+        "max": 1,
+        "lrp": 1,
+        "mov": 1,
+        "texld": 1
+      }
+    }
+  }
+}

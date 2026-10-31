@@ -224,6 +224,7 @@ struct TargetExt:FakeDevice {
 // Reset and the rest are its own.
 struct TargetDevice:Counted<FakeDevice> {
     TargetExt ext;TSwapChain* sc=nullptr;int resets=0;
+    unsigned renderTargetCalls=0;std::thread::id renderTargetThread;
     const void* lastUpData=nullptr;const void* lastUpIdentity=nullptr;
     TargetDevice(){
         gActiveTarget=this;
@@ -255,7 +256,7 @@ struct TargetDevice:Counted<FakeDevice> {
     HRESULT SetPixelShaderConstantF(UINT r,const float* d,UINT n) override{return ext.SetPixelShaderConstantF(r,d,n);}
     HRESULT SetPixelShaderConstantI(UINT r,const int* d,UINT n) override{return ext.SetPixelShaderConstantI(r,d,n);}
     HRESULT SetPixelShaderConstantB(UINT r,const WINBOOL* d,UINT n) override{return ext.SetPixelShaderConstantB(r,d,n);}
-    HRESULT SetRenderTarget(DWORD i,IDirect3DSurface9* s) override{return ext.SetRenderTarget(i,unwrapFake(s));}
+    HRESULT SetRenderTarget(DWORD i,IDirect3DSurface9* s) override{++renderTargetCalls;renderTargetThread=std::this_thread::get_id();return ext.SetRenderTarget(i,unwrapFake(s));}
     HRESULT GetRenderTarget(DWORD i,IDirect3DSurface9** pp) override{return ext.GetRenderTarget(i,pp);}
     HRESULT SetDepthStencilSurface(IDirect3DSurface9* s) override{return ext.SetDepthStencilSurface(unwrapFake(s));}
     HRESULT GetDepthStencilSurface(IDirect3DSurface9** pp) override{return ext.GetDepthStencilSurface(pp);}

@@ -230,7 +230,7 @@ def ao_blur(sc, raw, i, j, diag=None, early=True, filt=f32):
     early=False skips the unoccluded early-out (the full path, for the identity check)."""
     taps = [(t-math.floor((t+.5)*.2)*5-2, math.floor((t+.5)*.2)-2) for t in range(25)]
     r = raw(i, j)
-    if early and early_min(raw, i, j, filt) >= EARLY_OUT:
+    if early and r[3] > .995 and early_min(raw, i, j, filt) >= EARLY_OUT:
         if diag is not None:
             diag['total'], diag['early'] = 1., True
         return r
@@ -433,9 +433,16 @@ def audit_source():
     assert 'exp2(-abs(dot(q - p, n)) * planeScale)' in blur
     # unoccluded early-out: 9 bilinear AO-only reads (s0) and a dynamic branch before any depth read
     early = blur.index('[branch] if (minAO >= 0.9995) return raw;')
-    assert re.search(r'for \(int k = 0; k < 9; \+\+k\)', blur[:early]) and 'ReadDepth' not in blur[:early], 'early-out first'
-    assert 'minAO = min(minAO, tex2Dlod(AmbientLinear, float4(uv + min(float2(k - krow * 3.0, krow) * 2.0 - 1.5, 2.0) * tapStep, 0, 0)).a);' in blur[:early]
-    assert 'float krow = floor((k + 0.5) * (1.0 / 3.0));' in blur[:early]
+    assert 'ReadDepth' not in blur[:early], 'early-out first'
+    assert '[branch] if (raw.a > 0.995)' in blur[:early], 'a dark centre proves filtering is necessary'
+    assert '[unroll] for (int y = 0; y < 3; ++y)' in blur[:early]
+    assert '[unroll] for (int x = 0; x < 3; ++x)' in blur[:early]
+    assert 'float2 footprint = min(float2(x, y) * 2.0 - 1.5, 2.0);' in blur[:early]
+    assert 'minAO = min(minAO, tex2Dlod(AmbientLinear, float4(uv + footprint * tapStep, 0, 0)).a);' in blur[:early]
+    assembly = (fp.COMPILED / 'AOBlur.bin.asm').read_text()
+    proof = assembly.split('if_lt', 1)[1].split('else', 1)[0]
+    assert len(re.findall(r'\btexldl\b', proof)) == 9
+    assert not re.search(r'\b(rep|loop|frc)\b', proof), 'Fixed proof coordinates were not folded'
     assert 'sampler2D AmbientLinear : register(s0);' in text and 'Scene' not in blur, 'AOBlur reads the raw AO on s0, never Scene'
     # the footprints (min(2s - 1.5, 2) for s = 0, 1, 2) cover exactly the 25 taps' texels, each once
     spots = [min(2*s_-1.5, 2.) for s_ in range(3)]
@@ -534,16 +541,18 @@ def audit_wiring():
     text = fp.src('renderer.cpp').read_text()
     fn = text[text.index('SetRenderTarget(0,aoRawSurface)')-400:]
     a = fn.index('SetRenderTarget(0,aoRawSurface)')
-    seq = [fn.index(s, a) for s in ('quad(width/2,height/2),"AO pass"', 'SetRenderTarget(0,aoSurface)', 'bindEffects(aoRaw)',
-                                    'SetTexture(0,aoRaw)', 'SetPixelShader(aoBlurPS)', 'quad(width/2,height/2),"AO blur pass"',
+    seq = [fn.index(s, a) for s in ('quad(width/2,height/2,false),"AO pass"', 'SetRenderTarget(0,aoSurface)', 'SetTexture(2,aoRaw)',
+                                    'SetTexture(0,aoRaw)', 'SetPixelShader(aoBlurPS)', 'gpuProfile->mark("AOBlurSetup")',
+                                    'aoBlurResult=quad(width/2,height/2,false)', 'error(aoBlurResult,"AO blur pass")',
                                     'ext->SetTexture(2,nullptr);ext->SetTexture(0,scene);',
                                     'auto legacyComposite', 'world->render(')]
     assert seq == sorted(seq), seq
-    assert 'SetPixelShader(constants[7]==0.f?aoContactBloomPS:aoPS)' in fn[a:seq[0]]
+    assert 'contactShader=aoActorUsed?(constants[7]==0.f?aoActorPS:aoActorAlphaPS):aoContactBloomPS;' in fn[:a]
+    assert 'SetPixelShader(constants[7]==0.f?contactShader:aoPS)' in fn[a:seq[0]]
     assert 'ext->SetTexture(2,ao); ext->SetPixelShader(compositePS)' in fn
-    assert re.search(r'fold\?scene:nullptr,fold\?ao:nullptr\)', fn), 'the world fold reads the blurred ao'
+    assert re.search(r'fold\?scene:nullptr,fold\?ao:nullptr,frame\)', fn), 'the world fold reads the blurred ao'
     assert re.search(r'if\(fold&&!world->composited\)\{effectState\(\);bindEffects\(ao\);', fn), 'fold fallback binds ao'
-    assert 'aoRaw' not in fn[seq[2]+len('bindEffects(aoRaw)'):].split('legacyComposite')[0].split('SetTexture(2,nullptr)')[1]
+    assert 'aoRaw' not in fn[seq[2]+len('SetTexture(2,aoRaw)'):].split('legacyComposite')[0].split('SetTexture(2,nullptr)')[1]
     for fmt in (r'!ao && error\(ext->CreateTexture\(w/2, h/2, 1, D3DUSAGE_RENDERTARGET, D3DFMT_A16B16G16R16F, D3DPOOL_DEFAULT, &ao,',
                 r'!aoRaw && error\(ext->CreateTexture\(w/2, h/2, 1, D3DUSAGE_RENDERTARGET, D3DFMT_A16B16G16R16F, D3DPOOL_DEFAULT, &aoRaw,'):
         assert re.search(fmt, text), fmt
@@ -558,16 +567,19 @@ def audit_contact_ao():
     the legacy path a neutral clear; ContactAO=1 keeps the raw AO then AOBlur sequence checked by audit_wiring."""
     text = fp.src('renderer.cpp').read_text()
     fn = text[text.index('bindEffects(nullptr);\n        if (!contactAO) {'):text.index('// 0.3.174 FOLD:')]
-    off, on = fn.split('        } else {\n            if (error(ext->SetRenderTarget(0,aoRawSurface)', 1)
-    on = '            if (error(ext->SetRenderTarget(0,aoRawSurface)' + on
+    off, on = fn.split('        } else {\n            IDirect3DTexture9* actorTexture=', 1)
+    on = '            IDirect3DTexture9* actorTexture=' + on
     assert 'constants[7]==0.f' in off
     ready, legacy = off.split('} else {', 1)
-    assert 'SetRenderTarget(0,aoSurface)' in ready and 'SetPixelShader(contactBloomPS)' in ready and 'quad(width/2,height/2)' in ready
+    assert 'SetRenderTarget(0,aoSurface)' in ready and 'SetPixelShader(contactBloomPS)' in ready and 'quad(width/2,height/2,false)' in ready
     assert 'aoRaw' not in off and 'aoPS' not in off and 'aoBlurPS' not in off and 'aoContactBloomPS' not in off, 'off path runs neither AO nor AOBlur'
+    assert 'aoActor' not in off, 'off path must not run actor preparation or actor AO'
     assert 'SetRenderTarget(0,aoSurface)' in legacy and 'ext->Clear(0,nullptr,D3DCLEAR_TARGET,D3DCOLOR_ARGB(255,0,0,0),1.f,0)' in legacy
     assert 'quad(' not in legacy and 'D3DCLEAR_ZBUFFER' not in legacy and 'D3DCLEAR_STENCIL' not in legacy
     assert off.count('effectsBuckets.mark(Bucket::AO)') == 1 and on.count('effectsBuckets.mark(Bucket::AO)') == 1
-    assert 'SetPixelShader(constants[7]==0.f?aoContactBloomPS:aoPS)' in on and 'SetPixelShader(aoBlurPS)' in on and 'contactBloomPS' not in on
+    assert 'contactShader=aoActorUsed?(constants[7]==0.f?aoActorPS:aoActorAlphaPS):aoContactBloomPS;' in on
+    assert 'SetPixelShader(constants[7]==0.f?contactShader:aoPS)' in on and 'SetPixelShader(aoBlurPS)' in on and 'contactBloomPS' not in on
+    assert 'if(aoActorUsed){ext->SetTexture(2,nullptr);ext->SetTexture(4,nullptr);}' in on, 'unbind preparation before the blur writes its target'
     assert 'bool contactAO=true;' in text and 'contactAO=world->contactAO();' in text
     assert 'drop(contactBloomPS)' in text and 'CreatePixelShader(kContactBloomShader, &contactBloomPS)' in text
     assert 'bool contactAO()const{return quality.contactAO!=0;}' in fp.src('world_renderer.h').read_text()
@@ -585,20 +597,40 @@ def audit_contact_ao():
     return {'contact_bloom_slots': c['static_instruction_slots']}
 
 
+def check_center_guard():
+    """A dark POINT centre proves one existing bilinear footprint fails the early-out."""
+    minimum_axis_weight = 1.
+    for full in range(1, 8193):
+        half = max(1, full//2)
+        for centre in {0, half//2, half-1}:
+            # The +.5 AO-step footprint moves M/N texels on an M=floor(N/2) grid.
+            weight = 1. if centre == half-1 else 1.-half/full
+            minimum_axis_weight = min(minimum_axis_weight, weight)
+    assert minimum_axis_weight >= .5
+    # Allow two 1/256-texel errors per axis, then fp16 rounding of each lerp.
+    weight = (minimum_axis_weight-2/256)**2
+    worst_mean = 1.-weight*(1.-.995)+2*2**-12
+    assert worst_mean < EARLY_OUT, (weight, worst_mean)
+    return {'minimum_axis_weight': minimum_axis_weight,
+            'conservative_center_weight': weight, 'worst_filtered_mean': worst_mean,
+            'early_out_threshold': EARLY_OUT, 'full_dimensions_checked': [1, 8192]}
+
+
 def run():
     pattern = check_pattern()
     silhouette = check_silhouette()
     passthrough = check_passthrough()
     early = check_early_out()
+    center_guard = check_center_guard()
     shader = audit_source()
     wiring = audit_wiring()
     contact = audit_contact_ao()
     checks = {'residual_reduced_4x': all(r['blurred_residual_rms'] <= r['raw_residual_rms']/RES_RATIO for r in pattern if r['class'] == 'lowfreq'),
               'grooved_residual_reduced': all(r['blurred_residual_rms'] <= min(r['raw_residual_rms']/GROOVE_RATIO, r['noise_free_residual_rms']) for r in pattern if r['class'] == 'groove'),
               'mean_preserved': all(abs(r['mean_shift']) < MEAN_TOL for r in pattern),
-              'silhouette_no_bleed': True, 'passthrough': True, 'early_out_identical': True, 'shader_source': True, 'renderer_wiring': wiring, 'contact_ao_off_path': bool(contact)}
+              'silhouette_no_bleed': True, 'passthrough': True, 'early_out_identical': True, 'center_guard_exact': bool(center_guard), 'shader_source': True, 'renderer_wiring': wiring, 'contact_ao_off_path': bool(contact)}
     report = {'result': 'pass', 'game_launched': False, 'gpu_test': False, 'checks': checks, 'pattern': pattern,
-              'silhouette': silhouette, 'passthrough': passthrough, 'early_out': early, 'shader': shader,
+              'silhouette': silhouette, 'passthrough': passthrough, 'early_out': early, 'center_guard': center_guard, 'shader': shader,
               'test_sha256': hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
               'limitations': ['CPU float32/float64 reference of AOImpl and AOBlur on synthetic surfaces.']}
     for name, ok in checks.items():

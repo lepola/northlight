@@ -226,7 +226,7 @@ def pen(width):
 def lit(s,i,j):
     k=s.depth(2*i+1,2*j+1)[0];return (.05,AMB+LEGACY*LG[1],1.) if k=='g' else ((.02,AMB,1.) if k=='w' else (0.,.3,1.))
 checks={};report={}
-comp=hlsl[hlsl.index('float4 WorldComposite('):hlsl.index('// Separate geometry pass')]
+comp=hlsl[hlsl.index('float4 worldComposite('):hlsl.index('// Separate geometry pass')]
 checks['WorldComposite: lighting/baseline/AO taps weighted by the colour term, fog tent untouched, no contactPull left']=(
     'float tapLuma=dot(tex2Dlod(Scene,float4(tapUV,0,0)).rgb,float3(.299,.587,.114));' in comp
     and 'float guide=16*abs(centreLuma-tapLuma)/(centreLuma+tapLuma+.02),bits=delta*depthBits;' in comp

@@ -18,8 +18,17 @@ inline constexpr unsigned ProbeLimit=128;inline constexpr float MaxDistance=48.f
 // follows them over ~FollowSeconds. Its light shows only this frame's samples:
 // no fade-in (it swallowed one-frame flashes) and no release tail.
 inline constexpr float FollowSeconds=.05f,MinEnergy=.003f;
-struct Sample {float position[3]{},rgb[3]{};float brightest=0;}; // brightest: the strongest sample merged into this one
+struct Sample {float position[3]{},rgb[3]{};float brightest=0;bool castsShadows=false;}; // brightest: the strongest sample merged into this one
 struct Cluster {Sample sample;unsigned count=0;};
+// Shadow intent requires every triangle of a compact mesh, never sparse
+// samples of a large glow or an unanchored particle cloud.
+inline bool compactMesh(const float* lo,const float* hi,unsigned read,unsigned total){
+    if(!total||total>TrianglesPerDraw||read!=total)return false;
+    float diameter2=0;
+    for(unsigned k=0;k<3;++k){if(!std::isfinite(lo[k])||!std::isfinite(hi[k])||hi[k]<lo[k])return false;
+        const float d=hi[k]-lo[k];diameter2+=d*d;}
+    return diameter2<=3.f*3.f;
+}
 inline float peak(const float* rgb){return std::max({rgb[0],rgb[1],rgb[2]});}
 inline float brightness(const Sample& s){return std::max(s.brightest,peak(s.rgb));}
 // One light per place, whatever the hue: a lightning texture's blue, pale blue and
@@ -44,6 +53,7 @@ struct Draw {
     }
 };
 inline void add(Cluster& cluster,const Sample& sample){
+    cluster.sample.castsShadows=cluster.sample.castsShadows&&sample.castsShadows;
     const float scale=1.f/float(cluster.count+1);cluster.sample.brightest=std::max(brightness(cluster.sample),brightness(sample));
     for(unsigned k=0;k<3;++k){cluster.sample.position[k]+=(sample.position[k]-cluster.sample.position[k])*scale;
         cluster.sample.rgb[k]+=(sample.rgb[k]-cluster.sample.rgb[k])*scale;}
@@ -52,7 +62,7 @@ inline void add(Cluster& cluster,const Sample& sample){
 class Frame {
     std::array<Cluster,Clusters> current_{};unsigned count_=0;
     std::array<Light,Capacity> previous_{};unsigned previousCount_=0;std::uint64_t serial_=0;
-    struct Track {float position[3]{},rgb[3]{},target[3]{};std::uint64_t id=0;bool seen=false;};
+    struct Track {float position[3]{},rgb[3]{},target[3]{};std::uint64_t id=0;bool seen=false,castsShadows=false;};
     std::array<Track,Tracks> tracks_{};unsigned trackCount_=0;
 public:
     std::array<Light,Capacity> output{};unsigned outputCount=0;
@@ -113,7 +123,7 @@ public:
                 *track={};track->id=0xfed0000000000000ull|++serial_;
                 for(unsigned k=0;k<3;++k){track->position[k]=s.position[k];track->target[k]=target[k];}
             }
-            track->seen=true;
+            track->seen=true;track->castsShadows=s.castsShadows;
         }
         std::array<Light,Tracks+Capacity> candidates{};unsigned count=0;
         for(unsigned t=0;t<trackCount_;){auto& c=tracks_[t];
@@ -121,23 +131,29 @@ public:
             if(!c.seen&&peak(c.rgb)<MinEnergy){c=tracks_[--trackCount_];continue;}
             Light l{};for(unsigned k=0;k<3;++k){l.position[k]=c.position[k];l.diffuse[k]=c.rgb[k];}
             l.attenuationStart=.5f;l.attenuationEnd=2.f+4.f*std::sqrt(std::min(1.f,peak(c.rgb)));l.kind=2;l.sourceId=c.id;
+            if(c.castsShadows)l.flags|=NorthlightLocalLights::CastShadow;
             candidates[count++]=l;++t;
         }
         const unsigned particleCount=count;
+        std::array<std::uint64_t,2*Capacity> forgotten;unsigned forgottenCount=0;
         for(unsigned i=0;native&&i<nativeCount&&i<Capacity;++i){
             bool duplicate=false;for(unsigned j=0;j<particleCount;++j)if(
                 NorthlightEquipmentLights::distance2(native[i].position,candidates[j].position)<1.f&&
-                NorthlightEquipmentLights::hueClose(native[i].diffuse,candidates[j].diffuse)){duplicate=true;selection.forget(native[i].sourceId);break;}
+                NorthlightEquipmentLights::hueClose(native[i].diffuse,candidates[j].diffuse)){duplicate=true;forgotten[forgottenCount++]=native[i].sourceId;break;}
             if(!duplicate)candidates[count++]=native[i];
         }
         const auto score=[&](const Light& l){return std::sqrt(NorthlightEquipmentLights::distance2(l.position,camera))-l.attenuationEnd;};
-        std::sort(candidates.begin(),candidates.begin()+count,[&](const Light& a,const Light& b){
-            const float as=score(a),bs=score(b);return as!=bs?as<bs:a.sourceId<b.sourceId;});
+        std::array<unsigned char,Tracks+Capacity> order;order[0]=0;
+        if(count>1){std::array<float,Tracks+Capacity> scores;
+            for(unsigned i=0;i<count;++i){order[i]=static_cast<unsigned char>(i);scores[i]=score(candidates[i]);}
+            std::sort(order.begin(),order.begin()+count,[&](unsigned char a,unsigned char b){
+                return scores[a]!=scores[b]?scores[a]<scores[b]:candidates[a].sourceId<candidates[b].sourceId;});}
         outputCount=std::min(count,Capacity);immediateCount=0;
-        for(unsigned i=0;i<outputCount;++i){output[i]=candidates[i];
+        for(unsigned i=0;i<outputCount;++i){output[i]=candidates[order[i]];
             if((output[i].sourceId&0xfff0000000000000ull)==0xfed0000000000000ull)immediate[immediateCount++]=output[i].sourceId;}
         for(unsigned i=0;i<previousCount_;++i)
-            if(std::find(immediate.begin(),immediate.begin()+immediateCount,previous_[i].sourceId)==immediate.begin()+immediateCount)selection.forget(previous_[i].sourceId);
+            if(std::find(immediate.begin(),immediate.begin()+immediateCount,previous_[i].sourceId)==immediate.begin()+immediateCount)forgotten[forgottenCount++]=previous_[i].sourceId;
+        if(forgottenCount){std::sort(forgotten.begin(),forgotten.begin()+forgottenCount);selection.forgetSorted(forgotten.data(),forgottenCount);}
         previousCount_=0;for(unsigned i=0;i<outputCount;++i)if(
             std::find(immediate.begin(),immediate.begin()+immediateCount,output[i].sourceId)!=immediate.begin()+immediateCount)previous_[previousCount_++]=output[i];
     }

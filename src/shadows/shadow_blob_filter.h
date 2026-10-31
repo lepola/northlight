@@ -1,7 +1,8 @@
 #pragma once
 // Identifies the game's unit "blob" shadow decal by texture content and lets the
 // device wrapper skip those draws (BlobShadowStrength=0) or draw them with a lighter
-// texture (1..99; skipped when the blend cannot be lightened) while the extension's own shadow maps are on.
+// texture (1..99; skipped when the blend cannot be lightened). BlobShadows=0 uses
+// strength 0 independently of replacement shadow availability.
 // Include after logf(const char*, ...). Never wraps or retains game textures:
 // a verdict is cached per texture pointer, re-validated by level description on
 // every claim and by content every 600 frames to survive pointer reuse.
@@ -56,7 +57,7 @@ class NorthlightShadowBlobFilter {
         v.width=desc.Width;v.height=desc.Height;v.format=desc.Format;
         if(desc.Width!=NorthlightShadowBlobModel::Width||desc.Height!=NorthlightShadowBlobModel::Height)return v;
         v.blob=contentMatches(texture,desc);
-        if(v.blob&&identified++<8)logf("SHADOWBLOB identified texture=%p %ux%u format=%u; native blob shadow draws follow BlobShadowStrength=%u while the extension draws actor shadows (0 skipped, 1..99 lighter texture under modulate blend, 100 unchanged)",static_cast<void*>(base),desc.Width,desc.Height,unsigned(desc.Format),strength);
+        if(v.blob&&identified++<8)logf("SHADOWBLOB identified texture=%p %ux%u format=%u; native blob shadow draws follow BlobShadowStrength=%u (0 skipped, 1..99 lighter texture under modulate blend, 100 unchanged)",static_cast<void*>(base),desc.Width,desc.Height,unsigned(desc.Format),strength);
         return v;
     }
     // 0.3.193: one lazily created A8R8G8B8 MANAGED texture (survives Reset) with the faint disc's mip chain.

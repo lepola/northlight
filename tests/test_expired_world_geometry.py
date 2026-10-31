@@ -20,9 +20,12 @@ start = source.index('    void releaseExpiredMesh(){')
 release = source[start:source.index('\n    }', start) + 6]
 assert 'retirementBacklog.retireOrFree(reaper,expiredPublication,snapshotRetireBytes(*expiredPublication));' in source
 assert 'expiredMeshMapChanged|=heldDrawable&&active->map!=r.map;' in source and 'active.reset();expiredMeshPending|=heldDrawable;' in source
-end_frame = source[source.index('    void endFrame(bool retainPool=true){'):source.index('    bool ready()const')]
+end_frame = source[source.index('    void endFrame(bool retainPool=true,unsigned rendererFrame=0){'):source.index('    bool ready()const')]
 assert end_frame.index('replays.clear();') < end_frame.index('releaseExpiredMesh();')
-assert 'if(workerMemoryTrim.exchange(false,std::memory_order_relaxed))localGeometry.reset();' in source  # a trim keeps the entry lift
+assert 'if(workerMemoryTrim.exchange(false,std::memory_order_relaxed))resetPreparation();' in source
+reset_preparation = source.split('auto resetPreparation=[&]{', 1)[1].split('};', 1)[0]
+assert all(owner + '.reset();' in reset_preparation for owner in ('meshPreparation', 'sceneSources', 'localGeometry'))
+assert 'entryLift' not in reset_preparation  # a trim keeps the entry lift
 
 fixture = r'''
 #include "world_streaming.h"
@@ -71,9 +74,9 @@ int main(){
  assert(resident==0);
  // Actual log failure: publication is a second owner. Cleanup before endFrame
  // must not free pages still used by replay; after frame retirement it recovers
- // enough modeled VA to meet the *unchanged* 768 MiB aggregate reserve.
+ // enough modeled VA to meet the configured 512 MiB aggregate entry threshold.
  {Harness h;h.install();std::weak_ptr<Counted> bvh=h.active->bvh,plan=h.active->plan;
-  h.r.camera=Vec3(160.01f,0,0);h.geometryMemoryDemand=768*MiB;const uint64_t totalFreeAndReclaimable=615*MiB+resident;
+  h.r.camera=Vec3(160.01f,0,0);h.geometryMemoryDemand=buildBudget().available;const uint64_t totalFreeAndReclaimable=359*MiB+resident;
   assert(!admits({totalFreeAndReclaimable-resident,115*MiB,true},buildBudget(64*MiB)));
   h.range();assert(!h.active&&!h.published&&h.expiredPublication&&!bvh.expired());
   assert(h.meshStore.bytes==67*MiB&&h.poolReleases==0);h.endFrame();
@@ -111,9 +114,9 @@ int main(){
  // both entry/interior aggregate and contiguous floors stay unchanged.
  {EntryLift lift;lift.refused(853*MiB,640*MiB,636*MiB,1000,53*MiB);
   assert(lift.apply(buildBudget(64*MiB),1001).available==857*MiB);lift.clear();
-  assert(lift.apply(buildBudget(64*MiB),1002).available==768*MiB);
-  assert(!admits({767*MiB,115*MiB,true},lift.apply(buildBudget(64*MiB),1002)));
-  assert(!admits({639*MiB,115*MiB,true},inBuildBudget()));}
+  assert(lift.apply(buildBudget(64*MiB),1002).available==512*MiB);
+  assert(!admits({511*MiB,115*MiB,true},lift.apply(buildBudget(64*MiB),1002)));
+  assert(!admits({383*MiB,115*MiB,true},inBuildBudget()));}
  std::puts("PASS expired geometry: hold bounds, publication owners, end-frame pages under demand/pressure, same-map pages kept for elision, same-frame replacement, map change, worker holder, unchanged memory reserves");
 }
 '''.replace('EXPIRY', expiry).replace('RELEASE', release)

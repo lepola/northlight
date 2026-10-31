@@ -39,6 +39,7 @@ constexpr float RingInner=2.f,RingOuter=4.f;
 // strength 0 = the profile disc tint, today's colour.
 struct Hue {
     float sun[3]={1,.96f,.88f},sunCore[3]={1,.96f,.88f},moon[3]={.94f,.97f,1};
+    bool nativeSun=false;
     float strength=0,moonStrength=0; // sun and moon hue mix
 };
 inline float clamp01(float x){return std::isfinite(x)?std::clamp(x,0.f,1.f):0.f;}
@@ -65,8 +66,9 @@ inline float sunTailWeight(float sunElevationSine){return SunTailWeight+(SunTail
 inline void glareConstants(const Hue& hue,unsigned body,const float* tint,float tail,float wrap,float* c47,float* c48){
     const float m=clamp01(body?hue.moonStrength:hue.strength);
     for(unsigned k=0;k<3;++k){
-        const float t=clamp01(tint[k]);
-        c47[k]=t+(clamp01(body?hue.moon[k]:hue.sun[k])-t)*m;c48[k]=t+(clamp01(body?hue.moon[k]:hue.sunCore[k])-t)*m;
+        if(!body&&hue.nativeSun)c47[k]=c48[k]=clamp01(hue.sun[k]);
+        else{const float t=clamp01(tint[k]);
+            c47[k]=t+(clamp01(body?hue.moon[k]:hue.sun[k])-t)*m;c48[k]=t+(clamp01(body?hue.moon[k]:hue.sunCore[k])-t)*m;}
     }
     c47[3]=body?0.f:std::max(tail,0.f);c48[3]=body?0.f:clamp01(wrap);
 }

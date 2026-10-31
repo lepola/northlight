@@ -16,6 +16,27 @@ using NorthlightSettings::Field;
 
 static In::Decision route(unsigned msg,In::State& s,std::uintptr_t w=0,std::intptr_t l=0,In::Modifiers m={}){return In::route(msg,w,l,m,s);}
 
+static void masterHotkey(){
+    In::MasterHotkey key;const In::Modifiers chord{true,true,false};
+    const auto press=[&]{key.message(In::Msg::KeyDown,In::VkF1+9,0,chord,true);};
+    // A whole press/release before a frame must survive, exactly once.
+    press();key.message(In::Msg::KeyUp,In::VkF1+9,0,{},true);
+    CHECK(key.take(true));CHECK(!key.take(true));
+    press();key.message(In::Msg::KeyDown,In::VkF1+9,std::intptr_t(1)<<30,chord,true);
+    CHECK(key.take(true));CHECK(!key.take(true));
+    // Two fast presses restore the original state; three invert it.
+    press();press();CHECK(!key.take(true));press();press();press();CHECK(key.take(true));
+    key.message(In::Msg::KeyDown,In::VkF1+9,0,chord,false);CHECK(!key.take(true));
+    key.message(In::Msg::KeyDown,In::VkF1+9,0,{true,false,false},true);CHECK(!key.take(true));
+    key.message(In::Msg::KeyDown,In::VkF1+8,0,chord,true);CHECK(!key.take(true));
+    press();key.message(In::Msg::KillFocus,0,0,{},false);CHECK(!key.take(true));
+    press();key.message(In::Msg::ActivateApp,0,0,{},false);CHECK(!key.take(true));
+    press();CHECK(!key.take(false));CHECK(!key.take(true));
+    // Alt is accepted as by the original polling shortcut, including system keys.
+    key.message(In::Msg::SysKeyDown,In::VkF1+9,0,{true,true,true},true);CHECK(key.take(true));
+    press();key.clear();CHECK(!key.take(true));
+}
+
 static void routing(){
     In::Modifiers hot;hot.ctrl=hot.shift=true;
     {   // Closed: everything reaches the game and nothing is queued.
@@ -186,6 +207,9 @@ static void draft(){
     d.set(preset,"Quality");CHECK(!d.edited(preset)&&d.empty());
     // Mode fields read as Off / Normal maps / Normal maps + POM.
     CHECK(D::modeField(bump)&&D::modeOptions(bump).size()==3&&!D::modeField(strength));
+    {auto model=bump;model.key="AutoBumpModels";model.high="3";CHECK(D::modeField(model)&&D::modeOptions(model)==std::vector<std::string>({"0","1","2","3"}));
+     auto terrain=bump;terrain.high="3";CHECK(D::modeOptions(terrain).size()==4);
+     auto grass=bump;grass.key="AutoBumpGrass";grass.high="1";CHECK(D::modeOptions(grass)==std::vector<std::string>({"0","1"}));}
     // Regional Sun/Moon keys inherit the default profile, including its draft.
     CHECK(d.effective(sunRegion)=="1,0.9,0.8"&&!d.overrides(sunRegion)&&d.overrides(sunDefault));
     d.set(sunDefault,"0.5,0.5,0.5");CHECK(d.effective(sunRegion)=="0.5,0.5,0.5");
@@ -212,7 +236,7 @@ static void draft(){
 }
 
 int main(){
-    routing();draft();
+    masterHotkey();routing();draft();
     if(failures){std::fprintf(stderr,"%d failure(s)\n",failures);return 1;}
     std::puts("settings overlay: routing and draft OK");
     return 0;

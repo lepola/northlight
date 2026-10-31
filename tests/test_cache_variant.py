@@ -42,6 +42,7 @@ with tempfile.TemporaryDirectory(prefix='northlight-cache-variant-') as work:
         names = [i.filename for i in infos]
         assert names[0] == bcv.MANIFEST and names[1:] == sorted(names[1:])
         assert all(bcv.ALLOWLIST.fullmatch(n) for n in names[1:]), [n for n in names[1:] if not bcv.ALLOWLIST.fullmatch(n)]
+        assert 'lights/Azeroth.fga' in names and z.read('lights/Azeroth.fga').startswith(b'FGA1')
         assert all(i.compress_type == zipfile.ZIP_DEFLATED and i.date_time == bcv.ZIP_TIME for i in infos)
         kinds = {n.split('/')[0] for n in names[1:]}
         assert kinds == {'Azeroth', 'models', 'lights', 'fog', 'celestial'}, kinds

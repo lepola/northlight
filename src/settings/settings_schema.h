@@ -15,12 +15,21 @@ using Documents=std::array<Document,4>;
 inline Documents documents(const Images& a){Documents d;for(unsigned i=0;i<4;++i)d[i]=Document(a[i].raw);return d;}
 inline Documents factoryDocuments(){return {Document("[Quality]\nPreset=Quality\n"),Document("[Renderer]\nBackend=dxvk\n"),Document(kSettingsFactoryCelestial),Document(kSettingsFactoryShadowRange)};}
 inline std::string number(float f){std::ostringstream s;s<<std::setprecision(6)<<f;return s.str();}
+inline std::string migrateHdr(const std::filesystem::path& root){
+    try{Store store(root,3000);const auto before=store.read();auto docs=documents(before);auto values=docs[1].values();
+        if(values["renderer"]["hdrpipelineversion"]=="2")return "";
+        for(const auto& section:values)for(const auto& key:section.second)
+            if(section.first.rfind("hdr.",0)==0||(section.first=="renderer"&&(key.first.rfind("hdr",0)==0||key.first=="experimentalhdr")))docs[1].set(section.first,key.first,nullptr);
+        for(unsigned i=0;i<NorthlightHdrSettingsContract::Count;++i){const auto& key=NorthlightHdrSettingsContract::Keys[i];const auto value=i==0?"1":NorthlightHdrSettingsContract::mode(key)?"Auto":number(key.value);docs[1].set("Renderer",key.name,&value);}
+        const std::string version="2";docs[1].set("Renderer","HDRPipelineVersion",&version);auto after=before;after[1]={true,docs[1].bytes()};store.commit(before,after);return "";
+    }catch(const std::exception& error){return std::string("HDR migration failed: ")+error.what();}
+}
 inline bool liveQuality(const std::string& key){
-    static const std::set<std::string> restart={"CommandStream","StreamFramesAhead","StreamFrameSkip","StreamOcclusionLocal","GIThreads","GIFastBVH","GIRays","GIDistance","NameMask","SpellLayer","EquipmentLights"};
+    static const std::set<std::string> restart={"CommandStream","StreamFramesAhead","StreamFrameSkip","StreamOcclusionLocal","GIThreads","GIFastBVH","GIRays","GIDistance","NameMask","SpellLayer"};
     return restart.count(key)==0;
 }
 inline NorthlightQuality::Settings liveQualityUpdate(NorthlightQuality::Settings current,const NorthlightQuality::Settings& next){for(const auto& k:NorthlightQuality::Keys)if(liveQuality(k.name))current.*k.field=next.*k.field;current.preset=next.preset;return NorthlightQuality::effective(current);}
-struct Config{NorthlightQuality::Settings quality;NorthlightCelestialProfiles::Table celestial;std::array<float,std::size(NorthlightHdrSettingsContract::Keys)> hdr={0,203,160,1000,1,0};};
+struct Config{NorthlightQuality::Settings quality;NorthlightCelestialProfiles::Table celestial;std::array<float,NorthlightHdrSettingsContract::Count> hdr=NorthlightHdrSettingsContract::defaults();};
 // Only these live inputs can change the worker's GI Request. Display settings
 // still apply immediately without cancelling an otherwise identical solve.
 inline bool giRequestChanged(const NorthlightQuality::Settings& before,const NorthlightQuality::Settings& after,
@@ -37,11 +46,12 @@ inline bool giRequestChanged(const NorthlightQuality::Settings& before,const Nor
     return false;
 }
 inline NorthlightQuality::Settings qualityOf(const Document& d,const std::string& legacy){std::istringstream q(d.text()),l(legacy);std::vector<std::string> warnings;return NorthlightQuality::load(&q,&l,warnings);}
-inline Config configOf(const Documents& d,const std::string& legacy,bool validate=false){
+inline Config configOf(const Documents& d,const std::string& legacy,bool validate=false,const std::string& hdrProfile=""){
     Config c;c.quality=qualityOf(d[0],legacy);std::string error;std::istringstream celestial(d[2].text()),shadow(d[3].text());NorthlightRegionalShadow::Table ranges;
     if(!NorthlightCelestialProfiles::parse(celestial,c.celestial,error)&&validate)throw std::runtime_error("Celestial: "+error);
     if(!NorthlightRegionalShadow::parse(shadow,ranges,error)&&validate)throw std::runtime_error("Shadow range: "+error);
-    auto renderer=d[1].values();for(unsigned i=0;i<c.hdr.size();++i){const auto& key=NorthlightHdrSettingsContract::Keys[i];c.hdr[i]=NorthlightHdrSettingsContract::read(key,renderer["renderer"][lower(key.name)]);}return c;
+    auto renderer=d[1].values();for(unsigned i=0;i<c.hdr.size();++i){const auto& key=NorthlightHdrSettingsContract::Keys[i];const auto section=!hdrProfile.empty()&&NorthlightHdrSettingsContract::displayKey(i)?"hdr."+hdrProfile:"renderer";
+        c.hdr[i]=NorthlightHdrSettingsContract::read(key,renderer[section][lower(key.name)]);}return c;
 }
 inline std::pair<std::string,uint32_t> region(const std::string& section){
     auto colon=section.find(':');if(colon==section.npos)throw std::runtime_error("Unknown region");auto map=lower(section.substr(0,colon)),id=section.substr(colon+1);
@@ -62,12 +72,13 @@ struct Field {
 };
 // Case-insensitive match against a comma list of options; unknown values (and "~") stay as written so validation still reports them.
 inline std::string canonicalOption(const std::string& value,const std::string& options){
+    if(options=="Manual,Auto"){float mode=0;if(NorthlightHdrSettingsContract::parse(value,mode)&&(mode==0||mode==1))return NorthlightHdrSettingsContract::modeName(mode);}
     std::istringstream s(options);std::string o;while(std::getline(s,o,','))if(lower(o)==lower(value))return o;return value;
 }
-inline std::vector<Field> schema(const Documents& docs,const Documents& initial,const Config& active,const std::string& legacy,const std::string& backendOptions="native,dxvk,dxvk2,legacy"){
+inline std::vector<Field> schema(const Documents& docs,const Documents& initial,const Config& active,const std::string& legacy,const std::string& backendOptions="native,dxvk,dxvk2,legacy",const std::string& hdrProfile=""){
     auto factory=factoryDocuments();const auto available=","+backendOptions+",";
     const std::string factoryBackend=available.find(",dxvk,")!=available.npos?"dxvk":available.find(",dxvk2,")!=available.npos?"dxvk2":"native";factory[1].set("Renderer","Backend",&factoryBackend);
-    const auto saved=configOf(docs,legacy),defaults=configOf(factory,legacy);std::vector<Field> out;
+    const auto saved=configOf(docs,legacy,false,hdrProfile),defaults=configOf(factory,legacy);std::vector<Field> out;
     std::array<Values,4> savedValues,factoryValues,initialValues;
     for(unsigned i=0;i<4;++i){savedValues[i]=docs[i].values();factoryValues[i]=factory[i].values();initialValues[i]=initial[i].values();}
     const auto legacyQuality=qualityOf(Document("[Quality]\nPreset=Quality\n"),legacy);
@@ -78,12 +89,16 @@ inline std::vector<Field> schema(const Documents& docs,const Documents& initial,
     for(const auto& k:NorthlightQuality::Keys){Field f;f.section="Quality";f.key=k.name;f.kind=k.low==0&&k.high==1?"check":"slider";f.low=std::to_string(k.low);f.high=std::to_string(k.high);
         f.saved=std::to_string(saved.quality.*k.field);f.active=std::to_string(active.quality.*k.field);f.factory=std::to_string(defaults.quality.*k.field);f.apply=liveQuality(k.name)?"F":"R";
         f.options=std::to_string(legacyQuality.*k.field)+","+std::to_string(k.preset[1])+","+std::to_string(k.preset[2]);f.inherited=std::to_string(saved.quality.preset==NorthlightQuality::Preset::Quality?legacyQuality.*k.field:k.preset[unsigned(saved.quality.preset)]);
-        if(f.key=="AOMethod"){const char* names[]={"SSAO","HDAO","HBAOPlus","GTAO"};f.kind="enum";f.saved=names[std::min(3u,unsigned(std::stoul(f.saved)))];f.active=names[std::min(3u,unsigned(std::stoul(f.active)))];f.factory=f.inherited="SSAO";f.options="SSAO,HDAO,HBAOPlus,GTAO";}
+        if(f.key=="AOMethod"){const char* names[]={"SSAO","HDAO","HBAOPlus","GTAO"};f.kind="enum";f.saved=names[saved.quality.aoMethod];f.active=names[active.quality.aoMethod];f.factory=f.inherited="SSAO";f.options="SSAO,HDAO,HBAOPlus,GTAO";}
+        if(f.key=="AOQuality"){f.kind="enum";f.saved=NorthlightQuality::aoQualityName(saved.quality.aoQuality);f.active=NorthlightQuality::aoQualityName(active.quality.aoQuality);f.factory=f.inherited="High";f.options="High,Medium,Low";}
         add(f);out.back().origin=std::string(1,saved.quality.origin[index++]);}
     Field b;b.file=1;b.section="Renderer";b.key="Backend";b.kind="enum";b.saved=lower(explicitValue(savedValues[1],b.section,b.key));if(b.saved=="~")b.saved="legacy";b.active=lower(explicitValue(initialValues[1],b.section,b.key));if(b.active=="~")b.active="legacy";b.factory=factoryBackend;b.inherited="legacy";b.options=backendOptions;add(b);
-    unsigned hdrIndex=0;for(const auto& key:NorthlightHdrSettingsContract::Keys){Field f;f.file=1;f.section="Renderer";f.key=key.name;f.kind=key.low==0&&key.high==1?"check":"slider";f.low=number(key.low);f.high=number(key.high);f.step=number(key.step);f.factory=f.inherited=number(key.value);f.apply=hdrIndex?"F":"R";f.available=false; /* no HDR consumer in this build: kept in the snapshot so the files are preserved, shown disabled, never writable */
+    unsigned hdrIndex=0;for(const auto& key:NorthlightHdrSettingsContract::Keys){Field f;f.file=1;f.section="Renderer";f.key=key.name;f.kind=key.low==0&&key.high==1?"check":"slider";f.low=number(key.low);f.high=number(key.high);f.step=number(key.step);f.factory=f.inherited=number(key.value);f.apply="F";
+        if(!hdrProfile.empty()&&NorthlightHdrSettingsContract::displayKey(hdrIndex))f.section="HDR."+hdrProfile;
         f.saved=number(NorthlightHdrSettingsContract::read(key,explicitValue(savedValues[1],f.section,f.key)));
-        f.active=number(hdrIndex?active.hdr[hdrIndex]:NorthlightHdrSettingsContract::read(key,explicitValue(initialValues[1],f.section,f.key)));++hdrIndex;add(f);}
+        f.active=number(active.hdr[hdrIndex]);
+        if(NorthlightHdrSettingsContract::mode(key)){f.kind="enum";f.options="Manual,Auto";f.saved=NorthlightHdrSettingsContract::modeName(saved.hdr[hdrIndex]);f.active=NorthlightHdrSettingsContract::modeName(active.hdr[hdrIndex]);f.factory=f.inherited=NorthlightHdrSettingsContract::modeName(key.value);}
+        ++hdrIndex;add(f);}
     for(unsigned file=2;file<4;++file){std::set<std::string> sections;if(file==2)sections.insert("default");
         for(const auto* v:std::array<const Values*,2>{&savedValues[file],&factoryValues[file]})for(const auto& s:*v)if(!s.first.empty()&&s.first!="default")sections.insert(regionName(s.first));
         for(const auto& section:sections){

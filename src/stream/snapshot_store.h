@@ -8,6 +8,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
+#include <limits>
 #include <memory>
 #include <mutex>
 #include <vector>
@@ -16,6 +17,9 @@
 #endif
 
 namespace NorthlightStream {
+#ifdef NORTHLIGHT_REPLAY_STAND
+namespace StandInputs {class Session;}
+#endif
 // Process-wide counters, flushed from per-snapshot counts so the per-read path touches no atomic.
 struct SnapshotStats {
     static inline std::atomic<unsigned long long> hits{0},misses{0},triggers{0},overflow{0},unavailable{0},ageDraws{0},ageSamples{0};
@@ -24,25 +28,30 @@ struct SnapshotStats {
 // and must see live bytes (a snapshot never holds them; a hit would be a stale answer to a code check).
 // The fixed-base 3.3.5a image has its code in [0x401000,0xA00000) (PE .text; the vtables, globals and the heap
 // that every snapshot key points at all lie above 0xA00000), so that is the fallback and the bound when the
-// section table is not readable. On Windows the executable sections of the main module refine it.
+// section table is not readable. On Windows readonly code sections refine it;
+// writable executable .zdata must not extend this range across runtime globals.
 struct CodeRange {
     std::uintptr_t lo=0x400000,hi=0xA00000;
-    bool contains(std::uintptr_t a)const{return a>=lo&&a<hi;}
+    bool contains(std::uintptr_t a,std::size_t bytes=1)const{return a>=lo&&a<hi&&bytes<=hi-a;}
 };
-// Executable sections from an in-memory PE32 image (headers only, bounds checked against `size`); false if it is
-// not a PE or has no executable section. [base, end of the last executable section) is the range.
+// Readonly code sections of the supported fixed-base PE32 image (headers only).
+// A writable executable section is runtime data, not a signature-only domain.
 inline bool parseImageCode(const unsigned char* image,std::size_t size,std::uintptr_t base,CodeRange& out){
     auto u16=[&](std::size_t at){std::uint16_t v=0;std::memcpy(&v,image+at,2);return v;};
     auto u32=[&](std::size_t at){std::uint32_t v=0;std::memcpy(&v,image+at,4);return v;};
     if(!image||size<0x40||u16(0)!=0x5a4d)return false;
     const std::size_t nt=u32(0x3c);
     if(nt>size||size-nt<24||u32(nt)!=0x4550)return false;
-    const std::size_t sections=u16(nt+6),optional=u16(nt+20),table=nt+24+optional;
+    const std::size_t sections=u16(nt+6),optional=u16(nt+20);
+    if(optional>size-nt-24)return false;
+    const std::size_t table=nt+24+optional;
     if(!sections||sections>96||table>size||size-table<sections*40)return false;
     std::uintptr_t end=0;
     for(std::size_t i=0;i<sections;++i){
         const std::size_t s=table+i*40;const std::uint32_t flags=u32(s+36),virtualSize=u32(s+8),rva=u32(s+12);
-        if(!(flags&(0x20u|0x20000000u))||!virtualSize)continue;
+        if((flags&0x80000000u)||!(flags&(0x20u|0x20000000u))||!virtualSize)continue;
+        const auto maximum=(std::numeric_limits<std::uintptr_t>::max)();
+        if(rva>maximum-base||virtualSize>maximum-base-rva)return false;
         const std::uintptr_t top=base+rva+virtualSize;if(top>end)end=top;
     }
     if(!end||end<=base)return false;
@@ -69,11 +78,23 @@ public:
     static constexpr std::size_t ArenaBytes=64*1024,MaxKeys=64,MaxCopies=256;
     enum class Mode:std::uint8_t{Idle,Recording,Playing};
     enum class Serve:std::uint8_t{Miss,Ok,Failed};
+#ifdef NORTHLIGHT_REPLAY_STAND
+    static constexpr unsigned MaxTextureAliases=10;
+    struct TextureAlias {std::uint64_t oldId=0,proxy=0,generation=0;};
+    struct TextureAliases {TextureAlias entries[MaxTextureAliases]{};unsigned count=0;bool sealed=false;};
+    const TextureAliases& textureAliases()const noexcept{return aliases_;}
+#endif
     Mode mode=Mode::Idle;
     // Which trigger took it and the draw ordinal of that draw; the consumer's age is its own draw ordinal minus this.
     std::uint32_t triggerKind=0;std::uint64_t triggerDraw=0;
     unsigned long hits=0,misses=0; // this activation, flushed by ScopedPlayback
-    void clear(){keyCount_=copyCount_=0;used_=0;overflowed_=false;mode=Mode::Idle;triggerKind=0;triggerDraw=0;hits=misses=0;}
+    // Only record() writes payloads; reads require a fully initialized FIFO.
+    GameSnapshot()noexcept{}
+    void clear(){keyCount_=copyCount_=0;used_=0;overflowed_=false;mode=Mode::Idle;triggerKind=0;triggerDraw=0;hits=misses=0;
+#ifdef NORTHLIGHT_REPLAY_STAND
+        aliases_={};
+#endif
+    }
     bool usable()const{return !overflowed_&&copyCount_>0;}
     bool overflowed()const{return overflowed_;}
     std::size_t keys()const{return keyCount_;}
@@ -105,8 +126,26 @@ public:
         if(!copy.ok)return Serve::Failed;
         std::memcpy(out,arena_+copy.offset,size);return Serve::Ok;
     }
+    // Explicit archive/stand readers require a recorded FIFO entry. Production
+    // serve() deliberately retains its existing last-copy/live fallback policy.
+    Serve serveRecorded(std::uintptr_t address,void* out,std::size_t size){
+        if(!out&&size)return Serve::Miss;
+        const Key* key=find(address,size);if(!key||key->cursor==None)return Serve::Miss;
+        unsigned char empty=0;return serve(address,size?out:&empty,size);
+    }
+    template<class Visitor> bool visitRecorded(Visitor&& visit)const{
+        if(!usable())return false;
+        for(std::size_t i=0;i<keyCount_;++i){const Key& key=keys_[i];
+            for(auto index=key.head;index!=None;index=copies_[index].next){const Copy& copy=copies_[index];
+                if(!visit(key.address,key.size,copy.ok,copy.ok?arena_+copy.offset:nullptr))return false;}}
+        return true;
+    }
     bool has(std::uintptr_t address,std::size_t size)const{for(std::size_t i=0;i<keyCount_;++i)if(keys_[i].address==address&&keys_[i].size==size)return true;return false;}
 private:
+#ifdef NORTHLIGHT_REPLAY_STAND
+    friend class StandInputs::Session;
+    TextureAliases aliases_;
+#endif
     static constexpr std::uint16_t None=0xffff;
     struct Key{std::uintptr_t address;std::uint32_t size;std::uint16_t head,tail,cursor;};
     struct Copy{std::uint32_t offset;std::uint16_t next;bool ok;};
@@ -124,7 +163,7 @@ inline thread_local GameSnapshot* activeSnapshot=nullptr;
 // The whole readSelf policy, with the live read as a parameter. Code-range addresses are always live and never
 // recorded. Recording: live read, then append. Playing: a hit is served from the snapshot, a miss reads live.
 template<class Live> inline bool snapshotRead(GameSnapshot& s,std::uintptr_t address,void* out,std::size_t size,Live live,const CodeRange& range){
-    if(range.contains(address)||s.mode==GameSnapshot::Mode::Idle)return live(address,out,size);
+    if(range.contains(address,size)||s.mode==GameSnapshot::Mode::Idle)return live(address,out,size);
     if(s.mode==GameSnapshot::Mode::Recording){const bool ok=live(address,out,size);s.record(address,out,size,ok);return ok;}
     switch(s.serve(address,out,size)){
         case GameSnapshot::Serve::Ok:++s.hits;return true;

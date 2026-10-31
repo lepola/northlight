@@ -41,7 +41,7 @@ assert 'old.epoch!=epoch_||old.instancing!=canInstance_||std::memcmp(old.matrix,
 assert 'staticFull=%u staticPartial=%u partialRects=%u partialBounding=%u costFull=%u' in src
 # 0.3.151 StaticCacheSlices (static_cache_slices.h). The default 1 never starts a cycle:
 # sliceable() is gated on the key, so no slice state is touched.
-assert 'if(NorthlightStaticSlices::sliceable(quality.staticCacheSlices,partialStatic,diagnosticCapture!=0,StaticCacheDirtyRectVerify)){' in src
+assert 'if(NorthlightStaticSlices::sliceable(quality.staticCacheSlices,partialStatic,shadowDiagnosticCapture!=0,StaticCacheDirtyRectVerify)){' in src
 assert src.count('slices.start(')==1 and 'staticSlices[4]' in src and 'for(auto& c:staticSlices)c.reset();' in src
 # Any placement/local-content reason drops a cycle before the change detection (full redraw).
 assert src.index('auto& slices=staticSlices[slot];if(reason)slices.reset();')>src.index('reason="local-content"')

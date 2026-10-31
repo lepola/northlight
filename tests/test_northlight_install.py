@@ -218,9 +218,14 @@ class Preflight(Base):
         self.assertIn('--locale', self.refused())
 
     def test_non_ascii_path(self):
-        moved = self.base / 'Spiel-Äpfel' / 'WoW'
+        moved = self.base / 'Игра-Äpfel-世界-🎮' / 'WoW'
         moved.parent.mkdir(parents=True); self.client.rename(moved); self.client = moved
-        self.assertIn('non-ASCII', self.refused())
+        self.installer().install(self.client, instances='classic-raids')
+        report = self.installer().install(self.client)
+        self.assertEqual(report['instances']['kept'], ['classic-raids'])
+        with patch.object(sys, 'stdout', io.StringIO()):
+            self.installer().uninstall(self.client)
+        self.assertEqual(tree(self.client), self.before)
 
     def test_game_running(self):
         inst = self.installer(); inst.running = lambda: ['wow.exe']
@@ -683,6 +688,14 @@ class Install(Base):
         self.installer().uninstall(self.client)
         self.assertEqual(tree(self.client), self.before)
 
+    def test_art_ownership_survives_a_moved_client(self):
+        self.installer().install(self.client)
+        for backup in self.backups():
+            record = json.loads(backup.read_text())
+            record['client'] = str(self.base / 'old-game-location')
+            INSTALL.atomic_json(backup, record)
+        self.assertEqual(self.installer().foreign_z(self.client, 'enUS'), [])
+
     def test_stacked_migrations_leave_one_mac_record(self):
         if self.platform != 'mac':
             self.skipTest('macOS proxy migrations only')
@@ -891,8 +904,61 @@ class Install(Base):
         self.assertEqual(yes.choose_instances(self.client, None), ['wotlk-dungeons'])       # ... it keeps what is there
         self.assertEqual(yes.choose_instances(self.client, 'none'), [])                     # the argument wins
         prompts = self.tty('1')
-        self.assertEqual(self.installer().choose_instances(self.client, None), ['classic-dungeons'])
-        self.assertIn('Enter to keep: Wrath dungeons >', prompts[0])
+        self.assertEqual(self.installer().choose_instances(self.client, None), ['wotlk-dungeons'])
+        self.assertEqual(prompts, [])
+        self.assertEqual(self.installer().choose_instances(self.client, '1'), ['classic-dungeons'])
+
+    def test_update_keeps_saved_groups_without_prompting(self):
+        self.installer().install(self.client, instances='all')
+        prompts = self.tty()
+        report = self.installer().install(self.client)
+        self.assertEqual(prompts, [])
+        self.assertEqual(report['instances']['built'], [])
+        self.assertEqual(report['instances']['kept'], list(instance_maps.KEYS))
+
+    def test_current_local_cache_wins_over_prebuilt_without_extra_space(self):
+        import install_world_cache as iwc
+        self.installer().install(self.client)
+        (self.client / fi.CACHE / fi.VARIANT_FILE).unlink()
+        INSTALL.atomic_json(self.client / fi.CACHE / 'install-manifest.json', {'format': fi.LOCAL_FORMAT})
+        inst = self.installer()
+        inst.free_bytes = lambda path: fi.MIN_FREE
+        with patch.object(iwc, 'plan', return_value=('up_to_date', [])), \
+             patch.object(inst, 'find_source', side_effect=AssertionError('should keep the local cache')):
+            report = inst.install(self.client)
+        self.assertEqual(report['world_cache'], 'kept (up to date)')
+
+    def test_local_light_update_wins_over_prebuilt(self):
+        import install_world_cache as iwc
+        self.installer().install(self.client)
+        (self.client / fi.CACHE / fi.VARIANT_FILE).unlink()
+        INSTALL.atomic_json(self.client / fi.CACHE / 'install-manifest.json', {'format': fi.LOCAL_FORMAT})
+        inst = self.installer()
+        inst.free_bytes = lambda path: 2 * fi.MIN_FREE
+        with patch.object(iwc, 'plan', return_value=('partial', ['lights'])), \
+             patch.object(inst, 'find_source', side_effect=AssertionError('should only update the lights')):
+            plan = inst.plan_install(self.client, None, None, None, True, True)
+        self.assertEqual(plan['action'], 'build')
+
+    def test_update_remembers_none_without_prompting(self):
+        self.installer().install(self.client, instances='none')
+        self.assertEqual(json.loads((self.client / fi.CHOICE).read_text()), {'groups': []})
+        prompts = self.tty()
+        self.installer().install(self.client)
+        self.assertEqual(prompts, [])
+        self.assertEqual(self.instance_calls(), [])
+
+    def test_selection_survives_continent_build_failure(self):
+        self.variant = None
+        inst = self.installer()
+        def fail(*args):
+            raise fi.Failed('interrupted continent build')
+        inst.build_cache = fail
+        with self.assertRaises(fi.Failed):
+            inst.install(self.client, instances='1 6')
+        prompts = self.tty()
+        self.assertEqual(self.installer().choose_instances(self.client, None), ['classic-dungeons', 'wotlk-raids'])
+        self.assertEqual(prompts, [])
 
     def test_no_terminal_takes_the_default(self):
         with patch.object(sys, 'stdin', None):

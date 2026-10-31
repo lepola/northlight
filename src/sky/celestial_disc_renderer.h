@@ -21,6 +21,8 @@ class NorthlightCelestialDiscRenderer {
     static constexpr float SunMaskRadius=NorthlightCelestialGlow::SunMaskRadius,MoonMaskRadius=NorthlightCelestialGlow::MoonMaskRadius;
     static constexpr float SunGlareSupport=NorthlightCelestialGlow::SunGlareSupport,MoonGlareSupport=NorthlightCelestialGlow::MoonGlareSupport;
     IDirect3DDevice9* d;std::string root;NorthlightCelestialDisc::NativeObserver observer;
+    IDirect3DSurface9* hdrSkyTarget=nullptr; // borrowed for this frame
+    std::function<IDirect3DSurface9*()> beginHdrSky;
     IDirect3DTexture9* texture[2]={};unsigned textureWidth[2]={};IDirect3DPixelShader9* ps=nullptr;
     IDirect3DTexture9* terrainMask[2]={};IDirect3DSurface9* terrainSurface[2]={};
     IDirect3DVertexShader9* terrainVS=nullptr;IDirect3DPixelShader9* terrainPS=nullptr;
@@ -195,11 +197,13 @@ private:
 public:
     void setTerrainSource(std::function<uint64_t()> epoch,std::function<bool(unsigned,const float*)> draw,std::function<void(unsigned)> reuse=nullptr){terrainEpoch=std::move(epoch);terrainDraw=std::move(draw);terrainReuse=std::move(reuse);}
     explicit NorthlightCelestialDiscRenderer(IDirect3DDevice9* device,std::string sourceRoot="world-cache/celestial"):d(device),root(std::move(sourceRoot)){}
+    void setHdrSkyTarget(IDirect3DSurface9* target){hdrSkyTarget=target;}
+    void setHdrSkyCapture(std::function<IDirect3DSurface9*()> begin){beginHdrSky=std::move(begin);}
     ~NorthlightCelestialDiscRenderer(){reset();}
     NorthlightCelestialDiscRenderer(const NorthlightCelestialDiscRenderer&)=delete;
     void reset(){earlySkyOk=false;earlySkyMap.clear();for(auto& s:ringSurface)drop(s);for(auto& t:ringVisibility)drop(t);drop(veilPS);ringIndex=0;ringHistory={};ringWritten=false;sunGlare=Glare{};glow=NorthlightCelestialGlow::Hue{};
         for(unsigned i=0;i<2;++i){edge[i]={};haloWritten[i]=false;haloFrame[i]=0;}
-        for(auto& t:terrainMask)drop(t);for(auto& t:terrainSurface)drop(t);drop(terrainVS);drop(terrainPS);for(unsigned i=0;i<2;++i){terrainReady[i]=false;terrainGeneration[i]=0;std::fill(terrainCamera[i],terrainCamera[i]+3,0.f);terrainNear[i]=0;}maskFarClip=0;skyBand={};for(auto& h:haloHistory)h={};for(auto& body:haloSurface)for(auto& s:body)drop(s);for(auto& body:haloVisibility)for(auto& t:body)drop(t);drop(haloPS);haloIndex[0]=haloIndex[1]=0;for(auto& p:earlyPlacement)p.valid=false;for(auto& t:texture)drop(t);drop(ps);observer.reset();loaded=false;failed=false;drawn=0;earlyValid=false;drawnEarly=0;earlyWidth=earlyHeight=0;glareRead=false;drawnLate=offscreenOwned=0;suppressed=suppressedPrevious=lateOwnedPrevious=0;ownFrame=~0u;skyMode.reset();skyModePrevious=-1;renderFrame=~0u;}
+        for(auto& t:terrainMask)drop(t);for(auto& t:terrainSurface)drop(t);drop(terrainVS);drop(terrainPS);for(unsigned i=0;i<2;++i){terrainReady[i]=false;terrainGeneration[i]=0;std::fill(terrainCamera[i],terrainCamera[i]+3,0.f);terrainNear[i]=0;}maskFarClip=0;skyBand={};for(auto& h:haloHistory)h={};for(auto& body:haloSurface)for(auto& s:body)drop(s);for(auto& body:haloVisibility)for(auto& t:body)drop(t);drop(haloPS);haloIndex[0]=haloIndex[1]=0;for(auto& p:earlyPlacement)p.valid=false;for(auto& t:texture)drop(t);drop(ps);observer.reset();loaded=false;failed=false;drawn=0;earlyValid=false;drawnEarly=drawnSkyboxEarly=0;earlyWidth=earlyHeight=0;glareRead=false;drawnLate=offscreenOwned=0;suppressed=suppressedPrevious=lateOwnedPrevious=0;ownFrame=~0u;skyMode.reset();skyModePrevious=-1;renderFrame=~0u;}
     // Ownership: once the renderer has a validated sky context,
     // the game's own sun/primary-moon billboards are skipped on later frames.
     // Native planet draws are replaced in place, before clouds and opaque
@@ -207,13 +211,13 @@ public:
     // restores native draws. Missing terrain must not alternate native/custom moon.
     unsigned claimedDraws=0;
     void setIdentityMap(std::function<std::uintptr_t(std::uintptr_t)> map){observer.setIdentityMap(std::move(map));glareRead=false;}
-    void endFrame(){lateOwnedPrevious=drawnLate;suppressedPrevious=suppressed;suppressed=0;terrainReady[0]=terrainReady[1]=false;sunGlare.valid=false;for(auto& p:earlyPlacement)p.valid=false;observer.beginFrame();drawn=0;++frames;drawnEarly=0;drawnLate=offscreenOwned=0;glareRead=false;skyMode.endFrame();}
+    void endFrame(){lateOwnedPrevious=drawnLate;suppressedPrevious=suppressed;suppressed=0;terrainReady[0]=terrainReady[1]=false;sunGlare.valid=false;for(auto& p:earlyPlacement)p.valid=false;observer.beginFrame();drawn=0;++frames;drawnEarly=drawnSkyboxEarly=0;drawnLate=offscreenOwned=0;glareRead=false;skyMode.endFrame();}
     // Sky-phase draw: the native billboard is replaced IN PLACE by our disc,
     // drawn with sky-band depth before the zone skybox and the world, so
     // everything drawn later (skybox mountains, terrain, trees) covers it
     // exactly like the native moon. Uses the current client camera (independent
     // reader), a validated projection, and a fresh orbit/appearance snapshot.
-    float earlyProjection[3]={};float earlyWorldMaxDepth=1;bool earlyValid=false;UINT earlyWidth=0,earlyHeight=0;unsigned drawnEarly=0,earlyFailures=0;
+    float earlyProjection[3]={};float earlyWorldMaxDepth=1;bool earlyValid=false;UINT earlyWidth=0,earlyHeight=0;unsigned drawnEarly=0,drawnSkyboxEarly=0,earlyFailures=0;
     unsigned claimGate=0,claimNoBody=0,claimCamera=0,claimOffscreen=0,claimDrawn=0,claimSecondary=0;
     // Side-effect-free prefixes of the claim/observe gates, so callers can skip
     // their viewport validation for draws both claims would reject anyway.
@@ -226,18 +230,18 @@ public:
         if(!glare&&!draw)++claimGate;return glare||draw;
     }
     bool nativeObservePossible(HRESULT result,D3DPRIMITIVETYPE type,UINT count){return SUCCEEDED(result)&&!failed&&count&&count<=4&&skyTriangles(type);}
-    template<class Palette> bool claimNativeDraw(D3DPRIMITIVETYPE type,UINT count,bool skyPhase,Palette palette){
-        if(!earlyValid||failed||!skyPhase||count>4||!count||
+    template<class Palette> bool claimNativeDraw(D3DPRIMITIVETYPE type,UINT count,bool skyPhase,Palette palette,bool skyboxTrigger=false){
+        if(!earlyValid||failed||!skyPhase||(!skyboxTrigger&&count>4)||!count||
            (type!=D3DPT_TRIANGLELIST&&type!=D3DPT_TRIANGLESTRIP&&type!=D3DPT_TRIANGLEFAN)||!load()){++claimGate;return false;}
         IDirect3DBaseTexture9* source=nullptr;int body=-1;
-        if(SUCCEEDED(d->GetTexture(0,&source))){body=observer.claimIndex(source);drop(source);}
+        if(skyboxTrigger)body=0;else if(SUCCEEDED(d->GetTexture(0,&source))){body=observer.claimIndex(source);drop(source);}
         if(body<0){++claimNoBody;return false;}
         if(body==2){if(!owning())return false;++claimSecondary;return true;} // native moon02 is skipped, never redrawn
         D3DVIEWPORT9 nativeViewport={};
         if(SUCCEEDED(d->GetViewport(&nativeViewport)))
             skyBand.observe(nativeViewport.MinZ,nativeViewport.MaxZ,earlyWorldMaxDepth);
-        if(drawnEarly&(1u<<body))return true; // replace each body only once per frame
-        if(skyMode.skybox())return claimSuppress(body);
+        if(!skyboxTrigger&&(drawnEarly&(1u<<body)))return true; // replace each native body only once per frame
+        if(!skyboxTrigger&&skyMode.skybox())return claimSuppress(body);
         // Current camera from the client; without it the native draw stays.
         char map[64]={};NorthlightWorldCamera::Camera camera;NorthlightWorldCamera::Diagnostics why;
         if(!NorthlightWorldCamera::readSkyPhase(map,earlyProjection[2],camera,&why)){++claimCamera;if(earlyFailures++<4)logf("CELESTIAL early draw skipped: camera %s",NorthlightWorldCamera::rejectName(why.reason));return false;}
@@ -248,7 +252,8 @@ public:
             earlySkyHeld=currentSky;earlySkyMap=map;earlySkyAt=now;earlySkyOk=true;
         }else if(earlySkyOk&&earlySkyMap==map&&DWORD(now-earlySkyAt)<=2000){currentSky=earlySkyHeld;++claimSkyHeld;}
         else{++claimCamera;return false;}
-        if(skyboxFrame(currentSky))return claimSuppress(body);
+        if(skyboxTrigger){if(std::strcmp(map,"Northrend")||!NorthlightCelestial::skyboxVerified()||!skyboxFrame(currentSky))return false;}
+        else if(skyboxFrame(currentSky))return claimSuppress(body);
         NorthlightCelestial::resolveRendererSky(currentSky,neutralDirect);
         NorthlightCelestialProfiles::apply(palette(map,camera.camera),neutralDirect,currentSky);
         IDirect3DSurface9* target=nullptr;D3DSURFACE_DESC desc={};
@@ -261,7 +266,7 @@ public:
         // Both bodies share the native planet phase. A zone may omit one native
         // billboard entirely; place it here too, before the cloud layers.
         for(unsigned i=0;i<2;++i){
-            if(drawnEarly&(1u<<i))continue;
+            if((skyboxTrigger?drawnSkyboxEarly:drawnEarly)&(1u<<i))continue;
             NorthlightCelestialDisc::Disc disc;int bounds[4],glareBounds[4];
             if(!NorthlightCelestialDisc::prepare(bodies[i]->direction,bodies[i]->tint,bodies[i]->alpha,bodies[i]->angularRadius,disc)){
                 offscreenOwned|=1u<<i;++claimOffscreen;continue;
@@ -270,12 +275,17 @@ public:
             auto halo=disc;halo.tangentRadius*=i?MoonGlareSupport:4.f;
             const bool glareVisible=NorthlightCelestialDisc::screenBounds(halo,camera.inverseView,earlyProjection[0],earlyProjection[1],earlyProjection[2],desc.Width,desc.Height,glareBounds);
             if(i?!glareVisible:!surfaceVisible){offscreenOwned|=1u<<i;++claimOffscreen;continue;}
-            if(!prepareTerrain(i,disc,camera.inverseView)||
-               (surfaceVisible&&!drawDisc(i,target,desc.Width,desc.Height,earlyProjection,camera.inverseView,disc,bounds,nullptr,nullptr,0,earlyWorldMaxDepth,1,2,nullptr,false,bodies[i]->emission)))return (drawnEarly&(1u<<body))!=0;
-            drawnEarly|=1u<<i;++claimDrawn;
+            if(!prepareTerrain(i,disc,camera.inverseView))return (drawnEarly&(1u<<body))!=0;
+            // Capture before the SDR body, only for an on-screen owned source.
+            if(!hdrSkyTarget&&beginHdrSky)hdrSkyTarget=beginHdrSky();
+            if(surfaceVisible&&!drawDisc(i,target,desc.Width,desc.Height,earlyProjection,camera.inverseView,disc,bounds,nullptr,nullptr,0,earlyWorldMaxDepth,1,2,nullptr,false,bodies[i]->emission))return (drawnEarly&(1u<<body))!=0;
+            if(surfaceVisible){drawnEarly|=1u<<i;if(skyboxTrigger)drawnSkyboxEarly|=1u<<i;++claimDrawn;}
+            if(surfaceVisible&&hdrSkyTarget)drawDisc(i,hdrSkyTarget,desc.Width,desc.Height,earlyProjection,camera.inverseView,disc,bounds,nullptr,nullptr,0,earlyWorldMaxDepth,1,2,nullptr,false,bodies[i]->emission);
             // The lunar surface and its full halo share cloud/weather blending.
             // Solar keeps only its compact core here; its broad tail stays late.
-            if(glareVisible&&!drawDisc(i,target,desc.Width,desc.Height,earlyProjection,camera.inverseView,disc,glareBounds,nullptr,nullptr,0,earlyWorldMaxDepth,1,2,nullptr,false,bodies[i]->emission,true))return (drawnEarly&(1u<<body))!=0;
+            if(glareVisible){if(!drawDisc(i,target,desc.Width,desc.Height,earlyProjection,camera.inverseView,disc,glareBounds,nullptr,nullptr,0,earlyWorldMaxDepth,1,2,nullptr,false,bodies[i]->emission,true))return (drawnEarly&(1u<<body))!=0;
+                if(hdrSkyTarget)drawDisc(i,hdrSkyTarget,desc.Width,desc.Height,earlyProjection,camera.inverseView,disc,glareBounds,nullptr,nullptr,0,earlyWorldMaxDepth,1,2,nullptr,false,bodies[i]->emission,true);
+                if(!surfaceVisible){drawnEarly|=1u<<i;if(skyboxTrigger)drawnSkyboxEarly|=1u<<i;++claimDrawn;}}
         }
         return true;
     }
@@ -333,6 +343,7 @@ public:
             if(!hasDepth)return false;
         }
         DWORD srgb=0;if(!check(d->GetRenderState(D3DRS_SRGBWRITEENABLE,&srgb),"read color encoding"))return false;
+        D3DSURFACE_DESC targetDesc{};target->GetDesc(&targetDesc);const bool hdr=targetDesc.Format==D3DFMT_A16B16G16R16F;
         if(occlude)d->SetDepthStencilSurface(nullptr);for(unsigned k=1;k<4;++k)d->SetRenderTarget(k,nullptr);
         for(unsigned k=0;k<16;++k)d->SetTexture(k,nullptr);
         if(!check(d->SetRenderTarget(0,target),"target"))return false;
@@ -345,6 +356,7 @@ public:
           {D3DRS_CULLMODE,D3DCULL_NONE},{D3DRS_COLORWRITEENABLE,7},{D3DRS_FOGENABLE,FALSE},{D3DRS_STENCILENABLE,FALSE},{D3DRS_SCISSORTESTENABLE,TRUE},
           {D3DRS_CLIPPLANEENABLE,0},{D3DRS_DEPTHBIAS,0},{D3DRS_SLOPESCALEDEPTHBIAS,0},{D3DRS_FILLMODE,D3DFILL_SOLID},{D3DRS_MULTISAMPLEMASK,0xffffffff},{D3DRS_WRAP0,0}};
         for(auto& s:states)d->SetRenderState(s.s,s.v);
+        if(hdr){d->SetRenderState(D3DRS_SRGBWRITEENABLE,FALSE);if(glare)d->SetRenderState(D3DRS_SRCBLEND,D3DBLEND_ONE);}
         d->SetTextureStageState(0,D3DTSS_TEXCOORDINDEX,0);d->SetTextureStageState(0,D3DTSS_TEXTURETRANSFORMFLAGS,D3DTTFF_DISABLE);
         for(unsigned k=0;k<6;++k){d->SetSamplerState(k,D3DSAMP_ADDRESSU,D3DTADDRESS_CLAMP);d->SetSamplerState(k,D3DSAMP_ADDRESSV,D3DTADDRESS_CLAMP);
             d->SetSamplerState(k,D3DSAMP_MINFILTER,(k==1||k==4)?D3DTEXF_LINEAR:D3DTEXF_POINT);d->SetSamplerState(k,D3DSAMP_MAGFILTER,(k==1||k==4)?D3DTEXF_LINEAR:D3DTEXF_POINT);
@@ -367,7 +379,7 @@ public:
         c[12][2]*=fade;c[47][3]*=fade;
         if(glare){const float gain=weatherGain.load(std::memory_order_relaxed);c[12][2]*=gain;c[47][3]*=gain;} /* 0.3.198 (rain): x1 when dry */
         (void)legacyFog;c[11][0]=repairDepth;c[11][1]=repairDepth>=0?1.f:0.f;c[11][2]=NorthlightCelestialDisc::RepairDepthTolerance;c[11][3]=i==0?1.f:0.f;
-        std::memcpy(c[1],projection,12);c[1][3]=water?1.f:0.f;std::memcpy(c[2],inverseView,64);c[10][0]=srgb?1.f:0.f;c[10][1]=nearZ;c[10][2]=farZ;c[10][3]=occlude?1.f:0.f;
+        std::memcpy(c[1],projection,12);c[1][3]=water?1.f:0.f;std::memcpy(c[2],inverseView,64);c[10][0]=hdr?(i?3.f:2.f):srgb?1.f:0.f;c[10][1]=nearZ;c[10][2]=farZ;c[10][3]=occlude?1.f:0.f;
         struct V{float x,y,z,w,u,v;} vertices[]={{-.5f,-.5f,spriteDepth,1,0,0},{float(width)-.5f,-.5f,spriteDepth,1,1,0},{-.5f,float(height)-.5f,spriteDepth,1,0,1},{float(width)-.5f,float(height)-.5f,spriteDepth,1,1,1}};
         D3DVIEWPORT9 viewport={0,0,width,height,0,1};d->SetViewport(&viewport);
         std::memcpy(c[6],disc.direction,12);c[6][3]=disc.tangentRadius;std::memcpy(c[7],disc.right,12);std::memcpy(c[8],disc.up,12);
@@ -440,7 +452,7 @@ public:
         std::memcpy(earlyProjection,projection,12);earlyWorldMaxDepth=maxZ;earlyWidth=width;earlyHeight=height;earlyValid=true;
         const bool skybox=skyboxFrame(context);
         for(unsigned i=0;i<2;++i){
-            if(NorthlightCelestial::lateBody(skybox,(drawnEarly>>i)&1,(offscreenOwned>>i)&1,observer.lateDisc(i,suppressed),context.skyboxCover>0)){
+            if(NorthlightCelestial::lateBody(skybox,(drawnEarly>>i)&1,(offscreenOwned>>i)&1,observer.lateDisc(i,suppressed),context.skyboxCover>0,(drawnSkyboxEarly>>i)&1)){
                 // Skybox frame, or a body the planet phase did not cover (e.g. an interior skybox the sky snapshot missed): the
                 // pre-planet-phase late path. The disc is depth-occluded by the world and sky model; the full glare (compact
                 // core and tail) follows it with the same placement. A failed body must not take the other one with it.
@@ -518,7 +530,7 @@ public:
         // The glare weights already carry the edge fade; scale both by the veil.
         const float veil=NorthlightCelestialGlow::veilStrength(c[9][3],1,hazeAtSun,skyTransmittance);
         c[12][2]=0;c[47][3]*=veil; // diffuse bloom may cross an occluder; the compact core never does
-        c[10][0]=0; // SRGBWRITE off: encoded output, like the composite before it
+        D3DSURFACE_DESC desc{};target->GetDesc(&desc);c[10][0]=desc.Format==D3DFMT_A16B16G16R16F?2.f:0.f;
         const bool ring=ringWritten&&ringFrame==frames;c[48][3]=ring?NorthlightCelestialGlow::ringWrap(g.disc.direction[2],std::sin(std::atan(g.disc.tangentRadius))):0.f;
         if(!(veil>0)||!(c[12][2]+c[47][3]>0)){++veilStats.skipped;return false;}
         if(!veilPS&&!check(d->CreatePixelShader(kCelestialVeilPSShader,&veilPS),"veil shader"))return false;

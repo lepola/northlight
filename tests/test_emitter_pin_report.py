@@ -45,9 +45,10 @@ class PinReport(unittest.TestCase):
                 continue
             blob=self.assets['all'].read(path)
             if x['status']=='matched':
-                # One light per reviewed emitter: a profile may pin several emitters in one model.
+                # The report pins source bytes; the builder's compact-fixture
+                # policy may combine several authored emitters from that pin.
                 pin=outdoor_light_profiles.pinned(catalog[path])[hashlib.sha256(blob).hexdigest()]
-                self.assertEqual(len(outdoor_light_profiles.fallback(catalog,path,blob,[])),len(pin.get('emitters',[pin])))
+                self.assertEqual(len(outdoor_light_profiles.fallback(catalog,path,blob,[])),len(outdoor_light_profiles.fixture_emitters(pin)))
                 self.assertIn('pin',x)
             else:
                 with self.assertRaises(ValueError):outdoor_light_profiles.fallback(catalog,path,blob,[])

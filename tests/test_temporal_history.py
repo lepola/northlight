@@ -53,17 +53,22 @@ checks['A1 lines unchanged except the F2 gate (full to .25 px, none from .5)'] =
 
 # ---- 2. sampler states: s14 LINEAR only in the temporal pass, s15 stays POINT ----
 block = w[w.index('{   // Temporal stabilization: light + history'):w.index('temporalIndex=prev;temporalValid=true;')]
-loop = ('for(unsigned sampler=14;sampler<16;++sampler){d->SetSamplerState(sampler,D3DSAMP_ADDRESSU,D3DTADDRESS_CLAMP);'
+loop = ('for(unsigned sampler=14;sampler<16;++sampler){if(sampler==15&&removalDrawn)continue;d->SetSamplerState(sampler,D3DSAMP_ADDRESSU,D3DTADDRESS_CLAMP);'
         'd->SetSamplerState(sampler,D3DSAMP_ADDRESSV,D3DTADDRESS_CLAMP);'
         'd->SetSamplerState(sampler,D3DSAMP_MINFILTER,sampler==14?D3DTEXF_LINEAR:D3DTEXF_POINT);'
         'd->SetSamplerState(sampler,D3DSAMP_MAGFILTER,sampler==14?D3DTEXF_LINEAR:D3DTEXF_POINT);'
         'd->SetSamplerState(sampler,D3DSAMP_MIPFILTER,D3DTEXF_NONE);d->SetSamplerState(sampler,D3DSAMP_SRGBTEXTURE,FALSE);}')
+fog_loop = loop.replace('if(sampler==15&&removalDrawn)continue;', '')
 normals = ('d->SetTexture(14,normalBuffer);d->SetSamplerState(14,D3DSAMP_ADDRESSU,D3DTADDRESS_CLAMP);'
            'd->SetSamplerState(14,D3DSAMP_ADDRESSV,D3DTADDRESS_CLAMP);d->SetSamplerState(14,D3DSAMP_MINFILTER,D3DTEXF_POINT);'
            'd->SetSamplerState(14,D3DSAMP_MAGFILTER,D3DTEXF_POINT);')
 checks['s14 LINEAR (history) and s15 POINT (depth) in the temporal pass; the normals setup resets s14 POINT first'] = (
     block.count(loop) == 1 and w.count(normals) == 1 and w.index(normals) < w.index(block)
-    and 'sampler==14?D3DTEXF_LINEAR' not in w.replace(loop, '') and not re.search(r'SetSamplerState\((14|15),D3DSAMP_M(IN|AG)FILTER,D3DTEXF_LINEAR', w))
+    and all(block.count('d->SetSamplerState(15,D3DSAMP_'+state+','+value+');') == 1 for state,value in
+            [('ADDRESSU','D3DTADDRESS_CLAMP'),('ADDRESSV','D3DTADDRESS_CLAMP'),('MINFILTER','D3DTEXF_POINT'),
+             ('MAGFILTER','D3DTEXF_POINT'),('MIPFILTER','D3DTEXF_NONE'),('SRGBTEXTURE','FALSE')])
+    and block.index('if(removalDrawn){') < block.index('d->SetSamplerState(15,D3DSAMP_ADDRESSU') < block.index(loop)
+    and w.count(fog_loop) == 1 and 'sampler==14?D3DTEXF_LINEAR' not in w.replace(loop, '').replace(fog_loop, '') and not re.search(r'SetSamplerState\((14|15),D3DSAMP_M(IN|AG)FILTER,D3DTEXF_LINEAR', w))
 keys = {'BilinearHistory', 'TemporalHistory', 'HistoryFilter'}
 config = [fp.src('quality_settings.h').read_text(), fp.src('windows-package/northlight-quality.ini').read_text(),
           fp.src('windows-package/README.txt').read_text(encoding='utf-8')]

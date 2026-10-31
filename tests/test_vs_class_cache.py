@@ -28,6 +28,9 @@ HARNESS=r'''
 #include <cstdio>
 #include <unordered_map>
 #include <unordered_set>
+#include <vector>
+#include "native_shadow_observation.h"
+using DWORD=std::uint32_t;
 using uint64_t=std::uint64_t;
 struct IDirect3DVertexShader9{};
 struct World{unsigned wmoCalls=0;std::unordered_map<IDirect3DVertexShader9*,int> wmo;
@@ -35,8 +38,9 @@ struct World{unsigned wmoCalls=0;std::unordered_map<IDirect3DVertexShader9*,int>
     bool isWorldShader(IDirect3DVertexShader9* s){return wmo.count(s)!=0;}
     bool isSkinnedShader(IDirect3DVertexShader9*){return false;}};
 struct Cls{
-    static constexpr int kFamilyShift=3;
+    static constexpr int kFamilyShift=3,kNativeShadowTag=64;
     std::unordered_map<IDirect3DVertexShader9*,int> vsTags;std::unordered_map<IDirect3DVertexShader9*,uint64_t> vsHashes;
+    std::unordered_map<IDirect3DVertexShader9*,NorthlightNativeShadow::Proof> nativeShadowProofs;
     World* world=nullptr;
 @CLS@
     void registerVS(IDirect3DVertexShader9* s,int tag){++vsGeneration;vsTags[s]=tag;}
@@ -85,8 +89,16 @@ int main(){
         assert(c.classifyVs(&a).entry==1&&!c.lastVs.wmo&&c.vsCacheMisses==3);                    // alternating shaders: correct, one entry only
         c.registerVS(&a,2);                                                                      // freed address registered again with a new tag
         assert(c.classifyVs(&a).entry==2&&c.vsCacheMisses==4);
+        ++c.vsGeneration;c.vsTags[&a]|=256; // screen-text proof invalidates the cached classification
+        assert(c.classifyVs(&a).entry==(2|256)&&c.vsCacheMisses==5);
         c.world=nullptr;c.registerVS(&b,1);const auto& v=c.classifyVs(&b);assert(v.entry==1&&!v.wmo&&!v.world&&!v.skinned);   // no world: all false
         IDirect3DVertexShader9 unknown;assert(c.classifyVs(&unknown).entry==0);
+        c.nativeShadowProofs[&a].major=3;c.registerVS(&a,Cls::kNativeShadowTag);
+        auto* proof=c.classifyVs(&a).nativeShadow;assert(proof&&proof->major==3);
+        for(int i=0;i<100;++i)c.nativeShadowProofs[reinterpret_cast<IDirect3DVertexShader9*>(std::uintptr_t(0x1000+i*16))]={};
+        assert(c.classifyVs(&a).nativeShadow==proof); // node pointers survive rehash
+        assert(c.registerNativeShadow(&a,{})==0);c.registerVS(&a,0);
+        assert(!c.classifyVs(&a).nativeShadow&&!c.nativeShadowProofs.count(&a));
     }
     {   // lookupShader
         IDirect3DVertexShader9 a,b;Look l;l.registerShader(&a,true,false,0);l.registerShader(&b,false,true,7);
@@ -121,7 +133,7 @@ with tempfile.TemporaryDirectory(prefix='northlight-vs-cache-') as tmp:
     (Path(tmp)/'t.cpp').write_text(src)
     for label,flags in [('O2',['-O2']),('asan',['-O1','-g','-fsanitize=address,undefined','-fno-sanitize-recover=all'])]:
         exe=Path(tmp)/('test-'+label)
-        subprocess.run(['clang++','-std=c++17','-Wall','-Wextra','-Werror','-Wno-unused-parameter','-Wno-unused-private-field',*flags,str(Path(tmp)/'t.cpp'),'-o',str(exe)],check=True)
+        subprocess.run(['clang++','-std=c++17','-Wall','-Wextra','-Werror','-Wno-unused-parameter','-Wno-unused-private-field',*flags,*fp.test_include_flags(),str(Path(tmp)/'t.cpp'),'-o',str(exe)],check=True)
         print(label,subprocess.check_output([str(exe)],text=True),end='',flush=True)
 
 
@@ -208,15 +220,15 @@ dm=member(r,'template<class Capture> void prepareDrawImpl(Capture capture,UINT c
 registration=member(w,'void registerShader(IDirect3DVertexShader9* shader,uint64_t hash)')
 checks={
  'prepareDrawImpl: peekVertexShader with the GetVertexShader fallback, released only when not borrowed':
-    'const bool borrowedVS=ext->peekVertexShader(vs);' in dm and 'if(!borrowedVS&&(FAILED(ext->GetVertexShader(&vs))||!vs))' in dm
-    and '~ShaderRelease(){if(!borrowed)drop(p);}' in dm and 'if(!borrowedVS)drop(vs);' in dm and 'drop(vs);' not in dm.replace('if(!borrowedVS)drop(vs);','').replace('{++missingVS;drop(vs);if(spellOn)spellFixedDomain();return;}','').replace('if(!borrowed)drop(p);',''),
+    'const bool borrowedVS=ext->peekVertexShader(vs);' in dm and 'if(!borrowedVS&&FAILED(ext->GetVertexShader(&vs)))' in dm and 'if(!vs){' in dm
+    and '~ShaderRelease(){if(!borrowed)drop(p);}' in dm and 'if(!borrowedVS&&FAILED(ext->GetVertexShader(&vs))){++missingVS;drop(vs);return;}' in dm,
  'prepareDrawImpl post-effect sampled path: peek with fallback, classifyVs':
     'const bool borrowed=ext->peekVertexShader(late);' in dm and 'classifyVs(late)' in dm and 'if(!borrowed)drop(late);' in dm and 'world->isWorldShader' not in dm and 'world->isSkinnedShader' not in dm,
  'draw path classification through classifyVs (skinned lambda, non-world reject, shadow swap plan, beforeDraw)':
     'classifyVs(vs).skinned' in dm and 'classifyVs(vs).world' in dm and '(classifyVs(vs).entry&kTagMask)!=1' in member(r,'void planTerrainShadowSwap(')
     and 'const VsClass& vc=classifyVs(vs);' in bd and 'bool wmo=tag!=1&&vc.wmo;' in bd and 'vsTags.find' not in bd,
  'generation bumped before the maps change in CreateVertexShader registration':
-    '[&]{++vsGeneration;std::vector<DWORD> words;auto h=shaderHash(*out,words);' in r and r.count('++vsGeneration')==1 and all(registration.index('++worldShaderGen;')<registration.index(change) for change in ('wmoShaders.erase(', 'terrainShaders.erase(', 'captureShaders.erase(')),
+    '[&]{++vsGeneration;std::vector<DWORD> words;auto h=shaderHash(*out,words);' in r and r.count('++vsGeneration')==2 and '++vsGeneration;vsTags[vs]|=kUiTextTag;' in member(r,'void rememberUiTextVs(') and all(registration.index('++worldShaderGen;')<registration.index(change) for change in ('wmoShaders.erase(', 'terrainShaders.erase(', 'captureShaders.erase(')),
  'captureWater: peekDepthStencilSurface first, GetDepthStencilSurface fallback':
     'ext->peekDepthStencilSurface(currentDepth)' in cw and 'ext->GetDepthStencilSurface(&currentDepth)' in cw,
  'world capture paths use the shader lookup cache':

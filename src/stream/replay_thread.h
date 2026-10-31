@@ -21,6 +21,9 @@
 #include "snapshot_store.h"
 #include "stream_hooks.h"
 #include "unlock_source.h"
+#ifdef NORTHLIGHT_REPLAY_STAND
+#include "stand_inputs.h"
+#endif
 
 namespace NorthlightStream {
 // ---- implicit proxies: objects the game never created (back buffers, the default depth buffer, objects the mod bound) ----
@@ -137,6 +140,7 @@ public:
     std::function<void()> threadStart;                  // runs on the replay thread before the first command (owner handoff)
     std::function<void(const char*)> log;               // diagnostics line sink; may be empty
     bool (*diagnostics)()=nullptr;                      // Diagnostics on: per-call timers and the sync-only audit (asked per frame)
+    bool (*idleProfiling)()=nullptr;                    // RenderProfile: latched before the replay thread starts
     unsigned sampleEvery=600;
     // 0.3.200 (frame skip): StreamFrameSkip (set before start()). A frame is replayed in SKIP MODE when, at its first command, it and at least one later frame are
     // completely recorded (presentsRecorded >= ordinal+2: the replay is two frames behind and the game would soon wait for it), the game marked it hazard-free
@@ -166,28 +170,53 @@ public:
     // state is copied: DXVK sets single precision on the CreateDevice thread, and hook float math must match.
     bool start(){
         try{
+#ifdef NORTHLIGHT_REPLAY_STAND
+            const auto imported=StandInputs::shareForPlayback();if(!imported)return false;
+#endif
+            idleTracking_=idleProfiling&&idleProfiling();core.q.trackIdlePublications(idleTracking_);core.idleImages.enable(idleTracking_);producerCpu_.start(idleTracking_);core.idleLog=idleTracking_?&log:nullptr;
             unsigned short cw=0;unsigned csr=0;captureFpu(cw,csr);
             std::atomic<int> ready{0};
             startNs_.store(nowNs(),std::memory_order_relaxed);lastWall_=startNs_.load(std::memory_order_relaxed);
-            th_=std::thread([this,cw,csr,&ready]{
+            th_=std::thread([this,cw,csr,&ready
+#ifdef NORTHLIGHT_REPLAY_STAND
+                ,imported
+#endif
+            ]{
+#ifdef NORTHLIGHT_REPLAY_STAND
+                StandInputs::PlaybackScope context(imported);
+                if(!context.entered()){imported->reject();ready.store(-1);return;}
+                try{
+#endif
                 applyFpu(cw,csr);if(threadStart)threadStart();replayTid.store(currentTid());
-                raisePriority();diag_=diagnostics&&diagnostics();
+                raisePriority();diag_=diagnostics&&diagnostics();idleProfile_.enable(idleTracking_&&diag_);
+#ifdef NORTHLIGHT_REPLAY_STAND
+                }catch(...){imported->reject();ready.store(-1);return;}
+#endif
                 ready.store(1);loop();
                 // 0.3.192 (CS): the playback scope writes this thread's thread_local activeSnapshot and reads current_'s counters: it ends here, on the thread that began it,
                 // before stop() releases current_ to the pool (the destructor, on the game thread, must find nothing to run)
                 playback_.reset();});
             while(!ready.load())std::this_thread::yield();   // the handoff is complete before CreateDevice returns to the game
+#ifdef NORTHLIGHT_REPLAY_STAND
+            if(ready.load()<0){th_.join();core.idleLog=nullptr;producerCpu_.reset();return false;}
+#endif
             return true;
-        }catch(...){return false;}
+        }catch(...){
+#ifdef NORTHLIGHT_REPLAY_STAND
+            if(auto* context=StandInputs::currentContext())context->reject();
+#endif
+            core.idleLog=nullptr;producerCpu_.reset();return false;}
     }
     // Stops after everything recorded so far has run. Game thread; call once.
     void stop(){
         if(!th_.joinable())return;
         core.q.reserve((std::uint16_t)Cmd::Stop,0);core.q.commit();core.q.publish();
         th_.join();
+        producerCpu_.reset();
+        core.idleLog=nullptr;
         if(current_){snapshots.release(current_);current_=nullptr;}
     }
-    void join(){if(th_.joinable()){core.q.interrupt();stopNow_.store(true);th_.join();}}
+    void join(){if(th_.joinable()){core.q.interrupt();stopNow_.store(true);th_.join();}producerCpu_.reset();core.idleLog=nullptr;}
     bool running()const{return th_.joinable();}
     // Everything the stream holds from the process, for the CSTREAM line and the memory-guard transitions: queue chunks and Blocks (in use and
     // pooled), buffer shadows, texture shadows, snapshots.
@@ -221,6 +250,8 @@ private:
     std::atomic<std::uint64_t> startNs_{0};
     bool frameOpen_=false,skipping_=false;unsigned skipRun_=0;   // 0.3.200 (frame skip): replay thread only, see frameSkip
     bool diag_=false;Counter auditSets_{0};   // diag_: diagnostics() as of the last frame boundary (asked once per frame, not per command)
+    ReplayFrameProfile replayProfile_;
+    bool idleTracking_=false;IdleGapProfile idleProfile_;IdleProducerCpu producerCpu_;
     // audit: the values the game last set this frame, replay side
     DWORD auditRS_[StreamState::kRS]={},auditSamp_[StreamState::kSamplers][StreamState::kSampTypes]={},auditTss_[StreamState::kTSStages][StreamState::kTSTypes]={};
     std::vector<unsigned> touched_;std::vector<bool> touchedFlag_=std::vector<bool>(StreamState::kBits,false);
@@ -252,8 +283,17 @@ private:
             StreamQuery* q=pending_[i];bool done=false;
             if(q->dead.load()||!q->inner)done=true;
             else{
-                unsigned char buf[64]={};add(core.q.stats.queryPolls);
-                const HRESULT hr=static_cast<IDirect3DQuery9*>(q->inner)->GetData(buf,q->dataSize,0);
+                unsigned char buf[64]={};HRESULT hr;
+                // A FLUSH batch may already have completed this EVENT generation.
+                // Reuse that terminal result; a new END still takes the real poll.
+                if(q->type==8&&q->issueSeen&&q->issueSeenEpoch==core.queryEpoch.load(std::memory_order_relaxed)&&
+                   q->eventDoneGen.load(std::memory_order_acquire)==q->issueSeen){
+                    hr=q->eventStatus.load(std::memory_order_relaxed);
+                    if(hr==S_OK){const BOOL value=q->eventValue.load(std::memory_order_relaxed);std::memcpy(buf,&value,sizeof value);}
+                }else{
+                    add(core.q.stats.queryPolls);
+                    hr=static_cast<IDirect3DQuery9*>(q->inner)->GetData(buf,q->dataSize,0);
+                }
                 if(q->type==8)q->completeEvent(hr,buf);
                 if(hr==S_OK){q->writeResult(buf,q->dataSize);q->readyGen.store(q->issueSeen,std::memory_order_release);done=true;}
                 else if(q->type==8&&FAILED(hr))done=true;
@@ -335,6 +375,7 @@ private:
     void destroy(ProxyBase* p){
         if(p->pendingDestroy.fetch_sub(1)!=1||p->inUse()>0)return;   // a later Destroy is queued, or the proxy was handed out again
         core.reg.erase(p);
+        NorthlightAtlasProof::cache().erase(p->raw,p);
         for(ProxyBase* k:p->kids)if(k){core.reg.erase(k);if(k->inner)k->inner->Release();delete k;}
         if(p->inner)p->inner->Release();
         if(p->kind==Kind::Query){auto it=std::find(pending_.begin(),pending_.end(),static_cast<StreamQuery*>(static_cast<ProxyBase*>(p)));if(it!=pending_.end())pending_.erase(it);}
@@ -355,6 +396,7 @@ private:
     // 0.3.200 (frame skip): the decision at a frame's first command (see frameSkip). Two atomic loads a frame.
     void beginFrame(){
         frameOpen_=true;skipping_=false;
+        replayProfile_.begin(diag_,core.framesReplayed.load(std::memory_order_relaxed)+1);
         if(!frameSkip||skipRun_>=kMaxSkipRun)return;
         const std::uint64_t k=core.framesReplayed.load(std::memory_order_relaxed);
         if(core.presentsRecorded.load(std::memory_order_acquire)<k+2)return;
@@ -384,6 +426,7 @@ private:
         avg_.depth+=double(depth);avg_.bytes+=double(bytes);++avg_.n;if(depth>avg_.maxDepth)avg_.maxDepth=depth;if(bytes>avg_.maxBytes)avg_.maxBytes=bytes;
         const bool diag=diagnostics&&diagnostics();
         const bool audit=diag_;diag_=diag;   // the next frame records the audit state iff diagnostics are on now; switched on mid-frame: starts clean next frame
+        if(idleTracking_){if(idleProfile_.presented())logIdleGaps();idleProfile_.enable(diag);}
         if(audit&&diag&&frames%sampleEvery==1)runAudit();
         if(diag&&log&&frames%sampleEvery==0)cstreamLine(frames);
         if(log&&diag&&frames%sampleEvery==0){
@@ -394,6 +437,45 @@ private:
                 (unsigned long long)t.large,(unsigned long long)t.invalidations,(unsigned long long)t.evictions,(unsigned long long)t.releases);log(line);
         }
         touched_.clear();std::fill(touchedFlag_.begin(),touchedFlag_.end(),false);
+    }
+    IdlePoint idlePoint()const{
+        const auto epoch=core.queryEpoch.load(std::memory_order_acquire);const auto cooperative=core.coopState.load(std::memory_order_acquire);
+        auto p=core.q.idlePoint();p.frame=core.framesReplayed.load(std::memory_order_relaxed);p.presents=core.presentsRecorded.load(std::memory_order_acquire);
+        p.epoch=epoch;p.cooperative=cooperative;p.contextKnown=epoch==core.queryEpoch.load(std::memory_order_acquire)&&cooperative==core.coopState.load(std::memory_order_acquire);return p;
+    }
+    IdleCpuSample producerCpuSample()const{
+        const auto before=nowNs();auto p=producerCpu_.sample();p.readBeforeNs=before;p.readAfterNs=nowNs();return p;
+    }
+    void finishIdle(std::uint64_t end,const IdlePoint& last,std::uint16_t after,bool interrupted=false){
+        if(!idleProfile_.open())return;
+        const auto start=idleProfile_.startNs();
+        if(end>=start&&end-start>=IdleGapProfile::ThresholdNs)
+            idleProfile_.finish(end,last,after,interrupted,producerCpuSample(),core.idleImages.select(start,end));
+        else idleProfile_.finish(end,last,after,interrupted);
+    }
+    void logIdleGaps(){
+        const auto report=idleProfile_.take();if(!log||!diag_)return;
+        for(unsigned i=0;i<report.count;++i){
+            const auto& g=report.worst[i];const auto& a=g.first;const auto& b=g.last;char line[2300],cpuText[40];
+            const bool cpuKnown=g.cpuFirst.known&&g.cpuLast.known&&g.cpuFirst.readBeforeNs<=g.cpuFirst.readAfterNs&&g.cpuFirst.readAfterNs<=g.cpuLast.readBeforeNs&&g.cpuLast.readBeforeNs<=g.cpuLast.readAfterNs;
+            const auto kernel=cpuKnown?IdleGapProfile::delta(g.cpuFirst.kernelNs,g.cpuLast.kernelNs):-1;
+            const auto user=cpuKnown?IdleGapProfile::delta(g.cpuFirst.userNs,g.cpuLast.userNs):-1;
+            if(kernel>=0&&user>=0)std::snprintf(cpuText,sizeof cpuText,"%.6f",(double(kernel)+double(user))/1e6);else std::snprintf(cpuText,sizeof cpuText,"unknown");
+            std::snprintf(line,sizeof line,"CSTREAM IDLE_GAP frameStart=%llu frameEnd=%llu windowFrames=%u longGaps=%u wallMs=%.6f queueWaitMs=%.6f segments=%u before=%s after=%s interrupted=%u queueStart=%s queueEnd=%s recorded=%llu/%llu published=%llu/%llu replayed=%llu/%llu waitSeq=%llu/%llu backpressure=%u/%u express=%u/%u waitsSeen=%u producerDeltaNonexclusiveNs[sync=%lld,present=%lld,backpressure=%lld,recordSampled=%lld,lock=%lld,snapshot=%lld] publishesDelta=%lld presents=%llu/%llu epoch=%u/%u cooperative=%08lx/%08lx contextKnown=%u/%u frameDomain=stream-replayed producerCpuMs=%s applicationPhase=unknown monotonicStartNs=%llu monotonicEndNs=%llu producerKernelNs=%lld producerUserNs=%lld cpuReadFirstNs=%llu/%llu cpuReadLastNs=%llu/%llu cpuScope=boundary-counter-delta",
+                (unsigned long long)a.frame,(unsigned long long)b.frame,report.frames,report.gaps,double(g.wallNs())/1e6,double(g.waitNs)/1e6,g.segments,g.before==kExpressIdle?"idle":cmdName((Cmd)g.before),g.after==kExpressIdle?"none":cmdName((Cmd)g.after),unsigned(g.interrupted),a.queueState(),b.queueState(),
+                (unsigned long long)a.recorded,(unsigned long long)b.recorded,(unsigned long long)a.published,(unsigned long long)b.published,(unsigned long long)a.replayed,(unsigned long long)b.replayed,(unsigned long long)a.waitSeq,(unsigned long long)b.waitSeq,unsigned(a.backpressure),unsigned(b.backpressure),unsigned(a.express),unsigned(b.express),g.waitsSeen,
+                IdleGapProfile::delta(a.syncNs,b.syncNs),IdleGapProfile::delta(a.presentNs,b.presentNs),IdleGapProfile::delta(a.backpressureNs,b.backpressureNs),IdleGapProfile::delta(a.recordNs,b.recordNs),IdleGapProfile::delta(a.lockNs,b.lockNs),IdleGapProfile::delta(a.snapshotNs,b.snapshotNs),IdleGapProfile::delta(a.publishes,b.publishes),
+                (unsigned long long)a.presents,(unsigned long long)b.presents,a.epoch,b.epoch,(unsigned long)std::uint32_t(a.cooperative),(unsigned long)std::uint32_t(b.cooperative),unsigned(a.contextKnown),unsigned(b.contextKnown),cpuText,
+                (unsigned long long)g.startNs,(unsigned long long)g.endNs,kernel,user,
+                (unsigned long long)g.cpuFirst.readBeforeNs,(unsigned long long)g.cpuFirst.readAfterNs,(unsigned long long)g.cpuLast.readBeforeNs,(unsigned long long)g.cpuLast.readAfterNs);log(line);
+            const auto& p=g.image.lock;
+            const auto fillStart=p.returnedNs?std::max(g.startNs,p.returnedNs):g.endNs;
+            const auto fillEnd=std::min(g.endNs,p.unlockNs?p.unlockNs:g.endNs);
+            std::snprintf(line,sizeof line,"CSTREAM IDLE_IMAGE_LOCK monotonicStartNs=%llu monotonicEndNs=%llu stable=%u overflow=%llu selected=%u id=%llu entryNs=%llu returnedNs=%llu unlockEntryNs=%llu overlapNs=%llu fillOverlapNs=%llu caller=0x%llx callerResolution=raw gameFrame=%llu epoch=%u fmt=%u size=%ux%ux%u level=%u face=%u pool=%u usage=0x%x flags=0x%x route=%u mode=%u retainedCompleted=%u scope=observed-lock-interval-not-cpu-work",
+                (unsigned long long)g.startNs,(unsigned long long)g.endNs,unsigned(g.image.stable),(unsigned long long)g.image.overflow,unsigned(p.id!=0),(unsigned long long)p.id,
+                (unsigned long long)p.entryNs,(unsigned long long)p.returnedNs,(unsigned long long)p.unlockNs,(unsigned long long)g.image.overlapNs,(unsigned long long)(p.mode!=4&&fillEnd>fillStart?fillEnd-fillStart:0),
+                (unsigned long long)p.caller,(unsigned long long)p.frame,p.epoch,p.fmt,p.w,p.h,p.d,p.level,p.face,p.pool,p.usage,p.flags,p.route,p.mode,IdleImageLocks::Completed);log(line);
+        }
     }
     // Scalar slots set this frame must read back from the Target as set; a mismatch (a backend that normalizes) makes the slot sync-only for good.
     void runAudit(){
@@ -453,9 +535,10 @@ private:
             (unsigned long long)get(s.texShadowHits),(unsigned long long)get(s.texShadowFresh),(unsigned long long)get(s.texShadowReadbacks),(unsigned long long)get(s.texShadowEvicted),(unsigned long long)get(s.texShadowFreshUseful),(unsigned long long)get(s.texShadowRefused),get(s.texShadowRefusedBytes)/1048576.0,
             (unsigned long long)get(s.texShadowSpared),(unsigned long long)get(s.texShadowSpareReuses));   // 0.3.200 (pipeline): spared=kept/reused
         // 0.3.196 (task 12): fresh keeps skipped for lack of room, readbacks by cause (fresh drop + re-locked evict + never shadowed); total and per frame in this window.
-        {const std::uint64_t sk=get(s.texShadowFreshSkipped),rf2=get(s.readbackAfterFreshDrop),rr=get(s.readbackAfterRelockedEvict),rn=get(s.readbackNeverShadowed),rs=get(s.readbackAfterFreshSkip),ex=get(s.expressReadbacks),exNs=get(s.expressNs);const double f=sampleEvery?1.0/double(sampleEvery):0.0;
+        {const std::uint64_t sk=get(s.texShadowFreshSkipped),rf2=get(s.readbackAfterFreshDrop),rr=get(s.readbackAfterRelockedEvict),rn=get(s.readbackNeverShadowed),rs=get(s.readbackAfterFreshSkip),ex=get(s.expressReadbacks),exNs=get(s.readbackExpressNs);const double f=sampleEvery?1.0/double(sampleEvery):0.0;
          put(buf,n," texFreshSkipped=%llu(%.2f/frame) texReadbackCause[freshDrop=%llu(%.2f) relockedEvict=%llu(%.2f) neverShadowed=%llu(%.2f) freshSkip=%llu(%.2f)] express=%llu(%.2f/frame) expressMs=%.3f/frame",(unsigned long long)sk,double(sk-lastTexSkip_)*f,(unsigned long long)rf2,double(rf2-lastRbFresh_)*f,
              (unsigned long long)rr,double(rr-lastRbRelocked_)*f,(unsigned long long)rn,double(rn-lastRbNever_)*f,(unsigned long long)rs,double(rs-lastRbSkip_)*f,(unsigned long long)ex,double(ex-lastExpress_)*f,double(exNs-lastExpressNs_)*f/1e6);
+         put(buf,n," queryExpressPosts=%llu queryExpressHits=%llu queryExpressFallbacks=%llu queryExpressTotalMs=%.3f",(unsigned long long)get(s.expressQueries),(unsigned long long)get(s.expressQueryHits),(unsigned long long)get(s.expressQueryFallbacks),double(get(s.queryExpressNs))/1e6);
          lastExpress_=ex;lastExpressNs_=exNs;lastTexSkip_=sk;lastRbFresh_=rf2;lastRbRelocked_=rr;lastRbNever_=rn;lastRbSkip_=rs;}
         {const std::uint64_t rbD=get(s.dynShadowReadbacks),rbS=get(s.stShadowReadbacks),evD=get(s.dynShadowEvicted),evS=get(s.stShadowEvicted),evH=get(s.hotShadowEvicted),rf=get(s.relockRefused);
          const double f=sampleEvery?1.0/double(sampleEvery):0.0;
@@ -473,6 +556,12 @@ private:
         for(std::size_t i=0;i<top.size()&&i<8;++i)put(buf,n,"%s%s=%llu",i?",":"",cmdName((Cmd)top[i].second),(unsigned long long)top[i].first);
         put(buf,n,"]");
         log(buf);avg_=Avg();
+        if(idleTracking_&&diag_){
+            const auto wake=core.q.wakePublicationDiagnostics();char line[384];
+            std::snprintf(line,sizeof line,"CSTREAM WAKE_PUBLICATIONS streamFrame=%llu heldBatches=%llu heldCommands=%llu heldBytes=%llu wakeSignals=%llu scope=cumulative-independent-counters duration=unmeasured",
+                (unsigned long long)frames,(unsigned long long)wake.heldBatches,(unsigned long long)wake.heldCommands,(unsigned long long)wake.heldBytes,(unsigned long long)wake.wakeSignals);
+            log(line);
+        }
         logZeroCopy();
         logCallTop();
     }
@@ -507,6 +596,20 @@ private:
         for(std::size_t i=0;i<top.size()&&i<12;++i)put(buf,n," %s=%.3fms/%.0f",cmdName((Cmd)top[i].second),double(top[i].first)/1e6*perFrame,double(calls[top[i].second])*16.0*perFrame);
         log(buf);
     }
+    void logReplayProfile(){
+        if(!log||!diag_||!replayProfile_.enabled)return;
+        const auto& p=replayProfile_;unsigned top[5]={};unsigned count=0;
+        for(unsigned id=0;id<kMaxCmdIds;++id){if(!p.entries[id].calls)continue;
+            unsigned pos=0;while(pos<count&&p.entries[top[pos]].ns>=p.entries[id].ns)++pos;
+            if(pos>=5)continue;const unsigned end=count<5?count++:4;
+            for(unsigned i=end;i>pos;--i)top[i]=top[i-1];top[pos]=id;
+        }
+        char buf[kLine];int n=std::snprintf(buf,sizeof buf,"CSTREAM REPLAY frame=%llu calls=%u measuredMs=%.4f clockReads=%llu maxMs=%.4f maxCmd=%s top=",
+            (unsigned long long)p.frame,p.calls,double(p.totalNs)/1e6,(unsigned long long)p.calls*2,
+            double(p.maxNs)/1e6,cmdName((Cmd)p.maxId));
+        for(unsigned i=0;i<count;++i)put(buf,n,"%s%s:%.4fms/%u",i?",":"",cmdName((Cmd)top[i]),double(p.entries[top[i]].ns)/1e6,p.entries[top[i]].calls);
+        log(buf);
+    }
     void activateSnapshot(GameSnapshot* s){
         playback_.reset();
         if(current_)snapshots.release(current_);
@@ -519,10 +622,13 @@ private:
         case Cmd::Device_UpdateTexture:destination=reinterpret_cast<const Args_Device_UpdateTexture*>(h+1)->pDestinationTexture;break;
         case Cmd::Device_StretchRect:destination=reinterpret_cast<const Args_Device_StretchRect*>(h+1)->dst_surface;break;
         case Cmd::Device_ColorFill:destination=reinterpret_cast<const Args_Device_ColorFill*>(h+1)->surface;break;
-        case Cmd::Texture_GenerateMipSubLevels:destination=reinterpret_cast<const Args_Texture_GenerateMipSubLevels*>(h+1)->self;break;
+        case Cmd::Texture_GenerateMipSubLevels:{auto* proxy=particleTextureRoot(ProxyBase::of(reinterpret_cast<const Args_Texture_GenerateMipSubLevels*>(h+1)->self));if(proxy){NorthlightParticleTextures::cache().invalidate(proxy->raw);NorthlightParticleTextures::View view;if(NorthlightMaterialTextures::cache().lookup(proxy->raw,view)&&view.mip)NorthlightMaterialTextures::cache().invalidate(proxy->raw);}return;}
         default:return;
         }
-        invalidateParticleTexture(ProxyBase::of(destination));
+        // Full-copy material snapshots are compared after the real HRESULT in
+        // Device::UpdateTexture/UpdateSurface. Dropping them here forced a new
+        // height/mesh version even when the GPU copy contained identical bytes.
+        invalidateParticleTexture(ProxyBase::of(destination),h->id!=(unsigned)Cmd::Device_UpdateTexture&&h->id!=(unsigned)Cmd::Device_UpdateSurface);
     }
     void execute(const CommandHeader* h){
         if(skipping_&&skipCommand(h))return;   // 0.3.200 (frame skip)
@@ -536,7 +642,7 @@ private:
                 if(diag_&&a->Stage<StreamState::kTSStages&&unsigned(a->Type)<StreamState::kTSTypes){auditTss_[a->Stage][a->Type]=a->Value;note(StreamState::bitTss(a->Stage,unsigned(a->Type)));}}
             else if(h->id==(std::uint16_t)Cmd::Query_Issue){const auto* a=reinterpret_cast<const Args_Query_Issue*>(h+1);
                 auto* q=static_cast<StreamQuery*>(a->self);
-                if((a->dwIssueFlags&D3::kIssueEnd)&&!q->dead.load()){++q->issueSeen;if(std::find(pending_.begin(),pending_.end(),q)==pending_.end())pending_.push_back(q);}}
+                if((a->dwIssueFlags&D3::kIssueEnd)&&!q->dead.load()){++q->issueSeen;q->issueSeenEpoch=core.queryEpoch.load(std::memory_order_relaxed);if(std::find(pending_.begin(),pending_.end(),q)==pending_.end())pending_.push_back(q);}}
             else if(h->id==(std::uint16_t)Cmd::Device_DrawPrimitive||h->id==(std::uint16_t)Cmd::Device_DrawIndexedPrimitive){
                 ++draws_;if(current_&&(draws_&31)==0){SnapshotStats::ageDraws.fetch_add(draws_>=current_->triggerDraw?draws_-current_->triggerDraw:0,std::memory_order_relaxed);SnapshotStats::ageSamples.fetch_add(1,std::memory_order_relaxed);}}   // game_snapshot.h noteAge, sampled
             return;
@@ -588,20 +694,36 @@ private:
         Queue& q=core.q;
         std::uint16_t lastCmd=kExpressIdle;   // the id of the last command executed (an express readback records what it waited behind), kExpressIdle after an idle wait
         for(;;){
-            q.serveExpress(lastCmd);   // 0.3.206 (task 31): between two commands only
             const CommandHeader* h=q.next(false);
             if(!h){
+                const auto before=lastCmd;
                 lastCmd=kExpressIdle;
-                // Idle: the only clock reads of the replay thread. Pending queries are polled every ms; publish() wakes the wait at once.
-                if(!pending_.empty()){pollQueries();const auto t0=nowNs();h=q.nextTimed(1);own(idleNs,nowNs()-t0);}
-                else{const auto t0=nowNs();h=q.next(true);own(idleNs,nowNs()-t0);}
+                q.serveExpress(lastCmd);
+                // Pending queries keep the original 1 ms wait; publication wakes
+                // either path. Profiling reuses this wait's existing clock pair.
+                const bool profile=idleTracking_&&diag_;
+                const bool timedWait=!pending_.empty();if(timedWait)pollQueries();
+                if(profile){
+                    const auto first=idlePoint();const auto t0=nowNs();const auto cpu=idleProfile_.open()?IdleCpuSample{}:producerCpuSample();h=timedWait?q.nextTimed(1):q.next(true);
+                    const auto waitEnd=nowNs();own(idleNs,waitEnd-t0);const auto last=idlePoint();
+                    idleProfile_.wait(t0,waitEnd,first,last,before,cpu);if(h)finishIdle(waitEnd,last,h->id);
+                    else if(stopNow_.load()){finishIdle(waitEnd,last,kExpressIdle,true);logIdleGaps();return;}
+                }else{const auto t0=nowNs();h=timedWait?q.nextTimed(1):q.next(true);own(idleNs,nowNs()-t0);}
                 if(!h){if(stopNow_.load())return;continue;}
             }
-            if(h->id==(std::uint16_t)Cmd::Stop){q.retire(h);return;}
+            else if(idleTracking_&&diag_&&idleProfile_.open())finishIdle(nowNs(),idlePoint(),h->id);
+            // Selecting a command acquires its publication before the mailbox
+            // check, so a future END cannot pass an earlier posted query task.
+            q.serveExpress(lastCmd);
+            if(h->id==(std::uint16_t)Cmd::Stop){q.retire(h);if(idleTracking_)logIdleGaps();return;}
             if(!frameOpen_)beginFrame();   // 0.3.200 (frame skip)
+            const unsigned id=h->id;const bool timed=replayProfile_.enabled;
+            const auto started=timed?nowNs():0;
             execute(h);
+            if(timed){const auto ended=nowNs();replayProfile_.record(id,ended>=started?ended-started:0);}
             lastCmd=h->id;
             q.retire(h);
+            if(id==(unsigned)Cmd::Present||id==(unsigned)Cmd::SwapPresent)logReplayProfile();
         }
     }
 public:

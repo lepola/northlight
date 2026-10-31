@@ -22,6 +22,15 @@ class NativeInstall(unittest.TestCase):
         self.root = Path(self.temp.name)
         self.assets = SimpleNamespace(client=self.root, locale='enUS')
         self.work = self.root / 'work'
+        absent_creatures = patch.object(native.build_mount_emitters, 'build_creatures', side_effect=ValueError('No supported creature emitters'))
+        absent_creatures.start()
+        self.addCleanup(absent_creatures.stop)
+        absent_glue = patch.object(native.build_glue_emitters, 'build', side_effect=ValueError(native.build_glue_emitters.EMPTY))
+        absent_glue.start()
+        self.addCleanup(absent_glue.stop)
+        absent_objects = patch.object(native.build_gameobject_emitters, 'build', side_effect=ValueError(native.build_gameobject_emitters.EMPTY))
+        absent_objects.start()
+        self.addCleanup(absent_objects.stop)
 
     def test_fresh_client_stages_equipment_and_safe_spells_without_wdb(self):
         equipment = 'spells\\enchant.m2'
@@ -43,7 +52,16 @@ class NativeInstall(unittest.TestCase):
              patch.object(native.build_spell_emitters, 'build', side_effect=ValueError('No supported spell emitters')):
             payload, steps = native.build(self.assets, self.work, lambda _: self.fail('No archive expected'))
         self.assertEqual(payload, {})
-        self.assertEqual(len(steps), 3)
+        self.assertEqual(len(steps), 6)
+
+    def test_creature_sources_need_no_server_cache_and_keep_model_ownership(self):
+        with patch.object(native.build_equipment_emitters, 'build', side_effect=ValueError('No supported equipment emitters')), \
+             patch.object(native.build_spell_emitters, 'build', side_effect=ValueError('No supported spell emitters')), \
+             patch.object(native.build_mount_emitters, 'build_creatures', return_value={'counts': {'patched': 1}}) as creatures:
+            payload, steps = native.build(self.assets, self.work, lambda _: {'creature\\deathknightmount.m2': b'hoof-lights'})
+        self.assertEqual(payload, {'creature\\deathknightmount.m2': b'hoof-lights'})
+        self.assertEqual(creatures.call_args.kwargs, {'excluded': set()})
+        self.assertEqual(next(s['models'] for s in steps if s['step']=='creature_model_lights'), 1)
 
     def test_dbc_payload_and_conflicting_model_owners_are_refused(self):
         for spell in ({'dbfilesclient\\spell.dbc': b'bad'}, {'spells\\same.m2': b'different'}):
@@ -54,6 +72,17 @@ class NativeInstall(unittest.TestCase):
                     return {'spells\\same.m2': b'equipment'} if 'equipment' in path.name else spell
                 with self.assertRaises(ValueError):
                     native.build(self.assets, self.work, read)
+
+    def test_dynamic_glue_models_share_art_transaction_without_touching_installed_assets(self):
+        path='interface\\glues\\models\\ui_hd\\ui_hd.m2'
+        with patch.object(native.build_equipment_emitters,'build',side_effect=ValueError('No supported equipment emitters')), \
+             patch.object(native.build_spell_emitters,'build',side_effect=ValueError('No supported spell emitters')), \
+             patch.object(native.build_glue_emitters,'build',return_value={'counts':{'patched':1}}) as glue:
+            payload,steps=native.build(self.assets,self.work,lambda _: {path:b'qualified-hd-backdrop'})
+        self.assertEqual(payload,{path:b'qualified-hd-backdrop'})
+        self.assertEqual(glue.call_args.kwargs,{'excluded':set()})
+        self.assertEqual(next(s['models'] for s in steps if s['step']=='glue_model_lights'),1)
+        self.assertFalse((self.root/'Data').exists())
 
     def test_supported_server_cache_adds_mounts_and_corrupt_cache_is_skipped(self):
         from test_mount_emitter_patch import cache
@@ -76,8 +105,19 @@ class NativeInstall(unittest.TestCase):
 
     def test_every_generator_is_packaged_on_every_platform(self):
         build_packages.check_closure(build_packages.APP_FILES)
-        for module in ('native_model_lights', 'build_equipment_emitters', 'build_spell_emitters', 'build_mount_emitters', 'equipment_emitter_patch'):
+        for module in ('native_model_lights', 'build_equipment_emitters', 'build_spell_emitters', 'build_mount_emitters', 'build_gameobject_emitters', 'equipment_emitter_patch'):
             self.assertIn('renderer/' + module + '.py', build_packages.APP_FILES)
+
+    def test_gameobjects_stage_with_disjoint_world_ownership(self):
+        path = 'world\\skillactivated\\tradeskillnodes\\bush_ragveil.m2'
+        owned = 'world\\lamp.m2'
+        with patch.object(native.build_equipment_emitters, 'build', side_effect=ValueError('No supported equipment emitters')), \
+             patch.object(native.build_spell_emitters, 'build', side_effect=ValueError('No supported spell emitters')), \
+             patch.object(native.build_gameobject_emitters, 'build', return_value={'counts': {'patched': 1}}) as objects:
+            payload, steps = native.build(self.assets, self.work, lambda _: {path: b'herb', owned: b'suppressed'}, excluded={owned})
+        self.assertEqual(payload, {path: b'herb'})
+        self.assertEqual(objects.call_args.kwargs, {'excluded': {owned}})
+        self.assertEqual(next(s['models'] for s in steps if s['step'] == 'gameobject_model_lights'), 1)
 
 
 if __name__ == '__main__':

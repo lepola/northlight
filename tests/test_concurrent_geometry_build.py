@@ -7,7 +7,8 @@ so a probe solved against an older generation cannot pass the exact check.
 Checks: the worker solves camera moves on the previous generation while a build
 runs; the settled atlas equals an independent sequential solve bit-for-bit;
 deferral with a still camera; stop/shutdown mid-build; builder and worker faults.
-Native CPU only: no Windows, Wine, game, D3D or world cache.
+Native CPU only: no Wine, game, D3D device or world cache. Windows uses real
+thread/timer APIs and O2/debug builds without sanitizers; Unix retains sanitizers.
 """
 import sys; from pathlib import Path; sys.path.insert(0, str(Path(__file__).resolve().parents[1]))  # repo root
 import northlight_paths as fp
@@ -42,9 +43,15 @@ request=source[source.index('    struct Request {'):]
 request=request[:request.index('\n')]
 palette=source[source.index('    struct PaletteRegion {'):]
 palette=palette[:palette.index('\n')]
+fog_region=source[source.index('    struct FogRegion {'):];fog_region=fog_region[:fog_region.index('\n')]
 orphaned=source[source.index('    template<class Pending,class Active> static bool pendingOrphaned('):]
 orphaned=orphaned[:orphaned.index('\n')] # 0.3.156 production release rule
 fixture=r'''
+#ifdef _WIN32
+#define NOMINMAX
+#define WIN32_LEAN_AND_MEAN
+#include <windows.h>
+#endif
 #include "world_probe_progress.h"
 #include "world_dynamic_probes.h"
 #include "world_streaming.h"
@@ -56,6 +63,9 @@ fixture=r'''
 #include "memory_admission_probe.h"
 #include "worker_actor_memo.h"
 #include "diagnostics_switch.h"
+#include "scene_source_cache.h"
+#include "world_mesh_pages.h"
+#include "memory_profile_snapshot.h"
 #include <atomic>
 #include <cassert>
 #include <chrono>
@@ -69,18 +79,23 @@ fixture=r'''
 #include <stdexcept>
 #include <string>
 #include <thread>
-using V=NorthlightGI::Vec3;using DWORD=uint32_t;
+using V=NorthlightGI::Vec3;
+#ifndef _WIN32
+using DWORD=uint32_t;
 static DWORD GetTickCount(){return DWORD(std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch()).count());}
 static int GetCurrentThread(){return 0;}
 static bool SetThreadPriority(int,int){return true;}
 #define THREAD_PRIORITY_BELOW_NORMAL (-1)
+#endif
 static std::mutex logMutex;static std::vector<std::string> logLines;
 template<class... T> static void logf(const char* format,T... values){char line[2048];std::snprintf(line,sizeof line,format,values...);std::lock_guard<std::mutex> lock(logMutex);logLines.emplace_back(line);}
-namespace NorthlightRegionalFog {struct Field {};struct Region {};constexpr double WorldZero=17066.6666667,TileSize=533.3333333;
- inline Region loadRegion(const std::string&,const std::string&,float,float){return {};}}
+namespace NorthlightRegionalFog {struct Field {unsigned groundCells=0,airCells=0,fogCells=0;};struct Tile {std::vector<int> water,indoors;};struct Region {std::vector<Tile> tiles;};constexpr double WorldZero=17066.6666667,TileSize=533.3333333;constexpr float RefreshDistance=64;
+ using ZoneScale=std::function<void(uint32_t,float&,float&)>;
+ inline Region loadRegion(const std::string&,const std::string&,float,float){return {};}
+ inline bool buildCachedField(const std::string&,const std::string&,V,const Region&,Field&,std::string&,const NorthlightGI::AllocationAdmission&,const NorthlightGI::SceneSourceProvider&,const ZoneScale*){return false;}}
 namespace NorthlightMemMap {inline std::atomic<bool> deferredRequest{false};}
 namespace NorthlightLocalLights {struct Light {};struct Cache {explicit Cache(const std::string&){}};}
-namespace NorthlightActorGeometry {struct Result {std::shared_ptr<const NorthlightGI::WorldScene> scene;uint64_t hash=0;unsigned texturesDecoded=0;size_t textureEncodedBytes=0;};
+namespace NorthlightActorGeometry {struct Result {std::shared_ptr<const NorthlightGI::WorldScene> scene;uint64_t hash=0;unsigned texturesDecoded=0;size_t textureEncodedBytes=0;double decodeMs=0,geometryMs=0,hashMs=0;};
  struct ActorJob {Result resolve()const{throw std::runtime_error("fixture actor failure");}};}
 static NorthlightGI::WorldScene fixtureScene(V c){
  // Ground under the whole build box and a roof over the build centre whose
@@ -93,16 +108,21 @@ static NorthlightGI::WorldScene fixtureScene(V c){
 static NorthlightGI::Lighting fixtureLight(){NorthlightGI::Lighting l;l.sunDirection=V(.3f,.2f,.93f);l.sunIrradiance=V(3,2.9f,2.7f);l.skyRadiance=V(.4f,.5f,.7f);l.maxBounces=3;
  l.additionalDirections.push_back({V(0,0,1),V()});return l;}
 struct Fixture {
+ struct GpuScene {std::shared_ptr<void> workerPreparation;};
+ std::shared_ptr<GpuScene> gpuScene=std::make_shared<GpuScene>();
  struct PreparedCommit {int tag=0;};
 SNAPSHOT
 REQUEST
 PALETTE
+FOG_REGION
 ORPHANED
  NorthlightGeometryMemory::StallWatch generationStall;
  NorthlightQuality::Settings quality;std::string root="fixture/";
+ std::shared_ptr<NorthlightGI::SceneSourceCache> sharedSceneSources=std::make_shared<NorthlightGI::SceneSourceCache>();
  std::mutex mutex;std::condition_variable wake;Request request;bool stopping=false,pending=false,geometryRebuild=false;
  std::atomic<bool> workerBusy{false},workerMemoryTrim{false},giMemoryTrim{false};std::atomic<unsigned> workerFaultCode{0},geometryBuildEstimateMs{1000};std::atomic<uint64_t> geometryMemoryDemand{0};
  std::shared_ptr<Snapshot> published;std::shared_ptr<const PaletteRegion> publishedPaletteRegion;
+ std::shared_ptr<const FogRegion> publishedFogRegion;
  // Fixture build controls and observations (guarded by mutex unless atomic).
  std::atomic<unsigned> fixtureBuildMs{60},fixtureDefers{0};std::atomic<bool> fixtureThrow{false},fixtureFail{false};
  // Issue #40: maps without world-cache tiles; cacheChecks counts the builder's per-entry probes.
@@ -112,6 +132,7 @@ ORPHANED
  static NorthlightGeometryMemory::Sample geometryAdmissionFor(NorthlightMemoryAdmission::Probe&,NorthlightGeometryMemory::Budget,bool* exact=nullptr){
   if(exact)*exact=true;NorthlightGeometryMemory::Sample s;s.available=s.largest=uint64_t(3)<<30;s.valid=true;return s;}
  static void logGeometryMemory(const char*,NorthlightGeometryMemory::Sample,size_t=0,bool=true,const NorthlightGeometryMemory::Budget* =nullptr){}
+ static void logCpuFootprint(const char*,const char*,uint64_t,const NorthlightMemoryFootprint::Counter& memory){assert(memory.complete());}
 WORK
 };
 struct Harness {
@@ -334,16 +355,20 @@ int main(){
   assert(entries==2&&ends==2); /* the end line is logged when the map changes back */std::puts("uncached map: one probe and one error snapshot per entry, camera moves start no build, continent builds again");}
  std::puts("PASS concurrent geometry build: moves solved on the previous generation during builds; settled atlas bit-identical to a sequential final-generation solve; still-camera deferral; stop mid-build; builder and worker faults join; map change, build failure and stale adoption during builds; orphaned staged upload released (0.3.156); same-map teleports recover with a still camera; 0.3.169 120/150 hold adopts without a stall; lead region idles without spinning");
 }
-'''.replace('SNAPSHOT',snapshot).replace('REQUEST',request).replace('PALETTE',palette).replace('ORPHANED',orphaned).replace('WORK',work)
-report={'status':'pass','game_launched':False,'runs':[],'sha256':{n:hashlib.sha256(fp.tracked(n).read_bytes()).hexdigest() for n in ['world_renderer.h','world_probe_progress.h','world_probe_cache.h','gi_solve_pool.h','world_gi.cpp','test_concurrent_geometry_build.py']}}
-modes=[('O2',['-O2']),('asan-ubsan',['-O1','-g','-fsanitize=address,undefined','-fno-sanitize-recover=all','-fno-omit-frame-pointer']),('tsan',['-O1','-g','-fsanitize=thread'])]
+'''.replace('SNAPSHOT',snapshot).replace('REQUEST',request).replace('PALETTE',palette).replace('FOG_REGION',fog_region).replace('ORPHANED',orphaned).replace('WORK',work)
+windows=os.name=='nt'
+report={'status':'pass','game_launched':False,'platform':sys.platform,'sanitizers':not windows,'runs':[],'sha256':{n:hashlib.sha256(fp.tracked(n).read_bytes()).hexdigest() for n in ['world_renderer.h','world_probe_progress.h','world_probe_cache.h','gi_solve_pool.h','world_gi.h','world_gi.cpp','world_mesh_plan.h','world_mesh_plan.cpp','scene_source_cache.h','test_concurrent_geometry_build.py']}}
+modes=([('O2',['-O2']),('debug',['-O0','-g'])] if windows else
+       [('O2',['-O2']),('asan-ubsan',['-O1','-g','-fsanitize=address,undefined','-fno-sanitize-recover=all','-fno-omit-frame-pointer']),('tsan',['-O1','-g','-fsanitize=thread'])])
+compiler=[str(fp.zig()),'c++','-target','x86-windows-gnu'] if windows else ['clang++']
 with tempfile.TemporaryDirectory(prefix='northlight-concurrent-geometry-') as tmp:
     path=Path(tmp);(path/'test.cpp').write_text(fixture)
     for mode,flags in modes:
-        command=['clang++','-std=c++17','-pthread',*flags,'-UNDEBUG',*fp.test_include_flags(),str(path/'test.cpp'),str(fp.src('world_gi.cpp')),str(fp.src('world_mesh_plan.cpp')),'-o',str(path/mode)]
-        subprocess.run(command,check=True)
-        result=subprocess.run([str(path/mode)],capture_output=True,text=True,timeout=1800)
-        print(mode,result.stdout.strip(),result.stderr.strip());result.check_returncode()
+        exe=path/(mode+'.exe' if windows else mode)
+        command=[*compiler,'-std=c++17','-pthread',*flags,'-UNDEBUG',*fp.test_include_flags(),str(path/'test.cpp'),str(fp.src('world_gi.cpp')),str(fp.src('world_mesh_plan.cpp')),'-o',str(exe)]
+        subprocess.run(command,env=fp.zig_env() if windows else None,check=True)
+        result=subprocess.run([str(exe)],capture_output=True,text=True,timeout=1800)
+        print(mode,result.stdout.strip(),result.stderr.strip(),flush=True);result.check_returncode()
         assert 'WARNING: ThreadSanitizer' not in result.stderr
         report['runs'].append({'mode':mode,'stdout':result.stdout,'stderr':result.stderr})
 out=fp.output_dir();out.mkdir(parents=True,exist_ok=True)

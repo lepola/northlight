@@ -1,6 +1,7 @@
 #pragma once
 // Portable FGL1 reader. Offline builder retains real asset source coordinates,
 // intensities and authored attenuation ranges. No D3D/client APIs are used here.
+#include <filesystem>
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
@@ -10,6 +11,7 @@
 #include <vector>
 
 namespace NorthlightLocalLights {
+inline constexpr uint32_t Baked=1,CastShadow=2,FirePulse=4,CandlePulse=8,GlassEmitter=16;
 struct Light {
     float position[3],diffuse[3],attenuationStart,attenuationEnd;
     uint64_t sourceId;
@@ -22,7 +24,17 @@ inline bool valid(const Light& l) {
     for(float x:l.diffuse) {if(!std::isfinite(x)||x<0||x>10000)return false;peak=std::max(peak,x);}
     return peak>0&&std::isfinite(l.attenuationStart)&&std::isfinite(l.attenuationEnd)&&
         l.attenuationStart>=0&&l.attenuationStart<l.attenuationEnd&&l.attenuationEnd<=2000&&
-        (l.kind==1||l.kind==2||l.kind==3)&&l.flags==(l.kind==1?1u:0u);
+        (l.kind==1||l.kind==2||l.kind==3)&&(l.flags&~(CastShadow|FirePulse|CandlePulse|GlassEmitter))==(l.kind==1?Baked:0u)&&
+        (!(l.flags&(FirePulse|CandlePulse))||l.kind==3)&&
+        (!(l.flags&GlassEmitter)||((l.kind==1||l.kind==3)&&(l.flags&CastShadow)))&&
+        ((l.flags&(FirePulse|CandlePulse))!=(FirePulse|CandlePulse));
+}
+inline float pulseGain(const Light& l,uint32_t now){
+    if(!(l.flags&(FirePulse|CandlePulse)))return 1.f;
+    const uint32_t period=1240+uint32_t(l.sourceId%503),phase=uint32_t((l.sourceId>>32)%period);
+    const auto triangle=[](uint32_t t,uint32_t p){return 1.f-std::fabs(2.f*float(t%p)/float(p)-1.f);};
+    const float amount=(l.flags&CandlePulse)?.05f:.10f;
+    return 1.f+amount*(triangle(now+phase,period)-.5f)+amount*.6f*(triangle(now+phase*3,period*3)-.5f);
 }
 // Authored range with bounded linear fade. This is explicit transport policy,
 // not a claim that a baked classic WMO originally used this precise falloff.
@@ -39,7 +51,7 @@ inline bool safeMap(const std::string& map) {
 inline bool readFile(const std::string& path,std::vector<Light>& output) {
     // FGL1 is little endian, as are the supported macOS/Windows x86/ARM hosts.
     const uint32_t endian=1;if(*reinterpret_cast<const unsigned char*>(&endian)!=1)return false;
-    std::ifstream f(path,std::ios::binary|std::ios::ate);if(!f)return false;
+    std::ifstream f(std::filesystem::u8path(path),std::ios::binary|std::ios::ate);if(!f)return false;
     const auto length=f.tellg();if(length<16)return false;f.seekg(0);
     char magic[4];uint32_t header[3];f.read(magic,4);f.read(reinterpret_cast<char*>(header),12);
     if(!f||std::memcmp(magic,"FGL1",4)||header[0]!=1||header[1]!=sizeof(Light)||header[2]>1000000||
@@ -71,9 +83,12 @@ public:
             lights_.swap(candidate);map_=map;
         }
         for(const auto& l:lights_) {
-            double d2=0;
-            for(int i=0;i<3;++i){double d=l.position[i]-camera[i];d2+=d*d;}
             const double radius=double(maxDistance)+l.attenuationEnd;
+            const double dx=l.position[0]-camera[0];
+            if(std::fabs(dx)>radius)continue;
+            double d2=0;
+            d2+=dx*dx;
+            for(int i=1;i<3;++i){double d=l.position[i]-camera[i];d2+=d*d;}
             if(d2<=radius*radius)output.push_back(l);
         }
         // Source IDs retain deterministic order when camera moves; do not churn

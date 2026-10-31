@@ -106,6 +106,11 @@ del old_inputs['without']
 old = fake_cache(cache, {'inputs': old_inputs})
 assert any('patch-z' in a['archive'] for a in old['inputs']['archives'])
 assert iwc.recorded_digests(old, 'z') == base and iwc.plan(base, old, cache, False, 'z') == ('up_to_date', [])
+# A falsely foreign art layer is now proven ours: preserve geometry, refresh post steps.
+included = iwc.gather_inputs(client, 'all', 'enUS', iwc.MAPS, None, '')
+misidentified = {'inputs': included, 'digests': iwc.step_digests(included)}
+assert iwc.plan(base, misidentified, cache, False, 'z') == ('partial', iwc.POST)
+assert misidentified['inputs']['without'] == ''  # planning never changes the record
 extract, previous = out / 'world-cache.extract', out / 'world-cache.previous'
 for folder in (extract, previous, cache / 'lights.previous'):
     folder.mkdir(exist_ok=True)
@@ -346,13 +351,14 @@ class FakeStep:
         return {'step': self.name, 'exit': 0}
 
 
-built_groups, fail_group = [], []
+built_groups, fail_group, called_steps = [], [], []
 
 
 def fake_run_parallel(specs, jobs, budget=float('inf')):
     """Stand-ins for the builders: a tile and a unique model per map, a .fgl per map, a validation report."""
     steps = []
     for name, args, log, _, _ in specs:
+        called_steps.append(name)
         args = [str(a) for a in args]
         staging = Path(args[args.index('--output') + 1]) if '--output' in args else None
         if name.startswith('instances ') and name.split()[1] in instance_maps.KEYS:
@@ -390,6 +396,7 @@ shutil.rmtree(istaging, ignore_errors=True)
 
 def inst_run(spec, *extra):
     built_groups.clear()
+    called_steps.clear()
     return run(['--client', str(client), '--output', str(icache), '--instances', spec, '--jobs', '2', *extra])
 
 
@@ -449,6 +456,56 @@ unique = icache / 'models' / (key_of('unique-' + raids[0]).hex() + '.fgs')
 assert unique.read_text().endswith(' rebuilt') and (icache / 'models' / (SHARED.hex() + '.fgs')).read_text() == 'model ' + SHARED.hex()
 assert not (icache / 'models' / (CONTINENT_ONLY.hex() + '.fgs')).read_text().endswith(' rebuilt')
 BUILD = ''
+# Light-only changes reuse every geometry/model file; validation-only changes run no builder.
+real_sources = iwc.source_hashes
+original_sources = real_sources()
+unchanged = {p: (p.read_bytes(), p.stat().st_mtime_ns, p.stat().st_ino)
+             for m in raids + wotlk for p in (icache / m).glob('*.fg3')}
+unchanged[unique] = (unique.read_bytes(), unique.stat().st_mtime_ns, unique.stat().st_ino)
+shared_path = icache / 'models' / (SHARED.hex() + '.fgs')
+unchanged[shared_path] = (shared_path.read_bytes(), shared_path.stat().st_mtime_ns, shared_path.stat().st_ino)
+try:
+    iwc.source_hashes = lambda: dict(original_sources, **{'world_lights_builder.py': 'new lights'})
+    assert inst_run('2 6')[1]['built'] == ['classic-raids', 'wotlk-raids']
+    assert built_groups == [] and called_steps == ['instances lights', 'instances validate'], called_steps
+    assert all((p.read_bytes(), p.stat().st_mtime_ns, p.stat().st_ino) == value for p, value in unchanged.items())
+    light_sources = iwc.source_hashes()
+    iwc.source_hashes = lambda: dict(light_sources, **{'validate_world_cache.py': 'new validation'})
+    light_times = {p: p.stat().st_mtime_ns for p in (icache / 'lights').glob('*.fgl')}
+    assert inst_run('2 6')[1]['built'] == ['classic-raids', 'wotlk-raids']
+    assert built_groups == [] and called_steps == ['instances validate'], called_steps
+    assert all(p.stat().st_mtime_ns == t for p, t in light_times.items())
+    assert all((p.read_bytes(), p.stat().st_mtime_ns, p.stat().st_ino) == value for p, value in unchanged.items())
+    # Adding a new group alongside a light update must preserve shared models of the reused groups.
+    iwc.source_hashes = lambda: dict(light_sources, **{'world_lights_builder.py': 'next lights'})
+    assert inst_run('2 4 6')[1]['built'] == ['classic-raids', 'tbc-raids', 'wotlk-raids']
+    assert built_groups == ['tbc-raids']
+    assert all((p.read_bytes(), p.stat().st_mtime_ns, p.stat().st_ino) == value for p, value in unchanged.items())
+finally:
+    iwc.source_hashes = real_sources
+assert inst_run('2 6')[0] == 0 and not built_groups
+# Correcting ownership must also preserve instance meshes after continent inputs are replaced.
+continent_record = iwc.read_json(icache / 'install-manifest.json')
+with_art = dict(inputs, without='', archives=[*inputs['archives'], {'archive': 'Data/patch-z.mpq', 'bytes': 1, 'mtime_ns': 1}])
+(icache / 'install-manifest.json').write_text(json.dumps({'inputs': with_art, 'digests': iwc.step_digests(with_art)}))
+misidentified = iwc.read_json(icache / iwc.INSTANCE_MANIFEST)
+for k, r in misidentified['groups'].items():
+    r['digest'] = iwc.instance_digests(with_art)[k]
+    r.pop('digests', None)
+(icache / iwc.INSTANCE_MANIFEST).write_text(json.dumps(misidentified))
+rebased = iwc.rebase_instance_scenes(icache, 'z')
+assert all(r['digests']['scene'] == iwc.instance_step_digests(inputs)[k]['scene'] for k, r in rebased['groups'].items())
+(icache / iwc.INSTANCE_MANIFEST).write_text(json.dumps(rebased))
+(icache / 'install-manifest.json').write_text(json.dumps(continent_record))
+assert inst_run('2 6')[0] == 0 and not built_groups
+assert called_steps == ['instances lights', 'instances validate'], called_steps
+# Upgrade legacy metadata on a current cache, without any builder or validator.
+legacy = iwc.read_json(icache / iwc.INSTANCE_MANIFEST)
+for record_ in legacy['groups'].values():
+    record_.pop('digests')
+(icache / iwc.INSTANCE_MANIFEST).write_text(json.dumps(legacy))
+assert inst_run('2 6')[1]['event'] == 'up_to_date' and not called_steps
+assert all('digests' in r for r in iwc.read_json(icache / iwc.INSTANCE_MANIFEST)['groups'].values())
 # a group with missing folders is built again; --force rebuilds the selected ones
 shutil.rmtree(icache / raids[0])
 assert inst_run('classic-raids,wotlk-raids')[1]['built'] == ['classic-raids']

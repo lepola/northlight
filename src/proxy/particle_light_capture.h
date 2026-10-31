@@ -182,23 +182,34 @@ public:
         const float bary[4][3]={{1.f/3,1.f/3,1.f/3},{.6f,.2f,.2f},{.2f,.6f,.2f},{.2f,.2f,.6f}};
         // Place the draw by its first loadable triangle before it takes a sampling slot:
         // beyond the lights' reach, or with no loadable bytes, it can add no light.
-        bool placed=false;
+        bool placed=false;unsigned placedSample=samples;Point probe[3];
         for(unsigned sample=0;sample<samples&&!placed;++sample){
             std::uint64_t references[3];if(!NorthlightParticleLights::triangleIndices(unsigned(args.prim),std::uint64_t(sample)*args.primCount/samples,references))continue;
             Point points[3];if(!load(references[0],points[0])||!load(references[1],points[1])||!load(references[2],points[2]))continue;
             float world[3];for(unsigned j=0;j<3;++j){world[j]=inverseView[12+j];for(unsigned k=0;k<3;++k)world[j]+=(points[0].position[k]+points[1].position[k]+points[2].position[k])/3*inverseView[k*4+j];}
             if(!(NorthlightEquipmentLights::distance2(world,camera)<=NorthlightParticleLights::MaxDistance*NorthlightParticleLights::MaxDistance)){++frame.distant;return result;}
-            placed=true;
+            // No draw or upload occurs inside prepare(). Keep this exact probe's
+            // already evaluated vertices for its subsequent sampling iteration.
+            std::copy(points,points+3,probe);placedSample=sample;placed=true;
         }
         if(!placed||!frame.takeDraw(particle))return result;
+        float lo[3]={INFINITY,INFINITY,INFINITY},hi[3]={-INFINITY,-INFINITY,-INFINITY};unsigned loaded=0;
         for(unsigned sample=0;sample<samples;++sample){
             std::uint64_t references[3];if(!NorthlightParticleLights::triangleIndices(unsigned(args.prim),std::uint64_t(sample)*args.primCount/samples,references))continue;
-            Point points[3];if(!load(references[0],points[0])||!load(references[1],points[1])||!load(references[2],points[2]))continue;
+            Point points[3];
+            if(sample==placedSample)std::copy(probe,probe+3,points);
+            else if(!load(references[0],points[0])||!load(references[1],points[1])||!load(references[2],points[2]))continue;
+            if(!particle){++loaded;for(const auto& point:points)for(unsigned k=0;k<3;++k){
+                if(!std::isfinite(point.position[k]))return Prepared{};
+                lo[k]=std::min(lo[k],point.position[k]);hi[k]=std::max(hi[k],point.position[k]);}}
             ++frame.triangles;Four center{};for(unsigned j=0;j<4;++j)center[j]=(points[0].position[j]+points[1].position[j]+points[2].position[j])/3;
             float clip[4]{};for(unsigned j=0;j<4;++j)for(unsigned k=0;k<4;++k)clip[j]+=q[j*4+k]*center[k];
-            if(!std::isfinite(clip[3])||clip[3]<=0||std::fabs(clip[0])>clip[3]*1.2f||std::fabs(clip[1])>clip[3]*1.2f)continue;
+            // Preserve samples for the final cluster/track: an offscreen or
+            // behind-eye centroid can still illuminate visible receivers.
+            bool finiteClip=true;for(float v:clip)finiteClip&=std::isfinite(v);if(!finiteClip)continue;
             NorthlightParticleLights::Sample value;
             for(unsigned j=0;j<3;++j){value.position[j]=inverseView[12+j];for(unsigned k=0;k<3;++k)value.position[j]+=center[k]*inverseView[k*4+j];}
+            bool finite=true;for(float p:value.position)finite&=std::isfinite(p);if(!finite)continue;
             bool known=true;
             for(const auto& weights:bary){
                 Four colour{},texel{},emitted{};float uv[2]{};
@@ -213,6 +224,8 @@ public:
             }
             if(known&&NorthlightParticleLights::peak(value.rgb)>=.003f)result.add(value);
         }
+        if(!particle&&NorthlightParticleLights::compactMesh(lo,hi,loaded,args.primCount))
+            for(unsigned i=0;i<result.count;++i)result.clusters[i].sample.castsShadows=true;
         return result;
     }
     static void submit(const Prepared& prepared,bool accepted,bool deferred,NorthlightParticleLights::Frame& frame){

@@ -26,7 +26,8 @@ struct GlowHue {
     float sunCore[3]={1,1,1}; // hot core at the disc: the hue clipped toward warm white, normMax
     float moon[3]={1,1,1};    // normMax of the regional moon_disc tint (the approved moon colour)
     float strength=0;         // 0..1: how much the sun hue replaces today's colour (0 = today)
-    bool valid=false;         // sun only: a proven band read on this map within 2 s; false = today's sun colours
+    bool valid=false;         // validated native colour or the bounded legacy palette fallback
+    bool nativeColors=false; // body RGB and native glare RGB bypass reference-look remapping
     float moonStrength=0;     // 1 when moon holds the regional moon_disc tint (independent of valid), else 0
     float native=0;           // 0..1: share of band 9 (the native sun colour) in sun; the rest is band 10
 };
@@ -82,9 +83,17 @@ inline void glowColour(const GlowHue& h,float inner,float* out){
     for(unsigned i=0;i<3;++i)out[i]=std::clamp(h.sun[i]+(h.sunCore[i]-h.sun[i])*t,0.f,1.f);
 }
 // slots: the 18 packed light colours, or nullptr when the read failed or is unproven.
-inline GlowHue compute(const std::uint32_t* slots,const float* moonTint){
+inline GlowHue compute(const std::uint32_t* slots,const float* moonTint,const float* nativeSunTint=nullptr){
     GlowHue h;
     h.moonStrength=normMax(moonTint,h.moon)?1.f:0.f;
+    // Proven native appearance takes precedence over the reference-look palette.
+    // Preserve encoded RGB, including dark/black glare; no white/core hue bias.
+    if(finite3(nativeSunTint)&&nativeSunTint[0]>=0&&nativeSunTint[1]>=0&&nativeSunTint[2]>=0&&
+       nativeSunTint[0]<=1&&nativeSunTint[1]<=1&&nativeSunTint[2]<=1){
+        if(slots)unpack(slots[SlotSun],h.sun);else std::copy(nativeSunTint,nativeSunTint+3,h.sun);
+        std::copy(nativeSunTint,nativeSunTint+3,h.sunCore);
+        h.native=h.strength=1;h.valid=h.nativeColors=true;return h;
+    }
     if(!slots){hotCore(h.sun,h.sunCore);return h;}
     float sun[3],halo[3],fromSun[3],fromHalo[3],mixed[3];
     unpack(slots[SlotSun],sun);unpack(slots[SlotSunHalo],halo);

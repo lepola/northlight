@@ -133,15 +133,16 @@ checks[f'equal depth: the dark side reaches at most 1 half-res px across (from x
 
 # 4. wiring
 effects_cpp = renderer[renderer.index('    void renderEffects() {'):renderer.index('template<class Capture> void prepareDraw(')]
-fold_line = 'const bool fold=world&&debugMode==0&&world->ready();'
+fold_line = 'const bool fold=world&&debugMode==0&&world->screenReady();'
 legacy_before = 'if(!fold&&!legacyComposite())return;'
-render_call = 'world->render(saved.targets[0],depthTex,width,height,sceneFormat,nearZ,farZ,worldMinDepth,worldMaxDepth,worldDebug,gpuProfile.get(),waterMask,fold?scene:nullptr,fold?ao:nullptr)'
+render_call = 'world->render(saved.targets[0],depthTex,width,height,sceneFormat,nearZ,farZ,worldMinDepth,worldMaxDepth,worldDebug,gpuProfile.get(),waterMask,fold?scene:nullptr,fold?ao:nullptr,frame)'
 legacy_after = 'if(fold&&!world->composited){effectState();bindEffects(ao);if(!legacyComposite())return;}'
 checks['proxy: FOLD condition, legacy composite before render only when not folding, after it only if not composited'] = (
     all(effects_cpp.count(s) == 1 for s in (fold_line, legacy_before, render_call, legacy_after))
     and effects_cpp.index('gpuProfile->mark("AO");') < effects_cpp.index(fold_line) < effects_cpp.index(legacy_before)
     < effects_cpp.index(render_call) < effects_cpp.index(legacy_after) < effects_cpp.index('celestialDiscs->renderVeil(')
-    and 'ext->SetPixelShader(constants[7]==0.f?aoContactBloomPS:aoPS);' in effects_cpp)
+    and 'contactShader=aoActorUsed?(constants[7]==0.f?aoActorPS:aoActorAlphaPS):aoContactBloomPS;' in effects_cpp
+    and 'ext->SetPixelShader(constants[7]==0.f?contactShader:aoPS);' in effects_cpp)
 checks['proxy: one shared effect-state setup, used before the AO pass and before the late legacy composite'] = (
     renderer.count('    void effectState() {') == 1 and effects_cpp.count('effectState();') == 2
     and effects_cpp.index('effectState();') < effects_cpp.index('bindEffects(nullptr);')
@@ -153,7 +154,7 @@ checks['world: copy skipped only with foldScene, Scene s0 = foldScene, s10 = AO 
     'if(!foldScene&&!check(d->StretchRect(targetSurface,nullptr,colorSurface,nullptr,D3DTEXF_NONE),"world color copy"))return false;' in render_fn
     and 'IDirect3DTexture9* textures[]={foldScene?foldScene:color,' in render_fn
     and temporal.count('d->SetTexture(10,foldAO?foldAO:neutralAO);d->SetSamplerState(10,D3DSAMP_MINFILTER,D3DTEXF_LINEAR);d->SetSamplerState(10,D3DSAMP_MAGFILTER,D3DTEXF_LINEAR);') == 1
-    and temporal.index('SetTexture(10,') < temporal.index('quad(w/2,h/2),"temporal light pass"')
+    and temporal.index('SetTexture(10,') < temporal.index('quad(w/2,h/2,false),"temporal light pass"')
     and 'SetTexture(10' not in render_fn[render_fn.index('temporalIndex=prev;temporalValid=true;'):render_fn.index('"world composite"')])
 checks['world: composited cleared at entry, set right after the WorldComposite quad; neutral 1x1 (0,0,0,1) created and released'] = (
     'shadowsComposited=false;composited=false;lastRenderDebug=debug;' in render_fn
@@ -163,7 +164,7 @@ checks['world: composited cleared at entry, set right after the WorldComposite q
 checks['diagnostic capture: the folded scene dump is labelled pre-AO'] = 'foldScene?"pre-AO (folded AO/bloom)":"post-AO composite"' in wr
 
 # 5. shaders: WorldComposite folds, smoothRemoval reads the AO, removalScale has no floor
-composite = world[world.index('float4 WorldComposite('):]
+composite = world[world.index('float4 worldComposite('):]
 checks['WorldComposite: AO in the tent, native fog preserved before surface AO, bloom bilinear'] = (
     'sampler2D AmbientOcclusion : register(s10);' in world
     and 'ao=mad(occlusion,weight,ao);' in composite and 'fallbackAO=tex2Dlod(AmbientOcclusion,float4(fallbackUV,0,0)).a;' in composite  # gh#80: the nearest tap's AO is read once after the tent
@@ -181,7 +182,7 @@ checks['smoothRemoval: both Scene reads times the AO alpha; removalScale without
 wm = json.loads(fp.src('world-shader-build.json').read_text())['shaders']
 # 0.3.185: the removal smoothing (Scene, AO, baseline reads) moved to RemovalSmooth; TemporalLight keeps no s0/s10/s12 read and gains s9.
 checks[f"world manifest: WorldComposite {wm['WorldComposite']['static_instruction_slots']} <= 512 with s10; RemovalSmooth {wm['RemovalSmooth']['static_instruction_slots']} (s10 AO) <= 512; TemporalLight {wm['TemporalLight']['static_instruction_slots']} == 210"] = (
-    wm['WorldComposite']['static_instruction_slots'] <= 512 and wm['WorldComposite']['samplers'] == [0, 1, 2, 8, 9, 10, 11, 12, 13, 15]  # 0.3.202: the SM3 limit (512) replaces the old 500 headroom guard; the rain mask adds s13, the dither s2; gh#80 CurrentDistance s15
+    wm['WorldComposite']['static_instruction_slots'] <= 512 and wm['WorldComposite']['samplers'] == [0, 1, 2, 3, 8, 9, 10, 11, 12, 13, 15]  # 0.3.202: the SM3 limit (512) replaces the old 500 headroom guard; the rain mask adds s13, the dither s2; gh#80 CurrentDistance s15
     and wm['RemovalSmooth']['static_instruction_slots'] <= 512 and wm['RemovalSmooth']['samplers'] == [0, 1, 8, 10, 12, 14, 15]
     and wm['TemporalLight']['static_instruction_slots'] == 210 and  # Microsoft d3dcompiler_47 (Wine's builtin: 293)
     wm['TemporalLight']['samplers'] == [1, 8, 9, 14, 15])

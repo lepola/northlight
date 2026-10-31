@@ -15,6 +15,19 @@ class Window {
     bool primed_=false;
 public:
     void reset(){count_=0;previous_=0;primed_=false;}
+    // Preserve short A/B segments before resetting at a settings boundary.
+    // The next sample primes a new interval, so no interval crosses modes.
+    bool takePartial(Report& out){
+        out={};
+        if(!count_){reset();return false;}
+        out.count=count_;
+        for(unsigned i=0;i<count_;++i)out.meanMs+=samples_[i];
+        out.meanMs/=count_;
+        std::sort(samples_.begin(),samples_.begin()+count_);
+        out.p50Ms=(samples_[(count_-1)/2]+samples_[count_/2])*.5;
+        out.p95Ms=samples_[(count_*95+99)/100-1];out.maxMs=samples_[count_-1];
+        reset();return true;
+    }
     bool sample(int64_t tick,int64_t frequency,Report& out){
         out={};
         if(frequency<=0){reset();return false;}

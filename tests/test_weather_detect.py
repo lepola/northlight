@@ -53,7 +53,7 @@ static const DWORD kRainMaskMrtShader[]={1},kRainScrubShader[]={2};
 static std::vector<std::string> lines;
 static void sink(const char* l){lines.push_back(l);}
 static int A=21,X8=22,A1=25,A4=26,R5G6B5=23,DXT5=0x35545844;
-static int cell[64];static const void* P(int i){return &cell[i];}
+static int cell[128];static const void* P(int i){assert(i>=0&&i<int(sizeof(cell)/sizeof(cell[0])));return &cell[i];}
 static unsigned count(const char* prefix){unsigned n=0;for(auto& l:lines)if(l.rfind(prefix,0)==0)++n;return n;}
 // The hook: the line extracted from Device::drawHook over a mock mirror.
 struct Mirror{bool textureKnown[16]={};void* textures[16]={};};
@@ -210,6 +210,15 @@ int main(){
         o.endFrame(false);assert(o.hot==P(52)&&o.hotKind==Kind::Snow);
         o.endFrame(false);assert(o.hot==P(50)); /* wraps */
         Detector e;e.endFrame(true);e.endFrame(false);assert(e.hot==nullptr); /* no candidates */
+    }
+    {   // Re-created raw addresses remain unique; counted draws mark exactly the hot slot.
+        for(unsigned target=0;target<6;++target){
+            Detector o;for(unsigned i=0;i<6;++i)o.noteCreate(P(100+i),32,i<2?512:64,1,A);
+            o.noteCreate(P(102),32,64,1,A); // replace an existing raw address
+            assert(o.count()==6);unsigned occurrences=0;for(unsigned i=0;i<o.count();++i)occurrences+=o.candidate(i).raw==P(102);assert(occurrences==1);
+            const void* hot=o.candidate(target).raw;while(o.hot!=hot)o.rotate();o.endFrame(true);
+            for(unsigned i=0;i<o.count();++i)assert(o.candidate(i).drawn==(o.candidate(i).raw==hot));
+        }
     }
     {   // tall log: any format with h>=4w, the first 8 only
         lines.clear();Detector t;t.sink=&sink;
@@ -371,6 +380,7 @@ int main(){
         assert(f.mistCount()==kMistSlots&&f.isMist(P(0))&&f.isMist(P(1))&&f.mistOverflows==100-(kMistSlots-2)&&f.overflows==0);
         Detector g;for(unsigned i=0;i<kMistSlots;++i){g.noteCreate(P(i),128,512,10,A);g.proveMist(P(i));}
         g.noteCreate(P(20),128,512,10,A);assert(!g.isMist(P(0))&&g.isMist(P(1))&&g.isMist(P(20))); /* all proven: the oldest */
+        for(unsigned i=0;i<kMistSlots;++i){Detector q;for(unsigned j=0;j<kMistSlots;++j)q.noteCreate(P(j),128,512,10,A);q.proveMist(P(i));q.noteCreate(P(63),128,512,10,A);assert(q.isMist(P(i))&&q.isMist(P(63))&&!q.isMist(P(i==0?1:0)));} /* first, middle and last proven entries survive eviction */
     }
     {   // 0.3.199 (rain mist): the draw hook - armed and the game's 2x modulate: skipped (not drawn, not counted as weather); otherwise drawn
         auto game=[](Hook& h){h.ext->rs[D3DRS_ALPHABLENDENABLE]=1;h.ext->rs[D3DRS_SRCBLEND]=D3DBLEND_DESTCOLOR;h.ext->rs[D3DRS_DESTBLEND]=D3DBLEND_SRCCOLOR;h.ext->rs[D3DRS_BLENDOP]=D3DBLENDOP_ADD;};

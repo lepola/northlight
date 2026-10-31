@@ -9,7 +9,7 @@
 // it is; the image is never affected). The device is borrowed: reset() before the device is Reset, destroy before it is released.
 class NorthlightGpuFrameTimer {
     static constexpr unsigned RingSize=4;
-    struct Slot {IDirect3DQuery9 *start=nullptr,*end=nullptr,*frequency=nullptr,*disjoint=nullptr;uint64_t serial=0;bool pending=false;};
+    struct Slot {IDirect3DQuery9 *start=nullptr,*end=nullptr,*frequency=nullptr,*disjoint=nullptr;uint64_t serial=0,frequencyValue=0,startValue=0;unsigned readStage=0;bool pending=false;};
     IDirect3DDevice9* device_=nullptr;
     Slot slots_[RingSize];
     int active_=-1;
@@ -50,7 +50,7 @@ public:
         if(active_<0||disabled_)return;
         Slot& s=slots_[active_];active_=-1;
         if(!issue(s.end,D3DISSUE_END,"end timestamp")||!issue(s.frequency,D3DISSUE_END,"frequency end")||!issue(s.disjoint,D3DISSUE_END,"disjoint end"))return;
-        s.pending=true;
+        s.readStage=0;s.pending=true;
     }
     // Once per frame. Tries each pending slot once (flags 0, never D3DGETDATA_FLUSH, no loop until ready); true with the newest completed
     // valid interval in ms. A slot whose result is not there yet stays pending for a later frame.
@@ -59,23 +59,24 @@ public:
         bool found=false;uint64_t newest=0;
         for(auto& s:slots_){
             if(!s.pending)continue;
-            BOOL disjoint=FALSE;HRESULT hr=s.disjoint->GetData(&disjoint,sizeof disjoint,0);
-            if(hr==S_FALSE)continue;
-            if(FAILED(hr)){disable("disjoint read",hr);return false;}
-            if(disjoint){s.pending=false;continue;}
-            uint64_t frequency=0,t0=0,t1=0;
-            hr=s.frequency->GetData(&frequency,sizeof frequency,0);
-            if(hr==S_FALSE)continue;
-            if(FAILED(hr)){disable("frequency read",hr);return false;}
-            hr=s.start->GetData(&t0,sizeof t0,0);
-            if(hr==S_FALSE)continue;
-            if(FAILED(hr)){disable("timestamp read",hr);return false;}
+            HRESULT hr;
+            if(s.readStage==0){BOOL disjoint=FALSE;hr=s.disjoint->GetData(&disjoint,sizeof disjoint,0);
+                if(hr==S_FALSE)continue;
+                if(FAILED(hr)){disable("disjoint read",hr);return false;}
+                if(disjoint){s.pending=false;continue;}s.readStage=1;}
+            if(s.readStage==1){hr=s.frequency->GetData(&s.frequencyValue,sizeof s.frequencyValue,0);
+                if(hr==S_FALSE)continue;
+                if(FAILED(hr)){disable("frequency read",hr);return false;}s.readStage=2;}
+            if(s.readStage==2){hr=s.start->GetData(&s.startValue,sizeof s.startValue,0);
+                if(hr==S_FALSE)continue;
+                if(FAILED(hr)){disable("timestamp read",hr);return false;}s.readStage=3;}
+            uint64_t t1=0;
             hr=s.end->GetData(&t1,sizeof t1,0);
             if(hr==S_FALSE)continue;
             if(FAILED(hr)){disable("timestamp read",hr);return false;}
             s.pending=false;
-            if(!frequency||t1<t0)continue;
-            if(!found||s.serial>newest){newest=s.serial;ms=double(t1-t0)*1000.0/double(frequency);found=true;}
+            if(!s.frequencyValue||t1<s.startValue)continue;
+            if(!found||s.serial>newest){newest=s.serial;ms=double(t1-s.startValue)*1000.0/double(s.frequencyValue);found=true;}
         }
         return found;
     }

@@ -22,12 +22,13 @@ int main(){
      assert(p.beginFrame(480));d.frequency=0;p.endFrame();p.poll();findLog("zero timestamp frequency");d.frequency=1000000;
      p.reset();assert(d.live==0);d.ready=false;
      for(unsigned i=1;i<=6;++i){assert(p.beginFrame(i*120));p.mark("pass");p.endFrame();}
-     assert(!p.beginFrame(840));before=d.reads;p.poll();assert(d.reads-before==6);assert(d.live==6*(40+2+2)); /* 6 slots x (MaxMarks+2 stamps + frequency + disjoint) */d.ready=true;p.poll();assert(p.beginFrame(960));p.mark("recovered");p.endFrame();p.poll();findLog("recovered=1.000ms");
+     assert(!p.beginFrame(840));before=d.reads;p.poll();assert(d.reads-before==6);assert(d.live==6*(42+2+2)); /* 6 slots x (MaxMarks+2 stamps + frequency + disjoint) */d.ready=true;p.poll();assert(p.beginFrame(960));p.mark("recovered");p.endFrame();p.poll();findLog("recovered=1.000ms");
      p.reset();assert(d.live==0);d.failCreate=true;assert(!p.beginFrame(1080));findLog("query creation");auto count=d.creates;assert(!p.beginFrame(1200)&&d.creates==count);p.mark("ignored");p.endFrame();p.poll();assert(d.live==0);
      d.failCreate=false;p.reset();assert(p.beginFrame(120));d.failRead=true;p.endFrame();p.poll();assert(d.live==0);findLog("disjoint read");
      d.failRead=false;p.reset();d.failIssue=true;assert(!p.beginFrame(120));assert(d.live==0);findLog("disjoint begin");d.failIssue=false;
     }
     logs.clear();{NorthlightGpuProfile p(&d);assert(p.beginFrame(120));for(unsigned i=0;i<19;++i)p.mark("stage");p.mark("WorldComposite");p.endFrame();p.poll();findLog("WorldComposite=1.000ms");for(const auto& line:logs)assert(line.find("marks_truncated")==std::string::npos);}
+    logs.clear();{NorthlightGpuProfile p(&d);assert(p.beginFrame(120));for(unsigned i=0;i<38;++i)p.mark("stage");p.mark("AO");p.mark("AOBlurSetup");p.mark("AOBlur");p.mark("FogBlur");p.endFrame();p.poll();findLog("AOBlurSetup=1.000ms");findLog("AOBlur=1.000ms");findLog("FogBlur=1.000ms");findLog("total=43.000ms");for(const auto& line:logs)assert(line.find("marks_truncated")==std::string::npos);}
     logs.clear();{
      const unsigned before=d.creates;NorthlightGpuProfile p(&d,"GPU frame",2);
      assert(p.beginFrame(120));assert(d.creates-before==6);

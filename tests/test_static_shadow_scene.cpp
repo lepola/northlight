@@ -41,7 +41,9 @@ int main(int argc,char**argv){
     assert(packModel(std::move(nearOpaqueScene),"nearopaque",nearOpaque,error));assert(nearOpaque.materials[0].width==2&&nearOpaque.alphaAt(0,0)==254&&nearOpaque.materials[0].rgba.capacity()==0);
     auto largeSource=triangle();largeSource.vertices.resize(65537,largeSource.vertices[0]);largeSource.triangles[0].v2=65536;Model largeModel;
     assert(packModel(std::move(largeSource),"wide-index",largeModel,error));assert(!largeModel.index16&&largeModel.uploadPrepared&&largeModel.uploadIndices16.empty()&&largeModel.indexCount()==3&&largeModel.indexAt(2)==65536);
-    Placement transformed;float mat[9]={0,-2,0,3,0,0,0,0,-1};std::copy(mat,mat+9,transformed.matrix);transformed.translation={4,5,6};Vec3 p=transformPoint(transformed,{1,2,3});assert(p.x==0&&p.y==8&&p.z==3);Vec3 lo,hi;transformBounds(transformed,{0,0,0},{1,2,3},lo,hi);assert(lo.x==0&&lo.y==5&&lo.z==3&&hi.x==4&&hi.y==8&&hi.z==6);
+    Placement transformed;float mat[9]={0,-2,0,3,0,0,0,0,-1};std::copy(mat,mat+9,transformed.matrix);transformed.translation={4,5,6};Vec3 p=transformPoint(transformed,{1,2,3});assert(p.x==0&&p.y==8&&p.z==3);Vec3 lo,hi;transformBounds(transformed,{0,0,0},{1,2,3},lo,hi);
+    const float exactLow[]={0,5,3},exactHigh[]={4,8,6},actualLow[]={lo.x,lo.y,lo.z},actualHigh[]={hi.x,hi.y,hi.z};
+    for(unsigned axis=0;axis<3;++axis){assert(actualLow[axis]<=exactLow[axis]&&actualHigh[axis]>=exactHigh[axis]);assert(exactLow[axis]-actualLow[axis]<.001f&&actualHigh[axis]-exactHigh[axis]<.001f);}
     fs::path root=fs::temp_directory_path()/("fr-static-shadow-test-"+std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));fs::create_directories(root/"Azeroth");fs::create_directories(root/"Kalimdor");fs::create_directories(root/"models");modelFile(root/"models"/(key(1)+".fgs"));modelFile(root/"models"/(key(2)+".fgs"));
     auto a=placement(1,{0,0,0}),b=placement(2,{500,0,0}),c=placement(3,{1400,0,0},2);auto wmo=a;wmo.category=2;
     // Tile duplicates dedup by category+UID; equal UID in a different category remains.

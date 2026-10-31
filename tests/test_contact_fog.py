@@ -17,7 +17,7 @@ for _ in range(10000):
     assert original*ao+0==original*ao
     assert fog_part<=result<=original+1e-12
 
-world=fp.tracked('world_effects.hlsl').read_text().split('float4 WorldComposite(')[1].split('// Separate geometry pass')[0]
+world=fp.tracked('world_effects.hlsl').read_text().split('float4 worldComposite(')[1].split('// Separate geometry pass')[0]
 legacy=fp.tracked('effects.hlsl').read_text().split('float4 Composite(')[1]
 assert world.index('float3 fogPart=min(')<world.index('original.rgb=mad(original.rgb-fogPart,ao,fogPart);')<world.index('float3 color=original.rgb;')
 assert 'float3 lit = mad(original.rgb-fogPart,ambient.a,fogPart);' in legacy

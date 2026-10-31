@@ -4,6 +4,22 @@
 #include <iostream>
 using namespace NorthlightParticleLights;
 int main(){
+    {
+        float lo[3]={0,0,0},hi[3]={1,1,1};
+        assert(compactMesh(lo,hi,2,2));assert(!compactMesh(lo,hi,1,2));
+        assert(!compactMesh(lo,hi,17,17));assert(!compactMesh(lo,hi,0,0));
+        hi[0]=4;assert(!compactMesh(lo,hi,2,2));hi[0]=NAN;assert(!compactMesh(lo,hi,2,2));
+        float camera[3]={};Frame mesh;NorthlightLocalLightSelection::Tracker selected;std::vector<Light> fixed;
+        Sample herb{{0,0,2},{.2f,.4f,.8f},0,true};
+        mesh.observe(herb,camera);mesh.publish(nullptr,0,fixed,camera,selected);
+        assert(mesh.outputCount==1&&(mesh.output[0].flags&NorthlightLocalLights::CastShadow));
+        const auto id=mesh.output[0].sourceId;
+        mesh.nextFrame();herb.castsShadows=false;mesh.observe(herb,camera);mesh.publish(nullptr,0,fixed,camera,selected);
+        assert(mesh.outputCount==1&&mesh.output[0].sourceId==id&&!mesh.output[0].flags);
+        mesh.nextFrame();herb.castsShadows=true;mesh.observe(herb,camera);herb.castsShadows=false;mesh.observe(herb,camera);
+        mesh.publish(nullptr,0,fixed,camera,selected);assert(mesh.outputCount==1&&!mesh.output[0].flags);
+        mesh.nextFrame();mesh.publish(nullptr,0,fixed,camera,selected);assert(!mesh.outputCount);
+    }
     std::uint64_t indices[3],v=0;
     assert(triangleIndices(4,3,indices)&&indices[0]==9&&indices[2]==11);
     assert(triangleIndices(5,3,indices)&&indices[0]==3&&indices[2]==5);
@@ -45,6 +61,18 @@ int main(){
     assert(frame.outputCount==1&&frame.output[0].sourceId==flash);
     frame.nextFrame();frame.publish(nullptr,0,fixed,camera,selection,dt);assert(frame.outputCount==0); // no release tail
     for(unsigned f=0;f<170;++f){frame.nextFrame();frame.publish(nullptr,0,fixed,camera,selection,dt);}assert(frame.outputCount==0);
+
+    // Native lights at equal reach retain source-id ordering; nearby spheres
+    // outrank farther bulbs even when the latter have lower source ids.
+    {Frame ordered;NorthlightLocalLightSelection::Tracker tracker;std::array<Light,8> lamps{};
+     for(unsigned i=0;i<lamps.size();++i){auto& l=lamps[i];l.sourceId=80-i;l.kind=2;l.position[0]=10;l.diffuse[0]=.2f;l.attenuationEnd=4;}
+     ordered.publish(lamps.data(),unsigned(lamps.size()),{},camera,tracker);
+     assert(ordered.outputCount==lamps.size());
+     for(unsigned i=0;i<lamps.size();++i)assert(ordered.output[i].sourceId==73+i);
+     lamps[0].position[0]=15;lamps[0].attenuationEnd=12;
+     ordered.publish(lamps.data(),unsigned(lamps.size()),{},camera,tracker);
+     assert(ordered.output[0].sourceId==80);for(unsigned i=1;i<lamps.size();++i)assert(ordered.output[i].sourceId==72+i);
+    }
 
     NorthlightParticleUploads::Cache uploads;int key=0;unsigned in[4]={1,2,3,4},out[4]={};
     uploads.write(&key,1,16,in,sizeof in,false);assert(uploads.read(&key,16,sizeof out,out)&&out[3]==4);

@@ -58,30 +58,36 @@ upload='        c[30][0]=waterMask?1.f:0.f;d->SetPixelShaderConstantF(0,&c[0][0]
 checks['c30.yzw only from the drawn source weight (sum of positive weights), set once']=(w.count(const)==1 and w.count(upload)==1 and w.index(const)<w.index(upload)
     and re.search(r'c\[30\]\[[123]\]=',w.replace(const,'')) is None and 'if(sourceWeights[source]<=0&&source!=firstSource)continue;' in w)
 tb=w[w.index('{   // Temporal stabilization: light + history'):w.index('temporalIndex=prev;temporalValid=true;')]
-# s12 moved from the composite's binding line to the temporal pass: the same API calls per frame, and
-# nothing between the two passes rebinds s12 (the frame-start texture loop sets it to null earlier).
+# Current local radiance follows directional history; both consumers need the
+# same current baseline, and the optional point pass restores the world bank.
 between=w[w.index('temporalIndex=prev;temporalValid=true;'):w.index('d->SetPixelShader(finalPS);\n        /* 0.3.212 (task 32)')]
-# LocalDirect also reads the baseline alpha (sun visibility), so s12 is bound once more,
-# only inside the LocalDirect block (frames with lamps), before the temporal pass rebinds it.
 local=w[w.index('d->SetPixelShader(localDirectPS);'):w.index('if(profile)profile->mark("LocalLights");')]
-checks['BaselineLighting (s12) bound at the temporal pass (and for LocalDirect), still bound for the composite']=(w.count('SetTexture(12,')==7 # 0.3.209 (task 29): + the actor map (tile and ActorShadow passes), the first tile level, the actor visibility (WorldLighting loop only) and its null restore
+checks['BaselineLighting (s12): temporal/current-local/composite bindings retained']=(w.count('SetTexture(12,')==10
     and w.count('d->SetTexture(12,actorShadow[source]);')==2 and w.count('d->SetTexture(12,anyActorPass?actorVisibility:neutralWhite);')==1 and w.count('d->SetTexture(12,textures[12]);')==1
-    and 'd->SetTexture(12,baselineLight);' in tb and 'SetTexture(12' not in between and local.count('d->SetTexture(12,baselineLight);')==1)
+    and 'd->SetTexture(12,baselineLight);' in tb and between.count('d->SetTexture(12,baselineLight);')==3 and local.count('d->SetTexture(12,baselineLight);')==1)
 # 0.3.185 host: the pass is created, drawn right before the temporal pass with the samplers smoothRemoval reads, released and dumped.
-smoothdraw='if(removalDrawn){d->SetPixelShader(removalPS);if(!check(quad(w/2,h/2),"removal smoothing pass"))return false;}'
+smoothdraw='if(removalDrawn){if(!check(d->SetRenderTarget(0,smoothSurface),"removal smoothing target"))return false;d->SetPixelShader(removalPS);if(!check(quad(w/2,h/2,false),"removal smoothing pass"))return false;}'
 checks['RemovalSmooth host: shader, half-res fp16 target, release, F12 dump, drawn before the temporal pass; s9 (idle, rebound later) carries it']=(
     'kRemovalSmoothShader,&removalPS' in w and '&smoothLight,&smoothSurface' in w and 'drop(smoothSurface)' in w and 'drop(smoothLight)' in w and 'drop(removalPS)' in w
     and w.count('dump(d,c[30][1]>0?smoothSurface:lightSurface,directory,"smoothed-light",capture);')==1 and tb.count('const bool removalDrawn=c[30][1]>0;')==1
-    and tb.index('const bool removalDrawn')<tb.index(smoothdraw) and tb.count('d->SetTexture(9,removalDrawn?smoothLight:light);')==1 and tb.count(smoothdraw)==1 and tb.index('SetRenderTarget(0,smoothSurface)')<tb.index(smoothdraw)<tb.index('SetRenderTarget(0,temporalLightSurface[cur])')
-    and 'd->SetTexture(14,normalBuffer);' in tb[:tb.index(smoothdraw)] and tb.index('SetTexture(10,')<tb.index(smoothdraw) 
+    and tb.index('const bool removalDrawn')<tb.index(smoothdraw) and tb.count('d->SetTexture(9,removalDrawn?smoothLight:light);')==1 and tb.count(smoothdraw)==1 and tb.index(smoothdraw)<tb.index('SetRenderTarget(0,temporalLightSurface[cur])')
+    and w.index('d->SetTexture(14,normalBuffer);')<w.index('{   // Temporal stabilization: light + history') and tb.index('SetTexture(10,')<tb.index(smoothdraw)
     and 'd->SetTexture(8,light);' in tb[:tb.index(smoothdraw)])
 # task 43: GPU profile marks split the old GI and PointLighting intervals: GI (the GI pass), LocalLights (the lamp batches),
 # PointLight (the shadowed point lamp), RemovalSmooth (its pass, or nothing without a drawn source) and TemporalLight.
-order=[w.index(n) for n in ('quad(w/2,h/2),"world GI pass"','if(profile)profile->mark("GI");','d->SetPixelShader(localDirectPS);','if(profile)profile->mark("LocalLights");',
-    'renderPointLighting(depth,waterMask,w,h,nearZ,farZ,minZ,maxZ);','if(profile)profile->mark("PointLight");',smoothdraw,'if(profile)profile->mark("RemovalSmooth");',
-    'quad(w/2,h/2),"temporal light pass"','if(profile)profile->mark("TemporalLight");','bucket(NorthlightEffectsBuckets::PointLighting);')]
-checks['GPU marks: GI, LocalLights, PointLight, RemovalSmooth, TemporalLight in pass order, each once; PointLighting gone']=(order==sorted(order)
+order=[w.index(n) for n in ('quad(w/2,h/2),"world GI pass"','if(profile)profile->mark("GI");',smoothdraw,'if(profile)profile->mark("RemovalSmooth");',
+    'quad(w/2,h/2,false),"temporal light pass"','if(profile)profile->mark("TemporalLight");','bucket(NorthlightEffectsBuckets::PointLighting);',
+    'd->SetPixelShader(localDirectPS);','if(profile)profile->mark("LocalLights");',
+    'renderPointLighting(depth,waterMask,w,h,nearZ,farZ,minZ,maxZ,c[52][1],lampSunlitCut,c[20][2],sunEnergy);','if(profile)profile->mark("PointLight");')]
+checks['GPU marks: directional/GI filters precede current local and point passes, each once']=(order==sorted(order)
     and all(w.count('profile->mark("%s")'%m)==1 for m in ('GI','LocalLights','PointLight','RemovalSmooth','TemporalLight')) and 'mark("PointLighting")' not in w)
+recycle=w[w.index('if(profile)profile->mark("TemporalLight");'):w.index('constexpr unsigned directInputs=')]
+checks['Current local target: raw directional input saved before recycling; no additional target']=(
+    recycle.index('dump(d,lightSurface,directory,"light",capture);')<recycle.index('d->SetRenderTarget(0,lightSurface)')
+    and recycle.index('dump(d,c[30][1]>0?smoothSurface:lightSurface,directory,"smoothed-light",capture);')<recycle.index('d->SetRenderTarget(0,lightSurface)')
+    and recycle.index('d->SetTexture(8,nullptr);')<recycle.index('d->SetRenderTarget(0,lightSurface)')
+    and 'if(currentLocalLighting)' in recycle and 'd->Clear(0,nullptr,D3DCLEAR_TARGET,0,1,0)' in recycle
+    and 'd->SetTexture(3,currentLocalLighting?light:neutralZero);' in w and 'separate-current-local-v1' in w)
 checks['no quality key (always on): no ShadowRemovalSmoothing in settings, ini, README or the log']=all(
     'ShadowRemovalSmoothing' not in t and 'removalSmoothing' not in t for t in (q,ini,readme,r,w))
 # The emulation below mirrors these shader constants; fail loudly if the shader moves.

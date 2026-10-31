@@ -1,0 +1,4 @@
+[Renderer]
+Backend=dxvk
+; Set to 1 for the native-Windows DXVK 3 colour workaround, then restart WoW.
+DxvkEngineNameWorkaround=0

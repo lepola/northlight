@@ -66,7 +66,7 @@ public:
     bool isCandidate(const void* raw)const{for(unsigned i=0;i<n;++i)if(table[i].raw==raw)return true;return false;}
     unsigned mistCount()const{return mists;}
     bool isMist(const void* raw)const{for(unsigned i=0;i<mists;++i)if(mist[i]==raw)return true;return false;}
-    void proveMist(const void* raw){for(unsigned i=0;i<mists;++i)if(mist[i]==raw)mistProven[i]=true;}
+    void proveMist(const void* raw){for(unsigned i=0;i<mists;++i)if(mist[i]==raw){mistProven[i]=true;break;}}
     // Mirror inactive: never hot (the draw hook's comparison reads the mirror's stage-0 slot).
     void setOff(bool off_){off=off_;if(off)hot=nullptr,hotKind=Kind::None,mistArmed=false;}
     // `raw` = the texture before mirrorResources.wrap replaced it. A freed address can come back only through here.
@@ -99,7 +99,7 @@ public:
     void reset(){if(n)++generation;n=0;hot=nullptr;hotKind=Kind::None;mists=0;mistArmed=false;for(unsigned i=0;i<kMistSlots;++i)mist[i]=nullptr,mistProven[i]=false;}
     // Frame end: hot counted draws -> it stays and is marked drawn; otherwise try the next candidate.
     void endFrame(bool counted){
-        if(counted&&hot){for(unsigned i=0;i<n;++i)if(table[i].raw==hot)table[i].drawn=true;return;}
+        if(counted&&hot){for(unsigned i=0;i<n;++i)if(table[i].raw==hot){table[i].drawn=true;break;}return;}
         rotate();
     }
     // Next candidate (hot's slot + 1, wrapping).

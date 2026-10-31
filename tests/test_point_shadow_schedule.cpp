@@ -120,12 +120,12 @@ int main(){
     for(unsigned n:{6u,4u,3u,2u,1u}){RefreshSchedule sched;FaceCycle cycle;unsigned weights[6]={};bool cacheValid=false;auto lamp=light;
         auto frame=[&](uint32_t now,bool fresh,unsigned& faces)->bool{ /* false: reused, nothing drawn */
             const bool lightChanged=sched.light.sourceId!=lamp.sourceId||sched.light.attenuationEnd!=lamp.attenuationEnd||std::memcmp(sched.light.position,lamp.position,12);
-            faces=0;if(!sched.due(now,lamp,7,1000,!cacheValid||lightChanged))return false;
+            faces=0;if(!fresh)return false;
+            if(!sched.due(now,lamp,7,1000,!cacheValid||lightChanged))return false;
             const bool cycling=n<6&&sched.usable&&!lightChanged&&cacheValid;
-            if(!fresh&&(sched.complete||cycling)&&!lightChanged&&cacheValid)return false;
             faces=63;if(cycling){if(!cycle.active())cycle.start(n,weights,now,7);faces=cycle.mask();sched.stale();}else{cycle.reset();sched.invalidate();}
             for(unsigned f=0;f<6;++f)if(faces&(1u<<f))weights[f]=f<4?100:1;
-            cacheValid=true;if(!fresh)return true;
+            cacheValid=true;
             if(cycling&&!cycle.advance())return true;
             sched.commit(cycling?cycle.startedAt:now,lamp,7);return true;};
         unsigned faces=0;assert(frame(0,true,faces)&&faces==63&&sched.complete); /* first light: all six in one frame */

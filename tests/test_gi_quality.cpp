@@ -7,6 +7,7 @@
 #include <cassert>
 #include <cstdio>
 #include <cstring>
+#include <limits>
 using namespace NorthlightGI;
 static void quad(WorldScene& s,Vec3 a,Vec3 b,Vec3 c,Vec3 d,uint32_t m){
     uint32_t n=uint32_t(s.vertices.size());Vec3 normal=normalized(cross(b-a,c-a));
@@ -31,6 +32,23 @@ template<class Solve> static unsigned window(ProbeCache& cache,Vec3 camera,Solve
     return solved;
 }
 int main(){
+    // An empty tree returns a miss for zero and nonfinite ray directions too.
+    {WorldScene scene;BVH tree;std::string error;assert(tree.build(std::move(scene),error,true));
+     for(Vec3 direction: {Vec3(0,0,0),Vec3(0,0,-1),Vec3(std::numeric_limits<float>::infinity(),0,0)}){
+         const auto hit=tree.trace({0,0,1},direction,.1f,10.f);
+         assert(!hit.hit&&!hit.backFace&&hit.distance==10.f&&hit.triangle==UINT32_MAX);
+         assert(!tree.occluded({0,0,1},direction,10.f,.1f));}}
+    // A scene with triangles but no nondegenerate primitives builds an empty tree.
+    {WorldScene scene;scene.materials.push_back({});scene.vertices.push_back({{0,0,0},{0,0,1},0,0});
+     scene.triangles.push_back({0,0,0,0});BVH tree;std::string error;
+     assert(tree.build(std::move(scene),error,true));
+     assert(!tree.trace({0,0,1},{0,0,-1}).hit);assert(!tree.occluded({0,0,1},{0,0,-1},10));}
+    // Zero alpha cutoff accepts every representable texture alpha, including zero.
+    {WorldScene scene;WorldMaterial material;material.width=256;material.height=1;material.alphaCutoff=0.f;
+     material.rgba.resize(256*4);for(unsigned i=0;i<256;++i)material.rgba[i*4+3]=uint8_t(i);
+     scene.materials.push_back(std::move(material));quad(scene,{-1,-1,0},{1,-1,0},{1,1,0},{-1,1,0},0);
+     BVH tree;std::string error;assert(tree.build(std::move(scene),error,true));
+     assert(tree.trace({0,0,1},{0,0,-1}).hit);assert(tree.occluded({0,0,1},{0,0,-1},10));}
     const NorthlightQuality::Settings d{};
     /* Defaults are the 0.3.137 constants: rays literal 64, Lighting::maxBounces 3, quantize step 8. */
     assert(d.gi==1&&d.giRays==64&&d.giBounces==Lighting{}.maxBounces&&d.giBounces==3&&d.giProbeMoveStep==8&&d.giDynamicProbes==1&&d.giThreads==1);
@@ -91,6 +109,15 @@ int main(){
         }
         std::printf("GIThreads: capacity %zu, %u solves, 2..4 threads identical to serial\n",capacity,serialSolved);
     }
+    // A single missing probe is solved exactly once and a failure still propagates.
+    {SolvePool pool(2,nullptr);ProbeCache cache;std::vector<unsigned> order{0,1,2,3,4,5,6,7};
+     const Vec3 origin{};for(unsigned i=1;i<8;++i){const Vec3 p=probeWindowPosition(origin,i);ProbeGridKey key;assert(probeGridKey(p,key));cache.put(key,solve(key,p));}
+     std::array<Probe,8> out{};unsigned calls=0;
+     auto counted=[&](ProbeGridKey key,Vec3 p){++calls;return solve(key,p);};
+     assert(prefetchProbeGroup(pool,cache,origin,order,0,counted,out)==1&&calls==1);
+     ProbeGridKey key;const Vec3 p=probeWindowPosition(origin,0);assert(probeGridKey(p,key)&&same(out[0],solve(key,p)));
+     bool thrown=false;try{prefetchProbeGroup(pool,cache,origin,order,0,[](ProbeGridKey,Vec3)->Probe{throw std::runtime_error("single");},out);}
+     catch(const std::runtime_error&){thrown=true;}assert(thrown);}
     /* Pool: exceptions propagate after all jobs stop; empty runs are no-ops. */
     {SolvePool pool(3,nullptr);pool.run(0,[](size_t){assert(false);});bool thrown=false;
      try{pool.run(64,[](size_t i){if(i==17)throw std::runtime_error("x");});}catch(const std::runtime_error&){thrown=true;}assert(thrown);

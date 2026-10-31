@@ -31,9 +31,9 @@ inline bool same(const Field& f,const std::string& a,const std::string& b){
     for(std::size_t i=0;i<x.size();++i){double p=0,q=0;if(!numeric(x[i],p)||!numeric(y[i],q)||std::fabs(p-q)>1e-6*std::max(1.0,std::fabs(q)))return false;}
     return true;
 }
-// AutoBumpTerrain/Walls/Grass are 0..2 integers in the schema but read as three named modes.
-inline bool modeField(const Field& f){return f.file==Quality&&(f.key=="AutoBumpTerrain"||f.key=="AutoBumpWalls"||f.key=="AutoBumpGrass");}
-inline std::vector<std::string> modeOptions(const Field& f){return std::atoi(f.high.c_str())>=2?std::vector<std::string>{"0","1","2"}:std::vector<std::string>{"0","1"};}
+// Material domains use named modes; grass exposes only its supported range.
+inline bool modeField(const Field& f){return f.file==Quality&&(f.key=="AutoBumpTerrain"||f.key=="AutoBumpWalls"||f.key=="AutoBumpGrass"||f.key=="AutoBumpModels");}
+inline std::vector<std::string> modeOptions(const Field& f){std::vector<std::string> out;for(int i=0;i<=std::atoi(f.high.c_str());++i)out.push_back(std::to_string(i));return out;}
 // Quality keys other than Preset and the named enums carry their per-preset values in options ("quality,balanced,performance").
 inline bool presetValued(const Field& f){return f.file==Quality&&f.key!="Preset"&&f.kind!="enum";}
 
@@ -100,14 +100,15 @@ inline bool canInherit(const Field& f){return f.available&&!(f.file==Renderer&&f
 // Keys a Quality field needs switched on (the old menu's dependencies; every GI* key needs GI).
 inline std::vector<std::string> dependencies(const Field& f){
     static const std::map<std::string,std::vector<std::string>> table={
-        {"AutoBumpStrength",{"AutoBump"}},{"AutoBumpDistance",{"AutoBump"}},{"AutoBumpTerrain",{"AutoBump"}},{"AutoBumpWalls",{"AutoBump"}},{"AutoBumpGrass",{"AutoBump"}},
+        {"AutoBumpStrength",{"AutoBump"}},{"AutoBumpDistance",{"AutoBump"}},{"AutoBumpTerrain",{"AutoBump"}},{"AutoBumpWalls",{"AutoBump"}},{"AutoBumpGrass",{"AutoBump"}},{"AutoBumpModels",{"AutoBump"}},{"AutoMaterialOcclusionDistance",{"AutoBump"}},
         {"AutoParallaxDepth",{"AutoBump"}},{"AutoParallaxDistance",{"AutoBump"}},{"AutoParallaxSteps",{"AutoBump"}},
         {"AutoParallaxShadows",{"AutoBump"}},{"AutoParallaxShadowStrength",{"AutoBump","AutoParallaxShadows"}},{"AutoParallaxShadowSteps",{"AutoBump","AutoParallaxShadows"}},
         {"AutoCavity",{"AutoBump"}},{"AutoCavityStrength",{"AutoBump","AutoCavity"}},
-        {"AOMethod",{"ContactAO"}},{"AOStrength",{"ContactAO"}},{"AORadius",{"ContactAO"}},
+        {"AOMethod",{"ContactAO"}},{"AOQuality",{"ContactAO"}},{"AOStrength",{"ContactAO"}},{"AORadius",{"ContactAO"}},
         {"ActorShadowBudgetMiB",{"ActorShadows"}},{"ActorShadowRadius",{"ActorShadows"}},{"ActorShadowCpuMs",{"ActorShadows"}},{"ActorShadowDetail",{"ActorShadows"}},
+        {"BlobShadowStrength",{"BlobShadows"}},
         {"PointShadowLimit",{"PointShadows"}},{"PointShadowRefreshMs",{"PointShadows"}},{"PointShadowFacesPerFrame",{"PointShadows"}},
-        {"FogCloudDensity",{"FogClouds"}},{"RainFog",{"Weather"}},{"RenderProfile",{"Diagnostics"}},
+        {"FogCloudDensity",{"FogClouds"}},{"RainFog",{"Weather"}},{"RainLens",{"Weather"}},{"SnowLens",{"Weather"}},{"RainLensStrength",{"Weather","RainLens"}},{"SnowLensStrength",{"Weather","SnowLens"}},{"RenderProfile",{"Diagnostics"}},
         {"ShadowFateDiagnostics",{"Diagnostics","ActorShadows"}},{"DiagReplayProbe",{"Diagnostics","RenderProfile","ActorShadows"}},
         {"SpellLayerClasses",{"SpellLayer"}},{"SpellTrace",{"SpellLayer"}},{"SpellFog",{"SpellLayer"}},{"NameMaskDebug",{"NameMask"}},
         {"StreamFramesAhead",{"CommandStream"}},{"StreamFrameSkip",{"CommandStream"}},{"StreamOcclusionLocal",{"CommandStream"}},
@@ -118,12 +119,13 @@ inline std::vector<std::string> dependencies(const Field& f){
     return {};
 }
 // Why the field cannot be edited now, or "" (the missing key is named by its id; the panel words it).
-enum class Block { None, Unavailable, NeedsHdr, NeedsKey };
+enum class Block { None, Unavailable, NeedsHdr, NeedsKey, NeedsManual };
 inline Block blocked(const Draft& d,const Field& f,std::string& missing){
     missing.clear();
     if(!f.available)return Block::Unavailable;
     if(f.file==Renderer&&f.key!="Backend"&&f.key!="ExperimentalHDR")
         if(const Field* hdr=d.field(Renderer,"Renderer","ExperimentalHDR"))if(d.effective(*hdr)=="0")return Block::NeedsHdr;
+    if(f.file==Renderer&&f.key=="HDRMaxNits")if(const Field* mode=d.field(Renderer,f.section,"HDRPeakMode"))if(d.effective(*mode)=="Auto")return Block::NeedsManual;
     for(const auto& key:dependencies(f))if(const Field* parent=d.quality(key))if(d.effective(*parent)=="0"){missing=key;return Block::NeedsKey;}
     return Block::None;
 }

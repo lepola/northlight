@@ -17,6 +17,7 @@ for y in range(size):
 moon.write_bytes(struct.pack('<4I',0x31544346,1,size,size)+pixels)
 cases=[('celestial_occlusion_gpu.cpp',['sky-before-CelestialDiscPS.bin','sky-before-CelestialVeilPS.bin']),
        ('celestial_cloud_order_gpu.cpp',['sky-before-CelestialDiscPS.bin',moon]),
+       ('celestial_sky_restore_gpu.cpp',['sky-before-CelestialDiscPS.bin',moon]),
        ('celestial_diffuse_bloom_gpu.cpp',['sky-opaque-CelestialVeilPS.bin','sky-hot-CelestialVeilPS.bin']),
        ('celestial_fog_occlusion_gpu.cpp',['sky-before-WorldFog.bin','sky-before-CelestialHaloVisibilityPS.bin'])]
 for source,arguments in cases:
@@ -25,4 +26,4 @@ for source,arguments in cases:
                     '-Wno-return-type',*fp.include_flags(),str(fp.TESTS/source),'-luser32','-o',str(exe)],env=fp.zig_env(),check=True)
     args=[str(argument if isinstance(argument,Path) else baseline/argument) for argument in arguments]
     subprocess.run([str(exe),backend,*args],cwd=out,check=True,timeout=90)
-print('PASS four celestial production-shader replay families')
+print('PASS five celestial production-shader replay families')

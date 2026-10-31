@@ -4,7 +4,10 @@
 #include "game_snapshot.h"
 #include "stream_hooks.h"
 #include <cassert>
+#include <array>
 #include <cstdio>
+#include <cstdlib>
+#include <fstream>
 #include <map>
 #include <random>
 #include <string>
@@ -131,6 +134,55 @@ static void testPeParse() {
     CodeRange none;img[0]=0;assert(!parseImageCode(img,sizeof img,0x400000,none)&&none.lo==0x400000&&none.hi==0xA00000); // untouched on failure
     img[0]='M';assert(!parseImageCode(img,0x90,0x400000,none)&&!parseImageCode(nullptr,0,0,none));
     section(0,0x5a0000,0x1000,0x40000040);assert(!parseImageCode(img,sizeof img,0x400000,none)); // no executable section
+    section(0,0x5a0000,0x1000,0x60000020);assert(!parseImageCode(img,sizeof img,UINTPTR_MAX-0x1000,none)); // section end cannot wrap
+}
+static void requireWritableSnapshot(bool ok){if(!ok){std::fputs("SNAPSHOT_WRITABLE_GLOBAL_MISMATCH\n",stderr);std::abort();}}
+static void testWritableReplayRange(const CodeRange& range){
+    // Explicit client globals form an independent oracle: their captured values
+    // must remain frozen even when a later writable section is executable.
+    for(std::uintptr_t address:{0xb7436cu,0xc5df88u,0xce06d0u,0xd38b00u,0xcd7544u})requireWritableSnapshot(!range.contains(address,4));
+    requireWritableSnapshot(range.contains(0x4f6650,4)&&!range.contains(range.hi-2,4));
+    Memory memory;memory.camera();const char map[64]="Northrend";memory.put(0xce06d0,map,sizeof map);memory.put32(0x4f6650,0x12345678);
+    const std::uint32_t crossing=0x11223344;memory.put(range.hi-2,&crossing,4);
+    auto snapshot=fresh();auto live=[&](std::uintptr_t address,void* out,std::size_t bytes){return memory.read(address,out,bytes);};
+    std::vector<Spy> captured,replayed;
+    auto reader=[&](std::vector<Spy>& log){return [&log,&snapshot,&live,&range](std::uintptr_t address,void* out,std::size_t bytes){const bool ok=snapshotRead(*snapshot,address,out,bytes,live,range);log.push_back({address,bytes,ok,ok?fnv(out,bytes):0});return ok;};};
+    auto readState=[&](std::vector<Spy>& log){auto read=reader(log);captureReaders(read);char name[64];requireWritableSnapshot(read(0xce06d0,name,sizeof name));std::uint32_t value=0;requireWritableSnapshot(read(range.hi-2,&value,4)&&value==crossing);};
+    NorthlightWeatherMemory::configure(true);
+    {ScopedRecording recording(*snapshot);readState(captured);std::uint32_t value=0;
+     requireWritableSnapshot(snapshotRead(*snapshot,0x4f6650,&value,4,live,range)&&value==0x12345678);
+     requireWritableSnapshot(!snapshotRead(*snapshot,0x4f6654,&value,4,live,range));
+     requireWritableSnapshot(!snapshotRead(*snapshot,0xd38000,&value,4,live,range));}
+    requireWritableSnapshot(snapshot->usable()&&snapshot->has(0xb7436c,4)&&snapshot->has(0xce06d0,64)&&snapshot->has(0xd38b00,0x388)&&snapshot->has(0xcd7544,4)&&snapshot->has(0xd38000,4));
+    requireWritableSnapshot(!snapshot->has(0x4f6650,4)&&!snapshot->has(0x4f6654,4)&&snapshot->has(range.hi-2,4));
+    memory.clobber();memory.put32(0x4f6650,0x87654321);memory.put32(0x4f6654,99);memory.put32(0xd38000,88);memory.live=0;
+    {ScopedPlayback playback(*snapshot);readState(replayed);std::uint32_t value=0;
+     requireWritableSnapshot(snapshotRead(*snapshot,0x4f6650,&value,4,live,range)&&value==0x87654321);
+     requireWritableSnapshot(snapshotRead(*snapshot,0x4f6654,&value,4,live,range)&&value==99);
+     value=0xa5a5a5a5;requireWritableSnapshot(!snapshotRead(*snapshot,0xd38000,&value,4,live,range)&&value==0xa5a5a5a5&&snapshot->misses==0);}
+    requireWritableSnapshot(captured==replayed&&memory.live==2);
+}
+static void testWritableExecutable(){
+    // Metadata of the actual local client's .text/.rdata/.data/.zdata only;
+    // no original instructions or writable runtime payload are embedded.
+    unsigned char image[0x400]={};const auto put16=[&](std::size_t at,std::uint16_t value){std::memcpy(image+at,&value,2);};const auto put32=[&](std::size_t at,std::uint32_t value){std::memcpy(image+at,&value,4);};
+    put16(0,0x5a4d);put32(0x3c,0x80);put32(0x80,0x4550);put16(0x86,4);put16(0x94,0xe0);const std::size_t table=0x80+24+0xe0;
+    const std::uint32_t sections[4][3]={{6149043,0x1000,0x60000020},{878201,0x5df000,0x40000040},{3253512,0x6b6000,0xc0000040},{4096,0x9d1000,0xe0000040}};
+    for(unsigned i=0;i<4;++i){put32(table+i*40+8,sections[i][0]);put32(table+i*40+12,sections[i][1]);put32(table+i*40+36,sections[i][2]);}
+    CodeRange range;requireWritableSnapshot(parseImageCode(image,sizeof image,0x400000,range));testWritableReplayRange(range);
+}
+static void testActualPe(const char* path){
+    std::ifstream file(path,std::ios::binary);std::array<unsigned char,0x1000> image{};requireWritableSnapshot(bool(file.read(reinterpret_cast<char*>(image.data()),image.size())));
+    CodeRange range;requireWritableSnapshot(parseImageCode(image.data(),image.size(),0x400000,range));
+    auto u16=[&](std::size_t at){std::uint16_t value;std::memcpy(&value,image.data()+at,2);return value;};auto u32=[&](std::size_t at){std::uint32_t value;std::memcpy(&value,image.data()+at,4);return value;};
+    const std::size_t nt=u32(0x3c),table=nt+24+u16(nt+20);bool writableExecutable=false,text=false;std::uintptr_t legacyEnd=0,textEnd=0;
+    for(unsigned i=0;i<u16(nt+6);++i){const auto at=table+i*40;const auto size=u32(at+8),rva=u32(at+12),flags=u32(at+36);
+        if(!std::memcmp(image.data()+at,".text\0\0\0",8)){text=size==6149043&&rva==0x1000&&flags==0x60000020;textEnd=0x400000u+rva+size;}
+        writableExecutable|=!std::memcmp(image.data()+at,".zdata\0\0",8)&&rva==0x9d1000&&size==4096&&flags==0xe0000040;
+        if(size&&(flags&(0x20u|0x20000000u)))legacyEnd=std::max(legacyEnd,std::uintptr_t(0x400000)+rva+size);
+    }
+    requireWritableSnapshot(text&&writableExecutable&&legacyEnd==0xdd2000&&legacyEnd>0xd38b00+0x388);testWritableReplayRange(range);requireWritableSnapshot(range.hi==textEnd);
+    std::printf("PASS actual client PE headers: readonly code end=0x%zx legacy end=0x%zx; runtime globals frozen, .text signatures live, recorded failures and cross-boundary snapshots preserved\n",std::size_t(range.hi),std::size_t(legacyEnd));
 }
 static void testTriggers() {
     using NorthlightShaderTags::kTerrain;using NorthlightShaderTags::kUi;using NorthlightShaderTags::kWmo;using NorthlightShaderTags::kWorld;
@@ -214,7 +266,8 @@ static void testPoolAndHooks() {
     {bool nameMask=false;commandStreamFromText("",false,nullptr,nullptr,&nameMask);assert(nameMask);commandStreamFromText("[Quality]\nNameMask=0\n",true,nullptr,nullptr,&nameMask);assert(!nameMask);
      assert(!commandStreamFromText("[Quality]\nCommandStream=0\nNameMask=1\n",true,nullptr,nullptr,&nameMask)&&nameMask);}
 }
-int main(){
+int main(int argc,char** argv){
+    assert(argc==1||argc==2);if(argc==2)testActualPe(argv[1]);testWritableExecutable();
     testFifo();testOverflow();testPlayback();testCodeRangeAndInactive();testPeParse();testTriggers();testLearnedUi();testShaderTags();testPoolAndHooks();
     std::printf("game snapshot: FIFO record/playback incl. torn double reads, miss->live, failed reads, code-range bypass, inactive passthrough, thread-local, overflow, PE code range, trigger policy, VS tags == pre-0.3.192 tags, pool, hooks\n");
 }

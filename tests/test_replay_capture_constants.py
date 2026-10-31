@@ -37,7 +37,7 @@ w,r,c=read('world_renderer.h'),read('renderer.cpp'),read('replay_capture_constan
 templated=c[c.index('template<class Replay,class Source,class Fetch,class FetchFloats> bool captureBlocks('):c.index('template<class Replay> bool samePose(')]
 checks={
  'C1: the renderer reads the mirror clock in place (no Reader callback)':'world->setConstantEpochSource({&mirrorState.constantEpoch,&mirrorState});' in r
-   and 'constantStamp(out)' not in r and 'NorthlightReplayCaptureConstants::ClockSource<DeviceMirror> constantEpochSource;' in w
+   and 'constantEpochReader' not in w and 'NorthlightReplayCaptureConstants::ClockSource<DeviceMirror> constantEpochSource;' in w
    and 'captureBlocks(*p,previous,constantEpochSource,[&]{' in w,
  'C0: profile Stats on sample frames, self-check by its own flag and serial':'},sample?&constantEpochProfile:nullptr,constantSelfCheck,constantSelfCheckState))return;' in w
    and 'NorthlightReplayCaptureConstants::SelfCheck constantSelfCheckState{0,&constantEpochStats};' in w,

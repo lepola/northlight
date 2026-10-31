@@ -4,6 +4,7 @@
 // Runtime follows signature-gated client handle fields and compares the opaque
 // numeric identity with a valid GetTexture result; it never invokes that address.
 // Portable mip helpers remain only for offline original-artifact verification.
+#include <filesystem>
 #include "actor_texture.h"
 #include <fstream>
 #include <string>
@@ -19,7 +20,7 @@ inline bool decodeMip(MatchMip& mip){
     return NorthlightActorTexture::decode(mip.bytes.data(),mip.bytes.size(),mip.width,mip.height,pitch,fmt,mip.rgba);
 }
 inline bool loadMatch(const std::string& path,std::vector<MatchMip>& out){
-    std::ifstream f(path,std::ios::binary|std::ios::ate);if(!f||f.tellg()>200000)return false;f.seekg(0);
+    std::ifstream f(std::filesystem::u8path(path),std::ios::binary|std::ios::ate);if(!f||f.tellg()>200000)return false;f.seekg(0);
     std::uint32_t header[3]={};f.read(reinterpret_cast<char*>(header),12);
     if(!f||header[0]!=0x314d4346||header[1]!=1||!header[2]||header[2]>16)return false;
     std::vector<MatchMip> candidate;

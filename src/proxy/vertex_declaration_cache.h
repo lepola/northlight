@@ -14,17 +14,19 @@ class Cache {
         std::array<UINT,4> captureExtent{};bool captureChecked=false,captureValid=false;
     };
     std::array<Entry,128> entries_{};
+    unsigned used_=0;
     uint64_t clock_=0;Entry* recent_=nullptr;
     Entry* acquire(IDirect3DVertexDeclaration9* object){
         if(!object)return nullptr;
         if(recent_&&recent_->object==object){recent_->touched=++clock_;return recent_;}
         Entry* slot=&entries_[0];
-        for(auto& e:entries_){
+        for(unsigned i=0;i<used_;++i){auto& e=entries_[i];
             if(e.object==object){e.touched=++clock_;recent_=&e;return &e;}
             if(slot->object&&(!e.object||e.touched<slot->touched))slot=&e;
         }
         std::array<D3DVERTEXELEMENT9,MAXD3DDECLLENGTH+1> decoded{};UINT n=UINT(decoded.size());
         if(FAILED(object->GetDeclaration(decoded.data(),&n))||!n||n>decoded.size()||decoded[n-1].Stream!=0xff)return nullptr;
+        if(used_<entries_.size())slot=&entries_[used_++];
         object->AddRef();if(slot->object)slot->object->Release();
         *slot=Entry{};slot->object=object;slot->elements=decoded;slot->count=n;slot->touched=++clock_;recent_=slot;return slot;
     }
@@ -32,7 +34,7 @@ public:
     Cache()=default;
     Cache(const Cache&)=delete;Cache& operator=(const Cache&)=delete;
     ~Cache(){clear();}
-    void clear(){recent_=nullptr;for(auto& e:entries_){if(e.object)e.object->Release();e=Entry{};}clock_=0;}
+    void clear(){recent_=nullptr;for(unsigned i=0;i<used_;++i){auto& e=entries_[i];if(e.object)e.object->Release();e=Entry{};}used_=0;clock_=0;}
     bool get(IDirect3DVertexDeclaration9* object,const D3DVERTEXELEMENT9*& elements,UINT& count){
         elements=nullptr;count=0;auto* entry=acquire(object);if(!entry)return false;
         elements=entry->elements.data();count=entry->count;return true;

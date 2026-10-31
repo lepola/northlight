@@ -62,12 +62,18 @@ static size_t enclosed(const Program& p,const Mesh& mesh,const float* c,const fl
     return positions.size();
 }
 int main(int argc,char** argv){
-    assert(argc==2);auto p=load(argv[1]);assert(SkinEnvelope::supports(p));float c[1024],inverse[16]={};
+    assert(argc==2);auto p=load(argv[1]);std::swap(p.operations[0].source[0],p.operations[0].source[1]);buildKernel(p);assert(SkinEnvelope::supports(p));float c[1024],inverse[16]={};
     for(unsigned n=0;n<4;++n)inverse[5*n]=1;inverse[12]=10000;inverse[13]=-900;
     auto mesh=std::make_shared<const Mesh>(geometry(1200));EnvelopeCache cache;Bounds bounds;size_t vertices=0;
     for(unsigned pose=0;pose<20;++pose){palette(c,pose);const float a=pose*.013f;inverse[0]=inverse[5]=std::cos(a);inverse[1]=std::sin(a);inverse[4]=-std::sin(a);
         assert(finish(cache,p,mesh,c,inverse,bounds)==Status::Valid);vertices+=enclosed(p,*mesh,c,inverse,bounds);
     }
+    for(const auto& op:p.operations)for(unsigned field=0;field<8;++field){auto broken=p;auto& b=broken.operations[&op-p.operations.data()];
+        if(field==0)b.code^=1;else if(field==1)b.destination^=0x10000;else if(field%2==0)b.source[(field-2)/2].token^=1;else b.source[(field-3)/2].address^=1;
+        assert(!SkinEnvelope::supports(broken));}
+    for(unsigned pose=20;pose<40;++pose){palette(c,pose);assert(finish(cache,p,mesh,c,inverse,bounds)==Status::Valid);cache.beginFrame();Budget quick;quick.maxVertices=0;WorkInfo info;
+        const auto status=cache.calculate(p,*mesh,mesh,declaration,4,c,inverse,quick,bounds,EnvelopeCache::Stage::Cheap,&info);
+        assert(info.skin&&quick.vertices==0&&quick.operations<=1275);if(status==Status::Valid){assert(info.kind==WorkKind::Cheap);vertices+=enclosed(p,*mesh,c,inverse,bounds);}}
     // A local DEF can override a bone-palette row even with the same18 ops.
     // GPU API constants alone cannot supply the effective palette.
     auto defined=p;defined.definitions.push_back({31,{1,0,0,2000}});
@@ -104,7 +110,10 @@ with tempfile.TemporaryDirectory(prefix='northlight-skin-safety-') as tmp:
     root = Path(tmp)
     (root / 'd3d9.h').write_text(stub)
     (root / 'test.cpp').write_text(harness)
-    for flags in (['-O2'], ['-O1', '-g', '-fsanitize=address,undefined', '-fno-omit-frame-pointer']):
+    original = harness.replace('std::swap(p.operations[0].source[0],p.operations[0].source[1]);buildKernel(p);', '')
+    for program, fixture in ((original,client_fixtures.four_bone_vs3()),(harness,client_fixtures.four_bone_vs3()),(original,client_fixtures.four_bone_body_vs3())):
+      (root / 'test.cpp').write_text(program)
+      for flags in (['-O2'], ['-O1', '-g', '-fsanitize=address,undefined', '-fno-omit-frame-pointer']):
         subprocess.run(['clang++', '-std=c++17', '-Wall', '-Wextra', '-Werror', *flags,
                         '-I', str(root), *fp.test_include_flags(), str(root / 'test.cpp'), '-o', str(root / 'test')], check=True)
-        subprocess.run([str(root / 'test'), str(client_fixtures.four_bone_vs3())], check=True)
+        subprocess.run([str(root / 'test'), str(fixture)], check=True)

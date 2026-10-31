@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
-# northlight-test: requires=windows-exe,zig
+# northlight-test: requires=cxx
 """Production settings invalidation: every quality key, palette field and retained pending request."""
 import ast
+import os
 from pathlib import Path
 import subprocess
 import sys
@@ -69,6 +70,7 @@ out=fp.out()/'gi-settings-dependencies';out.mkdir(parents=True,exist_ok=True)
 (out/'dependencies.cpp').write_bytes((fixture+body).encode())
 for label,flags in [('O2',['-O2']),('debug',['-O0','-g'])]:
     exe=out/(label+'.exe')
-    subprocess.run([str(fp.zig()),'c++','-target','x86-windows-gnu','-std=c++17','-UNDEBUG',*flags,
+    compiler=[str(fp.zig()),'c++','-target','x86-windows-gnu'] if os.name=='nt' else ['clang++']
+    subprocess.run([*compiler,'-std=c++17','-UNDEBUG',*flags,
                     '-Wall','-Wextra','-Werror',*fp.test_include_flags(),str(out/'dependencies.cpp'),'-o',str(exe)],env=fp.zig_env(),check=True)
     subprocess.run([str(exe)],check=True)

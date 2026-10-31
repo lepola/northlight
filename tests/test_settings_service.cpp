@@ -27,10 +27,16 @@ int main(int argc,char** argv){
     assert(q==std::size(NorthlightQuality::Keys)+1&&c>=22*28);fails([&]{applyChanges(docs,fields,"Q\tQuality\tWeather\t2\n");});fails([&]{applyChanges(docs,fields,"Q\tQuality\t../path\t1\n");});
     auto changed=applyChanges(docs,fields,"Q\tQuality\tWeather\t~\n");assert(explicitValue(changed[0],"Quality","Weather")=="~");assert(qualityOf(changed[0],"").weather==1);
     auto next=active.quality;next.weather=1;next.commandStream=0;auto applied=liveQualityUpdate(active.quality,next);assert(applied.weather==1&&applied.commandStream==active.quality.commandStream);
+    // Preserve the local material and AO schema through the new in-process service.
+    for(const auto* key:{"AutoBumpModels","AutoDisplacementStrength","AutoDisplacementDistance","AutoDisplacementDetail","AutoModelDisplacementStrength","AutoModelDisplacementDistance","AutoModelDisplacementDetail","AutoHeightBalance","AutoMaterialOcclusionDistance","AOQuality"}){
+        unsigned found=0;for(const auto& f:fields)if(f.file==0&&f.key==key){++found;assert(f.available&&f.apply=="F");auto changed=applyChanges(docs,fields,f.id()+"\t"+f.factory+"\n");assert(configOf(changed,"").quality.preset==active.quality.preset);}assert(found==1);
+    }
+    for(const auto* value:{"High","Medium","Low"}){auto selected=applyChanges(docs,fields,std::string("Q\tQuality\tAOQuality\t")+value+"\n");auto config=configOf(selected,"");assert(std::string(NorthlightQuality::aoQualityName(liveQualityUpdate(active.quality,config.quality).aoQuality))==value);}
     unsigned live=0;for(const auto& k:NorthlightQuality::Keys)live+=liveQuality(k.name);assert(live>40&&live<std::size(NorthlightQuality::Keys));
     for(const auto& f:fields)if(f.file==2&&f.section=="default"&&f.key=="sun_fog_gain")assert(f.inherited=="1"&&std::stof(f.factory)==4.3f);
-    // HDR keys have no consumer in this build: listed (files stay preserved, UI shows them disabled) but never writable.
-    {unsigned hdrFields=0;for(const auto& f:fields)if(f.file==1&&f.section=="Renderer"&&f.key!="Backend"){++hdrFields;assert(!f.available);fails([&]{applyChanges(docs,fields,f.id()+"\t"+f.factory+"\n");});}assert(hdrFields==6);
+    // HDR mode and grading both participate in live preview and Revert.
+    {unsigned hdrFields=0;for(const auto& f:fields)if(f.file==1&&f.section=="Renderer"&&f.key!="Backend"){++hdrFields;assert(f.available&&f.apply=="F");auto edited=applyChanges(docs,fields,f.id()+"\t"+f.factory+"\n");assert(configOf(edited,"").hdr.size()==NorthlightHdrSettingsContract::Count);}assert(hdrFields==NorthlightHdrSettingsContract::Count);
+     auto unavailable=fields;for(auto& f:unavailable)if(f.key=="HDRMaxNits")f.available=false;fails([&]{applyChanges(docs,unavailable,"R\tRenderer\tHDRMaxNits\t600\n");});
      Document hdrDoc("[Renderer]\nHDRContrast=1.35\nHDRExposure=-1.25\nHDRPaperWhite=240\n");auto g=configOf({Document(""),hdrDoc,Document(""),Document("")},"");assert(g.hdr[4]==1.35f&&g.hdr[5]==-1.25f&&g.hdr[1]==240);}
     // Lock waits: a holder that lets go within the wait is tolerated, one that does not is not.
     {std::thread holder([&]{TransactionLock lease(root);std::this_thread::sleep_for(std::chrono::milliseconds(150));});std::this_thread::sleep_for(std::chrono::milliseconds(30));
@@ -68,7 +74,7 @@ int main(int argc,char** argv){
      unsigned q=0,r=0;for(const auto& f:snap->fields){q+=f.file==0;r+=f.apply=="R";}assert(q==std::size(NorthlightQuality::Keys)+1&&r>0);
      assert(!service.status().restartRequired);
      auto find=[&](const std::shared_ptr<const Snapshot>& s,const char* key){for(const auto& f:s->fields)if(f.key==key)return f;assert(false);return Field{};};
-     assert(find(snap,"Weather").apply=="F"&&find(snap,"CommandStream").apply=="R"&&find(snap,"EquipmentLights").apply=="R"&&find(snap,"AOMethod").apply=="F");
+     assert(find(snap,"Weather").apply=="F"&&find(snap,"CommandStream").apply=="R"&&find(snap,"EquipmentLights").apply=="F"&&find(snap,"AOMethod").apply=="F");
      // preview: no file writes; "R" and unknown ids are ignored; the latest draft wins
      const auto serial0=service.status().serial;
      std::vector<Change> d1={{"Q\tQuality\tWeather","1"},{"Q\tQuality\tCommandStream","0"},{"Q\tQuality\tNoSuchKey","1"}},d2={{"Q\tQuality\tWeather","0"}};
@@ -97,11 +103,13 @@ int main(int argc,char** argv){
      assert(service.status().restartRequired&&service.status().message.find("restart")!=std::string::npos);
      auto after=service.snapshot();assert(after->revision==saved->revision&&find(after,"Weather").saved==flipped&&find(after,"CommandStream").saved=="0"&&find(after,"CommandStream").active!="0");
      service.acknowledge(*saved);assert(service.revision()==saved->revision);
-     // unavailable (HDR) fields are rejected by commit and preview; they stay listed in the snapshot
-     {bool listed=false;for(const auto& f:service.snapshot()->fields)if(f.key=="HDRMaxNits"){listed=true;assert(!f.available);}assert(listed);
-      const auto before=store.read();const auto s=service.status().serial;assert(service.commit(service.snapshot()->revision,{{"R\tRenderer\tHDRMaxNits","600"}}));assert(waitFor([&]{return idle()&&service.status().serial>s;}));
-      assert(service.status().state==Status::State::Error&&service.status().message.find("not supported")!=std::string::npos&&store.read()==before);
-      const auto s2=service.status().serial;assert(service.preview({{"R\tRenderer\tHDRMaxNits","600"}}));assert(waitFor([&]{return idle()&&service.status().serial>s2;}));assert(service.status().state!=Status::State::Error&&store.read()==before);} // preview skips unavailable fields silently
+     // HDR preview changes the running grading while preserving every saved byte.
+     {bool listed=false;for(const auto& f:service.snapshot()->fields)if(f.key=="HDRMaxNits"){listed=true;assert(f.available);}assert(listed);
+      const auto before=store.read();const auto serial=service.status().serial;assert(service.preview({{"R\tRenderer\tHDRMaxNits","600"},{"R\tRenderer\tExperimentalHDR","1"}}));
+      assert(waitFor([&]{return idle()&&service.status().serial>serial;}));auto p=service.after(saved->revision);assert(p&&p->preview&&p->runtime->hdr[3]==600&&p->runtime->hdr[0]==1&&store.read()==before);
+      service.acknowledge(*p);assert(service.clearPreview());assert(waitFor([&]{auto v=service.after(p->revision);return idle()&&v&&!v->preview;}));auto restored=service.after(p->revision);assert(restored->runtime->hdr==saved->runtime->hdr&&store.read()==before);service.acknowledge(*restored);
+      const auto bad=service.status().serial;assert(service.commit(saved->revision,{{"R\tRenderer\tHDRMaxNits","99999999"}}));assert(waitFor([&]{return idle()&&service.status().serial>bad;}));assert(service.status().state==Status::State::Error&&store.read()==before);
+      service.setHdrStatus(true,0,"active scRGB");const auto status=service.hdrStatus();assert(status.active&&status.code==0&&status.reason=="active scRGB");}
      // stale base and bad values fail without touching the files
      const auto committed=store.read();const auto serial3=service.status().serial;
      assert(service.commit(snap->revision,{{"Q\tQuality\tWeather",savedWeather?"1":"0"}}));assert(waitFor([&]{return idle()&&service.status().serial>serial3;}));
@@ -138,6 +146,30 @@ int main(int argc,char** argv){
      assert(seen==3);assert(d[0].text().find("Preset=performance")!=std::string::npos);
      Documents bad={Document("[Quality]\nPreset=Turbo\n"),Document("[Renderer]\nBackend=nope\n"),Document(""),Document("")};
      for(const auto& x:schema(bad,bad,configOf(bad,""),"","native,dxvk,legacy"))if(x.key=="Preset")assert(x.overrideValue=="Turbo");else if(x.key=="Backend")assert(x.overrideValue=="nope");}
+    // A display profile changes only its calibration; stale or hidden profile edits cannot be committed to another display.
+    {Documents profiles=factoryDocuments();std::string p="350",q="700",manual="Manual",ev=".5";
+     profiles[1].set("HDR.first","HDRPaperWhite",&p);profiles[1].set("HDR.second","HDRMaxNits",&q);profiles[1].set("HDR.second","HDRPeakMode",&manual);profiles[1].set("Renderer","HDRExposure",&ev);
+     const auto first=configOf(profiles,"",true,"first"),second=configOf(profiles,"",true,"second");
+     assert(first.hdr[1]==350&&second.hdr[1]==203&&second.hdr[3]==700&&second.hdr[7]==0&&first.hdr[5]==second.hdr[5]);
+     const auto a=schema(profiles,profiles,first,"","native,dxvk","first"),b=schema(profiles,profiles,second,"","native,dxvk","second");
+     fails([&]{applyChanges(profiles,b,"R\tHDR.first\tHDRPaperWhite\t300\n");});
+     const auto edited=applyChanges(profiles,a,"R\tHDR.first\tHDRPaperWhite\t300\n");assert(configOf(edited,"",false,"first").hdr[1]==300&&configOf(edited,"",false,"second").hdr[3]==700);}
+    // One-time reset is one transaction. A failed migration cannot set its marker or modify other renderer settings.
+    {auto path=root/"hdr-migration";std::filesystem::create_directories(path);Store migrating(path);auto before=migrating.read(),after=before;
+     after[1]={true,"[Renderer]\nBackend=dxvk2\nExperimentalHDR=0\nHDRExposure=3\nHDRLegacyExpansion=2\n[HDR.old]\nHDRMaxNits=500\n"};migrating.commit(before,after);
+     {TransactionLock lock(path);assert(!migrateHdr(path).empty());assert(migrating.readUnlocked()==after);}
+     assert(migrateHdr(path).empty());auto migrated=migrating.read();auto docs=documents(migrated);const auto config=configOf(docs,"");
+     assert(config.hdr[0]==1&&config.hdr[5]==0&&config.hdr[6]==1&&config.hdr[7]==1&&config.hdr[9]==0);
+     assert(explicitValue(docs[1],"Renderer","Backend")=="dxvk2"&&explicitValue(docs[1],"Renderer","HDRPipelineVersion")=="2"&&explicitValue(docs[1],"HDR.old","HDRMaxNits")=="~");
+     const std::string value="1.25";docs[1].set("Renderer","HDRExposure",&value);auto changed=migrated;changed[1]={true,docs[1].bytes()};migrating.commit(migrated,changed);assert(migrateHdr(path).empty()&&migrating.read()==changed);
+     Service svc(path);auto waitFor=[&](auto pred){for(unsigned i=0;i<1500;++i){if(pred())return true;std::this_thread::sleep_for(std::chrono::milliseconds(2));}return false;};
+     svc.selectHdrProfile("first");assert(waitFor([&]{auto snap=svc.snapshot();return snap&&snap->hdrProfile=="first"&&svc.status().state!=Status::State::Busy;}));
+     auto first=svc.after("");assert(first&&first->runtime->hdr[1]==203);svc.acknowledge(*first);
+     assert(svc.preview({{"R\tHDR.first\tHDRPaperWhite","300"}}));assert(waitFor([&]{auto u=svc.after(first->revision);return u&&u->preview&&svc.status().state!=Status::State::Busy;}));
+     auto preview=svc.after(first->revision);assert(preview->runtime->hdr[1]==300);svc.acknowledge(*preview);
+     svc.selectHdrProfile("second");assert(waitFor([&]{auto snap=svc.snapshot();return snap&&snap->hdrProfile=="second"&&svc.status().state!=Status::State::Busy;}));
+     auto second=svc.after(preview->revision);assert(second&&!second->preview&&second->runtime->hdr[1]==203&&migrating.read()==changed);
+     const auto serial=svc.status().serial;assert(svc.commit(svc.snapshot()->revision,{{"R\tHDR.first\tHDRPaperWhite","300"}}));assert(waitFor([&]{return svc.status().serial>serial&&svc.status().state!=Status::State::Busy;}));assert(svc.status().state==Status::State::Error&&migrating.read()==changed);}
     // The startup baseline: a new Service (or attach) sees the files as they are now.
     {Service again(root);auto s=again.revision();assert(s==Store::revision(store.read()));}
     std::cout<<"Settings: encoding (incl. astral and invalid input), comments, inheritance, bounded schema, rollback, read-only, journal recovery, snapshot, preview coalescing, commit and conflict checks passed\n";

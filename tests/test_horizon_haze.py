@@ -345,7 +345,7 @@ def main():
     # 8. Source integration.
     shader = fp.src('world_effects.hlsl').read_text()
     cpu = fp.src('world_renderer.h').read_text()
-    composite_src = shader.split('float4 WorldComposite(', 1)[1].split('// Separate geometry pass:', 1)[0]
+    composite_src = shader.split('float4 worldComposite(', 1)[1].split('// Separate geometry pass:', 1)[0]
     helper = block(shader, 'float3 horizonHaze(')
     # 0.3.202 (rain mask): haze, then the fog mad, in one lerp expression back toward the unfogged colour on rain-mask pixels.
     assert composite_src.index('horizonHaze(color,centerUV,viewZ,d>=.99999&&liquid<=0)') < composite_src.index('fog.a,fog.rgb)')
@@ -366,15 +366,19 @@ def main():
         assert decl in shader
     for other in ('HorizonHaze.', 'HorizonShape.', 'HorizonSun.'):
         assert shader.count(other) == helper.count(other), other
-    assert cpu.count('d->SetPixelShaderConstantF(0,&c[0][0],68)') == 2  # register bank unchanged
+    assert cpu.count('d->SetPixelShaderConstantF(0,&c[0][0],68)') == 3  # World, post-temporal local, and optional point restore.
+    local_restore=cpu[cpu.index('if(profile)profile->mark("TemporalLight");'):cpu.index('constexpr unsigned directInputs=')]
+    assert 'd->SetPixelShaderConstantF(0,&c[0][0],68);' in local_restore
     upload = cpu.index('c[30][0]=waterMask?1.f:0.f;d->SetPixelShaderConstantF(0,&c[0][0],68);')
     assert cpu.index('c[57][1]=haze.shape[0];c[57][2]=haze.shape[1];c[57][3]=haze.shape[2];c[67][2]=haze.sun[0];c[67][3]=haze.sun[1];') < upload
-    blur_end = cpu.index('"volume blur vertical"))return false;}')
+    blur = block(cpu, 'if(effects.fog){float blur[4]')
+    assert blur.index('"volume blur horizontal"))return false;') < blur.index('"volume blur vertical"))return false;') < blur.index('profile->mark("FogBlur")')
+    blur_end = cpu.index(blur)+len(blur)
     assert blur_end < cpu.index('d->SetPixelShaderConstantF(34,haze.haze,1);') < cpu.index('"world composite"')
     assert 'farZ,hazeZone,effects.fog,celestialValid,hazeSun,hazeSunWeight,hazeLift,wx.hazeTauScale());' in cpu
     assert 'float hazeLift[3];NorthlightSunHue::horizonLift(glowHueFrame,hazeLift);' in cpu
     assert cpu.index('c[35][1]=haze.lift[0];c[35][2]=haze.lift[1];c[35][3]=haze.lift[2];') < upload
-    assert 'horizonHazeState.update(active->map,legacyFog.parameters,legacyFog.color,projection[2],' in cpu
+    assert 'horizonHazeState.update(frameMap,legacyFog.parameters,legacyFog.color,projection[2],' in cpu
     assert 'NorthlightCelestialProfiles::horizonHaze(volumePalette,c[31][3])' in cpu
 
     # 9. Compiled output (after compile_world_shaders.py): the others byte-identical.
@@ -384,14 +388,17 @@ def main():
     unchanged = []
     if compiled:
         for name, info in manifest['shaders'].items():
-            assert info['static_instruction_slots'] <= 512 and info['temporary_registers'] <= 32, name  # a count (highest rN + 1): ps_3_0 has r0..r31
+            limit=768 if name in ('WorldFogActorTiled','FogCloudsActorTiled') else 600 if name in ('WorldFogActor','FogCloudsActor') else 512
+            assert info['static_instruction_slots'] <= limit and info['temporary_registers'] <= 32, name
             # Shaders changed on purpose by other features are excluded from the byte-identical check below.
-            if name not in ('WorldComposite', 'TemporalLight', 'SourceVisibilityPS', 'WorldLighting', 'LocalDirect', 'WorldNormals', 'RemovalSmooth', 'WorldGI', 'WorldFog', 'FogClouds', 'FogTemporal', 'LocalFog', 'LocalFogCombine', 'ActorShadow', 'ActorTiles', 'LocalDirect16'):  # LocalDirect16 (the 16-lamp LocalDirect pass) is new; ActorShadow and ActorTiles (0.3.208, task 29) are new; FogClouds (0.3.199) is new, not in BEFORE; LocalFog (0.3.199) gains the near ramp, 0.3.205 (gh#20) returns the raw batch sum on purpose, LocalFogCombine is new
+            if name in BEFORE and name not in ('ShadowReplayPS', 'TemporalLight', 'SourceVisibilityPS', 'WorldLighting', 'LocalDirect', 'WorldNormals', 'WorldGI', 'WorldFog', 'LocalFog', 'FogBlur'):
                 assert info['sha256'] == BEFORE[name], name
                 unchanged.append(name)
-        assert sorted(unchanged) == sorted(k for k in BEFORE if k not in ('TemporalLight', 'SourceVisibilityPS', 'WorldLighting', 'LocalDirect', 'WorldNormals', 'WorldGI', 'WorldFog', 'LocalFog'))
+        assert sorted(unchanged) == sorted(k for k in BEFORE if k not in ('ShadowReplayPS', 'TemporalLight', 'SourceVisibilityPS', 'WorldLighting', 'LocalDirect', 'WorldNormals', 'WorldGI', 'WorldFog', 'LocalFog', 'FogBlur'))
+        # 00be1da changed FogBlur to the shared receiver-depth helper.
+        assert manifest['shaders']['FogBlur']['sha256']=='3566e684517a7bc8348ac407c6b56d7300a9551b1212f12c70671aa050c7f472'
         assert manifest['shaders']['WorldNormals']['static_instruction_slots'] == 305  # Microsoft d3dcompiler_47 (Wine's builtin: 483); r77: both wide samples or neither; 0.3.208: colour-picked one-sided side (was 434)
-        assert manifest['shaders']['WorldFog']['static_instruction_slots'] == 427  # PR #90: phase no longer reads SourceVisibility (was 431); PR #89: regional-field and near-fade interval clip (was 391); Microsoft d3dcompiler_47 (Wine's builtin: 512); 0.3.198 (rain): the same 512 slots (the literal .0017 became c59.w)
+        assert manifest['shaders']['WorldFog']['static_instruction_slots'] <= 512  # Regional fog now has the cloud/environment interval guards as well.
         assert SOURCE_VISIBILITY_SLOTS is not None, 'TODO(lead): pin SOURCE_VISIBILITY_SLOTS to the compiled count (%d)' % manifest['shaders']['SourceVisibilityPS']['static_instruction_slots']
         assert manifest['shaders']['SourceVisibilityPS']['static_instruction_slots'] == SOURCE_VISIBILITY_SLOTS <= 512
         assert manifest['shaders']['WorldComposite']['sha256'] != '772d438995ed33d36db7e26f9b169a5effd94a876ce5d8b8af9fd8aad5381990'

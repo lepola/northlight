@@ -14,7 +14,7 @@ checks={}
 checks['quality key: CommandStream 0..1, presets 1/1/1, default 1']=(re.search(r'\{\s*"CommandStream"\s*,\s*&Settings::commandStream\s*,\s*0\s*,\s*1\s*,\s*\{\s*1\s*,\s*1\s*,\s*1\s*\}\s*\}',q) is not None and 'unsigned commandStream=1;' in q)
 checks['WorldRenderer exposes the loaded value; the early reader uses the same loader']=('bool commandStream()const{return quality.commandStream!=0;}' in w
     and 'const NorthlightQuality::Settings s=NorthlightQuality::load(hasFile?&in:nullptr,nullptr,problems);' in hooks and 'return s.commandStream!=0;' in hooks and 'northlight-quality.ini' in hooks)
-checks['early reader is Win32-only and falls back to the direct path on any failure']=('inline bool commandStreamRequested(const wchar_t* rootPath,unsigned* framesAhead=nullptr,unsigned* frameSkip=nullptr,bool* nameMask=nullptr,bool* occlusionLocal=nullptr){' in hooks and hooks.count('catch(...){return false;}')==2)
+checks['early reader is Win32-only and falls back to the direct path on any failure']=('inline bool commandStreamRequested(const wchar_t* rootPath,unsigned* framesAhead=nullptr,unsigned* frameSkip=nullptr,bool* nameMask=nullptr,bool* occlusionLocal=nullptr,bool* contactAO=nullptr){' in hooks and hooks.count('catch(...){return false;}')==2)
 # 0.3.193: the faint blob shadows bump the version; 0.3.196: the removed DXVK 3 start-marker fallback bumps it;
 # 0.3.196 (task 12): the stream is followed by the task's lookup caches and stream bookkeeping.
 # 0.3.197 (task 13): the soft local-light cap and blended GI re-publication follow them.
@@ -37,8 +37,8 @@ checks['stream_hooks.h starts no thread']=not any(x in hooks for x in ('CreateTh
 create=r[r.index('HRESULT STDMETHODCALLTYPE CreateDevice(UINT adapter'):];create=create[:create.index('\n};')]
 device=r[r.index('class Device final'):r.index('class Factory final')]
 checks['CreateDevice: stream flag read before the real create, streamActive before the Device, MULTITHREADED added only when streaming']=(
-    'unsigned framesAhead=1,frameSkip=0;bool nameMaskWanted=false,occlusionLocal=false;const bool stream=NorthlightStream::commandStreamRequested(rootPath,&framesAhead,&frameSkip,&nameMaskWanted,&occlusionLocal);' in create
-    and create.index('streamActive.store(true')<create.index('real->CreateDevice(adapter,type,window,flags,pp,out)')<create.index('new Device(*out,this)')
+    'unsigned framesAhead=1,frameSkip=0;bool nameMaskWanted=false,occlusionLocal=false,contactAOWanted=false;const bool stream=NorthlightStream::commandStreamRequested(rootPath,&framesAhead,&frameSkip,&nameMaskWanted,&occlusionLocal,&contactAOWanted);' in create
+    and create.index('streamActive.store(true')<create.index('real->CreateDevice(adapter,type,window,flags,pp,out)')<create.index('new Device(*out,this,presentation)')
     and 'if(stream)flags|=D3DCREATE_MULTITHREADED;' in create)
 checks['CreateDevice: any stream failure logs CSTREAM disabled and returns the Device unchanged']=(
     'logf("CSTREAM disabled reason=%s",reason);return device;' in r and 'streamActive.store(false' in r and 'catch(...){reason="exception";}' in r)
@@ -51,13 +51,14 @@ checks['the stream\'s buffer read-backs use NorthlightUpload::readBackLock (NOOV
 checks['StreamFramesAhead: key 1..3 2/2/2, read with CommandStream, passed with budgetForFramesAhead']=(
     re.search(r'\{\s*"StreamFramesAhead"\s*,\s*&Settings::streamFramesAhead\s*,\s*1\s*,\s*3\s*,\s*\{\s*2\s*,\s*2\s*,\s*2\s*\}\s*\}',q) is not None and 'unsigned streamFramesAhead=2;' in q
     and 'if(framesAhead)*framesAhead=s.streamFramesAhead;' in hooks and hooks.count('if(framesAhead)*framesAhead=1;')==2
-    and 'options.framesAhead=framesAhead;options.budget=NorthlightStream::budgetForFramesAhead(framesAhead);' in r and 'startStream(*out,pp,framesAhead,frameSkip,occlusionLocal)' in create)
+    and 'options.framesAhead=framesAhead;options.budget=NorthlightStream::budgetForFramesAhead(framesAhead);' in r
+    and re.search(r'device=\*out;\*out=startStream\(device,pp,framesAhead,frameSkip,occlusionLocal\s*#ifndef NORTHLIGHT_REPLAY_STAND\s*,nativeCapture,captureReason\s*#endif\s*\);',create) is not None)
 # 0.3.200 (frame skip): StreamFrameSkip: 0..1, presets 1/1/1, read by the early reader with CommandStream (0 when unreadable), handed to the
 # stream (Options::frameSkip, whose own default stays 0) and logged on the CSTREAM active line.
 sd=fp.src('stream_device.h').read_text();rt=fp.src('replay_thread.h').read_text()
 checks['StreamFrameSkip: key 0..1 1/1/1, read with CommandStream, passed to the stream, logged']=(
     re.search(r'\{\s*"StreamFrameSkip"\s*,\s*&Settings::streamFrameSkip\s*,\s*0\s*,\s*1\s*,\s*\{\s*1\s*,\s*1\s*,\s*1\s*\}\s*\}',q) is not None and 'unsigned streamFrameSkip=1;' in q
-    and 'if(frameSkip)*frameSkip=s.streamFrameSkip;' in hooks and hooks.count('if(frameSkip)*frameSkip=0;')==2 and 'return commandStreamFromText(text,has,framesAhead,frameSkip,nameMask,occlusionLocal);' in hooks
+    and 'if(frameSkip)*frameSkip=s.streamFrameSkip;' in hooks and hooks.count('if(frameSkip)*frameSkip=0;')==2 and 'return commandStreamFromText(text,has,framesAhead,frameSkip,nameMask,occlusionLocal,contactAO);' in hooks
     and 'options.frameSkip=frameSkip;' in r and 'framesAhead=%u frameSkip=%u occlusionLocal=%d budgetMiB=%u' in r and 'unsigned frameSkip=0;' in sd and 'replayer.frameSkip=opt.frameSkip!=0;' in sd
     and 'put(buf,n," skipped=%llu",(unsigned long long)get(s.skippedFrames));' in rt and '"CSTREAM frame skip: first skipped frame=%llu' in rt)
 # StreamOcclusionLocal: 0..1, presets 1/1/1, read with CommandStream (false when unreadable), handed to the stream (Options default true), logged.
@@ -67,7 +68,7 @@ checks['StreamOcclusionLocal: key 0..1 1/1/1, read with CommandStream, passed to
     and 'options.occlusionLocal=occlusionLocal;' in r and 'bool occlusionLocal=true;' in sd and 'core.occlusionLocal=opt.occlusionLocal;' in sd)
 sp=fp.src('stream_proxies.h').read_text()
 checks['image proxies free a still-staged lock Block at destruction (surface, 3 texture kinds)']=(
-    'inline void dropSubStage(StreamCore& c,SubRes& s){if(s.stage){c.q.freeBlock(s.stage);s.stage=nullptr;}}' in sp
+    'inline void dropSubStage(StreamCore& c,SubRes& s){if(c.idleImages.enabled())c.idleImages.retire(std::uint64_t(reinterpret_cast<std::uintptr_t>(&s)));if(s.stage){c.q.freeBlock(s.stage);s.stage=nullptr;}}' in sp
     and 'dropSubShadow(*core,own);dropSubStage(*core,own);' in sp and sp.count('for(auto& s:subs){dropSubShadow(*core,s);dropSubStage(*core,s);}')==3)
 for name,ok in checks.items():print(('PASS ' if ok else 'FAIL ')+name)
 assert all(checks.values())

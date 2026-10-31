@@ -151,9 +151,11 @@ def main():
                    'float start=max(0,(i-offset)*stepLength);',
                    'float end=min((i+1-offset)*stepLength,surface);',
                    'visibility+=(receiver<=z?1:0)*w.x*w.y;', 'float4 ScreenSize : register(c33)',
-                   'if(dot(sunSource,1)>0)directWeight+=transmittance*absorb*(fogShadowProjected(shadowOrigin+shadowRay*((start+end)*.5))*heightFade)',
+                   'directWeight+=transmittance*absorb*(visibility*heightFade)',
                    'float3 directScatter=sunSource*directWeight;', 'directScatter*=cap/(cap+peak)', 'skySource*(1-transmittance)+directScatter'):
         assert anchor in shader, anchor
+    assert 'if(dot(sunSource,1)>0){' in shader and 'float visibility=fogShadowProjected(shadowOrigin+shadowRay*((start+end)*.5));' in shader
+    assert '[branch]if(actorIntegration&&FogActorInfo.x>0&&visibility>0)visibility=fogCombineActor(visibility,tiledActor?fogActorShadowTiled(actorOrigin+actorRay*start,actorRay*stepSize):fogActorShadow(actorOrigin+actorRay*start,actorRay*stepSize));' in shader
     assert 'c[32][0]=.0055f+.0089f*c[31][3];c[32][1]=.0037f+.00705f*c[31][3]' in cpu
     assert 'c[32][2]=64.f*volumeHeightScale;c[32][3]=48.f*volumeHeightScale' in cpu
     assert 'c[22][3]=.0035f+.0031f*c[31][3]' in cpu
@@ -182,7 +184,7 @@ def main():
     assert 'float fogAmbient[4]={0,0,0,c[18][3]};NorthlightSunHue::coolAmbient(c[18],glowHueFrame,sourceWeights[0],fogAmbient);' in cpu
     # wrap: SourceVisibilityPS keeps .6 x the clear fraction of an 8-tap ring (2.5/3.5 disc
     # radii, on-screen taps only) when larger than the disc value; WorldFog reads it unchanged.
-    visibility = shader[shader.index('float4 SourceVisibilityPS('):shader.index('float4 WorldFog(')]
+    visibility = shader[shader.index('float4 SourceVisibilityPS('):shader.index('float4 worldFog(')]
     for anchor in ('[unroll]for(int j=0;j<8;++j){', '((j%2)?3.5:2.5)*r;', 'float inside=step(abs(q.x-.5),.5)*step(abs(q.y-.5),.5);',
                    'current=max(current,.6*ringClear/max(ringTaps,1));', 'return lerp(current,previous,SourceInfo.y).xxxx;'):
         assert anchor in visibility, anchor
@@ -202,7 +204,12 @@ def main():
         if altitude>0:assert after[3][0]>before[3][0]
         else:assert before[3]==after[3]==(0.,0.,0.)
     assert 'c[33][0]=float(w);c[33][1]=float(h);c[33][2]=float(w/2);c[33][3]=float(h/2)' in cpu
-    assert cpu.count('d->SetPixelShaderConstantF(0,&c[0][0],68)') == 2
+    bank='d->SetPixelShaderConstantF(0,&c[0][0],68)'
+    assert cpu.count(bank)==3
+    assert 'c[30][0]=waterMask?1.f:0.f;'+bank in cpu
+    assert cpu.index(bank,cpu.index('// Temporal shaders own material'))<cpu.index('d->SetPixelShaderConstantF(73,bumpControl,1)',cpu.index('// Temporal shaders own material'))
+    assert cpu.index(bank,cpu.index('if(debug==0&&pointReady){'))<cpu.index('bool fogResolved=false;')
+
     assert 'uploadedFogField->fogCells||uploadedFogField->airCells' in cpu
     assert 'if(cell.height>0&&edge>0)++out.airCells' in policy
     heights = []

@@ -50,6 +50,9 @@ the maps are validated, and then the map folders, lights and new models move int
 scene, lights and validation sources) is unchanged is kept; a deselected one is removed together with the
 models only its tiles used. Changing the selection never touches the continents. A continent rebuild
 (swap(), swap_steps('lights')) carries the instance content over (carry_instances()).
+Groups also record separate scene/light digests: light-only changes reuse the map tiles and models;
+validation-only changes run no builder. Read-only staging inputs use hard links, with a copy fallback.
+A current legacy group is upgraded to these digests without rebuilding its content.
 
 Progress is one JSON object per line (--progress json, the default) or readable text
 (--progress human). The last stdout line is always JSON: {"event": "done"|"up_to_date"|"failed", ...}.
@@ -81,8 +84,11 @@ FORMAT = 'northlight-world-cache-install/1'
 # The sources each step's output depends on. lights and fog also depend on the scene digests
 # (they read the FGS3 tiles), which cover world_scene_builder.py, the module they import.
 STEP_SOURCES = {
-    'scene': ['world_scene_builder.py', 'm2_visibility.py', 'mpq.py', 'client_archives.py'],
-    'lights': ['world_lights_builder.py', 'world_light_placements.py', 'outdoor_light_profiles.py',
+    'scene': ['world_scene_builder.py', 'wmo_lamp_emission.py', 'world_emitter_coverage.py',
+              'point_transmission_builder.py', 'm2_visibility.py', 'mpq.py', 'client_archives.py'],
+    'lights': ['world_lights_builder.py', 'light_attachments.py', 'wmo_lamp_emission.py', 'world_light_placements.py', 'outdoor_light_profiles.py',
+               'world_emitter_coverage.py', 'world_emitter_index.py', 'build_equipment_emitters.py', 'emitter_pin_report.py',
+                 'attached_emitter_sources.py', 'emitter_tracks.py', 'equipment_emitter_patch.py', 'point_transmission_builder.py', 'build_glue_emitters.py',
                'outdoor-light-profiles.json', 'wotlk-emitter-profiles.json'],
     'fog': ['regional_fog_builder.py', 'world_light_placements.py', 'forest_regions.inc'],
     'celestial': ['build_celestial_disc_assets.py', 'world_scene_builder.py', 'mpq.py', 'client_archives.py'],
@@ -200,6 +206,8 @@ def human(f):
                 f"{f['fog_unreadable_wmos']} unreadable WMOs left out of the fog")
     if event == 'instances_removed':
         return f"Instance world cache: removed {', '.join(f['groups'])}"
+    if event == 'instances_reuse':
+        return f"Instance world cache: keeping geometry for {', '.join(f['groups'])}"
     if event == 'instances_carry_failed':
         return f"Warning: the instance world cache could not be carried over ({f['error']}); it is built again next time."
     if event == 'low_memory':
@@ -303,11 +311,23 @@ def step_digests(inputs, without=None):
 def recorded_digests(manifest, without):
     """The digests an installed cache was built with; migrated from a manifest that predates them."""
     if isinstance(manifest.get('digests'), dict):
-        return manifest['digests']
+        old = manifest['digests']
+        inputs = manifest.get('inputs')
+        if newly_excluded_art(inputs, without) and step_digests(inputs) == old:
+            # A layer falsely counted as foreign was ours: its mesh geometry did not change.
+            # Keep post steps stale: our old native-light/sky edits can affect their inputs.
+            normalized = step_digests(inputs, without)
+            return {k: normalized[k] if k.startswith('scene:') else v for k, v in old.items()}
+        return old
     try:
         return step_digests(manifest['inputs'], without)
     except (KeyError, TypeError, AttributeError):
         return {}
+
+
+def newly_excluded_art(inputs, without):
+    return isinstance(inputs, dict) and set(inputs.get('without', '')) <= set(without) and \
+        set(without) - set(inputs.get('without', '')) == {'z'}
 
 
 def read_json(path):
@@ -702,6 +722,61 @@ def instance_digests(inputs, keys=None):
             for k in (instance_maps.KEYS if keys is None else keys)}
 
 
+def instance_step_digests(inputs):
+    """Track geometry separately so a light/validation update can reuse it."""
+    chain = [[a['archive'].lower(), a['bytes'], a['mtime_ns']] for a in inputs['archives']
+             if not is_art_layer(a['archive'], inputs.get('without', ''))]
+    result = {}
+    for key in instance_maps.KEYS:
+        scene = _hash('instance-scene', chain, inputs['locale'], instance_maps.maps_for([key]),
+                      {n: inputs['sources'].get(n) for n in STEP_SOURCES['scene']})
+        result[key] = {'scene': scene, 'lights': _hash('instance-lights', scene,
+                       {n: inputs['sources'].get(n) for n in STEP_SOURCES['lights']})}
+    return result
+
+
+def rebase_instance_scenes(output, without):
+    """Keep geometry when a previously included art layer is now proven ours.
+    The old combined digest must prove that the group used the recorded continent inputs.
+    Lights still update, since old native-light edits may have affected their output.
+    """
+    recorded = read_json(output / INSTANCE_MANIFEST)
+    inputs = (read_json(output / 'install-manifest.json') or {}).get('inputs')
+    if not recorded or not newly_excluded_art(inputs, without):
+        return recorded
+    before = instance_digests(inputs)
+    prior_steps = instance_step_digests(inputs)
+    normalized = instance_step_digests(dict(inputs, without=without))
+    for key, group in recorded.get('groups', {}).items():
+        if group.get('digest') == before.get(key):
+            group['digests'] = dict(prior_steps[key], scene=normalized[key]['scene'])
+    return recorded
+
+
+def stage_instance_files(output, staging, maps, lights=False):
+    """Read-only staging inputs: hard links on the same drive, copies if unsupported."""
+    def link(source, target):
+        if target.exists():
+            return
+        target.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            os.link(source, target)
+        except OSError:
+            shutil.copy2(source, target)
+    for name in maps:
+        source_root = output / 'lights' / 'point-transmission' if lights else output
+        for source in (source_root / name).glob('*.fg3'):
+            link(source, staging / source.relative_to(output))
+        for key in tile_keys(source_root / name):
+            source = source_root / 'models' / f'{key}.fgs'
+            link(source, staging / source.relative_to(output))
+        if lights:
+            for extension in ('fgl', 'fga'):
+                source = output / 'lights' / f'{name}.{extension}'
+                if source.is_file():
+                    link(source, staging / source.relative_to(output))
+
+
 def tile_keys(folder):
     """The model keys (first 32 bytes of each record, hex) the FGS3 tiles of a folder reference."""
     keys = set()
@@ -731,7 +806,9 @@ def present_instance_maps(output, maps):
 
 
 def group_present(output, record):
-    return all((output / m).is_dir() and (output / 'lights' / f'{m}.fgl').is_file() for m in record.get('maps_built') or [])
+    maps = record.get('maps_built') or []
+    return bool(maps) and all(any((output / m).glob('*.fg3')) and
+                             (output / 'lights' / f'{m}.fgl').is_file() for m in maps)
 
 
 def instance_plan(digests, selected, recorded, output, force=False):
@@ -776,10 +853,52 @@ def carry_instances(old_root, new_root):
 
 def carry_instance_lights(old, new):
     """Move the instance .fgl files and their lights manifest from one lights/ folder to another."""
-    for name in [f'{m}.fgl' for m in instance_maps.ALL_MAPS] + [INSTANCE_MANIFEST]:
+    for name in [f'{m}.{extension}' for m in instance_maps.ALL_MAPS for extension in ('fgl','fga')] + [INSTANCE_MANIFEST]:
         if (old / name).is_file() and not (new / name).exists():
             new.mkdir(parents=True, exist_ok=True)
             retry(os.replace, old / name, new / name)
+    merge_point_transmission(old,new,instance_maps.ALL_MAPS)
+
+
+def merge_point_transmission(old, new, maps, replace=False):
+    """Keep auxiliary geometry with its map's light transaction and source models."""
+    maps=tuple(maps)
+    if any(name not in instance_maps.ALL_MAPS for name in maps):raise ValueError('Unknown transmission instance map')
+    old_index,new_index=old/'world-emitters-v1.json',new/'world-emitters-v1.json'
+    previous=json.loads(old_index.read_text()) if old_index.is_file() else None
+    current=json.loads(new_index.read_text()) if new_index.is_file() else None
+    for document in (previous,current):
+        if document is not None and (not isinstance(document,dict) or type(document.get('version')) is not int or document['version']!=1 or document.get('owner')!='northlight-local-direct' or not isinstance(document.get('models'),dict)):
+            raise ValueError('Transmission emitter index owner/version/models')
+    source=old/'point-transmission';target=new/'point-transmission'
+    needed=set()
+    for name in maps:
+        src,dst=source/name,target/name
+        if replace and dst.exists():
+            if not dst.resolve().is_relative_to(target.resolve()):raise ValueError('Transmission path escapes cache')
+            retry(shutil.rmtree,dst)
+        if src.is_dir() and not dst.exists():
+            dst.parent.mkdir(parents=True,exist_ok=True);retry(src.rename,dst)
+        if dst.is_dir():needed.update(tile_keys(dst))
+    for key in needed:
+        src,dst=source/'models'/(key+'.fgs'),target/'models'/(key+'.fgs')
+        if src.is_file() and (replace or not dst.exists()):
+            dst.parent.mkdir(parents=True,exist_ok=True);retry(os.replace,src,dst)
+    if previous is not None:
+        if current is None:current=previous
+        elif replace:current['models'].update(previous['models'])
+        else:
+            for path,value in previous['models'].items():current['models'].setdefault(path,value)
+        new_index.parent.mkdir(parents=True,exist_ok=True)
+        new_index.write_text(json.dumps(current,sort_keys=True,separators=(',',':'),allow_nan=False),encoding='utf-8')
+        digest=hashlib.sha256(new_index.read_bytes()).hexdigest()
+        for name in ('manifest.json',INSTANCE_MANIFEST):
+            path=new/name
+            if path.is_file():
+                manifest=json.loads(path.read_text())
+                if 'world_emitter_index' in manifest:
+                    manifest['world_emitter_index']['sha256']=digest
+                    path.write_text(json.dumps(manifest,indent=2)+'\n',encoding='utf-8')
 
 
 def drop_instance_record(root):
@@ -847,6 +966,9 @@ def merge_lights_manifest(output, staging, affected):
     fresh, base = read_json(new), read_json(old)
     kept = [e for e in (base or {}).get('maps', []) if e.get('map') not in affected]
     merged = dict(fresh or base or {}, maps=kept + list((fresh or {}).get('maps', [])))
+    index=output/'lights'/'world-emitters-v1.json'
+    if index.is_file() and 'world_emitter_index' in merged:
+        merged['world_emitter_index']['sha256']=hashlib.sha256(index.read_bytes()).hexdigest()
     if merged['maps']:
         old.parent.mkdir(parents=True, exist_ok=True)
         tmp = old.with_name(old.name + f'.{os.getpid()}.tmp')
@@ -876,14 +998,25 @@ def apply_instances(staging, output):
         if (output / m).exists():
             retry(shutil.rmtree, output / m)
         (lights / f'{m}.fgl').unlink(missing_ok=True)
+        (lights / f'{m}.fga').unlink(missing_ok=True)
     for m in ready['built_maps']:
-        if (staging / m).is_dir():
+        if m not in ready.get('reused_maps', []) and (staging / m).is_dir():
             if (output / m).exists():
                 retry(shutil.rmtree, output / m)
             retry((staging / m).rename, output / m)
+        if m not in ready.get('lights_maps', ready['built_maps']):
+            continue
         if (staging / 'lights' / f'{m}.fgl').is_file():
             retry(os.replace, staging / 'lights' / f'{m}.fgl', lights / f'{m}.fgl')
-    merge_lights_manifest(output, staging, {*ready['drop_maps'], *ready['built_maps']})
+        if (staging / 'lights' / f'{m}.fga').is_file():
+            retry(os.replace, staging / 'lights' / f'{m}.fga', lights / f'{m}.fga')
+    affected_lights = [*ready['drop_maps'], *ready.get('lights_maps', ready['built_maps'])]
+    merge_point_transmission(staging/'lights',lights,affected_lights,replace=True)
+    point_root=lights/'point-transmission'
+    point_keys=all_tile_keys(point_root)
+    for path in (point_root/'models').glob('*.fgs'):
+        if path.stem not in point_keys:path.unlink()
+    merge_lights_manifest(output, staging, set(affected_lights))
     if (staging / 'validation.json').is_file():   # the validator's report, beside the continents' validation.json
         retry(os.replace, staging / 'validation.json', output / 'instances-validation.json')
     (output / 'logs').mkdir(exist_ok=True)
@@ -928,8 +1061,9 @@ def run_instances(args, client, locale, output, inputs, started):
     digest = _hash(digests)
     staging = instance_staging(output)
     base = {'layer': 'instances', 'output': str(output)}
+    recorded = rebase_instance_scenes(output, args.without)
     if args.instances_plan:   # a dry run for the installer's disk check
-        build, keep, remove = instance_plan(digests, selected, read_json(output / INSTANCE_MANIFEST), output, args.force)
+        build, keep, remove = instance_plan(digests, selected, recorded, output, args.force)
         print(json.dumps({'event': 'instances_plan', 'build': build, 'keep': keep, 'remove': remove}), flush=True)
         return 0
     has_cache = (output / 'install-manifest.json').is_file() or (output / 'northlight-cache.json').is_file()
@@ -942,13 +1076,29 @@ def run_instances(args, client, locale, output, inputs, started):
     if finish_instances(staging, output, digests):
         return final('done', 0, **base, fingerprint=digest, seconds=round(time.time() - started, 1),
                      completed_interrupted_swap=True)
-    recorded = read_json(output / INSTANCE_MANIFEST)
     build, keep, remove = instance_plan(digests, selected, recorded, output, args.force)
+    step_digests = instance_step_digests(inputs)
+    # Upgrade a current legacy record without rebuilding its content. Dry runs never write.
+    if recorded and any(recorded['groups'][k].get('digests') != step_digests[k] for k in keep):
+        for k in keep:
+            recorded['groups'][k]['digests'] = step_digests[k]
+        temp = output / (INSTANCE_MANIFEST + '.tmp')
+        temp.write_text(json.dumps(recorded, indent=2) + '\n', encoding='utf-8')
+        retry(os.replace, temp, output / INSTANCE_MANIFEST)
     if not build and not remove:
         if staging.is_dir() and not (staging / 'install-state.json').is_file():
             retry(shutil.rmtree, staging)   # a leftover of a completed move
         return final('up_to_date', 0, **base, fingerprint=digest, kept=keep)
     old_groups = dict((recorded or {}).get('groups') or {})
+    reuse = [k for k in build if not args.force and old_groups.get(k, {}).get('maps_built') and
+             (old_groups.get(k, {}).get('digests') or {}).get('scene') == step_digests[k]['scene'] and
+             all(any((output / m).glob('*.fg3')) and
+                 all((output / 'models' / f'{key}.fgs').is_file() for key in tile_keys(output / m))
+                 for m in old_groups[k]['maps_built'])]
+    scene_build = [k for k in build if k not in reuse]
+    light_build = [k for k in build if k not in reuse or
+                   (old_groups[k].get('digests') or {}).get('lights') != step_digests[k]['lights'] or
+                   not group_present(output, old_groups[k])]
     state = staging / 'install-state.json'
     wanted = {k: digests[k] for k in build}
     if staging.exists():
@@ -968,12 +1118,19 @@ def run_instances(args, client, locale, output, inputs, started):
 
     ran, results = [], {}
     if build:
-        by_size = sorted(build, key=lambda k: -next(g['est_gb'] for g in instance_maps.GROUPS if g['key'] == k))
+        if reuse:
+            emit(event='instances_reuse', groups=reuse)
+        reuse_maps = [m for k in reuse for m in old_groups[k]['maps_built']]
+        by_size = sorted(scene_build, key=lambda k: -next(g['est_gb'] for g in instance_maps.GROUPS if g['key'] == k))
         need = (args.job_memory_gb or INSTANCE_MEMORY_GB) * (1 << 30)
         ran = run_parallel([(f'instances {k}', [fp.tracked('world_scene_builder.py'), '--instanced', '--map',
                                                 *instance_maps.maps_for([k]), '--output', staging, *common],
                              staging / 'logs' / f'instances-scene-{k}.log', None, need) for k in by_size], jobs, budget)
-        results = {k: instance_group_result(staging, k) for k in build}
+        results = {k: instance_group_result(staging, k) for k in scene_build}
+        for k in reuse:
+            r = old_groups[k]
+            results[k] = (r['maps_built'], r.get('tile_failures', {}), r.get('empty_source_tiles', {}),
+                          r.get('clamped_wmo_groups', 0), r.get('archive_warnings', []))
         problems = [f'{s.name} exit {s.proc.returncode}' for s in ran if s.proc.returncode]
         for k, (built, failures, _, _, _) in results.items():
             problems += [f'instances {k}: no tiles built'] if not built else []
@@ -981,10 +1138,14 @@ def run_instances(args, client, locale, output, inputs, started):
         if problems:
             return final('failed', 1, **base, problems=problems, staging=str(staging),
                          logs=instance_failed_logs(ran, [f'instances {k}' for k in build]))
+        stage_instance_files(output, staging, reuse_maps)
+        stage_instance_files(output, staging, [m for k in reuse if k not in light_build for m in old_groups[k]['maps_built']], lights=True)
         built_maps = [m for k in build for m in results[k][0]]
-        ran += run_parallel([('instances lights', [fp.tracked('world_lights_builder.py'), '--cache', staging, '--output',
-                                                   staging / 'lights', '--maps', *built_maps, '--manifest', INSTANCE_MANIFEST, *common],
-                              staging / 'logs' / 'instances-lights.log', None, POST_MEMORY_GB * (1 << 30))], 1)
+        light_maps = [m for k in light_build for m in results[k][0]]
+        if light_maps:
+            ran += run_parallel([('instances lights', [fp.tracked('world_lights_builder.py'), '--cache', staging, '--output',
+                                                       staging / 'lights', '--maps', *light_maps, '--manifest', INSTANCE_MANIFEST, *common],
+                                  staging / 'logs' / 'instances-lights.log', None, POST_MEMORY_GB * (1 << 30))], 1)
         ran += run_parallel([('instances validate', [fp.tracked('validate_world_cache.py'), '--cache', staging, '--report',
                                                      staging / 'validation.json', '--maps', *built_maps, *common],
                               staging / 'logs' / 'instances-validate.log', None, POST_MEMORY_GB * (1 << 30))], 1)
@@ -995,14 +1156,15 @@ def run_instances(args, client, locale, output, inputs, started):
         for k in build:
             for warning in results[k][4]:
                 warn_archive(warning)
-        clamped = {g for r in results.values() for g in r[3]}
+        clamped = {g for k, r in results.items() if k not in reuse for g in r[3]}
         if clamped:
             emit(event='tolerated', clamped_wmo_groups=len(clamped), fog_unreadable_wmos=0)
     # the new record: kept groups as they were, built ones from this run, removed ones gone
     groups = {k: v for k, v in old_groups.items() if k in keep}
     for k, (built, failures, empty, clamped, _) in results.items():
         groups[k] = {'digest': digests[k], 'maps_built': built, 'tile_failures': failures, 'empty_source_tiles': empty,
-                     'clamped_wmo_groups': len(clamped)}
+                     'clamped_wmo_groups': clamped if isinstance(clamped, int) else len(clamped),
+                     'archive_warnings': results[k][4], 'digests': step_digests[k]}
     built_maps = [m for k in build for m in results[k][0]]
     drop = [m for k in [*build, *remove]
             for m in dict.fromkeys([*((old_groups.get(k) or {}).get('maps_built') or []),
@@ -1012,13 +1174,17 @@ def run_instances(args, client, locale, output, inputs, started):
                 'locale': locale, 'built_unix': time.time(), 'seconds': round(time.time() - started, 1),
                 'steps': [s.record() for s in ran]} if groups else None
     prune = set()   # models the replaced or removed tiles used; the move deletes those no tile references any more
-    for m in [*drop, *(m for m in built_maps if (output / m).is_dir())]:
+    reused_maps = [m for k in reuse for m in results[k][0]]
+    for m in [*drop, *(m for m in built_maps if m not in reused_maps and (output / m).is_dir())]:
         prune |= tile_keys(output / m)
     outside = set()   # models a tile of the continents or of a kept group uses: shared, never replaced
     for folder in output.iterdir() if output.is_dir() else []:
-        if folder.is_dir() and folder.name not in NOT_MAPS and folder.name not in (*drop, *built_maps):
+        if folder.is_dir() and folder.name not in NOT_MAPS and \
+                (folder.name in reused_maps or folder.name not in (*drop, *built_maps)):
             outside |= tile_keys(folder)
     (staging / INSTANCE_READY).write_text(json.dumps({'digests': wanted, 'built_maps': built_maps, 'drop_maps': drop,
+                                                       'reused_maps': reused_maps,
+                                                       'lights_maps': [m for k in light_build for m in results[k][0]],
                                                        'prune': sorted(prune), 'replace': sorted(prune - outside),
                                                        'manifest': manifest}) + '\n')
     state.unlink(missing_ok=True)
@@ -1081,6 +1247,12 @@ def main(argv=None):
     if refusal:
         return final('failed', 2, stage='preflight', total_memory_gb=round(total / (1 << 30), 1), error=refusal)
 
+    # Save the proof before the continent manifest is replaced by the post-step update.
+    instance_record = rebase_instance_scenes(output, args.without)
+    if instance_record != read_json(output / INSTANCE_MANIFEST):
+        temp = output / (INSTANCE_MANIFEST + '.tmp')
+        temp.write_text(json.dumps(instance_record, indent=2) + '\n', encoding='utf-8')
+        retry(os.replace, temp, output / INSTANCE_MANIFEST)
     state = staging / 'install-state.json'
     if staging.exists():
         saved = read_json(state) or {}

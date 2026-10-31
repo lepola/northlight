@@ -77,6 +77,21 @@ static void reference(){
     }
     std::printf("PASS %zu reference draw bank comparisons across 20 frames x 8 passes, %zu preparations reused, with changing cameras/poses/ranges and culled draws\n",visited,reused);
 }
+static void worldProjection(){
+    Replay grass;grass.projectionKind=1;grass.constantUsage.floats={0,14};grass.constantUsage.booleans={};grass.constantUsage.integers={};
+    for(unsigned i=0;i<1024;++i)grass.constants[i]=float(i+100);
+    float rows[16],world[16];for(unsigned i=0;i<16;++i){rows[i]=float(int(i)-8);world[i]=float(1000+i);}
+    Pass<int32_t> pass;assert(pass.prepare(grass,rows,world));
+    assert(std::memcmp(pass.desired()+16,world,sizeof world)==0);
+    assert(std::memcmp(pass.desired(),grass.constants,16*sizeof(float))==0);
+    assert(std::memcmp(pass.desired()+32,grass.constants+32,24*sizeof(float))==0); // includes native c9 fade
+    assert(pass.prepare(grass,rows,world)&&pass.reused==1&&!pass.floats.count);
+    ++grass.constantGroup;grass.constants[36]=-.125f;assert(pass.prepare(grass,rows,world));
+    assert(pass.desired()[36]==-.125f&&std::memcmp(pass.desired()+16,world,sizeof world)==0);
+    Replay actor=grass;actor.projectionKind=2;++actor.constantGroup;
+    assert(pass.prepare(actor,rows,world)&&std::memcmp(pass.desired()+8,rows,sizeof rows)==0);
+    std::puts("PASS grass world projection preserves captured view/fade and grouping; actors retain view projection");
+}
 static volatile uint64_t sink;
 static void benchmark(unsigned parts){
     std::vector<Replay> draws(1200);
@@ -101,4 +116,4 @@ static void benchmark(unsigned parts){
     double old=run(false),now=run(true);
     std::printf("BENCH native helper only %u parts/pose, 1200 draws x 2 cascades x %u frames including grouping: baseline %.3f ms, grouped %.3f ms, %.3fx; prepares/frame 2400 -> %u; extra persistent bytes/draw %zu\n",parts,frames,old,now,old/now,2400/parts,sizeof(unsigned));
 }
-int main(){equality();reference();benchmark(8);benchmark(4);benchmark(1);}
+int main(){equality();reference();worldProjection();benchmark(8);benchmark(4);benchmark(1);}

@@ -15,9 +15,10 @@ northlight_paths.use_source_modules()
 import client_archives
 from world_scene_builder import Assets, array, string, unpack
 from world_lights_builder import constant_track
-from build_equipment_emitters import NATIVE_REFERENCE, REFERENCES, lifetime_track, sources as particle_sources
+from build_equipment_emitters import NATIVE_REFERENCE, REFERENCES, lifetime_track, validate_rgb, sources as particle_sources
 from equipment_emitter_patch import append_bone_lights
 from mpq import Archive
+from emitter_tracks import pulse_for
 
 
 def lifecycle_track(blob, offset, fmt, default):
@@ -29,9 +30,14 @@ def lifecycle_track(blob, offset, fmt, default):
     if sequence >= 0 and (nt != 1 or not unpack('<I', blob, global_offset + sequence * 4)[0]):
         raise ValueError('Invalid lifecycle global sequence')
     curves = []
-    for (tc, to), (kc, ko) in zip(array(blob, ot, nt, '<II'), array(blob, ok, nk, '<II')):
+    animations, animation_offset = unpack('<II',blob,28)
+    if sequence == -1 and animations and nt > animations:
+        raise ValueError('Lifecycle has more curves than original animations')
+    for slot,((tc, to), (kc, ko)) in enumerate(zip(array(blob, ot, nt, '<II'), array(blob, ok, nk, '<II'))):
         if tc != kc or tc > 4096:
             raise ValueError('Invalid lifecycle key counts')
+        if sequence == -1 and animations and tc and not unpack('<I',blob,animation_offset+slot*64+12)[0] & 0x20:
+            raise ValueError('External animation lifecycle is not inline emission proof')
         times = [v for (v,) in array(blob, to, tc, '<I')]
         values = [v for (v,) in array(blob, ko, kc, fmt)]
         if any(a >= b for a, b in zip(times, times[1:])) or not all(math.isfinite(v) for v in values):
@@ -62,7 +68,7 @@ def write_track(out, track, fmt, scale=1):
     return struct.pack('<hh4I', track['interpolation'], track['sequence'], len(times), ot, len(keys), ok)
 
 
-def spell_sources(assets, blob, max_sources=2):
+def spell_sources(assets, blob, max_sources=16):
     if len(blob) < 304 or blob[:4] != b'MD20' or unpack('<I', blob, 4)[0] != 264:
         raise ValueError('Not WotLK v264')
     if unpack('<I', blob, 264)[0]:
@@ -77,6 +83,11 @@ def spell_sources(assets, blob, max_sources=2):
             p = offset + index * stride
             rate = lifecycle_track(blob, p + 176, '<f', 0.)
             enabled = lifecycle_track(blob, p + 456, '<B', 1)
+            life = lifecycle_track(blob,p+152,'<f',0.)
+            lifetimes = [v for c in life['curves'] for v in c['values']]
+            scale = lifetime_track(blob,p+292,'<2f')
+            if not all(0 <= v <= 120 for v in lifetimes) or not max(lifetimes) or not any(min(v) > 0 for _,v in scale) or not all(math.isfinite(v) and v >= 0 for _,s in scale for v in s):
+                raise ValueError('No visible bounded particle lifetime/scale')
             rates = [v for c in rate['curves'] for v in c['values']]
             states = [v for c in enabled['curves'] for v in c['values']]
             peak = max(rates)
@@ -95,13 +106,18 @@ def spell_sources(assets, blob, max_sources=2):
             # Only identical schedules can share a source; unlike unrelated
             # particles, they always switch off together.
             neighbour = next((s for s in result if s['bone'] == source['bone'] and s['rate_track'] == rate
-                and s['enable_track'] == enabled and sum((a-b)**2 for a,b in zip(s['position'], source['position'])) < .25**2), None)
+                and s['enable_track'] == enabled and s.get('emission') == source.get('emission')
+                and s['intensity']+source['intensity'] <= 4
+                and sum((a-b)**2 for a,b in zip(s['position'], source['position'])) < .25**2), None)
             if neighbour:
                 rgb = [neighbour['rgb'][k]*neighbour['intensity'] + source['rgb'][k]*source['intensity'] for k in range(3)]
                 power = max(rgb)
-                neighbour['rgb'], neighbour['intensity'] = tuple(v/power for v in rgb), min(1., power)
+                a,b = neighbour['intensity'],source['intensity']
+                neighbour['position'] = tuple((x*a+y*b)/(a+b) for x,y in zip(neighbour['position'],source['position']))
+                neighbour['rgb'], neighbour['intensity'] = tuple(v/power for v in rgb), power
                 neighbour['particles'].append(index)
                 neighbour['particle_blends'] += source['particle_blends']
+                neighbour['particle_flags'] += source['particle_flags']
                 neighbour['textures'] = sorted(set(neighbour['textures'] + source['textures']))
             else:
                 result.append(source)
@@ -110,7 +126,7 @@ def spell_sources(assets, blob, max_sources=2):
     if not result:
         raise ValueError('No proven additive source: ' + json.dumps(collections.Counter(rejected.values()), sort_keys=True))
     if max_sources is not None and len(result) > max_sources:
-        raise ValueError('More than two independent sources/schedules; excluded')
+        raise ValueError('Source budget exceeded: %d independent sources (limit %d); none silently omitted' % (len(result), max_sources))
     return result, rejected
 
 
@@ -120,11 +136,15 @@ def append_spell_lights(original, emitters):
     global_count, _ = unpack('<II', original, 20)
     for index, source in enumerate(emitters):
         record = records + index * 156
+        if 'rate_track' not in source:
+            continue
         out[record + 76:record + 96] = write_track(out, source['rate_track'], '<f', source['intensity'] / source['rate'])
         out[record + 136:record + 156] = write_track(out, source['enable_track'], '<B')
         # CM2Model::AnimateMT commits diffuseIntensity * RGB only when the RGB
         # track updates. Two equal keys keep that native branch running every
         # frame (count > m_uint90); a single constant RGB key freezes intensity.
+        if pulse_for(source, index):
+            continue  # Pulsed RGB already updates every native frame.
         timestamp = add_bytes(out, struct.pack('<2I', 0, 1))
         rgb = add_bytes(out, struct.pack('<6f', *source['rgb'], *source['rgb']))
         times = add_bytes(out, struct.pack('<II', 2, timestamp))
@@ -150,6 +170,12 @@ def validate_spell_lights(original, patched, emitters):
         for actual, wanted in zip(unpack('<3f', patched, record+4), source['position']):
             if not math.isclose(actual, wanted, rel_tol=1e-6, abs_tol=1e-6):
                 raise ValueError('Original source position mismatch')
+        validate_rgb(patched, record+56, source, index)
+        if 'rate_track' not in source:
+            for relative, wanted in ((76, source['intensity']), (96, source['start']), (116, source['end'])):
+                if not math.isclose(constant_track(patched, record+relative, '<f')[0], wanted, rel_tol=1e-6):
+                    raise ValueError('Steady mesh energy/range mismatch')
+            continue
         for relative, fmt, key, scale in ((76, '<f', 'rate_track', source['intensity']/source['rate']), (136, '<B', 'enable_track', 1)):
             actual = lifecycle_track(patched, record+relative, fmt, 0 if fmt == '<f' else 1)
             wanted = source[key]
@@ -160,10 +186,8 @@ def validate_spell_lights(original, patched, emitters):
             for a, b in zip(actual['curves'], wanted['curves']):
                 if a['times'] != b['times'] or not all(math.isclose(x,y*scale,rel_tol=1e-6,abs_tol=1e-7) for x,y in zip(a['values'],b['values'])):
                     raise ValueError('Lifecycle samples mismatch')
-        if not all(math.isclose(x,y,rel_tol=1e-6,abs_tol=1e-6) for x,y in zip(constant_track(patched,record+56,'<3f'), source['rgb'])):
-            raise ValueError('Actual emission colour mismatch')
         _, _, _, times, _, _ = unpack('<hh4I', patched, record+56)
-        if unpack('<I', patched, times)[0] != 2:
+        if unpack('<I', patched, times)[0] < 2:
             raise ValueError('Animated intensity requires per-frame RGB update')
 
 
@@ -286,6 +310,8 @@ def luminous_missile_tail(blob, emitters, rejected):
 def build(assets, output, excluded, audit_broad=False):
     output.mkdir(parents=True, exist_ok=True)
     candidates = effect_models(assets)
+    if audit_broad:
+        candidates.update({p:candidates.get(p,[]) for p in assets.providers if p.startswith('spells\\') and p.endswith('.m2')})
     eligible, graph = ({}, {}) if audit_broad else missile_models(assets, candidates)
     report = {'format': 'native WotLK v264 spell lights with authored lifecycle',
         'scope': 'audit-only broad spell models' if audit_broad else 'exclusive missile models with luminous finite particle tails',
@@ -310,7 +336,7 @@ def build(assets, output, excluded, audit_broad=False):
             'Default scope excludes shared CEffect/DynamicObject/DBC owners. Missile retirement stops emission, waits only for luminous finite tails, then deletes/releases the model and unlinks lights.',
             'Native lights and particles share effectiveAlpha/fadeAlpha; baseAlpha alone does not suppress native lights.',
             'Only inline step/linear lifecycle tracks, actual additive particles 3/4, actual texture RGB and lifetime colour.',
-            'At most two independent sources per model; runtime shares LocalLightLimit and caps admitted dynamic sources at eight.',
+            'At most sixteen independent sources per model; over-budget models are reported, with no silent source omissions. Runtime dynamic admission remains capped at eight.',
             'Model VS2/3 capture is required for Northlight local/fog lighting; particle-only draws may not expose a light.',
             'No installation or in-game test was performed.'],
         'license': "Original MIT helper; derived model binaries are generated only from the user's client and must not be redistributed."}

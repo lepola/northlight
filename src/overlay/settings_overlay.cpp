@@ -1,5 +1,8 @@
 // Settings overlay: the device window's subclass, the input queue, the ImGui context and drawing. See settings_overlay.h.
 #include "settings_overlay.h"
+#include "hdr_compiled_shaders.h"
+#include "saved_state.h"
+#include "hdr_quad.h"
 #include <windows.h>
 #include <algorithm>
 #include <atomic>
@@ -55,6 +58,7 @@ struct WindowHook {
     std::atomic<bool> captured{false};   // the overlay holds the mouse capture for heldButtons (window thread)
     std::atomic<unsigned> hotkey{0};   // packed In::Hotkey (vk | ctrl<<8 | shift<<9 | alt<<10), set before install()
     In::Queue queue;
+    In::MasterHotkey master;
 };
 WindowHook hook;
 unsigned pack(const In::Hotkey& k){return k.vk|(k.mods.ctrl?1u<<8:0)|(k.mods.shift?1u<<9:0)|(k.mods.alt?1u<<10:0);}
@@ -69,7 +73,7 @@ LRESULT CALLBACK windowProcedure(HWND window,UINT msg,WPARAM wparam,LPARAM lpara
     };
     if(msg==WM_NCDESTROY){
         // The window is going away: unhook if nobody subclassed after us (the chain dies with the window anyway).
-        hook.active.store(false);hook.open.store(false);
+        hook.active.store(false);hook.open.store(false);hook.master.clear();
         const LONG_PTR current=unicode?GetWindowLongPtrW(window,GWLP_WNDPROC):GetWindowLongPtrA(window,GWLP_WNDPROC);
         if(current==reinterpret_cast<LONG_PTR>(&windowProcedure)&&previous){
             if(unicode)SetWindowLongPtrW(window,GWLP_WNDPROC,reinterpret_cast<LONG_PTR>(previous));else SetWindowLongPtrA(window,GWLP_WNDPROC,reinterpret_cast<LONG_PTR>(previous));
@@ -80,6 +84,7 @@ LRESULT CALLBACK windowProcedure(HWND window,UINT msg,WPARAM wparam,LPARAM lpara
     if(!hook.active.load(std::memory_order_relaxed))return forward();
     In::Modifiers mods;
     if(msg>=WM_KEYFIRST&&msg<=WM_KEYLAST){mods.ctrl=GetKeyState(VK_CONTROL)<0;mods.shift=GetKeyState(VK_SHIFT)<0;mods.alt=GetKeyState(VK_MENU)<0;}
+    hook.master.message(msg,wparam,lparam,mods,GetForegroundWindow()==window);
     In::State state;state.open=hook.open.load(std::memory_order_relaxed);state.captureMouse=hook.captureMouse.load(std::memory_order_relaxed);
     state.captureText=hook.captureText.load(std::memory_order_relaxed);state.hotkey=unpack(hook.hotkey.load(std::memory_order_relaxed));
     state.self=reinterpret_cast<std::intptr_t>(window);
@@ -115,13 +120,13 @@ bool install(HWND window,const char*& why){
     if(!window||!IsWindow(window)){why="no device window";return false;}
     if(hook.installed.load()){
         // Still chained from an earlier device (another module subclassed after us): reuse that link.
-        if(hook.window.load()==window){hook.active.store(true);return true;}
+        if(hook.window.load()==window){hook.master.clear();hook.active.store(true);return true;}
         why="the procedure is still chained into an earlier window";return false;
     }
     const bool unicode=IsWindowUnicode(window)!=FALSE;
     const LONG_PTR current=unicode?GetWindowLongPtrW(window,GWLP_WNDPROC):GetWindowLongPtrA(window,GWLP_WNDPROC);
     if(!current){why="GetWindowLongPtr failed";return false;}
-    hook.unicode.store(unicode);hook.window.store(window);hook.heldButtons.store(0);hook.queue.clear();
+    hook.unicode.store(unicode);hook.window.store(window);hook.heldButtons.store(0);hook.queue.clear();hook.master.clear();
     hook.previous.store(reinterpret_cast<WNDPROC>(current),std::memory_order_release);
     SetLastError(0);
     const LONG_PTR replaced=unicode?SetWindowLongPtrW(window,GWLP_WNDPROC,reinterpret_cast<LONG_PTR>(&windowProcedure))
@@ -134,7 +139,7 @@ bool install(HWND window,const char*& why){
 // Device destruction: restores the previous procedure only while ours is still the window's current one; otherwise
 // another module subclassed after us and we stay in its chain as a pass-through (never break its chain).
 void uninstall(){
-    hook.active.store(false);hook.open.store(false);hook.captureMouse.store(false);hook.captureText.store(false);hook.queue.clear();
+    hook.active.store(false);hook.open.store(false);hook.captureMouse.store(false);hook.captureText.store(false);hook.queue.clear();hook.master.clear();
     hook.heldButtons.store(0);hook.captured.store(false);   // a capture we hold ends with the button's release (pass-through from now on)
     if(!hook.installed.load())return;
     const HWND window=hook.window.load();const bool unicode=hook.unicode.load();
@@ -214,6 +219,8 @@ bool loadSystemFont(const wchar_t* name,float pixels,const ImWchar* ranges){
 
 class Impl final : public Overlay {
     IDirect3DDevice9* device;
+    IDirect3DPixelShader9* hdrShader=nullptr;IDirect3DPixelShader9* calibrationShader=nullptr;float hdrWhite=0;
+    IDirect3DSurface9* outputTarget=nullptr;
     std::shared_ptr<NorthlightSettings::Service> service;
     Log log;
     std::string hotkeyName;
@@ -250,7 +257,13 @@ class Impl final : public Overlay {
         io.BackendPlatformName="northlight-overlay";
         backend=ImGui_ImplDX9_Init(device);
         if(!backend)throw std::runtime_error("ImGui_ImplDX9_Init failed");
-        panel=std::make_unique<SettingsPanel>(service,hotkeyName);
+        panel=std::make_unique<SettingsPanel>(service,hotkeyName,[this](const float* rectangle,const float* color){
+            if(!(hdrWhite>0))return;SavedState saved(device);if(!saved.ok)return;D3DSURFACE_DESC desc{};if(FAILED(saved.targets[0]->GetDesc(&desc)))return;
+            if(!calibrationShader&&FAILED(device->CreatePixelShader(reinterpret_cast<const DWORD*>(kHdrCalibration),&calibrationShader)))return;
+            if(FAILED(NorthlightHdr::quadState(device,saved.targets[0],desc.Width,desc.Height)))return;
+            RECT clip={LONG(rectangle[0]),LONG(rectangle[1]),LONG(rectangle[2]),LONG(rectangle[3])};device->SetScissorRect(&clip);device->SetRenderState(D3DRS_SCISSORTESTENABLE,TRUE);
+            device->SetPixelShader(calibrationShader);device->SetPixelShaderConstantF(0,color,1);NorthlightHdr::drawQuad(device,desc.Width,desc.Height);
+        });
         QueryPerformanceFrequency(&frequency);QueryPerformanceCounter(&last);
     }
     // Font atlas and style for a new scale only (first frame, resolution changes).
@@ -311,6 +324,12 @@ class Impl final : public Overlay {
     }
     // Outside the game's scene (Present comes after its EndScene), onto the implicit swap chain's back buffer, over
     // everything the game drew. The caller's SavedState restores all of this.
+    static void hdrDrawState(const ImDrawList*,const ImDrawCmd* command){
+        auto& self=*static_cast<Impl*>(command->UserCallbackData);
+        const float color[]={self.hdrWhite/80,self.hdrWhite/80,self.hdrWhite/80,0};
+        self.device->SetPixelShader(self.hdrShader);self.device->SetPixelShaderConstantF(0,color,1);
+        self.device->SetRenderState(D3DRS_SRGBWRITEENABLE,FALSE);
+    }
     void render(IDirect3DSurface9* back,const D3DSURFACE_DESC& desc){
         device->SetRenderTarget(0,back);
         for(DWORD i=1;i<4;++i)device->SetRenderTarget(i,nullptr);
@@ -326,8 +345,16 @@ class Impl final : public Overlay {
         device->SetTextureStageState(0,D3DTSS_TEXCOORDINDEX,0);device->SetTextureStageState(0,D3DTSS_TEXTURETRANSFORMFLAGS,D3DTTFF_DISABLE);
         device->SetTextureStageState(0,D3DTSS_RESULTARG,D3DTA_CURRENT);
         device->SetStreamSourceFreq(0,1);
+        if(hdrWhite>0){
+            if(!hdrShader&&FAILED(device->CreatePixelShader(reinterpret_cast<const DWORD*>(kHdrOverlay),&hdrShader))){fail("HDR overlay shader unavailable");return;}
+            // The backend initializes fixed-function state before processing callbacks.
+            // Insert our transfer after that setup for each command list.
+            auto* data=ImGui::GetDrawData();
+            for(int i=0;i<data->CmdListsCount;++i){ImDrawCmd command;command.UserCallback=&hdrDrawState;command.UserCallbackData=this;data->CmdLists[i]->CmdBuffer.insert(data->CmdLists[i]->CmdBuffer.begin(),command);}
+        }
         if(FAILED(device->BeginScene()))return;
-        ImGui_ImplDX9_RenderDrawData(ImGui::GetDrawData());
+        // Overlay::draw requires the caller's SavedState; keep transform backup in the backend.
+        ImGui_ImplDX9_RenderDrawData(ImGui::GetDrawData(),false);
         device->EndScene();
         checkpoint();
     }
@@ -345,7 +372,8 @@ class Impl final : public Overlay {
         }
         struct Surface{IDirect3DSurface9* p=nullptr;~Surface(){if(p)p->Release();}} back;
         D3DSURFACE_DESC desc={};
-        if(FAILED(device->GetBackBuffer(0,0,D3DBACKBUFFER_TYPE_MONO,&back.p))||!back.p||FAILED(back.p->GetDesc(&desc))||!desc.Width||!desc.Height)return;
+        if(outputTarget){back.p=outputTarget;back.p->AddRef();}else if(FAILED(device->GetBackBuffer(0,0,D3DBACKBUFFER_TYPE_MONO,&back.p)))return;
+        if(!back.p||FAILED(back.p->GetDesc(&desc))||!desc.Width||!desc.Height)return;
         ensureContext();ImGui::SetCurrentContext(context);
         const float wanted=uiScale(desc.Height);
         if(wanted!=scale)rescale(wanted);
@@ -383,11 +411,20 @@ public:
             if(context){ImGui::SetCurrentContext(context);if(backend)ImGui_ImplDX9_Shutdown();ImGui::DestroyContext(context);}
         }catch(...){}
         context=nullptr;
+        if(hdrShader)hdrShader->Release();
+        if(calibrationShader)calibrationShader->Release();
         device->Release();
     }
+    bool masterHotkey(bool foreground,bool& pressed) override{
+        const bool active=hook.active.load(std::memory_order_relaxed);
+        pressed=hook.master.take(foreground&&active);
+        return active;
+    }
     bool visible()const override{return hook.open.load(std::memory_order_relaxed)||background.load(std::memory_order_relaxed);}
-    void draw() override{
+    void draw(float uiWhite=0,IDirect3DSurface9* output=nullptr) override{
         std::lock_guard<std::mutex> lock(mutex);
+        hdrWhite=uiWhite;
+        outputTarget=output;
         if(failed)return;
         try{frame();}
         catch(const std::exception& e){fail(e.what());}

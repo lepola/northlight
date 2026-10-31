@@ -20,7 +20,6 @@ namespace NorthlightReplayGPU {
    returned to probation and re-admitted. Multi-stream meshes keep the per-mesh layout.
    false: NorthlightReplayGPU::Cache, one buffer per mesh stream (0.3.142). */
 inline constexpr bool BatchedReplayCache=true;
-struct Placement {UINT vertexBase=0,indexStart=0;};
 class BatchedCache {
 public:
     using Stats=Cache::Stats;using Population=Cache::Population;using ClearStats=Cache::ClearStats;
@@ -196,6 +195,15 @@ public:
     const ClearStats& clearStats()const{return clearStats_;}
     BatchStats batchStats()const{BatchStats s=batchStats_;s.batches=batches_.size();for(const auto& b:batches_)s.batchBytes+=b->capacity;s.separateBytes=bytes_-s.batchBytes;s.liveBytes=live_;return s;}
     Population population()const{Population p;p.entries=entries.size();for(const auto& item:entries)p.resident+=item.second->bytes!=0;p.probation=p.entries-p.resident;return p;}
+    bool borrow(const std::shared_ptr<const NorthlightDrawSnapshot::Mesh>& mesh,IDirect3DVertexBuffer9* (&vb)[4],IDirect3DIndexBuffer9*& ib,Placement& at){
+        at={};if(!mesh)return false;auto it=entries.find(mesh.get());
+        if(it==entries.end()||it->second->owner.lock()!=mesh||!it->second->bytes)return false;
+        Entry& e=*it->second;touch(e);++hits_;reused_+=e.bytes;
+        IDirect3DVertexBuffer9* streams[4]={e.batch?e.batch->vertices:e.vertices[0],e.vertices[1],e.vertices[2],e.vertices[3]};
+        for(unsigned s=0;s<4;++s)if(vb[s]!=streams[s]){if(vb[s])vb[s]->Release();vb[s]=streams[s];if(vb[s])vb[s]->AddRef();}
+        IDirect3DIndexBuffer9* index=e.batch?(mesh->indices.empty()?nullptr:e.batch->indices):e.indices;
+        if(ib!=index){if(ib)ib->Release();ib=index;if(ib)ib->AddRef();}at=e.at;return true;
+    }
     // Cache::bind's policy (warm-up, 16 attempts, 4 MiB, time budget, admission, LRU room) verbatim;
     // a batched admission is a reservation committed at the next beginFrame. at: BaseVertexIndex/StartIndex.
     template<class Admission> bool bind(IDirect3DDevice9* device,

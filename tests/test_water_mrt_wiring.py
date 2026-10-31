@@ -19,7 +19,7 @@ for name in ('water_effects.hlsl','water-shader-build.json','water_compiled_shad
     checks[f'removed: {name}']=not any(p.name==name for d in (fp.SHADERS,fp.GENERATED) for p in d.iterdir())
 checks['removed: compile_water_shaders.py']=not (fp.REPO/'scripts/shaders/compile_water_shaders.py').exists()
 every=''.join(p.read_text(errors='replace') for d in fp.SRC_DIRS for p in d.iterdir() if p.suffix in ('.h','.inl','.cpp'))
-checks['removed: no appearance symbol left in src']=not re.search(r'kWaterEffectsEnabled|NorthlightWaterContext|waterContext|kWaterReflectionShader|kWaterCompositeShader|reflectionPS|water_compiled_shaders|Bucket::Water',every)
+checks['removed: no legacy appearance symbol left in src']=not re.search(r'kWaterEffectsEnabled|NorthlightWaterContext|waterContext|kWaterReflectionShader|kWaterCompositeShader|water_compiled_shaders|Bucket::Water',every) and 'reflectionPS' not in w and 'captureMaterial(' not in w
 checks['removed: the renderer has no render() or appearance targets']=all(s not in w for s in ('bool render(','reflectionSurface','colorSurface','compositePS'))
 checks['removed: build_renderer.py and the shader compilers do not know the water manifest']='water-shader-build' not in (fp.REPO/'scripts/build_renderer.py').read_text() and 'compile_water_shaders' not in ''.join(p.read_text() for p in (fp.REPO/'scripts/shaders').glob('*.py'))
 
@@ -85,7 +85,7 @@ checks['resolveMask: unbinds, resolves the twin once, clears the mask unless a s
     and resolve.count('quad()')==1 and resolve.count('StretchRect(')==1)
 checks['maskTextureForDepth: the min/max Z contract kept; MRT data only after the decode']=('std::fabs(minZ-maskMinZ)<.0001f&&std::fabs(maxZ-maskMaxZ)<.0001f' in w and '(captured||mrtResolved)&&!mrtDirty' in w)
 checks['endFrame / reset: the MRT flags go with the frame and the resources']=('captured=mrtCaptured=mrtResolved=mrtDirty=mrtCleared=false;' in w and 'drop(rawSurface);drop(raw);drop(twin);' in w)
-checks['WATER line: draws = mrt + redraw, with the three counters, the binds and the longest run']=('mrt=%u redraw=%u degraded=%u binds=%u longestRun=%u",waterDraws,0u,waterClears,waterScans,waterReadFailures,waterMrt,waterRedraws,waterDegraded,waterBinds,waterLongestRun' in r and 'waterDraws=waterRedraws+waterMrt' in r)
+checks['WATER line: draws = mrt + redraw, with the three counters, the binds and the longest run']=('mrt=%u redraw=%u degraded=%u binds=%u longestRun=%u afterEffects=%u",waterDraws,0u,waterClears,waterScans,waterReadFailures,waterMrt,waterRedraws,waterDegraded,waterBinds,waterLongestRun,waterLate' in r and 'waterDraws=waterRedraws+waterMrt' in r)
 
 # ---- the other unbind sites (the rain mask's list) still unbind ----
 for site in ('HRESULT STDMETHODCALLTYPE Clear(','HRESULT STDMETHODCALLTYPE StretchRect(','HRESULT STDMETHODCALLTYPE ColorFill(','HRESULT STDMETHODCALLTYPE UpdateSurface(','HRESULT STDMETHODCALLTYPE GetRenderTargetData(','HRESULT STDMETHODCALLTYPE EndScene('):

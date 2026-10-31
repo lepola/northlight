@@ -23,9 +23,10 @@ static std::vector<std::string> logs;
 static void logf(const char* f,...){char b[2000];va_list a;va_start(a,f);vsnprintf(b,sizeof b,f,a);va_end(a);logs.emplace_back(b);}
 #include "gpu_budget.h"
 #include "gpu_frame_timer.h"
+static uint64_t blockedStamp=0;
 HRESULT IDirect3DDevice9::CreateQuery(D3DQUERYTYPE t,IDirect3DQuery9** out){++creates;if(failCreate){*out=nullptr;return E_FAIL;}*out=new IDirect3DQuery9{this,t};++live;return S_OK;}
 HRESULT IDirect3DQuery9::Issue(DWORD flags){++d->issues;if(d->failIssue)return E_FAIL;assert(flags==D3DISSUE_BEGIN||flags==D3DISSUE_END);if(type!=D3DQUERYTYPE_TIMESTAMPDISJOINT)assert(flags==D3DISSUE_END);ended=flags==D3DISSUE_END;if(type==D3DQUERYTYPE_TIMESTAMP){d->time+=1000;stamp=d->time;}return S_OK;}
-HRESULT IDirect3DQuery9::GetData(void* out,DWORD size,DWORD flags){assert(flags==0);++d->reads;if(d->failRead)return E_FAIL;if(!ended||!d->ready)return S_FALSE;
+HRESULT IDirect3DQuery9::GetData(void* out,DWORD size,DWORD flags){assert(flags==0);++d->reads;if(d->failRead)return E_FAIL;if(!ended||!d->ready||(blockedStamp&&type==D3DQUERYTYPE_TIMESTAMP&&stamp==blockedStamp))return S_FALSE;
     if(type==D3DQUERYTYPE_TIMESTAMPDISJOINT){assert(size==4);BOOL result=d->disjoint;std::memcpy(out,&result,4);}else{assert(size==8);uint64_t result=type==D3DQUERYTYPE_TIMESTAMPFREQ?d->frequency:stamp;std::memcpy(out,&result,8);}return S_OK;}
 unsigned IDirect3DQuery9::Release(){--d->live;delete this;return 0;}
 namespace B=NorthlightGpuBudget;
@@ -38,7 +39,8 @@ int main(){
     {   // level map: level 0 is exactly the full image
         assert(B::cloudSteps(0)==40&&B::cloudSteps(1)==32&&B::cloudSteps(2)==24&&B::cloudSteps(3)==24);
         assert(B::fogSteps(0)==48&&B::fogSteps(2)==48&&B::fogSteps(3)==40);
-        for(unsigned limit=8;limit<=64;++limit){assert(B::lightLimit(limit,0)==limit&&B::lightLimit(limit,2)==limit&&B::lightLimit(limit,3)==limit);}
+        for(unsigned limit=8;limit<=128;++limit){assert(B::lightLimit(limit,0)==limit&&B::lightLimit(limit,2)==limit&&B::lightLimit(limit,3)==limit);}
+        for(unsigned level=0;level<=3;++level)for(unsigned reserved:{4u,8u,16u,32u,64u,128u})assert(B::lightLimit(32,level,reserved)>=reserved);
         assert(B::spacingDelta(128,40,40)==0.f&&B::spacingDelta(128,48,48)==0.f&&B::spacingDelta(128,0,40)==0.f);
         for(unsigned n:{24u,32u,40u}){const float spacing=std::fma(128.f,1.f/40,B::spacingDelta(128,n,40));assert(std::fabs(spacing-128.f/float(n))<1e-4f);}
         {const float spacing=std::fma(128.f,1.f/48,B::spacingDelta(128,40,48));assert(std::fabs(spacing-3.2f)<1e-4f);}
@@ -150,6 +152,15 @@ int main(){
         // end without begin, begin twice: balanced, no stray pending slot
         t.end();assert(t.begin());assert(t.begin());t.end();assert(t.poll(ms)&&ms==1.0);
         t.reset();assert(d.live==0);
+        // Completed query components are immutable until re-issued. A delayed
+        // final timestamp must not re-read disjoint/frequency/start each frame.
+        assert(t.begin());t.end();blockedStamp=d.time;before=d.reads;
+        assert(!t.poll(ms)&&d.reads-before==4);before=d.reads;
+        assert(!t.poll(ms)&&d.reads-before==1);before=d.reads;
+        blockedStamp=0;assert(t.poll(ms)&&d.reads-before==1&&ms==1.0);
+        assert(t.begin());t.end();blockedStamp=d.time;assert(!t.poll(ms));
+        t.reset();blockedStamp=0;assert(t.begin());t.end();before=d.reads;
+        assert(t.poll(ms)&&d.reads-before==4&&ms==1.0);t.reset();
         // failures: creation, issue, read each disable the timer (logged once) and release everything
         d.failCreate=true;logs.clear();assert(!t.begin()&&t.disabled()&&d.live==0&&logs.size()==1&&logs[0].find("GPUBUDGET timer disabled: query creation")==0);
         const unsigned count=d.creates;assert(!t.begin()&&d.creates==count&&logs.size()==1);d.failCreate=false;
