@@ -2550,6 +2550,7 @@ public:
     bool nameMask()const{return quality.nameMask!=0;} bool nameMaskDebug()const{return quality.nameMaskDebug!=0;} /* 0.3.212 (task 32): read once at device creation */
     bool contactAO()const{return quality.contactAO!=0;}
     unsigned aoMethod()const{return quality.aoMethod;}
+    unsigned aoQuality()const{return quality.aoQuality;}
     float aoStrength()const{return .6f*float(quality.aoStrength)/100.f;}
     float aoRadius()const{return float(quality.aoRadius)/100.f;}
     bool equipmentLightsOn()const{return quality.equipmentLights!=0;}

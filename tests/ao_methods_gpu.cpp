@@ -26,7 +26,9 @@ static void settingsCheck(){
     assert(preset(Preset::Quality).aoMethod==0&&preset(Preset::Balanced).aoMethod==0&&preset(Preset::Performance).aoMethod==0);
 }
 int main(int argc,char** argv){
-    assert(argc==4);settingsCheck();
+    assert(argc==4||argc==5);settingsCheck();
+    const std::string quality=argc==5?argv[4]:"";
+    assert(quality.empty()||quality=="Medium"||quality=="Low");
     constexpr unsigned W=256,H=192,AW=W/2,AH=H/2;
     const char* names[]={"AO","HDAO","HBAOPlus","GTAO"};
     WNDCLASSW wc{};wc.lpfnWndProc=DefWindowProcW;wc.lpszClassName=L"NorthlightAOMethods";wc.hInstance=GetModuleHandleW(nullptr);assert(RegisterClassW(&wc));
@@ -38,7 +40,7 @@ int main(int argc,char** argv){
     IDirect3DDevice9* d=nullptr;ok(api->CreateDevice(0,D3DDEVTYPE_HAL,window,D3DCREATE_HARDWARE_VERTEXPROCESSING|D3DCREATE_FPU_PRESERVE,&pp,&d));
     IDirect3DPixelShader9* shaders[4][2]{};
     for(unsigned m=0;m<4;++m)for(unsigned variant=0;variant<2;++variant){
-        std::string path=std::string(argv[1])+"/"+(variant?std::string(names[m])+"ContactBloom":"AO")+".bin";
+        std::string path=std::string(argv[1])+"/"+(variant?std::string(names[m])+"ContactBloom"+(m?quality:""):"AO")+".bin";
         auto code=read(path);ok(d->CreatePixelShader(reinterpret_cast<const DWORD*>(code.data()),&shaders[m][variant]));
     }
     IDirect3DSurface9 *target=nullptr,*staging=nullptr;

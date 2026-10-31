@@ -1,0 +1,5 @@
+# AO loop coordinates follow-up (2026-10-31)
+
+Three changes cover High/Medium/Low together: nested HDAO ring/sector coordinates, nested HBAO direction/radial coordinates, and an HBAO zero-displacement shading gate after the existing depth read. Every useful tap, order, weight, radius, strength and bloom value is preserved. Optional AOQuality is published in the preceding self-contained commit; High remains default and Medium/Low remain explicit quality tradeoffs.
+
+Compare the six optimized kernels against the quality-selection commit 4482f5a, which contains the original loops for all three quality levels. Native D3D9 and DXVK 3 each pass 3,456 exact FP16/FP32 cases over odd/even targets and MSAA 0/2/4/8. Wrong-output controls are rejected. The original 99 AO checks for each Medium/Low variant and 48 grazing checks for each High/Medium/Low GTAO also pass per backend. Parser, live settings, default identity and native enum checks pass; this branch retains its own GTAO and blur code. Its own x86 DLL builds. No game or new duration/FPS benchmark is used.

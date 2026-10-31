@@ -96,7 +96,7 @@ struct Settings {
     // Creation-time key (the renderer reads it once with the device).
     unsigned contactAO=1;
     // NightBrightness (0..100): how much of the art layer's darker night ambient is given back, as added light; 0 = Northlight's night, 100 = the original game's night ambient (shadows stay); default 50. Ramped by the sun below the horizon.
-    unsigned aoMethod=0,aoStrength=100,aoRadius=200; // Live AO method, percent, hundredths of a yard.
+    unsigned aoMethod=0,aoQuality=0,aoStrength=100,aoRadius=200; // Live AO method, percent, hundredths of a yard.
     unsigned nightBrightness=50;
     // 0.3.209 (task 29) ActorShadowDetail: 1 = a dedicated 4x finer shadow map around the player holds the moving casters (characters, mounts) and a
     // contact-hardening soft filter pass reads it (sharp at the feet, softer further from the caster); 0 = the 0.3.207 shadows (near cascade, 5x5 tent). ActorShadows=0 disables it too.
@@ -126,7 +126,7 @@ struct Settings {
     // WeatherMemory: 1 = the game's own weather state (kind incl. sand, intensity), read from memory, drives the weather effects on frames where the world drew a sky-band draw (the client skips weather
     // while the viewer is inside a building); 0 = the texture/draw detector only, as before.
     unsigned weatherMemory=1;
-    char origin[61]={'d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d'};
+    char origin[62]={'d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d'};
 };
 struct Key { const char* name; unsigned Settings::*field; unsigned low,high; unsigned preset[3]; };
 // preset[] = Quality, Balanced, Performance. Quality must equal Settings{}.
@@ -192,6 +192,7 @@ inline const Key Keys[]={
     {"AOMethod",&Settings::aoMethod,0,3,{0,0,0}},
     {"AOStrength",&Settings::aoStrength,0,200,{100,100,100}},
     {"AORadius",&Settings::aoRadius,10,1000,{200,200,200}},
+    {"AOQuality",&Settings::aoQuality,0,2,{0,0,0}}, // Explicit opt-in; presets retain High.
 };
 inline bool operator==(const Settings& a,const Settings& b){for(const auto& k:Keys)if(a.*k.field!=b.*k.field)return false;return true;}
 inline bool operator!=(const Settings& a,const Settings& b){return !(a==b);}
@@ -254,6 +255,12 @@ inline bool aoNumber(const std::string& text,unsigned& out){
     else if(value=="hbaoplus"||value=="hbao+")out=2;else if(value=="gtao")out=3;
     else return number(text,out);return true;
 }
+inline const char* aoQualityName(unsigned quality){const char* names[]={"High","Medium","Low"};return names[quality<3?quality:0];}
+inline bool aoQualityNumber(const std::string& text,unsigned& out){
+    const auto value=lower(text);
+    if(value=="high")out=0;else if(value=="medium")out=1;else if(value=="low")out=2;
+    else return number(text,out);return true;
+}
 // Explicit key values of one INI section, in file order. Unrecognised
 // sections are skipped; comments start with ';' or '#', also after a value.
 struct Entry { std::string key,value;unsigned line=0; };
@@ -284,7 +291,7 @@ inline void apply(const std::vector<Entry>& entries,Settings& s,const char* sour
         if(retired){problems.push_back(where+retired->name+" retired in "+retired->version+" (ignored)");continue;}
         if(!match){problems.push_back(where+"unknown key "+e.key+" ignored");continue;}
         unsigned v=0;
-        if(!(match->field==&Settings::aoMethod?aoNumber(e.value,v):number(e.value,v))||v<match->low||v>match->high){
+        if(!(match->field==&Settings::aoMethod?aoNumber(e.value,v):match->field==&Settings::aoQuality?aoQualityNumber(e.value,v):number(e.value,v))||v<match->low||v>match->high){
             problems.push_back(where+e.key+"="+e.value+" invalid (allowed "+std::to_string(match->low)+".."+std::to_string(match->high)+"); kept "+std::to_string(s.*match->field));continue;}
         s.*match->field=v;s.origin[index]=origin;
     }

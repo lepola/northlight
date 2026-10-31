@@ -433,9 +433,14 @@ def audit_source():
     assert 'exp2(-abs(dot(q - p, n)) * planeScale)' in blur
     # unoccluded early-out: 9 bilinear AO-only reads (s0) and a dynamic branch before any depth read
     early = blur.index('[branch] if (minAO >= 0.9995) return raw;')
-    assert re.search(r'for \(int k = 0; k < 9; \+\+k\)', blur[:early]) and 'ReadDepth' not in blur[:early], 'early-out first'
-    assert 'minAO = min(minAO, tex2Dlod(AmbientLinear, float4(uv + min(float2(k - krow * 3.0, krow) * 2.0 - 1.5, 2.0) * tapStep, 0, 0)).a);' in blur[:early]
-    assert 'float krow = floor((k + 0.5) * (1.0 / 3.0));' in blur[:early]
+    assert 'ReadDepth' not in blur[:early], 'early-out first'
+    assert '[unroll] for (int y = 0; y < 3; ++y)' in blur[:early]
+    assert '[unroll] for (int x = 0; x < 3; ++x)' in blur[:early]
+    assert 'float2 footprint = min(float2(x, y) * 2.0 - 1.5, 2.0);' in blur[:early]
+    assert 'minAO = min(minAO, tex2Dlod(AmbientLinear, float4(uv + footprint * tapStep, 0, 0)).a);' in blur[:early]
+    proof = (fp.COMPILED / 'AOBlur.bin.asm').read_text().split('if_ge', 1)[0]
+    assert len(re.findall(r'\btexldl[^\n]*\bs0\b', proof)) == 9
+    assert not re.search(r'\b(rep|loop|frc)\b', proof), 'Fixed proof coordinates were not folded'
     assert 'sampler2D AmbientLinear : register(s0);' in text and 'Scene' not in blur, 'AOBlur reads the raw AO on s0, never Scene'
     # the footprints (min(2s - 1.5, 2) for s = 0, 1, 2) cover exactly the 25 taps' texels, each once
     spots = [min(2*s_-1.5, 2.) for s_ in range(3)]

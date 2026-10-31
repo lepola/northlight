@@ -11,6 +11,7 @@ test_ao_blur.py
 test_ao_fog_capture.py
 test_ao_fold.py
 test_ao_methods.py
+test_ao_quality.py
 test_ao_rotation_stripes.py
 test_ao_texel_snap.py
 test_art_layer.py

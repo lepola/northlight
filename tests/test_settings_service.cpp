@@ -27,6 +27,9 @@ int main(int argc,char** argv){
     assert(q==std::size(NorthlightQuality::Keys)+1&&c>=22*28);fails([&]{applyChanges(docs,fields,"Q\tQuality\tWeather\t2\n");});fails([&]{applyChanges(docs,fields,"Q\tQuality\t../path\t1\n");});
     auto changed=applyChanges(docs,fields,"Q\tQuality\tWeather\t~\n");assert(explicitValue(changed[0],"Quality","Weather")=="~");assert(qualityOf(changed[0],"").weather==1);
     auto next=active.quality;next.weather=1;next.commandStream=0;auto applied=liveQualityUpdate(active.quality,next);assert(applied.weather==1&&applied.commandStream==active.quality.commandStream);
+    {auto qualityDocs=applyChanges(docs,fields,"Q\tQuality\tAOQuality\tMedium\n");
+     auto quality=qualityOf(qualityDocs[0],"");assert(quality.aoQuality==1&&liveQualityUpdate(active.quality,quality).aoQuality==1);
+     bool found=false;for(const auto& f:fields)if(f.key=="AOQuality"){found=true;assert(f.apply=="F"&&f.kind=="enum"&&f.options=="High,Medium,Low"&&f.factory=="High");}assert(found);}
     unsigned live=0;for(const auto& k:NorthlightQuality::Keys)live+=liveQuality(k.name);assert(live>40&&live<std::size(NorthlightQuality::Keys));
     for(const auto& f:fields)if(f.file==2&&f.section=="default"&&f.key=="sun_fog_gain")assert(f.inherited=="1"&&std::stof(f.factory)==4.3f);
     // HDR keys have no consumer in this build: listed (files stay preserved, UI shows them disabled) but never writable.
