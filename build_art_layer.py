@@ -31,7 +31,9 @@ their Light rows and apply their bands without the HD sky (the step records sky_
 a stock client gets the relighting plus those two zones' bands. Files the chain already resolves to
 the same bytes are left out. The archive is written twice, as
 DIR/<Data>/patch-<letter>.mpq and DIR/<Data>/<locale>/patch-<locale>-<letter>.mpq (the locale
-patches override the base patches' DBCs), with DIR/art-layer-manifest.json. DIR is a staging
+patches override the base patches' DBCs), with DIR/art-layer-manifest.json. Each MPQ carries
+northlight/art-layer.json with hashes of its complete payload, so updates can identify it without backups.
+DIR is a staging
 folder: nothing is written into the client.
 """
 import argparse
@@ -46,7 +48,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))   # the repo root, also
 import northlight_paths as fp  # noqa: E402
 fp.use_source_modules()
 import client_archives  # noqa: E402
-from mpq import Archive  # noqa: E402
+from mpq import Archive, ReadError  # noqa: E402
 import native_model_lights  # noqa: E402
 from world_scene_builder import Assets, decode_blp  # noqa: E402
 import build_lighting  # noqa: E402
@@ -59,6 +61,47 @@ from build_lighting import DBC, Skip  # noqa: E402
 
 DBC_NAME = 'DBFilesClient\\{}.dbc'
 SKYBOX = DBC_NAME.format('LightSkybox')
+OWNER_FILE = 'northlight\\art-layer.json'
+OWNER_FORMAT = 'northlight-art-layer/1'
+
+
+def owned_payload(payload):
+    """Portable ownership proof covering every generated file, independent of install history."""
+    manifest = {'format': OWNER_FORMAT, 'files': {n: hashlib.sha256(d).hexdigest() for n, d in payload.items()}}
+    return {**payload, OWNER_FILE: json.dumps(manifest, sort_keys=True, separators=(',', ':')).encode('utf-8')}
+
+
+def owns_archive(path):
+    """Accept our marker only while the archive's complete payload still matches it."""
+    try:
+        with Archive(path) as archive:
+            if not archive.has(OWNER_FILE):
+                return False
+            manifest = json.loads(archive.read(OWNER_FILE))
+            files = manifest.get('files')
+            if manifest.get('format') != OWNER_FORMAT or not isinstance(files, dict):
+                return False
+            names = {n.lower() for n in archive.names() if not n.startswith('(')}
+            if names != {OWNER_FILE, *(n.lower() for n in files)}:
+                return False
+            return all(hashlib.sha256(archive.read(n)).hexdigest() == digest for n, digest in files.items())
+    except (OSError, ValueError, AttributeError, TypeError, fp.Missing):
+        return False
+
+
+def unchanged_files(payload, assets):
+    """Omit a replacement only after successfully proving identical source bytes."""
+    unchanged = []
+    for name, data in payload.items():
+        if name.lower() not in assets.providers:
+            continue
+        try:
+            original = assets.read(name)
+        except (FileNotFoundError, ReadError):
+            continue  # The generated replacement is still valid and must be kept.
+        if original == data:
+            unchanged.append(name)
+    return sorted(unchanged)
 
 
 def write_archive(path, payload):
@@ -142,8 +185,9 @@ def build(client, output, world_cache, locale=None, letter='z', archives='all'):
         report['steps'].append({'step': 'weather_textures', 'files': sorted(textures)})
         report['steps'].append({'step': 'world_model_lights', 'skipped': 'Rendered from world-cache/lights'})
         last = None   # the payload is no longer a step's archive
-        unchanged = sorted(n for n, data in payload.items() if n.lower() in assets.providers and assets.read(n) == data)
+        unchanged = unchanged_files(payload, assets)
         payload = {n: data for n, data in payload.items() if n not in unchanged}
+        payload = owned_payload(payload)
         data = client_archives.data_dir(client).name
         local = client_archives.locale_dir(client, locale).name
         targets = [f'{data}/patch-{letter}.mpq', f'{data}/{local}/patch-{local.lower()}-{letter}.mpq']

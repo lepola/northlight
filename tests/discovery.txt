@@ -14,6 +14,8 @@ test_ao_methods.py
 test_ao_rotation_stripes.py
 test_ao_texel_snap.py
 test_art_layer.py
+test_art_layer_dedup.py
+test_art_layer_ownership.py
 test_async_memory_diagnostics.py
 test_backend_proxy.py
 test_band_retime.py
@@ -123,6 +125,7 @@ test_night_floor.py
 test_night_floor_wiring.py
 test_northlight_install.py
 test_outdoor_light_profiles.py
+test_output_scan_safety.py
 test_particle_light_capture.py
 test_particle_light_proof.py
 test_particle_light_proof_client.py
@@ -207,6 +210,7 @@ test_terrain_shadow_coverage.py
 test_terrain_shared_snapshot.py
 test_terrain_snapshot.py
 test_terrain_tracked_cache.py
+test_tool_imports.py
 test_tracked_buffers.py
 test_tracked_snapshot.py
 test_translucent_actor_depth.py

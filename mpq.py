@@ -9,15 +9,23 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
 from northlight_paths import stormlib  # noqa: E402  (sibling module)
-lib = C.CDLL(str(stormlib()))
+lib = None
 H, U = C.c_void_p, C.c_uint32
 WIDE = os.name == 'nt'
 FS = C.c_wchar_p if WIDE else C.c_char_p   # TCHAR* file system path
 
 def bind(name, args, result=C.c_bool):
-    fn = getattr(lib, name)
-    fn.argtypes, fn.restype = args, result
-    return fn
+    fn = None
+    def call(*values):
+        nonlocal fn
+        global lib
+        if fn is None:
+            if lib is None:
+                lib = C.CDLL(str(stormlib()))
+            fn = getattr(lib, name)
+            fn.argtypes, fn.restype = args, result
+        return fn(*values)
+    return call
 
 open_archive = bind('SFileOpenArchive', [FS, U, U, C.POINTER(H)])
 close_archive = bind('SFileCloseArchive', [H])

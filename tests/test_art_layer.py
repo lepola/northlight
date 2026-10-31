@@ -36,12 +36,13 @@ _mist_assets = Assets(client, 'stock', client_archives.detect_locale(client, Non
 blps.update(build_weather_textures.mist_textures(_mist_assets.read, decode_blp))   # 0.3.199 (rain mist): the client's puffs at 1:4
 _mist_assets.close()
 assert set(build_weather_textures.MIST) <= set(blps), 'the client has both mist puffs'
-files = tables | set(blps)
+files = tables | set(blps) | {build_art_layer.OWNER_FILE}
 report = {}
 
 stock = out / 'stock'
 shutil.rmtree(stock, ignore_errors=True)
 r = build_art_layer.build(client, stock, cache, archives='stock')
+assert all(build_art_layer.owns_archive(stock / target) for target in r['targets'])
 model_steps = {'world_model_lights', 'equipment_model_lights', 'spell_model_lights', 'mount_model_lights'}
 skipped = {s['step']: s['skipped'] for s in r['steps'] if 'skipped' in s and s['step'] not in model_steps}
 assert set(skipped) == {'orgrimmar', 'outdoor_sun', 'outdoor_moon'}, r['steps']

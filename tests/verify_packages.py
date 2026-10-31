@@ -115,7 +115,7 @@ def verify_installer(path):
     check(problems, sha(dll) == info['dll_sha256'] and bp.MARKER.search(dll) is not None, 'payload/d3d9.dll')
     for p, e in payload.items():
         check(problems, sha(files.get('payload/' + p, b'')) == e['sha256'], f'payload/{p} does not match its manifest')
-    check(problems, [p for p, e in payload.items() if e.get('preserve')] == ['northlight-quality.ini'], 'preserve flags')
+    check(problems, {p for p, e in payload.items() if e.get('preserve')} == {'northlight-quality.ini', 'celestial-profiles.ini', 'shadow-range-profiles.ini'}, 'preserve flags')
     d3d9 = [r for r in files if r.lower().endswith('/d3d9.dll') and not r.startswith('runtime/')]
     check(problems, d3d9 == ['payload/d3d9.dll'], f'd3d9.dll copies: {d3d9}')
     # pins
