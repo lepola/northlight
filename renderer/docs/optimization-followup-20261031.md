@@ -1,0 +1,5 @@
+# Cloud preparation follow-up (2026-10-31)
+
+Seven preparation changes preserve the authored cloud field: integer quantile ranks; SSE2 L8 normalization; initialization of only Worley padding; SSE2 four-cube interleave; integer generator-axis decomposition; one shared exponential smoothing weight for the density pair; and iteration of only occupied water-mask bits in original order. No shader quality, field resolution, density, geometry admission or process reserve changes.
+
+The independent branch passes the frozen-reference cloud preparation wrapper, density-pair test and SIMD preparation checks at optimized and sanitizer settings. Whole-volume checks cover 16 volumes / 4,194,304 exact bytes; four-cube checks cover 3,145,728 lanes; 18,004 bounds and 360,000 density pairs cover four rounding modes. Water masks match 10,000 reference cases. Its own Windows x86 DLL builds. Tests use frozen source supplied here, not a private integration commit. No new game run or duration/FPS benchmark is used.

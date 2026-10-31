@@ -122,9 +122,10 @@ constexpr float kClearNear=20,kClearFade=15;
 inline float clearFade(float z){const float u=std::min(1.f,std::max(0.f,(z-kClearNear)/kClearFade));return u*u*(3-2*u);}
 inline float foldedTransmittance(const Frame& f,float z){return 1-(1-f.transmittance(z))*clearFade(z);}
 // Positive powers of a base >= 1 are clamped to 1 by every fit sample.
-// Keep pow for all other inputs, including invalid exponents and signed zero.
+// Unit power preserves the clamped base, including signed zero; other inputs keep pow.
 inline float clampedPower(float base,float power){
     const float w=std::max(base,0.f);
+    if(power==1.f)return std::min(1.f,w);
     return w>=1.f&&power>0?1.f:std::min(1.f,std::pow(w,power));
 }
 // The game's visibility at view distance z for its fog constant (x, y, power).
@@ -181,7 +182,7 @@ inline bool emitFog(const Frame& f,const float game[3],float out[3],bool bareBas
         for(unsigned pi=0;pi<np&&ns<62;++pi){
             const float p=std::min(powers[pi],flat?kFlatMaxPower:1e30f);if(!(p>.05f))continue;
             float roots[M];
-            for(unsigned i=0;i<N;++i)roots[i]=std::pow(std::max(h[i],0.f),1.f/p);
+            for(unsigned i=0;i<N;++i)roots[i]=h[i]==1.f?1.f:std::pow(std::max(h[i],0.f),1.f/p);
             for(int start=0;start<2;++start){
                 float sz=0,sy=0,szz=0,szy=0,sn=0;
                 for(unsigned i=0;i<N;++i){if(start&&z[i]<kClearNear+kClearFade)continue;const float y=roots[i];sz+=z[i];sy+=y;szz+=z[i]*z[i];szy+=z[i]*y;sn+=1;}
@@ -203,22 +204,24 @@ inline bool emitFog(const Frame& f,const float game[3],float out[3],bool bareBas
             unsigned m=r;for(unsigned i=r+1;i<ns;++i)if(starts[i].e<starts[m].e)m=i;
             std::swap(starts[r],starts[m]);
             float a=starts[r].a,b=starts[r].b;const float p=starts[r].p;
-            float e=starts[r].e,lambda=1e-3f;
+            // Reuse accepted visibility values at the next refinement step.
+            float e=starts[r].e,lambda=1e-3f;float cached[M]={},candidateValues[M];bool cachedValid=false;
             for(int it=0;it<10;++it){
                 float jaa=0,jab=0,jbb=0,ga=0,gb=0;
                 for(unsigned i=0;i<N;++i){
                     const float w=a*z[i]+b;if(!(w>0)||w>=1)continue;
-                    const float v=std::pow(w,p);if(v>=1)continue;
+                    const float v=cachedValid?cached[i]:std::pow(w,p);cached[i]=v;if(v>=1)continue;
                     const float d=p*v/w,r2=v-h[i],k=wt[i];
                     jaa+=k*d*z[i]*d*z[i];jab+=k*d*z[i]*d;jbb+=k*d*d;ga+=k*d*z[i]*r2;gb+=k*d*r2;
                 }
+                cachedValid=true;
                 const float m00=jaa*(1+lambda)+1e-12f,m11=jbb*(1+lambda)+1e-12f,det=m00*m11-jab*jab;
                 if(!(std::fabs(det)>1e-18f))break;
                 const float da=-(m11*ga-jab*gb)/det,db=-(m00*gb-jab*ga)/det;
                 const float na=a+da,nb=b+db;
                 if(!(na<-1e-7f)||!(nb>0)){lambda*=10;continue;}
-                const float ne=error(na,nb,p);
-                if(ne<e){a=na;b=nb;e=ne;lambda=std::max(lambda*.3f,1e-6f);}else lambda*=10;
+                float ne=0;for(unsigned i=0;i<N;++i){const float v=clampedPower(na*z[i]+nb,p),d=v-h[i];candidateValues[i]=v;ne+=wt[i]*d*d;}
+                if(ne<e){a=na;b=nb;e=ne;for(unsigned i=0;i<N;++i)cached[i]=candidateValues[i];lambda=std::max(lambda*.3f,1e-6f);}else lambda*=10;
             }
             search.refined[search.count++]=Start{a,b,p,e};
         }
@@ -227,9 +230,9 @@ inline bool emitFog(const Frame& f,const float game[3],float out[3],bool bareBas
     for(unsigned r=0;r<search.count;++r){
         const auto& candidate=search.refined[r];
         const float a=candidate.a,b=candidate.b,p=candidate.p,e=candidate.e;
-        if(!(a<-1e-7f)||!(b>0))continue;                                    // nonincreasing and visible at the eye
+        if(!(a<-1e-7f)||!(b>0)||!(e<best))continue;                         // nonincreasing, visible and capable of improving the fit
         if(bareBase&&(-b/a<end*.98f||!bareGood(a,b,p)))continue;           // a shader that takes the pow of the bare ramp (no max): the ramp must not reach 0 before the game's own, a negative base is not 0 there and the fog would come back
-        if(e<best){best=e;bestFit[0]=a;bestFit[1]=b;bestFit[2]=p;found=true;}
+        best=e;bestFit[0]=a;bestFit[1]=b;bestFit[2]=p;found=true;
     }
     if(!found&&bareBase){ // no free fit reaches 0 late enough (thick fog and a far game end): pin the end at the game's and fit the slope and the power only
         const float E=end*.98f;

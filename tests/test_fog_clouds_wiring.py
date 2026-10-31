@@ -87,7 +87,7 @@ checks['cpp: sigmaAt adds the cloud term only for a candidate pass, to the base 
     and w.index('cf.active=cf.active&&effects.fog&&debug==0&&fogCloudsPS&&ensureCloudNoise();')<w.index('skyTransmittanceFrame=cf.active?atmosphere.veil[1]'))
 # 0.3.199 (fog clouds): lush zones - the camera texel's CPU-only lush flag, smoothed; the field's lush comes from lushZone (forests, grass, Duskwood, STV, Mulgore, Stormwind), outdoors only
 rf=fp.src('regional_fog.h').read_text()
-checks['cpp: lush at the camera texel, smoothed, unchanged indoors']='lushTarget=cloudLush;' in w and 'if(t.height>0)lushTarget=f.lush[k]?1.f:0.f;' in w and 'cloudLush=NorthlightFogClouds::smoothDense(cloudLush,lushTarget,cloudDt);' in w
+checks['cpp: lush at the camera texel, smoothed, unchanged indoors']='lushTarget=cloudLush;' in w and 'if(t.height>0)lushTarget=f.lush[k]?1.f:0.f;' in w and 'NorthlightFogClouds::smoothDensePair(cloudDenseZone,denseTarget,cloudLush,lushTarget,cloudDt);' in w
 checks['regional fog: lush flag per texel, not in the GPU texel']='out.lush[i]=!indoors&&lushZone(zone);' in rf and 'inline bool lushZone(uint32_t zone){return zone==10||zone==33||zone==215||zone==1519||forestZone(zone)||grassZone(zone);}' in rf and 'static_assert(sizeof(Texel)==16' in rf
 checks['cpp: measurement line only on profile-sampled frames']='if(profileSampled())logf("WORLD fog clouds active=%d coverage=%.3f threshold=%.3f height=%.1f speed=%.2f dir=(%.2f %.2f) sigmaMax=%.4f lush=%.2f noiseReady=%d"' in w
 

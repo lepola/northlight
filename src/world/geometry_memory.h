@@ -11,7 +11,7 @@
 // The owner queries process address space immediately before each costly stage.
 namespace NorthlightGeometryMemory {
 constexpr uint64_t MiB=1024ull*1024ull;
-constexpr uint64_t ProcessReserve=512*MiB;
+constexpr uint64_t ProcessReserve=256*MiB;
 // Contiguous headroom above the largest single allocation of a stage. A 32-bit
 // process whose largest free region shrank to ~20 MiB still reported 2.5 GiB
 // free before one silent exit; every large allocation now needs this margin.

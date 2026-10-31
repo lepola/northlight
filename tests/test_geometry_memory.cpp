@@ -6,69 +6,70 @@
 #include <vector>
 using namespace NorthlightGeometryMemory;
 int main(){
+    static_assert(ProcessReserve==256*MiB&&EntryHeadroom==256*MiB);
     auto build=buildBudget();
-    // Player log: a discarded terrain attempt lifted entry from 771 by the
-    // 640-618 shortfall to 793 MiB; the next region had zero live generations.
-    // Discarding the old estimate must admit a new 772 MiB entry, while keeping
-    // the ordinary 768 MiB aggregate and 96 MiB contiguous guards unchanged.
+    // Replay the original measured-shortfall scenario at the proposed reserve:
+    // 515 entry + (384-362) shortfall = 537 MiB. Discarding that estimate
+    // admits 516 MiB in a different region, while 492 MiB or a 95 MiB block
+    // still fails. Every original admission/refusal assertion remains below.
     EntryLift oldRegion;
-    oldRegion.refused(771*MiB,640*MiB,618*MiB,1000,96*MiB);
-    assert(oldRegion.apply(buildBudget(64*MiB),1100).available==793*MiB);
-    assert(!admits({772*MiB,332*MiB,true},oldRegion.apply(buildBudget(64*MiB),1100)));
+    oldRegion.refused(515*MiB,384*MiB,362*MiB,1000,96*MiB);
+    assert(oldRegion.apply(buildBudget(64*MiB),1100).available==537*MiB);
+    assert(!admits({516*MiB,332*MiB,true},oldRegion.apply(buildBudget(64*MiB),1100)));
     oldRegion.clear();
-    assert(admits({772*MiB,332*MiB,true},oldRegion.apply(buildBudget(64*MiB),1101)));
-    assert(!admits({748*MiB,332*MiB,true},oldRegion.apply(buildBudget(64*MiB),1101)));
-    assert(!admits({772*MiB,95*MiB,true},oldRegion.apply(buildBudget(64*MiB),1101)));
+    assert(admits({516*MiB,332*MiB,true},oldRegion.apply(buildBudget(64*MiB),1101)));
+    assert(!admits({492*MiB,332*MiB,true},oldRegion.apply(buildBudget(64*MiB),1101)));
+    assert(!admits({516*MiB,95*MiB,true},oldRegion.apply(buildBudget(64*MiB),1101)));
     // Many small retargets must compare against the measured attempt's fixed
     // anchor, not just the previous request; camera/GI retargets inside its
     // coverage retain the anti-rebuild backoff.
     const NorthlightGI::Vec3 refusedCenter{0,0,0};
-    oldRegion.refused(771*MiB,640*MiB,618*MiB,2000,96*MiB);
+    oldRegion.refused(515*MiB,384*MiB,362*MiB,2000,96*MiB);
     for(int step=1;step<=13;++step){
         const NorthlightGI::Vec3 eye{float(step*8),0,0};
         if(!NorthlightWorldStreaming::applicable("Northrend",refusedCenter,"Northrend",eye))oldRegion.clear();
         assert(oldRegion.armed==(step<=12));
     }
-    assert(admits({772*MiB,332*MiB,true},oldRegion.apply(buildBudget(64*MiB),2100)));
+    assert(admits({516*MiB,332*MiB,true},oldRegion.apply(buildBudget(64*MiB),2100)));
     assert(!NorthlightWorldStreaming::applicable("Northrend",refusedCenter,"UlduarRaid",refusedCenter));
-    assert(build.available==768*MiB);
+    assert(build.available==512*MiB);
     assert(build.largest==32*MiB);
-    assert(admits({768*MiB,32*MiB,true},build));
-    assert(!admits({768*MiB,32*MiB-1,true},build));
-    assert(!admits({768*MiB-1,768*MiB,true},build));
+    assert(admits({512*MiB,32*MiB,true},build));
+    assert(!admits({512*MiB,32*MiB-1,true},build));
+    assert(!admits({512*MiB-1,512*MiB,true},build));
     assert(!admits({UINT64_MAX,UINT64_MAX,false},build));
     assert(!admits({UINT64_MAX,UINT64_MAX,true},{}));
-    assert(!admits({768*MiB,32*MiB-1,true},buildBudget(32*MiB)));
-    assert(!admits({768*MiB,64*MiB-1,true},buildBudget(32*MiB)));
-    assert(admits({768*MiB,64*MiB,true},buildBudget(32*MiB)));
+    assert(!admits({512*MiB,32*MiB-1,true},buildBudget(32*MiB)));
+    assert(!admits({512*MiB,64*MiB-1,true},buildBudget(32*MiB)));
+    assert(admits({512*MiB,64*MiB,true},buildBudget(32*MiB)));
     assert(!buildBudget(UINT64_MAX).valid);
-    // In-build budget: same contiguous rule, 640 MiB aggregate (process reserve + 128 MiB guard); entry budget unchanged.
-    assert(InBuildHeadroom==128*MiB&&ProcessReserve+InBuildHeadroom==640*MiB);
+    // In-build budget: unchanged contiguous rule, 384 MiB (256 reserve + 128 working guard).
+    assert(InBuildHeadroom==128*MiB&&ProcessReserve+InBuildHeadroom==384*MiB);
     auto inBuild=inBuildBudget();
-    assert(inBuild.valid&&inBuild.available==640*MiB&&inBuild.largest==32*MiB);
-    assert(admits({640*MiB,32*MiB,true},inBuild));
-    assert(!admits({640*MiB-1,32*MiB,true},inBuild));
-    assert(!admits({640*MiB,32*MiB-1,true},inBuild));
-    assert(admits({640*MiB,64*MiB,true},inBuildBudget(32*MiB)));
-    assert(!admits({640*MiB,64*MiB-1,true},inBuildBudget(32*MiB)));
+    assert(inBuild.valid&&inBuild.available==384*MiB&&inBuild.largest==32*MiB);
+    assert(admits({384*MiB,32*MiB,true},inBuild));
+    assert(!admits({384*MiB-1,32*MiB,true},inBuild));
+    assert(!admits({384*MiB,32*MiB-1,true},inBuild));
+    assert(admits({384*MiB,64*MiB,true},inBuildBudget(32*MiB)));
+    assert(!admits({384*MiB,64*MiB-1,true},inBuildBudget(32*MiB)));
     assert(inBuildBudget(32*MiB).largest==buildBudget(32*MiB).largest);
     assert(!inBuildBudget(UINT64_MAX).valid&&!inBuildBudget(UINT64_MAX-ContiguousMargin+1).valid);
     assert(!inBuildBudget(UINT64_MAX-ProcessReserve+1).valid&&inBuildBudget(UINT64_MAX-ProcessReserve).valid);
     // A request above the guard keeps the process reserve after the allocation: floor = reserve + request.
-    assert(inBuildBudget(200*MiB).available==712*MiB&&inBuildBudget(200*MiB).largest==232*MiB);
-    assert(admits({712*MiB,232*MiB,true},inBuildBudget(200*MiB)));
-    assert(!admits({712*MiB-1,232*MiB,true},inBuildBudget(200*MiB)));
-    assert(!admits({712*MiB,232*MiB-1,true},inBuildBudget(200*MiB)));
-    assert(inBuildBudget(128*MiB).available==640*MiB&&inBuildBudget(129*MiB).available==641*MiB);
-    // Observed Orgrimmar samples: entry admits at 847-878 MiB, the build's own allocations land at 755-767 MiB mid-build.
-    assert(admits({878*MiB,477*MiB,true},buildBudget(64*MiB))&&!admits({767*MiB,477*MiB,true},buildBudget(1*MiB)));
-    assert(admits({767*MiB,477*MiB,true},inBuildBudget(1*MiB)));
-    assert(buildBudget().available==768*MiB&&buildBudget().largest==32*MiB);
+    assert(inBuildBudget(200*MiB).available==456*MiB&&inBuildBudget(200*MiB).largest==232*MiB);
+    assert(admits({456*MiB,232*MiB,true},inBuildBudget(200*MiB)));
+    assert(!admits({456*MiB-1,232*MiB,true},inBuildBudget(200*MiB)));
+    assert(!admits({456*MiB,232*MiB-1,true},inBuildBudget(200*MiB)));
+    assert(inBuildBudget(128*MiB).available==384*MiB&&inBuildBudget(129*MiB).available==385*MiB);
+    // Entry and interior checks use separate headroom; the build does not pay entry headroom twice.
+    assert(admits({622*MiB,477*MiB,true},buildBudget(64*MiB))&&!admits({511*MiB,477*MiB,true},buildBudget(1*MiB)));
+    assert(admits({511*MiB,477*MiB,true},inBuildBudget(1*MiB)));
+    assert(buildBudget().available==512*MiB&&buildBudget().largest==32*MiB);
     auto upload=uploadBudget(40*MiB,8*MiB,16*MiB,4*MiB);
-    assert(upload.available==704*MiB&&upload.largest==96*MiB);
-    assert(admits({704*MiB,96*MiB,true},upload));
-    assert(!admits({704*MiB-1,96*MiB,true},upload));
-    assert(!admits({704*MiB,96*MiB-1,true},upload));
+    assert(upload.available==448*MiB&&upload.largest==96*MiB);
+    assert(admits({448*MiB,96*MiB,true},upload));
+    assert(!admits({448*MiB-1,96*MiB,true},upload));
+    assert(!admits({448*MiB,96*MiB-1,true},upload));
     assert(uploadBudget(1,2,30,25).largest==50+16*MiB);
     assert(!uploadBudget(1,2,3,4).valid);
     assert(!uploadBudget(UINT64_MAX,1,0,0).valid);

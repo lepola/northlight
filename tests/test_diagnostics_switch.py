@@ -18,6 +18,7 @@ FILES=['renderer.cpp','world_renderer.h','world_shadow_experiment.inl','world_po
 GATES=('NorthlightDiagnostics::enabled()','diagnostics()','sampled()','captureSampled','if(diagnostics)','shadowFate.active()','sampledFrame','profiling()','profileSampled()','if(lightingClock)')
 # Ungated lines that stay with Diagnostics=0: format prefix -> label.
 KEEP={
+ 'FOG FIELD deferred ':'warning: bounded independent-field retry; previous field retained on allocation refusal',
  'SETTINGS unavailable:':'one-off initialization error',
  'SETTINGS startup recovery incomplete:':'one-off: a crash-interrupted settings commit could not be finished at start-up',
  'SETTINGS frame %s revision=':'settings event: a preview or saved config reached the frame boundary (user action)',

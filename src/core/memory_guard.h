@@ -17,7 +17,7 @@ struct Policy {
     // Address-space walk cadence (sampler thread, ~6-50 ms each on Windows).
     std::uint32_t sampleMs=3000,pressureSampleMs=1000,reportMs=10000;
     // Demand pressure: the geometry builder stalls for memory below its own floor
-    // (768 MiB at entry), far above enterAvailable. Recovery from a pressure episode
+    // (512 MiB at entry), far above enterAvailable. Recovery from a pressure episode
     // that a demand entered needs the largest demand seen plus this, so the restored
     // full caps cannot regrow straight back into the next region's stall.
     std::uint64_t demandRegrowth=128*MiB;

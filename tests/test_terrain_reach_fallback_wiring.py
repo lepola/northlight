@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # northlight-test:
 """Static wiring audit: the geometry worker falls back to the base terrain reach on a memory
-refusal, logs the stall episodes; stage entry uses buildBudget (768 MiB, raised by entryLift after a refusal that
+refusal, logs the stall episodes; stage entry uses buildBudget (512 MiB, raised by entryLift after a refusal that
 followed entry), interior allocations and the after-bvh gate inBuildBudget; stalls publish the guard's demand."""
 import sys; from pathlib import Path; sys.path.insert(0, str(Path(__file__).resolve().parents[1]))  # repo root
 import northlight_paths as fp
@@ -11,7 +11,7 @@ w = fp.src('world_renderer.h').read_text()
 g = fp.src('geometry_memory.h').read_text()
 r = fp.src('renderer.cpp').read_text()
 f = fp.src('terrain_reach_fallback.h').read_text()
-assert 'constexpr uint64_t ProcessReserve=512*MiB;' in g and 'constexpr uint64_t ContiguousMargin=32*MiB;' in g
+assert 'constexpr uint64_t ProcessReserve=256*MiB;' in g and 'constexpr uint64_t ContiguousMargin=32*MiB;' in g
 assert 'constexpr uint64_t EntryHeadroom=256*MiB;' in g and 'budgetWith(EntryHeadroom,largestAllocation)' in g and 'add(ProcessReserve,headroom,b.available)' in g and 'add(largestAllocation,ContiguousMargin,b.largest)' in g
 # Allocations inside a build that passed buildBudget at entry use the smaller in-build headroom.
 assert 'constexpr uint64_t InBuildHeadroom=128*MiB;' in g and 'budgetWith(largestAllocation>InBuildHeadroom?largestAllocation:InBuildHeadroom,largestAllocation)' in g

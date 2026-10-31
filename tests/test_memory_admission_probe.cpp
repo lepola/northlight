@@ -66,7 +66,8 @@ int main(){
     probe.invalidate();auto forgotten=space.sample(probe,dynamicBudget(1*MiB));assert(forgotten.fullScan);
     // Fresh aggregate reserve can decline while the witnessed hole remains.
     space.set(0,4096,false);space.set(32,2000,true);space.sample(probe,budget);
-    space.set(500,2000,false);parity(space,probe,budget);assert(!admits(space.original(),budget));
+    const auto belowReserve=unsigned(budget.available/MiB)-1;
+    space.set(32+belowReserve,2000,false);parity(space,probe,budget);assert(!admits(space.original(),budget));
     std::puts("PASS fresh address witness: unchanged state, base allocation, interior split, merge, relocation, 32-bit final byte, aggregate reserve and lower-bound escalation");
 
     const auto beforeQueries=space.queries;space.statusOK=false;auto failed=space.sample(probe,budget);

@@ -40,6 +40,7 @@ assert work.count('std::thread([&]{')==1 and 'FIXTURE REGION BUILD' in work
 snapshot=source[source.index('    struct Snapshot {'):source.index('\n    struct Request ')]
 request=source[source.index('    struct Request {'):]
 request=request[:request.index('\n')]
+fog_region=source[source.index('    struct FogRegion {'):];fog_region=fog_region[:fog_region.index('};')+2]
 palette=source[source.index('    struct PaletteRegion {'):]
 palette=palette[:palette.index('\n')]
 orphaned=source[source.index('    template<class Pending,class Active> static bool pendingOrphaned('):]
@@ -76,7 +77,10 @@ static bool SetThreadPriority(int,int){return true;}
 #define THREAD_PRIORITY_BELOW_NORMAL (-1)
 static std::mutex logMutex;static std::vector<std::string> logLines;
 template<class... T> static void logf(const char* format,T... values){char line[2048];std::snprintf(line,sizeof line,format,values...);std::lock_guard<std::mutex> lock(logMutex);logLines.emplace_back(line);}
-namespace NorthlightRegionalFog {struct Field {};struct Region {};constexpr double WorldZero=17066.6666667,TileSize=533.3333333;
+namespace NorthlightRegionalFog {struct Field {unsigned groundCells=0,airCells=0,fogCells=0;};struct Region {std::vector<int> tiles;};constexpr float RefreshDistance=64.f;
+ using ZoneScale=std::function<void(uint32_t,float&,float&)>;
+ inline bool buildCachedField(const std::string&,const std::string&,NorthlightGI::Vec3,const Region&,Field&,std::string&,const NorthlightGI::AllocationAdmission&,const ZoneScale*){return false;}
+ constexpr double WorldZero=17066.6666667,TileSize=533.3333333;
  inline Region loadRegion(const std::string&,const std::string&,float,float){return {};}}
 namespace NorthlightMemMap {inline std::atomic<bool> deferredRequest{false};}
 namespace NorthlightLocalLights {struct Light {};struct Cache {explicit Cache(const std::string&){}};}
@@ -97,12 +101,13 @@ struct Fixture {
 SNAPSHOT
 REQUEST
 PALETTE
+FOGREGION
 ORPHANED
  NorthlightGeometryMemory::StallWatch generationStall;
  NorthlightQuality::Settings quality;std::string root="fixture/";
  std::mutex mutex;std::condition_variable wake;Request request;bool stopping=false,pending=false,geometryRebuild=false;
  std::atomic<bool> workerBusy{false},workerMemoryTrim{false},giMemoryTrim{false};std::atomic<unsigned> workerFaultCode{0},geometryBuildEstimateMs{1000};std::atomic<uint64_t> geometryMemoryDemand{0};
- std::shared_ptr<Snapshot> published;std::shared_ptr<const PaletteRegion> publishedPaletteRegion;
+ std::shared_ptr<Snapshot> published;std::shared_ptr<const PaletteRegion> publishedPaletteRegion;std::shared_ptr<const FogRegion> publishedFogRegion;
  // Fixture build controls and observations (guarded by mutex unless atomic).
  std::atomic<unsigned> fixtureBuildMs{60},fixtureDefers{0};std::atomic<bool> fixtureThrow{false},fixtureFail{false};
  // Issue #40: maps without world-cache tiles; cacheChecks counts the builder's per-entry probes.
@@ -334,7 +339,7 @@ int main(){
   assert(entries==2&&ends==2); /* the end line is logged when the map changes back */std::puts("uncached map: one probe and one error snapshot per entry, camera moves start no build, continent builds again");}
  std::puts("PASS concurrent geometry build: moves solved on the previous generation during builds; settled atlas bit-identical to a sequential final-generation solve; still-camera deferral; stop mid-build; builder and worker faults join; map change, build failure and stale adoption during builds; orphaned staged upload released (0.3.156); same-map teleports recover with a still camera; 0.3.169 120/150 hold adopts without a stall; lead region idles without spinning");
 }
-'''.replace('SNAPSHOT',snapshot).replace('REQUEST',request).replace('PALETTE',palette).replace('ORPHANED',orphaned).replace('WORK',work)
+'''.replace('SNAPSHOT',snapshot).replace('REQUEST',request).replace('PALETTE',palette).replace('FOGREGION',fog_region).replace('ORPHANED',orphaned).replace('WORK',work)
 report={'status':'pass','game_launched':False,'runs':[],'sha256':{n:hashlib.sha256(fp.tracked(n).read_bytes()).hexdigest() for n in ['world_renderer.h','world_probe_progress.h','world_probe_cache.h','gi_solve_pool.h','world_gi.cpp','test_concurrent_geometry_build.py']}}
 modes=[('O2',['-O2']),('asan-ubsan',['-O1','-g','-fsanitize=address,undefined','-fno-sanitize-recover=all','-fno-omit-frame-pointer']),('tsan',['-O1','-g','-fsanitize=thread'])]
 with tempfile.TemporaryDirectory(prefix='northlight-concurrent-geometry-') as tmp:
