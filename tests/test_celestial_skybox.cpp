@@ -105,6 +105,8 @@ int main() {
      {Block weak;weak.skybox(P,.01f);Context w=ctx(weak);Sim s4;for(int i=0;i<3;++i)s4.frame(n,true);auto o=s4.frame(w,false);assert(!s4.mode.state&&o.late[0]&&o.late[1]&&!o.tail[0]);} // native mode, skybox evidence: late fallback
      {Sim s5;for(int i=0;i<3;++i)s5.frame(n,true);auto o=s5.frame(p,false);assert(o.late[0]&&o.late[1]);}
      // Pure rule table.
+     assert(!NorthlightCelestial::lateBody(true,true,false,true,true,true)); // confirmed layer insertion must not be repainted
+     assert(NorthlightCelestial::lateBody(true,true,false,true,true)); // a skybox appearing after the planet snapshot retains the late fallback
      assert(NorthlightCelestial::lateBody(false,false,false,true,true)&&!NorthlightCelestial::lateBody(false,true,false,true,true)&&!NorthlightCelestial::lateBody(false,false,true,true,true)&&!NorthlightCelestial::lateBody(false,false,false,true,false));
      assert(!NorthlightCelestial::lateBody(false,false,false,false,true)&&!NorthlightCelestial::lateBody(true,false,false,false,true)&&NorthlightCelestial::lateBody(true,false,false,true,false));
      assert(NorthlightCelestial::suppressNative(4,5)&&!NorthlightCelestial::suppressNative(~0u,1)&&!NorthlightCelestial::suppressNative(3,5));}

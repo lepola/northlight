@@ -22,6 +22,7 @@ struct Snapshot {
 struct Body {
     float direction[3]={}, tint[3]={}, alpha=0, altitudeVisibility=0;
     float emission=1.1f;
+    float nativeTint[3]={};bool nativeAppearance=false;
     float nativeAngularRadius=0;
     float angularRadius=0; // atan(size/24): native template half-size .5, orbit radius12.
 };
@@ -72,7 +73,8 @@ inline bool suppressNative(unsigned renderFrame,unsigned frames){return renderFr
 // A native billboard that did draw makes lateDisc false, so the two never double up.
 // The planet-phase fallback also needs positive skybox evidence in the render-time context (skyboxCover > 0: an interior SetBlendSky is
 // set before RenderSky): RenderSky is skipped underwater, with m_showSky 0 or a negative view depth, and those frames show no sky at all.
-inline bool lateBody(bool skyboxMode,bool drawnEarly,bool offscreenOwned,bool lateDisc,bool skyboxEvidence){return lateDisc&&(skyboxMode||(skyboxEvidence&&!(drawnEarly||offscreenOwned)));}
+// Only a confirmed insertion inside the skybox suppresses its late fallback; the ordinary planet snapshot can precede a changing skybox.
+inline bool lateBody(bool skyboxMode,bool drawnEarly,bool offscreenOwned,bool lateDisc,bool skyboxEvidence,bool skyboxLayerEarly=false){return !skyboxLayerEarly&&lateDisc&&(skyboxMode||(skyboxEvidence&&!(drawnEarly||offscreenOwned)));}
 inline float smooth(float x) { x=std::max(0.f,std::min(1.f,x));return x*x*(3-2*x); }
 inline bool decodeBody(const BodyRecord& r,const float* camera,Body& out) {
     Body candidate;float length2=0;
@@ -90,6 +92,7 @@ inline bool decodeBody(const BodyRecord& r,const float* camera,Body& out) {
     candidate.tint[0]=float((r.color>>16)&255)/255;
     candidate.tint[1]=float((r.color>>8)&255)/255;
     candidate.tint[2]=float(r.color&255)/255;
+    std::copy(candidate.tint,candidate.tint+3,candidate.nativeTint);candidate.nativeAppearance=true;
     candidate.alpha=float(r.color>>24)/255;
     candidate.angularRadius=candidate.nativeAngularRadius=std::atan(r.size/24.f);
     // Renderer policy: C1 fade over the first 4.6 degrees ABOVE the horizon.
@@ -160,7 +163,7 @@ inline void applyRendererPolicy(Context& c,const float* direct){
     c.sun.alpha=c.moon.alpha=1;
     c.sun.emission=3.5f;c.moon.emission=1.1f;
     const float tint[2][3]={{1,.96f,.88f},{.94f,.97f,1}};
-    for(unsigned i=0;i<3;++i){c.sun.tint[i]=tint[0][i];c.moon.tint[i]=tint[1][i];}
+    for(unsigned i=0;i<3;++i){c.sun.tint[i]=c.sun.nativeAppearance?c.sun.nativeTint[i]:tint[0][i];c.moon.tint[i]=tint[1][i];}
     // Each body lights the world (rays, shadows) as much as its disc is seen; the sun first, the moon takes the rest.
     c.sun.altitudeVisibility=discVisibility(c.sun.direction[2],c.sun.angularRadius);
     c.moon.altitudeVisibility=(1-c.sun.altitudeVisibility)*discVisibility(c.moon.direction[2],c.moon.angularRadius);

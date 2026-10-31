@@ -97,6 +97,13 @@ int main(){
         f.zero(6000,600);assert(f.value==0);const float rise=f.update(6016,601,1);assert(rise>0&&rise<.15f); // unknown visibility fades in
     }
     // Constants: hue/mix (c47), hot core/wrap (c48); the moon has no ring.
+    {
+        Hue native;native.nativeSun=true;native.strength=1;native.sun[0]=.91f;native.sun[1]=.855f;native.sun[2]=.882f;
+        native.sunCore[0]=native.sunCore[1]=native.sunCore[2]=1;const float tint[]={.1f,.2f,.3f};float a[4],b[4];
+        glareConstants(native,0,tint,SunTailWeight,Wrap,a,b);
+        for(unsigned k=0;k<3;++k){assert(a[k]==native.sun[k]);assert(b[k]==native.sun[k]);}
+        constants(native,0,0,a,b);for(unsigned k=0;k<3;++k)assert(b[k]==native.sunCore[k]);
+    }
     Hue hue;hue.sun[0]=1;hue.sun[1]=.3f;hue.sun[2]=0;hue.sunCore[0]=1;hue.sunCore[1]=.93f;hue.sunCore[2]=.78f;hue.strength=2;
     float c47[4],c48[4];constants(hue,0,Wrap,c47,c48);
     assert(c47[0]==1&&c47[1]==.3f&&c47[3]==1&&c48[1]==.93f&&c48[3]==Wrap);

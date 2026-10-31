@@ -114,6 +114,7 @@ int main() {
             assert(sky.sun.angularRadius==native.sun.angularRadius&&sky.moon.angularRadius==native.moon.angularRadius);
             for(unsigned k=0;k<3;++k){
                 assert(sky.sun.direction[k]==native.sun.direction[k]&&sky.moon.direction[k]==native.moon.direction[k]);
+                assert(sky.sun.nativeAppearance&&sky.sun.tint[k]==native.sun.tint[k]&&sky.sun.nativeTint[k]==native.sun.tint[k]);
                 assert(result.sun.direction[k]==native.sun.direction[k]&&result.moon.direction[k]==native.moon.direction[k]);
                 assert(sky.sunColor[k]+sky.moonColor[k]<=direct[k]+1e-6f&&std::fabs(sky.sunColor[k]+sky.moonColor[k]-direct[k]*(sky.sunWeight+sky.moonWeight))<1e-6f); // never more than the zone's light
             }

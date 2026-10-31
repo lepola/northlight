@@ -43,7 +43,8 @@ float skyVisibility(float4 source) {
     float2 uv=source.xy;
     float rawDepth=tex2Dlod(DiscDepth,float4(uv,0,0)).r;
     float depth=saturate((rawDepth-DiscImage.z)*DiscImage.w);
-    float visible=(source.z>=.5&&depth>=.99999994)?1:0;
+    // Only raw clear depth is sky; normalized horizon depth can also reach one.
+    float visible=(source.z>=.5&&rawDepth>=1-1.0/16777216)?1:0;
     if(DiscRepair.y>.5&&rawDepth<DiscRepair.x-DiscRepair.z)visible=0;
     if(DiscProjection.w>.5){float2 water=tex2Dlod(DiscWater,float4(uv,0,0)).rg;
         visible*=1-((water.x>DiscPolicy.y&&water.x<=DiscPolicy.z&&water.y>.003)?1:0);}
@@ -139,7 +140,7 @@ float4 CelestialDiscPS(float2 uv:TEXCOORD0):COLOR0 {
     // Strict depth occlusion, like the native billboard: every surface in the
     // depth buffer, fogged or not, hides the disc. (A fog-based exception was
     // tried in 0.3.25 and drew the moon over distant fogged trees.)
-    if(DiscPolicy.w>.5&&depth<.99999994)return 0;
+    if(DiscPolicy.w>.5&&rawDepth<1-1.0/16777216)return 0;
     if(DiscPolicy.w>.5&&DiscProjection.w>.5){float2 water=tex2Dlod(DiscWater,float4(depthUV,0,0)).rg;
         if(water.x>DiscPolicy.y&&water.x<=DiscPolicy.z&&water.y>.003)return 0;}
     float3 ray=discRay(uv);
@@ -200,7 +201,7 @@ float4 CelestialVeilPS(float2 uv:TEXCOORD0):COLOR0 {
     float2 depthUV=(clamp(floor(uv*dimensions),0,dimensions-1)+.5)*DiscImage.xy;
     float rawDepth=tex2Dlod(DiscDepth,float4(depthUV,0,0)).r;
     float depth=saturate((rawDepth-DiscImage.z)*DiscImage.w);
-    float sky=(depth>=.99999994&&rawDepth>=DiscRepair.x-DiscRepair.z)?1:0;
+    float sky=(rawDepth>=1-1.0/16777216&&rawDepth>=DiscRepair.x-DiscRepair.z)?1:0;
     // Visible water takes no veil: the sea in front of a low sun is where it sets, and a glow on it showed a bright
     // strip under the sea's edge (the water's own sun glint lights it).
     float sea=0;

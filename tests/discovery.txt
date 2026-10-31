@@ -177,6 +177,8 @@ test_shadow_paging_memory.py
 test_shadow_pivot.py
 test_shadow_removal_smoothing.py
 test_shadow_shimmer.py
+test_sky_only_context.py
+test_sky_restore.py
 test_snapshot_allocation.py
 test_snapshot_prediction.py
 test_solar_volume.py

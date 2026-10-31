@@ -55,7 +55,7 @@ assert 'if(current<=0)return 0;' in halo_ps
 veil_ps=body(shader,'float4 CelestialVeilPS(')
 # Raw-depth classification: WDL/beyond-far silhouettes (normalised depth 1, raw
 # depth below the sky sprite) are geometry; the complement of the glare.
-assert 'float sky=(depth>=.99999994&&rawDepth>=DiscRepair.x-DiscRepair.z)?1:0;' in veil_ps
+assert 'float sky=(rawDepth>=1-1.0/16777216&&rawDepth>=DiscRepair.x-DiscRepair.z)?1:0;' in veil_ps
 assert 'float geometry=(1-sky*terrainVisibility(ray))*(1-sea);' in veil_ps  # visible water takes no veil
 assert 'float alpha=geometry*glareProfile(radius);' in veil_ps
 assert 'overEdge' not in veil_ps  # no far-edge cut: it drew a line across near hills

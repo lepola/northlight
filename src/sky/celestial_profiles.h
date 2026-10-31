@@ -149,7 +149,7 @@ inline void apply(const Profile& p,const float* direct,NorthlightCelestial::Cont
         bodies[s]->emission=p.gain[s];
         float luma=p.light[s][0]*.2126f+p.light[s][1]*.7152f+p.light[s][2]*.0722f,glowLuma=p.glow[s][0]*.2126f+p.glow[s][1]*.7152f+p.glow[s][2]*.0722f;
         for(unsigned c=0;c<3;++c){
-            bodies[s]->tint[c]=p.disc[s][c];
+            bodies[s]->tint[c]=s==0&&bodies[s]->nativeAppearance?bodies[s]->nativeTint[c]:p.disc[s][c];
             float tinted=p.light[s][c]*(energy/std::max(luma,.001f));
             const float lit=direct[c]+(tinted-direct[c])*p.mix[s];
             colors[s][c]=lit*p.strength[s]*weight[s];

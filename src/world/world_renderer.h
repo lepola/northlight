@@ -429,7 +429,7 @@ private:
     NorthlightHorizonHaze::State horizonHazeState; /* game fog end/colour, smoothed per map */
     /* glow hue: the game's light slots (band 9 native glare, band 10 sunHalo), held for 2 s on one map without a proven read. */
     std::uint32_t lightSlots[NorthlightSunHue::Slots]={};bool lightSlotsValid=false;std::string lightSlotsMap;DWORD lightSlotsAt=0;
-    NorthlightSunHue::GlowHue glowHueFrame;
+    NorthlightSunHue::GlowHue glowHueFrame,celestialGlowHueFrame;
     NorthlightWmoContext::LightingHold globalLightHold; /* 0.3.207: sky block reads caught between the colour copy and the glare darkening (wmo_context.h) */
     NorthlightHorizonHaze::Constants hazeFrame; /* last composite haze constants, for the celestial veil */
     NorthlightSpellFog::Hold spellFogHold;DWORD spellFogTick=0;bool spellFogResetLogged=false; /* SpellFog: the smoothed per-frame estimate (spell_fog.h) */
@@ -2611,10 +2611,10 @@ public:
             logf("CELESTIAL palette map=\"%s\" zone=%u moonDisc=(%.3f %.3f %.3f) lightMix=%.3f/%.3f strength=%.3f/%.3f",map,zone,framePalette.disc[1][0],framePalette.disc[1][1],framePalette.disc[1][2],framePalette.mix[0],framePalette.mix[1],framePalette.strength[0],framePalette.strength[1]);
         }return framePalette;
     }
-    // the per-frame glow hue for the celestial renderer (sun: the game's band 10
-    // sunHalo; moon: the regional moon_disc tint). Updated with the world context, so the
-    // sky-phase disc sees the previous frame's value. valid=false: draw today's colours.
-    const NorthlightSunHue::GlowHue& glowHue()const{return glowHueFrame;}
+    // The celestial renderer keeps the native solar body/glare colours separate
+    // from the reference-look world/fog palette. The sky phase uses the prior
+    // published frame; failed native reads retain the bounded palette fallback.
+    const NorthlightSunHue::GlowHue& glowHue()const{return celestialGlowHueFrame;}
     // the horizon-haze constants of the last world composite (optical depth 0 = no haze:
     // fog off, HorizonHaze=0, unknown fog colour, or no world frame yet). The veil reads haze[3], shape[2].
     const NorthlightHorizonHaze::Constants& horizonHazeConstants()const{return hazeFrame;}
@@ -2650,6 +2650,23 @@ public:
         return hasContext();
     }
     unsigned modelContexts=0;
+    // A sky-only frame has no terrain/model draw to supply the camera. The
+    // projection was validated by the last world frame, but the basis and
+    // lighting must be read anew at the effects boundary. World draws retain
+    // their usual context path, including current projection/FOV and fog.
+    bool skyContext(const float* currentProjection){
+        if(failed)return false;if(valid)return true;
+        char map[64]={};NorthlightWorldCamera::Camera camera;NorthlightWorldCamera::Diagnostics why;
+        NorthlightWmoContext::Lighting light;
+        if(!NorthlightWorldCamera::readSkyPhase(map,currentProjection[2],camera,&why)||lastRequest.map!=map||
+           !NorthlightWmoContext::readGlobalLighting(camera.camera,light))return false;
+        auto lightHold=globalLightHold;lightHold.filter(light,map,GetTickCount());
+        if(!NorthlightWmoContext::context(camera.view,light,context))return false;
+        globalLightHold=std::move(lightHold);valid=true;traceContext=5;
+        std::memcpy(projection,currentProjection,sizeof projection);
+        updateWorldContext(map,camera.camera,&light);
+        return hasContext();
+    }
     bool wmoContext(IDirect3DVertexShader9* shader){
         if(failed)return false;
         auto it=wmoShaders.find(shader);if(it==wmoShaders.end())return false;
@@ -2761,7 +2778,10 @@ public:
         const DWORD slotsNow=GetTickCount();
         if(lightSlotsMap!=map||DWORD(slotsNow-lightSlotsAt)>NorthlightSunHue::HoldMs){lightSlotsValid=false;lightSlotsMap=map;}
         if(global&&global->slotsProven){memcpy(lightSlots,global->slots,sizeof lightSlots);lightSlotsValid=true;lightSlotsAt=slotsNow;}
-        glowHueFrame=NorthlightSunHue::compute(lightSlotsValid?lightSlots:nullptr,celestialPalette(map,camera).disc[1]);
+        const auto glowPalette=celestialPalette(map,camera);
+        glowHueFrame=NorthlightSunHue::compute(lightSlotsValid?lightSlots:nullptr,glowPalette.disc[1]);
+        celestialGlowHueFrame=glowHueFrame;
+        if(celestialValid&&celestial.sun.nativeAppearance)celestialGlowHueFrame=NorthlightSunHue::compute(lightSlotsValid?lightSlots:nullptr,glowPalette.disc[1],celestial.sun.nativeTint);
         sourceDirections[0]=vec(context.lightDirection);sourceColors[0]=vec(context.direct);sourceGlowColors[0]=sourceColors[0];sourceGlowColors[1]=V();
         sourceDirections[1]=V(0,0,1);sourceColors[1]=V();sourceWeights[0]=1;sourceWeights[1]=0;
         // The sun and moon light (shadows, rays) from 6 deg at the lowest (MinLightElevation), its weight ending with the disc (discVisibility);
@@ -4742,6 +4762,9 @@ public:
             quality.horizonHaze,quality.horizonHazeStart,quality.horizonHazeBand,quality.horizonHazeTerrain,unsigned(effects.fog),int(horizonHazeState.colorKnown),horizonHazeState.end,farZ,haze.shape[0],
             haze.haze[3]/NorthlightHorizonHaze::Log2e,hazeZone,haze.haze[0],haze.haze[1],haze.haze[2],haze.sun[0],haze.sun[1]);
         if(frames==1||(frames%600==0&&NorthlightDiagnostics::enabled())){ /* every 600 frames with Diagnostics=1 (RenderProfile needs it too), so one test session answers the hue question on stock and HD */
+            logf("CELESTIAL native appearance valid=%u coreRGB=%.4f,%.4f,%.4f discRGB=%.4f,%.4f,%.4f glareRGB=%.4f,%.4f,%.4f nativeRadius=%.7f renderedRadius=%.7f",
+                unsigned(celestialValid&&celestial.sun.nativeAppearance),celestial.sun.nativeTint[0],celestial.sun.nativeTint[1],celestial.sun.nativeTint[2],
+                celestial.sun.tint[0],celestial.sun.tint[1],celestial.sun.tint[2],celestialGlowHueFrame.sun[0],celestialGlowHueFrame.sun[1],celestialGlowHueFrame.sun[2],celestial.sun.nativeAngularRadius,celestial.sun.angularRadius);
             const auto& g=glowHueFrame;float band9[3],band10[3];NorthlightSunHue::unpack(lightSlots[NorthlightSunHue::SlotSun],band9);NorthlightSunHue::unpack(lightSlots[NorthlightSunHue::SlotSunHalo],band10);
             logf("CELESTIAL glowHue src=%s native=%.2f strength=%.2f moonStrength=%.0f rgb=%.3f,%.3f,%.3f core=%.3f,%.3f,%.3f moon=%.3f,%.3f,%.3f band9=%.3f,%.3f,%.3f band10=%.3f,%.3f,%.3f direct=%.3f,%.3f,%.3f fog=%.3f,%.3f,%.3f",
                 !g.valid||g.strength<=0?"fallback":g.native>=.5f?"native":"sunHalo",g.native,g.strength,g.moonStrength,g.sun[0],g.sun[1],g.sun[2],g.sunCore[0],g.sunCore[1],g.sunCore[2],g.moon[0],g.moon[1],g.moon[2],
