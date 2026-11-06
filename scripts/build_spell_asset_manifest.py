@@ -13,7 +13,7 @@ import tempfile
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import northlight_paths
 northlight_paths.use_source_modules()
-from world_scene_builder import Assets, array, decode_blp, string, unpack
+from world_scene_builder import Assets, array, blp_mips, decode_blp, string, unpack
 from build_spell_emitters import dbc_table, spell_sources
 from build_equipment_emitters import lifetime_track
 from world_lights_builder import constant_track
@@ -117,10 +117,7 @@ def texture_manifest(assets, path, local=None, decoder=None):
     bc = 'DXT1' if depth in (0, 1) else 'DXT3' if alpha == 1 else 'DXT5'
     offsets, sizes = unpack('<16I', blob, 20), unpack('<16I', blob, 84)
     mips = []
-    for level, (offset, size) in enumerate(zip(offsets, sizes)):
-        if not offset or not size:
-            continue
-        w, h = max(1, width >> level), max(1, height >> level)
+    for level, w, h, offset, size in blp_mips(blob):
         pitch = ((w + 3) // 4) * (8 if bc == 'DXT1' else 16)
         raw = blob[offset:offset+size]
         if len(raw) != size or size != pitch * ((h + 3) // 4):
@@ -142,7 +139,7 @@ def texture_manifest(assets, path, local=None, decoder=None):
     reference = None
     if decoder and selected:
         level = selected['level']
-        reference = {'level': level, **runtime_reference(blob[offsets[level]:offsets[level]+sizes[level]], selected['width'],
+        reference = {'level': level, **runtime_reference(blob[offsets[level]:offsets[level]+selected['bytes']], selected['width'],
                                                         selected['height'], selected['pitch'], bc, decoder,
                                                         local / (path.replace('\\', '_') + '.mip%d.runtime.rgba' % level) if local else None)}
     return {**provenance(assets, path, blob), 'blp_encoding': encoding, 'alpha_depth': depth,

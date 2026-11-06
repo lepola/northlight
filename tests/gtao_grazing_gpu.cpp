@@ -1,4 +1,4 @@
-// Production GTAO bytecode on an independent hidden device; no game process.
+// Production AO bytecode on an independent hidden device; no game process.
 #define main northlight_unused_composite_main
 #include "composite_distance_gpu.cpp"
 #undef main
@@ -70,6 +70,6 @@ int main(int argc,char** argv){
         if(shape<3&&minimum<.98f)++failures;
         ok(d->SetTexture(1,nullptr));depth->Release();
     }
-    std::fprintf(report,"],\"case_count\":%u,\"failures\":%u}\n",cases,failures);std::fclose(report);std::printf("GTAO grazing GPU: %u cases, convex/plane failures=%u\n",cases,failures);
-    ok(d->SetTexture(0,nullptr));scene->Release();d->SetPixelShader(nullptr);shader->Release();staging->Release();target->Release();d->Release();api->Release();FreeLibrary(module);DestroyWindow(window);UnregisterClassW(wc.lpszClassName,wc.hInstance);return 0;
+    std::fprintf(report,"],\"case_count\":%u,\"failures\":%u}\n",cases,failures);std::fclose(report);std::printf("AO grazing GPU: %u cases, convex/plane failures=%u\n",cases,failures);
+    ok(d->SetTexture(0,nullptr));scene->Release();d->SetPixelShader(nullptr);shader->Release();staging->Release();target->Release();d->Release();api->Release();FreeLibrary(module);DestroyWindow(window);UnregisterClassW(wc.lpszClassName,wc.hInstance);return failures?1:0;
 }

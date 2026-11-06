@@ -277,10 +277,12 @@ def main():
         print('elision counterfactual (foreign skips the wait): '+('overlap detected (expected failure)' if caught else 'NOT DETECTED'),flush=True);assert caught,(run.returncode,run.stdout,run.stderr)
         report['runs'].append({'build':'O2 -DNORTHLIGHT_GATE_ELISION_COUNTERFACTUAL=2','mode':'elision','exit_code':run.returncode,'expected':'failure'})
     assert all('ThreadSanitizer' not in run['stderr'] for run in report['runs'] if run.get('status')=='pass')
-    # 0.3.180 (D0): the forwarders are regenerated MirrorGuard sites (restored byte for byte afterwards).
+    # Regenerate into scratch storage: the freshness check must not rewrite a live source header.
     import generate_mirror_resource_forwarders
-    generated=fp.GENERATED/'mirror_resource_forwarders.h';before=generated.read_text();generate_mirror_resource_forwarders.generate();regenerated=generated.read_text();generated.write_text(before)
-    assert regenerated==before,'mirror_resource_forwarders.h is stale: run scripts/generate_mirror_resource_forwarders.py'
+    generated=fp.GENERATED/'mirror_resource_forwarders.h';before=generated.read_text()
+    with tempfile.TemporaryDirectory(prefix='mirror-forwarders-') as tmp:
+        scratch=Path(tmp)/generated.name;generate_mirror_resource_forwarders.generate(scratch)
+        assert scratch.read_bytes()==generated.read_bytes(),'mirror_resource_forwarders.h is stale: run scripts/generate_mirror_resource_forwarders.py'
     assert 'lock_guard' not in before and before.count('MirrorGuard lock(gate,MirrorSite::Resource);')>=100 and '#include "mirror_guard.h"' in before
     assert hashes=={f:hashlib.sha256(fp.tracked(f).read_bytes()).hexdigest() for f in files}
     report['status']='pass';out=fp.output_dir();destination=out/'resource-mirror-validation.json';destination.write_text(json.dumps(report,indent=2)+'\n');print(json.dumps(report,indent=2))

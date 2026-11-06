@@ -1,0 +1,11 @@
+# Keep snapshot microbenchmarks out of production profiling
+
+RenderProfile=1 previously rotated Map/Predict/Prefetch on non-sample capture frames, timed snapshot spans, calibrated clocks and ran key microbenchmarks while formatting periodic reports and destroying WorldRenderer. This made ordinary profiling change the workload it was meant to observe. The latest existing session contains 80 SNAPSHOT ab report lines; these are not new measurements made for this change.
+
+Keep the already-shipping Frame default, Prefetch, for every production frame. Remove WorldRenderer's SnapshotMeter, span timers, periodic report and destruction report. The offline lookup alternatives, synthetic-clock meter and explicit benchmark helpers remain available to tests. Normal sampled CPU/GPU diagnostic reporting stays intact. No geometry, admission/reserve policy, cache invalidation, output format or production shader payload changes.
+
+The removed meter constructor reserves twelve 512-double vectors: at least 49,152 bytes of payload per renderer, plus allocation/object overhead. Its clock calibration, per-span sampling, report sorting/copies and key timing no longer run on the render thread. Removing this work is established structurally; a whole-frame time/FPS improvement is not measured here. The old A/B paths ran on non-sample frames, so their overhead must not be attributed directly to the sampled CPU capture median.
+
+Both the independent diagnostics branch and combined source pass their own optimized and ASan/UBSan snapshot suites, with normal and forced 4-bit hashes, per-read three-mode equality, LRU/budget/failure checks, zero-allocation hits, synthetic clock checks and seven deliberately broken controls that fail as expected. Production-source guards reject benchmark callers or algorithm rotation. The combined native D3D9/DXVK oracle additionally alternates RenderProfile off/on while reordering a 64-batch native field and compares full shadow masks exactly; the 384 native alpha-mode cases per backend remain intact. Independent PR acceptance does not inherit that combined-only GPU fixture.
+
+Reproduce with tests/test_snapshot_prediction.py and the combined tests/test_grass_shadow_gpu.py. No game or live cache is used; no new wall-clock benchmark is run. The independent DLL and combined DLL are built from their respective branches.

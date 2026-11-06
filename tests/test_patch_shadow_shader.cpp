@@ -26,6 +26,13 @@ static void test() {
     assert(patch(sm3,14,out,&info));assert(info.major==3&&info.texcoordRegister==2);
     assert(info.texcoord0XY&&out.size()==23);
     assert(out[1]==0x0200001f&&out[2]==0x80070005&&out[3]==0xe00f0002);
+    assert(!info.color0W);
+    std::vector<Word> color(sm3,sm3+14);
+    color.insert(color.begin()+1,{0x0200001f,0x8000000a,0xe00f0003});
+    color.insert(color.end()-1,{0x02000001,0xe0080003,0x90ff0002});
+    assert(patch(color.data(),color.size(),out,&info)&&info.color0W);
+    color[color.size()-3]=0xe0030003;
+    assert(patch(color.data(),color.size(),out,&info)&&!info.color0W);
     // Four separate position component writes, including relative bone input.
     std::vector<Word> partial={0xfffe0200,0x03000001,0x800f0000,0xa0e42014,0xb0000000};
     for(int i=0;i<4;++i) {

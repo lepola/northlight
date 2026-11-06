@@ -23,13 +23,15 @@ from unittest.mock import patch
 spec = importlib.util.spec_from_file_location('northlight_install', fp.src('northlight_install.py'))
 fi = importlib.util.module_from_spec(spec); spec.loader.exec_module(fi)
 import instance_maps   # on the path since northlight_install added renderer/
+import install_world_cache as iwc
+import client_identity
 INSTALL = fi.INSTALL
 mig = fi.migrate()
 sha = lambda b: hashlib.sha256(b).hexdigest()
 PROXY = b'MZ Northlight renderer 0.3.162; PROXY module=%ls root=%ls'
 DXVK = b'MZ DXVK: \0\0\0v1.10.3-20230507-async (macOS)\0'
 CACHE_FILES = {'Azeroth/32_48.fg3': b'tile' * 50, 'models/0123.fgs': b'model' * 99, 'fog/Azeroth/32_48.frf': b'fog',
-               'lights/Azeroth.fgl': b'lights', 'celestial/sun.fct': b'sun'}
+               'lights/Azeroth.fgl': b'lights', 'lights/native-fixtures.bin': b'NLF1 fake catalog', 'celestial/sun.fct': b'sun'}
 INSTANCE_KEY = b'\x07instance'.ljust(32, b'.')   # the model key of every fake instance tile
 ART = b'MPQ\x1a fake art layer'
 BASE = ['common', 'common-2', 'expansion', 'lichking', 'patch', 'patch-2', 'patch-3']
@@ -42,8 +44,11 @@ def tree(root):
 
 def variant_manifest(files):
     rows = ''.join(f'{n}\0{sha(d)}\0{len(d)}\n' for n, d in sorted(files.items()))   # build_cache_variant.cache_digest
+    chain=[{'role':'base','name':'common.mpq','bytes':10,'table_sha256':'test tables'}]
     return {'format': fi.VARIANT_FORMAT, 'variant': 'stock', 'cache_digest': sha(rows.encode()),
-            'identity': {'chain': []}, 'files': {n: {'sha256': sha(d), 'bytes': len(d)} for n, d in files.items()}}
+            'identity': {'format':client_identity.FORMAT,'locale':'enUS','chain':chain,'sha256':client_identity.digest(chain)},
+            'build': {'cache_versions': dict(iwc.CACHE_VERSIONS)},
+            'files': {n: {'sha256': sha(d), 'bytes': len(d)} for n, d in files.items()}}
 
 
 class Base(unittest.TestCase):
@@ -137,6 +142,36 @@ class Base(unittest.TestCase):
             return None, ['extra Data/patch-z.mpq']
         return self.variant, [] if self.variant else ['extra Data/patch-y.mpq']
 
+    def test_art_input_snapshot_is_installed_and_restored_with_its_mpqs(self):
+        inst = self.installer()
+        (self.client / fi.CACHE / 'fog').mkdir(parents=True)
+        guard = 'northlight-art-inputs.ini'
+        guard_bytes = '[NorthlightAssets]\nVersion=1\n'.encode('utf-16')
+        emission = 'northlight-emission.bin'
+        emission_bytes = b'NLE1 runtime emission catalog'
+        def generate(script, args, show=True):
+            result = self.fake_run(script, args, show)
+            work = Path(args[args.index('--output') + 1])
+            report = json.loads((work / 'art-layer-manifest.json').read_text())
+            report['dependency_guard'] = guard
+            report['runtime_emission_catalog'] = emission
+            (work / emission).write_bytes(emission_bytes)
+            (work / guard).write_bytes(guard_bytes)
+            (work / 'art-layer-manifest.json').write_text(json.dumps(report))
+            return result
+        inst.run = generate
+        layer, why, _ = inst.art_layer(self.client, 'enUS')
+        self.assertIsNone(why)
+        self.assertEqual(layer[guard], guard_bytes)
+        self.assertEqual(layer[emission], emission_bytes)
+        plan, staged, _ = INSTALL.payload_plan(self.client, self.pkg_root, backend='dxvk' if inst.proxy else None, extra=layer, proxy=inst.proxy)
+        backup = INSTALL.commit(self.client, plan, staged, self.pkg_root / 'payload', 'guard-test')
+        self.assertEqual((self.client / guard).read_bytes(), guard_bytes)
+        self.assertEqual((self.client / emission).read_bytes(), emission_bytes)
+        INSTALL.restore(self.client, backup)
+        self.assertFalse((self.client / guard).exists())
+        self.assertFalse((self.client / emission).exists())
+
     def fake_run(self, script, args, show=True):
         args = [str(a) for a in args]
         opt = lambda name: args[args.index(name) + 1]
@@ -218,9 +253,14 @@ class Preflight(Base):
         self.assertIn('--locale', self.refused())
 
     def test_non_ascii_path(self):
-        moved = self.base / 'Spiel-Äpfel' / 'WoW'
+        moved = self.base / 'Игра-Äpfel-世界-🎮' / 'WoW'
         moved.parent.mkdir(parents=True); self.client.rename(moved); self.client = moved
-        self.assertIn('non-ASCII', self.refused())
+        self.installer().install(self.client, instances='classic-raids')
+        report = self.installer().install(self.client)
+        self.assertEqual(report['instances']['kept'], ['classic-raids'])
+        with patch.object(sys, 'stdout', io.StringIO()):
+            self.installer().uninstall(self.client)
+        self.assertEqual(tree(self.client), self.before)
 
     def test_game_running(self):
         inst = self.installer(); inst.running = lambda: ['wow.exe']
@@ -415,6 +455,45 @@ class LinuxOnlyChecks(Base):
 
 
 class Install(Base):
+    def test_versioned_variant_survives_a_package_without_prebuilt_variants(self):
+        self.installer().install(self.client)
+        cache=self.client/fi.CACHE;before=tree(cache)
+        inst=self.installer();inst.pkg.variants.clear();del inst.identify_chain
+        with patch.object(client_identity,'chain_identity',return_value=self.manifest['identity']) as identify:
+            plan=inst.plan_install(self.client,None,None,None,True,True)
+        self.assertEqual(plan['action'],'keep');self.assertEqual(plan['manifest'],self.manifest)
+        identify.assert_called_once_with(self.client,'all','enUS','z')
+        self.assertEqual(tree(cache),before)
+
+    def test_installed_variant_reuses_identity_read_when_package_variant_changed(self):
+        self.installer().install(self.client)
+        inst=self.installer();del inst.identify_chain
+        newer=json.loads(json.dumps(self.manifest));newer['identity']['chain'][0]['table_sha256']='another client'
+        inst.pkg.variants={'stock':newer}
+        with patch.object(client_identity,'chain_identity',return_value=self.manifest['identity']) as identify:
+            plan=inst.plan_install(self.client,None,None,None,True,True)
+        self.assertEqual(plan['action'],'keep');self.assertEqual(identify.call_count,1)
+
+    def test_incompatible_incomplete_or_changed_client_variant_is_rebuilt(self):
+        self.installer().install(self.client);cache=self.client/fi.CACHE;manifest_path=cache/fi.VARIANT_FILE
+        for versions in (None,{},dict(iwc.CACHE_VERSIONS,lights=True),dict(iwc.CACHE_VERSIONS,lights=2)):
+            current=json.loads(json.dumps(self.manifest));current['build']['cache_versions']=versions
+            manifest_path.write_text(json.dumps(current));inst=self.installer();inst.pkg.variants.clear();del inst.identify_chain
+            self.assertEqual(inst.plan_install(self.client,None,None,None,True,True)['action'],'build')
+        current=json.loads(json.dumps(self.manifest));current.pop('build')
+        manifest_path.write_text(json.dumps(current));inst=self.installer();inst.pkg.variants.clear();del inst.identify_chain
+        self.assertEqual(inst.plan_install(self.client,None,None,None,True,True)['action'],'build')
+        manifest_path.write_text(json.dumps(self.manifest))
+        changed=json.loads(json.dumps(self.manifest['identity']));changed['chain'][0]['table_sha256']='changed client archive'
+        inst=self.installer();inst.pkg.variants.clear();del inst.identify_chain
+        with patch.object(client_identity,'chain_identity',return_value=changed):
+            self.assertEqual(inst.plan_install(self.client,None,None,None,True,True)['action'],'build')
+        for member in ('lights/Azeroth.fgl','lights/native-fixtures.bin'):
+            path=cache/member;original=path.read_bytes();path.unlink();inst=self.installer();inst.pkg.variants.clear();del inst.identify_chain
+            with patch.object(client_identity,'chain_identity',return_value=self.manifest['identity']):
+                self.assertEqual(inst.plan_install(self.client,None,None,None,True,True)['action'],'build')
+            path.write_bytes(original)
+
     def test_stock_match_extracts_and_rerun_is_noop(self):
         report = self.installer().install(self.client)
         self.assertTrue(report['world_cache'].startswith('extracted'))
@@ -683,6 +762,14 @@ class Install(Base):
         self.installer().uninstall(self.client)
         self.assertEqual(tree(self.client), self.before)
 
+    def test_art_ownership_survives_a_moved_client(self):
+        self.installer().install(self.client)
+        for backup in self.backups():
+            record = json.loads(backup.read_text())
+            record['client'] = str(self.base / 'old-game-location')
+            INSTALL.atomic_json(backup, record)
+        self.assertEqual(self.installer().foreign_z(self.client, 'enUS'), [])
+
     def test_stacked_migrations_leave_one_mac_record(self):
         if self.platform != 'mac':
             self.skipTest('macOS proxy migrations only')
@@ -891,8 +978,61 @@ class Install(Base):
         self.assertEqual(yes.choose_instances(self.client, None), ['wotlk-dungeons'])       # ... it keeps what is there
         self.assertEqual(yes.choose_instances(self.client, 'none'), [])                     # the argument wins
         prompts = self.tty('1')
-        self.assertEqual(self.installer().choose_instances(self.client, None), ['classic-dungeons'])
-        self.assertIn('Enter to keep: Wrath dungeons >', prompts[0])
+        self.assertEqual(self.installer().choose_instances(self.client, None), ['wotlk-dungeons'])
+        self.assertEqual(prompts, [])
+        self.assertEqual(self.installer().choose_instances(self.client, '1'), ['classic-dungeons'])
+
+    def test_update_keeps_saved_groups_without_prompting(self):
+        self.installer().install(self.client, instances='all')
+        prompts = self.tty()
+        report = self.installer().install(self.client)
+        self.assertEqual(prompts, [])
+        self.assertEqual(report['instances']['built'], [])
+        self.assertEqual(report['instances']['kept'], list(instance_maps.KEYS))
+
+    def test_current_local_cache_wins_over_prebuilt_without_extra_space(self):
+        import install_world_cache as iwc
+        self.installer().install(self.client)
+        (self.client / fi.CACHE / fi.VARIANT_FILE).unlink()
+        INSTALL.atomic_json(self.client / fi.CACHE / 'install-manifest.json', {'format': fi.LOCAL_FORMAT})
+        inst = self.installer()
+        inst.free_bytes = lambda path: fi.MIN_FREE
+        with patch.object(iwc, 'plan', return_value=('up_to_date', [])), \
+             patch.object(inst, 'find_source', side_effect=AssertionError('should keep the local cache')):
+            report = inst.install(self.client)
+        self.assertEqual(report['world_cache'], 'kept (up to date)')
+
+    def test_local_light_update_wins_over_prebuilt(self):
+        import install_world_cache as iwc
+        self.installer().install(self.client)
+        (self.client / fi.CACHE / fi.VARIANT_FILE).unlink()
+        INSTALL.atomic_json(self.client / fi.CACHE / 'install-manifest.json', {'format': fi.LOCAL_FORMAT})
+        inst = self.installer()
+        inst.free_bytes = lambda path: 2 * fi.MIN_FREE
+        with patch.object(iwc, 'plan', return_value=('partial', ['lights'])), \
+             patch.object(inst, 'find_source', side_effect=AssertionError('should only update the lights')):
+            plan = inst.plan_install(self.client, None, None, None, True, True)
+        self.assertEqual(plan['action'], 'build')
+
+    def test_update_remembers_none_without_prompting(self):
+        self.installer().install(self.client, instances='none')
+        self.assertEqual(json.loads((self.client / fi.CHOICE).read_text()), {'groups': []})
+        prompts = self.tty()
+        self.installer().install(self.client)
+        self.assertEqual(prompts, [])
+        self.assertEqual(self.instance_calls(), [])
+
+    def test_selection_survives_continent_build_failure(self):
+        self.variant = None
+        inst = self.installer()
+        def fail(*args):
+            raise fi.Failed('interrupted continent build')
+        inst.build_cache = fail
+        with self.assertRaises(fi.Failed):
+            inst.install(self.client, instances='1 6')
+        prompts = self.tty()
+        self.assertEqual(self.installer().choose_instances(self.client, None), ['classic-dungeons', 'wotlk-raids'])
+        self.assertEqual(prompts, [])
 
     def test_no_terminal_takes_the_default(self):
         with patch.object(sys, 'stdin', None):

@@ -4,7 +4,6 @@
 #include <cstdint>
 #include <memory>
 #include <new>
-#include <set>
 #include <utility>
 #include <stdexcept>
 #include <vector>
@@ -13,25 +12,28 @@
 // sets must remain unchanged from prepare through the last directional pass.
 // Only scratch capacity survives: no eligibility, bounds or resource refs do.
 namespace NorthlightTerrainCandidates {
-// 0.3.175 (S2): the live terrain chunks of one frame. The ordered set (iteration, size, hash) plus a
-// flat bitmap of the global ADT chunk grid (64 tiles x 16 chunks per axis, 128 KiB, allocated at the
-// first insertion) for O(1) membership; coordinates outside the grid (-1: not one chunk) use the set.
+// Live chunks keep their storage between frames. The bitmap handles membership;
+// iteration sorts once after capture, preserving the previous set's hash order.
 class ChunkSet {
-    std::set<std::pair<int,int>> set_;std::vector<std::uint64_t> bits_;
+    mutable std::vector<std::pair<int,int>> chunks_;std::vector<std::uint64_t> bits_;
+    mutable bool sorted_=true;
     static constexpr int Grid=1024;
     static bool inGrid(int x,int y){return x>=0&&y>=0&&x<Grid&&y<Grid;}
     static std::size_t bit(int x,int y){return std::size_t(y)*Grid+std::size_t(x);}
+    void order()const{if(!sorted_){std::sort(chunks_.begin(),chunks_.end());sorted_=true;}}
 public:
     bool emplace(int x,int y){
-        if(inGrid(x,y)&&bits_.empty())bits_.assign(std::size_t(Grid)*Grid/64,0); /* before the set: a failed allocation changes nothing */
-        const bool added=set_.emplace(x,y).second;if(added&&inGrid(x,y)){const auto i=bit(x,y);bits_[i>>6]|=std::uint64_t(1)<<(i&63);}return added;}
-    bool contains(int x,int y)const{if(!inGrid(x,y))return set_.count({x,y})!=0;if(bits_.empty())return false;const auto i=bit(x,y);return (bits_[i>>6]>>(i&63))&1;}
+        if(contains(x,y))return false;
+        if(inGrid(x,y)&&bits_.empty())bits_.assign(std::size_t(Grid)*Grid/64,0);
+        chunks_.emplace_back(x,y);sorted_=false; // Publish membership only after allocation succeeds.
+        if(inGrid(x,y)){const auto i=bit(x,y);bits_[i>>6]|=std::uint64_t(1)<<(i&63);}return true;}
+    bool contains(int x,int y)const{if(!inGrid(x,y)){const std::pair<int,int> key{x,y};return sorted_?std::binary_search(chunks_.begin(),chunks_.end(),key):std::find(chunks_.begin(),chunks_.end(),key)!=chunks_.end();}if(bits_.empty())return false;const auto i=bit(x,y);return (bits_[i>>6]>>(i&63))&1;}
     std::size_t count(const std::pair<int,int>& c)const{return contains(c.first,c.second)?1:0;}
-    void clear(){if(!bits_.empty())for(const auto& c:set_)if(inGrid(c.first,c.second)){const auto i=bit(c.first,c.second);bits_[i>>6]&=~(std::uint64_t(1)<<(i&63));}set_.clear();}
-    std::size_t size()const{return set_.size();}
-    bool empty()const{return set_.empty();}
-    auto begin()const{return set_.begin();}
-    auto end()const{return set_.end();}
+    void clear(){if(!bits_.empty())for(const auto& c:chunks_)if(inGrid(c.first,c.second)){const auto i=bit(c.first,c.second);bits_[i>>6]&=~(std::uint64_t(1)<<(i&63));}chunks_.clear();sorted_=true;}
+    std::size_t size()const{return chunks_.size();}
+    bool empty()const{return chunks_.empty();}
+    auto begin()const{order();return chunks_.cbegin();}
+    auto end()const{order();return chunks_.cend();}
 };
 struct Stats {
     std::uint64_t scanned=0,membershipChecks=0,reusedMembershipChecks=0;

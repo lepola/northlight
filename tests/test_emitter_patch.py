@@ -42,7 +42,7 @@ class LightPatch(unittest.TestCase):
             self.assertEqual(position, (1., -2., 3.))
             for a, b in zip(rgb, (.23, .575, 1.15)):
                 self.assertAlmostEqual(a, b, places=6)
-            self.assertEqual((start, end, index, kind, flags), (1., 14., 0, 2, 0))
+            self.assertEqual((start, end, index, kind, flags), (1., 14., 0, 2, 2))
             light_offset = struct.unpack_from('<I', patched, 268)[0]
             for relative in (16, 36, 56, 76, 96, 116, 136):
                 self.assertEqual(struct.unpack_from('<h', patched, light_offset + relative + 2)[0], len(globals))

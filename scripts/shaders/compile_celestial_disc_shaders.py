@@ -18,7 +18,7 @@ def main():
         if hashlib.sha256(source.read_bytes()).hexdigest()!=digest:raise ValueError('Source changed during compile')
         header+=['static const DWORD k'+entry+'Shader[] = {']+rows(words)+['};']
         shaders[entry]={'target':target,'bytes':len(data),'sha256':hashlib.sha256(data).hexdigest(),**stats}
-    (fp.GENERATED/'celestial_disc_compiled_shaders.h').write_text('\n'.join(header)+'\n')
+    (fp.GENERATED/'celestial_disc_compiled_shaders.h').write_text('\n'.join(header)+'\n',encoding='utf-8',newline='\n')
     report={'source_sha256':digest,**compiler.provenance,'game_launched':False,'device_created':False,'shader':shaders['CelestialDiscPS'],'shaders':shaders}
-    (fp.SHADERS/'celestial-disc-shader-build.json').write_text(json.dumps(report,indent=2)+'\n');print(json.dumps(report))
+    (fp.SHADERS/'celestial-disc-shader-build.json').write_text(json.dumps(report,indent=2)+'\n',encoding='utf-8',newline='\n');print(json.dumps(report))
 if __name__=='__main__':main()

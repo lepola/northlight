@@ -22,6 +22,9 @@ import northlight_paths as fp
 # vs_3_0 Diffuse_T1_Env #20: a four-bone palette skin (variants 20-28 are the same program).
 FOUR_BONE_VS3 = ('shaders\\vertex\\vs_3_0\\diffuse_t1_env.bls', 20,
                  '34890b73162b07089f337cf1b4197ffe8fb8c6b0e1b1c2765b1e4c10b77e451c')
+# Body layout observed in the live bounds-budget diagnostic (sliced hash 5267e7a8cb988451).
+FOUR_BONE_BODY_VS3 = ('shaders\\vertex\\vs_3_0\\cdiffuse_t1.bls', 29,
+                      '634f2d5cbf41431f82736de9edc3eee87d0242aabe6ed4edc7f1b69b9f19a371')
 # The one-influence palette program every boneInfluences=1 M2 skin section uses (signs, barrels,
 # lamps, weapons), its active 3.3.5a variants, and the zero-influence program.
 PROGRAMS = {
@@ -66,6 +69,39 @@ def shaders_available():
         return False
 
 
+def shared_gpu_models(directory):
+    """Exact stock 48-byte M2 vertices and skin subsets for cross-pass residency."""
+    fp.use_source_modules()
+    from world_scene_builder import Assets
+    assets=Assets(archives='stock');sources=[];meshes=[]
+    try:
+        for model,expected_model,expected_skin in (
+            ('character\\scourge\\male\\scourgemale.m2','a40783df61b12b0e053bd21fc5a930ae37cc649423b79e2f4b076e048fe2a220','ad6cc380ec007257a2ffdbbca5600c1c8f0d647ef81f70af058091d14e6a2349'),
+            ('character\\human\\male\\humanmale.m2','b22478c1ab8d1e9bb7542f686e60e4e665a510d11b5360109a3e9e46d5bf91d2','cfc65fba893f05335bbd054b083b910455ef852c57ca8094ff4549741596ed0e'),
+            ('character\\orc\\male\\orcmale.m2','76097ce5227249cf02064686f146721211a0a08864ff1e97a92424fd9775d703','a382a53f35469aba1854d7c941544ace29145b2c1fddec02f41529ba7c290caa')):
+            data=assets.read(model);skin=assets.read(model[:-3]+'00.skin')
+            assert hashlib.sha256(data).hexdigest()==expected_model and hashlib.sha256(skin).hexdigest()==expected_skin,model
+            assert data[:4]==b'MD20' and skin[:4]==b'SKIN'
+            sources.append({'path':model,'model_sha256':expected_model,'skin_sha256':expected_skin,'archive':assets.origin(model)})
+            vertex_count,vertex_at=struct.unpack_from('<II',data,60)
+            count,at=struct.unpack_from('<II',skin,4);lookup=struct.unpack_from('<%dH'%count,skin,at)
+            count,at=struct.unpack_from('<II',skin,12);indices=[lookup[x] for x in struct.unpack_from('<%dH'%count,skin,at)]
+            count,at=struct.unpack_from('<II',skin,28)
+            for subset in struct.iter_unpack('<10H7f',skin[at:at+count*48]):
+                first=subset[4]+(subset[1]<<16);n=subset[5]
+                assert first+n<=len(indices) and n%3==0
+                if not n:continue
+                used=indices[first:first+n];lo,hi=min(used),max(used);assert hi<vertex_count
+                vertices=data[vertex_at+lo*48:vertex_at+(hi+1)*48];assert len(vertices)==(hi-lo+1)*48
+                meshes.append((vertices,[i-lo for i in used]))
+    finally:
+        assets.close()
+    fixture=struct.pack('<I',len(meshes))+b''.join(struct.pack('<II',len(v),len(i))+v+struct.pack('<%dI'%len(i),*i) for v,i in meshes)
+    assert len(meshes)==177 and hashlib.sha256(fixture).hexdigest()=='cb99fccf5cb39f54e485c66042e7c2dbb616a87cec0d0b306dac8f3d53c76183'
+    target=Path(directory)/'stock-m2.bin';target.write_bytes(fixture)
+    return target,sources,len(meshes)
+
+
 def four_bone_vs3():
     """Path of the four-bone vs_3_0 program (raw D3D9 bytecode), cached in out/client-shaders/."""
     path, variant, sha = FOUR_BONE_VS3
@@ -73,6 +109,20 @@ def four_bone_vs3():
     if target.is_file() and hashlib.sha256(target.read_bytes()).hexdigest() == sha:
         return target
     code = _read([FOUR_BONE_VS3])[path, variant]
+    target.parent.mkdir(parents=True, exist_ok=True)
+    tmp = target.with_name(f'{target.name}.{os.getpid()}.tmp')   # tests run in parallel: replace atomically
+    tmp.write_bytes(code)
+    os.replace(tmp, target)
+    return target
+
+
+def four_bone_body_vs3():
+    """Path of the four-bone body vs_3_0 program (raw D3D9 bytecode), cached in out/client-shaders/."""
+    path, variant, sha = FOUR_BONE_BODY_VS3
+    target = fp.out() / 'client-shaders' / 'actor_four_bone_body_vs3.bin'
+    if target.is_file() and hashlib.sha256(target.read_bytes()).hexdigest() == sha:
+        return target
+    code = _read([FOUR_BONE_BODY_VS3])[path, variant]
     target.parent.mkdir(parents=True, exist_ok=True)
     tmp = target.with_name(f'{target.name}.{os.getpid()}.tmp')   # tests run in parallel: replace atomically
     tmp.write_bytes(code)
@@ -112,6 +162,9 @@ RIGID_PLACEMENTS = [
     ('31_49', 1, 0x116f9, '780b00e932a5fad3'), ('31_49', 1, 0x3016, 'bc5fd6e502bfa533'),
 ]
 RIGID_PLACEMENTS_DIGEST = '5c5449f511ef9bf879abdd0f24a75906653458db006e90e16b2ba44609b0e00e'
+# The current client has a different prop at 0x272; 0x27a is the same pinned
+# sign model in that WMO. Both complete 20-placement corpora remain hash-checked.
+RIGID_PLACEMENTS_CURRENT_DIGEST = '95c698c74f23d1fe2802c2881c8bd50242f0aba277c7a2ffca25bf5dc1a81748'
 
 
 def rigid_placements(directory):
@@ -119,18 +172,22 @@ def rigid_placements(directory):
     row-major, column vector},{translation}} row per RIGID_PLACEMENTS entry) into directory."""
     root = fp.world_cache() / 'Azeroth'
     tiles, rows, values = {}, [], []
+    current = False
     for tile, category, uid, key in RIGID_PLACEMENTS:
         if tile not in tiles:
             data = (root / f'{tile}.fg3').read_bytes()
             tiles[tile] = list(struct.iter_unpack('<32sQI18f', data[12:]))
         found = [r for r in tiles[tile] if r[1] == uid and r[2] == category and r[0].hex().startswith(key)]
+        if not found and (tile, category, uid, key) == ('31_49', 3, 0x116f600000272, '5c82a6c5355a5bac'):
+            found = [r for r in tiles[tile] if r[1] == 0x116f60000027a and r[2] == category and r[0].hex().startswith(key)]
+            current = True
         if len(found) != 1:
             raise SystemExit(f'client_fixtures: world cache {root / tile}.fg3 has {len(found)} instances {uid:#x} of model {key}')
         m, t = found[0][9:18], found[0][18:21]   # after the key, id, category and bounds
         values += [*m, *t]
         rows.append(f'    {{{category},"{key}",{{' + ','.join(f'{v!r}f' for v in m) + '},{' + ','.join(f'{v!r}f' for v in t) + '}},')
     digest = hashlib.sha256(' '.join(f'{round(v, 5) + 0.0:.5f}' for v in values).encode()).hexdigest()
-    if digest != RIGID_PLACEMENTS_DIGEST:
+    if digest != (RIGID_PLACEMENTS_CURRENT_DIGEST if current else RIGID_PLACEMENTS_DIGEST):
         raise SystemExit(f'client_fixtures: the world cache in {root.parent} does not hold the expected placements ({digest})')
     target = Path(directory) / 'stormwind_rigid_placements.inc'
     target.write_text('// Generated by tests/client_fixtures.py from the tester\'s world cache; never commit.\n' + '\n'.join(rows) + '\n')

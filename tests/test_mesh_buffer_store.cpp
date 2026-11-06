@@ -1,4 +1,5 @@
 #include "mesh_buffer_store.h"
+#include "geometry_memory.h"
 #include <cassert>
 #include <cstdio>
 #include <random>
@@ -31,6 +32,25 @@ static void verifyInvariants(const S::Store& st){
     }
 }
 int main(){
+    // Count allocations, not payload writes: reused idle resources cost no new VA.
+    {S::Store st;uint64_t v=17,i=19;auto has=[&](uint32_t id,bool vertex){return vertex?st.entries()[id].vbCapacity!=0:st.entries()[id].ibCapacity!=0;};
+     assert(!st.stagingGrowth(has,v,i)&&v==17&&i==19);assert(st.beginStaging(keys({1,2})));
+     assert(st.stagingGrowth(has,v,i)&&v==2*round64(300000)&&i==2*round64(100000));createResources(st);st.commit();
+     assert(st.beginStaging(keys({3})));createResources(st);st.commit(); // two old pages are idle
+     assert(st.beginStaging(keys({4,5})));assert(st.stagingGrowth(has,v,i)&&v==0&&i==0);
+     auto missing=[&](uint32_t id,bool vertex){return vertex?false:has(id,false);};
+     assert(st.stagingGrowth(missing,v,i)&&v==2*round64(300000)&&i==0);
+     assert(st.markWriting(st.staging().uploadBuffer[0]));st.cancel();verifyInvariants(st);
+     assert(st.beginStaging({key(6,500000,100000)}));assert(st.stagingGrowth(has,v,i)&&v==round64(500000)&&i==0);st.cancel();}
+    // A complete idle pool avoids an otherwise false 343 MiB upload refusal.
+    {S::Store st;std::vector<Key> oldKeys,newKeys;for(unsigned n=0;n<64;++n){oldKeys.push_back(key(100+n));newKeys.push_back(key(1000+n));}
+     build(st,oldKeys);build(st,{key(999)});assert(st.beginStaging(newKeys));uint64_t v=0,i=0;
+     auto has=[&](uint32_t id,bool vertex){return vertex?st.entries()[id].vbCapacity!=0:st.entries()[id].ibCapacity!=0;};
+     assert(st.stagingGrowth(has,v,i)&&!v&&!i);using namespace NorthlightGeometryMemory;
+     auto oldBudget=uploadBudget(64ull*300000,64ull*100000,MiB,MiB);oldBudget.largest=18*MiB;
+     auto newBudget=uploadBudget(v,i,MiB,MiB);newBudget.largest=18*MiB;
+     const Sample sample{343*MiB,100*MiB,true};assert(!admits(sample,oldBudget)&&admits(sample,newBudget));
+     st.cancel();verifyInvariants(st);}
     // Zero-hit: everything uploads into new buffers; the old table is untouched until commit.
     {S::Store st;auto s=build(st,keys({1,2,3,4}));
      assert(s.pages==4&&s.reusedPages==0&&s.uploadedPages==4&&st.table().size()==4&&s.uploadedCapacity==4*(round64(300000)+round64(100000)));
@@ -157,6 +177,30 @@ int main(){
      (void)poolBefore;(void)before;
      // After a reset nothing is resident.
      st.reset();assert(st.activeKeys().empty()&&!st.beginStaging(keys({1}),{1}));assert(st.beginStaging(keys({1}),{0}));st.cancel();}
+    // Same content can have different Reset lifetimes. Filter existing hits,
+    // while cancelled staging and compatible idle reuse keep their old rules.
+    {S::Store st;build(st,keys({71,72}));const auto original=st.table();
+     std::vector<unsigned> pool(st.entries().size(),0);
+     auto managed=[&](uint32_t id){return id<pool.size()&&pool[id]==0;};
+     auto temporary=[&](uint32_t id){return id<pool.size()&&pool[id]==1;};
+     assert(st.activeKeys(managed).size()==2&&st.activeKeys(temporary).empty()&&st.activeKeys().size()==2);
+     const auto bytes=st.poolBytes();
+     assert(!st.beginStaging(keys({71,72}),{1,1},temporary)&&st.elidedMisses()==2&&!st.stagingOpen());
+     assert(st.table()==original&&st.poolBytes()==bytes);verifyInvariants(st);
+     assert(st.beginStaging(keys({71,72}),{},temporary)&&st.staging().stats.uploadedPages==2);
+     for(auto id:st.staging().uploadBuffer)assert(std::find(original.begin(),original.end(),id)==original.end());
+     st.cancel();assert(st.table()==original);verifyInvariants(st);
+     assert(st.beginStaging(keys({71,72}),{},temporary));pool.resize(st.entries().size());
+     for(auto id:st.staging().uploadBuffer)pool[id]=1;
+     createResources(st);st.commit();assert(st.activeKeys(managed).empty()&&st.activeKeys(temporary).size()==2);
+     // Prefer compatible idle originals over incompatible active twins.
+     assert(st.beginStaging(keys({71,72}),{},managed)&&st.staging().upload.empty()&&st.staging().table==original);
+     st.commit();assert(st.activeKeys(managed).size()==2&&st.activeKeys(temporary).empty());verifyInvariants(st);
+     // A mixed generation reuses compatible hits and uploads only the new key.
+     assert(st.beginStaging(keys({71,72,73,73}),{1,1,0,0},managed));
+     assert(st.staging().stats.reusedPages==3&&st.staging().stats.uploadedPages==1&&st.staging().table[2]==st.staging().table[3]);
+     createResources(st);st.commit();verifyInvariants(st);
+    }
     // Randomised: active buffers are never touched, committed tables are consistent, cancels leave no claims.
     {std::mt19937 rng(7);S::Store st;
      for(int round=0;round<4000;++round){

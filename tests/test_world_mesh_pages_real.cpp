@@ -20,7 +20,7 @@ struct Sample {
     P::Plan sequential,anchored;double sequentialMs=0,anchoredMs=0;
 };
 static uint64_t roundedCapacity(const P::Plan& plan,uint64_t step=65536) {
-    uint64_t bytes=0;for(const auto& p:plan.pages)for(uint64_t b:{uint64_t(p.vertices.size())*sizeof(WorldVertex),uint64_t(p.indices.size())*4})bytes+=(b+step-1)/step*step;return bytes;
+    uint64_t bytes=0;for(const auto& p:plan.pages)for(uint64_t b:{uint64_t(p.vertices.size())*sizeof(WorldVertex),uint64_t(p.indices.size())*sizeof(uint16_t)})bytes+=(b+step-1)/step*step;return bytes;
 }
 static std::unique_ptr<Sample> sample(const std::string& root,Vec3 c,std::string& error) {
     int tx=int(std::floor((17066.6666667-c.y)/533.3333333)),ty=int(std::floor((17066.6666667-c.x)/533.3333333));
@@ -107,7 +107,7 @@ static void measure(const std::string& root,const char* name,Vec3 c) {
     auto base=sample(root,c,error);
     std::printf("MEASURE %s: sequential pages %zu capacity %.1f MiB build %.0f ms; anchored pages %zu capacity %.1f MiB build+hash %.0f ms (key hashing only: ",name,
         base->sequential.pages.size(),double(roundedCapacity(base->sequential))/1048576,base->sequentialMs,base->anchored.pages.size(),double(roundedCapacity(base->anchored))/1048576,base->anchoredMs);
-    {auto t=std::chrono::steady_clock::now();uint64_t sink=0;for(const auto& p:base->anchored.pages)sink+=NorthlightMeshPageKey::keyOf(p.vertices.data(),p.vertices.size()*sizeof(WorldVertex),p.indices.data(),p.indices.size()*4).lo&1;
+    {auto t=std::chrono::steady_clock::now();uint64_t sink=0;for(const auto& p:base->anchored.pages)sink+=NorthlightMeshPageKey::keyOf(p.vertices.data(),p.vertices.size()*sizeof(WorldVertex),p.indices.data(),p.indices.size()*sizeof(uint16_t)).lo&1;
      std::printf("%.1f ms for %.1f MiB%s)\n",std::chrono::duration<double,std::milli>(std::chrono::steady_clock::now()-t).count(),double(base->anchored.vertexBytes+base->anchored.indexBytes)/1048576,sink==UINT64_MAX?"!":"");}
     struct Move {const char* label;Vec3 delta;};
     for(const auto& move:{Move{"same center",{0,0,0}},Move{"+20 yd",{20,0,0}},Move{"+60 yd",{60,0,0}},Move{"+60 yd diagonal",{42,42,0}}}) {
@@ -145,7 +145,7 @@ int main(int argc,char** argv) {
         size_t originalBatch=0,originalTriangle=0,triangles=0;
         for(const auto& page:pages.pages) {
             assert(page.vertices.size()*sizeof(WorldVertex)<=P::PageVertexByteLimit);
-            assert(page.indices.size()*sizeof(uint32_t)<=P::PageIndexByteLimit);
+            assert(page.indices.size()*sizeof(uint16_t)<=P::PageIndexByteLimit);
         }
         // Identity transform, normals and UVs are copied bit-for-bit. Therefore
         // identical VS/matrices produce identical vertex outputs, irrespective
@@ -159,7 +159,7 @@ int main(int argc,char** argv) {
                 const uint32_t index=page.indices.at(batch.start+t*3+k);
                 const auto& vertex=page.vertices.at(index);
                 assert(index>=batch.minVertex&&index<batch.minVertex+batch.vertexCount);
-                assert(std::memcmp(&vertex,&input.source->vertices.at(prior),sizeof(WorldVertex))==0);
+                assert(prior<input.source->vertices.size()&&std::memcmp(&vertex,&input.source->vertices[prior],sizeof(WorldVertex))==0);
                 const auto v=vertex.position;
                 assert(v.x>=batch.boundsLow.x&&v.x<=batch.boundsHigh.x&&v.y>=batch.boundsLow.y&&v.y<=batch.boundsHigh.y&&v.z>=batch.boundsLow.z&&v.z<=batch.boundsHigh.z);
             }

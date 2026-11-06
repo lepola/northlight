@@ -16,6 +16,27 @@ using NorthlightSettings::Field;
 
 static In::Decision route(unsigned msg,In::State& s,std::uintptr_t w=0,std::intptr_t l=0,In::Modifiers m={}){return In::route(msg,w,l,m,s);}
 
+static void masterHotkey(){
+    In::MasterHotkey key;const In::Modifiers chord{true,true,false};
+    const auto press=[&]{key.message(In::Msg::KeyDown,In::VkF1+9,0,chord,true);};
+    // A whole press/release before a frame must survive, exactly once.
+    press();key.message(In::Msg::KeyUp,In::VkF1+9,0,{},true);
+    CHECK(key.take(true));CHECK(!key.take(true));
+    press();key.message(In::Msg::KeyDown,In::VkF1+9,std::intptr_t(1)<<30,chord,true);
+    CHECK(key.take(true));CHECK(!key.take(true));
+    // Two fast presses restore the original state; three invert it.
+    press();press();CHECK(!key.take(true));press();press();press();CHECK(key.take(true));
+    key.message(In::Msg::KeyDown,In::VkF1+9,0,chord,false);CHECK(!key.take(true));
+    key.message(In::Msg::KeyDown,In::VkF1+9,0,{true,false,false},true);CHECK(!key.take(true));
+    key.message(In::Msg::KeyDown,In::VkF1+8,0,chord,true);CHECK(!key.take(true));
+    press();key.message(In::Msg::KillFocus,0,0,{},false);CHECK(!key.take(true));
+    press();key.message(In::Msg::ActivateApp,0,0,{},false);CHECK(!key.take(true));
+    press();CHECK(!key.take(false));CHECK(!key.take(true));
+    // Alt is accepted as by the original polling shortcut, including system keys.
+    key.message(In::Msg::SysKeyDown,In::VkF1+9,0,{true,true,true},true);CHECK(key.take(true));
+    press();key.clear();CHECK(!key.take(true));
+}
+
 static void routing(){
     In::Modifiers hot;hot.ctrl=hot.shift=true;
     {   // Closed: everything reaches the game and nothing is queued.
@@ -163,7 +184,7 @@ static void draft(){
         field(D::Quality,"Quality","Preset","enum","Quality,Balanced,Performance","Quality"),
         field(D::Quality,"Quality","GI","check","1,1,0","1"),
         field(D::Quality,"Quality","GIStrength","slider","100,80,60","100"),
-        field(D::Quality,"Quality","AOMethod","enum","SSAO,HDAO,HBAOPlus,GTAO","SSAO"),
+        field(D::Quality,"Quality","AOMethod","enum","SSAO,HDAO,HBAOPlus,GTAO,ASSAO","SSAO"),
         field(D::Quality,"Quality","AutoBumpTerrain","slider","2,1,0","2"),
         field(D::Quality,"Quality","CommandStream","check","1,1,1","1","~","R"),
         field(D::Renderer,"Renderer","Backend","enum","native,dxvk","legacy","dxvk","R"),
@@ -172,6 +193,8 @@ static void draft(){
         field(D::Celestial,"default","sun_disc","rgb","","1,1,1","1,0.9,0.8"),
         field(D::Celestial,"Azeroth:12","sun_disc","rgb","","1,0.9,0.8"),
         field(D::ShadowRange,"Azeroth:12","terrain_radius","slider","","1000","1500"),
+        field(D::Quality,"Quality","PointShadows","check","1,1,1","1"),
+        field(D::Quality,"Quality","PointShadowDistance","slider","48,48,48","48"),
     };
     fields[4].high="2";fields[1].high="1";
     D::Draft d;d.bind(&fields);
@@ -186,6 +209,9 @@ static void draft(){
     d.set(preset,"Quality");CHECK(!d.edited(preset)&&d.empty());
     // Mode fields read as Off / Normal maps / Normal maps + POM.
     CHECK(D::modeField(bump)&&D::modeOptions(bump).size()==3&&!D::modeField(strength));
+    {auto model=bump;model.key="AutoBumpModels";model.high="3";CHECK(D::modeField(model)&&D::modeOptions(model)==std::vector<std::string>({"0","1","2","3"}));
+     auto terrain=bump;terrain.high="3";CHECK(D::modeOptions(terrain).size()==4);
+     auto grass=bump;grass.key="AutoBumpGrass";grass.high="1";CHECK(D::modeOptions(grass)==std::vector<std::string>({"0","1"}));}
     // Regional Sun/Moon keys inherit the default profile, including its draft.
     CHECK(d.effective(sunRegion)=="1,0.9,0.8"&&!d.overrides(sunRegion)&&d.overrides(sunDefault));
     d.set(sunDefault,"0.5,0.5,0.5");CHECK(d.effective(sunRegion)=="0.5,0.5,0.5");
@@ -204,6 +230,8 @@ static void draft(){
     CHECK(!D::canInherit(backend));                          // no legacy backend installed: Backend cannot be removed
     // Restart-only keys whose shown value differs from the running one.
     CHECK(d.restartPending(hdr)&&!d.restartPending(exposure)&&!d.restartPending(stream));
+    d.set(fields[13],"96");CHECK(!d.restartPending(fields[13])&&D::blocked(d,fields[13],missing)==D::Block::None);
+    d.set(fields[12],"0");CHECK(D::blocked(d,fields[13],missing)==D::Block::NeedsKey&&missing=="PointShadows");
     // Changes go out as id/value pairs; a new snapshot without a field drops its edit.
     const auto changes=d.changes();bool sawHdr=false;for(const auto& c:changes)if(c.first==hdr.id())sawHdr=c.second=="1";CHECK(sawHdr);
     std::vector<Field> fewer(fields.begin(),fields.begin()+8);d.bind(&fewer);
@@ -211,8 +239,63 @@ static void draft(){
     CHECK(D::same(strength,"1.50","1.5")&&!D::same(ao,"SSAO","HDAO")&&!D::same(strength,"1,2","1"));
 }
 
+static void shadowRange(){
+    using namespace NorthlightSettings;
+    Documents docs{Document(""),Document(""),Document(""),Document("# keep\r\n[Azeroth:12]\r\nterrain_radius=2048\r\n[Azeroth:9999]\r\nterrain_radius=1500\r\n")};
+    const auto initial=docs;const auto active=configOf(docs,"");
+    auto fields=schema(docs,initial,active,"");D::Draft d;d.bind(&fields);
+    const auto *base=d.field(D::ShadowRange,"default","terrain_radius"),*westfall=d.field(D::ShadowRange,"Azeroth:40","terrain_radius"),
+        *elwynn=d.field(D::ShadowRange,"Azeroth:12","terrain_radius");
+    CHECK(base&&westfall&&elwynn);if(!base||!westfall||!elwynn)return;
+    for(const auto& r:Regions)CHECK(d.field(D::ShadowRange,r.first,"terrain_radius"));
+    CHECK(d.field(D::ShadowRange,"Azeroth:9999","terrain_radius"));
+    CHECK(d.effective(*base)=="928"&&d.effective(*westfall)=="928"&&!d.overrides(*westfall));
+    d.set(*base,"3000");CHECK(d.effective(*westfall)=="3000"&&d.saved(*westfall)=="928"&&d.restartPending(*westfall));
+    CHECK(d.effective(*elwynn)=="2048");
+    d.set(*westfall,"3000");CHECK(!d.edited(*westfall));
+    d.set(*westfall,"3500");CHECK(d.overrides(*westfall)&&d.effective(*westfall)=="3500");
+    d.inherit(*westfall);CHECK(!d.edited(*westfall)&&d.effective(*westfall)=="3000");
+    d.inherit(*elwynn);CHECK(d.effective(*elwynn)=="3000"&&!d.overrides(*elwynn));
+    auto changed=applyChanges(docs,fields,"S\tdefault\tterrain_radius\t3000\nS\tAzeroth:40\tterrain_radius\t3500\nS\tAzeroth:12\tterrain_radius\t~\n");
+    std::string error;NorthlightRegionalShadow::Table ranges;std::istringstream input(changed[3].text());
+    CHECK(NorthlightRegionalShadow::parse(input,ranges,error));
+    CHECK(ranges.at("Azeroth",12)==3000&&ranges.at("Azeroth",40)==3500&&ranges.at("Azeroth",9999)==1500&&ranges.at("Kalimdor",1)==3000);
+    CHECK(changed[3].bytes().find("# keep\r\n")!=std::string::npos);
+    fields=schema(changed,initial,active,"");d.bind(&fields);d.clear();
+    base=d.field(D::ShadowRange,"default","terrain_radius");westfall=d.field(D::ShadowRange,"Azeroth:40","terrain_radius");
+    const auto* inherited=d.field(D::ShadowRange,"Kalimdor:405","terrain_radius");CHECK(inherited&&inherited->saved=="3000"&&inherited->active=="928");
+    CHECK(base->saved=="3000"&&base->active=="928"&&westfall->saved=="3500");
+    d.set(*base,"4096");CHECK(d.effective(*inherited)=="4096"&&d.effective(*westfall)=="3500");
+    d.clear();CHECK(d.effective(*inherited)=="3000");
+    d.factory(*base);CHECK(d.effective(*base)=="928"&&d.effective(*inherited)=="928");
+    auto reset=applyChanges(changed,fields,"S\tdefault\tterrain_radius\t~\nS\tAzeroth:40\tterrain_radius\t~\n");
+    std::istringstream cleared(reset[3].text());CHECK(NorthlightRegionalShadow::parse(cleared,ranges,error));CHECK(ranges.fallback==928&&ranges.at("Azeroth",40)==928);
+    for(const char* bad:{"[default]\n", "[default]\nterrain_radius=927", "[default]\nterrain_radius=4097", "[default]\nterrain_radius=nan",
+        "[default]\nterrain_radius=2048\n[default]\nterrain_radius=3000"}){
+        std::istringstream invalid(bad);CHECK(!NorthlightRegionalShadow::parse(invalid,ranges,error));CHECK(ranges.fallback==928);
+    }
+    for(const char* bad:{"927","4097","NaN"}){bool rejected=false;try{applyChanges(changed,fields,std::string("S\tdefault\tterrain_radius\t")+bad+"\n");}catch(...){rejected=true;}CHECK(rejected);}
+}
+
+static void pointShadowDistance(){
+    using namespace NorthlightSettings;
+    const auto docs=factoryDocuments();const auto active=configOf(docs,"");
+    const auto fields=schema(docs,docs,active,"");D::Draft draft;draft.bind(&fields);
+    const auto* field=draft.field(D::Quality,"Quality","PointShadowDistance");
+    CHECK(field&&field->low=="8"&&field->high=="192"&&field->factory=="48"&&field->apply=="F");
+    for(const auto* value:{"8","96","192"}){
+        auto edited=applyChanges(docs,fields,std::string("Q\tQuality\tPointShadowDistance\t")+value+"\n");
+        edited[0]=Document(edited[0].bytes()); // save/reload preserves the override
+        const auto config=configOf(edited,"");CHECK(liveQualityUpdate(active.quality,config.quality).pointShadowDistance==std::stoul(value));
+    }
+    for(const auto* value:{"0","7","193","-1","nan"}){
+        bool rejected=false;try{applyChanges(docs,fields,std::string("Q\tQuality\tPointShadowDistance\t")+value+"\n");}catch(...){rejected=true;}
+        CHECK(rejected);
+    }
+}
+
 int main(){
-    routing();draft();
+    masterHotkey();routing();draft();shadowRange();pointShadowDistance();
     if(failures){std::fprintf(stderr,"%d failure(s)\n",failures);return 1;}
     std::puts("settings overlay: routing and draft OK");
     return 0;

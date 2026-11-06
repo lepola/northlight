@@ -2,11 +2,27 @@
 """Profile safety, native preservation, parent identity and real-cache checks."""
 import sys; from pathlib import Path; sys.path.insert(0, str(Path(__file__).resolve().parents[1]))  # repo root
 import northlight_paths as fp; fp.use_source_modules()
-import hashlib,json,os,pathlib,struct,unittest
+import hashlib,json,os,pathlib,struct,tempfile,unittest
 import outdoor_light_profiles as p
 import world_lights_builder as builder
 
 class Profiles(unittest.TestCase):
+    def test_compact_fixture_boundaries(self):
+        a=dict(position=[0.,0.,0.],rgb=[1.,.5,.25],intensity=1.,start=1.,end=8.,casts_shadows=True)
+        b=dict(a,position=[2.,0.,0.],intensity=2.,start=2.,end=10.)
+        pin=dict(a,emitters=[a,b])
+        result=p.fixture_emitters(pin)
+        self.assertEqual(result,[dict(b,position=(1.,0.,0.))])
+        self.assertEqual(a['position'],[0.,0.,0.])
+        # Equality at the 3-yard boundary is compact; larger or mixed-shadow
+        # fixtures and a transitive chain must keep their distinct lights.
+        edge=dict(b,position=[3.,0.,0.])
+        self.assertEqual(len(p.fixture_emitters(dict(a,emitters=[a,edge]))),1)
+        for separate in ([a,dict(b,position=[3.01,0.,0.])],
+                         [a,dict(b,casts_shadows=False)],
+                         [a,b,dict(b,position=[4.,0.,0.])]):
+            self.assertIs(p.fixture_emitters(dict(a,emitters=separate)),separate)
+        self.assertEqual(p.fixture_emitters(a),[a])
     def test_catalog_and_no_guessing(self):
         catalog=p.load();self.assertGreaterEqual(len(catalog),75)
         self.assertIn("world\\generic\\passivedoodads\\lights\\torch.m2",catalog)
@@ -62,11 +78,25 @@ class Profiles(unittest.TestCase):
         # so every HD profile places exactly the same emitter as before.
         data=json.loads(fp.tracked('outdoor-light-profiles.json').read_text())
         variants={name:x.pop('variants') for name,x in data['profiles'].items() if 'variants' in x}
+        for x in data['profiles'].values():x.pop('casts_shadows',None)
         self.assertEqual(hashlib.sha256((json.dumps(data,indent=2)+'\n').encode()).hexdigest(),
                          '592dfdc945bd7ed81de005570bb18ef69916920f0b04dce0d4d44b4ba88c6f7a')
         self.assertEqual(len(variants),6)
         for name,v in variants.items():
             for sha,x in v.items():self.assertEqual(x['asset'],'stock 3.3.5a (data/common-2.mpq)',name)
+    def test_explicit_shadow_policy(self):
+        catalog=p.load()
+        self.assertTrue(all(type(x['casts_shadows']) is bool for x in catalog.values()))
+        self.assertTrue(catalog['world\\generic\\passivedoodads\\lights\\generaltorch01.m2']['casts_shadows'])
+        self.assertFalse(catalog['world\\expansion02\\doodads\\crystalsongforest\\sparkles\\crystalsong_sparkles01.m2']['casts_shadows'])
+        blob=b'reviewed';path='world\\test.m2';profile=dict(asset_sha256=hashlib.sha256(blob).hexdigest(),position=[0,0,1],rgb=[1,.5,.2],intensity=1,start=1,end=10)
+        self.assertEqual(p.fallback({path:profile},path,blob,[])[0][-1],0)
+        profile['casts_shadows']=True
+        self.assertEqual(p.fallback({path:profile},path,blob,[])[0][-1],2)
+        profile['casts_shadows']=False
+        self.assertEqual(p.fallback({path:profile},path,blob,[])[0][-1],0)
+        profile['casts_shadows']='yes'
+        with self.assertRaises(ValueError):p.check(profile)
     def test_parent_identity_required(self):
         native=(0,0,0,1,.5,.2,1,12,1,1,1)
         child=(0,0,0,1,.5,.2,1,12,2,3,0)
@@ -78,20 +108,46 @@ class Profiles(unittest.TestCase):
         self.assertEqual(p.deduplicate_parent_lights([native,child],owners),([native,child],0))
         owners[2]=(3,(17<<32)|9);blue=(*child[:3],.1,.2,1,*child[6:])
         self.assertEqual(p.deduplicate_parent_lights([native,blue],owners),([native,blue],0))
-    def test_staged_native_preserved(self):
-        staged=os.environ.get('NORTHLIGHT_LIGHTS_STAGE')   # a staged world_lights_builder output to compare with the client's cache
-        if not staged or not pathlib.Path(staged).exists():self.skipTest('No staged light cache (NORTHLIGHT_LIGHTS_STAGE)')
-        root=fp.client_root();staged=pathlib.Path(staged)
+    def check_staged(self,installed,staged,minimum):
         total=0
         for name in builder.MAPS:
             def records(path):
                 b=path.read_bytes();magic,version,size,count=struct.unpack_from('<4sIII',b)
-                self.assertEqual((magic,version,size),(b'FGL1',1,48));self.assertEqual(len(b),16+48*count)
-                return list(builder.RECORD.iter_unpack(b[16:]))
-            before=records(root/'world-cache/lights'/f'{name}.fgl');after=records(staged/f'{name}.fgl')
+                self.assertEqual((magic,size),(b'FGL1',48));self.assertIn(version,(1,2));self.assertEqual(len(b),16+48*count)
+                rows=list(builder.RECORD.iter_unpack(b[16:]))
+                if version==1:
+                    for i,r in enumerate(rows):
+                        if r[9]==2 and not r[10]&32:
+                            rgb,start,end=builder.native_transport(r[3:6]);rows[i]=(*r[:3],*rgb,start,end,*r[8:])
+                return rows
+            before=records(installed/f'{name}.fgl');after=records(staged/f'{name}.fgl')
             by_id={r[8]:r for r in after};self.assertEqual(len(by_id),len(after))
-            self.assertTrue(all(by_id[r[8]]==r for r in before));self.assertTrue(all(r[9]==3 and r[10]==0 for r in after if r[8] not in {x[8] for x in before}))
+            for r in before:
+                current=by_id[r[8]];self.assertEqual(current[:3],r[:3]);self.assertEqual(current[8:],r[8:])
+                if r[9]==2:
+                    for a,b in zip(current[3:8],r[3:8]):self.assertAlmostEqual(a,b,delta=1e-6)
+                else:self.assertEqual(current,r)
+            self.assertTrue(all(r[9]==3 and r[10]==0 for r in after if r[8] not in {x[8] for x in before}))
             total+=sum(r[9]==3 for r in after)
-        self.assertGreaterEqual(total,14165)
+        self.assertGreaterEqual(total,minimum)
+    def test_staged_migration_both_versions(self):
+        raw=[(1,2,3,4,2,1,85.88758,214.718948,1,2,2),
+             (4,5,6,4,2,1,0,40,2,1,3),(7,8,9,2,1,.5,1,20,3,3,0)]
+        rgb,start,end=builder.native_transport(raw[0][3:6]);normalized=[(*raw[0][:3],*rgb,start,end,*raw[0][8:]),*raw[1:]]
+        added=(10,11,12,.5,.3,.1,.5,3,4,3,0)
+        output=fp.output_dir();output.mkdir(parents=True,exist_ok=True)
+        with tempfile.TemporaryDirectory(prefix='staged-light-migration-',dir=output) as folder:
+            installed=Path(folder)/'installed';staged=Path(folder)/'staged';installed.mkdir();staged.mkdir()
+            for version,rows in ((1,raw),(2,normalized)):
+                preserved={}
+                for name in builder.MAPS:
+                    path=installed/f'{name}.fgl';preserved[path]=struct.pack('<4sIII',b'FGL1',version,48,len(rows))+b''.join(builder.RECORD.pack(*r) for r in rows);path.write_bytes(preserved[path])
+                    (staged/f'{name}.fgl').write_bytes(struct.pack('<4sIII',b'FGL1',2,48,len(normalized)+1)+b''.join(builder.RECORD.pack(*r) for r in [*normalized,added]))
+                self.check_staged(installed,staged,1)
+                for path,data in preserved.items():self.assertEqual(path.read_bytes(),data)
+    def test_staged_native_preserved(self):
+        staged=os.environ.get('NORTHLIGHT_LIGHTS_STAGE')   # a staged world_lights_builder output to compare with the client's cache
+        if not staged or not pathlib.Path(staged).exists():self.skipTest('No staged light cache (NORTHLIGHT_LIGHTS_STAGE)')
+        self.check_staged(fp.client_root()/'world-cache/lights',pathlib.Path(staged),14165)
 
 if __name__=='__main__':unittest.main()

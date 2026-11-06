@@ -105,6 +105,9 @@ int main(){
         assert(upload.status()==Result::Failed&&activeGeneration==7&&failing.calls==failure);
         assert(upload.advance(failing,budget)==Result::Failed&&failing.calls==failure);
     }
+    {const std::vector<PageBytes> aligned={{CopyChunkBytes+32,400,32}};Upload u;assert(u.begin(aligned));FakeBackend b(aligned);
+     while(u.status()==Result::Pending){FakeBudget allowance;allowance.remaining=17003;const auto step=u.step();u.advance([&](Step current,size_t page,size_t at,size_t bytes){if(current==Step::CopyVertices)assert(at%32==0&&bytes%32==0);return b(current,page,at,bytes);},allowance);if(step==Step::CopyVertices)assert(u.offset()%32==0||u.step()!=Step::CopyVertices);}
+     assert(u.status()==Result::Ready&&b.pages[0].sourceV==b.pages[0].gpuV);assert(!u.begin({{33,2,32}}));}
     assert(!upload.begin({{MaxBufferBytes+1,1}}));
     assert(!upload.begin({{1,MaxBufferBytes+1}}));
     assert(!upload.begin({{0,1}}));assert(!upload.begin({{1,0}}));

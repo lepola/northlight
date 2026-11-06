@@ -14,8 +14,11 @@ namespace NorthlightQuality {
 enum class Preset { Quality, Balanced, Performance };
 struct Settings {
     Preset preset=Preset::Quality;
+    unsigned effects=1,worldShadows=1,worldFog=1,localLights=1;
     unsigned minSkinnedTriangles=100,captureBudgetMiB=32,actorShadowBudgetMiB=0;
-    unsigned farShadowInterval=4,nearShadowInterval=1,localLightLimit=48,pointShadows=0,pointShadowRefreshMs=0,shadowDirectionSteps=2048;
+    unsigned farShadowInterval=4,nearShadowInterval=1,localLightLimit=48,pointShadows=1,pointShadowLimit=64,pointShadowRefreshMs=0,shadowDirectionSteps=2048;
+    // Camera distance to the light's influence sphere, in yards.
+    unsigned pointShadowDistance=48;
     // Where each value in Keys order came from: 'd' code default (Quality), 'p' Balanced/Performance
     // preset, 'l' legacy shadow-experiment.ini, 'f' northlight-quality.ini key. Not part of ==.
     // 0.3.138 GI: worker probe solve (rays, bounces, request step), actor/dynamic probes, solver threads.
@@ -54,6 +57,9 @@ struct Settings {
     // packets (0.3.193: the game's blob shadows show with both values). Forces the replay-derived
     // keys off (effective()).
     unsigned actorShadows=1;
+    // Native detail-doodad casters (Quality only). Read once with the other quality
+    // keys; requires ActorShadows and the shadows toggle. Receiver census is independent.
+    unsigned grassShadows=1;
     // 0.3.187 FrameDrawGates: 1 = the draw hooks skip the sky, blob and terrain shadow work in frames
     // where its per-frame preconditions are off (draw_gates.h); 0 = the 0.3.184 per-draw work. Same image.
     unsigned frameDrawGates=1;
@@ -67,9 +73,15 @@ struct Settings {
     // 0.3.193 BlobShadowStrength: how strongly the game's own round blob shadow under characters shows while the mod draws
     // actor shadows: 100 = the game's texture unchanged (no filter work), 0 = hidden, 1..99 = drawn with a lighter texture.
     unsigned blobShadowStrength=50;
-    // 0.3.198 (rain): Weather 1 = Northlight's own effects follow detected rain or snow (sky/weather_effects.h); 0 = nothing reacts.
+    // Independent visibility of the native round ground decal; detailed shadows are unchanged.
+    unsigned blobShadows=1;
+    // Weather 1 = Northlight's effects follow detected rain, snow and sand; 0 = nothing reacts.
     // RainFog 0..2 scales the haze/fog/shafts/sun/shadow/GI/lamp couplings (1 = the tuned look).
     unsigned weather=1,rainFog=1;
+    unsigned rainLens=1,snowLens=1,rainLensStrength=60,snowLensStrength=60;
+    unsigned rainDropSize=100,snowFlakeSize=100,rainLensSize=100,snowLensSize=100;
+    unsigned rainRivulets=1,snowFrost=1,snowFrostStrength=70,sandLens=1,sandLensStrength=60,sandLensSize=100;
+    unsigned weatherWindDirection=45,weatherWindStrength=100,weatherCameraMotion=1;
     // 0.3.199 (fog clouds): FogClouds 1 = low fog banks that drift with the wind (own half-resolution raymarch pass, sky/fog_clouds.h);
     // 0 = none. FogCloudDensity 0..200 percent scales how much of the ground they cover (100 = the tuned look; thicker and faster in rain).
     unsigned fogClouds=1,fogCloudDensity=100;
@@ -95,12 +107,17 @@ struct Settings {
     // 0.3.201 (task 18) ContactAO: 1 = the screen-space contact AO (AO pass and its AOBlur denoise) runs; 0 = neither runs (bloom stays, no contact shading in creases and corners).
     // Creation-time key (the renderer reads it once with the device).
     unsigned contactAO=1;
+    unsigned aoMethod=0,aoQuality=0,aoStrength=100,aoRadius=200; // Live AO method/quality, percent, hundredths of a yard.
+    unsigned autoBump=1,autoBumpStrength=75,autoBumpDistance=48,autoBumpTerrain=3,autoBumpWalls=3,autoBumpGrass=1;
+    unsigned autoParallaxDepth=100,autoParallaxDistance=16,autoParallaxSteps=16;
+    unsigned autoParallaxShadows=1,autoParallaxShadowStrength=70,autoParallaxShadowSteps=8,autoCavity=1,autoCavityStrength=35;
+    unsigned autoMaterialOcclusionDistance=8;
     // NightBrightness (0..100): how much of the art layer's darker night ambient is given back, as added light; 0 = Northlight's night, 100 = the original game's night ambient (shadows stay); default 50. Ramped by the sun below the horizon.
-    unsigned aoMethod=0,aoStrength=100,aoRadius=200; // Live AO method, percent, hundredths of a yard.
     unsigned nightBrightness=50;
     // 0.3.209 (task 29) ActorShadowDetail: 1 = a dedicated 4x finer shadow map around the player holds the moving casters (characters, mounts) and a
     // contact-hardening soft filter pass reads it (sharp at the feet, softer further from the caster); 0 = the 0.3.207 shadows (near cascade, 5x5 tent). ActorShadows=0 disables it too.
     unsigned actorShadowDetail=1;
+    unsigned softShadows=1; // PCSS filtering only; does not change caster capture or shadow-map updates.
     // task 34 SpellLayer: 1 = translucent M2 draws without a depth write (particles, ribbons, spell batches, projected ground effects) are deferred and
     // drawn right after the world effects, so fog, haze, shadow and AO act on the world behind them and not on them; 0 = the old path (no classification).
     // SpellLayerClasses: bit mask of the blends deferred (1 additive, 2 alpha, 4 modulate/mod2x, 8 other). SpellTrace: frames of the SPELLTRACE draw-order log
@@ -126,7 +143,10 @@ struct Settings {
     // WeatherMemory: 1 = the game's own weather state (kind incl. sand, intensity), read from memory, drives the weather effects on frames where the world drew a sky-band draw (the client skips weather
     // while the viewer is inside a building); 0 = the texture/draw detector only, as before.
     unsigned weatherMemory=1;
-    char origin[61]={'d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d'};
+    unsigned autoDisplacementStrength=100,autoDisplacementDistance=12,autoDisplacementDetail=4;
+    unsigned autoBumpModels=3,autoModelDisplacementStrength=25,autoModelDisplacementDistance=8,autoModelDisplacementDetail=2;
+    unsigned autoHeightPolarity=0,autoHeightDetails=75,autoHeightBalance=50;
+    char origin[113]={'d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d'};
 };
 struct Key { const char* name; unsigned Settings::*field; unsigned low,high; unsigned preset[3]; };
 // preset[] = Quality, Balanced, Performance. Quality must equal Settings{}.
@@ -136,8 +156,8 @@ inline const Key Keys[]={
     {"ActorShadowBudgetMiB",&Settings::actorShadowBudgetMiB,0,32,{0,16,8}},
     {"FarShadowInterval",&Settings::farShadowInterval,1,16,{4,5,6}},
     {"NearShadowInterval",&Settings::nearShadowInterval,1,16,{1,2,2}},
-    {"LocalLightLimit",&Settings::localLightLimit,8,64,{48,32,24}}, /* 0.3.217: was 32/24/16 (lamps in view first, screen-coherent batches; 32 lamps measured ~0.15 ms GPU) */
-    {"PointShadows",&Settings::pointShadows,0,1,{0,0,0}}, /* 0.3.176: off in every preset (only building lights cast) */
+    {"LocalLightLimit",&Settings::localLightLimit,0,128,{48,32,24}},
+    {"PointShadows",&Settings::pointShadows,0,1,{1,1,1}},
     {"PointShadowRefreshMs",&Settings::pointShadowRefreshMs,0,100,{0,33,33}},
     {"ShadowDirectionSteps",&Settings::shadowDirectionSteps,256,2048,{2048,2048,2048}},
     {"GI",&Settings::gi,0,1,{1,1,1}},
@@ -188,17 +208,74 @@ inline const Key Keys[]={
     {"DepthFuncAware",&Settings::depthFuncAware,0,1,{1,1,1}},
     {"WeatherMemory",&Settings::weatherMemory,0,1,{1,1,1}},
     {"ActorShadowCpuMs",&Settings::actorShadowCpuMs,0,20,{3,3,2}}, /* task 45 */
+    {"GrassShadows",&Settings::grassShadows,0,1,{1,0,0}},
     {"EquipmentLights",&Settings::equipmentLights,0,1,{1,0,0}},
-    {"AOMethod",&Settings::aoMethod,0,3,{0,0,0}},
+    {"AOMethod",&Settings::aoMethod,0,4,{0,0,0}},
     {"AOStrength",&Settings::aoStrength,0,200,{100,100,100}},
     {"AORadius",&Settings::aoRadius,10,1000,{200,200,200}},
+    {"PointShadowLimit",&Settings::pointShadowLimit,16,128,{64,64,64}},
+    {"AutoBump",&Settings::autoBump,0,1,{1,0,0}},
+    {"AutoBumpStrength",&Settings::autoBumpStrength,0,150,{75,60,40}},
+    {"AutoBumpDistance",&Settings::autoBumpDistance,8,96,{48,36,24}},
+    {"AutoBumpTerrain",&Settings::autoBumpTerrain,0,3,{3,1,1}},
+    {"AutoBumpWalls",&Settings::autoBumpWalls,0,3,{3,1,1}},
+    {"AutoBumpGrass",&Settings::autoBumpGrass,0,3,{1,1,1}},
+    {"AutoParallaxDepth",&Settings::autoParallaxDepth,0,200,{100,75,50}},
+    {"AutoParallaxDistance",&Settings::autoParallaxDistance,4,32,{16,12,8}},
+    {"AutoParallaxSteps",&Settings::autoParallaxSteps,8,32,{16,12,8}},
+    {"AutoDisplacementStrength",&Settings::autoDisplacementStrength,0,1000,{100,75,50}},
+    {"AutoDisplacementDistance",&Settings::autoDisplacementDistance,4,24,{12,8,6}},
+    {"AutoDisplacementDetail",&Settings::autoDisplacementDetail,1,5,{4,3,2}},
+    {"AutoBumpModels",&Settings::autoBumpModels,0,3,{3,1,1}},
+    {"AutoModelDisplacementStrength",&Settings::autoModelDisplacementStrength,0,100,{25,15,10}},
+    {"AutoModelDisplacementDistance",&Settings::autoModelDisplacementDistance,2,16,{8,6,4}},
+    {"AutoModelDisplacementDetail",&Settings::autoModelDisplacementDetail,1,4,{2,2,1}},
+    {"AutoHeightPolarity",&Settings::autoHeightPolarity,0,2,{0,0,0}},
+    {"AutoHeightDetails",&Settings::autoHeightDetails,0,100,{75,75,75}},
+    {"AutoHeightBalance",&Settings::autoHeightBalance,0,100,{50,50,50}},
+    {"AutoParallaxShadows",&Settings::autoParallaxShadows,0,1,{1,0,0}},
+    {"AutoParallaxShadowStrength",&Settings::autoParallaxShadowStrength,0,100,{70,60,50}},
+    {"AutoParallaxShadowSteps",&Settings::autoParallaxShadowSteps,4,16,{8,6,4}},
+    {"AutoCavity",&Settings::autoCavity,0,1,{1,0,0}},
+    {"AutoCavityStrength",&Settings::autoCavityStrength,0,100,{35,30,25}},
+    {"AutoMaterialOcclusionDistance",&Settings::autoMaterialOcclusionDistance,2,16,{8,6,4}},
+    {"AOQuality",&Settings::aoQuality,0,2,{0,0,0}}, // Explicit opt-in; all presets retain High.
+    {"BlobShadows",&Settings::blobShadows,0,1,{1,1,1}},
+    {"RainLens",&Settings::rainLens,0,1,{1,1,1}},
+    {"SnowLens",&Settings::snowLens,0,1,{1,1,1}},
+    {"RainLensStrength",&Settings::rainLensStrength,0,100,{60,60,60}},
+    {"SnowLensStrength",&Settings::snowLensStrength,0,100,{60,60,60}},
+    {"RainDropSize",&Settings::rainDropSize,25,300,{100,100,100}},
+    {"SnowFlakeSize",&Settings::snowFlakeSize,25,300,{100,100,100}},
+    {"RainLensSize",&Settings::rainLensSize,25,300,{100,100,100}},
+    {"SnowLensSize",&Settings::snowLensSize,25,300,{100,100,100}},
+    {"RainRivulets",&Settings::rainRivulets,0,1,{1,1,1}},
+    {"SnowFrost",&Settings::snowFrost,0,1,{1,1,1}},
+    {"SnowFrostStrength",&Settings::snowFrostStrength,0,100,{70,70,70}},
+    {"SandLens",&Settings::sandLens,0,1,{1,1,1}},
+    {"SandLensStrength",&Settings::sandLensStrength,0,100,{60,60,60}},
+    {"SandLensSize",&Settings::sandLensSize,25,300,{100,100,100}},
+    {"WeatherWindDirection",&Settings::weatherWindDirection,0,359,{45,45,45}},
+    {"WeatherWindStrength",&Settings::weatherWindStrength,0,300,{100,100,100}},
+    {"WeatherCameraMotion",&Settings::weatherCameraMotion,0,1,{1,1,1}},
+    {"PointShadowDistance",&Settings::pointShadowDistance,8,192,{48,48,48}},
+    {"SoftShadows",&Settings::softShadows,0,1,{1,1,0}},
+    {"Effects",&Settings::effects,0,1,{1,1,1}},
+    {"WorldShadows",&Settings::worldShadows,0,1,{1,1,1}},
+    {"WorldFog",&Settings::worldFog,0,1,{1,1,1}},
+    {"LocalLights",&Settings::localLights,0,1,{1,1,1}},
 };
+// The seven scene groups own their child controls, including sky/ambient work.
+// Presentation/HDR and the settings overlay remain available like F10.
+inline bool pipelineWork(const Settings& s){return s.effects&&(s.gi||s.worldShadows||s.worldFog||(s.localLights&&s.localLightLimit)||s.contactAO||s.autoBump||s.weather);}
 inline bool operator==(const Settings& a,const Settings& b){for(const auto& k:Keys)if(a.*k.field!=b.*k.field)return false;return true;}
 inline bool operator!=(const Settings& a,const Settings& b){return !(a==b);}
 // Probe work actually requested: GI=0 also removes actor capture and dynamic probes.
 inline bool giActorCapture(const Settings& s){return s.gi&&s.giDynamicProbes;}
 // F8 can only hide GI; GI=0 keeps the pass off whatever F8 requests.
 inline bool giPass(const Settings& s,bool requested){return requested&&s.gi;}
+// Hidden or zero-weight transport has no probe/actor consumer. Retain its cache.
+inline bool giWork(const Settings& s,bool requested){return giPass(s,requested)&&s.giStrength!=0;}
 // Solver threads actually used: GIThreads, never more than cores-1 (the game
 // thread keeps a core); 0 cores (unknown) means 1. 1 = the original serial loop.
 inline unsigned giSolverThreads(const Settings& s,unsigned cores){
@@ -222,7 +299,11 @@ inline const ForcedKey ActorShadowForced[]={
 // "retired" note instead of "unknown key". The persistent casters (PersistentCasters,
 // PersistentRigidProps): rigid_memory.h replaces the rigid-prop part.
 struct RetiredKey { const char* name; const char* version; };
-inline const RetiredKey Retired[]={{"PersistentCasters","0.3.172"},{"PersistentRigidProps","0.3.172"}};
+inline const RetiredKey Retired[]={{"PersistentCasters","0.3.172"},{"PersistentRigidProps","0.3.172"},
+    {"Water","PR93 withdrawal"},{"WaterSSR","PR93 withdrawal"},{"WaterSSRResolution","PR93 withdrawal"},
+    {"WaterSSRSteps","PR93 withdrawal"},{"WaterSSRDistance","PR93 withdrawal"},{"WaterSSRThickness","PR93 withdrawal"},
+    {"WaterSSRRefineSteps","PR93 withdrawal"},{"WaterSSRStrength","PR93 withdrawal"},{"WaterRefraction","PR93 withdrawal"},
+    {"WaterGlints","PR93 withdrawal"},{"WaterPointLights","PR93 withdrawal"}};
 inline Settings effective(Settings s){if(!s.actorShadows)for(const auto& k:ActorShadowForced)s.*k.field=0;return s;}
 // Names of the keys effective() turned off (requested non-zero), space separated; "none" if nothing.
 inline std::string forcedOff(const Settings& requested){
@@ -231,6 +312,7 @@ inline std::string forcedOff(const Settings& requested){
     return out.empty()?"none":out;}
 // Replay shadow work actually requested: shadows on (F9) and ActorShadows=1.
 inline bool actorShadowWork(const Settings& s,bool shadows){return shadows&&s.actorShadows;}
+inline bool grassShadowWork(const Settings& s,bool shadows){return s.grassShadows&&actorShadowWork(s,shadows);}
 // 0.3.209 (task 29): the dedicated actor shadow map is drawn and read.
 inline bool actorShadowMap(const Settings& s,bool shadows){return actorShadowWork(s,shadows)&&s.actorShadowDetail;}
 inline const char* name(Preset p){return p==Preset::Balanced?"Balanced":p==Preset::Performance?"Performance":"Quality";}
@@ -247,11 +329,17 @@ inline bool number(const std::string& text,unsigned& out){
     if(text.empty()||text.size()>6||text.find_first_not_of("0123456789")!=std::string::npos)return false;
     out=unsigned(std::strtoul(text.c_str(),nullptr,10));return true;
 }
-inline const char* aoName(unsigned method){const char* names[]={"SSAO","HDAO","HBAOPlus-D3D9","GTAO"};return names[method<4?method:0];}
+inline const char* aoName(unsigned method){const char* names[]={"SSAO","HDAO","HBAOPlus-D3D9","GTAO","ASSAO"};return names[method<5?method:0];}
 inline bool aoNumber(const std::string& text,unsigned& out){
     const auto value=lower(text);
     if(value=="ssao")out=0;else if(value=="hdao")out=1;
-    else if(value=="hbaoplus"||value=="hbao+")out=2;else if(value=="gtao")out=3;
+    else if(value=="hbaoplus"||value=="hbao+")out=2;else if(value=="gtao")out=3;else if(value=="assao")out=4;
+    else return number(text,out);return true;
+}
+inline const char* aoQualityName(unsigned quality){const char* names[]={"High","Medium","Low"};return names[quality<3?quality:0];}
+inline bool aoQualityNumber(const std::string& text,unsigned& out){
+    const auto value=lower(text);
+    if(value=="high")out=0;else if(value=="medium")out=1;else if(value=="low")out=2;
     else return number(text,out);return true;
 }
 // Explicit key values of one INI section, in file order. Unrecognised
@@ -284,7 +372,7 @@ inline void apply(const std::vector<Entry>& entries,Settings& s,const char* sour
         if(retired){problems.push_back(where+retired->name+" retired in "+retired->version+" (ignored)");continue;}
         if(!match){problems.push_back(where+"unknown key "+e.key+" ignored");continue;}
         unsigned v=0;
-        if(!(match->field==&Settings::aoMethod?aoNumber(e.value,v):number(e.value,v))||v<match->low||v>match->high){
+        if(!(match->field==&Settings::aoMethod?aoNumber(e.value,v):match->field==&Settings::aoQuality?aoQualityNumber(e.value,v):number(e.value,v))||v<match->low||v>match->high){
             problems.push_back(where+e.key+"="+e.value+" invalid (allowed "+std::to_string(match->low)+".."+std::to_string(match->high)+"); kept "+std::to_string(s.*match->field));continue;}
         s.*match->field=v;s.origin[index]=origin;
     }
@@ -321,7 +409,7 @@ inline Settings load(std::istream* quality,std::istream* legacy,std::vector<std:
     apply(own,s,"northlight-quality.ini",'f',problems,true);
     return s;
 }
-// Far/NearShadowInterval>1: reuse of one source's last COMPLETE cascade map with the
+// Far cascade or near environment: retain a complete depth map with the
 // matrix it was rendered with. begin() is called before a render writes anything,
 // so a render that fails part-way is never reused; commit() only after success.
 struct ShadowMapReuse {
@@ -349,25 +437,16 @@ inline CascadeAction cascadeAction(const ShadowMapReuse& r,unsigned interval,uns
 // Near 2 / Far 3 renders far every 2). Only ever fresher; never with Near 1.
 inline bool pullFar(unsigned nearInterval,unsigned farInterval,unsigned now,const ShadowMapReuse& farMap,bool nearRenderedFresh){
     return nearRenderedFresh&&nearInterval>1&&farMap.valid&&now-farMap.pass+nearInterval>farInterval;}
-// Model (replay) capture is needed on a frame only by a consumer that draws or
-// packs fresh replays: GI actor packets (every ~200 ms), a directional cascade
-// that cannot reuse its complete map, a due point-shadow refresh, a demand left
-// by a previous skipped frame, or a GPU diagnostic dump. Shadows off: GI only.
-// Shadows on: only when BOTH intervals are >1 (1/1 is exactly the old path).
-// A wrong prediction is safe: that frame keeps its complete maps one more frame
-// and demands a capture (see WorldRenderer::render).
+// Moving shadows need fresh model poses every frame. Without that work, only
+// GI actor packets, a capture demand or a diagnostic need model capture.
 struct CaptureInputs {
     bool shadows=true,actorDue=false,demand=false,diagnostic=false,pointDue=false;
     bool sourceActive[2]={};unsigned nextPass=0;
 };
-inline bool captureSkipPossible(const Settings& s,bool shadows){return !shadows||(s.nearShadowInterval>1&&s.farShadowInterval>1);}
-inline bool skipModelCapture(const Settings& s,const CaptureInputs& in,const ShadowMapReuse* nearMaps,const ShadowMapReuse* farMaps){
-    if(!captureSkipPossible(s,in.shadows)||in.actorDue||in.demand||in.diagnostic)return false;
-    if(!in.shadows)return true;
-    if(in.pointDue)return false;
-    for(int source=0;source<2;++source)if(in.sourceActive[source]&&
-        (!nearMaps[source].fresh(s.nearShadowInterval,in.nextPass)||!farMaps[source].fresh(s.farShadowInterval,in.nextPass)))return false;
-    return true;
+// Near intervals retain environment depth, never old caster poses.
+inline bool captureSkipPossible(const Settings&,bool shadows){return !shadows;}
+inline bool skipModelCapture(const Settings&,const CaptureInputs& in,const ShadowMapReuse*,const ShadowMapReuse*){
+    return !in.shadows&&!in.actorDue&&!in.demand&&!in.diagnostic;
 }
 inline std::string describe(const Settings& s){
     std::ostringstream o;o<<"preset="<<name(s.preset);

@@ -44,6 +44,16 @@ emitter transform at draw time, so the light follows the same original bone.
 For world-space particle trails the light approximates the current emitter
 anchor rather than illuminating every old particle separately.
 
+Particle-derived equipment lights retain the calibrated texture/lifetime
+radiance. Particle count (emission rate times lifetime) is not another intensity
+multiplier: it made the Utgarde dagger's three sources 2.8, 9 and 50 times too
+strong. The original rate track still controls intensity relative to its peak,
+and the enabled track still turns the source off. This matches the live particle
+path's policy of measuring emission without summing every sprite. These values
+are generated offline; correcting them adds no per-frame work. Existing
+installations need regenerated equipment entries in both Northlight patch-Z
+archives; replacing the renderer DLL alone cannot fix their stored intensity.
+
 Every generated native record is read back with the existing track parser and
 every MPQ entry is reopened and byte-compared. Generated model binaries belong
 to the user's client and must not be committed or redistributed as source.
@@ -108,7 +118,12 @@ UV instructions supply the current particle position and colour. Texture RGB
 and alpha come from successful CPU uploads, including native BC formats and
 sRGB sampler state. No GPU texture or buffer readback is started. Unsupported
 shaders, missing uploads, multitexture effects, UI draws and ordinary alpha
-surfaces stay unlit.
+surfaces stay unlit. The client-specific `northlight-emission.bin` catalog now
+admits qualified luminous alpha materials as well. It is generated from the
+winning MPQ chain and installed/restored in the same art-layer transaction.
+Simple unlit fixed-function texture-times-diffuse ribbons use their actual
+world/view transforms, vertex colours and uploaded texture, with the same
+current-frame lifetime rule.
 
 Sampling is bounded to 32 additive draws and 16 triangles per draw. Nearby
 samples form compact lights, sharing the eight-source cap with native item and
@@ -128,3 +143,35 @@ light. In-game appearance and frame cost still require a client comparison.
 All these sources share `EquipmentLights`, `LocalLightLimit` and the eight-source
 Northlight admission cap. Those limits do not cap the game's own per-model
 native light updates. Generated archives need an in-game performance comparison.
+
+## Sky lightning
+
+The catalog identifies lightning and meteor-flash layers in every installed sky
+model. The current archive chain contains 17 such models / 254 material batches;
+27 batches use a second texture mask. Capture reads the native shader's current RGBA and
+animated UVs, so no independent random timer can drift from the visible flash.
+The sky viewport is admitted separately, before world depth/camera recovery.
+View-space sources are converted only when the current world camera is known.
+Both textures retain their own proven UV output, sampler addressing/filtering,
+RGB and alpha. A black or unavailable mask cannot leave an unmasked lamp.
+Texture alpha is interpreted by the native combiner; bright zero-alpha texels
+remain valid for Opaque combiners. Palette textures use an exact canonical RGBA
+identity after native CPU expansion. These rules apply throughout the resolved
+archive chain, without a location allowlist.
+
+Skybox scale is not physical distance. The explicit transport model intersects
+the measured direction with a cloud layer 350 yards above the viewer (a maximum
+1750-yard distance near the horizon). Source range is 2000 yards. World bolts
+use actual transformed geometry, with a 32-yard extent gate that prevents small
+spells sharing the same atlas from receiving environmental-bolt energy.
+This is relative artistic calibration, not measured lightning photometry.
+
+The transient inverse-square term has a finite core and a smooth zero at the
+range boundary. Brightness follows the native flash alpha; no selection fade or
+release tail is applied. Up to two of the eight dynamic slots are reserved for
+visible discharges. At most 64 candidate probes and four luminous discharge
+draws are sampled per frame; zero-opacity scheduled layers cannot consume the
+four slots. The ordinary lamp shaders remain byte-identical. Only batches with
+a discharge use the separate 447-slot `LocalFlash` shader; they never enter the
+ordinary sixteen-lamp variant. Lightning does not currently add a new shadow
+map, cloud bloom pass or thunder simulation.

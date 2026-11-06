@@ -24,9 +24,16 @@ checks['one fade check and one blend check in captureModel, after the small-shad
     and capture.index('if(smallShadow&&!actorCaptureEnabled())')<capture.index(check)<capture.index(blend)<capture.index('NorthlightCaptureAdmission::Decision admit;')
     <capture.index('if(replaySnapshots.captureExhausted(priority))')<capture.index('GetRenderState(D3DRS_ALPHATESTENABLE')
     and capture.index('if(replays.size()>=4096)')<capture.index(check))
-checks['blend: Blend fate first, a failed read rejects, counted per class on sample, no Blend fate after the admission']=(
-    'fate.reason=NorthlightShadowFate::Blend;\n        {DWORD blend=0;if(FAILED(d->'+blend+')||blend){if(sample&&priority)++skinnedBlendRejected;if(sample&&!priority)++otherBlendRejected;return;}}' in capture
-    and capture.count('NorthlightShadowFate::Blend')==1)
+legacy_blend=('fate.reason=NorthlightShadowFate::Blend;\n        {DWORD blend=0;if(FAILED(d->'+blend+')||blend){if(sample&&priority)++skinnedBlendRejected;if(sample&&!priority)++otherBlendRejected;return;}}' in capture)
+audited_grass_blend=(
+    'bool blendAllowed=SUCCEEDED(d->'+blend+');' in capture
+    and 'if(blendAllowed&&blend)' in capture
+    and 'blendAllowed=metadata.detailDoodad&&' in capture
+    and 'NorthlightDetailShadow::blendedMaterial(detailPixel,source,destination,operation)' in capture
+    and 'if(!blendAllowed){' in capture
+    and 'if(sample&&priority)++skinnedBlendRejected;if(sample&&!priority)++otherBlendRejected;return;}' in capture)
+checks['blend: unreadable state rejects, only audited grass can blend, counted before admission']=(
+    (legacy_blend or audited_grass_blend) and capture.count('NorthlightShadowFate::Blend')==1)
 checks['reads COLORWRITEENABLE, masks RGB, sets the Fade fate first, applies to every model draw, a failed read does not reject']=(
     'fate.reason=NorthlightShadowFate::Fade;\n        {DWORD colorWrite=15;if(SUCCEEDED(d->'+check in capture and '(colorWrite&7)==0' in capture
     and 'if(SUCCEEDED(d->'+check+')&&(colorWrite&7)==0){' in capture and 'if(priority&&(colorWrite' not in capture)

@@ -29,6 +29,7 @@ using V=NorthlightGI::Vec3;using DWORD=uint32_t;
 namespace NorthlightWorldMesh {struct WorldMeshUploadPlan {size_t cpuBytes()const{return 16;}};}
 namespace NorthlightRegionalFog {struct Field {};}
 namespace NorthlightLocalLights {struct Light {};}
+namespace NorthlightLightAttachments {struct Records {};}
 static DWORD now=0;static unsigned solveCalls=0;static std::function<void()> afterSolve,onTick;
 static DWORD GetTickCount(){if(onTick)onTick();return now;}
 namespace NorthlightGI {
@@ -44,7 +45,7 @@ static Probe fixtureMoving(const BVH& bvh,Vec3 p,const PreparedLighting& light,u
 struct Fixture {
  struct PreparedCommit {int tag=0;};
 SNAPSHOT
- struct Request {std::shared_ptr<const int> actorJob;V camera,probeCenter;NorthlightGI::Lighting light;std::string map="Azeroth";uint64_t id=1,baseId=1;DWORD queuedAt=0;unsigned reason=1;};
+ struct Request {std::shared_ptr<const int> actorJob;V camera,probeCenter;NorthlightGI::Lighting light;std::string map="Azeroth";uint64_t id=1,baseId=1;DWORD queuedAt=0;unsigned reason=1;bool enabled=true,giEnabled=true;};
  // The production relight cache answers repeated keys without solving; this tail test counts every solve and advances its clock
  // per solve, so it uses a pass-through with the same interface (the cache itself: test_probe_blend_equivalence / world_probe_cache).
  struct PassThroughRelight {
@@ -56,6 +57,7 @@ SNAPSHOT
  std::shared_ptr<NorthlightGI::BVH> bvh=std::make_shared<NorthlightGI::BVH>(),probeCacheGeometry,actors;
  std::shared_ptr<NorthlightWorldMesh::WorldMeshUploadPlan> scenePlan=std::make_shared<NorthlightWorldMesh::WorldMeshUploadPlan>();
  std::shared_ptr<const NorthlightRegionalFog::Field> sceneFog;
+ std::shared_ptr<const NorthlightLightAttachments::Records> sceneLightAttachments=std::make_shared<NorthlightLightAttachments::Records>();
  std::shared_ptr<const PreparedCommit> scenePrepared=std::make_shared<PreparedCommit>();
  std::vector<NorthlightLocalLights::Light> rawSceneLights;
  std::vector<NorthlightGI::PointLight> sceneLights;
@@ -91,6 +93,11 @@ int main(){
  const unsigned W=NorthlightGI::probeLayout().count(); /* 2744 at the default layout */
  reset();Fixture cold;onTick=[&]{cold.observe();};cold.run();assert(!cold.pending&&cold.published&&!cold.published->partial&&cold.published->processedProbes==W&&cold.completedBaseId==1);assert(cold.observed.front().value->partial&&cold.observed.front().value->processedProbes==8&&cold.observed.front().at==8);const unsigned interval=NorthlightGI::ProbePublicationCadence::IntervalMs;assert(cold.observed.size()>5&&cold.observed.size()<=W/interval+3);
  DWORD lastTick=0;for(const auto& o:cold.observed)if(o.value->partial){if(lastTick)assert(o.at-lastTick>=interval);lastTick=o.at;assert(o.value->lightingGeneration==1);}cold.immutable();
+ assert(cold.published->lightAttachments==cold.sceneLightAttachments);
+ // Disabling renderer/GI work during a solve must fence partial and final publication.
+ for(unsigned mode=0;mode<2;++mode){reset();Fixture disabled;onTick=[&]{disabled.observe();};afterSolve=[&]{if(solveCalls==100){if(mode)disabled.request.giEnabled=false;else disabled.request.enabled=false;}};disabled.run(1);
+  assert(disabled.completedBaseId==0&&disabled.superseded==1&&disabled.published&&disabled.published->partial);
+  for(const auto& o:disabled.observed)assert(o.at<=100);disabled.immutable();}
  // Repeated camera changes inside one BVH region retain all solved world
  // points, refresh the nearest-first window, and do not defer the pub clock.
  reset();Fixture moving;onTick=[&]{moving.observe();};unsigned changes=0;afterSolve=[&]{if(changes<8&&solveCalls>=unsigned(100*(changes+1))){++changes;moving.next({float(changes*4),0,0});}};moving.run();assert(changes==8&&moving.retargeted==8&&moving.superseded==0&&!moving.pending&&!moving.published->partial&&moving.completedBaseId==moving.request.baseId);assert(moving.published->lightingGeneration==1&&moving.published->reusedProbes>0);assert(solveCalls<W+8*400);moving.immutable();

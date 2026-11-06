@@ -13,14 +13,28 @@
 // Serials are monotonic within one reset, so an equal block serial proves that
 // no accepted write touched the block between two stamps (identical rewrites
 // included). A different serial means only "read/compare that block".
+class ExtensionDevice;
 namespace NorthlightConstantEpoch {
 constexpr unsigned BlockRegisters=16,FloatBlocks=256/BlockRegisters;
 struct Stamp {
     std::uint64_t reset=0,floats=0,floatWithout2=0,floatWithout4=0,booleans=0,integers=0;
     std::uint64_t floatBlock[FloatBlocks]={};
-    bool valid=false;
+    bool valid=false,held=false,requestHeld=false; // Optional same-gate certificate, not an epoch word.
 };
 using Reader=bool(*)(void*,Stamp&);
+using KnownSpan=bool(*)(void*,unsigned,unsigned,float*,Stamp&);
+// Only ExtensionDevice can construct a source certified to read its mirror.
+class TrustedSource {
+    friend class ::ExtensionDevice;
+    void* context_=nullptr;Reader reader_=nullptr;KnownSpan span_=nullptr;
+    TrustedSource(void* context,Reader reader,KnownSpan span):context_(context),reader_(reader),span_(span){}
+public:
+    TrustedSource()=default;
+    explicit operator bool()const{return reader_!=nullptr;}
+    void* context()const{return context_;}
+    Reader reader()const{return reader_;}
+    KnownSpan span()const{return span_;}
+};
 // 0.3.180 (C1): the serial words alone. exact() and banks() also need both stamps valid; an in-place
 // compare with a Clock's live words (whose valid flag is never set) asks its source's valid() instead.
 inline bool sameWords(const Stamp& a,const Stamp& b){

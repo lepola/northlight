@@ -4,6 +4,7 @@
 // Revert discards it. Labels, grouping and help text follow the retired in-game Lua menu.
 #include <memory>
 #include <string>
+#include <functional>
 
 namespace NorthlightSettings { class Service; }
 
@@ -13,7 +14,8 @@ class SettingsPanel {
     std::unique_ptr<State> s;
 public:
     // hotkey: the toggle's name, for the closed-window reminder.
-    SettingsPanel(std::shared_ptr<NorthlightSettings::Service> service,std::string hotkey);
+    using CalibrationDraw=std::function<void(const float* rectangle,const float* color)>;
+    SettingsPanel(std::shared_ptr<NorthlightSettings::Service> service,std::string hotkey,CalibrationDraw calibration={});
     ~SettingsPanel();
     SettingsPanel(const SettingsPanel&)=delete;
     SettingsPanel& operator=(const SettingsPanel&)=delete;

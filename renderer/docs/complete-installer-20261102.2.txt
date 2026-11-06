@@ -1,0 +1,31 @@
+Complete Windows test installer 0.3.216-test.20261102.2
+
+Base integration commit: 19ba2a959ede50e05d58c2349be6c2085a4e840c
+Includes the complete current integration plus the local release-validation repairs.
+Source identity: c2fc39baf25bb6ba3ebeb1dda1c28f51e62743bdb7d0b0e52300678526ec1b0c
+
+Archive: Northlight-0.3.216-test.20261102.2-Windows.zip
+Archive bytes: 20164851
+Archive SHA256: 118b7069b0f3fff0dc9c3a6d913a385ccfbbe264e3b245229e52e9ea4848d337
+DLL SHA256: 3c1ca7193d5329b8d0b39dd808279ad0359cb54aebe202093a1be2df6cbbc638
+
+Production repairs: optional source-identity lookup falls back on allocation
+failure; particle texture code compiles on x86 and x64; sampled replay-bound
+logs use the existing deferred queue outside selection/upload spans.
+Windows compiler preflight and AGENTS.md retain the approved build workflow
+that avoids Zig's restricted-sandbox error: Unexpected.
+
+Full final suite: PASS=250 FAIL=0 TIMEOUT=0 SKIP=225.
+All 35 initial test failures have been repaired. Skips retain the runner's
+explicit prerequisite/manual reasons; unavailable host C++/sanitizer tools
+are not reported as tested.
+Package allowlists, dependency pins, manifests, ZIP CRC, exact DLL bytes and
+six entry points under bundled isolated Python in a Unicode path pass.
+The regenerated unoptimized shader oracle passes all 12 paired GPU cases.
+The capture oracle checks INTZ and all 22 API-failure controls; the driver
+reports DF24 unsupported, and that omission is recorded explicitly.
+
+Test results: .local/out/test-output/20261102-170015/results.tsv
+Full evidence: .local/out/release-20261102.2/final-validation.json
+The package is local in releases/. The game installation is unchanged.
+These offline checks do not establish whole-game FPS or in-game visual acceptance.

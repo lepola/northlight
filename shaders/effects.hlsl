@@ -8,6 +8,8 @@ sampler2D Scene : register(s0);
 sampler2D Depth : register(s1);
 sampler2D Ambient : register(s2);
 sampler2D WaterMask : register(s3);
+sampler2D EffectCoverage : register(s7);
+float4 EffectCoverageInfo : register(c79);
 // AOBlur only: the raw AO on s0 (LINEAR, CLAMP: Scene's sampler state; AOBlur never reads Scene) for its bilinear early-out.
 sampler2D AmbientLinear : register(s0);
 float4 WaterInfo : register(c4); // coherent actual-liquid mask available
@@ -133,9 +135,13 @@ float4 AOImpl(float2 uv, bool colorBounce)
     float obscurance = 0.0;
     float3 bounce = 0.0;
 
-    [loop] for (int i = 0; i < 8; ++i)
+    // Four fixed pairs retain accumulation order and avoid SM3's
+    // eight-way constant-array selection at every tap.
+    [loop] for (int band = 0; band < (colorBounce ? 4 : 8); ++band)
+    [unroll] for (int tap = 0; tap < (colorBounce ? 2 : 1); ++tap)
     {
-        float2 suv = uv + kernel[i].x * axisX + kernel[i].y * axisY;
+        float2 k = colorBounce ? (band == 0 ? kernel[tap] : band == 1 ? kernel[tap + 2] : band == 2 ? kernel[tap + 4] : kernel[tap + 6]) : kernel[band];
+        float2 suv = uv + k.x * axisX + k.y * axisY;
         float sd = ReadDepth(suv);
         float3 q = Position(suv, sd);
         float3 v = q - p;
@@ -153,7 +159,7 @@ float4 AOImpl(float2 uv, bool colorBounce)
         obscurance += weight;
         // Only visible neighbouring surfaces contribute; missing off-screen
         // geometry cannot produce bounce in this screen-space approximation.
-        if (colorBounce)
+        [branch] if (colorBounce && weight > 0)
             bounce += tex2Dlod(Scene, float4(suv, 0, 0)).rgb * weight;
     }
     return float4(saturate(bounce * 0.125),
@@ -199,11 +205,15 @@ float4 AOContactBloom(float2 uv : TEXCOORD0) : COLOR0
 // D3D9 adaptations: AMD AOFX valley HDAO, NVIDIA HBAO+ coarse AO,
 // and Jimenez et al. GTAO's cosine-weighted horizon integral. See AO-METHODS.md
 // and licenses/ao-methods.txt. Shared half-res targets/filter, no SDK dependency.
-float2 AORotation(float2 uv)
+float2 AORotation(float2 uv, float angularPeriod)
 {
     float noise = frac(dot(floor(uv / ImageAndClip.xy * .5), float2(.06711056, .00583715)));
-    float2 rotation = frac(float2(52.9829189, 37.4136) * noise) * 2 - 1;
-    return rotation * rsqrt(max(dot(rotation, rotation), 1e-4));
+    // Hash one angle, not two correlated sawtooths normalized into a vector.
+    // The latter creates low-frequency diagonal bands that survive AOBlur,
+    // especially with ASSAO's asymmetric progressive sample pattern.
+    // The caller selects the angular sweep for its sample symmetry/budget.
+    float angle = frac(52.9829189 * noise) * angularPeriod;
+    return float2(cos(angle), sin(angle));
 }
 
 float AOAcos(float x)
@@ -222,11 +232,12 @@ float4 AOSample(float2 uv)
     return float4(Position(uv, d), valid);
 }
 
+// High sample counts are fixed; approved bytecode is pinned by the AO tests.
 float NewAO(float2 uv, int method)
 {
     uv = DepthTexelUV(uv, 1 / ImageAndClip.xy);
     float d = ReadDepth(uv);
-    if (d >= SKY_DEPTH || IsWater(uv, d)) return 1;
+    if (d >= SKY_DEPTH || IsWater(uv, d) || Lighting.z <= 0) return 1;
     float3 p = Position(uv, d), normal = SurfaceNormal(uv, p);
     float radius = Options.y; // AORadius is validated to 0.1..10 yards.
     // Cap the screen radius with one common factor: clamping x and y separately would bend the
@@ -236,7 +247,7 @@ float NewAO(float2 uv, int method)
     // SurfaceNormal forces n.z <= 0, which is wrong for visible faces pointing forward in view Z
     // (camera pitched up, terrain sloping away). Orient toward the eye (receiver-to-eye vector).
     normal *= dot(normal, p) > 0 ? -1 : 1;
-    float2 rotation = AORotation(uv);
+    float2 rotation = AORotation(uv, .78539816339);
     float obscurance = 0;
 
     if (method == 1)
@@ -244,10 +255,10 @@ float NewAO(float2 uv, int method)
         // Paired samples detect concave valleys. Opposite coplanar directions
         // have dot=-1, so a flat/sloping plane contributes no valley occlusion.
         float centerDistance = length(p);
-        [loop] for (int valley = 0; valley < 16; ++valley)
+        [loop] for (int ring = 0; ring < 4; ++ring)
+        [loop] for (int sector = 0; sector < 4; ++sector)
         {
-            float ring = floor(valley * .25);
-            float angle = (valley - ring * 4) * .78539816339;
+            float angle = sector * .78539816339;
             float2 v = float2(cos(angle), sin(angle));
             float2 direction = float2(v.x * rotation.x - v.y * rotation.y, v.x * rotation.y + v.y * rotation.x);
             float2 offset = direction * uvRadius * ((ring + 1) * .2);
@@ -255,9 +266,11 @@ float NewAO(float2 uv, int method)
             float2 delta = centerDistance - float2(length(a.xyz), length(b.xyz));
             float2 accept = saturate((radius - delta) / (radius * .8));
             accept *= float2(delta.x > radius * .01, delta.y > radius * .01);
+            [branch] if (a.w * b.w * accept.x * accept.y > 0) {
             float3 va = a.xyz - p, vb = b.xyz - p;
             float angleWeight = saturate(dot(va, vb) * rsqrt(max(dot(va, va) * dot(vb, vb), 1e-12)) + .9) * 1.2;
             obscurance += accept.x * accept.y * angleWeight * angleWeight * angleWeight * a.w * b.w;
+            }
         }
         return saturate(1 - Lighting.z * obscurance * (1.0 / 16.0));
     }
@@ -265,18 +278,20 @@ float NewAO(float2 uv, int method)
     {
         // HBAO+ coarse-kernel adaptation: eight directions, four radial steps,
         // normal bias and squared-distance falloff. No DX11 deinterleaving.
-        [loop] for (int tap = 0; tap < 32; ++tap)
+        [loop] for (int directionIndex = 0; directionIndex < 8; ++directionIndex)
         {
-            float directionIndex = floor(tap * .25);
-            float step = tap - directionIndex * 4;
             float angle = directionIndex * .78539816339;
             float2 v = float2(cos(angle), sin(angle));
             float2 direction = float2(v.x * rotation.x - v.y * rotation.y, v.x * rotation.y + v.y * rotation.x);
+            [loop] for (int step = 0; step < 4; ++step) {
             float4 q = AOSample(uv + direction * uvRadius * ((step + 1) * .2));
             float3 delta = q.xyz - p;
+            [branch] if (q.w > 0 && any(delta != 0) && dot(delta,delta) < radius*radius) {
             float distance2 = max(dot(delta, delta), 1e-12);
             float elevation = saturate(dot(normal, delta) * rsqrt(distance2) - .1);
             obscurance += elevation * saturate(1 - distance2 / (radius * radius)) * q.w;
+            }
+            }
         }
         return saturate(1 - Lighting.z * obscurance * (2.0 / (32.0 * .9)));
     }
@@ -298,16 +313,158 @@ float NewAO(float2 uv, int method)
         float cosine = saturate(dot(projected, view) * inverseProjectedLength);
         float sine = (dot(tangent, projected) >= 0 ? 1 : -1) * sqrt(max(1 - cosine * cosine, 0));
         float2 low = float2(-sine, sine);
-        float2 horizon = low;
+        float2 horizon = low, solidHorizon = low, coverage = 0;
         [loop] for (int step = 0; step < 4; ++step)
         {
             float sampleRadius = (step + 1) * .2;
             float2 offset = direction * uvRadius * sampleRadius * sampleRadius;
+            // Sub-texel offsets had zero weight: skip their depth reads and horizon work.
+            [branch] if (any(abs(offset) > .51 * ImageAndClip.xy))
+            {
             float4 a = AOSample(uv + offset), b = AOSample(uv - offset);
             float3 da = a.xyz - p, db = b.xyz - p;
             float2 inverseDistance = rsqrt(max(float2(dot(da, da), dot(db, db)), 1e-12));
             float2 distance = 1/inverseDistance;
-            float2 weight = saturate((radius - distance) / (radius * .5)) * float2(a.w, b.w);
+            float2 solidFalloff = saturate((radius - distance) / (radius * .5));
+            // A single depth layer overstates thin foreground silhouettes.
+            // Stronger depth-separation falloff handles isolated hits; multiple
+            // occluder samples retain the original solid-surface horizon.
+            float2 thinDistance = sqrt(float2(dot(da, da), dot(db, db)) + 3 * float2(da.z * da.z, db.z * db.z));
+            float2 thinFalloff = saturate((radius - thinDistance) / (radius * .5));
+            float2 weight = float2(a.w, b.w);
+            weight *= float2(distance.x > .00001, distance.y > .00001);
+            // Match the SSAO coplanar tolerance for grazing D24 derivatives.
+            weight *= float2(dot(normal, da) > .08 * distance.x, dot(normal, db) > .08 * distance.y);
+            float2 candidate = float2(dot(da, view), dot(db, view)) * inverseDistance;
+            float2 solidCandidate = lerp(low, candidate, weight * solidFalloff);
+            coverage += float2(solidCandidate.x > low.x + .00001, solidCandidate.y > low.y + .00001);
+            solidHorizon = max(solidHorizon, solidCandidate);
+            horizon = max(horizon, lerp(low, candidate, weight * thinFalloff));
+            }
+        }
+        horizon = lerp(horizon, solidHorizon, saturate(coverage - 1));
+        float open = projectedLength * (cosine + AOAcos(cosine) * abs(sine));
+        [branch] if (max(horizon.x-low.x,horizon.y-low.y)>.00001)
+        {
+        float2 ch = clamp(horizon.yx, -1, 1);
+        float2 h = float2(-AOAcos(ch.x), AOAcos(ch.y));
+        float2 sh = float2(-1, 1) * sqrt(max(1 - ch * ch, 0));
+        // cos(2*h-n) from the already known horizon cosine and normal sine.
+        float2 arc = (cosine + 2 * h * sine - ((2 * ch * ch - 1) * cosine + 2 * sh * ch * sine)) * .25;
+        // Normalize against this slice's open hemisphere, so perspective and
+        // tilted receiver normals do not turn a flat plane into an occluder.
+        float loss = max(0, open - projectedLength * (arc.x + arc.y));
+        obscurance += loss;
+        }
+        openVisibility += open;
+    }
+    return saturate(1 - Lighting.z * obscurance / max(openVisibility, .00001));
+}
+
+float NewAOQuality(float2 uv, int method, int quality)
+{
+    uv = DepthTexelUV(uv, 1 / ImageAndClip.xy);
+    float d = ReadDepth(uv);
+    if (d >= SKY_DEPTH || IsWater(uv, d) || Lighting.z <= 0) return 1;
+    float3 p = Position(uv, d), normal = SurfaceNormal(uv, p);
+    float radius = Options.y; // AORadius is validated to 0.1..10 yards.
+    // Cap the screen radius with one common factor: clamping x and y separately would bend the
+    // sample direction away from the view-space direction GTAO builds its slice plane from.
+    float2 uvRadius = .5 * radius * Lighting.xy / p.z;
+    uvRadius *= min(1, .25 / max(uvRadius.x, uvRadius.y));
+    // SurfaceNormal forces n.z <= 0, which is wrong for visible faces pointing forward in view Z
+    // (camera pitched up, terrain sloping away). Orient toward the eye (receiver-to-eye vector).
+    normal *= dot(normal, p) > 0 ? -1 : 1;
+    float angularPeriod = quality == 0 ? .78539816339 :
+        method == 1 ? 6.28318530718 : quality == 1 ? 1.04719755120 : 1.57079632679;
+    float2 rotation = AORotation(uv, angularPeriod);
+    float obscurance = 0;
+
+    if (method == 1)
+    {
+        // Paired samples detect concave valleys. Opposite coplanar directions
+        // have dot=-1, so a flat/sloping plane contributes no valley occlusion.
+        float centerDistance = length(p);
+        const int pairs = quality == 0 ? 16 : 8;
+        [loop] for (int ring = 0; ring < 4; ++ring)
+        [loop] for (int sector = 0; sector < (quality == 0 ? 4 : 2); ++sector)
+        {
+            float angle = quality == 0 ? sector * .78539816339 :
+                sector * 1.57079632679 + frac(ring * .5) * 1.57079632679;
+            float2 v = float2(cos(angle), sin(angle));
+            float2 direction = float2(v.x * rotation.x - v.y * rotation.y, v.x * rotation.y + v.y * rotation.x);
+            // Two directions per ring retain all four radial bands.
+            float sampleRadius = (ring + 1) * .2;
+            float2 offset = direction * uvRadius * sampleRadius;
+            float4 a = AOSample(uv + offset), b = AOSample(uv - offset);
+            float2 delta = centerDistance - float2(length(a.xyz), length(b.xyz));
+            float2 accept = saturate((radius - delta) / (radius * .8));
+            accept *= float2(delta.x > radius * .01, delta.y > radius * .01);
+            [branch] if (a.w * b.w * accept.x * accept.y > 0) {
+            float3 va = a.xyz - p, vb = b.xyz - p;
+            float angleWeight = saturate(dot(va, vb) * rsqrt(max(dot(va, va) * dot(vb, vb), 1e-12)) + .9) * 1.2;
+            obscurance += accept.x * accept.y * angleWeight * angleWeight * angleWeight * a.w * b.w;
+            }
+        }
+        return saturate(1 - Lighting.z * obscurance * (1.0 / pairs));
+    }
+    if (method == 2)
+    {
+        // HBAO+ coarse-kernel adaptation: eight directions, four radial steps,
+        // normal bias and squared-distance falloff. No DX11 deinterleaving.
+        const int directions = quality == 0 ? 8 : quality == 1 ? 6 : 4;
+        const int steps = quality == 1 ? 3 : 4;
+        const int taps = directions * steps;
+        [loop] for (int directionIndex = 0; directionIndex < directions; ++directionIndex)
+        {
+            float angle = directionIndex * (quality == 0 ? .78539816339 : 6.28318530718 / directions);
+            float2 v = float2(cos(angle), sin(angle));
+            float2 direction = float2(v.x * rotation.x - v.y * rotation.y, v.x * rotation.y + v.y * rotation.x);
+            [loop] for (int step = 0; step < steps; ++step) {
+            float4 q = AOSample(uv + direction * uvRadius * ((step + 1) * (quality == 1 ? .25 : .2)));
+            float3 delta = q.xyz - p;
+            [branch] if (q.w > 0 && any(delta != 0) && dot(delta,delta) < radius*radius) {
+            float distance2 = max(dot(delta, delta), 1e-12);
+            float elevation = saturate(dot(normal, delta) * rsqrt(distance2) - .1);
+            obscurance += elevation * saturate(1 - distance2 / (radius * radius)) * q.w;
+            }
+            }
+        }
+        return saturate(1 - Lighting.z * obscurance * (2.0 / (taps * .9)));
+    }
+
+    float3 view = -p * rsqrt(max(dot(p, p), 1e-12));
+    float openVisibility = 0;
+    const int slices = quality == 0 ? 4 : quality == 1 ? 3 : 2;
+    [loop] for (int slice = 0; slice < slices; ++slice)
+    {
+        float angle = slice * (quality == 0 ? .78539816339 : 3.14159265359 / slices);
+        float2 v = float2(cos(angle), sin(angle));
+        float2 direction = float2(v.x * rotation.x - v.y * rotation.y, v.x * rotation.y + v.y * rotation.x);
+        float3 sliceDirection = float3(direction.x, -direction.y, 0);
+        float3 tangent = sliceDirection - view * dot(sliceDirection, view);
+        float3 axis = cross(tangent, view);
+        axis *= rsqrt(max(dot(axis, axis), 1e-12));
+        float3 projected = normal - axis * dot(normal, axis);
+        float inverseProjectedLength = rsqrt(max(dot(projected, projected), 1e-12));
+        float projectedLength = 1/inverseProjectedLength;
+        float cosine = saturate(dot(projected, view) * inverseProjectedLength);
+        float sine = (dot(tangent, projected) >= 0 ? 1 : -1) * sqrt(max(1 - cosine * cosine, 0));
+        float2 low = float2(-sine, sine);
+        float2 horizon = low, solidHorizon = low, coverage = 0;
+        [loop] for (int step = 0; step < 4; ++step)
+        {
+            float sampleRadius = (step + 1) * .2;
+            float2 offset = direction * uvRadius * sampleRadius * sampleRadius;
+            [branch] if (any(abs(offset) > .51 * ImageAndClip.xy)) {
+            float4 a = AOSample(uv + offset), b = AOSample(uv - offset);
+            float3 da = a.xyz - p, db = b.xyz - p;
+            float2 inverseDistance = rsqrt(max(float2(dot(da, da), dot(db, db)), 1e-12));
+            float2 distance = 1/inverseDistance;
+            float2 solidFalloff = saturate((radius - distance) / (radius * .5));
+            float2 thinDistance = sqrt(float2(dot(da, da), dot(db, db)) + 3 * float2(da.z * da.z, db.z * db.z));
+            float2 thinFalloff = saturate((radius - thinDistance) / (radius * .5));
+            float2 weight = float2(a.w, b.w);
             weight *= float2(distance.x > .00001, distance.y > .00001);
             // Both inner taps can resolve to the receiver texel at distance.
             // Reject by footprint, not a nearly-zero reconstructed 3D delta.
@@ -315,8 +472,13 @@ float NewAO(float2 uv, int method)
             // Match the SSAO coplanar tolerance for grazing D24 derivatives.
             weight *= float2(dot(normal, da) > .08 * distance.x, dot(normal, db) > .08 * distance.y);
             float2 candidate = float2(dot(da, view), dot(db, view)) * inverseDistance;
-            horizon = max(horizon, lerp(low, candidate, weight));
+            float2 solidCandidate = lerp(low, candidate, weight * solidFalloff);
+            coverage += float2(solidCandidate.x > low.x + .00001, solidCandidate.y > low.y + .00001);
+            solidHorizon = max(solidHorizon, solidCandidate);
+            horizon = max(horizon, lerp(low, candidate, weight * thinFalloff));
+            }
         }
+        horizon = lerp(horizon, solidHorizon, saturate(coverage - 1));
         float open = projectedLength * (cosine + AOAcos(cosine) * abs(sine));
         [branch] if (max(horizon.x-low.x,horizon.y-low.y)>.00001)
         {
@@ -338,6 +500,25 @@ float NewAO(float2 uv, int method)
 float4 HDAOContactBloom(float2 uv : TEXCOORD0) : COLOR0 { return float4(ContactBloomRgb(uv), NewAO(uv, 1)); }
 float4 HBAOPlusContactBloom(float2 uv : TEXCOORD0) : COLOR0 { return float4(ContactBloomRgb(uv), NewAO(uv, 2)); }
 float4 GTAOContactBloom(float2 uv : TEXCOORD0) : COLOR0 { return float4(ContactBloomRgb(uv), NewAO(uv, 3)); }
+float4 HDAOContactBloomMedium(float2 uv : TEXCOORD0) : COLOR0 { return float4(ContactBloomRgb(uv), NewAOQuality(uv, 1, 1)); }
+float4 HBAOPlusContactBloomMedium(float2 uv : TEXCOORD0) : COLOR0 { return float4(ContactBloomRgb(uv), NewAOQuality(uv, 2, 1)); }
+float4 GTAOContactBloomMedium(float2 uv : TEXCOORD0) : COLOR0 { return float4(ContactBloomRgb(uv), NewAOQuality(uv, 3, 1)); }
+float4 HDAOContactBloomLow(float2 uv : TEXCOORD0) : COLOR0 { return float4(ContactBloomRgb(uv), NewAOQuality(uv, 1, 2)); }
+float4 HBAOPlusContactBloomLow(float2 uv : TEXCOORD0) : COLOR0 { return float4(ContactBloomRgb(uv), NewAOQuality(uv, 2, 2)); }
+float4 GTAOContactBloomLow(float2 uv : TEXCOORD0) : COLOR0 { return float4(ContactBloomRgb(uv), NewAOQuality(uv, 3, 2)); }
+
+// HDR builds bloom from linear radiance after world composition. Its AO input
+// consumes alpha only, including the fallback without a ready world scene.
+float4 AOOnly(float2 uv : TEXCOORD0) : COLOR0 { return float4(0,0,0,AOImpl(uv,false).a); }
+float4 HDAOOnly(float2 uv : TEXCOORD0) : COLOR0 { return float4(0,0,0,NewAO(uv,1)); }
+float4 HBAOPlusOnly(float2 uv : TEXCOORD0) : COLOR0 { return float4(0,0,0,NewAO(uv,2)); }
+float4 GTAOOnly(float2 uv : TEXCOORD0) : COLOR0 { return float4(0,0,0,NewAO(uv,3)); }
+float4 HDAOOnlyMedium(float2 uv : TEXCOORD0) : COLOR0 { return float4(0,0,0,NewAOQuality(uv,1,1)); }
+float4 HBAOPlusOnlyMedium(float2 uv : TEXCOORD0) : COLOR0 { return float4(0,0,0,NewAOQuality(uv,2,1)); }
+float4 GTAOOnlyMedium(float2 uv : TEXCOORD0) : COLOR0 { return float4(0,0,0,NewAOQuality(uv,3,1)); }
+float4 HDAOOnlyLow(float2 uv : TEXCOORD0) : COLOR0 { return float4(0,0,0,NewAOQuality(uv,1,2)); }
+float4 HBAOPlusOnlyLow(float2 uv : TEXCOORD0) : COLOR0 { return float4(0,0,0,NewAOQuality(uv,2,2)); }
+float4 GTAOOnlyLow(float2 uv : TEXCOORD0) : COLOR0 { return float4(0,0,0,NewAOQuality(uv,3,2)); }
 
 // 0.3.201 (task 18) ContactAO=0 with a ready world: the same bloom with AO 1 and no depth work; the AO pass and AOBlur do not run.
 float4 ContactBloom(float2 uv : TEXCOORD0) : COLOR0
@@ -383,12 +564,20 @@ float4 AOBlur(float2 uv : TEXCOORD0) : COLOR0
 {
     float2 tapStep = 2.0 * ImageAndClip.xy;
     float4 raw = tex2Dlod(Ambient, float4(uv, 0, 0));
-    float minAO = 1.0;
-    [loop] for (int k = 0; k < 9; ++k)
+    float minAO = 0.0;
+    // A dark centre alone makes the +.5,+.5 bilinear footprint fail .9995.
+    // The centre contributes about 1/4; .995 leaves margin for odd grids,
+    // subtexel phase and FP16 filtering rounding.
+    [branch] if (raw.a > 0.995)
     {
-        float krow = floor((k + 0.5) * (1.0 / 3.0));
-        // footprint k % 3 and k / 3 per axis -> -1.5, .5, 2 AO texels from the centre
-        minAO = min(minAO, tex2Dlod(AmbientLinear, float4(uv + min(float2(k - krow * 3.0, krow) * 2.0 - 1.5, 2.0) * tapStep, 0, 0)).a);
+        minAO = 1.0;
+        // Fixed footprints: keep row order and let the compiler fold coordinates.
+        [unroll] for (int y = 0; y < 3; ++y)
+        [unroll] for (int x = 0; x < 3; ++x)
+        {
+            float2 footprint = min(float2(x, y) * 2.0 - 1.5, 2.0);
+            minAO = min(minAO, tex2Dlod(AmbientLinear, float4(uv + footprint * tapStep, 0, 0)).a);
+        }
     }
     [branch] if (minAO >= 0.9995) return raw;
     float2 size = 1.0 / ImageAndClip.xy;
@@ -403,16 +592,19 @@ float4 AOBlur(float2 uv : TEXCOORD0) : COLOR0
     float sumAO = 0.0;
     float sumWeight = 0.0;
     // Visit the same 25 taps in row order without per-tap division/floor.
-    [loop] for(int y=0;y<5;++y)
+    [loop] for(int y=0;y<5;++y){
+    float rowUV=uv.y+(y-2)*tapStep.y;
+    float rowCenter=DepthTexelUV(float2(uv.x,rowUV),size).y;
+    float rowWeight=abs(y-2)>1.5?.5:1;
     [loop] for(int x=0;x<5;++x)
     {
         float2 o=float2(x-2,y-2);
-        float2 tapUV = uv + o * tapStep;
-        float2 quv = DepthTexelUV(tapUV, size);
+        float2 tapUV = float2(uv.x+o.x*tapStep.x,rowUV);
+        float2 quv = float2(DepthTexelUV(tapUV, size).x,rowCenter);
         float qd = ReadDepth(quv);
         float3 q = PositionInv(quv, qd, invFocal);
         float2 a = abs(o);
-        float weight = (a.x > 1.5 ? 0.5 : 1.0) * (a.y > 1.5 ? 0.5 : 1.0);
+        float weight = (a.x > 1.5 ? 0.5 : 1.0) * rowWeight;
         weight *= exp2(-abs(dot(q - p, n)) * planeScale);
         float3 tangent = PositionInv(quv + tangentStep, ReadDepth(quv + tangentStep), invFocal) - q;
         float tangentOff = dot(tangent, n);
@@ -421,6 +613,7 @@ float4 AOBlur(float2 uv : TEXCOORD0) : COLOR0
         weight *= qd < SKY_DEPTH && !IsWater(quv, qd) ? 1.0 : 0.0;
         sumAO += tex2Dlod(Ambient, float4(tapUV, 0, 0)).a * weight;
         sumWeight += weight;
+        }
     }
     return float4(raw.rgb, sumWeight > 1e-5 ? sumAO / sumWeight : raw.a);
 }
@@ -456,6 +649,7 @@ float4 Composite(float2 uv : TEXCOORD0) : COLOR0
     {
         float2 auv = ambientCenter + taps[j] * ambientTexel;
         float ad = ReadDepth(auv);
+        [branch] if (ad < SKY_DEPTH) {
         float3 q = Position(auv, ad);
         // Explicit neighbours remain valid when several full-resolution
         // pixels map onto the same snapped ambient texel.
@@ -466,9 +660,10 @@ float4 Composite(float2 uv : TEXCOORD0) : COLOR0
         float weight = exp2(-planeDistance / depthTolerance * 2.0);
         weight *= normalAgreement * normalAgreement;
         weight *= j == 0 ? 2.0 : 1.0;
-        weight *= (ad < SKY_DEPTH) == (depth < SKY_DEPTH) ? 1.0 : 0.0;
+
         ambient += tex2Dlod(Ambient, float4(auv, 0, 0)) * weight;
         sumWeight += weight;
+        }
     }
     ambient = sumWeight > 0.00001 ? ambient / max(sumWeight, 0.00001)
                                  : float4(0, 0, 0, 1);
@@ -484,17 +679,115 @@ float4 Composite(float2 uv : TEXCOORD0) : COLOR0
 
     // A small screen-space glow, bounded to bright neighbouring pixels.
     // This is LDR bloom: it cannot recover clipped HDR light energy.
+    float3 bloom = 0;
+    [branch] if (Options.x > 0) {
     float2 b = ImageAndClip.xy * 4.0;
-    float3 bloom = Bright(original.rgb) * 4.0;
+    bloom = Bright(original.rgb) * 4.0;
     bloom += Bright(tex2Dlod(Scene, float4(uv + float2( b.x, 0), 0, 0)).rgb);
     bloom += Bright(tex2Dlod(Scene, float4(uv + float2(-b.x, 0), 0, 0)).rgb);
     bloom += Bright(tex2Dlod(Scene, float4(uv + float2(0,  b.y), 0, 0)).rgb);
     bloom += Bright(tex2Dlod(Scene, float4(uv + float2(0, -b.y), 0, 0)).rgb);
     bloom *= 0.125;
+    }
     float legacyT=mad(LegacyFog.w,saturate(pow(max(mad(p.z,LegacyFog.x,LegacyFog.y),0),LegacyFog.z))-1,1);
     float3 fogPart=min((1-legacyT)*LegacyFogColor.rgb,original.rgb);
     float3 lit = mad(original.rgb-fogPart,ambient.a,fogPart);
     lit += ambient.rgb * Lighting.w * saturate(original.rgb + 0.1) * legacyT;
     lit += bloom * Options.x * (1.0 - saturate(lit));
+    [branch]if(EffectCoverageInfo.x>.5){
+        float4 effect=tex2Dlod(EffectCoverage,float4(uv,0,0));
+        float3 weight=EffectCoverageInfo.y>.5?lerp(saturate(effect.rgb/max(original.rgb,.000001)),1,saturate(effect.a)):saturate(effect.r);
+        lit=lerp(saturate(lit),original.rgb,weight);
+    }
     return float4(saturate(lit), original.a);
 }
+
+// Intel ASSAO fixed-quality kernel, adapted to Northlight's D3D9 depth,
+// half-resolution targets and bilateral filter. Copyright (c) 2016 Intel.
+// MIT license: licenses/ao-methods.txt. Upstream: GameTechDev/ASSAO,
+// c21d57a95b43c700ee01a2eb18f5589d7becefb2, ASSAO.hlsl Q0/Q1/Q2.
+static const float3 AssaoPattern[12] = {
+    float3(.78488064, .56661671, 1.50), float3(.26022232,-.29575172,1.50),
+    float3(.10459357, .08372527, 1.11), float3(-.68286800,.04963045,1.09),
+    float3(-.13570161,-.64190155,1.25), float3(-.26193795,-.08205118,.67),
+    float3(-.61177456,.66664219,.71), float3(.43675563,.25119025,.61),
+    float3(.07884444,.86618668,.64), float3(-.12790935,-.29869005,.60),
+    float3(-.04031125,.02413622,.60), float3(.16201244,-.52851415,.79)
+};
+
+float AssaoObscurance(float3 normal,float3 delta,float inverseRadiusSquared)
+{
+    float distanceSquared=dot(delta,delta);
+    return max(0,dot(normal,delta)*rsqrt(max(distanceSquared,1e-12))-.06)
+        *saturate(1-distanceSquared*inverseRadiusSquared);
+}
+
+float ASSAOImpl(float2 uv,int quality)
+{
+    uv=DepthTexelUV(uv,1/ImageAndClip.xy);
+    float depth=ReadDepth(uv);
+    if(depth>=SKY_DEPTH||IsWater(uv,depth)||Lighting.z<=0)return 1;
+    float3 p=Position(uv,depth);
+    float2 dx=float2(ImageAndClip.x,0),dy=float2(0,ImageAndClip.y);
+    float4 left=AOSample(uv-dx),right=AOSample(uv+dx);
+    float4 top=AOSample(uv-dy),bottom=AOSample(uv+dy);
+    float3 tx=abs(right.z-p.z)<abs(p.z-left.z)?right.xyz-p:p-left.xyz;
+    float3 ty=abs(bottom.z-p.z)<abs(p.z-top.z)?bottom.xyz-p:p-top.xyz;
+    float3 normal=SafeNormal(cross(tx,ty));normal*=dot(normal,p)>0?-1:1;
+    // Intel's near-camera radius limiter; Low has its original wider limit.
+    float radius=Options.y*(.2+.8*saturate(length(p)/(Options.y*Lighting.y*(quality==2?1.8:1.2))));
+    float inverseRadiusSquared=1/(radius*radius);
+    float2 uvRadius=.425*radius*Lighting.xy/p.z;
+    uvRadius*=min(1,.25/max(uvRadius.x,uvRadius.y));
+    // Paired samples repeat after a half turn. The sparse lower patterns use
+    // two cycles to distribute its residual noise across both screen axes.
+    float2 rotation=AORotation(uv,quality==0?3.14159265359:6.28318530718);
+    float obscurance=0,weightSum=0;
+    float4 edges=1;
+    if(quality<2){
+        float4 dz=float4(left.z,right.z,top.z,bottom.z)-p.z;
+        edges=saturate(1.3-min(abs(dz),abs(dz+dz.yxwz))/(p.z*.04));
+        edges*=float4(left.w,right.w,top.w,bottom.w);
+        float4 detail=float4(AssaoObscurance(normal,left.xyz-p,4*inverseRadiusSquared),
+            AssaoObscurance(normal,right.xyz-p,4*inverseRadiusSquared),
+            AssaoObscurance(normal,top.xyz-p,4*inverseRadiusSquared),
+            AssaoObscurance(normal,bottom.xyz-p,4*inverseRadiusSquared));
+        obscurance=.5*dot(detail,edges);
+    }
+    const int pairs=quality==0?12:quality==1?5:3;
+    [loop]for(int tap=0;tap<pairs;++tap){
+        float3 pattern=AssaoPattern[tap];
+        float2 direction=float2(pattern.x*rotation.x-pattern.y*rotation.y,
+            pattern.x*rotation.y+pattern.y*rotation.x);
+        // Snap symmetric offsets to native depth texels. No FP16 depth copy,
+        // depth mips or deinterleaved array is needed by this D3D9 adaptation.
+        float2 offset=round(direction*uvRadius/ImageAndClip.xy)*ImageAndClip.xy;
+        [branch]if(quality==2 && !any(offset!=0)){weightSum+=pattern.z+pattern.z;}else{
+        float4 a=AOSample(uv+offset),b=AOSample(uv-offset);
+        float3 da=a.xyz-p,db=b.xyz-p;
+        float2 weight=pattern.z;
+        if(quality<2)weight*=.4+.6*saturate(2-max(0,-float2(da.z,db.z))/Options.y);
+        // Missing/sky samples leave an open hemisphere, rather than amplifying
+        // the remaining occluders at the viewport border.
+        // A zero offset samples the receiver itself. Reconstructing it through
+        // a second UV expression can leave a tiny delta under fused arithmetic;
+        // normalizing that delta creates false shadows on distant flat ground.
+        obscurance+=dot(float2(AssaoObscurance(normal,da,inverseRadiusSquared),
+            AssaoObscurance(normal,db,inverseRadiusSquared))*float2(a.w,b.w),weight)*(any(offset!=0)?1:0);
+        weightSum+=weight.x+weight.y;
+        }
+    }
+    float fade=1;
+    if(quality<2)fade=saturate(1-saturate((1-edges.x-edges.y)*.35)-saturate((1-edges.z-edges.w)*.35));
+    // Match Intel's multiplier, clamp and power; Lighting.z supplies the
+    // existing Northlight strength control, including exact identity at zero.
+    float visibility=1-min(4.3*Lighting.z*obscurance/max(weightSum,1e-8),.98)*fade;
+    return visibility*sqrt(visibility);
+}
+
+float4 ASSAOContactBloom(float2 uv:TEXCOORD0):COLOR0{return float4(ContactBloomRgb(uv),ASSAOImpl(uv,0));}
+float4 ASSAOContactBloomMedium(float2 uv:TEXCOORD0):COLOR0{return float4(ContactBloomRgb(uv),ASSAOImpl(uv,1));}
+float4 ASSAOContactBloomLow(float2 uv:TEXCOORD0):COLOR0{return float4(ContactBloomRgb(uv),ASSAOImpl(uv,2));}
+float4 ASSAOOnly(float2 uv:TEXCOORD0):COLOR0{return float4(0,0,0,ASSAOImpl(uv,0));}
+float4 ASSAOOnlyMedium(float2 uv:TEXCOORD0):COLOR0{return float4(0,0,0,ASSAOImpl(uv,1));}
+float4 ASSAOOnlyLow(float2 uv:TEXCOORD0):COLOR0{return float4(0,0,0,ASSAOImpl(uv,2));}

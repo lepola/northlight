@@ -2,14 +2,21 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#ifndef _WIN32
+#include <chrono>
+#endif
 
 // Allocation-free CPU diagnostics. A null sink performs no clock reads. The
 // caller chooses a bounded sample; durations describe only that sample and are
 // never automatically extrapolated to the whole frame. Requires the platform's
-// LARGE_INTEGER/QueryPerformanceCounter declarations (or a test clock).
+// LARGE_INTEGER/QueryPerformanceCounter declarations on Windows, or a test clock.
 namespace NorthlightCapturePhases {
 struct PerformanceClock {
+#ifdef _WIN32
     static std::int64_t read(){LARGE_INTEGER now={};QueryPerformanceCounter(&now);return now.QuadPart;}
+#else
+    static std::int64_t read(){return std::chrono::steady_clock::now().time_since_epoch().count();}
+#endif
 };
 template<std::size_t N> struct Stats {
     std::array<std::int64_t,N> ticks{};

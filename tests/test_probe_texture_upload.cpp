@@ -1,10 +1,12 @@
 // CPU atlas upload regression: no D3D device, DLL or game.
 #include "probe_texture_upload.h"
+#include "fixtures/probe_texture_upload_20261030.h"
 #include <algorithm>
 #include <cassert>
 #include <chrono>
 #include <cstdio>
 #include <cstring>
+#include <stdexcept>
 #include <vector>
 using namespace NorthlightGI;
 static void reference(unsigned channel,void* bits,size_t pitch,unsigned n,
@@ -44,43 +46,75 @@ int main(){
  for(unsigned n:{16u,22u,24u}){
   assert(configureProbeLayout(probeLayoutFor(n-2)));
   std::vector<ProbeAtlasEntry> atlas(probeLayout().atlasSize());NorthlightProbeBlend::Mirror blend;
-  NorthlightProbeActivation a,b;blend.begin("A");a.begin("A");b.begin("A");
+  NorthlightProbeActivation a,b,c;blend.begin("A");a.begin("A");b.begin("A");c.begin("A");
   for(unsigned round=0;round<12;++round){
-   const char* map=round<6?"A":"Northrend";blend.begin(map);a.begin(map);b.begin(map);
-   mutate(atlas,round);const float now=10+float(round)*.075f;blend.publish(atlas,now);
+   const char* map=round<6?"A":"Northrend";blend.begin(map);a.begin(map);b.begin(map);c.begin(map);
+   mutate(atlas,round);
+   if(round==3)for(size_t i=0;i<atlas.size();i+=31){
+    static const uint32_t bits[]={0x80000000u,0x7fc12345u,0x7f800000u,0x00000001u};
+    for(unsigned k=0;k<4;++k){std::memcpy(&atlas[i].probe.sh[k].x,&bits[k],4);std::memcpy(&atlas[i].probe.moments[k].mean,&bits[3-k],4);}
+   }
+   const float now=10+float(round)*.075f;blend.publish(atlas,now);
    for(unsigned channel=0;channel<6;++channel){
     const size_t pitch=(n*n*(channel==5?3:1)*4+4*(round%5))*sizeof(float);
     const size_t bytes=pitch*n*(channel==3?6:1);
-    std::vector<unsigned char> old(bytes+8,0xa5),current=old;
-    if(channel==5){referencePrevious(old.data()+4,pitch,n,blend);NorthlightProbeUpload::previous(current.data()+4,pitch,n,blend);}
+    std::vector<unsigned char> old(bytes+8,0xa5),current=old,independent=old;
+    if(channel==5){referencePrevious(old.data()+4,pitch,n,blend);NorthlightProbeUpload::previous(current.data()+4,pitch,n,blend);NorthlightProbeUpload::previous(independent.data()+4,pitch,n,blend);}
     else{
      reference(channel,old.data()+4,pitch,n,atlas,blend,a,now,round%2);
      NorthlightProbeUpload::write(channel,current.data()+4,pitch,n,atlas,blend,b,now,round%2);
+     NorthlightProbeUpload::write(channel,independent.data()+4,pitch,n,atlas,blend,c,now,round%2,true);
     }
-    assert(old==current);++cases;checkedBytes+=bytes;
+    assert(old==current&&old==independent);++cases;checkedBytes+=bytes;
    }
    for(size_t i=0;i<atlas.size();++i)assert(a.update(i,atlas[i],now+1)==b.update(i,atlas[i],now+1));
+   for(size_t i=0;i<atlas.size();++i)assert(b.update(i,atlas[i],now+1)==c.update(i,atlas[i],now+1));
   }
+ }
+ // An undersized mirror must throw at the same texel and leave identical partial writes.
+ assert(configureProbeLayout(probeLayoutFor(14)));
+ NorthlightProbeBlend::Mirror shortBlend;shortBlend.begin("A");
+ assert(configureProbeLayout(probeLayoutFor(20)));
+ {
+  const unsigned n=probeLayout().atlas;const size_t pitch=size_t(n)*n*4*sizeof(float);
+  std::vector<ProbeAtlasEntry> atlas(probeLayout().atlasSize());NorthlightProbeActivation a,b;
+  std::vector<unsigned char> old(pitch*n*6,0xa5),current=old;bool oldThrew=false,newThrew=false;
+  try{NorthlightProbeUpload::write<3,false,1,false>(old.data(),pitch,n,atlas,shortBlend,a,0,true);}catch(const std::out_of_range&){oldThrew=true;}
+  try{NorthlightProbeUpload::write(3,current.data(),pitch,n,atlas,shortBlend,b,0,true,true);}catch(const std::out_of_range&){newThrew=true;}
+  assert(oldThrew&&newThrew&&old==current);
+  std::fill(old.begin(),old.end(),0xa5);current=old;oldThrew=newThrew=false;
+  try{NorthlightProbeUpload::previousImpl<false>(old.data(),pitch,n,shortBlend);}catch(const std::out_of_range&){oldThrew=true;}
+  try{NorthlightProbeUpload::previous(current.data(),pitch,n,shortBlend);}catch(const std::out_of_range&){newThrew=true;}
+  assert(oldThrew&&newThrew&&old==current);
+ }
+ // A possibly aliased target retains the original load/store order.
+ for(unsigned channel=0;channel<3;++channel){
+  std::vector<ProbeAtlasEntry> expected(1),current(1);for(unsigned k=0;k<4;++k)expected[0].probe.sh[k]={float(k*3+1),float(k*3+2),float(k*3+3)};current=expected;
+  NorthlightProbeBlend::Mirror mirror;NorthlightProbeActivation activation;
+  FrozenProbeUpload::write(channel,&expected[0].probe.sh[1].x,16,1,expected,mirror,activation,0,false,false);
+  NorthlightProbeUpload::write(channel,&current[0].probe.sh[1].x,16,1,current,mirror,activation,0,false,false);
+  assert(!std::memcmp(expected[0].probe.sh,current[0].probe.sh,sizeof current[0].probe.sh));
  }
  assert(configureProbeLayout(probeLayoutFor(20)));const unsigned n=probeLayout().atlas;
  std::vector<ProbeAtlasEntry> atlas(probeLayout().atlasSize());mutate(atlas,0);
  NorthlightProbeBlend::Mirror blend;NorthlightProbeActivation activation;blend.begin("A");activation.begin("A");blend.publish(atlas,10);
  std::vector<unsigned char> buffers[6];size_t pitches[6];
  for(unsigned c=0;c<6;++c){pitches[c]=size_t(n)*n*4*(c==5?3:1)*sizeof(float);buffers[c].resize(pitches[c]*n*(c==3?6:1));}
- double elapsed[2][7];volatile float sink=0;
- for(unsigned repeat=0;repeat<7;++repeat)for(unsigned mode=0;mode<2;++mode){
+ double elapsed[2][8];unsigned retained[2]={};volatile float sink=0;
+ for(unsigned block=0;block<20;++block){
+  const unsigned mode=(block/2)%2?1-block%2:block%2;
   const auto begin=std::chrono::steady_clock::now();
   for(unsigned iteration=0;iteration<200;++iteration){
    for(unsigned c=0;c<5;++c){
-    if(mode)NorthlightProbeUpload::write(c,buffers[c].data(),pitches[c],n,atlas,blend,activation,11,true);
-    else reference(c,buffers[c].data(),pitches[c],n,atlas,blend,activation,11,true);
+    if(mode)NorthlightProbeUpload::write(c,buffers[c].data(),pitches[c],n,atlas,blend,activation,11,true,true);
+    else FrozenProbeUpload::write(c,buffers[c].data(),pitches[c],n,atlas,blend,activation,11,true,true);
    }
    if(mode)NorthlightProbeUpload::previous(buffers[5].data(),pitches[5],n,blend);
-   else referencePrevious(buffers[5].data(),pitches[5],n,blend);
+   else FrozenProbeUpload::previous(buffers[5].data(),pitches[5],n,blend);
    float sample;std::memcpy(&sample,buffers[iteration%6].data(),sizeof sample);sink=sample;
   }
-  elapsed[mode][repeat]=std::chrono::duration<double,std::milli>(std::chrono::steady_clock::now()-begin).count()/200;
+  if(block>=4)elapsed[mode][retained[mode]++]=std::chrono::duration<double,std::milli>(std::chrono::steady_clock::now()-begin).count()/200;
  }
- std::sort(elapsed[0],elapsed[0]+7);std::sort(elapsed[1],elapsed[1]+7);(void)sink;
- std::printf("{\"pass\":true,\"cases\":%u,\"bytes_exact\":%llu,\"old_ms\":%.8f,\"new_ms\":%.8f,\"ratio\":%.4f}\n",cases,(unsigned long long)checkedBytes,elapsed[0][3],elapsed[1][3],elapsed[1][3]/elapsed[0][3]);
+ assert(retained[0]==8&&retained[1]==8);std::sort(elapsed[0],elapsed[0]+8);std::sort(elapsed[1],elapsed[1]+8);(void)sink;
+ std::printf("{\"pass\":true,\"cases\":%u,\"bytes_exact\":%llu,\"old_ms\":%.8f,\"new_ms\":%.8f,\"ratio\":%.4f}\n",cases,(unsigned long long)checkedBytes,(elapsed[0][3]+elapsed[0][4])*.5,(elapsed[1][3]+elapsed[1][4])*.5,(elapsed[1][3]+elapsed[1][4])/(elapsed[0][3]+elapsed[0][4]));
 }

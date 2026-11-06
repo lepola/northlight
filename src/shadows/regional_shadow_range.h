@@ -1,4 +1,5 @@
 #pragma once
+#include <filesystem>
 #include "celestial_profiles.h"
 #include "celestial_time_warp.h"
 
@@ -8,12 +9,13 @@ namespace NorthlightRegionalShadow {
 constexpr float DefaultRadius=928.f,MaximumRadius=4096.f;
 struct Table {
     std::map<std::pair<std::string,uint32_t>,float> zones;
+    float fallback=DefaultRadius;
     float at(const std::string& map,uint32_t zone)const {
-        auto i=zones.find({map,zone});return i==zones.end()?DefaultRadius:i->second;
+        auto i=zones.find({map,zone});return i==zones.end()?fallback:i->second;
     }
 };
 inline bool parse(std::istream& input,Table& out,std::string& error){
-    Table next;std::string line,map;uint32_t zone=0;unsigned number=0;bool assigned=true;
+    Table next;std::string line,map;uint32_t zone=0;unsigned number=0;bool assigned=true,defaultSeen=false;
     auto fail=[&](){error="invalid shadow range at line "+std::to_string(number);return false;};
     while(std::getline(input,line)){
         if(++number>1024)return fail();
@@ -21,6 +23,9 @@ inline bool parse(std::istream& input,Table& out,std::string& error){
         if(line.front()=='['&&line.back()==']'){
             if(!assigned)return fail();
             auto section=line.substr(1,line.size()-2);auto colon=section.find(':');
+            if(section=="default"){
+                if(defaultSeen)return fail();defaultSeen=true;map.clear();assigned=false;continue;
+            }
             if(colon==std::string::npos)return fail();
             map=section.substr(0,colon);auto id=section.substr(colon+1);
             if((map!="Azeroth"&&map!="Kalimdor"&&map!="Expansion01"&&map!="Northrend")||id.empty()||id.size()>6||id.find_first_not_of("0123456789")!=std::string::npos)return fail();
@@ -29,13 +34,13 @@ inline bool parse(std::istream& input,Table& out,std::string& error){
             auto eq=line.find('=');if(assigned||eq==std::string::npos||NorthlightCelestialProfiles::trim(line.substr(0,eq))!="terrain_radius")return fail();
             float radius;std::string extra;std::istringstream value(line.substr(eq+1));
             if(!(value>>radius)||!std::isfinite(radius)||radius<DefaultRadius||radius>MaximumRadius||(value>>extra))return fail();
-            next.zones[{map,zone}]=radius;assigned=true;
+            if(map.empty())next.fallback=radius;else next.zones[{map,zone}]=radius;assigned=true;
         }
     }
     if(input.bad()||!assigned)return fail();out=std::move(next);error.clear();return true;
 }
 inline bool load(const std::string& path,Table& out,std::string& error){
-    std::ifstream f(path,std::ios::binary);if(!f){error="no override; 928-unit defaults";return false;}
+    std::ifstream f(std::filesystem::u8path(path),std::ios::binary);if(!f){error="no override; 928-unit defaults";return false;}
     std::string text;if(!NorthlightCelestialProfiles::readIniText(f,text,error))return false;std::istringstream decoded(text);return parse(decoded,out,error);
 }
 // Keep the entire original cube. Outside it, retain a vertical corridor toward

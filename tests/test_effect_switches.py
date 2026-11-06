@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# northlight-test: requires=cxx
+# northlight-test: requires=zig
 """Native tests of real switch/neutral-target code; no game, Wine or GPU."""
 import sys; from pathlib import Path; sys.path.insert(0, str(Path(__file__).resolve().parents[1]))  # repo root
 import northlight_paths as fp
@@ -7,6 +7,7 @@ import json
 import re
 import subprocess
 import tempfile
+import os
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
@@ -26,7 +27,7 @@ def block(start):
 
 setter = block('    void setEffects(')
 shadow_clear = block('        if(!effects.shadows&&!neutralShadowMaps)')
-fog_clear = world.split('// Clear every disabled frame', 1)[1]
+fog_clear = world.split('// Clear every empty/disabled frame', 1)[1]
 fog_clear = fog_clear[fog_clear.index('d->SetTexture'):fog_clear.index('\n        }')]
 neutral_matrix = re.search(r'const float neutralMatrix\[16\]=\{[^;]+;', world)[0]
 
@@ -61,9 +62,10 @@ struct Device {
 struct Fixture {
     NorthlightEffectSwitches::Settings effects,requestedEffects;
     NorthlightQuality::Settings quality; // 0.3.138 northlight-quality.ini; defaults: giPass is a pass-through
-    bool temporalValid=true,sourceVisValid=true,shadowsComposited=true;
+    bool temporalValid=true,shadowsComposited=true,settingsRequestDirty=false,pipelineActive=true;
     bool shadowFrameReady=true,pointReady=true,neutralShadowMaps=false;
-    bool cacheValid=true;
+    bool cacheValid=true;unsigned transitionReleases=0;
+    void releaseShadowTransitions(){++transitionReleases;}
     Device device;Device* d=&device;
     Surface maps[4],fog;
     Surface* shadowSurface[4]={&maps[0],&maps[1],&maps[2],&maps[3]};
@@ -77,6 +79,14 @@ struct Fixture {
 };
 int main(){
     using namespace NorthlightEffectSwitches;
+    for(unsigned quality=0;quality<8;++quality)for(unsigned keys=0;keys<8;++keys)for(bool active:{false,true}){
+        Fixture f;f.pipelineActive=active;f.quality.gi=quality&1;f.quality.worldShadows=quality&2;f.quality.worldFog=quality&4;
+        Settings requested{bool(keys&1),bool(keys&2),bool(keys&4)};f.setEffects(requested);
+        assert(f.effects.gi==(active&&bool(quality&1)&&requested.gi));
+        assert(f.effects.shadows==(active&&bool(quality&2)&&requested.shadows));
+        assert(f.effects.fog==(active&&bool(quality&4)&&requested.fog));
+        f.pipelineActive=true;f.setEffects(f.requestedEffects);assert(f.requestedEffects==requested);
+    }
     // All combinations, key repeat, modifiers and focus transitions.
     for(unsigned mask=0;mask<=All;++mask){
         Hotkeys k;
@@ -106,12 +116,15 @@ int main(){
         Fixture f;Settings next{!(mask&GI),!(mask&Shadows),!(mask&Fog)};
         f.setEffects(next);
         assert(f.effects==next);
-        assert(f.temporalValid==!mask&&f.sourceVisValid==!mask);
+        assert(f.temporalValid==!mask);
+        assert(f.settingsRequestDirty==bool(mask&(Fog|GI)));
         assert(f.cacheValid==!(mask&Shadows));
         assert(f.shadowFrameReady==!(mask&Shadows));
         assert(f.pointReady==!(mask&Shadows));
-        f.temporalValid=f.sourceVisValid=true;
-        f.setEffects(next);assert(f.temporalValid&&f.sourceVisValid);
+        assert(f.transitionReleases==unsigned(bool(mask&Shadows)));
+        f.temporalValid=true;f.settingsRequestDirty=false;
+        f.setEffects(next);assert(f.temporalValid&&!f.settingsRequestDirty);
+        assert(f.transitionReleases==unsigned(bool(mask&Shadows)));
     }
     // GI=0 (northlight-quality.ini): F8 can never enable the GI pass; shadows/fog still switch.
     for(unsigned mask=0;mask<=All;++mask){
@@ -120,7 +133,8 @@ int main(){
         assert(!g.effects.gi&&g.effects.shadows==next.shadows&&g.effects.fog==next.fog);
         assert(g.cacheValid==!(mask&Shadows));
         const bool onlyGI=(mask&~GI)==0; // GI toggles alone are no transition when GI=0
-        assert(g.temporalValid==onlyGI&&g.sourceVisValid==onlyGI);
+        assert(g.temporalValid==onlyGI);
+        assert(g.settingsRequestDirty==bool(mask&Fog));
     }
     Fixture f;
     assert(f.neutralShadows()&&f.device.clearCalls==0);
@@ -176,8 +190,10 @@ assert world.index('d->SetPixelShaderConstantF(34,haze.haze,1);') < world.index(
 with tempfile.TemporaryDirectory(prefix='fr-effect-switches-') as temp:
     folder = Path(temp)
     (folder / 'test.cpp').write_text(body)
-    for flags in (['-O2'], ['-O1', '-g', '-fsanitize=address,undefined', '-fno-sanitize-recover=all']):
-        subprocess.run(['clang++', '-std=c++17', *flags, *fp.test_include_flags(),
+    compiler=[str(fp.zig()),'c++','-target','x86-windows-gnu'] if os.name=='nt' else ['clang++']
+    variants=(['-O2'],['-O0','-g']) if os.name=='nt' else (['-O2'], ['-O1', '-g', '-fsanitize=address,undefined', '-fno-sanitize-recover=all'])
+    for flags in variants:
+        subprocess.run([*compiler, '-std=c++17', '-UNDEBUG', *flags, *fp.test_include_flags(),
                         str(folder / 'test.cpp'), '-o', str(folder / 'test')], check=True)
         subprocess.run([str(folder / 'test')], check=True)
-print(json.dumps({'game_launched': False, 'native_and_sanitizers': 'PASS'}))
+print(json.dumps({'game_launched': False, 'native': 'PASS', 'sanitizers': 'not run on Windows' if os.name=='nt' else 'PASS'}))

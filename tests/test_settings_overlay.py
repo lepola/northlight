@@ -60,6 +60,15 @@ overlay = uncomment(fp.src('settings_overlay.cpp').read_text())
 create = overlay[overlay.index('std::unique_ptr<Overlay> create('):]
 check(create.index('if(!enabled)') < create.index('install('), 'create(): SettingsOverlay=0 must return before install()')
 
+# Master effects: window events own edges while hooked; polling remains the disabled/failed-overlay fallback.
+check('hook.master.message(msg,wparam,lparam,mods,GetForegroundWindow()==window)' in overlay,
+      'master hotkey must retain foreground window events')
+check('pressed=hook.master.take(foreground&&active)' in overlay and 'return active;' in overlay,
+      'master hotkey drains even when inactive or unfocused')
+check('if(!overlay||!overlay->masterHotkey(focus,masterPressed))masterPressed=k10&&!key10;' in renderer,
+      'master hotkey event and polling paths must not double-toggle')
+check('bool retry=masterPressed&&!masterEnabled;' in renderer, 'master retry uses the same retained edge and independent master switch')
+
 # Window procedure: forwards everything it does not swallow; the swallow decision is overlay_input.h route().
 proc = overlay[overlay.index('LRESULT CALLBACK windowProcedure'):overlay.index('bool install(')]
 check('In::route(msg,wparam,lparam,mods,state)' in proc, 'windowProcedure: decisions come from overlay_input.h route()')
@@ -71,7 +80,7 @@ route = route[route.index('inline Decision route('):route.index('inline float ma
 check(re.search(r'case Msg::MouseMove:case Msg::KeyUp:case Msg::SysKeyUp:d\.queue=true;break;', route) is not None,
       'route(): WM_MOUSEMOVE and WM_KEYUP are queued and never swallowed')
 # Unhook only while ours is the current procedure (never cut another subclasser's chain).
-uninstall = overlay[overlay.index('void uninstall()'):overlay.index('HWND deviceWindow(')]
+uninstall = overlay[overlay.index('void uninstall('):overlay.index('HWND deviceWindow(')]
 check('if(current!=reinterpret_cast<LONG_PTR>(&windowProcedure))return;' in uninstall, 'uninstall(): restores only when ours is current')
 
 # renderer.cpp hook points: drawn from finishFrame (Device::Present and SwapChain::Present both finish there) under RawScope+SavedState;
@@ -85,7 +94,7 @@ check(finish.count('drawOverlay(implicitChain);') == 2 and finish.index('extensi
 check(renderer.count('drawOverlay(') == 3, 'drawOverlay(): finishFrame is the only caller (one draw per presented frame)')
 # Only the implicit swap chain (index 0) draws it; additional swap chains never do.
 check('new SwapChain(*out,this,&mirrorResources,index==0)' in renderer and 'new SwapChain(*out,this,&mirrorResources,false)' in renderer
-      and 'finishDeviceFrame(owner,implicitChain)' in renderer, 'SwapChain: the overlay draws only for the implicit swap chain')
+      and 'finishDeviceFrame(owner,primary)' in renderer, 'SwapChain: the overlay draws only for the implicit swap chain')
 # Outside the game's scene, in its own BeginScene/EndScene; a failed BeginScene draws nothing.
 render = overlay[overlay.index('void render(IDirect3DSurface9* back'):]
 render = render[:render.index('\n    }\n')]

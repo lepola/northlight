@@ -49,7 +49,7 @@ inline bool linear(const NorthlightActorDeformation::Program& p){
     for(const auto& op:p.operations)if(op.code!=1&&op.code!=2&&op.code!=3&&op.code!=4&&op.code!=5&&op.code!=8&&op.code!=9&&op.code!=46)return false;
     return true;
 }
-inline bool evaluateIntervals(const NorthlightActorDeformation::Program& p,const Vector inputs[16],const float* constants,Vector& position,bool definitionsApplied=false){
+template<bool SingleInput=false> inline bool evaluateIntervals(const NorthlightActorDeformation::Program& p,const Vector inputs[16],const float* constants,Vector& position,bool definitionsApplied=false,unsigned inputRegister=16){
     // Most rigid programs touch only a few temporaries. Construct their values
     // on first write; the lane masks still prove every subsequent read.
     using namespace NorthlightShadowShader;std::optional<Vector> temp[33];Vector address={};
@@ -60,16 +60,17 @@ inline bool evaluateIntervals(const NorthlightActorDeformation::Program& p,const
     if(p.positionRegister>=32||!inputs||!constants)return false;
     for(const auto& input:p.inputs){if(input.reg>=16)return false;inputInitialized|=1u<<input.reg;}
     auto source=[&](const NorthlightActorDeformation::Source& s,Vector& result,unsigned lanes)->bool{
-        unsigned type=regType(s.token);int index=int(regIndex(s.token));Vector value={};
+        unsigned type=regType(s.token);int index=int(regIndex(s.token));Vector constantValue={};const Vector* value=nullptr;
         if(s.token&0x2000){unsigned c=p.major>=2?((s.address>>16)&3):0;if(!(addressInitialized&(1u<<c))||address[c].error!=0||!std::isfinite(address[c].value)||std::fabs(address[c].value)>4096)return false;index+=int(address[c].value);}
         unsigned valid=15;
-        if(type==0){if(index<0||index>=32||!initialized[index])return false;value=*temp[index];valid=initialized[index];}
-        else if(type==1){if(index<0||index>=16||!(inputInitialized&(1u<<index)))return false;value=inputs[index];}
-        else if(type==3){if(index)return false;value=address;valid=addressInitialized;}
-        else if(type==2){if(index<0||index>=256)return false;for(unsigned j=0;j<4;++j)value[j].value=constants[4*index+j];if(!definitionsApplied)for(auto& d:p.definitions)if(d.reg==unsigned(index))for(unsigned j=0;j<4;++j)value[j].value=d.value[j];}
+        if(type==0){if(index<0||index>=32||!initialized[index])return false;value=&*temp[index];valid=initialized[index];}
+        else if(type==1){if(index<0||index>=16||!(inputInitialized&(1u<<index)))return false;if constexpr(SingleInput){if(unsigned(index)!=inputRegister)return false;value=&inputs[0];}else value=&inputs[index];}
+        else if(type==3){if(index)return false;value=&address;valid=addressInitialized;}
+        else if(type==2){if(index<0||index>=256)return false;for(unsigned j=0;j<4;++j)constantValue[j].value=constants[4*index+j];if(!definitionsApplied)for(auto& d:p.definitions)if(d.reg==unsigned(index))for(unsigned j=0;j<4;++j)constantValue[j].value=d.value[j];value=&constantValue;}
         else return false;
-        for(unsigned j=0;j<4;++j){if(!(lanes&(1u<<j)))continue;const unsigned channel=(s.token>>(16+2*j))&3;if(!(valid&(1u<<channel)))return false;auto v=value[channel];unsigned modifier=(s.token>>24)&15;
-            if(modifier==11||modifier==12)v.value=std::fabs(v.value);else if(modifier!=0&&modifier!=1)return false;
+        const unsigned modifier=(s.token>>24)&15;if(modifier!=0&&modifier!=1&&modifier!=11&&modifier!=12)return false;
+        for(unsigned j=0;j<4;++j){if(!(lanes&(1u<<j)))continue;const unsigned channel=(s.token>>(16+2*j))&3;if(!(valid&(1u<<channel)))return false;auto v=(*value)[channel];
+            if(modifier==11||modifier==12)v.value=std::fabs(v.value);
             if(modifier==1||modifier==12)v.value=-v.value;if(!std::isfinite(v.value)||!std::isfinite(v.error))return false;
             if(v.value!=0&&std::fabs(v.value)<std::numeric_limits<float>::min())v.error+=std::fabs(v.value);
             result[j]=v;}
@@ -84,7 +85,8 @@ inline bool evaluateIntervals(const NorthlightActorDeformation::Program& p,const
             sum.error+=roundError(magnitude)*8;result.fill(sum);
         }else for(unsigned j=0;j<4;++j){switch(op.code){
             case 1:case 46:result[j]=a[j];break;case 2:result[j]=add(a[j],b[j]);break;case 3:result[j]=add(a[j],b[j],true);break;case 5:result[j]=mul(a[j],b[j]);break;
-            case 4:{auto product=mul(a[j],b[j]);result[j]=add(product,c[j]);result[j].error+=roundError(std::fabs(double(a[j].value)*b[j].value)+std::fabs(c[j].value));break;}
+            case 4:{auto product=mul(a[j],b[j]);if(product.value==0&&product.error==0){result[j]=c[j];break;} // exact 0*x+c: fused and separate both preserve c
+                result[j]=add(product,c[j]);result[j].error+=roundError(std::fabs(double(a[j].value)*b[j].value)+std::fabs(c[j].value));break;}
             default:return false;}}
         const unsigned type=regType(op.destination),index=regIndex(op.destination),mask=(op.destination>>16)&15;
         if((type!=0&&type!=3)||(type==0&&index>=32)||(type==3&&index))return false;
@@ -105,6 +107,25 @@ inline bool evaluateIntervals(const NorthlightActorDeformation::Program& p,const
 inline bool evaluate(const NorthlightActorDeformation::Program& p,const NorthlightActorDeformation::Four inputs[16],const float* constants,Vector& position){
     Vector intervals[16]={};for(unsigned i=0;i<16;++i)for(unsigned j=0;j<4;++j)intervals[i][j].value=inputs[i][j];
     return evaluateIntervals(p,intervals,constants,position);
+}
+// Same interval arithmetic as the audited single-bone MUL/MOVA/DP4 program,
+// without decoding its six instructions for each warm bounds group.
+inline bool singleSkinIntervals(const NorthlightActorDeformation::Program& p,const Vector inputs[16],const float* constants,Vector& position,bool definitionsApplied=true){
+    if(!p.kernel.valid||p.kernel.ops.size()!=p.operations.size()||!p.kernel.singleSkin())return false;
+    const auto control=definitionsApplied?NorthlightActorDeformation::Four{constants[0],constants[1],constants[2],constants[3]}:NorthlightActorDeformation::singleSkinControl(p,constants);
+    if(control[0]!=3||control[1]!=1)return false;
+    const auto index=inputs[1][0];
+    if(index.error!=0||!std::isfinite(index.value)||index.value<0||index.value>74||std::floor(index.value)!=index.value)return false;
+    const auto ordinary=[](float x){return std::isfinite(x)&&(x==0||std::fabs(x)>=std::numeric_limits<float>::min());};
+    for(const auto& v:inputs[0])if(!ordinary(v.value)||!std::isfinite(v.error)||v.error<0)return false;
+    Vector result{};result[3]={1,0};const unsigned first=31+3*unsigned(index.value);
+    for(unsigned axis=0;axis<3;++axis){Value sum;double magnitude=0;
+        for(unsigned j=0;j<4;++j){const float row=constants[4*(first+axis)+j];if(!ordinary(row))return false;
+            const auto term=mul({row,0},inputs[0][j]);magnitude+=std::fabs(term.value)+term.error;sum=add(sum,term);}
+        sum.error+=roundError(magnitude)*8;
+        if(!std::isfinite(sum.value)||!std::isfinite(sum.error)||sum.error<0)return false;result[axis]=sum;
+    }
+    position=result;return true;
 }
 } // namespace detail
 
@@ -194,7 +215,7 @@ class Cache {
         if(oldest!=entries_.end()){bytes_-=oldest->second.bytes;entries_.erase(oldest);}}
 public:
     void clear(){envelopeValid_=fallbackValid_=deferred_=0;replayCursor_=readyCursor_=heavyCursor_=buildCursor_=0;envelopes_.clear();entries_.clear();scratch_.clear();bytes_=0;clock_=hits_=misses_=avoidedVertices_=lookupNanoseconds_=0;lookupCalls_=0;}
-    void beginFrame(bool diagnostics=true){envelopeValid_=fallbackValid_=deferred_=0;envelopes_.beginFrame(diagnostics);hits_=misses_=avoidedVertices_=lookupNanoseconds_=0;lookupCalls_=0;}
+    void beginFrame(bool diagnostics=true,size_t packets=0){envelopeValid_=fallbackValid_=deferred_=0;envelopes_.beginFrame(diagnostics,packets);hits_=misses_=avoidedVertices_=lookupNanoseconds_=0;lookupCalls_=0;}
     unsigned envelopeValid()const{return envelopeValid_;}
     unsigned fallbackValid()const{return fallbackValid_;}
     unsigned deferred()const{return deferred_;}
@@ -212,6 +233,7 @@ public:
     bool canCheap()const{return envelopes_.canReady();}
     void finishReservedTurnsAndLend(){envelopes_.finishReservedTurnsAndLend();}
     void settleClock(){envelopes_.settleClock();}
+    void lendToBuild(Budget& budget){envelopes_.lendToBuild(budget);}
     void chargeCheapPreparation(std::uint64_t ns)noexcept{envelopes_.chargeCheapPreparation(ns);}
     double borrowedMicroseconds()const{return envelopes_.borrowedMicroseconds();}
     bool canHeavy()const{return envelopes_.canHeavy();}

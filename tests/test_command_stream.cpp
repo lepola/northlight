@@ -316,8 +316,8 @@ static void retireSignalRemembered(){
     q.interrupt();cons.join();
     CHECK(q.backstopSignals()==1);   // (0.3.199: the spin loop signalled seq 1 again after retire did: 2)
 }
-// 0.3.200 (pipeline): wakes of a sleeping consumer. (a) Several publishes while it sleeps signal it once. (b) commit()'s automatic publish does not wake it below
-// kLazyWakeCommands/kLazyWakeBytes, an explicit publish with nothing new then does; (c) past the threshold the automatic publish wakes it by itself.
+// A sleeper wakes on the first automatic batch, even if the producer stops
+// submitting. Explicit publication and dense traffic preserve ordered playback.
 static void wakeOncePerSleep(){
     auto asleep=[](Queue& q){CHECK(waitFor([&]{return get(q.stats.consumerSleeps)>=1;}));std::this_thread::sleep_for(std::chrono::milliseconds(5));};
     {Queue q;std::thread cons([&]{auto* h=q.next(true);CHECK(h);q.retire(h);});
@@ -325,8 +325,8 @@ static void wakeOncePerSleep(){
      cons.join();CHECK(q.wakeSignals()==1);while(auto* h=q.next(false))q.retire(h);}
     {Queue q;std::atomic<int> got{0};std::thread cons([&]{for(int i=0;i<(int)kAutoPublishCommands;++i){auto* h=q.next(true);CHECK(h);q.retire(h);got.fetch_add(1);}});
      asleep(q);for(int i=0;i<(int)kAutoPublishCommands;++i)record(q,1,8,i);   // the 64th auto-publishes
-     std::this_thread::sleep_for(std::chrono::milliseconds(20));CHECK(q.wakeSignals()==0&&got.load()==0);   // published, but the sleeper was not woken (its own timeout is 250 ms)
-     q.publish();cons.join();CHECK(q.wakeSignals()==1&&got.load()==(int)kAutoPublishCommands);}   // nothing new to publish: the held wake is delivered
+     CHECK(waitFor([&]{return got.load()==(int)kAutoPublishCommands;}));
+     q.publish();cons.join();CHECK(q.wakeSignals()==1&&got.load()==(int)kAutoPublishCommands);}
     {Queue q;const int n=(int)kLazyWakeCommands;std::atomic<int> got{0};std::thread cons([&]{for(int i=0;i<n;++i){auto* h=q.next(true);CHECK(h);q.retire(h);got.fetch_add(1);}});
      asleep(q);const auto t0=nowNs();for(int i=0;i<n;++i)record(q,1,8,i);
      CHECK(waitFor([&]{return got.load()==n;}));CHECK(nowNs()-t0<200000000ull&&q.wakeSignals()>=1);cons.join();}   // woken by the automatic publish, not by the 250 ms timeout
@@ -438,18 +438,24 @@ static void nestedSync(){
 #include "command_stream_targets.h"
 #include "command_stream_scenarios.h"
 #include "particle_texture_stream_scenarios.h"
+#include "buffer_range_shadow_scenarios.h"
 
 int main(int argc,char** argv){
+    if(argc>1&&std::string(argv[1])=="rangeshadow"){bufferRangeShadowModel();oversizedBufferRangeShadows();oversizedBufferPumpedWrite();return 0;}
+    if(argc>1&&std::string(argv[1])=="memorypressure"){pressureKeepsShadows();syncStormDetector();std::puts("PASS pressure shadows and sync-storm attribution");return 0;}
+    if(argc>1&&std::string(argv[1])=="effecthooks"){effectHookReplay();return 0;}
+    if(argc>1&&std::string(argv[1])=="materialtextures"){materialTextureStream();return 0;}
     if(argc>1&&std::string(argv[1])=="particletextures"){particleTextureStream();return 0;}
+    if(argc>1&&std::string(argv[1])=="sparseresources"){sparseResourcePublications();std::puts("PASS sparse create/upload publication, exact bytes and no sync calls");return 0;}
     const bool threadsOnly=argc>1&&std::string(argv[1])=="threads";
     spscStress();wakeHandshakeStress();presentStyleWait();retireThenSleepAndBackpressure();unflaggedWaitIsCaught();backstopSignalsOncePerSeq();retireSignalRemembered();wakeOncePerSleep();memoryCapsAndPools();producerNotSerializedByShadows();
     budgetRules();interruptAndEvents();publishRules();nestedSync();
     generatedSyncCases();
     if(!threadsOnly){
-        orderingAcrossChunks();blocksAndInline();reuseAfterWarmup();counters();generatedRecordCases();gameFacing();
+        orderingAcrossChunks();blocksAndInline();reuseAfterWarmup();counters();generatedRecordCases();gameFacing();sparseResourcePublications();bufferRangeShadowModel();oversizedBufferRangeShadows();oversizedBufferPumpedWrite();
     }
     streamTests(threadsOnly);
-    if(!threadsOnly)particleTextureStream();
+    if(!threadsOnly){particleTextureStream();materialTextureStream();}
     std::puts("test_command_stream: all passed");
     return 0;
 }

@@ -11,12 +11,15 @@ HERE=Path(__file__).resolve().parent
 w=fp.src('world_renderer.h').read_text()
 render=w[w.index('    bool render(IDirect3DSurface9* targetSurface'):]
 checks={}
-update='        const V cascadePivot=cascadeAnchor.update(pivot,vec(context.camera),uint32_t(GetTickCount()),anchorNewMap);\n'
+update='        const V cascadePivot=cascadeAnchor.update(pivot,frameCamera,transitionNow,anchorNewMap);\n'
 checks['anchor updated once per render, right after the raw pivot']=(w.count('cascadeAnchor.update(')==1 and update in render
     and render.index('const V pivot=staticPivotReady?staticFramePivot:shadowPivot();')<render.index('actorShadowOrigin[0]=pivot.x;actorShadowOrigin[1]=pivot.y;actorShadowOrigin[2]=pivot.z;')<render.index(update)
+    and 'const uint32_t transitionNow=GetTickCount();' in render and 'const V frameCamera=vec(context.camera),travelCamera=' in render
     and 'const bool anchorNewMap=cascadeAnchorMap!=lastRequest.map;if(anchorNewMap)cascadeAnchorMap=lastRequest.map;' in render)
-checks['cascade frames, prebuild frame and prebuild matrix use the anchor']=('cascadeFrames[source][cascade]=NorthlightWorldMath::shadowFrame(cascadePivot,sourceDirections[source],radius);' in render
+checks['cascade frames, prebuild frame and prebuild matrix use the anchor']=('cascadeFrames[source][cascade]=NorthlightWorldMath::shadowFrame(cascadePivot,slotDirections[source*2+cascade],radius);' in render
     and 'staticPrebuild.frame(cascadePivot,' in render and 'NorthlightWorldMath::shadowMatrixFrom(NorthlightWorldMath::shadowFrame(cascadePivot,direction,radius),' in render
+    and 'const auto direction=f.state.renderDirection();slotDirections[slot]=V(direction.x,direction.y,direction.z);' in render
+    and render.index('f.state.request(')<render.index('const auto direction=f.state.renderDirection();')<render.index('cascadeFrames[source][cascade]=')
     and 'slotPlacement[slot]=NorthlightWorldMath::shadowCachePlacement(cascadeFrames[source][cascade],' in render)
 after=render[render.index(update)+len(update):]
 checks['no other consumer of the raw pivot after the anchor']=re.search(r'\bpivot\b',re.sub(r'//[^\n]*','',after)) is None

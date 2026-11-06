@@ -24,7 +24,8 @@ struct IDirect3DDevice9;
 IMGUI_IMPL_API bool     ImGui_ImplDX9_Init(IDirect3DDevice9* device);
 IMGUI_IMPL_API void     ImGui_ImplDX9_Shutdown();
 IMGUI_IMPL_API void     ImGui_ImplDX9_NewFrame();
-IMGUI_IMPL_API void     ImGui_ImplDX9_RenderDrawData(ImDrawData* draw_data);
+// restore_state=false requires the caller to own a full device-state guard.
+IMGUI_IMPL_API void     ImGui_ImplDX9_RenderDrawData(ImDrawData* draw_data, bool restore_state = true);
 
 // Use if you want to reset your rendering device without losing Dear ImGui state.
 IMGUI_IMPL_API bool     ImGui_ImplDX9_CreateDeviceObjects();

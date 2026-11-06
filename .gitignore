@@ -9,6 +9,7 @@
 !/.gitattributes
 !/githooks/
 !/README.md
+!/AGENTS.md
 !/LICENSE
 !/*.py
 !/client-config/

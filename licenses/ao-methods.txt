@@ -2,6 +2,8 @@ AO kernel adaptations
 
 HDAO reference: Copyright (c) 2016 Advanced Micro Devices, Inc.
 GTAO reference: Copyright (C) 2016-2021, Intel Corporation.
+ASSAO reference: Copyright (c) 2016, Intel Corporation.
+https://github.com/GameTechDev/ASSAO/tree/c21d57a95b43c700ee01a2eb18f5589d7becefb2
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal

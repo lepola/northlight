@@ -4,6 +4,7 @@ Original MIT Northlight single-emitter implementation extended locally. No
 game assets or GPL ComfyAtmosphere source are embedded in this helper.
 """
 import math,struct
+from emitter_tracks import NativeTracks, pulse_for, validate_track
 
 
 def append_lights(blob,emitters):
@@ -23,16 +24,15 @@ def append_lights(blob,emitters):
     empty=struct.pack('<Hh4I',0,-1,0,0,0,0)
     identity=struct.pack('<iIhHI',-1,0,-1,0,0)+empty*3+struct.pack('<3f',0,0,0)
     struct.pack_into('<II',out,44,bones+1,add(blob[bo:bo+bones*88]+identity))
-    struct.pack_into('<II',out,20,globals+1,add(blob[go:go+globals*4]+struct.pack('<I',1)))
-    def track(fmt,values):
-        timestamp=add(struct.pack('<I',0));key=add(struct.pack(fmt,*values));times=add(struct.pack('<II',1,timestamp));keys=add(struct.pack('<II',1,key))
-        return struct.pack('<hh4I',0,globals,1,times,1,keys)
+    tracks=NativeTracks(out)
     records=[]
-    for p in emitters:
+    for index,p in enumerate(emitters):
         light=struct.pack('<HH3f',1,bones,*p['position'])
-        for fmt,value in [('<3f',(0,0,0)),('<f',(0,)),('<3f',p['rgb']),('<f',(p['intensity'],)),('<f',(p['start'],)),('<f',(p['end'],)),('<B',(1,))]:light+=track(fmt,value)
+        for field,(fmt,value) in enumerate([('<3f',(0,0,0)),('<f',(0,)),('<3f',p['rgb']),('<f',(p['intensity'],)),('<f',(p['start'],)),('<f',(p['end'],)),('<B',(1,))]):
+            light+=tracks.track(fmt,value,pulse_for(p,index) if field==2 else None)
         assert len(light)==156;records.append(light)
     struct.pack_into('<II',out,264,len(records),add(b''.join(records)))
+    tracks.finish()
     return bytes(out)
 
 
@@ -52,3 +52,16 @@ def verify_preserved(original,patched,count=1):
 
 def append_light(blob,position,rgb,intensity,start,end):
     return append_lights(blob,[dict(position=position,rgb=rgb,intensity=intensity,start=start,end=end)])
+
+
+def verify_lights(original,patched,emitters):
+    verify_preserved(original,patched,len(emitters))
+    bones=struct.unpack_from('<I',original,44)[0]
+    _,offset=struct.unpack_from('<II',patched,264)
+    for index,p in enumerate(emitters):
+        record=offset+index*156
+        kind,bone,*position=struct.unpack_from('<HH3f',patched,record)
+        if kind!=1 or bone!=bones or not all(math.isclose(a,b,rel_tol=1e-6,abs_tol=1e-6) for a,b in zip(position,p['position'])):
+            raise ValueError('Native source anchor mismatch')
+        for relative,fmt,values in [(16,'<3f',(0,0,0)),(36,'<f',(0,)),(56,'<3f',p['rgb']),(76,'<f',(p['intensity'],)),(96,'<f',(p['start'],)),(116,'<f',(p['end'],)),(136,'<B',(1,))]:
+            validate_track(patched,record+relative,fmt,values,pulse_for(p,index) if relative==56 else None)

@@ -26,7 +26,8 @@ def literal(path, name):
 
 def material_method(source):
     start = source.index('    bool actorMaterial(')
-    return source[start:source.index('    bool actorCaptureEnabled()', start)]
+    # Stop at this method's closing brace, independent of subsequent GI helpers.
+    return source[start:source.index('\n    }', start) + len('\n    }')]
 
 
 stub = literal(HERE / 'test_terrain_snapshot.py', 'stub').replace(

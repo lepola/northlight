@@ -22,7 +22,7 @@ struct Replay {
     IDirect3DVertexShader9* shader=nullptr;IDirect3DVertexShader9* originalShader=nullptr;IDirect3DVertexDeclaration9* decl=nullptr;IDirect3DBaseTexture9* texture=nullptr;
     std::shared_ptr<const NorthlightDrawSnapshot::Mesh> shared;float constantStorage[1024]={};BOOL boolStorage[16]={};int intStorage[64]={};
     const float* constants=constantStorage;const BOOL* bools=boolStorage;const int* ints=intStorage;
-    NorthlightShaderConstants::Usage constantUsage;unsigned projectionKind=2;float cutoff=-1;DWORD addressU=D3DTADDRESS_WRAP,addressV=D3DTADDRESS_WRAP;
+    NorthlightShaderConstants::Usage constantUsage;unsigned projectionKind=2;float cutoff=-1;unsigned alphaMode=0;DWORD addressU=D3DTADDRESS_WRAP,addressV=D3DTADDRESS_WRAP;
     D3DPRIMITIVETYPE type=D3DPT_TRIANGLELIST;UINT count=0;bool indexed=false;
 };
 struct Harness {

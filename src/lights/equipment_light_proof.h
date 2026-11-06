@@ -6,7 +6,7 @@
 #include <unordered_map>
 #include <vector>
 
-// Called only for exact known native Model shader identities. Prove the
+// Called only for exact known native Model/WMO shader identities. Prove the
 // register layout from the complete straight-line program, rather than a
 // compiler-specific instruction order. No shader execution or GPU readback.
 namespace NorthlightEquipmentLightProof {

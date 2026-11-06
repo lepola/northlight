@@ -1,16 +1,17 @@
 #!/usr/bin/env python3
-# northlight-test: requires=cxx
+# northlight-test: requires=zig
 """Zone skybox fallback: native decode/mode/signature test (test_celestial_skybox.cpp) plus static checks that a skybox frame
 restores the late disc and full glare (the planet phase never draws under a full skybox) while other frames keep the
 planet-phase path. No device or game."""
 import sys; from pathlib import Path; sys.path.insert(0, str(Path(__file__).resolve().parents[1]))  # repo root
 import northlight_paths as fp
-import subprocess,tempfile
+import subprocess,tempfile,os
 HERE=Path(__file__).resolve().parent
 with tempfile.TemporaryDirectory(prefix='northlight-celestial-skybox-') as tmp:
-    binary=str(Path(tmp)/'test')
-    subprocess.run(['c++','-std=c++17','-O1','-g','-fsanitize=address,undefined','-fno-omit-frame-pointer',*fp.test_include_flags(),
-                    str(HERE/'test_celestial_skybox.cpp'),'-o',binary],check=True)
+    binary=str(Path(tmp)/('test.exe' if os.name=='nt' else 'test'))
+    compiler=([str(fp.zig()),'c++','-target','x86-windows-gnu','-O2'] if os.name=='nt' else ['c++','-O1','-g','-fsanitize=address,undefined','-fno-omit-frame-pointer'])
+    subprocess.run([*compiler,'-std=c++17','-UNDEBUG',*fp.test_include_flags(),
+                    str(HERE/'test_celestial_skybox.cpp'),'-o',binary],env=fp.zig_env(),check=True)
     native=subprocess.check_output([binary],text=True).strip()
 assert native.startswith('PASS'),native
 
@@ -18,8 +19,8 @@ host=fp.src('celestial_disc_renderer.h').read_text()
 claim=host[host.index('template<class Palette> bool claimNativeDraw('):host.index('    bool claimNativeGlare(')]
 late=host[host.index('    bool render(IDirect3DSurface9*'):host.index('    bool renderRing(')]
 # One decision per frame: the claim decides from its context read, render() only when no claim did; endFrame resets it.
-assert 'if(skyMode.skybox())return claimSuppress(body);' in claim and 'if(skyboxFrame(currentSky))return claimSuppress(body);' in claim
-assert claim.index('if(skyboxFrame(currentSky))')<claim.index('resolveRendererSky(')<claim.index('drawDisc(')  # a skybox frame draws no early disc
+assert 'if(!skyboxTrigger&&skyMode.skybox())return claimSuppress(body);' in claim and 'else if(skyboxFrame(currentSky))return claimSuppress(body);' in claim
+assert claim.index('else if(skyboxFrame(currentSky))')<claim.index('resolveRendererSky(')<claim.index('drawDisc(')  # ordinary planet claims retain the skybox fallback
 assert 'const bool skybox=skyboxFrame(context);' in late
 assert 'void endFrame(){' in host and 'skyMode.endFrame();}' in host
 assert 'bool claimSuppress(int body){\n        if(!NorthlightCelestial::suppressNative(renderFrame,frames))return false;' in host  # as the pre-planet-phase F1b: needs a render() last frame
@@ -27,7 +28,7 @@ assert 'ownFrame=renderFrame=frames;' in late
 # Skybox frame late path: both bodies, occluded surface, then the full glare (core and tail) with the sky-band depth.
 sky=late[late.index('if(NorthlightCelestial::lateBody('):late.index('if(i==1)continue;')]
 assert 'observer.lateDisc(i,suppressed)' in late[late.index('lateBody('):late.index('lateBody(')+160]
-assert 'context.skyboxCover>0)){' in late
+assert 'context.skyboxCover>0,(drawnSkyboxEarly>>i)&1)){' in late
 assert late.index('if(i==1)continue;')>late.index('lateBody(')  # unevidenced frames fall through to PR #90's sun-only late tail
 # Full-skybox frames: the game draws no planets, so the previous frame's late bodies keep owning the native glare.
 assert 'void endFrame(){lateOwnedPrevious=drawnLate;' in host and host.count('|suppressedPrevious|lateOwnedPrevious')==2

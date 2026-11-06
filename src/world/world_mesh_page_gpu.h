@@ -7,7 +7,7 @@
 namespace NorthlightWorldMeshPages {
 constexpr size_t MaxBufferBytes=512u<<10;
 constexpr size_t CopyChunkBytes=256u<<10;
-struct PageBytes {size_t vertexBytes=0,indexBytes=0;};
+struct PageBytes {size_t vertexBytes=0,indexBytes=0,vertexStride=0;};
 enum class Step {CreateVertices,CreateIndices,CopyVertices,PreloadVertices,CopyIndices,PreloadIndices};
 enum class Result {Pending,Ready,Failed};
 
@@ -26,7 +26,7 @@ public:
     bool begin(std::vector<PageBytes> pages){
         reset();
         for(const auto& p:pages)
-            if(!p.vertexBytes||!p.indexBytes||p.vertexBytes>MaxBufferBytes||p.indexBytes>MaxBufferBytes){
+            if(!p.vertexBytes||!p.indexBytes||p.vertexBytes>MaxBufferBytes||p.indexBytes>MaxBufferBytes||(p.vertexStride&&p.vertexBytes%p.vertexStride)){
                 result_=Result::Failed;return false;
             }
         pages_=std::move(pages);begun_=true;
@@ -51,7 +51,8 @@ public:
         const bool vertex=step_==Step::CreateVertices||step_==Step::CopyVertices||step_==Step::PreloadVertices;
         const bool copy=step_==Step::CopyVertices||step_==Step::CopyIndices;
         const size_t total=vertex?p.vertexBytes:p.indexBytes;
-        const size_t bytes=copy?budget.chunk(std::min(CopyChunkBytes,total-offset_)):total;
+        size_t bytes=copy?budget.chunk(std::min(CopyChunkBytes,total-offset_)):total;
+        if(copy&&vertex&&p.vertexStride)bytes-=bytes%p.vertexStride;
         if(!bytes)return result_;
         if(!perform(step_,page_,copy?offset_:0,bytes)){result_=Result::Failed;return result_;}
         if(copy){

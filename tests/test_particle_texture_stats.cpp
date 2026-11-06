@@ -4,6 +4,7 @@
 #undef NDEBUG
 #endif
 #include <cassert>
+#include "texture_reset_cases.h"
 #include <cstdio>
 #include <limits>
 using namespace NorthlightParticleTextures;
@@ -50,5 +51,6 @@ int main(){
     c.invalidate(key(uploads));assert(!c.lookup(key(uploads),v));
     enabled.store(false);assert(!c.lookup(key(uploads-1),v));c.upload(key(uploads-1),key(uploads-1+100000),32,32,0,21,large.data(),large.size(),128,true,true);enabled.store(true);assert(!c.lookup(key(uploads-1),v));
     c.clear();assert(!c.bytes());
-    std::puts("particle textures: decode on first lookup, actual atlas UV/alpha, wrap/mirror/clamp, point/bilinear, sRGB alpha parity, native BC decode, lifetime/revision, mip order, partial/failed/GPU invalidation, bounded eviction PASS");
+    TextureResetCases::run();
+    std::puts("particle textures: decode on first lookup, actual atlas UV/alpha, wrap/mirror/clamp, point/bilinear, sRGB alpha parity, native BC decode, lifetime/revision, mip order, partial/failed/GPU invalidation, bounded eviction, pool-aware reset/retry/recreation PASS");
 }

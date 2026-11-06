@@ -226,7 +226,7 @@ def pen(width):
 def lit(s,i,j):
     k=s.depth(2*i+1,2*j+1)[0];return (.05,AMB+LEGACY*LG[1],1.) if k=='g' else ((.02,AMB,1.) if k=='w' else (0.,.3,1.))
 checks={};report={}
-comp=hlsl[hlsl.index('float4 WorldComposite('):hlsl.index('// Separate geometry pass')]
+comp=hlsl[hlsl.index('float4 worldComposite('):hlsl.index('// Separate geometry pass')]
 checks['WorldComposite: lighting/baseline/AO taps weighted by the colour term, fog tent untouched, no contactPull left']=(
     'float tapLuma=dot(tex2Dlod(Scene,float4(tapUV,0,0)).rgb,float3(.299,.587,.114));' in comp
     and 'float guide=16*abs(centreLuma-tapLuma)/(centreLuma+tapLuma+.02),bits=delta*depthBits;' in comp
@@ -235,8 +235,9 @@ checks['WorldComposite: lighting/baseline/AO taps weighted by the colour term, f
     and 'contactPull' not in hlsl and 'if(total<.02){bounce=fallbackLight.rgb;' in comp)
 man=json.loads(fp.src('world-shader-build.json').read_text())['shaders']
 # Microsoft d3dcompiler_47 counts; Wine's builtin compiler gave WorldNormals 483, WorldComposite 512, RemovalSmooth 269.
+# Later GI coverage work adds instructions; retain the pre-tent 434-slot ceiling and SM3 limits.
 checks[f"slots: WorldNormals {man['WorldNormals']['static_instruction_slots']} / {man['WorldNormals']['temporary_registers']} of 32 temporaries (was 434 / 29), WorldComposite {man['WorldComposite']['static_instruction_slots']} (was 509), RemovalSmooth {man['RemovalSmooth']['static_instruction_slots']} (task 43's zero-weight branch), all <= 512"]=(
-    man['WorldNormals']['static_instruction_slots']==305 and man['WorldNormals']['temporary_registers']<=32 and man['WorldComposite']['static_instruction_slots']<=512
+    man['WorldNormals']['static_instruction_slots']<=434 and man['WorldNormals']['temporary_registers']<=32 and man['WorldComposite']['static_instruction_slots']<=512
     and man['RemovalSmooth']['static_instruction_slots']==222)
 nrm=hlsl[hlsl.index('float3 tangentAxis('):hlsl.index('struct LightingOutput')]
 checks['WorldNormals: a confidence-0 pixel picks its one-sided side by scene colour (relative luminance, one fetch site), the depth rule below .05']=(

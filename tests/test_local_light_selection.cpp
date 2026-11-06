@@ -3,6 +3,7 @@
 #include <cassert>
 #include <chrono>
 #include <cstdio>
+#include <cstring>
 #include <functional>
 using namespace NorthlightLocalLightSelection;
 static NorthlightLocalLights::Light lamp(unsigned id){
@@ -60,7 +61,7 @@ static bool sameSelection(const Selection& a,const Selection& b){
     return a.count==b.count&&a.nearest==b.nearest&&a.fogDistance==b.fogDistance&&a.position==b.position&&a.color==b.color&&a.fog==b.fog;
 }
 static void trackerTests(){
-    static_assert(Slots==72&&Spare==8,"72 slots");
+    static_assert(Slots==136&&Spare==8,"136 slots");
     assert(capBand(8)==2&&capBand(32)==8&&capBand(64)==16&&capBand(1)==1&&capBand(3)==1);
     // 1a. Target continuity without fades: every frame is a restart (continuous=false), so factor == target.
     const auto movingLamp=[](unsigned f){ // 33 lamps (rank 33 moves from 220 down through everyone to 90 and back)
@@ -160,7 +161,7 @@ static void benchmark(){
         std::printf("bench lamps=921 frames=600 speed=%.0f legacyUsPerFrame=%.2f trackerUsPerFrame=%.2f fadingAvg=%.2f fadingMax=%u checksum=%.1f\n",speed,legacyBest,trackerBest,fadingSum/frames,fadingMax,checksum);
     }
 }
-int main(){
+int main(int argc,char** argv){
     const float camera[3]={};
     for(unsigned count=0;count<=64;++count){std::vector<NorthlightLocalLights::Light> lights;
         for(unsigned i=1;i<=count;++i)lights.push_back(lamp(i));
@@ -169,8 +170,8 @@ int main(){
         checkBatches<DirectBatchSize>(s);checkBatches<FogBatchSize>(s);
         std::reverse(lights.begin(),lights.end());auto reversed=select(lights,camera);assert(s.position==reversed.position&&s.color==reversed.color);
     }
-    auto a=lamp(1),b=lamp(2);b.position[0]=a.position[0];auto bad=lamp(3);bad.diffuse[0]=-1;auto far=lamp(4);far.position[0]=235;
-    auto s=select({b,bad,far,a},camera);assert(s.count==2&&s.color[0][0]==1&&s.color[1][0]==2);
+    auto a=lamp(1),b=lamp(2);b.position[0]=a.position[0];auto bad=lamp(3);bad.diffuse[0]=-1;auto distant=lamp(4);distant.position[0]=235;
+    auto s=select({b,bad,distant,a},camera);assert(s.count==2&&s.color[0][0]==1&&s.color[1][0]==2);
     // Activation is farther away while physical radii/falloff remain identical.
     float previous=1;
     for(int reach=0;reach<=225;++reach){
@@ -199,6 +200,6 @@ int main(){
         const double day=energy*25*.3/(.3+energy*25),night=energy*20*.24/(.24+energy*20);
         assert(std::fabs(night-day*.8)<1e-10);
     }
-    trackerTests();benchmark();
+    trackerTests();if(argc==2&&!std::strcmp(argv[1],"--benchmark"))benchmark();
     std::puts("PASS local lights: 0..64 candidates, nearest 32, stable ties/order, partial 8/4 batches zero-filled with no dropped/duplicated lights, out-of-range/invalid rejection, smooth 20% night dimming including saturated fog glow; tracker: soft cap continuity, linear time fades, resets, gaps keep incumbents, under-cap identity with select(), tie determinism, fog over fading lamps");
 }

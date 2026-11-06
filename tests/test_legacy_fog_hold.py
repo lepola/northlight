@@ -41,10 +41,10 @@ def wiring():
     reset = 'valid=false;traceContext=0;traceFog=0;legacyFogKnown=false;'
     assert reset in WORLD and 'legacyFog=NorthlightLegacyFog::Constants{}' in WORLD[WORLD.index(reset):WORLD.index(reset)+200]
     assert 'NorthlightLegacyFog::Hold legacyFogHold;' in WORLD
-    assert 'legacyFogHold.update(active->map,legacyFog,legacyFogKnown,now)' in WORLD
+    assert 'legacyFogHold.update(frameMap,legacyFog,legacyFogKnown,now)' in WORLD
     assert 'memcpy(c[25],uploadedFog.parameters,16);memcpy(c[26],uploadedFog.color,16);' in WORLD
     assert 'memcpy(c[25],legacyFog' not in WORLD
-    assert 'horizonHazeState.update(active->map,legacyFog.parameters,legacyFog.color,' in WORLD
+    assert 'horizonHazeState.update(frameMap,legacyFog.parameters,legacyFog.color,' in WORLD
     assert WORLD.count('legacyFogHold.update(') == 1
     assert 'if(traceFog==0&&!legacyFogKnown&&legacyFogHold.has)traceFog=2;' in WORLD
     assert 'context=%u fog=%u skip=%s' in RENDERER and 'frameTraceFog()' in RENDERER and 'unsigned frameTraceFog()' in WORLD

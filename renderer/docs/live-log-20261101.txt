@@ -1,0 +1,119 @@
+Live-log follow-up: stale HDR scene, replay bounds lifetime and subdivision CPU
+
+Input: northlight-renderer.log, 83,770,873 bytes, 405,386 lines.
+SHA256: cf78c46fc023540d89642fffbeebe28d440fa24ac55c82ad1d762ac9a6e44daa
+The log extends the session in captured-log-20261101.txt. It still runs installer
+.5 (source 513f1dc43129...), so it cannot measure the pose improvements in .6 or
+the fixes below. Device 2 ends at frame 173167 after about 34 minutes.
+
+Findings and fixes
+
+1. The reported symptom is a stale scene remaining over the moving camera while
+   the UI continues updating. Full-size offscreen draws passed beforeDraw's
+   orthographic UI gate after world capture. That gate marked the HDR boundary
+   and ran renderEffects before hdrDraw's stricter backbuffer check. Consequently
+   an offscreen image could replace the HDR world and close the frame's capture.
+   The log has 2,229 Resources lines with FP16 format 113, interleaved with the
+   logical format 22 used by hdrBegin. The first run starts at frame 21279 and
+   coincides with the first logical scene copy after UI. This is consistent with
+   the wrong boundary, but the log does not identify each render-target pointer
+   or prove that every observed visual freeze has this cause.
+
+   Fixed the target checks for fixed, orthographic, stock and learned UI paths.
+   Stock/learned HDR boundaries also require safe texture inputs. renderEffects
+   itself rejects foreign HDR targets. Existing stock SDR admission is retained.
+   A production-method regression reproduces the former offscreen admission,
+   then verifies that the subsequent real UI still consumes the current scene.
+
+2. There are 538 sampled bounds records with valid > total. At the end, total=151
+   and valid=196 produced unbounded=4294967251. Under memory pressure uploadReplay
+   truncated/recycled the packet list while the bounds worker still borrowed its
+   constant banks. Besides the lifetime violation, apply() rejected all remaining
+   bounds because the job and packet counts no longer matched. At the sampled
+   PointShadow peak (6.814 ms, frame 165735), the nearby bounds report likewise
+   shows 289 valid for 246 packets and every retained packet unclassified.
+
+   Join the bounds worker before truncating or recycling packets. This preserves
+   current bounds on the surviving prefix and keeps the job's log counts coherent.
+   The regression fails on the old ordering and checks destruction/recycling only
+   after the join, for both ordinary and quarantined packets, across three upload
+   cache/layout variants. The log alone cannot quantify the resulting GPU saving.
+
+3. Re-analysis identified subdivision as a remaining CPU spike: 210 sampled stage
+   records average 0.623378 ms, maximum 4.617 ms at device 2/frame 155194, with two
+   WMO builds. The peak model record is 3.0265 ms at frame 125222. These are sampled
+   build records, not costs paid on every frame.
+
+   Use a local standard monotonic memory resource for the two temporary hash maps
+   and one insertion lookup for a new vertex. The maps are discarded together at
+   build completion. Geometry budgets, subdivisions, vertex/index order, seams,
+   skin influences, padding, height sampling and GPU attributes remain unchanged.
+   The dense test uses seven scratch allocations, peaks at 2,015,960 bytes and
+   retains zero scratch bytes. All equivalence cases stay below 4 MiB scratch.
+
+   Paired O2 CPU medians (13 alternating rounds, first three discarded):
+     WMO grid:  3.065962 -> 2.419250 ms (21.1% less)
+     WMO seams: 4.564737 -> 3.327400 ms (27.1% less)
+     Model:     4.732113 -> 4.365613 ms (7.7% less)
+   These are isolated build microbenchmarks, not an in-game FPS measurement.
+
+Other costs and limitations
+
+- GPU effects: 1,332 samples, mean 3.951262 ms, maximum 9.921 ms. Mean AO is
+  0.787060 ms and WorldComposite 0.593279 ms. Quality settings were not reduced.
+- poseFallback peaks at 2.291 ms over 682 records. The exact-kernel and exhausted
+  build-slot improvements from .6 are already included in this branch.
+- Frame 128792's 215.196 ms effects span includes the explicit GPU diagnostic
+  capture; the log marks it excludeFromFps=1. It is not steady rendering cost.
+- Late 172112..172115 pauses coincide with a map transition. Frame 172112 has
+  595.587 ms total, 581.219 ms frame queue idle and 0.311 ms query span. These are
+  not evidence of a GPU hang or of the persistent stale-image symptom.
+- EVENT-aware budgets remain active. The final GPU report has eventWait=2.41 ms
+  and gpuBound=1; the final CPU report also recognizes replay wait. No further
+  budget-threshold change is justified by this log.
+- No DISABLED, EXTENSION fault or HDR conversion failure is logged. A fresh game
+  capture is still required to verify visual recovery and FPS with this build.
+
+Validation
+
+- Production UI boundary: 16 cases at O2 and O0, including HDR offscreen targets,
+  scene texture inputs, the following real UI, and unchanged stock SDR behavior.
+- Production replay upload: all three cache/layout variants at O2 and O0, with
+  assertions enabled; ordinary destruction and quarantine both require the join.
+  The Windows adapter replaces only test platform/compiler plumbing. Its O0 run
+  replaces the Linux-only sanitizer variant; no sanitizer run is claimed.
+- Subdivision: 294 comparisons and 75,756,280 output bytes at each of O2 and O0,
+  identical indices and attributes against 93fd5436. Includes welded/seamed grids,
+  reversed duplicate triangles, layers, skinning, strips, invalid inputs and caps.
+- World context (28 cases), AO fog (8), AO switching (200 transitions), VS class
+  cache, displacement state reuse and nine material CPU groups pass. Layout and
+  log-format checks pass.
+- Isolated GPU graph, HDR frame/sun and proxy acceptance run on DXVK 2.7.1 and
+  3.1.1, including repeated frames, target restoration, Reset and MSAA. No game
+  launch or installation is part of these checks.
+
+Evidence and reproducible commands
+
+Local evidence: .local/out/live-log-20261101 (source hash, analysis, before/after
+failures, microbenchmarks, build log and hdr-optimized/validation.json).
+  python tests/test_effect_ui_target.py
+  python tests/test_replay_upload.py
+  python tests/test_displacement_subdivision.py --benchmark
+  python tests/test_displacement_state_reuse.py
+  python tests/test_material_pipeline_cpu_micro.py
+  python tests/verify_hdr_pipeline.py --output <isolated-directory> --no-build
+
+Installer 20261101.7
+
+Source commit: f18939ec0c49bfd34095416e85f390f1d5ac39c6
+Northlight-0.3.216-test.20261101.7-Windows.zip: 20,151,268 bytes
+ZIP SHA256: 1a5a0f9a7d8da0cc0fd1e834579150701d6b90a46e391bb008c59a3e451ece17
+DLL: 9,016,832 bytes
+DLL SHA256: 686650af5d6857c9090060e5c6c32cbb8462e2f866bbfe054feba914b4222c38
+Source identity: 87f110b9abdfeda5d87728252e9009f3a38927471bba4e23bd07926dec2670be
+
+Package verification, ZIP CRC, exact tested-DLL comparison and all six bundled
+Python --help commands from a Unicode path pass. Python 3.13.15, DXVK 3.1.1 and
+alternative DXVK 2.7.1 keep their pins. Installer sources are unchanged; no new
+full installer-suite run is claimed. The ZIP is local under releases/ and has
+not been installed into the game.

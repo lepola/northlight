@@ -124,7 +124,7 @@ assert 'constexpr float SunCoreWeight=2.4f,SunCoreRate=1.1f,SunTailWeight=.9f,Su
 assert 'c[12][2]=i?NorthlightCelestialGlow::MoonGlareStrength:(occlude&&!fullGlare?0.f:NorthlightCelestialGlow::SunCoreWeight);' in host
 assert '{D3DRS_SRCBLEND,DWORD(glare?D3DBLEND_INVDESTCOLOR:D3DBLEND_SRCALPHA)},{D3DRS_DESTBLEND,DWORD(D3DBLEND_ONE)}' in host
 assert 'if(DiscRepair.w<.5)alpha*=1-texel.a*saturate(30*ray.z/forward);' in shader
-assert 'if(DiscPolicy.w>.5&&depth<.99999994)return 0;' in shader
+assert 'if(DiscPolicy.w>.5&&rawDepth<1.0-1.0/16777216.0)return 0;' in shader
 assert 'if(DiscRepair.w>.5){float a=saturate((1-length(local))/.56);texel.a=a*a*(3-2*a);}' in shader
 assert 'if(DiscRepair.w>.5)return (DiscEmission.z*exp2(-DiscEmission.x*r2)*disc+' in shader
 assert 'float3 tail=float3(exp2(-.12*r2),exp2(-.025*r2),exp2(-.008*r2));' in shader
@@ -134,7 +134,7 @@ assert 'return DiscEmission.z*.35*exp2(-1.11*max(radius-1,0))*edge*disc;' in sha
 assert 'float edge=1-smoothstep(.35*DiscEmission.y,DiscEmission.y,radius);' in shader
 assert 'return saturate(lerp(DiscGlowHue.rgb,DiscGlowCore.rgb,smoothstep(0,1,exp2(-DiscEmission.x*radius*radius))));' in shader
 assert 'float3 glowShoulder(float x,float3 color){return 1-exp2(-1.442695*x*color);}' in shader
-assert 'if(DiscEmission.w>.5)encoded=glowShoulder(alpha,encoded);' in shader
+assert 'if(DiscEmission.w>.5){encoded=glowShoulder(alpha,encoded);if(DiscPolicy.x>1.5)encoded=discDecode(encoded);}' in shader
 assert 'constexpr float SunGlareSupport=20.f,MoonGlareSupport=6.f;' in glow
 # 0.3.217: the terrain mask spans the whole glare support (no square edge on distant mountains).
 assert 'constexpr float SunMaskRadius=SunGlareSupport,MoonMaskRadius=MoonGlareSupport;' in glow

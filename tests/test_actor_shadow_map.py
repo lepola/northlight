@@ -2,7 +2,7 @@
 # northlight-test: requires=cxx
 """0.3.209 (task 29) actor shadow map: native model test of actor_shadow_map.h (clang++, plain and ASan/UBSan) and a wiring
 audit of world_renderer.h / quality_settings.h (static source analysis): the actor map is drawn in the near
-map's iteration (cascade 0, Render only) and reused with it, only cascade 0 skips replays inside the inset, ActorShadowDetail=0
+map's iteration (cascade 0), including retained-environment frames, only cascade 0 skips replays inside the inset, ActorShadowDetail=0
 (or ActorShadows=0) draws nothing and WorldLighting reads a neutral white, s12 carries the actor map for the ActorShadow passes and the
 visibility for the WorldLighting loop only (0.3.214: the water appearance pass that also received the maps is gone). No game or GPU."""
 import sys; from pathlib import Path; sys.path.insert(0, str(Path(__file__).resolve().parents[1]))  # repo root
@@ -21,11 +21,11 @@ checks['constants: Radius 12, Inset .80, Size 1024; unsnapped centre (XY from th
 checks['quality: ActorShadowDetail 0..1, presets 1/1/0, actorShadowMap needs ActorShadows']=(re.search(r'\{\s*"ActorShadowDetail"\s*,\s*&Settings::actorShadowDetail\s*,\s*0\s*,\s*1\s*,\s*\{\s*1\s*,\s*1\s*,\s*0\s*\}\s*\}',q) is not None
     and 'inline bool actorShadowMap(const Settings& s,bool shadows){return actorShadowWork(s,shadows)&&s.actorShadowDetail;}' in q and 'unsigned actorShadowDetail=1;' in q)
 # Frame matrices from the raw pivot, before the cascade anchor (the anchor test keeps every later `pivot` out).
-raw=render.index('NorthlightActorShadowMap::leash(actorCenter[source],actorCenterValid[source],pivot,sourceDirections[source])')
+raw=render.index('NorthlightActorShadowMap::leash(actorCenter[source],actorCenterValid[source],pivot,rawSourceDirections[source])')
 checks['matrix from the raw pivot, before the anchored cascade pivot; off = nothing computed']=(raw<render.index('cascadeAnchor.update(')
     and 'const bool actorMapOn=NorthlightQuality::actorShadowMap(quality,effects.shadows)&&actorShadowPS&&actorTilesPS&&actorShadow[0]&&actorShadow[1]&&actorTiles[0]&&actorTiles[1]&&actorTilesMid&&actorVisibility;' in render
     and 'actorFrameOn[source]=NorthlightActorShadowMap::finiteMatrix(actorFrameMatrix[source]);if(!actorFrameOn[source])actorCenterValid[source]=false;' in render
-    and 'NorthlightActorShadowMap::matrix(actorCenter[source],pivot,sourceDirections[source],actorFrameMatrix[source]);' in render
+    and 'NorthlightActorShadowMap::matrix(actorCenter[source],pivot,rawSourceDirections[source],actorFrameMatrix[source]);' in render
     and 'if(anchorNewMap)actorCenterValid[source]=false;' in render and render.index('if(anchorNewMap)actorCenterValid[source]=false;')<raw
     and 'actorCenterValid[s]=false;' in w and 'actorCenterValid[0]=actorCenterValid[1]=false;' in w and w.count('actorCenterValid[0]=actorCenterValid[1]=false;')==1) # releaseGPU (reset() calls it)
 checks['leash: 1.5 yd, 40 yd jump re-centre; diagnostic dump s%d-actor']=('inline constexpr float Leash=1.5f;' in h and 'inline constexpr float JumpDistance=40.f;' in h
@@ -38,11 +38,12 @@ begin=loop.index('reuse.begin(interval);')
 invalid=loop.index('if(cascade==0)actorValid[source]=nearActorSkip[source]=false;')
 draw=loop.index('if(cascade==0&&actorFrameOn[source]){')
 valid=loop.index('memcpy(actorMatrices[source],am,64);actorValid[source]=true;')
-union=loop.index('if(!check(quad(1024,1024),"shadow union"))return false;')
-checks['paired with the near map: reuse/defer continues before it, Render invalidates, the actor draw precedes the union and commit']=(
-    reuse<begin<invalid<draw<valid<union and loop.index('continue;',reuse)<begin and 'actorMatrices' not in loop[reuse:begin]
+union=loop.index('if(!unionShadow(shadowSurface[slot],dynamicShadow,nearEnvironment[source],0,0,0,1024))return false;')
+checks['actor map is current: only unsplit reuse continues; actor draw precedes final union and environment commit']=(
+    reuse<begin<invalid<draw<valid<union and loop.index('continue;',reuse)<begin and 'if(!splitNear){' in loop[reuse:begin] and 'if(!environmentReuse)reuse.begin(interval);' in loop
     and 'reuse.commit(interval,shadowPasses,matrices[cascade])' in loop and valid<loop.index('reuse.commit(interval,shadowPasses,matrices[cascade])'))
 actor=loop[draw:loop.index('} /* actorShadows */')]
+checks['transition dynamic target retains baseline scratch and current poses without extra actor replay']=('dynamicShadow=(historyReady||transition.state.fading())?transition.dynamic:shadowScratch' in loop and 'dynamicSurface=(historyReady||transition.state.fading())?transition.dynamicSurface:shadowScratchSurface' in loop and 'if(!historyReady&&!transition.state.fading())' in loop)
 checks['actor draw: own target, shared 1024 depth, cleared white/1, cascade replay machinery, actor matrix, exactly the near-skipped replays']=(
     'actorShadowSurface[source]' in actor and 'd->SetDepthStencilSurface(shadowDepth);' in actor and '0xffffffff,1,0' in actor
     and 'replayProjection(context.inverseView,am,actorRows)' in actor and 'submitReplay(p.get(),actorBindings,actorPoses,actorRows,' in actor
@@ -56,8 +57,8 @@ checks['near skip: cascade 0 only, never the far map, by the inset test on valid
     and h.count('std::isfinite(m[i])')==1 and h.index('std::isfinite(m[i])')<h.index('inline bool insideInset(')) # the matrix once per frame (finiteMatrix), not per replay
 # A near map drawn with the skip lacks those casters: reusable only while its actor map is valid (the source went inactive, the detail went off).
 checks['near map with skipped casters is redrawn, not reused, once its actor map is gone']=(
-    'const bool actorLost=cascade==0&&nearActorSkip[source]&&!actorValid[source];' in loop
-    and 'NorthlightQuality::cascadeAction(reuse,interval,shadowPasses,!reason&&key.valid&&!pull&&!actorLost,' in loop
+    'const bool actorLost=cascade==0&&!splitNear&&nearActorSkip[source]&&!actorValid[source];' in loop
+    and 'NorthlightQuality::cascadeAction(reuse,interval,shadowPasses,!reason&&key.valid&&!pull&&!actorLost&&!transition.state.fading(),' in loop
     and loop.index('const bool actorLost=')<reuse
     and 'if(cascade==0)actorValid[source]=nearActorSkip[source]=false;' in loop and 'if(cascade==0)nearActorSkip[source]=nearSkip;' in loop
     and 'nearShadow[s].invalidate();actorValid[s]=false;nearActorSkip[s]=false;' in w)
@@ -68,28 +69,29 @@ light=render[render.index('actor visibility (half res, r sun, g moon)'):render.i
 checks['visibility target and clear only on a frame with an ActorShadow pass (a valid actor map of a drawn, active source); otherwise neutralWhite']=(
     light.index('actorPass[source]=!(')<light.index('if(anyActorPass){')<light.index('if(!check(d->SetRenderTarget(0,actorVisibilitySurface),"actor visibility target")||!check(d->Clear(0,nullptr,D3DCLEAR_TARGET,0xffffffff,1,0),"clear actor visibility"))return false;\n        }')
     and '||!effects.shadows||!sourceActive[source]||!actorValid[source]||!actorShadow[source]||!actorShadowPS||!actorTilesPS||!actorTiles[source]||!actorTilesMid||!actorVisibility);' in light
-    and 'if(!actorPass[source])continue;' in light and light.count('0xffffffff')==1)
+    and 'if(!actorPass[source])continue;' in light and light[:light.index('bool softResolved=')].count('0xffffffff')==1)
 checks['every ActorTiles pass (own 64x64 target per source, own mark) before the visibility clear, so the visibility target is cleared and drawn without a switch; tiles on s10 (restored after)']=(
     light.index('d->SetPixelShader(actorTilesPS);')<light.index('if(!check(quad(tiles,tiles),"actor shadow tile pass"))return false;')<light.index('if(profile)profile->mark("ActorTiles");')
-    <light.index('"clear actor visibility"')<light.index('d->SetTexture(12,actorShadow[source]);d->SetTexture(10,actorTiles[source]);')<light.index('d->SetPixelShader(actorShadowPS);')
+    <light.index('"clear actor visibility"')<light.index('d->SetTexture(12,actorShadow[source]);d->SetTexture(10,actorTiles[source]);')<light.index('d->SetPixelShader(quality.softShadows?actorShadowPS:actorUniformPS);')
     and light.index('d->SetRenderTarget(0,actorTilesMidSurface)')<light.index('if(!check(quad(mid,mid),"actor shadow tile pass"))return false;')<light.index('d->SetRenderTarget(0,actorTilesSurface[source])')
     <light.index('d->SetTexture(12,actorTilesMid);d->SetPixelShaderConstantF(72,midInfo,1);')<light.index('if(!check(quad(tiles,tiles),"actor shadow tile pass"))return false;') # two 4x4 steps: 1024 -> 256 -> 64
     and light.count('SetRenderTarget(0,actorVisibilitySurface)')==1
-    and '!optional(tiles,tiles,D3DFMT_R32F,&actorTiles[0],&actorTilesSurface[0])||!optional(tiles,tiles,D3DFMT_R32F,&actorTiles[1],&actorTilesSurface[1])' in w
-    and 'if(anyActorPass)d->SetTexture(10,textures[10]);' in light and light.index('d->SetPixelShader(actorShadowPS);')<light.index('if(anyActorPass)d->SetTexture(10,textures[10]);'))
+    and '!makeTarget(count,count,D3DFMT_R32F,&actorTiles[0],&actorTilesSurface[0])||!makeTarget(count,count,D3DFMT_R32F,&actorTiles[1],&actorTilesSurface[1])' in w
+    and 'if(anyActorPass)d->SetTexture(10,textures[10]);' in light and light.index('d->SetPixelShader(quality.softShadows?actorShadowPS:actorUniformPS);')<light.index('if(anyActorPass)d->SetTexture(10,textures[10]);'))
 checks['ActorShadow pass: c68..c71 matrix, c72 info, actor map on s12, RED sun / GREEN moon, mask restored']=(
     'SetPixelShaderConstantF(68,actorMatrices[source],4)' in light and 'SetPixelShaderConstantF(72,actorInfo,1)' in light and 'const float actorInfo[4]={1.f,1.f/float(NorthlightActorShadowMap::Size),NorthlightActorShadowMap::Radius,0.f};' in light
     and 'd->SetTexture(12,actorShadow[source]);d->SetTexture(10,actorTiles[source]);' in light and 'source?D3DCOLORWRITEENABLE_GREEN:D3DCOLORWRITEENABLE_RED' in light and 'D3DRS_COLORWRITEENABLE,15' in light)
-checks['s12: visibility for the WorldLighting loop only, then the frame-start (null) binding; later readers rebind baselineLight']=(
-    light.index('d->SetTexture(12,anyActorPass?actorVisibility:neutralWhite);')<light.index('d->SetPixelShader(lightingPS);')
-    and light.rstrip().endswith('d->SetTexture(12,textures[12]); /* 0.3.209 (task 29): the frame-start binding (null) again; the visibility was WorldLighting\'s only */')
+checks['s12: actor visibility for WorldLighting, then baseline visibility for later lighting readers']=(
+    light.index('d->SetTexture(12,anyActorPass?actorVisibility:neutralWhite);')<light.index('d->SetPixelShader(softResolved?lightingSoftPS:lightingPS);')
+    and 'd->SetTexture(12,baselineLight); // The following lighting consumers use this frame\'s baseline and visibility.' in light and light.rstrip().endswith('d->SetTexture(15,nullptr);')
     and 'textures[]={foldScene?foldScene:color,depth,shadow[0],shadow[1],probe[0],probe[1],probe[2],probe[3],nullptr,nullptr,probe[4],waterMask,nullptr,' in render
-    and render.count('d->SetTexture(12,baselineLight)')==2)
+    and render.count('d->SetTexture(12,baselineLight)')==5)
 checks['resources: maps, tiles and visibility only with the shaders (ActorShadowDetail=1) and optional (a failure turns the map off, not the renderer); neutral white mandatory 1x1; released with the rest']=(
     "releaseActorTargets();logf(\"WORLD actor shadow map disabled: render targets unavailable\");" in w and 'actorVisibility,&actorVisibilitySurface))return false;' not in w
-    and '||!optional(w/2,h/2,D3DFMT_A8R8G8B8,&actorVisibility,&actorVisibilitySurface)' in w
-    and 'if(quality.actorShadows&&quality.actorShadowDetail&&(FAILED(d->CreatePixelShader(kActorShadowShader,&actorShadowPS))||FAILED(d->CreatePixelShader(kActorTilesShader,&actorTilesPS))))' in w
-    and 'void releaseActorTargets(){for(auto& t:actorShadow)drop(t);for(auto& t:actorShadowSurface)drop(t);for(auto& t:actorTiles)drop(t);for(auto& t:actorTilesSurface)drop(t);drop(actorTilesMid);drop(actorTilesMidSurface);drop(actorVisibility);drop(actorVisibilitySurface);drop(actorShadowPS);drop(actorTilesPS);}' in w
+    and '||!makeTarget(w/2,h/2,D3DFMT_A8R8G8B8,&actorVisibility,&actorVisibilitySurface)' in w
+    and 'if(quality.actorShadows&&quality.actorShadowDetail&&(FAILED(d->CreatePixelShader(kActorShadowShader,&actorShadowPS))||FAILED(d->CreatePixelShader(kActorTilesShader,&actorTilesPS))||FAILED(d->CreatePixelShader(kActorShadowUniformShader,&actorUniformPS))))' in w
+    and 'void releaseActorTargetTextures(){for(auto& t:actorShadow)drop(t);for(auto& t:actorShadowSurface)drop(t);for(auto& t:actorTiles)drop(t);for(auto& t:actorTilesSurface)drop(t);drop(actorTilesMid);drop(actorTilesMidSurface);drop(actorVisibility);drop(actorVisibilitySurface);}' in w
+    and 'void releaseActorTargets(){releaseActorTargetTextures();drop(actorShadowPS);drop(actorUniformPS);drop(actorTilesPS);drop(actorTilesWidePS);drop(fogActorTiledPS);drop(fogCloudsActorTiledPS);}' in w
     and 'releaseActorTargets();drop(neutralWhite);' in w and '*static_cast<DWORD*>(lock.pBits)=0xffffffffu;neutralWhite->UnlockRect(0);' in w
     and 'nearShadow[s].invalidate();actorValid[s]=false;' in w)
 # Hysteresis hold and the near-first bounds order: wired once, gated diagnostics, shown on the actor map log line.
@@ -115,10 +117,14 @@ checks['position without bounds: the palette root, or the origin of an injected 
     'float anchor[3]={};bool anchorValid=false;' in w and 'const float* position()const{return captureRootValid?captureRoot:anchorValid?anchor:nullptr;}' in w
     and 'p->captureRootValid=rooted;if(rooted)std::memcpy(p->captureRoot,root,sizeof p->captureRoot);p->anchorValid=false;' in w
     and 'p->captureRootValid=false;p->selfShadow=false;std::memcpy(p->anchor,e.world+9,sizeof p->anchor);p->anchorValid=true;' in rigidm)
-checks['near list: built from the actor maps as last drawn and the selection\'s self; rotating pass leaves listed packets to the walks once their share is spent, a packet over the share is delisted']=(
+checks['near list: current actor maps and self; hard half-budget caps, then every unfinished packet keeps its rotating turn']=(
     'nearList().begin(actorMatrices[0],actorValid[0],actorMatrices[1],actorValid[1])' in point
-    and 'item.outer=priority&&priority->consider(i,p.position(),p.selfShadow);' in job and 'skipOuter&&items[index].outer?false:visit(index,phase)' in job
-    and 'const bool skipOuter=priority&&priority->skipOuter();' in job and job.count('rotate(index,')==3 and 'inline constexpr float Limit=NorthlightActorShadowMap::Stay+(NorthlightActorShadowMap::Leash+CasterYards)/NorthlightActorShadowMap::Radius;' in near)
+    and 'if(priority)priority->consider(i,p.position(),p.selfShadow);' in job
+    and 'budget.maxOperations=operations;if(maxVertices)budget.maxVertices=vertices;' in job
+    and 'budget.maxOperations=maxOperations;budget.maxVertices=maxVertices;' in job
+    and job.index('budget.maxOperations=operations;')<job.index('NorthlightReplayBoundsNear::nearFirst(')<job.index('budget.maxOperations=maxOperations;')
+    and all('return visit(index,'+str(phase)+');}));' in job for phase in range(3))
+    and 'skipOuter' not in job and 'inline constexpr float Limit=NorthlightActorShadowMap::Stay+(NorthlightActorShadowMap::Leash+CasterYards)/NorthlightActorShadowMap::Radius;' in near)
 sel=fp.src('world_shadow_experiment.inl').read_text()
 checks['ring 0 is the self: the selection marks the self\'s draws every frame (not only with diagnostics), injected props never inherit the mark']=(
     'for(const auto& a:actorShadowScratch.actors)if(a.self)for(size_t i=a.first;i<a.first+a.count;++i)replays[actorShadowDraws[i].index]->selfShadow=true;' in sel

@@ -1,6 +1,7 @@
 #pragma once
 // Portable disc basis. World direction is copied from the audited native sky
 // orbit; this module never invents a clock, orbit or below-horizon source.
+#include <filesystem>
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
@@ -21,7 +22,7 @@ inline bool skyDepth(float skyMin,float skyMax,float worldMax,float& output){
 }
 struct Texture {unsigned width=0,height=0;std::vector<std::uint8_t> rgba;};
 inline bool loadTexture(const std::string& path,Texture& out){
-    std::ifstream f(path,std::ios::binary|std::ios::ate);if(!f)return false;auto length=f.tellg();if(length<16)return false;f.seekg(0);
+    std::ifstream f(std::filesystem::u8path(path),std::ios::binary|std::ios::ate);if(!f)return false;auto length=f.tellg();if(length<16)return false;f.seekg(0);
     std::uint32_t h[4];f.read(reinterpret_cast<char*>(h),16);
     if(!f||h[0]!=0x31544346||h[1]!=1||!h[2]||!h[3]||h[2]>512||h[3]>512||std::uint64_t(length)!=16+std::uint64_t(h[2])*h[3]*4)return false;
     Texture t;t.width=h[2];t.height=h[3];t.rgba.resize(t.width*t.height*4);f.read(reinterpret_cast<char*>(t.rgba.data()),t.rgba.size());if(!f)return false;out=std::move(t);return true;

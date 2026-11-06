@@ -1,4 +1,5 @@
 #include "point_light_shadow.h"
+#include "local_light_scissor.h"
 #include <cassert>
 #include <iostream>
 using NorthlightLocalLights::Light;
@@ -42,6 +43,22 @@ int main(){
     Light authored=a;authored.kind=3;authored.flags=0;authored.diffuse[0]=100;
     assert(NorthlightLocalLights::valid(authored));assert(NorthlightPointShadow::select({authored},camera)==-1);
     camera[0]=100;assert(NorthlightPointShadow::select(lights,camera)==-1);
+    // A large source can light nearby receivers although its centre is beyond
+    // the 48-yard shadow window. Camera rotation does not change admission.
+    Light large={{0,0,91.2f},{.368f,.700f,.648f},0,81.57f,42,1,NorthlightLocalLights::Baked|NorthlightLocalLights::CastShadow};
+    const float origin[3]={},projection[3]={9.f/16.f,1,1};
+    for(float yaw:{-1.4f,-.7f,0.f,.7f,1.4f,3.14f}){
+        float c=std::cos(yaw),s=std::sin(yaw);
+        const float view[16]={c,0,s,0,0,1,0,0,-s,0,c,0,0,0,0,1};
+        auto v=NorthlightLocalLightScissor::view(view,projection,.1f,3.5f,3840,2160);assert(v.valid);
+        assert(NorthlightPointShadow::select({large},origin)==0);
+        const float sphere[4]={large.position[0],large.position[1],large.position[2],large.attenuationEnd};
+        NorthlightLocalLightScissor::Bounds bounds;NorthlightLocalLightScissor::add(v,sphere,bounds);
+        if(yaw==0.f)assert(NorthlightLocalLightScissor::rect(v,bounds).area()>0);
+    }
+    large.position[2]=129.5f;assert(NorthlightPointShadow::select({large},origin)==0);
+    large.position[2]=129.7f;assert(NorthlightPointShadow::select({large},origin)==-1);
+    large.position[2]=91.2f;large.kind=3;large.flags=0;assert(NorthlightPointShadow::select({large},origin)==-1);
     float lo[3]={10,-1,-1},hi[3]={11,1,1};assert(NorthlightPointShadow::intersectsSphereAABB(a,lo,hi));
     lo[0]=10.01f;assert(!NorthlightPointShadow::intersectsSphereAABB(a,lo,hi));
     lo[0]=NAN;assert(!NorthlightPointShadow::intersectsSphereAABB(a,lo,hi));

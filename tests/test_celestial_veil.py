@@ -23,18 +23,20 @@ renderer=fp.src('renderer.cpp').read_text()
 effects=renderer[renderer.index('    void renderEffects() {'):renderer.index('template<class Capture> void prepareDraw(')]
 order=['if (applied || !enabled || failed || !projectionValid) return;',
        'const bool celestial=celestialDiscs&&world&&debugMode==0&&worldDebug==0;',
-       'celestialDiscs->render(saved.targets[0],',
+       'if(celestial&&!hdr.active)renderCelestial(saved.targets[0]);',
        'gpuProfile->mark("CelestialDiscs");',
-       'if(celestial){celestialDiscs->renderRing();gpuProfile->mark("CelestialRing");}',
+       'if(celestial&&!hdr.active){celestialDiscs->renderRing();gpuProfile->mark("CelestialRing");}',
        'ext->StretchRect(saved.targets[0], nullptr, sceneSurface',
-       'world->render(saved.targets[0],',
-       'celestialDiscs->renderVeil(saved.targets[0],NorthlightCelestialGlow::hazeAtSun(haze.haze[3],haze.shape[2],sunElevation),world->skyTransmittance());',
+       'world->render(outputTarget,',
+       'if(linearHdr){renderCelestial(outputTarget);celestialDiscs->renderRing();}',
+       'if(!linearHdr)celestialDiscs->renderVeil(outputTarget,NorthlightCelestialGlow::hazeAtSun(haze.haze[3],haze.shape[2],sunElevation),world->skyTransmittance());',
        'gpuProfile->mark("CelestialVeil");',
        'applied = true;']
 at=[effects.index(s) for s in order]
 assert at==sorted(at),list(zip(order,at))
-veil_site=effects[effects.index('        if(celestial){\n            const auto& haze='):effects.index('applied = true;')]
+veil_site=effects[effects.index('        if(celestial){\n            if(linearHdr)'):effects.index('applied = true;')]
 assert 'if(celestial){' in veil_site and 'SetRenderTarget' not in veil_site
+assert 'IDirect3DSurface9* outputTarget=linearHdr?hdrPresentBack:saved.targets[0];' in effects
 
 host=fp.src('celestial_disc_renderer.h').read_text()
 veil=host[host.index('    bool renderVeil('):]
@@ -55,7 +57,7 @@ assert 'if(current<=0)return 0;' in halo_ps
 veil_ps=body(shader,'float4 CelestialVeilPS(')
 # Raw-depth classification: WDL/beyond-far silhouettes (normalised depth 1, raw
 # depth below the sky sprite) are geometry; the complement of the glare.
-assert 'float sky=(depth>=.99999994&&rawDepth>=DiscRepair.x-DiscRepair.z)?1:0;' in veil_ps
+assert 'float sky=(rawDepth>=1.0-1.0/16777216.0&&rawDepth>=DiscRepair.x-DiscRepair.z)?1:0;' in veil_ps
 assert 'float geometry=(1-sky*terrainVisibility(ray))*(1-sea);' in veil_ps  # visible water takes no veil
 assert 'float alpha=geometry*glareProfile(radius);' in veil_ps
 assert 'overEdge' not in veil_ps  # no far-edge cut: it drew a line across near hills

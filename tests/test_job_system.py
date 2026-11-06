@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # northlight-test: requires=cxx
-"""0.3.200 (jobs) job system (job_system.h) and its renderer wiring. Native clang++ only (-O2, ASan+UBSan,
-TSan when the toolchain has it): worker count, correctness with the inline fallback, wait-help (the waiting
+"""0.3.200 (jobs) job system (job_system.h) and its renderer wiring. Windows uses pinned Zig O0/O2;
+other hosts use clang++ O2, ASan+UBSan and TSan when available: worker count, inline fallback, wait-help (the waiting
 thread runs a queued job while the only worker is held), exception safety, nested waits, no allocation per
 job, shutdown draining, interleaved counters. Then a source audit: the header is portable (no D3D, no Win32),
 ReplayJobs=0 never touches the pool, and the jobs read only frozen inputs and never call the device."""
@@ -28,13 +28,14 @@ check('wait helps (pops and runs) instead of sleeping','while(!counter.done()){J
 # --- renderer wiring ------------------------------------------------------------------------
 render=w[w.index('    bool render(IDirect3DSurface9* targetSurface,'):]
 check('lazy start on the renderer thread inside render() after the upload, never at construction',w.count('replayJobs_.start(')==1 and w.count('jobsStart()')==2
-      and 'const unsigned cores=NorthlightStream::cores();' in w and 'if(replayJobs_.start(cores))logf("JOBS workers=%u cores=%u"' in w and 'const bool jobs=jobsStart();' in render
-      and render.index('const bool jobs=jobsStart();')>render.index('bucket(NorthlightEffectsBuckets::Upload);'))
+      and 'const unsigned cores=NorthlightStream::cores();' in w and 'if(replayJobs_.start(cores))logf("JOBS workers=%u cores=%u"' in w and 'jobs=jobsStart();' in render
+      and render.index('jobs=jobsStart();')>render.index('bucket(NorthlightEffectsBuckets::Upload);'))
 check('ReplayJobs=0 or no worker: nothing kicked','bool jobsOn()const{return quality.replayJobs!=0&&replayJobs_.started();}' in w
-      and w.count('replayJobs_.kick(')==3 and all('if(jobs)replayJobs_.kick(' in l or 'job.kicked=true;replayJobs_.kick(' in l for l in w.splitlines() if 'replayJobs_.kick(' in l)
+      and w.count('replayJobs_.kick(')==4 and all('if(jobs)replayJobs_.kick(' in l or 'job.kicked=true;replayJobs_.kick(' in l or 'if(spellAsync)replayJobs_.kick(' in l for l in w.splitlines() if 'replayJobs_.kick(' in l)
+      and 'const bool spellAsync=jobs&&spellUpdate.environmentKnown&&' in render
       and 'if(jobs&&actorShadows&&!replayCullsKicked)' in render)
 kicked=sorted(m.group(1) for m in re.finditer(r'replayJobs_\.kick\([\w.]+,(\w+)\)',w))
-check('three jobs: atmosphere, terrain candidates, replay cull',kicked==['atmosphereJob','job','terrainJob'],' '.join(kicked))
+check('four jobs: atmosphere, terrain candidates, replay cull, spell fog',kicked==['atmosphereJob','job','spellJob','terrainJob'],' '.join(kicked))
 check('each body inline at its old place with ReplayJobs=0, joined there (or at the first reader) with 1',
       'if(jobs)replayJobs_.wait(atmosphereDone);else atmosphereWork(atmosphere,nearZ,w,h,debug);' in render
       and 'if(!jobs)terrainJob();' in render and render.index('if(!jobs)terrainJob();')<render.index('bucket(NorthlightEffectsBuckets::TerrainSelection);')
@@ -60,16 +61,21 @@ for name in ('void atmosphereWork(AtmosphereFrame& a,float nearZ,UINT w,UINT h,i
     start=w.index(name);body=re.sub(r'/\*.*?\*/','',re.sub(r'//[^\n]*','',w[start:w.index('\n    }\n',start)]),flags=re.S)
     check(f'no device call or log in {name.split("(")[0].split()[-1]}','d->' not in body and 'check(' not in body and 'ensureCloud' not in body and 'logf(' not in body and 'Lock' not in body)
 check('every kicked job is joined before render() returns (guards)',w.count('struct JobJoin')==1 and render.count('JobJoin ')==2
+      and '~SpellJoin(){finish();}' in render and 'jobs.wait(counter);update.publish(hold);published=true;' in render
+      and render.index('spellJoin.finish();')<render.index('spellFogHold.out.revision')
       and 'struct CullSettle {WorldRenderer& r;~CullSettle(){r.replayCullSettle();}} cullSettle{*this};' in render)
 jl=r.index('logf("JOBS frame=%u jobs=%u jobMs=%.3f joinWaitMs=%.3f replayMs=%.3f earlyCullKicks')
 check('JOBS line on RenderProfile sample frames only',r.count('logf("JOBS frame=')==1 and r.rindex('if(sampledFrame&&cpuFrequency.QuadPart>0){',0,jl)<r.rindex('if(NorthlightRenderThreadProbe::profiling()){',0,jl)<jl<r.index('logf("D3D calls frame=',jl))
 
 # --- native proof ---------------------------------------------------------------------------
 configs=[('O2',['-O2']),('asan+ubsan',['-O1','-g','-fsanitize=address,undefined','-fno-sanitize-recover=all']),('tsan',['-O1','-g','-fsanitize=thread','-DNORTHLIGHT_TEST_TSAN=1'])]
+compiler=['clang++'];env=None
+if sys.platform=='win32':
+    compiler=[str(fp.zig()),'c++','-target','x86-windows-gnu'];env=fp.zig_env();configs=[('O0',['-O0']),('O2',['-O2'])]
 with tempfile.TemporaryDirectory(prefix='northlight-jobs-') as tmp:
     for label,flags in configs:
-        exe=Path(tmp)/f'jobs-{label.replace("+","_")}'
-        b=subprocess.run(['clang++','-std=c++17','-Wall','-Wextra','-Werror','-UNDEBUG',*flags,*fp.test_include_flags(),str(HERE/'test_job_system.cpp'),'-o',str(exe)],capture_output=True,text=True)
+        exe=Path(tmp)/(f'jobs-{label.replace("+","_")}' + ('.exe' if sys.platform=='win32' else ''))
+        b=subprocess.run([*compiler,'-std=c++17','-Wall','-Wextra','-Werror','-UNDEBUG',*flags,*fp.test_include_flags(),str(HERE/'test_job_system.cpp'),'-o',str(exe)],env=env,capture_output=True,text=True)
         if b.returncode:
             if label=='tsan':print(f'SKIP job system [{label}] build: TSan unavailable on this toolchain? {(b.stdout+b.stderr).strip().splitlines()[-1:]}');continue
             check(f'job system [{label}] build','',(b.stdout+b.stderr).strip()[-600:]);continue

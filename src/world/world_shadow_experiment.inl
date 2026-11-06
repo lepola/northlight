@@ -1,8 +1,5 @@
-    // Selection runs on capture frames only; with model capture skipped between them
-    // (both shadow intervals >1) its frame counts are rescaled to rendered frames.
-    NorthlightActorShadowSelection::Tuning selectionTuning()const{
-        return NorthlightActorShadowSelection::atCadence(NorthlightActorShadowSelection::active(),
-            effects.shadows&&NorthlightQuality::captureSkipPossible(quality,true)?quality.nearShadowInterval:1);}
+    // Moving shadow casters are selected every frame, independently of environment cadence.
+    NorthlightActorShadowSelection::Tuning selectionTuning()const{return NorthlightActorShadowSelection::active();}
     void selectShadowReplays(){
         prepareJoin(); /* 0.3.177 (r83): first; every render-thread cache use of the frame follows it */
         if(shadowSelectionDone)return;shadowSelectionDone=true;

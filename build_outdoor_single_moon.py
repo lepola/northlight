@@ -49,16 +49,23 @@ def build(source,output,assets=None):
             name=sky_name(sky,sky.index[sid]);stem=name[:-4];model=read(stem+'.m2')
             textures,lookup=texture_names(model);count=struct.unpack_from('<I',model,68)[0]
             assert 1<=count<=4
-            skins={};removed=[];retained=[];suspects=[]
+            try:
+                source_skins={i:read(stem+f'{i:02d}.skin') for i in range(count)}
+            except (OSError,ValueError) as error:
+                audited.append(dict(sky=sid,model=name,refs=refs[sid],skipped=str(error)))
+                print(f'Outdoor moon: preserving {name}; unavailable skin: {error}',flush=True)
+                continue
+            skins={};removed=[];retained=[];suspects=[];mixed=[]
             for skinid in range(count):
-                before=read(stem+f'{skinid:02d}.skin');assert before[:4]==b'SKIN'
+                before=source_skins[skinid];assert before[:4]==b'SKIN'
                 n,off=struct.unpack_from('<II',before,36);assert off>=48 and off+n*24<=len(before)
                 kept=[]
                 for j in range(n):
                     raw=before[off+j*24:off+(j+1)*24];names=batch_names(raw,textures,lookup)
                     record=dict(skin=skinid,batch=j,textures=names)
                     if set(names)&MOON_TEXTURES:
-                        assert set(names)<=MOON_TEXTURES,('Mixed lunar batch',name,names)
+                        if not set(names)<=MOON_TEXTURES:
+                            mixed.append(record);kept.append(raw);continue
                         removed.append(record)
                     else:
                         kept.append(raw);retained.append(record)
@@ -68,7 +75,11 @@ def build(source,output,assets=None):
                 assert skin[:36]==before[:36] and skin[40:off]==before[40:off] and skin[off+24*n:]==before[off+24*n:]
                 assert skin[off:off+24*len(kept)]==b''.join(kept)
                 skins[skinid]=bytes(skin)
-            audited.append(dict(sky=sid,model=name,refs=refs[sid],retained_moon_named_batches=suspects))
+            audited.append(dict(sky=sid,model=name,refs=refs[sid],retained_moon_named_batches=suspects,
+                                unsupported_mixed_lunar_batches=mixed))
+            if mixed:
+                print(f'Outdoor moon: preserving {name}; lunar textures share batches with other sky textures',flush=True)
+                continue
             if not removed:continue
             custom=f'Environments\\Stars\\fr_single_moon_105_{sid}'
             assert custom.lower()+'.m2' not in lower

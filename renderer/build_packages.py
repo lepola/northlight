@@ -57,14 +57,20 @@ APP_FILES = [
     'build_outdoor_single_sun.py', 'build_outdoor_single_moon.py', 'build_weather_textures.py',  # 0.3.198 (rain): the art layer's procedural weather textures
     'scripts/install_world_cache.py', 'scripts/client_identity.py',
     'renderer/northlight_install.py', 'renderer/migrate_mac_proxy.py', 'renderer/windows-package/install.py',
-    'renderer/world_scene_builder.py', 'renderer/m2_visibility.py', 'renderer/world_lights_builder.py',
+    'renderer/world_scene_builder.py', 'renderer/wmo_lamp_emission.py', 'renderer/m2_visibility.py', 'renderer/m2_light_geometry.py', 'renderer/world_lights_builder.py', 'renderer/light_attachments.py',
     'renderer/instance_maps.py', 'renderer/world_light_placements.py', 'renderer/outdoor_light_profiles.py', 'renderer/outdoor-light-profiles.json',
     'renderer/wotlk-emitter-profiles.json', 'renderer/m2_emitter_patch.py',
     'renderer/build_emitter_patch.py', 'renderer/emitter_pin_report.py',
+    'renderer/world_emitter_coverage.py', 'renderer/world_fixture_emission.py', 'renderer/native_fixture_catalog.py', 'renderer/world_emitter_index.py', 'renderer/emitter_tracks.py',
     'renderer/regional_fog_builder.py', 'renderer/build_celestial_disc_assets.py',
     'renderer/native_model_lights.py', 'renderer/build_equipment_emitters.py',
     'renderer/build_spell_emitters.py', 'renderer/build_mount_emitters.py',
+    'renderer/build_glue_emitters.py',
+    'renderer/build_gameobject_emitters.py',
     'renderer/equipment_emitter_patch.py',
+    'renderer/point_transmission_builder.py',
+    'renderer/attached_emitter_sources.py',
+    'renderer/emission_catalog.py',
     'tests/validate_world_cache.py', 'src/sky/forest_regions.inc',
 ]
 PAYLOAD_COMMON = {'celestial-profiles.ini': 'client-config/celestial-profiles.ini',
@@ -86,10 +92,12 @@ def runtime_drop(config, extra=''):
 
 # Linux also drops _dbm with its Berkeley DB (a shared module there; on macOS it is part of the runtime).
 RUNTIME_DROP = {'mac': runtime_drop('darwin'), 'linux': runtime_drop('x86_64-linux-gnu', '|lib-dynload/_dbm')}
-CACHE_MEMBER = re.compile(r'^([A-Za-z0-9]+/\d+_\d+\.fg3|models/[0-9a-f]+\.fgs|lights/[A-Za-z0-9]+\.fgl|'
-                          r'fog/[A-Za-z0-9]+/\d+_\d+\.frf|celestial/(sun|moon)\.fct|northlight-cache\.json)$')
+CACHE_MEMBER = re.compile(r"^([A-Za-z0-9_ ']{1,63}/\d+_\d+\.fg3|models/[0-9a-f]+\.fgs|lights/[A-Za-z0-9_ ']{1,63}\.fg[la]|"
+                          r"lights/point-transmission/([A-Za-z0-9_ ']{1,63}/\d+_\d+\.fg3|models/[0-9a-f]{64}\.fgs)|lights/world-emitters-v1\.json|lights/native-fixtures\.bin|"
+                          r'fog/[A-Za-z0-9]+/\d+_\d+\.frf|celestial/(sun|moon)\.fct|northlight-cache\.json)\Z')
 MARKER = re.compile(rb'Northlight renderer (\d+\.\d+\.\d+);')
 DEV_MARKER = b'NORTHLIGHT DEV TUNING BUILD'  # embedded by build_renderer.py --dev-tuning; never ships
+STAND_MARKER = b'NORTHLIGHT STAND REPLAY BUILD'
 
 
 def sha(path):
@@ -150,6 +158,8 @@ def check_dll(data):
         raise SystemExit('the renderer DLL is not a proxy-capable Northlight renderer build')
     if DEV_MARKER in data:
         raise SystemExit('the renderer DLL is a NORTHLIGHT DEV TUNING BUILD (built with build_renderer.py --dev-tuning); rebuild it without --dev-tuning')
+    if STAND_MARKER in data:
+        raise SystemExit('the renderer DLL is an imported-input stand build; rebuild without --stand-replay for game installation')
     return MARKER.search(data).group(1).decode()
 
 
@@ -169,13 +179,15 @@ def variant_digest(files):
 
 
 def check_variant_sources(manifest):
-    """Never ship an old stock cache beside a new builder or emitter catalog."""
-    expected = install_world_cache.source_hashes()
-    actual = manifest.get('build', {}).get('sources', {})
-    changed = sorted(name for name, digest in expected.items() if actual.get(name) != digest)
+    """Ship only compatible cache revisions; DLL/source rebuilds are irrelevant."""
+    expected = install_world_cache.CACHE_VERSIONS
+    actual = manifest.get('build', {}).get('cache_versions') or {}
+    if not isinstance(actual, dict):
+        actual = {}
+    changed = sorted(name for name, version in expected.items() if type(actual.get(name)) is not int or actual[name] != version)
     if changed:
         raise SystemExit('Stale cache variant ' + str(manifest.get('variant', '?')) +
-                         ': regenerate with scripts/build_cache_variant.py (changed sources: ' + ', '.join(changed) + ')')
+                         ': regenerate with scripts/build_cache_variant.py (cache versions: ' + ', '.join(changed) + ')')
 
 
 def check_cache_zip(path, manifest):
@@ -380,6 +392,7 @@ def build(platform, version, dll, variants, out, stormlib_dir):
             'dxvk_fallback': {k: PINS['dxvk2'][k] for k in ('version', 'url', 'sha256')} if platform in PROXY_PLATFORMS else None,
             'variants': {n: {'cache_digest': m['cache_digest'], 'files': len(m['files'])} for n, m in sorted(variants.items())},
             'app_files': {n: sha(fp.REPO / n) for n in APP_FILES}}
+    info['cache_versions'] = dict(install_world_cache.CACHE_VERSIONS)
     tree.add('BUILD-INFO.json', (json.dumps(info, indent=2) + '\n').encode())
     tree.add('LICENSES/AO-methods.txt', fp.REPO / 'licenses/ao-methods.txt')
     tree.add('LICENSES/Dear-ImGui.txt', fp.REPO / 'licenses/imgui.txt')   # src/imgui/ (settings overlay)

@@ -102,6 +102,26 @@ static void randomView(std::mt19937& rng,float* inverse){
     for(unsigned i=0;i<3;++i)for(unsigned j=0;j<3;++j)inverse[4*i+j]=r[i][j];
     inverse[12]=u(rng)*12000;inverse[13]=u(rng)*12000;inverse[14]=u(rng)*300;inverse[15]=1;
 }
+static void matrixEdges(){
+    // Deliberately unaligned palettes and views, every SIMD lane and both signs.
+    alignas(16) float storage[1025],view[17]={};float* c=storage+1;float* inverse=view+1;inverse[0]=inverse[5]=inverse[10]=inverse[15]=1;
+    const uint32_t patterns[]={0,1,0x007fffff,0x00800000,0x00800001,0x3f800000,0x7f7ffffe,0x7f7fffff,0x7f800000,0x7f800001,0x7fc12345};
+    size_t checks=0;for(unsigned count:{1u,4u,33u,65u,75u}){
+        std::fill(c,c+1024,0.f);
+        SkinEnvelope skin;for(unsigned n=0;n<count;++n){Four in[16]={};in[0]={float(int(n%7)-3),-1,2,1};in[1]={.1f,.2f,.3f,.4f};const float bone=float((n*37)%75);in[2]={bone,bone,bone,bone};assert(skin.add(in));}
+        for(unsigned bone=0;bone<75;++bone){float* row=c+4*(31+3*bone);std::fill(row,row+12,0.f);row[0]=row[5]=row[10]=1;row[3]=float(bone)*.1f;}
+        auto equal=[&]{Bounds a,b;const bool x=legacyEvaluate(skin,c,inverse,a),y=skin.evaluate(c,inverse,b);
+            assert(x==y&&a.valid==b.valid&&!std::memcmp(a.low,b.low,12)&&!std::memcmp(a.high,b.high,12));++checks;};
+        equal();for(unsigned bone:{0u,1u,31u,32u,63u,64u,74u})for(unsigned lane=0;lane<12;++lane)for(auto bits:patterns)for(unsigned sign=0;sign<2;++sign){
+            float& coefficient=c[4*(31+3*bone)+lane];const float saved=coefficient;const uint32_t u=bits|(sign<<31);std::memcpy(&coefficient,&u,4);equal();coefficient=saved;}
+        // Equal signed zeros must preserve std::min/max's first-operand rule.
+        for(unsigned n=0;n<skin.usedBones;++n)for(unsigned axis=0;axis<3;++axis){skin.bones[skin.order[n]].low[axis]=-0.f;skin.bones[skin.order[n]].high[axis]=0.f;}equal();
+        struct Stop {unsigned calls=0,limit=0;};auto stop=[](void* p){auto& s=*static_cast<Stop*>(p);return ++s.calls==s.limit;};
+        for(unsigned limit:{0u,1u,2u}){Stop state{0,limit};Bounds b;const bool valid=skin.evaluate(c,inverse,b,stop,&state);const unsigned calls=(count-1)/32;
+            assert(state.calls==std::min(calls,limit?limit:calls));assert(valid==(!limit||limit>calls));if(!valid)assert(!b.valid&&b.low[0]==0&&b.high[0]==0);}
+    }
+    std::printf("SKIN_MATRIX_EDGES_PASS checks=%zu all_row_lanes signs normal_subnormal_edges nonfinite unused_bones unaligned signed_zero stop_cadence failure_output\n",checks);
+}
 /* Warm through the production phases, then the fast cheap turn and the Timer
    heavy turn must return identical bits for the same pose/camera. */
 static size_t fastTaken=0;
@@ -114,6 +134,7 @@ static Bounds phase(EnvelopeCache& cache,const Prepared& prepared,const std::sha
 }
 int main(int argc,char** argv){
     assert(argc==2);auto p=load(argv[1]);assert(SkinEnvelope::supports(p));auto prepared=EnvelopeCache::prepareProgram(p,declaration,4);assert(prepared);
+    matrixEdges();
     auto palettePrg=p;palettePrg.definitions.push_back({40,{1,0,0,900}});auto paletteDef=EnvelopeCache::prepareProgram(palettePrg,declaration,4);assert(paletteDef);
     std::mt19937 rng(137);float c[1024],inverse[16];size_t meshes=0,poses=0,vertices=0,fast=0,slow=0,rejected=0;EnvelopeCache cache;
     for(unsigned m=0;m<160;++m){const bool wild=m%4==3;auto mesh=std::make_shared<const Mesh>(randomMesh(rng,30+rng()%900,1+rng()%75,wild));++meshes;

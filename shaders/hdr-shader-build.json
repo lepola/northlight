@@ -1,0 +1,492 @@
+{
+  "source_sha256": "b13c6d36dd519a328465c5582f002dc2912b881bc6c77f092e599f4965c9b4a5",
+  "compiler": "Microsoft d3dcompiler_47 10.0.17134.12 IEEE strict",
+  "compiler_sha256": "4432bbd1a390874f3f0a503d45cc48d346abc3a8c0213c289f4b615bf0ee84f3",
+  "game_launched": false,
+  "shaders": {
+    "HdrUi-ps_2_0": {
+      "static_instruction_slots": 24,
+      "temporary_registers": 3,
+      "samplers": [],
+      "instructions": {
+        "add": 4,
+        "rcp": 1,
+        "cmp": 4,
+        "mul": 6,
+        "mov": 3,
+        "log": 3,
+        "exp": 3
+      },
+      "target": "ps_2_0",
+      "sha256": "404afcd413b3a04e26d4e5fb2b978e84cc199fa607cf6ba797ecdc3a4615f16f",
+      "bytes": 560
+    },
+    "HdrUi-ps_3_0": {
+      "static_instruction_slots": 23,
+      "temporary_registers": 3,
+      "samplers": [],
+      "instructions": {
+        "add": 4,
+        "rcp": 1,
+        "cmp": 4,
+        "mul": 6,
+        "mov": 2,
+        "log": 3,
+        "exp": 3
+      },
+      "target": "ps_3_0",
+      "sha256": "29187d5d090c459ac1dacf4dfe4f15b1e97eb4bd28b1f3a1a41e65fe098c0884",
+      "bytes": 548
+    },
+    "HdrParticle-ps_2_0": {
+      "static_instruction_slots": 15,
+      "temporary_registers": 3,
+      "samplers": [],
+      "instructions": {
+        "add": 2,
+        "mul": 4,
+        "log": 3,
+        "exp": 3,
+        "cmp": 1,
+        "mov": 2
+      },
+      "target": "ps_2_0",
+      "sha256": "5212e4ab6b20353ad39d97d7caf7af2f004d42547bfe26a4323c026172e04ee4",
+      "bytes": 412
+    },
+    "HdrParticle-ps_3_0": {
+      "static_instruction_slots": 15,
+      "temporary_registers": 3,
+      "samplers": [],
+      "instructions": {
+        "max": 1,
+        "add": 2,
+        "mul": 4,
+        "log": 3,
+        "exp": 3,
+        "cmp": 1,
+        "mov": 1
+      },
+      "target": "ps_3_0",
+      "sha256": "1fceb8a50c31acbe802c2ce0543e23b2071a228d9586dadf77aa55726a87177c",
+      "bytes": 416
+    },
+    "HdrWorld": {
+      "static_instruction_slots": 41,
+      "temporary_registers": 4,
+      "samplers": [
+        0
+      ],
+      "instructions": {
+        "texld": 1,
+        "max": 3,
+        "add": 5,
+        "mul": 10,
+        "log": 4,
+        "exp": 4,
+        "cmp": 3,
+        "mov": 3,
+        "if": 1,
+        "dp3": 1,
+        "else": 1,
+        "endif": 1,
+        "rcp": 1,
+        "min": 1
+      },
+      "target": "ps_3_0",
+      "sha256": "0a1a2e7b88e4315aa6a079593c72519cd3943821c0c19d56d8e9091babfff74b",
+      "bytes": 896
+    },
+    "HdrOverlay": {
+      "static_instruction_slots": 25,
+      "temporary_registers": 3,
+      "samplers": [
+        0
+      ],
+      "instructions": {
+        "texld": 1,
+        "mul": 7,
+        "add": 4,
+        "rcp": 1,
+        "cmp": 4,
+        "mov": 2,
+        "log": 3,
+        "exp": 3
+      },
+      "target": "ps_3_0",
+      "sha256": "af59ad79d865e44ee44b887044fe4c0081520281cec0ff49d6ac5f8a0fbe67c0",
+      "bytes": 652
+    },
+    "HdrFixedUi": {
+      "static_instruction_slots": 40,
+      "temporary_registers": 4,
+      "samplers": [
+        0
+      ],
+      "instructions": {
+        "add": 9,
+        "if": 1,
+        "mul": 10,
+        "texldl": 1,
+        "else": 1,
+        "mov": 3,
+        "endif": 1,
+        "rcp": 1,
+        "cmp": 4,
+        "log": 3,
+        "exp": 3
+      },
+      "target": "ps_3_0",
+      "sha256": "b9c8f63df258245989d10780b33a9fafc6d7a4d60ee7f4b63fe2e28424e6c144",
+      "bytes": 864
+    },
+    "HdrFixedUi2": {
+      "static_instruction_slots": 66,
+      "temporary_registers": 4,
+      "samplers": [
+        0,
+        1
+      ],
+      "instructions": {
+        "add": 20,
+        "if": 1,
+        "mul": 21,
+        "texldl": 1,
+        "else": 1,
+        "mov": 5,
+        "endif": 1,
+        "texld": 1,
+        "cmp": 5,
+        "rcp": 1,
+        "log": 3,
+        "exp": 3
+      },
+      "target": "ps_3_0",
+      "sha256": "a72b512067bb599e57211a3f707c6942d90beb50374762bb6c3ce3a70a974322",
+      "bytes": 1408
+    },
+    "HdrMeter": {
+      "static_instruction_slots": 30,
+      "temporary_registers": 4,
+      "samplers": [
+        0
+      ],
+      "instructions": {
+        "texld": 1,
+        "max": 4,
+        "mov": 2,
+        "if": 1,
+        "add": 4,
+        "mul": 3,
+        "log": 4,
+        "exp": 3,
+        "cmp": 3,
+        "endif": 1,
+        "dp3": 1,
+        "min": 1
+      },
+      "target": "ps_3_0",
+      "sha256": "26b132c1a5ace9fbf51aefd30f492209e2834ca75fdc6cf682ffbaf73bf249a3",
+      "bytes": 740
+    },
+    "HdrReduce": {
+      "static_instruction_slots": 330,
+      "temporary_registers": 6,
+      "samplers": [
+        0
+      ],
+      "instructions": {
+        "mov": 3,
+        "mul": 98,
+        "rcp": 2,
+        "frc": 1,
+        "add": 98,
+        "texldl": 64
+      },
+      "target": "ps_3_0",
+      "sha256": "37d4b2f5e9055b685b0291cb3f1cd8868da009707409a98851e0da89981847f4",
+      "bytes": 4756
+    },
+    "HdrReduceLinear": {
+      "static_instruction_slots": 91,
+      "temporary_registers": 5,
+      "samplers": [
+        0
+      ],
+      "instructions": {
+        "mov": 4,
+        "mul": 26,
+        "rcp": 2,
+        "frc": 1,
+        "add": 26,
+        "texldl": 16
+      },
+      "target": "ps_3_0",
+      "sha256": "cfb722c49a66eaad50b079756f109d965d63349ce9959a35ed085f54c16551d0",
+      "bytes": 1456
+    },
+    "HdrDecodeWorld": {
+      "static_instruction_slots": 75,
+      "temporary_registers": 5,
+      "samplers": [
+        0,
+        1,
+        2
+      ],
+      "instructions": {
+        "mov": 5,
+        "if": 3,
+        "texld": 3,
+        "add": 13,
+        "texkill": 1,
+        "endif": 3,
+        "max": 3,
+        "mul": 19,
+        "log": 4,
+        "exp": 4,
+        "cmp": 7,
+        "dp3": 1,
+        "else": 2
+      },
+      "target": "ps_3_0",
+      "sha256": "162aed0665ee8f3d1b91a297043b70ce477552e64eb4a5be576748076320b3a4",
+      "bytes": 1456
+    },
+    "HdrCopy": {
+      "static_instruction_slots": 1,
+      "temporary_registers": 0,
+      "samplers": [
+        0
+      ],
+      "instructions": {
+        "texld": 1
+      },
+      "target": "ps_3_0",
+      "sha256": "135cd0189ac469ad1fc7f9d4441dabbc3f369cd39387678a77a905304fbd25b2",
+      "bytes": 180
+    },
+    "HdrLegacyComposite": {
+      "static_instruction_slots": 141,
+      "temporary_registers": 8,
+      "samplers": [
+        0,
+        1,
+        2,
+        3,
+        7
+      ],
+      "instructions": {
+        "texld": 6,
+        "mov": 6,
+        "if": 4,
+        "add": 26,
+        "max": 10,
+        "mul": 32,
+        "log": 12,
+        "exp": 12,
+        "cmp": 7,
+        "rcp": 7,
+        "endif": 4,
+        "else": 3,
+        "pow": 1,
+        "min": 1
+      },
+      "target": "ps_3_0",
+      "sha256": "385990d25732043b04d863f5537230c450b86385478be9daa32658691baecb11",
+      "bytes": 2508
+    },
+    "HdrAdapt": {
+      "static_instruction_slots": 50,
+      "temporary_registers": 5,
+      "samplers": [
+        0,
+        1
+      ],
+      "instructions": {
+        "mov": 6,
+        "add": 10,
+        "log": 1,
+        "cmp": 6,
+        "texld": 1,
+        "max": 3,
+        "min": 3,
+        "if": 2,
+        "mul": 6,
+        "else": 2,
+        "texldl": 1,
+        "endif": 2,
+        "rcp": 1,
+        "exp": 1
+      },
+      "target": "ps_3_0",
+      "sha256": "31fbff6ced11f0d00af5d9510d61e5a4de7ca3a94350a4b0bf237b2ec06af1f8",
+      "bytes": 1012
+    },
+    "HdrBloom": {
+      "static_instruction_slots": 66,
+      "temporary_registers": 4,
+      "samplers": [
+        0
+      ],
+      "instructions": {
+        "mov": 2,
+        "mul": 11,
+        "add": 18,
+        "texld": 5,
+        "max": 15,
+        "rcp": 5,
+        "cmp": 10
+      },
+      "target": "ps_3_0",
+      "sha256": "80cd33a51bb6ce205e6ba8ba54252a5969fca52efc7205caabacd6f7533ba26f",
+      "bytes": 1328
+    },
+    "HdrBloomHorizontal": {
+      "static_instruction_slots": 60,
+      "temporary_registers": 4,
+      "samplers": [
+        0
+      ],
+      "instructions": {
+        "mov": 2,
+        "mul": 11,
+        "add": 17,
+        "texld": 5,
+        "max": 15,
+        "rcp": 5,
+        "cmp": 5
+      },
+      "target": "ps_3_0",
+      "sha256": "d2fb9423d8b7fdfdaebf700334d5dfd4a9ef7d9c02dc189678a2968ca1a654e7",
+      "bytes": 1212
+    },
+    "HdrBloomVertical": {
+      "static_instruction_slots": 20,
+      "temporary_registers": 4,
+      "samplers": [
+        0
+      ],
+      "instructions": {
+        "mov": 2,
+        "mul": 7,
+        "add": 7,
+        "texld": 4
+      },
+      "target": "ps_3_0",
+      "sha256": "63684eca83cbebb762391e3b84b83c61d29615796c5d04c911c3f52172dd0926",
+      "bytes": 572
+    },
+    "HdrWorldLinear": {
+      "static_instruction_slots": 76,
+      "temporary_registers": 6,
+      "samplers": [
+        0,
+        1,
+        2
+      ],
+      "instructions": {
+        "texld": 3,
+        "mov": 5,
+        "add": 11,
+        "cmp": 6,
+        "mul": 17,
+        "if": 4,
+        "else": 1,
+        "log": 4,
+        "exp": 6,
+        "endif": 4,
+        "max": 4,
+        "dp3": 1,
+        "min": 1,
+        "rcp": 1
+      },
+      "target": "ps_3_0",
+      "sha256": "b92da3f7d76965de6838cc63c5bd748aaf45c67f2bef6054916e7dd2d9ae9c72",
+      "bytes": 1452
+    },
+    "HdrWorldLinearOnly": {
+      "static_instruction_slots": 52,
+      "temporary_registers": 4,
+      "samplers": [
+        0,
+        1,
+        2
+      ],
+      "instructions": {
+        "texld": 3,
+        "max": 4,
+        "mov": 2,
+        "if": 3,
+        "mul": 11,
+        "add": 9,
+        "endif": 3,
+        "exp": 3,
+        "cmp": 4,
+        "dp3": 1,
+        "log": 1,
+        "min": 1,
+        "rcp": 1
+      },
+      "target": "ps_3_0",
+      "sha256": "9207a5dfa33b5fc88d05277615fcd5e8997c36657d81ec3793c169d1d394f26d",
+      "bytes": 1132
+    },
+    "HdrLegacyEncode": {
+      "static_instruction_slots": 24,
+      "temporary_registers": 4,
+      "samplers": [
+        0
+      ],
+      "instructions": {
+        "texld": 1,
+        "mov": 2,
+        "add": 2,
+        "cmp": 2,
+        "mul": 6,
+        "if": 1,
+        "else": 1,
+        "log": 3,
+        "exp": 3,
+        "endif": 1
+      },
+      "target": "ps_3_0",
+      "sha256": "ca2348e070051cb6aaa2f89f2bcab44b334eac0faf4ddeb4c8f02a940f9757f3",
+      "bytes": 512
+    },
+    "HdrCalibration": {
+      "static_instruction_slots": 1,
+      "temporary_registers": 0,
+      "samplers": [],
+      "instructions": {
+        "mov": 1
+      },
+      "target": "ps_3_0",
+      "sha256": "acad5be94ddd4be9632e94a96eea806309d68d8b4be33f5045e979aa9e106fa3",
+      "bytes": 152
+    },
+    "HdrLayer": {
+      "static_instruction_slots": 42,
+      "temporary_registers": 5,
+      "samplers": [
+        0
+      ],
+      "instructions": {
+        "mov": 6,
+        "add": 5,
+        "cmp": 6,
+        "texld": 1,
+        "if": 2,
+        "rcp": 1,
+        "mul": 6,
+        "log": 3,
+        "exp": 3,
+        "endif": 2,
+        "else": 1,
+        "texkill": 1
+      },
+      "target": "ps_3_0",
+      "sha256": "641cfec722c761449db7591e56e7c68577c468a580edac2e0273ba29998b689c",
+      "bytes": 824
+    }
+  }
+}

@@ -25,6 +25,7 @@ PREFIX = r'''
 #include <cmath>
 #include <cstdarg>
 #include <cstdio>
+#include <cstring>
 #include <cwchar>
 #include <iostream>
 #include <mutex>

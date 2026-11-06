@@ -14,7 +14,11 @@ checks={
     'actor maps follow the cascades':'if(!actorMapOn||!sourceActive[source]){actorValid[source]=false;actorHold[source].invalidate();}' in w,
     'capture skip uses the same test':'in.sourceActive[source]=NorthlightGI::dot(sourceColors[source],sourceColors[source])>1e-10f;' in w,
     'colours are the celestial direct*weight':'resolvedSources.sources[1].color=vec(celestialLight.moonColor);' in w,
+    'static proofs use current source demand':'prepareStaticProofs(sourceActive[0]||sourceActive[1]);' in w,
+    'static cache stays warm for reentry':'updateStaticCasters(effects.shadows,&streamBudget);' in w,
 }
+proofs=w[w.index('void prepareStaticProofs(bool directionalActive){'):w.index('void prepareStaticM2(){')]
+assert proofs.index('p->staticProofMask=p->staticM2Mask=0;')<proofs.index('if(!directionalActive)return;')<proofs.index('StaticShadowDedup::Budget budget;')
 for name,ok in checks.items():print(('PASS ' if ok else 'FAIL ')+name)
 assert all(checks.values())
 with tempfile.TemporaryDirectory(prefix='northlight-moon-') as tmp:

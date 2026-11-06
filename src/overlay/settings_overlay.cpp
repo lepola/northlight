@@ -1,5 +1,8 @@
 // Settings overlay: the device window's subclass, the input queue, the ImGui context and drawing. See settings_overlay.h.
 #include "settings_overlay.h"
+#include "hdr_compiled_shaders.h"
+#include "saved_state.h"
+#include "hdr_quad.h"
 #include <windows.h>
 #include <algorithm>
 #include <atomic>
@@ -17,7 +20,14 @@
 #include "imgui_impl_dx9.h"
 #include "overlay_font_roboto.h"
 #include "overlay_input.h"
+#include "window_size_filter.h"
 #include "settings_panel.h"
+#ifdef NORTHLIGHT_WINDOW_SIZE_TEST_FOREGROUND
+extern "C" HWND NorthlightWindowSizeTestForeground();
+#endif
+#ifdef NORTHLIGHT_WINDOW_SIZE_TEST_LIFECYCLE
+extern "C" void NorthlightWindowSizeTestClosing(IDirect3DDevice9*,HWND);
+#endif
 
 namespace {
 // The first failed ImGui assertion of the session. ImGui is used on the render thread only.
@@ -49,16 +59,42 @@ struct WindowHook {
     std::atomic<WNDPROC> previous{nullptr};
     std::atomic<HWND> window{nullptr};
     std::atomic<bool> unicode{false};
+    std::atomic<IDirect3DDevice9*> overlayOwner{nullptr};
     std::atomic<unsigned> opens{0};   // every show: the render thread refreshes the panel and resets ImGui's key state
     std::atomic<unsigned> heldButtons{0};   // written by the window thread; others ask through forgetButtons
     std::atomic<bool> forgetButtons{false};   // the render thread closed the window: the next message clears heldButtons
     std::atomic<bool> captured{false};   // the overlay holds the mouse capture for heldButtons (window thread)
     std::atomic<unsigned> hotkey{0};   // packed In::Hotkey (vk | ctrl<<8 | shift<<9 | alt<<10), set before install()
     In::Queue queue;
+    In::MasterHotkey master;
+    NorthlightWindowSize::Publication presentation;
+    NorthlightWindowSize::DeliveredSize deliveredSize; // window thread only
+    std::atomic<Log> stabilityLog{nullptr};
+    std::atomic<unsigned> suppressedSizes{0},sizeLogs{0},reportedSizes{0};
+    std::atomic<bool> normalWindow{false};
+    std::atomic<std::uint64_t> forwardedSize{0};
+    std::atomic<unsigned> forwardedSizes{0},forwardedLogs{0},reportedForwards{0},forwardReason{0};
 };
 WindowHook hook;
 unsigned pack(const In::Hotkey& k){return k.vk|(k.mods.ctrl?1u<<8:0)|(k.mods.shift?1u<<9:0)|(k.mods.alt?1u<<10:0);}
 In::Hotkey unpack(unsigned v){In::Hotkey k;k.vk=v&0xFF;k.mods.ctrl=(v>>8)&1;k.mods.shift=(v>>9)&1;k.mods.alt=(v>>10)&1;return k;}
+
+NorthlightWindowSize::Context sizeContext(HWND window,unsigned width,unsigned height){
+    NorthlightWindowSize::Context c;const auto s=hook.presentation.snapshot();c.session=s.session;c.barrier=s.barrier;
+    c.attached=s.owner&&s.window==reinterpret_cast<std::uintptr_t>(window)&&hook.window.load()==window;
+    if(!c.attached)return c;
+    RECT client{},outer{};auto& g=c.geometry;g.width=width;g.height=height;
+#ifdef NORTHLIGHT_WINDOW_SIZE_TEST_FOREGROUND
+    const HWND foreground=NorthlightWindowSizeTestForeground();
+#else
+    const HWND foreground=GetForegroundWindow();
+#endif
+    g.style=GetWindowLongPtrW(window,GWL_STYLE);g.extendedStyle=GetWindowLongPtrW(window,GWL_EXSTYLE);
+    g.usable=width&&height&&GetClientRect(window,&client)&&client.right-client.left==int(width)&&client.bottom-client.top==int(height)&&
+        GetWindowRect(window,&outer)&&!IsIconic(window)&&!IsZoomed(window)&&foreground==window;
+    g.left=outer.left;g.top=outer.top;g.right=outer.right;g.bottom=outer.bottom;
+    c.ready=s.ready&&s.width==width&&s.height==height;return c;
+}
 
 LRESULT CALLBACK windowProcedure(HWND window,UINT msg,WPARAM wparam,LPARAM lparam){
     const WNDPROC previous=hook.previous.load(std::memory_order_acquire);
@@ -67,19 +103,54 @@ LRESULT CALLBACK windowProcedure(HWND window,UINT msg,WPARAM wparam,LPARAM lpara
         if(!previous)return unicode?DefWindowProcW(window,msg,wparam,lparam):DefWindowProcA(window,msg,wparam,lparam);
         return unicode?CallWindowProcW(previous,window,msg,wparam,lparam):CallWindowProcA(previous,window,msg,wparam,lparam);
     };
+    // The shared subclass may remain chained after an earlier device/window.
+    // Never consume or mutate this window's state for another HWND.
+    if(window!=hook.window.load(std::memory_order_acquire))return forward();
     if(msg==WM_NCDESTROY){
         // The window is going away: unhook if nobody subclassed after us (the chain dies with the window anyway).
-        hook.active.store(false);hook.open.store(false);
+        const auto owner=hook.presentation.owner();
+        if(!hook.presentation.beginWindowDestruction())return forward();
+#ifdef NORTHLIGHT_WINDOW_SIZE_TEST_LIFECYCLE
+        NorthlightWindowSizeTestClosing(reinterpret_cast<IDirect3DDevice9*>(owner),window);
+#else
+        (void)owner;
+#endif
+        hook.normalWindow.store(false);hook.deliveredSize.invalidate();hook.overlayOwner.store(nullptr);
+        hook.active.store(false);hook.open.store(false);hook.master.clear();
         const LONG_PTR current=unicode?GetWindowLongPtrW(window,GWLP_WNDPROC):GetWindowLongPtrA(window,GWLP_WNDPROC);
         if(current==reinterpret_cast<LONG_PTR>(&windowProcedure)&&previous){
             if(unicode)SetWindowLongPtrW(window,GWLP_WNDPROC,reinterpret_cast<LONG_PTR>(previous));else SetWindowLongPtrA(window,GWLP_WNDPROC,reinterpret_cast<LONG_PTR>(previous));
-            hook.installed.store(false);
         }
+        hook.installed.store(false);hook.window.store(nullptr,std::memory_order_release);
+        hook.presentation.finishRelease();
         return forward();
+    }
+    const unsigned command=unsigned(wparam)&0xfff0u;
+    if(msg==WM_ACTIVATEAPP||msg==WM_ACTIVATE||msg==WM_KILLFOCUS||msg==WM_DISPLAYCHANGE||msg==WM_DPICHANGED||
+       msg==WM_STYLECHANGING||msg==WM_STYLECHANGED||msg==WM_ENTERSIZEMOVE||msg==WM_EXITSIZEMOVE||
+       (msg==WM_SYSKEYDOWN&&wparam==VK_RETURN)||(msg==WM_SYSCOMMAND&&(command==SC_SIZE||command==SC_MOVE||command==SC_MINIMIZE||command==SC_MAXIMIZE||command==SC_RESTORE))){
+        hook.normalWindow.store(false);hook.presentation.windowChanged();hook.deliveredSize.invalidate();
+    }
+    if(msg==WM_SIZE&&hook.presentation.owner()){
+        if(wparam!=SIZE_RESTORED){hook.normalWindow.store(false);hook.presentation.windowChanged();hook.deliveredSize.invalidate();}
+        const unsigned width=LOWORD(lparam),height=HIWORD(lparam);
+        const auto before=sizeContext(window,width,height);
+        if(!before.geometry.usable)hook.normalWindow.store(false,std::memory_order_release);
+        const auto decision=hook.deliveredSize.begin(unsigned(wparam),before);
+        if(decision.suppress){hook.suppressedSizes.fetch_add(1,std::memory_order_relaxed);return 0;}
+        const unsigned reason=wparam!=SIZE_RESTORED?1:!before.geometry.usable?2:!before.ready?3:4;
+        hook.forwardReason.store(reason,std::memory_order_relaxed);
+        hook.forwardedSize.store(std::uint64_t(width)|(std::uint64_t(height)<<16)|(std::uint64_t(unsigned(wparam))<<32),std::memory_order_relaxed);
+        hook.forwardedSizes.fetch_add(1,std::memory_order_release);
+        const LRESULT result=forward();
+        const auto after=sizeContext(window,width,height);
+        if(hook.deliveredSize.delivered(decision.token,unsigned(wparam),before.session,after))hook.normalWindow.store(true,std::memory_order_release);
+        return result;
     }
     if(!hook.active.load(std::memory_order_relaxed))return forward();
     In::Modifiers mods;
     if(msg>=WM_KEYFIRST&&msg<=WM_KEYLAST){mods.ctrl=GetKeyState(VK_CONTROL)<0;mods.shift=GetKeyState(VK_SHIFT)<0;mods.alt=GetKeyState(VK_MENU)<0;}
+    hook.master.message(msg,wparam,lparam,mods,GetForegroundWindow()==window);
     In::State state;state.open=hook.open.load(std::memory_order_relaxed);state.captureMouse=hook.captureMouse.load(std::memory_order_relaxed);
     state.captureText=hook.captureText.load(std::memory_order_relaxed);state.hotkey=unpack(hook.hotkey.load(std::memory_order_relaxed));
     state.self=reinterpret_cast<std::intptr_t>(window);
@@ -115,27 +186,48 @@ bool install(HWND window,const char*& why){
     if(!window||!IsWindow(window)){why="no device window";return false;}
     if(hook.installed.load()){
         // Still chained from an earlier device (another module subclassed after us): reuse that link.
-        if(hook.window.load()==window){hook.active.store(true);return true;}
+        if(hook.window.load()==window){hook.master.clear();return true;}
         why="the procedure is still chained into an earlier window";return false;
     }
     const bool unicode=IsWindowUnicode(window)!=FALSE;
     const LONG_PTR current=unicode?GetWindowLongPtrW(window,GWLP_WNDPROC):GetWindowLongPtrA(window,GWLP_WNDPROC);
     if(!current){why="GetWindowLongPtr failed";return false;}
-    hook.unicode.store(unicode);hook.window.store(window);hook.heldButtons.store(0);hook.queue.clear();
+    hook.unicode.store(unicode);hook.window.store(window);hook.heldButtons.store(0);hook.queue.clear();hook.master.clear();
     hook.previous.store(reinterpret_cast<WNDPROC>(current),std::memory_order_release);
     SetLastError(0);
     const LONG_PTR replaced=unicode?SetWindowLongPtrW(window,GWLP_WNDPROC,reinterpret_cast<LONG_PTR>(&windowProcedure))
                                    :SetWindowLongPtrA(window,GWLP_WNDPROC,reinterpret_cast<LONG_PTR>(&windowProcedure));
     if(!replaced&&GetLastError()){why="SetWindowLongPtr failed";return false;}
     if(replaced&&replaced!=current)hook.previous.store(reinterpret_cast<WNDPROC>(replaced),std::memory_order_release);
-    hook.installed.store(true);hook.active.store(true);
+    hook.installed.store(true);
     return true;
 }
 // Device destruction: restores the previous procedure only while ours is still the window's current one; otherwise
 // another module subclassed after us and we stay in its chain as a pass-through (never break its chain).
-void uninstall(){
-    hook.active.store(false);hook.open.store(false);hook.captureMouse.store(false);hook.captureText.store(false);hook.queue.clear();
+void uninstall(IDirect3DDevice9* expectedOwner,bool retiring=false){
+    std::uintptr_t retainedOwner=0;
+    if(!retiring&&!hook.presentation.beginMaintenance(reinterpret_cast<std::uintptr_t>(expectedOwner),retainedOwner))return;
+    struct Finish {bool retiring;std::uintptr_t retained;~Finish(){
+        if(retiring||hook.presentation.finishMaintenance(retained))return;
+        // NCDESTROY arrived while maintenance held the reservation. Its
+        // one-shot retirement must win over restoring the old owner/window.
+        const HWND window=hook.window.load();const bool unicode=hook.unicode.load();
+        const LONG_PTR current=unicode?GetWindowLongPtrW(window,GWLP_WNDPROC):GetWindowLongPtrA(window,GWLP_WNDPROC);
+        if(current==reinterpret_cast<LONG_PTR>(&windowProcedure)){
+            const auto previous=reinterpret_cast<LONG_PTR>(hook.previous.load());
+            if(unicode)SetWindowLongPtrW(window,GWLP_WNDPROC,previous);else SetWindowLongPtrA(window,GWLP_WNDPROC,previous);
+        }
+        hook.active.store(false);hook.open.store(false);hook.overlayOwner.store(nullptr);hook.normalWindow.store(false);
+        hook.captureMouse.store(false);hook.captureText.store(false);hook.heldButtons.store(0);hook.captured.store(false);
+        hook.queue.clear();hook.master.clear();hook.installed.store(false);hook.window.store(nullptr);
+        hook.presentation.finishRelease();
+    }} finish{retiring,retainedOwner};
+    const auto inputOwner=hook.overlayOwner.load(std::memory_order_acquire);
+    if(inputOwner&&inputOwner!=expectedOwner)return;
+    hook.overlayOwner.store(nullptr,std::memory_order_release);
+    hook.active.store(false);hook.open.store(false);hook.captureMouse.store(false);hook.captureText.store(false);hook.queue.clear();hook.master.clear();
     hook.heldButtons.store(0);hook.captured.store(false);   // a capture we hold ends with the button's release (pass-through from now on)
+    if(retainedOwner)return; // stability remains active without overlay input
     if(!hook.installed.load())return;
     const HWND window=hook.window.load();const bool unicode=hook.unicode.load();
     if(!IsWindow(window)){hook.installed.store(false);return;}
@@ -214,6 +306,8 @@ bool loadSystemFont(const wchar_t* name,float pixels,const ImWchar* ranges){
 
 class Impl final : public Overlay {
     IDirect3DDevice9* device;
+    IDirect3DPixelShader9* hdrShader=nullptr;IDirect3DPixelShader9* calibrationShader=nullptr;float hdrWhite=0;
+    IDirect3DSurface9* outputTarget=nullptr;
     std::shared_ptr<NorthlightSettings::Service> service;
     Log log;
     std::string hotkeyName;
@@ -235,7 +329,7 @@ class Impl final : public Overlay {
     // Ends the overlay for this session: input back to pure pass-through, D3DPOOL_DEFAULT objects released (Reset must not
     // find them). The context stays (a half-built frame may not survive DestroyContext) until the device goes.
     void fail(const char* why){
-        failed=true;background.store(false);uninstall();
+        failed=true;background.store(false);uninstall(device);
         logf("OVERLAY disabled for this session: %s",why);
         try{if(context&&backend){ImGui::SetCurrentContext(context);ImGui_ImplDX9_InvalidateDeviceObjects();}}catch(...){}
     }
@@ -250,7 +344,13 @@ class Impl final : public Overlay {
         io.BackendPlatformName="northlight-overlay";
         backend=ImGui_ImplDX9_Init(device);
         if(!backend)throw std::runtime_error("ImGui_ImplDX9_Init failed");
-        panel=std::make_unique<SettingsPanel>(service,hotkeyName);
+        panel=std::make_unique<SettingsPanel>(service,hotkeyName,[this](const float* rectangle,const float* color){
+            if(!(hdrWhite>0))return;SavedState saved(device);if(!saved.ok)return;D3DSURFACE_DESC desc{};if(FAILED(saved.targets[0]->GetDesc(&desc)))return;
+            if(!calibrationShader&&FAILED(device->CreatePixelShader(reinterpret_cast<const DWORD*>(kHdrCalibration),&calibrationShader)))return;
+            if(FAILED(NorthlightHdr::quadState(device,saved.targets[0],desc.Width,desc.Height)))return;
+            RECT clip={LONG(rectangle[0]),LONG(rectangle[1]),LONG(rectangle[2]),LONG(rectangle[3])};device->SetScissorRect(&clip);device->SetRenderState(D3DRS_SCISSORTESTENABLE,TRUE);
+            device->SetPixelShader(calibrationShader);device->SetPixelShaderConstantF(0,color,1);NorthlightHdr::drawQuad(device,desc.Width,desc.Height);
+        });
         QueryPerformanceFrequency(&frequency);QueryPerformanceCounter(&last);
     }
     // Font atlas and style for a new scale only (first frame, resolution changes).
@@ -311,6 +411,12 @@ class Impl final : public Overlay {
     }
     // Outside the game's scene (Present comes after its EndScene), onto the implicit swap chain's back buffer, over
     // everything the game drew. The caller's SavedState restores all of this.
+    static void hdrDrawState(const ImDrawList*,const ImDrawCmd* command){
+        auto& self=*static_cast<Impl*>(command->UserCallbackData);
+        const float color[]={self.hdrWhite/80,self.hdrWhite/80,self.hdrWhite/80,0};
+        self.device->SetPixelShader(self.hdrShader);self.device->SetPixelShaderConstantF(0,color,1);
+        self.device->SetRenderState(D3DRS_SRGBWRITEENABLE,FALSE);
+    }
     void render(IDirect3DSurface9* back,const D3DSURFACE_DESC& desc){
         device->SetRenderTarget(0,back);
         for(DWORD i=1;i<4;++i)device->SetRenderTarget(i,nullptr);
@@ -326,8 +432,16 @@ class Impl final : public Overlay {
         device->SetTextureStageState(0,D3DTSS_TEXCOORDINDEX,0);device->SetTextureStageState(0,D3DTSS_TEXTURETRANSFORMFLAGS,D3DTTFF_DISABLE);
         device->SetTextureStageState(0,D3DTSS_RESULTARG,D3DTA_CURRENT);
         device->SetStreamSourceFreq(0,1);
+        if(hdrWhite>0){
+            if(!hdrShader&&FAILED(device->CreatePixelShader(reinterpret_cast<const DWORD*>(kHdrOverlay),&hdrShader))){fail("HDR overlay shader unavailable");return;}
+            // The backend initializes fixed-function state before processing callbacks.
+            // Insert our transfer after that setup for each command list.
+            auto* data=ImGui::GetDrawData();
+            for(int i=0;i<data->CmdListsCount;++i){ImDrawCmd command;command.UserCallback=&hdrDrawState;command.UserCallbackData=this;data->CmdLists[i]->CmdBuffer.insert(data->CmdLists[i]->CmdBuffer.begin(),command);}
+        }
         if(FAILED(device->BeginScene()))return;
-        ImGui_ImplDX9_RenderDrawData(ImGui::GetDrawData());
+        // Overlay::draw requires the caller's SavedState; keep transform backup in the backend.
+        ImGui_ImplDX9_RenderDrawData(ImGui::GetDrawData(),false);
         device->EndScene();
         checkpoint();
     }
@@ -345,7 +459,8 @@ class Impl final : public Overlay {
         }
         struct Surface{IDirect3DSurface9* p=nullptr;~Surface(){if(p)p->Release();}} back;
         D3DSURFACE_DESC desc={};
-        if(FAILED(device->GetBackBuffer(0,0,D3DBACKBUFFER_TYPE_MONO,&back.p))||!back.p||FAILED(back.p->GetDesc(&desc))||!desc.Width||!desc.Height)return;
+        if(outputTarget){back.p=outputTarget;back.p->AddRef();}else if(FAILED(device->GetBackBuffer(0,0,D3DBACKBUFFER_TYPE_MONO,&back.p)))return;
+        if(!back.p||FAILED(back.p->GetDesc(&desc))||!desc.Width||!desc.Height)return;
         ensureContext();ImGui::SetCurrentContext(context);
         const float wanted=uiScale(desc.Height);
         if(wanted!=scale)rescale(wanted);
@@ -376,18 +491,27 @@ class Impl final : public Overlay {
 public:
     Impl(IDirect3DDevice9* d,std::shared_ptr<NorthlightSettings::Service> s,Log l,std::string key):device(d),service(std::move(s)),log(l),hotkeyName(std::move(key)){device->AddRef();}
     ~Impl() override{
-        uninstall();
+        uninstall(device);
         std::lock_guard<std::mutex> lock(mutex);
         try{
             panel.reset();
             if(context){ImGui::SetCurrentContext(context);if(backend)ImGui_ImplDX9_Shutdown();ImGui::DestroyContext(context);}
         }catch(...){}
         context=nullptr;
+        if(hdrShader)hdrShader->Release();
+        if(calibrationShader)calibrationShader->Release();
         device->Release();
     }
+    bool masterHotkey(bool foreground,bool& pressed) override{
+        const bool active=hook.active.load(std::memory_order_relaxed);
+        pressed=hook.master.take(foreground&&active);
+        return active;
+    }
     bool visible()const override{return hook.open.load(std::memory_order_relaxed)||background.load(std::memory_order_relaxed);}
-    void draw() override{
+    void draw(float uiWhite=0,IDirect3DSurface9* output=nullptr) override{
         std::lock_guard<std::mutex> lock(mutex);
+        hdrWhite=uiWhite;
+        outputTarget=output;
         if(failed)return;
         try{frame();}
         catch(const std::exception& e){fail(e.what());}
@@ -405,9 +529,13 @@ public:
 
 std::unique_ptr<Overlay> create(IDirect3DDevice9* device,bool enabled,const char* key,std::shared_ptr<NorthlightSettings::Service> service,Log log){
     char line[256];
-    if(!enabled){if(log)log("OVERLAY off: [Renderer] SettingsOverlay=0 (no window hook)");return nullptr;}
+    if(!enabled){if(log)log("OVERLAY off: [Renderer] SettingsOverlay=0 (no settings input)");return nullptr;}
     if(!device)return nullptr;
+    if(hook.presentation.closing()){if(log)log("OVERLAY unavailable: window hook is closing");return nullptr;}
     if(hook.active.load()){if(log)log("OVERLAY unavailable for this device: another device owns the settings window");return nullptr;}
+    if(hook.presentation.owner()&&hook.presentation.owner()!=reinterpret_cast<std::uintptr_t>(device)){
+        if(log)log("OVERLAY unavailable for this device: another device owns the window hook");return nullptr;
+    }
     In::Hotkey hotkey;
     if(key&&*key&&!In::parseHotkey(key,hotkey)){
         std::snprintf(line,sizeof line,"OVERLAY SettingsOverlayKey=%.64s not usable (F1..F12 with Ctrl/Shift/Alt, not Ctrl+Shift+F7..F10/F12); using %s",key,In::hotkeyName(hotkey).c_str());
@@ -418,9 +546,59 @@ std::unique_ptr<Overlay> create(IDirect3DDevice9* device,bool enabled,const char
     if(!install(window,why)){std::snprintf(line,sizeof line,"OVERLAY unavailable: %s",why);if(log)log(line);return nullptr;}
     try{
         auto overlay=std::make_unique<Impl>(device,std::move(service),log,In::hotkeyName(hotkey));
+        hook.overlayOwner.store(device,std::memory_order_release);
+        hook.active.store(true,std::memory_order_release);
         std::snprintf(line,sizeof line,"OVERLAY ready: %s shows the Northlight settings (window=%p unicode=%d)",In::hotkeyName(hotkey).c_str(),static_cast<void*>(window),int(hook.unicode.load()));
         if(log)log(line);
         return overlay;
-    }catch(...){uninstall();if(log)log("OVERLAY unavailable: allocation failure");return nullptr;}
+    }catch(...){uninstall(device);if(log)log("OVERLAY unavailable: allocation failure");return nullptr;}
 }
 } // namespace NorthlightOverlay
+
+namespace NorthlightWindowHook {
+bool attach(IDirect3DDevice9* owner,HWND window,NorthlightOverlay::Log log){
+    using namespace NorthlightOverlay;
+    const auto identity=reinterpret_cast<std::uintptr_t>(owner);
+    if(const auto inputOwner=hook.overlayOwner.load(std::memory_order_acquire);inputOwner&&inputOwner!=owner)return false;
+    if(!hook.presentation.acquire(identity,reinterpret_cast<std::uintptr_t>(window)))return false;
+    const char* why="";
+    if(!install(window,why)){
+        hook.presentation.release(identity);
+        if(log){char line[256];std::snprintf(line,sizeof line,"WINDOW size guard unavailable: %s",why);log(line);}return false;
+    }
+    hook.normalWindow.store(false,std::memory_order_release);hook.stabilityLog.store(log,std::memory_order_release);return true;
+}
+void invalidate(IDirect3DDevice9* owner){NorthlightOverlay::hook.presentation.invalidate(reinterpret_cast<std::uintptr_t>(owner));}
+void presented(IDirect3DDevice9* owner,HWND window,unsigned width,unsigned height,bool windowed,HRESULT status){
+    using namespace NorthlightOverlay;
+    const auto identity=reinterpret_cast<std::uintptr_t>(owner);
+    hook.presentation.presented(identity,reinterpret_cast<std::uintptr_t>(window),width,height,windowed,status==D3D_OK&&hook.normalWindow.load(std::memory_order_acquire));
+    if(hook.presentation.owner()!=identity)return;
+    if(const unsigned count=hook.forwardedSizes.load(std::memory_order_acquire);count!=hook.reportedForwards.load(std::memory_order_relaxed)&&hook.forwardedLogs.load(std::memory_order_relaxed)<8){
+        hook.reportedForwards.store(count,std::memory_order_relaxed);hook.forwardedLogs.fetch_add(1,std::memory_order_relaxed);
+        if(const auto log=hook.stabilityLog.load(std::memory_order_acquire)){
+            const auto size=hook.forwardedSize.load(std::memory_order_relaxed);const unsigned reason=hook.forwardReason.load(std::memory_order_relaxed);
+            const char* why=reason==1?"state-transition":reason==2?"window-state-or-geometry":reason==3?"no-current-present":"first-or-changed-delivery";
+            char line[256];std::snprintf(line,sizeof line,"WINDOW WM_SIZE forwarded window=%p wParam=%u size=%ux%u reason=%s count=%u",static_cast<void*>(window),unsigned(size>>32),unsigned(size&65535),unsigned((size>>16)&65535),why,count);log(line);
+        }
+    }
+    const unsigned suppressed=hook.suppressedSizes.load(std::memory_order_relaxed);
+    if(suppressed==hook.reportedSizes.load(std::memory_order_relaxed)||hook.sizeLogs.load(std::memory_order_relaxed)>=8)return;
+    hook.reportedSizes.store(suppressed,std::memory_order_relaxed);hook.sizeLogs.fetch_add(1,std::memory_order_relaxed);
+    if(const auto log=hook.stabilityLog.load(std::memory_order_acquire)){
+        char line[256];std::snprintf(line,sizeof line,"WINDOW duplicate restored WM_SIZE ignored window=%p size=%ux%u count=%u",static_cast<void*>(window),width,height,suppressed);log(line);
+    }
+}
+void detach(IDirect3DDevice9* owner){
+    using namespace NorthlightOverlay;
+    if(!owner)return;
+    const auto identity=reinterpret_cast<std::uintptr_t>(owner);
+    if(!hook.presentation.beginRelease(identity))return;
+#ifdef NORTHLIGHT_WINDOW_SIZE_TEST_LIFECYCLE
+    NorthlightWindowSizeTestClosing(owner,hook.window.load(std::memory_order_acquire));
+#endif
+    hook.normalWindow.store(false,std::memory_order_release);hook.stabilityLog.store(nullptr,std::memory_order_release);
+    uninstall(owner,true);
+    hook.presentation.finishRelease();
+}
+}

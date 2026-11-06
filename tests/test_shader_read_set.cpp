@@ -56,8 +56,12 @@ static void testPixel(){
     ins(b,5,{dst(TEMP,0),reg(TEMP,0),reg(CONST,26)});
     const ReadSet r=scanW(shader(PS2,b));
     CHECK(r.exact&&!r.vertex&&r.samplers==(1u|1u<<4|1u<<7)&&fcount(r)==2&&f(r,2)&&f(r,26)&&!r.i&&!r.b);
+    CHECK(r.sampledSamplers==1u); // unused declarations never fetch textures
     W c;ins(c,66,{dst(TEMP,0),reg(INPUT,0),reg(SAMPLER,9)});                   // a sampler used without dcl still counts
     CHECK(scanW(shader(PS2,c)).samplers==1u<<9);
+    CHECK(scanW(shader(PS2,c)).sampledSamplers==1u<<9);
+    W declaration;ins(declaration,31,{0x90000000u,dst(SAMPLER,3)});
+    const auto unused=scanW(shader(PS3,declaration));CHECK(unused.exact&&unused.samplers==(1u<<3)&&unused.sampledSamplers==0);
 }
 static void testIntBoolAndControlFlow(){
     W b;

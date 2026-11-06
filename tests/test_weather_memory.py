@@ -85,16 +85,16 @@ int main(){
         CrossCheck d;for(unsigned i=0;i<5000;++i)assert(d.frame(false,Kind::Rain,Kind::None)==R::Agree&&d.frame(true,Kind::Sand,Kind::None)==R::Agree); /* invalid memory, sand: never compared */
         CrossCheck e;for(unsigned i=0;i<CrossCheck::kOnlyFrames-1;++i)e.frame(true,Kind::Rain,Kind::None);e.frame(false,Kind::Rain,Kind::None);for(unsigned i=0;i<CrossCheck::kOnlyFrames-1;++i)assert(e.frame(true,Kind::Rain,Kind::None)==R::Agree); /* an invalid frame resets the run */
     }
-    {   // the gate: the memory counts with the key, a valid reading and (with the mirror) a sky-band draw this frame
-        assert(counts(true,true,true,true)&&!counts(true,true,true,false)&&!counts(true,false,true,true)&&!counts(false,true,true,true));
-        assert(counts(true,true,false,false)&&!counts(false,true,false,false)); /* no mirror: the bands are unknown, the memory alone */
-        // indoors (no sky draw): the frame goes the draw-based way, so the tracker holds 2.5 s and then fades the weather out
-        Sample outdoors;outdoors.memory=counts(true,true,true,true);outdoors.memoryKind=Kind::Rain;outdoors.memoryIntensity=0.7f;
-        Sample indoors=outdoors;indoors.memory=counts(true,true,true,false);
-        Tracker t;for(float x=0;x<8;x+=1.f/60)t.frame(outdoors,1.f/60);assert(t.state().kind==Kind::Rain&&t.state().blend==1.f);
-        for(float x=0;x<2.f;x+=1.f/60)t.frame(indoors,1.f/60);assert(t.state().kind==Kind::Rain&&t.state().blend==1.f); /* the hold */
-        for(float x=0;x<9.f;x+=1.f/60)t.frame(indoors,1.f/60);assert(t.state().kind==Kind::None&&t.state().blend==0);
-        for(float x=0;x<8.f;x+=1.f/60)t.frame(outdoors,1.f/60);assert(t.state().kind==Kind::Rain); /* back outside: it returns */
+    {   // A valid zone reading stays primary even with no visible sky or native particle draws.
+        assert(counts(true,true)&&!counts(true,false)&&!counts(false,true)&&!counts(false,false));
+        for(Kind kind:{Kind::Rain,Kind::Snow,Kind::Sand}){
+            Sample weather;weather.memory=counts(true,true);weather.memoryKind=kind;weather.memoryIntensity=.7f;
+            Tracker t;for(unsigned frame=0;frame<1800;++frame)t.frame(weather,1.f/60);
+            assert(t.state().kind==kind&&t.state().blend==1.f&&near(t.state().intensity,.7f)&&t.state().secondsSinceSeen==0);
+            weather.memoryKind=Kind::None;weather.memoryIntensity=0;
+            for(unsigned frame=0;frame<600;++frame)t.frame(weather,1.f/60);
+            assert(t.state().kind==Kind::None&&t.state().blend==0);
+        }
     }
     {   // Tracker, memory path: kind incl. sand, the game's intensity as given, no hold, the ramp in and out
         auto mem=[](Kind k,float i){Sample s;s.memory=true;s.memoryKind=k;s.memoryIntensity=i;return s;};

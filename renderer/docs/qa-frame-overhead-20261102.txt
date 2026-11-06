@@ -1,0 +1,46 @@
+Frame overhead and stutter reduction, 2026-11-02
+
+Scope
+- Preserve the terrain shader coverage shortcut and its conservative fallback.
+- Reuse terrain chunk storage while preserving membership and sorted iteration.
+- Avoid repeated native-normal state setters and restore every attempted change.
+- Skip inactive material capture/light setup; retire detached CPU snapshots through
+  the existing bounded worker after releasing COM owners on the render thread.
+- Flush a pending EVENT initially and at 1 ms intervals within the existing 16 ms
+  pumped wait; preserve asynchronous non-FLUSH probes and completion/error/reset.
+- Bound material timestamp spans to 256 and rotate native-draw samples at 1/16.
+- Fully time replay draws/uploads/waits, but sample repeated state setters after
+  the first eight calls. Log actual measured coverage without extrapolation.
+- Admit affine COUNT2 texture flags only for fixed-function pretransformed HDR
+  vertices; retain transformed/projected fallbacks. Reuse the existing state-block
+  pool for compatibility layers, including UI, sky and particle call sites.
+
+Validation on the integrated source
+- Renderer translation unit compiles to an x86 object. No DLL link or installation.
+- HDR suite: 2,893 cases pass on each DXVK 2 and DXVK 3 backend. New pool checks
+  preserve RGBA exactly and reduce 24 state-block creations to one.
+- HDR transform admission: 144 cases each on native D3D9 and DXVK, including
+  identity-matrix negative controls for ordinary XYZ vertices. Accepted fast-path
+  output is exact against the same path with ignored flags disabled.
+- Native D3D9 full HDR suite retains an MSAA/MRT assertion failure also reproduced
+  on untouched HEAD. It is not reported as passing; the new pool cases pass.
+- Terrain coverage: 468 exact GPU image comparisons; CPU arithmetic/state checks.
+- ChunkSet: 400 randomized scenarios, 385,500 reference selections, duplicate,
+  out-of-grid, sorted-iteration, clear/reuse and allocation-failure checks.
+- Isolated warmed 786-chunk CPU median: 40.1094 -> 9.0680 microseconds, allocations
+  786 -> 0. This measures container operations, not whole-frame or game FPS.
+- Normal capture: 32 output files bit-exact; 90 injected failure cases. In the
+  tested 54 captures, render-state writes 1620 -> 220, target writes 594 -> 108.
+- EVENT completion: 22 command-stream cases plus 64 real-GPU generations on each
+  native D3D9 and DXVK backend. Payloads, errors, reset and bounded waits retained.
+- Replay sampling coverage, saved-state lifetime, material profiling and CPU
+  retirement checks pass. Whitespace validation passes.
+
+Limits
+The original log separates native scene, effects and HDR/tail costs; query waits
+overlap GPU execution and must not be added as independent GPU cost. Some stalls
+occur in Present or producer/queue idle and remain unattributed. No new in-game
+run, measured FPS uplift or complete stutter elimination is claimed. Fog candidates
+that changed output or regressed timings were not accepted. Parallel GI edits are
+outside this change. Existing quality settings, shader tap counts and resolution
+are preserved. No new DLL, PDB or installer is supplied with this update.

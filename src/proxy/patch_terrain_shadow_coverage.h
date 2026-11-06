@@ -48,7 +48,7 @@ inline bool analyse(const Word* w,std::size_t count,Program& p){
             if(!p.vertex&&type==(p.major==3?1u:3u)){if(index>=10)return false;p.inputs[index]=true;}
         }
         p.ops.push_back({at,op,n});
-        if(op!=31&&op!=81&&op!=48&&op!=47)p.slots+=NorthlightShadowShader::instructionSlots(op);
+        if(op!=31&&op!=81&&op!=48&&op!=47)p.slots+=op==41?3:NorthlightShadowShader::instructionSlots(op);
         at+=n+1;
     }
     return false;
@@ -129,23 +129,32 @@ inline bool pixel(const Word* w,std::size_t count,std::vector<Word>& out,PixelIn
     if(reads.size()!=proof.replaced||!insert||depth)return false;
     std::vector<Word> extra;
     auto emit=[&](unsigned op,std::initializer_list<Word> args){extra.push_back(op|(unsigned(args.size())<<24));extra.insert(extra.end(),args);};
+    // lerp(1, 1, coverage) is exactly one. Lit native pixels need no matrix,
+    // bounds or edge-fade work; partially shadowed pixels retain the old path.
+    emit(1,{dst(0,b,8),src(2,k[0],0xff)});
+    emit(41u|(5u<<16),{src(0,proof.shadowRegister,proof.shadowComponent*0x55u),src(2,k[0],0xff)}); // if_ne
     emit(1,{dst(0,a,1),src(2,k[0],0xaa)});
     for(unsigned source=0;source<sources;++source){
         for(unsigned lane=0;lane<3;++lane)emit(9,{dst(0,b,1u<<lane),src(1,unsigned(varying)),src(2,base+source*3+lane)});
         emit(35,{dst(0,a,6),src(0,b,0x50)});
         emit(11,{dst(0,b,8),src(0,a,0x55),src(0,a,0xaa)});
-        emit(3,{dst(0,b,8),src(2,k[0],0xff),src(0,b,0xff)});
+        emit(2,{dst(0,b,8),src(2,k[0],0xff),src(0,b,0xff)|0x01000000u});
         emit(5,{dst(0,b,8)|0x00100000u,src(0,b,0xff),src(2,k[1],0xff)});
-        emit(3,{dst(0,a,14),src(0,b,0x90),src(2,k[0],0x90)});
-        emit(88,{dst(0,a,14),src(0,a)|0x01000000u,src(2,k[0],0xaa),src(2,k[0],0xff)});
-        for(unsigned lane=1;lane<4;++lane)emit(5,{dst(0,b,8),src(0,b,0xff),src(0,a,lane*0x55u)});
-        emit(3,{dst(0,a,14),src(2,k[1],0x90),src(0,b,0x90)});
-        emit(88,{dst(0,a,14),src(0,a)|0x01000000u,src(2,k[0],0xaa),src(2,k[0],0xff)});
-        for(unsigned lane=1;lane<4;++lane)emit(5,{dst(0,b,8),src(0,b,0xff),src(0,a,lane*0x55u)});
+        // ADD with a negated source also works on native runtimes that reject
+        // the raw SUB opcode, although the assembly subtraction is equivalent.
+        emit(2,{dst(0,a,14),src(0,b,0x90),src(2,k[0],0x90)|0x01000000u});
+        emit(2,{dst(0,b,7),src(2,k[1]),src(0,b)|0x01000000u});
+        // All six strict bounds hold exactly when their minimum is positive.
+        // Keep a.x (the source union) and b.w (the original edge fade) intact.
+        emit(10,{dst(0,a,14),src(0,a),src(0,b,0x90)});
+        emit(10,{dst(0,a,2),src(0,a,0x55),src(0,a,0xaa)});
+        emit(10,{dst(0,a,2),src(0,a,0x55),src(0,a,0xff)});
+        emit(88,{dst(0,b,8),src(0,a,0x55)|0x01000000u,src(2,k[0],0xaa),src(0,b,0xff)});
         emit(11,{dst(0,a,1),src(0,a,0x00),src(0,b,0xff)});
     }
     emit(18,{dst(0,b,8),src(0,a,0x00),src(2,k[0],0xff),src(0,proof.shadowRegister,proof.shadowComponent*0x55u)});
-    info.constants=base;info.addedSlots=2+19*sources;
+    emit(43,{}); // endif
+    info.constants=base;info.addedSlots=8+14*sources; // MOV + IF_CMP (3 slots) + ENDIF
     if(p.slots+info.addedSlots>512)return false;
     out.assign(w,w+count);for(auto i:reads)out[i]=src(0,b,0xff);
     if(declaration)out[declaration]|=0xf0000u;

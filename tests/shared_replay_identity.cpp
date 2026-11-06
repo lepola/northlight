@@ -1,0 +1,18 @@
+#include "replay_gpu_harness.h"
+#include "legacy_replay_gpu_cache.h"
+static std::shared_ptr<const NorthlightDrawSnapshot::Mesh> identified(uint64_t revision){auto m=std::const_pointer_cast<NorthlightDrawSnapshot::Mesh>(mesh());m->sourceIdentity=NorthlightSourceIdentity::make({10,revision});return m;}
+int main(){
+    {LegacyReplayGPU::Cache old;Device driver;IDirect3DVertexBuffer9* vb[4]={};IDirect3DIndexBuffer9* ib=nullptr;auto release=[&]{for(auto& p:vb){if(p)p->Release();p=nullptr;}if(ib)ib->Release();ib=nullptr;};auto m=identified(1);auto admit=[](size_t){return true;};old.beginFrame();assert(!old.bind(&driver,m,vb,ib,admit));old.beginFrame();assert(old.bind(&driver,m,vb,ib,admit));release();m.reset();for(unsigned i=0;i<100;++i)old.beginFrame();m=identified(1);assert(!old.bind(&driver,m,vb,ib,admit));old.beginFrame();assert(old.bind(&driver,m,vb,ib,admit)&&old.uploaded()==m->byteSize());release();old.clear();std::printf("SHARED_REPLAY_FROZEN_DIFF baseline=ac966ce oldReturnWarmups=1 oldReturnUploadedBytes=%zu newReturnWarmups=0 newReturnUploadedBytes=0\n",m->byteSize());}
+    NorthlightReplayGPU::Cache cache;Device d;IDirect3DVertexBuffer9* vb[4]={};IDirect3DIndexBuffer9* ib=nullptr;auto admit=[](size_t){return true;};
+    auto release=[&]{for(auto& p:vb){if(p)p->Release();p=nullptr;}if(ib)ib->Release();ib=nullptr;};
+    auto a=identified(1);std::weak_ptr<const NorthlightDrawSnapshot::Mesh> expired=a;cache.beginFrame();assert(!cache.bind(&d,a,vb,ib,admit));cache.beginFrame();assert(cache.bind(&d,a,vb,ib,admit));auto* first=vb[0];const auto created=d.calls;release();a.reset();assert(expired.expired());
+    for(unsigned i=0;i<100;++i)cache.beginFrame();auto b=identified(1);assert(cache.bind(&d,b,vb,ib,admit)&&vb[0]==first&&d.calls==created&&cache.uploaded()==0&&cache.stats().reconstructedHits==1);assert(cache.bytes()==b->byteSize()&&cache.chargedBytes()==cache.bytes()+cache.stats().identityBytes+cache.queueBytes());release();
+    auto edited=identified(2);cache.beginFrame();assert(!cache.bind(&d,edited,vb,ib,admit));cache.beginFrame();d.failAt=d.calls+2;const auto previousBytes=alive;assert(!cache.bind(&d,edited,vb,ib,admit)&&alive==previousBytes);d.failAt=0;assert(cache.bind(&d,edited,vb,ib,admit));release();
+    // A deliberately colliding complete hash still requires every identity word.
+    const uint64_t inverse=14886173955864302971ull,seed=1469598103934665603ull,prime=1099511628211ull;
+    auto collision=std::const_pointer_cast<NorthlightDrawSnapshot::Mesh>(mesh());const uint64_t last=(b->sourceIdentity->hash*inverse)^((seed^11)*prime);collision->sourceIdentity=NorthlightSourceIdentity::make({11,last});assert(collision->sourceIdentity->hash==b->sourceIdentity->hash&&!NorthlightSourceIdentity::same(collision->sourceIdentity,b->sourceIdentity));collision->streams[0].bytes[0]^=1;
+    cache.beginFrame();assert(!cache.bind(&d,collision,vb,ib,admit));cache.beginFrame();assert(cache.bind(&d,collision,vb,ib,admit)&&vb[0]!=first);release();
+    cache.clear();assert(alive==0);cache.setLimit(b->byteSize()+b->sourceIdentity->bytes()-1);cache.beginFrame();assert(!cache.bind(&d,b,vb,ib,admit)&&!cache.chargedBytes());
+    cache.setLimit(64u<<20);auto unknown=mesh();cache.beginFrame();assert(!cache.bind(&d,unknown,vb,ib,admit));cache.beginFrame();assert(cache.bind(&d,unknown,vb,ib,admit));release();unknown.reset();cache.beginFrame();assert(!cache.bytes()&&!alive);cache.clear();
+    std::puts("SHARED_REPLAY_IDENTITY_PASS expired_CPU_100_frames_reconstructed_zero_upload full_hash_collision revision_isolation failed_partial_cleanup same_caps pressure unknown_weak_reset");
+}

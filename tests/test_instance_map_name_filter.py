@@ -25,7 +25,7 @@ checks={
  'no log line prints a map name unquoted':
   not re.search(r'[mM]ap=%s',w) and w.count('ap=\\"%s\\"')>=16,
  'the tile path stays a plain concatenation (an apostrophe or space needs no escaping in a file path)':
-  w.count('"%sworld-cache/%s/%d_%d.fg3"')==2 and 'FindFirstFileA((root+"world-cache/"+map+"/*.fg3").c_str(),&data)' in w,
+  w.count('"%sworld-cache/%s/%d_%d.fg3"')==2 and 'FindFirstFileW(std::filesystem::u8path(root+"world-cache/"+map+"/*.fg3").c_str(),&data)' in w,
  'local lights accept the same names (<map>.fgl exists for instance maps) and still reject separators':
   "c=='_'||c=='\\''||c==' '))return false;" in lights and 'if(!safeMap(map)' in lights and 'map.empty()||map.size()>63' in lights,
 }

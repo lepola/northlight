@@ -1,0 +1,150 @@
+Northlight: large-log follow-up and non-MSAA model batching, 2026-11-02
+
+Input
+
+qa_report/northlight-renderer.log, 176,942,266 bytes, 243,004 lines.
+SHA256 5ecfedbbea3f7218733943423a2cb409c21332dcee28a94d94f5f2445f75b90e.
+BUILD identity 513f1dc43129a9102c76540ed388633b472101be84a5c085261ebfeb5bb738ba,
+built 2026-11-01 17:25:33 UTC. This replaces the smaller log described in
+qa-telredor-20261102.txt; their measurements must not be combined.
+The large log covers about 25 minutes and several workloads/loading periods.
+Its sampled local-source viewports are 1280x720, unlike the earlier 2560x1440
+report. The snapshot is older than current subdivision and pose fixes.
+
+Measured workload (all samples, not a steady-location FPS benchmark)
+
+945 FRAME interval records: median of interval meanMs 11.114 ms;
+95th percentile 33.385 ms; maximum interval mean 81.772 ms.
+888 GPU frame records: median total 8.663 ms, p95 28.683 ms.
+814 effect-bearing GPU records: median GameScene 4.742 ms, Effects 3.350 ms.
+GameScene includes inline Northlight material capture. CPU and GPU measurements
+overlap and cannot be added. Diagnostics/profiling were enabled.
+
+Mean / p95 / maximum, milliseconds:
+  GPU model capture draw             0.630 / 0.982 / 8.864
+  GPU model native draw              1.446 / 3.334 / 9.135
+  CPU model capture setup            0.226 / 0.386 / 1.060
+  CPU model capture restore          0.058 / 0.090 / 0.330
+  CPU model pose envelope            0.216 / 0.402 / 0.584
+  GPU point shadows                  0.618 / 2.114 / 10.004
+  GPU point light                    0.459 / 1.175 / 9.932
+  CPU point-shadow submission        0.511 / 1.655 / 4.519
+  GPU RemovalSmooth                  0.638 / 0.711 / 1.997
+  GPU AO                             0.507 / 0.546 / 1.601
+
+Confirmed bottlenecks and disposition
+
+1. All 888 MATERIAL_DEFERRED records have queued=flushed=0 despite enabled=1.
+   The source required MSAA. Implemented ordered opaque-model capture batches
+   for non-MSAA D24S8 scenes on the existing DXVK deferred-capability path.
+   The normal-only native shader specialization from the preceding change is
+   retained. The two changes address shader work and per-draw target switching.
+
+2. Cold model subdivision occurs in 25 sampled frames: mean 3.306 ms,
+   maximum 4.895 ms at frame 293497 (line 96016). Pose fallback reaches
+   2.407 ms at frame 353187; boundsPose reaches 4.147 ms at frame 303784.
+   Current HEAD already includes f18939ec (subdivision allocation optimization)
+   and 7e3fa4ff (world-transformed pose / exhausted build slots), both later
+   than this log's binary. Do not duplicate those fixes or claim a new measured
+   improvement from this old capture. The new batching reuses a conservative
+   far bound already computed by the geometry pose path, avoiding a second
+   envelope evaluation when that proof is available.
+
+3. Address-space pressure is real: minimum available virtual memory 388 MiB,
+   minimum largest free block 34 MiB, 186 cumulative trims. The last sample
+   has 509 MiB available and a 158 MiB largest block. One critical trim costs
+   16.508 ms and releases an estimated 119.7 MiB (frame 296033, line 102318);
+   its material work is 11.556 ms and world work 4.848 ms. Later empty trims
+   can be as low as 0.030 ms. Asynchronous address-space walks reach 47.075 ms;
+   this is worker sample time, not automatically render-thread blocking.
+   Preserve critical-pressure release and the existing bounded queues. The new
+   depth snapshot costs four bytes per pixel (3.52 MiB at 1280x720), uses the
+   existing headroom policy, and falls back to immediate capture if allocation
+   fails. Failed allocation retries are delayed 60 frames.
+
+4. The 3.55-second slow frame 690 has applied=0 and 2912.803 ms of frame queue
+   idle; frame 363297 has 3056.136 ms total and 2948.209 ms idle. These are not
+   multi-second point-light shader executions. An idle gap at frame 294796
+   lasts 1084.954 ms with only 15.625 ms observed producer CPU and negligible
+   command-stream waits. The trace does not identify the application phase.
+   A producer/application or I/O trace is required to attribute that remainder.
+   Replay samples also contain Present calls around 36 ms (frames 259461,
+   259588), which must be separated from active rendering work.
+
+5. The command stream reports 35,879 cumulative texture readbacks near the
+   end, with 16 MiB texture shadow capacity. The last 600-frame window has
+   322 readbacks, 6.882 MiB transferred, and 45.267 ms total wait. The final
+   replay sample spends 7.402 ms across 1193 UnlockBuffer calls, including one
+   5.620 ms call. Memory pressure disables zero-copy and the log reports large
+   cumulative copied traffic. These counts include very different frame
+   regimes; they are not per-frame costs. Increasing retained shadow/ring
+   budgets with only 34 MiB contiguous headroom is not a justified fix.
+   Follow-up measurement should correlate UnlockBuffer outliers with driver
+   upload waits and pressure transitions before changing buffer ownership.
+
+6. Isolated timestamp spikes occur in unrelated passes: AOBlur, PointShadow
+   and PointLight all exceed 8 ms around frame 259842; Fog reaches 22.279 ms
+   at frame 315595. Timestamp duration includes GPU execution stalls. This
+   capture alone cannot distinguish shader cost, driver scheduling and upload
+   dependencies. Stable RemovalSmooth cost and crowded point-shadow submission
+   remain candidates for a separate measured optimization. Their image quality,
+   light counts and refresh cadence have not been reduced.
+
+Batch correctness contract
+
+A batch snapshots the currently bound native depth through DXVK RESZ into DF24,
+then replays model captures in original order with their native depth comparison
+and depth writes. EQUAL retains the prepass; LESS retains first-writer behavior.
+A final-depth-only replay would fail those cases and is deliberately not used.
+Conservative pose/position bounds must prove every vertex within capture range,
+so range clipping cannot remove a depth write needed by a later packet.
+Alpha-tested/blended models, shared POM, prepared displacement geometry,
+unsupported depth formats, unknown bounds and unsafe snapshots keep immediate
+capture. Existing MSAA admission and its private-depth EQUAL handling remain.
+Batches finish before an uncaptured native draw, depth clear, target/depth change,
+copy operation or guarded texture mutation. Immutable source and map leases,
+packet budgets and resident/UP fallbacks reuse the existing deferred machinery.
+New MATERIAL_DEFERRED fields singleSample, depthSeeds and depthBarriers make
+actual batching and fragmentation visible in the next tester log.
+
+Validation
+
+GPU differential harness: tests/validate_material_deferred.py --single-sample.
+Actual client M2 vertex/pixel shader fixtures; local NVIDIA RTX 4090, DXVK 3.1.1.
+Compares serialized FP16 normal/depth targets, cavity targets and native color
+byte for byte, plus the existing final material-composite fixtures.
+Covers LESS/LEQUAL/EQUAL/GREATER, existing prepass, coplanar surfaces, native
+occluder and clear barriers, range crossing, pose/mesh mutation, strip geometry,
+packet limits, cache failures, unused captures, pressure and failed allocation.
+Also checks existing MSAA 0/2/4/8 behavior and guarded alpha capture fallback.
+The final opaque and alpha runs passed 37 + 21 checks and compared 254 output
+buffers byte for byte, including the geometry-mode-3 admission case.
+
+Benchmark: 128 buffered model draws, 16x16 tessellation, normal+cavity enabled,
+1280x720, MSAA off; three alternating immediate/deferred runs.
+Median full GPU workload: 2.417920 -> 1.406848 ms (41.82% lower).
+Median CPU submission: 0.296312 -> 0.462600 ms (+0.166288 ms).
+This is a GPU-bound component improvement, not measured in-game FPS.
+The benchmark targets were byte-identical. No reduction in visual settings.
+
+Local evidence
+
+.local/out/qa-large-20261102/analysis.json and analyze.py: full-log statistics.
+.local/out/material-single-depth-final/validation.json: benchmark and comparisons.
+.local/out/material-single-depth-release/validation.json: final opaque regression.
+.local/out/material-single-depth-alpha/validation.json: alpha fallback regression.
+.local/out/test-output/20261102-115013/results.tsv: seven CPU/state regression suites.
+.local/out/test-output/20261102-115739/results.tsv: four final bounds/depth/lifetime
+and logging regression suites after the final resource-lifetime changes.
+The game was not launched or modified; an in-game Telredor A/B remains necessary
+before claiming a tester FPS gain or full-scene visual acceptance.
+
+Batch build (before the point-shadow follow-up)
+
+Source identity 0e719594eee43c1fb4d2a59a7656c570e5f7ac09c6268a2dc4fb256fbf953239
+renderer/frd9.dll SHA256 ac8f21304942ebdcd7c87f40c9c4997b926fbf4fe35c04b5c8258456001a3ee3
+Size 9028096 bytes. Built 2026-11-02 09:59:45 UTC.
+The DLL is built locally and is not installed into the game directory.
+
+The subsequent offline Telredor validation, point-shadow state optimization
+and newer DLL identity are recorded in qa-telredor-point-reuse-20261102.txt.

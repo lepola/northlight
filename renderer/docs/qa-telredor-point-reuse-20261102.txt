@@ -1,0 +1,78 @@
+Telredor follow-up: state changes for reused point-shadow cubes
+
+The large tester log identifies point shadows as a remaining bounded workload:
+mean GPU 0.618 ms, p95 2.114 ms and maximum 10.004 ms across sampled passes.
+Those samples include dynamic draws and unrelated GPU stalls. They are not a
+measurement of the static-only optimization below.
+
+renderPointShadow already retained complete static-only cube faces, but still
+issued 22 device state calls before discovering that every face could be reused:
+13 sampler unbinds, 3 MRT unbinds, 4 stream-frequency resets and 2 render states.
+Defer that setup until the first face requiring a draw. Keep face-content
+generation bookkeeping, refresh scheduling, face cycling and failure handling.
+No extra cache, quality reduction, light removal or shader change is needed.
+
+Offline scene and quality
+
+Use the real Expansion01 cache at Telredor (278.582, 6001.27, 144.73):
+620,016 local triangles, 1,319,119 shadow-plan triangles and 3,907 batches.
+Run the production x86 WorldRenderer on RTX 4090 / DXVK 3.1.1, eight camera
+headings, light limits 4/16/64/128, 256-square R32F faces, 3840x2160 scissor.
+This is a static point-shadow component; there is no native animated draw
+stream, full game-frame replay or in-game FPS claim.
+
+The expanded stand performs 1,800 exact visible-face comparisons plus 7,248
+byte-for-byte comparisons after noncritical trim, critical trim, point-resource
+recreation and a forced mesh-generation/cache rebuild. Pressure paths execute
+on real scene resources, but do not simulate total process address exhaustion.
+SHA-256 manifests of 1,812 faces match between old and new production code:
+0cac90a6812de37c10ed0d339499ba72e974fe5fb66e1d4d958e833d926235d0
+
+The original stand omitted the outer render pass's initial shadow state.
+Initialize linear alpha filtering and the production depth/cull states before
+the first cube; the new forced-rebuild comparison exposed that fixture gap.
+Both control and candidate pass with the same corrected setup.
+
+The separate authored GPU regression passes on native D3D9 and DXVK. It covers
+moving lights, live/static caster transitions, partial-face refresh, skipped
+capture, upload handoff, offscreen re-entry and an already-bound cube. A wholly
+reused cube preserves caller bindings; a forced rebuild unbinds it and produces
+the identical six faces. Selection and log-format checks also pass.
+
+Paired timing
+
+Three executions per variant, in control/candidate/candidate/control/control/
+candidate order, with no concurrent compilation. Each execution retains the
+eight ABBA visibility blocks, 64 updates per block and two priming updates.
+Compare the visibility-enabled blocks only. Take each view's median across
+blocks and runs, then the geometric mean of candidate/control ratios over the
+eight views. Lower completion time by light limit: 4 = 0.88%, 16 = 1.14%,
+64 = 1.00%, 128 = 2.11%. Completion includes CPU submission and GPU execution.
+
+This is a small overhead reduction, with visible timing noise. At limit 64 the
+median across views is 0.283357 -> 0.284502 ms; the per-view ratio aggregation
+above is a different statistic. At limit 128 it is 0.327586 -> 0.316929 ms.
+These numbers do not justify a large performance or whole-frame FPS claim.
+
+Evidence and reproduction
+
+python tests/test_point_shadow_visibility_gpu.py --output <new-folder> --backend <d3d9-dll> --benchmark
+python scripts/run_tests.py test_point_terrain_coverage_gpu.py test_point_shadow_selection.py test_log_format_literals.py
+
+.local/out/telredor-offline-20261102-control/validation.json: frozen old point pass.
+.local/out/telredor-offline-20261102-final/validation.json: current point pass.
+.local/out/telredor-offline-20261102-paired/validation.json: six alternating runs,
+after all compilation completed; full hashes, per-view timings and run logs.
+.local/out/test-output/20261102-121805/results.tsv: 3 PASS, 0 FAIL, 0 SKIP.
+Layout and whitespace checks pass. Game files were not installed or changed.
+
+Final build (includes the preceding normal-only and single-sample batching work)
+
+Source identity 5d10b2091c065b66f7bed05f02d9d2d39ed0ac2a1b549ce02adb51544ea96348
+renderer/frd9.dll SHA256 b4a91a8846b3f86b1498641437e3954ab652ac548abd789532ef7ba1f0cf4374
+Size 9028608 bytes. Build started 2026-11-02 10:19:17 UTC.
+
+Remaining independently attributable problems from the large log: material
+trim pauses (up to 11.556 ms within a 16.508 ms critical trim), UnlockBuffer
+outliers (5.620 ms) and producer/Present waits. This change does not claim to
+resolve those causes or the complete tester-reported Telredor slowdown.

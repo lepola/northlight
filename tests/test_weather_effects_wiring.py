@@ -20,10 +20,13 @@ checks={}
 checks['hlsl: WeatherInfo at c59, documented (z shadows, w air extinction), LocalLightFog still read only through .x']=(
     'float4 WeatherInfo : register(c59);' in h and 'z direct shadow softening (WorldLighting), w the shared air extinction' in h
     and 'free: only .x is read' in h and re.findall(r'LocalLightFog\[[^\]]*\]\.(\w+)',re.sub(r'//[^\n]*','',h))==['x'] and 'LocalLightFog[i].x' in h)
-checks['hlsl: no other register c59..c66 reader']=re.findall(r'register\(c6[0-6]\)',h)==['register(c60)','register(c64)','register(c64)','register(c64)'] and h.count('register(c59)')==2 # 0.3.199 (fog clouds): CloudInfo[4] at c60 (.yzw only), see test_fog_clouds_wiring; (fog temporal): FogTemporalInfo at c64 (.y only), see test_fog_temporal_wiring; 0.3.200 (gpu budget): FogStepInfo at c64 (.z, WorldFog), see test_gpu_budget_wiring; HorizonEdge at c64 (.w, WorldComposite's haze band)
+checks['hlsl: exact shared register layout, including fog height and actor coverage']=(
+    re.findall(r'register\(c6[0-6]\)',h)==['register(c60)','register(c64)','register(c64)','register(c66)','register(c65)','register(c64)']
+    and h.count('register(c59)')==2
+    and 'float4 FogActorBounds : register(c66);' in h and 'float4 FogHeightControl : register(c65);' in h)
 checks['hlsl: WorldLighting and WorldFog read WeatherInfo (z, w)']=all(
     ('WeatherInfo.'+c) in h for c in 'zw') and len(re.findall(r'WeatherInfo\.x',h))==0
-checks['cpp: c59.zw set in the bank, c59.x and c60..c66 not']=('c[59][2]=std::max(wx.shadowSoften(),1.f-underwaterFade.scale());' in w and 'c[59][3]=airFloor;' in w and 'c[59][0]' not in w and 'c[59][1]' not in w and set(re.findall(r'c\[(6[0-6])\]',w))<={'60','61','62','63','64'}) # 0.3.199 (fog clouds): c60..c63 .yzw belong to CloudInfo; 0.3.200 (gpu budget): c60.x and c64.z the march intervals
+checks['cpp: c59.zw weather writes and exact existing fog-bank access']=('c[59][2]=std::max(wx.shadowSoften(),1.f-underwaterFade.scale());' in w and 'c[59][3]=airFloor;' in w and 'c[59][0]' not in w and 'c[59][1]' not in w and set(re.findall(r'c\[(6[0-6])\]',w))=={'60','62','64','65'})
 checks['cpp: c23 untouched']=w.count('memcpy(c[23],context.camera,12);')==1 and 'c[23][' not in w
 checks['cpp: GridInfo.z (c20.z) unchanged']='c[20][2]=.85f;' in w and re.findall(r'c\[20\]\[2\]=[^;]*;',w)==['c[20][2]=.85f;']
 # identity at zero weather
@@ -35,20 +38,23 @@ checks['haze: tauScale defaults to 1 and multiplies the optical depth only']=('f
 checks['hlsl: WorldFog takes the air floor from c59.w (the old literal .0017 moved into the constant)']=('airBase=WeatherInfo.w+airBase*saturate(mad(field.w,1.6,-1));' in h and '.0017+airBase' not in h)
 checks['cpp: sigmaAt mirrors the extra extinction through the same airFloor']=('airBase=airFloor+airBase*std::clamp((t.height-.625f)/.625f,0.f,1.f);' in w and '.0017f+airBase' not in w and w.index('const float airFloor=')<w.index('auto sigmaAt='))
 # shadows
-lt=h[h.index('LightingOutput WorldLighting('):h.index('// Second pass to the same FP16 lighting buffer')]
+lt=h[h.index('LightingOutput worldLightingValue('):h.index('// Second pass to the same FP16 lighting buffer')]
 checks['hlsl WorldLighting: only the direct replacement is softened, behind a branch that is off when dry']=(
     'if(WeatherInfo.z>0){moonShadow=lerp(1,shadow,1-WeatherInfo.z);sunVisibility=lerp(1,shadow,GridInfo.z*(1-WeatherInfo.z));}' in lt
-    and 'float3 moon=DirectLight.rgb*saturate(dot(n,SunDirection.xyz))*moonShadow;' in lt and 'float3 sun=DirectLight.rgb*saturate(dot(n,LegacyDirection.xyz))*sunVisibility;' in lt)
+    and 'float3 moon=DirectLight.rgb*saturate(dot(detailNormal,SunDirection.xyz))*moonShadow;' in lt and 'float3 sun=DirectLight.rgb*saturate(dot(detailNormal,LegacyDirection.xyz))*sunVisibility;' in lt)
 checks['hlsl WorldLighting: correction.a and baseline.a keep the true visibility']=(
     'o.correction=float4(replacement-painted,lerp(visibility,shadow,SunDirection.w)*SourcePolicy.y);' in lt
-    and 'o.baseline=float4(max(old+AmbientLight.rgb,.15),lerp(visibility,shadow,SunDirection.w)*known);' in lt and 'float visibility=lerp(1,shadow,GridInfo.z);' in lt)
+    and 'o.baseline=float4(max(old+AmbientLight.rgb,.15),known?lerp(visibility,shadow,SunDirection.w):-1);' in lt and 'float visibility=lerp(1,shadow,GridInfo.z);' in lt)
 checks['hlsl: GridInfo.z still the divisor of the removal']=('/GridInfo.z' in h and 'max(GridInfo.z,.001)' in h)
 checks['hlsl: c24.y (softness) still unread']='PassInfo.y' not in h.replace('softness,debug','')
 # WorldGI carries no weather code (0.3.198 rebase onto task 13: it is at 31 temps)
 gi=h[h.index('float4 WorldGI('):h.index('// Four POINT reads work')]
 checks['hlsl WorldGI: no weather code (it is at 31 temps)']='WeatherInfo' not in gi
 checks['hlsl: no WorldWet shader; WeatherInfo.y only the fog clouds\' folded bank top (0.3.199 optimisation)']='WorldWet' not in h and h.count('WeatherInfo.y')==1 and 'mad(nL,CloudInfo[2].z,WeatherInfo.y)' in h
-checks['render: the weather adds no pass of its own (quad count 21, shader creations 26 with the 0.3.199 fog clouds and fog temporal, the 0.3.205 lamp fog combine quad and shader, the 0.3.209 actor shadow visibility and two tile quads and their two shaders and the 16-lamp LocalDirect quad and shader)']=(w.count('quad(')==21 and w.count('CreatePixelShader')==26) and 'wetPS' not in w
+# Exact integrated baseline: combined light passes removed a quad site; the
+# actor-aware fog and cached caster variants added shader creation sites.
+# Static-shadow transitions add the independently gated soft-resolve pass and shader.
+checks['render: exact draw budget, including HDR and shadow transitions (24 quad sites, 41 pixel shaders)']=(w.count('quad(')==24 and w.count('CreatePixelShader')==41 and 'if(compositeOk&&unlitMask)' in w) and 'wetPS' not in w
 # disc and veil
 checks['discs: gain atomic, default 1, opacity and glare weights only, veil inherits']=(
     'std::atomic<float> weatherGain{1.f};' in dr and 'c[9][3]=glare?disc.opacity:disc.opacity*weatherGain.load(std::memory_order_relaxed);' in dr

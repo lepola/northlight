@@ -6,13 +6,9 @@
 // Never shadows game state or survives a StateBlock/other rendering pass.
 // DrawPrimitive/DrawIndexedPrimitive do not mutate these bindings.
 namespace NorthlightReplayDrawState {
-// Opaque replays (cutoff -1) keep the pass's current stage-0 texture and address modes.
-// ShadowReplayPS kills only when tex.a-c0.w<0 (FOrdLessThan: NaN survives) and LocalShadowPS
-// samples only when c0.w>=0, so with c0.w=-1 no texture whose alpha lies in [-1,1] (every
-// UNORM/SNORM/DXT/luminance/depth format, and a null texture) can kill a fragment: the draw's
-// output is independent of stage 0. The first material of a pass still binds, so the kept
-// texture is always one of this pass's captured game textures, never a foreign/target texture.
-// false: every draw binds its own texture and address modes (0.3.142).
+// A negative cutoff bypasses alpha testing in both replay shaders. The first
+// material still binds; later opaque draws may retain its texture/addressing.
+// Native shader cutouts have a nonnegative cutoff and never take this shortcut.
 constexpr bool SkipOpaqueMaterial=true;
 // Guard for the proof: the only formats whose alpha can fall below -1. Set by the proxy's
 // Create*Texture wrappers when the game creates one; then every draw binds again.
@@ -27,7 +23,7 @@ template<bool Skip> class BasicCache {
     IDirect3DVertexShader9* shader_=nullptr;
     IDirect3DIndexBuffer9* index_=nullptr;
     IDirect3DVertexBuffer9* streams_[4]={};UINT offsets_[4]={},strides_[4]={};
-    IDirect3DBaseTexture9* texture_=nullptr;DWORD u_=0,v_=0;float cutoff_=0;
+    IDirect3DBaseTexture9* texture_=nullptr;DWORD u_=0,v_=0;float cutoff_=0;unsigned alphaMode_=0;
     bool legacy_=false;IDirect3DBaseTexture9* legacyTexture_=nullptr;DWORD legacyU_=0,legacyV_=0; /* diagnostic: what the binding-every-draw path would hold */
 public:
     /* Diagnostic only: successful setter calls issued by this pass; legacy*: the
@@ -57,7 +53,7 @@ public:
             if(!material_||u_!=p.addressU){hr=d_->SetSamplerState(0,D3DSAMP_ADDRESSU,p.addressU);if(FAILED(hr)){material_=false;return hr;}u_=p.addressU;++counts.samplers;}
             if(!material_||v_!=p.addressV){hr=d_->SetSamplerState(0,D3DSAMP_ADDRESSV,p.addressV);if(FAILED(hr)){material_=false;return hr;}v_=p.addressV;++counts.samplers;}
         }
-        if(!material_||std::memcmp(&cutoff_,&p.cutoff,sizeof(float))){float c[]={1,1,1,p.cutoff};hr=d_->SetPixelShaderConstantF(0,c,1);if(FAILED(hr)){material_=false;return hr;}cutoff_=p.cutoff;++counts.cutoffs;}
+        if(!material_||std::memcmp(&cutoff_,&p.cutoff,sizeof(float))||alphaMode_!=p.alphaMode){float c[]={float(p.alphaMode),0,0,p.cutoff};hr=d_->SetPixelShaderConstantF(0,c,1);if(FAILED(hr)){material_=false;return hr;}cutoff_=p.cutoff;alphaMode_=p.alphaMode;++counts.cutoffs;}
         material_=true;return D3D_OK;
     }
 };

@@ -22,11 +22,12 @@ fixture = r'''
 using V=NorthlightGI::Vec3;using DWORD=uint32_t;
 namespace NorthlightRegionalFog {struct Field {};}
 namespace NorthlightLocalLights {struct Light {};}
+namespace NorthlightLightAttachments {struct Records {};}
 template<class... T> void logf(const char*,T...){}
 struct Fixture {
  struct PreparedCommit {int tag=0;};
 SNAPSHOT
- struct Request {std::string map="Azeroth";V camera,geometryCenter;uint64_t id=1;DWORD queuedAt=1;int actorJob=1;};
+ struct Request {std::string map="Azeroth";V camera,geometryCenter;uint64_t id=1;DWORD queuedAt=1;int actorJob=1;bool enabled=true;};
  Request request,original,consumed;
  std::mutex mutex;bool stopping=false,pending=false;
  unsigned superseded=0,retargeted=0,enteredGI=0;
@@ -35,6 +36,7 @@ SNAPSHOT
  std::shared_ptr<NorthlightGI::BVH> bvh=std::make_shared<NorthlightGI::BVH>();
  std::shared_ptr<NorthlightWorldMesh::WorldMeshUploadPlan> scenePlan=std::make_shared<NorthlightWorldMesh::WorldMeshUploadPlan>();
  std::shared_ptr<const NorthlightRegionalFog::Field> sceneFog=std::make_shared<NorthlightRegionalFog::Field>();
+ std::shared_ptr<const NorthlightLightAttachments::Records> sceneLightAttachments=std::make_shared<NorthlightLightAttachments::Records>();
  std::shared_ptr<const PreparedCommit> scenePrepared=std::make_shared<PreparedCommit>();
  std::vector<NorthlightLocalLights::Light> rawSceneLights;
  std::shared_ptr<Snapshot> published,previousLighting,result=std::make_shared<Snapshot>();
@@ -66,6 +68,7 @@ int main(){
   assert(f.published->center.x==0&&f.published->map=="Azeroth"&&f.published->serial==17&&f.published->atlas.size()==2);
   assert(old->bvh!=f.bvh&&old->center.x==0&&old->serial==17); // immutable fallback
   assert(f.published->fogField==f.sceneFog&&f.published->prepared==f.scenePrepared); // paired with meshPlan
+  assert(f.published->lightAttachments==f.sceneLightAttachments);
   if(distance<=64){assert(f.enteredGI==1&&f.retargeted==1&&!f.pending&&f.consumed.actorJob==19&&f.consumed.id==9);
    assert(f.result->center.x==0&&f.result->requestedAt==200&&f.result->requestId==9);}
   else assert(!f.enteredGI&&f.pending&&f.retargeted==0); // geometry useful, GI needs a newer build
@@ -83,6 +86,8 @@ int main(){
  for(float lead:{0.f,10.f,40.f}){Fixture f;f.request.id=9;f.request.camera={-70,0,0};f.request.geometryCenter={-70+lead,0,0};f.pending=true;f.run();
   assert(f.published&&f.published->bvh==f.bvh&&!f.enteredGI);
   assert(f.pending==(lead<38)); /* lead point 70-lead from the centre: >32 wants a new region */}
+ Fixture disabled;disabled.request.enabled=false;disabled.published=std::make_shared<Fixture::Snapshot>();auto held=disabled.published;
+ disabled.run();assert(disabled.published==held&&!disabled.enteredGI);assert(!disabled.failure()&&disabled.published==held);
  Fixture cross;cross.published=std::make_shared<Fixture::Snapshot>();cross.published->map="Kalimdor";cross.published->atlas.resize(4);cross.published->serial=99;
  cross.run();assert(cross.published->atlas.empty()&&cross.published->serial==0&&cross.enteredGI==1);
  Fixture previous;previous.previousLighting=std::make_shared<Fixture::Snapshot>();previous.previousLighting->map="Azeroth";previous.previousLighting->serial=5;

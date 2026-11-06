@@ -21,7 +21,15 @@ inline thread_local const void* upIdentity=nullptr;
 // Maps a pointer the game stored in its own memory (a stream proxy) to the Device-level object it wraps; set by the
 // stream while active. celestial_disc_native.h applies it before the registry's rawOf. Null = identity.
 inline const void* (*innerOf)(const void*)=nullptr;
+#ifdef NORTHLIGHT_REPLAY_STAND
+inline void (*rejectImportedInputs)()=nullptr;
+inline const void* inner(const void* p){
+    if(!p)return nullptr;if(innerOf)return innerOf(p);
+    if(rejectImportedInputs)rejectImportedInputs();return nullptr;
+}
+#else
 inline const void* inner(const void* p){return innerOf&&p?innerOf(p):p;}
+#endif
 // True from before the Device is constructed until the process ends, only when the replay thread runs. It must be set
 // before WorldRenderer / StaticShadowGpu are constructed (their core budgets read it once). A plain atomic with
 // relaxed loads: written once on the game thread during Factory::CreateDevice, never cleared.
@@ -49,14 +57,15 @@ inline unsigned cores(){const unsigned hw=std::thread::hardware_concurrency();re
 // 0.3.200 (pipeline): framesAhead (optional) receives StreamFramesAhead from the same load (1 when nothing could be read).
 // 0.3.200 (frame skip): frameSkip (optional) receives StreamFrameSkip the same way (0 when nothing could be read).
 // 0.3.212 (task 32): nameMask (optional) receives NameMask != 0 the same way (false when nothing could be read: no depth format upgrade), so CreateDevice reads the ini once.
-inline bool commandStreamFromText(const std::string& own,bool hasFile=true,unsigned* framesAhead=nullptr,unsigned* frameSkip=nullptr,bool* nameMask=nullptr,bool* occlusionLocal=nullptr){
-    if(framesAhead)*framesAhead=1;if(frameSkip)*frameSkip=0;if(nameMask)*nameMask=false;if(occlusionLocal)*occlusionLocal=false;
+inline bool commandStreamFromText(const std::string& own,bool hasFile=true,unsigned* framesAhead=nullptr,unsigned* frameSkip=nullptr,bool* nameMask=nullptr,bool* occlusionLocal=nullptr,bool* contactAO=nullptr){
+    if(framesAhead)*framesAhead=1;if(frameSkip)*frameSkip=0;if(nameMask)*nameMask=false;if(occlusionLocal)*occlusionLocal=false;if(contactAO)*contactAO=false;
     try{std::istringstream in(NorthlightQuality::narrow(own));std::vector<std::string> problems;
         const NorthlightQuality::Settings s=NorthlightQuality::load(hasFile?&in:nullptr,nullptr,problems);
         if(framesAhead)*framesAhead=s.streamFramesAhead;
         if(frameSkip)*frameSkip=s.streamFrameSkip;
         if(nameMask)*nameMask=s.nameMask!=0;
         if(occlusionLocal)*occlusionLocal=s.streamOcclusionLocal!=0;
+        if(contactAO)*contactAO=s.contactAO!=0;
         return s.commandStream!=0;}
     catch(...){return false;}
 }
@@ -75,10 +84,10 @@ inline bool readQualityText(const wchar_t* rootPath,std::string& text){
         CloseHandle(f);return true;
     }catch(...){return false;}
 }
-inline bool commandStreamRequested(const wchar_t* rootPath,unsigned* framesAhead=nullptr,unsigned* frameSkip=nullptr,bool* nameMask=nullptr,bool* occlusionLocal=nullptr){
-    std::string text;if(framesAhead)*framesAhead=1;if(frameSkip)*frameSkip=0;if(nameMask)*nameMask=false;if(occlusionLocal)*occlusionLocal=false;
+inline bool commandStreamRequested(const wchar_t* rootPath,unsigned* framesAhead=nullptr,unsigned* frameSkip=nullptr,bool* nameMask=nullptr,bool* occlusionLocal=nullptr,bool* contactAO=nullptr){
+    std::string text;if(framesAhead)*framesAhead=1;if(frameSkip)*frameSkip=0;if(nameMask)*nameMask=false;if(occlusionLocal)*occlusionLocal=false;if(contactAO)*contactAO=false;
     const bool has=readQualityText(rootPath,text);
-    return commandStreamFromText(text,has,framesAhead,frameSkip,nameMask,occlusionLocal);
+    return commandStreamFromText(text,has,framesAhead,frameSkip,nameMask,occlusionLocal,contactAO);
 }
 #endif
 } // namespace NorthlightStream

@@ -8,6 +8,37 @@
 
 namespace NorthlightStream {
 constexpr std::size_t kMaxCmdIds=512;   // size of the sync census; command_stream.inl static_asserts Cmd::Count fits
+// Replay-thread-only wall time, on the same 1/127 frames as query attribution.
+// Fixed storage; disabled/ordinary frames read no additional clocks.
+struct ReplayFrameProfile {
+    struct Entry {std::uint64_t ns=0;unsigned calls=0,observed=0;};
+    struct Upload {std::uint64_t lockNs=0,copyNs=0,unlockNs=0,maxLockNs=0,maxCopyNs=0,maxUnlockNs=0,bytes=0;unsigned calls=0,skipped=0,failed=0,clockReads=0;} upload;
+    Entry entries[kMaxCmdIds]{};
+    static constexpr unsigned StatePrefix=8,StateStride=16;
+    std::uint64_t frame=0,totalNs=0,maxNs=0;unsigned calls=0,observed=0,maxId=0;bool enabled=false;
+    void begin(bool diagnostics,std::uint64_t id){
+        enabled=diagnostics&&id%127==0;frame=id;
+        if(enabled){for(auto& e:entries)e={};totalNs=maxNs=0;calls=observed=maxId=0;upload={};}
+    }
+    bool sample(unsigned id,bool stateOnly){
+        if(!enabled||id>=kMaxCmdIds)return false;
+        ++observed;const unsigned visit=entries[id].observed++;
+        // Retain first-use costs and rotate steady-state setters. Draws,
+        // uploads, resource creation and waits remain fully timed.
+        return !stateOnly||visit<StatePrefix||(visit-StatePrefix+frame/127)%StateStride==0;
+    }
+    void record(unsigned id,std::uint64_t ns){
+        if(!enabled||id>=kMaxCmdIds)return;
+        entries[id].ns+=ns;++entries[id].calls;totalNs+=ns;++calls;
+        if(ns>maxNs){maxNs=ns;maxId=id;}
+    }
+    void recordUpload(std::uint64_t bytes,std::uint64_t lock,std::uint64_t copy,std::uint64_t unlock,bool skipped,bool failed,unsigned clocks){
+        if(!enabled)return;
+        auto& u=upload;u.bytes+=bytes;++u.calls;u.skipped+=skipped;u.failed+=failed;u.clockReads+=clocks;
+        u.lockNs+=lock;u.copyNs+=copy;u.unlockNs+=unlock;
+        if(lock>u.maxLockNs)u.maxLockNs=lock;if(copy>u.maxCopyNs)u.maxCopyNs=copy;if(unlock>u.maxUnlockNs)u.maxUnlockNs=unlock;
+    }
+};
 using Counter=std::atomic<std::uint64_t>;
 inline void add(Counter& c,std::uint64_t n=1){c.fetch_add(n,std::memory_order_relaxed);}
 inline void own(Counter& c,std::uint64_t n=1){c.store(c.load(std::memory_order_relaxed)+n,std::memory_order_relaxed);}
@@ -40,7 +71,7 @@ struct Counters {
     // 0.3.196 (task 12): fresh keeps skipped for lack of free room (they stage instead), and the readbacks split by why the level had no shadow: its fresh keep was evicted, its
     // re-locked shadow was evicted, its fresh keep was skipped (no room), or it never had one (a first write above the fresh limit, a refused or dropped shadow).
     Counter texShadowFreshSkipped{0},readbackAfterFreshDrop{0},readbackAfterRelockedEvict{0},readbackNeverShadowed{0},readbackAfterFreshSkip{0};   // ...Skip: the level's fresh keep was skipped (no room)
-    Counter expressReadbacks{0},expressNs{0};   // 0.3.206 (task 31): texture readbacks run at a command boundary without draining the queue (count, game-thread wait ns)
+    Counter expressReadbacks{0},expressQueries{0},expressQueryHits{0},expressQueryFallbacks{0},expressNs{0},readbackExpressNs{0},queryExpressNs{0};   // boundary tasks: readback/query posts, proven query hits/fallbacks, all wait ns and each subset
     Counter texShadowSpared{0},texShadowSpareReuses{0};   // 0.3.200 (pipeline): evicted level allocations kept as spares / reused by a new level shadow (StreamCore::texSpare)
     // 0.3.192 (CS): buffer shadows made by ONE synchronous whole-buffer readback at a write re-lock (DYNAMIC late shadows / non-DYNAMIC shadows), LRU evictions
     // by kind (hot = locked within kShadowHotFrames), re-locks refused (too big for the cap / no victim qualified), and adaptive cap growths.
@@ -69,6 +100,7 @@ struct Counters {
     Counter coopAnswered{0};   // 0.3.204 (task 21): TestCooperativeLevel calls the game thread answered D3D_OK from StreamCore::coopState (not in stateAnswered)
     Counter eventRequests{0},eventLocal{0},eventPending{0}; // exact EVENT cache hits, queued FLUSH batches and pending local probes
     Counter eventPendingNs{0},eventCompleted{0}; // first pending probe -> observed completion; includes real GPU work
+    Counter eventReplayWaitNs{0}; // EVENT/FLUSH trip -> replay start, always measured, excludes GPU polling
     Counter queryFlushLocal{0},queryFlushSynced{0};   // GetData(FLUSH) calls: answered on the game thread from the replay thread's latest polled result (occlusion queries only) / run as SyncGetData
     Counter census[kMaxCmdIds]{};   // sync calls per command id (name via cmdName in command_stream.inl)
     // ---- Consumer (replay thread) ----
@@ -77,6 +109,7 @@ struct Counters {
     Counter directCalls{0};   // replayed straight on the extension device
     Counter queryPolls{0},deadCreates{0},createFailures{0},replayFailures{0},syncOnlySlots{0},proxyMismatch{0};   // replayFailures: the game thread adds rarely too
     Counter eventPollBatches{0},eventPollCalls{0},eventWaitTrips{0};   // bounded EVENT/FLUSH polls per replay request; replay thread only
+    Counter eventGpuWaitNs{0}; // time after the first S_FALSE inside an issued EVENT/FLUSH wait; always measured
     Counter skippedFrames{0},skippedCommands{0};   // 0.3.200 (frame skip): frames replayed in skip mode (no draws, no real Present) and the draws/clears they dropped
     // ---- Both threads write: memory in flight (chunks handed to the producer and not yet recycled, live blocks, registered shadows). ----
     alignas(kLine) Counter chunksLive{0};
@@ -85,6 +118,8 @@ struct Counters {
     std::atomic<std::int64_t> retiredBytes{0},ringBytes{0},ringSlices{0};   // 0.3.204 (task 21): live bytes of retired slices (dropped while the replay thread may still read them) and of ring slices (the buffers' non-current slices); NOT part of shadowBytes/largeShadowBytes (so they never block a shadow grant), but in memory() and under their own budget:
     std::atomic<std::int64_t> ringLargeBytes{0},ringRegularBytes{0},retiredLargeBytes{0},retiredRegularBytes{0};   // the ring budget per kind (live + retired): regular <= ShadowBudgetBytes, large <= LargeShadowBudgetBytes
     std::atomic<std::int64_t> zcPatchBytes{0};   // 0.3.205 (#34): live bytes of staged overlap locks waiting to be written into their slice (BufferState::patches; each buffer's at most its length)
+    std::atomic<std::int64_t> rangeShadowBytes{0};
+    Counter rangeShadowHits{0},rangeShadowStores{0},rangeShadowRefused{0};
 };
 static_assert(alignof(Counters)==kLine&&sizeof(Counters)%kLine==0,"Counters groups are line-aligned");
 static_assert(offsetof(Counters,commands)/kLine!=offsetof(Counters,consumerSleeps)/kLine&&offsetof(Counters,consumerSleeps)/kLine!=offsetof(Counters,chunksLive)/kLine,"counter groups on distinct lines");

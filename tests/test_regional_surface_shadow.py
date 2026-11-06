@@ -9,15 +9,17 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
 shader = fp.src('world_effects.hlsl').read_text()
-assert 'float3 sun=DirectLight.rgb*saturate(dot(n,LegacyDirection.xyz))*sunVisibility;' in shader and 'float visibility=lerp(1,shadow,GridInfo.z);' in shader # 0.3.198 (rain): sunVisibility = visibility unless c59.z softens it
+assert 'float3 sun=DirectLight.rgb*saturate(dot(detailNormal,LegacyDirection.xyz))*sunVisibility;' in shader and 'float visibility=lerp(1,shadow,GridInfo.z);' in shader # 0.3.198 (rain): sunVisibility = visibility unless c59.z softens it
 assert 'lerp(sun,moon,SunDirection.w)' in shader
-assert 'if(dot(DirectLight.rgb,1)>0){shadow=directionalShadow' in shader and 'shadow=min(shadow,SunDirection.w>.5?actor.g:actor.r);}' in shader # 0.3.209 (task 29): the actor map's visibility joins in the same branch
+assert 'if(dot(DirectLight.rgb,1)>0){' in shader and 'else shadow=directionalShadow' in shader and 'shadow=min(shadow,SunDirection.w>.5?actor.g:actor.r);}' in shader # Soft and ordinary directional shadows both retain actor visibility.
 # 0.3.170: near cascade 5x5 tent (radius 2.5), far cascade unchanged 4x4 (radius 2).
-assert '[loop]for(int i=0;i<25&&i<size*size;++i)' in shader and 'break;' not in shader[shader.index('float shadowMap('):shader.index('float directionalShadow(')]
+shadow_filter = shader[shader.index('float shadowMapFiltered('):shader.index('float shadowMap(')]
+assert '[loop]for(int y=0;y<5&&y<size;++y)' in shadow_filter and '[loop]for(int x=0;x<5&&x<size;++x)' in shadow_filter and 'break;' not in shadow_filter
 assert 'float size=useNear?5:4,reach=size*.5;' in shader and 'float start=useNear?-2:-1;' in shader
 assert 'float2 base=floor(pixel+(useNear?.5:0)),fraction=pixel-base;' in shader
-assert 'float row=floor((i+.5)/size);' in shader
-assert 'max(reach-abs(offset-fraction),0)' in shader
+assert 'float rowOffset=y+start,rowUV=(base.y+rowOffset+.5)*DepthParams.w;' in shader
+assert 'float rowWeight=max(reach-abs(rowOffset-fraction.y),0);' in shader
+assert 'float w=max(reach-abs(offset-fraction.x),0)*rowWeight;' in shader
 assert 'dot(gradient,tapUV-uv)' in shader
 
 def filter_edge(x, size):

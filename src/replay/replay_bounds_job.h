@@ -24,7 +24,6 @@ struct Item {
     std::shared_ptr<const NorthlightDrawSnapshot::Mesh> owner; // null: owned/transient packet, never bounded
     std::shared_ptr<const NorthlightReplayBounds::Prepared> prepared; // null: no program/declaration, Unsupported
     const float* constants=nullptr; // the packet's frozen capture bank
-    bool outer=false; // in an outer ring of the near list (replay_bounds_near.h): the rotating pass leaves it to the walks on most frames
     NorthlightReplayBounds::Bounds bounds;NorthlightReplayBounds::WorkInfo work; // results
 };
 struct Totals {size_t cheapVisited=0,heavyVisited=0,buildVisited=0,reservedCheapVisited=0,boundVertices=0,boundOperations=0;unsigned valid=0,nearStops=0;}; /* nearStops: phases whose near walk ended on its half of the budget */
@@ -59,22 +58,25 @@ inline Totals schedule(NorthlightReplayBounds::Cache& cache,std::vector<Item>& i
         if(!priority)return;
         const size_t operations=halfLeft(budget.operations,budget.maxOperations),vertices=halfLeft(budget.vertices,budget.maxVertices);
         const std::uint64_t spent=cache.phaseNanoseconds(phase),limit=cache.phaseLimit(phase),until=spent+(limit>spent?(limit-spent)/2:0);
-        if(NorthlightReplayBoundsNear::nearFirst(priority,phase,[&]{return phaseCan()&&budget.operations<operations&&(!budget.maxVertices||budget.vertices<vertices)&&cache.phaseNanoseconds(phase)<until;},[&](size_t index){return visit(index,phase);})&&phaseCan())++t.nearStops;
+        const auto maxOperations=budget.maxOperations,maxVertices=budget.maxVertices;
+        budget.maxOperations=operations;if(maxVertices)budget.maxVertices=vertices;
+        const bool stopped=NorthlightReplayBoundsNear::nearFirst(priority,phase,[&]{return phaseCan()&&cache.phaseNanoseconds(phase)<until;},[&](size_t index){return visit(index,phase);});
+        budget.maxOperations=maxOperations;budget.maxVertices=maxVertices;
+        if(stopped&&phaseCan())++t.nearStops;
     };
-    // The rotating pass over every packet: without the outer-ring packets on most frames (their walks reach them as the budget allows; one frame in
-    // OuterTurn the pass takes them as well, so nothing the walks cannot reach waits for ever, also in the heavy and build phases, which have no bonus turn).
-    const bool skipOuter=priority&&priority->skipOuter();
-    const auto rotate=[&](size_t index,unsigned phase){return skipOuter&&items[index].outer?false:visit(index,phase);};
+    // Every unfinished packet retains its rotating turn, including near packets
+    // too expensive for their half-budget walk. Already valid bounds cost no work.
     nearWalk(0,cheapBudget,[&]{return live()&&cache.canCheap()&&cheapBudget.operations<cheapBudget.maxOperations;}); /* casters near the pivot first */
     cache.readyResume(NorthlightReplaySchedule::pass(count,cache.readyStart(count),
-        [&](){return live()&&cache.canCheap()&&cheapBudget.operations<cheapBudget.maxOperations;},[&](size_t index){return rotate(index,0);}));
+        [&](){return live()&&cache.canCheap()&&cheapBudget.operations<cheapBudget.maxOperations;},[&](size_t index){return visit(index,0);}));
     nearWalk(1,heavyBudget,[&]{return live()&&cache.canHeavy()&&heavyBudget.operations<heavyBudget.maxOperations;});
     cache.heavyResume(NorthlightReplaySchedule::pass(count,cache.heavyStart(count),
-        [&](){return live()&&cache.canHeavy()&&heavyBudget.operations<heavyBudget.maxOperations;},[&](size_t index){return rotate(index,1);}));
+        [&](){return live()&&cache.canHeavy()&&heavyBudget.operations<heavyBudget.maxOperations;},[&](size_t index){return visit(index,1);}));
+    cache.lendToBuild(buildBudget);
     if(live())cache.continuePendingBuild(buildBudget);
     nearWalk(2,buildBudget,[&]{return live()&&cache.canBuild()&&buildBudget.vertices<buildBudget.maxVertices&&buildBudget.operations<buildBudget.maxOperations;});
     cache.buildResume(NorthlightReplaySchedule::pass(count,cache.buildStart(count),
-        [&](){return live()&&cache.canBuild()&&buildBudget.vertices<buildBudget.maxVertices&&buildBudget.operations<buildBudget.maxOperations;},[&](size_t index){return rotate(index,2);}));
+        [&](){return live()&&cache.canBuild()&&buildBudget.vertices<buildBudget.maxVertices&&buildBudget.operations<buildBudget.maxOperations;},[&](size_t index){return visit(index,2);}));
     t.reservedCheapVisited=t.cheapVisited;
     cache.finishReservedTurnsAndLend();
     cheapBudget.maxOperations=262144-heavyBudget.operations-buildBudget.operations;
@@ -92,7 +94,7 @@ template<class Packets,class Resolve> bool gather(std::vector<Item>& items,Packe
     const void* shader=nullptr;const void* decl=nullptr;std::shared_ptr<const NorthlightReplayBounds::Prepared> prepared;bool resolved=false;
     for(size_t i=0;i<packets.size();++i){auto& p=*packets[i];auto& item=items[i];
         p.pointBounds={};p.boundsWork={};p.boundsPrepared.reset();
-        item.owner=p.shared;item.constants=p.constants;item.bounds={};item.work={};item.prepared.reset();item.outer=priority&&priority->consider(i,p.position(),p.selfShadow);
+        item.owner=p.shared;item.constants=p.constants;item.bounds={};item.work={};item.prepared.reset();if(priority)priority->consider(i,p.position(),p.selfShadow);
         if(!p.shared)continue;
         if(!resolved||p.originalShader!=shader||p.decl!=decl){shader=p.originalShader;decl=p.decl;prepared=resolve(p.originalShader,p.decl);resolved=true;}
         item.prepared=prepared;

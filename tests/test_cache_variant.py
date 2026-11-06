@@ -12,6 +12,7 @@ import northlight_paths as fp; fp.use_source_modules()
 import hashlib, json, os, subprocess, tempfile, zipfile
 import build_cache_variant as bcv
 import client_identity as ci
+import install_world_cache as iwc
 
 client = Path(os.environ.get('NORTHLIGHT_STOCK_CLIENT') or fp.client_root())
 # The builder deliberately refuses an output inside the client, even when the checkout is there.
@@ -42,6 +43,8 @@ with tempfile.TemporaryDirectory(prefix='northlight-cache-variant-') as work:
         names = [i.filename for i in infos]
         assert names[0] == bcv.MANIFEST and names[1:] == sorted(names[1:])
         assert all(bcv.ALLOWLIST.fullmatch(n) for n in names[1:]), [n for n in names[1:] if not bcv.ALLOWLIST.fullmatch(n)]
+        assert 'lights/Azeroth.fga' in names and z.read('lights/Azeroth.fga').startswith(b'FGA1')
+        assert 'lights/native-fixtures.bin' in names and z.read('lights/native-fixtures.bin').startswith(b'NLF1')
         assert all(i.compress_type == zipfile.ZIP_DEFLATED and i.date_time == bcv.ZIP_TIME for i in infos)
         kinds = {n.split('/')[0] for n in names[1:]}
         assert kinds == {'Azeroth', 'models', 'lights', 'fog', 'celestial'}, kinds
@@ -61,6 +64,7 @@ with tempfile.TemporaryDirectory(prefix='northlight-cache-variant-') as work:
     build_info = manifest['build']
     assert build_info['archives'] == 'stock' and build_info['without'] == 'z' and build_info['maps'] == ['Azeroth']
     assert set(build_info['digests']) == {'scene:Azeroth', 'lights', 'fog', 'celestial'} and build_info['sources']
+    assert build_info['cache_versions'] == iwc.CACHE_VERSIONS
     identity = ci.chain_identity(client, 'stock', manifest['identity']['locale'])
     assert ci.match(identity, manifest) == (True, []) and identity['sha256'] == manifest['identity']['sha256']
 

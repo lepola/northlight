@@ -35,10 +35,11 @@ def body(text,head):
         i+=1
 capture=body(w,'    void captureModel(D3DPRIMITIVETYPE type,')
 select=body(x,'    void selectShadowReplays(){')
-end=body(w,'    void endFrame(bool retainPool=true){')
+assert w.count('void endFrame(')==1
+end=body(w,'    void endFrame(')
 release=w[w.index('    void releaseGPU(bool keepMesh=false){'):];release=release[:release.index('\n')]
 reset=w[w.index('    void reset(){'):];reset=reset[:reset.index('\n')]
-trim=body(g,'    MemoryTrim trimMemory(){')
+trim=body(g,'    MemoryTrim trimMemory(')
 register=body(w,'    void registerShader(IDirect3DVertexShader9* shader,uint64_t hash){')
 checks.update({
  'capture: the inputs filled just before a selected skinned draw joins replays, published right after':

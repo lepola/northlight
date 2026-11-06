@@ -31,7 +31,7 @@ def main():
         assert hashlib.sha256((fp.COMPILED / (entry + '.bin')).read_bytes()).hexdigest() == digest, entry + ' changed'
     for entry, data in manifest['shaders'].items():
         assert hashlib.sha256((fp.COMPILED / (entry + '.bin')).read_bytes()).hexdigest() == data['sha256']
-    print('PASS original SSAO, AOContactBloom, AOBlur and Composite bytecode unchanged; manifest verified')
+    print('PASS approved SSAO, AOContactBloom, AOBlur and Composite bytecode hashes; manifest verified')
 
 
 if __name__ == '__main__':

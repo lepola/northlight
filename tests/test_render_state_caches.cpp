@@ -27,13 +27,13 @@ struct IDirect3DDevice9 {
     HRESULT SetStreamSource(unsigned s,IDirect3DVertexBuffer9* p,UINT o,UINT stride){if(!accept())return -1;vb[s]=p;offsets[s]=o;strides[s]=stride;return 0;}
     HRESULT SetTexture(unsigned s,IDirect3DBaseTexture9* p){assert(s==0);if(!accept())return -1;texture=p;return 0;}
     HRESULT SetSamplerState(unsigned s,unsigned state,DWORD value){assert(s==0);if(!accept())return -1;(state==D3DSAMP_ADDRESSU?u:v)=value;return 0;}
-    HRESULT SetPixelShaderConstantF(unsigned r,const float* p,unsigned n){assert(r==0&&n==1);if(!accept())return -1;assert(p[0]==1&&p[1]==1&&p[2]==1);cutoff=p[3];return 0;}
+    HRESULT SetPixelShaderConstantF(unsigned r,const float* p,unsigned n){assert(r==0&&n==1);if(!accept())return -1;assert(p[0]==0&&p[1]==0&&p[2]==0);cutoff=p[3];return 0;}
 };
 #include "vertex_declaration_cache.h"
 #include "replay_draw_state.h"
 struct Replay {
     IDirect3DVertexDeclaration9* decl=nullptr;IDirect3DVertexShader9* shader=nullptr;IDirect3DIndexBuffer9* index=nullptr;
-    IDirect3DVertexBuffer9* stream[4]={};UINT offset[4]={},stride[4]={};IDirect3DBaseTexture9* texture=nullptr;DWORD addressU=1,addressV=1;float cutoff=-1;
+    IDirect3DVertexBuffer9* stream[4]={};UINT offset[4]={},stride[4]={};IDirect3DBaseTexture9* texture=nullptr;DWORD addressU=1,addressV=1;float cutoff=-1;unsigned alphaMode=0;
 };
 int main(){
     std::array<IDirect3DVertexDeclaration9,140> declarations;

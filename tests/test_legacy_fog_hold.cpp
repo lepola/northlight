@@ -52,5 +52,18 @@ int main(){
      assert(allFinite(h.update("m",B,true,1064)));
      Hold g;bad=B;bad.parameters[0]=nan;assert(identity(g.update("m",bad,true,10)));}
     {Hold h;h.update("m",A,true,5);h.reset();assert(identity(h.update("m",U,false,6)));}
+    { // The compositor must classify the uploaded hold, not a raw fog-off observation.
+     assert(surfaceFogIsZero(U,true)&&!surfaceFogIsZero(U,false));
+     assert(!surfaceFogIsZero(A,true));Hold h;h.update("m",A,true,1000);
+     assert(!surfaceFogIsZero(h.update("m",U,false,1016),true));
+     h.update("m",U,false,1000+Hold::HoldMs);
+     const auto faded=h.update("m",U,false,1000+Hold::HoldMs+16);
+     assert(faded.parameters[3]>0&&faded.parameters[3]<1&&!surfaceFogIsZero(faded,true));
+     Constants black=A;black.color[0]=black.color[1]=black.color[2]=0;
+     assert(surfaceFogIsZero(black,true));assert(!surfaceFogIsZero(black,false));
+     Constants clear=A;clear.parameters[0]=0;clear.parameters[1]=1;
+     assert(surfaceFogIsZero(clear,true));clear=A;clear.parameters[3]=0;assert(surfaceFogIsZero(clear,true));
+     black.parameters[2]=0;assert(!surfaceFogIsZero(black,true));
+     black=A;black.color[0]=std::numeric_limits<float>::quiet_NaN();assert(!surfaceFogIsZero(black,true));}
     std::puts("legacy fog hold ok");return 0;
 }

@@ -24,7 +24,8 @@
       "intensity": 1.15,
       "start": 1.0,
       "end": 12,
-      "position_basis": "installed luminous skin-batch bounds center: world\\azeroth\\elwynn\\passivedoodads\\lamppost\\glow32.blp"
+      "position_basis": "installed luminous skin-batch bounds center: world\\azeroth\\elwynn\\passivedoodads\\lamppost\\glow32.blp",
+      "casts_shadows": true
     },
     "world\\generic\\human\\passive doodads\\lampposts\\duskwoodlamppost.m2": {
       "family": "warm_lantern",
@@ -42,7 +43,8 @@
       "intensity": 1.15,
       "start": 1.0,
       "end": 12,
-      "position_basis": "installed luminous skin-batch bounds center: world\\azeroth\\elwynn\\passivedoodads\\lamppost\\glow32.blp"
+      "position_basis": "installed luminous skin-batch bounds center: world\\azeroth\\elwynn\\passivedoodads\\lamppost\\glow32.blp",
+      "casts_shadows": true
     },
     "world\\generic\\human\\passive doodads\\lamps\\stormwindstreetlamp01.m2": {
       "family": "warm_lantern",
@@ -71,7 +73,8 @@
           ],
           "position_basis": "installed luminous skin-batch bounds center: dungeons\\textures\\doodads\\stormwindlampglass.blp (stock lamp glass, unlit; the profile position is the HD lamp-window batch center (-0.004,0.018,4.258))"
         }
-      }
+      },
+      "casts_shadows": true
     },
     "world\\generic\\human\\passive doodads\\hanginglanterns\\generalhanginglantern01.m2": {
       "family": "warm_lantern",
@@ -89,7 +92,8 @@
       "intensity": 1.15,
       "start": 1.0,
       "end": 9,
-      "position_basis": "installed luminous skin-batch bounds center: world\\azeroth\\elwynn\\passivedoodads\\lamppost\\glow32.blp"
+      "position_basis": "installed luminous skin-batch bounds center: world\\azeroth\\elwynn\\passivedoodads\\lamppost\\glow32.blp",
+      "casts_shadows": true
     },
     "world\\generic\\human\\passive doodads\\hanginglanterns\\generalhanginglanternlong.m2": {
       "family": "warm_lantern",
@@ -107,7 +111,8 @@
       "intensity": 1.15,
       "start": 1.0,
       "end": 9,
-      "position_basis": "authored flame/bulb offset reviewed against installed mesh bounds"
+      "position_basis": "authored flame/bulb offset reviewed against installed mesh bounds",
+      "casts_shadows": true
     },
     "world\\generic\\human\\passive doodads\\lanterns\\generallantern01.m2": {
       "family": "warm_lantern",
@@ -125,7 +130,8 @@
       "intensity": 1.15,
       "start": 1.0,
       "end": 9,
-      "position_basis": "authored flame/bulb offset reviewed against installed mesh bounds"
+      "position_basis": "authored flame/bulb offset reviewed against installed mesh bounds",
+      "casts_shadows": true
     },
     "world\\generic\\human\\passive doodads\\lanterns\\generallantern02.m2": {
       "family": "warm_lantern",
@@ -143,7 +149,8 @@
       "intensity": 1.15,
       "start": 1.0,
       "end": 9,
-      "position_basis": "authored flame/bulb offset reviewed against installed mesh bounds"
+      "position_basis": "authored flame/bulb offset reviewed against installed mesh bounds",
+      "casts_shadows": true
     },
     "world\\generic\\human\\passive doodads\\lanterns\\generallantern03.m2": {
       "family": "warm_lantern",
@@ -161,7 +168,8 @@
       "intensity": 1.15,
       "start": 1.0,
       "end": 9,
-      "position_basis": "authored flame/bulb offset reviewed against installed mesh bounds"
+      "position_basis": "authored flame/bulb offset reviewed against installed mesh bounds",
+      "casts_shadows": true
     },
     "world\\generic\\human\\passive doodads\\lanterns\\generallantern04.m2": {
       "family": "warm_lantern",
@@ -179,7 +187,8 @@
       "intensity": 1.15,
       "start": 1.0,
       "end": 9,
-      "position_basis": "authored flame/bulb offset reviewed against installed mesh bounds"
+      "position_basis": "authored flame/bulb offset reviewed against installed mesh bounds",
+      "casts_shadows": true
     },
     "world\\azeroth\\westfall\\passivedoodads\\lamppost\\westfalllamppost.m2": {
       "family": "warm_lantern",
@@ -208,7 +217,8 @@
           ],
           "position_basis": "installed luminous skin-batch bounds center: world\\generic\\passivedoodads\\lights\\gloworange32.blp (stock glow halo around the lantern, as lamppost.m2 glow32.blp; the HD model is one garrison-lamp batch with no glow)"
         }
-      }
+      },
+      "casts_shadows": true
     },
     "world\\azeroth\\westfall\\passivedoodads\\lamppost\\westfalllamppost01.m2": {
       "family": "warm_lantern",
@@ -237,7 +247,8 @@
           ],
           "position_basis": "installed luminous skin-batch bounds center: item\\objectcomponents\\weapon\\misc_1h_lantern_b_01silver.blp (stock lantern body, unlit additive; this variant has no glow halo)"
         }
-      }
+      },
+      "casts_shadows": true
     },
     "world\\azeroth\\westfall\\passivedoodads\\lamppost\\westfalllamppost02.m2": {
       "family": "warm_lantern",
@@ -266,7 +277,8 @@
           ],
           "position_basis": "installed luminous skin-batch bounds center: world\\generic\\passivedoodads\\lights\\gloworange32.blp (stock glow halo around the lantern, as lamppost.m2 glow32.blp; the HD model is one garrison-lamp batch with no glow)"
         }
-      }
+      },
+      "casts_shadows": true
     },
     "world\\expansion02\\doodads\\generic\\human\\lamppost\\hu_lamppost_northrend.m2": {
       "family": "warm_lantern",
@@ -284,7 +296,8 @@
       "intensity": 1.15,
       "start": 1.0,
       "end": 12,
-      "position_basis": "authored flame/bulb offset reviewed against installed mesh bounds"
+      "position_basis": "authored flame/bulb offset reviewed against installed mesh bounds",
+      "casts_shadows": true
     },
     "world\\expansion02\\doodads\\generic\\human\\lamppost\\hu_lamp_arm_northrend.m2": {
       "family": "warm_lantern",
@@ -302,7 +315,8 @@
       "intensity": 1.15,
       "start": 1.0,
       "end": 12,
-      "position_basis": "authored flame/bulb offset reviewed against installed mesh bounds"
+      "position_basis": "authored flame/bulb offset reviewed against installed mesh bounds",
+      "casts_shadows": true
     },
     "world\\azeroth\\stranglethorn\\passivedoodads\\diamondminewalllantern\\diamondminewalllantern.m2": {
       "family": "warm_lantern",
@@ -320,7 +334,8 @@
       "intensity": 1.15,
       "start": 1.0,
       "end": 9,
-      "position_basis": "authored flame/bulb offset reviewed against installed mesh bounds"
+      "position_basis": "authored flame/bulb offset reviewed against installed mesh bounds",
+      "casts_shadows": true
     },
     "world\\generic\\human\\passive doodads\\lamps\\tirisfallstreetlamp01.m2": {
       "family": "violet_lantern",
@@ -355,7 +370,8 @@
           ],
           "position_basis": "installed luminous skin-batch bounds center: world\\generic\\human\\passive doodads\\lamps\\silverpinelampposttop01.blp (stock lamp glass, unlit; the profile position is the HD lamp-window batch center (-0.01,-0.009,4.258). Green, not violet: the stock glass is yellow-green (linear mean .63,1,.27) with a glowgreen32.blp halo, where the HD window is purple)"
         }
-      }
+      },
+      "casts_shadows": true
     },
     "world\\expansion02\\doodads\\generic\\forsaken\\fk_lamppost.m2": {
       "family": "violet_lantern",
@@ -373,7 +389,8 @@
       "intensity": 1.05,
       "start": 1.0,
       "end": 12,
-      "position_basis": "installed luminous skin-batch bounds center: world\\azeroth\\elwynn\\passivedoodads\\lamppost\\glow32.blp"
+      "position_basis": "installed luminous skin-batch bounds center: world\\azeroth\\elwynn\\passivedoodads\\lamppost\\glow32.blp",
+      "casts_shadows": true
     },
     "world\\expansion01\\doodads\\ghostlands\\lampposts\\be_lamppost_ghostlands01.m2": {
       "family": "violet_lantern",
@@ -391,7 +408,8 @@
       "intensity": 1.05,
       "start": 1.0,
       "end": 12,
-      "position_basis": "installed luminous skin-batch bounds center: spells\\genericglow64.blp"
+      "position_basis": "installed luminous skin-batch bounds center: spells\\genericglow64.blp",
+      "casts_shadows": true
     },
     "world\\expansion01\\doodads\\ghostlands\\lampposts\\be_lamppost_ghostlands02.m2": {
       "family": "violet_lantern",
@@ -409,7 +427,8 @@
       "intensity": 1.05,
       "start": 1.0,
       "end": 12,
-      "position_basis": "installed luminous skin-batch bounds center: spells\\genericglow64.blp"
+      "position_basis": "installed luminous skin-batch bounds center: spells\\genericglow64.blp",
+      "casts_shadows": true
     },
     "world\\generic\\nightelf\\passive doodads\\lamps\\kalidarstreetlamp01.m2": {
       "family": "blue_lantern",
@@ -427,7 +446,8 @@
       "intensity": 1.0,
       "start": 1.0,
       "end": 12,
-      "position_basis": "installed luminous skin-batch bounds center: world\\generic\\nightelf\\passive doodads\\lamps\\glowblue32.blp"
+      "position_basis": "installed luminous skin-batch bounds center: world\\generic\\nightelf\\passive doodads\\lamps\\glowblue32.blp",
+      "casts_shadows": true
     },
     "world\\generic\\nightelf\\passive doodads\\lamps\\kalidarstreetlamp02.m2": {
       "family": "blue_lantern",
@@ -445,7 +465,8 @@
       "intensity": 1.0,
       "start": 1.0,
       "end": 12,
-      "position_basis": "installed luminous skin-batch bounds center: world\\generic\\nightelf\\passive doodads\\lamps\\glowblue32.blp"
+      "position_basis": "installed luminous skin-batch bounds center: world\\generic\\nightelf\\passive doodads\\lamps\\glowblue32.blp",
+      "casts_shadows": true
     },
     "world\\generic\\nightelf\\passive doodads\\lamps\\darnassusstreetlamp01.m2": {
       "family": "blue_lantern",
@@ -463,7 +484,8 @@
       "intensity": 1.0,
       "start": 1.0,
       "end": 12,
-      "position_basis": "authored flame/bulb offset reviewed against installed mesh bounds"
+      "position_basis": "authored flame/bulb offset reviewed against installed mesh bounds",
+      "casts_shadows": true
     },
     "world\\generic\\nightelf\\passive doodads\\lamps\\darnassusstreetlamp02.m2": {
       "family": "blue_lantern",
@@ -481,7 +503,8 @@
       "intensity": 1.0,
       "start": 1.0,
       "end": 12,
-      "position_basis": "installed luminous skin-batch bounds center: world\\generic\\nightelf\\passive doodads\\lamps\\glowblue32.blp"
+      "position_basis": "installed luminous skin-batch bounds center: world\\generic\\nightelf\\passive doodads\\lamps\\glowblue32.blp",
+      "casts_shadows": true
     },
     "world\\generic\\nightelf\\passive doodads\\lanterns\\nightelfhanginglantern.m2": {
       "family": "blue_lantern",
@@ -499,7 +522,8 @@
       "intensity": 1.0,
       "start": 1.0,
       "end": 9,
-      "position_basis": "authored flame/bulb offset reviewed against installed mesh bounds"
+      "position_basis": "authored flame/bulb offset reviewed against installed mesh bounds",
+      "casts_shadows": true
     },
     "world\\generic\\nightelf\\passive doodads\\lanterns\\nightelflantern01.m2": {
       "family": "blue_lantern",
@@ -517,7 +541,8 @@
       "intensity": 1.0,
       "start": 1.0,
       "end": 9,
-      "position_basis": "authored flame/bulb offset reviewed against installed mesh bounds"
+      "position_basis": "authored flame/bulb offset reviewed against installed mesh bounds",
+      "casts_shadows": true
     },
     "world\\environment\\doodad\\generaldoodads\\nightelflanternblue\\ne_lanternblue01.m2": {
       "family": "blue_lantern",
@@ -535,7 +560,8 @@
       "intensity": 1.0,
       "start": 1.0,
       "end": 9,
-      "position_basis": "installed luminous skin-batch bounds center: world\\generic\\nightelf\\passive doodads\\lamps\\glowblue32.blp"
+      "position_basis": "installed luminous skin-batch bounds center: world\\generic\\nightelf\\passive doodads\\lamps\\glowblue32.blp",
+      "casts_shadows": true
     },
     "world\\expansion01\\doodads\\generic\\draenei\\lampposts\\dr_lamppost_01.m2": {
       "family": "arcane_lantern",
@@ -553,7 +579,8 @@
       "intensity": 1.0,
       "start": 1.0,
       "end": 11,
-      "position_basis": "installed luminous skin-batch bounds center: spells\\genericglow64.blp"
+      "position_basis": "installed luminous skin-batch bounds center: spells\\genericglow64.blp",
+      "casts_shadows": true
     },
     "world\\expansion01\\doodads\\generic\\draenei\\lampposts\\dr_lamppost_02.m2": {
       "family": "arcane_lantern",
@@ -571,7 +598,8 @@
       "intensity": 1.0,
       "start": 1.0,
       "end": 11,
-      "position_basis": "installed luminous skin-batch bounds center: spells\\genericglow64.blp"
+      "position_basis": "installed luminous skin-batch bounds center: spells\\genericglow64.blp",
+      "casts_shadows": true
     },
     "world\\expansion01\\doodads\\generic\\draenei\\lanterns\\dr_lantern_01.m2": {
       "family": "arcane_lantern",
@@ -589,7 +617,8 @@
       "intensity": 1.0,
       "start": 1.0,
       "end": 9,
-      "position_basis": "installed luminous skin-batch bounds center: spells\\genericglow64.blp"
+      "position_basis": "installed luminous skin-batch bounds center: spells\\genericglow64.blp",
+      "casts_shadows": true
     },
     "world\\expansion01\\doodads\\eversong\\lamppost\\be_lamppost_eversong01.m2": {
       "family": "gold_lantern",
@@ -607,7 +636,8 @@
       "intensity": 1.0,
       "start": 1.0,
       "end": 11,
-      "position_basis": "installed luminous skin-batch bounds center: spells\\genericglow64.blp"
+      "position_basis": "installed luminous skin-batch bounds center: spells\\genericglow64.blp",
+      "casts_shadows": true
     },
     "world\\expansion01\\doodads\\eversong\\lamppost\\be_lamppost_eversong01-optimized.m2": {
       "family": "gold_lantern",
@@ -625,7 +655,8 @@
       "intensity": 1.0,
       "start": 1.0,
       "end": 11,
-      "position_basis": "installed luminous skin-batch bounds center: spells\\genericglow64.blp"
+      "position_basis": "installed luminous skin-batch bounds center: spells\\genericglow64.blp",
+      "casts_shadows": true
     },
     "world\\expansion01\\doodads\\generic\\bloodelf\\lantern\\be_lantern01.m2": {
       "family": "gold_lantern",
@@ -643,7 +674,8 @@
       "intensity": 1.0,
       "start": 1.0,
       "end": 9,
-      "position_basis": "installed luminous skin-batch bounds center: spells\\genericglow64.blp"
+      "position_basis": "installed luminous skin-batch bounds center: spells\\genericglow64.blp",
+      "casts_shadows": true
     },
     "world\\generic\\orc\\passive doodads\\lampposts\\orcbrazierstreetlamp.m2": {
       "family": "fire",
@@ -661,7 +693,8 @@
       "intensity": 1.35,
       "start": 1.0,
       "end": 13,
-      "position_basis": "authored flame/bulb offset reviewed against installed mesh bounds"
+      "position_basis": "authored flame/bulb offset reviewed against installed mesh bounds",
+      "casts_shadows": true
     },
     "world\\generic\\orc\\passive doodads\\lampposts\\orcbrazierlamppost01.m2": {
       "family": "fire",
@@ -679,7 +712,8 @@
       "intensity": 1.35,
       "start": 1.0,
       "end": 13,
-      "position_basis": "authored flame/bulb offset reviewed against installed mesh bounds"
+      "position_basis": "authored flame/bulb offset reviewed against installed mesh bounds",
+      "casts_shadows": true
     },
     "world\\generic\\orc\\passive doodads\\lampposts\\orcbrazier_lightpostbarrens.m2": {
       "family": "fire",
@@ -697,7 +731,8 @@
       "intensity": 1.35,
       "start": 1.0,
       "end": 13,
-      "position_basis": "authored flame/bulb offset reviewed against installed mesh bounds"
+      "position_basis": "authored flame/bulb offset reviewed against installed mesh bounds",
+      "casts_shadows": true
     },
     "world\\generic\\orc\\passive doodads\\lanterns\\orchanginglantern.m2": {
       "family": "fire",
@@ -715,7 +750,8 @@
       "intensity": 1.35,
       "start": 1.0,
       "end": 9,
-      "position_basis": "authored flame/bulb offset reviewed against installed mesh bounds"
+      "position_basis": "authored flame/bulb offset reviewed against installed mesh bounds",
+      "casts_shadows": true
     },
     "world\\generic\\orc\\passive doodads\\braziers\\mediumbrazier01.m2": {
       "family": "fire",
@@ -733,7 +769,8 @@
       "intensity": 1.35,
       "start": 1.0,
       "end": 13,
-      "position_basis": "authored flame/bulb offset reviewed against installed mesh bounds"
+      "position_basis": "authored flame/bulb offset reviewed against installed mesh bounds",
+      "casts_shadows": true
     },
     "world\\generic\\orc\\passive doodads\\braziers\\mediumbraziernoomni01.m2": {
       "family": "fire",
@@ -751,7 +788,8 @@
       "intensity": 1.35,
       "start": 1.0,
       "end": 13,
-      "position_basis": "authored flame/bulb offset reviewed against installed mesh bounds"
+      "position_basis": "authored flame/bulb offset reviewed against installed mesh bounds",
+      "casts_shadows": true
     },
     "world\\generic\\orc\\passive doodads\\braziers\\smallbrazier01.m2": {
       "family": "fire",
@@ -769,7 +807,8 @@
       "intensity": 1.35,
       "start": 1.0,
       "end": 13,
-      "position_basis": "authored flame/bulb offset reviewed against installed mesh bounds"
+      "position_basis": "authored flame/bulb offset reviewed against installed mesh bounds",
+      "casts_shadows": true
     },
     "world\\generic\\orc\\passive doodads\\braziers\\smallbraziernoomni01.m2": {
       "family": "fire",
@@ -787,7 +826,8 @@
       "intensity": 1.35,
       "start": 1.0,
       "end": 13,
-      "position_basis": "authored flame/bulb offset reviewed against installed mesh bounds"
+      "position_basis": "authored flame/bulb offset reviewed against installed mesh bounds",
+      "casts_shadows": true
     },
     "world\\generic\\orc\\passive doodads\\braziers\\tallbrazier01.m2": {
       "family": "fire",
@@ -805,7 +845,8 @@
       "intensity": 1.35,
       "start": 1.0,
       "end": 13,
-      "position_basis": "authored flame/bulb offset reviewed against installed mesh bounds"
+      "position_basis": "authored flame/bulb offset reviewed against installed mesh bounds",
+      "casts_shadows": true
     },
     "world\\generic\\orc\\passive doodads\\braziers\\tallbraziernoomni01.m2": {
       "family": "fire",
@@ -823,7 +864,8 @@
       "intensity": 1.35,
       "start": 1.0,
       "end": 13,
-      "position_basis": "authored flame/bulb offset reviewed against installed mesh bounds"
+      "position_basis": "authored flame/bulb offset reviewed against installed mesh bounds",
+      "casts_shadows": true
     },
     "world\\generic\\passivedoodads\\lights\\freestandingtorch01.m2": {
       "family": "fire",
@@ -841,7 +883,8 @@
       "intensity": 1.08,
       "start": 1.0,
       "end": 13,
-      "position_basis": "authored flame/bulb offset reviewed against installed mesh bounds"
+      "position_basis": "authored flame/bulb offset reviewed against installed mesh bounds",
+      "casts_shadows": true
     },
     "world\\generic\\passivedoodads\\lights\\generaltorch01.m2": {
       "family": "fire",
@@ -859,7 +902,8 @@
       "intensity": 1.08,
       "start": 1.0,
       "end": 13,
-      "position_basis": "authored flame/bulb offset reviewed against installed mesh bounds"
+      "position_basis": "authored flame/bulb offset reviewed against installed mesh bounds",
+      "casts_shadows": true
     },
     "world\\generic\\ogre\\passive doodads\\torches\\ogrewalltorch.m2": {
       "family": "fire",
@@ -877,7 +921,8 @@
       "intensity": 1.35,
       "start": 1.0,
       "end": 13,
-      "position_basis": "authored flame/bulb offset reviewed against installed mesh bounds"
+      "position_basis": "authored flame/bulb offset reviewed against installed mesh bounds",
+      "casts_shadows": true
     },
     "world\\generic\\ogre\\passive doodads\\torches\\ogrewalltorchred.m2": {
       "family": "fire",
@@ -895,7 +940,8 @@
       "intensity": 1.35,
       "start": 1.0,
       "end": 13,
-      "position_basis": "authored flame/bulb offset reviewed against installed mesh bounds"
+      "position_basis": "authored flame/bulb offset reviewed against installed mesh bounds",
+      "casts_shadows": true
     },
     "world\\generic\\tauren\\passive doodads\\lampposts\\taurenlamppost.m2": {
       "family": "fire",
@@ -913,7 +959,8 @@
       "intensity": 1.35,
       "start": 1.0,
       "end": 13,
-      "position_basis": "authored flame/bulb offset reviewed against installed mesh bounds"
+      "position_basis": "authored flame/bulb offset reviewed against installed mesh bounds",
+      "casts_shadows": true
     },
     "world\\generic\\tauren\\passive doodads\\lampposts\\taurenlamppost02.m2": {
       "family": "fire",
@@ -931,7 +978,8 @@
       "intensity": 1.35,
       "start": 1.0,
       "end": 13,
-      "position_basis": "authored flame/bulb offset reviewed against installed mesh bounds"
+      "position_basis": "authored flame/bulb offset reviewed against installed mesh bounds",
+      "casts_shadows": true
     },
     "world\\generic\\human\\passive doodads\\braziers\\stormwindbrazier01.m2": {
       "family": "fire",
@@ -949,7 +997,8 @@
       "intensity": 1.35,
       "start": 1.0,
       "end": 13,
-      "position_basis": "authored flame/bulb offset reviewed against installed mesh bounds"
+      "position_basis": "authored flame/bulb offset reviewed against installed mesh bounds",
+      "casts_shadows": true
     },
     "world\\generic\\dwarf\\passive doodads\\braziers\\dwarvenbrazier01.m2": {
       "family": "fire",
@@ -967,7 +1016,8 @@
       "intensity": 1.35,
       "start": 1.0,
       "end": 13,
-      "position_basis": "authored flame/bulb offset reviewed against installed mesh bounds"
+      "position_basis": "authored flame/bulb offset reviewed against installed mesh bounds",
+      "casts_shadows": true
     },
     "world\\generic\\dwarf\\passive doodads\\braziers\\dwarvenbrazier02.m2": {
       "family": "fire",
@@ -985,7 +1035,8 @@
       "intensity": 1.35,
       "start": 1.0,
       "end": 13,
-      "position_basis": "authored flame/bulb offset reviewed against installed mesh bounds"
+      "position_basis": "authored flame/bulb offset reviewed against installed mesh bounds",
+      "casts_shadows": true
     },
     "world\\generic\\dwarf\\passive doodads\\braziers\\stormwinddwarfbrazier.m2": {
       "family": "fire",
@@ -1003,7 +1054,8 @@
       "intensity": 1.35,
       "start": 1.0,
       "end": 13,
-      "position_basis": "authored flame/bulb offset reviewed against installed mesh bounds"
+      "position_basis": "authored flame/bulb offset reviewed against installed mesh bounds",
+      "casts_shadows": true
     },
     "world\\azeroth\\elwynn\\passivedoodads\\campfire\\elwynncampfire.m2": {
       "family": "fire",
@@ -1032,7 +1084,8 @@
           ],
           "position_basis": "authored flame offset of elwynncampfire_blue.m2 (0,0,0.8), whose skin batches and bounds are identical to this stock model (rocks top z .712, wood center z .173); the stock native light has an animated track, so the profile applies"
         }
-      }
+      },
+      "casts_shadows": true
     },
     "world\\generic\\human\\passive doodads\\fire\\undeadcampfire.m2": {
       "family": "fire",
@@ -1050,7 +1103,8 @@
       "intensity": 1.35,
       "start": 1.0,
       "end": 13,
-      "position_basis": "authored flame/bulb offset reviewed against installed mesh bounds"
+      "position_basis": "authored flame/bulb offset reviewed against installed mesh bounds",
+      "casts_shadows": true
     },
     "world\\expansion02\\doodads\\generic\\northrend fires\\northrendelwynncampfire.m2": {
       "family": "fire",
@@ -1068,7 +1122,8 @@
       "intensity": 1.35,
       "start": 1.0,
       "end": 13,
-      "position_basis": "authored flame/bulb offset reviewed against installed mesh bounds"
+      "position_basis": "authored flame/bulb offset reviewed against installed mesh bounds",
+      "casts_shadows": true
     },
     "world\\expansion02\\doodads\\generic\\northrend fires\\northrendgeneraltorch01.m2": {
       "family": "fire",
@@ -1086,7 +1141,8 @@
       "intensity": 1.35,
       "start": 1.0,
       "end": 13,
-      "position_basis": "authored flame/bulb offset reviewed against installed mesh bounds"
+      "position_basis": "authored flame/bulb offset reviewed against installed mesh bounds",
+      "casts_shadows": true
     },
     "world\\kalimdor\\orgrimmar\\passivedoodads\\orgrimmarbonfire\\orgrimmarbonfire01.m2": {
       "family": "bonfire",
@@ -1104,7 +1160,8 @@
       "intensity": 1.65,
       "start": 1.0,
       "end": 20,
-      "position_basis": "authored flame/bulb offset reviewed against installed mesh bounds"
+      "position_basis": "authored flame/bulb offset reviewed against installed mesh bounds",
+      "casts_shadows": true
     },
     "world\\azeroth\\burningsteppes\\passivedoodads\\bonfire\\orcbonfire.m2": {
       "family": "bonfire",
@@ -1122,7 +1179,8 @@
       "intensity": 1.65,
       "start": 1.0,
       "end": 20,
-      "position_basis": "authored flame/bulb offset reviewed against installed mesh bounds"
+      "position_basis": "authored flame/bulb offset reviewed against installed mesh bounds",
+      "casts_shadows": true
     },
     "world\\generic\\orc\\passive doodads\\firepits\\largefirepit01.m2": {
       "family": "bonfire",
@@ -1140,7 +1198,8 @@
       "intensity": 1.65,
       "start": 1.0,
       "end": 20,
-      "position_basis": "authored flame/bulb offset reviewed against installed mesh bounds"
+      "position_basis": "authored flame/bulb offset reviewed against installed mesh bounds",
+      "casts_shadows": true
     },
     "world\\generic\\orc\\passive doodads\\braziers\\orcbrazier_campfire01.m2": {
       "family": "bonfire",
@@ -1158,7 +1217,8 @@
       "intensity": 1.65,
       "start": 1.0,
       "end": 20,
-      "position_basis": "authored flame/bulb offset reviewed against installed mesh bounds"
+      "position_basis": "authored flame/bulb offset reviewed against installed mesh bounds",
+      "casts_shadows": true
     },
     "world\\expansion02\\doodads\\generic\\bonfire\\bonfirenorthrend_01.m2": {
       "family": "bonfire",
@@ -1176,7 +1236,8 @@
       "intensity": 1.65,
       "start": 1.0,
       "end": 20,
-      "position_basis": "authored flame/bulb offset reviewed against installed mesh bounds"
+      "position_basis": "authored flame/bulb offset reviewed against installed mesh bounds",
+      "casts_shadows": true
     },
     "world\\generic\\orc\\passive doodads\\braziers\\mediumbrazierpurple01.m2": {
       "family": "magic_blue",
@@ -1194,7 +1255,8 @@
       "intensity": 1.2,
       "start": 1.0,
       "end": 13,
-      "position_basis": "authored flame/bulb offset reviewed against installed mesh bounds"
+      "position_basis": "authored flame/bulb offset reviewed against installed mesh bounds",
+      "casts_shadows": true
     },
     "world\\generic\\orc\\passive doodads\\braziers\\smallbrazierpurple01.m2": {
       "family": "magic_blue",
@@ -1212,7 +1274,8 @@
       "intensity": 1.2,
       "start": 1.0,
       "end": 13,
-      "position_basis": "authored flame/bulb offset reviewed against installed mesh bounds"
+      "position_basis": "authored flame/bulb offset reviewed against installed mesh bounds",
+      "casts_shadows": true
     },
     "world\\generic\\orc\\passive doodads\\braziers\\smallbrazierpurplehanging.m2": {
       "family": "magic_blue",
@@ -1230,7 +1293,8 @@
       "intensity": 1.2,
       "start": 1.0,
       "end": 13,
-      "position_basis": "authored flame/bulb offset reviewed against installed mesh bounds"
+      "position_basis": "authored flame/bulb offset reviewed against installed mesh bounds",
+      "casts_shadows": true
     },
     "world\\generic\\ogre\\passive doodads\\torches\\ogrewalltorchblue.m2": {
       "family": "magic_blue",
@@ -1248,7 +1312,8 @@
       "intensity": 1.2,
       "start": 1.0,
       "end": 13,
-      "position_basis": "authored flame/bulb offset reviewed against installed mesh bounds"
+      "position_basis": "authored flame/bulb offset reviewed against installed mesh bounds",
+      "casts_shadows": true
     },
     "world\\azeroth\\elwynn\\passivedoodads\\campfire\\elwynncampfire_blue.m2": {
       "family": "magic_blue",
@@ -1266,7 +1331,8 @@
       "intensity": 1.2,
       "start": 1.0,
       "end": 13,
-      "position_basis": "authored flame/bulb offset reviewed against installed mesh bounds"
+      "position_basis": "authored flame/bulb offset reviewed against installed mesh bounds",
+      "casts_shadows": true
     },
     "world\\expansion02\\doodads\\generic\\northrend fires\\northrendelwynncampfire_blue.m2": {
       "family": "magic_blue",
@@ -1284,7 +1350,8 @@
       "intensity": 1.2,
       "start": 1.0,
       "end": 13,
-      "position_basis": "authored flame/bulb offset reviewed against installed mesh bounds"
+      "position_basis": "authored flame/bulb offset reviewed against installed mesh bounds",
+      "casts_shadows": true
     },
     "world\\azeroth\\burningsteppes\\passivedoodads\\bonfire\\orcbonfire_blue.m2": {
       "family": "magic_blue",
@@ -1302,7 +1369,8 @@
       "intensity": 1.2,
       "start": 1.0,
       "end": 13,
-      "position_basis": "authored flame/bulb offset reviewed against installed mesh bounds"
+      "position_basis": "authored flame/bulb offset reviewed against installed mesh bounds",
+      "casts_shadows": true
     },
     "world\\expansion02\\doodads\\generic\\vrykul\\brazier\\vr_brazier_01_blue.m2": {
       "family": "magic_blue",
@@ -1320,7 +1388,8 @@
       "intensity": 1.2,
       "start": 1.0,
       "end": 13,
-      "position_basis": "authored flame/bulb offset reviewed against installed mesh bounds"
+      "position_basis": "authored flame/bulb offset reviewed against installed mesh bounds",
+      "casts_shadows": true
     },
     "world\\generic\\ogre\\passive doodads\\torches\\ogrewalltorchpurple.m2": {
       "family": "magic_violet",
@@ -1338,7 +1407,8 @@
       "intensity": 1.1,
       "start": 1.0,
       "end": 12,
-      "position_basis": "authored flame/bulb offset reviewed against installed mesh bounds"
+      "position_basis": "authored flame/bulb offset reviewed against installed mesh bounds",
+      "casts_shadows": true
     },
     "world\\lordaeron\\scholomance\\passivedoodads\\brazier\\scholomancebrazier01purple.m2": {
       "family": "magic_violet",
@@ -1356,7 +1426,8 @@
       "intensity": 1.1,
       "start": 1.0,
       "end": 12,
-      "position_basis": "installed luminous skin-batch bounds center: world\\generic\\human\\passive doodads\\candelabras\\glowwhite32.blp"
+      "position_basis": "installed luminous skin-batch bounds center: world\\generic\\human\\passive doodads\\candelabras\\glowwhite32.blp",
+      "casts_shadows": true
     },
     "world\\generic\\ogre\\passive doodads\\torches\\ogrewalltorchgreen.m2": {
       "family": "magic_green",
@@ -1374,7 +1445,8 @@
       "intensity": 1.1,
       "start": 1.0,
       "end": 12,
-      "position_basis": "authored flame/bulb offset reviewed against installed mesh bounds"
+      "position_basis": "authored flame/bulb offset reviewed against installed mesh bounds",
+      "casts_shadows": true
     },
     "world\\lordaeron\\scholomance\\passivedoodads\\brazier\\scholomancebrazier01green.m2": {
       "family": "magic_green",
@@ -1392,7 +1464,8 @@
       "intensity": 1.1,
       "start": 1.0,
       "end": 12,
-      "position_basis": "installed luminous skin-batch bounds center: world\\generic\\human\\passive doodads\\candelabras\\glowwhite32.blp"
+      "position_basis": "installed luminous skin-batch bounds center: world\\generic\\human\\passive doodads\\candelabras\\glowwhite32.blp",
+      "casts_shadows": true
     },
     "world\\generic\\human\\passive doodads\\braziers\\humanbraziercorrupt.m2": {
       "family": "magic_green",
@@ -1410,7 +1483,8 @@
       "intensity": 1.1,
       "start": 1.0,
       "end": 12,
-      "position_basis": "authored flame/bulb offset reviewed against installed mesh bounds"
+      "position_basis": "authored flame/bulb offset reviewed against installed mesh bounds",
+      "casts_shadows": true
     },
     "world\\generic\\passivedoodads\\lights\\torch.m2": {
       "family": "warm_fire",
@@ -1428,7 +1502,8 @@
       "intensity": 1.15,
       "start": 1.0,
       "end": 10,
-      "position_basis": "Installed particle emitter z=.7555, centered slightly above emission at z=1.02 inside luminous glow bounds .481..1.556; wall-mounted torch.m2, distinct from generaltorch01.m2"
+      "position_basis": "Installed particle emitter z=.7555, centered slightly above emission at z=1.02 inside luminous glow bounds .481..1.556; wall-mounted torch.m2, distinct from generaltorch01.m2",
+      "casts_shadows": true
     }
   }
 }

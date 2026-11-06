@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# northlight-test: requires=cxx
+# northlight-test: requires=zig
 """Execute the production early planet claim across missing late contexts and sky-read rejection."""
 import sys; from pathlib import Path; sys.path.insert(0, str(Path(__file__).resolve().parents[1]))  # repo root
 import os, re, subprocess
@@ -15,6 +15,6 @@ command=([str(fp.zig()), 'c++', '-target', 'x86-windows-gnu'] if os.name=='nt' e
 subprocess.run([*command, '-std=c++17', '-O2', '-UNDEBUG', *fp.include_flags(), '-I'+str(out),
                 str(fp.TESTS/'celestial_phase_recovery.cpp'), '-o', str(exe)], env=fp.zig_env(), check=True)
 subprocess.run([str(exe)], check=True, timeout=20)
-assert 'void reset(){earlySkyOk=false;earlySkyMap.clear();' in host
+assert 'void reset(){skyLayers=nullptr;earlySkyOk=false;earlySkyMap.clear();' in host
 renderer = fp.src('renderer.cpp').read_text()
 assert 'celestialDiscs&&enabled&&debugMode==0&&worldDebug==0&&!applied&&celestialDiscs->nativeClaimPossible' in renderer

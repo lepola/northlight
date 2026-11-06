@@ -1,0 +1,82 @@
+const char* hdrBoundarySource(){
+        IDirect3DVertexShader9* vs=nullptr;IDirect3DPixelShader9* ps=nullptr;
+        const bool vsBorrowed=ext->peekVertexShader(vs),psBorrowed=ext->peekPixelShader(ps);
+        const HRESULT vsHr=vsBorrowed?S_OK:ext->GetVertexShader(&vs),psHr=psBorrowed?S_OK:ext->GetPixelShader(&ps);
+        if(FAILED(vsHr)||FAILED(psHr)){
+            if(!vsBorrowed)drop(vs);if(!psBorrowed)drop(ps);
+            if(hdrDeferredLogs<8&&hdrDeferredFrame!=frame){hdrDeferredFrame=frame;++hdrDeferredLogs;
+                logf("HDR boundary deferred frame=%u reason=shader-query-failed VS=0x%08lx PS=0x%08lx",frame,(unsigned long)vsHr,(unsigned long)psHr);}
+            return nullptr;
+        }
+        const VsClass& vc=classifyVs(vs);const auto pixel=psTags.find(ps);
+        const char* source=(vc.entry&kTagMask)==2&&pixel!=psTags.end()&&pixel->second==2?"stock-ui":
+            uiFallback.isBoundary(reinterpret_cast<std::uintptr_t>(vs),reinterpret_cast<std::uintptr_t>(ps))?"learned-ui":
+            !terrain&&!vc.world&&!vc.wmo&&!vc.skinned&&!(vc.entry&kWaterTag)?"screen-space":nullptr;
+        if(!vsBorrowed)drop(vs);if(!psBorrowed)drop(ps);return source;
+    }
+template<class Draw> HRESULT hdrDraw(Draw draw){
+        if(!hdr.active)return draw();
+        bool linear=false;
+        extensionWork("HDR UI preparation",[&]{
+            if(!hdrUiPhase){
+                D3DSURFACE_DESC desc{};float rows[16];DWORD zwrite=1,zfunc=0;
+                if(SUCCEEDED(ext->GetRenderState(D3DRS_ZWRITEENABLE,&zwrite))&&SUCCEEDED(ext->GetRenderState(D3DRS_ZFUNC,&zfunc))&&
+                   SUCCEEDED(ext->GetVertexShaderConstantF(0,rows,4))&&NorthlightUiBoundary::accepts(zwrite!=0,rows,zfunc==D3DCMP_ALWAYS)&&fullViewport(desc,nullptr,true,false)&&hdrBackTarget()){
+                    // c0..3 can also be an affine world transform. In-world HDR
+                    // waits for the same verified UI pair as the effect boundary.
+                    if(const char* boundary=hdrBoundarySource()){
+                        if(!applied){renderEffects();spellReplay();}hdrBegin(false,boundary);
+                    }else if(hdrDeferredLogs<8&&hdrDeferredFrame!=frame){
+                        hdrDeferredFrame=frame;++hdrDeferredLogs;
+                        logf("HDR boundary deferred frame=%u reason=unverified-world-ui applied=%u terrain=%u",frame,unsigned(applied),unsigned(terrain));
+                    }
+                }
+            }
+            linear=hdrUiPhase&&hdrBackTarget();
+        });
+        if(!linear)return draw();
+        bool submitted=false;HRESULT hr=E_FAIL;const unsigned rejected=hdrColor.rejected;
+        extensionWork("HDR UI draw",[&]{hr=hdrColor.draw(ext,hdr.settings.uiWhite,[&]{submitted=true;return draw();});});
+        if(hdrColor.rejected!=rejected&&hdrFailuresLogged++<8)logf("HDR unconverted UI draw frame=%u rejected=%u; experimental shader coverage incomplete",frame,hdrColor.rejected);
+        return submitted?hr:draw();
+    }
+void uiFallbackDraw(const VsClass& vc,IDirect3DVertexShader9* vs){
+        if(!uiFallback.collecting()||!terrain||applied||hashBoundaryThisFrame||fallbackBoundaryThisFrame||vc.wmo)return;
+        if(vc.world||drawWaterVS)return;
+        const bool armed=uiFallback.armed();
+        if(!armed&&(!enabled||failed))return; /* learning counts only frames that would draw effects (endFrame: Neutral) */
+        IDirect3DPixelShader9* ps=nullptr;
+        const bool borrowed=ext->peekPixelShader(ps); // identity lookup only
+        if(!borrowed&&(FAILED(ext->GetPixelShader(&ps))||!ps))return;
+        if(!borrowed)drop(ps);
+        const std::uintptr_t vsId=reinterpret_cast<std::uintptr_t>(vs),psId=reinterpret_cast<std::uintptr_t>(ps);
+        if(armed&&!uiFallback.isBoundary(vsId,psId))return;
+        DWORD zw=0;if(FAILED(ext->GetRenderState(D3DRS_ZWRITEENABLE,&zw)))return;
+        DWORD zf=D3DCMP_ALWAYS;if(zFuncAware&&FAILED(ext->GetRenderState(D3DRS_ZFUNC,&zf)))return; /* the client's UI draws all run with ZFUNC ALWAYS */
+        float c[16]={};if(FAILED(ext->GetVertexShaderConstantF(0,c,4)))return;
+        if(!NorthlightUiBoundary::accepts(zw!=0,c,zf==D3DCMP_ALWAYS)){if(!armed){triageVs=vs;triagePs=ps;triageZw=zw;for(int i=0;i<4;++i)triageC3[i]=c[12+i];++triageDraws;}return;}
+        D3DSURFACE_DESC desc={};
+        if(!fullViewport(desc,nullptr,true))return; // last, and quiet: minimap and portrait targets are expected here
+        if(!armed){uiFallback.noteCandidate(vsId,psId);return;}
+        fallbackBoundaryThisFrame=true;++uiFallbackBoundaries;
+        if(sampled()){DWORD z=0,blend=0;ext->GetRenderState(D3DRS_ZENABLE,&z);ext->GetRenderState(D3DRS_ALPHABLENDENABLE,&blend);
+            logf("EFFECT boundary frame=%u draw=%u kind=ui-fallback z=%lu zwrite=%lu blend=%lu",frame,drawCalls,(unsigned long)z,(unsigned long)zw,(unsigned long)blend);}
+        renderEffects();spellReplay();
+    }
+} else if (tag==2) {
+            ++uiDraws;
+            if(!terrain)return; // Login/loading UI can use stock shaders even when the in-world UI is replaced by a font mod.
+            ++uiAfterTerrain;
+            IDirect3DPixelShader9* ps=nullptr;
+            const bool borrowed=ext->peekPixelShader(ps); // identity lookup only
+            if (!borrowed && (FAILED(ext->GetPixelShader(&ps)) || !ps)) return;
+            auto itp=psTags.find(ps); bool isUI=itp!=psTags.end() && itp->second==2; if(!borrowed)drop(ps);
+            // UI variant uses DP4 rows c0..3; constant clip-w confirms screen-space UI.
+            float w[4];
+            if (isUI && SUCCEEDED(ext->GetVertexShaderConstantF(3,w,1)) && NorthlightUiBoundary::clipWOne(w)){
+                hashBoundaryThisFrame=true;
+                if(sampled()){DWORD z=0,zw=0,blend=0;ext->GetRenderState(D3DRS_ZENABLE,&z);ext->GetRenderState(D3DRS_ZWRITEENABLE,&zw);ext->GetRenderState(D3DRS_ALPHABLENDENABLE,&blend);
+                    logf("EFFECT boundary frame=%u draw=%u kind=ui z=%lu zwrite=%lu blend=%lu",frame,drawCalls,(unsigned long)z,(unsigned long)zw,(unsigned long)blend);}
+                renderEffects();spellReplay();
+            }
+        }

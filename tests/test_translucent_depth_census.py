@@ -30,5 +30,5 @@ cf=r[r.index('void clearFrame() {'):r.index('void releaseResources()')]
 assert 'resetTranslucentCensus()' in cf,'clearFrame resets the census'
 assert fin.index('TRANSLUCENT frame=')<fin.index('clearFrame();'),'the log runs before clearFrame resets'
 assert 'resetTranslucentCensus();' not in fin,'only clearFrame resets (also on the extensionFault path)'
-assert 'if(extensionFault){clearFrame();return;}' in r[r.index('void finishFrame() {'):r.index('void finishFrameImpl() {')]
+assert 'if(extensionFault){clearFrame();drawOverlay(implicitChain);return;}' in r[r.index('void finishFrame(bool implicitChain=true) {'):r.index('void finishFrameImpl() {')]
 print('PASS translucent depth census: read-only, sample frames only, before capture, logged and reset per frame')

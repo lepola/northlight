@@ -1,0 +1,116 @@
+{
+  "format": "northlight-pipeline-cpu-audit/1",
+  "version": "0.3.219",
+  "baseline_commit": "039252509610f35019fdbad4a82c1e4a509c4fe4",
+  "source_identity": "5d768f8333e760a4b827a2db00b5bf5bf038bb520088f2232c7c81ddf65e4d31",
+  "dll_sha256": "ea945d48bbd7f6c841a3596a7cff91710fd3adeee1964eccbbe79ed5acbcb8da",
+  "dll_bytes": 9100288,
+  "measurements_ms": {
+    "BINDINGS_CPU": {
+      "current": 6.6352,
+      "baseline": 6.7414
+    },
+    "CLASSIFY_CPU": {
+      "current": 2.999,
+      "baseline": 3.682
+    }
+  },
+  "world_renderer": {
+    "current": {
+      "0": {
+        "night_delta": 0.0544434,
+        "night_digest": "12954036118236719192",
+        "local_200_frames_ms": {
+          "0": 0.0392,
+          "1": 17.165
+        },
+        "actor_jobs_per_100000_frames": {
+          "0": 0,
+          "1": 0,
+          "2": 100000,
+          "3": 0
+        }
+      },
+      "2": {
+        "night_delta": 0.0544434,
+        "night_digest": "12954036118236719192",
+        "local_200_frames_ms": {
+          "0": 0.0383,
+          "1": 17.2257
+        },
+        "actor_jobs_per_100000_frames": {
+          "0": 0,
+          "1": 0,
+          "2": 100000,
+          "3": 0
+        }
+      }
+    },
+    "baseline": {
+      "0": {
+        "night_delta": 0.0544434,
+        "night_digest": "12954036118236719192",
+        "local_200_frames_ms": {
+          "0": 2.6389,
+          "1": 17.3373
+        },
+        "actor_jobs_per_100000_frames": {
+          "0": 100000,
+          "1": 100000,
+          "2": 100000,
+          "3": 0
+        }
+      },
+      "2": {
+        "night_delta": 0.0544434,
+        "night_digest": "12954036118236719192",
+        "local_200_frames_ms": {
+          "0": 2.6623,
+          "1": 17.4852
+        },
+        "actor_jobs_per_100000_frames": {
+          "0": 100000,
+          "1": 100000,
+          "2": 100000,
+          "3": 0
+        }
+      }
+    }
+  },
+  "game_launched": false,
+  "installed_mpq_modified": false,
+  "installed_wow_exe_modified": false,
+  "windows_package": {
+    "platform": "windows",
+    "file": "Northlight-0.3.219-Windows.zip",
+    "sha256": "a18f8e3fdfce2931601c86ad2e96e59e6872b6354b59161eaf51efa98fd9aa2a",
+    "bytes": 20190199,
+    "files": 98,
+    "dll_version": "0.3.219"
+  },
+  "package_verification": "PASS",
+  "evidence_root": ".local/out/pipeline-cpu-20261103",
+  "command_stream_full": "PASS",
+  "validation": {
+    "status": "complete",
+    "full_run": ".local/out/test-output/20261103-134518/results.tsv",
+    "initial_counts": {
+      "SKIP": 221,
+      "PASS": 264,
+      "FAIL": 1
+    },
+    "rerun": ".local/out/test-output/20261103-140050/results.tsv",
+    "resolved_failures": [
+      "test_actor_shadows_wiring.py"
+    ],
+    "consolidated_counts": {
+      "SKIP": 221,
+      "PASS": 265
+    }
+  },
+  "fps_gain_claimed": false,
+  "rejected_experiments": [
+    "direct bound-pointer comparison",
+    "cached bound identities"
+  ]
+}

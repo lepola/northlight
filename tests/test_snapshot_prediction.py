@@ -8,6 +8,7 @@ Directed liveness cases D1-D5 under ASan+UBSan; CacheKey == against memcmp()==0 
 flip; the SnapshotMeter on a synthetic clock; hits allocate nothing. Counterfactuals must fail: CF1-CF4
 (no prediction reset at an erase site: ASan heap-use-after-free in the directed cases), CF5-CF7 (a prefix
 compare, prediction on untracked keys, equality without the declaration: a differential mismatch).
+The synthetic-clock meter stays offline; production profiling keeps Prefetch and has no benchmark callers.
 Plus source needles. Native code and static analysis only; no Wine, DLL or game is run."""
 import sys; from pathlib import Path; sys.path.insert(0, str(Path(__file__).resolve().parents[1]))  # repo root
 import northlight_paths as fp
@@ -15,7 +16,7 @@ import ast,hashlib,json,re,subprocess,tempfile
 HERE=Path(__file__).resolve().parent
 def literal(file,key):return next(ast.literal_eval(n.value) for n in ast.parse(file.read_text()).body if isinstance(n,ast.Assign) and any(isinstance(t,ast.Name) and t.id==key for t in n.targets))
 stub=literal(HERE/'test_terrain_snapshot.py','stub');prefix=literal(HERE/'test_draw_snapshot.py','harness').split('int main()')[0]
-FILES=['draw_snapshot.h','northlight_mem.h','world_renderer.h','test_snapshot_prediction.cpp','test_snapshot_prediction.py']
+FILES=['source_identity.h','draw_snapshot.h','northlight_mem.h','world_renderer.h','test_snapshot_prediction.cpp','test_snapshot_prediction.py']
 report={'scope':'Fake-device tests of draw_snapshot.h; no D3D runtime, Wine or game.',
         'source_sha256':{n:hashlib.sha256(fp.tracked(n).read_bytes()).hexdigest() for n in FILES},'runs':[]}
 ASAN=['-O1','-g','-fsanitize=address,undefined','-fno-sanitize-recover=all','-fno-omit-frame-pointer']
@@ -46,28 +47,30 @@ def body(name):
     for k in range(i,len(s)):
         depth+=(s[k]=='{')-(s[k]=='}')
         if depth==0:return s[i:k+1]
-functions={n:body(n) for n in ('evictOldest','serve','store','clearSnapshotCache','dropPrediction')}
+functions={n:body(n) for n in ('evictOldest','serve','store','clearSnapshotCache','dropPrediction','joinSnapshotPool')}
 def enclosing(pos):
     return next((n for n,b in functions.items() if b and s.find(b)<=pos<s.find(b)+len(b)),None)
-erasers=[enclosing(m.start()) for m in re.finditer(r'cache_\.(erase|clear)\(',s)]
+erasers=[enclosing(m.start()) for m in re.finditer(r'sources_->entries\.(erase|clear)\(',s)]
 key=s[s.index('bool operator==(const CacheKey& o)const{'):s.index('struct CacheEntry {')]
 sources={p.name:p.read_text() for d in fp.SRC_DIRS for p in Path(d).glob('*') if p.suffix in ('.h','.cpp','.inl')}
 checks={
- 'every cache_ erase/clear is in evictOldest, serve, store or clearSnapshotCache, and each resets the prediction':
+ 'every source-pool erase/clear is in evictOldest, serve, store or clearSnapshotCache, and each resets local prediction':
    sorted(set(erasers))==['clearSnapshotCache','evictOldest','serve','store'] and all('dropPrediction(Erase::' in functions[n] for n in set(erasers))
    and s.count('dropPrediction(Erase::')==4,
- 'predicted_ is assigned only in serve and dropPrediction':all(enclosing(m.start()) in ('serve','dropPrediction') for m in re.finditer(r'(?<!CacheEntry\* )\bpredicted_=',s)) and s.count('CacheEntry* predicted_=nullptr;')==1,
+ 'predicted_ is assigned only in serve, dropPrediction and empty-group joining':all(enclosing(m.start()) in ('serve','dropPrediction','joinSnapshotPool') for m in re.finditer(r'(?<!CacheEntry\* )\bpredicted_=',s)) and s.count('CacheEntry* predicted_=nullptr;')==1,
+ 'cross-consumer invalidation checks group generation before predicted dereference':'if(!NORTHLIGHT_SNAPSHOT_COUNTERFACTUAL&&predictionGeneration_!=sources_->generation){predicted_=nullptr;predictionGeneration_=sources_->generation;}' in functions['serve'],
  'prediction on tracked keys only (the revalidation branch stays on the map path)':'if(lookup_!=Lookup::Map&&(key.tracked||NORTHLIGHT_SNAPSHOT_COUNTERFACTUAL==6)&&predicted_)' in functions['serve'],
  'CacheKey == has no memcmp':'memcmp' not in key and 'diff|=x^y' in key,
  '__builtin_prefetch only in the one helper':sum(t.count('__builtin_prefetch') for t in sources.values())==1
    and 'inline void prefetch(const void* address){__builtin_prefetch(address);}' in s,
  'the counterfactual and hash macros default to 0':'#define NORTHLIGHT_SNAPSHOT_COUNTERFACTUAL 0' in s and '#define NORTHLIGHT_SNAPSHOT_HASH_BITS 0' in s,
- 'mode: Prefetch unless a RenderProfile=1 non-sample frame (Map/Predict/Prefetch by frame%3), set at the frame\'s first read':
-   'const bool metered=NorthlightRenderThreadProbe::profiling()&&!sample;' in w and 'replaySnapshots.setLookup(metered?Lookup(snapshotFrameSerial%3):Lookup::Prefetch);' in w
-   and 'if(!snapshotFrameBegun)snapshotBeginFrame(sample);' in w,
- 'the snapshot span covers the snapshot phase and ends at the constants phase':'snapshotSpan.end();phase.next(CaptureConstants);' in w,
- 'the SNAPSHOT ab line is Diagnostics-gated, every 600 frames and at destruction':'if(NorthlightDiagnostics::enabled())logf("SNAPSHOT ab class=%s' in w
-   and 'if(++snapshotReportFrames>=600){snapshotReportFrames=0;logSnapshotAb();}' in w and 'logSnapshotAb(); /* 0.3.181: the SNAPSHOT ab window at device destroy */' in w,
+ 'production uses Frame default Prefetch without profiling-dependent algorithm rotation':
+   'Lookup lookup_=Lookup::Prefetch;' in s and '.setLookup(' not in w,
+ 'production capture retains its constants phase without snapshot benchmark spans':
+   'phase.next(CaptureConstants);' in w and 'SnapshotSpan<' not in w,
+ 'offline benchmark helpers have no production users or retained meter state':
+   not any(any(needle in text for needle in ('SnapshotMeter<','SnapshotSpan<','benchKeys('))
+           for name,text in sources.items() if name!='draw_snapshot.h'),
  'keyEqLegacyNs times the byte loop copy, not memcmp':'k.legacyNs=time([&]{return NorthlightMem::byteCompare(&a,&b,sizeof(CacheKey))==0;});' in s,
 }
 for name,ok in checks.items():print(('PASS ' if ok else 'FAIL ')+name)

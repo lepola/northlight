@@ -1,0 +1,1364 @@
+{
+  "date": "2026-11-03",
+  "reference_commit": "445c1637010b23be77b269dcbca4686753ba6bfe",
+  "asset_failure_reference_commit": "f2edbdfeb228c352b333bb3240e18ca694526c91",
+  "reference_source_identity": "547595df8094837b3c879a9bff2df1a0790ecb8cff6f0db867ea8ff7681ee5bc",
+  "game_launched": false,
+  "counts": {
+    "cpu": 40,
+    "gpu": 40
+  },
+  "cpu": {
+    "exact": [
+      {
+        "mode": "-O0",
+        "sha256": "dbe20bc5c0b7f1096ef287e78cb05024191005d5202703d16607a48a1766e7f1",
+        "status": "PASS"
+      },
+      {
+        "mode": "-O2",
+        "sha256": "dbe20bc5c0b7f1096ef287e78cb05024191005d5202703d16607a48a1766e7f1",
+        "status": "PASS"
+      }
+    ],
+    "checks": [
+      "test_probe_activation.cpp",
+      "test_probe_blend.cpp",
+      "test_probe_pool_dispatch.cpp",
+      "test_streaming_retirement.cpp",
+      "cpu_retirement_wake.cpp",
+      "test_static_shadow_dedup.cpp",
+      "test_material_byte_ops.cpp",
+      "test_replay_bounds_schedule.cpp",
+      "position_bounds.cpp",
+      "test_light_scissor_pairs.cpp",
+      "test_local_light_scissor.cpp"
+    ]
+  },
+  "cpu_benchmark": [
+    {
+      "name": "dither_ranks",
+      "before_ms": "8.533000",
+      "after_ms": "5.985300",
+      "ratio": "0.7014"
+    },
+    {
+      "name": "dither_recreate",
+      "before_ms": "8.696700",
+      "after_ms": "0.004500",
+      "ratio": "0.0005"
+    },
+    {
+      "name": "rain_merge",
+      "before_ms": "5.569200",
+      "after_ms": "4.907500",
+      "ratio": "0.8812"
+    },
+    {
+      "name": "position_scan_stride12",
+      "before_ms": "0.803600",
+      "after_ms": "0.805100",
+      "ratio": "1.0019"
+    },
+    {
+      "name": "position_scan_stride16",
+      "before_ms": "1.171100",
+      "after_ms": "1.162900",
+      "ratio": "0.9930"
+    },
+    {
+      "name": "position_scan_stride32",
+      "before_ms": "1.162600",
+      "after_ms": "1.161800",
+      "ratio": "0.9993"
+    },
+    {
+      "name": "alpha_opaque",
+      "before_ms": "6.043900",
+      "after_ms": "5.047900",
+      "ratio": "0.8352"
+    },
+    {
+      "name": "alpha_zero",
+      "before_ms": "6.043500",
+      "after_ms": "0.000200",
+      "ratio": "0.0000"
+    },
+    {
+      "name": "canonical_triangles",
+      "before_ms": "3.102800",
+      "after_ms": "2.746500",
+      "ratio": "0.8852"
+    },
+    {
+      "name": "strip_triangles",
+      "before_ms": "9.165500",
+      "after_ms": "7.707100",
+      "ratio": "0.8409"
+    }
+  ],
+  "gpu": [
+    {
+      "name": "gpu-final3-dxvk2",
+      "cases": 880,
+      "pixels": 5562920,
+      "max_absolute_error": 0,
+      "over_tolerance": 0,
+      "nonfinite": 0,
+      "samples": [
+        0,
+        4
+      ],
+      "backend_sha256": "00ecd422b3b12e9d3b309785f3f19431405389d80eb4a37018ebc63e2d87d900",
+      "input_manifest_sha256": "832e0b62230ff1ddad0356438609e5545df03e5f664e9636dcc13291950c3b8b",
+      "results_sha256": "3412d940fd0a31fbe55ed7aaf1301132a81b4d93916e8bad48d023b6cea95d92",
+      "candidate_operations": {
+        "shader-draw": 872,
+        "neutral-clear": 8
+      }
+    },
+    {
+      "name": "gpu-final3-dxvk3",
+      "cases": 880,
+      "pixels": 130565160,
+      "max_absolute_error": 1.78813934e-07,
+      "over_tolerance": 0,
+      "nonfinite": 0,
+      "samples": [
+        0,
+        4
+      ],
+      "backend_sha256": "265888c31ca78dffa290c39cb7e50bfb02762590e41927906e46fb32f01497fa",
+      "input_manifest_sha256": "6cd7b89b15dab4633f43ca534ebdd538c98cd174b3be371557f4f6d4f7b3831d",
+      "results_sha256": "412ea9e8edae0d0de9facc31bcd3ba4ab21018dbd0a8d161aa20888b308cba75",
+      "candidate_operations": {
+        "shader-draw": 872,
+        "neutral-clear": 8
+      }
+    },
+    {
+      "name": "gpu-final3-real-snow",
+      "cases": 96,
+      "pixels": 14243472,
+      "max_absolute_error": 0,
+      "over_tolerance": 0,
+      "nonfinite": 0,
+      "samples": [
+        0,
+        4
+      ],
+      "backend_sha256": "265888c31ca78dffa290c39cb7e50bfb02762590e41927906e46fb32f01497fa",
+      "input_manifest_sha256": "c5b91a4a72f839dbe30fc918da3b39250f6c1b28616f4a71534553aa5d050102",
+      "results_sha256": "49084cc0664dfcf4222f79a4c8af43d5ed5a5d3e0da9f827de22d03c4c40ff13",
+      "candidate_operations": {
+        "shader-draw": 96
+      }
+    }
+  ],
+  "gpu_shader_sha256": {
+    "RainQuality": {
+      "before": "61f11c91ba98602e046a8819afd2c5c69b1a14b27678c208f24fa16610a955ea",
+      "after": "61f11c91ba98602e046a8819afd2c5c69b1a14b27678c208f24fa16610a955ea"
+    },
+    "RainPerformance": {
+      "before": "3874eca5969e75f3b6d235cd0ba69e1193f91a065d5ba8e82521c01b1602012f",
+      "after": "3874eca5969e75f3b6d235cd0ba69e1193f91a065d5ba8e82521c01b1602012f"
+    },
+    "SnowQuality": {
+      "before": "607b5dd71175684298beead48000a3934658841e793fae7b600363204679e6f5",
+      "after": "607b5dd71175684298beead48000a3934658841e793fae7b600363204679e6f5"
+    },
+    "SnowPerformance": {
+      "before": "e82040e44fa2a9af5351820659142cf93a111de741d80de7d532644804eb76d7",
+      "after": "e82040e44fa2a9af5351820659142cf93a111de741d80de7d532644804eb76d7"
+    },
+    "RainLens": {
+      "before": "fccc18bb213b0e7cff13952f87f5b4dbbe9fbc0d8c4caae1e1e4fd19aa54f20d",
+      "after": "fccc18bb213b0e7cff13952f87f5b4dbbe9fbc0d8c4caae1e1e4fd19aa54f20d"
+    },
+    "SnowLens": {
+      "before": "139ebb74b075120060a237d438c7f4c75d0369476bb8b93d7280126a826e3204",
+      "after": "139ebb74b075120060a237d438c7f4c75d0369476bb8b93d7280126a826e3204"
+    },
+    "WeatherLensParticle": {
+      "before": "a87788e26d832ce915ff2803092a429f202def61a188da6d7f46eab62d0762fc",
+      "after": "a87788e26d832ce915ff2803092a429f202def61a188da6d7f46eab62d0762fc"
+    },
+    "FrostVignette": {
+      "before": "e2999f61376cc344383041e9ee23cd69e2f4c03b68a65abadd191bf2ec1f5350",
+      "after": "7a1fe02742a682ef36b8729b1a9285e419f9b8c78fb05f669efecac980fb7b40"
+    },
+    "SandLens": {
+      "before": "ab4660054918e03a37f7a6ecf0c312db6172a1d71271b2909b2749846b68f9cd",
+      "after": "9d7f559fdc18f00db7425cac527fed1f8e29c076e7169ef4b598ca469c07dc7f"
+    },
+    "AO": {
+      "before": "fa7a14b42bb3b1238fb440c91deebbc6dc85ad6be2b7770ade831e592e5826c6",
+      "after": "6520abbc98e44341c2bdadb0abd23a948c529a5397670580c2ebcf335928e25a"
+    },
+    "AOOnly": {
+      "before": "149678e270e00d5e15e96a19f8cb256afa0aafd8a369da2e9bf03f7a4c46f28c",
+      "after": "149678e270e00d5e15e96a19f8cb256afa0aafd8a369da2e9bf03f7a4c46f28c"
+    },
+    "AOContactBloom": {
+      "before": "69f09b7b034b86e714fe56b0aa596fe0896b927940db9b0cc80ee98984545105",
+      "after": "73fdf746f61e22425bea22da1995fe60c83496ee015e201a351186a5e3580357"
+    },
+    "ContactBloom": {
+      "before": "60d848b716243336eb587339f87e8d59d822b9df5ac85bd737254650582337bd",
+      "after": "60d848b716243336eb587339f87e8d59d822b9df5ac85bd737254650582337bd"
+    },
+    "AOBlur": {
+      "before": "f856c90b86ccfa9c6a7e0651edbade57af96b508d2862838c057f44d01883ec5",
+      "after": "a6cc0e4714c49b78a90f9f0da955e5195ae4ec696b38448ea047ccd98d017fd4"
+    },
+    "Composite": {
+      "before": "36d90667788788500a5e0a6a7c8f100fe858ed9ec550dd489edb8fe5a6ca02f2",
+      "after": "fc684814095c8546ee29cd1bc9dd802b2b7357a22409f3c5d4a71da0a0f5796c"
+    },
+    "HDAOOnly": {
+      "before": "22232a3d7a380861b3ac0ae783b7a86ced1f68d9b3531e27aeb9dc94e4ec979e",
+      "after": "d2a002aaaa2ea38ef1077781176aae41cc2a5d9e1fc31bac3ca55cbc66bc360a"
+    },
+    "HDAOOnlyMedium": {
+      "before": "98c43dbbf382125e1775a7424d43a254f1089a98fa7f6c8407010c381d77dcee",
+      "after": "4bb57f8f435ab35e176a0b05bc2e7a2af52d9e8cd3e5d42fb935984c58cfa65d"
+    },
+    "HDAOOnlyLow": {
+      "before": "98c43dbbf382125e1775a7424d43a254f1089a98fa7f6c8407010c381d77dcee",
+      "after": "4bb57f8f435ab35e176a0b05bc2e7a2af52d9e8cd3e5d42fb935984c58cfa65d"
+    },
+    "HBAOPlusOnly": {
+      "before": "8724b94ebf55e8378220fab75fcf20eca51f24719bfb155f2eb4edd0c9970618",
+      "after": "338d6da7979875c7178e735330ac2bc5104b1cf460b22146f846726b687d9253"
+    },
+    "HBAOPlusOnlyMedium": {
+      "before": "a8ea60738ed316b4eeba4f50a086147e97b0f7fb922bac4714446a9fdd424a6b",
+      "after": "d33c9f0e08c88a8b846a409e6263ffe1535109ec2e5b4dfe0d7db87089a4bf84"
+    },
+    "HBAOPlusOnlyLow": {
+      "before": "516a12eac4394f8ac8b297f8886926306e9b04960d13662728036028f0c36271",
+      "after": "16f695ba06ed0ea9f402959096c3018eb2bf92eade00ae1c8b990d36a3f89b01"
+    },
+    "GTAOOnly": {
+      "before": "4a7c7c08022de340db40f2f422362a994de2ff9e1c88942d8f5c7b55a7c59a8a",
+      "after": "2ed06e3107d8dc29bc2af8078ec106b7a5e77ccfd3b8a993595777961782522a"
+    },
+    "GTAOOnlyMedium": {
+      "before": "8034742a2767780af031a465ad238a0a5d20f96daaf691f88a5aaee5ea72b51c",
+      "after": "910e3277cd5dac694b0901566434fd843cbdeeec493f02dad3cfd3fe4d2a3e28"
+    },
+    "GTAOOnlyLow": {
+      "before": "15763e3cc789a57d5381dcf7272e47561d8c394ba78669ba4c5dc7233a6b332c",
+      "after": "e678a93f0e67cbbdbdb371d8611c6a59e563d83551439c5dc72d61e1333c193e"
+    },
+    "ASSAOOnly": {
+      "before": "a52278d69987d5c083e47ec2e81bef369500fadeb4b59e9e41cc2cdf53957d40",
+      "after": "a52278d69987d5c083e47ec2e81bef369500fadeb4b59e9e41cc2cdf53957d40"
+    },
+    "ASSAOOnlyMedium": {
+      "before": "2d581a93a4970c652432eeb8496e1d11d35048cf33830b457a52a23d3473560f",
+      "after": "2d581a93a4970c652432eeb8496e1d11d35048cf33830b457a52a23d3473560f"
+    },
+    "ASSAOOnlyLow": {
+      "before": "46ac38f9c118c2956447433b4c9360e6ece06a369d455b9a9cd93491a5836037",
+      "after": "1e36530cf6f6dc8d62a35506513b963324843c252918ef3f44e7ce2fa56f13fe"
+    },
+    "HdrWorld": {
+      "before": "b6390c35c63415b212fa4a4e505633387baac204ea54b37d788835569248b97d",
+      "after": "0a1a2e7b88e4315aa6a079593c72519cd3943821c0c19d56d8e9091babfff74b"
+    },
+    "HdrMeter": {
+      "before": "fbc52ff119c699c133dbc96616e2f4d27a0cb573a7d7678627d6913f91f7dbc2",
+      "after": "26b132c1a5ace9fbf51aefd30f492209e2834ca75fdc6cf682ffbaf73bf249a3"
+    },
+    "HdrDecodeWorld": {
+      "before": "f082541a2349667f09b6d8c502d34f428c531c2f5feaa4976d068c9e9617f052",
+      "after": "162aed0665ee8f3d1b91a297043b70ce477552e64eb4a5be576748076320b3a4"
+    },
+    "HdrBloom": {
+      "before": "72aeac4a07f6aebc0002030cccc28446f6b339c457ce875cff1e772d10969784",
+      "after": "80cd33a51bb6ce205e6ba8ba54252a5969fca52efc7205caabacd6f7533ba26f"
+    },
+    "HdrBloomHorizontal": {
+      "before": "e7aa9a9e833f02fb92c1201e69592619e58db9cc9dc0120ff2d9d311b32e60d9",
+      "after": "d2fb9423d8b7fdfdaebf700334d5dfd4a9ef7d9c02dc189678a2968ca1a654e7"
+    },
+    "HdrFixedUi": {
+      "before": "89a137b36a5ac0fc558f23058c9aa67befc998c42bf01c79c02de730158c4bb5",
+      "after": "b9c8f63df258245989d10780b33a9fafc6d7a4d60ee7f4b63fe2e28424e6c144"
+    },
+    "HdrFixedUi2": {
+      "before": "bdde9b8bce99d6613f21a011da1a6cfdaafb7de4049765549432894c804d9acb",
+      "after": "a72b512067bb599e57211a3f707c6942d90beb50374762bb6c3ce3a70a974322"
+    },
+    "HdrLegacyComposite": {
+      "before": "af568d0b1149d251b3c9d6da3af78b8e5ee8a6b523db8e9a506ffb47c7cbe342",
+      "after": "5c55b0ab88d980797d716cf47723f3633625ffeac705dd75578a81c0c2da33e6"
+    },
+    "HdrAdapt": {
+      "before": "1c06b4320c05e4b752e7e2826329d4c7fe1cf79166504ac43250b2feb320beb4",
+      "after": "31fbff6ced11f0d00af5d9510d61e5a4de7ca3a94350a4b0bf237b2ec06af1f8"
+    },
+    "HdrWorldLinearOnly": {
+      "before": "604ec73ee9a1110a3a206388383ba90eff56b7af45819d5b5dd95b5b504f8d74",
+      "after": "9207a5dfa33b5fc88d05277615fcd5e8997c36657d81ec3793c169d1d394f26d"
+    },
+    "HdrLegacyEncode": {
+      "before": "4ec08433c0ac9193289373c95ed7ca9692c307123499c8b3c0296fb708736c82",
+      "after": "ca2348e070051cb6aaa2f89f2bcab44b334eac0faf4ddeb4c8f02a940f9757f3"
+    },
+    "HdrLayer": {
+      "before": "c4342d344b10aaaa1a0b233c3c46338799c89b50ab9fda78bfd33d7060495800",
+      "after": "b81eb8f877171274b6cdb1621b13965a50cdf8abf14ef2435d17b0c3cc1c046f"
+    },
+    "LocalDirect": {
+      "before": "7dfe182a97f7c7e5d83c9fa3aba116f2fbaefea61092a1a0499b76fc310b1aa2",
+      "after": "7608573c0b57768833a2c23242edaae46daf595e7283ab2865c784f7884c014a"
+    },
+    "LocalDirect1": {
+      "before": "7bb597d12ea38b5521188119b5c77abc4a0ee7a4d515768d86af2d1333787e2f",
+      "after": "37dd927047391e333e7980b76919c64c35110fe8d43a593c9cae6d097d41c06b"
+    },
+    "LocalDirect16": {
+      "before": "fa2b003f9042e41d0715d651062aa4d64d9bee52aa64a73622f229910de9d607",
+      "after": "b9d902729993246bb0c8c9b1497b08e8537d04bc9e25422fa0482f8d1715dbc7"
+    },
+    "LocalFog": {
+      "before": "8d9254aa8959a25c0d2ccb47f70dfcd4c108280464049ed7287895dbe9e5b35b",
+      "after": "f8b6e4539ce3fce3dc5913959114b991f9e6868dbdebc27c0283fd0a4dd37145"
+    },
+    "DirectionalShadow": {
+      "before": "5297efdcfd88c86e794eed73e86725d8ddc5a4e5eb6086aca74f105a1c620820",
+      "after": "87bbea8acdcd36d2fe2661c5715e3388c29c3a3ae8107f81bd7b98a55cc3c3fb"
+    },
+    "WorldLighting": {
+      "before": "0d94fc4c1097641e27cae44d7e5fd2b503ea99cc518b9a4b8bcfc16eef5ee7d9",
+      "after": "87d22b71417221d604a4cc00c42586443fb0ecd7dcb3268bb0e69fd4f435378c"
+    },
+    "WorldLightingSoft": {
+      "before": "487cab3500dbfb9e908b7c49a6bcaff97a610f124dfba68192033d220db5d707",
+      "after": "1205fa03fc38b77e64c7d29ffc1349d32e3836eff15894112f2e3efbca90d7cc"
+    },
+    "MaterialComposite": {
+      "before": "394e7fba007096c79b92b502a1534f1e53d4533ea38d9821cfa8452ecf336c04",
+      "after": "684102794c23f8682423b970be135aa5be1e42c1edb9b2f516ad7d66ed6f9bfa"
+    },
+    "MaterialCompositeHdr": {
+      "before": "e0ed7fc8007348cee0e863e31a6f8b134383604a450dd5d3983e2fab841f08d5",
+      "after": "6f5cb2807a8ce9250b86bb24dd5b0c6d3928321d3bf54ba85351f5d04ace25a5"
+    },
+    "WorldComposite": {
+      "before": "c95b0c289cac4cdef206c40bb409b66acc5c002cd9196fb206bb012cfb3c1138",
+      "after": "baf3a2328c9394909567760f48006ad6ecddadbc88f8eacae5397b63ae483095"
+    },
+    "WorldCompositeHdr": {
+      "before": "de57c5eac06446c6ecfae741ac106de285d85458099a51b4b11136de4dd0ae57",
+      "after": "13a981b80e41b90ea4f42e956cb821f0aa3e3f1010c671ed88a99dc1142757d2"
+    },
+    "LocalShadowResolve": {
+      "before": "9407fb92d30d58e2f95daf002b5b33fb36d21d86983734597825213afbb89c93",
+      "after": "b217b8a8c70a3a7a5ea83ed344d942df3a94e0b5d4795e3498987aaf6ab70c51"
+    },
+    "LocalLighting": {
+      "before": "1fda47103ca6ee1dcd82c54604cf72620fa82274cd3129b257e4ad072d5a5dd3",
+      "after": "fe960efe36a7fdc2ae228f269201bb152ed15bc2cfeb7e259fda068fe24a5bf3"
+    },
+    "LocalLightingSoft": {
+      "before": "1049d5728a68e47e94ed1ba241a8db4d3704b61596a01d59785379d95473a5fe",
+      "after": "894da9c9f17e065f1dd8f2a21a0415ff4957d194fe689c9bf33b7e6496bbc38b"
+    },
+    "AutoNormal": {
+      "before": "b35a3fb501be8913e841f0684f8cd16dbb983af26e4f1f2c21290aae50a23791",
+      "after": "f84dd55effb24fc9c89117293831dc02dfcf4f5e18dc3e5b3e83e01de2c3274a"
+    },
+    "AutoNormalModel": {
+      "before": "7118623b229170d403278fcf61c0f0b2bae6378021988fdc8b90a45afa041cfc",
+      "after": "7118623b229170d403278fcf61c0f0b2bae6378021988fdc8b90a45afa041cfc"
+    }
+  },
+  "gpu_diagnostic_timings_dxvk3": {
+    "AO": {
+      "cases": 16,
+      "sum_before_ms": 0.133134,
+      "sum_after_ms": 0.11156,
+      "ratio": 0.8379527393453213
+    },
+    "AOBlur": {
+      "cases": 16,
+      "sum_before_ms": 0.499654,
+      "sum_after_ms": 0.50048,
+      "ratio": 1.0016531439756313
+    },
+    "AOContactBloom": {
+      "cases": 16,
+      "sum_before_ms": 0.110582,
+      "sum_after_ms": 0.110336,
+      "ratio": 0.9977754064856849
+    },
+    "AOOnly": {
+      "cases": 16,
+      "sum_before_ms": 0.107648,
+      "sum_after_ms": 0.107584,
+      "ratio": 0.9994054696789537
+    },
+    "ASSAOOnly": {
+      "cases": 16,
+      "sum_before_ms": 0.568704,
+      "sum_after_ms": 0.57,
+      "ratio": 1.0022788656313302
+    },
+    "ASSAOOnlyLow": {
+      "cases": 16,
+      "sum_before_ms": 0.22178,
+      "sum_after_ms": 0.217242,
+      "ratio": 0.9795382811795472
+    },
+    "ASSAOOnlyMedium": {
+      "cases": 16,
+      "sum_before_ms": 0.303414,
+      "sum_after_ms": 0.303454,
+      "ratio": 1.000131833072963
+    },
+    "AutoNormal": {
+      "cases": 16,
+      "sum_before_ms": 0.268992,
+      "sum_after_ms": 0.26896,
+      "ratio": 0.9998810373542706
+    },
+    "AutoNormalModel": {
+      "cases": 16,
+      "sum_before_ms": 0.670144,
+      "sum_after_ms": 0.670272,
+      "ratio": 1.0001910037245727
+    },
+    "Composite": {
+      "cases": 16,
+      "sum_before_ms": 0.249216,
+      "sum_after_ms": 0.225792,
+      "ratio": 0.9060092449922958
+    },
+    "ContactBloom": {
+      "cases": 16,
+      "sum_before_ms": 0.1168,
+      "sum_after_ms": 0.0592,
+      "ratio": 0.5068493150684932
+    },
+    "DirectionalShadow": {
+      "cases": 16,
+      "sum_before_ms": 0.378172,
+      "sum_after_ms": 0.374312,
+      "ratio": 0.9897930042414562
+    },
+    "FrostVignette": {
+      "cases": 16,
+      "sum_before_ms": 0.046016,
+      "sum_after_ms": 0.045376,
+      "ratio": 0.9860917941585535
+    },
+    "GTAOOnly": {
+      "cases": 16,
+      "sum_before_ms": 0.635584,
+      "sum_after_ms": 0.564736,
+      "ratio": 0.8885308629543852
+    },
+    "GTAOOnlyLow": {
+      "cases": 16,
+      "sum_before_ms": 0.42520399999999997,
+      "sum_after_ms": 0.33867,
+      "ratio": 0.7964882738638396
+    },
+    "GTAOOnlyMedium": {
+      "cases": 16,
+      "sum_before_ms": 0.58638,
+      "sum_after_ms": 0.45344,
+      "ratio": 0.7732869470309356
+    },
+    "HBAOPlusOnly": {
+      "cases": 16,
+      "sum_before_ms": 0.73824,
+      "sum_after_ms": 0.6384,
+      "ratio": 0.8647594278283485
+    },
+    "HBAOPlusOnlyLow": {
+      "cases": 16,
+      "sum_before_ms": 0.42847999999999997,
+      "sum_after_ms": 0.390144,
+      "ratio": 0.9105302464525766
+    },
+    "HBAOPlusOnlyMedium": {
+      "cases": 16,
+      "sum_before_ms": 0.467136,
+      "sum_after_ms": 0.426176,
+      "ratio": 0.9123167557199616
+    },
+    "HDAOOnly": {
+      "cases": 16,
+      "sum_before_ms": 0.732288,
+      "sum_after_ms": 0.632896,
+      "ratio": 0.8642719804230029
+    },
+    "HDAOOnlyLow": {
+      "cases": 16,
+      "sum_before_ms": 0.42817,
+      "sum_after_ms": 0.396744,
+      "ratio": 0.9266039190041339
+    },
+    "HDAOOnlyMedium": {
+      "cases": 16,
+      "sum_before_ms": 0.427196,
+      "sum_after_ms": 0.394752,
+      "ratio": 0.9240535960074532
+    },
+    "HdrAdapt": {
+      "cases": 16,
+      "sum_before_ms": 0.125632,
+      "sum_after_ms": 0.127424,
+      "ratio": 1.0142638818135508
+    },
+    "HdrBloom": {
+      "cases": 16,
+      "sum_before_ms": 0.158336,
+      "sum_after_ms": 0.159936,
+      "ratio": 1.0101050929668551
+    },
+    "HdrBloomHorizontal": {
+      "cases": 16,
+      "sum_before_ms": 0.15776,
+      "sum_after_ms": 0.159424,
+      "ratio": 1.010547667342799
+    },
+    "HdrDecodeWorld": {
+      "cases": 16,
+      "sum_before_ms": 0.115904,
+      "sum_after_ms": 0.118016,
+      "ratio": 1.018221976808393
+    },
+    "HdrFixedUi": {
+      "cases": 16,
+      "sum_before_ms": 0.127488,
+      "sum_after_ms": 0.127808,
+      "ratio": 1.0025100401606426
+    },
+    "HdrFixedUi2": {
+      "cases": 16,
+      "sum_before_ms": 0.13331199999999999,
+      "sum_after_ms": 0.132032,
+      "ratio": 0.9903984637542008
+    },
+    "HdrLayer": {
+      "cases": 16,
+      "sum_before_ms": 0.12704000000000001,
+      "sum_after_ms": 0.128064,
+      "ratio": 1.0080604534005038
+    },
+    "HdrLegacyComposite": {
+      "cases": 16,
+      "sum_before_ms": 0.130048,
+      "sum_after_ms": 0.129792,
+      "ratio": 0.9980314960629921
+    },
+    "HdrLegacyEncode": {
+      "cases": 16,
+      "sum_before_ms": 0.12672,
+      "sum_after_ms": 0.126976,
+      "ratio": 1.002020202020202
+    },
+    "HdrMeter": {
+      "cases": 16,
+      "sum_before_ms": 0.128192,
+      "sum_after_ms": 0.12832,
+      "ratio": 1.00099850224663
+    },
+    "HdrWorld": {
+      "cases": 16,
+      "sum_before_ms": 0.129386,
+      "sum_after_ms": 0.130468,
+      "ratio": 1.0083625740033697
+    },
+    "HdrWorldLinearOnly": {
+      "cases": 16,
+      "sum_before_ms": 0.129408,
+      "sum_after_ms": 0.128704,
+      "ratio": 0.9945598417408508
+    },
+    "LocalDirect": {
+      "cases": 16,
+      "sum_before_ms": 0.14958,
+      "sum_after_ms": 0.149642,
+      "ratio": 1.000414493916299
+    },
+    "LocalDirect1": {
+      "cases": 16,
+      "sum_before_ms": 0.153516,
+      "sum_after_ms": 0.15352,
+      "ratio": 1.0000260559159955
+    },
+    "LocalDirect16": {
+      "cases": 16,
+      "sum_before_ms": 0.16672,
+      "sum_after_ms": 0.16007,
+      "ratio": 0.9601127639155469
+    },
+    "LocalFog": {
+      "cases": 16,
+      "sum_before_ms": 0.14192,
+      "sum_after_ms": 0.143252,
+      "ratio": 1.0093855693348366
+    },
+    "LocalLighting": {
+      "cases": 16,
+      "sum_before_ms": 0.155546,
+      "sum_after_ms": 0.153312,
+      "ratio": 0.985637689172335
+    },
+    "LocalLightingSoft": {
+      "cases": 16,
+      "sum_before_ms": 0.14771,
+      "sum_after_ms": 0.147392,
+      "ratio": 0.9978471328955385
+    },
+    "LocalShadowResolve": {
+      "cases": 16,
+      "sum_before_ms": 0.377536,
+      "sum_after_ms": 0.38048,
+      "ratio": 1.0077979318528565
+    },
+    "MaterialComposite": {
+      "cases": 16,
+      "sum_before_ms": 0.156672,
+      "sum_after_ms": 0.156224,
+      "ratio": 0.997140522875817
+    },
+    "MaterialCompositeHdr": {
+      "cases": 16,
+      "sum_before_ms": 0.157216,
+      "sum_after_ms": 0.157248,
+      "ratio": 1.0002035416242623
+    },
+    "RainLens": {
+      "cases": 16,
+      "sum_before_ms": 0.038848,
+      "sum_after_ms": 0.038784,
+      "ratio": 0.9983525535420098
+    },
+    "RainPerformance": {
+      "cases": 16,
+      "sum_before_ms": 0.038464,
+      "sum_after_ms": 0.038784,
+      "ratio": 1.0083194675540765
+    },
+    "RainQuality": {
+      "cases": 16,
+      "sum_before_ms": 0.039872,
+      "sum_after_ms": 0.039807999999999996,
+      "ratio": 0.9983948635634029
+    },
+    "SandLens": {
+      "cases": 16,
+      "sum_before_ms": 0.03828,
+      "sum_after_ms": 0.03744,
+      "ratio": 0.9780564263322884
+    },
+    "SnowLens": {
+      "cases": 16,
+      "sum_before_ms": 0.037434,
+      "sum_after_ms": 0.037044,
+      "ratio": 0.9895816637281615
+    },
+    "SnowPerformance": {
+      "cases": 16,
+      "sum_before_ms": 0.044544,
+      "sum_after_ms": 0.044672,
+      "ratio": 1.002873563218391
+    },
+    "SnowQuality": {
+      "cases": 16,
+      "sum_before_ms": 0.056384,
+      "sum_after_ms": 0.056704,
+      "ratio": 1.0056753688989784
+    },
+    "WeatherLensParticle": {
+      "cases": 16,
+      "sum_before_ms": 0.041408,
+      "sum_after_ms": 0.041344,
+      "ratio": 0.9984544049459041
+    },
+    "WorldComposite": {
+      "cases": 16,
+      "sum_before_ms": 0.360082,
+      "sum_after_ms": 0.360384,
+      "ratio": 1.0008386978521557
+    },
+    "WorldCompositeHdr": {
+      "cases": 16,
+      "sum_before_ms": 0.371328,
+      "sum_after_ms": 0.371068,
+      "ratio": 0.9992998104102034
+    },
+    "WorldLighting": {
+      "cases": 16,
+      "sum_before_ms": 0.248192,
+      "sum_after_ms": 0.190336,
+      "ratio": 0.7668901495616297
+    },
+    "WorldLightingSoft": {
+      "cases": 16,
+      "sum_before_ms": 0.15193600000000002,
+      "sum_after_ms": 0.152896,
+      "ratio": 1.0063184498736308
+    }
+  },
+  "production_precipitation": {
+    "cases": 3072,
+    "targets": 24,
+    "unsupported_targets": 0,
+    "strict_four_shader_reference": "445c1637010b23be77b269dcbca4686753ba6bfe",
+    "pass": true
+  },
+  "production_pcss": {
+    "backends": 2,
+    "edge_cases_per_backend": 12,
+    "production_state_and_fallbacks": true,
+    "pass": true
+  },
+  "production_lens": {
+    "formats": [
+      "RGB8",
+      "RGBA16F",
+      "RGBA32F"
+    ],
+    "samples": [
+      0,
+      4
+    ],
+    "alpha_preserved": true,
+    "name_stencil_preserved": true,
+    "state_restored": true,
+    "pass": true
+  },
+  "blp": {
+    "samples": 30,
+    "modes": [
+      "O0",
+      "O2"
+    ],
+    "backends": 2,
+    "proxy_cycles_per_mode": 3,
+    "gpu_readback_exact": true,
+    "input_hashes_unchanged": true,
+    "proxy_sha256": "1e716bbf0be51152505c57d7da7313a8f9988991f43560d79c1da2a84c13b0de"
+  },
+  "suite": {
+    "counts": {
+      "SKIP": 225,
+      "PASS": 252,
+      "FAIL": 7
+    },
+    "timeouts": 0,
+    "failures": [
+      "test_dalaran_candle_geometry.py",
+      "test_emitter_pin_report.py",
+      "test_model_light_attachments.py",
+      "test_point_transmission_cache.py",
+      "test_spell_asset_manifest_client.py",
+      "test_wmo_lamp_emission.py",
+      "test_wmo_lamp_runtime.py"
+    ],
+    "unmodified_head_same_failures": true,
+    "results_sha256": {
+      "20261103-023806": "beb6bcb4ae50fccf0ce7bb905670a9b36da298bd42a6c8e2ba4abfa7c5b94854",
+      "20261103-025309": "709c7d910d984342e858d0512bab432e1ab2ec5875d720e2197ab78b5de0ca52",
+      "20261103-042541": "dc0ddf39c509ebeffa5bed13ae856ef729fdf3ff66ca53eda4dc23bb45c0fafe"
+    }
+  },
+  "build": {
+    "version": "0.3.218",
+    "source_identity": "0258e1f76b8eb21889e0de0cdb583e8f7c67a5c8df66d90bd234f2211ba8645a",
+    "sha256": "1e716bbf0be51152505c57d7da7313a8f9988991f43560d79c1da2a84c13b0de",
+    "bytes": 9097728,
+    "package_check_pass": true,
+    "game_launched": false
+  },
+  "optimizations": {
+    "cpu": [
+      {
+        "id": "CPU01",
+        "file": "src/sky/dither_noise.h",
+        "description": "Reuse mirrored Gaussian kernel entries instead of repeating exp",
+        "status": "correctness_pass",
+        "validation": "cpu-validation/validation.json: O0/O2 exact snapshot and 11 native helpers"
+      },
+      {
+        "id": "CPU02",
+        "file": "src/sky/dither_noise.h",
+        "description": "Split wrapped kernel updates into contiguous add/subtract spans",
+        "status": "correctness_pass",
+        "validation": "cpu-validation/validation.json: O0/O2 exact snapshot and 11 native helpers"
+      },
+      {
+        "id": "CPU03",
+        "file": "src/sky/dither_noise.h",
+        "description": "Visit only occupied bits in cluster selection",
+        "status": "correctness_pass",
+        "validation": "cpu-validation/validation.json: O0/O2 exact snapshot and 11 native helpers"
+      },
+      {
+        "id": "CPU04",
+        "file": "src/sky/dither_noise.h",
+        "description": "Visit only unoccupied bits in void selection",
+        "status": "correctness_pass",
+        "validation": "cpu-validation/validation.json: O0/O2 exact snapshot and 11 native helpers"
+      },
+      {
+        "id": "CPU05",
+        "file": "src/sky/dither_noise.h",
+        "description": "Reuse the immutable dither offsets across texture recreation",
+        "status": "correctness_pass",
+        "validation": "cpu-validation/validation.json: O0/O2 exact snapshot and 11 native helpers"
+      },
+      {
+        "id": "CPU06",
+        "file": "src/sky/weather_lens.h",
+        "description": "Skip merge preparation when there is no collision pair",
+        "status": "correctness_pass",
+        "validation": "cpu-validation/validation.json: O0/O2 exact snapshot and 11 native helpers"
+      },
+      {
+        "id": "CPU07",
+        "file": "src/sky/weather_lens.h",
+        "description": "Avoid clearing collision scratch that is overwritten before use",
+        "status": "correctness_pass",
+        "validation": "cpu-validation/validation.json: O0/O2 exact snapshot and 11 native helpers"
+      },
+      {
+        "id": "CPU08",
+        "file": "src/sky/weather_lens.h",
+        "description": "Skip trail metadata and trig when rivulets are disabled",
+        "status": "correctness_pass",
+        "validation": "cpu-validation/validation.json: O0/O2 exact snapshot and 11 native helpers"
+      },
+      {
+        "id": "CPU09",
+        "file": "src/sky/weather_lens.h",
+        "description": "Reuse speed between tail length and trail direction",
+        "status": "correctness_pass",
+        "validation": "cpu-validation/validation.json: O0/O2 exact snapshot and 11 native helpers"
+      },
+      {
+        "id": "CPU10",
+        "file": "src/sky/weather_lens.h",
+        "description": "Reject trail length before computing cross-axis distance",
+        "status": "correctness_pass",
+        "validation": "cpu-validation/validation.json: O0/O2 exact snapshot and 11 native helpers"
+      },
+      {
+        "id": "CPU11",
+        "file": "src/sky/weather_lens.h",
+        "description": "Skip closest-point division for separated swept heads",
+        "status": "correctness_pass",
+        "validation": "cpu-validation/validation.json: O0/O2 exact snapshot and 11 native helpers"
+      },
+      {
+        "id": "CPU12",
+        "file": "src/sky/weather_lens.h",
+        "description": "Skip the snow mass scan while computing a rain-only frost target",
+        "status": "correctness_pass",
+        "validation": "cpu-validation/validation.json: O0/O2 exact snapshot and 11 native helpers"
+      },
+      {
+        "id": "CPU13",
+        "file": "src/sky/weather_motion.h",
+        "description": "Cache authored wind velocity until kind/heading/strength changes",
+        "status": "correctness_pass",
+        "validation": "cpu-validation/validation.json: O0/O2 exact snapshot and 11 native helpers"
+      },
+      {
+        "id": "CPU14",
+        "file": "src/lights/local_light_scissor.h",
+        "description": "Use exact half-scale constants for even-sized scissor targets",
+        "status": "correctness_pass",
+        "validation": "cpu-validation/validation.json: O0/O2 exact snapshot and 11 native helpers"
+      },
+      {
+        "id": "CPU15",
+        "file": "src/gi/gi_solve_pool.h",
+        "description": "Claim bounded probe jobs with one atomic fetch-add instead of a CAS loop",
+        "status": "correctness_pass",
+        "validation": "cpu-validation/validation.json: O0/O2 exact snapshot and 11 native helpers"
+      },
+      {
+        "id": "CPU16",
+        "file": "src/core/cpu_retirement.h",
+        "description": "Notify idle waiters after releasing the reaper mutex",
+        "status": "correctness_pass",
+        "validation": "cpu-validation/validation.json: O0/O2 exact snapshot and 11 native helpers"
+      },
+      {
+        "id": "CPU17",
+        "file": "src/gi/gi_solve_pool.h",
+        "description": "Notify the sole solve owner outside the completion mutex",
+        "status": "correctness_pass",
+        "validation": "cpu-validation/validation.json: O0/O2 exact snapshot and 11 native helpers"
+      },
+      {
+        "id": "CPU18",
+        "file": "src/world/terrain_indices.h",
+        "description": "Cache typed storage pointers in compact-index iterators",
+        "status": "correctness_pass",
+        "validation": "cpu-validation/validation.json: O0/O2 exact snapshot and 11 native helpers"
+      },
+      {
+        "id": "CPU19",
+        "file": "src/world/terrain_indices.h",
+        "description": "Dispatch compact-index equality once per comparison",
+        "status": "correctness_pass",
+        "validation": "cpu-validation/validation.json: O0/O2 exact snapshot and 11 native helpers"
+      },
+      {
+        "id": "CPU20",
+        "file": "src/replay/replay_bounds_schedule.h",
+        "description": "Replace per-packet variable modulo with a wrapping cursor",
+        "status": "correctness_pass",
+        "validation": "cpu-validation/validation.json: O0/O2 exact snapshot and 11 native helpers"
+      },
+      {
+        "id": "CPU21",
+        "file": "src/replay/replay_bounds_near.h",
+        "description": "Stop the two-source ring projection after an innermost hit",
+        "status": "correctness_pass",
+        "validation": "cpu-validation/validation.json: O0/O2 exact snapshot and 11 native helpers"
+      },
+      {
+        "id": "CPU22",
+        "file": "src/replay/replay_bulk_layout.h",
+        "description": "Reuse the previous immutable bulk-layout key lookup",
+        "status": "correctness_pass",
+        "validation": "cpu-validation/validation.json: O0/O2 exact snapshot and 11 native helpers"
+      },
+      {
+        "id": "CPU23",
+        "file": "src/core/material_byte_ops.h",
+        "description": "Scan alpha in four independent SIMD chains",
+        "status": "correctness_pass",
+        "validation": "cpu-validation/validation.json: O0/O2 exact snapshot and 11 native helpers"
+      },
+      {
+        "id": "CPU24",
+        "file": "src/core/material_byte_ops.h",
+        "description": "Short-circuit alpha scans with a transparent prefix",
+        "status": "correctness_pass",
+        "validation": "cpu-validation/validation.json: O0/O2 exact snapshot and 11 native helpers"
+      },
+      {
+        "id": "CPU25",
+        "file": "src/sky/dither_noise.h",
+        "description": "Remove the redundant per-texel occupancy byte vector",
+        "status": "correctness_pass",
+        "validation": "cpu-validation/validation.json: O0/O2 exact snapshot and 11 native helpers"
+      },
+      {
+        "id": "CPU26",
+        "file": "src/gi/probe_blend.h",
+        "description": "Cache the proof that both retained SH copies are zero",
+        "status": "correctness_pass",
+        "validation": "cpu-validation/validation.json: O0/O2 exact snapshot and 11 native helpers"
+      },
+      {
+        "id": "CPU27",
+        "file": "src/gi/probe_blend.h",
+        "description": "Skip transpose and second comparison for unchanged invalid SH",
+        "status": "correctness_pass",
+        "validation": "cpu-validation/validation.json: O0/O2 exact snapshot and 11 native helpers"
+      },
+      {
+        "id": "CPU28",
+        "file": "src/gi/probe_activation.h",
+        "description": "Invalidate activation metadata without clearing inaccessible keys/timestamps",
+        "status": "correctness_pass",
+        "validation": "cpu-validation/validation.json: O0/O2 exact snapshot and 11 native helpers"
+      },
+      {
+        "id": "CPU29",
+        "file": "src/sky/weather_lens.h",
+        "description": "Compute each quad screen coordinate once per side",
+        "status": "correctness_pass",
+        "validation": "cpu-validation/validation.json: O0/O2 exact snapshot and 11 native helpers"
+      },
+      {
+        "id": "CPU30",
+        "file": "src/sky/weather_lens.h",
+        "description": "Compute each quad U division once per side",
+        "status": "correctness_pass",
+        "validation": "cpu-validation/validation.json: O0/O2 exact snapshot and 11 native helpers"
+      },
+      {
+        "id": "CPU31",
+        "file": "src/sky/weather_lens.h",
+        "description": "Compute each quad local displacement once per side",
+        "status": "correctness_pass",
+        "validation": "cpu-validation/validation.json: O0/O2 exact snapshot and 11 native helpers"
+      },
+      {
+        "id": "CPU32",
+        "file": "src/lights/local_light_scissor.h",
+        "description": "Reuse symmetric Gram entries while preserving accumulation order",
+        "status": "correctness_pass",
+        "validation": "cpu-validation/validation.json: O0/O2 exact snapshot and 11 native helpers"
+      },
+      {
+        "id": "CPU33",
+        "file": "src/lights/local_light_scissor.h",
+        "description": "Reject provably empty far-offscreen scissors before rounding",
+        "status": "correctness_pass",
+        "validation": "cpu-validation/validation.json: O0/O2 exact snapshot and 11 native helpers"
+      },
+      {
+        "id": "CPU34",
+        "file": "src/world/position_bounds.h",
+        "description": "Hash bounds-cache keys with native-width integer arithmetic",
+        "status": "correctness_pass",
+        "validation": "cpu-validation/validation.json: O0/O2 exact snapshot and 11 native helpers"
+      },
+      {
+        "id": "CPU35",
+        "file": "src/world/terrain_capture_bounds.h",
+        "description": "Reserve bounded chunk-set capacity at the small-set overflow",
+        "status": "correctness_pass",
+        "validation": "cpu-validation/validation.json: O0/O2 exact snapshot and 11 native helpers"
+      },
+      {
+        "id": "CPU36",
+        "file": "src/shadows/static_shadow_dedup.h",
+        "description": "Use a fixed three-element canonical ordering network",
+        "status": "correctness_pass",
+        "validation": "cpu-validation/validation.json: O0/O2 exact snapshot and 11 native helpers"
+      },
+      {
+        "id": "CPU37",
+        "file": "src/shadows/static_shadow_dedup.h",
+        "description": "Specialize indexed versus direct shadow triangle loading",
+        "status": "correctness_pass",
+        "validation": "cpu-validation/validation.json: O0/O2 exact snapshot and 11 native helpers"
+      },
+      {
+        "id": "CPU38",
+        "file": "src/shadows/static_shadow_dedup.h",
+        "description": "Specialize list versus strip triangle loading outside the loop",
+        "status": "correctness_pass",
+        "validation": "cpu-validation/validation.json: O0/O2 exact snapshot and 11 native helpers"
+      },
+      {
+        "id": "CPU39",
+        "file": "src/shadows/static_shadow_dedup.h",
+        "description": "Reuse the two validated shared vertices of consecutive strip triangles",
+        "status": "correctness_pass",
+        "validation": "cpu-validation/validation.json: O0/O2 exact snapshot and 11 native helpers"
+      },
+      {
+        "id": "CPU40",
+        "file": "src/core/cpu_retirement.h",
+        "description": "Wake the CPU reaper only when it may be sleeping",
+        "status": "correctness_pass",
+        "validation": "cpu-validation/validation.json: O0/O2 exact snapshot and 11 native helpers"
+      }
+    ],
+    "gpu": [
+      {
+        "id": "GPU01",
+        "file": "shaders/auto_bump_normal.hlsl",
+        "description": "Reject captures without material coverage before decoding octahedral detail",
+        "status": "correctness_pass",
+        "validation": "gpu-final3-dxvk2 + gpu-final3-dxvk3: frozen/current FP32 oracle; MSAA 0/4"
+      },
+      {
+        "id": "GPU02",
+        "file": "shaders/auto_bump_normal.hlsl",
+        "description": "Reject mismatched capture depth before normal rebasing",
+        "status": "correctness_pass",
+        "validation": "gpu-final3-dxvk2 + gpu-final3-dxvk3: frozen/current FP32 oracle; MSAA 0/4"
+      },
+      {
+        "id": "GPU03",
+        "file": "shaders/effects.hlsl",
+        "description": "Color-bounce SSAO uses four unrolled pairs instead of eight-way kernel lookup per tap",
+        "status": "correctness_pass",
+        "validation": "gpu-final3-dxvk2 + gpu-final3-dxvk3: frozen/current FP32 oracle; MSAA 0/4"
+      },
+      {
+        "id": "GPU04",
+        "file": "shaders/effects.hlsl",
+        "description": "SSAO fetches bounce RGB only for positive tap weight",
+        "status": "correctness_pass",
+        "validation": "gpu-final3-dxvk2 + gpu-final3-dxvk3: frozen/current FP32 oracle; MSAA 0/4"
+      },
+      {
+        "id": "GPU05",
+        "file": "shaders/effects.hlsl",
+        "description": "HDAO/HBAO/GTAO strength-zero skips kernel while preserving bloom",
+        "status": "correctness_pass",
+        "validation": "gpu-final3-dxvk2 + gpu-final3-dxvk3: frozen/current FP32 oracle; MSAA 0/4"
+      },
+      {
+        "id": "GPU06",
+        "file": "shaders/effects.hlsl",
+        "description": "HDAO rejects unaccepted pairs before angle normalization",
+        "status": "correctness_pass",
+        "validation": "gpu-final3-dxvk2 + gpu-final3-dxvk3: frozen/current FP32 oracle; MSAA 0/4"
+      },
+      {
+        "id": "GPU07",
+        "file": "shaders/effects.hlsl",
+        "description": "HBAO rejects invalid/outside-radius taps before reciprocal square root",
+        "status": "correctness_pass",
+        "validation": "gpu-final3-dxvk2 + gpu-final3-dxvk3: frozen/current FP32 oracle; MSAA 0/4"
+      },
+      {
+        "id": "GPU08",
+        "file": "shaders/effects.hlsl",
+        "description": "Medium/Low GTAO skips subtexel taps before depth reads",
+        "status": "correctness_pass",
+        "validation": "gpu-final3-dxvk2 + gpu-final3-dxvk3: frozen/current FP32 oracle; MSAA 0/4"
+      },
+      {
+        "id": "GPU09",
+        "file": "shaders/effects.hlsl",
+        "description": "AO blur reuses the snapped row Y coordinate across five columns",
+        "status": "correctness_pass",
+        "validation": "gpu-final3-dxvk2 + gpu-final3-dxvk3: frozen/current FP32 oracle; MSAA 0/4"
+      },
+      {
+        "id": "GPU10",
+        "file": "shaders/effects.hlsl",
+        "description": "Composite rejects sky taps before neighbor normals and ambient reads",
+        "status": "correctness_pass",
+        "validation": "gpu-final3-dxvk2 + gpu-final3-dxvk3: frozen/current FP32 oracle; MSAA 0/4"
+      },
+      {
+        "id": "GPU11",
+        "file": "shaders/effects.hlsl",
+        "description": "Legacy AO composite skips disabled bloom taps",
+        "status": "correctness_pass",
+        "validation": "gpu-final3-dxvk2 + gpu-final3-dxvk3: frozen/current FP32 oracle; MSAA 0/4"
+      },
+      {
+        "id": "GPU12",
+        "file": "shaders/effects.hlsl",
+        "description": "Low ASSAO zero-offset taps preserve weight sum without depth/obscurance work",
+        "status": "correctness_pass",
+        "validation": "gpu-final3-dxvk2 + gpu-final3-dxvk3: frozen/current FP32 oracle; MSAA 0/4"
+      },
+      {
+        "id": "GPU13",
+        "file": "shaders/effects.hlsl",
+        "description": "AO blur evaluates the spatial row edge weight once instead of five times",
+        "status": "correctness_pass",
+        "validation": "gpu-final3-dxvk2 + gpu-final3-dxvk3: frozen/current FP32 oracle; MSAA 0/4"
+      },
+      {
+        "id": "GPU14",
+        "file": "shaders/local_light_effects.hlsl",
+        "description": "Expanded cube PCF reuses its final-filter row tangent across four columns",
+        "status": "correctness_pass",
+        "validation": "gpu-final3-dxvk2 + gpu-final3-dxvk3: frozen/current FP32 oracle; MSAA 0/4"
+      },
+      {
+        "id": "GPU15",
+        "file": "src/proxy/renderer.cpp",
+        "description": "ContactAO-off and bloom-zero uses a neutral GPU clear instead of a fullscreen contact-bloom draw",
+        "status": "correctness_pass",
+        "validation": "gpu-final3-dxvk2 + gpu-final3-dxvk3: frozen/current FP32 oracle; MSAA 0/4"
+      },
+      {
+        "id": "GPU16",
+        "file": "shaders/hdr_effects.hlsl",
+        "description": "Steady exposure skips the adaptation exponential",
+        "status": "correctness_pass",
+        "validation": "gpu-final3-dxvk2 + gpu-final3-dxvk3: frozen/current FP32 oracle; MSAA 0/4"
+      },
+      {
+        "id": "GPU17",
+        "file": "shaders/hdr_effects.hlsl",
+        "description": "Highlight expansion skips relative-luminance work when bright coverage rejects expansion",
+        "status": "correctness_pass",
+        "validation": "gpu-final3-dxvk2 + gpu-final3-dxvk3: frozen/current FP32 oracle; MSAA 0/4"
+      },
+      {
+        "id": "GPU18",
+        "file": "shaders/hdr_effects.hlsl",
+        "description": "Legacy sRGB encoding skips three power operations for all-low RGB",
+        "status": "correctness_pass",
+        "validation": "gpu-final3-dxvk2 + gpu-final3-dxvk3: frozen/current FP32 oracle; MSAA 0/4"
+      },
+      {
+        "id": "GPU19",
+        "file": "shaders/hdr_effects.hlsl",
+        "description": "Black legacy pixels skip native fog depth and color-space decoding",
+        "status": "correctness_pass",
+        "validation": "gpu-final3-dxvk2 + gpu-final3-dxvk3: frozen/current FP32 oracle; MSAA 0/4"
+      },
+      {
+        "id": "GPU20",
+        "file": "shaders/surface_effects.hlsl",
+        "description": "Sand film skips fine noise where broad deposit is zero",
+        "status": "correctness_pass",
+        "validation": "gpu-final3-dxvk2 + gpu-final3-dxvk3: frozen/current FP32 oracle; MSAA 0/4"
+      },
+      {
+        "id": "GPU21",
+        "file": "shaders/hdr_effects.hlsl",
+        "description": "Legacy HDR world skips identity contrast power",
+        "status": "correctness_pass",
+        "validation": "gpu-final3-dxvk2 + gpu-final3-dxvk3: frozen/current FP32 oracle; MSAA 0/4"
+      },
+      {
+        "id": "GPU22",
+        "file": "shaders/hdr_effects.hlsl",
+        "description": "HDR meter branches over SDR decode for linear input",
+        "status": "correctness_pass",
+        "validation": "gpu-final3-dxvk2 + gpu-final3-dxvk3: frozen/current FP32 oracle; MSAA 0/4"
+      },
+      {
+        "id": "GPU23",
+        "file": "shaders/hdr_effects.hlsl",
+        "description": "Legacy highlight expansion skips statistics/relative luminance below support",
+        "status": "correctness_pass",
+        "validation": "gpu-final3-dxvk2 + gpu-final3-dxvk3: frozen/current FP32 oracle; MSAA 0/4"
+      },
+      {
+        "id": "GPU24",
+        "file": "shaders/hdr_effects.hlsl",
+        "description": "HDR layer branches over decode for linear input",
+        "status": "correctness_pass",
+        "validation": "gpu-final3-dxvk2 + gpu-final3-dxvk3: frozen/current FP32 oracle; MSAA 0/4"
+      },
+      {
+        "id": "GPU25",
+        "file": "shaders/hdr_effects.hlsl",
+        "description": "HDR bright extraction uses a bounded reciprocal identity, removing one clamp per tap",
+        "status": "correctness_pass",
+        "validation": "gpu-final3-dxvk2 + gpu-final3-dxvk3: frozen/current FP32 oracle; MSAA 0/4"
+      },
+      {
+        "id": "GPU26",
+        "file": "shaders/world_effects.hlsl",
+        "description": "Lamp fog skips empty ray/sphere intersections before integration",
+        "status": "correctness_pass",
+        "validation": "gpu-final3-dxvk2 + gpu-final3-dxvk3: frozen/current FP32 oracle; MSAA 0/4"
+      },
+      {
+        "id": "GPU27",
+        "file": "shaders/world_effects.hlsl",
+        "description": "Horizon haze skips azimuth/power for an absent sun lobe",
+        "status": "correctness_pass",
+        "validation": "gpu-final3-dxvk2 + gpu-final3-dxvk3: frozen/current FP32 oracle; MSAA 0/4"
+      },
+      {
+        "id": "GPU28",
+        "file": "shaders/world_effects.hlsl",
+        "description": "Expanded directional PCF reuses each row UV and tent weight across up to nine columns",
+        "status": "correctness_pass",
+        "validation": "gpu-final3-dxvk2 + gpu-final3-dxvk3: frozen/current FP32 oracle; MSAA 0/4"
+      },
+      {
+        "id": "GPU29",
+        "file": "shaders/surface_effects.hlsl",
+        "description": "Frost skips gradient and scene lookup outside revealed coverage",
+        "status": "correctness_pass",
+        "validation": "gpu-final3-dxvk2 + gpu-final3-dxvk3: frozen/current FP32 oracle; MSAA 0/4"
+      },
+      {
+        "id": "GPU30",
+        "file": "shaders/local_light_effects.hlsl",
+        "description": "Cube blocker search reuses its row tangent across four columns",
+        "status": "correctness_pass",
+        "validation": "gpu-final3-dxvk2 + gpu-final3-dxvk3: frozen/current FP32 oracle; MSAA 0/4"
+      },
+      {
+        "id": "GPU31",
+        "file": "shaders/world_effects.hlsl",
+        "description": "Directional base PCF reuses row UV and tent weight across columns",
+        "status": "correctness_pass",
+        "validation": "gpu-final3-dxvk2 + gpu-final3-dxvk3: frozen/current FP32 oracle; MSAA 0/4"
+      },
+      {
+        "id": "GPU32",
+        "file": "shaders/world_effects.hlsl",
+        "description": "Directional blocker search unrolls four fixed columns",
+        "status": "correctness_pass",
+        "validation": "gpu-final3-dxvk2 + gpu-final3-dxvk3: frozen/current FP32 oracle; MSAA 0/4"
+      },
+      {
+        "id": "GPU33",
+        "file": "shaders/local_light_effects.hlsl",
+        "description": "Local light correction skips baseline/shadow work for zero facing",
+        "status": "correctness_pass",
+        "validation": "gpu-final3-dxvk2 + gpu-final3-dxvk3: frozen/current FP32 oracle; MSAA 0/4"
+      },
+      {
+        "id": "GPU34",
+        "file": "shaders/auto_material_height.hlsl",
+        "description": "Inferred height skips color accent math for zero accent profile",
+        "status": "correctness_pass",
+        "validation": "gpu-final3-dxvk2 + gpu-final3-dxvk3: frozen/current FP32 oracle; MSAA 0/4"
+      },
+      {
+        "id": "GPU35",
+        "file": "shaders/auto_material_height.hlsl",
+        "description": "Inferred height skips green/blue ratio where red/green edge is zero",
+        "status": "correctness_pass",
+        "validation": "gpu-final3-dxvk2 + gpu-final3-dxvk3: frozen/current FP32 oracle; MSAA 0/4"
+      },
+      {
+        "id": "GPU36",
+        "file": "shaders/hdr_effects.hlsl",
+        "description": "Fixed UI skips source texture when texture RGB and alpha weights are zero",
+        "status": "correctness_pass",
+        "validation": "gpu-final3-dxvk2 + gpu-final3-dxvk3: frozen/current FP32 oracle; MSAA 0/4"
+      },
+      {
+        "id": "GPU37",
+        "file": "shaders/hdr_effects.hlsl",
+        "description": "Legacy HDR composite skips fog/depth/decode when native fog is disabled",
+        "status": "correctness_pass",
+        "validation": "gpu-final3-dxvk2 + gpu-final3-dxvk3: frozen/current FP32 oracle; MSAA 0/4"
+      },
+      {
+        "id": "GPU38",
+        "file": "shaders/hdr_effects.hlsl",
+        "description": "Exposure reset skips history fetch and adaptation exponential",
+        "status": "correctness_pass",
+        "validation": "gpu-final3-dxvk2 + gpu-final3-dxvk3: frozen/current FP32 oracle; MSAA 0/4"
+      },
+      {
+        "id": "GPU39",
+        "file": "shaders/hdr_effects.hlsl",
+        "description": "Linear presentation computes shoulder only above its threshold",
+        "status": "correctness_pass",
+        "validation": "gpu-final3-dxvk2 + gpu-final3-dxvk3: frozen/current FP32 oracle; MSAA 0/4"
+      },
+      {
+        "id": "GPU40",
+        "file": "shaders/hdr_effects.hlsl",
+        "description": "Premultiplied HDR layer skips transfer for transparent texels",
+        "status": "correctness_pass",
+        "validation": "gpu-final3-dxvk2 + gpu-final3-dxvk3: frozen/current FP32 oracle; MSAA 0/4"
+      }
+    ]
+  },
+  "rejected": [
+    {
+      "candidate": "grouped position bounds SIMD",
+      "reason": "Measured regression: packed stride 12 was 1.98x baseline; wide strides 3-4% slower. Restored the original scanner."
+    },
+    "Per-tap SSAO/blur early-rejection branches slowed the large-target stand; replaced with kernel/row reuse.",
+    "Cube per-tap invalid-ray branches slowed LocalShadowResolve; replaced with row tangent reuse.",
+    "Per-tap directional nonpositive/zero-weight branches were replaced with base-row reuse and fixed blocker-column unrolling.",
+    "Explicit gradient snow-floc sampling changed mip-filtered precipitation pixels; original snowFloc sampling retained.",
+    "SnowMorph explicit gradients differed from implicit sampling on the authored 512x512 atlas (max 0.0001399); restored original implicit sampling and replaced both candidates with HDR fast paths.",
+    "Pure-snow water-optics branch also changed authored-atlas sampling through compiler scheduling; restored the entire production WeatherLensParticle. Unused procedural RainLens/SnowLens and generic HdrBloom changes were removed from the count after host call-site audit. Replacements target active contact-bloom, exposure, highlight extraction, horizontal bloom and expanded directional PCF.",
+    "The contact-bloom shader branch consumed too many SM3 slots in large ASSAO variants. Replaced by the production host selecting the existing neutral clear when both effects are disabled; compiled contact-bloom remains compact.",
+    "Specialized rain culls changed one extreme-phase FP32 pixel by 2.9e-5 despite matching the 3072-case production stand. Restored all precipitation bytecode; the ledger separately identifies the already independently changed AO spatial-row weight and cube final-filter row calculations.",
+    "FXC flattened initial contact-bloom and bright-extraction early returns into cmp. Final candidates use the host neutral clear and algebraic horizontal bright extraction; specialized rain was subsequently rejected and restored."
+  ]
+}

@@ -1,8 +1,13 @@
 """Near-fade clipping keeps every interval with nonzero optical depth."""
 import math
 import random
+from pathlib import Path
+
+shader = (Path(__file__).resolve().parents[1] / 'shaders/world_effects.hlsl').read_text()
+assert shader.count('[branch]if(surface<=max(FogRange.x,0))return float4(0,0,0,1);') == 2
 
 rng = random.Random(21)
+near_empty_cases = 0
 for count in (12, 20, 24, 32, 40, 48):
     for _ in range(3000):
         major = rng.choice((-1, 1)) * rng.uniform(1/math.sqrt(3), 1)
@@ -27,6 +32,10 @@ for count in (12, 20, 24, 32, 40, 48):
             else:
                 assert optical == 0, (count, near, surface, i, first)
         assert before == after
+        if surface <= max(near, 0):
+            assert before == 0, (count, near, surface, before)
+            near_empty_cases += 1
+assert near_empty_cases
 print('PASS 18000 fog interval cases: exact optical path, both ray signs and all step budgets')
 
 # Regional field clip (WorldFog/FogClouds): regionalFogAt's coverage is zero outside the 63/64 field

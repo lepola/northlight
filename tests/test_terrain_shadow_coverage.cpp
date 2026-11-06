@@ -39,6 +39,9 @@ struct VM{
         for(std::size_t i=1;i<w.size();){unsigned code=w[i]&65535,n=w[i]>>24&15;if(code==65535)break;
             if(code==31){i+=n+1;continue;}
             if(code==81){for(unsigned j=0;j<4;++j)constant[w[i+1]&2047][j]=NorthlightTerrainShadow::wordFloat(w[i+2+j]);i+=n+1;continue;}
+            if(code==41){assert((w[i]>>16&7)==5);const bool taken=read(w[i+1])[0]!=read(w[i+2])[0];i+=n+1;
+                if(!taken){unsigned depth=1;while(depth){unsigned c=w[i]&65535;if(c==41)++depth;if(c==43)--depth;i+=(w[i]>>24&15)+1;}}continue;}
+            if(code==43){i+=n+1;continue;}
             V a=read(w[i+2]),b{},c{},r{};if(n>2)b=read(w[i+3]);if(n>3)c=read(w[i+4]);
             for(unsigned j=0;j<4;++j)switch(code){
             case 1:r[j]=a[j];break;case 2:r[j]=a[j]+b[j];break;case 3:r[j]=a[j]-b[j];break;
@@ -57,12 +60,24 @@ static float coverage(V q){
     if(u<.003f||u>.997f||v<.003f||v>.997f||q[2]<=0||q[2]>=1)return 0;
     return std::max(0.f,std::min(1.f,(1-std::max(std::fabs(q[0]),std::fabs(q[1])))/.12f));
 }
+// Frozen scalar form of the original emitted SUB/CMP/MUL strict-bound gates.
+static float strictCoverage(V q){
+    const float low[]={-.9949765625f,-.9930234375f,0},high[]={.9930234375f,.9949765625f,1};
+    float weight=std::clamp((1-std::max(std::fabs(q[0]),std::fabs(q[1])))*(1.f/.12f),0.f,1.f);
+    for(unsigned lane=0;lane<3;++lane)weight*=-(q[lane]-low[lane])>=0?0.f:1.f;
+    for(unsigned lane=0;lane<3;++lane)weight*=-(high[lane]-q[lane])>=0?0.f:1.f;
+    return weight;
+}
 int main(){
     std::mt19937 gen(8471);std::uniform_real_distribution<float> sample(-1.3f,1.3f),unit(0,1);
     unsigned cases=0;
     for(bool hasView:{false,true})for(unsigned sources:{1u,2u}){
         auto original=ps(hasView);std::vector<Word> patched;PixelInfo info;
         assert(pixel(original.data(),original.size(),patched,info,sources));
+        Program measured;assert(analyse(patched.data(),patched.size(),measured));
+        Program unpatched;assert(analyse(original.data(),original.size(),unpatched));
+        assert(info.addedSlots==8+14*sources&&measured.slots==unpatched.slots+info.addedSlots);
+        for(const auto& operation:measured.ops)assert(operation.code!=3); // Native-compatible ADD/NEG encoding.
         auto vertexOriginal=vs(hasView);std::vector<Word> vertexPatched;
         assert(vertex(vertexOriginal.data(),vertexOriginal.size(),vertexPatched));
         VM v;v.input[0]={10,20,30,1};for(unsigned i=0;i<4;++i)v.constant[i][i]=1;v.run(vertexPatched);
@@ -70,12 +85,23 @@ int main(){
         for(unsigned i=0;i<30000;++i){
             V q0={sample(gen),sample(gen),sample(gen),1},q1={sample(gen),sample(gen),sample(gen),1};
             if(i%3==0)q1={0,0,.5f,1}; // either active source covering the receiver removes the authored shadow
-            float shadow=unit(gen),rgb=unit(gen);VM machine;machine.input[0]={rgb,rgb,rgb,shadow};machine.input[1]={0,0,0,1};
+            float shadow=i%4==0?1.f:i%4==1?std::nextafter(1.f,0.f):unit(gen),rgb=unit(gen);VM machine;machine.input[0]={rgb,rgb,rgb,shadow};machine.input[1]={0,0,0,1};
             for(unsigned s=0;s<sources;++s){V q=s?q1:q0;for(unsigned j=0;j<3;++j)machine.constant[info.constants+s*3+j][3]=q[j];}
             machine.run(patched);float weight=sources==1?coverage(q0):std::max(coverage(q0),coverage(q1));
             float expected=rgb*(.7f+.3f*(shadow+(1-shadow)*weight));
             assert(std::fabs(machine.output[0][0]-expected)<2e-6f);++cases;
         }
+        // The exact boundary and both adjacent representable floats must keep
+        // their old strict semantics, independently for either light source.
+        const float bounds[][2]={{-.9949765625f,.9930234375f},{-.9930234375f,.9949765625f},{0,1}};
+        for(unsigned source=0;source<sources;++source)for(unsigned axis=0;axis<3;++axis)for(float bound:bounds[axis])
+            for(float coordinate:{std::nextafter(bound,-INFINITY),bound,std::nextafter(bound,INFINITY)}){
+                V q[2]={{2,2,2,1},{2,2,2,1}};q[source]={0,0,.5f,1};q[source][axis]=coordinate;
+                VM machine;machine.input[0]={.8f,.8f,.8f,0};machine.input[1]={0,0,0,1};
+                for(unsigned s=0;s<sources;++s)for(unsigned j=0;j<3;++j)machine.constant[info.constants+s*3+j][3]=q[s][j];
+                machine.run(patched);const float weight=std::max(strictCoverage(q[0]),sources==2?strictCoverage(q[1]):0.f);
+                assert(std::fabs(machine.output[0][0]-.8f*(.7f+.3f*weight))<2e-6f);++cases;
+            }
         // Unsupported prefixes, occupied view outputs and legacy programs are unchanged.
         auto bad=vertexOriginal;for(auto& t:bad)if(t==src(2,1))t=src(2,2);
         assert(!vertex(bad.data(),bad.size(),vertexPatched)&&vertexPatched.empty());

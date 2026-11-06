@@ -1,0 +1,23 @@
+# Complete point-shadow capture updates
+
+The reported `Northlight-0.3.216-test.20261030.9-Windows.zip` records combined source `b9077f0d`. Its point-shadow path and independent PR #92 could overwrite a cube without current model replays and mark that static-only result ready. A stale face cycle switching back to six faces per frame is one reproducible case. New, changed or invalidated sources could also publish incomplete cubes on a skipped-capture frame.
+
+Return before cube writes when capture is skipped. Request capture for the next frame; reuse an already usable cube only when map, source identity, position, range, attenuation start and flags remain compatible. Otherwise leave the source unavailable until a fresh capture completes. No stale pose storage, additional GPU resources, shader changes or capture-budget changes are introduced.
+
+`tests/test_point_terrain_coverage_gpu.py` executes the production renderer and shader patcher on a hidden device. An authored replay caster must match static rasterization exactly at six light distances, 0.11 through 4 world units. Fifty-four transitions cover refresh-interval reuse, complete-cube reuse, stale schedules, identity/position/range/attenuation/flag changes, invalidation and fresh-capture recovery. The earlier four terrain camera-membership checks remain.
+
+Both independent PR #92 and the corrected test.9 integration pass on native D3D9 and DXVK 3. Compiling the same regression with the unmodified `b9077f0d` point-rendering include fails on both: caster center depth changes from `0.091673024` to empty `1.000000000`. The negative control retains all other fixture and renderer inputs.
+
+Focused scheduler, clipping, shader-artifact and capture checks pass, including optimized and ASan/UBSan runs. Both Windows x86 DLLs build independently. This proves the capture-gap regression with authored geometry; the complete reported gameplay scenes were not replayed. No game was launched, package installed, settings changed or client cache modified.
+
+## Streaming handoff follow-up
+
+The 31 October bridge clip reports the dropout persisting in `0.3.216-test.20261031.9`. Its embedded source identity, `89192dede043e55870bfb737a04a4a20f4af646399a6d0daf6d15e09d709ad91`, matches a frozen checkout of `9ea85302`. A separate defect rejects point shadows whenever `active->bvh` advances before the bounded GPU upload commits. `upload()` deliberately keeps the previous same-map pages drawable during this interval; directional shadows already use them. The point pass instead cleared readiness and returned, temporarily removing every selected lamp's shadow correction.
+
+Use the same committed-map/resource guard as the uploader. The committed batches, materials, content records and mesh generation remain paired until the existing atomic upload commit. Current captured casters continue to update; skipped captures retain the existing complete-cube policy. Map mismatches still reject old geometry. No shader, selection, memory-budget or quality change is needed.
+
+The extended production GPU oracle fails at `POINT_UPLOAD_HANDOFF rendered=0 ready=0` with the original guard on native D3D9 and DXVK 3. With the correction it passes on both backends: exact static coverage during publication/upload mismatch, current-caster appearance and removal, skipped-capture retention, upload commit and map-mismatch rejection. The earlier four native-terrain membership states, six caster distances / 54 capture transitions, and visibility/re-entry checks also pass. Focused scheduling, projection, prepared clipping and capture-wiring checks pass; the portable C++ checks include ASan/UBSan.
+
+The isolated Windows candidate uses test.9 sources plus this guard correction, source identity `98290d5976fb1c4d6344d8d1ea61faed94f0423015b7127c591157b3a964962d`. Unrelated concurrent checkout changes are excluded. Private evidence is under `.local/shadow-report-20261031`. This reproduces and corrects the upload-handoff dropout; the exact gameplay sequence still requires an in-game retest. The game, installed DLL, settings and cache were not changed.
+
+Verified package: `.local/releases/0.3.216-test.20261031.shadowhandoff/Northlight-0.3.216-test.20261031.shadowhandoff-Windows.zip`, SHA256 `98e8b70f5cb5df33cb4624fde3c291a1bf473a36ea86fca80787c2b9220203ae`. Its DLL matches the built candidate, SHA256 `29d5dae943660f2e6ed56e28c5bfbefcf8f9c62298fdc5a0946676218afd7680`. Two wider source audits (`test_fog_temporal_wiring.py` and `test_gpu_budget_wiring.py`) fail identically on unchanged test.9 source; their logs are recorded separately from the passing focused checks.

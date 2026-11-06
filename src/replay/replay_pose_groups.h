@@ -22,10 +22,10 @@ template<class Replay> bool sameCaptured(const Replay& a,const Replay& b){
     // Projection is overwritten for this pass. Compare all other captured
     // registers bit-for-bit, including signed zero/NaN payloads and every bone
     // of relative-address shaders. Uncaptured pooled memory is never read.
-    if(std::memcmp(a.constants+4*x.floats.first,b.constants+4*x.floats.first,(projection-x.floats.first)*16)||
-       std::memcmp(a.constants+4*(projection+4),b.constants+4*(projection+4),(end-projection-4)*16))return false;
-    return (!x.booleans.count||!std::memcmp(a.bools+x.booleans.first,b.bools+x.booleans.first,x.booleans.count*sizeof(a.bools[0])))&&
-           (!x.integers.count||!std::memcmp(a.ints+4*x.integers.first,b.ints+4*x.integers.first,x.integers.count*4*sizeof(a.ints[0])));
+    if(a.constants!=b.constants&&(std::memcmp(a.constants+4*x.floats.first,b.constants+4*x.floats.first,(projection-x.floats.first)*16)||
+       std::memcmp(a.constants+4*(projection+4),b.constants+4*(projection+4),(end-projection-4)*16)))return false;
+    return (!x.booleans.count||a.bools==b.bools||!std::memcmp(a.bools+x.booleans.first,b.bools+x.booleans.first,x.booleans.count*sizeof(a.bools[0])))&&
+           (!x.integers.count||a.ints==b.ints||!std::memcmp(a.ints+4*x.integers.first,b.ints+4*x.integers.first,x.integers.count*4*sizeof(a.ints[0])));
 }
 
 // One instance per uninterrupted replay pass with a fixed projection. Discard
@@ -42,10 +42,10 @@ public:
     NorthlightReplayConstants::DirtySpan floats,booleans,integers;
     size_t prepared=0,reused=0;
     const float* desired()const{return floatBank_.data();}
-    template<class Replay> bool prepare(const Replay& p,const float* rows){
+    template<class Replay> bool prepare(const Replay& p,const float* rows,const float* worldMatrix=nullptr){
         floats={};booleans={};integers={};
         if(valid_&&group_==p.constantGroup){++reused;return true;}
-        if(!NorthlightReplayConstants::updateProjectedConstants(floatBank_,p.constants,p.constantUsage,p.projectionKind,rows,floats))return false;
+        if(!NorthlightReplayConstants::updateProjectedConstants(floatBank_,p.constants,p.constantUsage,p.projectionKind,rows,floats,worldMatrix))return false;
         booleans=boolBank_.update(p.bools,p.constantUsage.booleans);
         integers=intBank_.update(p.ints,p.constantUsage.integers);
         group_=p.constantGroup;valid_=true;++prepared;return true;

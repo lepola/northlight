@@ -64,11 +64,11 @@ struct Slot {
     enum State:unsigned char{None,Filling,Valid};
     std::atomic<unsigned char> state{None};
     std::vector<unsigned char> data;
-    bool gpuWritten=false,evicted=false,large=false,dropAtUnpin=false;unsigned strikes=0,frames=0,pins=0,listAt=0;std::uint64_t used=0,lastFrame=0,evictedFrame=0,parkUntil=0;   // frames: distinct recent frames with a capture read
+    bool gpuWritten=false,evicted=false,large=false,dropAtUnpin=false,complete=false;unsigned strikes=0,frames=0,pins=0,listAt=0;std::uint64_t used=0,lastFrame=0,evictedFrame=0,parkUntil=0;   // frames: distinct recent frames with a capture read
 };
 // 0.3.196 (task 12): the outstanding write lock of ONE wrapper (a member of the tracked Buffer, no mutex): noteWrite() fills it at Lock, commitWrite() consumes it at Unlock
 // under ONE store mutex acquisition. `drop`: the lock cannot be mirrored exactly (nested, null pointer, offset past the end): the copy is dropped at Unlock.
-struct PendingWrite {bool active=false,drop=false;UINT off=0,end=0;const unsigned char* ptr=nullptr;};
+struct PendingWrite {bool active=false,drop=false,discard=false;UINT off=0,end=0;const unsigned char* ptr=nullptr;};
 struct Refusals {std::uint64_t budget=0,tooLarge=0,backoff=0,unsafe=0,locked=0,pressure=0,allocation=0;UINT largestBuffer=0;};
 struct Store {
     std::mutex m;std::unordered_map<const void*,Slot*> registry;std::vector<Slot*> list;   // list: Filling and Valid slots
@@ -128,11 +128,18 @@ inline void detach(Slot& c){
 // A successful write Lock (not READONLY), no mutex (0.3.196, task 12: the Lock/Unlock pair used to take the store mutex twice). before = locks already outstanding on the buffer.
 // Only records what Unlock needs; a nested write, an offset past the end or a null pointer cannot be mirrored exactly: commitWrite drops the copy. Size 0 = to the end, a
 // range past the end is clamped (as the stream does). A slot that is not Valid now cannot become Valid before the Unlock (beginFill refuses while locks>0), so nothing is recorded.
-inline void writeLocked(const Slot& c,PendingWrite& w,unsigned before,UINT off,UINT size,void* ptr){
+inline void writeLocked(const Slot& c,PendingWrite& w,unsigned before,UINT off,UINT size,void* ptr,DWORD flags=0){
     if(c.state.load()!=Slot::Valid)return;
     if(w.active||before||!ptr||off>c.size){w.active=true;w.drop=true;return;}   // a pending write of this wrapper means a nested one, as does before
     std::uint64_t end=size?std::uint64_t(off)+size:std::uint64_t(c.size);if(end>c.size)end=c.size;
-    w.active=true;w.drop=false;w.off=off;w.end=UINT(end);w.ptr=static_cast<const unsigned char*>(ptr);
+    w.active=true;w.drop=false;w.discard=(flags&D3DLOCK_DISCARD)!=0;w.off=off;w.end=UINT(end);w.ptr=static_cast<const unsigned char*>(ptr);
+}
+// Replay-thread preflight only: do not fill/touch the capture cache or allocate.
+inline bool unchangedWrite(const Slot& c,UINT off,UINT size,const unsigned char* bytes){
+    if(c.state.load()!=Slot::Valid)return false;
+    Store& s=store();std::lock_guard<std::mutex> g(s.m);
+    return c.state.load()==Slot::Valid&&c.complete&&!(c.locks&&c.locks->load())&&
+        bytes&&size&&std::uint64_t(off)+size<=c.size&&!std::memcmp(c.data.data()+off,bytes,size);
 }
 // A rejected write Lock, a failed Unlock, a GPU write: the copy no longer mirrors the buffer.
 inline void invalidate(Slot& c,bool gpuWrite=false){
@@ -150,11 +157,15 @@ inline bool beforeUnlock(Slot& c,PendingWrite& w,unsigned before,bool compare=fa
     Store& s=store();std::lock_guard<std::mutex> g(s.m);
     if(c.state.load()!=Slot::Valid)return false;
     if(p.drop||before>1){detail::drop(s,c,detail::Why::Invalidate);return false;}   // which lock does this Unlock close? unknown: drop
+    // A partial DISCARD can replace bytes outside the write. Those retained
+    // bytes may still serve undefined reads, but cannot prove a future upload equal.
+    if(p.discard&&(p.off||p.end!=c.size))c.complete=false;
     if(p.end>p.off){   // the stream's own replayed write names its source bytes (cached memory, see unlock_source.h); a pass-through lock is read back from the mapped pointer
         const UnlockSource& u=unlockSource;
-        const unsigned char* from=u.bytes&&u.off==p.off&&u.size==p.end-p.off?u.bytes:p.ptr;
-        if(compare&&!std::memcmp(c.data.data()+p.off,from,p.end-p.off))return true;
-        std::memcpy(c.data.data()+p.off,from,p.end-p.off);}
+        const unsigned char* from=u.bytes&&(!u.target||u.target==c.exposed)&&u.off==p.off&&u.size==p.end-p.off?u.bytes:p.ptr;
+        if(compare&&c.complete&&!std::memcmp(c.data.data()+p.off,from,p.end-p.off))return true;
+        std::memcpy(c.data.data()+p.off,from,p.end-p.off);
+        if(!p.off&&p.end==c.size)c.complete=true;}
     return false;
 }
 // ---- reader side (replay_copy_reader.h) ----
@@ -230,7 +241,7 @@ inline const unsigned char* readOrBeginFill(const void* key,UINT off,UINT size,S
 inline void endFill(Slot& c,bool ok){
     void* const owner=c.owner;void(*const ref)(void*,bool)=c.ref;
     {Store& s=store();std::lock_guard<std::mutex> g(s.m);auto& m=NorthlightLockMeter::state();
-     if(ok&&c.state.load()==Slot::Filling){c.state.store(Slot::Valid);m.copyFills.fetch_add(1,std::memory_order_relaxed);m.copyFillBytes.fetch_add(c.size,std::memory_order_relaxed);return;}
+     if(ok&&c.state.load()==Slot::Filling){c.complete=true;c.state.store(Slot::Valid);m.copyFills.fetch_add(1,std::memory_order_relaxed);m.copyFillBytes.fetch_add(c.size,std::memory_order_relaxed);return;}
      detail::drop(s,c,detail::Why::Silent);if(c.pins)--c.pins;
      if(!c.pins)std::vector<unsigned char>().swap(c.data);}
     if(owner)ref(owner,false);   // the fill's pin; c may be freed from here on

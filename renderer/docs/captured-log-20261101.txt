@@ -1,0 +1,88 @@
+Captured-log follow-up and Windows test installer 20261101.6
+
+Input: northlight-renderer_captured.log, 9,255,083 bytes, 44,132 lines.
+SHA256: 1341bb94d60d13df2919dba0bcfc8a3e8523c62bbf272b393e5b3199f7510987
+The log runs installer .5 (source identity 513f1dc43129...), with two device
+lifetimes, live setting changes and background windows. Frame numbers must be
+joined within their device lifetime; aggregate FPS is not a controlled A/B.
+
+Findings
+
+- Model poseFallback has 99 sampled records: mean 1.161653 ms, maximum 2.0592 ms
+  at device 2/frame 14351, line 42043 (8189 generic vertices). Device 2/frame
+  13970 spends 1.9852 ms here and 5.9405 ms in material CPU scopes overall.
+- Generic pose work precedes the two-build-per-frame refusal in prepare(). A
+  cold model can spend pose/envelope budget even when no new geometry can be
+  built. The log alone does not quantify how much time that ordering wastes.
+- GPU effects average 4.651740 ms across 123 profiles, maximum 7.413 ms. Among
+  sampled passes AO, removal smoothing and world composition remain significant.
+  Last full-frame GPU records are 20.857 and 25.460 ms; native GameScene accounts
+  for 13.933 and 12.388 ms. Native material draw scopes are part of that scene,
+  not entirely additional renderer overhead.
+- Previous shadow-bound starvation is absent at the end: 834/834 valid bounds,
+  no cold or unsupported entries, 0.680 ms worker time and 0.060 ms join wait.
+  PointShadow GPU time averages 0.186 ms and peaks at 1.333 ms in this capture.
+- EVENT-aware budgets are active: the last two GPU reports show level 3,
+  gpuBound=1 and eventWait=3.67/3.86 ms. CPU budget level remains 0 while the
+  renderer identifies GPU pressure. No further budget change is justified here.
+- The 2656 ms memory-stall episode is a worker build admission/retry interval,
+  ending with outcome=published, not a single render-thread frame. Final windows
+  have focus=0 and roughly 30 FPS. Diagnostics/RenderProfile are enabled and
+  contribute timer/query overhead; these windows cannot establish foreground
+  performance or a change in FPS relative to earlier captures.
+
+Changes in 7e3fa4ffde360abedd8f057bcb07a846696853cc
+
+Recognize 120 additional stock SM2/SM3 programs that skin into r0 then transform
+with c14..16 into r1. Exact token matching reuses the audited single/weighted
+prefix evaluators. Arithmetic order, definitions, aliased inputs, failed outputs,
+strict evaluation and existing envelope/attachment eligibility are preserved.
+Geometry-source counters include these evaluators in their appropriate families.
+
+Once both build slots are spent, reject a skinned model before pose work if no
+source/declaration/program/domain candidate exists. Candidates still undergo the
+original current-pose, distance and exact material checks. Cache hits and draws
+with an available build slot retain their previous admission path.
+
+Paired O2 CPU medians, 8192 vertices, baseline 01b3063a:
+  SM2 single + transform:   0.876519 -> 0.160031 ms
+  SM2 weighted + transform: 2.555631 -> 0.327269 ms
+  SM3 single + transform:   0.915637 -> 0.167038 ms
+  SM3 weighted + transform: 2.240463 -> 0.303812 ms
+These are evaluator microbenchmarks. The log has no per-program generic-pose
+identities, so it does not prove all observed generic work uses these templates.
+
+Validation
+
+O2 and O0 each pass 738,304 comparisons across fixtures and 5136 supported
+programs from 5594 stock shaders, including 92,288 alias checks. New signatures
+reject token mutations and preserve constant overrides, NaNs and failure output.
+The cold-build regression skips pose/envelope work for 100 rejected draws and
+preserves warm hits, moving poses, material mismatches, changed sources, linear
+and indexed cache lookups, and the remaining-build-slot boundary. Displacement
+state reuse, nine material pipeline groups at O2/O0, layout, log format literals
+and the Windows x86 release build pass.
+
+Reproduce:
+  python tests/test_actor_pose_kernels.py --benchmark --baseline-ref 01b3063a
+  python tests/test_displacement_state_reuse.py
+  python tests/test_material_pipeline_cpu_micro.py
+  python scripts/check_layout.py
+  python tests/test_log_format_literals.py
+  python scripts/build_renderer.py
+
+Installer
+
+Northlight-0.3.216-test.20261101.6-Windows.zip: 20,148,992 bytes
+ZIP SHA256: 17b73cdfa7287e4b39ad7a07a901f76330daaec7f6b87cd631615f3369f1f7f6
+DLL: 9,010,688 bytes, built 2026-11-01 18:08:24 UTC
+DLL SHA256: 17f95cfeff331ed2c898e442b76e7560326feee29b87596e546a337e7fe56eae
+Source identity: c110a9a8d7f08d895e86ff6ffe5d6fcca35df31ad94186d6f523be1118a166ee
+
+Package hash/payload/dependency/pin verification, ZIP CRC and all six --help
+entry points using bundled isolated Python from a Unicode path pass. Packaged
+DLL bytes equal the tested build. Python 3.13.15, DXVK 3.1.1 and alternative
+DXVK 2.7.1 retain their pins. No installer source changed; the installer suites
+recorded for .5 were not repeated. The ZIP remains local under releases/.
+No game installation, new in-game FPS measurement or full-suite acceptance is
+claimed by these focused checks.

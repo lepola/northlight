@@ -8,7 +8,7 @@ import sys; from pathlib import Path; sys.path.insert(0, str(Path(__file__).reso
 import northlight_paths as fp
 import re
 
-TOKENS = re.compile(r'NorthlightZoneTuning|\bdev(?:Built|BuiltSnapshot|Builds)\b|\btuning\b|zone_tuning\.h|\bdev(?:Poll|Reload|WriteState|Snapshot|Overrides|Mutex|TerrainReach|Error|Revision|Path|FogScale)\b|\bcelestialShipped\b|\breachZone\b')
+TOKENS = re.compile(r'NorthlightZoneTuning|\bdev(?:Built|BuiltSnapshot|Builds)\b|\btuning\b|\b(?:requestedFogTuning|fogTuning)\b|zone_tuning\.h|\bdev(?:Poll|Reload|WriteState|Snapshot|Overrides|Mutex|TerrainReach|Error|Revision|Path|FogScale)\b|\bcelestialShipped\b|\breachZone\b')
 
 def outside_dev(text):
     """Lines (number, text) not inside an active `#if NORTHLIGHT_DEV_TUNING` branch, comments removed."""
@@ -37,11 +37,16 @@ for name in ('world_renderer.h', 'renderer.cpp'):
     assert all(re.fullmatch(r'\s*#\s*if NORTHLIGHT_DEV_TUNING\s*', u) for u in uses), f'{name}: use only a plain #if NORTHLIGHT_DEV_TUNING'
 w = fp.src('world_renderer.h').read_text()
 assert w.count('#if NORTHLIGHT_DEV_TUNING') >= 6, 'the dev hooks (include, members, constructor, palette, worker reach and fog) exist'
-# The shipped branches survive: the reach lookup and buildField call of the release build are still present in their #else.
+# Release builds use the authored reach and the independent cached fog field with identity scale.
 assert 'const float profileReach=shadowRanges.at(r.map,NorthlightRegionalFog::zoneAt(paletteRegion->region,center.x,center.y));' in w
-assert 'buildField(replacement->scene(),region,center.x,center.y,fogScale)' in w and 'fogScale=nullptr;' in w  # null scale = identity
-# One overrides snapshot per build serves both the terrain reach and the ground fog scales; the published build records it (no mixed or lost mid-build change).
-assert 'NorthlightZoneTuning::terrainRadius(*tuning,' in w and 'NorthlightZoneTuning::fogScale(*tuning,' in w and 'devBuilt=tuning;' in w and w.count('devSnapshot()') >= 2
+assert 'buildCachedField(root+"world-cache",r.map,r.camera,paletteRegion->region,*field,fogError,fogAdmission,sceneSource,scale)' in w
+assert 'const NorthlightRegionalFog::ZoneScale* scale=nullptr;' in w
+cache=fp.src('regional_fog_cache.h').read_text()
+assert 'const ZoneScale* scale=nullptr' in cache and 'buildField(ground,region,center.x,center.y,scale)' in cache
+# Geometry and fog now publish independently. Each keeps the immutable tuning snapshot used by that build.
+assert 'NorthlightZoneTuning::terrainRadius(*tuning,' in w and 'devBuilt=tuning;' in w
+assert 'const auto requestedFogTuning=devSnapshot();' in w and 'NorthlightZoneTuning::fogScale(*requestedFogTuning,' in w
+assert 'if(accepted)fogTuning=requestedFogTuning;' in w and 'fogTuningChanged=requestedFogTuning!=fogTuning;' in w
 assert w.index('const auto tuning=devSnapshot();') < w.index('// BEGIN REGION BUILD')
 f = fp.src('regional_fog.h').read_text()
 assert 'const ZoneScale* zoneScale=nullptr' in f and '(*zoneScale)(zone,cell.day,cell.nightExtra);' in f  # identity unless a scale is passed

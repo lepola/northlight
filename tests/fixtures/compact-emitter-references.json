@@ -1,0 +1,34 @@
+{
+  "version": 1,
+  "scope": "Independent authored fixture-energy reference; derived coordinates only, no client bytes or runtime capture.",
+  "fixtures": {
+    "world\\dungeon\\goldshireinn\\innchandelier\\innchandelier.m2": {
+      "asset_sha256": "1e71128d9cd92e45bf98033ddc79632acf92e01586c1b11fecfb2b5677a486a1",
+      "original_count": 6,
+      "position": [0.03718727175146341, 0.000019848346710205078, -1.801309585571289],
+      "rgb": [1.0, 0.4835186953153827, 0.1260045835574178],
+      "intensity": 0.8, "start": 1.0, "end": 8.0, "casts_shadows": true
+    },
+    "world\\expansion02\\doodads\\azjol-nerub\\azjol_chandelier_02.m2": {
+      "asset_sha256": "6937eb1c5e2baed6e2cdf6aff55aa2adf4e21d07599100f6fa6c26e2a5c1c2f0",
+      "original_count": 5,
+      "position": [0.00015263557434082032, 0.02722773551940918, 1.816895353794098],
+      "rgb": [1.0, 0.9686275124549866, 0.0784313753247261],
+      "intensity": 0.8, "start": 1.0, "end": 8.0, "casts_shadows": true
+    },
+    "world\\expansion02\\doodads\\generic\\northrend fires\\northrendtallbraziernoomni01.m2": {
+      "asset_sha256": "05ec407f936855689882c1b25772133a0d9fd8d1d01cc05eed2a6d43ba406537",
+      "original_count": 5,
+      "position": [-0.08927099332213402, -0.016744935512542726, 1.9508042454719543],
+      "rgb": [1.0, 0.495, 0.125],
+      "intensity": 0.8, "start": 1.0, "end": 8.0, "casts_shadows": true
+    },
+    "world\\generic\\passivedoodads\\lights\\chandelier01.m2": {
+      "asset_sha256": "51361baa4e97ff83f09593d2de3a8f2a65785b07922b9f5afac09bd7ba84eff6",
+      "original_count": 4,
+      "position": [0.07379766646772623, 0.12492928611754905, 1.2021623700857162],
+      "rgb": [1.0, 0.20307785203246076, 0.013860504191315959],
+      "intensity": 0.8, "start": 1.0, "end": 8.0, "casts_shadows": true
+    }
+  }
+}

@@ -28,7 +28,7 @@ def assets(replacement=False):
     original, particle = model()
     if replacement:
         original = bytearray(original)
-        struct.pack_into('<h', original, particle+42, 0)
+        struct.pack_into('<h', original, particle+42, 11)
         original = bytes(original)
     spell = [0]*234
     spell[0], spell[71], spell[95], spell[110] = 458, 6, 78, 284
@@ -75,6 +75,20 @@ class MountPatch(unittest.TestCase):
         with tempfile.TemporaryDirectory(dir=northlight_paths.output_dir()) as folder:
             with self.assertRaisesRegex(ValueError, 'No proven'):
                 build(source, cache(), Path(folder))
+
+    def test_unreplaced_particle_survives_shared_display_palettes(self):
+        for index in (-1, 0):
+            source, particle = assets(replacement=True)
+            original = bytearray(source.blob)
+            struct.pack_into('<h', original, particle+42, index)
+            source.blob = bytes(original)
+            with tempfile.TemporaryDirectory(dir=northlight_paths.output_dir()) as folder:
+                report = build(source, cache(), Path(folder))
+                entry = report['models']['creature\\real_mount.m2']
+                self.assertEqual(entry['replacement_colors'], [123])
+                self.assertEqual(entry['emitters'][0]['rgb'], (0,0,1))
+                self.assertEqual(report['counts']['patched'], 1)
+            self.assertEqual(source.blob, original)
 
     def test_model_id_aliases_share_the_same_patched_file(self):
         source, _ = assets(replacement=True)

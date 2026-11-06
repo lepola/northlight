@@ -16,11 +16,14 @@ using Four=NorthlightActorDeformation::Four;
 struct Vertex {
     NorthlightActorDeformation::Program color,uv;
     bool valid=false;
+    NorthlightActorDeformation::Program uv1;bool hasUv1=false;
 };
 struct Pixel {
     float rgbScale=0,alphaScale=0;
     unsigned sampler=0;
     bool textureAlpha=false,fog=false,valid=false;
+    unsigned secondSampler=0,uv=0,secondUv=0,samples=1;
+    bool secondRGB=false,secondRGBAlpha=false,secondAlpha=false;
 };
 inline bool initialized(const NorthlightActorDeformation::Program& p){
     using namespace NorthlightShadowShader;
@@ -61,16 +64,19 @@ inline bool compileVertex(const Word* code,size_t words,unsigned family,Vertex& 
     if(!NorthlightActorDeformation::compile(code,words,next.color,true,2,10)||
        !NorthlightActorDeformation::compile(code,words,next.uv,true,2,5)||
        !initialized(next.color)||!initialized(next.uv))return false;
+    next.hasUv1=NorthlightActorDeformation::compile(code,words,next.uv1,true,2,5,1)&&initialized(next.uv1);
     next.valid=true;out=std::move(next);return true;
     }catch(...){out={};return false;}
 }
-inline bool evaluateVertex(const Vertex& p,const Four inputs[16],const float* constants,Four& color,float (&uv)[2]){
+inline bool evaluateVertex(const Vertex& p,const Four inputs[16],const float* constants,Four& color,float (&uv)[2],float* uv1=nullptr){
     color={};uv[0]=uv[1]=0;if(!p.valid||!inputs||!constants)return false;Four c,t;
     if(!NorthlightActorDeformation::evaluateFast<true>(p.color,inputs,constants,c)||
        !NorthlightActorDeformation::evaluateFast<true>(p.uv,inputs,constants,t))return false;
     // A shader-model-dependent COLOR clamp must never create an inferred tint.
     for(float v:c)if(!std::isfinite(v)||v<0||v>1)return false;
-    color=c;uv[0]=t[0];uv[1]=t[1];return true;
+    color=c;uv[0]=t[0];uv[1]=t[1];
+    if(uv1){if(!p.hasUv1||!NorthlightActorDeformation::evaluateFast<true>(p.uv1,inputs,constants,t))return false;uv1[0]=t[0];uv1[1]=t[1];}
+    return true;
 }
 namespace detail {
 enum Op:unsigned {Literal=1,Color,Texture,Fog,Uniform,Add,Mul};
@@ -105,11 +111,11 @@ struct Expressions {
             if(d.a==negative||d.b==negative){fogged=true;return d.a==negative?d.b:d.a;}
         }return id;
     }
-    bool factors(unsigned id,unsigned channel,float& scale,unsigned& color,unsigned& texture,unsigned& visits)const{
+    bool factors(unsigned id,unsigned channel,float& scale,unsigned& color,unsigned (&texture)[2][4],unsigned& visits)const{
         if(!id||++visits>256)return false;const auto n=nodes[id];float v=0;
         if(value(id,v)){scale*=v;return std::isfinite(scale);}
         if(n.op==Color){if(n.a!=channel)return false;++color;return true;}
-        if(n.op==Texture){if(n.a!=channel)return false;++texture;return true;}
+        if(n.op==Texture){if(n.a>=8)return false;++texture[n.a/4][n.a%4];return true;}
         if(n.op==Mul)return factors(n.a,channel,scale,color,texture,visits)&&factors(n.b,channel,scale,color,texture,visits);
         return false;
     }
@@ -121,8 +127,8 @@ inline bool compilePixel(const Word* code,size_t words,Pixel& out){
     using namespace NorthlightShadowShader;using namespace detail;
     const unsigned major=(code[0]>>8)&255;Expressions e;
     std::array<unsigned,4> temp[32]{},output{},definitions[224]{};
-    bool defined[224]={},samplers[16]={};unsigned inputMask[16]={},legacyUvMask=0;int color=major==2?0:-1,uv=major==2?0:-1,fog=-1;
-    unsigned samples=0,sampler=0;
+    bool defined[224]={},samplers[16]={};unsigned inputMask[16]={},legacyUvMask[2]={};int color=major==2?0:-1,uv[2]={major==2?0:-1,major==2?1:-1},fog=-1;
+    unsigned samples=0,sampler[2]={},coordinates[2]={};
     const auto source=[&](Word t,unsigned lane)->unsigned{
         const unsigned type=regType(t),index=regIndex(t),modifier=(t>>24)&15,c=(t>>(16+2*lane))&3;
         if(!(t&0x80000000u)||(t&0x2000u)||modifier>1)return 0;unsigned id=0;
@@ -135,15 +141,25 @@ inline bool compilePixel(const Word* code,size_t words,Pixel& out){
     for(size_t at=1;at<words;){
         const Word token=code[at];const unsigned op=token&65535;
         if(op==65535){
-            if(token!=0xffffu||at+1!=words||samples!=1)return false;
-            Pixel next;next.sampler=sampler;
+            if(token!=0xffffu||at+1!=words||!samples||samples>2)return false;
+            Pixel next;next.sampler=sampler[0];next.uv=coordinates[0];next.samples=samples;next.secondSampler=sampler[1];next.secondUv=coordinates[1];
             for(unsigned c=0;c<4;++c){
                 bool fogged=false;const unsigned id=c<3?e.intrinsic(output[c],fogged):output[c];
-                float scale=1;unsigned colors=0,textures=0,visits=0;
+                float scale=1;unsigned colors=0,textures[2][4]={},visits=0;
                 if(!e.factors(id,c,scale,colors,textures,visits)||colors!=1||(scale!=1&&scale!=2))return false;
-                if(c<3){if(textures!=1||(c&&next.rgbScale!=scale)||(c&&next.fog!=fogged))return false;next.rgbScale=scale;next.fog=fogged;}
-                else{if(textures>1)return false;next.textureAlpha=textures!=0;next.alphaScale=scale;}
+                unsigned totals[2]={};for(unsigned t=0;t<2;++t)for(unsigned k=0;k<4;++k)totals[t]+=textures[t][k];
+                if(c<3){
+                    if(totals[0]!=1||textures[0][c]!=1||totals[1]>1||
+                       (totals[1]&&!textures[1][c]&&!textures[1][3])||(c&&next.rgbScale!=scale)||(c&&next.fog!=fogged))return false;
+                    const bool mask=totals[1]!=0,alphaMask=textures[1][3]!=0;
+                    if(c&&(next.secondRGB!=mask||next.secondRGBAlpha!=alphaMask))return false;
+                    next.rgbScale=scale;next.fog=fogged;next.secondRGB=mask;next.secondRGBAlpha=alphaMask;
+                }else{
+                    if(totals[0]>1||totals[1]>1||totals[0]!=textures[0][3]||totals[1]!=textures[1][3])return false;
+                    next.textureAlpha=totals[0]!=0;next.alphaScale=scale;next.secondAlpha=totals[1]!=0;
+                }
             }
+            if(samples==2&&!next.secondRGB&&!next.secondAlpha)return false;
             next.valid=true;out=next;return true;
         }
         if(op==65534){const size_t n=(token>>16)&32767;if(n>=words-at)return false;at+=n+1;continue;}
@@ -154,13 +170,14 @@ inline bool compilePixel(const Word* code,size_t words,Pixel& out){
             const unsigned mask=(a[1]>>16)&15;if(!mask)return false;
             if(major==2){
                 if(type==1&&index==0&&!inputMask[0])inputMask[0]=mask;
-                else if(type==3&&index==0&&!legacyUvMask)legacyUvMask=mask;else return false;continue;
+                else if(type==3&&index<2&&!legacyUvMask[index])legacyUvMask[index]=mask;else return false;continue;
             }
-            if(type!=1||index>=16||((a[0]>>16)&15))return false;
+            if(type!=1||index>=16)return false;
             if(inputMask[index])return false;inputMask[index]=mask;
             const unsigned usage=a[0]&31;
+            const unsigned semantic=(a[0]>>16)&15;if(semantic>1||(semantic&&usage!=5))return false;
             if(usage==10){if(color>=0)return false;color=int(index);}
-            else if(usage==5){if(uv>=0)return false;uv=int(index);}
+            else if(usage==5){if(uv[semantic]>=0)return false;uv[semantic]=int(index);}
             else if(usage==11){if(fog>=0)return false;fog=int(index);}else return false;
             continue;
         }
@@ -172,10 +189,11 @@ inline bool compilePixel(const Word* code,size_t words,Pixel& out){
         if((a[0]&0x0ff02000u)||!mask||!((type==0&&index<32)||(type==8&&index==0)))return false;
         auto& target=type==0?temp[index]:output;
         if(op==66){
-            if(n!=3||(token&0x00ff0000u)||type!=0||mask!=15||samples++||uv<0||color<0||regType(a[1])!=(major==2?3u:1u)||int(regIndex(a[1]))!=uv||
-               ((a[1]>>16)&255)!=0xe4||((a[1]>>24)&15)||(a[1]&0x2000u)||((major==2?legacyUvMask:inputMask[unsigned(uv)])&3)!=3||
+            const unsigned coord=uv[0]>=0&&int(regIndex(a[1]))==uv[0]?0:uv[1]>=0&&int(regIndex(a[1]))==uv[1]?1:2;
+            if(n!=3||(token&0x00ff0000u)||type!=0||mask!=15||samples>=2||coord>1||color<0||regType(a[1])!=(major==2?3u:1u)||
+               ((a[1]>>16)&255)!=0xe4||((a[1]>>24)&15)||(a[1]&0x2000u)||((major==2?legacyUvMask[coord]:inputMask[unsigned(uv[coord])])&3)!=3||
                regType(a[2])!=10||regIndex(a[2])>=16||!samplers[regIndex(a[2])]||((a[2]>>16)&255)!=0xe4||((a[2]>>24)&15)||(a[2]&0x2000u))return false;
-            sampler=regIndex(a[2]);for(unsigned c=0;c<4;++c)target[c]=e.node(Texture,c);continue;
+            sampler[samples]=regIndex(a[2]);coordinates[samples]=coord;for(unsigned c=0;c<4;++c)target[c]=e.node(Texture,samples*4+c);++samples;continue;
         }
         if(!((op==1&&n==2)||((op==2||op==5)&&n==3)||((op==4||op==90)&&n==4)))return false;
         std::array<unsigned,4> result{};
@@ -194,10 +212,11 @@ inline bool compilePixel(const Word* code,size_t words,Pixel& out){
 }
 // Intrinsic shader RGBA before the proven native fog epilogue. Fog colour is
 // neither emitted light nor sampled texture; PS constants therefore do not enter.
-inline bool shade(const Pixel& p,const Four& color,const Four& texture,const float*,Four& out){
+inline bool shade(const Pixel& p,const Four& color,const Four& texture,const float*,Four& out,const Four* second=nullptr){
     out={};if(!p.valid)return false;
     for(unsigned c=0;c<4;++c)if(!std::isfinite(color[c])||!std::isfinite(texture[c])||color[c]<0||color[c]>1||texture[c]<0||texture[c]>1)return false;
-    for(unsigned c=0;c<3;++c)out[c]=color[c]*texture[c]*p.rgbScale;
-    out[3]=color[3]*(p.textureAlpha?texture[3]:1.f)*p.alphaScale;return true;
+    if(p.samples==2){if(!second)return false;for(float v:*second)if(!std::isfinite(v)||v<0||v>1)return false;}
+    for(unsigned c=0;c<3;++c)out[c]=color[c]*texture[c]*p.rgbScale*(p.secondRGB?(*second)[p.secondRGBAlpha?3:c]:1.f);
+    out[3]=color[3]*(p.textureAlpha?texture[3]:1.f)*p.alphaScale*(p.secondAlpha?(*second)[3]:1.f);return true;
 }
 } // namespace NorthlightParticleLightProof

@@ -16,8 +16,9 @@ prior=Path(sys.argv[1]).resolve()
 with tempfile.TemporaryDirectory(prefix='northlight-spell-fit-') as tmp:
     folder=Path(tmp)
     shutil.copy2(prior,folder/'spell_fog_reference.h')
-    binary=folder/'test'
-    subprocess.run(['clang++','-std=c++17','-O2','-UNDEBUG','-Wall','-Wextra','-Werror',
+    binary=folder/('test.exe' if sys.platform=='win32' else 'test')
+    compiler=[str(fp.zig()),'c++','-target','x86-windows-gnu'] if sys.platform=='win32' else ['clang++']
+    subprocess.run([*compiler,'-std=c++17','-O2','-UNDEBUG','-Wall','-Wextra','-Werror',
                     '-I',str(folder),*fp.test_include_flags(),
-                    str(Path(__file__).with_suffix('.cpp')),'-o',str(binary)],check=True)
+                    str(Path(__file__).with_suffix('.cpp')),'-o',str(binary)],env=fp.zig_env() if sys.platform=='win32' else None,check=True)
     subprocess.run([str(binary)],check=True)

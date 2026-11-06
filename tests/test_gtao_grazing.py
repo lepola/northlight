@@ -22,7 +22,7 @@ def main():
     args = parser.parse_args()
     assert os.name == 'nt', 'Requires Windows D3D9'
     args.report.parent.mkdir(parents=True, exist_ok=True)
-    exe = ROOT / 'out/gtao-grazing/gtao-grazing.exe'
+    exe = args.report.parent / 'gtao-grazing.exe'
     subprocess.run([str(fp.zig()), 'c++', '-target', 'x86-windows-gnu', '-std=c++17', '-O2', '-UNDEBUG',
                     '-Wno-return-type', *fp.include_flags(), str(ROOT / 'tests/gtao_grazing_gpu.cpp'),
                     '-luser32', '-o', str(exe)], env=fp.zig_env(), check=True)

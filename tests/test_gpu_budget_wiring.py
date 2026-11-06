@@ -20,24 +20,38 @@ checks={}
 
 # controller and timer headers
 checks['gpu_budget.h: portable (no D3D, Win32, clock or allocation)']=all(x not in code(b) for x in ('d3d9','windows.h','chrono','QueryPerformance','new ','malloc','std::vector'))
-checks['gpu_budget.h: level 0 is the full image (40 cloud / 48 fog intervals, the light limit at every level since 0.3.217, no alternation, zero interval constant)']=all(x in b for x in (
-    'return level==0?40u:level==1?32u:24u;','return level>=3?40u:48u;','inline unsigned lightLimit(unsigned limit,unsigned){return limit;}','return steps==fullSteps||!steps||!fullSteps?0.f:'))
+checks['gpu_budget.h: level 0 is the full image (40 cloud / 48 fog intervals, the light limit, no alternation, zero interval constant)']=all(x in b for x in (
+    'return level==0?40u:level==1?32u:24u;','return level>=3?40u:48u;','return std::max(limit,shadowReserve);','return steps==fullSteps||!steps||!fullSteps?0.f:'))
 tc=code(t)
 reads=re.findall(r'->GetData\(([^;]*?)\)',tc)
 checks['timer: every GetData with flags 0, no D3DGETDATA_FLUSH, no wait loop, sleep or spin']=(len(reads)==4 and all(x.rstrip().endswith(',0') for x in reads)
     and 'D3DGETDATA_FLUSH' not in tc and 'while' not in tc and 'for(;;)' not in tc and 'Sleep' not in tc and 'SwitchToThread' not in tc)
 checks['timer: S_FALSE leaves the slot pending (continue), never retried in the same poll']=tc.count('if(hr==S_FALSE)continue;')==4
 checks['timer: a full ring skips the frame (begin returns false), disjoint / zero frequency / nonmonotonic dropped']=(
-    'if(s.pending)continue;' in tc and 'if(disjoint){s.pending=false;continue;}' in tc and 'if(!frequency||t1<t0)continue;' in tc)
+    'if(s.pending)continue;' in tc and 'if(disjoint){s.pending=false;continue;}' in tc and 'if(!s.frequencyValue||t1<s.startValue)continue;' in tc)
+checks['timer: completed components are read once per issue, progress resets at end']=(
+    all(f'if(s.readStage=={stage})' in tc for stage in range(3)) and 's.readStage=0;s.pending=true;' in tc)
 
 # renderer.cpp: timer bracket, poll, controller, logs
 rc=code(r)
 re_=rc[rc.index('void renderEffects() {'):rc.index('applied = true; ++appliedFrames;')]
-checks['renderer: timer opened only with GpuBudgetMs > 0, right after the SavedState, closed by a scope guard (every return path)']=(
-    'struct TimerEnd { NorthlightGpuFrameTimer* t; bool open; ~TimerEnd(){if(open)t->end();} } timerEnd{gpuTimer.get(),world&&world->gpuBudgetMs()&&gpuTimer->begin()};' in re_
-    and re_.index('if (!saved.ok) return;')<re_.index('timerEnd{')<re_.index('gpuProfile->beginFrame(')<re_.index('profileEnd{'))
+# Surface effects finish after deferred spells; clearFrame also closes the timer on early exits.
+checks['renderer: timer spans surface work through deferred spells and is closed on frame cleanup']=(
+    'surfaceTimerOpen=world&&world->gpuBudgetMs()&&gpuTimer->begin();' in re_
+    and re_.index('if (!saved.ok) return;')<re_.index('surfaceTimerOpen=')<re_.index('gpuProfile->beginFrame(')
+    and 'if(surfaceTimerOpen){if(gpuTimer)gpuTimer->end();surfaceTimerOpen=false;}' in rc
+    and rc.count('if(surfaceTimerOpen){gpuTimer->end();surfaceTimerOpen=false;}')==2)
+def in_order(text,*tokens):
+    positions=[text.find(token) for token in tokens]
+    return all(pos>=0 for pos in positions) and all(a<b for a,b in zip(positions,positions[1:]))
+constructor=rc[rc.index('Device(IDirect3DDevice9* d,'):rc.index('~Device() {')]
+destructor=rc[rc.index('~Device() {'):rc.index('bool gamePresentation(')]
+reset=rc[rc.index('HRESULT STDMETHODCALLTYPE Reset(D3DPRESENT_PARAMETERS* pp)'):rc.index('void trimMemory(')]
+# Intervening profiler cleanup is valid; query owners must still retire before the device.
 checks['renderer: the timer is created, reset before a device Reset and destroyed with the profiler']=(
-    'gpuTimer=std::make_unique<NorthlightGpuFrameTimer>(ext);' in rc and 'gpuProfile->reset();gpuSceneProfile->reset();gpuFrameStarted=gpuSceneSplit=gpuEffectsSplit=false;gpuTimer->reset();' in rc and 'gpuProfile.reset();gpuSceneProfile.reset();gpuTimer.reset();' in rc)
+    'gpuTimer=std::make_unique<NorthlightGpuFrameTimer>(ext);' in constructor
+    and in_order(reset,'gpuProfile->reset();','gpuSceneProfile->reset();','materialProfile->reset();','gpuFrameStarted=gpuSceneSplit=gpuEffectsSplit=false;','gpuTimer->reset();','HRESULT hr=ext->Reset(pp);')
+    and in_order(destructor,'gpuProfile.reset();','gpuSceneProfile.reset();','materialProfile.reset();','gpuTimer.reset();','ext->Release();'))
 fin=rc[rc.index('void finishFrameImpl() {'):]
 gb=rc[rc.index('void gpuBudgetFrame(){'):rc.index('void finishFrameImpl() {')]
 checks['renderer: once per frame in finishFrameImpl, after the profile poll, ungated by Diagnostics']=(
@@ -47,7 +61,7 @@ checks['renderer: GpuBudgetMs=0 resets the controller and sets level 0 before an
 checks['renderer: only a finished reading updates the controller (dt from the previous reading), the level goes to the world']=(
     'if(gpuTimer&&gpuTimer->poll(ms)){' in gb and 'world->setGpuBudgetLevel(gpuBudget.update(float(budget),float(ms),dt,gpuLimited));' in gb)
 checks['renderer: GPUBUDGET line on RenderProfile sample frames, level changes logged (first 32, then with Diagnostics)']=(
-    'if(sampled()&&NorthlightRenderThreadProbe::profiling())logf("GPUBUDGET ms=%.3f smoothed=%.3f budget=%.1f level=%u gpuWait=%.2f gpuBound=%d"' in gb
+    'if(sampled()&&NorthlightRenderThreadProbe::profiling())logf("GPUBUDGET ms=%.3f smoothed=%.3f budget=%.1f level=%u gpuWait=%.2f gpuBound=%d eventWait=%.2f"' in gb
     and 'if(gpuBudget.level!=before&&(gpuBudget.changes<=32||diagnostics()))' in gb and 'logf("GPUBUDGET level %u -> %u' in gb)
 
 # world: level gated, full level unchanged
@@ -56,10 +70,12 @@ checks['world: the level is 0 whenever GpuBudgetMs is 0, clamped to MaxLevel']='
 checks['world: the interval constants are written only at a reduced level (bank unchanged at level 0), c60.x only with the clouds active']=(
     'if(gpuBudgetLevel){if(cf.active)c[60][0]=NorthlightGpuBudget::spacingDelta(c[21][3],NorthlightGpuBudget::cloudSteps(gpuBudgetLevel),40);c[64][2]=NorthlightGpuBudget::spacingDelta(c[21][3],NorthlightGpuBudget::fogSteps(gpuBudgetLevel),48);}' in wc
     and len(re.findall(r'c\[64\]\[[0-2]\]=',wc))==1 and wc.index('c[21][3]=128;')<wc.index('if(gpuBudgetLevel){')<wc.index('d->SetPixelShaderConstantF(0,&c[0][0],68);'))
-checks['world: the lamp limit passes through lightLimit (the setting at level 0)']='NorthlightGpuBudget::lightLimit(quality.localLightLimit,gpuBudgetLevel)' in wc and wc.count('quality.localLightLimit,float(selectDt)')==0
+checks['world: the lamp limit passes through lightLimit (the setting at level 0)']='NorthlightGpuBudget::lightLimit(quality.localLightLimit,gpuBudgetLevel,effects.shadows&&quality.pointShadows?quality.pointShadowLimit:0)' in wc and wc.count('quality.localLightLimit,float(selectDt)')==0
 cp=wc[wc.index('if(cf.active&&c[21][0]>=.5f){'):wc.index('d->SetPixelShaderConstantF(17,c[17],2);')]
 checks['world: the clouds are one draw into the fog at every level (0.3.200: no amortised reuse, it lagged a frame in motion)']=(
-    cp.count('const bool cloudsDrawn=check(quad(w/2,h/2),"fog clouds raymarch");')==1 and cp.count('SetPixelShader(fogCloudsPS)')==1
+    cp.count('const bool cloudsDrawn=check(quad(w/2,h/2),"fog clouds raymarch");')==1
+    and cp.count('SetPixelShader(cloudFade?(fogActorCurrent?(fogActorTiledCurrent?cloudActorTiledFadePS:cloudActorFadePS):cloudFadePS):(fogActorCurrent?(fogActorTiledCurrent?fogCloudsActorTiledPS:fogCloudsActorPS):fogCloudsPS))')==1
+    and 'const bool cloudFade=geometryReady&&shadowVolumeTransitionActive(firstSource);if(cloudFade)bindShadowTransition(firstSource);' in cp
     and 'cloudBuffer' not in wc and 'cloudAlternate' not in wc and 'amortise' not in cp and 'if(!cloudsDrawn)return false;' in cp)
 
 # shaders: zero addend at level 0
@@ -75,14 +91,14 @@ checks['settings: GpuBudgetMs (0..20, presets 4/3/2, default 4)']=(
 
 # task 45: GPU-bound gate and the CPU budget (ActorShadowCpuMs)
 wl=fp.src('world_shadow_experiment.inl').read_text();wlc=code(wl)
-checks['task 45 gate: the signal is the previous Present\'s latency wait, kept apart from the logging counters; known only with the latency limit']=(
+checks['task 45 gate: the signal includes EVENT and Present latency waits, kept apart from the logging counters; known only with the latency limit']=(
     'latencyLastMs=0;' in rc and 'latencyLastMs=double(qpcNow()-t0)*perMs;++latencyWaits;latencyWaitMs+=latencyLastMs;' in rc
     and 'boundKnown=limitGpuLatency&&!latencyFailed;gpuLimited=!boundKnown||gpuBound.bound();' in gb
     and 'cpuLimited=(!replayKnown||replayWait.bound())&&(!boundKnown||!gpuBound.bound());' in gb
     and 'NorthlightStream::get(streamStats->presentNs)+NorthlightStream::get(streamStats->backpressureNs)' in gb and 'replayKnown=streamStats!=nullptr;' in gb
     and 'NorthlightStream::get(streamStats->skippedFrames)' in gb and 'replayWait.update(skippedNow?NorthlightGpuBudget::MaxWaitMs:' in gb
     and 'target->streamStats=&stream->streamCore().q.stats;' in r
-    and 'gpuBound.update(float(latencyLastMs),' in gb and gb.index('gpuBound.update(')<gb.index('const unsigned budget=world?world->gpuBudgetMs():0;'))
+    and 'gpuBound.update(float(latencyLastMs)+eventGpuMs,' in gb and gb.index('gpuBound.update(')<gb.index('const unsigned budget=world?world->gpuBudgetMs():0;'))
 checks['task 45 gate: BoundWaitMs and the lighten parameter default to the old behaviour']=(
     'constexpr float BoundWaitMs=.5f;' in b and 'unsigned update(float budgetMs,float ms,float dt,bool lighten=true){' in b
     and 'over=lighten&&smoothed>budgetMs?over+dt:0.f;' in code(b) and 'under=smoothed<budgetMs*UpFraction||!lighten?under+dt:0.f;' in code(b))

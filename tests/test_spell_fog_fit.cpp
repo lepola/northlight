@@ -8,6 +8,10 @@
 #include <cstdio>
 #include <cstring>
 #include <algorithm>
+#include "job_system.h"
+#if defined(__SSE__)
+#include <xmmintrin.h>
+#endif
 namespace New=NorthlightSpellFog;
 namespace Old=ReferenceSpellFog;
 static uint32_t seed=1531;
@@ -60,19 +64,54 @@ int main(){
  }
  // The complete hold path, including new hints, unchanged frames, smoothing,
  // inactive transitions, invalid input reset and the revision threshold.
- New::Hold a;Old::Hold b;
+ New::Hold a,queued;Old::Hold b;NorthlightJobs::System jobs;assert(jobs.start(6));
+ std::fenv_t initialEnvironment;assert(std::fegetenv(&initialEnvironment)==0);
  for(unsigned i=0;i<500;++i){
   New::Frame ar;Old::Frame br;ar.active=br.active=i%13!=0;
   for(unsigned k=0;k<New::kSamples;++k)ar.tau[k]=br.tau[k]=New::kDistance[k]*(.002f+float(next()%1000)/100000);
   for(unsigned k=0;k<3;++k)ar.scatter[k]=br.scatter[k]=float(next()%256)/256;
-  if(i%7==0){const auto& game=games[i%5];a.addHint(game,i%2);b.addHint(game,i%2);}
+  if(i%7==0){const auto& game=games[i%5];a.addHint(game,i%2);b.addHint(game,i%2);queued.addHint(game,i%2);}
   if(i%11==0)for(bool bare:{i%2!=0,i%2==0}){
-   const auto& game=games[1+i%4];a.addHint(game,bare);b.addHint(game,bare);
+   const auto& game=games[1+i%4];a.addHint(game,bare);b.addHint(game,bare);queued.addHint(game,bare);
   }
   if(i%41==0)ar.tau[0]=br.tau[0]=NAN;
   const float dt=i%3?.008f:0;const bool wanted=i%29!=0;
-  a.update(ar,wanted,dt);b.update(br,wanted,dt);same(a.out,b.out);assert(a.resets==b.resets);++updates;
+  const int modes[]={FE_TONEAREST,FE_DOWNWARD,FE_UPWARD,FE_TOWARDZERO};assert(std::fesetround(modes[i%4])==0);
+#if defined(__i386__)||defined(__x86_64__)
+  unsigned short expectedCw;asm volatile("fnstcw %0":"=m"(expectedCw));expectedCw=(expectedCw&~0x300u)|(i%3==0?0:i%3==1?0x200u:0x300u);asm volatile("fldcw %0"::"m"(expectedCw));
+#endif
+#if defined(__SSE__)
+  const unsigned expectedCsr=(_mm_getcsr()&~0x8040u)|((i%4&1)?0x8000u:0)|((i%4&2)?0x40u:0);_mm_setcsr(expectedCsr);
+#endif
+  New::PendingUpdate pending(queued,ar,wanted,dt);assert(pending.environmentKnown);NorthlightJobs::Counter done;
+  auto work=[&]{
+   std::fenv_t saved;assert(std::fegetenv(&saved)==0);assert(std::fesetround(modes[(i+1)%4])==0);
+#if defined(__i386__)||defined(__x86_64__)
+   unsigned short cw;asm volatile("fnstcw %0":"=m"(cw));cw=(cw&~0x300u)|0x300u;asm volatile("fldcw %0"::"m"(cw));
+#endif
+#if defined(__SSE__)
+   _mm_setcsr((_mm_getcsr()&~0x8040u)|0x8000u);
+#endif
+   std::fenv_t poisoned;assert(std::fegetenv(&poisoned)==0);assert(std::fesetenv(&pending.environment)==0);
+#if defined(__i386__)||defined(__x86_64__)
+   unsigned short restoredCw;asm volatile("fnstcw %0":"=m"(restoredCw));assert(restoredCw==expectedCw);
+#endif
+#if defined(__SSE__)
+   assert((_mm_getcsr()&~0x3fu)==(expectedCsr&~0x3fu));
+#endif
+   assert(std::fesetenv(&poisoned)==0);
+   const int workerMode=std::fegetround();pending();assert(std::fegetround()==workerMode);assert(std::fesetenv(&saved)==0);
+  };
+  if(i%3)jobs.kick(done,work);else work();assert(jobs.wait(done));
+  same(queued.out,b.out);assert(queued.resets==b.resets); // private until publication
+  a.update(ar,wanted,dt);b.update(br,wanted,dt);pending.publish(queued);
+  same(a.out,b.out);same(queued.out,b.out);assert(a.resets==b.resets&&queued.resets==b.resets);++updates;
  }
+ assert(std::fesetenv(&initialEnvironment)==0);
+ {New::Hold hold;New::Frame raw;raw.active=true;for(unsigned i=0;i<New::kSamples;++i)raw.tau[i]=.02f*New::kDistance[i];
+  New::PendingUpdate pending(hold,raw,true,.016f);pending.environmentKnown=false;pending();assert(!pending.ready);
+  Old::Hold reference;Old::Frame input;input.active=true;std::memcpy(input.tau,raw.tau,sizeof input.tau);reference.update(input,true,.016f);
+  pending.publish(hold);same(hold.out,reference.out);}
  // Same static profile repeated while its transmittance changes enough to
  // trigger refits: reproduces the work in Hold::update on a moving camera.
  double ms[2][7];

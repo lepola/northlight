@@ -16,17 +16,27 @@ using Triangle=std::array<NorthlightGI::Vec3,3>;
 using Canonical=std::array<uint32_t,9>;
 // Snapshot indices are already rebased/compacted by draw_snapshot.h. Indexed
 // and nonindexed list/strip layouts remain supported; malformed data keeps replay.
+template<bool Indexed,bool Strip,class Position> bool makeTrianglesImpl(const std::vector<Position>& positions,const std::vector<uint32_t>& indices,
+    size_t primitiveCount,std::vector<Triangle>& output){
+    const size_t required=Strip?primitiveCount+2:primitiveCount*3;
+    if((Indexed&&indices.size()<required)||(!Indexed&&positions.size()<required))return false;
+    output.reserve(primitiveCount);
+    auto read=[&](size_t v,NorthlightGI::Vec3& out){if constexpr(Indexed)v=indices[v];if(v>=positions.size())return false;
+        const auto& p=positions[v];if(!std::isfinite(p.x)||!std::isfinite(p.y)||!std::isfinite(p.z))return false;out={p.x,p.y,p.z};return true;};
+    if constexpr(Strip){
+        Triangle t;for(unsigned j=0;j<3;++j)if(!read(j,t[j])){output.clear();return false;}output.push_back(t);
+        for(size_t i=1;i<primitiveCount;++i){t[0]=t[1];t[1]=t[2];if(!read(i+2,t[2])){output.clear();return false;}output.push_back(t);}return true;
+    }
+    for(size_t i=0;i<primitiveCount;++i){Triangle t;
+        for(unsigned j=0;j<3;++j)if(!read(3*i+j,t[j])){output.clear();return false;}
+        output.push_back(t);
+    }return true;
+}
 template<class Position> bool makeTriangles(const std::vector<Position>& positions,const std::vector<uint32_t>& indices,
     bool indexed,size_t primitiveCount,bool strip,std::vector<Triangle>& output,size_t limit=8192){
     output.clear();if(!primitiveCount||primitiveCount>std::min<size_t>(limit,8192))return false;
-    const size_t required=strip?primitiveCount+2:primitiveCount*3;
-    if((indexed&&indices.size()<required)||(!indexed&&positions.size()<required))return false;
-    output.reserve(primitiveCount);
-    for(size_t i=0;i<primitiveCount;++i){Triangle t;
-        for(unsigned j=0;j<3;++j){size_t v=strip?i+j:3*i+j;if(indexed)v=indices[v];if(v>=positions.size()){output.clear();return false;}
-            const auto p=positions[v];if(!std::isfinite(p.x)||!std::isfinite(p.y)||!std::isfinite(p.z)){output.clear();return false;}t[j]={p.x,p.y,p.z};}
-        output.push_back(t);
-    }return true;
+    if(indexed)return strip?makeTrianglesImpl<true,true>(positions,indices,primitiveCount,output):makeTrianglesImpl<true,false>(positions,indices,primitiveCount,output);
+    return strip?makeTrianglesImpl<false,true>(positions,indices,primitiveCount,output):makeTrianglesImpl<false,false>(positions,indices,primitiveCount,output);
 }
 struct Eligibility { bool auditedRigid=false,dynamic=false,skinned=false,alphaTest=true; };
 inline bool eligible(Eligibility e){return e.auditedRigid&&!e.dynamic&&!e.skinned&&!e.alphaTest;}
@@ -36,7 +46,10 @@ inline bool canonical(const Triangle& t,Canonical& out){
         for(unsigned j=0;j<3;++j){if(!std::isfinite(p[j]))return false;float v=p[j]==0?0:p[j];std::memcpy(&points[i][j],&v,4);}}
     // All directional caster passes are double-sided. Reordering triangle
     // vertices changes neither coverage nor depth; canonicalize winding/order.
-    std::sort(points.begin(),points.end());for(unsigned i=0;i<3;++i)for(unsigned j=0;j<3;++j)out[3*i+j]=points[i][j];return true;
+    if(points[1]<points[0])std::swap(points[0],points[1]);
+    if(points[2]<points[1])std::swap(points[1],points[2]);
+    if(points[1]<points[0])std::swap(points[0],points[1]);
+    for(unsigned i=0;i<3;++i)for(unsigned j=0;j<3;++j)out[3*i+j]=points[i][j];return true;
 }
 struct Budget {
     size_t triangles=0,candidates=0,draws=0;

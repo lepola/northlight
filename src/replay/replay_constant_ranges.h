@@ -23,8 +23,12 @@ class BoundedDirtyRegisters {
     // Unknown slots are never compared. Only the validity mask is initialized.
     std::array<T,Count*Width> values_;
     std::array<uint64_t,(Count+63)/64> valid_{};
-    bool known(std::size_t index) const noexcept {return (valid_[index/64]&(uint64_t(1)<<(index%64)))!=0;}
+    bool allKnown_=false,anyKnown_=false;
+    bool known(std::size_t index) const noexcept {return allKnown_||(valid_[index/64]&(uint64_t(1)<<(index%64)))!=0;}
     void mark(std::size_t first,std::size_t last) noexcept {
+        if(allKnown_)return;
+        anyKnown_=true;
+        if(first==0&&last==Count){allKnown_=true;return;}
         for(std::size_t i=first;i<last;){
             const std::size_t boundary=std::min(last,(i/64+1)*64),length=boundary-i;
             const uint64_t mask=length==64?~uint64_t(0):((uint64_t(1)<<length)-1)<<(i%64);
@@ -32,6 +36,7 @@ class BoundedDirtyRegisters {
         }
     }
     bool knownRange(std::size_t first,std::size_t last) const noexcept {
+        if(allKnown_)return true;
         for(std::size_t i=first;i<last;){
             const std::size_t boundary=std::min(last,(i/64+1)*64),length=boundary-i;
             const uint64_t mask=length==64?~uint64_t(0):((uint64_t(1)<<length)-1)<<(i%64);
@@ -52,9 +57,17 @@ public:
         assert(used.first<Count&&used.count<=Count-used.first&&desired);
         if(!desired||used.first>=Count||used.count>Count-used.first)return {};
         std::size_t first=used.first,last=first+used.count;
+        if(!anyKnown_){std::memcpy(values_.data()+first*Width,desired+first*Width,(last-first)*RegisterBytes);mark(first,last);return {used.first,used.count};}
+        if constexpr(std::is_same_v<T,float>&&Width==4){
+            if(knownRange(first,last)){
+                auto dirty=Detail::knownFloatSpan(values_.data()+first*Width,desired+first*Width,used.count);
+                if(dirty.count){dirty.first+=used.first;std::memcpy(values_.data()+dirty.first*Width,desired+dirty.first*Width,dirty.count*RegisterBytes);}
+                return dirty;
+            }
+        }
         if(knownRange(first,last)&&std::memcmp(values_.data()+first*Width,desired+first*Width,(last-first)*RegisterBytes)==0)return {};
-        while(first<last&&known(first)&&std::memcmp(values_.data()+first*Width,desired+first*Width,RegisterBytes)==0)++first;
-        while(last>first&&known(last-1)&&std::memcmp(values_.data()+(last-1)*Width,desired+(last-1)*Width,RegisterBytes)==0)--last;
+        while(first<last&&known(first)&&Detail::equalRegister<RegisterBytes>(values_.data()+first*Width,desired+first*Width))++first;
+        while(last>first&&known(last-1)&&Detail::equalRegister<RegisterBytes>(values_.data()+(last-1)*Width,desired+(last-1)*Width))--last;
         if(first==last)return {};
         std::memcpy(values_.data()+first*Width,desired+first*Width,(last-first)*RegisterBytes);
         mark(first,last);
@@ -82,8 +95,9 @@ public:
             const std::size_t origin=a;const bool allKnown=knownRange(a,b);
             if(allKnown&&!std::memcmp(values_.data()+a*Width,source,(b-a)*RegisterBytes))return;
             const auto same=[&](std::size_t lo,std::size_t hi){
-                return (allKnown||knownRange(lo,hi))&&
-                    !std::memcmp(values_.data()+lo*Width,source+(lo-origin)*Width,(hi-lo)*RegisterBytes);
+                return (allKnown||knownRange(lo,hi))&&(hi-lo==1?
+                    Detail::equalRegister<RegisterBytes>(values_.data()+lo*Width,source+(lo-origin)*Width):
+                    !std::memcmp(values_.data()+lo*Width,source+(lo-origin)*Width,(hi-lo)*RegisterBytes));
             };
             constexpr std::size_t Chunk=16;
             while(b-a>=Chunk&&same(a,a+Chunk))a+=Chunk;
@@ -92,9 +106,8 @@ public:
             while(b>a&&same(b-1,b))--b;
             if(a<b){first=std::min(first,a);last=std::max(last,b);}
         };
-        inspect(begin,patchFirst,captured+begin*Width);
-        inspect(patchFirst,patchLast,replacement);
-        inspect(patchLast,end,captured+patchLast*Width);
+        if(!anyKnown_){first=begin;last=end;}
+        else {inspect(begin,patchFirst,captured+begin*Width);inspect(patchFirst,patchLast,replacement);inspect(patchLast,end,captured+patchLast*Width);}
         if(first>=last)return {};
         const auto source=[&](std::size_t i){return i>=patchFirst&&i<patchLast?
             replacement+(i-patchFirst)*Width:captured+i*Width;};
@@ -109,7 +122,7 @@ public:
     }
     // Read only known registers, normally the latest used range or dirty span.
     const T* data()const noexcept {return values_.data();}
-    void reset() noexcept {valid_.fill(0);}
+    void reset() noexcept {valid_.fill(0);allKnown_=false;anyKnown_=false;}
 };
 
 // The projection is the only difference between captured and desired floats.
@@ -117,14 +130,15 @@ public:
 // unchanged range, so its stable data() pointer can serve the existing Pass API.
 inline bool updateProjectedConstants(BoundedDirtyRegisters<float,256,4>& bank,
         const float* captured,const NorthlightShaderConstants::Usage& usage,
-        unsigned projectionKind,const float* projectionRows,DirtySpan& dirty) noexcept {
+        unsigned projectionKind,const float* projectionRows,DirtySpan& dirty,const float* worldMatrix=nullptr) noexcept {
     dirty={};
     if(!captured||!projectionRows||(projectionKind!=1&&projectionKind!=2))return false;
     const auto range=usage.floats;
     const unsigned projectionStart=projectionKind==1?4:2;
     if(range.first>256||range.count>256-range.first||range.first>projectionStart||range.first+range.count<projectionStart+4)return false;
     float transposed[16];const float* replacement=projectionRows;
-    if(projectionKind==1){
+    if(projectionKind==1&&worldMatrix)replacement=worldMatrix; // DetailDoodad shadow VS consumes world POSITION0.
+    else if(projectionKind==1){
         for(unsigned a=0;a<4;++a)for(unsigned b=0;b<4;++b)
             std::memcpy(transposed+a*4+b,projectionRows+b*4+a,sizeof(float));
         replacement=transposed;
@@ -145,7 +159,9 @@ inline bool prepareFloatConstants(float* desired,const float* captured,
     const auto range=usage.floats;
     const unsigned projectionStart=projectionKind==1?4:2;
     if(range.first>256||range.count>256-range.first||range.first>projectionStart||range.first+range.count<projectionStart+4)return false;
-    std::memcpy(desired+range.first*4,captured+range.first*4,std::size_t(range.count)*16);
+    const auto end=range.first+range.count;
+    std::memcpy(desired+range.first*4,captured+range.first*4,std::size_t(projectionStart-range.first)*16);
+    std::memcpy(desired+(projectionStart+4)*4,captured+(projectionStart+4)*4,std::size_t(end-projectionStart-4)*16);
     if(projectionKind==1){
         for(unsigned a=0;a<4;++a)for(unsigned b=0;b<4;++b)desired[16+a*4+b]=projectionRows[b*4+a];
     }else std::memcpy(desired+8,projectionRows,16*sizeof(float));

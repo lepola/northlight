@@ -1,0 +1,76 @@
+{
+  "format": "northlight-f11-all-off/1",
+  "version": "0.3.217",
+  "baseline_commit": "74f6abc08a9d7d4f2658269ab63a5c5622ba4236",
+  "source_identity": "0c150e6411c99dfcff7335da2bd57f5cd4de110868275d04c4ba91cc1033c15c",
+  "dll_sha256": "cbb469c5a55ee6bdc937c59eab53169a4fe85cdf6726fbb5069bad15c369b93a",
+  "dll_bytes": 9104384,
+  "windows_package": {
+    "platform": "windows",
+    "file": "Northlight-0.3.217-Windows.zip",
+    "sha256": "d4ac30ec6625cc9b769b3526062d6323b8924ea9e357116b57dffd886dc66781",
+    "bytes": 20192796,
+    "files": 98,
+    "dll_version": "0.3.217"
+  },
+  "draw_100000_median_ms": {
+    "current": {
+      "0": 4.16505,
+      "1": 4.1419,
+      "2": 4.2063
+    },
+    "baseline": {
+      "0": 9.515450000000001,
+      "1": 12.97425,
+      "2": 12.93165
+    }
+  },
+  "frame_finish_200_median_ms": {
+    "current": {
+      "0": 0.4005,
+      "1": 0.39959999999999996,
+      "2": 0.39985000000000004
+    },
+    "baseline": {
+      "0": 0.41105,
+      "1": 0.404,
+      "2": 0.38615
+    }
+  },
+  "mode_names": {
+    "0": "F10",
+    "1": "F11 master OFF",
+    "2": "F11 all scene groups OFF"
+  },
+  "samples_per_mode": 6,
+  "cpu_backend_draw_stub": true,
+  "real_gpu_image_equality": true,
+  "worker_pause_resume_cache_preservation": true,
+  "requested_diagnostics_preserved": true,
+  "game_launched": false,
+  "game_attachment": false,
+  "allow_running_game": true,
+  "installed_mpq_modified": false,
+  "installed_wow_exe_modified": false,
+  "fps_gain_claimed": false,
+  "gpu_backend": "DXVK 3.1.1",
+  "validation": {
+    "status": "complete",
+    "full_run": ".local/out/test-output/20261103-150024/results.tsv",
+    "initial_counts": {
+      "SKIP": 221,
+      "PASS": 264,
+      "FAIL": 2
+    },
+    "rerun": ".local/out/test-output/20261103-151930/results.tsv",
+    "resolved_failures": [
+      "test_event_budget.py",
+      "test_pending_release_wiring.py"
+    ],
+    "consolidated_counts": {
+      "SKIP": 221,
+      "PASS": 266
+    }
+  },
+  "evidence_root": ".local/out/f11-all-off-20261103"
+}

@@ -41,7 +41,8 @@ _MAP = '(?:' + '|'.join(MAPS) + ')'
 # What the DLL reads from world-cache/ (src/world, src/lights, src/sky); nothing else is shipped.
 # Continents only, on purpose: the dungeon and raid maps (instance_maps.py) are an optional layer the installer builds
 # on the player's machine on top of this cache; a prebuilt variant never carries them.
-ALLOWLIST = re.compile(rf'{_MAP}/\d+_\d+\.fg3|models/[0-9a-f]{{64}}\.fgs|lights/{_MAP}\.fgl'
+ALLOWLIST = re.compile(rf'{_MAP}/\d+_\d+\.fg3|models/[0-9a-f]{{64}}\.fgs|lights/{_MAP}\.fg[la]'
+                       r'|lights/native-fixtures\.bin'
                        rf'|fog/{_MAP}/\d+_\d+\.frf|celestial/(?:sun|moon)\.fct')
 ZIP_TIME = (2026, 1, 1, 0, 0, 0)
 
@@ -141,6 +142,7 @@ def main(argv=None):
                 'build': {'archives': args.archives, 'without': args.without, 'maps': build.get('maps_built'),
                           'tiles': build['inputs']['tiles'], 'fingerprint': build['fingerprint'],
                           'digests': build.get('digests'), 'sources': build['inputs']['sources'],
+                          'cache_versions': build['inputs'].get('cache_versions'),
                           'built_unix': build.get('built_unix'), 'python': sys.version.split()[0]},
                 'files': files}
     manifest_bytes = (json.dumps(manifest, indent=1, sort_keys=True) + '\n').encode()

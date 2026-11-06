@@ -7,6 +7,7 @@ Synthetic tests provide full-resolution depth; saved captures reconstruct it
 from half-resolution distance and therefore cannot alone prove edge behavior.
 """
 import argparse
+import hashlib
 import json
 import math
 import os
@@ -100,12 +101,26 @@ def main():
             cases.append(args.capture_prefix)
         rows = []
         for prefix in cases:
+            constants = Path(prefix + 'constants.f32').read_bytes()
+            if len(constants) not in (68 * 16, 79 * 16):
+                raise ValueError('Invalid constants length: expected 68 or 79 float4 registers')
+            provenance = dict(constant_register_count=len(constants) // 16,
+                              constant_bank_sha256=hashlib.sha256(constants).hexdigest(),
+                              constant_bank_stage='unversioned',
+                              input_origin='saved-aggregate' if prefix == args.capture_prefix else 'authored-fixture',
+                              depth_reconstructed=not Path(prefix + 'depth.fgr').is_file(),
+                              invented_fog_environment=False, per_source_bank_missing=True,
+                              material_inputs_complete=False, authentic_source_replay=False, whole_scene_replay=False)
             result = subprocess.run([str(binary), prefix, str(args.reference_shader or reference / 'RemovalSmooth.bin'),
                                      str(fp.COMPILED / 'RemovalSmooth.bin'), str(args.reference_normals or reference / 'WorldNormals.bin'),
                                      str(fp.COMPILED / 'WorldNormals.bin'), Path(prefix).name, backend],
                                     cwd=folder, capture_output=True, text=True, check=True, timeout=60)
             print(result.stdout, end='', flush=True)
-            rows.extend(json.loads(line) for line in result.stdout.splitlines() if line.startswith('{'))
+            for line in result.stdout.splitlines():
+                if line.startswith('{'):
+                    row = json.loads(line)
+                    row['input_provenance'] = provenance
+                    rows.append(row)
         if args.output:
             args.output.write_text(json.dumps(rows, indent=2) + '\n')
         print('PASS removal distance: alpha/confidence exact, finite output, component error <= 1/1024')

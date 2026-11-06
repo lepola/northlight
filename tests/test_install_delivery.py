@@ -17,15 +17,20 @@ import build_art_layer as art
 import build_packages as packages
 import build_emitter_patch
 import test_emitter_patch
+import build_cache_variant
 
 
 class Delivery(unittest.TestCase):
-    def test_release_rejects_stale_or_missing_builder_sources(self):
-        manifest = {'variant': 'stock', 'build': {'sources': packages.install_world_cache.source_hashes()}}
+    def test_release_checks_cache_versions_independently_of_dll_and_sources(self):
+        manifest = {'variant': 'stock', 'build': {'cache_versions': dict(packages.install_world_cache.CACHE_VERSIONS),
+                                                'sources': {'world_scene_builder.py': 'different release'}}}
         packages.check_variant_sources(manifest)
-        for changed in ('outdoor-light-profiles.json', 'wotlk-emitter-profiles.json', 'world_scene_builder.py'):
+        for changed in packages.install_world_cache.CACHE_VERSIONS:
             stale = copy.deepcopy(manifest)
-            stale['build']['sources'][changed] = 'old'
+            stale['build']['cache_versions'][changed] += 1
+            with self.assertRaisesRegex(SystemExit, changed):
+                packages.check_variant_sources(stale)
+            stale['build']['cache_versions'][changed] = True
             with self.assertRaisesRegex(SystemExit, changed):
                 packages.check_variant_sources(stale)
         with self.assertRaisesRegex(SystemExit, 'regenerate'):
@@ -33,6 +38,12 @@ class Delivery(unittest.TestCase):
 
     def test_packaged_imports_are_complete(self):
         packages.check_closure(packages.APP_FILES)
+
+    def test_native_fixture_catalog_is_in_cache_delivery_allowlists(self):
+        for allowlist in (packages.CACHE_MEMBER, build_cache_variant.ALLOWLIST):
+            self.assertIsNotNone(allowlist.fullmatch('lights/native-fixtures.bin'))
+            for path in ('native-fixtures.bin','lights/other.bin','lights/../native-fixtures.bin'):
+                self.assertIsNone(allowlist.fullmatch(path))
 
     def test_reviewed_generation_never_guesses_unknown_models_or_revisions(self):
         original = test_emitter_patch.LightPatch().model()

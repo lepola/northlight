@@ -1,0 +1,64 @@
+Northlight 0.3.216-test.20261102.8 вЂ” complete Windows installer
+
+Combined implementation: f4750cde8b1ffc227f08ee00155d382732bf9fb3.
+Parents: 66fa8d897804915f90ea53a8a1c2f84b5c89d03e and
+ac88b7f8c6d30fe24e45c1e0314c7c98b194a93b.
+
+Includes the complete .7 renderer and all accepted earlier optimizations, plus
+the fragmented-VA guard and command-stream diagnostic follow-up. No selective
+feature ports or feature removal. The experimental transient material ring was
+measured and rejected for general use; it is not a release input.
+
+Changes since .7
+- Preserve pressure caps while avoiding another cache clear when the previous
+  completed trim did not grow the largest free region and memory is stable.
+  Aggregate shortage, builder demand and a smaller largest region still permit
+  a trim. A new episode remains eligible when the prior cooldown expires.
+- Attribute sync-storm transitions to locks, unlocks, queries, other calls and
+  express texture readbacks. Buffer/texture readbacks are overlapping explanatory
+  subsets, not additional round trips. Existing counters are sampled at the
+  two-second detector boundary.
+
+The .7 sampler/state batching, packet allocation reuse, shared prepared geometry,
+compact shader constants, ready/single-bone envelope paths, HDR shortcuts and
+zero-extinction fog skipping are retained. See the .5/.6/.7 records for component
+measurements and their limits. No new quality or frame-queue settings are added.
+
+Production build
+Built with scripts/build_renderer.py and Zig 0.15.2, including compiler preflight,
+shader freshness gates and normal package DLL verification. No development-tuning
+or replay-stand build. Source inputs were hashed before and after compilation.
+Source identity: e4087f41df808393e9bd9a4cad3fc8df7b079937accca3639ee872e6ab5f60ad
+DLL bytes: 9060864
+DLL SHA256: f9b646c2c56da6c454f1af2736557bab7dd7d0e3a55e288deff9fcbde0e0b150
+
+Installer
+File: Northlight-0.3.216-test.20261102.8-Windows.zip
+ZIP bytes: 20175466
+ZIP SHA256: a736119019d832380abcbf31870bd82c5883b6a9df3eff811059936fc019648a
+Bundled Python, pinned StormLib, DXVK 3.1.1 and fallback DXVK 2.7.1 are included.
+No game cache or game data is bundled. Package verification, runtime/backend pins,
+ZIP CRC, byte-exact packaged DLL and current source identity pass. All six entry
+points pass --help through the bundled isolated Python under a Unicode path.
+
+Regression results
+Full combined Windows regression: 256 PASS, 0 FAIL, 0 TIMEOUT, 225 SKIP
+by prerequisites/runner conditions. Results: test-output/20261102-211623/results.tsv.
+The production memory_guard and replay-upload tests pass on the combined source;
+optimized and sanitizer variants cover stable fragmentation, reserve failures,
+cooldown re-entry, cache trim/cap behavior and sampler handoff. Focused real-queue
+memorypressure checks pass O2, ASan/UBSan and TSan against current headers, without
+private production-header overrides. The older full command-stream test previously
+hit the same event-query poll-count assertion on both baseline and modified code;
+that is separate from the focused pressure checks.
+
+Scope
+This archive is a complete test installer. It has not been installed into the
+client or used for a new gameplay FPS measurement. Stable 120 FPS and resolution
+of the cloth triangle are not established. Earlier .7 GPU image comparisons keep
+their recorded scope; do not substitute component timings for whole-game FPS.
+
+Local evidence: out/complete-installer-20261102-8/ (inputs.json,
+build-renderer.log, full-suite.log, cpu/test-output/, installer-validation.json,
+package-check.log and packages/). Earlier arena evidence remains in
+out/qa-instance-20261102/ and out/qa-followup-20261102/.

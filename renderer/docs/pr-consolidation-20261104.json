@@ -1,0 +1,654 @@
+{
+  "format": "northlight-pr-consolidation/1",
+  "repository": "lepola/northlight",
+  "retained_pr": 98,
+  "integration_before": "4f7f490dec13237a970d5f31be447913ea8232ca",
+  "history_merge": "ace81c1c46a72dac2b57b03744a2bbb96b11af5d",
+  "verified_tree": "0dbc6a4f601007e2a6470a92ab341ac4a7224ced",
+  "open_prs_before": 17,
+  "target_open_prs": 1,
+  "original_commits_added": 45,
+  "all_original_heads_reachable": true,
+  "tree_unchanged_by_history_merge": true,
+  "renderer_source_identity": "1fbbbf318ad5cfa8f3e970d0ba19d737b9cac8e1831bd8729331c5f20cda750c",
+  "pr_heads": [
+    {
+      "number": 76,
+      "title": "Preserve native vegetation alpha and add bounded grass shadows",
+      "head": "6cd7b1cd81b6dffbc14e2ef01021a667d195b9b0",
+      "branch": "fix/translucent-tree-spell-layer",
+      "missing_count": 6
+    },
+    {
+      "number": 86,
+      "title": "Avoid NVIDIA present-wait stalls and retain the DXVK 3 colour workaround",
+      "head": "1f270b99897cb7d517a19cc6fde3f98554a5c855",
+      "branch": "review/dxvk-engine-name-20261021",
+      "missing_count": 2
+    },
+    {
+      "number": 92,
+      "title": "Review complete renderer integration: local-source shadows",
+      "head": "25db9c6fa641f0b51f7af8b8427b7fd3bdbe97f3",
+      "branch": "review/local-source-shadows-20261021",
+      "missing_count": 0
+    },
+    {
+      "number": 94,
+      "title": "Review complete renderer integration: HDR presentation",
+      "head": "25db9c6fa641f0b51f7af8b8427b7fd3bdbe97f3",
+      "branch": "review/experimental-hdr-20261021",
+      "missing_count": 0
+    },
+    {
+      "number": 96,
+      "title": "Review complete renderer integration: diagnostics",
+      "head": "25db9c6fa641f0b51f7af8b8427b7fd3bdbe97f3",
+      "branch": "review/ui-atlas-diagnostics-20261021",
+      "missing_count": 0
+    },
+    {
+      "number": 97,
+      "title": "Review complete renderer integration: materials and terrain",
+      "head": "25db9c6fa641f0b51f7af8b8427b7fd3bdbe97f3",
+      "branch": "review/material-displacement-20261021",
+      "missing_count": 0
+    },
+    {
+      "number": 98,
+      "title": "Integrate the complete renderer with HDR, persistent lights, shadows and weather",
+      "head": "4f7f490dec13237a970d5f31be447913ea8232ca",
+      "branch": "review/combined-integration-20261021",
+      "missing_count": 0
+    },
+    {
+      "number": 109,
+      "title": "Preserve regional fog during memory deferral and skip empty rendering",
+      "head": "f266891348b2f3d3bc583c038c3e97568232c30d",
+      "branch": "review/independent-fog-recovery-20261027",
+      "missing_count": 7
+    },
+    {
+      "number": 110,
+      "title": "Preserve native sun colors and occlude glare behind horizon geometry",
+      "head": "1ce599530b634a4380cb8f314a7b3831d6342ae1",
+      "branch": "review/independent-native-sun-20261027",
+      "missing_count": 3
+    },
+    {
+      "number": 111,
+      "title": "Review complete renderer integration: EVENT completion",
+      "head": "25db9c6fa641f0b51f7af8b8427b7fd3bdbe97f3",
+      "branch": "review/independent-event-completion-20261027",
+      "missing_count": 0
+    },
+    {
+      "number": 112,
+      "title": "Reduce thin actor AO halos while preserving contact and environment occlusion",
+      "head": "92e8d4b482c4a38a4caa4de18668e0297093fe1e",
+      "branch": "fix/ao-actor-thickness-106-20261027",
+      "missing_count": 0
+    },
+    {
+      "number": 113,
+      "title": "Crossfade directional shadow cache updates without retaining actor poses",
+      "head": "369f73590d9430845719c16b8051f48ca653cece",
+      "branch": "fix/shadow-cache-crossfade-107-20261027",
+      "missing_count": 3
+    },
+    {
+      "number": 114,
+      "title": "Expand dynamic emitter coverage, glue light animation and local transmission shadows",
+      "head": "233bf23981db522d803705e95df1c4b86e967e0d",
+      "branch": "feat/emitter-coverage-shadow-base-20261027",
+      "missing_count": 6
+    },
+    {
+      "number": 116,
+      "title": "Make tooling optional, reuse valid caches, and recognize generated art layers",
+      "head": "f039e2589da651c49069b7cd717fe57a2465e8e0",
+      "branch": "review/test-tooling-20261029",
+      "missing_count": 5
+    },
+    {
+      "number": 117,
+      "title": "Bound scene geometry allocations and recover fragmented worker builds",
+      "head": "20098e6c1598a998511376e148d79c92c8c277b2",
+      "branch": "review/bounded-scene-storage-20261029",
+      "missing_count": 5
+    },
+    {
+      "number": 118,
+      "title": "Add ASSAO quality variants and preserve AO silhouette controls",
+      "head": "d85f58de8d7eea64f5de67abdc4d2d5e55f1a56d",
+      "branch": "review/gtao-silhouette-20261029",
+      "missing_count": 7
+    },
+    {
+      "number": 120,
+      "title": "Support Unicode game paths in the installer and renderer",
+      "head": "781097f927be98859c9436e03cdf1f35147e33b9",
+      "branch": "codex/unicode-game-paths-20261031",
+      "missing_count": 1
+    }
+  ],
+  "commit_coverage": [
+    {
+      "pr": 76,
+      "sha": "e64cd367a419e9b30f027dd791e259ba23c1a85c",
+      "subject": "Reconcile vegetation alpha replay with current upstream settings and shaders",
+      "coverage": "upstream_reconciliation_merge",
+      "adaptation_commits": [],
+      "source_paths": []
+    },
+    {
+      "pr": 76,
+      "sha": "942849aa928d4c73868616f632cf9c1f8da15ba3",
+      "subject": "Capture verified blended grass with fade-preserving shadow coverage",
+      "coverage": "present",
+      "adaptation_commits": [
+        "afdf690f4d704f05c334d62eb3f47619fde79ef1"
+      ],
+      "source_paths": [
+        "src/shadows/detail_doodad_shadow.h",
+        "src/world/world_renderer.h"
+      ]
+    },
+    {
+      "pr": 76,
+      "sha": "85c3b1a3d927ed0abd9c9e9a3c97ba85c6470c71",
+      "subject": "Cover legacy alpha modes and native grass rejection controls",
+      "coverage": "present",
+      "adaptation_commits": [
+        "a9c23f103e95f01d1c2e9e771046123cd408729a"
+      ],
+      "source_paths": [
+        "tests/grass_shadow_gpu.cpp"
+      ]
+    },
+    {
+      "pr": 76,
+      "sha": "25a6ebf4d2b6b76b34c3942900a4adda703c7c7b",
+      "subject": "Keep dense grass fields inside a separate bounded frame allowance",
+      "coverage": "present",
+      "adaptation_commits": [],
+      "source_paths": [
+        "src/shadows/detail_doodad_shadow.h"
+      ]
+    },
+    {
+      "pr": 76,
+      "sha": "bd34e621294af990e152c27762da20c885d3ba6a",
+      "subject": "Accept audited grass blending in capture source contracts",
+      "coverage": "present",
+      "adaptation_commits": [],
+      "source_paths": [
+        "src/world/world_renderer.h",
+        "tests/test_actor_fade_capture.py"
+      ]
+    },
+    {
+      "pr": 76,
+      "sha": "6cd7b1cd81b6dffbc14e2ef01021a667d195b9b0",
+      "subject": "Stabilize grass shadow projection during camera movement",
+      "coverage": "present",
+      "adaptation_commits": [
+        "a799cbe2405464e6f6858878ae6914b5a3421682",
+        "d0ab1696f6a5d0c96c5a1af70aa8796fa25e82a4"
+      ],
+      "source_paths": [
+        "src/replay/replay_constant_ranges.h",
+        "src/shadows/detail_doodad_shadow.h"
+      ]
+    },
+    {
+      "pr": 86,
+      "sha": "4b6518f50d0822ffb730a990176df00153e57536",
+      "subject": "Reconcile the scoped DXVK workaround with current upstream",
+      "coverage": "upstream_reconciliation_merge",
+      "adaptation_commits": [],
+      "source_paths": []
+    },
+    {
+      "pr": 86,
+      "sha": "1f270b99897cb7d517a19cc6fde3f98554a5c855",
+      "subject": "Avoid stalled NVIDIA present waits on DXVK 3.1.1",
+      "coverage": "present",
+      "adaptation_commits": [
+        "976e6c933a987ff0968447b8d1d77f90bd6a92a1"
+      ],
+      "source_paths": [
+        "src/proxy/dxvk_engine_name.h"
+      ]
+    },
+    {
+      "pr": 109,
+      "sha": "88841bd517f1a57b9917ba61c372e23a92f2d707",
+      "subject": "Render regional fog independently and preserve bounded geometry retries",
+      "coverage": "present",
+      "adaptation_commits": [],
+      "source_paths": [
+        "src/sky/regional_fog_cache.h",
+        "src/world/world_renderer.h"
+      ]
+    },
+    {
+      "pr": 109,
+      "sha": "3295a9b7140ca8e6c74661e66d1f6602ceb8eb45",
+      "subject": "Reduce regional fog construction and fitting overhead",
+      "coverage": "present",
+      "adaptation_commits": [],
+      "source_paths": [
+        "src/sky/fog_clouds.h",
+        "src/sky/spell_fog_march.h"
+      ]
+    },
+    {
+      "pr": 109,
+      "sha": "c5046151740ee4e0303882bbdfeae83aa408f75b",
+      "subject": "Reduce exact fog preparation work with bounded scratch",
+      "coverage": "present",
+      "adaptation_commits": [],
+      "source_paths": [
+        "src/sky/fog_clouds.h"
+      ]
+    },
+    {
+      "pr": 109,
+      "sha": "c8206190d6b6745bcd93b6c96baeb5abb8d8ab05",
+      "subject": "Exercise exact water masks in fog preparation checks",
+      "coverage": "present",
+      "adaptation_commits": [],
+      "source_paths": [
+        "tests/test_regional_fog_water_mask.cpp",
+        "tests/test_regional_fog_water_mask.py"
+      ]
+    },
+    {
+      "pr": 109,
+      "sha": "30badfccf584e560268da401e0750befb320ed66",
+      "subject": "Batch exact cloud generation and fog support reductions",
+      "coverage": "present",
+      "adaptation_commits": [
+        "51e64251810ab7a753f6952b929ec610cc51e05e"
+      ],
+      "source_paths": [
+        "src/sky/fog_clouds.h"
+      ]
+    },
+    {
+      "pr": 109,
+      "sha": "f6f55b80d6a756dfaad909c64658c53f92d770a5",
+      "subject": "Preserve cloud outputs while reducing field and weather preparation",
+      "coverage": "present",
+      "adaptation_commits": [],
+      "source_paths": [
+        "src/sky/fog_clouds.h"
+      ]
+    },
+    {
+      "pr": 109,
+      "sha": "f266891348b2f3d3bc583c038c3e97568232c30d",
+      "subject": "Skip empty fog passes while preserving temporal history",
+      "coverage": "present",
+      "adaptation_commits": [],
+      "source_paths": [
+        "src/world/world_renderer.h"
+      ]
+    },
+    {
+      "pr": 110,
+      "sha": "7e6db7cc0d0d925f39a4a60831f530259649709e",
+      "subject": "Preserve native sun core and glare colors independently",
+      "coverage": "present",
+      "adaptation_commits": [],
+      "source_paths": [
+        "src/sky/sun_hue.h",
+        "src/world/world_renderer.h"
+      ]
+    },
+    {
+      "pr": 110,
+      "sha": "577278db63e2aa7b72ae22d3eb98c2e9cc6440d8",
+      "subject": "Restore native sky cloud order and recover fresh sky-only camera context",
+      "coverage": "present",
+      "adaptation_commits": [],
+      "source_paths": [
+        "src/proxy/sky_mip_hash.h",
+        "src/sky/celestial_context.h",
+        "src/sky/celestial_disc_renderer.h"
+      ]
+    },
+    {
+      "pr": 110,
+      "sha": "1ce599530b634a4380cb8f314a7b3831d6342ae1",
+      "subject": "Occlude celestial glare behind raw-depth horizon geometry",
+      "coverage": "present",
+      "adaptation_commits": [],
+      "source_paths": [
+        "shaders/celestial_disc_effects.hlsl",
+        "tests/celestial_occlusion_gpu.cpp"
+      ]
+    },
+    {
+      "pr": 113,
+      "sha": "6ae9eab8ebe4766c64cbb1f3f6c2e5db57cc90e5",
+      "subject": "Crossfade directional shadow cache updates without retaining actor poses",
+      "coverage": "present",
+      "adaptation_commits": [
+        "155ae2f7926b2243dbcac3b850f5e499def4789d"
+      ],
+      "source_paths": [
+        "src/world/world_renderer.h"
+      ]
+    },
+    {
+      "pr": 113,
+      "sha": "1d42bd8d6a889ff5f53158bae45b72d8ba9b3329",
+      "subject": "Keep high-detail actor shadows aligned with continuous celestial motion",
+      "coverage": "present",
+      "adaptation_commits": [],
+      "source_paths": [
+        "src/proxy/renderer.cpp",
+        "src/world/world_renderer.h"
+      ]
+    },
+    {
+      "pr": 113,
+      "sha": "369f73590d9430845719c16b8051f48ca653cece",
+      "subject": "Preserve shadow filters with nested tap coordinates",
+      "coverage": "present",
+      "adaptation_commits": [],
+      "source_paths": [
+        "shaders/world_effects.hlsl"
+      ]
+    },
+    {
+      "pr": 114,
+      "sha": "a8d33d9c968d6b6ac20c5f53bbddf00c53fe8840",
+      "subject": "Validate point-transmission masks on an independent GPU device",
+      "coverage": "present",
+      "adaptation_commits": [],
+      "source_paths": [
+        "tests/local_source_shadows_gpu.cpp",
+        "tests/test_local_source_shadows.py"
+      ]
+    },
+    {
+      "pr": 114,
+      "sha": "ed33eaa1b8fbae6d912e43f376babe2c155c1ecc",
+      "subject": "Reuse local-light retirement scissors and constant columns",
+      "coverage": "present",
+      "adaptation_commits": [],
+      "source_paths": [
+        "src/lights/local_light_selection.h",
+        "src/world/world_renderer.h"
+      ]
+    },
+    {
+      "pr": 114,
+      "sha": "6a54ec926d6f30fcc6bb2c1039f368258056323e",
+      "subject": "Light server-spawned herbs and props with compact mesh shadows",
+      "coverage": "present",
+      "adaptation_commits": [
+        "8b246f074eb33d8c1bccb992c750f7f72a972199"
+      ],
+      "source_paths": [
+        "renderer/build_gameobject_emitters.py",
+        "renderer/native_model_lights.py"
+      ]
+    },
+    {
+      "pr": 114,
+      "sha": "794fd3b11978f32e19b191e9b7e4b754b131db0b",
+      "subject": "Verify cyan Swamp Gas lighting and preserve unrecolored particle sources",
+      "coverage": "present",
+      "adaptation_commits": [
+        "8ea7b32f119060eeea5ecd739791eef7082aff06"
+      ],
+      "source_paths": [
+        "renderer/attached_emitter_sources.py",
+        "tests/test_particle_light_capture.py"
+      ]
+    },
+    {
+      "pr": 114,
+      "sha": "ed22e9a9b7012811e2603ea1745cb93fd654b211",
+      "subject": "Cover native emitters in world props without gameobject display rows",
+      "coverage": "present",
+      "adaptation_commits": [
+        "8ac01fbd68485b9d08c1794d72d2c47c59884b51"
+      ],
+      "source_paths": [
+        "renderer/build_gameobject_emitters.py"
+      ]
+    },
+    {
+      "pr": 114,
+      "sha": "233bf23981db522d803705e95df1c4b86e967e0d",
+      "subject": "Keep fixture shadows and attach world lights to animated model parts",
+      "coverage": "present",
+      "adaptation_commits": [
+        "870f259f425949929291ebe9f042d9ae6c337020",
+        "6329142d1a7ff428350566af90fb566601e34233"
+      ],
+      "source_paths": [
+        "src/lights/model_light_attachments.h",
+        "src/replay/replay_shadow_policy.h"
+      ]
+    },
+    {
+      "pr": 116,
+      "sha": "ac99f72f62ae97240151c0047fa5e65b4d8a42ae",
+      "subject": "Load optional tooling on demand and isolate generated client fixtures",
+      "coverage": "present",
+      "adaptation_commits": [],
+      "source_paths": [
+        "build_art_layer.py",
+        "northlight_paths.py",
+        "scripts/shaders/shader_compiler.py",
+        "tests/test_tool_imports.py"
+      ]
+    },
+    {
+      "pr": 116,
+      "sha": "34588547b9e4c82cca58ff83e1a3470637f188b9",
+      "subject": "Pin reproducible StormLib sources and hash them consistently across hosts",
+      "coverage": "present",
+      "adaptation_commits": [],
+      "source_paths": [
+        "renderer/package-pins.json",
+        "scripts/build_stormlib.py"
+      ]
+    },
+    {
+      "pr": 116,
+      "sha": "1733fa08d6c9afbaf43cf680d32fe46284d794e0",
+      "subject": "Verify preservation of all three user profile files in packages",
+      "coverage": "present",
+      "adaptation_commits": [],
+      "source_paths": [
+        "tests/verify_packages.py"
+      ]
+    },
+    {
+      "pr": 116,
+      "sha": "b3d5b02c240983228413928832f3d228f75fcd24",
+      "subject": "Reuse current world caches and preserve saved instance selections",
+      "coverage": "present",
+      "adaptation_commits": [
+        "32e84d95694bdbf68f22e49e1c2ca5c0cb131c2d"
+      ],
+      "source_paths": [
+        "scripts/install_world_cache.py"
+      ]
+    },
+    {
+      "pr": 116,
+      "sha": "f039e2589da651c49069b7cd717fe57a2465e8e0",
+      "subject": "Recognize generated art archives and retain compatible cached geometry",
+      "coverage": "present",
+      "adaptation_commits": [
+        "0da2256e06376b29f6ed896fdee0a657c0919af6"
+      ],
+      "source_paths": [
+        "renderer/northlight_install.py",
+        "scripts/install_world_cache.py"
+      ]
+    },
+    {
+      "pr": 117,
+      "sha": "5a474471faef0faf8bde277f0fcd5d342fbb843d",
+      "subject": "Bound local scene geometry and recover fragmented worker builds",
+      "coverage": "present",
+      "adaptation_commits": [],
+      "source_paths": [
+        "src/gi/adaptive_geometry_array.h",
+        "src/gi/scene_source_cache.h",
+        "src/world/world_renderer.h"
+      ]
+    },
+    {
+      "pr": 117,
+      "sha": "aa920935115dd3a058bc1ef655f9dfb0dcea9874",
+      "subject": "Pack independent GI probe textures with exact SSE2 stores",
+      "coverage": "present",
+      "adaptation_commits": [
+        "748a18bda64182b1e26ff146e25bf7d9b6250e5f"
+      ],
+      "source_paths": [
+        "src/gi/probe_texture_upload.h"
+      ]
+    },
+    {
+      "pr": 117,
+      "sha": "99edf0ce8cc2d8035c451bf922f807d73307013d",
+      "subject": "Separate scene-storage correctness from performance acceptance",
+      "coverage": "present",
+      "adaptation_commits": [
+        "f88f5c13e1c966c770220b2da99320a9e1334f4d"
+      ],
+      "source_paths": [
+        "tests/test_probe_blend.cpp"
+      ]
+    },
+    {
+      "pr": 117,
+      "sha": "05b38559139d16b746f0c16e1f9b0a161f2bb211",
+      "subject": "Require an explicit flag for probe differential benchmarks",
+      "coverage": "present",
+      "adaptation_commits": [
+        "e44fb6c92252608e2b1191d53c4255b4ac576f34"
+      ],
+      "source_paths": [
+        "tests/test_probe_blend_equivalence.cpp",
+        "tests/test_probe_blend_equivalence.py"
+      ]
+    },
+    {
+      "pr": 117,
+      "sha": "20098e6c1598a998511376e148d79c92c8c277b2",
+      "subject": "Reduce capture material and GI preparation with checked exact fast paths",
+      "coverage": "present",
+      "adaptation_commits": [],
+      "source_paths": [
+        "src/core/material_byte_ops.h",
+        "src/gi/gi_solve_pool.h",
+        "src/gi/gi_trig.h",
+        "src/gi/probe_moment_pack.h",
+        "src/gi/world_probe_cache.h",
+        "src/world/draw_snapshot.h"
+      ]
+    },
+    {
+      "pr": 118,
+      "sha": "3977bd702f6aab1c671c58f2b53f0405d6d08bd1",
+      "subject": "Reduce GTAO halos from isolated foreground silhouettes",
+      "coverage": "present",
+      "adaptation_commits": [],
+      "source_paths": [
+        "shaders/effects.hlsl"
+      ]
+    },
+    {
+      "pr": 118,
+      "sha": "7871c40efe3d43df5b77c0a728509ac13899ad94",
+      "subject": "Skip High GTAO zero-weight taps before depth sampling",
+      "coverage": "present",
+      "adaptation_commits": [],
+      "source_paths": [
+        "shaders/effects.hlsl",
+        "tests/gtao_footprint_gpu.cpp",
+        "tests/validate_gtao_footprint_gpu.py"
+      ]
+    },
+    {
+      "pr": 118,
+      "sha": "f9c58f1d4420beef15374bf3d7cc32c796aa5648",
+      "subject": "Fold fixed AO blur proof coordinates without changing samples",
+      "coverage": "present",
+      "adaptation_commits": [
+        "b9077f0d51308952d0b36d5e929f65c562b96e12"
+      ],
+      "source_paths": [
+        "shaders/effects.hlsl"
+      ]
+    },
+    {
+      "pr": 118,
+      "sha": "4482f5a62d127feb925d3a198145f935c7d8b492",
+      "subject": "Expose optional AO quality through live settings and native menu",
+      "coverage": "present",
+      "adaptation_commits": [],
+      "source_paths": [
+        "src/core/quality_settings.h",
+        "src/settings/settings_schema.h"
+      ]
+    },
+    {
+      "pr": 118,
+      "sha": "b8e7fba951cf5c2f7342779a9c334558e0b37b37",
+      "subject": "Preserve AO kernels with nested ring and direction coordinates",
+      "coverage": "present",
+      "adaptation_commits": [],
+      "source_paths": [
+        "shaders/effects.hlsl"
+      ]
+    },
+    {
+      "pr": 118,
+      "sha": "1c52bf5f589e5d43cd0ce1e49611412e6ab1e29c",
+      "subject": "Add fixed-quality ASSAO and skip discarded fallback bloom reads",
+      "coverage": "present",
+      "adaptation_commits": [],
+      "source_paths": [
+        "shaders/effects.hlsl",
+        "src/proxy/renderer.cpp"
+      ]
+    },
+    {
+      "pr": 118,
+      "sha": "d85f58de8d7eea64f5de67abdc4d2d5e55f1a56d",
+      "subject": "Reduce AO rotation artifacts and add GPU visual regression lab",
+      "coverage": "present",
+      "adaptation_commits": [
+        "418c39ce6b6ad14eb8bea5b78a70b10fb913c55d"
+      ],
+      "source_paths": [
+        "shaders/effects.hlsl"
+      ]
+    },
+    {
+      "pr": 120,
+      "sha": "781097f927be98859c9436e03cdf1f35147e33b9",
+      "subject": "Support Unicode game paths throughout installer and renderer file I/O",
+      "coverage": "present",
+      "adaptation_commits": [
+        "8dc3e67d600c73d98d6bba1ac7851fefb52e4f22"
+      ],
+      "source_paths": [
+        "src/core/utf8_path.h"
+      ]
+    }
+  ]
+}

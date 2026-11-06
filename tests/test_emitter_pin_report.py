@@ -5,7 +5,7 @@ Historical batches are compared only on identical model bytes. Stock variant pin
 available reviewed luminous-batch center remain checked. Reads MPQs only."""
 import sys; from pathlib import Path; sys.path.insert(0, str(Path(__file__).resolve().parents[1]))  # repo root
 import northlight_paths as fp; fp.use_source_modules()
-import hashlib,json,unittest
+import hashlib,json,struct,unittest
 import emitter_pin_report
 import outdoor_light_profiles
 from world_scene_builder import Assets
@@ -45,9 +45,10 @@ class PinReport(unittest.TestCase):
                 continue
             blob=self.assets['all'].read(path)
             if x['status']=='matched':
-                # One light per reviewed emitter: a profile may pin several emitters in one model.
+                # The report pins source bytes; the builder's compact-fixture
+                # policy may combine several authored emitters from that pin.
                 pin=outdoor_light_profiles.pinned(catalog[path])[hashlib.sha256(blob).hexdigest()]
-                self.assertEqual(len(outdoor_light_profiles.fallback(catalog,path,blob,[])),len(pin.get('emitters',[pin])))
+                self.assertEqual(len(outdoor_light_profiles.fallback(catalog,path,blob,[])),len(outdoor_light_profiles.fixture_emitters(pin)))
                 self.assertIn('pin',x)
             else:
                 with self.assertRaises(ValueError):outdoor_light_profiles.fallback(catalog,path,blob,[])
@@ -77,7 +78,24 @@ class PinReport(unittest.TestCase):
                 prefix='installed luminous skin-batch bounds center: '
                 if not pin['position_basis'].startswith(prefix):continue
                 texture=pin['position_basis'][len(prefix):].split(' (')[0]
-                centers={tuple(b['center']) for b in emitter_pin_report.batches(self.assets[view],path) if b['texture']==texture}
+                try:
+                    actual_batches=emitter_pin_report.batches(self.assets[view],path)
+                except ValueError as error:
+                    self.assertEqual(view,'all')
+                    self.assertIn('SKIN vertex lookup exceeds winning M2',str(error))
+                    # A model-only pin does not certify an independently replaced SKIN.
+                    # Keep the original position proof on byte-identical vertex data.
+                    current=self.assets[view].read(path);stock=self.assets['stock'].read(path)
+                    def vertices(blob):
+                        n,off=struct.unpack_from('<II',blob,60)
+                        return blob[off:off+48*n]
+                    self.assertEqual(vertices(current),vertices(stock),path)
+                    diagnostic=emitter_pin_report.report(self.assets[view],catalog={path:p},with_batches=True)['profiles'][path]
+                    self.assertIn('geometry_error',diagnostic)
+                    self.assertEqual(diagnostic['skin_archive'],self.assets[view].origin(path[:-3]+'00.skin'))
+                    self.assertNotIn('batches',diagnostic)
+                    actual_batches=emitter_pin_report.batches(self.assets['stock'],path)
+                centers={tuple(b['center']) for b in actual_batches if b['texture']==texture}
                 self.assertEqual(centers,{tuple(pin['position'])},(view,path));checked+=1
         if not checked:self.skipTest('No luminous-batch model with a reviewed hash is installed')
         print('reviewed luminous batch centers checked:',checked)

@@ -5,6 +5,9 @@
 #include <atomic>
 #include <cstring>
 #include "snapshot_store.h"
+#ifdef NORTHLIGHT_REPLAY_STAND
+#include "stand_inputs.h"
+#endif
 #ifdef _WIN32
 #include <windows.h>
 #endif
@@ -66,7 +69,17 @@ struct SelfReadStats {
     static inline std::atomic<unsigned long long> calls{0},bytes{0},failures{0};
     static inline std::atomic<long long> ticks{0};
     static inline std::atomic<bool> timed{false};
+#ifndef NORTHLIGHT_REPLAY_STAND
+    using Observer=void(*)(std::uintptr_t,const void*,std::size_t,bool) noexcept;
+    static inline std::atomic<Observer> observer{nullptr}; // Explicit native capture only.
+#endif
 };
+#ifdef NORTHLIGHT_REPLAY_STAND
+inline bool readSelfLive(uintptr_t address,void* output,size_t size) {
+    // A stand never interprets recorded addresses as pointers in its own host.
+    (void)address;(void)output;(void)size;return false;
+}
+#else
 inline bool readSelfLive(uintptr_t address,void* output,size_t size) {
     const unsigned long long n=SelfReadStats::calls.fetch_add(1,std::memory_order_relaxed);
     SelfReadStats::bytes.fetch_add(size,std::memory_order_relaxed);
@@ -78,19 +91,30 @@ inline bool readSelfLive(uintptr_t address,void* output,size_t size) {
         reinterpret_cast<LPCVOID>(address),output,size,&copied) && copied==size;
     if(timed){QueryPerformanceCounter(&end);SelfReadStats::ticks.fetch_add((end.QuadPart-begin.QuadPart)*8,std::memory_order_relaxed);}
     if(!ok)SelfReadStats::failures.fetch_add(1,std::memory_order_relaxed);
+    if(const auto observer=SelfReadStats::observer.load(std::memory_order_acquire))observer(address,output,size,ok);
     return ok;
 }
+#endif
 // 0.3.192 (CS): with a snapshot active on this thread (capture on the game thread, replay of a snapshot command on the
 // replay thread) the read goes through it (snapshot_store.h); otherwise exactly the live read above, one null check apart.
 inline bool readSelf(uintptr_t address,void* output,size_t size) {
+#ifdef NORTHLIGHT_REPLAY_STAND
+    return NorthlightStream::StandInputs::read(address,output,size);
+#else
     if(NorthlightStream::GameSnapshot* snapshot=NorthlightStream::activeSnapshot)
         return NorthlightStream::snapshotRead(*snapshot,address,output,size,readSelfLive,NorthlightStream::codeRange());
     return readSelfLive(address,output,size);
+#endif
 }
 
 inline bool supportedClient() {
     // This client is a fixed-base PE32. Reject another image/base outright.
+#ifdef NORTHLIGHT_REPLAY_STAND
+    const auto* context=NorthlightStream::StandInputs::currentContext();
+    if(!context||context->targetBase()!=0x400000)return false;
+#else
     if(reinterpret_cast<uintptr_t>(GetModuleHandleW(nullptr))!=0x400000)return false;
+#endif
     static const unsigned char cameraCode[]={
         0x55,0x8b,0xec,0xa1,0x6c,0x43,0xb7,0x00,
         0x8b,0x80,0x20,0x7e,0x00,0x00,0x8b,0x50,0x08};

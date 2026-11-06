@@ -79,11 +79,9 @@ template<class Read> inline bool proven(Read read){
     return true;
 }
 
-// Whether the memory reading counts as weather present this frame. The client keeps its weather per zone and also while the viewer is inside a
-// building or cave, where it draws none (it skips the weather draws when the viewer is fully inside a WMO) and the sky is not drawn either: the old
-// draw-based detector then fades the weather out, so the memory only counts on frames where the world drew a sky-band draw. mirrorActive false: the
-// draw bands are unknown (no device mirror), so the memory counts alone. key: the WeatherMemory setting.
-inline bool counts(bool key,bool valid,bool mirrorActive,bool skyBandDrawn){return key&&valid&&(!mirrorActive||skyBandDrawn);}
+// Zone weather is independent of the camera's visible sky. Shelter belongs to
+// the effect passes, not the source; otherwise looking down eventually fades it out.
+inline bool counts(bool key,bool valid){return key&&valid;}
 
 // Per frame source: the code proofs run once (code reads bypass the snapshot, see snapshot_store.h), then one validated reading per call.
 class Source {

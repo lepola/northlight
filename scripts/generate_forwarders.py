@@ -126,18 +126,20 @@ REDUNDANT = {('IDirect3DDevice9', n) for n in (
 #   not overridden by Device: SetRenderState SetSamplerState SetTextureStageState SetTransform MultiplyTransform SetMaterial SetLight LightEnable
 #     SetClipPlane SetScissorRect SetViewport SetFVF SetStreamSourceFreq Set{Vertex,Pixel}ShaderConstant{F,I,B} SetNPatchMode
 #     SetSoftwareVertexProcessing SetCurrentTexturePalette SetPaletteEntries (GuardedMirrorDevice takes only the gate)
-#   pure unwrap + forward to ext: SetTexture SetVertexShader SetPixelShader SetVertexDeclaration SetRenderTarget SetDepthStencilSurface
+#   pure unwrap + forward to ext: SetTexture SetVertexShader SetPixelShader SetVertexDeclaration
 #     (mirrorResources.unwrap), SetStreamSource SetIndices (NorthlightTrackedBuffers::resolveInput; its one side effect, disabling the mirror for
 #     an unwrapped input, cannot fire for a stream proxy whose raw was resolved as wrapped: a proxy without a proven raw replays through the Device)
 # NEVER direct: draws (hooks, counters, census), Clear, Present, Reset, Begin/EndScene, every Create*, CreateVertexShader/PixelShader
 # (registration), ProcessVertices, StretchRect/ColorFill/UpdateSurface/UpdateTexture, queries, state blocks, cursor, Get*.
+# SetRenderTarget retains Device interception for logical HDR backbuffers.
+# SetDepthStencilSurface retains Device interception to finish deferred material captures before changing depth.
 # tests/test_command_stream.py checks this set against the audited list and against renderer.cpp's Device source.
 DIRECT = {('IDirect3DDevice9', n) for n in (
     'SetRenderState', 'SetSamplerState', 'SetTextureStageState', 'SetTransform', 'MultiplyTransform', 'SetMaterial', 'SetLight', 'LightEnable',
     'SetClipPlane', 'SetScissorRect', 'SetViewport', 'SetFVF', 'SetStreamSourceFreq', 'SetVertexShaderConstantF', 'SetVertexShaderConstantI',
     'SetVertexShaderConstantB', 'SetPixelShaderConstantF', 'SetPixelShaderConstantI', 'SetPixelShaderConstantB', 'SetNPatchMode',
     'SetSoftwareVertexProcessing', 'SetCurrentTexturePalette', 'SetPaletteEntries', 'SetTexture', 'SetVertexShader', 'SetPixelShader',
-    'SetVertexDeclaration', 'SetStreamSource', 'SetIndices', 'SetRenderTarget', 'SetDepthStencilSurface')}
+    'SetVertexDeclaration', 'SetStreamSource', 'SetIndices')}
 PUBLISH = {('IDirect3DDevice9', n) for n in ('BeginScene', 'EndScene', 'Clear', 'SetRenderTarget')}
 # Ids of commands the hand-written stream code records (no generated encoder). Append here; ids are regenerated with
 # the file and nothing persists them.
@@ -487,8 +489,13 @@ def forwarders_text(text):
 
 def generate():
     text = SDK.read_text()
-    (northlight_paths.GENERATED / 'forwarders.h').write_text(forwarders_text(text))
-    (northlight_paths.GENERATED / 'command_stream.inl').write_text(stream_text(text))
+    for name, content in [('forwarders.h', forwarders_text(text)), ('command_stream.inl', stream_text(text))]:
+        path = northlight_paths.GENERATED / name
+        data = content.encode('utf-8')
+        # A concurrent compiler may have this header mapped on Windows.
+        # Identical output needs no truncate/write and no cache invalidation.
+        if not path.exists() or path.read_bytes() != data:
+            path.write_bytes(data)
 
 if __name__ == '__main__':
     generate()

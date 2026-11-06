@@ -1,0 +1,152 @@
+Telredor / Zangarmarsh: QA performance investigation, 2026-11-02
+
+Inputs and limits
+
+qa_report/northlight-renderer.log
+  SHA256 4d188ce98a4ba92704c41b5367943c3bb3c1ac81899de5335187b29066112f84
+  Renderer 0.3.216, source identity 87f110b9abdfeda5d87728252e9009f3a38927471bba4e23bd07926dec2670be.
+qa_report/Wow_d3d9.log: DXVK 3.1.1, NVIDIA RTX 3080, 2560x1440.
+The screenshot shows build d5925de7056b and the tester reports 15 FPS.
+The supplied log's settled interval is about 29 FPS. These are different build
+identities; this record does not treat the screenshot's 15 FPS as reproduced.
+Raw logs and game data remain local and are not added to the repository.
+
+Evidence
+
+Use samples with frame >= 2667, after initial loading and diagnostic capture.
+There are eight FRAME interval, GPU frame and GPU profile records in this set.
+The following numbers are means, in milliseconds unless stated otherwise:
+
+  Frame interval                          34.1955 (29.2438 FPS)
+  GPU total                               34.1495
+  GPU GameScene                           27.9241
+  GPU Effects                              6.1815
+    PointShadow                            1.5188
+    PointLight                             1.3366
+    RemovalSmooth                          0.6380
+    AO + AOBlur                            0.6206
+  CPU effects submission                   5.7259
+    point-shadow submission                2.0688
+    selection                              0.9924
+  CPU model material capture setup         2.2897
+  CPU model material capture draw          0.9107
+  CPU model material capture restore       0.7810
+  Measured GPU model material capture draw 3.0249 (partial coverage)
+
+CPU and GPU intervals overlap; do not add them as independent frame costs.
+GameScene includes Northlight's inline material work and is not a measurement
+of the unmodified game. NativeDraw timing also does not isolate mod overhead.
+MATERIAL_GPU_COVERAGE hits its 4096-span cap (7843 attempts at frame 3556), so
+the per-material GPU totals cover only part of the draw stream. CPU profiling
+and GPU timestamp queries also add overhead to sampled frames.
+
+At the last AUTOBUMP sample, 1151 model and 149 grass captures are submitted.
+MATERIAL_DEFERRED reports enabled=1 but queued=flushed=0: the current batching
+path requires MSAA and does not apply to these non-MSAA targets. Each model
+capture switches the render target and restores the native draw state.
+No cold material builds remain in the selected samples; optimizing subdivision
+again would not address this settled workload.
+
+The point pool reports 21 selected/ready sources despite the configured limit
+of 64. Its static face rebuild count is zero in the settled schedule records.
+The dynamic scratch path still draws cached-mesh terrain, live terrain and
+replay candidates. All 1299 replay bounds are valid in late coverage records.
+Lowering PointShadowLimit from 64 without measuring active selection would not
+establish the cause of this slowdown.
+With PointShadowRefreshMs=0 the crowd policy still uses a 33 ms period. At the
+observed ~34 ms frame interval, this permits a refresh every frame; its reuse
+benefit disappears. Lengthening the interval would trade temporal quality for
+speed, so this first change does not alter that policy.
+
+The final command-stream report also has approximately 5 ms/frame in rename
+waits, with budget-limited buffer renaming. This can reflect downstream GPU
+backpressure; it is not evidence that increasing an x86 memory budget is safe
+or would improve the frame rate.
+
+Implemented first change
+
+Add BumpNormalNative and select it for M2 material capture in modes 1 and 3.
+Those paths already set parallax depth to zero. The specialization removes
+the unused parallax path while retaining the same normal construction, native
+alpha/texkill, range rejection, cavity and world-space normal encoding.
+Mode 2, shared POM and receiver-normal capture retain their existing shaders.
+Opaque and alpha variants have independent cached entries and reference
+ownership. A failed specialized variant falls back to the generic capture.
+
+The offline compiler reports 283 -> 131 instruction slots, 12 -> 9 temporary
+registers, and 4388 -> 2308 bytes. Existing entry bytecode hashes are unchanged.
+Quality settings, light counts, shadow distances and refresh rates are unchanged.
+
+Follow-up priorities
+
+1. Batch non-MSAA model normal/cavity capture. This targets the measured setup,
+   replay and restore work and the 1151 extra model submissions. Reusing the
+   MSAA queue by simply deleting its guard is unsafe: the non-MSAA path uses
+   the progressively updated native depth. First prove equivalent depth and
+   draw ordering with private depth, EQUAL prepasses, alpha coverage, texture
+   write barriers, deformation, overlays and fallback failures.
+
+2. Remove repeated cached-terrain submission from local cube refreshes. The
+   unchanged static faces are already cached; the dynamic path still includes
+   cached terrain. Measure terrain/live/replay/union draw counts separately,
+   then cache terrain with an explicit geometry-content invalidation rule.
+   The current static digest intentionally excludes terrain. Compare all cube
+   faces, including streamed geometry changes and source movement, before use.
+
+3. Profile local-shadow receiver passes and their scissors under overlapping
+   lights (PointLight ~1.34 ms here). Preserve per-source occlusion and the
+   once-only glow cap. The smaller AO/fog costs are lower priorities in this log.
+
+4. Obtain a controlled before/after trace in the same Telredor view, build,
+   settings and resolution, with profiling disabled for frame-rate measurement.
+   Keep a separate sampled diagnostic run. Address the material GPU-span cap
+   before treating material subtotals as complete. Investigate buffer rename
+   waits after reducing the downstream work rather than raising memory limits.
+
+Validation and delivery
+
+The GPU comparison uses a hidden standalone D3D9 device, never WoW. Its authored
+normal/cavity/alpha/depth cases compare both MRT outputs byte for byte. A separate
+client-archive test patches real M2 pixel combiners and checks native alpha and
+texkill for both generic and specialized opaque/alpha variants.
+The local test GPU is an RTX 4090; it is not the tester's RTX 3080.
+The synthetic fully covered case was effectively unchanged in FP32. With the
+production FP16/RGBA8 targets it measured about 0.00250 -> 0.00218 ms for a
+512x512 draw. These short component timings are not a whole-frame benchmark.
+Shader size reduction is proven; a substantial frame-rate gain is not claimed.
+
+Completed checks:
+  - Seven related CPU/wiring regressions passed: displacement state reuse,
+    log format, capture targets, normal variants, nine material CPU groups,
+    private depth and replay state. No skipped tests in this selected run.
+  - 256 GPU comparisons passed byte-exactly for both MRT outputs: 128 FP32
+    and 128 production FP16/RGBA8 cases. Includes alpha/depth rejection,
+    cavity on/off, near/far surfaces, surface slopes and camera rotations.
+  - Real client combiners: 1792 alpha and 1792 opaque coverage comparisons
+    passed across the generic/specialized variants and two constant patterns.
+    No rejected patches; worst native-alpha error was 2.98023e-08.
+  - Layout and whitespace checks passed. Production renderer DLL built.
+
+One historical test remains failing: test_material_early_alpha_gpu.py compares
+against auto_bump_capture-dbda9f3.hlsl and fails BumpGrass, shape=0, target=0.
+The same mismatch was reproduced using the unchanged HEAD (5718196b) harness
+and BumpGrass.bin; the current BumpGrass bytecode is identical to HEAD. This is
+a pre-existing baseline mismatch, not a new regression. Evidence is saved in
+.local/out/telredor-baseline-check/result.json. The new specialization is
+compared directly against the current generic shader, not that old fixture.
+
+Reproduce:
+  python scripts/shaders/compile_auto_bump_shaders.py --compatible-compiler
+  python tests/test_material_normal_variants.py
+  python tests/test_material_normal_native_gpu.py --compatible-compiler
+  python tests/validate_native_material_alpha.py --backend <standalone D3D9 DLL>
+  python scripts/build_renderer.py
+
+Local evidence is under .local/out/test-output/test_material_normal_native_gpu,
+.local/out/native-alpha-dxvk and the related test runner output directories.
+The seven-test run is .local/out/test-output/20261102-111757/results.tsv.
+This change does not install a DLL or change the user's game configuration.
+
+Follow-up: qa-large-log-20261102.txt records the replacement large log and
+the implemented non-MSAA model batching with differential GPU validation.
+Its final DLL supersedes the first-step build recorded above.

@@ -19,10 +19,10 @@ constexpr float CalmSeconds=30.f;     // a step up that holds this long forgets 
 constexpr float MaxSampleMs=250.f;    // larger readings (device stalls, loading) are ignored like invalid ones
 constexpr float SpikeFactor=1.5f;     // a reading counts as at most this many budgets: one hitch (even after a long gap) cannot step the level down
 constexpr float MaxDt=.25f;           // a long gap between samples counts as this much
-// task 45: the GPU is the frame's limit only when the replay thread waits for it before Present (renderer.cpp waitPreviousFrameGpu, command stream
-// with framesAhead>=2). A smoothed wait over this many ms per frame counts as GPU-bound (measured: hundreds of ms per 120 frames when GPU-bound, ~0 when CPU-bound).
+// GPU pressure includes pending EVENT/FLUSH waits and the latency wait before Present
+// (renderer.cpp, command stream with framesAhead>=2). A smoothed wait over this many ms per frame counts as GPU-bound (measured: hundreds of ms per 120 frames when GPU-bound, ~0 when CPU-bound).
 constexpr float BoundWaitMs=.5f;
-// task 45: the same threshold for the game thread's wait for the replay thread (Present + backpressure waits per frame): above it the replay thread is the limit.
+// task 45: the same threshold for the game thread's wait for the replay thread (Present + backpressure + EVENT queue waits per frame): above it the replay thread is the limit.
 // task 45: one frame's wait counts as at most this many ms. A single hitch (a 10-30 ms backpressure wait while a large texture uploads) kept the smoothed
 // wait over BoundWaitMs for more than DownSeconds and stepped the CPU budget down in game although the game thread never otherwise waited; only a wait
 // on most frames (bound needs about a quarter of the frames at the cap) now counts.
@@ -37,7 +37,7 @@ struct WaitSignal {
         if(!std::isfinite(waitMs)||waitMs<0)waitMs=0;
         if(waitMs>MaxWaitMs)waitMs=MaxWaitMs;
         dt=std::isfinite(dt)&&dt>0?(dt<MaxDt?dt:MaxDt):0.f;
-        if(!primed){smoothed=waitMs;primed=true;}else smoothed+=(waitMs-smoothed)*(1.f-std::exp(-dt/SmoothSeconds));}
+        if(!primed){smoothed=waitMs;primed=true;}else if(waitMs!=smoothed)smoothed+=(waitMs-smoothed)*(1.f-std::exp(-dt/SmoothSeconds));}
     bool bound()const{return smoothed>BoundWaitMs;}
 };
 
@@ -77,9 +77,9 @@ private:
 inline unsigned cloudSteps(unsigned level){return level==0?40u:level==1?32u:24u;}
 // WorldFog march intervals: 48 (full), 40 (level 3).
 inline unsigned fogSteps(unsigned level){return level>=3?40u:48u;}
-// Lamps lit at once (LocalLightLimit): the setting at every level. 0.3.217: level 3 no longer caps it at 16; 32 lamps with their
-// fog glow measured about 0.15 ms GPU (LocalLights + Fog), the cut saved ~0.07 ms and left most lamps of a city dark.
-inline unsigned lightLimit(unsigned limit,unsigned){return limit;}
+// Lamps keep the configured limit at every budget level; active shadow slots stay lit.
+inline unsigned lightLimit(unsigned limit,unsigned,unsigned shadowReserve=0){
+    return std::max(limit,shadowReserve);}
 // Shader constant that lengthens an interval of a march written as mad(range,1/fullSteps,delta): 0 when steps==fullSteps.
 inline float spacingDelta(float range,unsigned steps,unsigned fullSteps){
     return steps==fullSteps||!steps||!fullSteps?0.f:range*(1.f/float(steps)-1.f/float(fullSteps));}

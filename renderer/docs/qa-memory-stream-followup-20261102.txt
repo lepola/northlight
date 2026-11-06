@@ -1,0 +1,59 @@
+QA follow-up: fragmented VA and command-stream synchronization, 2026-11-02
+
+Historical validation of 66fa8d89. This follow-up is now included in the complete
+.8 installer; complete-installer-20261102.8.txt supersedes the isolation status below.
+
+Based on e549817f (the earlier replay-cache admission fix). Work is isolated in
+codex/qa-memory-stream-20261102; the concurrent renderer/package checkout is not
+modified, built, installed or republished by this follow-up.
+
+Memory guard
+The old qa_report log has 55 completed trims. The logged largest free region
+did not grow after any of them; only one trigger had less than 400 MiB aggregate
+free VA. Repeated clears also invalidate caches that the next frames rebuild.
+After the first completed trim and subsequent exact address-space sample, retain
+the pressure caps but suppress repeats if fragmentation did not improve. A smaller
+largest region, aggregate VA below the existing threshold, builder demand, or a new
+pressure/cap transition still permits a trim on the existing 20-second cooldown.
+Recovery, admission checks, emergency trim contents and demand-only episodes keep
+their existing behavior. Without post-trim feedback the old retry behavior remains.
+
+Synchronization
+The old log has two storms (163 and 242 round trips/frame) with Diagnostics off:
+there is no per-cause census to identify them retrospectively. The current client
+log contains no storms. Existing pressure handling retains CPU buffer shadows;
+the real queue's pressure test preserves those shadows over 600 write locks and
+idle frames with no added synchronous round trip. Do not remove necessary query
+waits or change gxFixLag. Storm transitions now report lock/unlock/query/other and
+express-texture rates plus buffer/texture readback rates, using existing counters.
+Readback rates are overlapping explanatory subsets, not extra round trips.
+Counters are sampled only at the existing two-second detector boundary.
+
+Material uploads: experiment rejected for general use
+Reused dynamic_ring.h with cached ArgentTournamentDungeon geometry, derived packet
+sizes of 32 draws/262656 bytes and 256 draws/7188480 bytes, and bounded 3/10 MiB
+VB+IB allocations. Four-frame submissions, interleaved mode order, first 8 of 32
+blocks discarded. Native D3D9 and DXVK 3 each rendered 128 comparison frames;
+every frame matched its UP reference byte for byte. No concurrent Northlight
+GPU stand was observed. This is not replay of the original game's material draws.
+For 32 draws, native CPU submission grew from 0.013-0.016 to 0.031 ms/frame;
+DXVK GPU time grew from 0.0033 to 0.0072 ms. For 256 draws, the 10 MiB ring saved
+about 0.080 ms CPU on native and 0.027 ms on DXVK; native GPU time grew by 0.016 ms.
+The fresh client log has 39 material samples: 32 have zero UP draws; the other
+seven have at most 29. Its final 12 samples have none. No universal
+gain or current in-game benefit is established, so no ring is added to materials.
+
+Validation
+Full memory_guard test: PASS (O2, ASan/UBSan, TSan, cache trim and sampler handoff).
+Queue memorypressure mode: PASS under O2, ASan/UBSan and TSan. Native x86 Windows
+StreamDevice compile: PASS with Zig 0.15.2 and real D3D9 headers.
+The older base needs two particle-header portability corrections in an ignored
+fixture copy for these strict host builds; that production file is not changed.
+Both the modified and original StreamDevice hit the same eventQueryBatch
+poll-count assertion in the full queue suite; focused pressure/attribution checks
+passed. The new fragmentation regression fails against the old Guard, as expected. No full renderer/package rebuild or game FPS
+improvement is claimed. The cloth triangle remains unresolved as documented before.
+
+Local evidence: out/qa-followup-20261102/{validation.json,upload-validation.json,
+upload-native/upload.tsv,upload-dxvk3/upload.tsv,material_upload_gpu.cpp,
+run_upload_gpu.py,run_stream_cpu.py,cpu/test-output/20261102-210139/}.

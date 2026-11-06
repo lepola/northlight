@@ -220,9 +220,28 @@ def stormlib_source(required=True):
     return p
 
 
+def protect_output(path):
+    """Keep generated fixtures out of the client's recursive loose-file scan.
+
+    WoW skips .svn directories. Test installations can contain fake caches and
+    long paths which must never be mounted as game content on the next launch.
+    """
+    path = Path(path)
+    client = client_root(False)
+    if client:
+        try:
+            relative = path.resolve().relative_to(client.resolve())
+        except ValueError:
+            pass
+        else:
+            if '.svn' not in (part.lower() for part in relative.parts):
+                return path / '.svn'
+    return path
+
+
 def out():
     """Build and test output root (ignored by git)."""
-    return _path('out') or REPO / 'out'
+    return protect_output(_path('out') or REPO / 'out')
 
 
 def output_dir():
@@ -232,7 +251,7 @@ def output_dir():
     points every test at renderer/records/validation-<version> (release evidence)."""
     p = os.environ.get('NORTHLIGHT_TEST_OUTPUT_DIR')
     if p:
-        p = Path(p)
+        p = protect_output(p)
     else:
         main = getattr(sys.modules.get('__main__'), '__file__', None) or 'adhoc'
         p = out() / 'test-output' / Path(main).stem

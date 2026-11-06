@@ -3,11 +3,14 @@
 chain(client) lists them lowest priority first, so the last archive that holds a name wins:
 
     common, common-2, expansion, lichking           Data/
-    patch, patch-2..9, patch-a..z                    Data/
+    patch, patch-2, patch-3                        Data/
     locale, expansion-locale, lichking-locale        Data/<locale>/
-    patch-<locale>, patch-<locale>-2..9, -a..z       Data/<locale>/
+    patch-<locale>, -2, -3                         Data/<locale>/
+    patch-4..9, patch-a..z                          Data/
+    patch-<locale>-4..9, -a..z                      Data/<locale>/
 
-The same order as Noggit's loader (application.cpp loadMPQs, last loaded wins). Only one-character
+Custom patches override the stock locale archives too. Otherwise a patched SKIN can be paired
+with a stock locale M2 when a builder republishes that M2 (the UI_Scourge crash). Only one-character
 patch suffixes load, so patch-5.mpq.disabled or patch-custom.mpq are ignored. The speech, base and
 backup archives are left out: they hold only sounds and launcher files, no world or DBC data.
 
@@ -102,9 +105,11 @@ def chain(client, archives='all', locale=None, without=''):
     suffixes = [s for s in suffixes if not s or s not in without]   # '' (patch.mpq) is never left out
     top, local = _entries(data), _entries(locale_dir(client, locale))
     names = [(top, n + '.mpq') for n in BASE]
-    names += [(top, 'patch' + (f'-{s}' if s else '') + '.mpq') for s in suffixes]
+    names += [(top, 'patch' + (f'-{s}' if s else '') + '.mpq') for s in suffixes if s in STOCK_SUFFIXES]
     names += [(local, f'{n}-{locale}.mpq') for n in LOCALE_BASE]
-    names += [(local, f'patch-{locale}' + (f'-{s}' if s else '') + '.mpq') for s in suffixes]
+    names += [(local, f'patch-{locale}' + (f'-{s}' if s else '') + '.mpq') for s in suffixes if s in STOCK_SUFFIXES]
+    names += [(top, f'patch-{s}.mpq') for s in suffixes if s not in STOCK_SUFFIXES]
+    names += [(local, f'patch-{locale}-{s}.mpq') for s in suffixes if s not in STOCK_SUFFIXES]
     return [folder[n] for folder, n in names if n in folder and folder[n].is_file()]
 
 

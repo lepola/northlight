@@ -1,0 +1,59 @@
+Northlight: additional optimizations based on the user's .4 run
+
+Source: D:/Games/335_engb_mod/northlight-renderer.log; a snapshot is retained locally.
+SHA256: ed4226c80300d7f4ccb6190464f976227067cc0071e59863ee20d812b5bd1a56
+BUILD identity source=950c751c9f2c95ac932d8f975713f9b6921826f20123607950b72bf8fe94c008 built=2026-11-02 16:29:13 UTC
+RTX 4090, 3840x2160, MSAA 2, HDR scRGB, GTAO High, Diagnostics/RenderProfile=1.
+
+Observations
+Adjacent normal-view windows: 480 frames with effects, 14.376 ms / 69.56 FPS;
+184 frames with Northlight disabled, 8.322 ms / 120.16 FPS;
+240 frames after enabling it, 14.506 ms / 68.94 FPS.
+These are observations from one session, not a controlled same-image comparison.
+Window averages do not establish overall p95/p99 frame times or 1% lows.
+After enabling effects, the median GPU timestamp interval is 12.257 ms:
+scene 7.534, effects 3.278, tail 1.445. Intervals may include submission gaps.
+Material preparation takes about 2.97 ms CPU, including nativeDraw. CPU and GPU
+work overlap and their times cannot be added. Sampled MATERIAL_GPU timings
+cannot be extrapolated to all draw calls. Heavy frames also contain queue waits.
+
+Changes
+1. HDR draws with COLORWRITEENABLE=0 execute the native draw directly.
+   Depth, stencil, alpha test and draw count are preserved. Intermediate clears,
+   MSAA resolves and fullscreen HDR composition are no longer needed.
+2. The observed diffuse-only additive sky state (SRCALPHA/ONE, ADD, stage 0
+   COLOROP/ALPHAOP=DISABLE, no fog/specular) uses the existing shader directly.
+   Other combinations retain the previous path. Alpha follows the previous
+   composition policy; states and constants are restored.
+   On DXVK 3, an isolated two-pass 4K/MSAA 2 benchmark saves 0.090 ms with small
+   coverage and 0.176 ms with full coverage. These are not measured game FPS gains.
+3. The audited single-bone MUL/MOVA/DP4 bounds program uses a direct evaluator
+   with the same interval arithmetic, avoiding repeated interpretation of six
+   instructions per group. Unusual values retain the general interpreter.
+   O2: 177.115 -> 48.140 ns per group (3.679x); O0 also passes equivalence checks.
+   Budgets, visibility, ray counts and effect quality are unchanged.
+
+Validation
+25,000 single-bone cases at O0 and O2 match values and numerical error bounds
+exactly: 19,625 use the fast path, 5,375 retain the general path.
+132 new HDR cases on each DXVK backend cover depth/stencil/alpha test, color
+writes, texture states and MSAA. Maximum RGB difference from the old 8-bit
+intermediate layer is 0.0117188 in linear scRGB; alpha difference is 0.00195312.
+HDR is not claimed to be bit-identical: intermediate rounding is removed and
+the resulting differences are checked against tolerances.
+The HDR frame oracle also passes 2,893 cases per DXVK backend, and texture
+transforms pass 144 cases per backend. Full suite: PASS 254, FAIL 0, TIMEOUT 0,
+SKIP 225, XFAIL 0, XPASS 0. Skip reasons are retained in results.tsv;
+checks requiring unavailable tools were not run.
+
+Installer: Northlight-0.3.216-test.20261102.5-Windows.zip
+Source identity: 26a6b1b81c3acd466497012186cd18a344bdc4f9aa4b0401decb6b9d66468e06
+DLL SHA256: 54604838c8e6c65ffb3308277b3129038f701cb4722adb4563a53454255261e8
+ZIP SHA256: bb8474c83ce7091b2529970c429f7cb6085dba2461dfcd9f96bd15691795a44b
+Exact DLL bytes, ZIP CRC, source identity and six entry points were checked
+using the isolated bundled Python, including a path containing Cyrillic text.
+
+No TargetFps or other setting was added. The game was not launched and client
+files were not replaced. Offline validation does not establish stable 120 FPS
+or elimination of every stutter. Another game log is needed to assess the
+overall gain and remaining waits.

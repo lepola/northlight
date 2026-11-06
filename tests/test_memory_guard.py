@@ -35,6 +35,36 @@ int main(){
      for(std::uint32_t t=1000;t<20000;t+=1000){auto d=g.update(1000*MiB,90*MiB,t);assert(!d.trim&&!d.entered&&g.pressure());}
      assert(g.update(1000*MiB,90*MiB,20000).trim&&g.trims()==2);
      assert(!g.update(1000*MiB,90*MiB,39999).trim);assert(g.update(1000*MiB,90*MiB,40000).trim&&g.trims()==3&&g.entries()==1);}
+    // QA: 942 MiB free but the same 79 MiB largest region after a completed trim.
+    // Rebuilding the caches must not cause another synchronous clear every 20 seconds.
+    {Guard g;assert(g.update(942*MiB,79*MiB,0).trim);g.trimCompleted(50);
+     auto d=g.update(970*MiB,79*MiB,1000);assert(d.afterTrim&&!d.trim&&g.capsHalved());
+     for(std::uint32_t t=2000;t<=120000;t+=1000)assert(!g.update((t%3?643:942)*MiB,79*MiB,t).trim);
+     assert(g.trims()==1&&g.pressure());
+     assert(g.update(643*MiB,77*MiB,121000).trim); // a smaller largest region needs a new attempt
+     g.trimCompleted(121050);assert(g.update(680*MiB,77*MiB,122000).afterTrim);
+     assert(!g.update(640*MiB,77*MiB,141000).trim);
+     assert(g.update(399*MiB,77*MiB,142000).trim); // aggregate exhaustion still trims on the usual cooldown
+     g.trimCompleted(142050);g.update(450*MiB,77*MiB,143000);
+     assert(g.update(450*MiB,77*MiB,162000,768*MiB).trim); // builder demand is preserved
+    }
+    {Guard g;g.update(942*MiB,79*MiB,0);g.trimCompleted(50);
+     g.update(970*MiB,100*MiB,1000); // a trim that improves the largest block may repeat
+     assert(g.update(942*MiB,100*MiB,20000).trim);
+     g.trimCompleted(20050);g.update(970*MiB,100*MiB,21000);
+     assert(!g.update(942*MiB,100*MiB,40000).trim);
+     g.update(1000*MiB,300*MiB,41000);assert(g.update(1000*MiB,300*MiB,51000).recovered);
+     assert(g.update(942*MiB,100*MiB,52000).trim); // feedback never blocks a new episode
+    }
+    {Guard g;const std::uint32_t t=0xFFFFF000u;
+     g.update(942*MiB,79*MiB,t);g.trimCompleted(t+50);g.update(970*MiB,79*MiB,t+1000);
+     assert(!g.update(942*MiB,79*MiB,t+20000).trim);
+     assert(g.update(399*MiB,79*MiB,t+21000).trim);}
+    {Guard g;g.update(942*MiB,79*MiB,0);g.trimCompleted(50);g.update(970*MiB,79*MiB,1000);
+     g.update(1000*MiB,300*MiB,2000);assert(g.update(1000*MiB,300*MiB,12000).recovered);
+     auto d=g.update(942*MiB,79*MiB,13000);assert(d.entered&&!d.trim);
+     assert(g.update(942*MiB,79*MiB,20000).trim); // new episode remains eligible after the old cooldown
+    }
     // Hysteresis: between thresholds keeps pressure; recovery needs 10 s of consecutive healthy samples.
     {Guard g;g.update(1000*MiB,100*MiB,0);
      for(std::uint32_t t=1000;t<60000;t+=1000)assert(!g.update(1000*MiB,200*MiB,t).recovered&&g.pressure()); // 160..256: stay
@@ -296,24 +326,37 @@ int main(){
 }
 '''
 r=fp.src('renderer.cpp').read_text();w=fp.src('world_renderer.h').read_text();inl=fp.src('world_memory_guard.inl').read_text()
+reset_start=w.index('auto resetPreparation=[&]{')
+preparation_reset=w[reset_start:w.index('};',reset_start)]
 finish=r[r.index('    void finishFrameImpl() {'):r.index('    HRESULT STDMETHODCALLTYPE Present(const RECT* src,const RECT* dst,HWND wnd')]
-trim=r[r.index('    void trimMemory(const NorthlightMemoryDiagnostics::Sample& trigger){'):r.index('    void finishFrame() {')]
+trim=r[r.index('    void trimMemory(const NorthlightMemoryDiagnostics::Sample& trigger,'):r.index('    void finishFrame(bool implicitChain=true) {')]
+boundary=finish[finish.index('        if(memoryWorld>=0||memoryCaps>=0||memoryTrim){'):finish.index('        if(NorthlightRenderThreadProbe::profiling()',finish.index('        if(memoryWorld>=0||memoryCaps>=0||memoryTrim){'))]
+ordered_pressure=['if(memoryTrim&&world){worldTrim=world->trimMemory(memoryGuard.capsHalved(),retirementBatch);QueryPerformanceCounter(&worldTrimEnd);}',
+                  'if((memoryWorld>=0||memoryCaps>=0)&&world)world->setMemoryPressure(memoryGuard.pressure(),memoryGuard.capsHalved());',
+                  'if((memoryWorld>=0||memoryCaps>=0)&&autoBump)autoBump->setMemoryPressurePolicy(memoryGuard.pressure(),memoryGuard.capsHalved(),retirementBatch);',
+                  'if(memoryCaps>=0&&NorthlightReplayCopies::enabled.load(std::memory_order_relaxed))NorthlightReplayCopies::setPressure(memoryCaps==1);',
+                  'if(memoryCaps>=0)NorthlightStream::memoryPressure.store(memoryCaps==1,std::memory_order_relaxed);',
+                  'if(memoryTrim)trimMemory(memorySample,worldTrim,double(worldTrimEnd.QuadPart-workStart.QuadPart)*ms,retirementBatch);']
 checks={
  'sampler always created (no diagnostics gate), below-normal walk':'try{memoryDiagnostics=std::make_unique<NorthlightMemoryDiagnostics::Sampler>(&queryAddressSpace);}' in r and 'SetThreadPriority(GetCurrentThread(),THREAD_PRIORITY_BELOW_NORMAL)' in r,
  'render thread requests on the guard cadence, never walks':'if(memoryGuard.requestDue(now))memoryDiagnostics->request();' in finish and 'VirtualQuery' not in finish,
- 'caps and trim only after clearFrame() (frame boundary)':finish.index('clearFrame();')<finish.index('if(memoryWorld>=0&&world)') and re.search(r'if\(memoryWorld>=0&&world\)world->setMemoryPressure\(memoryWorld==1\);\n        if\(memoryCaps>=0&&NorthlightReplayCopies::enabled\.load\(std::memory_order_relaxed\)\)NorthlightReplayCopies::setPressure\(memoryCaps==1\);[^\n]*\n        if\(memoryCaps>=0\)NorthlightStream::memoryPressure\.store\(memoryCaps==1,std::memory_order_relaxed\);[^\n]*\n        if\(memoryTrim\)trimMemory\(memorySample\);',finish) is not None and finish.count('trimMemory(memorySample)')==1 and finish.count('setMemoryPressure(')==1,
- 'stream/replay-copy caps follow the guard\'s caps edges (a demand-only episode keeps full caps), the world follows every episode':'if(decision.capsChanged)memoryCaps=decision.halfCaps?1:0;' in finish and 'memoryWorld=decision.entered?1:0;' in finish and 'memoryGuard.capsHalved()?"half":"full"' in finish,
+ 'caps and trim only after clearFrame() (frame boundary)':finish.index('clearFrame();')<finish.index(ordered_pressure[0]) and all(boundary.count(x)==1 for x in ordered_pressure) and [boundary.index(x) for x in ordered_pressure]==sorted(boundary.index(x) for x in ordered_pressure) and finish.count('trimMemory(memorySample,')==1 and finish.count('setMemoryPressure(')==1 and finish.count('setMemoryPressurePolicy(')==1,
+ 'terrain/stream/replay-copy caps follow real-low edges; other world caps keep demand savings':'if(decision.capsChanged)memoryCaps=decision.halfCaps?1:0;' in finish and 'memoryWorld=decision.entered?1:0;' in finish and 'world->setMemoryPressure(memoryGuard.pressure(),memoryGuard.capsHalved());' in finish and 'memoryGuard.capsHalved()?"half":"full"' in finish,
  'periodic line gated, events ungated':'if(decision.report&&diagnostics())logf("MEMORY frame=' in finish and 'logf("MEMORY guard %s' in finish and 'if(decision.afterTrim)logf(' in finish,
- 'trim: world caches, exact-walk before values, estimates, no address-space ballast':'t=world->trimMemory();' in trim and 'memoryGuard.trimCompleted(now);' in trim and 'logf("MEMORY guard trim frame=%u exactWalk=1 beforeAvailableVirtualMiB=' in trim and all(x not in r for x in ['Ballast','ballast','MEM_RESERVE','VirtualAlloc(']),
- 'guard fed only by the exact full walk':'memoryGuard.update(sample.availableVirtual,sample.largestFree,DWORD(sample.tick),demand)' in finish and 'world->geometryMemoryDemand.load(' in finish and 'auto& sample=memorySample;' in finish and 'if(memoryTrim)trimMemory(memorySample);' in finish and 'geometryAdmission' not in finish,
- 'world trim: terrain, snapshot+index, pool, GPU cache, worker flag':all(x in inl for x in ['terrainBoundsCache.clearPersistent();','replaySnapshots.clearIndexCache();','freeReplays.clear();','pooledSnapshotBytes=0;','replayGpuCache.clear();','workerMemoryTrim.store(true']),
- 'mesh pool: the guard trim frees idle page buffers only (never the active table), never during a staged upload; after a staged commit the hysteresis trim does the same (a map change reuses the buffers)':'t.gpu+=trimMeshPools();' in inl and 'size_t trimMeshPools(uint64_t maxBytes=UINT64_MAX){\n        if(pendingMesh)return 0;' in w and 'meshStore.trimIdle(maxBytes,' in w and w.count('trimMeshPools()')==0 and w.count('trimMeshPools(request)')==1,
- 'world caps: half under pressure, full on recovery':all(x in inl for x in ['setSnapshotCacheLimit(on?NorthlightDrawSnapshot::Frame::SnapshotCacheLimit/2:NorthlightDrawSnapshot::Frame::SnapshotCacheLimit)','setPersistentByteLimit(on?16u*1024u*1024u:32u*1024u*1024u)','replayGpuCache.setLimit(on?32u*1024u*1024u:64u*1024u*1024u)','memoryPressure?ReplayPoolBytes/2:ReplayPoolBytes']),
+ 'trim timing includes all cache consumers and reports each phase':trim.index('QueryPerformanceCounter(&start)')<trim.index('if(surface)')<trim.index('QueryPerformanceCounter(&surfaceEnd)')<trim.index('if(autoBump)')<trim.index('QueryPerformanceCounter(&materialEnd)')<trim.index('stateBlocks.clear()')<trim.index('QueryPerformanceCounter(&stateEnd)')<trim.index('if(water)')<trim.index('QueryPerformanceCounter(&waterEnd)')<trim.index('const auto& t=worldTrim;')<trim.index('QueryPerformanceCounter(&end)') and 'worldTrimMs+elapsed(start,end)' in trim and 'world->trimMemory()' not in trim and all(field in trim for field in ('surfaceMs=','materialMs=','stateBlocksMs=','waterStateMs=','worldMs=')),
+ 'memory work timer encloses cap updates and trim only on an event':finish.index('clearFrame();')<finish.index('if(memoryWorld>=0||memoryCaps>=0||memoryTrim){')<finish.index('QueryPerformanceCounter(&workStart)')<finish.index(ordered_pressure[0])<finish.index('world->setMemoryPressure(')<finish.index('autoBump->setMemoryPressurePolicy(')<finish.index(ordered_pressure[-1])<finish.index('QueryPerformanceCounter(&workEnd)') and finish.count('MEMORY guard work frame=')==1 and 'worldPreclearMs=' in boundary and 'double(worldEnd.QuadPart-worldTrimEnd.QuadPart)*ms' in boundary,
+ 'demand trim retains bounded material GPU replay; critical trim releases it':'if(autoBump)autoBump->trimMemory(memoryGuard.capsHalved(),retirementBatch);' in trim,
+ 'CPU retirement batch ends inside the measured boundary; critical pressure and recovery bypass it':boundary.index('NorthlightStreaming::CpuRetirementBatch cpuRetirementBatch(batchCPU?')<boundary.index(ordered_pressure[0])<boundary.index('cpuRetirementBatch.finish()')<boundary.index('QueryPerformanceCounter(&workEnd)') and 'const bool batchCPU=memoryGuard.pressure()&&!memoryGuard.capsHalved();' in boundary and 'auto* retirementBatch=batchCPU?&cpuRetirementBatch:nullptr;' in boundary and 'fallbackSynchronous=' in boundary,
+ 'trim: carried world result, exact-walk before values, estimates, no address-space ballast':'const WorldRenderer::MemoryTrim& worldTrim,double worldTrimMs' in trim and 'const auto& t=worldTrim;' in trim and 'memoryGuard.trimCompleted(now);' in trim and 'logf("MEMORY guard trim frame=%u exactWalk=1 beforeAvailableVirtualMiB=' in trim and all(x not in r for x in ['Ballast','ballast','MEM_RESERVE','VirtualAlloc(']),
+ 'guard fed only by the exact full walk':'memoryGuard.update(sample.availableVirtual,sample.largestFree,DWORD(sample.tick),demand)' in finish and 'world->geometryMemoryDemand.load(' in finish and 'auto& sample=memorySample;' in finish and ordered_pressure[-1] in finish and 'geometryAdmission' not in finish,
+ 'world trim: terrain, snapshot+index, pool, GPU cache, worker flag':all(x in inl for x in ['t.terrainDeferred=terrainBoundsCache.clearPersistent(critical?nullptr:&NorthlightStreaming::cpuRetirement(),critical?nullptr:batch);','replaySnapshots.clearIndexCache(critical?nullptr:&NorthlightStreaming::cpuRetirement(),critical?nullptr:batch);','freeReplays.clear();','pooledSnapshotBytes=0;','replayGpuCache.clear();','workerMemoryTrim.store(true']),
+ 'mesh pool: the guard trim frees idle page buffers only (never the active table), never during a staged upload; after a staged commit the hysteresis trim does the same (a map change reuses the buffers)':'t.gpu+=trimMeshPools();' in inl and 'size_t trimMeshPools(uint64_t maxBytes=UINT64_MAX){\n        if(pendingMesh)return 0;' in w and 'meshStore.trimIdle(maxBytes,' in w and w.count('trimMeshPools()')==1 and 'else trimMeshPools();' in w[w.index('void releaseDefaultMesh(){'):w.index('void reset(){')] and w.count('trimMeshPools(request)')==1,
+ 'world caps preserve demand savings; terrain halves only under real low address space':all(x in inl for x in ['void setMemoryPressure(bool on,bool halveTerrain)','setSnapshotCacheLimit(on?NorthlightDrawSnapshot::Frame::SnapshotCacheLimit/2:NorthlightDrawSnapshot::Frame::SnapshotCacheLimit)','setPersistentByteLimit(halveTerrain?16u*1024u*1024u:32u*1024u*1024u)','replayGpuCache.setLimit(on?32u*1024u*1024u:64u*1024u*1024u)','memoryPressure?ReplayPoolBytes/2:ReplayPoolBytes']),
  'replay pool cap: no underflow above a lowered cap':'bool keep=capacity<=replayPoolLimit()-std::min(replayPoolLimit(),pooledSnapshotBytes);' in w,
- 'worker drops its local-geometry cache at request start; a trim keeps the entry lift (a floor on measured free memory)':w.count('if(workerMemoryTrim.exchange(false,std::memory_order_relaxed))localGeometry.reset();')==1 and w.index('workerMemoryTrim.exchange')<w.index('auto result=std::make_shared<Snapshot>();result->map=r.map;'),
- 'a superseded spatial region drops its entry lift and terrain hint at every cancellation':w.count('stallEnd("superseded")')==1 and 'entryLift.clear();terrainSizeHint={};stallEnd("superseded");' in w and w.count('abandonGeometry();')==3,
- 'entry lift tracks the refused region across small retargets':'entryLiftMap=r.map;entryLiftCenter=r.geometryCenter;\n                    entryLift.refused(' in w and 'if(entryLift.armed&&!NorthlightWorldStreaming::applicable(entryLiftMap,entryLiftCenter,r.map,r.camera)){\n                entryLift.clear();terrainSizeHint={};' in w,
- 'inactive static caster reclaim occurs only at the frame boundary and stays paused until geometry is drawable':'releaseExpiredMesh();\n        reclaimInactiveCasters();' in w and 'staticRecoveryPaused||!staticStream||(active&&active->bvh)||!geometryMemoryDemand.load(' in inl and 'staticRecoveryPaused=true;staticStream->setPaused(true);' in inl and 'if(staticRecoveryPaused&&!(active&&active->bvh))return;' in w and 'if(staticRecoveryPaused){staticStream->setPaused(false);staticRecoveryPaused=false;' in w,
+ 'worker drops all shared preparation caches at request start; a trim keeps the entry lift (a floor on measured free memory)':w.count('if(workerMemoryTrim.exchange(false,std::memory_order_relaxed))resetPreparation();')==1 and w.index('workerMemoryTrim.exchange')<w.index('auto result=std::make_shared<Snapshot>();result->map=r.map;') and all(preparation_reset.count(x)==1 for x in ('meshPreparation.reset();','sceneSources.reset();','localGeometry.reset();')) and 'entryLift' not in preparation_reset,
+ 'a superseded spatial region drops its entry lift and terrain hint at every cancellation':w.count('stallEnd("superseded")')==1 and 'entryLift.clear();chunkLift.clear();coldLift.clear();terrainSizeHint={};stallEnd("superseded");' in w and w.count('abandonGeometry();')==3,
+ 'entry lift tracks the refused region across small retargets':'entryLiftMap=r.map;entryLiftCenter=r.geometryCenter;\n                    auto& lift=coldRecovery?coldLift:chunkedLocal?chunkLift:entryLift;lift.refused(' in w and 'if((entryLift.armed||chunkLift.armed||coldLift.armed)&&!NorthlightWorldStreaming::applicable(entryLiftMap,entryLiftCenter,r.map,r.camera)){\n                entryLift.clear();chunkLift.clear();coldLift.clear();terrainSizeHint={};' in w,
+ 'inactive static caster reclaim occurs only at the frame boundary and stays paused until geometry is drawable':w.index('releaseExpiredMesh();',w.index('void endFrame(')) < w.index('reclaimInactiveCasters();',w.index('void endFrame(')) and 'staticRecoveryPaused||!staticStream||(active&&active->bvh)||!geometryMemoryDemand.load(' in inl and 'staticRecoveryPaused=true;staticStream->setPaused(true);' in inl and 'if(staticRecoveryPaused&&!(active&&active->bvh))return;' in w and 'if(staticRecoveryPaused){staticStream->setPaused(false);staticRecoveryPaused=false;' in w,
  'guard included inside WorldRenderer':'#include "world_memory_guard.inl"' in w,
 }
 for k,v in checks.items():print(('PASS ' if v else 'FAIL ')+k)

@@ -1,0 +1,9 @@
+# Dense grass shadow admission
+
+The new normal-view captures (2 and 3; capture 1 was a separately marked debug view) and renderer log show valid native grass material capture with no mask/blend failures, but only 4-6 accepted draws among dozens of candidates. The shared 8,192-vertex/512-KiB frame allowance was exhausted by a few batches; subsequent visible patches depended on native draw order. Range-refused reads also spent that allowance.
+
+Keep the 8,192-vertex limit for each individual draw and its existing bounded source snapshot. Separate the frame allowance: at most 128 attempts, 131,072 read vertices and 8 MiB, with the ordinary global capture budget and memory/admission safeguards still applied. Bounds remain capped per draw; no 131,072-vertex contiguous buffer is introduced. This intentionally allows the necessary grass work rather than claiming that more complete casting costs nothing.
+
+A production capture/replay GPU test now fills 64 native batches / 65,536 vertices, reorders them four ways, and checks every patch's opaque/transparent texels. Native D3D9 and DXVK 3 produce byte-identical directional and local masks for all orders. Retained geometry in this authored case is 2,752,512 bytes (2.625 MiB), not an estimate of every game scene. The maximum remains bounded and oversized/count/byte exhaustion controls reject safely. Existing 384 alpha-mode/native-shader checks per backend, CPU debug/optimized bounds/fade/budget tests and ASan/UBSan checks pass. Shader payloads and native geometry/fade policy are unchanged.
+
+Reproduce with tests/test_grass_shadow_gpu.py and tests/test_detail_doodad_shadow.py. This corrects the observed admission starvation; it does not promise unlimited grass under arbitrary process exhaustion, visual acceptance on every GPU or new FPS results. The game and generating cache are not used by these tests.

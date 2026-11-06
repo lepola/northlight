@@ -35,6 +35,7 @@ inline std::uint64_t identity(void* buffer,bool index){
 }
 inline std::atomic<uint64_t> clock{1};
 inline std::atomic<uint64_t> noChangeWrites{0},noChangeBytes{0};
+inline std::atomic<uint64_t> skippedWrites{0},skippedBytes{0};
 inline std::mutex mutex;
 struct Record {
     void* raw=nullptr;void* exposed=nullptr;
@@ -138,8 +139,8 @@ template<class T,class Forward> class Buffer final:public Forward {
     // 0.3.192 (DXVK3): the size DXVK 3.x charges for a DISCARD of this buffer (DEFAULT|DYNAMIC only: direct-mapped), 0 otherwise.
     UINT discardBytes=0;
     NorthlightReplayCopies::PendingWrite pendingWrite; // 0.3.196 (task 12): this wrapper's outstanding write lock (Lock records, Unlock consumes; touched by the locking thread only)
-    NorthlightParticleUploads::Pending particleWrite;
     uint64_t previousWriteRevision=0,pendingWriteRevision=0;
+    NorthlightParticleUploads::Pending particleWrite;
 public:
     bool hasCopySlotForTest()const{return record.copy.attached;} // the CPU copy slot exists only for buffers created while the stream is active
     Buffer(T* real,IDirect3DDevice9* device,bool index,void(*unsafe)(IDirect3DDevice9*,const char*)=nullptr,MirrorGate* gate=nullptr):Forward(real),owner(device),unsafeAccess(unsafe),census(gate){
@@ -202,9 +203,19 @@ public:
         return this->real->GetPrivateData(guid,data,size);
     }
     HRESULT STDMETHODCALLTYPE Lock(UINT offset,UINT size,void** data,DWORD flags) override{
+        if(census)census->noteBuffer();
+        auto& source=NorthlightReplayCopies::unlockSource;
+        // Preserve dynamic-buffer synchronization/rename boundaries: a later
+        // NOOVERWRITE may rely on the last ordinary Lock or DISCARD completing.
+        if(source.target==record.exposed&&data&&source.off==offset&&source.size==size&&record.metadata.known&&record.revision.load(std::memory_order_relaxed)&&
+           ((flags==0&&!(record.metadata.usage&D3DUSAGE_DYNAMIC))||(discardBytes&&flags==D3DLOCK_NOOVERWRITE))&&
+           NorthlightReplayCopies::enabled.load(std::memory_order_relaxed)&&NorthlightReplayCopies::unchangedWrite(record.copy,offset,size,source.bytes)){
+            *data=const_cast<unsigned char*>(source.bytes);source.skipped=true;
+            noChangeWrites.fetch_add(1,std::memory_order_relaxed);noChangeBytes.fetch_add(size,std::memory_order_relaxed);
+            skippedWrites.fetch_add(1,std::memory_order_relaxed);skippedBytes.fetch_add(size,std::memory_order_relaxed);return D3D_OK;
+        }
         // Mark before entering the driver. Even failed writes conservatively
         // invalidate the old generation. READONLY never advances a generation.
-        if(census)census->noteBuffer();
         // Task 34: first of all, before the revision or the lock count move: a deferred draw may read the bytes this write replaces (spell_layer.h onBufferWrite).
         if(record.spellGuard.load(std::memory_order_relaxed)&&!(flags&D3DLOCK_READONLY)&&spellHook.write)
             spellHook.write(spellHook.context,record.raw,offset,size,flags,record.metadata.usage,record.locks.load(std::memory_order_relaxed));
@@ -215,12 +226,6 @@ public:
         if(!(flags&D3DLOCK_READONLY))record.revision.store(clock.fetch_add(1),std::memory_order_relaxed);
         if((flags&D3DLOCK_DISCARD)&&discardBytes)NorthlightLockMeter::discard(NorthlightLockMeter::Game,discardBytes);
         const unsigned lockedBefore=record.locks.fetch_add(1);
-        if(NorthlightParticleUploads::enabled.load(std::memory_order_relaxed)&&!(flags&D3DLOCK_READONLY)){
-            auto& uploads=NorthlightParticleUploads::cache();
-            const bool valid=record.metadata.known&&offset<=record.metadata.size&&(!size||std::uint64_t(offset)+size<=record.metadata.size);
-            uploads.invalidate(record.raw,offset,size,(flags&D3DLOCK_DISCARD)||lockedBefore||!valid);
-            particleWrite={offset,valid?(size?size:UINT(record.metadata.size-offset)):0,!lockedBefore&&valid};
-        }
         // Reuse a content token only for a complete, successful, isolated write
         // whose live replay-side bytes prove unchanged. Partial DISCARD remains
         // invalidating: the driver may replace every byte outside that range.
@@ -230,14 +235,20 @@ public:
            (!(flags&D3DLOCK_DISCARD)||(!offset&&(!size||size==record.metadata.size)))){
             previousWriteRevision=previousRevision;pendingWriteRevision=record.revision.load(std::memory_order_relaxed);
         }
+        if(NorthlightParticleUploads::enabled.load(std::memory_order_relaxed)&&!(flags&D3DLOCK_READONLY)){
+            auto& uploads=NorthlightParticleUploads::cache();
+            const bool valid=record.metadata.known&&offset<=record.metadata.size&&(!size||std::uint64_t(offset)+size<=record.metadata.size);
+            uploads.invalidate(record.raw,offset,size,(flags&D3DLOCK_DISCARD)||lockedBefore||!valid);
+            particleWrite={offset,valid?(size?size:UINT(record.metadata.size-offset)):0,!lockedBefore&&valid};
+        }
         HRESULT hr=this->real->Lock(offset,size,data,flags);
         // 0.3.192 (CS): the write the stream replays (or a pass-through lock the game writes through) is mirrored into the CPU copy at Unlock.
         if(record.copy.attached&&!(flags&D3DLOCK_READONLY)&&NorthlightReplayCopies::enabled.load(std::memory_order_relaxed)){
-            if(FAILED(hr))NorthlightReplayCopies::invalidate(record.copy);else NorthlightReplayCopies::writeLocked(record.copy,pendingWrite,lockedBefore,offset,size,data?*data:nullptr);
+            if(FAILED(hr))NorthlightReplayCopies::invalidate(record.copy);else NorthlightReplayCopies::writeLocked(record.copy,pendingWrite,lockedBefore,offset,size,data?*data:nullptr,flags);
         }
         if(FAILED(hr)){
-            particleWrite={};
             previousWriteRevision=pendingWriteRevision=0;
+            particleWrite={};
             // A rejected write cannot repair tracking after an earlier failed
             // unlock. Keep the legacy exact-read path until a write succeeds.
             if(wasUnsafe)record.revision.store(0,std::memory_order_relaxed);
@@ -256,7 +267,7 @@ public:
         HRESULT hr=this->real->Unlock();
         if(particleWrite.active){
             const auto source=NorthlightReplayCopies::unlockSource;
-            if(SUCCEEDED(hr)&&record.locks.load(std::memory_order_relaxed)==1&&source.bytes&&source.off<=particleWrite.offset&&
+            if(SUCCEEDED(hr)&&record.locks.load(std::memory_order_relaxed)==1&&source.bytes&&(!source.target||source.target==record.exposed)&&source.off<=particleWrite.offset&&
                std::uint64_t(particleWrite.offset-source.off)+particleWrite.size<=source.size)
                 NorthlightParticleUploads::cache().write(record.raw,record.metadata.identity,particleWrite.offset,
                     source.bytes+(particleWrite.offset-source.off),particleWrite.size,(record.metadata.usage&D3DUSAGE_DYNAMIC)!=0);

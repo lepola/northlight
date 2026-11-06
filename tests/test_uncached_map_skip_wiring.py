@@ -3,7 +3,7 @@
 """0.3.210 (issue #40): maps without world-cache tiles (dungeons, raids, battlegrounds) skip geometry
 builds. The cache covers only the continents; the builder used to run a full region build attempt
 (memory sampling, admission, nine fopen probes) and publish a fresh error snapshot for every GI request.
-Now the map is probed once per entry (FindFirstFileA on world-cache/<map>/*.fg3), the error is published
+Now the map is probed once per entry (FindFirstFileW on world-cache/<map>/*.fg3), the error is published
 once, and no build runs until the map changes. The GI worker drops its region only on the first drop.
 Source wiring; the behaviour runs in test_concurrent_geometry_build.py case (h). Writes nothing."""
 import sys; from pathlib import Path; sys.path.insert(0, str(Path(__file__).resolve().parents[1]))  # repo root
@@ -16,8 +16,8 @@ gate=work[work.index('if(r.map!=cacheCheckedMap){'):work.index('auto built=std::
 drop=work[work.index('if(!serve){\n                    // Release worker ownership'):]
 drop=drop[:drop.index('buildWake.notify_one();continue;')]
 checks={
- 'worldCacheHasTiles probes world-cache/<map>/*.fg3 with FindFirstFileA and closes the handle':
-  'FindFirstFileA((root+"world-cache/"+map+"/*.fg3").c_str(),&data)' in helper and 'FindClose(h)' in helper and 'if(map.empty())return false;' in helper,
+ 'worldCacheHasTiles probes the UTF-8 world-cache/<map>/*.fg3 path with FindFirstFileW and closes the handle':
+  'FindFirstFileW(std::filesystem::u8path(root+"world-cache/"+map+"/*.fg3").c_str(),&data)' in helper and 'FindClose(h)' in helper and 'if(map.empty())return false;' in helper,
  'only a missing folder or tile means no cache; other probe failures let the normal build run':
   'if(h==INVALID_HANDLE_VALUE){const DWORD error=GetLastError();return error!=ERROR_FILE_NOT_FOUND&&error!=ERROR_PATH_NOT_FOUND;}' in helper,
  'the gate sits after the error lambdas and before the region build, outside the REGION BUILD block':

@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Northlight · Caverns of Time · A/B</title>
+<style>
+*{box-sizing:border-box}body{margin:0;background:#111519;color:#e2e7ec;font:15px system-ui,sans-serif}header,footer{padding:18px 24px}h1{font-size:21px;margin:0 0 8px}p{line-height:1.5;margin:8px 0;color:#b6c0cb}.toolbar{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin:16px 0 0}button,a{font:inherit}button{padding:9px 14px;border:1px solid #47525f;background:#222a33;color:inherit;border-radius:6px;cursor:pointer}button[aria-pressed=true]{background:#36546a;border-color:#8dc5e8}input{width:180px;accent-color:#9dcfed}a{color:#a9d8fa}#viewport{overflow:auto;background:#000}#stage{position:relative;width:100%;aspect-ratio:16/9;--split:50%}#stage img{position:absolute;inset:0;width:100%;height:100%;object-fit:contain}#new{clip-path:inset(0 0 0 var(--split))}#divider{position:absolute;left:var(--split);height:100%;border-left:2px solid #e9f2f8;pointer-events:none}#badge{position:absolute;top:12px;left:12px;background:#101820dd;padding:7px 10px;border-radius:4px}#stage.native{width:2560px}details{margin-top:14px;max-width:1050px}summary{cursor:pointer;color:#dbe6f0}kbd{font:12px system-ui;background:#27313c;padding:2px 5px;border-radius:3px}footer{font-size:13px}
+</style>
+<header>
+<h1>Caverns of Time — previous and updated Northlight</h1>
+<p>The distant stone ceiling now responds to lighting beyond GI-probe coverage. Both results were computed by GPU shaders using this scene's buffers.</p>
+<div class="toolbar" role="group" aria-label="Comparison mode">
+<button data-mode="old" aria-pressed="false">1 · Previous</button>
+<button data-mode="new" aria-pressed="false">2 · Updated</button>
+<button data-mode="split" aria-pressed="true">3 · Compare</button>
+<button data-mode="captured" aria-pressed="false">4 · QA capture</button>
+<label id="sliderLabel">Split <input id="split" type="range" min="0" max="100" value="50" aria-label="Split between previous and updated results"></label>
+<button id="zoom" aria-pressed="false">1:1 scale</button>
+</div>
+</header>
+<div id="viewport"><div id="stage">
+<img id="old" src="old.png" alt="Previous shader, capture replay">
+<img id="new" src="new.png" alt="Updated shader with ambient correction outside GI-probe coverage">
+<div id="divider"></div><span id="badge">Previous on the left · updated on the right</span>
+</div></div>
+<footer>
+<p><kbd>1</kbd> previous · <kbd>2</kbd> updated · <kbd>3</kbd> split · <kbd>4</kbd> QA capture · <kbd>Space</kbd> toggle previous/updated. This page works offline without the game.</p>
+<details><summary>How this comparison was produced and its limits</summary>
+<p>Source: session-3516-335313015-0, capture-1, 2560 × 1440. The previous WorldGI matches QA build 0.3.216-test.20261102.1. Color, depth, normals, original lighting, AO, fog and materials come from the capture.</p>
+<p>The GI-probe atlas was not exported in the QA capture. It was reconstructed by the production solver from the local world cache: a 20 × 20 × 14 grid, 64 rays and 3 bounces, without dynamic actors or previous probe history. Both GI shaders receive the same reconstructed atlas. Their difference passes through the production blur and is added to the captured lighting. WorldComposite and MaterialComposite then run.</p>
+<p>This reconstructs the change to a single frame. Motion, temporal history accumulation and the missing stencil mask are not reproduced; dithering is neutral. Small effects and edges may therefore differ from the game. The previous replay differs from the QA capture by a mean of ERROR_MEAN levels out of 255; the 99th percentile is ERROR_P99 and the maximum is ERROR_MAX. Two reference regions on distant walls match exactly in RGB.</p>
+<p>The fix uses directional shadowing as a bounded approximation of ambient lighting where GI-probe coverage is insufficient. It can also deepen outdoor shadows beyond probe coverage. With full coverage, the GI result is preserved.</p>
+<p><a href="report.json">Measurements and input SHA-256 hashes</a> · <a href="replay.log">GPU replay log</a> · <a href="old.png">Previous PNG</a> · <a href="new.png">Updated PNG</a> · <a href="captured.png">QA PNG</a></p>
+</details>
+</footer>
+<script>
+const stage=document.querySelector('#stage'),old=document.querySelector('#old'),newImage=document.querySelector('#new'),divider=document.querySelector('#divider'),badge=document.querySelector('#badge'),slider=document.querySelector('#split'),sliderLabel=document.querySelector('#sliderLabel');
+let mode='split';
+function show(next){mode=next;document.querySelectorAll('[data-mode]').forEach(b=>b.setAttribute('aria-pressed',b.dataset.mode===mode));old.src=mode==='captured'?'captured.png':'old.png';newImage.hidden=mode==='old'||mode==='captured';newImage.style.clipPath=mode==='new'?'none':'inset(0 0 0 var(--split))';divider.hidden=sliderLabel.hidden=mode!=='split';badge.textContent={old:'Previous · replay',new:'Updated · replay',split:'Previous on the left · updated on the right',captured:'Original QA capture'}[mode]}
+document.querySelectorAll('[data-mode]').forEach(b=>b.onclick=()=>show(b.dataset.mode));slider.oninput=()=>stage.style.setProperty('--split',slider.value+'%');document.querySelector('#zoom').onclick=e=>{const native=stage.classList.toggle('native');e.currentTarget.setAttribute('aria-pressed',native)};
+document.addEventListener('keydown',e=>{if(e.target.matches('input,button'))return;const next={'1':'old','2':'new','3':'split','4':'captured',' ':mode==='old'?'new':'old'}[e.key];if(next){e.preventDefault();show(next)}});
+</script>
+</html>

@@ -11,7 +11,7 @@
 using namespace NorthlightGI;
 static uint32_t rng=739;
 static uint32_t next(){return rng=rng*1664525u+1013904223u;}
-int main(){
+int main(int argc,char** argv){
     unsigned compared=0;volatile unsigned sink=0;
     for(unsigned n:{14u,20u,22u}){
         assert(configureProbeLayout(probeLayoutFor(n)));
@@ -33,6 +33,8 @@ int main(){
             if(frame%31==0){a.reset();b.reset();}
         }
     }
+    if(argc==1){std::printf("{\"pass\":true,\"slots_exact\":%u}\n",compared);return 0;}
+    assert(argc==2&&std::strcmp(argv[1],"--benchmark")==0);
     double times[2][7];
     for(unsigned r=0;r<7;++r)for(unsigned mode=0;mode<2;++mode){
         NorthlightProbeBlend::Mirror a;ReferenceProbeBlend::Mirror b;

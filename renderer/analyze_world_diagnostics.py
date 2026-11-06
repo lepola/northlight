@@ -25,13 +25,23 @@ class Buffer:
                 'max':[max(v[c] for v in finite) for c in range(len(samples[0]))] if finite else [],
                 'mean':[sum(v[c] for v in finite)/len(finite) for c in range(len(samples[0]))] if finite else []}
 
+def constant_bank(raw):
+    if len(raw) not in (68*16,79*16):raise ValueError('Invalid constants length: expected 68 or 79 float4 registers')
+    return [struct.unpack_from('<4f',raw,i) for i in range(0,len(raw),16)]
+
 def analyze(directory,capture=1):
     root=Path(directory);prefix=f'capture-{capture}-'
     buffers={p.name[len(prefix):-4]:Buffer(p) for p in root.glob(prefix+'*.fgr')}
     report={'capture':capture,'buffers':{k:v.stats() for k,v in buffers.items()}}
     raw=(root/(prefix+'constants.f32')).read_bytes()
-    if len(raw)!=68*16:raise ValueError('Invalid constants length')
-    values=struct.unpack('<272f',raw);c=[values[i:i+4] for i in range(0,272,4)]
+    c=constant_bank(raw)
+    # Keep every captured register, including material c73..c78, without treating
+    # the final bank as the earlier local-light batches' constants.
+    report['constant_bank']={'register_count':len(c),'raw_hex':raw.hex(),'stage':'unversioned'}
+    report['input_provenance']={'surface_depth_source':'half-resolution-distance','depth_reconstructed':True,
+        'full_resolution_depth_supplied':'depth' in buffers,'invented_fog_environment':False,
+        'per_source_bank_missing':True,'material_inputs_complete':False,
+        'authentic_source_replay':False,'whole_scene_replay':False}
     report['camera']=c[15][:3];report['source']=c[16];report['source_rgb']=c[17][:3]
     report['legacy_fog']=c[25];report['projection']=c[1]
     def affine(p,first):return tuple(sum(p[k]*c[first+k][j] for k in range(3))+c[first+3][j] for j in range(3))

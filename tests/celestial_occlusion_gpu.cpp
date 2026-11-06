@@ -20,7 +20,7 @@ int main(int argc,char** argv){
     for(auto state:{D3DRS_ZENABLE,D3DRS_ZWRITEENABLE,D3DRS_ALPHABLENDENABLE,D3DRS_ALPHATESTENABLE,D3DRS_SRGBWRITEENABLE,D3DRS_FOGENABLE})ok(d->SetRenderState(state,FALSE));
     ok(d->SetRenderState(D3DRS_CULLMODE,D3DCULL_NONE));D3DVIEWPORT9 vp={0,0,size,size,0,1};ok(d->SetViewport(&vp));
     Image depth{size,size,D3DFMT_R32F,4,std::vector<unsigned char>(size*size*4)};
-    const float bands[]={.5f,.999f,1.f,.940001f};
+    const float bands[]={.5f,.9985f,1.f,.940001f};
     for(unsigned y=0;y<size;++y)for(unsigned x=0;x<size;++x)std::memcpy(depth.pixels.data()+(y*size+x)*4,&bands[x/16],4);
     auto dep=texture(d,depth),white=texture(d,{1,1,D3DFMT_A8R8G8B8,4,{255,255,255,255}});
     ok(d->SetTexture(0,dep));ok(d->SetTexture(1,white));
@@ -42,7 +42,7 @@ int main(int argc,char** argv){
             // discRay removes the D3D9 half-texel offset from interpolated UV.
             const float vx=(float(x)/size*2-1)/5,vy=(1-float(y)/size*2)/5;
             const float z=vy*cs+sn,length=std::sqrt(vx*vx+vy*vy+1);
-            const bool above=z>=horizon*length,geometry=bands[x/16]<c[11][0]-c[11][2];
+            const bool above=z>=horizon*length,geometry=mode?bands[x/16]<1.f-1.f/16777216:bands[x/16]<c[11][0]-c[11][2];
             const bool inDisc=std::max(std::fabs(vx),std::fabs(vy))<=c[6][3];
             const float nativeFade=std::clamp(30*z,0.f,1.f);
             const bool expected=inDisc&&!geometry&&nativeFade>.001f;

@@ -31,7 +31,9 @@ their Light rows and apply their bands without the HD sky (the step records sky_
 a stock client gets the relighting plus those two zones' bands. Files the chain already resolves to
 the same bytes are left out. The archive is written twice, as
 DIR/<Data>/patch-<letter>.mpq and DIR/<Data>/<locale>/patch-<locale>-<letter>.mpq (the locale
-patches override the base patches' DBCs), with DIR/art-layer-manifest.json. DIR is a staging
+patches override the base patches' DBCs), with DIR/art-layer-manifest.json. Each MPQ carries
+northlight/art-layer.json with hashes of its complete payload, so updates can identify it without backups.
+DIR is a staging
 folder: nothing is written into the client.
 """
 import argparse
@@ -40,14 +42,17 @@ import json
 import shutil
 import sys
 import tempfile
+import configparser
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))   # the repo root, also under python -I
 import northlight_paths as fp  # noqa: E402
 fp.use_source_modules()
 import client_archives  # noqa: E402
-from mpq import Archive  # noqa: E402
+from mpq import Archive, ReadError  # noqa: E402
 import native_model_lights  # noqa: E402
+import emission_catalog  # noqa: E402
+import world_emitter_index  # noqa: E402
 from world_scene_builder import Assets, decode_blp  # noqa: E402
 import build_lighting  # noqa: E402
 import build_mulgore_lighting  # noqa: E402
@@ -59,6 +64,64 @@ from build_lighting import DBC, Skip  # noqa: E402
 
 DBC_NAME = 'DBFilesClient\\{}.dbc'
 SKYBOX = DBC_NAME.format('LightSkybox')
+OWNER_FILE = 'northlight\\art-layer.json'
+OWNER_FORMAT = 'northlight-art-layer/1'
+INPUTS_FILE = 'northlight-art-inputs.ini'
+
+
+def write_inputs(output, client, locale, letter, archives, expected):
+    """Startup guard: source MPQ inventory and metadata, without reading gigabytes of payload."""
+    current = client_archives.fingerprint(client_archives.chain(client, archives, locale, without=letter), client)
+    if current != expected:
+        raise ValueError('MPQ inputs changed during art generation; run the installer again')
+    config = configparser.ConfigParser()
+    config.optionxform = str
+    config['NorthlightAssets'] = {'Version': '1', 'Locale': locale, 'Letter': letter,
+                                 'View': archives, 'Count': str(len(current['archives']))}
+    for i, entry in enumerate(current['archives']):
+        config[f'Archive{i}'] = {'Path': entry['archive'].replace('/', '\\'), 'Size': str(entry['bytes']),
+                                'Modified': str(entry['mtime_ns'] // 100 + 116444736000000000)}
+    with (output / INPUTS_FILE).open('w', encoding='utf-16') as target:
+        config.write(target)
+
+
+def owned_payload(payload):
+    """Portable ownership proof covering every generated file, independent of install history."""
+    manifest = {'format': OWNER_FORMAT, 'files': {n: hashlib.sha256(d).hexdigest() for n, d in payload.items()}}
+    return {**payload, OWNER_FILE: json.dumps(manifest, sort_keys=True, separators=(',', ':')).encode('utf-8')}
+
+
+def owns_archive(path):
+    """Accept our marker only while the archive's complete payload still matches it."""
+    try:
+        with Archive(path) as archive:
+            if not archive.has(OWNER_FILE):
+                return False
+            manifest = json.loads(archive.read(OWNER_FILE))
+            files = manifest.get('files')
+            if manifest.get('format') != OWNER_FORMAT or not isinstance(files, dict):
+                return False
+            names = {n.lower() for n in archive.names() if not n.startswith('(')}
+            if names != {OWNER_FILE, *(n.lower() for n in files)}:
+                return False
+            return all(hashlib.sha256(archive.read(n)).hexdigest() == digest for n, digest in files.items())
+    except (OSError, ValueError, AttributeError, TypeError, fp.Missing):
+        return False
+
+
+def unchanged_files(payload, assets):
+    """Omit a replacement only after successfully proving identical source bytes."""
+    unchanged = []
+    for name, data in payload.items():
+        if name.lower() not in assets.providers:
+            continue
+        try:
+            original = assets.read(name)
+        except (FileNotFoundError, ReadError):
+            continue  # The generated replacement is still valid and must be kept.
+        if original == data:
+            unchanged.append(name)
+    return sorted(unchanged)
 
 
 def write_archive(path, payload):
@@ -86,6 +149,7 @@ def build(client, output, world_cache, locale=None, letter='z', archives='all'):
     fog = world_cache / 'fog'
     assets = Assets(client, archives, locale, without=letter)
     report = {'client_archives': assets.fingerprint(), 'letter': letter, 'steps': []}
+    input_archives = client_archives.fingerprint(client_archives.chain(client, archives, locale, without=letter), client)
     work = Path(tempfile.mkdtemp(prefix='art-layer-', dir=output.parent))
     try:
         tables = {n: DBC(assets.read(DBC_NAME.format(n))) for n in build_lighting.TABLES}
@@ -128,9 +192,19 @@ def build(client, output, world_cache, locale=None, letter='z', archives='all'):
             if manifest.get('sky_clone_skipped'):
                 report['steps'][-1]['sky_clone_skipped'] = manifest['sky_clone_skipped']
                 print(f"{name}: sky clone skipped ({manifest['sky_clone_skipped']})", flush=True)
-        dynamic_models, dynamic_steps = native_model_lights.build(assets, work, read_archive)
+        index_file=world_cache/'lights'/'world-emitters-v1.json'
+        extra_paths=json.loads(index_file.read_text())['models'] if index_file.is_file() else ()
+        emitter_metadata, emitter_counts = world_emitter_index.build(assets,extra_paths)
+        world_owned=set(json.loads(emitter_metadata)['models'])
+        dynamic_models, dynamic_steps = native_model_lights.build(assets, work, read_archive,excluded=world_owned)
         payload.update(dynamic_models)
         report['steps'].extend(dynamic_steps)
+        emission = emission_catalog.build(assets, output)
+        report['runtime_emission_catalog'] = emission_catalog.FILE
+        report['steps'].append({'step': 'live_emission_catalog', **emission['counts']})
+        payload[world_emitter_index.ARCHIVE_PATH] = emitter_metadata
+        report['steps'].append({'step': 'world_emitter_index', 'owner': 'northlight-local-direct',
+                                'sha256': hashlib.sha256(emitter_metadata).hexdigest(), **emitter_counts})
         # 0.3.198 (rain): after the sky steps, so their skybox edits are kept: private storm profiles, then the weather textures.
         final = {n: DBC(payload[DBC_NAME.format(n)]) for n in build_lighting.TABLES}
         storm = build_lighting.stormify(final, stock)
@@ -142,8 +216,9 @@ def build(client, output, world_cache, locale=None, letter='z', archives='all'):
         report['steps'].append({'step': 'weather_textures', 'files': sorted(textures)})
         report['steps'].append({'step': 'world_model_lights', 'skipped': 'Rendered from world-cache/lights'})
         last = None   # the payload is no longer a step's archive
-        unchanged = sorted(n for n, data in payload.items() if n.lower() in assets.providers and assets.read(n) == data)
+        unchanged = unchanged_files(payload, assets)
         payload = {n: data for n, data in payload.items() if n not in unchanged}
+        payload = owned_payload(payload)
         data = client_archives.data_dir(client).name
         local = client_archives.locale_dir(client, locale).name
         targets = [f'{data}/patch-{letter}.mpq', f'{data}/{local}/patch-{local.lower()}-{letter}.mpq']
@@ -161,6 +236,8 @@ def build(client, output, world_cache, locale=None, letter='z', archives='all'):
                   letter_already_in_client=[t for t in targets if (client / t).exists()],
                   archive_sha256=hashlib.sha256((output / targets[0]).read_bytes()).hexdigest(),
                   game_launched=False)
+    write_inputs(output, client, locale, letter, archives, input_archives)
+    report['dependency_guard'] = INPUTS_FILE
     (output / 'art-layer-manifest.json').write_text(json.dumps(report, indent=2) + '\n')
     return report
 

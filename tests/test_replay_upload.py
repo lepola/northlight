@@ -8,11 +8,13 @@ import ast,subprocess,tempfile
 HERE=Path(__file__).resolve().parent
 def literal(file,key):return next(ast.literal_eval(n.value) for n in ast.parse(file.read_text()).body if isinstance(n,ast.Assign) and any(getattr(t,'id','')==key for t in n.targets))
 stub=literal(HERE/'test_terrain_snapshot.py','stub')
-stub=stub.replace('struct IDirect3DDevice9{','constexpr HRESULT S_OK=0,S_FALSE=1;constexpr unsigned D3DLOCK_DISCARD=8192,D3DISSUE_END=1;enum D3DQUERYTYPE{D3DQUERYTYPE_EVENT=8};\nstruct IDirect3DQuery9:IRef{virtual HRESULT Issue(DWORD)=0;virtual HRESULT GetData(void*,DWORD,DWORD)=0;};\nstruct IDirect3DDevice9{\nvirtual HRESULT CreateQuery(D3DQUERYTYPE,IDirect3DQuery9**)=0;\nvirtual HRESULT CreateVertexBuffer(UINT,DWORD,UINT,unsigned,IDirect3DVertexBuffer9**,void*)=0;\nvirtual HRESULT CreateIndexBuffer(UINT,DWORD,D3DFORMAT,unsigned,IDirect3DIndexBuffer9**,void*)=0;')
+stub=stub.replace('struct IDirect3DDevice9{','constexpr HRESULT S_OK=0,S_FALSE=1;constexpr unsigned D3DISSUE_END=1;enum D3DQUERYTYPE{D3DQUERYTYPE_EVENT=8};\nstruct IDirect3DQuery9:IRef{virtual HRESULT Issue(DWORD)=0;virtual HRESULT GetData(void*,DWORD,DWORD)=0;};\nstruct IDirect3DDevice9{\nvirtual HRESULT CreateQuery(D3DQUERYTYPE,IDirect3DQuery9**)=0;\nvirtual HRESULT CreateVertexBuffer(UINT,DWORD,UINT,unsigned,IDirect3DVertexBuffer9**,void*)=0;\nvirtual HRESULT CreateIndexBuffer(UINT,DWORD,D3DFORMAT,unsigned,IDirect3DIndexBuffer9**,void*)=0;')
 body=r'''
 #include "replay_gpu_cache.h"
 #include "replay_gpu_batches.h"
 #include "replay_bulk_layout.h"
+#include "scene_native_store.h"
+#include "geometry_memory.h"
 #include <cassert>
 #include <cstdio>
 #include <random>
@@ -79,6 +81,10 @@ int main(){
 source=fp.src('world_renderer.h').read_text()
 start=source.index('    bool uploadReplay(bool allowCache=true){');end=source.index('    bool actorMaterial',start)
 method=source[start:end]
+# Legacy cache variants exercise the unchanged bulk/ring algorithm. The native
+# scene's additional ownership telemetry is verified by test_shared_gpu_wiring.
+import re
+method=re.sub(r'^\s*deferLogf\("GPU_SCENE[^\n]*\n','',method,flags=re.M)
 shell=r"""
 #include <cstdarg>
 #include <chrono>
@@ -88,7 +94,10 @@ bool QueryPerformanceCounter(LARGE_INTEGER* out){out->QuadPart=std::chrono::stea
 #include "streaming_phase_profile.h"
 #include "dynamic_ring.h"
 #include "lock_meter.h"
-namespace NorthlightGeometryMemory {constexpr size_t MiB=1024*1024;}
+struct NativeCacheStorage {NorthlightGpuScene::NativeStore store;};
+struct NativeCache:NativeCacheStorage,NorthlightGpuScene::NativeClient {
+ NativeCache():NorthlightGpuScene::NativeClient(store,NorthlightGpuScene::Consumer::Shadow){}
+};
 void logf(const char*,...){}
 template<class T>void drop(T*& p){if(p)p->Release();p=nullptr;}
 class WorldRenderer {public:
@@ -99,7 +108,8 @@ class WorldRenderer {public:
   IDirect3DVertexBuffer9* stream[4]={};IDirect3DIndexBuffer9* index=nullptr;
   UINT offset[4]={},stride[4]={},start=0;INT base=0;
   const NorthlightDrawSnapshot::Mesh& mesh()const{return shared?*shared:snapshot;}
-  ~Replay(){for(auto& p:stream)drop(p);drop(index);}
+  bool* boundsPending=nullptr;
+  ~Replay(){assert(!boundsPending||!*boundsPending);for(auto& p:stream)drop(p);drop(index);}
  };
  IDirect3DDevice9* d;REPLAY_CACHE replayGpuCache;
  NorthlightReplayBulk::Layout replayBulkLayout;
@@ -114,10 +124,17 @@ class WorldRenderer {public:
  /* One frame: the production call, then the frame fence's Issue (WorldRenderer::endFrame). autoFrame: frames advance by themselves (tests that do not set frameNow). */
  bool upload(bool allowCache=true){const bool ok=uploadReplay(allowCache);frameFence.endFrame();if(autoFrame)++frameNow;return ok;}
  bool forceBulkPressure=false,denyAllGrowth=false;
- bool admitsGrowth(const char* kind,size_t){if(denyAllGrowth&&!std::strcmp(kind,"replay-growth"))return false;return !forceBulkPressure||std::strcmp(kind,"replay-growth")||replayGpuCache.bytes()==0;}
+ NorthlightGeometryMemory::Sample cacheMemory{1024ull<<20,512ull<<20,true};
+ std::vector<size_t> cacheGrowthRequests;
+ bool boundsPending=false;unsigned boundsJoins=0;
+ void replayBoundsJoin(){if(boundsPending){assert(replays.size()==4);boundsPending=false;++boundsJoins;}}
+ bool admitsGrowth(const char* kind,size_t bytes){
+  if(!std::strcmp(kind,"replay-cache")){cacheGrowthRequests.push_back(bytes);return NorthlightGeometryMemory::admits(cacheMemory,NorthlightGeometryMemory::dynamicBudget(bytes));}
+  if(denyAllGrowth&&!std::strcmp(kind,"replay-growth"))return false;return !forceBulkPressure||std::strcmp(kind,"replay-growth")||replayGpuCache.bytes()==0;}
  bool check(HRESULT h,const char*){return !FAILED(h);}
  void deferLogf(const char*,...){} /* 0.3.176: the sampled MODEL GPU lines are written from endFrame */
- bool prepareUnsettled()const{return false;}void recycleReplay(Replay* raw){delete raw;} /* 0.3.177: no abandoned prepare worker */
+ bool preparePending=false;
+ bool prepareUnsettled()const{return preparePending;}void recycleReplay(Replay* raw){assert(!boundsPending);delete raw;}
  static UINT roundBuffer(UINT bytes,size_t){return bytes;} // exact allocations in fake device
  explicit WorldRenderer(IDirect3DDevice9* dev):d(dev){}
  ~WorldRenderer(){for(auto& ring:replayVertexRing)NorthlightDynamicRing::clearSpans(ring,frameFence);NorthlightDynamicRing::clearSpans(replayIndexRing,frameFence);frameFence.drop();replays.clear();replayGpuCache.clear();for(auto& p:replayVerticesGPU)drop(p);drop(replayIndicesGPU);}
@@ -140,6 +157,41 @@ class WorldRenderer {public:
 main=r"""
 };
 int main(){Device d;auto a=mesh(),b=mesh(480),c=mesh(96);
+ // The QA's 79 MiB contiguous block must admit small resident meshes. The
+ // complete frame reservation includes every new mesh and batch stride pad.
+ {const double saved=NorthlightReplayGPU::createBudgetMs();NorthlightReplayGPU::createBudgetMs()=1e30;
+  WorldRenderer world(&d);auto x=meshS(24*1024,24,false),y=meshS(28*1024,28,false);
+  world.add(x,true);world.add(y,true);assert(world.upload());world.verify();
+  world.cacheMemory={942ull<<20,79ull<<20,true};world.cacheGrowthRequests.clear();
+  assert(world.upload());world.verify();assert(world.replays[0]->gpuCached&&world.replays[1]->gpuCached);
+  assert(world.cacheGrowthRequests.size()==2);
+  assert(world.cacheGrowthRequests[0]==x->byteSize()+24);
+  assert(world.cacheGrowthRequests[1]==x->byteSize()+24+y->byteSize()+28);
+  world.cacheGrowthRequests.clear();assert(world.upload());world.verify();assert(world.cacheGrowthRequests.empty());
+  NorthlightReplayGPU::createBudgetMs()=saved;}
+ assert(alive==0);
+ // A sample covering one request must not admit a whole pending batch.
+ {const double saved=NorthlightReplayGPU::createBudgetMs();NorthlightReplayGPU::createBudgetMs()=1e30;
+  WorldRenderer world(&d);auto x=meshS(24*1024,24,false),y=meshS(28*1024,28,false);
+  world.add(x,true);world.add(y,true);assert(world.upload());world.verify();
+  world.cacheMemory={NorthlightGeometryMemory::ProcessReserve+3*(x->byteSize()+24),79ull<<20,true};
+  assert(world.upload());world.verify();assert(world.replays.size()==2&&world.replays[0]->gpuCached&&!world.replays[1]->gpuCached);
+  world.cacheMemory={NorthlightGeometryMemory::ProcessReserve+3*(y->byteSize()+28),79ull<<20,true};world.cacheGrowthRequests.clear();
+  assert(world.upload());world.verify();assert(world.replays[1]->gpuCached&&world.cacheGrowthRequests[0]==y->byteSize()+28);
+  NorthlightReplayGPU::createBudgetMs()=saved;}
+ assert(alive==0);
+ // No contiguous/aggregate reserve: retain all draws through existing bulk
+ // buffers. A refused request must not consume the next frame's reservation.
+ for(auto memory:{NorthlightGeometryMemory::Sample{942ull<<20,15ull<<20,true},
+                  NorthlightGeometryMemory::Sample{256ull<<20,79ull<<20,true},
+                  NorthlightGeometryMemory::Sample{942ull<<20,79ull<<20,false}}){
+  WorldRenderer world(&d);auto x=meshS(24*1024,24,false);world.add(x,true);assert(world.upload());world.verify();
+  const auto capacity=world.replayVertexBytes[0];world.cacheMemory=memory;
+  assert(world.upload());world.verify();assert(world.replays.size()==1&&!world.replays[0]->gpuCached&&world.replayVertexBytes[0]==capacity);
+  world.cacheMemory={942ull<<20,79ull<<20,true};world.cacheGrowthRequests.clear();
+  assert(world.upload());world.verify();assert(world.replays[0]->gpuCached&&world.cacheGrowthRequests[0]==x->byteSize()+24);
+ }
+ assert(alive==0);
  // First-use/probation snapshots can repeat for many material/pose draws.
  // Every draw survives and sees its original bytes, with one shared upload.
  {WorldRenderer world(&d);for(unsigned i=0;i<4096;++i)world.add(a,true);
@@ -158,9 +210,10 @@ int main(){Device d;auto a=mesh(),b=mesh(480),c=mesh(96);
  assert(alive==0);
  // Under hard memory pressure the prefix fit counts UNIQUE bytes; repeated
  // draws referencing its first mesh all survive with their original order.
- {WorldRenderer world(&d);world.add(a,false);assert(world.upload());world.replays.clear();
+ for(bool quarantine:{false,true}){WorldRenderer world(&d);world.add(a,false);assert(world.upload());world.replays.clear();world.preparePending=quarantine;
   auto fresh=mesh();world.add(fresh,true);world.add(fresh,true);world.add(fresh,true);world.add(mesh(3<<20),false); /* 0.3.192: larger than the ring capacity of the first call */
-  world.denyAllGrowth=true;assert(world.upload());world.verify();assert(world.replays.size()==3);
+  world.boundsPending=true;for(auto& p:world.replays)p->boundsPending=&world.boundsPending;
+  world.denyAllGrowth=true;assert(world.upload());world.verify();assert(world.replays.size()==3&&!world.boundsPending&&world.boundsJoins==1);
  }
  assert(alive==0);
  // Equal bytes with different immutable owners must NOT alias; UP/owned
@@ -348,7 +401,7 @@ integration=body.split('int main()')[0]+shell+method+main
 with tempfile.TemporaryDirectory(prefix='northlight-replay-upload-') as tmp:
  p=Path(tmp);(p/'d3d9.h').write_text(stub);(p/'test.cpp').write_text(integration)
  # Per-mesh cache (switch off), batched cache with multi-stream meshes (per-mesh layout) and single-stream meshes (batches).
- for variant in [['-DREPLAY_CACHE=NorthlightReplayGPU::Cache','-DSINGLE_STREAM=0'],['-DREPLAY_CACHE=NorthlightReplayGPU::BatchedCache','-DSINGLE_STREAM=0'],['-DREPLAY_CACHE=NorthlightReplayGPU::BatchedCache','-DSINGLE_STREAM=1']]:
+ for variant in [['-DREPLAY_CACHE=NorthlightReplayGPU::Cache','-DSINGLE_STREAM=0'],['-DREPLAY_CACHE=NorthlightReplayGPU::BatchedCache','-DSINGLE_STREAM=0'],['-DREPLAY_CACHE=NorthlightReplayGPU::BatchedCache','-DSINGLE_STREAM=1'],['-DREPLAY_CACHE=NativeCache','-DSINGLE_STREAM=1']]:
   for flags in [[],['-fsanitize=address,undefined','-fno-omit-frame-pointer']]:
    subprocess.run(['clang++','-std=c++17','-O2',*variant,*flags,'-I'+str(p),*fp.test_include_flags(),str(p/'test.cpp'),'-o',str(p/'test')],check=True)
    print(' '.join(variant[:2]),' '.join(flags[:1]),flush=True);subprocess.run([str(p/'test')],check=True)

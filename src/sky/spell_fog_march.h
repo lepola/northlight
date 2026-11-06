@@ -26,10 +26,9 @@ inline FieldSample fieldAt(const NorthlightRegionalFog::Field& f,float x,float y
     const float w[4]={(1-fx)*(1-fy),fx*(1-fy),(1-fx)*fy,fx*fy};
     const NorthlightRegionalFog::Texel* t[4]={&f.texels[size_t(by)*N+size_t(bx)],&f.texels[size_t(by)*N+size_t(bx)+1],&f.texels[size_t(by+1)*N+size_t(bx)],&f.texels[size_t(by+1)*N+size_t(bx)+1]};
     float total=0,ground=0,height=0;
-    for(int i=0;i<4;++i){
-        s.day+=w[i]*t[i]->day;s.nightExtra+=w[i]*t[i]->nightExtra;
-        if(t[i]->height>0){total+=w[i];ground+=w[i]*t[i]->ground;height+=w[i]*t[i]->height;}
-    }
+    auto accumulate=[&](int i){s.day+=w[i]*t[i]->day;s.nightExtra+=w[i]*t[i]->nightExtra;
+        if(t[i]->height>0){total+=w[i];ground+=w[i]*t[i]->ground;height+=w[i]*t[i]->height;}};
+    accumulate(0);accumulate(1);accumulate(2);accumulate(3);
     const float inv=1.f/std::max(total,1e-6f);
     s.ground=ground*inv;s.height=height*inv;
     const float edge=saturate(std::min(std::min(gx,gy),std::min(float(N-1)-gx,float(N-1)-gy))*.5f);
@@ -68,5 +67,30 @@ template<class Extra> inline float opticalDepth(const NorthlightRegionalFog::Fie
         depth+=(base+extra(x,y,z,s))*nearFade(m,t)*step;
     }
     return depth;
+}
+// A known global footprint bound proves that a whole ray stays above every cloud bank.
+// The four-unit margin covers float interpolation and world-coordinate rounding;
+// unknown or out-of-range values retain the full cloud march.
+inline bool cloudRayAboveSupport(const std::array<float,3>& bounds,float height,float fromZ,float toZ){
+    if(!(bounds[2]>0&&std::isfinite(bounds[0])&&std::isfinite(bounds[1])&&std::isfinite(bounds[2])&&
+         bounds[0]<=bounds[1]&&std::fabs(bounds[0])<=100000&&std::fabs(bounds[1])<=100000&&
+         std::isfinite(height)&&height>0&&height<=20&&std::isfinite(fromZ)&&std::isfinite(toZ)&&
+         std::fabs(fromZ)<=100000&&std::fabs(toZ)<=100000))return false;
+    return std::min(fromZ,toZ)>bounds[1]+5.5f*height+4.f;
+}
+// Compute the clear and cloud optical depths over the same samples.
+template<class Extra> inline void opticalDepthPair(const NorthlightRegionalFog::Field& f,const March& m,const float from[3],const float to[3],unsigned steps,Extra&& extra,float& clear,float& cloudy){
+    float d[3]={to[0]-from[0],to[1]-from[1],to[2]-from[2]};
+    const float length=std::sqrt(d[0]*d[0]+d[1]*d[1]+d[2]*d[2]);
+    clear=cloudy=0;
+    if(!(length>1e-4f)||!steps)return;
+    const float step=length/float(steps);
+    for(unsigned i=0;i<steps;++i){
+        const float t=(float(i)+.5f)*step,u=t/length;
+        const float x=from[0]+d[0]*u,y=from[1]+d[1]*u,z=from[2]+d[2]*u;
+        FieldSample s;const float base=sigma(f,m,x,y,z,s);
+        clear+=(base+0.f)*nearFade(m,t)*step;
+        cloudy+=(base+extra(x,y,z,s))*nearFade(m,t)*step;
+    }
 }
 }

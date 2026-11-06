@@ -15,6 +15,7 @@ struct ReadSet {
     uint64_t f[4]={};                // float constant registers (VS 0..255, PS 0..223)
     uint16_t i=0,b=0;                // int and bool constant registers
     uint16_t samplers=0;             // sampler registers s0..s15 (declared with dcl or used by a texture instruction)
+    uint16_t sampledSamplers=0;      // executable sampler reads; declarations alone never fetch a texture
 };
 namespace Detail {
 constexpr unsigned kTypeConst=2,kTypeSampler=10,kTypeConst2=11,kTypeConst3=12,kTypeConst4=13,kTypeConstInt=7,kTypeConstBool=14;
@@ -108,7 +109,7 @@ inline ReadSet scan(const uint32_t* words,std::size_t count){
             case kTypeConstInt:if(relative||num>=16)return bad;r.i|=uint16_t(1u<<num);break;
             case kTypeConstBool:if(relative||num>=16)return bad;r.b|=uint16_t(1u<<num);break;
             case kTypeConst2:case kTypeConst3:case kTypeConst4:return bad;  // extended banks (c2048..) are outside what the API state carries here
-            case kTypeSampler:if(num>=16)return bad;r.samplers|=uint16_t(1u<<num);break;
+            case kTypeSampler:if(num>=16)return bad;r.samplers|=uint16_t(1u<<num);r.sampledSamplers|=uint16_t(1u<<num);break;
             default:break;
             }
         }

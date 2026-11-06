@@ -24,8 +24,8 @@ public:
     HRESULT STDMETHODCALLTYPE GetDesc(D3DSURFACE_DESC* pDesc) override {MirrorGuard lock(gate,MirrorSite::Resource); return real->GetDesc(pDesc);}
     HRESULT STDMETHODCALLTYPE LockRect(D3DLOCKED_RECT *locked_rect, const RECT *rect, DWORD flags) override {MirrorGuard lock(gate,MirrorSite::Resource); if(NorthlightMirrorWrite::writes(flags))NorthlightMirrorWrite::level(real); return real->LockRect(locked_rect, rect, flags);}
     HRESULT STDMETHODCALLTYPE UnlockRect() override {MirrorGuard lock(gate,MirrorSite::Resource); NorthlightMirrorWrite::level(real); return real->UnlockRect();}
-    HRESULT STDMETHODCALLTYPE GetDC(HDC* phdc) override {MirrorGuard lock(gate,MirrorSite::Resource); return real->GetDC(phdc);}
-    HRESULT STDMETHODCALLTYPE ReleaseDC(HDC hdc) override {MirrorGuard lock(gate,MirrorSite::Resource); return real->ReleaseDC(hdc);}
+    HRESULT STDMETHODCALLTYPE GetDC(HDC* phdc) override {MirrorGuard lock(gate,MirrorSite::Resource); NorthlightMirrorWrite::level(real); return real->GetDC(phdc);}
+    HRESULT STDMETHODCALLTYPE ReleaseDC(HDC hdc) override {MirrorGuard lock(gate,MirrorSite::Resource); NorthlightMirrorWrite::level(real); return real->ReleaseDC(hdc);}
 };
 class ForwardIDirect3DTexture9:public IDirect3DTexture9 {
 public:
@@ -43,7 +43,7 @@ public:
     DWORD STDMETHODCALLTYPE GetPriority() override {MirrorGuard lock(gate,MirrorSite::Resource); return real->GetPriority();}
     void STDMETHODCALLTYPE PreLoad() override {MirrorGuard lock(gate,MirrorSite::Resource); return real->PreLoad();}
     D3DRESOURCETYPE STDMETHODCALLTYPE GetType() override {MirrorGuard lock(gate,MirrorSite::Resource); return real->GetType();}
-    DWORD STDMETHODCALLTYPE SetLOD(DWORD LODNew) override {MirrorGuard lock(gate,MirrorSite::Resource); return real->SetLOD(LODNew);}
+    DWORD STDMETHODCALLTYPE SetLOD(DWORD LODNew) override {MirrorGuard lock(gate,MirrorSite::Resource); NorthlightMirrorWrite::texture(real); return real->SetLOD(LODNew);}
     DWORD STDMETHODCALLTYPE GetLOD() override {MirrorGuard lock(gate,MirrorSite::Resource); return real->GetLOD();}
     DWORD STDMETHODCALLTYPE GetLevelCount() override {MirrorGuard lock(gate,MirrorSite::Resource); return real->GetLevelCount();}
     HRESULT STDMETHODCALLTYPE SetAutoGenFilterType(D3DTEXTUREFILTERTYPE FilterType) override {MirrorGuard lock(gate,MirrorSite::Resource); return real->SetAutoGenFilterType(FilterType);}
@@ -71,7 +71,7 @@ public:
     DWORD STDMETHODCALLTYPE GetPriority() override {MirrorGuard lock(gate,MirrorSite::Resource); return real->GetPriority();}
     void STDMETHODCALLTYPE PreLoad() override {MirrorGuard lock(gate,MirrorSite::Resource); return real->PreLoad();}
     D3DRESOURCETYPE STDMETHODCALLTYPE GetType() override {MirrorGuard lock(gate,MirrorSite::Resource); return real->GetType();}
-    DWORD STDMETHODCALLTYPE SetLOD(DWORD LODNew) override {MirrorGuard lock(gate,MirrorSite::Resource); return real->SetLOD(LODNew);}
+    DWORD STDMETHODCALLTYPE SetLOD(DWORD LODNew) override {MirrorGuard lock(gate,MirrorSite::Resource); NorthlightMirrorWrite::texture(real); return real->SetLOD(LODNew);}
     DWORD STDMETHODCALLTYPE GetLOD() override {MirrorGuard lock(gate,MirrorSite::Resource); return real->GetLOD();}
     DWORD STDMETHODCALLTYPE GetLevelCount() override {MirrorGuard lock(gate,MirrorSite::Resource); return real->GetLevelCount();}
     HRESULT STDMETHODCALLTYPE SetAutoGenFilterType(D3DTEXTUREFILTERTYPE FilterType) override {MirrorGuard lock(gate,MirrorSite::Resource); return real->SetAutoGenFilterType(FilterType);}
@@ -99,7 +99,7 @@ public:
     DWORD STDMETHODCALLTYPE GetPriority() override {MirrorGuard lock(gate,MirrorSite::Resource); return real->GetPriority();}
     void STDMETHODCALLTYPE PreLoad() override {MirrorGuard lock(gate,MirrorSite::Resource); return real->PreLoad();}
     D3DRESOURCETYPE STDMETHODCALLTYPE GetType() override {MirrorGuard lock(gate,MirrorSite::Resource); return real->GetType();}
-    DWORD STDMETHODCALLTYPE SetLOD(DWORD LODNew) override {MirrorGuard lock(gate,MirrorSite::Resource); return real->SetLOD(LODNew);}
+    DWORD STDMETHODCALLTYPE SetLOD(DWORD LODNew) override {MirrorGuard lock(gate,MirrorSite::Resource); NorthlightMirrorWrite::texture(real); return real->SetLOD(LODNew);}
     DWORD STDMETHODCALLTYPE GetLOD() override {MirrorGuard lock(gate,MirrorSite::Resource); return real->GetLOD();}
     DWORD STDMETHODCALLTYPE GetLevelCount() override {MirrorGuard lock(gate,MirrorSite::Resource); return real->GetLevelCount();}
     HRESULT STDMETHODCALLTYPE SetAutoGenFilterType(D3DTEXTUREFILTERTYPE FilterType) override {MirrorGuard lock(gate,MirrorSite::Resource); return real->SetAutoGenFilterType(FilterType);}

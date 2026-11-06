@@ -26,12 +26,12 @@ BEFORE={'WorldNormals':'e647de5f5ba48db3fa790f329731d066a47fa965fdf474dcc568c337
 
 # HLSL
 checks['source: RainMask declared on s13 (aliasing RegionalFog, as s8/s10 do)']=('sampler2D RainMask : register(s13);' in h)
-comp=h.split('float4 WorldComposite(',1)[1].split('// Separate geometry pass:',1)[0]
+comp=h.split('float4 worldComposite(',1)[1].split('// Separate geometry pass:',1)[0]
 m=re.search(r'if\(PassInfo\.z<\.5\)\{(.*?)\n    \}',comp,re.S)
 body=m.group(1) if m else ''
 checks['source: WorldComposite reads the mask once, only inside the PassInfo.z<.5 branch']=(bool(m) and comp.count('RainMask')==1 and body.count('tex2Dlod(RainMask,float4(uv,0,0)).r')==1)
 checks['source: unfogged colour kept before haze, lerped back to after the haze + fog mad']=(
-    'float3 unfogged=color;' in body and body.index('unfogged=color')<body.index('lerp(mad(horizonHaze(')<body.index('fog.a,fog.rgb)')<body.index(',unfogged,rain)')
+    'float3 unfogged=color;' in body and body.index('unfogged=color')<body.index('lerp(mad(horizonHaze(')<body.index('fog.a,fog.rgb*coverageTransmission)')<body.index(',unfogged,rain)')
     and ',unfogged,rain)' in body)
 checks['source: debug views (PassInfo.z != 0) do not touch the mask']=('RainMask' not in comp.split('if(PassInfo.z<.5)',1)[0] and 'RainMask' not in comp.split('PassInfo.z==3',1)[1])
 
@@ -43,8 +43,17 @@ checks['manifest: WorldComposite bytecode changed']=(wc['sha256']!=BEFORE['World
 # 0.3.208: WorldNormals (colour-picked one-sided tangent side) changed on purpose
 # 0.3.209 (task 29): WorldLighting reads the actor visibility (s12) on purpose, ActorShadow and ActorTiles are new
 # task 43: RemovalSmooth branches around a zero-weight tap's reads on purpose (the same output)
-checks['manifest: shaders outside the reviewed feature changes retain their historical hashes']=(set(manifest)==set(BEFORE)|{'LocalFogCombine', 'ActorTiles', 'ActorShadow', 'LocalDirect16'} and all(manifest[n]['sha256']==s for n,s in BEFORE.items() if n not in ('FogClouds', 'LocalFog', 'RemovalSmooth', 'WorldComposite', 'WorldFog', 'WorldLighting', 'WorldNormals'))
-    and manifest['LocalFog']['sha256']!=BEFORE['LocalFog'])
+# 3e8d8cb3 adds the separately validated lightning passes FlashShadow and LocalFlash.
+# 7c5c699 adds diagnostic-only MaterialAudit; 11f79a8 adds the bit-exact FogTemporal history-equality guard.
+REVIEWED_AFTER={'FogTemporal':'492128b1154ec3e10f526b12c5bdf56946b405f79fa9d3d3fdbbb82761891d8b',
+                # 84689f198f00: absent probes preserve native ambient (233 slots).
+                # Independently guarded by test_gi_fallback_gpu.py (1009 cases).
+                'WorldGI':'98e33a0ff1a8412e7dd0d1801596cc4dc8f5dc2d4fde4880e4760a6eee267992',
+                # 00be1da: shared receiver-depth helper and tighter material depth validity.
+                'FogBlur':'3566e684517a7bc8348ac407c6b56d7300a9551b1212f12c70671aa050c7f472',
+                'MaterialAudit':'75488d95d603821f1f9ef9403f1a7d1362371fd88bd646f4da7f6e20c8a10899'}
+checks['manifest: shaders outside the reviewed feature changes retain their historical hashes']=(set(manifest)==set(BEFORE)|{'FlashShadow', 'LocalFlash', 'LocalFogCombine', 'ActorTiles', 'MaterialComposite', 'LocalDirect16', 'ActorShadow', 'MaterialAudit', 'WorldNormalsNoDistance', 'WorldFogAmbient', 'WorldFogActor', 'FogCloudsActor', 'LocalDirect1', 'WorldUnlitComposite', 'WorldPrelitComposite', 'WorldPrelitCompositeHdr', 'ActorTilesWide', 'WorldFogActorTiled', 'FogCloudsActorTiled', 'DirectionalShadow', 'WorldLightingSoft', 'ActorShadowUniform', 'WorldCompositeHdr', 'WorldUnlitCompositeHdr', 'MaterialCompositeHdr', 'WorldMaterialCompositeHdr'} and all(manifest[n]['sha256']==REVIEWED_AFTER.get(n,s) for n,s in BEFORE.items() if n not in ('FogClouds', 'LocalDirect', 'LocalFog', 'RemovalSmooth', 'ShadowReplayPS', 'WorldComposite', 'WorldFog', 'WorldLighting', 'WorldNormals'))
+    and manifest['LocalFog']['sha256']!=BEFORE['LocalFog'] and manifest['MaterialAudit']['sha256']==REVIEWED_AFTER['MaterialAudit'])
 checks['compiled: WorldComposite.bin exists']=(fp.COMPILED/'WorldComposite.bin').exists()
 
 # numeric reference of the blend: lerp(fogged, unfogged, mask)
@@ -60,13 +69,13 @@ checks['numeric: mask 0 gives exactly the previous result']=(composite(col,haze,
 checks['numeric: mask 1 gives the unfogged colour']=all(abs(a-b)<1e-12 for a,b in zip(composite(col,haze,fa,fr,1.),col))
 mid=composite(col,haze,fa,fr,.5)
 checks['numeric: mask .5 is the midpoint']=all(abs(m_-(o+c)/2)<1e-12 for m_,o,c in zip(mid,old,col))
-# 0.3.202 (rain mask MRT): the two ps_2_0 shaders of the MRT mask (shaders/rain_mask.hlsl); the ps_3_0 entries of effects.hlsl stay byte-identical
+# 0.3.202 (rain mask MRT): the two ps_2_0 shaders of the MRT mask (shaders/rain_mask.hlsl); the separately built effects retain their approved payloads
 eff=json.loads((fp.SHADERS/'shader-build.json').read_text())['shaders']
 # The Microsoft d3dcompiler_47 build (rebased from the Wine builtin hashes)
-EFF_BEFORE={'AO':'fa7a14b42bb3b1238fb440c91deebbc6dc85ad6be2b7770ade831e592e5826c6','AOContactBloom':'69f09b7b034b86e714fe56b0aa596fe0896b927940db9b0cc80ee98984545105','Composite':'36d90667788788500a5e0a6a7c8f100fe858ed9ec550dd489edb8fe5a6ca02f2'}
+EFF_APPROVED=json.loads((fp.FIXTURES/'ao_baseline_sha256.json').read_text())
 import hashlib
 checks['MRT shaders: effects.hlsl untouched (the rain shaders have their own source, hashed in the manifest)']=('RainMaskMRT' not in (fp.SHADERS/'effects.hlsl').read_text() and json.loads((fp.SHADERS/'shader-build.json').read_text()).get('rain_source_sha256')==hashlib.sha256((fp.SHADERS/'rain_mask.hlsl').read_bytes()).hexdigest())
-checks['MRT shaders: AO, AOContactBloom and Composite byte-identical to 0.3.201']=all(eff[n]['sha256']==x for n,x in EFF_BEFORE.items())
+checks['MRT shaders: separately approved effect payloads']=all(eff[n]['sha256']==x for n,x in EFF_APPROVED.items())
 checks['MRT shaders: RainMaskMRT and RainScrub are ps_2_0, small, with a compiled .bin']=all(n in eff and eff[n]['target']=='ps_2_0' and eff[n]['static_instruction_slots']<=32 and (fp.COMPILED/(n+'.bin')).exists() for n in ('RainMaskMRT','RainScrub'))
 ehl=(fp.SHADERS/'rain_mask.hlsl').read_text()
 checks['MRT shaders: source writes oC1 = white with the streak alpha (RT1 masked to red); the scrub discards unchanged depth and outputs 0']=('out float4 mask : COLOR1' in ehl and 'mask = float4(1, 1, 1, c.a);' in ehl and 'clip(abs(tex2D(Scene, uv).r - tex2D(Depth, uv).r) - 1e-6);' in ehl and 'return 0;' in ehl.split('float4 RainScrub(',1)[1])

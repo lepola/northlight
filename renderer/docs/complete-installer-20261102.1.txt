@@ -1,0 +1,40 @@
+Complete Windows test installer 0.3.216-test.20261102.1
+
+Implementation commit: f7933d49228ef81279593107d45cc144a5dece70
+Includes native M2 normal-only capture, opaque model batching without MSAA,
+lazy point-shadow state setup, reduced tracked-snapshot metadata and safe replay
+upload elision with sampled Lock/copy/Unlock attribution.
+
+Archive: Northlight-0.3.216-test.20261102.1-Windows.zip
+Archive bytes: 20157529
+Archive SHA256: 3d1bcfe66181d433a041bb9affc70c42476b4a4ce8405dc3fed19920e781b075
+DLL bytes: 9031680
+DLL SHA256: 1fef9e12b8d3175cbd3ef693e076d1a7e619071fb69f9ed9a7fdaeb0c77674ce
+Embedded source identity: 75f121803a8b0d984d48de7b6c873aafdc6c12b701338fb84086e48a4c86ab5f
+Build UTC: 2026-11-02 11:30:55 UTC
+
+Package allowlists, exact manifests, runtime/dependency pins and ZIP CRC pass.
+The packaged DLL exactly matches the offline-validated release DLL. All six
+entry points return zero under the bundled isolated Python in a Unicode path.
+Installer front-end tests: 239 cases, 6 skips. Windows installer: 62 cases,
+2 skips; rerun with a writable local Temp after sandbox Temp cleanup was denied.
+The existing Python 3.13.15 and DXVK 3.1.1/2.7.1 pins remain in use.
+
+Focused combined regressions: 4 PASS, including O2/O0 buffer upload checks,
+three detected unsafe negative controls, query attribution, pressure transitions
+and log formats. Six alternating offline Telredor runs retain byte-identical
+shadow-face digests, with 9048 face comparisons per process. Detailed measurements
+and limits: renderer/docs/qa-telredor-memory-unlock-20261102.txt.
+
+Reproduce packaging:
+python renderer/build_packages.py --platform windows --version 0.3.216-test.20261102.1 --dll renderer/frd9.dll --out releases
+python tests/verify_packages.py releases/Northlight-0.3.216-test.20261102.1-Windows.zip
+
+Evidence: .local/out/telredor-publication-20261102/installer-validation.json,
+.local/out/test-output/20261102-132522/results.tsv,
+.local/out/test-output/20261102-134411/logs/test_northlight_install.log,
+.local/out/test-output/20261102-134557/results.tsv.
+
+The ZIP is local in releases/. No GitHub Release upload or game installation.
+These component and installer checks do not establish full-game FPS or animated
+whole-frame visual acceptance.

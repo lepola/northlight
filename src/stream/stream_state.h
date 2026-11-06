@@ -40,14 +40,18 @@ struct StreamState {
     struct FloatBank {
         static constexpr UINT kRegs=256;
         float v[kRegs][4]={};std::uint64_t known[kRegs/64]={};
-        static std::uint64_t wordMask(UINT w,UINT r,UINT end){   // the bits of word w inside [r,end)
-            const UINT lo=w*64,a=r>lo?r-lo:0,b=end<lo+64?end-lo:64;
-            return (b>=64?~std::uint64_t(0):((std::uint64_t(1)<<b)-1))&~((std::uint64_t(1)<<a)-1);}
         bool allKnown(UINT r,UINT n)const{   // r+n <= kRegs
-            if(!n)return true;const UINT end=r+n;
-            for(UINT w=r/64;w<=(end-1)/64;++w){const std::uint64_t m=wordMask(w,r,end);if((known[w]&m)!=m)return false;}
-            return true;}
-        void setKnown(UINT r,UINT n){if(!n)return;const UINT end=r+n;for(UINT w=r/64;w<=(end-1)/64;++w)known[w]|=wordMask(w,r,end);}
+            if(!n)return true;const UINT end=r+n,first=r/64,last=(end-1)/64;
+            const auto low=~std::uint64_t(0)<<(r&63),high=~std::uint64_t(0)>>((0u-end)&63);
+            if(first==last){const auto mask=low&high;return (known[first]&mask)==mask;}
+            if((known[first]&low)!=low)return false;
+            for(UINT w=first+1;w<last;++w)if(known[w]!=~std::uint64_t(0))return false;
+            return (known[last]&high)==high;}
+        void setKnown(UINT r,UINT n){
+            if(!n)return;const UINT end=r+n,first=r/64,last=(end-1)/64;
+            const auto low=~std::uint64_t(0)<<(r&63),high=~std::uint64_t(0)>>((0u-end)&63);
+            if(first==last){known[first]|=low&high;return;}
+            known[first]|=low;for(UINT w=first+1;w<last;++w)known[w]=~std::uint64_t(0);known[last]|=high;}
         void forget(){for(auto& k:known)k=0;}
     };
     struct VsI {bool known=false;int v[4]={};};

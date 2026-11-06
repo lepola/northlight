@@ -11,7 +11,16 @@
 // The owner queries process address space immediately before each costly stage.
 namespace NorthlightGeometryMemory {
 constexpr uint64_t MiB=1024ull*1024ull;
-constexpr uint64_t ProcessReserve=512*MiB;
+// Keep 256 MiB for unrelated game/driver allocations. Entry adds a separate
+// 256 MiB working allowance; interior/upload checks still re-sample current VA
+// and enforce request-sized headroom plus the unchanged contiguous margins.
+constexpr uint64_t ProcessReserve=256*MiB;
+// Recreating the same committed pressure payload after Reset may retain one
+// additional 16 MiB mapped allocator chunk on DXVK. Only that replay may spend
+// this allowance; CPU builds and new scene uploads keep ProcessReserve.
+// These are admission floors, not post-Create guarantees about driver mappings.
+constexpr uint64_t ResetReplayAllowance=16*MiB;
+constexpr uint64_t ResetReplayReserve=ProcessReserve-ResetReplayAllowance;
 // Contiguous headroom above the largest single allocation of a stage. A 32-bit
 // process whose largest free region shrank to ~20 MiB still reported 2.5 GiB
 // free before one silent exit; every large allocation now needs this margin.
@@ -43,6 +52,11 @@ inline uint64_t corrected(uint64_t apiAvailable){
     return apiAvailable>bias?apiAvailable-bias:0;
 }
 struct Budget { uint64_t available=0,largest=0;bool valid=false; };
+inline Budget replayBudget(Budget budget,bool sameCommittedReplay){
+    if(!sameCommittedReplay||!budget.valid)return budget;
+    if(budget.available<ProcessReserve)return {};
+    budget.available-=ResetReplayAllowance;return budget;
+}
 inline bool add(uint64_t a,uint64_t b,uint64_t& out){
     if(b>std::numeric_limits<uint64_t>::max()-a)return false;
     out=a+b;return true;
@@ -53,6 +67,15 @@ inline Budget budgetWith(uint64_t headroom,uint64_t largestAllocation){
     b.valid=true;return b;
 }
 inline Budget buildBudget(uint64_t largestAllocation=0){return budgetWith(EntryHeadroom,largestAllocation);}
+// Chunked local builds avoid large contiguous buffers; keep the process and interior reserves unchanged.
+inline Budget chunkBuildBudget(){return budgetWith(EntryHeadroom-32*MiB,MiB);}
+// Bounded recovery (including a replacement with one retained generation).
+// Pressure staging spills disposable geometry/pages to private temporary files
+// and omits optional source/acceleration caches. Entry reserves a bounded
+// 48 MiB candidate; each large request independently preserves ProcessReserve.
+constexpr uint64_t ColdInBuildHeadroom=2*MiB,ColdEntryHeadroom=48*MiB;
+inline Budget coldChunkBuildBudget(){return budgetWith(ColdEntryHeadroom,MiB);}
+inline Budget coldInBuildBudget(uint64_t request=0){return budgetWith(request>ColdInBuildHeadroom?request:ColdInBuildHeadroom,request);}
 // Interior allocation: the process reserve must survive the request itself, so a request above the guard raises the floor.
 inline Budget inBuildBudget(uint64_t largestAllocation=0){
     return budgetWith(largestAllocation>InBuildHeadroom?largestAllocation:InBuildHeadroom,largestAllocation);
@@ -69,6 +92,13 @@ inline Budget dynamicBudget(uint64_t capacityBytes){
        !add(twice,capacityBytes,b.available)||!add(b.available,ProcessReserve,b.available))return {};
     b.valid=true;return b;
 }
+// The renderer never CPU-locks DEFAULT render/depth targets or renames them
+// like dynamic buffers. Real 4K/MSAA8 creation+use tests on D3D9/DXVK2/3
+// show no additional mapped VA for the target group. Keep bounded CPU metadata
+// headroom; actual HRESULT failure still rolls back the complete target group.
+inline Budget defaultTargetBudget(){
+    Budget b;b.available=ProcessReserve+2*MiB;b.largest=MiB;b.valid=true;return b;
+}
 constexpr uint64_t SmallPageCapacityLimit=512ull*1024ull;
 // After the complete generation passed full upload admission, each bounded
 // MANAGED page may use a fresh GlobalMemoryStatusEx available-VA sample instead
@@ -77,11 +107,11 @@ constexpr uint64_t SmallPageCapacityLimit=512ull*1024ull;
 // must retain the old complete generation and enter the normal retry path.
 // Reserve three capacities as for other growth, and debit successes from the
 // shared sample before admitting another allocation in the same frame.
-inline bool admitsSmallPageGrowth(bool valid,uint64_t available,uint64_t capacityBytes){
-    if(!valid||!capacityBytes||capacityBytes>SmallPageCapacityLimit)return false;
+inline bool admitsSmallPageGrowth(bool valid,uint64_t available,uint64_t capacityBytes,uint64_t reserve=ProcessReserve){
+    if(!valid||!capacityBytes||capacityBytes>SmallPageCapacityLimit||reserve<ResetReplayReserve||reserve>ProcessReserve)return false;
     uint64_t twice=0,reserved=0,required=0;
     return add(capacityBytes,capacityBytes,twice)&&add(twice,capacityBytes,reserved)&&
-           add(ProcessReserve,reserved,required)&&available>=required;
+           add(reserve,reserved,required)&&available>=required;
 }
 // A fresh sample can cover the consecutive local VB/IB allocation transaction.
 // Reserve the same three-capacity allowance used by dynamicBudget after each
@@ -109,6 +139,9 @@ inline Budget uploadBudget(uint64_t vertexBytes,uint64_t indexBytes,
     if(!add(largest,largest,b.largest)||!add(b.largest,ChunkMargin,b.largest))return {};
     b.valid=true;return b;
 }
+// File-backed candidates upload bounded pages into DEFAULT resources; each
+// growth is rechecked, so admission need not reserve a second full CPU copy.
+inline Budget coldUploadBudget(uint64_t largestTexture=0){uint64_t twice=0;if(!add(largestTexture,largestTexture,twice))return {};return budgetWith((ColdInBuildHeadroom>twice?ColdInBuildHeadroom:twice),(MiB>largestTexture?MiB:largestTexture));}
 inline bool admits(Sample sample,Budget budget){
     return sample.valid&&budget.valid&&sample.available>=budget.available&&
            sample.largest>=budget.largest;
@@ -164,6 +197,9 @@ template<class T,size_t Limit=2> class Generations {
 public:
     size_t live(){size_t count=0;for(auto& e:entries_){if(e.expired())e.reset();else ++count;}return count;}
     bool canAdmit(){return live()<Limit;}
+    // Diagnostics visit only immutable completed generations. The short local
+    // lease protects a concurrent final retirement without changing the limit.
+    template<class Visit> void forEach(Visit&& visit)const {for(const auto& entry:entries_)if(auto owner=entry.lock())visit(*owner);}
     bool track(const std::shared_ptr<T>& value){
         if(!value)return false;
         live();

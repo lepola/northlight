@@ -8,7 +8,7 @@
 #include <cstdint>
 
 namespace NorthlightWeather {
-enum class Kind:std::uint8_t{None,Rain,Snow,Sand}; /* Sand is reserved: never detected in this phase */
+enum class Kind:std::uint8_t{None,Rain,Snow,Sand}; /* Sand comes from native memory; texture fallback detects rain and snow. */
 inline const char* kindName(Kind k){switch(k){case Kind::Rain:return "rain";case Kind::Snow:return "snow";case Kind::Sand:return "sand";default:return "none";}}
 // What the draw hook counted in one frame for the hot candidate (kind = that candidate's kind).
 // memory: the game's own weather state read from memory (weather_memory.h), valid when set; it then replaces the draw counts as the source (kind incl. sand,

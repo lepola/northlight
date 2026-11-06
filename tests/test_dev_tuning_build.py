@@ -9,6 +9,8 @@ import northlight_paths as fp
 fp.use_source_modules()
 import re
 import struct
+import subprocess
+import tempfile
 import unittest
 from unittest import mock
 
@@ -31,10 +33,13 @@ class DevTuningBuild(unittest.TestCase):
         fp.src('renderer.cpp')  # build the source index before subprocess.run is replaced
         calls = []
         with mock.patch.object(br.subprocess, 'run', side_effect=lambda cmd, **kw: calls.append(cmd)), \
+                mock.patch.object(br, 'check_compiler'), \
                 mock.patch.object(br.check_layout, 'layout_problems', return_value=[]), \
                 mock.patch.object(br.northlight_paths, 'zig', return_value=Path('zig')), \
                 mock.patch.object(br.northlight_paths, 'zig_env', return_value={}), \
+                mock.patch.object(br, 'datetime') as build_clock, \
                 mock.patch('builtins.print'):
+            build_clock.now.return_value.strftime.return_value = '2026-01-01 00:00:00 UTC'
             br.main(argv)
         zig = [c for c in calls if c and c[0] == 'zig']
         self.assertEqual(len(zig), 1)
@@ -53,6 +58,24 @@ class DevTuningBuild(unittest.TestCase):
     def test_marker_matches_the_source_constant(self):
         header = fp.src('zone_tuning.h').read_text()
         self.assertEqual(re.search(r'Marker\[\]="([^"]+)"', header).group(1).encode(), bp.DEV_MARKER)
+
+    def test_windows_preflight_reports_sandbox_failure_before_build(self):
+        with tempfile.TemporaryDirectory() as folder, \
+                mock.patch.object(br.check_layout, 'layout_problems', return_value=[]), \
+                mock.patch.object(br.northlight_paths, 'out', return_value=Path(folder)), \
+                mock.patch.object(br.northlight_paths, 'zig', return_value=Path('zig')), \
+                mock.patch.object(br.northlight_paths, 'zig_env', return_value={}), \
+                mock.patch.object(br.sys, 'platform', 'win32'), \
+                mock.patch.object(br.subprocess, 'run', return_value=subprocess.CompletedProcess(
+                    [], 1, '', 'probe.cpp:1:1: error: Unexpected\n')) as run:
+            with self.assertRaisesRegex(SystemExit, 'normal approval mechanism'):
+                br.main([])
+            run.assert_called_once()
+            self.assertIn('error: Unexpected', (Path(folder) / 'build-preflight.log').read_text())
+            self.assertIn('-c', run.call_args.args[0])
+            run.return_value = subprocess.CompletedProcess([], 0, '', '')
+            br.check_compiler(Path('zig'), {'TEST': 'value'})
+            self.assertEqual(run.call_args.kwargs['env'], {'TEST': 'value'})
 
     def test_package_builder_refuses_the_dev_dll(self):
         self.assertEqual(bp.check_dll(fake_dll()), '0.3.215')

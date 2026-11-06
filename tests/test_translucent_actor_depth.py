@@ -133,14 +133,14 @@ checks['state reads include Z write, blend, src/dst, colour write, skinned']=all
 hook=r[r.index('template<class Capture,class Draw> HRESULT drawHook('):];hook=hook[:hook.index('\n    }\n')+7]
 # 0.3.193: the real draw goes through blobFaintDraw (it wraps terrainShadowDraw) in both drawHook modes.
 checks['early block runs before the real draw (prepareDraw/prepareDrawImpl precede draw in both drawHook modes)']=(
-    hook.index('prepareDraw(capture,count);')<hook.index('nameMaskDraw(rainBlend,claimed||mist,draw)')<hook.index('prepareDrawImpl(capture,count);')<hook.rindex('nameMaskDraw(rainBlend,claimed||mist,draw)'))
+    hook.index('prepareDraw(capture,count);')<hook.index('nameMaskDraw(rainBlend,claimed||mist,nativeDraw)')<hook.index('prepareDrawImpl(capture,count);')<hook.rindex('nameMaskDraw(rainBlend,claimed||mist,nativeDraw)'))
 cf=r[r.index('void clearFrame() {'):r.index('void releaseResources()')]
 checks['clearFrame resets the latch and the census']='earlyDepth.reset()' in cf and 'resetTranslucentCensus()' in cf
 fin=r[r.index('void finishFrameImpl() {'):r.index('++frame;mirrorState.gate.frame')]
 checks['TRANSLUCENT logged before clearFrame in finishFrameImpl']=fin.index('TRANSLUCENT frame=')<fin.index('clearFrame();')
 terr=r[r.index('if(!bindWorldDepth(desc))return;'):][:400]
 checks['terrain draw undo uses earlyCaptured, counted before captured=false']=terr.index('captured&&earlyDepth.earlyCaptured')<terr.index('++earlyResolveUndone')<terr.index('terrain=true; captured=false;')
-clr=r[r.index('HRESULT STDMETHODCALLTYPE Clear('):][:2200]
+clr=r[r.index('HRESULT STDMETHODCALLTYPE Clear('):];clr=clr[:clr.index('\n    }')+6]
 checks['Clear(Z) after the early resolve freezes it instead of resolving']='earlyDepth.earlyCaptured' in clr and 'earlyDepth.freeze()' in clr and 'resolveDepth()' in clr
 checks['state reads cached per draw']='known=true' in impl
 checks['no TranslucentActorDepth setting']=all('ranslucentActorDepth' not in x for x in (r,q,w))

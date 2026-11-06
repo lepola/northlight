@@ -1,0 +1,255 @@
+{
+  "format": "northlight-source-release/1",
+  "created_utc": "2026-11-06T07:59:40.741575+00:00",
+  "version": "0.3.217-test.20261106.1",
+  "installer": {
+    "path": "releases/Northlight-0.3.217-test.20261106.1-Windows.zip",
+    "bytes": 20559350,
+    "sha256": "77b40939eb867facac29eb021943130949adddd89b6236d646554b3fab4a0e3f"
+  },
+  "dll": {
+    "path": "releases/Northlight-0.3.217-test.20261106.1/d3d9.dll",
+    "sha256": "b86926dcdc8f530a4c3ad97446d4cbd73d5683ddd52e922e1e8c1361c0002d90",
+    "source_identity": "fea6718b034691bd401be00fbc4fcea24d61a8d17b1fefdf3e1bffc090a4b978",
+    "compiler": "Zig 0.15.2",
+    "production_build": true
+  },
+  "included": [
+    "Batch all 13 model-normal sampler states through the existing known-only mirror; exact old GetSamplerState fallback on unknown/inactive state or untrusted context.",
+    "Snapshot hash-prefix reuse, source-identity envelope reuse, immutable geometry residency, range proofs and prepared pose evaluation CPU optimizations.",
+    "SSE2 skin-envelope interval evaluation with bit-identical bounds, unchanged stop cadence and outward rounding.",
+    "Bounded dynamic buffer range mirrors reduce synchronous relocks without retaining undefined/stale bytes.",
+    "Native lamp shadow ownership patch and MPQ light deduplication; native sources remain when present, additions only when absent.",
+    "Shared base/composition neutral-input work reduction, capture admission and state reuse, shader variants and source-linked regression coverage."
+  ],
+  "latest_cpu_measurement": {
+    "pass_": true,
+    "command": [
+      "D:\\dev\\projects\\Northlight\\.local\\tools\\zig\\zig.exe",
+      "c++",
+      "-target",
+      "x86-windows-gnu",
+      "-O2",
+      "-UNDEBUG",
+      "-std=c++17",
+      "-Wno-microsoft-exception-spec",
+      "-ID:\\dev\\Projects\\Northlight\\out\\cpu-model-samplers-20261106",
+      "-I",
+      "D:\\dev\\Projects\\Northlight\\src\\core",
+      "-I",
+      "D:\\dev\\Projects\\Northlight\\src\\gamedata",
+      "-I",
+      "D:\\dev\\Projects\\Northlight\\src\\generated",
+      "-I",
+      "D:\\dev\\Projects\\Northlight\\src\\gi",
+      "-I",
+      "D:\\dev\\Projects\\Northlight\\src\\imgui",
+      "-I",
+      "D:\\dev\\Projects\\Northlight\\src\\lights",
+      "-I",
+      "D:\\dev\\Projects\\Northlight\\src\\overlay",
+      "-I",
+      "D:\\dev\\Projects\\Northlight\\src\\proxy",
+      "-I",
+      "D:\\dev\\Projects\\Northlight\\src\\replay",
+      "-I",
+      "D:\\dev\\Projects\\Northlight\\src\\settings",
+      "-I",
+      "D:\\dev\\Projects\\Northlight\\src\\shadows",
+      "-I",
+      "D:\\dev\\Projects\\Northlight\\src\\sky",
+      "-I",
+      "D:\\dev\\Projects\\Northlight\\src\\stream",
+      "-I",
+      "D:\\dev\\Projects\\Northlight\\src\\water",
+      "-I",
+      "D:\\dev\\Projects\\Northlight\\src\\world",
+      "-I",
+      "D:\\dev\\Projects\\Northlight\\tests",
+      "D:\\dev\\Projects\\Northlight\\tests\\material_sampler_batch.cpp",
+      "-luser32",
+      "-luuid",
+      "-o",
+      "D:\\dev\\Projects\\Northlight\\out\\cpu-model-samplers-20261106\\sampler-bench.exe"
+    ],
+    "rows": [
+      {
+        "unknown": false,
+        "old_ms": 0.013216,
+        "new_ms": 0.003331,
+        "reduction_percent": 74.79570217917674,
+        "samples": [
+          [
+            0.013231,
+            0.00333
+          ],
+          [
+            0.013204,
+            0.003331
+          ],
+          [
+            0.013183,
+            0.003327
+          ],
+          [
+            0.013236,
+            0.003337
+          ],
+          [
+            0.013216,
+            0.003344
+          ]
+        ]
+      },
+      {
+        "unknown": true,
+        "old_ms": 0.013761,
+        "new_ms": 0.014841,
+        "reduction_percent": -7.848266841072582,
+        "samples": [
+          [
+            0.013796,
+            0.01487
+          ],
+          [
+            0.01376,
+            0.014848
+          ],
+          [
+            0.013786,
+            0.014817
+          ],
+          [
+            0.013744,
+            0.014827
+          ],
+          [
+            0.013761,
+            0.014841
+          ]
+        ]
+      }
+    ],
+    "scope": "Native Win32, 5 x 7 paired samples; full 13 sampler states, 286 captures/frame, 500 frames/sample. Not game FPS."
+  },
+  "earlier_cpu_measurements": {
+    "snapshot_capture_percent": 13.118,
+    "weighted_pose_percent": [
+      16.5997,
+      19.7616
+    ],
+    "range_proof_percent": [
+      4.7496,
+      5.0058
+    ],
+    "skin_envelope_percent": [
+      3.8093,
+      7.8983,
+      13.8752,
+      17.6609,
+      18.9647
+    ],
+    "note": "Separate local CPU microbenchmarks against each iteration's frozen input. Percentages are not additive and are not game FPS."
+  },
+  "validation": {
+    "installer": [
+      "canonical verify_packages explicit ZIP",
+      "ZIP CRC for every member",
+      "all 48 APP_FILES byte-equal to current repository and BUILD-INFO",
+      "packaged DLL byte-equal to fresh renderer/frd9.dll; current source identity embedded",
+      "Python, StormLib and both DXVK metadata pins match current package-pins",
+      "bundled isolated Python stdlib/extensions from Unicode path, without Northlight environment overrides",
+      "all six packaged entry points --help using bundled isolated Python under Unicode path",
+      "fresh packaged parent Installer recognizes both real owned archives with every manifest member verified and no external StormLib override",
+      "owned synthetic archive accepted; foreign, tampered and merged archives rejected"
+    ],
+    "prepublication": [
+      {
+        "test": "test_native_model_install.py",
+        "exit": 0
+      },
+      {
+        "test": "test_art_layer.py",
+        "exit": 0
+      },
+      {
+        "test": "test_job_system.py",
+        "exit": 0
+      },
+      {
+        "test": "test_world_shader_manifest.py",
+        "exit": 0
+      }
+    ],
+    "final_dll_runs": [
+      {
+        "backend": "dxvk2",
+        "mode": "sdr",
+        "exit_code": 0
+      },
+      {
+        "backend": "dxvk2",
+        "mode": "hdr",
+        "exit_code": 0
+      },
+      {
+        "backend": "dxvk2",
+        "mode": "hdr-msaa2",
+        "exit_code": 0
+      },
+      {
+        "backend": "dxvk2",
+        "mode": "stream-off",
+        "exit_code": 0
+      },
+      {
+        "backend": "dxvk3",
+        "mode": "sdr",
+        "exit_code": 0
+      },
+      {
+        "backend": "dxvk3",
+        "mode": "hdr",
+        "exit_code": 0
+      },
+      {
+        "backend": "dxvk3",
+        "mode": "hdr-msaa2",
+        "exit_code": 0
+      },
+      {
+        "backend": "dxvk3",
+        "mode": "stream-off",
+        "exit_code": 0
+      }
+    ],
+    "final_dll_cases": 1962,
+    "model_normal_native_shader_cases": 8,
+    "range_envelope": "MODEL_NORMALS_RANGE_PASS kind=3 cases=3 culled=1 pixels=exact near=retained mixed_or_stale=retained disjoint=1 nearAddsPixels=1 farMatchesAnchor=1",
+    "cpu_material_batch": "5 existing native CPU suites PASS, plus all 13 sampler state values/unknown/failure checks across 16 stages.",
+    "windows_installer_unit": "60 PASS, 2 existing skips out of 62 cases.",
+    "previous_real_sanitizers": "GCC14 ASan/UBSan proofs retained for command stream, snapshot/source identities, pose evaluators and skin envelopes; Zig combined sanitizer results are not called ASan."
+  },
+  "cache_versions": {
+    "scene": 1,
+    "lights": 1,
+    "fog": 1,
+    "celestial": 1,
+    "instances": 1,
+    "validation": 1
+  },
+  "lamp_fix_sha256": {
+    "src/lights/native_direct_ownership.h": "d71453eb78c85a8eae8afeb1dcc189f4dbc1713d427a68f00f76e7959aabfc8e",
+    "src/lights/native_local_light_patch.h": "d6850d17421b02a0294f9931ae4cf768cffcd8baec8fa6fa9dbd9966b939a6bb",
+    "src/lights/native_local_light_renderer.h": "39f9ca3fc3bbce2a9c0e0457969d548d677c1301243343d2528344eb47d5a1b0",
+    "shaders/local_light_effects.hlsl": "4f03617f73fcc943bebb0a50e0da0663ef41a842492b18a85f5fea4ae23cdf89",
+    "shaders/compiled/NativeLocalLighting1.bin": "cd2e669def773cc61ee643f15977b25da52b83dcaaa251a91daa67696e39d8d0",
+    "src/generated/local_light_compiled_shaders.h": "88226b1eb7756374a62176286ee2c12b0a0903bd44fae01519faaeee28293f51"
+  },
+  "limits": [
+    "Game FPS/frametime and the exact Telredor rotation are not measured by these offline tests.",
+    "Latest sampler microbenchmark: warm known state improves about 75%; forced unknown state is about 8% slower from the extra failed probe (about 0.0011 ms per 286 captures).",
+    "Final-DLL smoke uses isolated fixtures; the historical near-lamp/camera scene still needs a future game capture.",
+    "Installer built and verified locally; not installed into the game and not uploaded as a public release asset."
+  ]
+}

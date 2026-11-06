@@ -20,7 +20,8 @@
           "end": 12,
           "position_basis": "installed luminous skin-batch bounds center: world\\azeroth\\elwynn\\passivedoodads\\lamppost\\glow32.blp"
         }
-      }
+      },
+      "casts_shadows": true
     },
     "world\\generic\\human\\passive doodads\\lampposts\\duskwoodlamppost.m2": {
       "injected_sha256": "3a151d28a73d72d50cf97d5bcd6ae6652f437decf20e015f3103e8c8f51ab7c5",
@@ -41,7 +42,8 @@
           "end": 12,
           "position_basis": "installed luminous skin-batch bounds center: world\\azeroth\\elwynn\\passivedoodads\\lamppost\\glow32.blp"
         }
-      }
+      },
+      "casts_shadows": true
     },
     "world\\generic\\human\\passive doodads\\lamps\\stormwindstreetlamp01.m2": {
       "injected_sha256": "e4707e9ad285d8f0f6b9115af7cb11f7a9bad90ca78f0d2a89c3cc0f32a8191b",
@@ -62,7 +64,8 @@
           "end": 12,
           "position_basis": "installed luminous skin-batch bounds center: dungeons\\textures\\doodads\\stormwindlampglass.blp (stock lamp glass, unlit; the profile position is the HD lamp-window batch center (-0.004,0.018,4.258))"
         }
-      }
+      },
+      "casts_shadows": true
     },
     "world\\generic\\human\\passive doodads\\hanginglanterns\\generalhanginglantern01.m2": {
       "injected_sha256": "ee6f96fa6d1e524dd897a2a40ccebd5a37af92dabfc01a8d63fedda8f7f55b08",
@@ -83,7 +86,8 @@
           "end": 9,
           "position_basis": "installed luminous skin-batch bounds center: world\\azeroth\\elwynn\\passivedoodads\\lamppost\\glow32.blp"
         }
-      }
+      },
+      "casts_shadows": true
     },
     "world\\generic\\human\\passive doodads\\hanginglanterns\\generalhanginglanternlong.m2": {
       "injected_sha256": "a0fc3a127ec526c0f84747d65b086b040eeaf56fccb997573b01b8618a60acf3",
@@ -104,7 +108,8 @@
           "end": 9,
           "position_basis": "authored flame/bulb offset reviewed against installed mesh bounds"
         }
-      }
+      },
+      "casts_shadows": true
     },
     "world\\generic\\human\\passive doodads\\lanterns\\generallantern01.m2": {
       "injected_sha256": "cb9d3411c44d03fb1f92d36b66ab5747a2f90f15fb997ab7ad065c875e4fd304",
@@ -125,7 +130,8 @@
           "end": 9,
           "position_basis": "authored flame/bulb offset reviewed against installed mesh bounds"
         }
-      }
+      },
+      "casts_shadows": true
     },
     "world\\generic\\human\\passive doodads\\lanterns\\generallantern02.m2": {
       "injected_sha256": "fe62bd1a3e327d06493d9526605e9bc7df79027875ef9b80cd2289cc488c79e8",
@@ -146,7 +152,8 @@
           "end": 9,
           "position_basis": "authored flame/bulb offset reviewed against installed mesh bounds"
         }
-      }
+      },
+      "casts_shadows": true
     },
     "world\\generic\\human\\passive doodads\\lanterns\\generallantern03.m2": {
       "injected_sha256": "8967030a584244160e6be9cb8a9745a881a1323e0f0481b99a1821f78258dde3",
@@ -167,7 +174,8 @@
           "end": 9,
           "position_basis": "authored flame/bulb offset reviewed against installed mesh bounds"
         }
-      }
+      },
+      "casts_shadows": true
     },
     "world\\generic\\human\\passive doodads\\lanterns\\generallantern04.m2": {
       "injected_sha256": "f05369391504b2b84b442a7e37acd00f4e22589793c08cfd50e51d043c264673",
@@ -188,7 +196,8 @@
           "end": 9,
           "position_basis": "authored flame/bulb offset reviewed against installed mesh bounds"
         }
-      }
+      },
+      "casts_shadows": true
     },
     "world\\azeroth\\westfall\\passivedoodads\\lamppost\\westfalllamppost.m2": {
       "injected_sha256": "cf24247d10dd7a8219d8cc32175ddd2cfad052c435156153bd200b761e12ece7",
@@ -209,7 +218,8 @@
           "end": 12,
           "position_basis": "installed luminous skin-batch bounds center: world\\generic\\passivedoodads\\lights\\gloworange32.blp (stock glow halo around the lantern, as lamppost.m2 glow32.blp; the HD model is one garrison-lamp batch with no glow)"
         }
-      }
+      },
+      "casts_shadows": true
     },
     "world\\azeroth\\westfall\\passivedoodads\\lamppost\\westfalllamppost01.m2": {
       "injected_sha256": "4e530dc476e79fed3375e80ab0c5d9192bd5d37a67598421b5bd8268f118a91f",
@@ -230,7 +240,8 @@
           "end": 12,
           "position_basis": "installed luminous skin-batch bounds center: item\\objectcomponents\\weapon\\misc_1h_lantern_b_01silver.blp (stock lantern body, unlit additive; this variant has no glow halo)"
         }
-      }
+      },
+      "casts_shadows": true
     },
     "world\\azeroth\\westfall\\passivedoodads\\lamppost\\westfalllamppost02.m2": {
       "injected_sha256": "e30eac2ca3dfdfd8c1489126cd6152606052405fac3934bd6154e7967b9be6b0",
@@ -251,7 +262,8 @@
           "end": 12,
           "position_basis": "installed luminous skin-batch bounds center: world\\generic\\passivedoodads\\lights\\gloworange32.blp (stock glow halo around the lantern, as lamppost.m2 glow32.blp; the HD model is one garrison-lamp batch with no glow)"
         }
-      }
+      },
+      "casts_shadows": true
     },
     "world\\expansion02\\doodads\\generic\\human\\lamppost\\hu_lamppost_northrend.m2": {
       "injected_sha256": "73479f14cd4dc0f0e35ec166ad32532427fdca94870264108619535281dd9d07",
@@ -272,7 +284,8 @@
           "end": 12,
           "position_basis": "authored flame/bulb offset reviewed against installed mesh bounds"
         }
-      }
+      },
+      "casts_shadows": true
     },
     "world\\expansion02\\doodads\\generic\\human\\lamppost\\hu_lamp_arm_northrend.m2": {
       "injected_sha256": "ceb547dd34a2f368614dee58b460b4857cd6a5c30aa2d11e7fa2e62332794027",
@@ -293,7 +306,8 @@
           "end": 12,
           "position_basis": "authored flame/bulb offset reviewed against installed mesh bounds"
         }
-      }
+      },
+      "casts_shadows": true
     },
     "world\\azeroth\\stranglethorn\\passivedoodads\\diamondminewalllantern\\diamondminewalllantern.m2": {
       "injected_sha256": "232c6c12617b344ef4fc959959fa666ec8e650e17f5c92e2533328bd39ab2769",
@@ -314,7 +328,8 @@
           "end": 9,
           "position_basis": "authored flame/bulb offset reviewed against installed mesh bounds"
         }
-      }
+      },
+      "casts_shadows": true
     },
     "world\\generic\\human\\passive doodads\\lamps\\tirisfallstreetlamp01.m2": {
       "injected_sha256": "27593b35a6c88a9a8210ade1d56293ffb5895b3778ba15417405f2d6c359acd7",
@@ -335,7 +350,8 @@
           "end": 12,
           "position_basis": "installed luminous skin-batch bounds center: world\\generic\\human\\passive doodads\\lamps\\silverpinelampposttop01.blp (stock lamp glass, unlit; the profile position is the HD lamp-window batch center (-0.01,-0.009,4.258). Green, not violet: the stock glass is yellow-green (linear mean .63,1,.27) with a glowgreen32.blp halo, where the HD window is purple)"
         }
-      }
+      },
+      "casts_shadows": true
     },
     "world\\expansion02\\doodads\\generic\\forsaken\\fk_lamppost.m2": {
       "injected_sha256": "737f573f94c2f394018400b1df8d018321fd600acced7f7fe13b622fc35c6210",
@@ -356,7 +372,8 @@
           "end": 12,
           "position_basis": "installed luminous skin-batch bounds center: world\\azeroth\\elwynn\\passivedoodads\\lamppost\\glow32.blp"
         }
-      }
+      },
+      "casts_shadows": true
     },
     "world\\expansion01\\doodads\\ghostlands\\lampposts\\be_lamppost_ghostlands01.m2": {
       "injected_sha256": "a317d6883db7bbf4993231979ad7ebe9d083a2c49d921731e91a5c2f35b02ada",
@@ -377,7 +394,8 @@
           "end": 12,
           "position_basis": "installed luminous skin-batch bounds center: spells\\genericglow64.blp"
         }
-      }
+      },
+      "casts_shadows": true
     },
     "world\\expansion01\\doodads\\ghostlands\\lampposts\\be_lamppost_ghostlands02.m2": {
       "injected_sha256": "34d33e46f9fc255933d1882ad29b16e80e5ebdc6b3b85bf16d603417aa455c42",
@@ -398,7 +416,8 @@
           "end": 12,
           "position_basis": "installed luminous skin-batch bounds center: spells\\genericglow64.blp"
         }
-      }
+      },
+      "casts_shadows": true
     },
     "world\\generic\\nightelf\\passive doodads\\lamps\\kalidarstreetlamp01.m2": {
       "injected_sha256": "baf8641edcce5fe2ee08144c85365ff5bc0ca402151a1cd5c94d6d8b0ee4b2bf",
@@ -419,7 +438,8 @@
           "end": 12,
           "position_basis": "installed luminous skin-batch bounds center: world\\generic\\nightelf\\passive doodads\\lamps\\glowblue32.blp"
         }
-      }
+      },
+      "casts_shadows": true
     },
     "world\\generic\\nightelf\\passive doodads\\lamps\\kalidarstreetlamp02.m2": {
       "injected_sha256": "bbae599dae8dff411adae00a5e033832a452f504ebff9436990ac3eb54092707",
@@ -440,7 +460,8 @@
           "end": 12,
           "position_basis": "installed luminous skin-batch bounds center: world\\generic\\nightelf\\passive doodads\\lamps\\glowblue32.blp"
         }
-      }
+      },
+      "casts_shadows": true
     },
     "world\\generic\\nightelf\\passive doodads\\lamps\\darnassusstreetlamp01.m2": {
       "injected_sha256": "5df1d28f63325788b0ef60c246687f4c149f1304463c4d820ca39c5836b6277e",
@@ -461,7 +482,8 @@
           "end": 12,
           "position_basis": "authored flame/bulb offset reviewed against installed mesh bounds"
         }
-      }
+      },
+      "casts_shadows": true
     },
     "world\\generic\\nightelf\\passive doodads\\lamps\\darnassusstreetlamp02.m2": {
       "injected_sha256": "008995332d79fb8deff43f7364e7a189047104a2f9cb8d44b783551aa6160847",
@@ -482,7 +504,8 @@
           "end": 12,
           "position_basis": "installed luminous skin-batch bounds center: world\\generic\\nightelf\\passive doodads\\lamps\\glowblue32.blp"
         }
-      }
+      },
+      "casts_shadows": true
     },
     "world\\generic\\nightelf\\passive doodads\\lanterns\\nightelfhanginglantern.m2": {
       "injected_sha256": "5969ec73d8399bae3e6a2d6c606a323f073d5c727c9a578a71b5d90382bd2d09",
@@ -503,7 +526,8 @@
           "end": 9,
           "position_basis": "authored flame/bulb offset reviewed against installed mesh bounds"
         }
-      }
+      },
+      "casts_shadows": true
     },
     "world\\generic\\nightelf\\passive doodads\\lanterns\\nightelflantern01.m2": {
       "injected_sha256": "31f94ec44e260dd1ee2eb0675627d7dda1386e59fe8f6723337e0ddf71d7d441",
@@ -524,7 +548,8 @@
           "end": 9,
           "position_basis": "authored flame/bulb offset reviewed against installed mesh bounds"
         }
-      }
+      },
+      "casts_shadows": true
     },
     "world\\environment\\doodad\\generaldoodads\\nightelflanternblue\\ne_lanternblue01.m2": {
       "injected_sha256": "1b9d3418f7e4b548a523bb4f3b8bca35250eee4e1e6d2414e0d262b71556e90b",
@@ -545,7 +570,8 @@
           "end": 9,
           "position_basis": "installed luminous skin-batch bounds center: world\\generic\\nightelf\\passive doodads\\lamps\\glowblue32.blp"
         }
-      }
+      },
+      "casts_shadows": true
     },
     "world\\expansion01\\doodads\\generic\\draenei\\lampposts\\dr_lamppost_01.m2": {
       "injected_sha256": "f28c120f12611fb164541e5a8094830b8f898bf44a7c570f17ba4aaafddc2e1b",
@@ -566,7 +592,8 @@
           "end": 11,
           "position_basis": "installed luminous skin-batch bounds center: spells\\genericglow64.blp"
         }
-      }
+      },
+      "casts_shadows": true
     },
     "world\\expansion01\\doodads\\generic\\draenei\\lampposts\\dr_lamppost_02.m2": {
       "injected_sha256": "230e1d60581949a67ecb2de1601110f2db23a395abd557543f84a71165900a74",
@@ -587,7 +614,8 @@
           "end": 11,
           "position_basis": "installed luminous skin-batch bounds center: spells\\genericglow64.blp"
         }
-      }
+      },
+      "casts_shadows": true
     },
     "world\\expansion01\\doodads\\generic\\draenei\\lanterns\\dr_lantern_01.m2": {
       "injected_sha256": "8c4c406c8cdd65e88aac9e50b2f18a4e62fc51f86cc0260559ef18692aef6006",
@@ -608,7 +636,8 @@
           "end": 9,
           "position_basis": "installed luminous skin-batch bounds center: spells\\genericglow64.blp"
         }
-      }
+      },
+      "casts_shadows": true
     },
     "world\\expansion01\\doodads\\eversong\\lamppost\\be_lamppost_eversong01.m2": {
       "injected_sha256": "3002184e1125c08cdea9f5745d0593928b1c0783feaa9154a028de18dfabb7f8",
@@ -629,7 +658,8 @@
           "end": 11,
           "position_basis": "installed luminous skin-batch bounds center: spells\\genericglow64.blp"
         }
-      }
+      },
+      "casts_shadows": true
     },
     "world\\expansion01\\doodads\\eversong\\lamppost\\be_lamppost_eversong01-optimized.m2": {
       "injected_sha256": "32b5fb73d7cd0bc8bc1f33e08276b5158588ec08d1fdec5cc4e641ef05e2b267",
@@ -650,7 +680,8 @@
           "end": 11,
           "position_basis": "installed luminous skin-batch bounds center: spells\\genericglow64.blp"
         }
-      }
+      },
+      "casts_shadows": true
     },
     "world\\expansion01\\doodads\\generic\\bloodelf\\lantern\\be_lantern01.m2": {
       "injected_sha256": "d7ad9d0ebcecea855225c6cae9fe1115a94f10935e576d96571a726afe3addf2",
@@ -671,7 +702,8 @@
           "end": 9,
           "position_basis": "installed luminous skin-batch bounds center: spells\\genericglow64.blp"
         }
-      }
+      },
+      "casts_shadows": true
     },
     "world\\generic\\orc\\passive doodads\\lampposts\\orcbrazierstreetlamp.m2": {
       "injected_sha256": "855c08160caee8133ed884223ac4084ae40b6f67aaf5ddf1bc9c8faff8f65c4d",
@@ -692,7 +724,8 @@
           "end": 13,
           "position_basis": "authored flame/bulb offset reviewed against installed mesh bounds"
         }
-      }
+      },
+      "casts_shadows": true
     },
     "world\\generic\\orc\\passive doodads\\lampposts\\orcbrazierlamppost01.m2": {
       "injected_sha256": "4a20f2044fe892a3a2913949748f2c2aaf00834247fce99c9b68e66284cb4f2e",
@@ -713,7 +746,8 @@
           "end": 13,
           "position_basis": "authored flame/bulb offset reviewed against installed mesh bounds"
         }
-      }
+      },
+      "casts_shadows": true
     },
     "world\\generic\\orc\\passive doodads\\lampposts\\orcbrazier_lightpostbarrens.m2": {
       "injected_sha256": "56fb916712f25d843d749cf8d3873e46057df66b2a611552a38e219928b88536",
@@ -734,7 +768,8 @@
           "end": 13,
           "position_basis": "authored flame/bulb offset reviewed against installed mesh bounds"
         }
-      }
+      },
+      "casts_shadows": true
     },
     "world\\generic\\orc\\passive doodads\\lanterns\\orchanginglantern.m2": {
       "injected_sha256": "bbfab29a9e2f1c67d0009991bb4b4ead613c7360a3c6b896b33d339f6c7694c7",
@@ -755,7 +790,8 @@
           "end": 9,
           "position_basis": "authored flame/bulb offset reviewed against installed mesh bounds"
         }
-      }
+      },
+      "casts_shadows": true
     },
     "world\\generic\\orc\\passive doodads\\braziers\\mediumbraziernoomni01.m2": {
       "injected_sha256": "f2424dbb8ded6a3ad23f58923046d79f85b50b18691fbd7c53c0eb8d4d6b2fd1",
@@ -776,7 +812,8 @@
           "end": 13,
           "position_basis": "authored flame/bulb offset reviewed against installed mesh bounds"
         }
-      }
+      },
+      "casts_shadows": true
     },
     "world\\generic\\orc\\passive doodads\\braziers\\smallbraziernoomni01.m2": {
       "injected_sha256": "0da299a980afa6eca2822564fdfe0b0704a1b2d72534e4ae35835381464ddf50",
@@ -797,7 +834,8 @@
           "end": 13,
           "position_basis": "authored flame/bulb offset reviewed against installed mesh bounds"
         }
-      }
+      },
+      "casts_shadows": true
     },
     "world\\generic\\orc\\passive doodads\\braziers\\tallbraziernoomni01.m2": {
       "injected_sha256": "e3284f32b235d134d288cf70241dc2f2514111a56638f94b5252f0f45b256fa9",
@@ -818,7 +856,8 @@
           "end": 13,
           "position_basis": "authored flame/bulb offset reviewed against installed mesh bounds"
         }
-      }
+      },
+      "casts_shadows": true
     },
     "world\\generic\\passivedoodads\\lights\\freestandingtorch01.m2": {
       "injected_sha256": "9a838b48a801d1fe0afd2281c9257962163b9a35d41bed966072ec415a6b15b4",
@@ -839,7 +878,8 @@
           "end": 13,
           "position_basis": "authored flame/bulb offset reviewed against installed mesh bounds"
         }
-      }
+      },
+      "casts_shadows": true
     },
     "world\\generic\\passivedoodads\\lights\\generaltorch01.m2": {
       "injected_sha256": "0946ab92a501bd52177787da5c4b4ca3b90dc0e2bfdf5aff09e082e9f37961ea",
@@ -860,7 +900,8 @@
           "end": 13,
           "position_basis": "authored flame/bulb offset reviewed against installed mesh bounds"
         }
-      }
+      },
+      "casts_shadows": true
     },
     "world\\generic\\ogre\\passive doodads\\torches\\ogrewalltorch.m2": {
       "injected_sha256": "7e58d01bef45e95439c2e57d1e83f024cb88b531be0a81ae2502c1ad4c20e4b1",
@@ -881,7 +922,8 @@
           "end": 13,
           "position_basis": "authored flame/bulb offset reviewed against installed mesh bounds"
         }
-      }
+      },
+      "casts_shadows": true
     },
     "world\\generic\\ogre\\passive doodads\\torches\\ogrewalltorchred.m2": {
       "injected_sha256": "74c6d93018e706fb4cb8f6a70636ef3cf9ab40fac81003af9890b8e788a16f5d",
@@ -902,7 +944,8 @@
           "end": 13,
           "position_basis": "authored flame/bulb offset reviewed against installed mesh bounds"
         }
-      }
+      },
+      "casts_shadows": true
     },
     "world\\generic\\tauren\\passive doodads\\lampposts\\taurenlamppost.m2": {
       "injected_sha256": "2882ed2db36696dde613d1d715c96b3c0ba6f998e668619baad282afd0c9ef05",
@@ -923,7 +966,8 @@
           "end": 13,
           "position_basis": "authored flame/bulb offset reviewed against installed mesh bounds"
         }
-      }
+      },
+      "casts_shadows": true
     },
     "world\\generic\\tauren\\passive doodads\\lampposts\\taurenlamppost02.m2": {
       "injected_sha256": "f2d551b83166d0576042fd4d1745e63c83d2c04dc5f8243df0178856a83660fc",
@@ -944,7 +988,8 @@
           "end": 13,
           "position_basis": "authored flame/bulb offset reviewed against installed mesh bounds"
         }
-      }
+      },
+      "casts_shadows": true
     },
     "world\\generic\\human\\passive doodads\\braziers\\stormwindbrazier01.m2": {
       "injected_sha256": "6c6f7b3f534cf3cb981f802968da9494f539e6166c28ad825cbbb60ac94e98ce",
@@ -965,7 +1010,8 @@
           "end": 13,
           "position_basis": "authored flame/bulb offset reviewed against installed mesh bounds"
         }
-      }
+      },
+      "casts_shadows": true
     },
     "world\\generic\\dwarf\\passive doodads\\braziers\\dwarvenbrazier02.m2": {
       "injected_sha256": "bcadb6136c55529219d9267c99f55c6cb337afee0a166298d1b8357b6836417c",
@@ -986,7 +1032,8 @@
           "end": 13,
           "position_basis": "authored flame/bulb offset reviewed against installed mesh bounds"
         }
-      }
+      },
+      "casts_shadows": true
     },
     "world\\generic\\dwarf\\passive doodads\\braziers\\stormwinddwarfbrazier.m2": {
       "injected_sha256": "c6ac0c04abc143b8761bde52b6ce3c9c6cb3d9185216aa607a0066d29c329277",
@@ -1007,7 +1054,8 @@
           "end": 13,
           "position_basis": "authored flame/bulb offset reviewed against installed mesh bounds"
         }
-      }
+      },
+      "casts_shadows": true
     },
     "world\\expansion02\\doodads\\generic\\northrend fires\\northrendgeneraltorch01.m2": {
       "injected_sha256": "b995d6c1955121cc2d6f543c7204fb1526525924fbda91b1fd5f8d83796ffebe",
@@ -1028,7 +1076,8 @@
           "end": 13,
           "position_basis": "authored flame/bulb offset reviewed against installed mesh bounds"
         }
-      }
+      },
+      "casts_shadows": true
     },
     "world\\kalimdor\\orgrimmar\\passivedoodads\\orgrimmarbonfire\\orgrimmarbonfire01.m2": {
       "injected_sha256": "d179b4eafe32e6f29093a82987b29001350730f0c85b5c977146d0a511ebaebc",
@@ -1049,7 +1098,8 @@
           "end": 20,
           "position_basis": "authored flame/bulb offset reviewed against installed mesh bounds"
         }
-      }
+      },
+      "casts_shadows": true
     },
     "world\\azeroth\\burningsteppes\\passivedoodads\\bonfire\\orcbonfire.m2": {
       "injected_sha256": "05f5edbb9b07e5ab2834954fe0054425d7675a3924aac4d8a0c96e1f4e2e4ecd",
@@ -1070,7 +1120,8 @@
           "end": 20,
           "position_basis": "authored flame/bulb offset reviewed against installed mesh bounds"
         }
-      }
+      },
+      "casts_shadows": true
     },
     "world\\generic\\orc\\passive doodads\\braziers\\orcbrazier_campfire01.m2": {
       "injected_sha256": "81b1991b2fefbb083a59cc4e0094261bc648343de5414295b0adf1adac76e79f",
@@ -1091,7 +1142,8 @@
           "end": 20,
           "position_basis": "authored flame/bulb offset reviewed against installed mesh bounds"
         }
-      }
+      },
+      "casts_shadows": true
     },
     "world\\expansion02\\doodads\\generic\\bonfire\\bonfirenorthrend_01.m2": {
       "injected_sha256": "59c2e54f27dfd0a31efb5acf1b3fff02957463439db8e485254134466934b143",
@@ -1112,7 +1164,8 @@
           "end": 20,
           "position_basis": "authored flame/bulb offset reviewed against installed mesh bounds"
         }
-      }
+      },
+      "casts_shadows": true
     },
     "world\\generic\\orc\\passive doodads\\braziers\\mediumbrazierpurple01.m2": {
       "injected_sha256": "ff91dbccb287998bba6edf1212721eacd3b5d7add6bb85c49da21a8f496de189",
@@ -1133,7 +1186,8 @@
           "end": 13,
           "position_basis": "authored flame/bulb offset reviewed against installed mesh bounds"
         }
-      }
+      },
+      "casts_shadows": true
     },
     "world\\generic\\orc\\passive doodads\\braziers\\smallbrazierpurple01.m2": {
       "injected_sha256": "b606a58ee037342b6424f8d34db886aff27565e1d483c86e6166e4ad5ff2d9ac",
@@ -1154,7 +1208,8 @@
           "end": 13,
           "position_basis": "authored flame/bulb offset reviewed against installed mesh bounds"
         }
-      }
+      },
+      "casts_shadows": true
     },
     "world\\generic\\orc\\passive doodads\\braziers\\smallbrazierpurplehanging.m2": {
       "injected_sha256": "78569f14b68352aa92e3a6366c0a4d2b969bdc9495b53064dd1029d17bf7ebbd",
@@ -1175,7 +1230,8 @@
           "end": 13,
           "position_basis": "authored flame/bulb offset reviewed against installed mesh bounds"
         }
-      }
+      },
+      "casts_shadows": true
     },
     "world\\generic\\ogre\\passive doodads\\torches\\ogrewalltorchblue.m2": {
       "injected_sha256": "a481fbe2169073762eb805f9719e349dff52eef4c8d3f0b2825fe8fa5fe222b1",
@@ -1196,7 +1252,8 @@
           "end": 13,
           "position_basis": "authored flame/bulb offset reviewed against installed mesh bounds"
         }
-      }
+      },
+      "casts_shadows": true
     },
     "world\\azeroth\\burningsteppes\\passivedoodads\\bonfire\\orcbonfire_blue.m2": {
       "injected_sha256": "fb76a3f9526a4407a2370cefdd0f5d586b612d3b9a82377efdb5646d5795f4fd",
@@ -1217,7 +1274,8 @@
           "end": 13,
           "position_basis": "authored flame/bulb offset reviewed against installed mesh bounds"
         }
-      }
+      },
+      "casts_shadows": true
     },
     "world\\expansion02\\doodads\\generic\\vrykul\\brazier\\vr_brazier_01_blue.m2": {
       "injected_sha256": "38a8cf2cb7b7f47977ba772d88977b7eabd7e573482f2e9aa714db51a21ed2c3",
@@ -1238,7 +1296,8 @@
           "end": 13,
           "position_basis": "authored flame/bulb offset reviewed against installed mesh bounds"
         }
-      }
+      },
+      "casts_shadows": true
     },
     "world\\generic\\ogre\\passive doodads\\torches\\ogrewalltorchpurple.m2": {
       "injected_sha256": "f54a4e18731abd3dd763870e1fae7aa62cca44ba92c21fe41ff8a6f084a0f006",
@@ -1259,7 +1318,8 @@
           "end": 12,
           "position_basis": "authored flame/bulb offset reviewed against installed mesh bounds"
         }
-      }
+      },
+      "casts_shadows": true
     },
     "world\\lordaeron\\scholomance\\passivedoodads\\brazier\\scholomancebrazier01purple.m2": {
       "injected_sha256": "1bf59564bf4a449240edd38b1346b5e9d4b6b3c2a07782f17ae06de6f24d5e5b",
@@ -1280,7 +1340,8 @@
           "end": 12,
           "position_basis": "installed luminous skin-batch bounds center: world\\generic\\human\\passive doodads\\candelabras\\glowwhite32.blp"
         }
-      }
+      },
+      "casts_shadows": true
     },
     "world\\generic\\ogre\\passive doodads\\torches\\ogrewalltorchgreen.m2": {
       "injected_sha256": "78eb2f9df6bd2b567453fac0ac04fc510fa2aeef2a81d2499c4e21c332564f95",
@@ -1301,7 +1362,8 @@
           "end": 12,
           "position_basis": "authored flame/bulb offset reviewed against installed mesh bounds"
         }
-      }
+      },
+      "casts_shadows": true
     },
     "world\\lordaeron\\scholomance\\passivedoodads\\brazier\\scholomancebrazier01green.m2": {
       "injected_sha256": "d66651af10a90c2770aed6647cf0d462012c568c5616150ef57cd94698dbc747",
@@ -1322,7 +1384,8 @@
           "end": 12,
           "position_basis": "installed luminous skin-batch bounds center: world\\generic\\human\\passive doodads\\candelabras\\glowwhite32.blp"
         }
-      }
+      },
+      "casts_shadows": true
     },
     "world\\generic\\human\\passive doodads\\braziers\\humanbraziercorrupt.m2": {
       "injected_sha256": "a754ad995676752d22001a8f4da55c39722c96e19dc9239fdd7474a529d85176",
@@ -1343,7 +1406,8 @@
           "end": 12,
           "position_basis": "authored flame/bulb offset reviewed against installed mesh bounds"
         }
-      }
+      },
+      "casts_shadows": true
     },
     "world\\generic\\passivedoodads\\lights\\torch.m2": {
       "injected_sha256": "c173d4cf26edcfbd42ce3689de4d451d45cac031753e7cfc9da61dce944154ce",
@@ -1364,7 +1428,8 @@
           "end": 10,
           "position_basis": "Installed particle emitter z=.7555, centered slightly above emission at z=1.02 inside luminous glow bounds .481..1.556; wall-mounted torch.m2, distinct from generaltorch01.m2"
         }
-      }
+      },
+      "casts_shadows": true
     },
     "world\\expansion01\\doodads\\generic\\ancientorc\\lampost\\ao_lamppost01.m2": {
       "position": [
@@ -1401,7 +1466,8 @@
           "position_basis": "v264 additive flame: item\\objectcomponents\\weapon\\flamelicksmall.blp"
         }
       },
-      "injected_sha256": "62219bb05e15ff22e718811ef47b4527a8bdf97ac2ce3a39db40e7330282fccc"
+      "injected_sha256": "62219bb05e15ff22e718811ef47b4527a8bdf97ac2ce3a39db40e7330282fccc",
+      "casts_shadows": true
     },
     "world\\expansion01\\doodads\\generic\\ancientorc\\lampost\\ao_lamppost02.m2": {
       "position": [
@@ -1438,7 +1504,8 @@
           "position_basis": "v264 additive flame: item\\objectcomponents\\weapon\\flamelicksmall.blp"
         }
       },
-      "injected_sha256": "82db2f22a5c504f317d5221a04a2acc90879310b3802b16c9ceb2c921d531276"
+      "injected_sha256": "82db2f22a5c504f317d5221a04a2acc90879310b3802b16c9ceb2c921d531276",
+      "casts_shadows": true
     },
     "world\\expansion01\\doodads\\generic\\arakkoa\\torch\\ak_torch01.m2": {
       "position": [
@@ -1475,7 +1542,8 @@
           "position_basis": "v264 additive flame: particles\\flame02.blp"
         }
       },
-      "injected_sha256": "551a7a2b1b36dfae934ad3ff2cfe05ec70163596caab24258a53f8261a01ea1f"
+      "injected_sha256": "551a7a2b1b36dfae934ad3ff2cfe05ec70163596caab24258a53f8261a01ea1f",
+      "casts_shadows": true
     },
     "world\\expansion01\\doodads\\generic\\bloodelf\\candles\\be_candleabra01.m2": {
       "position": [
@@ -1512,7 +1580,8 @@
           "position_basis": "v264 unlit additive skin batch: world\\generic\\orc\\passive doodads\\voodoostuff\\genericglow1.blp"
         }
       },
-      "injected_sha256": "d7cd42873bd9a354c2c0e4c5c656b214a2ff9c4c903adb0c0e934b5341e78339"
+      "injected_sha256": "d7cd42873bd9a354c2c0e4c5c656b214a2ff9c4c903adb0c0e934b5341e78339",
+      "casts_shadows": true
     },
     "world\\expansion01\\doodads\\generic\\bloodelf\\lamp\\be_lamp01.m2": {
       "position": [
@@ -1549,7 +1618,8 @@
           "position_basis": "v264 unlit additive skin batch: spells\\genericglow2c.blp; v264 unlit additive skin batch: spells\\genericglow64.blp"
         }
       },
-      "injected_sha256": "3394eaeb80957893d352b1c440137910c2215386276be7c328413a0605e3bf4b"
+      "injected_sha256": "3394eaeb80957893d352b1c440137910c2215386276be7c328413a0605e3bf4b",
+      "casts_shadows": true
     },
     "world\\expansion01\\doodads\\generic\\draenei\\brazier\\dr_brazier_01.m2": {
       "position": [
@@ -1586,7 +1656,8 @@
           "position_basis": "v264 additive flame: world\\kalimdor\\mauradon\\passivedoodads\\satyrhangingbraziers\\fire10020blue.blp"
         }
       },
-      "injected_sha256": "9ac062daa11c5677579cd3683086d7a5ea2e01bac3fa4c133bdf5eb819cc855f"
+      "injected_sha256": "9ac062daa11c5677579cd3683086d7a5ea2e01bac3fa4c133bdf5eb819cc855f",
+      "casts_shadows": true
     },
     "world\\expansion01\\doodads\\generic\\draenei\\brazier\\dr_brazier_02.m2": {
       "position": [
@@ -1623,7 +1694,8 @@
           "position_basis": "v264 additive flame: world\\kalimdor\\mauradon\\passivedoodads\\satyrhangingbraziers\\fire10020blue.blp"
         }
       },
-      "injected_sha256": "b2b12ebeede43335a5003825062e3fcc9410db4ea8fd03ad08d4a85fa3807db8"
+      "injected_sha256": "b2b12ebeede43335a5003825062e3fcc9410db4ea8fd03ad08d4a85fa3807db8",
+      "casts_shadows": true
     },
     "world\\expansion01\\doodads\\generic\\draenei\\brazier\\dr_brazier_03.m2": {
       "position": [
@@ -1660,7 +1732,8 @@
           "position_basis": "v264 additive flame: world\\kalimdor\\mauradon\\passivedoodads\\satyrhangingbraziers\\fire10020blue.blp"
         }
       },
-      "injected_sha256": "8db1e8bebc9b8f014455c5a45fc2b45ea451955ddb1bd0ca533343e19feea6e0"
+      "injected_sha256": "8db1e8bebc9b8f014455c5a45fc2b45ea451955ddb1bd0ca533343e19feea6e0",
+      "casts_shadows": true
     },
     "world\\expansion01\\doodads\\generic\\ethereal\\lamppost\\et_lamppost01.m2": {
       "position": [
@@ -1697,7 +1770,8 @@
           "position_basis": "v264 unlit additive skin batch: spells\\genericglow64.blp"
         }
       },
-      "injected_sha256": "8a7ca7e9171bf206e14769c0db18beb82b5477d6a3e35bffa6e4ff1bdefecc57"
+      "injected_sha256": "8a7ca7e9171bf206e14769c0db18beb82b5477d6a3e35bffa6e4ff1bdefecc57",
+      "casts_shadows": true
     },
     "world\\expansion01\\doodads\\generic\\naga\\torch\\na_torch01.m2": {
       "position": [
@@ -1734,7 +1808,8 @@
           "position_basis": "v264 unlit additive skin batch: world\\kalimdor\\feralas\\passivedoodads\\tree\\frostglowball64.blp"
         }
       },
-      "injected_sha256": "8695caeabeb277e635ad41a92cf8cd0939383d86eae8024723eaf9764b471ffd"
+      "injected_sha256": "8695caeabeb277e635ad41a92cf8cd0939383d86eae8024723eaf9764b471ffd",
+      "casts_shadows": true
     },
     "world\\expansion01\\doodads\\generic\\shadowcouncil\\torch\\shadowcouncil_torch.m2": {
       "position": [
@@ -1771,7 +1846,8 @@
           "position_basis": "v264 additive flame: item\\objectcomponents\\weapon\\flamelicksmall.blp"
         }
       },
-      "injected_sha256": "c5fa29435144e8fa431508c4c95780f484136473596fff80ca4688d6f60bf590"
+      "injected_sha256": "c5fa29435144e8fa431508c4c95780f484136473596fff80ca4688d6f60bf590",
+      "casts_shadows": true
     },
     "world\\expansion01\\doodads\\hellfirepeninsula\\lamppost\\ancient_drainei_lamppost.m2": {
       "position": [
@@ -1808,7 +1884,8 @@
           "position_basis": "v264 unlit additive skin batch: spells\\genericglow64.blp"
         }
       },
-      "injected_sha256": "2f76f72648b5309981e14139516d077e033a4e734da9065231266ca6ee3e1495"
+      "injected_sha256": "2f76f72648b5309981e14139516d077e033a4e734da9065231266ca6ee3e1495",
+      "casts_shadows": true
     },
     "world\\expansion01\\doodads\\shadowmoon\\brazier\\shadowmoonblacktemplebrazier01.m2": {
       "position": [
@@ -1845,7 +1922,8 @@
           "position_basis": "v264 additive flame: world\\kalimdor\\mauradon\\passivedoodads\\satyrhangingbraziers\\fire1white.blp"
         }
       },
-      "injected_sha256": "d1094477f4c75b9df538250828d274b42614027ab145b101040b2deddd0338ff"
+      "injected_sha256": "d1094477f4c75b9df538250828d274b42614027ab145b101040b2deddd0338ff",
+      "casts_shadows": true
     },
     "world\\expansion01\\doodads\\zangar\\lamp\\zangarlamppost01.m2": {
       "position": [
@@ -1882,7 +1960,8 @@
           "position_basis": "v264 unlit additive skin batch: spells\\genericglow64.blp"
         }
       },
-      "injected_sha256": "a107df80353d0b34a0647d9d4e20c74ce9478acace1405b974a2b1c7c7e10d76"
+      "injected_sha256": "a107df80353d0b34a0647d9d4e20c74ce9478acace1405b974a2b1c7c7e10d76",
+      "casts_shadows": true
     },
     "world\\expansion02\\doodads\\generic\\ancientnightelf\\borean_roadlamp01.m2": {
       "position": [
@@ -1919,7 +1998,8 @@
           "position_basis": "v264 unlit additive skin batch: world\\generic\\nightelf\\passive doodads\\lamps\\glowblue32.blp"
         }
       },
-      "injected_sha256": "542bd3522555c4dbe94647b05c0280c52b47100fc3cb7ac9c065058135c105d2"
+      "injected_sha256": "542bd3522555c4dbe94647b05c0280c52b47100fc3cb7ac9c065058135c105d2",
+      "casts_shadows": true
     },
     "world\\expansion02\\doodads\\generic\\irondwarf\\id_lamppost.m2": {
       "position": [
@@ -1956,7 +2036,8 @@
           "position_basis": "v264 unlit additive skin batch: spells\\genericglow64.blp"
         }
       },
-      "injected_sha256": "1cee9e63cd5c2d201614e714c5174d3c2a9ca61e8fa8acd21fb603491f4e3352"
+      "injected_sha256": "1cee9e63cd5c2d201614e714c5174d3c2a9ca61e8fa8acd21fb603491f4e3352",
+      "casts_shadows": true
     },
     "world\\expansion02\\doodads\\generic\\irondwarf\\id_large-lantern.m2": {
       "position": [
@@ -1993,7 +2074,8 @@
           "position_basis": "v264 unlit additive skin batch: spells\\genericglow64.blp"
         }
       },
-      "injected_sha256": "051eebbaae1905c381ee0770cbaed2d0e61968ff9a89c92becdce5547cea1be0"
+      "injected_sha256": "051eebbaae1905c381ee0770cbaed2d0e61968ff9a89c92becdce5547cea1be0",
+      "casts_shadows": true
     },
     "world\\expansion02\\doodads\\generic\\irondwarf\\id_wall_lamp.m2": {
       "position": [
@@ -2030,7 +2112,8 @@
           "position_basis": "v264 unlit additive skin batch: spells\\genericglow64.blp"
         }
       },
-      "injected_sha256": "dc1f79001dd77eead97f59305842960e4e38ce4dc0b82f1fb605142c58e6c65f"
+      "injected_sha256": "dc1f79001dd77eead97f59305842960e4e38ce4dc0b82f1fb605142c58e6c65f",
+      "casts_shadows": true
     },
     "world\\expansion02\\doodads\\generic\\vrykul\\torch\\vr_torch_01.m2": {
       "position": [
@@ -2067,7 +2150,8 @@
           "position_basis": "v264 unlit additive skin batch: world\\azeroth\\elwynn\\passivedoodads\\lamppost\\glow32.blp"
         }
       },
-      "injected_sha256": "0ba2b6694ee8b375f3b6957cffce516dff25958ce7c6b9a5a3543c661bb7286f"
+      "injected_sha256": "0ba2b6694ee8b375f3b6957cffce516dff25958ce7c6b9a5a3543c661bb7286f",
+      "casts_shadows": true
     },
     "world\\expansion02\\doodads\\generic\\vrykul\\torch\\vr_torch_01_blue.m2": {
       "position": [
@@ -2104,7 +2188,8 @@
           "position_basis": "v264 unlit additive skin batch: world\\azeroth\\elwynn\\passivedoodads\\lamppost\\glow32.blp; v264 unlit additive skin batch: world\\kalimdor\\darkshore\\passivedoodads\\lamp\\glowblue32.blp"
         }
       },
-      "injected_sha256": "b8f66527c66d6c067219c53017d9486271c92ce0915acb0f18243dcdfc4c639f"
+      "injected_sha256": "b8f66527c66d6c067219c53017d9486271c92ce0915acb0f18243dcdfc4c639f",
+      "casts_shadows": true
     },
     "world\\expansion02\\doodads\\generic\\vrykul\\torch\\vr_torch_snow01.m2": {
       "position": [
@@ -2141,7 +2226,8 @@
           "position_basis": "v264 unlit additive skin batch: world\\azeroth\\elwynn\\passivedoodads\\lamppost\\glow32.blp"
         }
       },
-      "injected_sha256": "6551b072a45e06e600d2312bb13572b37da1cc95282a17e530fc38983369da40"
+      "injected_sha256": "6551b072a45e06e600d2312bb13572b37da1cc95282a17e530fc38983369da40",
+      "casts_shadows": true
     },
     "world\\expansion02\\doodads\\wintertauren\\wt_lamppost01.m2": {
       "position": [
@@ -2178,7 +2264,8 @@
           "position_basis": "v264 additive flame: item\\objectcomponents\\weapon\\flamelicksmall.blp"
         }
       },
-      "injected_sha256": "eed781e99b8ed4694dc611eb21c744107129c62ee48ec639575f5e49c907ff01"
+      "injected_sha256": "eed781e99b8ed4694dc611eb21c744107129c62ee48ec639575f5e49c907ff01",
+      "casts_shadows": true
     },
     "world\\expansion02\\doodads\\zuldrak\\decorations\\zuldrak_torch_01.m2": {
       "position": [
@@ -2215,7 +2302,8 @@
           "position_basis": "v264 additive flame: creature\\infernal\\flame01.blp"
         }
       },
-      "injected_sha256": "342ef31ce37152dfb78c83f210a486fa29a090bb7199f2ddc4b6f22c3463ac1d"
+      "injected_sha256": "342ef31ce37152dfb78c83f210a486fa29a090bb7199f2ddc4b6f22c3463ac1d",
+      "casts_shadows": true
     },
     "world\\expansion02\\doodads\\zuldrak\\decorations\\zuldrak_torch_01_low.m2": {
       "position": [
@@ -2252,7 +2340,8 @@
           "position_basis": "v264 unlit additive skin batch: spells\\genericglow64.blp"
         }
       },
-      "injected_sha256": "43135f1c8b050b88a536cc21971634abf5e838bebc9dc0716601ab25ba902ab1"
+      "injected_sha256": "43135f1c8b050b88a536cc21971634abf5e838bebc9dc0716601ab25ba902ab1",
+      "casts_shadows": true
     },
     "world\\expansion02\\doodads\\zuldrak\\decorations\\zuldrak_torch_02.m2": {
       "position": [
@@ -2289,7 +2378,8 @@
           "position_basis": "v264 additive flame: creature\\infernal\\flame01.blp"
         }
       },
-      "injected_sha256": "a90e43a480c27d6848856408653776db5eb43ff7240363de845e5055379658c9"
+      "injected_sha256": "a90e43a480c27d6848856408653776db5eb43ff7240363de845e5055379658c9",
+      "casts_shadows": true
     },
     "world\\expansion02\\doodads\\zuldrak\\decorations\\zuldrak_torch_02b.m2": {
       "position": [
@@ -2326,7 +2416,8 @@
           "position_basis": "v264 additive flame: creature\\infernal\\flame01.blp"
         }
       },
-      "injected_sha256": "9a4231d189046bb3d8d51e404f9318e965fb37d88238413b84d8536adae9f6bb"
+      "injected_sha256": "9a4231d189046bb3d8d51e404f9318e965fb37d88238413b84d8536adae9f6bb",
+      "casts_shadows": true
     },
     "world\\expansion02\\doodads\\zuldrak\\decorations\\zuldrak_torch_03.m2": {
       "position": [
@@ -2363,7 +2454,8 @@
           "position_basis": "v264 additive flame: world\\kalimdor\\mauradon\\passivedoodads\\satyrhangingbraziers\\fire10020blue.blp; v264 additive flame: world\\kalimdor\\mauradon\\passivedoodads\\satyrhangingbraziers\\fire1white.blp"
         }
       },
-      "injected_sha256": "a7a5fc9212a8e414f04f2dab0aa72424eb3879998f04869903f8ce1fdaaa5c29"
+      "injected_sha256": "a7a5fc9212a8e414f04f2dab0aa72424eb3879998f04869903f8ce1fdaaa5c29",
+      "casts_shadows": true
     },
     "world\\expansion02\\doodads\\zuldrak\\decorations\\zuldrak_torch_04.m2": {
       "position": [
@@ -2400,7 +2492,8 @@
           "position_basis": "v264 additive flame: creature\\infernal\\flame01.blp"
         }
       },
-      "injected_sha256": "6f3d9ac85f47134ca17f53983736bbd1f4f34599d00144c360cbb3d51df84aeb"
+      "injected_sha256": "6f3d9ac85f47134ca17f53983736bbd1f4f34599d00144c360cbb3d51df84aeb",
+      "casts_shadows": true
     },
     "world\\generic\\dwarf\\passive doodads\\forgebonfire\\forgebonfire.m2": {
       "position": [
@@ -2437,7 +2530,8 @@
           "position_basis": "v264 additive flame: item\\objectcomponents\\weapon\\flamelicksmall.blp"
         }
       },
-      "injected_sha256": "01712eba9e9d22dfb1d67aa26edc431d8a3fff7d50580bfb861a5da610934d58"
+      "injected_sha256": "01712eba9e9d22dfb1d67aa26edc431d8a3fff7d50580bfb861a5da610934d58",
+      "casts_shadows": true
     },
     "world\\generic\\human\\passive doodads\\candelabras\\generalcandelabra01.m2": {
       "position": [
@@ -2474,7 +2568,8 @@
           "position_basis": "v264 additive flame: item\\objectcomponents\\weapon\\flamelicksmall.blp"
         }
       },
-      "injected_sha256": "8e9ddbf197ed913b779dbb7291b79d93b4817fd4e608f66eb091c1c1e0b3628e"
+      "injected_sha256": "8e9ddbf197ed913b779dbb7291b79d93b4817fd4e608f66eb091c1c1e0b3628e",
+      "casts_shadows": true
     },
     "world\\generic\\human\\passive doodads\\lamps\\westernplaguelandslampost01.m2": {
       "position": [
@@ -2511,7 +2606,8 @@
           "position_basis": "v264 unlit additive skin batch: world\\generic\\human\\passive doodads\\lamps\\glowgreen32.blp"
         }
       },
-      "injected_sha256": "0b99217505432df0d391d13abdb891ac13830004013d30f903c92640cef3620b"
+      "injected_sha256": "0b99217505432df0d391d13abdb891ac13830004013d30f903c92640cef3620b",
+      "casts_shadows": true
     },
     "world\\generic\\human\\passive doodads\\lamps\\westernplaguelandslampost02.m2": {
       "position": [
@@ -2548,7 +2644,8 @@
           "position_basis": "v264 unlit additive skin batch: world\\generic\\human\\passive doodads\\lamps\\glowgreen32.blp"
         }
       },
-      "injected_sha256": "3cb64a64dc928402137a1257e2c0209e31e9ca0bdd9675c5f1d827fdec645b76"
+      "injected_sha256": "3cb64a64dc928402137a1257e2c0209e31e9ca0bdd9675c5f1d827fdec645b76",
+      "casts_shadows": true
     },
     "world\\generic\\human\\passive doodads\\lamps\\westernplaguelandslampoststraight.m2": {
       "position": [
@@ -2585,7 +2682,8 @@
           "position_basis": "v264 unlit additive skin batch: world\\generic\\human\\passive doodads\\lamps\\glowgreen32.blp"
         }
       },
-      "injected_sha256": "c56bfffff52b898cf5ca5cd0a7f5c2bb4bcf2febbf0370c52d936ae8ce8a1db3"
+      "injected_sha256": "c56bfffff52b898cf5ca5cd0a7f5c2bb4bcf2febbf0370c52d936ae8ce8a1db3",
+      "casts_shadows": true
     },
     "world\\generic\\nightelf\\passive doodads\\candles\\ne_candle01.m2": {
       "position": [
@@ -2622,7 +2720,8 @@
           "position_basis": "v264 additive flame: world\\azeroth\\elwynn\\passivedoodads\\smalldock\\flamelicksmallblue.blp"
         }
       },
-      "injected_sha256": "1c3f1ef33e89d04a0605d60f8d5349348a543ec010ef48142490e0464b9b66c7"
+      "injected_sha256": "1c3f1ef33e89d04a0605d60f8d5349348a543ec010ef48142490e0464b9b66c7",
+      "casts_shadows": true
     },
     "world\\generic\\orc\\passive doodads\\braziers\\blackrockorccampfire.m2": {
       "position": [
@@ -2659,7 +2758,8 @@
           "position_basis": "v264 additive flame: item\\objectcomponents\\weapon\\flamelicksmall.blp"
         }
       },
-      "injected_sha256": "72a589d695b06361bc099a4f602e6ad9c9e66c86f2692286679c4b80801d700c"
+      "injected_sha256": "72a589d695b06361bc099a4f602e6ad9c9e66c86f2692286679c4b80801d700c",
+      "casts_shadows": true
     },
     "world\\generic\\orc\\passive doodads\\braziers\\orcpvpbonfirelarge.m2": {
       "position": [
@@ -2696,7 +2796,8 @@
           "position_basis": "v264 additive flame: spells\\fire1.blp; v264 additive flame: world\\khazmodan\\badlands\\passivedoodads\\rune\\fire10020.blp"
         }
       },
-      "injected_sha256": "a9ab7c3a80ae516339bebf892052b6a5d54352ea8f98e8edcf1eb220c0486d7a"
+      "injected_sha256": "a9ab7c3a80ae516339bebf892052b6a5d54352ea8f98e8edcf1eb220c0486d7a",
+      "casts_shadows": true
     },
     "world\\generic\\orc\\passive doodads\\firepits\\smallfirepit01.m2": {
       "position": [
@@ -2733,7 +2834,8 @@
           "position_basis": "v264 additive flame: creature\\infernal\\flame01.blp; v264 additive flame: item\\objectcomponents\\weapon\\flamelicksmall.blp"
         }
       },
-      "injected_sha256": "e88824c4144408ac153e5ecb6eb799cd3b5a1b061a114fb23a3eb4fa69bd2dd7"
+      "injected_sha256": "e88824c4144408ac153e5ecb6eb799cd3b5a1b061a114fb23a3eb4fa69bd2dd7",
+      "casts_shadows": true
     },
     "world\\generic\\orc\\passive doodads\\voodoostuff\\skullcandle01.m2": {
       "position": [
@@ -2770,7 +2872,8 @@
           "position_basis": "v264 additive flame: particles\\flame02.blp"
         }
       },
-      "injected_sha256": "6e061e7066e1b29af43a5f9a33f122f30761483295ba7c20e6c2aa1e75fedadb"
+      "injected_sha256": "6e061e7066e1b29af43a5f9a33f122f30761483295ba7c20e6c2aa1e75fedadb",
+      "casts_shadows": true
     },
     "world\\generic\\passivedoodads\\lights\\candelabratallwall01.m2": {
       "position": [
@@ -2807,7 +2910,8 @@
           "position_basis": "v264 additive flame: item\\objectcomponents\\weapon\\flamelicksmall.blp"
         }
       },
-      "injected_sha256": "2e74febb469e6ad33dcfcf3e6c8fd8ad9dec0d42fd5e577882645848cb5f18be"
+      "injected_sha256": "2e74febb469e6ad33dcfcf3e6c8fd8ad9dec0d42fd5e577882645848cb5f18be",
+      "casts_shadows": true
     },
     "world\\generic\\passivedoodads\\lights\\candelabratallwall02.m2": {
       "position": [
@@ -2844,7 +2948,8 @@
           "position_basis": "v264 additive flame: item\\objectcomponents\\weapon\\flamelicksmall.blp"
         }
       },
-      "injected_sha256": "34add988214c29fe5fa80a8fccdb5d0e55a3ab9cb724d386cde062e16a53b3f5"
+      "injected_sha256": "34add988214c29fe5fa80a8fccdb5d0e55a3ab9cb724d386cde062e16a53b3f5",
+      "casts_shadows": true
     },
     "world\\generic\\passivedoodads\\lights\\candle01.m2": {
       "position": [
@@ -2881,7 +2986,8 @@
           "position_basis": "v264 additive flame: particles\\flame02.blp"
         }
       },
-      "injected_sha256": "3ee38b2ec29d0499114ef4842f127df1c6323f8747d71d6aa351517a8774303f"
+      "injected_sha256": "3ee38b2ec29d0499114ef4842f127df1c6323f8747d71d6aa351517a8774303f",
+      "casts_shadows": true
     },
     "world\\generic\\passivedoodads\\lunarnewyear\\lunarnewyearlantern_alliance_hanging.m2": {
       "position": [
@@ -2918,7 +3024,8 @@
           "position_basis": "v264 unlit additive skin batch: spells\\genericglow64.blp"
         }
       },
-      "injected_sha256": "67417ac7c12d493b2305df8f9f8d659259ba0fe0f75d91749ef599bd3819daf0"
+      "injected_sha256": "67417ac7c12d493b2305df8f9f8d659259ba0fe0f75d91749ef599bd3819daf0",
+      "casts_shadows": true
     },
     "world\\generic\\passivedoodads\\lunarnewyear\\lunarnewyearlantern_alliance_standing.m2": {
       "position": [
@@ -2955,7 +3062,8 @@
           "position_basis": "v264 unlit additive skin batch: spells\\genericglow64.blp"
         }
       },
-      "injected_sha256": "32f01142c4e8fb50bd7ca6769f7e7a1aeec9848bd7f678e64ba609d6ae4504a7"
+      "injected_sha256": "32f01142c4e8fb50bd7ca6769f7e7a1aeec9848bd7f678e64ba609d6ae4504a7",
+      "casts_shadows": true
     },
     "world\\generic\\passivedoodads\\lunarnewyear\\lunarnewyearlantern_horde_hanging.m2": {
       "position": [
@@ -2992,7 +3100,8 @@
           "position_basis": "v264 unlit additive skin batch: spells\\genericglow64.blp"
         }
       },
-      "injected_sha256": "23a84e53832b0d5ed238b8d42c8ee551fc7429c78f1eabc0f162d92abb745ed4"
+      "injected_sha256": "23a84e53832b0d5ed238b8d42c8ee551fc7429c78f1eabc0f162d92abb745ed4",
+      "casts_shadows": true
     },
     "world\\generic\\passivedoodads\\lunarnewyear\\lunarnewyearlantern_horde_standing.m2": {
       "position": [
@@ -3029,7 +3138,8 @@
           "position_basis": "v264 unlit additive skin batch: spells\\genericglow64.blp"
         }
       },
-      "injected_sha256": "a26a21d350fe6fb5a88ba062c891872e2e31e249057c3712030393d28ef76434"
+      "injected_sha256": "a26a21d350fe6fb5a88ba062c891872e2e31e249057c3712030393d28ef76434",
+      "casts_shadows": true
     },
     "world\\generic\\passivedoodads\\summerfestival\\summerfest_bonfire_base_01.m2": {
       "position": [
@@ -3066,7 +3176,8 @@
           "position_basis": "v264 unlit additive skin batch: world\\kalimdor\\orgrimmar\\passivedoodads\\orgrimmarbonfire\\genericglow_alpha_128.blp"
         }
       },
-      "injected_sha256": "82fd3491e9f8c9ed3cd6357388a86a7c5ff04d14b086c3f88e791691efff260b"
+      "injected_sha256": "82fd3491e9f8c9ed3cd6357388a86a7c5ff04d14b086c3f88e791691efff260b",
+      "casts_shadows": true
     },
     "world\\generic\\passivedoodads\\summerfestival\\summerfest_brazier_01.m2": {
       "position": [
@@ -3103,7 +3214,8 @@
           "position_basis": "v264 additive flame: spells\\t_vfx_fire01_b64.blp; v264 additive flame: spells\\t_vfx_fire01_c64.blp"
         }
       },
-      "injected_sha256": "74512238f2af29e64dc32908253bc72c3bc7665575488dd2f2fb14b5df7a72d2"
+      "injected_sha256": "74512238f2af29e64dc32908253bc72c3bc7665575488dd2f2fb14b5df7a72d2",
+      "casts_shadows": true
     },
     "world\\generic\\passivedoodads\\summerfestival\\summerfest_candle_01.m2": {
       "position": [
@@ -3140,7 +3252,8 @@
           "position_basis": "v264 additive flame: particles\\flame02.blp"
         }
       },
-      "injected_sha256": "f849a9564222cc0bb4ef635857c7635f299e47b9bdae9fe411d9c65900126cbb"
+      "injected_sha256": "f849a9564222cc0bb4ef635857c7635f299e47b9bdae9fe411d9c65900126cbb",
+      "casts_shadows": true
     },
     "world\\generic\\passivedoodads\\summerfestival\\summerfest_candle_02.m2": {
       "position": [
@@ -3177,7 +3290,8 @@
           "position_basis": "v264 additive flame: particles\\flame02.blp"
         }
       },
-      "injected_sha256": "6162c9c0f6d9403d4034255df923d7c69f0200f475f1d35889c1a4036c3ffc60"
+      "injected_sha256": "6162c9c0f6d9403d4034255df923d7c69f0200f475f1d35889c1a4036c3ffc60",
+      "casts_shadows": true
     },
     "world\\goober\\g_brazierorcblue.m2": {
       "position": [
@@ -3214,7 +3328,8 @@
           "position_basis": "v264 additive flame: world\\generic\\ogre\\passive doodads\\torches\\flamelicksmallmagicblue.blp"
         }
       },
-      "injected_sha256": "df0525937707468c90794327840fdd9b37f74d13e8a49fe1db6974cf61be800d"
+      "injected_sha256": "df0525937707468c90794327840fdd9b37f74d13e8a49fe1db6974cf61be800d",
+      "casts_shadows": true
     },
     "world\\goober\\g_brazierorcgreen.m2": {
       "position": [
@@ -3251,7 +3366,8 @@
           "position_basis": "v264 additive flame: world\\goober\\flamelicksmallmagicgreen.blp"
         }
       },
-      "injected_sha256": "1b2312e61b1c68477eca040e9ebb7d901215be204ea19b4305f392855366f119"
+      "injected_sha256": "1b2312e61b1c68477eca040e9ebb7d901215be204ea19b4305f392855366f119",
+      "casts_shadows": true
     },
     "world\\goober\\g_brazierorcpurple.m2": {
       "position": [
@@ -3288,7 +3404,8 @@
           "position_basis": "v264 additive flame: world\\goober\\flamelicksmallmagicpurple.blp"
         }
       },
-      "injected_sha256": "9209ce1f3375666c7cdd2897dfca00d9b4e5b94d8ed4d96b1180d0745d712d5c"
+      "injected_sha256": "9209ce1f3375666c7cdd2897dfca00d9b4e5b94d8ed4d96b1180d0745d712d5c",
+      "casts_shadows": true
     },
     "world\\goober\\g_brazierorcred.m2": {
       "position": [
@@ -3325,7 +3442,8 @@
           "position_basis": "v264 additive flame: world\\goober\\flamelicksmallmagicred.blp"
         }
       },
-      "injected_sha256": "7a94110007691d8ce8ef20377e7953c3daf7afdba92724c2f954f7c082e6d23f"
+      "injected_sha256": "7a94110007691d8ce8ef20377e7953c3daf7afdba92724c2f954f7c082e6d23f",
+      "casts_shadows": true
     },
     "world\\kalimdor\\darkshore\\passivedoodads\\lamp\\darkstreetlamp.m2": {
       "position": [
@@ -3362,7 +3480,8 @@
           "position_basis": "v264 unlit additive skin batch: world\\kalimdor\\darkshore\\passivedoodads\\lamp\\glowblue32.blp"
         }
       },
-      "injected_sha256": "18a040b9a2cfd318060ff2772bbf4d0652ace36eb90bd8b6f2342dfa84f192f3"
+      "injected_sha256": "18a040b9a2cfd318060ff2772bbf4d0652ace36eb90bd8b6f2342dfa84f192f3",
+      "casts_shadows": true
     },
     "world\\kalimdor\\diremaul\\passivedoodads\\ogrecampfires\\ogrecampfire01.m2": {
       "position": [
@@ -3399,7 +3518,8 @@
           "position_basis": "v264 additive flame: item\\objectcomponents\\weapon\\flamelicksmall.blp"
         }
       },
-      "injected_sha256": "75c200fafa1dd3ad90b461787c10ec4c8c42a447d06681b1df2659c050a63e38"
+      "injected_sha256": "75c200fafa1dd3ad90b461787c10ec4c8c42a447d06681b1df2659c050a63e38",
+      "casts_shadows": true
     },
     "world\\kalimdor\\felwood\\passivedoodads\\lamp\\felwoodlamp01.m2": {
       "position": [
@@ -3436,7 +3556,8 @@
           "position_basis": "v264 unlit additive skin batch: world\\generic\\human\\passive doodads\\lamps\\glowgreen32.blp"
         }
       },
-      "injected_sha256": "3f2e8d238ab8a0efa9881c1e6ade62480efefb0df5baad5181fd169b8031b812"
+      "injected_sha256": "3f2e8d238ab8a0efa9881c1e6ade62480efefb0df5baad5181fd169b8031b812",
+      "casts_shadows": true
     },
     "world\\kalimdor\\mauradon\\passivedoodads\\bridgebraziers\\bridgebrazierblue01.m2": {
       "position": [
@@ -3473,7 +3594,8 @@
           "position_basis": "v264 additive flame: world\\kalimdor\\mauradon\\passivedoodads\\satyrhangingbraziers\\fire10020blue.blp"
         }
       },
-      "injected_sha256": "5210028e0d670995c0299aee2be97ad1cde92191b8b4281806550c8ba04c40f3"
+      "injected_sha256": "5210028e0d670995c0299aee2be97ad1cde92191b8b4281806550c8ba04c40f3",
+      "casts_shadows": true
     },
     "world\\kalimdor\\mauradon\\passivedoodads\\bridgebraziers\\bridgebraziergreen01.m2": {
       "position": [
@@ -3510,7 +3632,8 @@
           "position_basis": "v264 additive flame: world\\kalimdor\\mauradon\\passivedoodads\\bridgebraziers\\fire10020green.blp"
         }
       },
-      "injected_sha256": "9fcb739a9afecfec5c123d85490c4c92055a80940de15ed0ac5495b243fc0bdf"
+      "injected_sha256": "9fcb739a9afecfec5c123d85490c4c92055a80940de15ed0ac5495b243fc0bdf",
+      "casts_shadows": true
     },
     "world\\kalimdor\\mauradon\\passivedoodads\\bridgebraziers\\bridgebrazierpurple01.m2": {
       "position": [
@@ -3547,7 +3670,8 @@
           "position_basis": "v264 additive flame: world\\kalimdor\\mauradon\\passivedoodads\\bridgebraziers\\fire10020purple.blp"
         }
       },
-      "injected_sha256": "2984ea654586eac6964ab4ea24456c339c995cbde9669fc8cc9558b8657dea8e"
+      "injected_sha256": "2984ea654586eac6964ab4ea24456c339c995cbde9669fc8cc9558b8657dea8e",
+      "casts_shadows": true
     },
     "world\\kalimdor\\mauradon\\passivedoodads\\centaurbraziers\\centaurbrazierred01.m2": {
       "position": [
@@ -3584,7 +3708,8 @@
           "position_basis": "v264 additive flame: spells\\fire1.blp; v264 additive flame: world\\khazmodan\\badlands\\passivedoodads\\rune\\fire10020.blp"
         }
       },
-      "injected_sha256": "0815f1e5405cd98328dba5d9f55510b808ab1bd7f530a7fa6a9a9502525433bc"
+      "injected_sha256": "0815f1e5405cd98328dba5d9f55510b808ab1bd7f530a7fa6a9a9502525433bc",
+      "casts_shadows": true
     },
     "world\\kalimdor\\mauradon\\passivedoodads\\satyrfloorbraziers\\satyrfloorbrazierblue01.m2": {
       "position": [
@@ -3621,7 +3746,8 @@
           "position_basis": "v264 additive flame: world\\kalimdor\\mauradon\\passivedoodads\\satyrhangingbraziers\\fire10020blue.blp; v264 additive flame: world\\kalimdor\\mauradon\\passivedoodads\\satyrhangingbraziers\\fire1white.blp"
         }
       },
-      "injected_sha256": "822a470380652fb2bc368776f76e91dd8dea4bbe1f5a5761415b92b1433113bd"
+      "injected_sha256": "822a470380652fb2bc368776f76e91dd8dea4bbe1f5a5761415b92b1433113bd",
+      "casts_shadows": true
     },
     "world\\kalimdor\\mauradon\\passivedoodads\\satyrfloorbraziers\\satyrfloorbraziergreen01.m2": {
       "position": [
@@ -3658,7 +3784,8 @@
           "position_basis": "v264 additive flame: world\\kalimdor\\mauradon\\passivedoodads\\satyrhangingbraziers\\fire10020blue.blp; v264 additive flame: world\\kalimdor\\mauradon\\passivedoodads\\satyrhangingbraziers\\fire1white.blp"
         }
       },
-      "injected_sha256": "717d464145af7322a2d106c982a32926aa526b9209ffba8eaa6a1bfecb0b587c"
+      "injected_sha256": "717d464145af7322a2d106c982a32926aa526b9209ffba8eaa6a1bfecb0b587c",
+      "casts_shadows": true
     },
     "world\\kalimdor\\mauradon\\passivedoodads\\satyrfloorbraziers\\satyrfloorbrazierpurple01.m2": {
       "position": [
@@ -3695,7 +3822,8 @@
           "position_basis": "v264 additive flame: world\\kalimdor\\mauradon\\passivedoodads\\satyrhangingbraziers\\fire10020blue.blp; v264 additive flame: world\\kalimdor\\mauradon\\passivedoodads\\satyrhangingbraziers\\fire1white.blp"
         }
       },
-      "injected_sha256": "1007b70a26eb6f073c2512cc82112e7cb94e943fe9b19fc817ee59a76b05f407"
+      "injected_sha256": "1007b70a26eb6f073c2512cc82112e7cb94e943fe9b19fc817ee59a76b05f407",
+      "casts_shadows": true
     },
     "world\\lordaeron\\scholomance\\passivedoodads\\brazier\\scholomancebrazier01orange.m2": {
       "position": [
@@ -3732,7 +3860,8 @@
           "position_basis": "v264 additive flame: world\\generic\\human\\activedoodads\\doors\\flame0001.blp"
         }
       },
-      "injected_sha256": "d4a6716b84692a7b9c0ff18a2749b08c54c2461d78a264f4c687d4da709a1565"
+      "injected_sha256": "d4a6716b84692a7b9c0ff18a2749b08c54c2461d78a264f4c687d4da709a1565",
+      "casts_shadows": true
     },
     "world\\lordaeron\\scholomance\\passivedoodads\\candles\\floorcandlescorner01.m2": {
       "position": [
@@ -3769,7 +3898,8 @@
           "position_basis": "v264 unlit additive skin batch: world\\generic\\human\\passive doodads\\candelabras\\glowwhite32.blp; v264 unlit additive skin batch: world\\lordaeron\\scholomance\\passivedoodads\\candles\\candleflameorange.blp"
         }
       },
-      "injected_sha256": "8111504f8ca804ee082c89557efdd233ee5fe8f9f4a000f3620b21e726ebdc0e"
+      "injected_sha256": "8111504f8ca804ee082c89557efdd233ee5fe8f9f4a000f3620b21e726ebdc0e",
+      "casts_shadows": true
     },
     "world\\lordaeron\\scholomance\\passivedoodads\\candles\\floorcandlescorner01green.m2": {
       "position": [
@@ -3806,7 +3936,8 @@
           "position_basis": "v264 unlit additive skin batch: world\\generic\\human\\passive doodads\\candelabras\\glowwhite32.blp; v264 unlit additive skin batch: world\\lordaeron\\scholomance\\passivedoodads\\candles\\candleflameorange.blp"
         }
       },
-      "injected_sha256": "7e6883b482229393412d014dd9359311ae29ecb57691429a81ba65776d0496ab"
+      "injected_sha256": "7e6883b482229393412d014dd9359311ae29ecb57691429a81ba65776d0496ab",
+      "casts_shadows": true
     },
     "world\\lordaeron\\scholomance\\passivedoodads\\candles\\floorcandlescorner01red.m2": {
       "position": [
@@ -3843,7 +3974,8 @@
           "position_basis": "v264 unlit additive skin batch: world\\generic\\human\\passive doodads\\candelabras\\glowwhite32.blp; v264 unlit additive skin batch: world\\lordaeron\\scholomance\\passivedoodads\\candles\\candleflameorange.blp"
         }
       },
-      "injected_sha256": "6c71762d091ff867b10259eb1eb15174c34271056ebe27a23490e086c1dfbff6"
+      "injected_sha256": "6c71762d091ff867b10259eb1eb15174c34271056ebe27a23490e086c1dfbff6",
+      "casts_shadows": true
     },
     "world\\lordaeron\\scholomance\\passivedoodads\\candles\\floorcandlesstraight02.m2": {
       "position": [
@@ -3880,7 +4012,8 @@
           "position_basis": "v264 unlit additive skin batch: world\\generic\\human\\passive doodads\\candelabras\\glowwhite32.blp"
         }
       },
-      "injected_sha256": "594df684985beab02cca6a427b31ac4ebd879b65e062c130a263f586234e4070"
+      "injected_sha256": "594df684985beab02cca6a427b31ac4ebd879b65e062c130a263f586234e4070",
+      "casts_shadows": true
     },
     "world\\lordaeron\\scholomance\\passivedoodads\\candles\\floorcandlesstraight02green.m2": {
       "position": [
@@ -3917,7 +4050,8 @@
           "position_basis": "v264 unlit additive skin batch: world\\generic\\human\\passive doodads\\candelabras\\glowwhite32.blp"
         }
       },
-      "injected_sha256": "9c79852e02b8c7700d1f4526fb0b35149ed433e5d350076beb5e302a0dfeebb2"
+      "injected_sha256": "9c79852e02b8c7700d1f4526fb0b35149ed433e5d350076beb5e302a0dfeebb2",
+      "casts_shadows": true
     },
     "world\\lordaeron\\scholomance\\passivedoodads\\candles\\floorcandlesstraight02red.m2": {
       "position": [
@@ -3954,7 +4088,8 @@
           "position_basis": "v264 unlit additive skin batch: world\\generic\\human\\passive doodads\\candelabras\\glowwhite32.blp"
         }
       },
-      "injected_sha256": "567daf6b09ef27bf593931ec46cf9bf8082414d715456d833065995015ffc544"
+      "injected_sha256": "567daf6b09ef27bf593931ec46cf9bf8082414d715456d833065995015ffc544",
+      "casts_shadows": true
     },
     "world\\lordaeron\\scholomance\\passivedoodads\\candles\\floorcandlesstraight04.m2": {
       "position": [
@@ -3991,7 +4126,8 @@
           "position_basis": "v264 unlit additive skin batch: world\\generic\\human\\passive doodads\\candelabras\\glowwhite32.blp"
         }
       },
-      "injected_sha256": "37221c8cb4d547972a46c095ff1b7812974b4de8210887c2775b2c484bc89312"
+      "injected_sha256": "37221c8cb4d547972a46c095ff1b7812974b4de8210887c2775b2c484bc89312",
+      "casts_shadows": true
     },
     "world\\lordaeron\\scholomance\\passivedoodads\\candles\\floorcandlesstraight04green.m2": {
       "position": [
@@ -4028,7 +4164,8 @@
           "position_basis": "v264 unlit additive skin batch: world\\generic\\human\\passive doodads\\candelabras\\glowwhite32.blp"
         }
       },
-      "injected_sha256": "cbad9e1a5bf27a9724445455ee508ae02b7fa6398ed234b0764a51910abf0567"
+      "injected_sha256": "cbad9e1a5bf27a9724445455ee508ae02b7fa6398ed234b0764a51910abf0567",
+      "casts_shadows": true
     },
     "world\\lordaeron\\scholomance\\passivedoodads\\candles\\floorcandlesstraight04red.m2": {
       "position": [
@@ -4065,7 +4202,8 @@
           "position_basis": "v264 unlit additive skin batch: world\\generic\\human\\passive doodads\\candelabras\\glowwhite32.blp"
         }
       },
-      "injected_sha256": "91ba9ca93219b86d22949f683e0061d7be7de12d71c4a4a630ce5e68723922d6"
+      "injected_sha256": "91ba9ca93219b86d22949f683e0061d7be7de12d71c4a4a630ce5e68723922d6",
+      "casts_shadows": true
     },
     "world\\lordaeron\\scholomance\\passivedoodads\\candles\\scholme_candelabra.m2": {
       "position": [
@@ -4102,7 +4240,8 @@
           "position_basis": "v264 unlit additive skin batch: world\\generic\\human\\passive doodads\\candelabras\\glowwhite32.blp"
         }
       },
-      "injected_sha256": "32c736d741fb590796cc021693ac19418e5a9de8818aff6aba0a27f2ced8cae6"
+      "injected_sha256": "32c736d741fb590796cc021693ac19418e5a9de8818aff6aba0a27f2ced8cae6",
+      "casts_shadows": true
     },
     "world\\lordaeron\\scholomance\\passivedoodads\\candles\\scholme_candelabra02.m2": {
       "position": [
@@ -4139,7 +4278,8 @@
           "position_basis": "v264 unlit additive skin batch: world\\generic\\human\\passive doodads\\candelabras\\glowwhite32.blp"
         }
       },
-      "injected_sha256": "753eef94ab870cf494f45d3d9fc1b162aead1e6cf307335415224e103bc65a35"
+      "injected_sha256": "753eef94ab870cf494f45d3d9fc1b162aead1e6cf307335415224e103bc65a35",
+      "casts_shadows": true
     },
     "world\\lordaeron\\scholomance\\passivedoodads\\candles\\scholme_candelabra03.m2": {
       "position": [
@@ -4176,7 +4316,8 @@
           "position_basis": "v264 unlit additive skin batch: world\\generic\\human\\passive doodads\\candelabras\\glowwhite32.blp"
         }
       },
-      "injected_sha256": "bba4b8634c21d138070c8cae200b6772637639c7d4fe93239189fac3e589c5a7"
+      "injected_sha256": "bba4b8634c21d138070c8cae200b6772637639c7d4fe93239189fac3e589c5a7",
+      "casts_shadows": true
     },
     "world\\lordaeron\\scholomance\\passivedoodads\\candles\\scholme_greencandelabra.m2": {
       "position": [
@@ -4213,7 +4354,8 @@
           "position_basis": "v264 unlit additive skin batch: world\\generic\\human\\passive doodads\\candelabras\\glowwhite32.blp"
         }
       },
-      "injected_sha256": "ec79944a114f83ac647400eae378ddb02e7230c31e36a92deda57516dd824028"
+      "injected_sha256": "ec79944a114f83ac647400eae378ddb02e7230c31e36a92deda57516dd824028",
+      "casts_shadows": true
     },
     "world\\lordaeron\\scholomance\\passivedoodads\\candles\\scholme_greencandelabra02.m2": {
       "position": [
@@ -4250,7 +4392,8 @@
           "position_basis": "v264 unlit additive skin batch: world\\generic\\human\\passive doodads\\candelabras\\glowwhite32.blp"
         }
       },
-      "injected_sha256": "dddce6cec93f446998fff10e8bf6b15e7d27bed9b2b2a23b81d2a3d467ebb575"
+      "injected_sha256": "dddce6cec93f446998fff10e8bf6b15e7d27bed9b2b2a23b81d2a3d467ebb575",
+      "casts_shadows": true
     },
     "world\\lordaeron\\scholomance\\passivedoodads\\candles\\scholme_greencandelabra03.m2": {
       "position": [
@@ -4287,7 +4430,8 @@
           "position_basis": "v264 unlit additive skin batch: world\\generic\\human\\passive doodads\\candelabras\\glowwhite32.blp"
         }
       },
-      "injected_sha256": "b527de126ef861f616f3ad5a16edc0d710f0f746ac17037d561836efb306da03"
+      "injected_sha256": "b527de126ef861f616f3ad5a16edc0d710f0f746ac17037d561836efb306da03",
+      "casts_shadows": true
     },
     "world\\lordaeron\\scholomance\\passivedoodads\\candles\\scholme_redcandelabra.m2": {
       "position": [
@@ -4324,7 +4468,8 @@
           "position_basis": "v264 unlit additive skin batch: world\\generic\\human\\passive doodads\\candelabras\\glowwhite32.blp"
         }
       },
-      "injected_sha256": "3bfb639591bbd561f069e807dad89534dfe66d52d8de15e1345df486223e1f8f"
+      "injected_sha256": "3bfb639591bbd561f069e807dad89534dfe66d52d8de15e1345df486223e1f8f",
+      "casts_shadows": true
     },
     "world\\lordaeron\\scholomance\\passivedoodads\\candles\\scholme_redcandelabra02.m2": {
       "position": [
@@ -4361,7 +4506,8 @@
           "position_basis": "v264 unlit additive skin batch: world\\generic\\human\\passive doodads\\candelabras\\glowwhite32.blp"
         }
       },
-      "injected_sha256": "cb9e8e282f35a66aac77193d312efb25da84fa1b38a2b4f10d77e2b1f209e509"
+      "injected_sha256": "cb9e8e282f35a66aac77193d312efb25da84fa1b38a2b4f10d77e2b1f209e509",
+      "casts_shadows": true
     },
     "world\\lordaeron\\scholomance\\passivedoodads\\candles\\scholme_redcandelabra03.m2": {
       "position": [
@@ -4398,7 +4544,8 @@
           "position_basis": "v264 unlit additive skin batch: world\\generic\\human\\passive doodads\\candelabras\\glowwhite32.blp"
         }
       },
-      "injected_sha256": "ecd8ee6590a29e941789a88ae2e0195de6750bc13ee250bf277a9b55a3ef6484"
+      "injected_sha256": "ecd8ee6590a29e941789a88ae2e0195de6750bc13ee250bf277a9b55a3ef6484",
+      "casts_shadows": true
     },
     "world\\azeroth\\burningsteppes\\passivedoodads\\orcfoundrypit\\orcsmallfoundrypit.m2": {
       "position": [
@@ -4469,7 +4616,8 @@
           ],
           "position_basis": "v264 additive flame: creature\\infernal\\flame01.blp"
         }
-      }
+      },
+      "casts_shadows": false
     },
     "world\\dungeon\\goldshireinn\\innchandelier\\innchandelier.m2": {
       "position": [
@@ -4690,7 +4838,8 @@
           ],
           "position_basis": "v264 additive flame: world\\azeroth\\karazahn\\passivedoodads\\bonfire\\flamelicksmallblue.blp; v264 additive flame: world\\azeroth\\karazahn\\passivedoodads\\bonfire\\flamelicksmallblue.blp; v264 additive flame: world\\azeroth\\karazahn\\passivedoodads\\bonfire\\flamelicksmallblue.blp; v264 additive flame: world\\azeroth\\karazahn\\passivedoodads\\bonfire\\flamelicksmallblue.blp; v264 additive flame: world\\azeroth\\karazahn\\passivedoodads\\bonfire\\flamelicksmallblue.blp; v264 additive flame: world\\azeroth\\karazahn\\passivedoodads\\bonfire\\flamelicksmallblue.blp"
         }
-      }
+      },
+      "casts_shadows": true
     },
     "world\\expansion01\\doodads\\generic\\bloodelf\\demoncrystals\\be_demoncrystal_01.m2": {
       "position": [
@@ -4761,7 +4910,8 @@
           ],
           "position_basis": "v264 additive flame: world\\kalimdor\\silithus\\passivedoodads\\ahnqiraj\\torch\\flamelicksmall.blp"
         }
-      }
+      },
+      "casts_shadows": false
     },
     "world\\expansion01\\doodads\\generic\\bloodelf\\demoncrystals\\be_demoncrystal_02.m2": {
       "position": [
@@ -4832,7 +4982,8 @@
           ],
           "position_basis": "v264 additive flame: world\\kalimdor\\orgrimmar\\passivedoodads\\orgrimmarbonfire\\flamelicksmallblue.blp"
         }
-      }
+      },
+      "casts_shadows": false
     },
     "world\\expansion01\\doodads\\generic\\bloodelf\\sconce\\be_sconce01.m2": {
       "position": [
@@ -4903,7 +5054,8 @@
           ],
           "position_basis": "v264 additive flame: world\\kalimdor\\orgrimmar\\passivedoodads\\orgrimmarbonfire\\flamelicksmallblue.blp"
         }
-      }
+      },
+      "casts_shadows": true
     },
     "world\\expansion01\\doodads\\generic\\burninglegion\\tradeskill\\bu_forge_01.m2": {
       "position": [
@@ -4974,7 +5126,8 @@
           ],
           "position_basis": "v264 additive flame: creature\\infernal\\flame01.blp; v264 additive flame: creature\\infernal\\flame01.blp"
         }
-      }
+      },
+      "casts_shadows": true
     },
     "world\\expansion01\\doodads\\generic\\draenei\\blacksmith\\dr_forge_01.m2": {
       "position": [
@@ -5045,7 +5198,8 @@
           ],
           "position_basis": "v264 additive flame: creature\\infernal\\flame01.blp"
         }
-      }
+      },
+      "casts_shadows": true
     },
     "world\\expansion02\\doodads\\azjol-nerub\\azjol_chandelier_02.m2": {
       "position": [
@@ -5236,7 +5390,8 @@
           ],
           "position_basis": "static weighted unlit additive island spells\\genericglow64.blp; static weighted unlit additive island spells\\genericglow64.blp; static weighted unlit additive island spells\\genericglow64.blp; static weighted unlit additive island spells\\genericglow64.blp; static weighted unlit additive island spells\\genericglow64.blp"
         }
-      }
+      },
+      "casts_shadows": true
     },
     "world\\expansion02\\doodads\\azjol-nerub\\azjol_sconce_01.m2": {
       "position": [
@@ -5307,7 +5462,8 @@
           ],
           "position_basis": "static weighted unlit additive island spells\\genericglow64.blp; static weighted unlit additive island spells\\genericglow64.blp; static weighted unlit additive island spells\\genericglow64.blp; static weighted unlit additive island spells\\genericglow64.blp; static weighted unlit additive island spells\\genericglow64.blp; static weighted unlit additive island spells\\genericglow64.blp; static weighted unlit additive island spells\\genericglow64.blp; static weighted unlit additive island spells\\genericglow64.blp; static weighted unlit additive island spells\\genericglow64.blp"
         }
-      }
+      },
+      "casts_shadows": true
     },
     "world\\expansion02\\doodads\\azjol-nerub\\azjol_sconce_02.m2": {
       "position": [
@@ -5378,7 +5534,8 @@
           ],
           "position_basis": "static weighted unlit additive island spells\\genericglow64.blp; static weighted unlit additive island spells\\genericglow64.blp; static weighted unlit additive island spells\\genericglow64.blp; static weighted unlit additive island spells\\genericglow64.blp; static weighted unlit additive island spells\\genericglow64.blp; static weighted unlit additive island spells\\genericglow64.blp; static weighted unlit additive island spells\\genericglow64.blp"
         }
-      }
+      },
+      "casts_shadows": true
     },
     "world\\expansion02\\doodads\\azjol-nerub\\azjol_sconce_03.m2": {
       "position": [
@@ -5449,7 +5606,8 @@
           ],
           "position_basis": "static weighted unlit additive island spells\\genericglow64.blp; static weighted unlit additive island spells\\genericglow64.blp; static weighted unlit additive island spells\\genericglow64.blp; static weighted unlit additive island spells\\genericglow64.blp; static weighted unlit additive island spells\\genericglow64.blp; static weighted unlit additive island spells\\genericglow64.blp; static weighted unlit additive island spells\\genericglow64.blp"
         }
-      }
+      },
+      "casts_shadows": true
     },
     "world\\expansion02\\doodads\\azjol-nerub\\azjol_sconce_04.m2": {
       "position": [
@@ -5520,7 +5678,8 @@
           ],
           "position_basis": "static weighted unlit additive island spells\\genericglow64.blp; static weighted unlit additive island spells\\genericglow64.blp; static weighted unlit additive island spells\\genericglow64.blp; static weighted unlit additive island spells\\genericglow64.blp; static weighted unlit additive island spells\\genericglow64.blp; static weighted unlit additive island spells\\genericglow64.blp; static weighted unlit additive island spells\\genericglow64.blp"
         }
-      }
+      },
+      "casts_shadows": true
     },
     "world\\expansion02\\doodads\\azjol-nerub\\azjol_sconce_05.m2": {
       "position": [
@@ -5591,7 +5750,8 @@
           ],
           "position_basis": "static weighted unlit additive island spells\\genericglow64.blp; static weighted unlit additive island spells\\genericglow64.blp; static weighted unlit additive island spells\\genericglow64.blp; static weighted unlit additive island spells\\genericglow64.blp; static weighted unlit additive island spells\\genericglow64.blp; static weighted unlit additive island spells\\genericglow64.blp; static weighted unlit additive island spells\\genericglow64.blp"
         }
-      }
+      },
+      "casts_shadows": true
     },
     "world\\expansion02\\doodads\\azjol-nerub\\azjol_sconce_06.m2": {
       "position": [
@@ -5662,7 +5822,8 @@
           ],
           "position_basis": "static weighted unlit additive island spells\\genericglow64.blp; static weighted unlit additive island spells\\genericglow64.blp; static weighted unlit additive island spells\\genericglow64.blp; static weighted unlit additive island spells\\genericglow64.blp; static weighted unlit additive island spells\\genericglow64.blp; static weighted unlit additive island spells\\genericglow64.blp; static weighted unlit additive island spells\\genericglow64.blp; static weighted unlit additive island spells\\genericglow64.blp; static weighted unlit additive island spells\\genericglow64.blp"
         }
-      }
+      },
+      "casts_shadows": true
     },
     "world\\expansion02\\doodads\\crystalsongforest\\sparkles\\crystalsong_sparkles01.m2": {
       "position": [
@@ -5733,7 +5894,8 @@
           ],
           "position_basis": "static weighted unlit additive island world\\expansion02\\doodads\\crystalsongforest\\trees\\crystalsong_magicleaves_glow.blp"
         }
-      }
+      },
+      "casts_shadows": false
     },
     "world\\expansion02\\doodads\\generic\\bonfire\\bonfirenorthrend_01blue.m2": {
       "position": [
@@ -5804,7 +5966,8 @@
           ],
           "position_basis": "static weighted unlit additive island world\\expansion02\\doodads\\generic\\bonfire\\t_vfx_fire_anim02_128_full_desat_blue.blp; static weighted unlit additive island world\\expansion02\\doodads\\generic\\bonfire\\t_vfx_fire_anim02_128_full_desat_blue.blp"
         }
-      }
+      },
+      "casts_shadows": true
     },
     "world\\expansion02\\doodads\\generic\\human\\torch\\northrendtorch_01.m2": {
       "position": [
@@ -5875,7 +6038,8 @@
           ],
           "position_basis": "static weighted unlit additive island world\\expansion02\\doodads\\howlingfjord\\firefx\\t_vfx_fire_anim02_128_full_desat.blp; static weighted unlit additive island world\\expansion02\\doodads\\howlingfjord\\firefx\\t_vfx_fire_anim02_128_full_desat.blp"
         }
-      }
+      },
+      "casts_shadows": true
     },
     "world\\expansion02\\doodads\\generic\\human\\torch\\northrendtorch_01blue.m2": {
       "position": [
@@ -5946,7 +6110,8 @@
           ],
           "position_basis": "static weighted unlit additive island world\\expansion02\\doodads\\generic\\bonfire\\t_vfx_fire_anim02_128_full_desat_blue.blp; static weighted unlit additive island world\\expansion02\\doodads\\generic\\bonfire\\t_vfx_fire_anim02_128_full_desat_blue.blp"
         }
-      }
+      },
+      "casts_shadows": true
     },
     "world\\expansion02\\doodads\\generic\\northrend fires\\northrendfreestandingtorch04_giant.m2": {
       "position": [
@@ -6017,7 +6182,8 @@
           ],
           "position_basis": "static weighted unlit additive island world\\expansion02\\doodads\\howlingfjord\\firefx\\t_vfx_fire_anim02_128_full_desat.blp; static weighted unlit additive island world\\expansion02\\doodads\\howlingfjord\\firefx\\t_vfx_fire_anim02_128_full_desat.blp"
         }
-      }
+      },
+      "casts_shadows": true
     },
     "world\\expansion02\\doodads\\generic\\northrend fires\\northrendgeneraltorch02.m2": {
       "position": [
@@ -6088,7 +6254,8 @@
           ],
           "position_basis": "static weighted unlit additive island world\\expansion02\\doodads\\howlingfjord\\firefx\\t_vfx_fire_anim02_128_full_desat.blp"
         }
-      }
+      },
+      "casts_shadows": true
     },
     "world\\expansion02\\doodads\\generic\\northrend fires\\northrendorcbonfire.m2": {
       "position": [
@@ -6159,7 +6326,8 @@
           ],
           "position_basis": "static weighted unlit additive island world\\expansion02\\doodads\\howlingfjord\\firefx\\t_vfx_fire_anim02_128_full_desat.blp; static weighted unlit additive island world\\expansion02\\doodads\\howlingfjord\\firefx\\t_vfx_fire_anim02_128_full_desat.blp"
         }
-      }
+      },
+      "casts_shadows": true
     },
     "world\\expansion02\\doodads\\generic\\northrend fires\\northrendtallbraziernoomni01.m2": {
       "position": [
@@ -6350,7 +6518,8 @@
           ],
           "position_basis": "static weighted unlit additive island world\\expansion02\\doodads\\howlingfjord\\firefx\\t_vfx_fire_anim02_128_full_desat.blp; static weighted unlit additive island world\\expansion02\\doodads\\howlingfjord\\firefx\\t_vfx_fire_anim02_128_full_desat.blp; static weighted unlit additive island world\\generic\\passivedoodads\\lights\\gloworange32.blp; static weighted unlit additive island world\\generic\\passivedoodads\\lights\\gloworange32.blp; static weighted unlit additive island world\\generic\\passivedoodads\\lights\\gloworange32.blp; static weighted unlit additive island world\\generic\\passivedoodads\\lights\\gloworange32.blp; static weighted unlit additive island world\\generic\\passivedoodads\\lights\\gloworange32.blp; static weighted unlit additive island world\\generic\\passivedoodads\\lights\\gloworange32.blp"
         }
-      }
+      },
+      "casts_shadows": true
     },
     "world\\expansion02\\doodads\\generic\\scarletonslaught\\scarleto_brazier_fire.m2": {
       "position": [
@@ -6421,7 +6590,8 @@
           ],
           "position_basis": "static weighted unlit additive island world\\expansion02\\doodads\\howlingfjord\\firefx\\t_vfx_fire_anim02_128_full_desat.blp; static weighted unlit additive island world\\expansion02\\doodads\\howlingfjord\\firefx\\t_vfx_fire_anim02_128_full_desat.blp"
         }
-      }
+      },
+      "casts_shadows": true
     },
     "world\\expansion02\\doodads\\generic\\scarletonslaught\\scarleto_brazier_lit.m2": {
       "position": [
@@ -6492,7 +6662,8 @@
           ],
           "position_basis": "static weighted unlit additive island world\\expansion02\\doodads\\howlingfjord\\firefx\\t_vfx_fire_anim02_128_full_desat.blp; static weighted unlit additive island world\\expansion02\\doodads\\howlingfjord\\firefx\\t_vfx_fire_anim02_128_full_desat.blp"
         }
-      }
+      },
+      "casts_shadows": true
     },
     "world\\expansion02\\doodads\\generic\\scarletonslaught\\scarleto_brazier_smoker.m2": {
       "position": [
@@ -6563,7 +6734,8 @@
           ],
           "position_basis": "static weighted unlit additive island world\\expansion02\\doodads\\howlingfjord\\firefx\\t_vfx_fire_anim02_128_full_desat.blp; static weighted unlit additive island world\\expansion02\\doodads\\howlingfjord\\firefx\\t_vfx_fire_anim02_128_full_desat.blp"
         }
-      }
+      },
+      "casts_shadows": false
     },
     "world\\expansion02\\doodads\\generic\\tuskarr\\forge\\ts_forge_01.m2": {
       "position": [
@@ -6634,7 +6806,8 @@
           ],
           "position_basis": "v264 additive flame: spells\\t_vfx_fire01_a.blp"
         }
-      }
+      },
+      "casts_shadows": true
     },
     "world\\expansion02\\doodads\\generic\\vrykul\\chandelier\\vr_chandelier_01.m2": {
       "position": [
@@ -6945,7 +7118,8 @@
           ],
           "position_basis": "static weighted unlit additive island world\\expansion02\\doodads\\howlingfjord\\firefx\\t_vfx_fire_anim02_128_full_desat.blp; static weighted unlit additive island world\\expansion02\\doodads\\howlingfjord\\firefx\\t_vfx_fire_anim02_128_full_desat.blp; static weighted unlit additive island world\\azeroth\\elwynn\\passivedoodads\\lamppost\\glow32.blp; static weighted unlit additive island world\\azeroth\\elwynn\\passivedoodads\\lamppost\\glow32.blp; static weighted unlit additive island world\\azeroth\\elwynn\\passivedoodads\\lamppost\\glow32.blp; static weighted unlit additive island world\\azeroth\\elwynn\\passivedoodads\\lamppost\\glow32.blp; static weighted unlit additive island world\\azeroth\\elwynn\\passivedoodads\\lamppost\\glow32.blp; static weighted unlit additive island world\\azeroth\\elwynn\\passivedoodads\\lamppost\\glow32.blp; static weighted unlit additive island world\\azeroth\\elwynn\\passivedoodads\\lamppost\\glow32.blp; static weighted unlit additive island world\\azeroth\\elwynn\\passivedoodads\\lamppost\\glow32.blp; static weighted unlit additive island world\\azeroth\\elwynn\\passivedoodads\\lamppost\\glow32.blp; static weighted unlit additive island world\\azeroth\\elwynn\\passivedoodads\\lamppost\\glow32.blp; static weighted unlit additive island world\\azeroth\\elwynn\\passivedoodads\\lamppost\\glow32.blp; static weighted unlit additive island world\\azeroth\\elwynn\\passivedoodads\\lamppost\\glow32.blp"
         }
-      }
+      },
+      "casts_shadows": true
     },
     "world\\expansion02\\doodads\\generic\\vrykul\\lights\\vr_chandelier_purple_01.m2": {
       "position": [
@@ -7136,7 +7310,8 @@
           ],
           "position_basis": "static weighted unlit additive island world\\expansion02\\doodads\\generic\\vrykul\\lights\\glowpurple32.blp; static weighted unlit additive island world\\expansion02\\doodads\\generic\\vrykul\\lights\\glowpurple32.blp; static weighted unlit additive island world\\expansion02\\doodads\\generic\\vrykul\\lights\\glowpurple32.blp; static weighted unlit additive island world\\expansion02\\doodads\\generic\\vrykul\\lights\\glowpurple32.blp; static weighted unlit additive island world\\expansion02\\doodads\\generic\\vrykul\\lights\\t_vfx_fire_anim02_128_full_desat_purple.blp; static weighted unlit additive island world\\expansion02\\doodads\\generic\\vrykul\\lights\\t_vfx_fire_anim02_128_full_desat_purple.blp"
         }
-      }
+      },
+      "casts_shadows": true
     },
     "world\\expansion02\\doodads\\generic\\wolvar\\wolvar_cookpot.m2": {
       "position": [
@@ -7207,7 +7382,8 @@
           ],
           "position_basis": "static weighted unlit additive island world\\expansion01\\doodads\\zangar\\mushroom\\glowball02.blp"
         }
-      }
+      },
+      "casts_shadows": true
     },
     "world\\expansion02\\doodads\\generic\\wolvar\\wolvar_cookpot_dragonblight.m2": {
       "position": [
@@ -7278,7 +7454,8 @@
           ],
           "position_basis": "static weighted unlit additive island world\\expansion01\\doodads\\zangar\\mushroom\\glowball02.blp"
         }
-      }
+      },
+      "casts_shadows": true
     },
     "world\\expansion02\\doodads\\icecrown\\lights\\icecrown_lablamp.m2": {
       "position": [
@@ -7409,7 +7586,8 @@
           ],
           "position_basis": "static weighted unlit additive island world\\kalimdor\\orgrimmar\\passivedoodads\\orgrimmarbonfire\\genericglow_alpha_128.blp; static weighted unlit additive island world\\kalimdor\\orgrimmar\\passivedoodads\\orgrimmarbonfire\\genericglow_alpha_128.blp; static weighted unlit additive island world\\kalimdor\\orgrimmar\\passivedoodads\\orgrimmarbonfire\\genericglow_alpha_128.blp"
         }
-      }
+      },
+      "casts_shadows": true
     },
     "world\\expansion02\\doodads\\icecrown\\runeforge\\icecrown_runeforge_green.m2": {
       "position": [
@@ -7540,7 +7718,8 @@
           ],
           "position_basis": "static weighted unlit additive island world\\azeroth\\elwynn\\passivedoodads\\lamppost\\glow32.blp; static weighted unlit additive island world\\azeroth\\elwynn\\passivedoodads\\lamppost\\glow32.blp; static weighted unlit additive island world\\azeroth\\elwynn\\passivedoodads\\lamppost\\glow32.blp; static weighted unlit additive island world\\azeroth\\elwynn\\passivedoodads\\lamppost\\glow32.blp; static weighted unlit additive island world\\azeroth\\elwynn\\passivedoodads\\lamppost\\glow32.blp; static weighted unlit additive island world\\azeroth\\elwynn\\passivedoodads\\lamppost\\glow32.blp"
         }
-      }
+      },
+      "casts_shadows": false
     },
     "world\\expansion02\\doodads\\icecrown\\runeforge\\icecrown_runeforge_orange.m2": {
       "position": [
@@ -7671,7 +7850,8 @@
           ],
           "position_basis": "static weighted unlit additive island world\\azeroth\\elwynn\\passivedoodads\\lamppost\\glow32.blp; static weighted unlit additive island world\\azeroth\\elwynn\\passivedoodads\\lamppost\\glow32.blp; static weighted unlit additive island world\\azeroth\\elwynn\\passivedoodads\\lamppost\\glow32.blp; static weighted unlit additive island world\\azeroth\\elwynn\\passivedoodads\\lamppost\\glow32.blp; static weighted unlit additive island world\\azeroth\\elwynn\\passivedoodads\\lamppost\\glow32.blp; static weighted unlit additive island world\\azeroth\\elwynn\\passivedoodads\\lamppost\\glow32.blp"
         }
-      }
+      },
+      "casts_shadows": false
     },
     "world\\expansion02\\doodads\\zuldrak\\decorations\\zuldrak_brazier_01.m2": {
       "position": [
@@ -7742,7 +7922,8 @@
           ],
           "position_basis": "static weighted unlit additive island world\\expansion02\\doodads\\howlingfjord\\firefx\\t_vfx_fire_anim02_128_full_desat.blp"
         }
-      }
+      },
+      "casts_shadows": true
     },
     "world\\generic\\passivedoodads\\lights\\chandelier01.m2": {
       "position": [
@@ -7903,7 +8084,8 @@
           ],
           "position_basis": "v264 additive flame: item\\objectcomponents\\weapon\\flamelicksmall.blp; v264 additive flame: item\\objectcomponents\\weapon\\flamelicksmall.blp; v264 additive flame: item\\objectcomponents\\weapon\\flamelicksmall.blp; v264 additive flame: item\\objectcomponents\\weapon\\flamelicksmall.blp; v264 additive flame: item\\objectcomponents\\weapon\\flamelicksmall.blp"
         }
-      }
+      },
+      "casts_shadows": true
     }
   }
 }

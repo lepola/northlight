@@ -208,6 +208,48 @@ static void replayWrite(VB b,UINT off,UINT n,DWORD flags,unsigned seed){ // Unlo
  void* p=nullptr;assert(b.vb->Lock(off,n,&p,flags)==S_OK);for(UINT i=0;i<(n?n:b.raw->desc.Size-off);++i)static_cast<unsigned char*>(p)[i]=(unsigned char)(seed*131u+i*7u+off);assert(b.vb->Unlock()==S_OK);}
 // readSame reads through the RAW pointer, exactly what the capture gets from ext->GetStreamSource/GetIndices (the wrapper is only the stream's write path)
 static bool readSame(VB b,UINT off,UINT n){C::Reader<IDirect3DVertexBuffer9> r(b.raw);void* p=nullptr;assert(r.lock(off,n,&p)==S_OK&&p);const bool same=!std::memcmp(p,b.raw->mem.data()+off,n);assert(r.unlock()==S_OK);return same;}
+template<class T> static void skippedUploadTests(){
+ using namespace NorthlightTrackedBuffers;Device owner;C::enabled.store(true);
+ constexpr bool index=std::is_same<T,IDirect3DIndexBuffer9>::value;
+ auto* raw=new Raw<T>;raw->desc.Size=4096;raw->desc.Usage=D3DUSAGE_DYNAMIC;raw->mem.assign(4096,0x55);T* buffer=raw;
+ wrap<T,Forward<T>>(&buffer,&owner,index);
+ {C::Reader<T> reader(raw);void* data=nullptr;assert(reader.lock(0,4096,&data)==S_OK&&reader.unlock()==S_OK);}
+ std::vector<unsigned char> payload(raw->mem);
+ auto upload=[&](UINT off,UINT size,DWORD flags,bool allow=true){
+  const auto locks=raw->lockCalls;void* data=nullptr;C::UnlockSourceScope source(payload.data()+off,off,size,allow?buffer:nullptr);
+  assert(buffer->Lock(off,size,&data,flags)==S_OK);
+  if(source.skipped()){assert(raw->lockCalls==locks&&data==payload.data()+off);return true;}
+  assert(raw->lockCalls==locks+1);std::memcpy(data,payload.data()+off,size);assert(buffer->Unlock()==S_OK);return false;
+ };
+ const auto revision=version(raw,index),skips=skippedWrites.load();
+ assert(!upload(0,4096,0)&&!upload(0,4096,D3DLOCK_DISCARD)); // keep dynamic synchronization/rename boundaries
+ assert(upload(0,4096,D3DLOCK_NOOVERWRITE)&&upload(17,100,D3DLOCK_NOOVERWRITE));
+ assert(!upload(17,100,0));
+ assert(version(raw,index)==revision&&skippedWrites.load()==skips+2);
+ assert(!upload(0,4096,0,false)&&version(raw,index)==revision); // no opt-in: normal Lock/Unlock contract
+ payload.back()^=1;assert(!upload(0,4096,D3DLOCK_NOOVERWRITE)&&raw->mem==payload&&version(raw,index)!=revision);assert(upload(0,4096,D3DLOCK_NOOVERWRITE));
+ // Model a driver rename on partial DISCARD: retained CPU bytes outside the
+ // write differ from the physical buffer, even if the next payload matches them.
+ assert(!upload(17,100,D3DLOCK_DISCARD));std::fill(raw->mem.begin()+117,raw->mem.end(),0xcd);
+ assert(!upload(0,4096,D3DLOCK_NOOVERWRITE)&&raw->mem==payload);assert(upload(0,4096,D3DLOCK_NOOVERWRITE));
+ {void* data=nullptr;const auto locks=raw->lockCalls;C::UnlockSourceScope source(payload.data(),0,4096,&owner);
+  assert(buffer->Lock(0,4096,&data,D3DLOCK_NOOVERWRITE)==S_OK&&!source.skipped()&&raw->lockCalls==locks+1);
+  std::memset(data,0x33,4096);assert(buffer->Unlock()==S_OK);payload=raw->mem;
+  C::Reader<T> reader(raw);assert(reader.lock(0,4096,&data)==S_OK&&!std::memcmp(data,payload.data(),4096)&&reader.unlock()==S_OK);}
+ assert(upload(0,4096,D3DLOCK_NOOVERWRITE)); // a scope for another buffer cannot supply bytes or elide a lock
+ void* data=nullptr;assert(buffer->Lock(0,4,&data,D3DLOCK_READONLY)==S_OK);
+ assert(!upload(0,4096,D3DLOCK_NOOVERWRITE));assert(buffer->Unlock()==S_OK); // outstanding lock disables the proof
+ {C::Reader<T> reader(raw);assert(reader.lock(0,4096,&data)==S_OK&&reader.unlock()==S_OK);}
+ assert(!upload(0,4096,D3DLOCK_READONLY)&&!upload(0,4096,0x40000000));
+ assert(!upload(0,0,0));
+ invalidateAll();assert(!upload(0,4096,D3DLOCK_NOOVERWRITE));
+ {C::Reader<T> reader(raw);assert(reader.lock(0,4096,&data)==S_OK&&reader.unlock()==S_OK);}
+ C::enabled.store(false);assert(!upload(0,4096,D3DLOCK_NOOVERWRITE));C::enabled.store(true);
+ written(buffer);assert(!upload(0,4096,D3DLOCK_NOOVERWRITE)); // ProcessVertices permanently removes the proof
+ buffer->Release();C::enabled.store(false);assert(owner.refs==1&&records.empty());
+ assert(!C::unlockSource.target&&!C::unlockSource.skipped&&!C::unlockSource.bytes);
+ std::printf("PASS skipped %s uploads: no driver calls, exact bytes, partial DISCARD repair, changed/nested/untracked/disabled fallbacks\n",index?"IB":"VB");
+}
 template<class T> static void unchangedWriteTests(){
  using namespace NorthlightTrackedBuffers;Device owner;C::enabled.store(true);
  constexpr bool index=std::is_same<T,IDirect3DIndexBuffer9>::value;
@@ -512,5 +554,5 @@ int main(){using namespace NorthlightTrackedBuffers;Device owner;
  raw->AddRef();vb->Release();assert(owner.refs==1&&version(raw,false)==0&&unwrap(raw)==raw);raw->Release();
  auto* ri=new Raw<IDirect3DIndexBuffer9>;IDirect3DIndexBuffer9* ib=ri;wrap<IDirect3DIndexBuffer9,ForwardIDirect3DIndexBuffer9>(&ib,&owner,true);assert(version(ri,true)&&!version(ri,false));ib->Release();assert(owner.refs==1&&records.empty());
  puts("PASS buffer COM ownership, VB/IB identity, normal/DISCARD/NOOVERWRITE writes, READONLY, nested failed lock, failed unlock, ProcessVertices invalidation and reset");
- metadataTests();mirrorExposure();discardMeterTests();copiesTests();unchangedWriteTests<IDirect3DVertexBuffer9>();unchangedWriteTests<IDirect3DIndexBuffer9>();spellHookTests();
+ metadataTests();mirrorExposure();discardMeterTests();copiesTests();unchangedWriteTests<IDirect3DVertexBuffer9>();unchangedWriteTests<IDirect3DIndexBuffer9>();skippedUploadTests<IDirect3DVertexBuffer9>();skippedUploadTests<IDirect3DIndexBuffer9>();spellHookTests();
 }

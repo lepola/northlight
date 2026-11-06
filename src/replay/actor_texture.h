@@ -4,7 +4,11 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
+#include <type_traits>
 #include <vector>
+#if defined(__SSE2__)
+#include <emmintrin.h>
+#endif
 
 namespace NorthlightActorTexture {
 // ARGB1555/XRGB1555/ARGB4444 (0.3.171): 16-bit uploads such as the game's 1-bit
@@ -34,27 +38,100 @@ struct Snapshot {
     Format format=Format::BGRA8;
     bool valid()const{return readable(bytes.data(),bytes.size(),width,height,pitch,format);}
 };
-inline bool decode(const void* source,std::size_t sourceBytes,unsigned width,unsigned height,std::size_t pitch,Format format,std::vector<std::uint8_t>& output){
-    output.clear();if(!readable(source,sourceBytes,width,height,pitch,format))return false;
-    std::vector<std::uint8_t> rgba(std::size_t(width)*height*4);
-    auto* bytes=static_cast<const std::uint8_t*>(source);
-    if(!compressed(format)){for(unsigned y=0;y<height;++y)for(unsigned x=0;x<width;++x){auto* dst=rgba.data()+(y*width+x)*4;
-        if(format!=Format::BGRA8&&format!=Format::BGRX8){std::uint16_t v;std::memcpy(&v,bytes+y*pitch+x*2,2);
-            auto c=format==Format::RGB565?rgb565(v):format==Format::ARGB4444?argb4444(v):argb1555(v,format==Format::ARGB1555);std::memcpy(dst,c.data(),4);}
-        else{auto* src=bytes+y*pitch+x*4;dst[0]=src[2];dst[1]=src[1];dst[2]=src[0];dst[3]=format==Format::BGRA8?src[3]:255;}}
-    }else for(unsigned by=0;by<(height+3)/4;++by)for(unsigned bx=0;bx<(width+3)/4;++bx){
-        auto* block=bytes+by*pitch+bx*(format==Format::BC1?8:16);auto* color=block+(format==Format::BC1?0:8);
+inline constexpr auto SelectorCounts=[](){std::array<std::uint32_t,256> table{};for(unsigned value=0;value<256;++value)for(unsigned i=0;i<4;++i)table[value]+=1u<<(((value>>(i*2))&3)*8);return table;}();
+inline constexpr auto BC2AlphaSums=[](){std::array<unsigned,256> table{};for(unsigned value=0;value<256;++value)table[value]=((value&15)+(value>>4))*17;return table;}();
+template<Format FormatValue,bool BlockSums=false,class Write>inline void decodeCompressed(const std::uint8_t* bytes,unsigned width,unsigned height,std::size_t pitch,Write&& write){
+    for(unsigned by=0;by<(height+3)/4;++by)for(unsigned bx=0;bx<(width+3)/4;++bx){
+        auto* block=bytes+by*pitch+bx*(FormatValue==Format::BC1?8:16);auto* color=block+(FormatValue==Format::BC1?0:8);
         std::uint16_t c0,c1;std::uint32_t selectors;std::memcpy(&c0,color,2);std::memcpy(&c1,color+2,2);std::memcpy(&selectors,color+4,4);
-        std::array<std::uint8_t,4> colors[4]={rgb565(c0),rgb565(c1),{}, {}};bool four=c0>c1||format!=Format::BC1;
-        for(unsigned c=0;c<3;++c){colors[2][c]=std::uint8_t(four?(2u*colors[0][c]+colors[1][c])/3:(unsigned(colors[0][c])+colors[1][c])/2);colors[3][c]=four?std::uint8_t((unsigned(colors[0][c])+2u*colors[1][c])/3):0;}
+        std::array<std::uint8_t,4> colors[4]={rgb565(c0),rgb565(c1),{}, {}};bool four=c0>c1||FormatValue!=Format::BC1;
+        if(selectors&0xaaaaaaaau)for(unsigned c=0;c<3;++c){colors[2][c]=std::uint8_t(four?(2u*colors[0][c]+colors[1][c])/3:(unsigned(colors[0][c])+colors[1][c])/2);colors[3][c]=four?std::uint8_t((unsigned(colors[0][c])+2u*colors[1][c])/3):0;}
         colors[2][3]=255;colors[3][3]=four?255:0;
         std::uint8_t alpha[8]={block[0],block[1]};std::uint64_t alphaBits=0;
-        if(format==Format::BC3){for(unsigned j=0;j<6;++j)alphaBits|=std::uint64_t(block[2+j])<<(8*j);
-            if(alpha[0]>alpha[1])for(unsigned j=1;j<=6;++j)alpha[j+1]=std::uint8_t(((7-j)*unsigned(alpha[0])+j*unsigned(alpha[1]))/7);
-            else{for(unsigned j=1;j<=4;++j)alpha[j+1]=std::uint8_t(((5-j)*unsigned(alpha[0])+j*unsigned(alpha[1]))/5);alpha[6]=0;alpha[7]=255;}}
-        for(unsigned y=0;y<4;++y)for(unsigned x=0;x<4;++x){unsigned px=bx*4+x,py=by*4+y,i=y*4+x;if(px>=width||py>=height)continue;
-            auto value=colors[(selectors>>(2*i))&3];if(format==Format::BC2)value[3]=std::uint8_t(((block[i/2]>>((i&1)*4))&15)*17);
-            else if(format==Format::BC3)value[3]=alpha[(alphaBits>>(3*i))&7];std::memcpy(rgba.data()+(py*width+px)*4,value.data(),4);}
+        if(FormatValue==Format::BC3){std::memcpy(&alphaBits,block,8);alphaBits>>=16;
+            if(alphaBits){if(alpha[0]>alpha[1])for(unsigned j=1;j<=6;++j)alpha[j+1]=std::uint8_t(((7-j)*unsigned(alpha[0])+j*unsigned(alpha[1]))/7);
+            else{for(unsigned j=1;j<=4;++j)alpha[j+1]=std::uint8_t(((5-j)*unsigned(alpha[0])+j*unsigned(alpha[1]))/5);alpha[6]=0;alpha[7]=255;}}}
+        std::array<unsigned,4> sums{};
+        if constexpr(BlockSums){if((bx+1)*4<=width&&(by+1)*4<=height){
+            // Four byte histograms add without carries (each count is <=16).
+            const auto counts=SelectorCounts[selectors&255]+SelectorCounts[(selectors>>8)&255]+SelectorCounts[(selectors>>16)&255]+SelectorCounts[selectors>>24];
+            if(selectors==(selectors&3)*0x55555555u){for(unsigned c=0;c<3;++c)sums[c]=colors[selectors&3][c]*16;}
+            else for(unsigned index=0;index<4;++index)for(unsigned c=0;c<3;++c)sums[c]+=colors[index][c]*((counts>>(index*8))&255);
+            if constexpr(FormatValue==Format::BC1)sums[3]=(four?16:16-((counts>>24)&255))*255;
+            else if constexpr(FormatValue==Format::BC2){sums[3]=0;for(unsigned i=0;i<8;++i)sums[3]+=BC2AlphaSums[block[i]];}
+            else if constexpr(FormatValue==Format::BC3){if(!alphaBits)sums[3]=alpha[0]*16;else for(unsigned i=0;i<16;++i)sums[3]+=alpha[(alphaBits>>(3*i))&7];}
+            write(bx*4,by*4,sums);continue;
+        }}
+        const unsigned rows=std::min(4u,height-by*4),columns=std::min(4u,width-bx*4);
+        for(unsigned y=0;y<rows;++y)for(unsigned x=0;x<columns;++x){unsigned px=bx*4+x,py=by*4+y,i=y*4+x;
+            auto value=colors[(selectors>>(2*i))&3];if(FormatValue==Format::BC2)value[3]=std::uint8_t(((block[i/2]>>((i&1)*4))&15)*17);
+            else if(FormatValue==Format::BC3)value[3]=alpha[(alphaBits>>(3*i))&7];
+            if constexpr(BlockSums){for(unsigned c=0;c<4;++c)sums[c]+=value[c];}else write(px,py,value);}
+        if constexpr(BlockSums)write(bx*4,by*4,sums);
+    }
+}
+#if defined(__SSE2__)
+template<Format F> __attribute__((noinline)) inline void decode16(const std::uint8_t* bytes,unsigned width,unsigned height,std::size_t pitch,std::uint8_t* rgba){
+    if(pitch==size_t(width)*2){width*=height;height=1;}
+    const auto five=_mm_set1_epi16(31),six=_mm_set1_epi16(63),nibble=_mm_set1_epi16(15),opaque=_mm_set1_epi16(255);
+    for(unsigned y=0;y<height;++y){unsigned x=0;
+        for(;width-x>=8;x+=8){
+            const auto p=_mm_loadu_si128(reinterpret_cast<const __m128i*>(bytes+size_t(y)*pitch+x*2));__m128i r,g,b,a=opaque;
+            if constexpr(F==Format::ARGB4444){
+                r=_mm_and_si128(_mm_srli_epi16(p,8),nibble);g=_mm_and_si128(_mm_srli_epi16(p,4),nibble);b=_mm_and_si128(p,nibble);a=_mm_srli_epi16(p,12);
+                r=_mm_or_si128(r,_mm_slli_epi16(r,4));g=_mm_or_si128(g,_mm_slli_epi16(g,4));b=_mm_or_si128(b,_mm_slli_epi16(b,4));a=_mm_or_si128(a,_mm_slli_epi16(a,4));
+            }else{
+                r=_mm_and_si128(_mm_srli_epi16(p,F==Format::RGB565?11:10),five);g=_mm_and_si128(_mm_srli_epi16(p,5),F==Format::RGB565?six:five);b=_mm_and_si128(p,five);
+                r=_mm_or_si128(_mm_slli_epi16(r,3),_mm_srli_epi16(r,2));b=_mm_or_si128(_mm_slli_epi16(b,3),_mm_srli_epi16(b,2));
+                if constexpr(F==Format::RGB565)g=_mm_or_si128(_mm_slli_epi16(g,2),_mm_srli_epi16(g,4));else g=_mm_or_si128(_mm_slli_epi16(g,3),_mm_srli_epi16(g,2));
+                if constexpr(F==Format::ARGB1555)a=_mm_and_si128(_mm_srai_epi16(p,15),opaque);
+            }
+            const auto rg=_mm_or_si128(r,_mm_slli_epi16(g,8)),ba=_mm_or_si128(b,_mm_slli_epi16(a,8));auto* dst=rgba+(size_t(y)*width+x)*4;
+            _mm_storeu_si128(reinterpret_cast<__m128i*>(dst),_mm_unpacklo_epi16(rg,ba));_mm_storeu_si128(reinterpret_cast<__m128i*>(dst+16),_mm_unpackhi_epi16(rg,ba));
+        }
+        for(;x<width;++x){std::uint16_t p;std::memcpy(&p,bytes+size_t(y)*pitch+x*2,2);const auto c=F==Format::RGB565?rgb565(p):F==Format::ARGB4444?argb4444(p):argb1555(p,F==Format::ARGB1555);std::memcpy(rgba+(size_t(y)*width+x)*4,c.data(),4);}
+    }
+}
+template<Format F> __attribute__((noinline)) inline void decodeWide(const std::uint8_t* bytes,unsigned width,unsigned height,std::size_t pitch,std::uint8_t* rgba){
+    if(pitch==size_t(width)*4){width*=height;height=1;}
+    const auto keep=_mm_set1_epi32(F==Format::BGRA8?int(0xff00ff00u):0x0000ff00),red=_mm_set1_epi32(0x00ff0000),blue=_mm_set1_epi32(0x000000ff),alpha=_mm_set1_epi32(int(0xff000000u));
+    for(unsigned y=0;y<height;++y){unsigned x=0;
+        for(;width-x>=4;x+=4){const auto pixels=_mm_loadu_si128(reinterpret_cast<const __m128i*>(bytes+size_t(y)*pitch+x*4));
+            auto converted=_mm_or_si128(_mm_and_si128(pixels,keep),_mm_or_si128(_mm_srli_epi32(_mm_and_si128(pixels,red),16),_mm_slli_epi32(_mm_and_si128(pixels,blue),16)));
+            if constexpr(F==Format::BGRX8)converted=_mm_or_si128(converted,alpha);
+            _mm_storeu_si128(reinterpret_cast<__m128i*>(rgba+(size_t(y)*width+x)*4),converted);}
+        for(;x<width;++x){const auto* src=bytes+size_t(y)*pitch+x*4;auto* dst=rgba+(size_t(y)*width+x)*4;dst[0]=src[2];dst[1]=src[1];dst[2]=src[0];dst[3]=F==Format::BGRA8?src[3]:255;}}
+}
+#endif
+inline bool decode(const void* source,std::size_t sourceBytes,unsigned width,unsigned height,std::size_t pitch,Format format,std::vector<std::uint8_t>& output){
+    if(!readable(source,sourceBytes,width,height,pitch,format)){output.clear();return false;}
+    std::vector<std::uint8_t> rgba;
+    const auto src=reinterpret_cast<std::uintptr_t>(source),dst=reinterpret_cast<std::uintptr_t>(output.data());
+    const bool alias=output.data()&&(src<=dst?dst-src<sourceBytes:src-dst<output.capacity());
+    // Every destination texel is overwritten. Preserve an existing tile's
+    // storage, but keep the original separate-buffer behaviour for aliases.
+    if(!alias)rgba.swap(output);
+    output.clear();rgba.resize(std::size_t(width)*height*4);
+    auto* bytes=static_cast<const std::uint8_t*>(source);
+#if defined(__SSE2__)
+    if(width>=4&&(format==Format::BGRA8||format==Format::BGRX8)){if(format==Format::BGRA8)decodeWide<Format::BGRA8>(bytes,width,height,pitch,rgba.data());else decodeWide<Format::BGRX8>(bytes,width,height,pitch,rgba.data());output=std::move(rgba);return true;}
+    if(width>=8&&!compressed(format)){
+        switch(format){case Format::RGB565:decode16<Format::RGB565>(bytes,width,height,pitch,rgba.data());break;case Format::ARGB4444:decode16<Format::ARGB4444>(bytes,width,height,pitch,rgba.data());break;case Format::ARGB1555:decode16<Format::ARGB1555>(bytes,width,height,pitch,rgba.data());break;default:decode16<Format::XRGB1555>(bytes,width,height,pitch,rgba.data());break;}
+        output=std::move(rgba);return true;
+    }
+#endif
+    if(!compressed(format)){
+        auto decodeColor=[&](auto tag){constexpr Format f=decltype(tag)::value;for(unsigned y=0;y<height;++y)for(unsigned x=0;x<width;++x){auto* dst=rgba.data()+(y*width+x)*4;
+            if constexpr(f!=Format::BGRA8&&f!=Format::BGRX8){std::uint16_t v;std::memcpy(&v,bytes+y*pitch+x*2,2);
+                auto c=f==Format::RGB565?rgb565(v):f==Format::ARGB4444?argb4444(v):argb1555(v,f==Format::ARGB1555);std::memcpy(dst,c.data(),4);}
+            else{auto* src=bytes+y*pitch+x*4;dst[0]=src[2];dst[1]=src[1];dst[2]=src[0];dst[3]=f==Format::BGRA8?src[3]:255;}}};
+        switch(format){case Format::BGRA8:decodeColor(std::integral_constant<Format,Format::BGRA8>{});break;case Format::BGRX8:decodeColor(std::integral_constant<Format,Format::BGRX8>{});break;
+        case Format::RGB565:decodeColor(std::integral_constant<Format,Format::RGB565>{});break;case Format::ARGB4444:decodeColor(std::integral_constant<Format,Format::ARGB4444>{});break;
+        case Format::ARGB1555:decodeColor(std::integral_constant<Format,Format::ARGB1555>{});break;default:decodeColor(std::integral_constant<Format,Format::XRGB1555>{});break;}
+    }else{auto write=[&](unsigned x,unsigned y,const std::array<std::uint8_t,4>& value){std::memcpy(rgba.data()+(size_t(y)*width+x)*4,value.data(),4);};
+        if(format==Format::BC1)decodeCompressed<Format::BC1>(bytes,width,height,pitch,write);
+        else if(format==Format::BC2)decodeCompressed<Format::BC2>(bytes,width,height,pitch,write);
+        else decodeCompressed<Format::BC3>(bytes,width,height,pitch,write);
     }
     output=std::move(rgba);return true;
 }

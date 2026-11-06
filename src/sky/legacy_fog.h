@@ -147,6 +147,14 @@ inline bool allFinite(const Constants& c){
     for(unsigned i=0;i<4;++i)if(!std::isfinite(c.parameters[i])||!std::isfinite(c.color[i]))return false;
     return true;
 }
+// For a nonnegative encoded scene, subtracting this fog leaves the same RGB.
+// Inspect the uploaded/held constants, not the latest raw fog observation.
+inline bool surfaceFogIsZero(const Constants& c,bool nonnegativeSource){
+    if(!nonnegativeSource||!allFinite(c)||c.parameters[2]<=0||c.parameters[2]>64||
+       c.parameters[3]<0||c.parameters[3]>1)return false;
+    return c.parameters[3]==0||(c.parameters[0]==0&&c.parameters[1]==1)||
+           (c.color[0]==0&&c.color[1]==0&&c.color[2]==0);
+}
 struct Hold {
     static constexpr std::uint32_t HoldMs=2000;   // an unreadable frame returns the last readable value for this long
     static constexpr float FadeSeconds=.5f;       // time constant of the post-hold fade of w toward 0

@@ -31,12 +31,13 @@ int main(int argc,char** argv){
         ok(d->DrawPrimitiveUP(D3DPT_TRIANGLESTRIP,2,q,sizeof(Flat)));
     };
     auto capture=[&]{ok(d->GetRenderTargetData(target,staging));D3DLOCKED_RECT l{};ok(staging->LockRect(&l,nullptr,D3DLOCK_READONLY));std::vector<float> out(N*N*4);for(unsigned y=0;y<N;++y)std::memcpy(out.data()+y*N*4,static_cast<char*>(l.pBits)+y*l.Pitch,N*16);ok(staging->UnlockRect());return out;};
-    float weatherGain=1;
+    float weatherGain=1,hdrPolicy=0;
     auto planet=[&](unsigned body,bool early,bool surface=true,bool halo=true){
         const float cs=std::cos(.4f),sn=std::sin(.4f);float c[49][4]{};
         c[0][0]=c[0][1]=1.f/N;c[0][3]=1/.94f;c[1][0]=c[1][1]=5;c[1][2]=1;c[2][1]=1;c[3][0]=-sn;c[3][2]=cs;c[4][0]=cs;c[4][2]=sn;c[5][3]=1;
         c[6][0]=cs;c[6][2]=sn;c[6][3]=std::tan(.14f);c[7][1]=1;c[8][0]=-sn;c[8][2]=cs;
         c[9][0]=c[9][1]=c[9][2]=1;c[9][3]=weatherGain;c[10][1]=.2f;c[10][2]=1000;c[10][3]=early?0.f:1.f;
+        c[10][0]=hdrPolicy;
         c[11][0]=.99992f;c[11][1]=early?0.f:1.f;c[11][2]=1.5f/16777215;c[11][3]=body?0.f:1.f;c[12][0]=1;c[12][1]=20;
         for(unsigned k=0;k<3;++k)c[47][k]=c[48][k]=1;
         const Vertex q[]={{-.5f,-.5f,.99992f,1,0,0},{N-.5f,-.5f,.99992f,1,1,0},{-.5f,N-.5f,.99992f,1,0,1},{N-.5f,N-.5f,.99992f,1,1,1}};
@@ -66,6 +67,14 @@ int main(int argc,char** argv){
         for(unsigned y=0;y<N;++y)for(unsigned x=0;x<N;++x){const bool blocked=x>=20&&x<32&&y>=20&&y<44;const float color[]={51.f/255,77.f/255,102.f/255};for(unsigned k=0;k<3;++k){const float expected=blocked?color[k]:unobscured[(y*N+x)*4+k];if(std::fabs(foreground[(y*N+x)*4+k]-expected)>3e-5)++failures;}geometryPixels+=blocked;}
     }
     assert(baselineWrong);
+    weatherGain=1;
+    for(unsigned body=0;body<2;++body){hdrPolicy=body?3:2;
+        ok(d->Clear(0,nullptr,D3DCLEAR_TARGET|D3DCLEAR_ZBUFFER,0,1,0));ok(d->BeginScene());planet(body,true,true,false);ok(d->EndScene());const auto bright=capture();
+        float peak=0;for(unsigned p=0;p<N*N;++p)peak=std::max(peak,bright[p*4]);assert(peak>1);++cases;
+        ok(d->BeginScene());flat(D3DCOLOR_ARGB(128,51,77,102),.99996f,true);ok(d->EndScene());const auto covered=capture();
+        for(unsigned p=0;p<N*N;++p)for(unsigned k=0;k<3;++k){const float tint[]={51.f/255,77.f/255,102.f/255};const float expected=bright[p*4+k]*(127.f/255)+tint[k]*(128.f/255);if(std::fabs(covered[p*4+k]-expected)>5e-5f)++failures;}++cases;
+        std::printf("HDR celestial body=%u relativePeak=%g cloudOrder=linear\n",body,peak);
+    }
     std::printf("cloud order GPU cases=%u checkedPixels=%u baselineWrongChannels=%u geometryPixels=%u maxError=%.9g failures=%u\n",cases,cases*N*N,baselineWrong,geometryPixels,maxError,failures);
     d->SetPixelShader(nullptr);for(unsigned s=0;s<6;++s)d->SetTexture(s,nullptr);moon->Release();white->Release();before->Release();after->Release();staging->Release();target->Release();zbuffer->Release();d->Release();api->Release();FreeLibrary(module);DestroyWindow(window);UnregisterClassW(wc.lpszClassName,wc.hInstance);return failures?1:0;
 }

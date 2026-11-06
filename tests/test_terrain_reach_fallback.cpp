@@ -6,8 +6,10 @@ using namespace NorthlightTerrainReach;
 namespace GM=NorthlightGeometryMemory;
 int main(){
     constexpr float Ext=4096;
-    // Observed Bael Modan sample (aggregate 760 MiB, largest block 63 MiB), synthetic growth checks.
-    const GM::Sample observed{760*GM::MiB,63*GM::MiB,true},unfragmented{800*GM::MiB,63*GM::MiB,true};
+    constexpr uint64_t Entry=GM::ProcessReserve+GM::EntryHeadroom;
+    // Model the Bael Modan deficit relative to the current entry policy, with
+    // the same 63 MiB contiguous block and unchanged growth requests.
+    const GM::Sample observed{Entry-8*GM::MiB,63*GM::MiB,true},unfragmented{Entry+32*GM::MiB,63*GM::MiB,true};
     for(double mib:{1.0,23.58,37.92,64.0}){
         const uint64_t bytes=uint64_t(mib*GM::MiB);
         assert(!GM::admits(observed,GM::buildBudget(bytes)));   // full-reach sequence refused
@@ -15,17 +17,17 @@ int main(){
     }
     // Reduced reach: allocations stay well below the 96 MiB block requirement of the 64 MiB one.
     for(double mib:{1.0,8.0,16.0,24.0})assert(GM::admits(unfragmented,GM::buildBudget(uint64_t(mib*GM::MiB))));
-    // Aggregate margin still applies to the reduced build (no margin was relaxed).
+    // Aggregate admission still applies to the reduced build.
     assert(!GM::admits(observed,GM::buildBudget(24*GM::MiB)));
-    assert(GM::buildBudget().available==768*GM::MiB&&GM::ContiguousMargin==32*GM::MiB&&GM::ProcessReserve==512*GM::MiB);
+    assert(GM::buildBudget().available==512*GM::MiB&&GM::ContiguousMargin==32*GM::MiB&&GM::ProcessReserve==256*GM::MiB);
 
     // The sample is taken fresh per call and drops by what the stage itself holds: the extended attempt has
     // 64 MiB-class buffers live when it asks for the next one; freeing them (the retry) restores the sample.
-    {uint64_t held=0;const uint64_t entryAvail=980*GM::MiB,entryLargest=754*GM::MiB;
+    {uint64_t held=0;const uint64_t entryAvail=Entry+212*GM::MiB,entryLargest=754*GM::MiB;
      auto sample=[&]{return GM::Sample{entryAvail-held,held?63*GM::MiB:entryLargest,true};};
      auto admit=[&](uint64_t bytes){return GM::admits(sample(),GM::buildBudget(bytes));};
      held=220*GM::MiB;                              // extended terrain scene + merged vertices already built (mid-build)
-     assert(sample().available<768*GM::MiB&&sample().largest==63*GM::MiB);
+     assert(sample().available<Entry&&sample().largest==63*GM::MiB);
      assert(!admit(64*GM::MiB));                    // extended refused
      held=0;                                        // torn down before the reduced attempt
      assert(admit(1*GM::MiB)&&admit(24*GM::MiB)); // reduced allocations admitted again, same margins
@@ -63,7 +65,7 @@ int main(){
      begins+=e.refused(60);ends+=e.end(70,ms,n);assert(begins==2&&ends==2);}
     // Memory restore rule (0.3.212 player log: every 30 s restore refused again at ~630 MiB, entry ~800).
     // (Samples are large enough that the proactive tier requirement is met as well.)
-    {State s;const uint64_t entry=1400*GM::MiB,need=GM::inBuildBudget(1*GM::MiB).available,seen=630*GM::MiB;
+    {State s;const uint64_t entry=1400*GM::MiB,need=GM::inBuildBudget(1*GM::MiB).available,seen=need-10*GM::MiB;
      assert(memoryRefused(s,Ext,1000,entry+(need-seen)));assert(s.restoreAvailable==1410*GM::MiB);
      assert(choose(s,Ext,1000+BackoffMs,entry).reduced);                 // backoff over, entry unchanged: still base reach
      assert(choose(s,Ext,1000+5*BackoffMs,1409*GM::MiB).reduced&&s.refused);
@@ -74,22 +76,22 @@ int main(){
      auto c=choose(s,BaseReach,2+BackoffMs,0);assert(c.reach==BaseReach&&!c.reduced&&!s.refused);} // a base-reach zone still clears it
     // Entry lift (0.3.212 player log: plan-deferred 20, 162 and 482 attempts, the BVH rebuilt every second).
     {GM::EntryLift lift;const auto plain=GM::buildBudget(64*GM::MiB);
-     assert(!lift.active(0)&&lift.apply(plain,0).available==768*GM::MiB);
-     // Entry at 770, the in-build check refused at 630 (needs 640): the next entry needs 780.
-     lift.refused(770*GM::MiB,GM::inBuildBudget().available,630*GM::MiB,100);
-     assert(lift.available==780*GM::MiB&&lift.apply(plain,100).available==780*GM::MiB);
+     assert(!lift.active(0)&&lift.apply(plain,0).available==Entry);
+     // Enter 2 MiB above the floor; a later 10 MiB deficit raises entry by 12.
+     lift.refused(Entry+2*GM::MiB,GM::inBuildBudget().available,GM::inBuildBudget().available-10*GM::MiB,100);
+     assert(lift.available==Entry+12*GM::MiB&&lift.apply(plain,100).available==Entry+12*GM::MiB);
      assert(lift.apply(plain,100).largest==plain.largest);                      // contiguous rule untouched
-     assert(!GM::admits({775*GM::MiB,500*GM::MiB,true},lift.apply(plain,200)));  // no retry at the same level
-     assert(GM::admits({780*GM::MiB,500*GM::MiB,true},lift.apply(plain,200)));
-     assert(lift.apply(plain,100+GM::LiftMs-1).available==780*GM::MiB);
-     assert(lift.apply(plain,100+GM::LiftMs).available==768*GM::MiB&&!lift.active(100+GM::LiftMs)); // expires: no lockout
+     assert(!GM::admits({Entry+7*GM::MiB,500*GM::MiB,true},lift.apply(plain,200)));  // no retry at the same level
+     assert(GM::admits({Entry+12*GM::MiB,500*GM::MiB,true},lift.apply(plain,200)));
+     assert(lift.apply(plain,100+GM::LiftMs-1).available==Entry+12*GM::MiB);
+     assert(lift.apply(plain,100+GM::LiftMs).available==Entry&&!lift.active(100+GM::LiftMs)); // expires: no lockout
      // Never below the plain floor, capped above it, overflow-safe, cleared on publish.
-     lift.refused(700*GM::MiB,640*GM::MiB,700*GM::MiB,0);assert(lift.apply(plain,1).available==768*GM::MiB);
-     lift.refused(3000*GM::MiB,640*GM::MiB,0,0);assert(lift.available==768*GM::MiB+GM::LiftCap);
-     lift.refused(UINT64_MAX,UINT64_MAX,0,0);assert(lift.available==768*GM::MiB+GM::LiftCap);
-     lift.clear();assert(lift.apply(plain,1).available==768*GM::MiB);
-     const uint32_t t=0xFFFFFF00u;lift.refused(800*GM::MiB,640*GM::MiB,600*GM::MiB,t); // tick wrap
-     assert(lift.apply(plain,uint32_t(t+0x200)).available==840*GM::MiB&&!lift.active(uint32_t(t+GM::LiftMs)));
+     lift.refused(Entry-68*GM::MiB,640*GM::MiB,700*GM::MiB,0);assert(lift.apply(plain,1).available==Entry);
+     lift.refused(3000*GM::MiB,640*GM::MiB,0,0);assert(lift.available==Entry+GM::LiftCap);
+     lift.refused(UINT64_MAX,UINT64_MAX,0,0);assert(lift.available==Entry+GM::LiftCap);
+     lift.clear();assert(lift.apply(plain,1).available==Entry);
+     const uint32_t t=0xFFFFFF00u;lift.refused(Entry+32*GM::MiB,640*GM::MiB,600*GM::MiB,t); // tick wrap
+     assert(lift.apply(plain,uint32_t(t+0x200)).available==Entry+72*GM::MiB&&!lift.active(uint32_t(t+GM::LiftMs)));
      assert(!GM::admits({0,0,false},lift.apply(GM::Budget{},0)));}
     // A refusal for want of one free block (no aggregate shortfall) must not retry at once either.
     {GM::EntryLift lift;const auto plain=GM::buildBudget(64*GM::MiB);const auto big=GM::inBuildBudget(64*GM::MiB); // 96 MiB contiguous
@@ -161,7 +163,7 @@ int main(){
      c=choose(s,Ext,10+BackoffMs,963*GM::MiB,512*GM::MiB);assert(c.reach==MidReach&&!c.reduced&&c.restored); // refusal cleared; the tier margin caps the raise at 1856
      c=choose(s,Ext,10+2*BackoffMs,964*GM::MiB,512*GM::MiB);assert(c.reach==Ext&&!c.restored&&s.tier==0);
      assert(memoryRefused(s,MidReach,20+3*BackoffMs));}                                                     // a refused 1856 build also falls to 928
-    // The after-BVH gate keeps the in-build floor: the logged 720 MiB plan refusal now proceeds.
-    assert(GM::admits({720*GM::MiB,502*GM::MiB,true},GM::inBuildBudget())&&!GM::admits({720*GM::MiB,502*GM::MiB,true},GM::buildBudget()));
+    // A sample 48 MiB below entry still passes the smaller after-BVH floor.
+    assert(GM::admits({Entry-48*GM::MiB,502*GM::MiB,true},GM::inBuildBudget())&&!GM::admits({Entry-48*GM::MiB,502*GM::MiB,true},GM::buildBudget()));
     std::cout<<"terrain reach fallback PASS\n";
 }

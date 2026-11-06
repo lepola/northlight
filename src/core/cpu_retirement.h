@@ -43,7 +43,8 @@ class CpuRetirement {
              if(!count_&&stop_)return;
              item=std::move(queue_[head_]);head_=(head_+1)%Capacity;--count_;inFlight_=true;}
             item.owner.reset();
-            {std::lock_guard<std::mutex> lock(mutex_);bytes_-=item.bytes;inFlight_=false;if(!count_)idle_.notify_all();}
+            bool idle;{std::lock_guard<std::mutex> lock(mutex_);bytes_-=item.bytes;inFlight_=false;idle=!count_;}
+            if(idle)idle_.notify_all();
         }
     }
 public:
@@ -59,8 +60,9 @@ public:
         ++stats_.accepted;stats_.oversized+=oversized;
         // Transfer under the lock, before waking the consumer. Copying here
         // lets the worker win the race and leaves final destruction on caller.
+        const bool wake=!count_&&!inFlight_;
         queue_[(head_+count_)%Capacity]={std::move(owner),bytes};++count_;bytes_+=bytes;
-        lock.unlock();wake_.notify_one();return true;
+        lock.unlock();if(wake)wake_.notify_one();return true;
     }
     /* Geometry-generation owners (BVH/plan/snapshot): the render thread would
        otherwise free them itself, so the byte cap (which bounds memory kept
@@ -75,8 +77,9 @@ public:
         if(stop_||count_==Capacity){++stats_.refused;return false;}
         const bool oversized=bytes_>=MaxBytes||bytes>MaxBytes-bytes_;
         ++stats_.accepted;stats_.oversized+=oversized;
+        const bool wake=!count_&&!inFlight_;
         queue_[(head_+count_)%Capacity]={std::move(owner),bytes};++count_;bytes_+=bytes;
-        lock.unlock();wake_.notify_one();return true;
+        lock.unlock();if(wake)wake_.notify_one();return true;
     }
     RetirementStats stats(){std::lock_guard<std::mutex> lock(mutex_);return stats_;}
     /* Waits until nothing is queued and the last dequeued item is destroyed
@@ -110,7 +113,8 @@ public:
         if(!owner||queue.retireGeneration(owner,bytes))return;
         ++generationFrees;owner.reset();
     }
-    void retry(CpuRetirement& queue,Clock::time_point now=Clock::now()){
+    void retry(CpuRetirement& queue){if(parked())retry(queue,Clock::now());}
+    void retry(CpuRetirement& queue,Clock::time_point now){
         for(auto& item:items_)if(item.owner&&!queue.retire(item.owner,item.bytes)&&
             std::chrono::duration<double,std::milli>(now-item.since).count()>=MaxParkMs){++synchronous;item.owner.reset();}
     }
@@ -118,4 +122,35 @@ public:
     void clear(){for(auto& item:items_)item.owner.reset();}
 };
 inline CpuRetirement& cpuRetirement(){static CpuRetirement queue;return queue;}
+// One frame-boundary clear is one retirement. Otherwise the first cache can
+// consume the byte cap and force every following cache to free synchronously.
+// Uses the queue's existing oversized-when-idle rule; busy/full/disabled queues
+// still fall back on the caller. Only detached immutable CPU owners belong here.
+class CpuRetirementBatch {
+    struct Item {std::shared_ptr<const void> owner;size_t bytes=0;};
+    struct Owners {std::array<Item,16> items;};
+    CpuRetirement* queue_;std::shared_ptr<Owners> owners_;size_t count_=0,bytes_=0,queuedBytes_=0;
+public:
+    explicit CpuRetirementBatch(CpuRetirement* queue=nullptr)noexcept:queue_(queue){}
+    CpuRetirementBatch(const CpuRetirementBatch&)=delete;
+    template<class T> bool retire(std::shared_ptr<T>& owner,size_t bytes){
+        if(!owner)return true;
+        if(!owners_&&queue_&&!count_)try{owners_=std::make_shared<Owners>();}catch(...) {queue_=nullptr;}
+        if(!owners_||count_==owners_->items.size()||bytes>size_t(-1)-bytes_)return false;
+        owners_->items[count_++]={std::move(owner),bytes};bytes_+=bytes;return true;
+    }
+    size_t bytes()const{return bytes_;}size_t count()const{return count_;}
+    size_t queuedBytes()const{return queuedBytes_;}
+    bool finish(){
+        if(!count_||!owners_||!queue_){owners_.reset();queue_=nullptr;return false;}
+        if(queue_->retire(owners_,bytes_)){queuedBytes_=bytes_;return true;}
+        // Preserve individual admissions when another retirement is in flight.
+        // Rejected owners are destroyed outside the queue's lock, on this caller.
+        bool allQueued=true;
+        for(size_t i=0;i<count_;++i){auto& item=owners_->items[i];
+            if(queue_->retire(item.owner,item.bytes))queuedBytes_+=item.bytes;
+            else {allQueued=false;item.owner.reset();}}
+        owners_.reset();return allQueued;
+    }
+};
 }

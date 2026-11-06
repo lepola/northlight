@@ -149,6 +149,27 @@ static void testTextureSource(){
     textures[0].width=3;assert(!buildUploadPlan(meta,c,error,{},&textures));
     std::puts("PASS external texture source builds the identical plan without texels in the scene");
 }
+static void testSharedBatchFlags(){
+    WorldScene scene;scene.materials.resize(3);
+    scene.materials[1].pointOnly=true;
+    scene.materials[2].lampSourceId=0x123456789abcdef0ull;
+    for(unsigned i=0;i<6;++i)triangle(scene,{float(i),0,0},{float(i)+1,0,0},{float(i),1,0},i%3);
+    std::vector<PreparationPiece> pieces(2);
+    for(unsigned i=0;i<2;++i){pieces[i].identity=std::to_string(i);pieces[i].firstTriangle=i*3;pieces[i].triangleCount=3;pieces[i].materials={0,1,2};}
+    PreparationCache cache;cache.setLimit(8*1024*1024);
+    WorldMeshUploadPlan reference;std::string error;assert(buildUploadPlan(scene,reference,error));
+    for(unsigned pass=0;pass<2;++pass){
+        WorldMeshUploadPlan shared;assert(buildUploadPlan(scene,shared,error,{},nullptr,{},&pieces,&cache));
+        assert(shared.indices==reference.indices&&shared.batches.size()==reference.batches.size());
+        for(size_t i=0;i<reference.batches.size();++i){const auto& a=reference.batches[i];const auto& b=shared.batches[i];
+            assert(a.material==b.material&&a.start==b.start&&a.count==b.count);
+            assert(a.pointOnly==b.pointOnly&&a.lampSourceId==b.lampSourceId);
+            assert(b.pointOnly==scene.materials[b.material].pointOnly&&b.lampSourceId==scene.materials[b.material].lampSourceId);
+        }
+    }
+    assert(cache.stats().hits>=2);
+    std::puts("PASS shared mesh batches preserve point transmission and lamp identity on cold and warm builds");
+}
 static void testActual(const char* tile,const char* models){
     WorldScene scene;std::string error;
     assert(loadInstancedScenes({tile},models,{-10300,-573,-150},{-9724,3,490},scene,error));
@@ -198,4 +219,4 @@ static void testSpatialOrder(){
     assert(equalBatches+1>=spatial.batches.size()-1);
     std::printf("PASS spatial batch order: %zu -> %zu batches (terrain %zu unchanged), cell-major, one extra triangle changes one batch\n",old.batches.size(),spatial.batches.size(),spatialTerrain);
 }
-int main(int argc,char**argv){testGrouping();testFailure();testTextureSource();testShadowBounds();testSpatialOrder();if(argc>2)testActual(argv[1],argv[2]);std::puts("All world mesh upload plan tests passed");}
+int main(int argc,char**argv){testGrouping();testFailure();testTextureSource();testSharedBatchFlags();testShadowBounds();testSpatialOrder();if(argc>2)testActual(argv[1],argv[2]);std::puts("All world mesh upload plan tests passed");}

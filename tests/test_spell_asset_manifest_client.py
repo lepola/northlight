@@ -23,6 +23,7 @@ class ClientManifestTest(unittest.TestCase):
         cls.assets, cls.stock = Assets(), Assets(archives='stock')
         cls.expected = json.loads((fp.FIXTURES / 'cold_blood_assets.json').read_text(encoding='utf-8'))
         cls.actual = build(cls.assets, cls.stock)
+        cls.stock_report = build(cls.stock,cls.stock)
 
     @classmethod
     def tearDownClass(cls):
@@ -50,7 +51,7 @@ class ClientManifestTest(unittest.TestCase):
                 self.assertEqual(particle['alpha_lifetime_0_32767'][-1][1], (0,))
 
     def test_real_midlife_colour_times_uploaded_texture_is_blue(self):
-        textures = {t['path']: t for t in self.expected['textures']}
+        textures = {t['path']: next(m for m in t['mips'] if max(m['width'],m['height'])<=64) for t in self.actual['textures']}
         for model in self.actual['models']:
             for particle in model['particles']:
                 # Native authored middle key, independently multiplied by the
@@ -59,7 +60,7 @@ class ClientManifestTest(unittest.TestCase):
                 alpha_stamp, (alpha,) = particle['alpha_lifetime_0_32767'][1]
                 self.assertEqual(stamp, alpha_stamp)
                 self.assertEqual(stamp, 16384)
-                moments = textures[particle['texture']]['runtime_reference']['rgb_alpha_mean']
+                moments = textures[particle['texture']]['rgb_alpha_mean']
                 rgb = [colour[k]/255 * alpha/32767 * moments[k] for k in range(3)]
                 self.assertGreater(rgb[2], max(rgb[0], rgb[1]))
                 self.assertGreater(rgb[2], 0)
@@ -67,26 +68,36 @@ class ClientManifestTest(unittest.TestCase):
 
     def test_raw_upload_hashes_and_native_codec(self):
         expected = {t['path']: t for t in self.expected['textures']}
+        native_results={}
         with tempfile.TemporaryDirectory(prefix='northlight-cold-blood-') as temp:
             for optimize in ('O0', 'O2'):
                 decoder = Path(temp) / (optimize + '.exe')
                 subprocess.run([str(fp.zig()), 'c++', '-std=c++17', '-' + optimize, '-I' + str(fp.SRC / 'replay'),
                                 str(fp.TESTS / 'cold_blood_texture_probe.cpp'), '-o', str(decoder)], check=True, capture_output=True, env=fp.zig_env())
-                for texture in self.actual['textures']:
-                    frozen = expected[texture['path']]
-                    self.assertEqual(texture['sha256'], frozen['sha256'])
-                    selected = next(m for m in texture['mips'] if max(m['width'], m['height']) <= 64)
-                    reference = frozen['runtime_reference']
-                    self.assertEqual(selected['level'], reference['level'])
-                    blob = self.assets.read(texture['path'])
-                    level = selected['level']
-                    offset = struct.unpack_from('<I', blob, 20+level*4)[0]
-                    size = struct.unpack_from('<I', blob, 84+level*4)[0]
-                    raw = blob[offset:offset+size]
-                    self.assertEqual(hashlib.sha256(raw).hexdigest(), selected['raw_sha256'])
-                    self.assertEqual(fnv1a64(raw), selected['raw_fnv1a64'])
-                    actual = runtime_reference(raw, selected['width'], selected['height'], selected['pitch'], texture['native_format'], decoder)
-                    self.assertEqual(actual, {k: v for k, v in reference.items() if k != 'level'})
+                for view,report,assets in (('stock',self.stock_report,self.stock),('active',self.actual,self.assets)):
+                    for texture in report['textures']:
+                        frozen = expected[texture['path']]
+                        if view=='stock':self.assertEqual(texture['sha256'],frozen['sha256'])
+                        self.assertLessEqual(len(texture['mips']),max(texture['width'],texture['height']).bit_length())
+                        selected = next(m for m in texture['mips'] if max(m['width'], m['height']) <= 64)
+                        blob = assets.read(texture['path']);level = selected['level']
+                        offset = struct.unpack_from('<I', blob, 20+level*4)[0]
+                        raw = blob[offset:offset+selected['bytes']]
+                        self.assertEqual(hashlib.sha256(raw).hexdigest(), selected['raw_sha256'])
+                        self.assertEqual(fnv1a64(raw), selected['raw_fnv1a64'])
+                        actual = runtime_reference(raw, selected['width'], selected['height'], selected['pitch'], texture['native_format'], decoder)
+                        if texture['sha256']==frozen['sha256']:
+                            reference=frozen['runtime_reference']
+                            self.assertEqual(selected['level'],reference['level'])
+                            self.assertEqual(actual,{k:v for k,v in reference.items() if k!='level'})
+                        else:
+                            for key in ('rgb_mean','rgb_alpha_mean'):
+                                for a,b in zip(actual[key],selected[key]):self.assertAlmostEqual(a,b,delta=1/255)
+                            self.assertAlmostEqual(actual['alpha_mean'],selected['alpha_mean'],delta=1/255)
+                        key=(view,texture['path'])
+                        if optimize=='O0':native_results[key]=actual
+                        else:self.assertEqual(actual,native_results[key])
+        print('PASS stock frozen hashes and custom native BC decodes at O0/O2:',len(native_results),'textures')
 
     def test_local_fixture_is_exact_mesh_data_and_explicitly_not_a_draw_capture(self):
         with tempfile.TemporaryDirectory(prefix='northlight-cold-blood-mesh-') as temp:

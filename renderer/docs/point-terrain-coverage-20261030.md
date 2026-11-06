@@ -1,0 +1,11 @@
+# Camera-independent point-shadow terrain coverage
+
+The third normal-view capture retains selected torch sources with nonzero colors and successful direct/fog submissions. The log contains no point-pass failure for that session. Reviewing the caster path found that any native visibility in a terrain chunk removed its entire cached terrain batch from the point-shadow cube. Native draws are camera-culled; they do not prove complete coverage of the chunk or of the light's shadow volume.
+
+An actual WorldRenderer counterexample holds the light, cached blocker and world geometry fixed while toggling that chunk's native visibility. Before the fix the blocker center changes from depth 0.983193338 to empty 1.0 and the draw count goes from one to zero. The missing blocker changes the local-light shadow correction despite an unchanged source.
+
+Retain cached terrain candidates in the point light's clip volume and union them with native terrain through the existing depth path. Terrain is still redrawn on refresh rather than inserted into the static-face cache. Face/range culling, source identity, partial-update failure handling and existing resources remain unchanged. No new target, source limit, texture upload, driver allocation policy or shader payload is introduced. Overlapping equivalent terrain retains the nearest depth; the cached geometry supplies parts absent from the native camera subset.
+
+The new production-renderer oracle checks four native-visibility states and complete cube-face equality on native D3D9 and DXVK 3, using authored geometry only. The old path fails the retained-blocker assertion; the corrected path preserves depth 0.983193338 and one blocker draw in every state. Existing caster/receiver tests pass 648 cases per backend, including grazing and translated surfaces. DXVK batch equivalence passes 576 cases and 589,824 components; current-light overlap passes 16 cases, including temporal and shadow controls. No GPU-duration or game FPS benchmark is run.
+
+Reproduce with tests/test_point_terrain_coverage_gpu.py and tests/test_local_shadow_receiver_gpu.py. This fixes a demonstrated camera-dependent hole in the point-shadow path. The captured game scene is not replayed as a complete scene and no new gameplay/visual acceptance is claimed.

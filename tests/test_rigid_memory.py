@@ -32,7 +32,7 @@ checks['opaque copies hold no texture; no game VB/IB is held']=('c.texture.reset
 checks['at most 4096 replays, outside quota/radius/fate']=('if(replays.size()+e.payload.draws.size()>=4096' in inject and 'p->fateSlot=-1;' in inject
     and 'p->shadowSkinned=p->shadowSelected=true;' in inject)
 checks['cleared in releaseGPU (reset() calls it), trimMemory, on a map change and with shadows off']=('staticCasters.settle();rigidMemoryClear();' in w
-    and re.search(r'void reset\(\)\{[^\n]*releaseGPU\(true\);',w) is not None and 'rigidMemoryClear(); /* 0.3.172' in g[g.index('MemoryTrim trimMemory(){'):g.index('void setMemoryPressure')]
+    and re.search(r'void reset\(\)\{[^\n]*releaseGPU\(true\);',w) is not None and 'rigidMemoryClear(); /* 0.3.172' in g[g.index('MemoryTrim trimMemory('):g.index('void setMemoryPressure')]
     and 'if(lastRequest.map!=rigidMap){rigidMemoryClear();' in m and 'if(!effects.shadows){rigidMemoryClear();return;}' in m)
 checks['never the static cache']=all(n not in m for n in ('staticCasters','shadowCacheKey','invalidateShadowCache','staticSignature'))
 checks['observes every captured skinned group; bodies are the non-rigid ones; identity by mixShape']=('if(!p.shadowSkinned)continue;' in m and 'rigidBodies.insert(' in m

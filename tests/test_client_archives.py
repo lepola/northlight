@@ -36,10 +36,10 @@ root = client(out / 'client-a', base + patches + local + ignored, 'SET gxApi "d3
 # 1. Game order, lowest priority first: patch.mpq under patch-2 (the 0.3.161 builder sorted
 #    patch-enus.mpq last, so it overrode patch-enus-2/3/x/z), digits before letters, locale
 #    base archives in expansion order, the speech/base/backup archives and inactive names left out.
-expected = base + ['Data/patch.MPQ', 'Data/patch-2.MPQ', 'Data/patch-3.MPQ', 'Data/patch-5.MPQ', 'Data/patch-x.MPQ',
+expected = base + ['Data/patch.MPQ', 'Data/patch-2.MPQ', 'Data/patch-3.MPQ',
                    'Data/enUS/locale-enUS.MPQ', 'Data/enUS/expansion-locale-enUS.MPQ', 'Data/enUS/lichking-locale-enUS.MPQ',
                    'Data/enUS/patch-enUS.MPQ', 'Data/enUS/patch-enUS-2.MPQ', 'Data/enUS/patch-enUS-3.MPQ',
-                   'Data/enUS/patch-enUS-z.MPQ']
+                   'Data/patch-5.MPQ', 'Data/patch-x.MPQ', 'Data/enUS/patch-enUS-z.MPQ']
 assert names(root) == expected, names(root)
 
 # 2. Stock view: only Blizzard's 3.3.5a archives.
@@ -49,8 +49,9 @@ assert names(root, without='z') == [n for n in expected if n != 'Data/enUS/patch
 
 # 3. Locale: Config.wtf wins over the folder scan, an explicit locale wins over both, a missing one fails.
 assert ca.detect_locale(root) == 'enUS' and sorted(ca.installed_locales(root)) == ['deDE', 'enUS']
-assert names(root, locale='deDE') == base + ['Data/patch.MPQ', 'Data/patch-2.MPQ', 'Data/patch-3.MPQ', 'Data/patch-5.MPQ',
-                                             'Data/patch-x.MPQ', 'Data/deDE/locale-deDE.MPQ', 'Data/deDE/patch-deDE-3.MPQ']
+assert names(root, locale='deDE') == base + ['Data/patch.MPQ', 'Data/patch-2.MPQ', 'Data/patch-3.MPQ',
+                                             'Data/deDE/locale-deDE.MPQ', 'Data/deDE/patch-deDE-3.MPQ',
+                                             'Data/patch-5.MPQ', 'Data/patch-x.MPQ']
 for wanted, error in [('frFR', FileNotFoundError)]:
     try:
         ca.detect_locale(root, wanted)

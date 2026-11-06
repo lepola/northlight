@@ -21,14 +21,17 @@ inline bool clipRejectAffine(NorthlightGI::Vec3 low,NorthlightGI::Vec3 high,
                              const float* matrix,float epsilon=1e-4f,bool retainUpstream=false) {
     if(!std::isfinite(epsilon)||epsilon<0)return false;
     const float lo[]={low.x,low.y,low.z},hi[]={high.x,high.y,high.z};
-    for(unsigned axis=0;axis<3;++axis)
+    double extent[3];
+    for(unsigned axis=0;axis<3;++axis){
         if(!std::isfinite(lo[axis])||!std::isfinite(hi[axis])||lo[axis]>hi[axis])return false;
+        extent[axis]=std::max(std::fabs(double(lo[axis])),std::fabs(double(hi[axis])));
+    }
     for(unsigned axis=0;axis<3;++axis) {
         double lower=matrix[12+axis],upper=lower,magnitude=std::fabs(lower);
         for(unsigned row=0;row<3;++row){
             const double a=double(lo[row])*matrix[row*4+axis],b=double(hi[row])*matrix[row*4+axis];
             lower+=std::min(a,b);upper+=std::max(a,b);
-            magnitude+=std::max(std::fabs(a),std::fabs(b));
+            magnitude+=extent[row]*std::fabs(double(matrix[row*4+axis]));
         }
         // Interval extrema replace eight corner projections. The maximum
         // magnitude bounds EVERY corner's old roundoff expansion (including

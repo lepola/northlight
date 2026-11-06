@@ -18,14 +18,28 @@ public:
     // Relaxed atomic loads: false while the window is closed and the panel has nothing pending (nothing else runs then).
     // While closed with an unsaved draft it stays true: draw() then keeps the service work moving and shows a one-line reminder.
     virtual bool visible()const=0;
+    // Returns whether the window hook owns F10; drains presses even without foreground focus.
+    // A missing/failed hook leaves the renderer's polling fallback in charge.
+    virtual bool masterHotkey(bool foreground,bool& pressed)=0;
     // Draws onto back buffer 0 of the implicit swap chain, in its own BeginScene/EndScene. Call only for a Present of that
     // swap chain. The caller holds a RawScope and a SavedState: state need not be restored.
-    virtual void draw()=0;
+    // uiWhite=0 uses SDR; positive nits select linear scRGB output.
+    virtual void draw(float uiWhite=0,IDirect3DSurface9* output=nullptr)=0;
     // Before the device's Reset: releases every D3DPOOL_DEFAULT object (recreated lazily by the next draw).
     virtual void invalidate()=0;
 };
-// enabled=false ([Renderer] SettingsOverlay=0): logs that and returns nullptr; no window subclass. hotkey: the
+// enabled=false ([Renderer] SettingsOverlay=0): logs that and returns nullptr; this call installs no subclass or settings input.
+// The independent renderer-stability lifecycle below may already own the shared subclass. hotkey: the
 // SettingsOverlayKey text ("Ctrl+Shift+F11"; empty or null = that default; unusable = the default and one log line).
 // service may be null (the window then says the settings are unavailable). device is the real (extension) device; it is AddRef'ed.
 std::unique_ptr<Overlay> create(IDirect3DDevice9* device,bool enabled,const char* hotkey,std::shared_ptr<NorthlightSettings::Service> service,Log log);
 } // namespace NorthlightOverlay
+
+// Renderer stability uses the shared subclass independently of overlay input.
+// owner is a non-owning device identity; these functions never call D3D.
+namespace NorthlightWindowHook {
+bool attach(IDirect3DDevice9* owner,HWND window,NorthlightOverlay::Log log=nullptr);
+void invalidate(IDirect3DDevice9* owner);
+void presented(IDirect3DDevice9* owner,HWND window,unsigned width,unsigned height,bool windowed,HRESULT status);
+void detach(IDirect3DDevice9* owner);
+}

@@ -1,7 +1,8 @@
 {
-  "source_sha256": "2df3a0e625fde6a984b211b5d00918d29c8b6a1755230e8364ceacfe82fd2946",
+  "bump_include_sha256": "b5523a51dc6715f11ac2e7ba9ecb46a4973ba6aa23de159e308a8fd24d4e9ebc",
+  "source_sha256": "4f03617f73fcc943bebb0a50e0da0663ef41a842492b18a85f5fea4ae23cdf89",
   "compiler": "Microsoft d3dcompiler_47 10.0.17134.12 IEEE strict",
-  "compiler_sha256": "3c5f066a121a446e55db9c699b392da5d3aca6ad9019437b722360d09698e3c3",
+  "compiler_sha256": "4432bbd1a390874f3f0a503d45cc48d346abc3a8c0213c289f4b615bf0ee84f3",
   "game_launched": false,
   "device_created": false,
   "shaders": {
@@ -21,21 +22,23 @@
     },
     "LocalShadowPS": {
       "target": "ps_3_0",
-      "bytes": 492,
-      "sha256": "5e57eba04b0ccbc8eadeb22a00792ded08105a0a4af668a6a5c2350327d344c4",
-      "static_instruction_slots": 20,
-      "temporary_registers": 2,
+      "bytes": 1064,
+      "sha256": "1b820bd571a9e554737b047b41de82cad8041d7249bf6ac989b0b3d2a9038852",
+      "static_instruction_slots": 54,
+      "temporary_registers": 3,
       "samplers": [
         0
       ],
       "instructions": {
-        "mul": 2,
-        "add": 4,
+        "mul": 17,
+        "add": 13,
         "mov": 3,
         "dp3": 1,
-        "texkill": 2,
+        "texkill": 3,
         "if": 1,
         "texld": 1,
+        "frc": 5,
+        "cmp": 3,
         "endif": 1,
         "rcp": 1
       },
@@ -43,31 +46,131 @@
     },
     "LocalLighting": {
       "target": "ps_3_0",
-      "bytes": 6124,
-      "sha256": "d29f3427bce1c48c36b7135268afa7eb9dd52017464a0bbd67330ee42a03f097",
-      "static_instruction_slots": 386,
+      "bytes": 7336,
+      "sha256": "917605958df655eaf5c4f4d73ccc4cd6e6c1a3c7753d54dee262d622b9ed9764",
+      "static_instruction_slots": 469,
       "temporary_registers": 13,
       "samplers": [
         0,
         1,
-        2
+        2,
+        3,
+        4,
+        5
+      ],
+      "instructions": {
+        "rcp": 20,
+        "add": 115,
+        "frc": 6,
+        "mul": 95,
+        "max": 16,
+        "min": 6,
+        "mov": 38,
+        "texldl": 9,
+        "if": 12,
+        "else": 12,
+        "cmp": 55,
+        "endif": 12,
+        "dp3": 16,
+        "rsq": 5,
+        "dp2add": 2,
+        "nrm": 1
+      },
+      "cube_instruction_extra_slots": 12
+    },
+    "LocalShadowResolve": {
+      "target": "ps_3_0",
+      "bytes": 7088,
+      "sha256": "b217b8a8c70a3a7a5ea83ed344d942df3a94e0b5d4795e3498987aaf6ab70c51",
+      "static_instruction_slots": 468,
+      "temporary_registers": 18,
+      "samplers": [
+        0,
+        1,
+        2,
+        3
       ],
       "instructions": {
         "rcp": 21,
-        "add": 105,
-        "frc": 2,
-        "mul": 92,
+        "add": 116,
+        "frc": 8,
+        "mul": 84,
         "max": 22,
         "min": 8,
-        "mov": 25,
-        "texldl": 10,
-        "if": 5,
-        "else": 5,
-        "cmp": 34,
-        "endif": 5,
-        "dp3": 15,
+        "mov": 51,
+        "texldl": 9,
+        "if": 6,
+        "else": 6,
+        "cmp": 56,
+        "endif": 6,
+        "dp3": 11,
         "rsq": 2,
-        "nrm": 1
+        "nrm": 1,
+        "rep": 4,
+        "endrep": 4
+      },
+      "cube_instruction_extra_slots": 18
+    },
+    "LocalLightingSoft": {
+      "target": "ps_3_0",
+      "bytes": 4176,
+      "sha256": "421a538ea30ecf4cb42d1af34d648013f7163362a3a825353c18ef43644585c5",
+      "static_instruction_slots": 250,
+      "temporary_registers": 9,
+      "samplers": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5
+      ],
+      "instructions": {
+        "rcp": 13,
+        "add": 54,
+        "frc": 2,
+        "mul": 58,
+        "max": 4,
+        "min": 2,
+        "mov": 15,
+        "texldl": 6,
+        "if": 10,
+        "else": 10,
+        "cmp": 22,
+        "endif": 10,
+        "dp3": 9,
+        "rsq": 5,
+        "dp2add": 2
+      },
+      "cube_instruction_extra_slots": 0
+    },
+    "NativeLocalLighting1": {
+      "target": "ps_3_0",
+      "bytes": 4140,
+      "sha256": "cd2e669def773cc61ee643f15977b25da52b83dcaaa251a91daa67696e39d8d0",
+      "static_instruction_slots": 259,
+      "temporary_registers": 12,
+      "samplers": [
+        1
+      ],
+      "instructions": {
+        "mul": 47,
+        "add": 74,
+        "dsx": 1,
+        "dsy": 1,
+        "dp3": 10,
+        "rsq": 2,
+        "cmp": 36,
+        "rcp": 8,
+        "if": 2,
+        "mov": 25,
+        "else": 2,
+        "nrm": 1,
+        "max": 12,
+        "frc": 4,
+        "min": 4,
+        "texldl": 4,
+        "endif": 2
       },
       "cube_instruction_extra_slots": 12
     }

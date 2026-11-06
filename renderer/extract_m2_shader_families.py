@@ -149,7 +149,7 @@ def main():
     clients = [Path(c) for c in args.client] if args.client else [northlight_paths.client_root()]
     text, lines, _ = generate(clients)
     out = Path(args.output) if args.output else northlight_paths.GAMEDATA / 'm2_shader_families.h'
-    out.write_text(text)
+    out.write_text(text, newline="\n")
     print('\n'.join(lines))
     print('Wrote', out.name if not args.output else args.output)
 

@@ -2,7 +2,7 @@
 # northlight-test:
 """scripts/install_world_cache.py without a client (stat-only fake archives):
 - per-step digests: our art layer (patch-z, patch-<loc>-z) and name case leave every digest
-  unchanged; a new archive changes them all; a lights-only, fog-only or celestial-only source change
+  unchanged; DLL/source rebuilds leave them unchanged; a new archive changes them all; a lights, fog or celestial revision
   changes only that step; the plan rebuilds only the stale post step;
 - a manifest from before the digests is migrated (up to date when its chain and sources match, also
   when it recorded patch-z);
@@ -15,12 +15,12 @@
   leftover <output>.previous and <output>/<step>.previous; <output>.extract is never touched;
 - stale *.<pid>.tmp files are swept; Windows lock retries;
 - a failed build names its failed steps' logs and, in human mode, prints their last lines;
-- a cache recorded with main's scene, lights and placement builders (SOURCE_EQUIVALENTS) stays up to date;
+- legacy source-equivalence migration remains readable; unversioned caches rebuild once into the versioned scheme;
 - the instance layer (--instances, fake builders): digests independent of the continents, plan build/keep/remove,
   model pruning, carry_instances in swap() and swap_steps('lights'), staging leftovers.
 With NORTHLIGHT_STOCK_CLIENT set (read only): the stock test client's install-manifest.json from before
 the digests migrates to exactly the digests its chain has today (patch-z installed since then), so
-only builder source changes can make it stale."""
+archive inputs can be separated from the one-time version migration."""
 import sys; from pathlib import Path; sys.path.insert(0, str(Path(__file__).resolve().parents[1]))  # repo root
 import northlight_paths as fp; fp.use_source_modules()
 import contextlib, io, json, os, shutil, struct
@@ -36,10 +36,12 @@ for name in ['Wow.exe', 'Data/common.MPQ', 'Data/patch.MPQ', 'Data/patch-3.MPQ',
     (client / name).write_bytes(b'x')
 
 
-def digests(view='all', locale='enUS', maps=iwc.MAPS, tiles=None, without='z', sources=None):
+def digests(view='all', locale='enUS', maps=iwc.MAPS, tiles=None, without='z', sources=None, versions=None):
     inputs = iwc.gather_inputs(client, view, locale, maps, tiles, without)
     if sources:
         inputs['sources'] = dict(inputs['sources'], **sources)
+    if versions:
+        inputs['cache_versions'] = dict(inputs['cache_versions'], **versions)
     return iwc.step_digests(inputs)
 
 
@@ -63,12 +65,16 @@ assert digests() == base                                                       #
 assert digests(without='') != base                                             # it was the trigger
 os.rename(client / 'Data/patch-3.MPQ', client / 'Data/PATCH-3.mpq')
 assert digests() == base                                                       # case
-changed = {k for k, v in digests(sources={'outdoor-light-profiles.json': 'x'}).items() if base[k] != v}
-assert changed == {'lights'}, changed
-assert {k for k,v in digests(sources={'wotlk-emitter-profiles.json':'x'}).items() if base[k]!=v} == {'lights'}
-assert {k for k, v in digests(sources={'forest_regions.inc': 'x'}).items() if base[k] != v} == {'fog'}
-assert {k for k, v in digests(sources={'build_celestial_disc_assets.py': 'x'}).items() if base[k] != v} == {'celestial'}
-assert {k for k, v in digests(sources={'world_scene_builder.py': 'x'}).items() if base[k] != v} == set(base)
+assert digests(sources={name: 'different source build' for name in iwc.SOURCES}) == base
+assert iwc.step_digests(dict(inputs,dll_version='new release',dll_sha256='different DLL')) == base
+for step, affected in [('scene',set(base)-{'celestial'}),('lights',{'lights'}),('fog',{'fog'}),('celestial',{'celestial'})]:
+    changed = {k for k,v in digests(versions={step:iwc.CACHE_VERSIONS[step]+1}).items() if base[k]!=v}
+    assert changed == affected, (step,changed)
+assert digests(versions={'instances':2,'validation':2}) == base
+for invalid in (None, {}, {'scene': True}, dict(iwc.CACHE_VERSIONS, lights=0)):
+    try: iwc.step_digests(dict(inputs, cache_versions=invalid))
+    except ValueError: pass
+    else: raise AssertionError('Invalid cache version accepted')
 assert all(o['scene:Azeroth'] != base['scene:Azeroth'] for o in [digests(locale='deDE'), digests(tiles=[31, 48, 33, 50])])
 azeroth = digests(maps=['Azeroth'])                                             # a map's scene is its own
 assert set(azeroth) == {'scene:Azeroth', *iwc.POST} and azeroth['scene:Azeroth'] == base['scene:Azeroth']
@@ -82,7 +88,7 @@ assert all(v != base[k] for k, v in digests().items())                         #
 # 2. Plan against an installed cache, and a manifest from before the digests.
 def fake_cache(folder, digests_or_inputs):
     shutil.rmtree(folder, ignore_errors=True)
-    for name in [*(f'{m}/1_1.fg3' for m in iwc.MAPS), *(f'lights/{m}.fgl' for m in iwc.MAPS), 'fog/manifest.json',
+    for name in [*(f'{m}/1_1.fg3' for m in iwc.MAPS), *(f'lights/{m}.fgl' for m in iwc.MAPS), 'lights/native-fixtures.bin', 'fog/manifest.json',
                  'celestial/sun.fct', 'celestial/moon.fct']:
         (folder / name).parent.mkdir(parents=True, exist_ok=True)
         (folder / name).write_text(f'old {name}')
@@ -96,7 +102,30 @@ cache = out / 'world-cache'
 recorded = fake_cache(cache, {'digests': base})
 assert iwc.plan(base, recorded, cache, False, 'z') == ('up_to_date', [])
 assert iwc.plan(base, recorded, cache, True, 'z') == ('full', iwc.POST)
-lights_only = digests(sources={'outdoor-light-profiles.json': 'x'})
+for invalid in (None, {}, [], dict(iwc.CACHE_VERSIONS, scene=True)):
+    malformed = dict(recorded,inputs=dict(inputs,cache_versions=invalid))
+    assert iwc.plan(base,malformed,cache,False,'z') == ('full',iwc.POST)
+(cache / 'lights/native-fixtures.bin').unlink()
+assert iwc.plan(base, recorded, cache, False, 'z') == ('partial', ['lights'])
+(cache / 'lights/native-fixtures.bin').write_bytes(b'catalog')
+# Before M2 shell ownership, scene fingerprints did not include this dependency.
+pre_ownership_inputs = iwc.gather_inputs(client, 'all', 'enUS', iwc.MAPS, None, 'z')
+pre_ownership_inputs.pop('cache_versions')
+pre_ownership_inputs['sources'].pop('m2_light_geometry.py')
+scene_sources = iwc.STEP_SOURCES['scene']
+try:
+    iwc.STEP_SOURCES['scene'] = [n for n in scene_sources if n != 'm2_light_geometry.py']
+    pre_ownership = {'inputs': pre_ownership_inputs, 'maps_built': iwc.MAPS,
+                     'digests': iwc.step_digests(pre_ownership_inputs)}
+    pre_ownership_instances = iwc.instance_digests(pre_ownership_inputs)
+    pre_ownership_instance_steps = iwc.instance_step_digests(pre_ownership_inputs)
+finally:
+    iwc.STEP_SOURCES['scene'] = scene_sources
+assert iwc.plan(base, pre_ownership, cache, False, 'z') == ('full', iwc.POST)
+assert iwc.plan(base, {'inputs': pre_ownership_inputs}, cache, False, 'z') == ('full', iwc.POST)
+assert iwc.plan(digests(versions={'scene':2}),recorded,cache,False,'z') == ('full',iwc.POST)
+assert iwc.plan(digests(sources={n:'new DLL build' for n in iwc.SOURCES}),recorded,cache,False,'z') == ('up_to_date',[])
+lights_only = digests(versions={'lights':2})
 assert iwc.plan(lights_only, recorded, cache, False, 'z') == ('partial', ['lights'])
 (cache / 'celestial/moon.fct').unlink()
 assert iwc.plan(base, recorded, cache, False, 'z') == ('partial', ['celestial'])
@@ -106,6 +135,11 @@ del old_inputs['without']
 old = fake_cache(cache, {'inputs': old_inputs})
 assert any('patch-z' in a['archive'] for a in old['inputs']['archives'])
 assert iwc.recorded_digests(old, 'z') == base and iwc.plan(base, old, cache, False, 'z') == ('up_to_date', [])
+# A falsely foreign art layer is now proven ours: preserve geometry, refresh post steps.
+included = iwc.gather_inputs(client, 'all', 'enUS', iwc.MAPS, None, '')
+misidentified = {'inputs': included, 'digests': iwc.step_digests(included)}
+assert iwc.plan(base, misidentified, cache, False, 'z') == ('partial', iwc.POST)
+assert misidentified['inputs']['without'] == ''  # planning never changes the record
 extract, previous = out / 'world-cache.extract', out / 'world-cache.previous'
 for folder in (extract, previous, cache / 'lights.previous'):
     folder.mkdir(exist_ok=True)
@@ -113,6 +147,14 @@ for folder in (extract, previous, cache / 'lights.previous'):
 code, last = run(['--client', str(client), '--output', str(cache), '--progress', 'human'])
 assert (code, last['event']) == (0, 'up_to_date'), (code, last)
 assert not previous.exists() and not (cache / 'lights.previous').exists() and (extract / 'keep').is_file()
+real_hashes = iwc.source_hashes
+before_rerun = {p:(p.read_bytes(),p.stat().st_mtime_ns) for p in cache.rglob('*') if p.is_file()}
+try:
+    iwc.source_hashes = lambda: {name:'another source build' for name in iwc.SOURCES}
+    assert run(['--client',str(client),'--output',str(cache)])[1]['event'] == 'up_to_date'
+    assert before_rerun == {p:(p.read_bytes(),p.stat().st_mtime_ns) for p in cache.rglob('*') if p.is_file()}
+finally:
+    iwc.source_hashes = real_hashes
 assert iwc.side_folders(cache)[:2] == [out / 'world-cache.staging', previous]
 (cache / 'install-manifest.json').write_text(json.dumps({'digests': base, 'problems': [], 'maps_built': iwc.MAPS}))
 real_total = iwc.total_memory
@@ -122,10 +164,16 @@ code, last = run(['--client', str(client), '--output', str(cache), '--without', 
 iwc.total_memory = real_total
 assert (code, last['event'], last['stage']) == (2, 'failed', 'preflight'), last  # the foreign z is an input
 
-# 2b. A cache built with the 0.3.183 scene/fog builders stays up to date when its reports cover every
+# 2b. Historical source-equivalence migration remains readable for old manifests.
+legacy_inputs = dict(inputs)
+legacy_inputs.pop('cache_versions')
+legacy_base = iwc.step_digests(legacy_inputs)
+legacy_lights_only = iwc.step_digests(dict(legacy_inputs, sources=dict(legacy_inputs['sources'], **{'emitter_pin_report.py':'x'})))
+# A cache built with the 0.3.183 scene/fog builders stays up to date when its reports cover every
 # tile and record no oversized MOGP; anything else is a full rebuild, other stale inputs still count.
 def built_with(sources, overrun=False, report=True):
     old_inputs = iwc.gather_inputs(client, 'all', 'enUS', iwc.MAPS, None, 'z')
+    old_inputs.pop('cache_versions')
     old_inputs['sources'] = dict(old_inputs['sources'], **sources)
     recorded = fake_cache(cache, {'inputs': old_inputs, 'digests': iwc.step_digests(old_inputs)})
     (cache / 'fog/manifest.json').write_text(json.dumps({'unsupported': {}}))
@@ -145,24 +193,27 @@ assert set(v183) == {'world_scene_builder.py', 'regional_fog_builder.py'} and se
 # A continent cache recorded with main's scene, lights and placement builders (before the instance maps) is up to
 # date: lights, fog and celestial come out the same, so none of their digests goes stale, and no report check is needed.
 assert all(iwc.SOURCE_EQUIVALENTS[n][h] is False for n, h in MAIN.items())
-assert iwc.plan(base, built_with(MAIN, report=False), cache, False, 'z') == ('up_to_date', [])
-assert iwc.plan(base, built_with(dict(MAIN, **{'m2_visibility.py': 'f' * 64})), cache, False, 'z')[0] == 'full'
-assert iwc.plan(lights_only, built_with(MAIN), cache, False, 'z') == ('partial', ['lights'])
+assert iwc.plan(legacy_base, built_with(MAIN, report=False), cache, False, 'z') == ('up_to_date', [])
+assert iwc.plan(legacy_base, built_with(dict(MAIN, **{'m2_visibility.py': 'f' * 64})), cache, False, 'z')[0] == 'full'
+assert iwc.plan(legacy_lights_only, built_with(MAIN), cache, False, 'z') == ('partial', ['lights'])
 # 0.3.193's scene builder, mpq.py and client_archives.py: up to date without any report check (they stopped where 0.3.194 differs).
 for kw in [{}, {'report': False}, {'overrun': True}]:
-    assert iwc.plan(base, built_with(v193, **kw), cache, False, 'z') == ('up_to_date', []), kw
-assert iwc.plan(base, built_with(dict(v193, **{'m2_visibility.py': 'f' * 64})), cache, False, 'z')[0] == 'full'
+    assert iwc.plan(legacy_base, built_with(v193, **kw), cache, False, 'z') == ('up_to_date', []), kw
+assert iwc.plan(legacy_base, built_with(dict(v193, **{'m2_visibility.py': 'f' * 64})), cache, False, 'z')[0] == 'full'
 mixed = dict(v193, **{'world_scene_builder.py': v183['world_scene_builder.py']})   # 0.3.183 needs clamp_free
-assert iwc.plan(base, built_with(mixed), cache, False, 'z') == ('up_to_date', [])
-assert iwc.plan(base, built_with(mixed, overrun=True), cache, False, 'z')[0] == 'full'
-assert iwc.plan(base, built_with(v183), cache, False, 'z') == ('up_to_date', [])
-assert iwc.plan(base, built_with(v183, overrun=True), cache, False, 'z')[0] == 'full'
-assert iwc.plan(base, built_with(v183, report=False), cache, False, 'z')[0] == 'full'
-assert iwc.plan(base, built_with(dict(v183, **{'world_scene_builder.py': 'f' * 64})), cache, False, 'z')[0] == 'full'
-assert iwc.plan(lights_only, built_with(v183), cache, False, 'z') == ('partial', ['lights'])
+assert iwc.plan(legacy_base, built_with(mixed), cache, False, 'z') == ('up_to_date', [])
+assert iwc.plan(legacy_base, built_with(mixed, overrun=True), cache, False, 'z')[0] == 'full'
+assert iwc.plan(legacy_base, built_with(v183), cache, False, 'z') == ('up_to_date', [])
+assert iwc.plan(legacy_base, built_with(v183, overrun=True), cache, False, 'z')[0] == 'full'
+assert iwc.plan(legacy_base, built_with(v183, report=False), cache, False, 'z')[0] == 'full'
+assert iwc.plan(legacy_base, built_with(dict(v183, **{'world_scene_builder.py': 'f' * 64})), cache, False, 'z')[0] == 'full'
+assert iwc.plan(legacy_lights_only, built_with(v183), cache, False, 'z') == ('partial', ['lights'])
 recorded = built_with(v183)
 (cache / 'Azeroth/2_2.fg3').write_text('resumed after a kill')                    # no report covers it
-assert iwc.plan(base, recorded, cache, False, 'z')[0] == 'full'
+assert iwc.plan(legacy_base, recorded, cache, False, 'z')[0] == 'full'
+# All unversioned data must rebuild once, even an otherwise equivalent legacy build.
+for prior in (MAIN, v183, v193, {}):
+    assert iwc.plan(base, built_with(prior), cache, False, 'z') == ('full', iwc.POST)
 # A few unreadable WMOs are tolerated and reported; more than 5% (or a tile short) is a problem.
 fog_staging = out / 'fog-staging'
 for unreadable, tiles, problem in [(1, 1, False), (6, 1, True), (0, 0, True)]:
@@ -292,7 +343,7 @@ if stock:
     assert (stock / 'data/patch-z.mpq').is_file()                                  # installed after the build
     assert not any('patch-z' in a['archive'] or 'enus-z' in a['archive'] for a in now['archives'])
     assert [a['archive'] for a in now['archives']] == [a['archive'] for a in manifest['inputs']['archives']]
-    as_built = iwc.step_digests(dict(now, sources=manifest['inputs']['sources']))
+    as_built = iwc.step_digests({k:v for k,v in dict(now, sources=manifest['inputs']['sources']).items() if k != 'cache_versions'})
     assert iwc.recorded_digests(manifest, 'z') == as_built                          # the chain alone is not stale
     stale = sorted(n for n, h in manifest['inputs']['sources'].items() if now['sources'].get(n) != h)
     print('stock test client: chain unchanged under patch-z; sources changed since its build:', ', '.join(stale))
@@ -304,12 +355,12 @@ inputs = iwc.gather_inputs(client, 'all', 'enUS', [], None, 'z')
 inst = iwc.instance_digests(inputs)
 assert list(inst) == instance_maps.KEYS and len(set(inst.values())) == 6 and inst == iwc.instance_digests(inputs)
 assert iwc.instance_digests(dict(inputs, locale='deDE')) != inst
-# Independent of the continents: fog, celestial and tile-range inputs leave them alone; lights and scene sources count.
-def inst_with(**sources):
-    return iwc.instance_digests(dict(inputs, sources=dict(inputs['sources'], **sources)))
-assert inst_with(**{'regional_fog_builder.py': 'x', 'forest_regions.inc': 'x', 'build_celestial_disc_assets.py': 'x'}) == inst
-assert all(inst_with(**{n: 'x'}) != inst for n in ['world_scene_builder.py', 'world_lights_builder.py', 'world_light_placements.py',
-                                                    'validate_world_cache.py', 'instance_maps.py'])
+# Independent of DLL/source builds and continent-only revisions.
+assert iwc.instance_digests(dict(inputs, sources={n:'another build' for n in iwc.SOURCES})) == inst
+def inst_with(**versions):
+    return iwc.instance_digests(dict(inputs, cache_versions=dict(inputs['cache_versions'], **versions)))
+assert inst_with(fog=2,celestial=2) == inst
+assert all(inst_with(**{n:2}) != inst for n in ('scene','lights','instances','validation'))
 assert digests() == base                                                       # the continents never see the layer
 os.rename(client / 'Data/PATCH-3.mpq', client / 'Data/patch-3.MPQ')
 assert iwc.instance_digests(iwc.gather_inputs(client, 'all', 'enUS', [], None, 'z')) == inst   # name case, our art layer
@@ -346,13 +397,14 @@ class FakeStep:
         return {'step': self.name, 'exit': 0}
 
 
-built_groups, fail_group = [], []
+built_groups, fail_group, called_steps = [], [], []
 
 
 def fake_run_parallel(specs, jobs, budget=float('inf')):
     """Stand-ins for the builders: a tile and a unique model per map, a .fgl per map, a validation report."""
     steps = []
     for name, args, log, _, _ in specs:
+        called_steps.append(name)
         args = [str(a) for a in args]
         staging = Path(args[args.index('--output') + 1]) if '--output' in args else None
         if name.startswith('instances ') and name.split()[1] in instance_maps.KEYS:
@@ -372,6 +424,7 @@ def fake_run_parallel(specs, jobs, budget=float('inf')):
                 assert (cache_ / m / '1_1.fg3').is_file()
                 (staging / f'{m}.fgl').parent.mkdir(parents=True, exist_ok=True)
                 (staging / f'{m}.fgl').write_text('lights ' + m)
+            (staging / 'native-fixtures.bin').write_bytes(b'instance native fixture catalog')
             (staging / args[args.index('--manifest') + 1]).write_text(json.dumps({'maps': [{'map': m} for m in maps]}))
         elif name == 'instances validate':
             Path(args[args.index('--report') + 1]).write_text('{}')
@@ -390,6 +443,7 @@ shutil.rmtree(istaging, ignore_errors=True)
 
 def inst_run(spec, *extra):
     built_groups.clear()
+    called_steps.clear()
     return run(['--client', str(client), '--output', str(icache), '--instances', spec, '--jobs', '2', *extra])
 
 
@@ -435,6 +489,18 @@ assert (code, last['built'], last['kept']) == (0, ['wotlk-raids'], ['classic-rai
 assert list(json.loads((icache / iwc.INSTANCE_MANIFEST).read_text())['groups']) == ['classic-raids', 'wotlk-raids']
 assert [m['map'] for m in json.loads((icache / 'lights' / iwc.INSTANCE_MANIFEST).read_text())['maps']] == raids + wotlk
 assert iwc.plan(base, recorded, icache, False, 'z') == ('up_to_date', [])
+# Existing selected groups must rebuild their geometry, including legacy combined-only records.
+for with_steps in (False, True):
+    stale = iwc.read_json(icache / iwc.INSTANCE_MANIFEST)
+    for k, group in stale['groups'].items():
+        group['digest'] = pre_ownership_instances[k]
+        group.pop('digests', None)
+        if with_steps:
+            group['digests'] = pre_ownership_instance_steps[k]
+    (icache / iwc.INSTANCE_MANIFEST).write_text(json.dumps(stale))
+    code, last = inst_run('classic-raids,wotlk-raids')
+    assert (code, last['built'], last['kept']) == (0, ['classic-raids', 'wotlk-raids'], []), last
+    assert set(called_steps) == {'instances classic-raids', 'instances wotlk-raids', 'instances lights', 'instances validate'}, called_steps
 # --instances-plan is a dry run: it names what would be built and changes nothing
 before_plan = sorted(p.relative_to(icache).as_posix() for p in icache.rglob('*'))
 code, last = inst_run('classic-raids,tbc-raids', '--instances-plan')
@@ -449,6 +515,55 @@ unique = icache / 'models' / (key_of('unique-' + raids[0]).hex() + '.fgs')
 assert unique.read_text().endswith(' rebuilt') and (icache / 'models' / (SHARED.hex() + '.fgs')).read_text() == 'model ' + SHARED.hex()
 assert not (icache / 'models' / (CONTINENT_ONLY.hex() + '.fgs')).read_text().endswith(' rebuilt')
 BUILD = ''
+# Light-only changes reuse every geometry/model file; validation-only changes run no builder.
+original_versions = iwc.CACHE_VERSIONS
+unchanged = {p: (p.read_bytes(), p.stat().st_mtime_ns, p.stat().st_ino)
+             for m in raids + wotlk for p in (icache / m).glob('*.fg3')}
+unchanged[unique] = (unique.read_bytes(), unique.stat().st_mtime_ns, unique.stat().st_ino)
+shared_path = icache / 'models' / (SHARED.hex() + '.fgs')
+unchanged[shared_path] = (shared_path.read_bytes(), shared_path.stat().st_mtime_ns, shared_path.stat().st_ino)
+try:
+    iwc.CACHE_VERSIONS = dict(original_versions, lights=2)
+    assert inst_run('2 6')[1]['built'] == ['classic-raids', 'wotlk-raids']
+    assert built_groups == [] and called_steps == ['instances lights', 'instances validate'], called_steps
+    assert all((p.read_bytes(), p.stat().st_mtime_ns, p.stat().st_ino) == value for p, value in unchanged.items())
+    light_versions = dict(iwc.CACHE_VERSIONS)
+    iwc.CACHE_VERSIONS = dict(light_versions, validation=2)
+    light_times = {p: p.stat().st_mtime_ns for p in (icache / 'lights').glob('*.fgl')}
+    assert inst_run('2 6')[1]['built'] == ['classic-raids', 'wotlk-raids']
+    assert built_groups == [] and called_steps == ['instances validate'], called_steps
+    assert all(p.stat().st_mtime_ns == t for p, t in light_times.items())
+    assert all((p.read_bytes(), p.stat().st_mtime_ns, p.stat().st_ino) == value for p, value in unchanged.items())
+    # Adding a new group alongside a light update must preserve shared models of the reused groups.
+    iwc.CACHE_VERSIONS = dict(light_versions, lights=3)
+    assert inst_run('2 4 6')[1]['built'] == ['classic-raids', 'tbc-raids', 'wotlk-raids']
+    assert built_groups == ['tbc-raids']
+    assert all((p.read_bytes(), p.stat().st_mtime_ns, p.stat().st_ino) == value for p, value in unchanged.items())
+finally:
+    iwc.CACHE_VERSIONS = original_versions
+assert inst_run('2 6')[0] == 0 and not built_groups
+# Correcting ownership must also preserve instance meshes after continent inputs are replaced.
+continent_record = iwc.read_json(icache / 'install-manifest.json')
+with_art = dict(inputs, without='', archives=[*inputs['archives'], {'archive': 'Data/patch-z.mpq', 'bytes': 1, 'mtime_ns': 1}])
+(icache / 'install-manifest.json').write_text(json.dumps({'inputs': with_art, 'digests': iwc.step_digests(with_art)}))
+misidentified = iwc.read_json(icache / iwc.INSTANCE_MANIFEST)
+for k, r in misidentified['groups'].items():
+    r['digest'] = iwc.instance_digests(with_art)[k]
+    r.pop('digests', None)
+(icache / iwc.INSTANCE_MANIFEST).write_text(json.dumps(misidentified))
+rebased = iwc.rebase_instance_scenes(icache, 'z')
+assert all(r['digests']['scene'] == iwc.instance_step_digests(inputs)[k]['scene'] for k, r in rebased['groups'].items())
+(icache / iwc.INSTANCE_MANIFEST).write_text(json.dumps(rebased))
+(icache / 'install-manifest.json').write_text(json.dumps(continent_record))
+assert inst_run('2 6')[0] == 0 and not built_groups
+assert called_steps == ['instances lights', 'instances validate'], called_steps
+# Upgrade legacy metadata on a current cache, without any builder or validator.
+legacy = iwc.read_json(icache / iwc.INSTANCE_MANIFEST)
+for record_ in legacy['groups'].values():
+    record_.pop('digests')
+(icache / iwc.INSTANCE_MANIFEST).write_text(json.dumps(legacy))
+assert inst_run('2 6')[1]['event'] == 'up_to_date' and not called_steps
+assert all('digests' in r for r in iwc.read_json(icache / iwc.INSTANCE_MANIFEST)['groups'].values())
 # a group with missing folders is built again; --force rebuilds the selected ones
 shutil.rmtree(icache / raids[0])
 assert inst_run('classic-raids,wotlk-raids')[1]['built'] == ['classic-raids']

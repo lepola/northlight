@@ -6,12 +6,15 @@
 // lock the game writes through) the mapped pointer is read as before. thread_local: only the replay thread writes buffers.
 #include <cstdint>
 namespace NorthlightReplayCopies {
-struct UnlockSource {const unsigned char* bytes=nullptr;std::uint32_t off=0,size=0;};
+struct UnlockSource {const unsigned char* bytes=nullptr;std::uint32_t off=0,size=0;const void* target=nullptr;bool skipped=false;};
 inline thread_local UnlockSource unlockSource;
 class UnlockSourceScope {
     UnlockSource saved_;
 public:
-    UnlockSourceScope(const unsigned char* bytes,std::uint32_t off,std::uint32_t size):saved_(unlockSource){unlockSource={bytes,off,size};}
+    // A replay naming its exact target must check skipped() after Lock and omit memcpy/Unlock
+    // when the tracked wrapper proves the upload identical without a driver lock.
+    UnlockSourceScope(const unsigned char* bytes,std::uint32_t off,std::uint32_t size,const void* target=nullptr):saved_(unlockSource){unlockSource={bytes,off,size,target,false};}
+    bool skipped()const{return unlockSource.skipped;}
     ~UnlockSourceScope(){unlockSource=saved_;}
     UnlockSourceScope(const UnlockSourceScope&)=delete;UnlockSourceScope& operator=(const UnlockSourceScope&)=delete;
 };

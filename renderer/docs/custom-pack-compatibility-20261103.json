@@ -1,0 +1,449 @@
+{
+  "date": "2026-11-03",
+  "base_commit": "c4eb05c2b2d9768074fd179887489165d3fb1939",
+  "resolved_scenarios": [
+    "test_dalaran_candle_geometry.py",
+    "test_emitter_pin_report.py",
+    "test_model_light_attachments.py",
+    "test_point_transmission_cache.py",
+    "test_spell_asset_manifest_client.py",
+    "test_wmo_lamp_emission.py",
+    "test_wmo_lamp_runtime.py"
+  ],
+  "focused": {
+    "tests": 12,
+    "pass": 12,
+    "fail": 0,
+    "skip": 0,
+    "results_sha256": "cff51a05c81cb6d4f6a9d1d7b49624705ed3a908df8c41ec9bea642c81b16e8e"
+  },
+  "suite": {
+    "consolidated": {
+      "SKIP": 225,
+      "PASS": 260
+    },
+    "fail": 0,
+    "timeout": 0,
+    "initial_full_run": {
+      "pass": 259,
+      "fail": 1,
+      "skip": 225,
+      "failure": "test_unlisted_archive.py",
+      "reason": "cache source fingerprint changed during this task while its two installation calls were running",
+      "results_sha256": "ec7eec45add18e90a77b3f559081a68313398fedf87359c79b8c30223106e028"
+    },
+    "followup_result": "Unlisted archive and eleven related scripts pass on stable final source."
+  },
+  "unit_boundary_cases": 9,
+  "texture_header_corpus": {
+    "scope": "unique names from the prior active anomalous-texture audit, resolved again through the installed chain",
+    "names": 69243,
+    "counts": {
+      "accepted": 69243,
+      "mips": 620783
+    },
+    "content_identity": "2160dad51859a948f1b0a2d925ef2cd32b8c54afb626a1f582a1e2d4511a68db",
+    "errors": []
+  },
+  "client_files": {
+    "unchanged": true,
+    "files": 39,
+    "mpq_archives": 37,
+    "bytes": 36333778296,
+    "manifest_sha256": "9f4659434085815c90979ed5b10fb1ee32bc22f8fb75e51477cebf0f7cf75077"
+  },
+  "production_dll": {
+    "version": "0.3.218",
+    "source_identity": "0258e1f76b8eb21889e0de0cdb583e8f7c67a5c8df66d90bd234f2211ba8645a",
+    "sha256": "1e716bbf0be51152505c57d7da7313a8f9988991f43560d79c1da2a84c13b0de",
+    "bytes": 9097728,
+    "runtime_sources_changed": false,
+    "package_check_pass": true
+  },
+  "qa_report": {
+    "renderer": "0.3.217",
+    "source_identity": "547595df8094837b3c879a9bff2df1a0790ecb8cff6f0db867ea8ff7681ee5bc",
+    "log_mtime_utc": "2026-11-03T09:23:22+00:00",
+    "log_sha256": "c662d62f32d834a56e21b15bf7cf59b718c29f928241508d05d2db0567ba5fe0",
+    "resolution": [
+      2560,
+      1440
+    ],
+    "gpu": "NVIDIA GeForce RTX 3080",
+    "blp_guard_startup_active": true,
+    "late_regular_intervals": [
+      {
+        "frame": 2044.0,
+        "samples": 120.0,
+        "meanMs": 31.269,
+        "p50Ms": 30.894,
+        "p95Ms": 38.589,
+        "fps": 31.98,
+        "complete": true,
+        "reason": null
+      },
+      {
+        "frame": 2164.0,
+        "samples": 120.0,
+        "meanMs": 31.23,
+        "p50Ms": 30.946,
+        "p95Ms": 36.216,
+        "fps": 32.02,
+        "complete": true,
+        "reason": null
+      },
+      {
+        "frame": 2284.0,
+        "samples": 120.0,
+        "meanMs": 31.21,
+        "p50Ms": 31.225,
+        "p95Ms": 35.041,
+        "fps": 32.04,
+        "complete": true,
+        "reason": null
+      },
+      {
+        "frame": 2404.0,
+        "samples": 120.0,
+        "meanMs": 31.356,
+        "p50Ms": 31.316,
+        "p95Ms": 37.201,
+        "fps": 31.89,
+        "complete": true,
+        "reason": null
+      },
+      {
+        "frame": 2524.0,
+        "samples": 120.0,
+        "meanMs": 31.247,
+        "p50Ms": 31.52,
+        "p95Ms": 39.149,
+        "fps": 32.0,
+        "complete": true,
+        "reason": null
+      },
+      {
+        "frame": 2644.0,
+        "samples": 120.0,
+        "meanMs": 31.177,
+        "p50Ms": 31.157,
+        "p95Ms": 38.459,
+        "fps": 32.07,
+        "complete": true,
+        "reason": null
+      },
+      {
+        "frame": 2775.0,
+        "samples": 120.0,
+        "meanMs": 30.949,
+        "p50Ms": 30.858,
+        "p95Ms": 36.634,
+        "fps": 32.31,
+        "complete": true,
+        "reason": null
+      }
+    ],
+    "late_gpu": {
+      "Effects": {
+        "samples": 7,
+        "mean": 5.511857142857143,
+        "min": 4.566,
+        "max": 6.902
+      },
+      "GameScene": {
+        "samples": 7,
+        "mean": 25.287,
+        "min": 24.999,
+        "max": 26.129
+      },
+      "tail": {
+        "samples": 7,
+        "mean": 0.045142857142857144,
+        "min": 0.037,
+        "max": 0.06
+      },
+      "total": {
+        "samples": 7,
+        "mean": 30.843999999999998,
+        "min": 29.818,
+        "max": 31.967
+      }
+    },
+    "late_effects": {
+      "AO": {
+        "samples": 7,
+        "mean": 0.48614285714285715,
+        "min": 0.485,
+        "max": 0.489
+      },
+      "AOBlur": {
+        "samples": 7,
+        "mean": 0.12357142857142857,
+        "min": 0.119,
+        "max": 0.13
+      },
+      "AOBlurSetup": {
+        "samples": 7,
+        "mean": 0.0,
+        "min": 0.0,
+        "max": 0.0
+      },
+      "ActorShadow": {
+        "samples": 7,
+        "mean": 0.04714285714285714,
+        "min": 0.043,
+        "max": 0.054
+      },
+      "ActorTiles": {
+        "samples": 7,
+        "mean": 0.009285714285714286,
+        "min": 0.009,
+        "max": 0.01
+      },
+      "CelestialDiscs": {
+        "samples": 7,
+        "mean": 0.0,
+        "min": 0.0,
+        "max": 0.0
+      },
+      "CelestialRing": {
+        "samples": 7,
+        "mean": 0.0,
+        "min": 0.0,
+        "max": 0.0
+      },
+      "CelestialVeil": {
+        "samples": 7,
+        "mean": 0.010571428571428572,
+        "min": 0.01,
+        "max": 0.011
+      },
+      "Fog": {
+        "samples": 7,
+        "mean": 0.0,
+        "min": 0.0,
+        "max": 0.0
+      },
+      "FogBlur": {
+        "samples": 7,
+        "mean": 0.06485714285714286,
+        "min": 0.063,
+        "max": 0.066
+      },
+      "FogClouds": {
+        "samples": 7,
+        "mean": 0.016142857142857143,
+        "min": 0.016,
+        "max": 0.017
+      },
+      "FogMarch": {
+        "samples": 7,
+        "mean": 0.02557142857142857,
+        "min": 0.024,
+        "max": 0.027
+      },
+      "FogTemporal": {
+        "samples": 7,
+        "mean": 0.03542857142857143,
+        "min": 0.035,
+        "max": 0.036
+      },
+      "GI": {
+        "samples": 7,
+        "mean": 0.07457142857142857,
+        "min": 0.074,
+        "max": 0.075
+      },
+      "LocalLights": {
+        "samples": 7,
+        "mean": 0.1412857142857143,
+        "min": 0.14,
+        "max": 0.146
+      },
+      "MaterialDetail": {
+        "samples": 7,
+        "mean": 0.10114285714285715,
+        "min": 0.1,
+        "max": 0.102
+      },
+      "PointLight": {
+        "samples": 7,
+        "mean": 1.4288571428571428,
+        "min": 1.324,
+        "max": 1.996
+      },
+      "PointShadow": {
+        "samples": 7,
+        "mean": 1.202,
+        "min": 0.511,
+        "max": 1.912
+      },
+      "PreCelestial": {
+        "samples": 7,
+        "mean": 0.03514285714285714,
+        "min": 0.035,
+        "max": 0.036
+      },
+      "RemovalSmooth": {
+        "samples": 7,
+        "mean": 0.6905714285714285,
+        "min": 0.594,
+        "max": 1.254
+      },
+      "ShadowFilter": {
+        "samples": 7,
+        "mean": 0.2134285714285714,
+        "min": 0.212,
+        "max": 0.215
+      },
+      "StaticCasterUpload": {
+        "samples": 7,
+        "mean": 0.0,
+        "min": 0.0,
+        "max": 0.0
+      },
+      "SunActor": {
+        "samples": 7,
+        "mean": 0.011714285714285714,
+        "min": 0.009,
+        "max": 0.014
+      },
+      "SunFar": {
+        "samples": 7,
+        "mean": 0.09042857142857143,
+        "min": 0.0,
+        "max": 0.318
+      },
+      "SunNear": {
+        "samples": 7,
+        "mean": 0.018428571428571426,
+        "min": 0.018,
+        "max": 0.019
+      },
+      "SunNearReplays": {
+        "samples": 7,
+        "mean": 0.2632857142857143,
+        "min": 0.257,
+        "max": 0.267
+      },
+      "TemporalLight": {
+        "samples": 7,
+        "mean": 0.04328571428571428,
+        "min": 0.043,
+        "max": 0.044
+      },
+      "WorldComposite": {
+        "samples": 7,
+        "mean": 0.26185714285714284,
+        "min": 0.261,
+        "max": 0.263
+      },
+      "WorldLighting": {
+        "samples": 7,
+        "mean": 0.038,
+        "min": 0.037,
+        "max": 0.039
+      },
+      "WorldNormals": {
+        "samples": 7,
+        "mean": 0.07757142857142857,
+        "min": 0.077,
+        "max": 0.079
+      },
+      "WorldUpload": {
+        "samples": 7,
+        "mean": 0.0,
+        "min": 0.0,
+        "max": 0.0
+      },
+      "tail": {
+        "samples": 7,
+        "mean": 0.0,
+        "min": 0.0,
+        "max": 0.0
+      },
+      "total": {
+        "samples": 7,
+        "mean": 5.511857142857143,
+        "min": 4.566,
+        "max": 6.902
+      }
+    },
+    "late_timer_overhead": {
+      "timerOverheadMs": {
+        "samples": 2,
+        "mean": 1.286,
+        "min": 1.283,
+        "max": 1.289
+      }
+    },
+    "late_material_profile": {
+      "clockReads": {
+        "samples": 7,
+        "mean": 65522.57142857143,
+        "min": 64292,
+        "max": 67812
+      },
+      "cpuExclusiveMs": {
+        "samples": 7,
+        "mean": 7.436914285714286,
+        "min": 7.0342,
+        "max": 7.982
+      }
+    },
+    "long_lock_count": 9,
+    "capture_metadata_fps_eligible": false,
+    "paired_33fps_baseline_available": false,
+    "offline_composite_replay": [
+      {
+        "backend": "dxvk2",
+        "capture": "telredor-composite",
+        "old_ms": 0.169568,
+        "native_ms": 0.111736,
+        "ratio": 0.6589,
+        "components": 14745600,
+        "changed": 0,
+        "over_1_1024": 0,
+        "alpha_changes": 0,
+        "nonfinite": 0,
+        "max_abs": 0,
+        "rmse": 0,
+        "depth_reconstructed": false,
+        "AO_neutral": false,
+        "constant_register_count": 79,
+        "constant_bank_stage": "unversioned",
+        "invented_fog_environment": false,
+        "neutral_composite_auxiliary_textures": true,
+        "per_source_bank_missing": true,
+        "material_inputs_complete": false,
+        "authentic_source_replay": false,
+        "whole_scene_replay": false
+      },
+      {
+        "backend": "dxvk",
+        "capture": "telredor-composite",
+        "old_ms": 0.124152,
+        "native_ms": 0.107008,
+        "ratio": 0.8619,
+        "components": 14745600,
+        "changed": 0,
+        "over_1_1024": 0,
+        "alpha_changes": 0,
+        "nonfinite": 0,
+        "max_abs": 0,
+        "rmse": 0,
+        "depth_reconstructed": false,
+        "AO_neutral": false,
+        "constant_register_count": 79,
+        "constant_bank_stage": "unversioned",
+        "invented_fog_environment": false,
+        "neutral_composite_auxiliary_textures": true,
+        "per_source_bank_missing": true,
+        "material_inputs_complete": false,
+        "authentic_source_replay": false,
+        "whole_scene_replay": false
+      }
+    ],
+    "whole_scene_replay": false
+  }
+}

@@ -28,6 +28,7 @@ bool draw(Device* d,Surface* target,Shader* ps,Texture* const (&textures)[Sample
         {D3DRS_SEPARATEALPHABLENDENABLE,FALSE},{D3DRS_COLORWRITEENABLE,7},{D3DRS_SRGBWRITEENABLE,FALSE},{D3DRS_SCISSORTESTENABLE,TRUE},
         {D3DRS_CULLMODE,D3DCULL_NONE},{D3DRS_STENCILENABLE,FALSE},{D3DRS_FOGENABLE,FALSE},{D3DRS_CLIPPLANEENABLE,0}};
     for(const auto& s:states)d->SetRenderState(s.s,s.v);
+    if(c[10][0]>1.5f)d->SetRenderState(D3DRS_SRCBLEND,D3DBLEND_ONE);
     for(unsigned k=0;k<Samplers;++k){
         d->SetTexture(k,textures[k]);
         d->SetSamplerState(k,D3DSAMP_ADDRESSU,D3DTADDRESS_CLAMP);d->SetSamplerState(k,D3DSAMP_ADDRESSV,D3DTADDRESS_CLAMP);

@@ -96,8 +96,8 @@ with Archive(client / 'Data/patch-R.MPQ') as a:
 # 1. Assets: the unlisted archive keeps its place in the priority order.
 assets = Assets(client, 'all', 'enUS')
 try:
-    assert [p.name for p in assets.paths] == ['common.MPQ', 'patch.MPQ', 'patch-3.MPQ', 'patch-R.MPQ', 'patch-S.MPQ', 'patch-U.MPQ',
-                                              'locale-enUS.MPQ']
+    assert [p.name for p in assets.paths] == ['common.MPQ', 'patch.MPQ', 'patch-3.MPQ', 'locale-enUS.MPQ',
+                                              'patch-R.MPQ', 'patch-S.MPQ', 'patch-U.MPQ']
     assert assets.unlisted == ['Data/patch-R.MPQ'] and assets.unreadable == ['Data/patch-T.MPQ'], (assets.unlisted, assets.unreadable)
     assert assets.read('DBFilesClient\\Light.dbc') == b'patch-S'                    # a later listed archive still wins
     assert assets.read('dbfilesclient/map.dbc') == b'patch-R'                       # patch-R replaces common's
@@ -187,12 +187,13 @@ for tile, height in [('32_48', 10.), ('33_48', 20.)]:
     assert struct.unpack_from('<8f', terrain, 20)[2] == height, f'the terrain of {tile} is not patch-R\'s'
 
 # 3. install_world_cache end to end; the post steps are stand-ins that write what the orchestrator checks.
-STAND_IN = '''import json, sys
+STAND_IN = '''import json, struct, sys
 from pathlib import Path
 a, name = sys.argv[1:], Path(__file__).name
 opt = lambda k: Path(a[a.index(k) + 1])
 if name == 'world_lights_builder.py':
     (opt('--output')).mkdir(parents=True, exist_ok=True); (opt('--output') / 'Azeroth.fgl').write_text('lights')
+    (opt('--output') / 'native-fixtures.bin').write_bytes(struct.pack('<4s5I', b'NLF1', 2, 48, 0, 52, 0))
 elif name == 'regional_fog_builder.py':
     (opt('--output')).mkdir(parents=True, exist_ok=True)
     (opt('--output') / 'manifest.json').write_text(json.dumps({'maps': {'Azeroth': {'tiles': 2, 'expected': 2}},
@@ -208,6 +209,7 @@ stand_ins.mkdir(exist_ok=True)
 for name in ['world_lights_builder.py', 'regional_fog_builder.py', 'build_celestial_disc_assets.py', 'validate_world_cache.py']:
     (stand_ins / name).write_text(STAND_IN)
 tracked = fp.tracked
+cache_versions = dict(iwc.CACHE_VERSIONS)
 iwc.fp.tracked = lambda name: stand_ins / name if (stand_ins / name).is_file() else tracked(name)
 iwc.total_memory = iwc.available_memory = lambda: 16 << 30
 cache = out / 'world-cache'
@@ -236,8 +238,11 @@ try:
     manifest = json.loads((cache / 'install-manifest.json').read_text())
     assert [w['archive'] for w in manifest['tolerated']['archive_warnings']] == ['Data/patch-R.MPQ', 'Data/patch-T.MPQ']
     assert not manifest['problems'] and (cache / 'Azeroth/33_48.fg3').is_file()
-    # A lights-only update runs no scene builder: the recorded warnings stay, and are shown again.
+    # Source-only changes retain a compatible cache; a version change rebuilds only lights.
     (stand_ins / 'world_lights_builder.py').write_text(STAND_IN + '# changed\n')
+    code, last, text = run()
+    assert (code, last['event']) == (0, 'up_to_date'), text[-3000:]
+    iwc.CACHE_VERSIONS['lights'] += 1
     code, last, text = run()
     assert (code, last['event'], last.get('steps')) == (0, 'done', ['lights']), text[-3000:]
     assert text.count(unlisted) == 1 and text.count(unopened) == 1, text
@@ -245,4 +250,6 @@ try:
     assert [w['archive'] for w in manifest['tolerated']['archive_warnings']] == ['Data/patch-R.MPQ', 'Data/patch-T.MPQ']
 finally:
     iwc.fp.tracked = tracked
+    iwc.CACHE_VERSIONS.clear()
+    iwc.CACHE_VERSIONS.update(cache_versions)
 print('unlisted archive: probed, read, reported; scene build and install_world_cache pass with the warning')

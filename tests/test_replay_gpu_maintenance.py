@@ -19,6 +19,13 @@ harness=gpu.fixture+r'''
 '''+gpu.helpers+r'''
 // Inspect the actual stable nodes and map; no production testing hooks.
 static void structure(const NorthlightReplayGPU::Cache& cache);
+static const NorthlightReplayGPU::Cache::Entry* matchingEntry(const NorthlightReplayGPU::Cache& cache,const Mesh* mesh){
+ const auto key=mesh->sourceIdentity?mesh->sourceIdentity->hash:std::uint64_t(reinterpret_cast<std::uintptr_t>(mesh));
+ const auto range=cache.entries.equal_range(key);const NorthlightReplayGPU::Cache::Entry* found=nullptr;
+ for(auto i=range.first;i!=range.second;++i){const auto& entry=*i->second;
+  if(mesh->sourceIdentity?NorthlightSourceIdentity::same(entry.identity,mesh->sourceIdentity):!entry.identity&&entry.owner.lock().get()==mesh){assert(!found);found=&entry;}}
+ return found;
+}
 static void limitsAndFailures(){
  assert(NorthlightReplayGPU::Cache::entryLimit()==4096);
  {NorthlightReplayGPU::Cache c;Device d;Bindings b;std::vector<Owner> ms;for(unsigned i=0;i<17;++i)ms.push_back(sized(256*1024,i));
@@ -65,14 +72,18 @@ static void byteAndSlotPressure(){
   c.beginFrame();assert(!gpuBind(c,d,ms.back(),b));assert(c.stats().evictions==1);structure(c);
   c.clear();structure(c);assert(!alive);
  }
- {NorthlightReplayGPU::Cache c;Device d;Bindings b;std::vector<Owner> ms;for(unsigned i=0;i<18;++i)ms.push_back(sized(4*MiB,i));
+ {NorthlightReplayGPU::Cache c;Device d;Bindings b;std::vector<Owner> ms;
+  const size_t metadata=NorthlightReplayGPU::Cache::QueueMetadata,payload=(64*MiB-18*metadata)/16;
+  for(unsigned i=0;i<18;++i)ms.push_back(sized(payload,i));
   c.beginFrame();for(auto& m:ms)assert(!gpuBind(c,d,m,b,false));
   for(unsigned f=0;f<16;++f){c.beginFrame();for(unsigned i=0;i<16;++i){gpuBind(c,d,ms[i],b,false);b.clear();}structure(c);}
-  assert(c.bytes()==64*MiB);c.beginFrame();for(unsigned i=0;i<16;++i){assert(gpuBind(c,d,ms[i],b,false));b.clear();}
+  assert(c.bytes()==16*payload&&c.chargedBytes()==64*MiB);c.beginFrame();for(unsigned i=0;i<16;++i){assert(gpuBind(c,d,ms[i],b,false));b.clear();}
   for(unsigned i=16;i<18;++i)assert(!c.bind(&d,ms[i],b.vb,b.ib,[](size_t){return false;}));
-  assert(!gpuBind(c,d,ms[16],b,false)&&!gpuBind(c,d,ms[17],b,false));structure(c);assert(c.bytes()==64*MiB&&c.stats().evictions==0);
-  auto tiny=sized(4);assert(!gpuBind(c,d,tiny,b));structure(c); // insertion needs zero payload despite full byte bank
-  c.beginFrame();assert(gpuBind(c,d,ms[16],b,false));b.clear();assert(c.bytes()==64*MiB&&c.stats().evictions>=1);structure(c);
+  assert(!gpuBind(c,d,ms[16],b,false)&&!gpuBind(c,d,ms[17],b,false));structure(c);assert(c.bytes()==16*payload&&c.chargedBytes()==64*MiB&&c.stats().evictions==0);
+  // Even an unpromoted entry needs its charged links; current entries stay protected.
+  auto tiny=sized(4);const auto rejected=c.stats().roomRejected;assert(!gpuBind(c,d,tiny,b));structure(c);
+  assert(c.stats().roomRejected==rejected+1&&!matchingEntry(c,tiny.get())&&c.chargedBytes()==64*MiB);
+  c.beginFrame();assert(gpuBind(c,d,ms[16],b,false));b.clear();assert(c.bytes()==16*payload&&c.chargedBytes()==64*MiB-metadata&&c.stats().evictions==1);structure(c);
  }
  assert(!alive);
 }
@@ -85,10 +96,10 @@ static size_t stress(){
   c.beginFrame();structure(c);std::vector<size_t> order(ms.size());for(size_t i=0;i<order.size();++i)order[i]=i;std::shuffle(order.begin(),order.end(),random);
   std::unordered_set<const Mesh*> boundThisFrame;
   for(size_t i=0;i<order.size();++i){auto& m=ms[order[i]];const bool good=gpuBind(c,d,m,b);if(boundThisFrame.count(m.get()))assert(good);if(good)boundThisFrame.insert(m.get());b.clear();++checked;
-   if(i%64==0){structure(c);for(auto& held:boundThisFrame)assert(c.entries.find(held)!=c.entries.end());}
+   if(i%64==0){structure(c);for(auto& held:boundThisFrame)assert(matchingEntry(c,held));}
    if(i%127==0){const bool again=gpuBind(c,d,m,b);assert(!good||again);b.clear();++checked;structure(c);}
   }
-  assert(c.bytes()<=64*MiB&&c.uploaded()<=4*MiB&&c.population().entries<=4096);structure(c);
+  assert(c.chargedBytes()<=64*MiB&&c.uploaded()<=4*MiB&&c.population().entries<=4096);structure(c);
  }
  c.clear();structure(c);assert(!alive);return checked;
 }
@@ -106,21 +117,29 @@ template<class C>static void benchmark(const char* version,unsigned count,bool c
 }
 static void structure(const NorthlightReplayGPU::Cache& c){
  assert((c.oldest_==nullptr)==c.entries.empty());assert((c.newest_==nullptr)==c.entries.empty());
- std::unordered_set<const void*> seen;size_t bytes=0;const NorthlightReplayGPU::Cache::Entry* previous=nullptr;
+ std::unordered_set<const void*> seen;size_t bytes=0,metadata=0,identity=0;const NorthlightReplayGPU::Cache::Entry* previous=nullptr;
  for(auto* e=c.oldest_;e;e=e->next){
   assert(seen.insert(e).second&&e->previous==previous&&e->touched<=c.frame_);
   if(previous)assert(previous->touched<=e->touched);
-  const auto found=c.entries.find(e->key);assert(found!=c.entries.end()&&found->second.get()==e);
+  const auto range=c.entries.equal_range(e->key);unsigned matches=0;for(auto i=range.first;i!=range.second;++i)matches+=i->second.get()==e;assert(matches==1);
   size_t payload=0;for(auto* v:e->vertices)if(v)payload+=static_cast<Buffer<IDirect3DVertexBuffer9,D3DVERTEXBUFFER_DESC>*>(v)->data.size();
   if(e->indices)payload+=static_cast<Buffer<IDirect3DIndexBuffer9,D3DINDEXBUFFER_DESC>*>(e->indices)->data.size();assert(payload==e->bytes);
-  bytes+=e->bytes;previous=e;
+  assert(e->metadata>=c.QueueMetadata);metadata+=e->metadata;identity+=e->metadata-c.QueueMetadata;bytes+=e->bytes;previous=e;
  }
- assert(previous==c.newest_&&seen.size()==c.entries.size()&&bytes==c.bytes_);
+ assert(previous==c.newest_&&seen.size()==c.entries.size()&&bytes==c.gpuBytes_&&bytes==c.bytes());
+ assert(bytes+metadata==c.bytes_&&c.chargedBytes()==bytes+metadata&&identity==c.stats().identityBytes);
+ assert(c.queueBytes()==c.entries.size()*c.QueueMetadata&&metadata==identity+c.queueBytes()&&c.chargedBytes()<=c.limit());
  if(c.oldest_)assert(!c.oldest_->previous);if(c.newest_)assert(!c.newest_->next);
  size_t reverse=0;const NorthlightReplayGPU::Cache::Entry* next=nullptr;
  for(auto* e=c.newest_;e;e=e->previous){assert(e->next==next&&seen.count(e));next=e;++reverse;}
  assert(next==c.oldest_&&reverse==seen.size());
+ std::unordered_set<const void*> probation;previous=nullptr;
+ for(auto* e=c.probationOldest_;e;e=e->probationNext){assert(seen.count(e)&&probation.insert(e).second&&!e->bytes&&e->probationPrevious==previous);if(previous)assert(previous->touched<=e->touched);previous=e;}
+ assert(previous==c.probationNewest_);next=nullptr;reverse=0;
+ for(auto* e=c.probationNewest_;e;e=e->probationPrevious){assert(e->probationNext==next&&probation.count(e));next=e;++reverse;}
+ assert(next==c.probationOldest_&&reverse==probation.size()&&probation.size()==c.population().probation);
  for(const auto& item:c.entries)assert(seen.count(item.second.get())&&item.first==item.second->key);
+ for(const auto& item:c.entries)assert(bool(probation.count(item.second.get()))==!item.second->bytes);
  assert(!c.stats().scanVisits&&!c.stats().scanPasses&&!c.stats().scanMemoHits);
  assert(c.stats().evictionChecks==c.stats().evictions+c.stats().roomRejected);
 }
@@ -128,14 +147,30 @@ static void stableNodesAndTouch(){
  NorthlightReplayGPU::Cache c;Device d;Bindings b;std::vector<Owner> ms;
  for(unsigned i=0;i<5;++i)ms.push_back(sized(32,i));
  c.beginFrame();for(auto& m:ms)assert(!gpuBind(c,d,m,b));
- std::vector<const void*> nodes;for(auto& m:ms)nodes.push_back(c.entries.at(m.get()).get());
- c.beginFrame();for(size_t i=0;i<ms.size();++i){assert(gpuBind(c,d,ms[i],b));b.clear();assert(c.entries.at(ms[i].get()).get()==nodes[i]);structure(c);}
+ std::vector<const void*> nodes;for(auto& m:ms){const auto* node=matchingEntry(c,m.get());assert(node);nodes.push_back(node);}
+ c.beginFrame();for(size_t i=0;i<ms.size();++i){assert(gpuBind(c,d,ms[i],b));b.clear();assert(matchingEntry(c,ms[i].get())==nodes[i]);structure(c);}
  c.beginFrame();assert(gpuBind(c,d,ms[0],b));assert(c.stats().lruMoves==1);const auto* tail=c.newest_;
  assert(gpuBind(c,d,ms[0],b)&&c.stats().lruMoves==1&&tail==c.newest_);structure(c);
  b.clear();c.clear();structure(c);assert(!alive);
 }
+static void collidingIdentityNodes(){
+ NorthlightReplayGPU::Cache c;Device d;Bindings b;
+ auto first=std::const_pointer_cast<Mesh>(sized(64,17));first->sourceIdentity=NorthlightSourceIdentity::make({10,1});
+ auto collision=std::make_shared<Mesh>(*first);collision->streams[0].bytes[0]^=1;
+ const uint64_t inverse=14886173955864302971ull,seed=1469598103934665603ull,prime=1099511628211ull;
+ const uint64_t last=(first->sourceIdentity->hash*inverse)^((seed^11)*prime);collision->sourceIdentity=NorthlightSourceIdentity::make({11,last});
+ assert(first->sourceIdentity->hash==collision->sourceIdentity->hash&&!NorthlightSourceIdentity::same(first->sourceIdentity,collision->sourceIdentity));
+ c.beginFrame();assert(!gpuBind(c,d,first,b)&&!gpuBind(c,d,collision,b));
+ const auto* a=matchingEntry(c,first.get());const auto* z=matchingEntry(c,collision.get());assert(a&&z&&a!=z);structure(c);
+ c.beginFrame();assert(gpuBind(c,d,first,b));b.clear();assert(gpuBind(c,d,collision,b));b.clear();
+ assert(matchingEntry(c,first.get())==a&&matchingEntry(c,collision.get())==z);structure(c);
+ auto reconstructed=std::make_shared<Mesh>(*first);std::weak_ptr<const Mesh> expired=first;first.reset();assert(expired.expired());
+ c.beginFrame();const auto calls=d.calls;assert(gpuBind(c,d,reconstructed,b)&&d.calls==calls&&!c.uploaded());b.clear();
+ assert(matchingEntry(c,reconstructed.get())==a&&matchingEntry(c,collision.get())==z&&c.entries.size()==2);structure(c);
+ c.clear();structure(c);assert(!alive);
+}
 int main(){NorthlightReplayGPU::createBudgetMs()=1e30; /* exact 16-attempt/4 MiB limits; time bound tested in test_replay_create_budget.cpp */
- stableNodesAndTouch();limitsAndFailures();expiryAndReuse();byteAndSlotPressure();const size_t checked=stress();std::fprintf(stderr,"PASS GPU maintenance: list/map/age/payload invariants, expiry and same-address replacement, held output references, full-slot promotion, current-frame protection, 64MiB/4MiB/16-attempt limits, 15 partial failure positions, %zu stress bind/content checks.\n",checked);
+ stableNodesAndTouch();collidingIdentityNodes();limitsAndFailures();expiryAndReuse();byteAndSlotPressure();const size_t checked=stress();std::fprintf(stderr,"PASS GPU maintenance: both lists/full-key map/age/payload/metadata invariants, colliding identities and reconstructed stable nodes, expiry and same-address replacement, held output references, full-slot promotion, current-frame protection, 64MiB/4MiB/16-attempt limits, 15 partial failure positions, %zu stress bind/content checks.\n",checked);
  for(unsigned n:{2048u,2800u,4096u,4500u}){benchmark<NorthlightReplayGPU123::Cache>("baseline123",n,false);benchmark<NorthlightReplayGPU4096Reference::Cache>("reference4096",n,false);benchmark<NorthlightReplayGPU::Cache>("production124",n,false);}
  benchmark<NorthlightReplayGPU123::Cache>("baseline123",256,true);benchmark<NorthlightReplayGPU4096Reference::Cache>("reference4096",256,true);benchmark<NorthlightReplayGPU::Cache>("production124",256,true);
 }

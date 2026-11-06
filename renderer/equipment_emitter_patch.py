@@ -5,6 +5,9 @@ source or an unsupported material is an exclusion, never a white fallback.
 """
 import math
 import struct
+from emitter_tracks import NativeTracks, pulse_for
+
+MAX_ATTACHED_SOURCES = 16
 
 
 def append_bone_lights(blob, emitters):
@@ -18,38 +21,39 @@ def append_bone_lights(blob, emitters):
         raise ValueError('Invalid original bones')
     if globals >= 32767 or globals and (global_offset < 304 or global_offset + globals * 4 > len(blob)):
         raise ValueError('Invalid global sequences')
-    if not 1 <= len(emitters) <= 2:
-        raise ValueError('At most two compact equipment sources')
+    if not 1 <= len(emitters) <= MAX_ATTACHED_SOURCES:
+        raise ValueError('At most sixteen compact attached sources')
     for source in emitters:
         if not isinstance(source['bone'], int) or not 0 <= source['bone'] < bones:
             raise ValueError('Light must use an existing source bone')
+        seen, parent = set(), source['bone']
+        while parent >= 0:
+            if parent >= bones or parent in seen:
+                raise ValueError('Invalid source bone parent chain')
+            seen.add(parent)
+            parent = struct.unpack_from('<h', blob, bone_offset+parent*88+8)[0]
         if len(source['position']) != 3 or len(source['rgb']) != 3 or not all(math.isfinite(x) for x in (*source['position'], *source['rgb'])):
             raise ValueError('Invalid source vectors')
         if max(map(abs, source['position'])) > 100 or not all(0 <= x <= 1 for x in source['rgb']) or not max(source['rgb']):
             raise ValueError('Invalid source position/colour')
-        if not 0 < source['intensity'] <= 1 or not 0 <= source['start'] < source['end'] <= 12:
+        if not 0 < source['intensity'] <= 4 or not 0 <= source['start'] < source['end'] <= 12:
             raise ValueError('Invalid source energy/range')
     out = bytearray(blob)
+    tracks = NativeTracks(out)
     def add(data):
         out.extend(b'\0' * (-len(out) % 4))
         offset = len(out)
         out.extend(data)
         return offset
-    struct.pack_into('<II', out, 20, globals + 1, add(blob[global_offset:global_offset + globals * 4] + struct.pack('<I', 1)))
-    def track(fmt, values):
-        timestamp = add(struct.pack('<I', 0))
-        key = add(struct.pack(fmt, *values))
-        times = add(struct.pack('<II', 1, timestamp))
-        keys = add(struct.pack('<II', 1, key))
-        return struct.pack('<hh4I', 0, globals, 1, times, 1, keys)
     records = []
     for source in emitters:
         record = struct.pack('<HH3f', 1, source['bone'], *source['position'])
-        for fmt, values in [('<3f', (0, 0, 0)), ('<f', (0,)), ('<3f', source['rgb']),
-                            ('<f', (source['intensity'],)), ('<f', (source['start'],)), ('<f', (source['end'],)), ('<B', (1,))]:
-            record += track(fmt, values)
+        for field, (fmt, values) in enumerate([('<3f', (0, 0, 0)), ('<f', (0,)), ('<3f', source['rgb']),
+                            ('<f', (source['intensity'],)), ('<f', (source['start'],)), ('<f', (source['end'],)), ('<B', (1,))]):
+            record += tracks.track(fmt, values, pulse=pulse_for(source, len(records)) if field == 2 else None)
         assert len(record) == 156
         records.append(record)
+    tracks.finish()
     struct.pack_into('<II', out, 264, len(records), add(b''.join(records)))
     restored = bytearray(out[:len(blob)])
     for start, end in ((20, 28), (264, 272)):

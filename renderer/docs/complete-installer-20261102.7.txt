@@ -1,0 +1,70 @@
+Northlight 0.3.216-test.20261102.7
+
+Includes all preceding changes, including the ready-envelope fast path from .6.
+The source .5 run measured 240 warm frames averaging 14.2665 ms / 70.09 FPS.
+Analysis source and limits: .local/out/performance-20261102c/report.txt.
+
+Sampler-state batching
+Eleven known states of one sampler are read in a single batch. Any unknown
+state retains the original GetSamplerState sequence.
+286 draws on the CPU benchmark: 0.015120 -> 0.003544 ms. This removes wrapper
+calls and gate acquisitions; the old cache already avoided backend calls for
+known states.
+
+Five additional CPU optimizations
+1. Reuse Deferred packet storage and vectors after flush. Texture, shader,
+   geometry and GPU-resource leases are released immediately. The pool follows
+   the existing packet limit; reset, trim and memory pressure release it.
+   286 benchmark packets: 0.381067 -> 0.029573 ms; 572 allocations -> 0 after
+   warm-up. Unused constant banks no longer require zero-initialization.
+2. Hand the same draw's immutable geometry snapshot from prepare to recordCapture.
+   This avoids a second snapshot and GetVertexDeclaration. The handoff precedes
+   geometrySource deduplication, preserving the current source revision.
+   UP benchmark, 286 packets: 0.077488 -> 0.029510 ms. This UP result must not
+   be extrapolated to the game's warm native-buffer path.
+3. Place capture constants beside the native shader constants they accompany.
+   Of 2,784 accepted variants, 1,392 become more compact and none regress:
+   196,864 -> 24,352 total float4 registers; maximum span 135 -> 16.
+   All 2,784 programs match byte for byte after reversing the register remapping.
+4. Read the first 2 and subsequent 5 render states in two mirror batches.
+   Unknown states preserve the original getter order and error handling.
+   562 batches of 5 states: 0.009743 -> 0.004024 ms.
+5. Geometry preparation receives the already checked states of the current draw,
+   removing 3-7 repeated GetRenderState calls. All 2,304 admission combinations
+   match. 502 benchmark admissions: 0.013595 -> 0.007635 ms.
+
+Measurements are medians of 7 alternating CPU benchmark runs. They measure
+separate paths: gains must not be added or presented as whole-game acceleration.
+Reusing the vertex-constant bank was slower and was removed.
+
+The build generator no longer rewrites unchanged headers. A regression with an
+open read-only mmap verifies unchanged bytes and timestamps, while modified
+output still regenerates. Zig builds run outside the restricted sandbox;
+compiler preflight and shader freshness checks remain enabled.
+
+Validation
+Final outcomes: PASS 256, FAIL 0, TIMEOUT 0, SKIP 225.
+The initial run had 254 passes and one input-change-guard failure in
+test_auto_normal_index_windows.py; its four cache checks passed.
+Sources changed during that validation. The test passed again on final files,
+and the added test_forwarder_generation.py also passed. Original and repeat
+results are retained separately; the initial failure was not overwritten.
+GPU coverage: 1,792 alpha and 1,792 opaque variants; maximum alpha error 2.98e-08.
+58 deferred-rendering scenarios cover MSAA, single-sample depth/prepass ordering,
+textures, buffer mutation, cache/draw failures, limits, pressure and profiling.
+All compared image buffers match byte for byte.
+The outdated profiling assertion now accounts for intentionally sampled
+NativeDraw calls while requiring all other GPU scopes and honest coverage.
+
+gxFixLag is preserved; Config.wtf matches its original bytes.
+Quality, effect distances and queued-frame count are unchanged; no TargetFps
+setting was added. Stable 120 FPS remains unverified and needs a new game run.
+
+Archive: D:/dev/Projects/Northlight/releases/Northlight-0.3.216-test.20261102.7-Windows.zip
+ZIP SHA256: c548f698bb72fb99b6fd1053d356d0edcf9edbd0e28020fd4ee2f023a4693dec
+DLL SHA256: d2deb6e6d3b53175007a5cf99b19329402002ac7f9670a0fb03102962333013f
+Source identity: e3938f3033ccf17820952d380d5f742f34ea2718579ccbee79b88019ad8b1d4a
+ZIP CRC, exact packaged DLL and six installer entry points were verified with
+the bundled Python in a path containing Cyrillic text. The archive was not
+installed in the game directory.
+Full local evidence: D:/dev/Projects/Northlight/.local/out/performance-20261102d.

@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
-"""Tracked copies of the client-root profile files must be byte-identical to the live ones.
+"""Explicit developer export check: compare factory profiles with a tuned client.
 
-The renderer reads celestial-profiles.ini and shadow-range-profiles.ini from the client
-root (and renderer/build_packages.py packages them from there). The client root is the
-live copy people tune; this folder only mirrors it so git versions it.
+The renderer reads personal profiles from the client root. Packages and settings reset
+use the factory profiles in this folder. They may intentionally differ. Normal validation
+is tests/test_client_config.py, which uses the renderer's parsers and checks factory/reset
+consistency. Use this stricter byte comparison only when reviewing an explicit tuning export.
 
   python3 check_client_config.py           exit 1 if a copy differs; SKIP (exit 0) when the
                                            client-root files are absent (scratch copies)
@@ -34,8 +35,8 @@ def main():
     for n in FILES:
         print(('DIFFERS ' if n in bad else 'OK      ') + n, 'client', sha(CLIENT / n)[:16], 'tracked', sha(HERE / n)[:16])
     if bad:
-        print('The client root is the live copy: copy root -> client-config/ '
-              '(python3 client-config/check_client_config.py --update) and commit.')
+        print('Personal profiles differ from factory defaults. This is valid for local tuning. '
+              'Use --update only to intentionally export these personal profiles as reviewed factory defaults.')
     return 1 if bad else 0
 
 if __name__ == '__main__':

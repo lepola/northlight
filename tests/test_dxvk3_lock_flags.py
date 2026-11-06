@@ -15,6 +15,7 @@ STUB='''#pragma once
 using UINT=unsigned;using DWORD=unsigned;using HRESULT=std::int32_t;
 constexpr HRESULT S_OK=0,S_FALSE=1;
 inline bool FAILED(HRESULT h){return h<0;}
+inline bool SUCCEEDED(HRESULT h){return h>=0;}
 constexpr DWORD D3DLOCK_READONLY=0x10,D3DLOCK_NOOVERWRITE=0x1000,D3DLOCK_DISCARD=0x2000,D3DISSUE_END=1;
 enum D3DQUERYTYPE{D3DQUERYTYPE_EVENT=8};
 struct IDirect3DQuery9{virtual HRESULT Issue(DWORD)=0;virtual HRESULT GetData(void*,DWORD,DWORD)=0;virtual unsigned long AddRef()=0;virtual unsigned long Release()=0;};

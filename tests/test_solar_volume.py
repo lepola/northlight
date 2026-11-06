@@ -151,9 +151,11 @@ def main():
                    'float start=max(0,(i-offset)*stepLength);',
                    'float end=min((i+1-offset)*stepLength,surface);',
                    'visibility+=(receiver<=z?1:0)*w.x*w.y;', 'float4 ScreenSize : register(c33)',
-                   'if(dot(sunSource,1)>0)directWeight+=transmittance*absorb*(fogShadowProjected(shadowOrigin+shadowRay*((start+end)*.5))*heightFade)',
+                   'directWeight+=transmittance*absorb*(visibility*heightFade)',
                    'float3 directScatter=sunSource*directWeight;', 'directScatter*=cap/(cap+peak)', 'skySource*(1-transmittance)+directScatter'):
         assert anchor in shader, anchor
+    assert 'if(dot(sunSource,1)>0){' in shader and 'float visibility=fogShadowProjected(shadowOrigin+shadowRay*((start+end)*.5));' in shader
+    assert '[branch]if(actorIntegration&&FogActorInfo.x>0&&visibility>0)visibility=fogCombineActor(visibility,tiledActor?fogActorShadowTiled(actorOrigin+actorRay*start,actorRay*stepSize):fogActorShadow(actorOrigin+actorRay*start,actorRay*stepSize));' in shader
     assert 'c[32][0]=.0055f+.0089f*c[31][3];c[32][1]=.0037f+.00705f*c[31][3]' in cpu
     assert 'c[32][2]=64.f*volumeHeightScale;c[32][3]=48.f*volumeHeightScale' in cpu
     assert 'c[22][3]=.0035f+.0031f*c[31][3]' in cpu
@@ -163,12 +165,13 @@ def main():
     assert ('if(PassInfo.z<.5){\n        float3 unfogged=color;\n'
             '        // Rain streaks were drawn into the scene before the composite: on mask pixels go back toward the unfogged pixel so they are not hazed.\n'
             '        float rain=tex2Dlod(RainMask,float4(uv,0,0)).r;\n'
-            '        color=lerp(mad(horizonHaze(color,centerUV,viewZ,d>=.99999&&liquid<=0),fog.a,fog.rgb),unfogged,rain);\n    }') in shader
+            '        color=lerp(mad(horizonHaze(color,centerUV,viewZ,d>=.99999&&liquid<=0,hdrMode,coverageTransmission),fog.a,fog.rgb*coverageTransmission),unfogged,rain);\n'
+            '    }') in shader
     assert 'mad(legacyT,fog.rgb,fogPart)' not in shader
     # 0.3.163: fog-pass-only overrides. The sun's forward soft cap .38 -> .95 (moon .24 kept),
     # the sun's c17 takes the glow hue, c18.rgb is cooled (w kept) for the fog loop only and
     # c17/c18 are restored from the bank before lamp fog, blur and composite. WorldFog unchanged.
-    assert 'c[21][1]=1.2f*volumePalette.fogGain[source]*wx.shaftGain();c[21][2]=source==0?NorthlightSunHue::SunForwardCap:NorthlightSunHue::MoonForwardCap' in cpu
+    assert 'c[21][1]=1.2f*volumePalette.fogGain[source]*wx.shaftGain();c[21][2]=hdrMode?64.f:source==0?NorthlightSunHue::SunForwardCap:NorthlightSunHue::MoonForwardCap' in cpu
     hue = fp.src('sun_hue.h').read_text()
     assert f'SunForwardCap={SUN_CAP:g}f,MoonForwardCap=.24f'.replace('0.', '.') in hue
     set_source = cpu[cpu.index('auto setSource=[&](int source,bool first,bool volume=false){'):]
@@ -182,7 +185,7 @@ def main():
     assert 'float fogAmbient[4]={0,0,0,c[18][3]};NorthlightSunHue::coolAmbient(c[18],glowHueFrame,sourceWeights[0],fogAmbient);' in cpu
     # wrap: SourceVisibilityPS keeps .6 x the clear fraction of an 8-tap ring (2.5/3.5 disc
     # radii, on-screen taps only) when larger than the disc value; WorldFog reads it unchanged.
-    visibility = shader[shader.index('float4 SourceVisibilityPS('):shader.index('float4 WorldFog(')]
+    visibility = shader[shader.index('float4 SourceVisibilityPS('):shader.index('float4 worldFog(')]
     for anchor in ('[unroll]for(int j=0;j<8;++j){', '((j%2)?3.5:2.5)*r;', 'float inside=step(abs(q.x-.5),.5)*step(abs(q.y-.5),.5);',
                    'current=max(current,.6*ringClear/max(ringTaps,1));', 'return lerp(current,previous,SourceInfo.y).xxxx;'):
         assert anchor in visibility, anchor
@@ -202,7 +205,13 @@ def main():
         if altitude>0:assert after[3][0]>before[3][0]
         else:assert before[3]==after[3]==(0.,0.,0.)
     assert 'c[33][0]=float(w);c[33][1]=float(h);c[33][2]=float(w/2);c[33][3]=float(h/2)' in cpu
-    assert cpu.count('d->SetPixelShaderConstantF(0,&c[0][0],68)') == 2
+    bank='d->SetPixelShaderConstantF(0,&c[0][0],68)'
+    assert cpu.count(bank)==3
+    assert 'c[30][0]=waterMask?1.f:0.f;'+bank in cpu
+    assert cpu.index(bank,cpu.index('// Temporal shaders own material'))<cpu.index('d->SetPixelShaderConstantF(73,bumpControl,1)',cpu.index('// Temporal shaders own material'))
+    assert 'const bool currentLocalLighting=debug==0&&(localDirectCount||pointReady);' in cpu
+    assert cpu.index(bank,cpu.index('if(currentLocalLighting){'))<cpu.index('bool fogResolved=false;')
+
     assert 'uploadedFogField->fogCells||uploadedFogField->airCells' in cpu
     assert 'if(cell.height>0&&edge>0)++out.airCells' in policy
     heights = []

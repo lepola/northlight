@@ -11,24 +11,26 @@ static Image constant(float r,float g,float b,float a){
 }
 static void settingsCheck(){
     using namespace NorthlightQuality;
-    for(unsigned method=0;method<4;++method){
-        const char* names[]={"SSAO","hdao","HBAO+","GTAO"};
+    for(unsigned method=0;method<5;++method){
+        const char* names[]={"SSAO","hdao","HBAO+","GTAO","assao"};
         for(const auto& text:{std::string(names[method]),std::to_string(method)}){
             std::istringstream in("[Quality]\nAOMethod="+text+"\nAOStrength=125\nAORadius=350\n");
             std::vector<std::string> problems;auto s=load(&in,nullptr,problems);
             assert(problems.empty()&&s.aoMethod==method&&s.aoStrength==125&&s.aoRadius==350);
         }
     }
-    for(const char* value:{"VXAO","4","-1","GTAOabc"}){
+    for(const char* value:{"VXAO","5","-1","GTAOabc"}){
         std::istringstream in(std::string("[Quality]\nAOMethod=")+value+"\nAOStrength=201\nAORadius=0\n");
         std::vector<std::string> problems;assert(load(&in,nullptr,problems)==Settings{}&&problems.size()==3);
     }
     assert(preset(Preset::Quality).aoMethod==0&&preset(Preset::Balanced).aoMethod==0&&preset(Preset::Performance).aoMethod==0);
 }
 int main(int argc,char** argv){
-    assert(argc==4);settingsCheck();
+    assert(argc==4||argc==5);settingsCheck();
+    const std::string quality=argc==5?argv[4]:"";
+    assert(quality.empty()||quality=="Medium"||quality=="Low");
     constexpr unsigned W=256,H=192,AW=W/2,AH=H/2;
-    const char* names[]={"AO","HDAO","HBAOPlus","GTAO"};
+    const char* names[]={"AO","HDAO","HBAOPlus","GTAO","ASSAO"};
     WNDCLASSW wc{};wc.lpfnWndProc=DefWindowProcW;wc.lpszClassName=L"NorthlightAOMethods";wc.hInstance=GetModuleHandleW(nullptr);assert(RegisterClassW(&wc));
     HWND window=CreateWindowExW(0,wc.lpszClassName,L"",WS_OVERLAPPED,0,0,64,64,nullptr,nullptr,wc.hInstance,nullptr);assert(window);
     HMODULE module=LoadLibraryA(argv[2]);assert(module);
@@ -36,9 +38,9 @@ int main(int argc,char** argv){
     auto api=create(D3D_SDK_VERSION);assert(api);
     D3DPRESENT_PARAMETERS pp{};pp.Windowed=TRUE;pp.hDeviceWindow=window;pp.BackBufferWidth=pp.BackBufferHeight=64;pp.BackBufferFormat=D3DFMT_X8R8G8B8;pp.SwapEffect=D3DSWAPEFFECT_DISCARD;
     IDirect3DDevice9* d=nullptr;ok(api->CreateDevice(0,D3DDEVTYPE_HAL,window,D3DCREATE_HARDWARE_VERTEXPROCESSING|D3DCREATE_FPU_PRESERVE,&pp,&d));
-    IDirect3DPixelShader9* shaders[4][2]{};
-    for(unsigned m=0;m<4;++m)for(unsigned variant=0;variant<2;++variant){
-        std::string path=std::string(argv[1])+"/"+(variant?std::string(names[m])+"ContactBloom":"AO")+".bin";
+    IDirect3DPixelShader9* shaders[5][3]{};
+    for(unsigned m=0;m<5;++m)for(unsigned variant=0;variant<3;++variant){
+        std::string path=std::string(argv[1])+"/"+(variant?std::string(names[m])+(variant==1?"ContactBloom":"Only")+(m?quality:""):"AO")+".bin";
         auto code=read(path);ok(d->CreatePixelShader(reinterpret_cast<const DWORD*>(code.data()),&shaders[m][variant]));
     }
     IDirect3DSurface9 *target=nullptr,*staging=nullptr;
@@ -50,7 +52,7 @@ int main(int argc,char** argv){
     for(unsigned s=0;s<4;++s){for(auto state:{D3DSAMP_MINFILTER,D3DSAMP_MAGFILTER})ok(d->SetSamplerState(s,state,D3DTEXF_POINT));ok(d->SetSamplerState(s,D3DSAMP_MIPFILTER,D3DTEXF_NONE));ok(d->SetSamplerState(s,D3DSAMP_ADDRESSU,D3DTADDRESS_CLAMP));ok(d->SetSamplerState(s,D3DSAMP_ADDRESSV,D3DTADDRESS_CLAMP));}
     auto scene=texture(d,constant(1,1,1,1));ok(d->SetTexture(0,scene));
     const Vertex quad[]={{-.5f,-.5f,0,1,0,0},{AW-.5f,-.5f,0,1,1,0},{-.5f,AH-.5f,0,1,0,1},{AW-.5f,AH-.5f,0,1,1,1}};
-    unsigned failures=0,cases=0;std::vector<float> corner[4];
+    unsigned failures=0,cases=0;std::vector<float> corner[5];
     FILE* report=std::fopen(argv[3],"w");assert(report);std::fprintf(report,"{\"cases\":[");
     for(unsigned shape=0;shape<6;++shape)for(unsigned strength=0;strength<2;++strength){
         const float clipNear=.2f,clipFar=1000.f,sx=1.3f,sy=1.9f;
@@ -67,18 +69,27 @@ int main(int argc,char** argv){
         float c[7][4]{};c[0][0]=1.f/W;c[0][1]=1.f/H;c[0][2]=clipNear;c[0][3]=clipFar;
         c[1][0]=sx;c[1][1]=sy;c[1][2]=strength?.6f:0;c[1][3]=.12f;c[2][0]=.08f;c[2][1]=2;
         c[3][1]=c[3][2]=1;c[4][0]=shape==5?1:0;ok(d->SetPixelShaderConstantF(0,c[0],7));
-        for(unsigned m=0;m<4;++m)for(unsigned variant=0;variant<2;++variant){
+        std::vector<float> referenceAlpha(AW*AH),fallbackRgb(AW*AH*3);
+        for(unsigned m=0;m<5;++m)for(unsigned variant=0;variant<3;++variant){
             ok(d->SetPixelShader(shaders[m][variant]));ok(d->BeginScene());ok(d->DrawPrimitiveUP(D3DPT_TRIANGLESTRIP,2,quad,sizeof(Vertex)));
-            if(!variant&&m){ok(d->SetRenderState(D3DRS_COLORWRITEENABLE,D3DCOLORWRITEENABLE_ALPHA));ok(d->SetPixelShader(shaders[m][1]));ok(d->DrawPrimitiveUP(D3DPT_TRIANGLESTRIP,2,quad,sizeof(Vertex)));ok(d->SetRenderState(D3DRS_COLORWRITEENABLE,15));}
+            if(!variant&&m){ok(d->SetRenderState(D3DRS_COLORWRITEENABLE,D3DCOLORWRITEENABLE_ALPHA));ok(d->SetPixelShader(shaders[m][2]));ok(d->DrawPrimitiveUP(D3DPT_TRIANGLESTRIP,2,quad,sizeof(Vertex)));ok(d->SetRenderState(D3DRS_COLORWRITEENABLE,15));}
             ok(d->EndScene());ok(d->GetRenderTargetData(target,staging));
             D3DLOCKED_RECT lock{};ok(staging->LockRect(&lock,nullptr,D3DLOCK_READONLY));double sum=0;float minimum=1,maximum=0;unsigned count=0;
+            // Every texel, including silhouettes/borders/sky/water: removing
+            // unused SDR bloom must preserve the production AO bit for bit.
+            for(unsigned y=0;y<AH;++y)for(unsigned x=0;x<AW;++x){
+                float pixel[4];std::memcpy(pixel,static_cast<char*>(lock.pBits)+y*lock.Pitch+x*16,16);
+                if(!variant)for(unsigned k=0;k<3;++k){const auto i=(y*AW+x)*3+k;if(!m)fallbackRgb[i]=pixel[k];else assert(pixel[k]==fallbackRgb[i]);}
+                if(variant==1)referenceAlpha[y*AW+x]=pixel[3];
+                if(variant==2)assert(pixel[3]==referenceAlpha[y*AW+x]&&pixel[0]==0&&pixel[1]==0&&pixel[2]==0);
+            }
             for(unsigned y=4;y<AH-4;++y)for(unsigned x=4;x<AW-4;++x){
                 float pixel[4];std::memcpy(pixel,static_cast<char*>(lock.pBits)+y*lock.Pitch+x*16,16);
                 bool bad=false;for(float v:pixel)bad|=!std::isfinite(v);
                 bad|=pixel[3]<-1e-5f||pixel[3]>1.00001f;
                 if(!strength||shape==0||shape==4||shape==5)bad|=std::fabs(pixel[3]-1)>1e-4f;
                 if(shape==1)bad|=pixel[3]<.98f;
-                if(variant)for(unsigned k=0;k<3;++k)bad|=std::fabs(pixel[k]-.08f)>1e-5f;
+                if(variant)for(unsigned k=0;k<3;++k)bad|=std::fabs(pixel[k]-(variant==1?.08f:0.f))>1e-5f;
                 if(bad&&failures++<6)std::printf("FAIL method=%s shape=%u strength=%u variant=%u xy=%u,%u alpha=%f\n",names[m],shape,strength,variant,x,y,pixel[3]);
                 minimum=std::min(minimum,pixel[3]);maximum=std::max(maximum,pixel[3]);sum+=pixel[3];++count;
             }
@@ -149,10 +160,10 @@ int main(int argc,char** argv){
             ++cases;
         }
     }
-    for(unsigned a=0;a<4;++a)for(unsigned b=a+1;b<4;++b){double difference=0;for(unsigned i=0;i<AW*AH;++i)difference+=std::fabs(corner[a][i]-corner[b][i]);if(difference/(AW*AH)<1e-5){std::printf("FAIL identical methods %s %s\n",names[a],names[b]);++failures;}}
-    {std::ofstream image(std::string(argv[3])+".pgm",std::ios::binary);image<<"P5\n"<<AW*4<<" "<<AH<<"\n255\n";
-     for(unsigned y=0;y<AH;++y)for(unsigned m=0;m<4;++m)for(unsigned x=0;x<AW;++x){unsigned char v=static_cast<unsigned char>(std::max(0.f,std::min(1.f,corner[m][y*AW+x]))*255+.5f);image.write(reinterpret_cast<const char*>(&v),1);}}
+    for(unsigned a=0;a<5;++a)for(unsigned b=a+1;b<5;++b){double difference=0;for(unsigned i=0;i<AW*AH;++i)difference+=std::fabs(corner[a][i]-corner[b][i]);if(difference/(AW*AH)<1e-5){std::printf("FAIL identical methods %s %s\n",names[a],names[b]);++failures;}}
+    {std::ofstream image(std::string(argv[3])+".pgm",std::ios::binary);image<<"P5\n"<<AW*5<<" "<<AH<<"\n255\n";
+     for(unsigned y=0;y<AH;++y)for(unsigned m=0;m<5;++m)for(unsigned x=0;x<AW;++x){unsigned char v=static_cast<unsigned char>(std::max(0.f,std::min(1.f,corner[m][y*AW+x]))*255+.5f);image.write(reinterpret_cast<const char*>(&v),1);}}
     std::fprintf(report,"],\"case_count\":%u,\"failures\":%u,\"settings\":\"PASS\",\"game_launched\":false}\n",cases,failures);std::fclose(report);
-    std::printf("AO GPU: %u cases, failures=%u; settings PASS; four distinct kernels\n",cases,failures);
+    std::printf("AO GPU: %u cases, failures=%u; settings PASS; five distinct kernels\n",cases,failures);
     ok(d->SetTexture(0,nullptr));scene->Release();d->SetPixelShader(nullptr);for(auto& method:shaders)for(auto shader:method)shader->Release();staging->Release();target->Release();d->Release();api->Release();FreeLibrary(module);DestroyWindow(window);UnregisterClassW(wc.lpszClassName,wc.hInstance);return failures?1:0;
 }

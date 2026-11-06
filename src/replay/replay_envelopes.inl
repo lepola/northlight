@@ -34,6 +34,7 @@ public:
         size_t memoColdMisses=0,memoReplacedMisses=0,memoCameraMisses=0,memoConstantMisses=0;
         size_t memoBypassed=0,memoStoreBypassed=0,memoProtected=0,memoCopiedBytes=0;
         size_t effectiveCopiedBytes=0,fastValid=0;
+        size_t sourceIdentityHits=0,sourceReconstructedHits=0;
     };
     struct MemoTotals {
         std::uint64_t tests=0,hits=0,cold=0,replaced=0,camera=0,constants=0;
@@ -49,6 +50,8 @@ private:
     struct Group {std::vector<float> limits;}; // low/high for USED input registers only
     struct Entry {
         std::weak_ptr<const NorthlightDrawSnapshot::Mesh> owner;
+        const NorthlightDrawSnapshot::Mesh* sourceAddress=nullptr;
+        NorthlightSourceIdentity::Handle identity;
         std::vector<std::uint32_t> key;
         std::vector<Binding> bindings;
         std::unordered_map<std::string,Group> groups;
@@ -56,7 +59,7 @@ private:
         size_t vertex=0,index=0,indexCount=0;bool unsupported=false,ready=false;
         std::uint64_t touched=0,programHash=0,lastEvaluationNs=0,serial=0;size_t bytes=0,baseBytes=0;
         unsigned constantFirst=0,constantCount=256,memoSlot=64;
-        bool copyDefinitions=true; /* false: no DEF can shadow a register this evaluator reads from the API bank */
+        bool copyDefinitions=true,singleBone=false; /* singleBone resolves its control DEF directly */
     };
     static constexpr size_t MaxGroups=512,Limit=8u*1024u*1024u,MaxEntries=2048;
     static constexpr size_t MemoSlots=64,MemoLimit=256u*1024u;
@@ -67,10 +70,10 @@ private:
     bool memoProtect_=true;
     size_t memoBytes_=0,memoTableBytes_=0,memoNext_=0,memoEntries_=0;
     std::uint64_t entrySerial_=0;
-    static constexpr std::uint64_t HeavyNanoseconds=AdaptiveTimeBudget::Heavy,BuildNanoseconds=AdaptiveTimeBudget::Build,CheapSliceNanoseconds=40000;
+    static constexpr std::uint64_t HeavyNanoseconds=AdaptiveTimeBudget::Heavy,CheapSliceNanoseconds=40000;
     AdaptiveTimeBudget timeBudget_;bool diagnostics_=true;
     size_t bytes_=0;
-    std::unordered_multimap<std::uintptr_t,Entry> entries_;
+    std::unordered_multimap<std::uint64_t,Entry> entries_;
     std::uint64_t clock_=0,frame_=0,readyNanoseconds_=0,heavyNanoseconds_=0,buildNanoseconds_=0,classifyNanoseconds_=0;
     unsigned readyCalls_=0,heavyCalls_=0,buildCalls_=0;Stats stats_;Expensive expensive_;
     std::vector<std::uint32_t> scratch_;
@@ -79,7 +82,7 @@ private:
     // non-owning pointer first. No geometry owner or evaluated pose is retained.
     Entry* pending_=nullptr;
     std::uint64_t pendingProgressFrame_=0;
-    /* FastReady clock batch: the interval since fastMark_ (warm skin draws and
+    /* FastReady clock batch: the interval since fastMark_ (warm cheap draws and
        the schedule between them) is charged to the ready bank every
        ReadyClockStride draws and before any Timer/lending starts. Gaps are
        charged, never dropped, so the batch only over-counts, by construction. */
@@ -89,6 +92,21 @@ private:
     /* Owner equivalence without lock(): same control block and a live argument
        proves the same unexpired snapshot; an ABA address has another block. */
     static bool sameOwner(const std::weak_ptr<const NorthlightDrawSnapshot::Mesh>& a,const std::shared_ptr<const NorthlightDrawSnapshot::Mesh>& b){return !a.owner_before(b)&&!b.owner_before(a);}
+    static const auto& identity(const NorthlightDrawSnapshot::Mesh& mesh){return mesh.replayIdentity?mesh.replayIdentity:mesh.sourceIdentity;}
+    static std::uint64_t sourceHash(const NorthlightDrawSnapshot::Mesh& mesh){const auto& id=identity(mesh);return id?id->hash:std::uint64_t(reinterpret_cast<std::uintptr_t>(&mesh));}
+    auto findSource(const std::shared_ptr<const NorthlightDrawSnapshot::Mesh>& owner,const std::vector<std::uint32_t>& key){
+        const auto& id=identity(*owner);auto range=entries_.equal_range(sourceHash(*owner));
+        for(auto it=range.first;it!=range.second;++it){auto& e=it->second;
+            if(e.key!=key)continue;
+            const bool same=e.sourceAddress==owner.get()&&sameOwner(e.owner,owner);
+            if(id?!NorthlightSourceIdentity::same(id,e.identity):e.identity||!same)continue;
+            if(id){++stats_.sourceIdentityHits;if(!same){++stats_.sourceReconstructedHits;
+                // Only immutable source envelopes survive reconstruction. Pose/
+                // camera results must be evaluated again for this live draw.
+                releaseMemo(e);e.owner=owner;e.sourceAddress=owner.get();}}
+            return it;
+        }return entries_.end();
+    }
     static constexpr std::uint64_t MaxIdleBuildFrames=8;
     static bool makeKey(const NorthlightActorDeformation::Program& p,const D3DVERTEXELEMENT9* elements,size_t count,std::vector<std::uint32_t>& key){
         if(!detail::linear(p)||!elements||!count||count>MAXD3DDECLLENGTH+1||p.inputs.size()>16||p.definitions.size()>256)return false;
@@ -130,6 +148,12 @@ private:
            rows c31..c255. Copying the 3.6 KiB bank then changes no value read. */
         e.copyDefinitions=!p.definitions.empty();
         if(e.skin){e.copyDefinitions=false;for(const auto& d:p.definitions)e.copyDefinitions|=d.reg>=31;}
+        // The single-bone evaluator resolves its c0 literal directly; an ordinary
+        // palette needs no 4 KiB copy just to replace that control register.
+        e.singleBone=p.kernel.valid&&p.kernel.ops.size()==p.operations.size()&&p.kernel.singleSkin();
+        if(e.singleBone){
+            e.copyDefinitions=false;for(const auto& d:p.definitions)e.copyDefinitions|=d.reg!=0;
+        }
         // A superset of EVERY original API constant read by this evaluator.
         // The exact skin template reads palette rows c31..c255. Generic relative
         // addressing retains the full bank; no observed vertex narrows it.
@@ -235,7 +259,7 @@ private:
     bool evict(const Entry* protectedEntry=nullptr){
         auto oldest=entries_.end();int best=99;
         for(auto it=entries_.begin();it!=entries_.end();++it){auto& e=it->second;if(&e==protectedEntry||&e==pending_)continue;
-            const int priority=e.owner.expired()?0:e.unsupported?1:!e.ready?2:3;
+            const int priority=!e.identity&&e.owner.expired()?0:e.unsupported?1:!e.ready?2:3;
             if(oldest==entries_.end()||priority<best||(priority==best&&e.touched<oldest->second.touched)){oldest=it;best=priority;if(priority==0)break;}
         }
         if(oldest!=entries_.end()){++stats_.evictions;stats_.readyEvictions+=oldest->second.ready;stats_.expiredEvictions+=oldest->second.owner.expired();releaseMemo(oldest->second);bytes_-=oldest->second.bytes;entries_.erase(oldest);return true;}
@@ -253,7 +277,7 @@ private:
         void mode(bool next){if(next!=building){charge(Clock::now());building=next;}}
         void slice(){sliced=true;sliceStart=checked;}
         bool sliceExpired()const{return sliced&&delta(checked,sliceStart)>=CheapSliceNanoseconds;}
-        bool expired(){checked=Clock::now();return sliceExpired()||bank()+delta(checked,start)>=(building?BuildNanoseconds:heavy?HeavyNanoseconds:cache.timeBudget_.cheapLimit);}
+        bool expired(){checked=Clock::now();return sliceExpired()||bank()+delta(checked,start)>=(building?cache.timeBudget_.buildLimit:heavy?HeavyNanoseconds:cache.timeBudget_.cheapLimit);}
         void evaluation(Entry& e,WorkInfo* metadata,Stage phase,Status& status,size_t groupCount,size_t operationCount){
             evaluated=&e;info=metadata;stage=phase;result=&status;groups=groupCount;operations=operationCount;evaluationStart=checked;
         }
@@ -284,11 +308,14 @@ private:
         }
         for(unsigned sinceCheck=0;e.vertex<mesh.vertexCount;++sinceCheck){
             if(budget.vertices>=budget.maxVertices){++stats_.vertexDeferred;return Status::Budget;}
-            if((sinceCheck%BuildClockStride)==0&&timer.expired())return timeBudget();NorthlightActorDeformation::Four inputs[16]={};std::string groupKey;
+            if((sinceCheck%BuildClockStride)==0&&timer.expired())return timeBudget();NorthlightActorDeformation::Four inputs[16];std::string groupKey;
             for(const auto& binding:e.bindings){const auto& s=mesh.streams[binding.element.Stream];auto& input=inputs[binding.reg];
                 if(!NorthlightActorDeformation::decodeElement(s.bytes.data()+e.vertex*s.stride+binding.element.Offset,binding.element.Type,input)){discardGroups(e);++stats_.invalid;return Status::Invalid;}
                 for(float f:input)if(!std::isfinite(f)){discardGroups(e);++stats_.invalid;return Status::Invalid;}
-                if(!e.skin&&binding.element.Usage==2)groupKey.append(reinterpret_cast<const char*>(input.data()),16);
+                // Audited single-bone programs address only v1.x. Unused YZW
+                // must not split one bone into hundreds of cold groups.
+                if(!e.skin&&binding.element.Usage==2)groupKey.append(reinterpret_cast<const char*>(input.data()),
+                    e.singleBone&&binding.reg==1?4:16);
             }
             if(e.skin){if(!e.skin->add(inputs)){discardGroups(e);++stats_.unsupported;return Status::Unsupported;}}
             else {
@@ -312,12 +339,12 @@ public:
     EnvelopeCache(const EnvelopeCache&)=delete;EnvelopeCache& operator=(const EnvelopeCache&)=delete;
     EnvelopeCache(EnvelopeCache&&)=delete;EnvelopeCache& operator=(EnvelopeCache&&)=delete;
     void clear(){pending_=nullptr;pendingProgressFrame_=0;std::vector<Memo>().swap(memo_);memoBytes_=memoTableBytes_=memoNext_=memoEntries_=0;memoPolicy_={};memoTotals_={};entrySerial_=0;entries_.clear();scratch_.clear();bytes_=0;clock_=frame_=0;expensive_={};stats_={};beginFrame();}
-    void beginFrame(bool diagnostics=true){
+    void beginFrame(bool diagnostics=true,size_t packets=0){
         fastOpen_=false;fastCount_=0;
         memoTotals_.add(stats_);
         memoPolicy_.beginFrame(stats_.memoTests,stats_.memoHits);
         memoProtect_=true;
-        diagnostics_=diagnostics;timeBudget_.reset();++frame_;readyNanoseconds_=heavyNanoseconds_=buildNanoseconds_=classifyNanoseconds_=0;readyCalls_=heavyCalls_=buildCalls_=0;stats_={};
+        diagnostics_=diagnostics;timeBudget_.reset(packets);++frame_;readyNanoseconds_=heavyNanoseconds_=buildNanoseconds_=classifyNanoseconds_=0;readyCalls_=heavyCalls_=buildCalls_=0;stats_={};
         if(pending_&&pending_->owner.expired()){pending_=nullptr;++stats_.pendingOwnerExpired;}
         else if(pending_&&frame_-pendingProgressFrame_>MaxIdleBuildFrames){pending_=nullptr;++stats_.pendingAbandoned;}
     }
@@ -337,6 +364,10 @@ public:
     size_t pendingBuildVertices()const{return pending_?pending_->vertex:0;}
     size_t pendingBuildIndices()const{return pending_?pending_->index:0;}
     void settleClock(){flushFast(BoundsClock::now());}
+    void lendToBuild(Budget& budget){
+        settleClock();timeBudget_.lendToBuild(readyNanoseconds_,heavyNanoseconds_);
+        budget.maxVertices=std::max(budget.maxVertices,timeBudget_.buildVertices());
+    }
     void finishReservedTurnsAndLend(){
         settleClock();
         timeBudget_.finishReservedTurns(heavyNanoseconds_,buildNanoseconds_);
@@ -349,11 +380,11 @@ public:
     double borrowedMicroseconds()const{return double(timeBudget_.lent())/1000.;}
     bool canReady()const{return readyCalls_<4096&&readyNanoseconds_<timeBudget_.cheapLimit;}
     bool canHeavy()const{return !timeBudget_.reservedClosed&&heavyCalls_<2048&&heavyNanoseconds_<HeavyNanoseconds;}
-    bool canBuild()const{return !timeBudget_.reservedClosed&&buildCalls_<2048&&buildNanoseconds_<BuildNanoseconds;}
+    bool canBuild()const{return !timeBudget_.reservedClosed&&buildCalls_<2048&&buildNanoseconds_<timeBudget_.buildLimit;}
     bool canWork()const{return canReady()||canBuild();}
     // Time of a phase (0 cheap, 1 heavy, 2 build) spent so far this frame and its limit: the near walk of the bounds job takes half of what is left.
     std::uint64_t phaseNanoseconds(unsigned phase)const{return phase==0?readyNanoseconds_:phase==1?heavyNanoseconds_:buildNanoseconds_;}
-    std::uint64_t phaseLimit(unsigned phase)const{return phase==0?timeBudget_.cheapLimit:phase==1?HeavyNanoseconds:BuildNanoseconds;}
+    std::uint64_t phaseLimit(unsigned phase)const{return phase==0?timeBudget_.cheapLimit:phase==1?HeavyNanoseconds:timeBudget_.buildLimit;}
     double readyMilliseconds()const{return double(readyNanoseconds_)/1000000.;}
     double heavyMilliseconds()const{return double(heavyNanoseconds_)/1000000.;}
     double classifyMilliseconds()const{return double(classifyNanoseconds_)/1000000.;}
@@ -385,25 +416,59 @@ public:
         return calculateImpl(p,mesh,owner,elements,count,constants,inverse,budget,output,stage,info,nullptr);
     }
 private:
-    /* Warm, cheap, exact-template skin draw only; anything else (cold, heavy,
-       rigid, palette DEF, odd camera, operation cap) returns false and takes
-       the unchanged Timer path. Same lookup proof, same evaluator, same bits. */
+    const float* effectiveConstants(const NorthlightActorDeformation::Program& p,const Entry& e,const float* captured,float* storage){
+        if(!e.copyDefinitions)return captured;
+        const size_t copied=size_t(e.constantCount)*16;
+        if(copied)std::memcpy(storage+4*e.constantFirst,captured+4*e.constantFirst,copied);
+        stats_.effectiveCopiedBytes+=copied;
+        for(const auto& def:p.definitions){if(def.reg>=256)return nullptr;std::memcpy(storage+4*def.reg,def.value.data(),16);}
+        return storage;
+    }
+    template<class Stop> static Status evaluateGroups(const NorthlightActorDeformation::Program& p,const Entry& e,
+        const float* constants,const float* inverse,Budget& budget,Bounds& output,Stop&& stop){
+        double low[3]={INFINITY,INFINITY,INFINITY},high[3]={-INFINITY,-INFINITY,-INFINITY};
+        for(const auto& pair:e.groups){
+            if(stop())return Status::Budget;
+            budget.operations+=p.operations.size();detail::Vector inputs[16]={};
+            const auto& limits=pair.second.limits;
+            for(size_t i=0;i<e.bindings.size();++i)for(unsigned j=0;j<4;++j){const float lo=limits[i*8+j],hi=limits[i*8+4+j],mid=float((double(lo)+hi)*.5);inputs[e.bindings[i].reg][j]={mid,std::max(double(mid)-lo,double(hi)-mid)};}
+            detail::Vector position;
+            if(!detail::singleSkinIntervals(p,inputs,constants,position,e.copyDefinitions)&&!detail::evaluateIntervals(p,inputs,constants,position,e.copyDefinitions))return Status::Unsupported;
+            for(unsigned axis=0;axis<3;++axis){detail::Value world=detail::mul(position[3],{inverse[12+axis],0});double magnitude=std::fabs(world.value)+world.error;
+                for(unsigned k=0;k<3;++k){auto term=detail::mul(position[k],{inverse[4*k+axis],0});magnitude+=std::fabs(term.value)+term.error;world=detail::add(world,term);}
+                world.error+=detail::roundError(magnitude)*8+.001;
+                if(!std::isfinite(world.value)||!std::isfinite(world.error)||std::fabs(world.value)+world.error>1000000)return Status::Unsupported;
+                low[axis]=std::min(low[axis],double(world.value)-world.error);high[axis]=std::max(high[axis],double(world.value)+world.error);
+            }
+        }
+        for(unsigned axis=0;axis<3;++axis){output.low[axis]=std::nextafter(float(low[axis]),-std::numeric_limits<float>::infinity());output.high[axis]=std::nextafter(float(high[axis]),std::numeric_limits<float>::infinity());}
+        output.valid=true;return Status::Valid;
+    }
+    // Warm cheap skins and small generic envelopes share the batched clock.
+    // Cold/heavy work retains its interruptible Timer path and reserved budget.
     bool fastReady(const Prepared& prepared,const std::shared_ptr<const NorthlightDrawSnapshot::Mesh>& owner,const float* constants,const float* inverse,
-        Budget& budget,Bounds& output,WorkInfo* info,Status& status){
-        Entry* e=nullptr;auto range=entries_.equal_range(reinterpret_cast<std::uintptr_t>(owner.get()));
-        for(auto it=range.first;it!=range.second;++it)if(sameOwner(it->second.owner,owner)&&it->second.key==prepared.key_){e=&it->second;break;}
-        if(!e||e->unsupported||!e->ready||!e->skin||e->copyDefinitions||e->lastEvaluationNs>=CheapSliceNanoseconds)return false;
-        const size_t operations=size_t(75)+size_t(e->skin->usedBones)*16;
+        Budget& budget,Bounds& output,WorkInfo* info,Status& status,Timer* individual=nullptr){
+        const bool batched=!individual;
+        auto found=findSource(owner,prepared.key_);Entry* e=found==entries_.end()?nullptr:&found->second;
+        if(!e||e->unsupported||!e->ready||(e->skin&&e->copyDefinitions)||e->lastEvaluationNs>=CheapSliceNanoseconds)return false;
+        const auto& p=prepared.program_;
+        const size_t groups=e->skin?e->skin->usedBones:e->groups.size();
+        const size_t operations=e->skin?size_t(75)+groups*16:groups*p.operations.size();
+        if((!e->skin||!batched)&&(groups>8||operations>128))return false;
         if(budget.operations>budget.maxOperations||operations>budget.maxOperations-budget.operations)return false;
         for(unsigned j=0;j<16;++j)if(!std::isfinite(inverse[j]))return false;
         if(inverse[3]!=0||inverse[7]!=0||inverse[11]!=0||inverse[15]!=1)return false;
-        if(!fastOpen_){fastMark_=BoundsClock::now();fastOpen_=true;fastCount_=0;}
+        if(batched&&!fastOpen_){fastMark_=BoundsClock::now();fastOpen_=true;fastCount_=0;}
         e->touched=++clock_;++stats_.memoBypassed;
-        if(info){info->kind=Kind::Cheap;info->programHash=e->programHash;info->groups=e->skin->usedBones;info->operations=operations;info->skin=true;}
-        budget.operations+=operations;
-        if(e->skin->evaluate(constants,inverse,output)){++stats_.ready;++stats_.skinValid;++stats_.cheapValid;++stats_.memoStoreBypassed;++stats_.fastValid;status=Status::Valid;}
-        else {output={};++stats_.unsupported;status=Status::Unsupported;}
-        if(++fastCount_>=ReadyClockStride){const auto now=BoundsClock::now();readyNanoseconds_+=elapsedNs(now,fastMark_);fastMark_=now;fastCount_=0;}
+        if(info){info->kind=Kind::Cheap;info->programHash=e->programHash;info->groups=groups;info->operations=operations;info->skin=bool(e->skin);}
+        if(individual)individual->evaluation(*e,info,Stage::All,status,groups,operations);
+        float storage[1024];const float* effective=effectiveConstants(p,*e,constants,storage);
+        if(!effective){++stats_.invalid;status=Status::Invalid;}
+        else if(e->skin){budget.operations+=operations;status=e->skin->evaluate(effective,inverse,output)?Status::Valid:Status::Unsupported;}
+        else status=evaluateGroups(p,*e,effective,inverse,budget,output,[]{return false;});
+        if(status==Status::Valid){++stats_.ready;stats_.skinValid+=bool(e->skin);stats_.cheapValid+=batched;++stats_.memoStoreBypassed;++stats_.fastValid;}
+        else {output={};if(status==Status::Unsupported)++stats_.unsupported;}
+        if(batched&&++fastCount_>=ReadyClockStride){const auto now=BoundsClock::now();readyNanoseconds_+=elapsedNs(now,fastMark_);fastMark_=now;fastCount_=0;}
         return true;
     }
     Status calculateImpl(const NorthlightActorDeformation::Program& p,const NorthlightDrawSnapshot::Mesh& mesh,
@@ -414,6 +479,13 @@ private:
         if(stage==Stage::Build?!canBuild():stage==Stage::Heavy?!canHeavy():!canReady())return timeBudget();
         if(stage==Stage::Build)++buildCalls_;else if(stage==Stage::Heavy)++heavyCalls_;else ++readyCalls_;
         if(FastReady&&!ResultMemo&&stage==Stage::Cheap&&prepared){Status fast;if(fastReady(*prepared,owner,constants,inverse,budget,output,info,fast))return fast;}
+        // Material draws interleave unrelated game work. Time each bounded
+        // warm evaluation separately; the shadow pass's batched clock would
+        // charge those gaps and exhaust the material budget prematurely.
+        if(FastReady&&!ResultMemo&&stage==Stage::All&&prepared){
+            {Status fast;Timer timer{*this,false};if(fastReady(*prepared,owner,constants,inverse,budget,output,info,fast,&timer))return fast;}
+            if(!canReady())return timeBudget();
+        }
         Status evaluationStatus=Status::Budget;
         Timer timer{*this,stage==Stage::Build,stage==Stage::Heavy};
         const auto lookupStart=timer.start;bool classified=false;
@@ -421,21 +493,20 @@ private:
         try {
             if(!prepared&&!makeKey(p,elements,count,scratch_)){accountClassify();if(info)info->kind=Kind::Unsupported;++stats_.unsupported;return Status::Unsupported;}
             const auto& exactKey=prepared?prepared->key_:scratch_;
-            const auto identity=reinterpret_cast<std::uintptr_t>(owner.get());auto range=entries_.equal_range(identity);auto found=entries_.end();
-            for(auto it=range.first;it!=range.second;++it)if(sameOwner(it->second.owner,owner)&&it->second.key==exactKey){found=it;break;}
+            const auto hash=sourceHash(mesh);auto found=findSource(owner,exactKey);
             accountClassify();
             if(found==entries_.end()){
                 ++stats_.cold;if(info)info->kind=Kind::Cold;
                 if(stage==Stage::Ready||stage==Stage::Cheap||stage==Stage::Heavy)return Status::Budget;
                 timer.mode(true);if(!canBuild()||timer.expired())return timeBudget();
                 if(pending_){++stats_.pendingDeferred;return Status::Budget;}
-                Entry e;e.owner=owner;e.key=exactKey;e.programHash=prepared?prepared->hash_:programHash(p);if(!prepare(p,mesh,elements,count,e)){++stats_.invalid;return Status::Invalid;}
-                e.baseBytes=sizeof(Entry)+e.key.capacity()*4+e.bindings.capacity()*sizeof(Binding)+256;
+                Entry e;e.owner=owner;e.sourceAddress=owner.get();e.identity=identity(mesh);e.key=exactKey;e.programHash=prepared?prepared->hash_:programHash(p);if(!prepare(p,mesh,elements,count,e)){++stats_.invalid;return Status::Invalid;}
+                e.baseBytes=sizeof(Entry)+e.key.capacity()*4+e.bindings.capacity()*sizeof(Binding)+256+(e.identity?e.identity->bytes():0);
                 e.bytes=e.baseBytes+(e.skin?sizeof(SkinEnvelope)+32:0);if(e.bytes>Limit)return Status::Unsupported;
                 trimMemos(e.bytes);
                 while(!entries_.empty()&&(bytes_+e.bytes>Limit||entries_.size()>=MaxEntries)){if(!evict())return Status::Budget;}
                 if(entrySerial_!=std::numeric_limits<std::uint64_t>::max())e.serial=++entrySerial_;
-                const auto added=e.bytes;found=entries_.emplace(identity,std::move(e));bytes_+=added;
+                const auto added=e.bytes;found=entries_.emplace(hash,std::move(e));bytes_+=added;
             }
             Entry& e=found->second;
             // Negative entries remain small and do not displace useful ready
@@ -475,14 +546,8 @@ private:
             if(inverse[3]!=0||inverse[7]!=0||inverse[11]!=0||inverse[15]!=1){++stats_.invalid;evaluationStatus=Status::Invalid;return evaluationStatus;}
             // Apply shader-local DEF overrides once, instead of searching their
             // list at every source fetch in every group. Captured banks untouched.
-            float storage[1024];const float* effective=constants;
-            if(e.copyDefinitions){
-                const size_t copied=size_t(e.constantCount)*16;
-                if(copied)std::memcpy(storage+4*e.constantFirst,constants+4*e.constantFirst,copied);
-                stats_.effectiveCopiedBytes+=copied;
-                for(const auto& def:p.definitions){if(def.reg>=256){++stats_.invalid;evaluationStatus=Status::Invalid;return evaluationStatus;}std::memcpy(storage+4*def.reg,def.value.data(),16);}
-                effective=storage;
-            }
+            float storage[1024];const float* effective=effectiveConstants(p,e,constants,storage);
+            if(!effective){++stats_.invalid;evaluationStatus=Status::Invalid;return evaluationStatus;}
             if(e.skin){budget.operations+=operations;
                 bool interrupted=false;
                 struct StopContext {Timer* timer;bool* interrupted;};StopContext stop{&timer,&interrupted};
@@ -493,21 +558,10 @@ private:
                 ++stats_.ready;++stats_.skinValid;if(stage==Stage::Cheap)++stats_.cheapValid;if(stage==Stage::Heavy)++stats_.heavyValid;
                 remember(e,constants,inverse,output);evaluationStatus=Status::Valid;return evaluationStatus;
             }
-            double low[3]={INFINITY,INFINITY,INFINITY},high[3]={-INFINITY,-INFINITY,-INFINITY};
-            for(const auto& pair:e.groups){
-                if(timer.expired()){if(stage==Stage::Cheap&&timer.sliceExpired()){++stats_.cheapSliceDeferred;if(info)info->kind=Kind::Heavy;}return timeBudget();}budget.operations+=p.operations.size();detail::Vector inputs[16]={};
-                const auto& limits=pair.second.limits;
-                for(size_t i=0;i<e.bindings.size();++i)for(unsigned j=0;j<4;++j){const float lo=limits[i*8+j],hi=limits[i*8+4+j],mid=float((double(lo)+hi)*.5);inputs[e.bindings[i].reg][j]={mid,std::max(double(mid)-lo,double(hi)-mid)};}
-                detail::Vector position;if(!detail::evaluateIntervals(p,inputs,effective,position,true)){++stats_.unsupported;evaluationStatus=Status::Unsupported;return evaluationStatus;}
-                for(unsigned axis=0;axis<3;++axis){detail::Value world=detail::mul(position[3],{inverse[12+axis],0});double magnitude=std::fabs(world.value)+world.error;
-                    for(unsigned k=0;k<3;++k){auto term=detail::mul(position[k],{inverse[4*k+axis],0});magnitude+=std::fabs(term.value)+term.error;world=detail::add(world,term);}
-                    world.error+=detail::roundError(magnitude)*8+.001;
-                    if(!std::isfinite(world.value)||!std::isfinite(world.error)||std::fabs(world.value)+world.error>1000000){++stats_.unsupported;evaluationStatus=Status::Unsupported;return evaluationStatus;}
-                    low[axis]=std::min(low[axis],double(world.value)-world.error);high[axis]=std::max(high[axis],double(world.value)+world.error);
-                }
-            }
-            for(unsigned axis=0;axis<3;++axis){output.low[axis]=std::nextafter(float(low[axis]),-std::numeric_limits<float>::infinity());output.high[axis]=std::nextafter(float(high[axis]),std::numeric_limits<float>::infinity());}
-            output.valid=true;++stats_.ready;if(stage==Stage::Cheap)++stats_.cheapValid;if(stage==Stage::Heavy)++stats_.heavyValid;remember(e,constants,inverse,output);evaluationStatus=Status::Valid;return evaluationStatus;
+            evaluationStatus=evaluateGroups(p,e,effective,inverse,budget,output,[&]{return timer.expired();});
+            if(evaluationStatus==Status::Budget){if(stage==Stage::Cheap&&timer.sliceExpired()){++stats_.cheapSliceDeferred;if(info)info->kind=Kind::Heavy;}return timeBudget();}
+            if(evaluationStatus!=Status::Valid){++stats_.unsupported;return evaluationStatus;}
+            ++stats_.ready;if(stage==Stage::Cheap)++stats_.cheapValid;if(stage==Stage::Heavy)++stats_.heavyValid;remember(e,constants,inverse,output);return evaluationStatus;
         }catch(...){evaluationStatus=Status::Unsupported;accountClassify();if(info)info->kind=Kind::Unsupported;++stats_.unsupported;return Status::Unsupported;}
     }
 };

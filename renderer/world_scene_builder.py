@@ -106,6 +106,17 @@ def array(b,offset,count,fmt):
     if count>10000000 or offset+count*size>len(b):raise ValueError('Invalid array')
     return list(struct.iter_unpack(fmt,b[offset:offset+count*size]))
 
+def skin_vertex_indices(model,skin):
+    """Resolve a SKIN against its winning M2; never borrow another archive's mesh."""
+    if skin[:4]!=b'SKIN':raise ValueError('Unsupported skin')
+    n,off=unpack('<II',skin,4);lookup=[v[0] for v in array(skin,off,n,'<H')]
+    n,off=unpack('<II',skin,12);indices=[v[0] for v in array(skin,off,n,'<H')]
+    vertex_count=unpack('<I',model,60)[0]
+    if any(i>=vertex_count for i in lookup):raise ValueError('SKIN vertex lookup exceeds winning M2')
+    if any(i>=len(lookup) for i in indices):raise ValueError('SKIN triangle lookup exceeds vertex table')
+    return [lookup[i] for i in indices]
+
+
 def normalize(v):
     length=math.sqrt(sum(x*x for x in v))
     return tuple(x/length for x in v) if length>1e-8 else (0.,0.,1.)
@@ -226,15 +237,48 @@ class Assets:
 
 def rgb565(value):return ((value>>11)*255//31,((value>>5)&63)*255//63,(value&31)*255//31)
 
-def decode_blp(b,maximum=128):
+def blp_mips(b):
+    """Validated mip extents, bounded by image dimensions rather than spare header slots."""
     if b[:4]!=b'BLP2':raise ValueError('Only BLP2 texture decoding is implemented')
     encoding,alpha_depth,alpha_encoding,has_mips=unpack('<4B',b,8)
     w,h=unpack('<II',b,12); offsets=unpack('<16I',b,20);sizes=unpack('<16I',b,84)
     if not w or not h or max(w,h)>16384:raise ValueError('Invalid BLP dimensions')
-    level=0
-    while max(w,h)>maximum and level<15 and offsets[level+1]:w=max(1,w//2);h=max(1,h//2);level+=1
-    offset,size=offsets[level],sizes[level]
-    if not offset or offset+size>len(b):raise ValueError('Invalid BLP mip')
+    if encoding==1 and alpha_depth not in (0,1,4,8):raise ValueError('Unsupported palette alpha')
+    if encoding not in (1,2,3):raise ValueError('Unsupported BLP encoding')
+    result=[]
+    for level in range(max(w,h).bit_length()):
+        offset,size=offsets[level],sizes[level]
+        if not offset or not size or offset==len(b):
+            # Some packers leave repeated EOF offsets or stale sizes after a
+            # partial mip chain. Preserve its valid prefix, never read the tail.
+            if any(0<offsets[i]<len(b) and sizes[i] for i in range(level+1,max(w,h).bit_length())):
+                raise ValueError('Noncontiguous BLP mip chain')
+            break
+        mw,mh=max(1,w>>level),max(1,h>>level)
+        required=(mw*mh*4 if encoding==3 else mw*mh+(mw*mh*alpha_depth+7)//8 if encoding==1 else
+                  ((mw+3)//4)*((mh+3)//4)*(8 if alpha_depth in (0,1) else 16))
+        # Keep the last complete level when packers omit sub-byte alpha or
+        # undersize a rectangular BC mip below one block in its short axis.
+        if result and encoding==1 and alpha_depth in (1,4) and mw*mh*alpha_depth<8 and size==mw*mh and 1172<=offset and offset+size<=len(b):
+            break
+        block_size=8 if alpha_depth in (0,1) else 16
+        if result and encoding==2 and min(mw,mh)<4 and block_size<=size<required and size%block_size==0 and 148<=offset and offset+size<=len(b):
+            break
+        if offset<(1172 if encoding==1 else 148) or size<required or offset+size>len(b):
+            raise ValueError('Invalid BLP mip extent at level '+str(level))
+        result.append((level,mw,mh,offset,required))
+    if not result:raise ValueError('Missing BLP base mip')
+    return result
+
+
+def decode_blp(b,maximum=128):
+    if maximum<1:raise ValueError('Invalid BLP decode limit')
+    mips=blp_mips(b)
+    level,w,h,offset,size=mips[-1]
+    for mip in mips:
+        level,w,h,offset,size=mip
+        if max(w,h)<=maximum:break
+    encoding,alpha_depth,alpha_encoding,has_mips=unpack('<4B',b,8)
     data=b[offset:offset+size];result=bytearray(w*h*4)
     if encoding==3:
         if len(data)<w*h*4:raise ValueError('Truncated RGBA mip')
@@ -287,8 +331,8 @@ class Builder:
         self.assets=assets;self.meshes={};self.mesh_names={};self.textures={};self.skipped_groups=[];self.skip_bad_groups=False;self.reset()
     def reset(self):
         self.vertices=[];self.triangles=[];self.materials=[];self.material_ids={};self.tile_stats=collections.Counter();self.tile_errors=0
-    def material(self,path='',blend=0,flat=False):
-        key=(path,blend,flat)
+    def material(self,path='',blend=0,flat=False,point_glass=False):
+        key=(path,blend,flat,point_glass)
         if key in self.material_ids:return self.material_ids[key]
         if path not in self.textures:
             try:self.textures[path]=decode_blp(self.assets.read(path)) if path else (0,0,b'')
@@ -299,7 +343,17 @@ class Builder:
         if flat and rgba:
             count=len(rgba)//4;color=tuple(sum(srgb_to_linear(v/255) for v in rgba[channel::4])/count for channel in range(3));w=h=0;rgba=b''
         result=len(self.materials);self.material_ids[key]=result
-        self.materials.append((color,w,h,ALPHA_KEY_CUTOFF if blend==1 else 0.,rgba))
+        # Negative exact integers carry fixture IDs. Older readers reject them
+        # even when the game's floating-point mode flushes subnormal values.
+        cutoff=ALPHA_KEY_CUTOFF if blend==1 else 0.
+        if point_glass:
+            code=point_glass-0x90000000+1 if point_glass>=0x90000000 else point_glass
+            if not 0<code<0x801040:raise ValueError('Lamp fixture tag range')
+            if blend==1:
+                if code<0x800000:raise ValueError('Cutout lamp tag requires an M2 source')
+                code+=0x400000
+            cutoff=-float(code)
+        self.materials.append((color,w,h,cutoff,rgba))
         return result
     def add_mesh(self,mesh,matrix,translation,category,instance_id=0):
         if not any(value for row in matrix for value in row):
@@ -321,8 +375,7 @@ class Builder:
         vertices=[tuple(v[:3])+tuple(v[11:14])+tuple(v[14:16]) for v in data]
         skin=self.assets.read(path[:-3]+'00.skin')
         if skin[:4]!=b'SKIN':raise ValueError('Unsupported skin')
-        n,off=unpack('<II',skin,4);lookup=[x[0] for x in array(skin,off,n,'<H')]
-        n,off=unpack('<II',skin,12);indices=[lookup[x[0]] for x in array(skin,off,n,'<H')]
+        indices=skin_vertex_indices(b,skin)
         n,off=unpack('<II',skin,28);subsets=array(skin,off,n,'<10H7f')
         n,off=unpack('<II',skin,36);batches=array(skin,off,n,'<2B11H')
         n,off=unpack('<II',b,80);textures=array(b,off,n,'<4I')
@@ -330,6 +383,42 @@ class Builder:
         n,off=unpack('<II',b,128);tex_lookup=[x[0] for x in array(b,off,n,'<H')]
         triangles=[];materials=[];selected=set()
         invisible=hidden_batches(b,batches);faint=hidden_batches(b,batches,CASTER_MIN_ALPHA)
+        shells={};lights=[]
+        if any(blend in (0,1) for flag,blend in flags):
+            # Tag only a bounded, static, opaque luminous shell containing one
+            # source. The tag changes ownership, not caster geometry. Resolve
+            # native and renderer-owned sources exactly as the FGL builder does.
+            from world_lights_builder import extract_m2,m2_sources,static_bone_offset,Unsupported
+            from light_attachments import native_sources
+            from world_fixture_emission import native_fixture_offsets
+            import world_emitter_index
+            try:
+                if not hasattr(self,'lamp_emitters'):self.lamp_emitters=world_emitter_index.Index(self.assets,lazy=True)
+                lights=m2_sources(path,b,extract_m2(b,collections.Counter())+native_sources(b),self.lamp_emitters)
+                offsets=native_fixture_offsets(self.assets,path,b,lights)
+                lights=[(offsets[s[4]]['position'],*s[1:]) if s[4] in offsets else s for s in lights]
+            except (ValueError,FileNotFoundError,IndexError,KeyError,struct.error):lights=[]
+            candidates=collections.defaultdict(list)
+            for bi,batch in enumerate(batches):
+                if bi in invisible or bi in faint or batch[0]&4 or batch[2]==0x8000 or batch[7]:continue
+                flag,blend=flags[batch[6]]
+                if blend!=0 or not flag&1 or flag&0x40:continue
+                sub=subsets[batch[3]];first=sub[4]+(sub[1]<<16);size=sub[5]
+                if not size or size%3 or size>4096*3 or first+size>len(indices):continue
+                ids=set(indices[first:first+size])
+                if not ids or max(ids)>=len(vertices):continue
+                try:
+                    bones={v[7+k] for i in ids for v in [data[i]] for k in range(4) if v[3+k]}
+                    if any(static_bone_offset(b,bone)!=(0.,0.,0.) for bone in bones):continue
+                except Unsupported:continue
+                low=tuple(min(vertices[i][k] for i in ids) for k in range(3))
+                high=tuple(max(vertices[i][k] for i in ids) for k in range(3))
+                inside=[l for l in lights if l[6]&2 and all(0<high[k]-low[k]<=l[3] and low[k]<l[0][k]<high[k] for k in range(3))]
+                if len(inside)==1:candidates[inside[0][4]].append(batch[3])
+            for light,subs in candidates.items():
+                if len(subs)==1:
+                    if 0<=light<4096:shells[subs[0]]=0x800000+light
+                    elif 0x80000000<=light<0x80000040:shells[subs[0]]=0x801000+light-0x80000000
         for batch_index,batch in enumerate(batches):
             if batch_index in invisible:
                 self.assets.stats['excluded_permanently_invisible_m2_batches']+=1
@@ -347,25 +436,65 @@ class Builder:
             if batch_index in faint:self.assets.stats['excluded_faint_m2_batches']+=1;continue
             selected.add(sub);texture=textures[tex_lookup[texcombo]]
             path_tex=string(b,texture[3]) if texture[0]==0 and texture[2] else ''
-            mat=len(materials);materials.append((path_tex,min(blend,1),False))   # the game's shadow pass alpha-tests every blended batch
+            mat=len(materials);materials.append((path_tex,min(blend,1),False,shells[sub]) if sub in shells else (path_tex,min(blend,1),False))   # the game's shadow pass alpha-tests every blended batch
             subset=subsets[sub];first=subset[4]+(subset[1]<<16);size=subset[5]
             if first+size>len(indices) or size%3:raise ValueError('Invalid skin triangle range')
             for i in range(first,first+size,3):
                 t=tuple(indices[i:i+3])
                 if max(t)>=len(vertices):raise ValueError('M2 vertex range')
                 triangles.append((*t,mat))
+        if lights:
+            from m2_light_geometry import source_components,paired_source_layers
+            static={}
+            def static_vertex(i):
+                for weight,bone in zip(data[i][3:7],data[i][7:11]):
+                    if not weight:continue
+                    if bone not in static:
+                        try:static[bone]=static_bone_offset(b,bone)==(0.,0.,0.)
+                        except Unsupported:static[bone]=False
+                    if not static[bone]:return False
+                return True
+            def alpha_at(index,u,v):
+                triangle=triangles[index];texture=materials[triangle[3]][0]
+                if texture not in self.textures:
+                    try:self.textures[texture]=decode_blp(self.assets.read(texture))
+                    except (ValueError,FileNotFoundError,IndexError):self.textures[texture]=(0,0,b'')
+                width,height,rgba=self.textures[texture]
+                if not width or not height:return False
+                uv=[sum(weight*vertices[vertex][6+k] for weight,vertex in zip((1-u-v,u,v),triangle[:3])) for k in range(2)]
+                x=uv[0]*width-.5;y=uv[1]*height-.5;ix=math.floor(x);iy=math.floor(y);fx=x-ix;fy=y-iy
+                alpha=sum(wx*wy*rgba[(((iy+dy)%height)*width+(ix+dx)%width)*4+3]
+                          for dx,wx in ((0,1-fx),(1,fx)) for dy,wy in ((0,1-fy),(1,fy)))
+                return alpha>=255*ALPHA_KEY_CUTOFF
+            owned=source_components(vertices,triangles,materials,lights,static_vertex,alpha_at)
+            owned.update(paired_source_layers(vertices,triangles,materials,lights,static_vertex,owned))
+            tagged={}
+            for i,source in owned.items():
+                if 0<=source<4096:tag=0x800000+source
+                elif 0x80000000<=source<0x80000040:tag=0x801000+source-0x80000000
+                else:continue
+                a,c,d,material=triangles[i];key=(material,tag)
+                if key not in tagged:tagged[key]=len(materials);materials.append((*materials[material][:3],tag))
+                triangles[i]=(a,c,d,tagged[key])
         mesh=(vertices,triangles,materials);self.meshes[path]=mesh;self.mesh_names[id(vertices)]=path;return mesh
     def wmo(self,path):
         if path in self.meshes:return self.meshes[path]
-        root=dict(chunks(self.assets.read(path)));groups=unpack('<I',root['MOHD'],4)[0]
+        rootBlob=self.assets.read(path);root=dict(chunks(rootBlob));groups=unpack('<I',root['MOHD'],4)[0]
+        import wmo_lamp_emission
+        lampMaterials=wmo_lamp_emission.candidates(rootBlob)
         mt=root.get('MOTX',b'');materials=[]
         for material in array(root['MOMT'],0,len(root['MOMT'])//64,'<16I'):
             materials.append((string(mt,material[3]),material[2],False))
         vertices=[];triangles=[];refs=set()
         for group in range(groups):
             name=path[:-4]+'_%03d.wmo'%group
-            try:g,overrun=wmo_group(self.assets.read(name))
+            try:groupBlob=self.assets.read(name);g,overrun=wmo_group(groupBlob)
             except FileNotFoundError:self.assets.missing.add(name);continue
+            glass={}
+            if lampMaterials:
+                try:_,glass=wmo_lamp_emission.analyze(rootBlob,groupBlob,self.assets.read,group,lampMaterials)
+                except (ValueError,FileNotFoundError,IndexError,KeyError,struct.error) as exc:
+                    self.assets.unsupported.add('wmo_lamp:'+name+':'+str(exc))
             if overrun:self.assets.clamped.add(name)
             sub={}
             for tag,payload in chunks(g['MOGP'],68):sub.setdefault(tag,payload)
@@ -381,7 +510,7 @@ class Builder:
             # Render batches define visible faces; collision-only triangles outside
             # MOBA ranges must not become artificial lighting occluders.
             batches=array(sub.get('MOBA',b''),0,len(sub.get('MOBA',b''))//24,'<6hI3H2B')
-            emitted=set()
+            emitted=set();tagged={}
             for batch in batches:
                 first,size,material=batch[6],batch[7],batch[11]
                 if material>=len(materials):raise ValueError('WMO material range')
@@ -391,7 +520,12 @@ class Builder:
                     if i in emitted:continue
                     emitted.add(i);t=inds[i:i+3]
                     if max(t)>=len(pos):raise ValueError('WMO vertex range')
-                    triangles.append((base+t[0],base+t[1],base+t[2],material))
+                    use=material
+                    if i in glass:
+                        identity=(material,glass[i])
+                        if identity not in tagged:tagged[identity]=len(materials);materials.append((*materials[material],glass[i]))
+                        use=tagged[identity]
+                    triangles.append((base+t[0],base+t[1],base+t[2],use))
         mesh=(vertices,triangles,materials,root,refs);self.meshes[path]=mesh;self.mesh_names[id(vertices)]=path;return mesh
     def wmo_doodads(self,root,refs,doodadset,matrix,translation,root_id=0):
         names=root.get('MODN',b'');data=root.get('MODD',b'');sets=root.get('MODS',b'')

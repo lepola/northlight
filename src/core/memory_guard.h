@@ -17,7 +17,7 @@ struct Policy {
     // Address-space walk cadence (sampler thread, ~6-50 ms each on Windows).
     std::uint32_t sampleMs=3000,pressureSampleMs=1000,reportMs=10000;
     // Demand pressure: the geometry builder stalls for memory below its own floor
-    // (768 MiB at entry), far above enterAvailable. Recovery from a pressure episode
+    // (512 MiB at entry), far above enterAvailable. Recovery from a pressure episode
     // that a demand entered needs the largest demand seen plus this, so the restored
     // full caps cannot regrow straight back into the next region's stall.
     std::uint64_t demandRegrowth=128*MiB;
@@ -32,7 +32,7 @@ struct Decision {
     bool trim=false,entered=false,recovered=false;
     bool afterTrim=false; // first sample walked after the last completed trim
     bool demand=false;    // this entry/trim was caused by the builder's demand, not the guard's own thresholds
-    bool capsChanged=false; // 0.3.216: the stream/replay-copy/world caps must switch now; halfCaps tells to what (true: halved, false: full)
+    bool capsChanged=false; // The stream/replay-copy/terrain caps must switch now; halfCaps tells to what (true: halved, false: full).
     bool halfCaps=false;
     bool report=false;    // periodic diagnostic line due (caller gates on Diagnostics)
 };
@@ -43,6 +43,8 @@ class Guard {
     bool pressure_=false,trimmed_=false,healthy_=false,requested_=false,reported_=false,afterPending_=false;
     bool demandOnly_=false; // pressure entered by a demand and no own-threshold low sample since
     bool halved_=false;     // 0.3.216: the caps are halved: only the guard's own thresholds do that (a demand-only episode keeps full caps: halving dropped the buffer shadows and made every lock a sync round trip)
+    bool fragmentationUnchanged_=false;
+    std::uint64_t trimLargest_=0;
     std::uint32_t lastTrim_=0,trimDone_=0,healthySince_=0,lastRequest_=0,lastReport_=0,lastDemand_=0;
     std::uint64_t minAvailable_=~0ull,minLargest_=~0ull,demandFloor_=0;
     unsigned trims_=0,entries_=0,samples_=0;
@@ -62,7 +64,10 @@ public:
         Decision d;++samples_;
         if(available<minAvailable_)minAvailable_=available;
         if(largest<minLargest_)minLargest_=largest;
-        if(afterPending_&&after(sampleTick,trimDone_)){afterPending_=false;d.afterTrim=true;}
+        if(afterPending_&&after(sampleTick,trimDone_)){
+            afterPending_=false;d.afterTrim=true;
+            fragmentationUnchanged_=largest<=trimLargest_;trimLargest_=largest;
+        }
         const bool low=largest<policy_.enterLargest||available<policy_.enterAvailable;
         const bool demanded=available<demand;
         if(demand)lastDemand_=sampleTick;
@@ -71,14 +76,19 @@ public:
         const bool healthy=largest>=policy_.recoverLargest&&available>=recoverAvailable();
         if(low){
             healthy_=false;demandOnly_=false;
-            if(!pressure_){pressure_=true;++entries_;d.entered=true;}
-            if(!halved_){halved_=true;d.capsChanged=d.halfCaps=true;}   // also a demand-only episode that now meets a real low sample
-            // Repeated trims while still low, at most once per cooldown.
-            if(!trimmed_||sampleTick-lastTrim_>=policy_.trimCooldownMs){trimmed_=true;lastTrim_=sampleTick;++trims_;d.trim=true;}
+            if(!pressure_){pressure_=true;fragmentationUnchanged_=false;++entries_;d.entered=true;}
+            if(!halved_){halved_=true;fragmentationUnchanged_=false;d.capsChanged=d.halfCaps=true;}   // also a demand-only episode that now meets a real low sample
+            // A trim cannot coalesce free regions occupied by the game/driver. If it did not
+            // grow the largest region, keep the pressure caps but leave rebuilt caches alone
+            // until that region shrinks, aggregate VA is low, or the builder needs memory.
+            const bool retry=d.entered||d.capsChanged||!fragmentationUnchanged_||largest<trimLargest_||available<policy_.enterAvailable||demanded;
+            if(retry&&(!trimmed_||sampleTick-lastTrim_>=policy_.trimCooldownMs)){
+                trimmed_=true;lastTrim_=sampleTick;trimLargest_=largest;fragmentationUnchanged_=false;++trims_;d.trim=true;
+            }
         }else if(demanded&&!pressure_){
             // One trim (cooldown-limited), caps unchanged; a demand alone never repeats the trim while it stays unmet.
             healthy_=false;pressure_=true;demandOnly_=true;++entries_;d.entered=true;d.demand=true;
-            if(!trimmed_||sampleTick-lastTrim_>=policy_.trimCooldownMs){trimmed_=true;lastTrim_=sampleTick;++trims_;d.trim=true;}
+            if(!trimmed_||sampleTick-lastTrim_>=policy_.trimCooldownMs){trimmed_=true;lastTrim_=sampleTick;trimLargest_=largest;fragmentationUnchanged_=false;++trims_;d.trim=true;}
         }else if(pressure_&&healthy){
             if(!healthy_){healthy_=true;healthySince_=sampleTick;}
             if(sampleTick-healthySince_>=policy_.recoverHoldMs&&(!demandOnly_||sampleTick-lastDemand_>=policy_.demandQuietMs)){

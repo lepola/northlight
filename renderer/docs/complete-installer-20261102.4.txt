@@ -1,0 +1,52 @@
+Complete Windows test installer 0.3.216-test.20261102.4
+
+Base integration commit: 19ba2a959ede50e05d58c2349be6c2085a4e840c
+Includes the existing .2 integration and release-validation repairs, plus the
+performance fixes below. No new quality setting or TargetFps controller.
+Source identity: 950c751c9f2c95ac932d8f975713f9b6921826f20123607950b72bf8fe94c008
+
+Archive: Northlight-0.3.216-test.20261102.4-Windows.zip
+Archive bytes: 20166358
+Archive SHA256: f1819da8b9a218386805013d5326b85b3a3639904ba5ec45b4fdd87ed34add59
+DLL SHA256: 2bc5d057eb5284956d660234233e2ea9057835e1c3d224119e4fc71d14f3cda2
+
+Performance changes
+- Reuse the already computed current-palette SkinEnvelope instead of a second
+  equivalent material bounds evaluation. Native O0/O2 checks cover 120 poses,
+  shader DEF constants, source generations, exact bounds and budget refusal.
+- Stop skinned depth-range preparation before fetching constants, declaration
+  and source after the existing ready budget is exhausted. The old downstream
+  evaluator necessarily refused that request. Frame reset restores eligibility.
+- Skip local fog when every selected extinction coefficient is exactly zero.
+  QA capture confirms all 64 lights have zero extinction in the actual shader
+  banks; the accumulator is zero and before/after fog images are byte-identical.
+  This removes 16 LocalFog draws, one combine draw and the accumulator clear in
+  that scene. Direct lighting remains active; nonzero and unexpected values
+  retain the previous fog path. No quality reduction or budget increase.
+
+Diagnostics and limits
+Bounded HDR fallback diagnostics now identify particle and sky call sites as
+well as UI. HDR rendering itself is unchanged; this is not a claimed FPS fix.
+Experimental AO and cloud shader edits were rejected after mixed GPU timings
+or equivalence failure and were fully restored to the frozen source baseline.
+Zig compiler preflight and the approved Windows build workflow remain in place
+to avoid restricted-sandbox error: Unexpected.
+
+QA: RTX 3080, 2560x1440, SDR, ASSAO High. The effective DXVK 90 FPS limiter
+precludes 120 FPS. Diagnostics=0 suppressed timing despite RenderProfile=1;
+the supplied session cannot establish actual FPS, CPU/GPU cost or p95/p99.
+For the next timing run remove that existing cap, use Diagnostics=1 with
+RenderProfile=1 temporarily, and record normal gameplay without capture stalls.
+Then measure gameplay with diagnostics off. No CPU model is required to proceed.
+
+Full final suite: PASS=252 FAIL=0 TIMEOUT=0 SKIP=225.
+Skips retain prerequisite/manual reasons in results.tsv; missing host C++ and
+sanitizer tools are not represented as tested. Packaging checks passed source
+identity, exact DLL bytes, ZIP CRC, allowlists/pins/manifests and six entry points
+under bundled isolated Python in a Unicode path.
+
+Test results: .local/out/test-output/20261102-182853/results.tsv
+Full evidence: .local/out/performance-wave-20261102/final-validation.json
+QA evidence: .local/out/qa-audit-20261102/report.txt
+The package is local in releases/. These checks do not establish stable 120 FPS
+or whole-game visual acceptance. The game installation is unchanged.

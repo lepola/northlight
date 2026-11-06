@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # northlight-test: requires=cxx
-"""Local light selection and Tracker (soft cap, incumbent bias, time-based fades): native tests, plain and ASan/UBSan, with a select()-vs-Tracker timing line."""
+"""Local light selection and Tracker (soft cap, incumbent bias, time-based fades): native tests, plain and ASan/UBSan, with optional explicit select()-vs-Tracker benchmarks."""
 import sys; from pathlib import Path; sys.path.insert(0, str(Path(__file__).resolve().parents[1]))  # repo root
 import northlight_paths as fp
 import subprocess,tempfile

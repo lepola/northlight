@@ -50,6 +50,14 @@ class BuilderTests(unittest.TestCase):
         _,_,_,ot,_,_=struct.unpack_from('<hh4I',blob,h)
         struct.pack_into('<II',blob,ok,2,ko);struct.pack_into('<II',blob,ot,2,to)
         self.assertEqual(b.extract_m2(blob,stats),[]);self.assertEqual(stats['unsupported_animated_track'],1)
+    def test_m2_native_transport_ignores_placement_scale(self):
+        light=((1,2,3),(4,1.882352948,.627451003),16,40,0,2,2)
+        for scale in (.25,1,5.3679737,16):
+            r=(b'x'*32,71,1,*([0]*6),scale,0,0,0,scale,0,0,0,scale,10,20,30)
+            placed=b.instance_lights([light],r,'world\\bonfire.m2')[0]
+            self.assertEqual(placed[:3],(10+scale,20+2*scale,30+3*scale))
+            self.assertEqual(placed[6:8],(1,12));self.assertEqual(placed[3],1)
+            self.assertAlmostEqual(placed[4],1.882352948/4)
     def test_profile_variant_placement(self):
         # A light-less M2 gets its profile's emitter by asset hash; the HD and the stock asset of the
         # same placement share one source id, so caches of the two packs diff as values, not as
@@ -83,7 +91,7 @@ def run_native(cache_dir=None):
         (p/'Alpha.fgl').write_bytes(good)
         (p/'Beta.fgl').write_bytes(struct.pack('<4sIII',b'FGL1',1,48,1)+b.RECORD.pack(25,0,0,1,1,1,0,5,4,2,0))
         bad=[good[:15],good[:-1],good+b'\0',b'BAD!'+good[4:]]
-        for offset,fmt,value in [(4,'<I',2),(8,'<I',52),(12,'<I',1000001),(16,'<f',math.nan),(16+28,'<f',1),(16+48+32,'<Q',1)]:
+        for offset,fmt,value in [(4,'<I',3),(8,'<I',52),(12,'<I',1000001),(16,'<f',math.nan),(16+28,'<f',1),(16+48+32,'<Q',1)]:
             x=bytearray(good);struct.pack_into(fmt,x,offset,value);bad.append(bytes(x))
         for i,x in enumerate(bad):(p/f'bad{i}.fgl').write_bytes(x)
         binary=p/'test';command=['c++','-std=c++17','-O1','-g','-fsanitize=address,undefined','-fno-omit-frame-pointer',*fp.test_include_flags(),str(ROOT/'test_world_local_lights.cpp'),'-o',str(binary)]

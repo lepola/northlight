@@ -115,20 +115,20 @@
         replayProbeDisabled=true;
         if(NorthlightRenderThreadProbe::profiling())logf("WORLD replay probe disabled: %s HRESULT=%08lx after %u consecutive incomplete runs (rendering unaffected)",stage,(unsigned long)hr,replayProbeFailures);
     }
-    template<class Mode> bool replayProbeIssue(const float* rows,size_t& draws){
+    template<class Mode> bool replayProbeIssue(const float* rows,const float* worldMatrix,size_t& draws){
         size_t constantBytes=0,constantCalls=0;const char* failedStage=nullptr;HRESULT failedHR=S_OK;
         NorthlightReplayPoses::Pass<BOOL> probePoses;
         NorthlightReplayDrawState::Cache probeBindings(d);
         Mode mode;
         for(const Replay* p:replayProbeList){
-            if(!submitReplay(p,probeBindings,probePoses,rows,mode,constantBytes,constantCalls,[&](HRESULT h,const char* s){if(SUCCEEDED(h))return true;failedStage=s;failedHR=h;return false;}))break;
+            if(!submitReplay(p,probeBindings,probePoses,rows,worldMatrix,mode,constantBytes,constantCalls,[&](HRESULT h,const char* s){if(SUCCEEDED(h))return true;failedStage=s;failedHR=h;return false;}))break;
             ++draws;
         }
         if(draws==replayProbeList.size())return true;
         replayProbeFailed(failedStage?failedStage:"pose constants",failedStage?failedHR:E_FAIL);return false;
     }
     // realLoopMs: this frame's sun near replay loop (coarse, two clock reads, every probe frame).
-    void replayProbe(const float* rows,double realLoopMs){
+    void replayProbe(const float* rows,const float* worldMatrix,double realLoopMs){
         replayProbeStats.realLoop.add(realLoopMs);
         const auto mode=replayProbeMode;if(mode==NorthlightRenderThreadProbe::ProbeOff||captureFrequency.QuadPart<=0)return;
         if(!replayProbeSurface||!replayProbeDepth){
@@ -147,9 +147,9 @@
             if(SUCCEEDED(hr))hr=d->SetViewport(&vp);if(SUCCEEDED(hr))hr=d->Clear(0,nullptr,D3DCLEAR_TARGET|D3DCLEAR_ZBUFFER,0xffffffff,1,0);
             if(FAILED(hr)){replayProbeFailed("probe target binding",hr);return;}
             t1=QpcClock::now();
-            complete=mode==NorthlightRenderThreadProbe::ProbeFull?replayProbeIssue<NorthlightRenderThreadProbe::Off>(rows,draws):
-                     mode==NorthlightRenderThreadProbe::ProbeState?replayProbeIssue<NorthlightRenderThreadProbe::StateOnly>(rows,draws):
-                     replayProbeIssue<NorthlightRenderThreadProbe::LogicOnly>(rows,draws);
+            complete=mode==NorthlightRenderThreadProbe::ProbeFull?replayProbeIssue<NorthlightRenderThreadProbe::Off>(rows,worldMatrix,draws):
+                     mode==NorthlightRenderThreadProbe::ProbeState?replayProbeIssue<NorthlightRenderThreadProbe::StateOnly>(rows,worldMatrix,draws):
+                     replayProbeIssue<NorthlightRenderThreadProbe::LogicOnly>(rows,worldMatrix,draws);
             t2=QpcClock::now();
         } /* SavedState restores targets, depth, viewport and the full state block here */
         const int64_t t3=QpcClock::now();

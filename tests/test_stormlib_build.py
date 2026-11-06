@@ -37,6 +37,33 @@ def build(target):
 
 
 class StormLibBuild(unittest.TestCase):
+    def test_source_identity_is_host_independent_and_complete(self):
+        # Known ordering distinguishes case folding and flat-string/path-component sorting.
+        files = {'CMakeLists.txt': b'cmake', 'LICENSE': b'license', 'src/Z.c': b'upper',
+                 'src/a.c': b'lower', 'src/nested/a.h': b'nested', 'src/nested-z.h': b'flat'}
+        with tempfile.TemporaryDirectory(prefix='northlight-storm-identity-') as temporary:
+            root = Path(temporary)
+            for name, data in files.items():
+                path = root / name
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_bytes(data)
+            expected = 'd5e75480e6546b914ac43d29265959915c1f44e359ec009e03ed2d7e2631ff50'
+            self.assertEqual(bs.tree_sha256(root), expected)
+            for name, data in files.items():
+                path = root / name
+                path.write_bytes(data + b'changed')
+                self.assertNotEqual(bs.tree_sha256(root), expected, name)
+                path.write_bytes(data)
+            extra = root / 'src/extra.h'
+            extra.write_bytes(b'new')
+            self.assertNotEqual(bs.tree_sha256(root), expected)
+            extra.unlink()
+            original, renamed = root / 'src/Z.c', root / 'src/renamed.c'
+            original.rename(renamed)
+            self.assertNotEqual(bs.tree_sha256(root), expected)
+            renamed.rename(original)
+            self.assertEqual(bs.tree_sha256(root), expected)
+
     def test_source_tree_pinned(self):
         self.assertEqual(bs.tree_sha256(bs.source_root()), PINS['source_tree_sha256'])
 

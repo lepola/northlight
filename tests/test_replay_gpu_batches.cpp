@@ -71,7 +71,7 @@ struct Device:IDirect3DDevice9{
 struct Replay {
     Owner shared;const Mesh& mesh()const{return *shared;}
     bool gpuCached=false,indexed=true;IDirect3DVertexBuffer9* stream[4]={};IDirect3DIndexBuffer9* index=nullptr;UINT offset[4]={},stride[4]={},start=0;INT base=0;
-    IDirect3DVertexDeclaration9* decl=nullptr;IDirect3DVertexShader9* shader=nullptr;IDirect3DBaseTexture9* texture=nullptr;DWORD addressU=1,addressV=1;float cutoff=-1;
+    IDirect3DVertexDeclaration9* decl=nullptr;IDirect3DVertexShader9* shader=nullptr;IDirect3DBaseTexture9* texture=nullptr;DWORD addressU=1,addressV=1;float cutoff=-1;unsigned alphaMode=0;
     Replay()=default;Replay(const Replay& o):shared(o.shared),indexed(o.indexed),decl(o.decl),cutoff(o.cutoff){}
     ~Replay(){for(auto& p:stream)if(p)p->Release();if(index)index->Release();}
 };
