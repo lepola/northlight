@@ -14,7 +14,21 @@ The repository holds no game files: every tool that needs game data reads it fro
 
 The changelog, release notes and validation records are not part of the public source.
 
-Download latest release: https://github.com/lepola/northlight/releases
+Download the current [Northlight release](https://github.com/lepola/northlight/releases).
+
+## Tideglass beta branch
+
+This branch is being prepared for a combined Northlight and Tideglass water renderer.
+The build and install instructions below currently produce standard Northlight. A combined
+player package is pending. The intended package uses one Northlight `d3d9.dll` and a
+companion `water-core.dll`. Installing a second game-folder proxy would replace Northlight.
+
+Contributors working on the combo should keep the exported Tideglass sources, shader inputs
+and licence notices sufficient to build both DLLs from this checkout. Record the source
+revision and check exported files for drift when updating them. Keep client-derived assets
+and developer settings out of the package. For installer changes, exercise install, reinstall
+and uninstall on a modified client fixture and verify its realm, add-ons and archives at
+each step. See the [test instructions](#test) and [source conventions](#conventions).
 
 ## What Northlight adds
 

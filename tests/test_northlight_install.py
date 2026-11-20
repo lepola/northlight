@@ -534,6 +534,37 @@ class Install(Base):
         paths = [e['path'] for b in self.backups() for e in json.loads(b.read_text())['files']]
         self.assertFalse([p for p in paths if p.endswith('.mpq')])
 
+    def test_modified_client_keeps_player_files_through_install_reinstall_uninstall(self):
+        player_files = {
+            'Data/enUS/realmlist.wtf': b'set realmlist realm.example\r\n',
+            'WTF/Config.wtf': b'SET locale "enUS"\r\n',
+            'Interface/AddOns/Example/Example.toc': b'## Interface: 30300\r\n',
+            'WTF/Account/EXAMPLE/SavedVariables/Example.lua': b'Example = { enabled = true }\r\n',
+            'Data/patch-y.mpq': b'custom art',
+            'Data/patch-z.mpq': b'custom world',
+            'Data/enUS/patch-enus-z.mpq': b'custom locale',
+        }
+        for name, content in player_files.items():
+            path = self.client / name
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(content)
+        def player_data(files):
+            return {name: content for name, content in files.items()
+                    if name.startswith(('Data/', 'WTF/', 'Interface/')) or name == 'wow.exe'}
+
+        before = tree(self.client)
+
+        for stage in ('install', 'reinstall', 'uninstall'):
+            with self.subTest(stage=stage):
+                installer = self.installer()
+                if stage == 'uninstall':
+                    installer.uninstall(self.client)
+                    self.assertEqual(tree(self.client), before)
+                else:
+                    report = installer.install(self.client)
+                    self.assertTrue(report['art_layer'].startswith('skipped'))
+                    self.assertEqual(player_data(tree(self.client)), player_data(before))
+
     def test_killed_extraction_resumes(self):
         real, opened = fi.Source.open, []
 
