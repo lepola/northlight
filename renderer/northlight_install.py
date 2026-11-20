@@ -251,18 +251,14 @@ def locked(client):
 PROXY_PLATFORMS = ('windows', 'linux')   # the game-folder d3d9.dll proxy with the package's DXVK backends
 # Linux: what the player sets once so that Wine loads the game-folder d3d9.dll (shown after every install).
 WINE_STEPS = [
-    '',
-    'Linux: Wine must load d3d9.dll from the game folder (native before builtin): WINEDLLOVERRIDES="d3d9=n,b".',
-    '  Lutris:  right-click the game > Configure > Runner options > DLL overrides: add d3d9 with the value n,b',
-    '           (Lutris builds WINEDLLOVERRIDES from this list; an environment variable may be overwritten).',
-    '  Bottles: the bottle\'s settings > DLL Overrides (under Advanced in recent versions): d3d9 = Native, then Builtin.',
-    '  Steam (a non-Steam game, Properties > Compatibility: a Proton version): Properties > Launch options:',
-    '           WINEDLLOVERRIDES="d3d9=n,b" %command%',
-    '  Wine:    WINEDLLOVERRIDES="d3d9=n,b" wine Wow.exe, or winecfg > Applications > Wow.exe > Libraries: d3d9 (native, builtin).',
-    'Northlight loads its own DXVK from renderer-backends/, so the DXVK setting of Lutris, Bottles, Proton or the',
-    'Wine prefix does not matter and needs no change. Do not copy a DXVK d3d9.dll into the game folder (it would',
-    'replace Northlight\'s d3d9.dll) and do not use WineD3D modes (PROTON_USE_WINED3D, "DXVK off" with d3d9=b).',
-    'After the first start the game folder has northlight-renderer.log; its first line shows backend=dxvk loaded=1.',
+    'Before starting WoW, set your launcher to load the installed d3d9.dll:',
+    '  Steam/Proton: game Properties > Launch Options:',
+    '    WINEDLLOVERRIDES="d3d9=n,b" %command%',
+    '  Lutris: Configure > Runner options > DLL overrides: add d3d9 with value n,b.',
+    '  Bottles: in the bottle settings, set the d3d9 DLL override to Native, then Builtin.',
+    '  Plain Wine: from the game folder run WINEDLLOVERRIDES="d3d9=n,b" wine Wow.exe',
+    '    or set d3d9 to native, builtin in winecfg for Wow.exe.',
+    'Keep your existing launcher DXVK setting. Northlight supplies its own copy.',
 ]
 
 
@@ -394,6 +390,7 @@ class Installer:
     def __init__(self, package, platform=None, yes=False, out=None):
         self.pkg = package
         self.platform = platform or package.platform
+        self.product_name = 'Northlight + Tideglass' if package.info.get('tideglass') else 'Northlight renderer'
         self.yes = yes
         self.out = out or sys.stdout
         self.log = None
@@ -504,8 +501,10 @@ class Installer:
         if self.platform in ('mac', 'linux'):
             text = text.replace('\\ ', ' ')   # a folder dragged into Terminal
         client = Path(text).expanduser()
-        if not client.is_dir():
-            raise Refusal(f'Game folder not found: {text}')
+        if client.name.lower() == 'wow.exe' and client.is_file():
+            client = client.parent
+        if not text or not client.is_dir():
+            raise Refusal(f'Game folder not found: {text}. Choose the folder containing Wow.exe.')
         self.given = Path(os.path.abspath(client))
         return client.resolve()
 
@@ -520,9 +519,7 @@ class Installer:
                 self.say(f'  {i}) {path}')
             raw = input('Game folder (a number above, or drag the folder here) and Enter: ').strip()
             return found[int(raw) - 1] if raw.isdigit() and 0 < int(raw) <= len(found) else raw
-        if self.platform == 'linux':
-            return input('Game folder (the folder with Wow.exe, inside your Wine prefix or Steam/Lutris library): ')
-        return input('Game folder (the folder with wow.exe): ')
+        return input('Paste the game folder path or drag Wow.exe here, then press Enter: ')
 
     def preflight(self, client, locale):
         """Read-only checks; returns the locale. Raises Refusal with what to do next."""
@@ -698,11 +695,11 @@ class Installer:
         current = self.chosen_instances(client)
         if self.yes or not sys.stdin or not sys.stdin.isatty():
             return current
-        self.say('Dungeon and raid world cache (optional: GI, AO and world shadows inside instances).')
+        self.say('Optional lighting for dungeons and raids. You can add these later.')
         for n, g in enumerate(instance_maps.GROUPS, 1):
             self.say(f'  {n}  {g["label"]:<17} ~{g["est_gb"]:g} GB  ~{g["est_minutes"]:g} min')
         names = ', '.join(g['label'] for g in instance_maps.GROUPS if g['key'] in current) or 'none'
-        return self.pick(f'Groups to build (e.g. "1 2 6"), "all", "none", or Enter to keep: {names} > ',
+        return self.pick(f'Press Enter to keep {names}, or choose numbers (e.g. 1 2 6), all or none > ',
                          instance_maps.resolve, current)
 
     def instance_labels(self, keys):
@@ -925,7 +922,7 @@ class Installer:
         steps = report.get('steps', [])
         skipped = sum(1 for step in steps if 'skipped' in step)
         self.say(f'Art layer: generated from local assets ({len(steps) - skipped} steps applied, '
-                 f'{skipped} skipped; details in the log)')
+                 f'{skipped} skipped; details in the log)', console=not combo or self.log is None)
         actions = {}
         for name, data in layer.items():
             target = client / name
@@ -1092,7 +1089,7 @@ class Installer:
 
     def plan_install(self, client, locale, cache, backend, art, world_cache, instances=None, sky=None, raised_air=False):
         """Every check, read-only: returns what apply_install does. Raises Refusal."""
-        self.say(f'Northlight renderer {self.pkg.version} installer; game folder: {client}')
+        self.say(f'Game folder: {client}')
         backend = INSTALL.resolve_backend(client, backend)   # called once; payload_plan takes the result
         locale = self.preflight(client, locale)
         self.check_payload(backend)
@@ -1149,6 +1146,8 @@ class Installer:
                 action = 'build'
         if variant:
             self.say(f'Client: {variant} 3.3.5a archives ({locale}).')
+        elif not self.pkg.variants:
+            self.say(f'Using your own game files ({locale}).')
         else:
             self.say(f'Client: modified archives ({locale}); no prebuilt cache matches:')
             for line in differences[:12]:
@@ -1185,7 +1184,7 @@ class Installer:
         self.still_closed('changing anything')
         raised = {}
         if p['raised_air']:
-            self.say('Building outdoor height samples for Dalaran and Telredor from your client ...')
+            self.say('Preparing outdoor fog for Dalaran and Telredor ...')
             with tempfile.TemporaryDirectory() as work:
                 code, _ = self.run(APP / 'renderer' / 'raised_air.py',
                                    ['--client', client, '--locale', locale, '--output', work])
@@ -1276,7 +1275,7 @@ class Installer:
         backups = [b for b in backups if b.exists()]   # the run's own record is often merged away
         report.update(payload=payload, backups=[str(b) for b in backups], backups_freed=freed)
         self.say('')
-        self.say(f'Northlight renderer {self.pkg.version}: ' + ('installed.' if changed else 'already installed; nothing changed.'))
+        self.say(f'{self.product_name} {self.pkg.version}: ' + ('installed.' if changed else 'already installed; nothing changed.'))
         self.say(f'  world cache: {report["world_cache"]}')
         self.say('  ' + self.instance_summary(report['instances']))
         if report.get('instances_failed'):
@@ -1287,18 +1286,25 @@ class Installer:
             import install_world_cache as iwc
             for warning in report['archive_warnings']:
                 self.say('    ' + iwc.archive_warning_text(warning))
-        self.say(f'  art layer:   {report["art_layer"]}')
-        self.say(f'  renderer:    {payload}' + (f' (backend {p["backend"]})' if self.proxy else ''))
+        details = not self.pkg.info.get('tideglass') or self.log is None
+        self.say(f'  art layer:   {report["art_layer"]}', console=details or bool(why))
+        self.say(f'  renderer:    {payload}' + (f' (backend {p["backend"]})' if self.proxy else ''), console=details)
         if freed:
-            self.say(f'  backups:     {freed / (1 << 20):.1f} MiB of older Northlight copies removed; only the original files are kept')
+            self.say(f'  backups:     {freed / (1 << 20):.1f} MiB of older Northlight copies removed; only the original files are kept', console=details)
         if kept_why:
             self.say(f'  backups:     kept as they are: {kept_why}')
         for b in backups:
-            self.say('  rollback:   ', b)
+            self.say('  rollback:   ', b, console=details)
+        if not details:
+            self.say(f'  Installation details: {self.log.name}')
         if self.platform == 'linux':
             for line in WINE_STEPS:
                 self.say(line)
-        self.say('Start WoW yourself; this installer never starts the game.')
+        self.say('Start WoW as usual.')
+        if self.pkg.info.get('tideglass'):
+            self.say('To undo this install, close WoW and run ' +
+                     ('Uninstall.cmd' if self.platform == 'windows' else 'bash uninstall.sh') +
+                     ' from the extracted package.')
         return report
 
     def instance_summary(self, done):
@@ -1349,7 +1355,7 @@ class Installer:
                     (client / folder).rmdir()   # only when empty
                 except OSError:
                     pass
-        self.say('Northlight renderer removed.' if found or owner in ('variant', 'local') else 'Nothing to remove.')
+        self.say(f'{self.product_name} removed.' if found or owner in ('variant', 'local') else 'Nothing to remove.')
         left = self.foreign_proxy(client)
         if left:
             self.say(left)
@@ -1452,6 +1458,7 @@ def main(argv=None):
     installer.open_log(args.action)
     try:
         if args.action == 'install':
+            installer.say(f'{installer.product_name} {installer.pkg.version} installer')
             installer.install(args.client, args.locale, args.cache, args.backend, args.art_layer,
                               not args.no_world_cache, args.jobs, instances=args.instances, sky=args.sky,
                               raised_air=args.raised_air)

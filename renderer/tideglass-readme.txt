@@ -1,36 +1,43 @@
-Northlight + Tideglass beta __RELEASE_VERSION__
+Northlight + Tideglass {version} for {platform}
 
-Close the game. Unpack this folder outside the game directory. Start Install.cmd
-on Windows or run bash install.sh on Linux. Use the uninstall launcher from the
-same folder to restore the previous renderer. The Linux Wine override is below.
+For the 32-bit WoW 3.3.5a client (build 12340) on {system}.
 
-The combined renderer supports the 32-bit 3.3.5a build 12340 executable. The
-installer reads its header and installs d3d9.dll, water-core.dll, settings, the
-selected backends and northlight-water-archives.txt. It reads the player's own
-archives. It leaves realm settings, account data, add-ons and foreign MPQs alone.
-A previously installed water DLL or INI from another renderer must be moved
-aside before installing. Keep those files to restore that setup.
+FIRST INSTALL
 
-A standard install builds Northlight's lighting, current zone skies and weather,
-plus outdoor fog coverage in Dalaran and Telredor. It repairs the last mip of
-four known incomplete HD dock, sign and plant textures where needed. All inputs
-come from your client. Your original archives stay in place. If patch-Z belongs
-to another mod, the installer uses a free slot and reports any locale conflict.
+1. Close WoW. Extract the whole ZIP into a folder outside the game, such as
+   Downloads. Keep this folder so you can undo the installation later.
+2. {start}
+   Paste the path to your game folder or drag Wow.exe into the prompt.
+3. Press Enter for the default sky and dungeon choices. The first install
+   usually takes 20-40 minutes to prepare outdoor lighting. Allow about 13 GB
+   free on the game drive and 8 GB RAM. If interrupted, run it again to resume.
+{before_play}
+Start WoW as usual. Look across water towards trees or buildings, turn along
+the bank, then take the camera underwater to see the change.
 
-The world cache adds static shadows and global illumination. --no-world-cache
-skips that build. Without cached fog tables the installer can still generate
-the scenery repairs and raised fog coverage. --no-art-layer and --no-raised-air
-skip the respective generation steps. HD users can try --sky experimental-preserve.
-Reinstall after changing locale or adding or removing client archives.
+WHAT CHANGES
 
-Set Enable=0 in water-host.ini and restart for Northlight with native water.
-Set it to 1 and restart to turn Tideglass back on. Appearance settings live in
-water.ini. Launch and confirm the water changes after crossing a shoreline.
-The game clock and realm selection are kept. Edited water settings survive
-reinstall and uninstall. The generated northlight-water-textures directory and
-renderer logs can be removed with the game closed.
+The defaults include zone lighting, skies, weather, reflections, slime and
+magma. Dalaran and Telredor get outdoor fog coverage. On affected HD clients
+the installer also repairs distant dock and plant textures. Your original
+game archives, realm settings and add-ons stay in place.
 
-For a report, include the version, backend, location, time of day, and what you
-were doing when it happened. Review water-core.log and northlight-renderer.log
-before sharing excerpts. Server acceptance and native Windows play require
-separate verification. The standard Northlight reference follows.
+CHANGE YOUR MIND
+
+For Northlight lighting settings in game, press Ctrl+Shift+F11.
+To use the game's water with Northlight, close WoW, open water-host.ini in the
+game folder and set Enable=0. Restart WoW. Set it back to 1 to use Tideglass.
+To remove both, close WoW and {undo}
+from the extracted folder. Choose the same game folder. The uninstaller restores the previous renderer
+and keeps edited water settings.
+
+IF SOMETHING GOES WRONG
+
+If the game closes at startup, open a terminal in the extracted folder and
+try the older graphics backend with this command:
+  {fallback}
+If installation stops, the last message tells you why. For help, include the
+package version and that message. Installer logs are in the extracted package's
+logs folder. For a visual issue, include the zone, time of day and how to
+reproduce it. A screenshot or a short clip is helpful. The game folder also
+contains northlight-renderer.log and water-core.log after a normal launch.

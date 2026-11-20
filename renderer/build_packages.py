@@ -398,11 +398,21 @@ def build(platform, version, dll, variants, out, stormlib_dir, water_core=None, 
     for name, manifest in sorted(variants.items()):
         tree.add(f'variants/{name}.json', (json.dumps(manifest, indent=2) + '\n').encode())
     tree.add('LICENSES/StormLib-NOTICES.txt', notices)
-    readme = fp.RENDERER / f'{platform}-package' / 'README.txt'
-    text = readme.read_text(encoding='utf-8').replace('__RELEASE_VERSION__', version)
-    if water_core is not None:
-        notes = (fp.RENDERER / 'tideglass-readme.txt').read_text(encoding='utf-8')
-        text = notes.replace('__RELEASE_VERSION__', version) + '\n' + text
+    if water_core is None:
+        readme = fp.RENDERER / f'{platform}-package' / 'README.txt'
+        text = readme.read_text(encoding='utf-8').replace('__RELEASE_VERSION__', version)
+    else:
+        from northlight_install import WINE_STEPS
+        windows = platform == 'windows'
+        template = (fp.RENDERER / 'tideglass-readme.txt').read_text(encoding='utf-8')
+        text = template.format(
+            version=version, platform=PLATFORMS[platform],
+            system='64-bit Windows 10 or 11' if windows else 'x86-64 Linux with Wine or Proton',
+            start='Double-click Install.cmd in the extracted folder.' if windows else
+                  'Open a terminal in the extracted folder and run bash install.sh.',
+            before_play='' if windows else '\n' + '\n'.join(WINE_STEPS) + '\n',
+            undo='double-click Uninstall.cmd' if windows else 'run bash uninstall.sh',
+            fallback=r'.\Install.cmd --backend dxvk2' if windows else 'bash install.sh --backend dxvk2')
     tree.add('README.txt', text.replace('\n', '\r\n').encode('utf-8') if platform == 'windows' else text.encode('utf-8'))
     for name, data in launchers(platform, version).items():
         tree.add(name, data, executable=True)

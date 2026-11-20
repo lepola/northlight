@@ -217,6 +217,13 @@ class Preflight(Base):
         self.assert_untouched()
         return str(e.exception)
 
+    def test_folder_prompt_accepts_the_executable_and_rejects_other_files(self):
+        installer = self.installer()
+        self.assertEqual(installer.resolve_client('"'+str(self.client / 'wow.exe')+'"'), self.client.resolve())
+        for value in ('', self.client / 'Data/patch-3.mpq'):
+            with self.assertRaises(fi.Refusal):
+                installer.resolve_client(value)
+
     def test_package_inside_client(self):
         self.pkg_root = self.make_package(self.client / 'Northlight')
         (self.pkg_root / 'variants/stock.json').write_text(json.dumps(self.manifest))
@@ -500,7 +507,7 @@ class Install(Base):
         console = inst.out.getvalue()
         self.assertIn('    ' + warning, console)
         self.assertIn(warning, (self.base / 'install.log').read_text())
-        self.assertLess(console.index(warning), console.index('Start WoW yourself'))
+        self.assertLess(console.index(warning), console.index('Start WoW as usual'))
         self.assertEqual((self.client / 'Data/patch-z.mpq').read_bytes(), ART)   # the installation went on
         self.archive_warnings = []
         self.assertEqual(self.installer().install(self.client)['archive_warnings'], [])
@@ -934,11 +941,11 @@ class Install(Base):
         inst = self.installer()
         self.assertEqual(inst.choose_instances(self.client, None), ['classic-raids', 'wotlk-raids'])
         text = inst.out.getvalue()
-        self.assertIn('Dungeon and raid world cache (optional: GI, AO and world shadows inside instances).', text)
+        self.assertIn('Optional lighting for dungeons and raids. You can add these later.', text)
         for g in instance_maps.GROUPS:
             self.assertIn(f'{g["label"]}', text)
             self.assertIn(f'~{g["est_gb"]:g} GB  ~{g["est_minutes"]:g} min', text)
-        self.assertIn('Groups to build (e.g. "1 2 6"), "all", "none", or Enter to keep: none', prompts[0])
+        self.assertIn('Press Enter to keep none, or choose numbers (e.g. 1 2 6), all or none', prompts[0])
 
     def test_pick_rules(self):
         inst = self.installer()
@@ -958,7 +965,7 @@ class Install(Base):
         self.assertEqual(yes.choose_instances(self.client, 'none'), [])                     # the argument wins
         prompts = self.tty('1')
         self.assertEqual(self.installer().choose_instances(self.client, None), ['classic-dungeons'])
-        self.assertIn('Enter to keep: Wrath dungeons >', prompts[0])
+        self.assertIn('Press Enter to keep Wrath dungeons,', prompts[0])
 
     def test_no_terminal_takes_the_default(self):
         with patch.object(sys, 'stdin', None):
@@ -1382,7 +1389,7 @@ class LinuxInstall(WindowsInstall):
         for launcher in ('Lutris', 'Bottles', 'Proton', 'winecfg'):
             self.assertIn(launcher, out)
         self.assertIn('Runner options > DLL overrides', out)   # Lutris rebuilds the variable from this list
-        self.assertIn('does not matter and needs no change', out)   # the prefix's DXVK is not Northlight's
+        self.assertIn('Keep your existing launcher DXVK setting', out)   # the prefix's DXVK is not Northlight's
         self.assertIn('bash install.sh --backend dxvk2', out)
         self.assertNotIn('Install.cmd', out)
         uninstall = self.installer()
