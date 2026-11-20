@@ -54,7 +54,7 @@ checks['RemovalInfo aliases c30 (WaterInfo.x stays the water flag)']=('float4 Wa
     and hlsl.count('RemovalInfo.x')==0)
 const='        const float drawnWeight=std::max(sourceWeights[0],0.f)+std::max(sourceWeights[1],0.f);\n        if(drawnWeight>.001f){c[30][1]=1;c[30][2]=1/drawnWeight;c[30][3]=.75f*std::fabs(projection[0])*float(w/2)*.5f;}\n'
 # 0.3.170: the TemporalReach (c15.w) lines sit between this block and the upload (test_shadow_shimmer).
-upload='        c[30][0]=waterMask?1.f:0.f;d->SetPixelShaderConstantF(0,&c[0][0],68);'
+upload='        c[30][0]=waterMask?(surface?2.f:1.f):0.f;d->SetPixelShaderConstantF(0,&c[0][0],68);'
 checks['c30.yzw only from the drawn source weight (sum of positive weights), set once']=(w.count(const)==1 and w.count(upload)==1 and w.index(const)<w.index(upload)
     and re.search(r'c\[30\]\[[123]\]=',w[w.index('bool render('):].replace(const,'')) is None and 'if(sourceWeights[source]<=0&&source!=firstSource)continue;' in w)
 tb=w[w.index('{   // Temporal stabilization: light + history'):w.index('temporalIndex=prev;temporalValid=true;')]
@@ -64,7 +64,7 @@ between=w[w.index('temporalIndex=prev;temporalValid=true;'):w.index('/* 0.3.212 
 # LocalDirect also reads the baseline alpha (sun visibility), so s12 is bound once more,
 # only inside the LocalDirect block (frames with lamps), before the temporal pass rebinds it.
 local=w[w.index('d->SetPixelShader(localDirectPS);'):w.index('if(profile)profile->mark("LocalLights");')]
-checks['BaselineLighting (s12) bound at the temporal pass (and for LocalDirect), still bound for the composite']=(w.count('SetTexture(12,')==7 # 0.3.209 (task 29): + the actor map (tile and ActorShadow passes), the first tile level, the actor visibility (WorldLighting loop only) and its null restore
+checks['BaselineLighting (s12) bound at the temporal pass (and for LocalDirect), still bound for the composite']=(w[w.index('    bool render(IDirect3DSurface9* targetSurface'):].count('SetTexture(12,')==7 # 0.3.209 (task 29): + the actor map (tile and ActorShadow passes), the first tile level, the actor visibility (WorldLighting loop only) and its null restore
     and w.count('d->SetTexture(12,actorShadow[source]);')==2 and w.count('d->SetTexture(12,anyActorPass?actorVisibility:neutralWhite);')==1 and w.count('d->SetTexture(12,textures[12]);')==1
     and 'd->SetTexture(12,baselineLight);' in tb and 'SetTexture(12' not in between and local.count('d->SetTexture(12,baselineLight);')==1)
 # 0.3.185 host: the pass is created, drawn right before the temporal pass with the samplers smoothRemoval reads, released and dumped.

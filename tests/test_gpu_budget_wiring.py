@@ -32,7 +32,7 @@ checks['timer: a full ring skips the frame (begin returns false), disjoint / zer
 
 # renderer.cpp: timer bracket, poll, controller, logs
 rc=code(r)
-re_=rc[rc.index('void renderEffects() {'):rc.index('applied = true; ++appliedFrames;')]
+re_=rc[rc.index('void renderEffects(bool atWorldRead=false) {'):rc.index('applied = true; ++appliedFrames;')]
 checks['renderer: timer opened only with GpuBudgetMs > 0, right after the SavedState, closed by a scope guard (every return path)']=(
     'struct TimerEnd { NorthlightGpuFrameTimer* t; bool open; ~TimerEnd(){if(open)t->end();} } timerEnd{gpuTimer.get(),world&&world->gpuBudgetMs()&&gpuTimer->begin()};' in re_
     and re_.index('if (!saved.ok) return;')<re_.index('timerEnd{')<re_.index('gpuProfile->beginFrame(')<re_.index('profileEnd{'))

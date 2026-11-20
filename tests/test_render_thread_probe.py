@@ -28,7 +28,7 @@ r,w,probe,probeH,mirror,raw,q=read('renderer.cpp'),read('world_renderer.h'),read
 CLOCKS=('QueryPerformanceCounter','steady_clock','QpcClock','::now(')
 loop=w[w.index('auto replayLoop=[&](auto& split)->bool{'):w.index('ReplaySplit split;split.timed=profiled;')]
 submit=w[w.index('template<class Split,class Check> bool submitReplay('):w.index('    bool render(IDirect3DSurface9* targetSurface,')]
-ticks=r[r.index('struct PresentTicks {'):r.index('static void finishDeviceFrame(IDirect3DDevice9* owner);')]
+ticks=r[r.index('struct PresentTicks {'):r.index('static void finishDeviceFrame(IDirect3DDevice9* owner,bool implicitChain);')]
 issue=probe[probe.index('NorthlightReplayDrawState::Cache probeBindings(d);'):probe.index('        if(draws==replayProbeList.size())return true;')]
 probeBody=probe[probe.index('    template<class Mode> bool replayProbeIssue('):probe.index('    // endFrame(): a finished window')]
 counted=[l for l in raw.splitlines() if 'm->countRaw(' in l and 'rawActive()){++m->rawCalls;' not in l]
@@ -40,7 +40,7 @@ checks={
    and 'NorthlightRenderThreadProbe::configure(NorthlightQuality::renderProfile(quality),NorthlightQuality::replayProbe(quality));' in w
    and 'probeFlag.store(profile&&probe,std::memory_order_relaxed);' in probeH,
  # functional cadences
- 'self-check keeps frame%120==0; the diagnostic sample is a separate flag':r.count(',vs,frame%120==0,NorthlightRenderThreadProbe::sampleFrame(frame));captureWater(')==4
+ 'self-check keeps frame%120==0; the diagnostic sample is a separate flag':r.count(',vs,frame%120==0,NorthlightRenderThreadProbe::sampleFrame(frame));}captureWater(')==4
    and w.count('constantSelfCheck=selfCheck;sample=sample&&NorthlightDiagnostics::enabled();')==2 and 'frame%120!=60' in read('mirror_audit_schedule.h'),
  'sampler: RenderProfile=0 is frame%120==0, RenderProfile=1 the prime 127':'inline bool sampleFrame(unsigned frame,bool profile){return profile?profileFrame(frame):frame%SamplePeriod==0;}' in probeH
    and 'constexpr unsigned SamplePeriod=120,ProfilePeriod=127;' in probeH and 'bool sampled()const{return NorthlightRenderThreadProbe::sampleFrame(frame)&&NorthlightDiagnostics::enabled();}' in r
@@ -85,7 +85,7 @@ checks={
  'probe target: cascade formats and size, private, restored':'static constexpr unsigned ReplayProbeSize=1024' in probe and 'D3DUSAGE_RENDERTARGET,D3DFMT_R32F,D3DPOOL_DEFAULT,&replayProbeTexture' in probe
    and 'D3DFMT_D24S8,D3DMULTISAMPLE_NONE,0,TRUE,&replayProbeDepth' in probe and all(x not in w for x in ('replayProbeSurface','replayProbeTexture','replayProbeDepth'))
    and 'SavedState save(d,&stateBlocks);' in probe and re.findall(r'SetRenderTarget\(([^)]*)\)',probe)==['0,replayProbeSurface']
-   and 'SetTexture(' not in probe and 'SetSamplerState(' not in probe and 'SetRenderState(' not in probe and 'void releaseGPU(bool keepMesh=false){replayBoundsAbandon();releaseReplayProbe();' in w,
+   and 'SetTexture(' not in probe and 'SetSamplerState(' not in probe and 'SetRenderState(' not in probe and 'replayBoundsAbandon();releaseReplayProbe();' in w.split('void releaseGPU(bool keepMesh=false){',1)[1].split('void reset(){',1)[0],
  'probe never fails the frame (no check(), no failed flag; the call site ignores its result)':'check(' not in probe and 'failed=true' not in probe and 'void replayProbe(const float* rows,double realLoopMs){' in probe,
  'probe issues the same per-draw sequence, own counters':'submitReplay(p,probeBindings,probePoses,rows,mode,constantBytes,constantCalls,' in issue
    and all(x not in probe for x in ('replayDraws','replayConstantBytes','replayConstantCalls','culledReplayDraws','replaySlot','staticDedup','persistentSkipped','replayMeshKeys','replayPosePrepared')),

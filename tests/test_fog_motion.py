@@ -47,7 +47,7 @@ def march(camera_x, schedule, shadow):
 
 def main():
     shader = fp.src('world_effects.hlsl').read_text()
-    fog = shader.split('float4 WorldFog(', 1)[1].split('// Glow of', 1)[0]
+    fog = shader.split('float4 worldFogMarch(', 1)[1].split('// Glow of', 1)[0]
     for contract in ('frac(major.y*(major.x<0?-1:1)/spacing)',
                      'float altitude=p.z-field.x;',
                      'heightFade=saturate(altitude*(1.0/12))',

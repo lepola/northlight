@@ -36,7 +36,7 @@ def body(text,head):
 capture=body(w,'    void captureModel(D3DPRIMITIVETYPE type,')
 select=body(x,'    void selectShadowReplays(){')
 end=body(w,'    void endFrame(bool retainPool=true){')
-release=w[w.index('    void releaseGPU(bool keepMesh=false){'):];release=release[:release.index('\n')]
+release=body(w,'    void releaseGPU(bool keepMesh=false){')
 reset=w[w.index('    void reset(){'):];reset=reset[:reset.index('\n')]
 trim=body(g,'    MemoryTrim trimMemory(){')
 register=body(w,'    void registerShader(IDirect3DVertexShader9* shader,uint64_t hash){')

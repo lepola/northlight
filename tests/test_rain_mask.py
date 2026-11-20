@@ -27,14 +27,14 @@ BEFORE={'WorldNormals':'e647de5f5ba48db3fa790f329731d066a47fa965fdf474dcc568c337
 # HLSL
 checks['source: RainMask declared on s13 (aliasing RegionalFog, as s8/s10 do)']=('sampler2D RainMask : register(s13);' in h)
 comp=h.split('float4 WorldCompositeImpl(',1)[1].split('// Separate geometry pass:',1)[0]
-m=re.search(r'if\(PassInfo\.z<\.5\)\{(.*?)\n    \}',comp,re.S)
+m=re.search(r'if\(beforeRefraction<\.5&&PassInfo\.z<\.5\)\{(.*?)\n    \}',comp,re.S)
 body=m.group(1) if m else ''
 checks['source: WorldComposite reads the mask once, only inside the PassInfo.z<.5 branch']=(bool(m) and comp.count('RainMask')==1 and body.count('tex2Dlod(RainMask,float4(uv,0,0)).r')==1)
 checks['source: unfogged colour kept before haze, lerped back to after the haze + fog mad']=(
     'float3 unfogged=color;' in body and body.index('unfogged=color')<body.index('horizonHaze(color,centerUV,viewZ,d>=.99999&&liquid<=0,liquid>0)')<body.index('fog.a,fog.rgb)')<body.index(',unfogged,rain)')
     and 'color=lerp(mad(background,fog.a,fog.rgb),unfogged,rain);' in body
     and 'float3 background=liquid>0&&atmosphereOwned>.5?color:horizonHaze(' in body)
-checks['source: debug views (PassInfo.z != 0) do not touch the mask']=('RainMask' not in comp.split('if(PassInfo.z<.5)',1)[0] and 'RainMask' not in comp.split('PassInfo.z==3',1)[1])
+checks['source: debug views (PassInfo.z != 0) do not touch the mask']=('RainMask' not in comp.split('if(beforeRefraction<.5&&PassInfo.z<.5)',1)[0] and 'RainMask' not in comp.split('PassInfo.z==3',1)[1])
 
 # manifest
 wc=manifest['WorldComposite']
@@ -44,7 +44,7 @@ checks['manifest: WorldComposite bytecode changed']=(wc['sha256']!=BEFORE['World
 # 0.3.208: WorldNormals (colour-picked one-sided tangent side) changed on purpose
 # 0.3.209 (task 29): WorldLighting reads the actor visibility (s12) on purpose, ActorShadow and ActorTiles are new
 # task 43: RemovalSmooth branches around a zero-weight tap's reads on purpose (the same output)
-checks['manifest: shaders outside the reviewed feature changes retain their historical hashes']=(set(manifest)==set(BEFORE)|{'LocalFogCombine', 'ActorTiles', 'ActorShadow', 'LocalDirect16', 'WaterSkyGradient', 'WaterSkyField', 'WorldCompositeWaterProbe'} and all(manifest[n]['sha256']==s for n,s in BEFORE.items() if n not in ('FogClouds', 'LocalFog', 'RemovalSmooth', 'WorldComposite', 'WorldFog', 'WorldLighting', 'WorldNormals'))
+checks['manifest: shaders outside the reviewed feature changes retain their historical hashes']=(set(manifest)==set(BEFORE)|{'LocalFogCombine', 'ActorTiles', 'ActorShadow', 'LocalDirect16', 'WaterSkyGradient', 'WaterSkyField', 'WorldCompositeWaterProbe', 'WorldFogRaised', 'WorldWaterLighting', 'WorldWaterVisibility', 'SpatialAlphaFog'} and all(manifest[n]['sha256']==s for n,s in BEFORE.items() if n not in ('FogClouds', 'LocalFog', 'RemovalSmooth', 'WorldComposite', 'WorldFog', 'WorldLighting', 'WorldNormals'))
     and manifest['LocalFog']['sha256']!=BEFORE['LocalFog'])
 checks['compiled: WorldComposite.bin exists']=(fp.COMPILED/'WorldComposite.bin').exists()
 

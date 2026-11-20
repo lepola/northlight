@@ -76,9 +76,10 @@ int main(){
     assert(d.localLightLimit==48&&d.pointShadows==0&&d.pointShadowRefreshMs==0&&d.shadowDirectionSteps==2048);
     assert(parse(nullptr)==d&&parse("")==d&&parse("[Quality]\nPreset=Quality\n")==d&&preset(Preset::Quality)==d);
     for(const auto& k:Keys){assert(k.preset[0]==d.*k.field);for(unsigned p=0;p<3;++p)assert(k.preset[p]>=k.low&&k.preset[p]<=k.high);}
-    { /* The shipped default file must be exactly Quality, with no warnings. */
+    { /* The combo uses the Quality preset with spatial fog and lighter rain. */
         std::ifstream f("windows-package/northlight-quality.ini");assert(f);std::vector<std::string> problems;
-        auto s=load(&f,nullptr,problems);assert(s==d&&s.preset==Preset::Quality&&problems.empty());}
+        auto expected=d;expected.spatialAlphaFog=1;expected.rainOpacity=60;
+        auto s=load(&f,nullptr,problems);assert(s==expected&&s.preset==Preset::Quality&&problems.empty());}
     /* Presets and case-insensitive names, BOM, CRLF, inline comments. */
     assert(parse("[Quality]\nPreset=Balanced\n")==preset(Preset::Balanced));
     auto perf=parse("\xEF\xBB\xBF; c\r\n[ quality ]\r\npreset = PERFORMANCE ; low end\r\n");

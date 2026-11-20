@@ -126,14 +126,18 @@ assert '{D3DRS_SRCBLEND,DWORD(glare?D3DBLEND_INVDESTCOLOR:D3DBLEND_SRCALPHA)},{D
 assert 'if(DiscRepair.w<.5)alpha*=1-texel.a*saturate(30*ray.z/forward);' in shader
 assert 'if(DiscPolicy.w>.5&&depth<.99999994)return 0;' in shader
 assert 'if(DiscRepair.w>.5){float a=saturate((1-length(local))/.56);texel.a=a*a*(3-2*a);}' in shader
-assert 'if(DiscRepair.w>.5)return (DiscEmission.z*exp2(-DiscEmission.x*r2)*disc+' in shader
-assert 'float3 tail=float3(exp2(-.12*r2),exp2(-.025*r2),exp2(-.008*r2));' in shader
-assert 'float tailed=max(disc*dot(tail,float3(.25,.35,.40)),ring*dot(tail,float3(.118257,.299458,.380527)));' in shader
-assert 'return (DiscEmission.z*exp2(-DiscEmission.x*r2)*disc+DiscGlowHue.w*tailed)*edge;' in shader
-assert 'return DiscEmission.z*.35*exp2(-1.11*max(radius-1,0))*edge*disc;' in shader
-assert 'float edge=1-smoothstep(.35*DiscEmission.y,DiscEmission.y,radius);' in shader
-assert 'return saturate(lerp(DiscGlowHue.rgb,DiscGlowCore.rgb,smoothstep(0,1,exp2(-DiscEmission.x*radius*radius))));' in shader
-assert 'float3 glowShoulder(float x,float3 color){return 1-exp2(-1.442695*x*color);}' in shader
+glare_shader=(fp.SHADERS/'celestial_glare.hlsli').read_text()
+assert 'CelestialGlareProfile(radius,DiscRepair.w>.5,DiscEmission,DiscGlowHue,DiscGlowCore,disc,ring)' in shader
+assert 'CelestialGlareColour(radius,DiscEmission,DiscGlowHue,DiscGlowCore)' in shader
+assert 'return CelestialGlowShoulder(x,color);' in shader
+assert 'if(solar)return (emission.z*exp2(-emission.x*r2)*disc+' in glare_shader
+assert 'float3 tail=float3(exp2(-.12*r2),exp2(-.025*r2),exp2(-.008*r2));' in glare_shader
+assert 'float tailed=max(disc*dot(tail,float3(.25,.35,.40)),core.w*ring*dot(tail,float3(.118257,.299458,.380527)));' in glare_shader
+assert 'return (emission.z*exp2(-emission.x*r2)*disc+hue.w*tailed)*edge;' in glare_shader
+assert 'return emission.z*.35*exp2(-1.11*max(radius-1,0))*edge*disc;' in glare_shader
+assert 'float edge=1-smoothstep(.35*emission.y,emission.y,radius);' in glare_shader
+assert 'return saturate(lerp(hue.rgb,core.rgb,smoothstep(0,1,exp2(-emission.x*radius*radius))));' in glare_shader
+assert 'return 1-exp2(-1.442695*x*colour);' in glare_shader
 assert 'if(DiscEmission.w>.5)encoded=glowShoulder(alpha,encoded);' in shader
 assert 'constexpr float SunGlareSupport=20.f,MoonGlareSupport=6.f;' in glow
 # 0.3.217: the terrain mask spans the whole glare support (no square edge on distant mountains).

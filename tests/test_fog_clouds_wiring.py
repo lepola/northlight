@@ -44,7 +44,7 @@ checks['hlsl: the cloud sigma matches the CPU sigma (.65/.35 mix, quantile thres
     '[branch]if(min(valid,CloudInfo[2].x-altitude)>0){','[branch]if(nL>CloudInfo[1].x){','CloudInfo[2].w*valid*nearFade','tex3Dlod(CloudNoise,float4(rel*CloudInfo[3].y+CloudInfo[0].yzw,0))','tex3Dlod(CloudNoise,float4(rel*CloudInfo[3].z+CloudInfo[1].yzw,0))'))
 checks['hlsl: direct part soft-capped by FogInfo.z, shadowed by fogShadow, branch only inside a cloud']=('cap=max(FogInfo.z,.0001)' in body and 'fogShadowProjected(shadowOrigin+shadowRay*((start+end)*.5))' in body and '[branch]if(sigma>0)' in body)
 
-wf=h[h.index('float4 WorldFog('):h.index('// Glow of')]
+wf=h[h.index('float4 worldFogMarch('):h.index('// Glow of')]
 exact=['float profile=saturate((field.w-2.5)/2.5);','float groundHeight=lerp(field.w,6,RegionalFogInfo.w*(1-profile));','float vertical=saturate(1-altitude/max(groundHeight,.001));',
     'float groundSigma=max(field.y+field.z*RegionalFogInfo.w,0)*vertical*vertical;','float altitude=p.z-field.x;','float valid=altitude>=0?coverage:0;',
     'float nearFade=saturate(((start+end)*.5-FogRange.x)*FogRange.y);nearFade*=nearFade*(3-2*nearFade);'.replace('((start+end)*.5-FogRange.x)','(mid-FogRange.x)')]
@@ -82,7 +82,7 @@ mirror=[l for l in w.splitlines() if 'cloudy+=NorthlightFogClouds::sigmaAt(' in 
 checks['cpp: sigmaAt adds the cloud term only for a candidate pass, to the base value, inside the t.height>0 branch; the bank picks it only when cf.active']=(
     len(mirror)==1 and 'if(!cloudCandidate)return 0.f;' in w[w.index('const auto clouds=[&]'):] # SpellFog's march adds clouds only for a candidate pass too
     and mirror[0].strip().startswith('if(clouds&&cloudCandidate){') and 'cloudy+=NorthlightFogClouds::sigmaAt(cloudData,cf,context.camera,point,t.ground,t.height,1.f)' in mirror[0] and
-    w.index('if(t.height>0){')<w.index(mirror[0])<w.index('return sigma;') and 'sigma=altitude>=0?ground+airBase*airVertical*airVertical:0;cloudy=sigma;' in w
+    w.index('if(t.height>0){')<w.index(mirror[0])<w.index('cloudy+=raised;return sigma+raised;') and 'sigma=altitude>=0?ground+airBase*airVertical*airVertical:0;cloudy=sigma;' in w
     and 'const bool cloudCandidate=cf.active&&effects.fog&&debug==0&&fogCloudsPS;' in w and 'skyTransmittanceFrame=cf.active?atmosphere.veil[1]:atmosphere.veil[0];' in w
     and w.index('cf.active=cf.active&&effects.fog&&debug==0&&fogCloudsPS&&ensureCloudNoise();')<w.index('skyTransmittanceFrame=cf.active?atmosphere.veil[1]'))
 # 0.3.199 (fog clouds): lush zones - the camera texel's CPU-only lush flag, smoothed; the field's lush comes from lushZone (forests, grass, Duskwood, STV, Mulgore, Stormwind), outdoors only

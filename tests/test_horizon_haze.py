@@ -14,6 +14,7 @@ import hashlib
 import json
 import math
 import random
+import re
 import subprocess
 import sys
 import tempfile
@@ -41,6 +42,11 @@ LIFT_COMPOSITE_SLOTS = 416  # Microsoft d3dcompiler_47 (gh#80); Wine's builtin: 
 SOURCE_VISIBILITY_SLOTS = 285  # Microsoft d3dcompiler_47; Wine's builtin: 492 (was 281 before the wrap ring)
 # Rebased to the one Microsoft d3dcompiler_47 build (every pass recompiled; Wine's builtin compiler is gone).
 BEFORE = {
+    # Independent shaders introduced with the reviewed Tideglass host.
+    'WorldFogRaised': '9e7aa7d1dc40d9c0305fcaf55e99608d4a3279ce41dc8a829ea8f32ccde5987b',
+    'WorldWaterLighting': '7b9cdc51f7b53fa28317fa9fdc458face7805fd6ffbd027e66c09e80729aff76',
+    'WorldWaterVisibility': '6b91f5d63c7676ba80f342d5fd0857ea6f5b35da5b354c4a5acd063082a52bb9',
+    'SpatialAlphaFog': '333d6e8680bcb788d2f71dd527c791d7732a907a04bcb258cf55f415c22e1ac0',
     'WorldNormals': '625cd9190b0c3a3abc43b5622a1fe648ca1932298ec1be43466ddb3506292062',
     'WorldLighting': '408425df88ee74682237683394353b9fb4257069c67382219083857546c2d2df',
     'WorldGI': '98e33a0ff1a8412e7dd0d1801596cc4dc8f5dc2d4fde4880e4760a6eee267992',
@@ -351,7 +357,7 @@ def main():
     assert 'return horizonHazeDirection(color,world,rsqrt(dot(ray,ray)),range);' in screen_helper
     # 0.3.202 (rain mask): haze, then the fog mad, in one lerp expression back toward the unfogged colour on rain-mask pixels.
     assert composite_src.index('horizonHaze(color,centerUV,viewZ,d>=.99999&&liquid<=0,liquid>0)') < composite_src.index('fog.a,fog.rgb)')
-    assert 'if(PassInfo.z<.5){\n        float3 unfogged=color;' in composite_src
+    assert 'if(beforeRefraction<.5&&PassInfo.z<.5){\n        float3 unfogged=color;' in composite_src
     assert '[branch]if(range<=0||HorizonHaze.w<=0)return color;' in helper
     assert helper.index('[branch]') < helper.index('viewPositionDistance') and 'tex2D' not in helper and 'loop' not in helper
     assert 'float range=sky?1:water?saturate(viewZ*inverseEnd):saturate((viewZ-HorizonShape.y)*HorizonShape.z);' in helper
@@ -370,8 +376,9 @@ def main():
     for other in ('HorizonHaze.', 'HorizonShape.', 'HorizonSun.'):
         assert shader[:shader.index('float4 WorldCompositeImpl(')].count(other) == helper.count(other), other
     render = cpu[cpu.index('    bool render(IDirect3DSurface9* targetSurface'):]
-    assert render.count('d->SetPixelShaderConstantF(0,&c[0][0],68)') == 2  # register bank unchanged
-    upload = cpu.index('c[30][0]=waterMask?1.f:0.f;d->SetPixelShaderConstantF(0,&c[0][0],68);')
+    # Each upload restores the same 68-register bank, including after the liquid lighting pass.
+    assert re.findall(r'd->SetPixelShaderConstantF\(0,&c\[0\]\[0\],(\d+)\)', render) == ['68'] * 3
+    upload = cpu.index('c[30][0]=waterMask?(surface?2.f:1.f):0.f;d->SetPixelShaderConstantF(0,&c[0][0],68);')
     assert cpu.index('c[57][1]=haze.shape[0];c[57][2]=haze.shape[1];c[57][3]=haze.shape[2];c[67][2]=haze.sun[0];c[67][3]=haze.sun[1];') < upload
     blur_end = cpu.index('"volume blur vertical"))return false;}')
     assert blur_end < cpu.index('d->SetPixelShaderConstantF(34,haze.haze,1);') < cpu.index('"world composite"')
@@ -395,7 +402,7 @@ def main():
                 unchanged.append(name)
         assert sorted(unchanged) == sorted(k for k in BEFORE if k not in ('TemporalLight', 'SourceVisibilityPS', 'WorldLighting', 'LocalDirect', 'WorldNormals', 'WorldGI', 'WorldFog', 'LocalFog'))
         assert manifest['shaders']['WorldNormals']['static_instruction_slots'] == 305  # Microsoft d3dcompiler_47 (Wine's builtin: 483); r77: both wide samples or neither; 0.3.208: colour-picked one-sided side (was 434)
-        assert manifest['shaders']['WorldFog']['static_instruction_slots'] == 427  # PR #90: phase no longer reads SourceVisibility (was 431); PR #89: regional-field and near-fade interval clip (was 391); Microsoft d3dcompiler_47 (Wine's builtin: 512); 0.3.198 (rain): the same 512 slots (the literal .0017 became c59.w)
+        assert manifest['shaders']['WorldFog']['static_instruction_slots'] == 421  # Standard march without raised-air samples.
         assert SOURCE_VISIBILITY_SLOTS is not None, 'TODO(lead): pin SOURCE_VISIBILITY_SLOTS to the compiled count (%d)' % manifest['shaders']['SourceVisibilityPS']['static_instruction_slots']
         assert manifest['shaders']['SourceVisibilityPS']['static_instruction_slots'] == SOURCE_VISIBILITY_SLOTS <= 512
         assert manifest['shaders']['WorldComposite']['sha256'] != '772d438995ed33d36db7e26f9b169a5effd94a876ce5d8b8af9fd8aad5381990'

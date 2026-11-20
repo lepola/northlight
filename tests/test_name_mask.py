@@ -144,7 +144,7 @@ checks['names: the UI-hash vertex shader (tag 2) whose c3 is not the screen-spac
     and dc.index('!drawUiHashVS')<dc.index('GetVertexShaderConstantF(3,c3,1)')<dc.index('viewport.Width==width&&viewport.Height==height&&worldDepthBound()'))
 checks['font mods (Lexara, TweakWoW2): a name may also be drawn with the VS the UI boundary fallback learned, only while it is armed; the boundary itself still tests tag 2 only']=(
     'bool uiTextVs(IDirect3DVertexShader9* vs,int tag)const{return tag==2||(vs&&uiFallback.armed()&&reinterpret_cast<std::uintptr_t>(vs)==uiFallback.learnedVs());}' in r
-    and r.count('uiTextVs(')==3 and '} else if (tag==2) {' in r)
+    and r.count('uiTextVs(')==3 and 'if ((vc.entry&kTagMask)==2) {' in r)
 checks['the boundary keeps its own test: tag 2, orthographic rows, depth state and main-target viewport call renderEffects (screen UI is never a name)']=(
     'NorthlightUiBoundary::accepts(zw!=0,rows,zf==D3DCMP_ALWAYS,z!=0)' in r and 'fullViewport(desc,nullptr,true)' in r and 'SUCCEEDED(ext->GetVertexShaderConstantF(0,rows,4))' in r)
 indexed=r[r.index('HRESULT STDMETHODCALLTYPE DrawIndexedPrimitive('):r.index('HRESULT STDMETHODCALLTYPE DrawPrimitiveUP(')]
@@ -165,7 +165,7 @@ checks['run: begin clears if needed then applies kMark once (nameRun), end resto
 checks['run ends before anything that could draw or clear with stencil on: prepareDrawImpl (any non-UI-hash draw), nameMaskDraw (non-name), Clear, EndScene, Reset, renderEffects, finishFrameImpl']=(
     '++drawCalls;maskKind=0;if(nameRun)nameMaskRunBreak();' in impl and 'if(kind!=1)nameMaskRunEnd();' in r
     and 'nameMaskRunEnd(); /* 0.3.212 (task 32): a run of names never spans a Clear */' in r[r.index('HRESULT STDMETHODCALLTYPE Clear('):][:700]
-    and 'override { Guard mirrorLock(mirrorState.gate);nameMaskRunEnd();' in r and 'void renderEffects() {\n        nameMaskRunEnd();' in r and 'void finishFrameImpl() {\n        nameMaskRunEnd();' in r
+    and 'override { Guard mirrorLock(mirrorState.gate);nameMaskRunEnd();' in r and 'void renderEffects(bool atWorldRead=false) {\n        nameMaskRunEnd();' in r and 'void finishFrameImpl() {\n        nameMaskRunEnd();' in r
     and re.search(r'Reset\(D3DPRESENT_PARAMETERS\* pp\) override \{ Guard mirrorLock\(mirrorState.gate\);\s*(?:#ifdef NORTHLIGHT_WATER\s+cooperativeWater.Lost\(\);\s+#endif\s+)?nameMaskRunEnd\(\);',r) is not None)
 checks['the stencil-in-use guard reads the game\'s STENCILENABLE once per frame (reset at the frame end and Reset), so a run knows the value to restore']='if(!nameMask.stencilChecked){' in r and 'nameMask.stencilChecked=true;' in r and 'FAILED(ext->GetRenderState(D3DRS_STENCILENABLE,&stencilOn))' in r
 md=r[r.index('HRESULT nameMaskDraw('):r.index('    // One shader query/reference per original draw')]
@@ -175,12 +175,12 @@ checks['draw: unmark states around the game draw; a name draws with the run set 
     and 'if(!kind)return rainBlendDraw(rain,claimed,draw);' in md and 'if(claimed||!nameMask.armed())return rainBlendDraw(rain,claimed,draw);' in md)
 hook=r[r.index('template<class Capture,class Draw> HRESULT drawHook('):];hook=hook[:hook.index('\n    }\n')+7]
 checks['drawHook: both gate paths end in nameMaskDraw (optional draw wrappers retain the game call)']=hook.count('nameMaskDraw(rainBlend,claimed||mist,draw)')==2 and 'rainBlendDraw' not in hook
-checks['draw lambdas retain all four device entry points']=len(re.findall(r'return drawHook\(t,count,\[&\]\(IDirect3DVertexShader9\* vs\)\{[\s\S]*?\},draw\);\}',r))==4 and all(x in r for x in ('ext->DrawPrimitive(','ext->DrawIndexedPrimitive('))
+checks['draw lambdas retain all four device entry points']=len(re.findall(r'return drawHook\(t,count,(?:0|stride),\[&\]\(IDirect3DVertexShader9\* vs\)\{[\s\S]*?\},draw\);\}',r))==4 and all(x in r for x in ('ext->DrawPrimitive(','ext->DrawIndexedPrimitive('))
 clr=r[r.index('HRESULT STDMETHODCALLTYPE Clear('):][:2800]
 checks['Clear hook: the stencil flag joins the game\'s full Clear(Z) of the world depth (no rects, scissor off) while the frame has no marks; with marks it is dropped; the mask bit in the game\'s value disables']=(
     'boundDepthIs(maskDsId)' in clr and 'n==0&&SUCCEEDED(ext->GetRenderState(D3DRS_SCISSORTESTENABLE,&scissor))&&!scissor&&SUCCEEDED(ext->GetViewport(&viewport))&&nameMaskFullViewport(viewport)' in clr and 'flags|=D3DCLEAR_STENCIL;stencil=0;' in clr and 'flags&=~DWORD(D3DCLEAR_STENCIL)' in clr
     and 'nameMask.noteClear(false)' in clr and 'nameMask.disable("the game clears stencil with the mask bit")' in clr and clr.index('flags|=D3DCLEAR_STENCIL')<clr.index('ext->Clear(n,rects,flags,color,z,stencil)'))
-re_=r[r.index('void renderEffects() {'):r.index('/* The guards of every mask decision')]
+re_=r[r.index('void renderEffects(bool atWorldRead=false) {'):r.index('/* The guards of every mask decision')]
 checks['viewport: a world-depth Clear(Z) is the full clear only with a viewport of the depth surface size (Clear is clipped to it); our own stencil Clear sets a full viewport for the call and restores it']=(
     'v.Width==worldDepthDesc.Width&&v.Height==worldDepthDesc.Height' in r)
 checks['renderEffects: marks only with an armed feature, a stencil depth, the world depth and no debug view; the world gets the surface for its composite, the legacy composite binds it around its quad with the shared bind']=(

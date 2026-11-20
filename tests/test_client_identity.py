@@ -132,7 +132,11 @@ shutil.rmtree(links, ignore_errors=True)
 (links / 'Data' / locale).mkdir(parents=True)
 (links / 'Wow.exe').write_bytes(b'')
 for source in client_archives.chain(client, 'stock', locale):
-    target = links / source.relative_to(client)
+    # Keep the fixture's Data and locale spelling even on a case-sensitive HD installation.
+    parent = links / 'Data'
+    if len(source.relative_to(client).parts) == 3:
+        parent /= locale
+    target = parent / source.name
     try:
         os.symlink(source, target)
     except OSError as exc:

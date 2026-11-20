@@ -13,7 +13,7 @@ body=r'''
 #include "replay_gpu_cache.h"
 #include <cassert>
 #include <cstdio>
-static size_t alive=0;static unsigned freshLocks=0,plainLocks=0,overlaps=0; /* resident uploads; asserted by main only: fixture users run archived flags-0 caches */
+static size_t alive=0;[[maybe_unused]] static unsigned freshLocks=0,plainLocks=0,overlaps=0; /* resident uploads; asserted by main only: fixture users run archived flags-0 caches */
 template<class T,class D>struct Buffer:T{
  unsigned refs=1;std::vector<unsigned char> data;D desc;bool fail=false;bool dynamic=false;std::vector<std::pair<UINT,UINT>> written;
  Buffer(size_t n):data(n){desc.Size=UINT(n);alive+=n;}~Buffer(){alive-=data.size();}

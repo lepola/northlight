@@ -541,8 +541,8 @@ def audit_wiring():
     assert seq == sorted(seq), seq
     assert 'SetPixelShader(constants[7]==0.f?aoContactBloomPS:aoPS)' in fn[a:seq[0]]
     assert 'ext->SetTexture(2,ao); ext->SetPixelShader(compositePS)' in fn
-    assert re.search(r'fold\?scene:nullptr,fold\?ao:nullptr\)', fn), 'the world fold reads the blurred ao'
-    assert re.search(r'if\(fold&&!world->composited\)\{effectState\(\);bindEffects\(ao\);', fn), 'fold fallback binds ao'
+    assert re.search(r'fold\?scene:nullptr,fold\?ao:nullptr,composition\)', fn), 'the world fold reads the blurred ao'
+    assert re.search(r'if\(fold&&!world->composited&&!materialAttempted\)\{effectState\(\);bindEffects\(ao\);', fn), 'fold fallback binds ao'
     assert 'aoRaw' not in fn[seq[2]+len('bindEffects(aoRaw)'):].split('legacyComposite')[0].split('SetTexture(2,nullptr)')[1]
     for fmt in (r'!ao && error\(ext->CreateTexture\(w/2, h/2, 1, D3DUSAGE_RENDERTARGET, D3DFMT_A16B16G16R16F, D3DPOOL_DEFAULT, &ao,',
                 r'!aoRaw && error\(ext->CreateTexture\(w/2, h/2, 1, D3DUSAGE_RENDERTARGET, D3DFMT_A16B16G16R16F, D3DPOOL_DEFAULT, &aoRaw,'):

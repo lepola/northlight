@@ -20,7 +20,7 @@ assert native.startswith('PASS'),native
 def body(source,start):
     i=source.index(start);return source[i:source.index('\n}\n',i)+3]
 renderer=fp.src('renderer.cpp').read_text()
-effects=renderer[renderer.index('    void renderEffects() {'):renderer.index('template<class Capture> void prepareDraw(')]
+effects=renderer[renderer.index('    void renderEffects(bool atWorldRead=false) {'):renderer.index('template<class Capture> void prepareDraw(')]
 order=['if (applied || !enabled || failed || !projectionValid) return;',
        'const bool celestial=celestialDiscs&&world&&debugMode==0&&worldDebug==0',
        'celestialDiscs->render(saved.targets[0],',

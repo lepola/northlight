@@ -42,7 +42,7 @@ checks['TemporalReach aliases c15; Camera.w is read nowhere; TemporalReach.w onl
     and code(hlsl).count('TemporalReach.w') == 1 and code(temporal).count('TemporalReach.w') == 1)
 
 # ---- 2. CPU wiring: c15.w from the drawn, active sources before the one bank upload ----
-upload = w.index('c[30][0]=waterMask?1.f:0.f;d->SetPixelShaderConstantF(0,&c[0][0],68);')
+upload = w.index('c[30][0]=waterMask?(surface?2.f:1.f):0.f;d->SetPixelShaderConstantF(0,&c[0][0],68);')
 cpu = ('        for(int source=0;source<2;++source)if(sourceWeights[source]>0&&sourceActive[source])\n'
        '            c[15][3]=std::max(c[15][3],std::max({sourceColors[source].x,sourceColors[source].y,sourceColors[source].z})*drawnWeight/sourceWeights[source]);\n')
 checks['c[15][3] set once, from drawn active sources, after drawnWeight and before the bank upload'] = (

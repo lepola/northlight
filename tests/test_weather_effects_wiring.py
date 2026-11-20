@@ -54,7 +54,10 @@ while '#ifdef NORTHLIGHT_WATER' in standard:
     branch=standard[start:end]
     assert '#if' not in branch[len('#ifdef NORTHLIGHT_WATER'):], 'nested cooperative condition needs explicit handling'
     standard=standard[:start]+(branch.split('#else',1)[1] if '#else' in branch else '')+standard[end+len('#endif'):]
-checks['render: the weather adds no pass of its own (quad count 21, shader creations 26 with the 0.3.199 fog clouds and fog temporal, the 0.3.205 lamp fog combine quad and shader, the 0.3.209 actor shadow visibility and two tile quads and their two shaders and the 16-lamp LocalDirect quad and shader)']=(standard.count('quad(')==21 and standard.count('CreatePixelShader')==26) and 'wetPS' not in w
+# Raised-air fog selects an alternative pixel shader for the existing march.
+checks['render: weather adds no draw or shader beyond the existing world passes and raised-air variant']=(
+    standard.count('quad(')==21 and standard.count('CreatePixelShader')==27
+    and 'CreatePixelShader(kWorldFogRaisedShader,&raisedFogPS)' in standard and 'wetPS' not in w)
 # disc and veil
 checks['discs: gain atomic, default 1, opacity and glare weights only, veil inherits']=(
     'std::atomic<float> weatherGain{1.f};' in dr and 'c[9][3]=glare?disc.opacity:disc.opacity*weatherGain.load(std::memory_order_relaxed);' in dr

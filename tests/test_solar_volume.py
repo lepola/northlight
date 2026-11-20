@@ -175,7 +175,7 @@ def main():
     set_source = cpu[cpu.index('auto setSource=[&](int source,bool first,bool volume=false){'):]
     set_source = set_source[:set_source.index('\n        };\n')]
     assert set_source.index('if(volume&&source==0)NorthlightSunHue::fogDirect(rgb,glowHueFrame,rgb);') < set_source.index('d->SetPixelShaderConstantF(17,rgb,1);')
-    fog_loop = cpu.index('d->SetRenderTarget(0,fogSurface);d->SetPixelShader(fogPS);first=true;')
+    fog_loop = cpu.index('d->SetRenderTarget(0,fogSurface);d->SetPixelShader(raisedAir?raisedFogPS:fogPS);first=true;')
     cool = cpu.index('d->SetPixelShaderConstantF(18,fogAmbient,1);')
     march = cpu.index('"celestial volumetric raymarch"')
     restore = cpu.index('d->SetPixelShaderConstantF(17,c[17],2);')

@@ -33,7 +33,7 @@ checks['HLSL: c64 is the only new constant, only .y read; s14 history, s15 depth
     'float4 FogTemporalInfo : register(c64);' in h and 'FogTemporalInfo.y' in body and len(re.findall(r'FogTemporalInfo\.[xzw]',body))==0
     and 'sampler2D FogHistory : register(s14);' in h and 'DepthHistory' in body)
 checks['HLSL: no other shader reads c64.y (0.3.200: FogStepInfo, c64.z, only in WorldFog\'s interval)']=(len(re.findall(r'register\(c64\)',h))==3 and re.findall(r'HorizonEdge\.\w+',re.sub(r'//[^\n]*','',h))==['HorizonEdge.w'] and 'LocalLightFog[5].' not in h
-    and re.findall(r'FogStepInfo\.\w+',re.sub(r'//[^\n]*','',h))==['FogStepInfo.z'] and 'mad(FogInfo.w,1.0/48,FogStepInfo.z)' in h[h.index('float4 WorldFog('):h.index('float4 FogBlur(')])
+    and re.findall(r'FogStepInfo\.\w+',re.sub(r'//[^\n]*','',h))==['FogStepInfo.z'] and 'mad(FogInfo.w,1.0/48,FogStepInfo.z)' in h[h.index('float4 worldFogMarch('):h.index('float4 FogBlur(')])
 checks['HLSL: sky reprojects the direction only, clamp over the neighbourhood, lerp by the weight, passthrough at 0']=(
     'sky' in body and 'PreviousView[0].xyz' in body and 'min(lo,s)' in body and 'clamp(history,lo,hi)' in body and 'lerp(current,' in body
     and 'if(FogTemporalInfo.y<=0)return current;' in body and 'max(.25,w*.03)' in body)
@@ -59,7 +59,7 @@ bl=g[g.index('// Separable depth-aware blur'):g.index('// c34 belongs')]
 checks['host: blur unchanged when the pass did not run (fog -> fogBlurred -> fog), resolved: fogHistory -> fog -> fogBlurred']=(
     'SetRenderTarget(0,fogResolved?fogSurface:fogBlurredSurface);d->SetTexture(9,fogResolved?fogHistory:fog)' in bl
     and 'SetRenderTarget(0,fogResolved?fogBlurredSurface:fogSurface);d->SetTexture(9,fogResolved?fog:fogBlurred)' in bl)
-checks['host: composite and the diagnostic dump read the final buffer']=('SetTexture(9,fogResolved?fogBlurred:fog);' in g and 'd->SetPixelShader(waterDistanceOwned?waterOwnedPS:finalPS);' in g and '#else\n        d->SetPixelShader(finalPS);' in g and 'dump(d,fogResolved?fogBlurredSurface:fogSurface,directory,"fog",capture)' in g)
+checks['host: composite and the diagnostic dump read the final buffer']=('SetTexture(9,fogResolved?fogBlurred:fog);' in g and 'd->SetPixelShader(waterOwned?waterOwnedPS:finalPS);' in g and '#else\n        d->SetPixelShader(finalPS);' in g and 'dump(d,fogResolved?fogBlurredSurface:fogSurface,directory,"fog",capture)' in g)
 checks['host: history target created with the others, dropped and invalidated in releaseGPU; shader optional']=(
     '&fogHistory,&fogHistorySurface)' in w and 'drop(fogHistorySurface);drop(fogHistory);drop(fogTemporalPS);fogHistoryValid=false;' in w and 'fogTemporalPS=nullptr;logf("WORLD fog temporal disabled' in w)
 checks['host: no per-draw work (nothing in src/stream or src/proxy mentions it)']=all(

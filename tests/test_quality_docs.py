@@ -7,7 +7,7 @@ import sys; from pathlib import Path; sys.path.insert(0, str(Path(__file__).reso
 import northlight_paths as fp
 import re
 
-# Developer/diagnostic keys: still parsed and logged on the QUALITY line, intentionally NOT in any player document.
+# Developer/diagnostic keys: still parsed and logged on the QUALITY line, absent from player guidance. The combo enables SpatialAlphaFog in its preset.
 DEVELOPER_KEYS = {'SpellLayerClasses', 'SpellTrace', 'SpatialAlphaFog'}
 INI_NAME, README_NAME = 'windows-package/northlight-quality.ini', 'windows-package/README.txt'
 
@@ -45,16 +45,19 @@ for l in lines[start:]:
 # ini blocks: the comment lines before ";Name=value", up to the previous blank line.
 ini_lines = ini.split('\n')
 ini_keys = {}
+assert ini_lines.count('RainOpacity=60') == 1, 'combo rain opacity override'
 for i, l in enumerate(ini_lines):
-    m = re.match(r'^;(\w+)=(\S*)\s*$', l)
+    m = re.match(r'^;(\w+)=(\S*)\s*$', l) or re.fullmatch(r'(RainOpacity)=(60)', l)
     if not m: continue
     j = i
     while j > 0 and ini_lines[j - 1].strip(): j -= 1
     ini_keys[m.group(1)] = (m.group(2), '\n'.join(ini_lines[j:i]))
 
 for name, (member, low, high, preset) in keys.items():
-    if name in DEVELOPER_KEYS:  # must stay out of every player document
-        if name in ini: fail(INI_NAME, name, 'developer key appears in the ini template')
+    if name in DEVELOPER_KEYS:  # only the combo preset may enable the internal spatial fog switch
+        if name == 'SpatialAlphaFog':
+            if ini.splitlines().count('SpatialAlphaFog=1') != 1: fail(INI_NAME, name, 'combo must enable spatial fog')
+        elif name in ini: fail(INI_NAME, name, 'developer key appears in the ini template')
         if name in readme: fail(README_NAME, name, 'developer key appears in README.txt')
         continue
     if preset[0] != defaults.get(member): fail('quality_settings.h', name, f'Quality preset {preset[0]} != Settings::{member} initialiser {defaults.get(member)}')
@@ -62,7 +65,8 @@ for name, (member, low, high, preset) in keys.items():
     if name not in ini_keys: fail(INI_NAME, name, 'no commented ";Name=default" line'); 
     else:
         value, block = ini_keys[name]
-        if value != str(preset[0]): fail(INI_NAME, name, f';{name}={value} but the Quality preset is {preset[0]}')
+        expected_value = 60 if name == 'RainOpacity' else preset[0]
+        if value != str(expected_value): fail(INI_NAME, name, f'{name}={value}, expected {expected_value}')
         # an "Allowed lo..hi" line in the key's comment block matches the Keys range
         a = re.findall(r'Allowed (\d+)\.\.(\d+)', block)
         if a and (int(a[-1][0]), int(a[-1][1])) != (low, high): fail(INI_NAME, name, f'Allowed {a[-1][0]}..{a[-1][1]} but Keys range is {low}..{high}')
@@ -88,4 +92,4 @@ if not m or int(m.group(1)) != len(keys) or m.group(2).count("'d'") != len(keys)
 
 if failures:
     print('\n'.join('FAIL ' + f for f in failures)); sys.exit(1)
-print(f'PASS quality docs: {len(keys)} keys, {len(rows)} README.txt rows, {len(ini_keys)} ini keys; {sorted(DEVELOPER_KEYS)} absent from player docs')
+print(f'PASS quality docs: {len(keys)} keys, {len(rows)} README.txt rows, {len(ini_keys)} ini keys; internal settings and combo overrides checked')

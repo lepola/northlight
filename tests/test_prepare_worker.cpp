@@ -355,10 +355,10 @@ static void handoffMeter(){
     std::printf("handoff meter: corrected within %.2f %% of the true cost over %u synthetic frames (clock reads 100-400 ns); raw inflated past 20 %% in all\n",100*worst,frames);
 }
 // Test processes: a throw on one index, or a stall (the watchdog).
-static std::atomic<std::size_t> throwAt{SIZE_MAX},stallAt{SIZE_MAX};static std::atomic<bool> stallHold{false}; /* 0.3.183: the stalled record waits on after 20 ms */
+static std::atomic<std::size_t> throwAt{SIZE_MAX},stallAt{SIZE_MAX};static std::atomic<bool> stallHold{false},stallEntered{false}; /* 0.3.183: the stalled record waits on after 20 ms */
 struct Faulty {template<class R> void operator()(State& s,const R& p,std::size_t index,Caches& c,const NorthlightActorPrepare::Frame& f,Output& out)const{
     if(index==throwAt.load())throw std::bad_alloc();
-    if(index==stallAt.load()){std::this_thread::sleep_for(std::chrono::milliseconds(20));while(stallHold.load())std::this_thread::sleep_for(std::chrono::milliseconds(1));} /* the record is read after it */
+    if(index==stallAt.load()){stallEntered=true;std::this_thread::sleep_for(std::chrono::milliseconds(20));while(stallHold.load())std::this_thread::sleep_for(std::chrono::milliseconds(1));} /* the record is read after it */
     NorthlightActorPrepare::prepareRecord(s,p,index,c,f.inverseView,f.camera,out);}};
 static void delay(std::mt19937& rng){switch(rng()%6){case 0:std::this_thread::sleep_for(std::chrono::microseconds(rng()%80));break;
     case 1:for(unsigned i=rng()%2000;i;--i)NorthlightActorPrepare::pause();break;case 2:std::this_thread::yield();break;default:break;}}
@@ -512,6 +512,7 @@ static void rearmCap(World& world){
     for(unsigned k=0;k<world.programs.size();++k)if(world.programs[k])r.actorPrograms[World::shader(k)]=r.captureShaders[World::shader(k)].program=world.programs[k];
     r.prepareWorker.setWatchdogMs(5);NorthlightRenderThreadProbe::on=false;tickNow=1000;
     auto frame=[&](bool stall){
+        if(stall){stallEntered=false;stallHold=true;}
         std::vector<std::unique_ptr<Rec>> records;
         do records=world.frame(rng,8);while(published(records).records.empty());
         const Camera c=camera(rng);std::memcpy(r.context.inverseView,c.inverseView,64);std::memcpy(r.context.camera,c.camera,12);
@@ -521,14 +522,18 @@ static void rearmCap(World& world){
             const auto handoffStart=timedHandoff?r.prepareMeter.start():std::chrono::steady_clock::time_point{};
             if(handoff)r.prepareFill(*rec,r.captureShaders[rec->originalShader]);
             r.replays.emplace_back(std::move(rec));r.preparePublish();if(timedHandoff)r.prepareMeter.stop(handoffStart);}
-        if(stall)std::this_thread::sleep_for(std::chrono::milliseconds(2)); /* the worker is inside the stalled record */
+        if(stall){
+            const auto until=std::chrono::steady_clock::now()+std::chrono::seconds(5);
+            while(!stallEntered&&std::chrono::steady_clock::now()<until)std::this_thread::yield();
+            assert(stallEntered); // The watchdog measures an in-flight record, even on a busy host.
+        }
         r.prepareJoin();const std::string mode=r.prepareStats.mode;
         std::size_t tests=0,reused=0;r.actorShadowDraws.clear();r.prepareStable(tests,reused);
         const auto p=published(r.replays);const std::size_t n=p.records.size();std::vector<Output> reference(n);
         prepare(p,0,n,*referenceCaches,c.inverseView,c.camera,reference);assert(r.actorShadowDraws.size()==n);
         for(std::size_t k=0;k<n;++k){Output got;got.item=r.actorShadowDraws[k];got.tested=p.records[k]->boneKnown;got.after=reference[k].after;assert(NorthlightActorPrepare::same(got,reference[k]));}
         r.prepareQuiesce();r.prepareEndFrame();for(auto& rec:r.replays)r.recycleReplay(rec.release());r.replays.clear();
-        stallAt=SIZE_MAX;return mode;};
+        stallHold=false;stallAt=SIZE_MAX;return mode;};
     for(unsigned cycle=0;cycle<5;++cycle){
         std::string mode=frame(true);assert(mode=="watchdog"&&r.prepareWorker.abandoned());
         mode=frame(false);assert(mode=="inline");

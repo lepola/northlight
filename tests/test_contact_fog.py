@@ -23,6 +23,6 @@ assert world.index('float3 fogPart=min(')<world.index('original.rgb=mad(original
 assert 'float3 lit = mad(original.rgb-fogPart,ambient.a,fogPart);' in legacy
 assert ' * legacyT;' in legacy
 rc=fp.src('renderer.cpp').read_text()
-assert 'fogForward=p[11];' in rc and 'nativeFog.parameters[0]*=fogForward;' in rc
+assert 'sign=p[11];' in rc and 'readProjection(wmo||model,lens,sign)' in rc and 'fogForward=sign;' in rc and 'nativeFog.parameters[0]*=fogForward;' in rc
 assert 'SetPixelShaderConstantF(5,nativeFog.parameters,1)' in rc and 'SetPixelShaderConstantF(6,nativeFog.color,1)' in rc
 print('PASS native fog survives AO, unknown/disabled fog keeps identity, dark channels are bounded, signed view slope wired')

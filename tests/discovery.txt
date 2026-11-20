@@ -168,6 +168,7 @@ test_rigid_memory.py
 test_saved_state.py
 test_settings_overlay.py
 test_settings_service.py
+test_shader_manifest.py
 test_shader_read_set.py
 test_shader_read_set_client.py
 test_shadow_blob_client.py
@@ -221,7 +222,9 @@ test_unlisted_archive.py
 test_upload_locks.py
 test_upload_payload_release.py
 test_vs_class_cache.py
+test_water_environment_glare.py
 test_water_geometry.py
+test_water_horizon_gpu.py
 test_water_mask_state.py
 test_water_mrt_wiring.py
 test_water_shader_patch.py

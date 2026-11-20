@@ -123,7 +123,8 @@ def old_parts(line):
 def new_parts(sig):
     body=member(renderer,sig+' override')
     draw=re.search(r'return (ext->Draw\w+\([^)]*\));',body).group(1)
-    cap=re.search(r'return drawHook\(t,count,\[&\]\(IDirect3DVertexShader9\* vs\)\{(.*?)captureWater\(vs,(\w+::\w+),draw\);\},draw\);\}',body,re.S)
+    stride = 'stride' if 'PrimitiveUP(' in sig else '0'
+    cap=re.search(r'return drawHook\(t,count,'+stride+r',\[&\]\(IDirect3DVertexShader9\* vs\)\{(.*?)captureWater\(vs,(\w+::\w+),draw\);\},draw\);\}',body,re.S)
     capture=cap.group(1)
     if capture.startswith('{'):
         trace = '#ifdef NORTHLIGHT_WATER\n            NorthlightWaterCall trace((classifyVs(vs).entry&kTagMask)==1?"Northlight::terrain capture":nullptr);\n#endif'
@@ -233,13 +234,15 @@ struct MockWorld{
     bool hasContext()const{return context;}
     bool ready()const{return context;} /* the old code has no ready(); following the context keeps the runs equivalent */
     bool rainBlendSetting()const{return false;}
+    bool cameraInLiquid()const{return false;}
+    bool skyContext()const{return false;}
     bool actorShadowsEnabled()const{return actorShadows;}
     bool shadowsRequested()const{return shadows;}
     bool terrainShadowActive()const{return shadows&&composited;}
     bool frameDrawGates()const{return true;}
     bool recognizesWmo(IDirect3DVertexShader9*)const{return false;}bool isWorldShader(IDirect3DVertexShader9*)const{return false;}bool isSkinnedShader(IDirect3DVertexShader9*)const{return false;}
     template<class... A> bool terrainShadowCoverage(A&&...){return false;}
-    IDirect3DPixelShader9* terrainShadowReplacement(IDirect3DPixelShader9* p){env->call("terrainShadowReplacement "+psName(p),"fault replacement");return env->bit("replacement")?&replacement:nullptr;}
+    template<class... Args> IDirect3DPixelShader9* terrainShadowReplacement(IDirect3DPixelShader9* p,Args&&...){env->call("terrainShadowReplacement "+psName(p),"fault replacement");return env->bit("replacement")?&replacement:nullptr;}
     void capture(D3DPRIMITIVETYPE t,INT base,UINT min,UINT vertices,UINT start,UINT count,bool indexed,IDirect3DVertexShader9*,bool a,bool b){
         env->call("capture "+drawName(t,start,count)+" "+std::to_string(base+min+vertices)+std::to_string(indexed)+std::to_string(a)+std::to_string(b),"fault capture");}
     int celestialPalette(const char*,const float*){env->call("celestialPalette");return 0;}
@@ -286,6 +289,9 @@ struct Base{
     Trace trace;Env env;MockExt extObj;MockWorld worldObj;MockSky skyObj;MockBlobs blobsObj;
     MockExt* ext=&extObj;MockWorld* world=&worldObj;MockSky* celestialDiscs=nullptr;MockBlobs* shadowBlobs=nullptr;
     MirrorStateMock mirrorState;
+    bool skyView=false,skyTried=false,worldDepth=false,projectionValid=false;
+    bool bindWorldDepth(const D3DSURFACE_DESC&,bool){return false;}
+    template<class Draw> HRESULT slimeNativeDraw(D3DPRIMITIVETYPE,UINT,bool,Draw draw){return draw();}
     BumpMock* autoBump=nullptr;struct{bool capsHalved()const{return false;}}memoryGuard;
     template<class Draw> HRESULT hdrDraw(Draw draw){return draw();}
     bool extensionFault=false,failed=false,enabled=true,applied=false,terrain=false,gateFrame=false,rainMaskCleared=false,rainMaskDrawn=false,rainMaskFrame=false,rainMaskOk=false,rainMrtBound=false,rainMaskFailed=false,rainMaskMismatchLogged=false;UINT width=0,height=0;IDirect3DTexture9* rainMask=nullptr;IDirect3DSurface9* rainMaskSurface=nullptr;IDirect3DSurface9* rainMaskMS=nullptr;D3DMULTISAMPLE_TYPE rainMaskMsType=D3DMULTISAMPLE_NONE,rainMaskWantType=D3DMULTISAMPLE_NONE;DWORD rainMaskMsQuality=0,rainMaskWantQuality=0;unsigned rainMaskDraws=0;

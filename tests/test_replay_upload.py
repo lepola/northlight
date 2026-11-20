@@ -82,8 +82,6 @@ method=source[start:end]
 shell=r"""
 #include <cstdarg>
 #include <chrono>
-struct LARGE_INTEGER {std::int64_t QuadPart=0;};
-bool QueryPerformanceCounter(LARGE_INTEGER* out){out->QuadPart=std::chrono::steady_clock::now().time_since_epoch().count();return true;}
 #include "capture_phase_profile.h"
 #include "streaming_phase_profile.h"
 #include "dynamic_ring.h"

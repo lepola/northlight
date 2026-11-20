@@ -174,7 +174,9 @@ int main(){
     d.vb.bytes.resize(16+200005u*24);d.put(4,a);d.put(100004,b);d.put(200004,c);
     std::uint32_t wide[]={4,100004,200004};d.ib.desc.Format=D3DFMT_INDEX32;d.ib.bytes.resize(sizeof wide);std::memcpy(d.ib.bytes.data(),wide,sizeof wide);
     FrameCache cache;MeshSnapshot out;Diagnostics why;
-    auto read=[&](UINT i){cache.clearFrame();return cache.readMesh(&d,D3DPT_TRIANGLELIST,0,4,200001+i,0,1,d.view,out,&why);};
+    // The cache reuses identical geometry across draw ranges. Give each range its own vertex data to exercise eviction.
+    float heightDelta=0;
+    auto read=[&](UINT i){d.put(4,Position{a.x,a.y,a.z+float(i)+heightDelta});cache.clearFrame();return cache.readMesh(&d,D3DPT_TRIANGLELIST,0,4,200001+i,0,1,d.view,out,&why);};
     const std::uint64_t limit=32u*1024u*1024u;assert(cache.persistentByteLimit()==limit);
     for(UINT i=0;i<12;++i)assert(read(i));assert(cache.persistentBytes()<=limit&&cache.persistentEntries()>=4);
     const auto fullEntries=cache.persistentEntries();const auto fullBytes=cache.persistentBytes();
@@ -188,7 +190,7 @@ int main(){
     assert(read(11)&&!why.contentCacheHit&&out.positions.size()==reference.size());
     for(size_t i=0;i<reference.size();++i)assert(out.positions[i].x==reference[i].x&&out.positions[i].y==reference[i].y&&out.positions[i].z==reference[i].z);
     assert(out.indices==indices);assert(read(11)&&why.contentCacheHit);
-    d.put(4,{a.x,a.y,77});assert(read(11)&&!why.contentCacheHit&&out.positions[0].z==77); // rebuilt entries still verify live bytes
+    heightDelta=77-a.z-11;assert(read(11)&&!why.contentCacheHit&&out.positions[0].z==77); // rebuilt entries still verify live bytes
     assert(d.vb.locks==d.vb.unlocks&&d.ib.locks==d.ib.unlocks&&d.vb.refs==1&&d.ib.refs==1);
     {// Trim cost at production-like size (log: 2410 entries, 32 MiB).
      Device b;const UINT span=560;b.vb.bytes.resize(16+(span+4000)*24);for(UINT v=0;v<span+4000;++v)b.put(v,a);b.put(283,Position{-10198,-1180,4});b.put(563,Position{-10200,-1178,5});
