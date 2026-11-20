@@ -1124,6 +1124,9 @@ class WindowsInstall(Install):
         before = tree(self.client)
         self.installer().install(self.client)
         descriptor = self.client / fi.WATER_ARCHIVE_LIST
+        self.assertNotIn('./Data/enUS/patch-enus-z.mpq', descriptor.read_text().splitlines())
+        self.assertFalse((self.client / 'Data/enUS/patch-enus-z.mpq').exists())
+        self.installer().install(self.client, art=True)
         expected = ['./' + path.relative_to(self.client).as_posix() for path in fi.client_archives.chain(self.client)]
         self.assertEqual(descriptor.read_text().splitlines(), expected)
         self.assertIn('./Data/enUS/patch-enus-z.mpq', expected)

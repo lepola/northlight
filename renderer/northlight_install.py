@@ -1019,9 +1019,11 @@ class Installer:
             self.say('Removing world-cache.previous left by an interrupted run...')
             remove_tree(previous)
 
-    def install(self, client, locale=None, cache=None, backend=None, art=True, world_cache=True, jobs=None,
+    def install(self, client, locale=None, cache=None, backend=None, art=None, world_cache=True, jobs=None,
                 instances=None, sky=None, raised_air=False):
         client = self.resolve_client(client)
+        if art is None:
+            art = not self.pkg.info.get('tideglass')
         plan = self.plan_install(client, locale, cache, backend, art, world_cache, instances, sky, raised_air)
         with locked(client):   # S5: taken once the read-only checks have passed
             return self.apply_install(plan, jobs)
@@ -1422,8 +1424,7 @@ def main(argv=None):
     installer.open_log(args.action)
     try:
         if args.action == 'install':
-            art = args.art_layer if args.art_layer is not None else not installer.pkg.info.get('tideglass')
-            installer.install(args.client, args.locale, args.cache, args.backend, art,
+            installer.install(args.client, args.locale, args.cache, args.backend, args.art_layer,
                               not args.no_world_cache, args.jobs, instances=args.instances, sky=args.sky,
                               raised_air=args.raised_air)
         elif args.action == 'uninstall':
