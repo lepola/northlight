@@ -510,6 +510,8 @@ static void integration(World& world,unsigned frames,unsigned maxGroups){
 static void rearmCap(World& world){
     std::mt19937 rng(1777);Renderer r(world.declarationCache);auto referenceCaches=std::make_unique<Caches>();
     for(unsigned k=0;k<world.programs.size();++k)if(world.programs[k])r.actorPrograms[World::shader(k)]=r.captureShaders[World::shader(k)].program=world.programs[k];
+    // Wake for one record: this fixture waits before join and can submit fewer than the normal wake batch.
+    r.prepareWorker.setWakeBatch(1);
     r.prepareWorker.setWatchdogMs(5);NorthlightRenderThreadProbe::on=false;tickNow=1000;
     auto frame=[&](bool stall){
         if(stall){stallEntered=false;stallHold=true;}
@@ -537,7 +539,9 @@ static void rearmCap(World& world){
     for(unsigned cycle=0;cycle<5;++cycle){
         std::string mode=frame(true);assert(mode=="watchdog"&&r.prepareWorker.abandoned());
         mode=frame(false);assert(mode=="inline");
-        std::this_thread::sleep_for(std::chrono::milliseconds(40)); /* the stalled record ends: settled */
+        const auto until=std::chrono::steady_clock::now()+std::chrono::seconds(5);
+        while(!r.prepareWorker.settled()&&std::chrono::steady_clock::now()<until)std::this_thread::yield();
+        assert(r.prepareWorker.settled());
         tickNow+=5000;mode=frame(false);assert(mode=="inline"&&r.prepareWorker.abandoned()); /* settled, but not 10 s yet */
         assert(r.prepareQuarantine.empty()&&!r.prepareAbandonedCaches&&r.prepareQuarantinedDecls.empty()&&r.prepareQuarantinedPrograms.empty()); /* released once settled */
         tickNow+=5001;mode=frame(false);assert(mode=="inline"); /* this frame's end re-arms (within the budget) */
