@@ -117,7 +117,9 @@ def texture_manifest(assets, path, local=None, decoder=None):
     bc = 'DXT1' if depth in (0, 1) else 'DXT3' if alpha == 1 else 'DXT5'
     offsets, sizes = unpack('<16I', blob, 20), unpack('<16I', blob, 84)
     mips = []
-    for level, (offset, size) in enumerate(zip(offsets, sizes)):
+    # Some HD BLPs leave nonzero padding in the header after the 1x1 level.
+    for level in range(min(len(offsets), max(width, height).bit_length())):
+        offset, size = offsets[level], sizes[level]
         if not offset or not size:
             continue
         w, h = max(1, width >> level), max(1, height >> level)

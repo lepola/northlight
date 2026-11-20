@@ -14,7 +14,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import northlight_paths as fp
 fp.use_source_modules()
 from world_scene_builder import Assets
-from build_spell_asset_manifest import build, fnv1a64, runtime_reference
+from build_spell_asset_manifest import build, fnv1a64, runtime_reference, texture_manifest
 
 
 class ClientManifestTest(unittest.TestCase):
@@ -67,18 +67,29 @@ class ClientManifestTest(unittest.TestCase):
 
     def test_raw_upload_hashes_and_native_codec(self):
         expected = {t['path']: t for t in self.expected['textures']}
+        cases = []
+        for texture in self.actual['textures']:
+            path = texture['path']
+            frozen = expected[path]
+            if texture['sha256'] != frozen['sha256']:
+                # HD archives can replace the effect. Exercise the replacement as well as the pinned original.
+                cases.append((self.assets, texture, None))
+                original = texture_manifest(self.stock, path)
+                self.assertEqual(original['sha256'], frozen['sha256'], path)
+                cases.append((self.stock, original, frozen['runtime_reference']))
+            else:
+                cases.append((self.assets, texture, frozen['runtime_reference']))
+        decoded = {}
         with tempfile.TemporaryDirectory(prefix='northlight-cold-blood-') as temp:
             for optimize in ('O0', 'O2'):
                 decoder = Path(temp) / (optimize + '.exe')
                 subprocess.run([str(fp.zig()), 'c++', '-std=c++17', '-' + optimize, '-I' + str(fp.SRC / 'replay'),
                                 str(fp.TESTS / 'cold_blood_texture_probe.cpp'), '-o', str(decoder)], check=True, capture_output=True, env=fp.zig_env())
-                for texture in self.actual['textures']:
-                    frozen = expected[texture['path']]
-                    self.assertEqual(texture['sha256'], frozen['sha256'])
+                for archives, texture, reference in cases:
                     selected = next(m for m in texture['mips'] if max(m['width'], m['height']) <= 64)
-                    reference = frozen['runtime_reference']
-                    self.assertEqual(selected['level'], reference['level'])
-                    blob = self.assets.read(texture['path'])
+                    if reference is not None:
+                        self.assertEqual(selected['level'], reference['level'])
+                    blob = archives.read(texture['path'])
                     level = selected['level']
                     offset = struct.unpack_from('<I', blob, 20+level*4)[0]
                     size = struct.unpack_from('<I', blob, 84+level*4)[0]
@@ -86,7 +97,12 @@ class ClientManifestTest(unittest.TestCase):
                     self.assertEqual(hashlib.sha256(raw).hexdigest(), selected['raw_sha256'])
                     self.assertEqual(fnv1a64(raw), selected['raw_fnv1a64'])
                     actual = runtime_reference(raw, selected['width'], selected['height'], selected['pitch'], texture['native_format'], decoder)
-                    self.assertEqual(actual, {k: v for k, v in reference.items() if k != 'level'})
+                    if reference is not None:
+                        self.assertEqual(actual, {k: v for k, v in reference.items() if k != 'level'})
+                    if optimize == 'O0':
+                        decoded[texture['sha256']] = actual
+                    else:
+                        self.assertEqual(actual, decoded[texture['sha256']])
 
     def test_local_fixture_is_exact_mesh_data_and_explicitly_not_a_draw_capture(self):
         with tempfile.TemporaryDirectory(prefix='northlight-cold-blood-mesh-') as temp:
