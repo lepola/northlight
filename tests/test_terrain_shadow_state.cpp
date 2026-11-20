@@ -23,28 +23,28 @@ struct Hook{
     DeviceState* ext=nullptr;
     Shader *shadowSwapOriginal=nullptr,*shadowSwapReplacement=nullptr,*shadowSwapVertexOriginal=nullptr,*shadowSwapVertexReplacement=nullptr;
     unsigned shadowSwapConstantBase=0,shadowSwapConstantCount=0,terrainShadowDraws=0;
-    float shadowSwapConstants[24]={};
+    float shadowSwapConstants[28]={};
     int sampledHookTimer(){return 0;}
     // Exact current production method, extracted by the Python driver.
 #include "terrain_shadow_draw.inc"
 };
 int main(){
     unsigned cases=0;
-    for(unsigned count:{3u,6u})for(unsigned fail=0;fail<=4;++fail)for(bool claimed:{false,true})for(HRESULT drawResult:{0l,-7l}){
+    for(unsigned count:{1u,4u,7u})for(unsigned fail=0;fail<=(count==1?3u:4u);++fail)for(bool claimed:{false,true})for(HRESULT drawResult:{0l,-7l}){
         Shader v,p,newV,newP;DeviceState state;state.vertex=&v;state.pixel=&p;state.failAt=fail;
         for(unsigned i=0;i<state.constants.size();++i)state.constants[i]=float(i)*.03125f;
         const auto before=state.constants;
-        Hook hook;hook.ext=&state;hook.shadowSwapOriginal=&p;hook.shadowSwapReplacement=&newP;hook.shadowSwapVertexOriginal=&v;hook.shadowSwapVertexReplacement=&newV;
-        hook.shadowSwapConstantBase=224-count;hook.shadowSwapConstantCount=count;std::fill_n(hook.shadowSwapConstants,24,-10.f);
+        Hook hook;hook.ext=&state;hook.shadowSwapOriginal=&p;hook.shadowSwapReplacement=&newP;hook.shadowSwapVertexOriginal=count==1?nullptr:&v;hook.shadowSwapVertexReplacement=count==1?nullptr:&newV;
+        hook.shadowSwapConstantBase=224-count;hook.shadowSwapConstantCount=count;std::fill_n(hook.shadowSwapConstants,28,-10.f);
         unsigned draws=0;HRESULT result=hook.terrainShadowDraw(claimed,[&](){
             ++draws;
             if(fail){assert(state.pixel==&p&&state.vertex==&v&&state.constants==before);}
-            else{assert(state.pixel==&newP&&state.vertex==&newV);for(unsigned i=0;i<count*4;++i)assert(state.constants[(224-count)*4+i]==-10.f);}
+            else{assert(state.pixel==&newP&&state.vertex==(count==1?&v:&newV));for(unsigned i=0;i<count*4;++i)assert(state.constants[(224-count)*4+i]==-10.f);}
             return drawResult;
         });
         assert(draws==unsigned(!claimed)&&result==(claimed?D3D_OK:drawResult));
         assert(state.pixel==&p&&state.vertex==&v&&state.constants==before);
-        assert(v.releases==1&&p.releases==1&&!newV.releases&&!newP.releases);
+        assert(v.releases==(count==1?0:1)&&p.releases==1&&!newV.releases&&!newP.releases);
         assert(!hook.shadowSwapOriginal&&!hook.shadowSwapReplacement&&!hook.shadowSwapVertexOriginal&&!hook.shadowSwapVertexReplacement);++cases;
     }
     std::printf("PASS %u actual draw-wrapper state/refcount/failure/claimed cases\n",cases);

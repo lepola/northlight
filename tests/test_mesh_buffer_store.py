@@ -45,7 +45,7 @@ failure = w[w.index('bool streamingFailure('):w.index('bool uploadRegionalFog()'
 for body in (orphan, failure):
     assert 'meshStore.cancel();' in body and body.index('meshStore.cancel();') < body.index('pendingMesh.reset();')
 release = w[w.index('void releaseGPU(bool keepMesh=false){'):]
-release = release[:release.index('\n')]
+release = release[:release.index('void recover()')]  # the cooperative release path spans several lines
 assert 'if(!keepMesh){pendingMesh.reset();clearMesh();}' in release and 'if(!keepMesh){releaseMeshPool();uploadedMap.clear();}' in release  # releaseMeshPool resets the store, claims included
 assert 'meshStore.reset();' in w[w.index('void releaseMeshPool()'):w.index('size_t trimMeshPools(')]
 assert 'meshIdleMiB=%.1f' in w and 'meshStore.poolBytes()' in w

@@ -36,7 +36,7 @@ return float4(fogReceiverDistance(uv,d),receiverDistance(uv,d),receiverDistance(
         subprocess.run([str(fp.zig()), 'c++', '-target', 'x86-windows-gnu', '-O2', '-UNDEBUG', '-Wall', '-Wextra', '-Werror',
                         *fp.test_include_flags(),str(fp.TESTS / 'water_fog_endpoint_gpu.cpp'), '-luser32', '-o', str(binary)], env=fp.zig_env(), check=True)
         compiler = root / 'compile_shaders.exe'
-        subprocess.run([str(fp.zig()), 'c++', '-target', 'x86-windows-gnu', '-O2', str(fp.REPO / 'scripts/shaders/compile_shaders.cpp'), '-o', str(compiler)], env=fp.zig_env(), check=True)
+        subprocess.run([str(fp.zig()), 'c++', '-target', 'x86-windows-gnu', '-O2', str(fp.REPO / 'scripts/shaders/compile_shaders.cpp'), '-ladvapi32', '-o', str(compiler)], env=fp.zig_env(), check=True)
         subprocess.run([str(compiler), str(hlsl), 'WaterFogOracle', 'ps_3_0', str(shader), '--native'], check=True)
         subprocess.run([str(binary), str(shader), backend], cwd=root, check=True, timeout=30)
 

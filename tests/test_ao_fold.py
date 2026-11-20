@@ -132,11 +132,11 @@ bleed = min(x for x in (5 + i / 100 for i in range(301)) if upsample(ao_row, fla
 checks[f'equal depth: the dark side reaches at most 1 half-res px across (from x={bleed:.2f}, edge at 8)'] = 8 - bleed <= 1.0 + 1e-9
 
 # 4. wiring
-effects_cpp = renderer[renderer.index('    void renderEffects() {'):renderer.index('template<class Capture> void prepareDraw(')]
+effects_cpp = renderer[renderer.index('    void renderEffects('):renderer.index('template<class Capture> void prepareDraw(')]
 fold_line = 'const bool fold=world&&debugMode==0&&world->ready();'
 legacy_before = 'if(!fold&&!legacyComposite())return;'
-render_call = 'world->render(saved.targets[0],depthTex,width,height,sceneFormat,nearZ,farZ,worldMinDepth,worldMaxDepth,worldDebug,gpuProfile.get(),waterMask,fold?scene:nullptr,fold?ao:nullptr)'
-legacy_after = 'if(fold&&!world->composited){effectState();bindEffects(ao);if(!legacyComposite())return;}'
+render_call = 'world->render(saved.targets[0],depthTex,width,height,sceneFormat,nearZ,farZ,worldMinDepth,worldMaxDepth,worldDebug,gpuProfile.get(),waterMask,fold?scene:nullptr,fold?ao:nullptr,composition)'
+legacy_after = 'if(fold&&!world->composited&&!materialAttempted){effectState();bindEffects(ao);if(!legacyComposite())return;}'
 checks['proxy: FOLD condition, legacy composite before render only when not folding, after it only if not composited'] = (
     all(effects_cpp.count(s) == 1 for s in (fold_line, legacy_before, render_call, legacy_after))
     and effects_cpp.index('gpuProfile->mark("AO");') < effects_cpp.index(fold_line) < effects_cpp.index(legacy_before)
@@ -145,7 +145,7 @@ checks['proxy: FOLD condition, legacy composite before render only when not fold
 checks['proxy: one shared effect-state setup, used before the AO pass and before the late legacy composite'] = (
     renderer.count('    void effectState() {') == 1 and effects_cpp.count('effectState();') == 2
     and effects_cpp.index('effectState();') < effects_cpp.index('bindEffects(nullptr);')
-    and 'D3DRS_MULTISAMPLEANTIALIAS,TRUE' in renderer[renderer.index('    void effectState() {'):renderer.index('    void renderEffects() {')]
+    and 'D3DRS_MULTISAMPLEANTIALIAS,TRUE' in renderer[renderer.index('    void effectState() {'):renderer.index('    void renderEffects(')]
     and 'kAoContactBloomShader' in renderer and 'kAoContactShader' not in renderer)
 render_fn = wr[wr.index('    bool render(IDirect3DSurface9* targetSurface'):]
 temporal = render_fn[render_fn.index('{   // Temporal stabilization'):render_fn.index('temporalIndex=prev;temporalValid=true;')]
@@ -163,12 +163,12 @@ checks['world: composited cleared at entry, set right after the WorldComposite q
 checks['diagnostic capture: the folded scene dump is labelled pre-AO'] = 'foldScene?"pre-AO (folded AO/bloom)":"post-AO composite"' in wr
 
 # 5. shaders: WorldComposite folds, smoothRemoval reads the AO, removalScale has no floor
-composite = world[world.index('float4 WorldComposite('):]
-checks['WorldComposite: AO in the tent, native fog preserved before surface AO, bloom bilinear'] = (
+composite = world[world.index('float4 WorldCompositeImpl('):]
+checks['WorldComposite: dry AO preserves native fog; bloom is bilinear and absent from the refraction source'] = (
     'sampler2D AmbientOcclusion : register(s10);' in world
     and 'ao=mad(occlusion,weight,ao);' in composite and 'fallbackAO=tex2Dlod(AmbientOcclusion,float4(fallbackUV,0,0)).a;' in composite  # gh#80: the nearest tap's AO is read once after the tent
-    and 'ao=relight?(total<.02?fallbackAO:ao/total):1;' in composite
-    and 'float3 bloom=tex2D(AmbientOcclusion,uv).rgb;' in composite
+    and 'ao=relight&&liquid<=0?(total<.02?fallbackAO:ao/total):1;' in composite
+    and 'float3 bloom=beforeRefraction<.5?tex2D(AmbientOcclusion,uv).rgb:0;' in composite
     and composite.index('float3 fogPart=min((1-legacyT)*LegacyFogColor.rgb,original.rgb);')
     < composite.index('original.rgb=mad(original.rgb-fogPart,ao,fogPart);')
     < composite.index('original.rgb=saturate(mad(bloom,1-saturate(original.rgb),original.rgb));')

@@ -9,6 +9,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <chrono>
+#include <cstdio>
 #include "intrusive_lru.h"
 #include <cstring>
 #include <limits>
@@ -32,6 +33,10 @@
 // and ordinary writes after capture cannot change a replay. Original shader inputs
 // (including blend indices/weights) and topology are preserved bit for bit.
 namespace NorthlightDrawSnapshot {
+// Optional bounded profiling; callers own the current span and its lifetime.
+struct PhaseTrace {void* context=nullptr;void (*next)(void*,const char*)=nullptr;
+    void at(const char* name)const{if(next)next(context,name);}};
+
 struct Stream { UINT stride=0; std::vector<std::uint8_t> bytes; };
 struct Mesh {
     Stream streams[4]; std::vector<std::uint32_t> indices;
@@ -554,7 +559,8 @@ public:
     // (also DYNAMIC) may be served from / stored into the persistent
     // cache as an immutable shared mesh and output is left empty. Hits charge
     // admission and the read budget exactly like the equivalent miss.
-    bool read(IDirect3DDevice9* device,IDirect3DVertexDeclaration9* declaration,const Draw& draw,Mesh& output,Diagnostics* why=nullptr,bool priority=false,std::shared_ptr<const Mesh>* shared=nullptr,bool nearby=false) {
+    bool read(IDirect3DDevice9* device,IDirect3DVertexDeclaration9* declaration,const Draw& draw,Mesh& output,Diagnostics* why=nullptr,bool priority=false,std::shared_ptr<const Mesh>* shared=nullptr,bool nearby=false,PhaseTrace trace={}) {
+        trace.at("snapshot metadata");
         if(shared)shared->reset();
         Mesh mesh=std::move(output);mesh.prepare();output=Mesh{};if(why)*why={};if(!device)return fail(why,Error::Arguments);
         UINT extent[4]={},n=0;if(!layout(declaration,extent,why)||!indexCount(draw,n,why))return false;
@@ -601,21 +607,26 @@ public:
                 const std::uint64_t token=known?metadata[4].identity:identity_(ib.p,true);
                 key=makeKey(vertices,extent,draw,declaration,strides,offsets,descriptions,token,desc.Size,unsigned(desc.Format),ok,batch?metadata:nullptr);
                 key.version[4]=known?metadata[4].revision:(version_?version_(ib.p,true):0);if(!key.version[4])key.tracked=0;cacheable=ok&&token!=0&&(!mesh.dynamic||key.tracked);
-                if(cacheable){bool served=false;if(!serve(key,vertices,ib.p,extent,shared,why,served))return false;if(served){fastCacheHits_+=metadataKnown&&key.tracked;output=std::move(mesh);return true;}}}
+                if(cacheable){trace.at("snapshot cache lookup");bool served=false;if(!serve(key,vertices,ib.p,extent,shared,why,served))return false;if(served){fastCacheHits_+=metadataKnown&&key.tracked;output=std::move(mesh);return true;}}}
             cacheIbBegin=begin;cacheIbBytes=bytes;
             if(!admit(why))return false;
             if(!reserve(std::size_t(bytes),why))return false;
+            trace.at("snapshot index allocation");
             rawIndexScratch_.resize(static_cast<std::size_t>(bytes));auto& raw=rawIndexScratch_;void* ptr=nullptr;
             NorthlightReplayCopies::Reader<IDirect3DIndexBuffer9> read(ib.p);
+            trace.at("snapshot index lock");
             if(FAILED(hr=read.lock(UINT(begin),UINT(bytes),&ptr)))return fail(why,Error::Lock,hr);
+            trace.at("snapshot index copy");
             if(ptr)std::memcpy(raw.data(),ptr,raw.size());HRESULT unlocked=read.unlock();
             if(FAILED(unlocked))return fail(why,Error::Unlock,unlocked);if(!ptr)return fail(why,Error::Lock);
+            trace.at("snapshot index decode");
             if(!decode(raw.data(),n,desc.Format,draw,mesh,low,high,why))return false;
         }else{
             // DYNAMIC resources may be cached only with complete write tracking.
             if(cacheable){bool ok=true;key=makeKey(vertices,extent,draw,declaration,strides,offsets,descriptions,0,0,0,ok,batch?metadata:nullptr);cacheable=ok&&(!mesh.dynamic||key.tracked);
-                if(cacheable){bool served=false;if(!serve(key,vertices,nullptr,extent,shared,why,served))return false;if(served){fastCacheHits_+=metadataKnown&&key.tracked;output=std::move(mesh);return true;}}}
+                if(cacheable){trace.at("snapshot cache lookup");bool served=false;if(!serve(key,vertices,nullptr,extent,shared,why,served))return false;if(served){fastCacheHits_+=metadataKnown&&key.tracked;output=std::move(mesh);return true;}}}
             if(!admit(why))return false;if(std::uint64_t(low)+n>std::uint64_t(UINT(-1))+1)return fail(why,Error::VertexRange);high=low+n-1;}
+        trace.at("snapshot vertex layout");
         std::int64_t first=std::int64_t(low)+(draw.indexed?draw.base:0),last=std::int64_t(high)+(draw.indexed?draw.base:0);
         if(first<0||last<first||last>UINT(-1))return fail(why,Error::VertexRange);
         if(!draw.indexed)mesh.vertexCount=high-low+1;
@@ -634,15 +645,20 @@ public:
         if(totalReadBytes>std::numeric_limits<size_t>::max()||!canReserve(size_t(totalReadBytes),why))return false;
         for(UINT s=0;s<4;++s){if(!extent[s])continue;if(why)why->stream=s;
             auto& vb=vertices[s];auto& target=mesh.streams[s];UINT stride=strides[s];HRESULT hr=D3D_OK;
+            trace.at("snapshot vertex allocation");
             target.stride=stride;target.bytes.resize(size_t(mesh.vertexCount)*stride);
             if(!reserve(size_t(readBytes[s]),why))return false;void* ptr=nullptr;
             NorthlightReplayCopies::Reader<IDirect3DVertexBuffer9> read(vb.p);
+            trace.at("snapshot vertex lock");
             if(FAILED(hr=read.lock(UINT(begins[s]),UINT(lockBytes[s]),&ptr)))return fail(why,Error::Lock,hr);
-            if(ptr)copyVertices(target.bytes.data(),static_cast<const std::uint8_t*>(ptr),stride,extent[s],low,mesh.vertexCount);HRESULT unlocked=read.unlock();
+            if(trace.next){char label[96];std::snprintf(label,sizeof label,"snapshot vertex %s bytes=%llu span=%llu runs=%zu",read.fromCopy()?"CPU":"mapped",(unsigned long long)readBytes[s],(unsigned long long)lockBytes[s],compacted_?activeRuns_->size():size_t(1));trace.at(label);}
+            if(ptr)copyVertices(target.bytes.data(),static_cast<const std::uint8_t*>(ptr),stride,extent[s],low,mesh.vertexCount);
+            trace.at("snapshot vertex unlock");HRESULT unlocked=read.unlock();
             if(FAILED(unlocked))return fail(why,Error::Unlock,unlocked);if(!ptr)return fail(why,Error::Lock);
         }
         sourceSpanVertices_+=size_t(sourceSpan);uniqueVertices_+=mesh.vertexCount;savedVertexBytes_+=size_t(savedBytes);compactedDraws_+=compacted_;
         accepted();if(why){why->error=Error::None;why->hr=D3D_OK;}
+        trace.at("snapshot cache store");
         if(cacheable){++cacheMisses_;if(store(key,std::move(mesh),cacheIbBegin,cacheIbBytes,low,begins,lockBytes,readBytes,shared))return true;}
         output=std::move(mesh);return true;
     }

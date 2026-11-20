@@ -557,7 +557,7 @@ def audit_contact_ao():
     """0.3.201 (task 18) ContactAO=0: no AO pass and no AOBlur; a ready world gets ContactBloom (bloom, AO 1) straight into ao,
     the legacy path a neutral clear; ContactAO=1 keeps the raw AO then AOBlur sequence checked by audit_wiring."""
     text = fp.src('renderer.cpp').read_text()
-    fn = text[text.index('bindEffects(nullptr);\n        if (!contactAO) {'):text.index('// 0.3.174 FOLD:')]
+    fn = text[text.index('bindEffects(nullptr);\n        if (!contactAO || !terrain) {'):text.index('// 0.3.174 FOLD:')]
     off, on = fn.split('        } else {\n            if (error(ext->SetRenderTarget(0,aoRawSurface)', 1)
     on = '            if (error(ext->SetRenderTarget(0,aoRawSurface)' + on
     assert 'constants[7]==0.f' in off

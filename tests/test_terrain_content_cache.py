@@ -37,11 +37,11 @@ int main(){
     assert(read()&&!why.contentCacheHit&&out.positions[0].x==b.x);d.ib.bytes=original;
     assert(read()&&!why.contentCacheHit&&out.positions[0].z==30);
     d.setIndices32();assert(read()&&!why.contentCacheHit);assert(read()&&why.contentCacheHit);
-    // Contract differences force a miss even when the effective geometry matches.
-    assert(read(4)&&!why.contentCacheHit);assert(read(4)&&why.contentCacheHit);
+    // Each new contract is validated; equivalent geometry can then be reused.
+    assert(read(4)&&why.contentCacheHit);assert(read(4)&&why.contentCacheHit);
     d.put(3,c);assert(read(3,-4)&&!why.contentCacheHit);
     d.declaration.type=D3DDECLTYPE_FLOAT4;assert(read()&&!why.contentCacheHit);
-    d.declaration.stream=1;assert(read()&&!why.contentCacheHit);
+    d.declaration.stream=1;assert(read()&&why.contentCacheHit);
     d.declaration.offset=8;fill();assert(read()&&!why.contentCacheHit);
     d.stride=28;d.vb.bytes.resize(16+8*28);fill();assert(read()&&!why.contentCacheHit);
     d.streamOffset=20;d.vb.bytes.resize(20+8*28);fill();assert(read()&&!why.contentCacheHit);
@@ -66,17 +66,17 @@ int main(){
     assert(budget.readMesh(&d,D3DPT_TRIANGLELIST,-3,7,3,1,1,d.view,out,&why));
     assert(!budget.readMesh(&d,D3DPT_TRIANGLELIST,-3,7,3,1,1,d.view,out,&why)&&why.reason==RejectReason::ByteBudget);
     budget.clearFrame();assert(budget.readMesh(&d,D3DPT_TRIANGLELIST,-3,7,3,1,1,d.view,out,&why)&&why.contentCacheHit);
-    // Different vertex-range contracts fill at most 4096 entries.
+    // Distinct geometry fills at most 4096 entries; contract aliases alone do not.
     cache.clearPersistent();
-    for(UINT i=0;i<4296;++i){cache.clearFrame();assert(read(3+i));assert(cache.persistentEntries()<=4096&&cache.persistentBytes()<=32u*1024*1024);}
+    for(UINT i=0;i<4296;++i){cache.clearFrame();d.put(4,{a.x,a.y,float(i)});assert(read(3+i));assert(cache.persistentEntries()<=4096&&cache.persistentBytes()<=32u*1024*1024);}
     assert(cache.persistentEntries()==4096);cache.clearFrame();assert(read(4298)&&why.contentCacheHit);
-    cache.clearFrame();assert(read()&&!why.contentCacheHit); // Evicted oldest.
+    cache.clearFrame();d.put(4,{a.x,a.y,0});assert(read()&&!why.contentCacheHit); // Evicted oldest.
     // Wide, valid index spans exercise the memory cap before the entry cap.
     d.declaration.type=D3DDECLTYPE_FLOAT3;d.declaration.offset=4;d.declaration.stream=0;d.stride=24;d.streamOffset=16;
     d.vb.bytes.resize(16+200005u*24);d.put(4,a);d.put(100004,b);d.put(200004,c);
     std::uint32_t wide[]={4,100004,200004};d.ib.bytes.resize(sizeof wide);std::memcpy(d.ib.bytes.data(),wide,sizeof wide);
     cache.clearPersistent();
-    for(UINT i=0;i<12;++i){cache.clearFrame();assert(cache.readMesh(&d,D3DPT_TRIANGLELIST,0,4,200001+i,0,1,d.view,out,&why));
+    for(UINT i=0;i<12;++i){cache.clearFrame();d.put(4,{a.x,a.y,float(i)});assert(cache.readMesh(&d,D3DPT_TRIANGLELIST,0,4,200001+i,0,1,d.view,out,&why));
         assert(cache.persistentBytes()<=32u*1024*1024);}
     assert(cache.persistentEntries()<12&&cache.persistentEntries()>0);
     assert(d.vb.locks==d.vb.unlocks&&d.ib.locks==d.ib.unlocks);

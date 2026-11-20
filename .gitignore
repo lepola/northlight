@@ -56,3 +56,7 @@ video-review-*/
 /renderer/records/
 
 !/licenses/
+
+!/tideglass/
+# Shader read logs contain temporary compiler paths. Portable hashes live in the manifests.
+/shaders/compiled/*.bin.inputs

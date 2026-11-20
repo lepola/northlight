@@ -297,7 +297,7 @@ int main(){
 '''
 r=fp.src('renderer.cpp').read_text();w=fp.src('world_renderer.h').read_text();inl=fp.src('world_memory_guard.inl').read_text()
 finish=r[r.index('    void finishFrameImpl() {'):r.index('    HRESULT STDMETHODCALLTYPE Present(const RECT* src,const RECT* dst,HWND wnd')]
-trim=r[r.index('    void trimMemory(const NorthlightMemoryDiagnostics::Sample& trigger){'):r.index('    void finishFrame() {')]
+trim=r[r.index('    void trimMemory(const NorthlightMemoryDiagnostics::Sample& trigger){'):r.index('    void finishFrame(bool implicitChain=true) {')]
 checks={
  'sampler always created (no diagnostics gate), below-normal walk':'try{memoryDiagnostics=std::make_unique<NorthlightMemoryDiagnostics::Sampler>(&queryAddressSpace);}' in r and 'SetThreadPriority(GetCurrentThread(),THREAD_PRIORITY_BELOW_NORMAL)' in r,
  'render thread requests on the guard cadence, never walks':'if(memoryGuard.requestDue(now))memoryDiagnostics->request();' in finish and 'VirtualQuery' not in finish,

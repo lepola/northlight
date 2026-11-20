@@ -24,6 +24,7 @@ constexpr bool kFilterRedundantState=NORTHLIGHT_STREAM_FILTER!=0;
 // The stream the process runs, for the opaque-pointer hook (celestial identities the game stored in its own memory).
 inline std::atomic<StreamCore*> activeCore{nullptr};
 inline const void* innerOfActive(const void* p){StreamCore* c=activeCore.load(std::memory_order_acquire);return c?c->reg.innerOf(p):p;}
+inline bool rawIdentityOfActive(const void* p,std::uintptr_t& raw){StreamCore* c=activeCore.load(std::memory_order_acquire);raw=0;return c&&c->reg.rawIdentity(p,raw);}
 
 // The Win32 calls DXVK's hardware cursor makes (d3d9_cursor.cpp), behind function pointers so the host tests can observe them. Plain Win32 on
 // the calling thread's input queue: the stream does them on the GAME thread, at the call, exactly as DXVK would on the direct path.
@@ -57,6 +58,9 @@ class StreamDevice final:public IDirect3DDevice9 {
 public:
     struct Options {
         std::size_t budget=BudgetBytes;
+#ifdef NORTHLIGHT_WATER
+        std::function<WaterHostFrameRef(const D3DVIEWPORT9&)> captureWater;
+#endif
         bool (*capture)(GameSnapshot&,Trigger,std::uint64_t)=nullptr;   // game_snapshot.h capture() in the DLL; null = no snapshots
         std::function<void()> threadStart;                              // runs on the replay thread first (owner handoff)
         std::function<void(const char*)> log;
@@ -101,7 +105,7 @@ public:
             else d->sc0->dead.store(true);
             d->st.loadDefaults(c.target);ok=!d->sc0->dead.load();},Cmd::SyncInit);
         if(!ran||!ok)return fail("init");
-        gameTid.store(Replayer::currentTid());activeCore.store(&d->core,std::memory_order_release);innerOf=&innerOfActive;
+        gameTid.store(Replayer::currentTid());activeCore.store(&d->core,std::memory_order_release);innerOf=&innerOfActive;rawIdentityOf=&rawIdentityOfActive;
         return d.release();
     }
     ~StreamDevice(){}
@@ -386,6 +390,9 @@ public:
             nowAtPresent=nowNs();const std::uint64_t now=nowAtPresent;auto& st2=q.stats;
             if(frameEnd){own(st2.gameNs,now-frameEnd);own(st2.gameWaitNs,get(st2.syncNs)+get(st2.backpressureNs)-waitsAtFrameEnd);own(st2.gameFrames);}
         }
+#ifdef NORTHLIGHT_WATER
+        waterFrame = {};
+#endif
         policy.onPresent();takeReplayFailure();
         UINT dirtyBytes=0;
         if(dirty){dirtyBytes=dirty->rdh.dwSize+dirty->rdh.nCount*UINT(sizeof(RECT));if(sizeof(PresentArgs)+dirtyBytes>MaxInlinePayload)dirtyBytes=0;}
@@ -445,10 +452,13 @@ public:
 
     HRESULT STDMETHODCALLTYPE Reset(D3DPRESENT_PARAMETERS* p) override{
         if(!p)return D3DERR_INVALIDCALL;
+#ifdef NORTHLIGHT_WATER
+        waterFrame = {};
+#endif
         st.clear();recording=false;
         HRESULT hr=D3DERR_INVALIDCALL;
         const bool ran=runTask(core,[&](StreamCore& c){   // everything recorded so far has run; the game waits, pumped
-            for(ProxyBase* k:sc0->kids)if(k&&k->inner&&k->refs.load()==0){c.reg.unbindInner(k);k->inner->Release();k->inner=nullptr;}   // one the game still holds keeps its object, as in D3D9   // back buffers must not outlive the swap chain's reset
+            for(ProxyBase* k:sc0->kids)if(k&&k->inner&&k->refs.load()==0){auto* retired=k->inner;c.reg.unbindInner(k);retired->Release();}   // one the game still holds keeps its object, as in D3D9   // back buffers must not outlive the swap chain's reset
             c.queryEpoch.fetch_add(1); // invalidate EVENT cache across Reset
             hr=c.target->Reset(p);c.coopState.store(c.target->TestCooperativeLevel());   // 0.3.204 (task 21): the replay thread publishes the new cooperative level; StreamDevice is not an IDirect3DDevice9Ex, so there is no ResetEx
             if(SUCCEEDED(hr)){IDirect3DSwapChain9* sc=nullptr;if(SUCCEEDED(c.target->GetSwapChain(0,&sc))&&sc){sc->GetPresentParameters(&sc0->pp);sc->Release();}}
@@ -612,6 +622,10 @@ private:
     bool recording=false,pressureApplied=false,filter=true;std::uint64_t stormStartNs_=0,stormSyncAt_=0,stormWaitAt_=0,stormFrameAt_=0;bool stormSeen_=false;BOOL cursorVisible=0;void* hCursor=nullptr;std::mutex cursorMutex;CursorApi cursor=CursorApi::native();unsigned getsSincePublish=0;std::uint64_t frameEnd=0,waitsAtFrameEnd=0;std::uint64_t drawOrdinal=0;
     unsigned framesAhead_=1;PresentMark presentHist[kMaxFramesAhead];   // 0.3.200 (pipeline): see presentCommon
     std::thread::id gameThread=std::this_thread::get_id();
+#ifdef NORTHLIGHT_WATER
+    WaterHostFrameRef waterFrame;
+    std::function<WaterHostFrameRef(const D3DVIEWPORT9&)> captureWaterFrame;
+#endif
     PoolTuner tuner;TriggerPolicy policy;bool (*capture)(GameSnapshot&,Trigger,std::uint64_t)=nullptr;
     // 0.3.200 (frame skip): a swap chain's back buffer (the frame's own image); a texture level or cube face (sampled later: never a skippable depth target).
     // A frame may be skipped only while every draw and clear lands in a back buffer and a standalone depth surface.
@@ -625,6 +639,9 @@ private:
     StreamDevice(IDirect3DDevice9* target,IDirect3D9* par,const D3DPRESENT_PARAMETERS* p,Options opt)
         :coreOwner(new StreamCore(opt.budget)),core(*coreOwner),replayer(core,SnapshotPool::capFor(clampFramesAhead(opt.framesAhead))),parent(par),framesAhead_(clampFramesAhead(opt.framesAhead)),capture(opt.capture){
         core.target=target;core.game=this;core.framesAhead=framesAhead_;core.logLine=nullptr;core.callerModule=opt.callerModule;core.queryCaller=opt.queryCaller;core.occlusionLocal=opt.occlusionLocal;callerLog=opt.log;callerDiag=opt.diagnostics;core.readBackLock=opt.readBackLock;st.core=&core;
+#ifdef NORTHLIGHT_WATER
+        captureWaterFrame = opt.captureWater;
+#endif
         if(opt.cursorApi)cursor=*opt.cursorApi;
         restoreOwner=opt.threadStart;replayer.frameSkip=opt.frameSkip!=0;replayer.threadStart=std::move(opt.threadStart);replayer.log=opt.log;replayer.diagnostics=opt.diagnostics;filter=opt.filterRedundant;
         if(kDirectReplay&&opt.directReplay&&opt.extension&&opt.rawOf){core.ext=opt.extension;auto f=opt.rawOf;core.reg.rawOf=[f](IUnknown* e,Kind k){return f(e,unsigned(k));};}
@@ -663,7 +680,7 @@ private:
         st.clear();sc0->comRelease();   // binds and the swap chain's own reference go; the Destroys run before the Target's release
         runTask(core,[&](StreamCore& c){c.target->Release();c.target=nullptr;},Cmd::SyncRelease);   // the Device's final release happens on the replay thread
         replayer.stop();
-        innerOf=nullptr;activeCore.store(nullptr,std::memory_order_release);
+        innerOf=nullptr;rawIdentityOf=nullptr;activeCore.store(nullptr,std::memory_order_release);
         if(hCursor){cursor.destroy(hCursor);hCursor=nullptr;}
         IDirect3D9* p=parent;
         delete this;
@@ -678,10 +695,31 @@ private:
     void takeSnapshot(Trigger t){
         if(t==Trigger::None||!capture)return;
         const std::uint64_t t0=core.timing?nowNs():0;   // 0.3.204 (task 21): snapshot capture time (acquire + capture + record), Diagnostics only
-        GameSnapshot* s=replayer.snapshots.acquire();if(!s)return;
-        if(!capture(*s,t,drawOrdinal)){replayer.snapshots.release(s);if(t0)own(core.q.stats.snapNs,nowNs()-t0);return;}
-        Queue& q=core.q;auto* p=static_cast<GameSnapshot**>(q.reserve((std::uint16_t)Cmd::Snapshot,sizeof(GameSnapshot*)));*p=s;q.commit();
-        if(t0)own(q.stats.snapNs,nowNs()-t0);
+        // State changes recorded before this draw can replay during the world snapshot.
+        if(t==Trigger::World)core.q.publish();
+        GameSnapshot* s=replayer.snapshots.acquire();
+        if(!s){
+#ifdef NORTHLIGHT_WATER
+            recordSnapshot(nullptr);
+#endif
+            return;
+        }
+        if(!capture(*s,t,drawOrdinal)){
+            replayer.snapshots.release(s);
+#ifdef NORTHLIGHT_WATER
+            recordSnapshot(nullptr);
+#endif
+            if(t0)own(core.q.stats.snapNs,nowNs()-t0);return;
+        }
+#ifdef NORTHLIGHT_WATER
+        if(t == Trigger::World && captureWaterFrame && st.viewport.known) waterFrame = captureWaterFrame(st.viewport.v);
+        s->waterFrame = waterFrame;
+#endif
+        recordSnapshot(s);
+        if(t0)own(core.q.stats.snapNs,nowNs()-t0);
+    }
+    void recordSnapshot(GameSnapshot* snapshot){
+        Queue& q=core.q;auto* p=static_cast<GameSnapshot**>(q.reserve((std::uint16_t)Cmd::Snapshot,sizeof(GameSnapshot*)));*p=snapshot;q.commit();
     }
     void written(ProxyBase* p){
         if(!p)return;

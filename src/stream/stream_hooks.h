@@ -22,6 +22,11 @@ inline thread_local const void* upIdentity=nullptr;
 // stream while active. celestial_disc_native.h applies it before the registry's rawOf. Null = identity.
 inline const void* (*innerOf)(const void*)=nullptr;
 inline const void* inner(const void* p){return innerOf&&p?innerOf(p):p;}
+// Resolve an opaque game-memory identity through the stream's existing backend
+// mapping. True includes known-but-unready proxies (raw=0); false needs the
+// caller's ordinary non-stream lookup. No backend call or COM ownership transfer.
+inline bool (*rawIdentityOf)(const void*,std::uintptr_t&)=nullptr;
+inline bool rawIdentity(const void* p,std::uintptr_t& raw){raw=0;return rawIdentityOf&&p&&rawIdentityOf(p,raw);}
 // True from before the Device is constructed until the process ends, only when the replay thread runs. It must be set
 // before WorldRenderer / StaticShadowGpu are constructed (their core budgets read it once). A plain atomic with
 // relaxed loads: written once on the game thread during Factory::CreateDevice, never cleared.

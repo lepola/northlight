@@ -9,6 +9,11 @@ import northlight_paths as fp
 import re
 
 r=fp.src('renderer.cpp').read_text()
+cooperative_counter='\n#ifdef NORTHLIGHT_WATER\n            if(rainLayerMode&&!applied&&weatherDetect.hotKind==NorthlightWeather::Kind::Rain){++rainSeen;if(!rainBlend)rainColourIncomplete=true;}\n#endif\n'
+# 2026-11-09: the game's rain is skipped like a mist puff while the camera is in liquid (it streaked over the underwater view)
+liquid_skip='            /* With the camera in liquid the game still draws its rain, which then streaks over the underwater view (2026-11-09):\n               skipped like a mist puff. */\n            if(weatherDetect.hotKind==NorthlightWeather::Kind::Rain&&world&&world->cameraInLiquid())mist=true;\n        '
+assert r.count(cooperative_counter+liquid_skip)==1
+r=r.replace(cooperative_counter+liquid_skip,'')
 checks={}
 for name in ('stream_device.h','stream_proxies.h','game_snapshot.h'):
     # game_snapshot.h only records the game's own weather state next to the sky block (weather_memory.h); the texture detection stays out of the stream path
@@ -50,7 +55,7 @@ checks['Reset clears the detector']='weatherDetect.reset();' in reset
 s0=r.index('    void finishFrameImpl() {');fin=r[s0:r.index('HRESULT STDMETHODCALLTYPE Present(',s0)]
 checks['finishFrameImpl calls weatherFrame before the next frame is latched']=0<fin.index('weatherFrame(sampleFrame);')<fin.index('++frame;')
 wf=r[r.index('    void weatherFrame('):r.index('    void logWeatherProbe(')]
-checks['weatherFrame: tracker, world, rotate, mirror-off']=all(s in wf for s in ('weatherTracker.frame(weatherSample,','world->setWeather(st)','weatherDetect.endFrame(counted)','weatherDetect.setOff(true)','WEATHER detect=off (mirror inactive)'))
+checks['weatherFrame: tracker, world, rotate, mirror-off']=all(s in wf for s in ('weatherTracker.frame(weatherSample,','world->setWeather(st)','weatherDetect.endFrame(counted,frameSample.memory,','weatherDetect.setOff(true)','WEATHER detect=off (mirror inactive)'))
 checks['DRAWGATE line carries weatherDraws/weatherPrims']='weatherDraws=%u weatherPrims=%u weatherNs=%.1f' in r and 'weatherSample.draws,weatherSample.primitives,b.weatherNs)' in r
 w=fp.src('world_renderer.h').read_text()
 checks['WorldRenderer: POD state, setter and getter only']=all(s in w for s in ('NorthlightWeather::State weatherState{};','void setWeather(const NorthlightWeather::State& s){weatherState=s;}','const NorthlightWeather::State& weather()const{return weatherState;}')) and w.count('weatherState')==4
@@ -64,7 +69,7 @@ checks['rain mask MRT: the rain branch makes ONE draw through rainMrtDraw, betwe
     and 'rainMrtDraw' not in helper.split('return blobFaintDraw(claimed,[&]{')[0] and 'rainMaskPass' not in r and 'rainScrub' not in r.replace('rainScrubPS','').replace('kRainScrubShader','') and 'rainMaskScrub' not in r)
 mrt=r[r.index('template<class Draw> HRESULT rainMrtDraw('):r.index('IDirect3DTexture9* rainMaskPrepare()')]
 checks['rain mask MRT: rainMrtDraw: begin and end inside extensionWork("rain mask"), the draw once between them, unbound before a plain draw, counted only on success']=(
-    mrt.count('draw()')==2 and mrt.count('extensionWork("rain mask"')==2 and 'masked=rainMrtBegin()' in mrt and 'if(!masked){rainMrtUnbind();return draw();}' in mrt and mrt.index('rainMrtBegin()')<mrt.index('const HRESULT hr=draw();')<mrt.index('rainMrtEnd()')
+    mrt.count('draw()')==1 and mrt.count('rainOpacityDraw(draw)')==1 and mrt.count('extensionWork("rain mask"')==2 and 'masked=rainMrtBegin()' in mrt and 'if(!masked){' in mrt and 'rainMrtUnbind();return rainOpacityDraw(draw);}' in mrt and mrt.index('if(!masked){')<mrt.index('rainMrtUnbind();return rainOpacityDraw(draw);}')<mrt.index('const HRESULT hr=draw();') and mrt.index('rainMrtBegin()')<mrt.index('const HRESULT hr=draw();')<mrt.index('rainMrtEnd()')
     and 'if(SUCCEEDED(hr)){rainMaskDrawn=true;++rainMaskDraws;}' in mrt)
 bg=r[r.index('bool rainMrtBegin(){'):r.index('void rainMrtEnd(){')]
 checks['rain mask MRT: eligibility (not applied, terrain, enabled, not failed, world, mask not failed), cached per frame; caps once; no game VS or PS; the exact stage setup']=(
@@ -76,7 +81,7 @@ checks['rain mask MRT: only RT1\'s write mask (red) is saved with Get, set after
     and 'ext->GetRenderState(types[i],&rainMrtPrev[i])' in bg and 'ext->SetPixelShader(rainMrtPS);' in bg and bg.index('ext->SetRenderTarget(1,maskTarget)')<bg.index('ext->SetRenderState(types[i],want[i])')<bg.index('ext->SetPixelShader(rainMrtPS)')
     and 'ext->SetRenderState(types[i],rainMrtPrev[i])' in r and 'ext->SetPixelShader(nullptr);' in r[r.index('void rainMrtEnd(){'):r.index('template<class Draw> HRESULT rainMrtDraw(')])
 checks['rain mask MRT: RT1 binds once per run (rainMrtRuns), lazily unbound by rainMrtUnbind; a skip unbinds, counts and logs the first reason once']=(
-    'else if(!rainMrtBound){' in bg and 'rainMrtBound=true;++rainMrtRuns;' in bg and 'void rainMrtUnbind(){\n        bool done=false;if(water&&water->isMrtBound()){water->unbindMrt();done=true;}\n        if(rainMrtBound){if(!done)ext->SetRenderTarget(1,nullptr);rainMrtBound=false;}\n    }' in r
+    'else if(!rainMrtBound){' in bg and 'rainMrtBound=true;++rainMrtRuns;' in bg and 'bool done=false;if(water&&water->isMrtBound()){water->unbindMrt();done=true;}' in r and 'if(rainMrtBound){if(!done)ext->SetRenderTarget(1,nullptr);rainMrtBound=false;}' in r and 'rainColourUnbind();' in r[r.index('void rainMrtUnbind(){'):r.index('bool rainMaskEligible()')]
     and 'rainMrtUnbind();++rainMaskSkips;' in bg and 'if(!rainSkipLogged){rainSkipLogged=true;logf("WEATHER rain mask skip: reason=%u vs=%d vsModel=%u ps=%d stage0 color=%ld(%ld,%ld) alpha=%ld(%ld,%ld) stage1 color=%ld texcoord=%ld texTransform=%ld specular=%lu"' in bg)
 el=r[r.index('bool rainMaskEligible()'):r.index('void rainMaskCaps()')]
 checks['rain mask: eligible only at the effect size, depth type AND quality equal the RT (no depth: the RT values), the RT type/quality are kept for creation, skip log carries depthMs']=('rd.Width==width&&rd.Height==height' in el and 'MultiSampleType==D3DMULTISAMPLE_NONE' not in el and 'ok=dd.MultiSampleType==rd.MultiSampleType&&dd.MultiSampleQuality==rd.MultiSampleQuality;' in el and 'GetDepthStencilSurface' in el
@@ -112,11 +117,16 @@ checks['resolveDepth: the same RESZ code serves depthTex (fatal) and rainDepth (
 rr=r[r.index('    void releaseResources() {'):r.index('    bool error(HRESULT hr')]
 rs=r[r.index('    bool resources(UINT w'):r.index('    // Swap chain 0')]
 checks['rain mask: dropped in releaseResources (RT1 unbound first, failed flag reset, shaders and rain depth too) and on a size change']=('rainMrtUnbind();stateBlocks.clear();' in rr and 'drop(rainMaskMS);drop(rainMaskSurface);drop(rainMask);drop(rainDepth);rainMaskFailed=false;' in rr and 'drop(rainMrtPS);drop(rainScrubPS);' in rr and 'drop(rainMaskMS);drop(rainMaskSurface);drop(rainMask);drop(rainDepth);' in rs.split('captured=false;')[1].split('}')[0])
-checks['rain mask: per-frame flags reset where terrain/applied reset (clearFrame), RT1 unbound there']='rainMrtUnbind();terrain = captured = applied = projectionValid = false;rainMaskCleared=rainMaskDrawn=rainMaskFrame=rainMaskOk=rainDepthOk=false;' in r
+checks['rain mask: per-frame flags reset where terrain/applied reset (clearFrame), RT1 unbound there']='terrain = captured = applied = projectionValid = false;rainMaskCleared=rainMaskDrawn=rainMaskFrame=rainMaskOk=rainDepthOk=false;' in r and (lambda clear:clear.index('rainMrtUnbind();')<clear.index('terrain = captured = applied = projectionValid = false;'))(r[r.index('void clearFrame() {'):r.index('void releaseResources()')])
 pr=r[r.index('IDirect3DTexture9* rainMaskPrepare()'):r.index('template<class Draw> HRESULT rainBlendDraw(')]
-checks['rain scrub: renderEffects asks rainMaskPrepare once, early (before the AO), then hands its texture to setRainMask right before world->render; no scrub draw per world draw']=(
-    r.count('rainMaskPrepare()')==2 and 'IDirect3DTexture9* rainMaskTex=world&&debugMode==0?rainMaskPrepare():nullptr;' in r and r.index('rainMaskPrepare()')<r.index('bindEffects(nullptr);')<r.index('world->setRainMask(rainMaskTex);')<r.index('world->render(saved.targets[0]')
-    and r.index('world->render(saved.targets[0]')-r.index('world->setRainMask(')<260)
+# The pre-world-read and ordinary effects boundaries may both ask for rain. A
+# frame-local accessor performs the scrub once and hands the same mask onward.
+fx=r[r.index('    void renderEffects('):r.index('template<class Capture> void prepareDraw(')]
+checks['rain scrub: frame-local cache serves both boundaries; effects resolve before AO and hand the same mask to world']=(
+    'if(!rainMaskPrepared){rainMaskPrepared=true;rainMaskFrameTex=rainMaskPrepare();}return rainMaskFrameTex;' in r
+    and 'rainMaskPrepared=false;rainMaskFrameTex=nullptr;' in r
+    and 'IDirect3DTexture9* rainMaskTex=world&&debugMode==0?rainMaskForFrame():nullptr;' in fx
+    and fx.index('rainMaskForFrame()')<fx.index('bindEffects(nullptr);')<fx.index('world->setRainMask(rainMaskTex);')<fx.index('world->render(saved.targets[0]'))
 checks['rain scrub: RT1 unbound, MSAA twin resolved by StretchRect (failure: nullptr and a one-shot log), ONE full-screen quad into the mask texture with depthTex (s0) and rainDepth (s1) POINT, alpha-only write, own SavedState']=(
     pr.startswith('IDirect3DTexture9* rainMaskPrepare(){\n        rainMrtUnbind();') and 'if(!rainMaskDrawn||!rainDepthOk||' in pr and 'ext->StretchRect(rainMaskMS,nullptr,rainMaskSurface,nullptr,D3DTEXF_NONE)' in pr and 'rainMaskResolveHr=rh;return nullptr;' in pr
     and 'SavedState scrub(ext,&stateBlocks);' in pr and 'effectState();' in pr and 'ext->SetRenderTarget(0,rainMaskSurface)' in pr and 'ext->SetTexture(0,depthTex);ext->SetTexture(1,rainDepth);' in pr
@@ -135,7 +145,7 @@ rst=dmethod('Reset');pre=dmethod('Present');es=dmethod('EndScene')
 checks['rain mask MRT: Reset, Present and EndScene unbind first; finishFrame (also SwapChain::Present) unbinds before the extension work']=(
     'rainMrtUnbind();' in rst and rst.index('rainMrtUnbind();')<rst.index('releaseResources();')<rst.index('ext->Reset(')  # RT1 unbound before the resources and the real Reset go
     and 'rainMrtUnbind();' in pre and pre.index('rainMrtUnbind();')<pre.index('finishFrame()') and 'rainMrtUnbind();' in es and es.index('rainMrtUnbind();')<es.index('GuardedMirrorDevice::EndScene()')
-    and 'void finishFrame() {\n        Guard mirrorLock(mirrorState.gate);\n        rainMrtUnbind();' in r and 'finishDeviceFrame(owner);' in r)
+    and 'void finishFrame(bool implicitChain=true) {\n        Guard mirrorLock(mirrorState.gate);\n        rainMrtUnbind();' in r and 'finishDeviceFrame(owner,implicitChain);' in r)
 checks['rain mask MRT: renderEffects unbinds before its first device work; drawHook unbinds for every draw that is not a rain draw, before any capture or effect work']=(
     'rainMrtUnbind(); /* 0.3.202 (rain mask MRT) */\n        ExtensionDevice::RawScope rawEffects(*ext);' in r and 'if(rainMrtBound&&!rainBlend)rainMrtUnbind();' in hook and hook.index('if(rainMrtBound&&!rainBlend)rainMrtUnbind();')<hook.index('if(!frameDrawGates){')<hook.index('prepareDraw(capture,count)'))
 checks['rain mask MRT: SetRenderTarget and SetDepthStencilSurface stay pure unwrap + forward (they are on the generator DIRECT list: the replay calls ext->, never the Device method); the next draw/Clear/StretchRect unbinds']=(

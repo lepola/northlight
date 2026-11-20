@@ -26,13 +26,14 @@ BEFORE={'WorldNormals':'e647de5f5ba48db3fa790f329731d066a47fa965fdf474dcc568c337
 
 # HLSL
 checks['source: RainMask declared on s13 (aliasing RegionalFog, as s8/s10 do)']=('sampler2D RainMask : register(s13);' in h)
-comp=h.split('float4 WorldComposite(',1)[1].split('// Separate geometry pass:',1)[0]
+comp=h.split('float4 WorldCompositeImpl(',1)[1].split('// Separate geometry pass:',1)[0]
 m=re.search(r'if\(PassInfo\.z<\.5\)\{(.*?)\n    \}',comp,re.S)
 body=m.group(1) if m else ''
 checks['source: WorldComposite reads the mask once, only inside the PassInfo.z<.5 branch']=(bool(m) and comp.count('RainMask')==1 and body.count('tex2Dlod(RainMask,float4(uv,0,0)).r')==1)
 checks['source: unfogged colour kept before haze, lerped back to after the haze + fog mad']=(
-    'float3 unfogged=color;' in body and body.index('unfogged=color')<body.index('lerp(mad(horizonHaze(')<body.index('fog.a,fog.rgb)')<body.index(',unfogged,rain)')
-    and ',unfogged,rain)' in body)
+    'float3 unfogged=color;' in body and body.index('unfogged=color')<body.index('horizonHaze(color,centerUV,viewZ,d>=.99999&&liquid<=0,liquid>0)')<body.index('fog.a,fog.rgb)')<body.index(',unfogged,rain)')
+    and 'color=lerp(mad(background,fog.a,fog.rgb),unfogged,rain);' in body
+    and 'float3 background=liquid>0&&atmosphereOwned>.5?color:horizonHaze(' in body)
 checks['source: debug views (PassInfo.z != 0) do not touch the mask']=('RainMask' not in comp.split('if(PassInfo.z<.5)',1)[0] and 'RainMask' not in comp.split('PassInfo.z==3',1)[1])
 
 # manifest
@@ -43,7 +44,7 @@ checks['manifest: WorldComposite bytecode changed']=(wc['sha256']!=BEFORE['World
 # 0.3.208: WorldNormals (colour-picked one-sided tangent side) changed on purpose
 # 0.3.209 (task 29): WorldLighting reads the actor visibility (s12) on purpose, ActorShadow and ActorTiles are new
 # task 43: RemovalSmooth branches around a zero-weight tap's reads on purpose (the same output)
-checks['manifest: shaders outside the reviewed feature changes retain their historical hashes']=(set(manifest)==set(BEFORE)|{'LocalFogCombine', 'ActorTiles', 'ActorShadow', 'LocalDirect16'} and all(manifest[n]['sha256']==s for n,s in BEFORE.items() if n not in ('FogClouds', 'LocalFog', 'RemovalSmooth', 'WorldComposite', 'WorldFog', 'WorldLighting', 'WorldNormals'))
+checks['manifest: shaders outside the reviewed feature changes retain their historical hashes']=(set(manifest)==set(BEFORE)|{'LocalFogCombine', 'ActorTiles', 'ActorShadow', 'LocalDirect16', 'WaterSkyGradient', 'WaterSkyField', 'WorldCompositeWaterProbe'} and all(manifest[n]['sha256']==s for n,s in BEFORE.items() if n not in ('FogClouds', 'LocalFog', 'RemovalSmooth', 'WorldComposite', 'WorldFog', 'WorldLighting', 'WorldNormals'))
     and manifest['LocalFog']['sha256']!=BEFORE['LocalFog'])
 checks['compiled: WorldComposite.bin exists']=(fp.COMPILED/'WorldComposite.bin').exists()
 
@@ -70,5 +71,34 @@ checks['MRT shaders: AO, AOContactBloom and Composite byte-identical to 0.3.201'
 checks['MRT shaders: RainMaskMRT and RainScrub are ps_2_0, small, with a compiled .bin']=all(n in eff and eff[n]['target']=='ps_2_0' and eff[n]['static_instruction_slots']<=32 and (fp.COMPILED/(n+'.bin')).exists() for n in ('RainMaskMRT','RainScrub'))
 ehl=(fp.SHADERS/'rain_mask.hlsl').read_text()
 checks['MRT shaders: source writes oC1 = white with the streak alpha (RT1 masked to red); the scrub discards unchanged depth and outputs 0']=('out float4 mask : COLOR1' in ehl and 'mask = float4(1, 1, 1, c.a);' in ehl and 'clip(abs(tex2D(Scene, uv).r - tex2D(Depth, uv).r) - 1e-6);' in ehl and 'return 0;' in ehl.split('float4 RainScrub(',1)[1])
+# The actual host build must reject stale inputs/products; accepting an edited
+# manifest or header here would let a successful DLL build hide old rain code.
+import copy, tempfile
+sys.path.insert(0,str(fp.SCRIPTS/'shaders'))
+import shader_manifest
+rain_manifest=json.loads((fp.SHADERS/'shader-build.json').read_bytes())
+def refused(root, value):
+    try: shader_manifest.validate_manifest(root,value)
+    except ValueError: return
+    raise AssertionError('stale rain build was accepted')
+shader_manifest.validate_manifest(fp.REPO,rain_manifest)
+changed=copy.deepcopy(rain_manifest)
+changed['shaders']['RainColourRestore']['dependencies']['shaders/rain_mask.hlsl']='stale'
+refused(fp.REPO,changed)
+with tempfile.TemporaryDirectory(prefix='northlight-rain-provenance-') as tmp:
+    scratch=Path(tmp)
+    names=set(rain_manifest['headers'])
+    for name,entry in rain_manifest['shaders'].items():
+        names.update(entry['dependencies']);names.update(entry['compiler_inputs'])
+        names.update(('shaders/compiled/'+name+'.bin','shaders/compiled/'+name+'.bin.asm'))
+    for name in names:
+        path=scratch/name;path.parent.mkdir(parents=True,exist_ok=True);path.write_bytes((fp.REPO/name).read_bytes())
+    shader_manifest.validate_manifest(scratch,rain_manifest)
+    changed=['shaders/rain_mask.hlsl',*rain_manifest['headers']]
+    changed += ['shaders/compiled/'+name+'.bin' for name in ('RainMaskMRT','RainScrub','RainColourMRT','RainColourRestore')]
+    for name in changed:
+        path=scratch/name;data=path.read_bytes()
+        path.write_bytes(data+b'changed');refused(scratch,rain_manifest);path.write_bytes(data)
+checks['shared host validator rejects changed rain source, each bytecode entry, retained input identity and generated header']=True
 for k,ok in checks.items():print(('PASS ' if ok else 'FAIL ')+k)
 sys.exit(0 if all(checks.values()) else 1)

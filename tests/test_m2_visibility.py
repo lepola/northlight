@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-# northlight-test: requires=stormlib
+# northlight-test: requires=stormlib,client
 """Offline zero-opacity regressions, including the actual Orgrimmar emitters."""
 import sys; from pathlib import Path; sys.path.insert(0, str(Path(__file__).resolve().parents[1]))  # repo root
 import northlight_paths as fp; fp.use_source_modules()
-import struct
+import argparse,struct
 from m2_visibility import hidden_batches
 from world_scene_builder import Assets, Builder, array, unpack
 
@@ -21,6 +21,9 @@ def fixture(values=(0,), kind=0, sequences=1, global_id=-1):
 
 
 def main():
+    parser=argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--locale',help='Client locale when several are installed')
+    args=parser.parse_args()
     b,batch=fixture();assert hidden_batches(b,[batch])=={0}
     b,_=fixture((0,0),kind=1);assert hidden_batches(b,[batch])=={0}
     for kwargs in [dict(values=(32767,)),dict(values=(0,32767),kind=1),dict(kind=2),dict(kind=3),dict(values=()),dict(sequences=2),dict(global_id=1),dict(global_id=-2)]:
@@ -51,7 +54,7 @@ def main():
     assert not hidden_batches(coloured(0),[batch])   # colour index 65535: no colour alpha
     # Hidden first pass cannot suppress a later visible pass sharing the submesh.
     b,_=fixture();visible=list(batch);visible[11]=65535;assert hidden_batches(b,[batch,visible])=={0}
-    assets=Assets()
+    assets=Assets(locale=args.locale)
     try:
         builder=Builder(assets)
         for leaf in ['orgrimmarfloatingembers','orgrimmarsmokeemitter']:

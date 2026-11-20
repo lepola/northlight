@@ -2,10 +2,9 @@
 // Task 34 SpellFog: replayed spell draws (they are drawn after Northlight's fog composite) get Northlight's fog through the game's own fog constants, at the cost of
 // changing one or two constants of the record, not a pass. The M2 effect vertex shaders write fog = min(pow(max(z*c30.x + c30.y, 0), c30.z), 1) and the ps_3_0 combiners mix
 // lerp(cF, X, fog) (cF a PS constant); so a draw replayed with fog' = fog * T_N(z) (T_N: Northlight's transmittance along the view ray) is fogged by both. The fit F maps the game's
-// (c30.x, c30.y, c30.z) to (a, b, p) with pow(max(z*a + b, 0), p) ~ g(z) * T_N(z) on [0, min(game fog end, 128)] (Northlight's fog reaches 128 units); it is computed once per distinct
+// (c30.x, c30.y, c30.z) to (a, b, p) with pow(max(z*a + b, 0), p) ~ g(z) * T_N(z) through the game's ramp (volume transmittance holds beyond 128 units); it is computed once per distinct
 // game constant and frame, not per entry. Pure CPU maths: no D3D, no game data.
-// Approximations, by design: the camera's heading stands for every pixel of the effect (the optical depth is taken on rays from the eye to a point at the heading, at the height of an effect
-// above the ground there; off-axis pixels are farther per unit of view depth); the optical depth is sampled at six distances
+// One ray through the view centre represents the whole effect. Off-axis pixels travel farther per unit of view depth. Optical depth is sampled at six distances
 // and interpolated, Northlight's fog reaches 128 units; the fit is one power law (a game ramp that starts late with a high power is followed less well); the horizon haze that
 // Northlight adds to the picture is not folded; the in-scatter colour is the ambient sky source only (no direct-light term); the estimate follows the camera with a 0.25 s smoothing and
 // is the previous frame's. Fixed-function effects and the ps_2_0 fixed-function fog colour are not touched.
@@ -152,6 +151,12 @@ inline bool emitFog(const Frame& f,const float game[3],float out[3],bool bareBas
     constexpr unsigned M=24;float z[M],h[M],wt[M];unsigned N=0;
     for(float q:{0.f,4.f,8.f,12.f,16.f,20.f,25.f,30.f,35.f})if(q<hi*.9f){z[N]=q;wt[N]=q<=kClearNear?16.f:1.f;++N;}
     for(unsigned i=0;i<12;++i){z[N]=hi*(float(i)+.5f)/12.f;wt[N]=1.f;++N;}
+    // The volume ends at 128 yards. A falling native ramp can start beyond
+    // that distance, so include its remaining falloff at the final transmission.
+    if(!flat && end>kRange){
+        const float span=std::min(end,2*kFlatBareEnd)-kRange;
+        for(float t:{.25f,.5f,.75f}){z[N]=kRange+t*span;wt[N]=2.f;++N;}
+    }
     for(unsigned i=0;i<N;++i)h[i]=gameVisibility(game,z[i])*foldedTransmittance(f,z[i]);
     static const float scale[]={.6f,.8f,1.f,1.25f,1.6f,2.f,2.6f,3.5f};
     float best=1e30f,bestFit[3]={game[0],game[1],game[2]};bool found=false;

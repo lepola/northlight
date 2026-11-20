@@ -25,10 +25,11 @@ def leaf_shadow(x, y):
 
 
 def soft_shadow(x, y):
-    grid = (x/1.5, y/1.5)
+    texel = 384 / 1024
+    grid = (x/texel, y/texel)
     base = tuple(math.floor(v) for v in grid)
-    f = tuple(smooth(v-b) for v, b in zip(grid, base))
-    return sum(leaf_shadow((base[0]+a)*1.5, (base[1]+b)*1.5)
+    f = tuple(v-b for v, b in zip(grid, base))
+    return sum(leaf_shadow((base[0]+a)*texel, (base[1]+b)*texel)
                * (f[0] if a else 1-f[0])*(f[1] if b else 1-f[1])
                for a in (0, 1) for b in (0, 1))
 
@@ -56,7 +57,8 @@ def main():
     assert '.35+.65*visible' not in fog
     shadow = shader.split('float fogShadowProjected(', 1)[1].split('float2 probeUV', 1)[0]
     assert 'ShadowNear' not in shadow
-    assert '(q.xy-FarMatrix[3].xy)' in shadow
+    assert 'base=floor(pixel),weight=pixel-base' in shadow
+    assert '(base+bit+.5)*DepthParams.w' in shadow
     assert 'visibility+=(receiver<=z?1:0)*w.x*w.y' in shadow
 
     rng = random.Random(52)
@@ -82,14 +84,14 @@ def main():
         second = [advance+(a+b)*.5 for a, b in intervals(100-advance, moved, ray)[1:-1]]
         assert all(min(abs(a-b) for b in first) < 1e-9 for a in second)
 
-    # Changing the shadow pivot changes matrix translation, not the world grid.
-    for x in (-17000., -1.3, 0., 47.9, 17000.):
-        expected = x/1.5
-        for pivot in (-17000., -48., 0., 48., 17000.):
-            q = (x-pivot)/192
-            origin = -pivot/192
-            plane = (q-origin)*192/1.5
-            assert math.isclose(plane, expected, abs_tol=1e-10)
+    # Moving a snapped orthographic pivot by whole map texels preserves the
+    # blend of the same four world texels, including below zero.
+    for x in (-17000.75, -1.3, 0., 47.9, 17000.25):
+        for pivot in (-480, -1, 0, 17, 480):
+            texel = x / .375
+            local = texel - pivot
+            assert math.floor(local) + pivot == math.floor(texel)
+            assert math.isclose(local % 1, texel % 1, abs_tol=1e-10)
 
     # Ground fade is terrain-relative, not absolute world Z. Source blocking
     # and zero intensity remove the direct term without changing extinction.

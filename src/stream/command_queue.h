@@ -49,7 +49,7 @@ constexpr std::size_t budgetForFramesAhead(unsigned n){return BudgetBytes*clampF
 constexpr std::size_t TextureShadowBudgetBytes=std::size_t(16)<<20;   // per-level texture shadows; not halved under pressure (0.3.216); evictable (LRU)
 // 0.3.192 (CS): CPU shadows of buffers (DYNAMIC and re-locked non-DYNAMIC ones; evictable LRU, never while locked). The cap is ADAPTIVE: ShadowBudgetBytes is
 // the base/start value; it grows by kShadowGrowStep (up to kShadowBudgetMaxBytes) only when the shadows thrash (also under memory pressure since 0.3.216: refusing growth sent hot buffers to the synchronous pass-through): the LRU had
-// to evict a HOT shadow (locked within kShadowHotFrames Presents) or a re-lock found no victim at all. At most one step per kShadowGrowFrames Presents
+// to evict a HOT shadow (locked within kShadowHotFrames Presents), refill a recently evicted one, or a re-lock found no victim at all. At most one step per kShadowGrowFrames Presents
 // (and none in the first interval). Pressure changes nothing here (0.3.216). Growth is game-thread; the cap is read by any thread.
 constexpr std::size_t ShadowBudgetBytes=std::size_t(16)<<20;
 // 0.3.205: the ring budget of regular-cap buffers (live + retired slices; was ShadowBudgetBytes, 16 MiB): in crowds several skinning buffers of 2-3 MiB DISCARD many times a frame and the 16 MiB ring
@@ -398,7 +398,7 @@ public:
     // (or level) is a synchronous round trip to the replay thread, and a hundred of those per frame made the game unplayable (fps 70-140 -> 20-38) to save ~10 MiB of a stream that
     // holds 17-24 MiB in all. Pressure still halves the queue budget and releases pooled memory, rings and spare level allocations: none of that creates a sync path.
     std::size_t shadowItemLimit()const{return shadowCapCur_.load(std::memory_order_relaxed)/4;}
-    // Thrash signal (game thread, `frame` = Presents so far): one more step, if no pressure, below the maximum and past the interval. true = grew.
+    // Thrash signal (game thread, `frame` = Presents so far): one step below the maximum and past the interval. true = grew.
     bool growShadowCap(std::uint64_t frame){
         const std::size_t c=shadowCapCur_.load(std::memory_order_relaxed);
         if(c+kShadowGrowStep>kShadowBudgetMaxBytes||frame<shadowGrowAt_)return false;

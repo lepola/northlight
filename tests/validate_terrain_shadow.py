@@ -64,7 +64,9 @@ def disassembler():
                DYLD_LIBRARY_PATH=str(WINE_ROOT / 'lib/external'))
 
     def run(binary, asm):
-        subprocess.run([str(WINE_ROOT / 'bin/wine'), str(exe), str(binary), str(asm)], env=env, check=True, timeout=120)
+        compiler = os.environ.get('NORTHLIGHT_D3DCOMPILER47')
+        extra = ['Z:' + str(Path(compiler).resolve()).replace('/', '\\')] if compiler else []
+        subprocess.run([str(WINE_ROOT / 'bin/wine'), str(exe), str(binary), str(asm), *extra], env=env, check=True, timeout=120)
         return asm.read_text(errors='replace').splitlines()
     return run
 

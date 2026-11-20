@@ -19,17 +19,18 @@ source = values['harness'].split('int main(){')[0] + r'''
 static uint64_t identity(void*,bool index){return index?12:11;}
 static uint64_t version(void*,bool index){return index?22:21;}
 int main(){
- Device d;d.put(4,{-10200,-1180,3});d.put(5,{-10198,-1180,4});d.put(6,{-10200,-1178,5});
+ Device d;d.vb.bytes.resize(16+778*8*24);
+ for(unsigned i=0;i<778;++i){d.put(i*8+4,{-10200,-1180,3+float(i)});d.put(i*8+5,{-10198,-1180,4});d.put(i*8+6,{-10200,-1178,5});}
  FrameCache cache;cache.setIdentityProvider(identity);cache.setVersionProvider(version);
  std::shared_ptr<const MeshSnapshot> out;Diagnostics why;
  unsigned hits=0,locks=0;uint64_t bytes=0;
  for(unsigned cycle=0;cycle<3;++cycle){
   cache.clearFrame();hits=0;unsigned before=d.vb.locks+d.ib.locks;
   for(unsigned i=0;i<778;++i){
-   assert(cache.readMeshShared(&d,D3DPT_TRIANGLELIST,-3,7,3+i,1,1,d.view,out,&why));
+   assert(cache.readMeshShared(&d,D3DPT_TRIANGLELIST,INT(i*8)-3,7,3,1,1,d.view,out,&why));
    hits+=why.trackedCacheHit;
    assert(out->positions.size()==3&&out->indices.size()==3);
-   assert(out->positions[0].z==3&&out->positions[1].z==4&&out->positions[2].z==5);
+   assert(out->positions[0].z==3+float(i)&&out->positions[1].z==4&&out->positions[2].z==5);
    for(unsigned j=0;j<3;++j)assert(out->indices[j]==j);
   }
   locks=d.vb.locks+d.ib.locks-before;bytes=cache.bytesRead();
@@ -39,7 +40,7 @@ int main(){
  std::printf("{\"draws\":778,\"warm_hits\":%u,\"warm_locks\":%u,\"warm_read_bytes\":%llu,\"entries\":%zu}\n",hits,locks,(unsigned long long)bytes,cache.persistentEntries());
 }
 '''
-report = {'game_launched': False, 'scope': '778 distinct immutable tracked draw contracts; exact vertex/index equality; fake D3D, not FPS', 'runs': []}
+report = {'game_launched': False, 'scope': '778 distinct immutable tracked meshes; exact vertex/index equality; fake D3D, not FPS', 'runs': []}
 with tempfile.TemporaryDirectory(prefix='terrain-capacity-') as temp:
     root = Path(temp)
     with tarfile.open(args.baseline) as archive:

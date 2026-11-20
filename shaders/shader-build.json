@@ -1,15 +1,15 @@
 {
   "source_sha256": "0cb0ac497fa97b9ae2d3bd3143ff10e28623da9acbed0ffad4f7899e24108426",
-  "rain_source_sha256": "10948a355dc52e824d9ae61b5251a5146a20955295070dbe9ce749dec0eac172",
+  "rain_source_sha256": "fb1465e8d01eb7efc35ea6b7600e82daf5e276a20a4fe345fe2ac344e7ed36d0",
   "target": "ps_3_0",
-  "compiler": "Microsoft d3dcompiler_47 10.0.17134.12 IEEE strict",
-  "compiler_sha256": "3c5f066a121a446e55db9c699b392da5d3aca6ad9019437b722360d09698e3c3",
+  "compiler": "Microsoft d3dcompiler_47 Windows SDK 10.0.26100.8249 IEEE strict",
+  "compiler_sha256": "e407b9ffadef47e87994dc488214f75405cf04ee99589f2315fc7ab99fd1dfe2",
   "game_launched": false,
   "shaders": {
     "AO": {
       "bytes": 4724,
       "sha256": "fa7a14b42bb3b1238fb440c91deebbc6dc85ad6be2b7770ade831e592e5826c6",
-      "compiler_sha256": "4432bbd1a390874f3f0a503d45cc48d346abc3a8c0213c289f4b615bf0ee84f3",
+      "compiler_sha256": "e407b9ffadef47e87994dc488214f75405cf04ee99589f2315fc7ab99fd1dfe2",
       "static_instruction_slots": 267,
       "temporary_registers": 10,
       "samplers": [
@@ -37,12 +37,34 @@
         "rep": 1,
         "endrep": 1
       },
-      "source_sha256": "32c38f25f42077c1e2df5f27d390dd932fe575e103cd287464b3439a2d38b218"
+      "instruction_count": 249,
+      "cube_instruction_extra_slots": 0,
+      "source_sha256": "0cb0ac497fa97b9ae2d3bd3143ff10e28623da9acbed0ffad4f7899e24108426",
+      "source": "shaders/effects.hlsl",
+      "dependencies": {
+        "shaders/effects.hlsl": "0cb0ac497fa97b9ae2d3bd3143ff10e28623da9acbed0ffad4f7899e24108426"
+      },
+      "compiler_inputs": {
+        "scripts/shaders/compile_shaders.cpp": "4faf7f9e8f6a5bdbc63406db030ef66bd65beed1d789a525949ceba7d2a1cd89",
+        "scripts/shaders/shader_inputs.h": "e78f9ff80c7e01f3b4c5a9d7dd7e00c1552cbad9f30345f63ecefe26b28ef63c",
+        "scripts/shaders/shader_compiler.py": "1dc622cd01cc0997e303483310ad272484ae7d62f51158c81ae1b851635041ea",
+        "scripts/shaders/shader_manifest.py": "f0fcb820509e8ee00f8693e6414b7032be82913ad4b7f7ccc4ad2033f89131fe",
+        "scripts/shaders/compile_shaders.py": "24c392d87ca409afcc103afb29f39b3b88f1f693ececfd21f8650e2edea19bb2"
+      },
+      "compiler_driver_sha256": "28f2719960265e525bff9154edccd7b5e8a7bf05a682faec45629b247764765a",
+      "compiler_flags": [
+        "BACKWARDS_COMPATIBILITY",
+        "IEEE_STRICTNESS",
+        "OPTIMIZATION_LEVEL3"
+      ],
+      "assembly_sha256": "96ffef5e731db56df39b5b88309e1696db9685f66e09f803fc2f0f6761f8ff8e",
+      "target": "ps_3_0",
+      "symbol": "kAoShader"
     },
     "AOContactBloom": {
       "bytes": 5176,
       "sha256": "69f09b7b034b86e714fe56b0aa596fe0896b927940db9b0cc80ee98984545105",
-      "compiler_sha256": "4432bbd1a390874f3f0a503d45cc48d346abc3a8c0213c289f4b615bf0ee84f3",
+      "compiler_sha256": "e407b9ffadef47e87994dc488214f75405cf04ee99589f2315fc7ab99fd1dfe2",
       "static_instruction_slots": 289,
       "temporary_registers": 9,
       "samplers": [
@@ -71,12 +93,34 @@
         "rep": 1,
         "endrep": 1
       },
-      "source_sha256": "32c38f25f42077c1e2df5f27d390dd932fe575e103cd287464b3439a2d38b218"
+      "instruction_count": 272,
+      "cube_instruction_extra_slots": 0,
+      "source_sha256": "0cb0ac497fa97b9ae2d3bd3143ff10e28623da9acbed0ffad4f7899e24108426",
+      "source": "shaders/effects.hlsl",
+      "dependencies": {
+        "shaders/effects.hlsl": "0cb0ac497fa97b9ae2d3bd3143ff10e28623da9acbed0ffad4f7899e24108426"
+      },
+      "compiler_inputs": {
+        "scripts/shaders/compile_shaders.cpp": "4faf7f9e8f6a5bdbc63406db030ef66bd65beed1d789a525949ceba7d2a1cd89",
+        "scripts/shaders/shader_inputs.h": "e78f9ff80c7e01f3b4c5a9d7dd7e00c1552cbad9f30345f63ecefe26b28ef63c",
+        "scripts/shaders/shader_compiler.py": "1dc622cd01cc0997e303483310ad272484ae7d62f51158c81ae1b851635041ea",
+        "scripts/shaders/shader_manifest.py": "f0fcb820509e8ee00f8693e6414b7032be82913ad4b7f7ccc4ad2033f89131fe",
+        "scripts/shaders/compile_shaders.py": "24c392d87ca409afcc103afb29f39b3b88f1f693ececfd21f8650e2edea19bb2"
+      },
+      "compiler_driver_sha256": "28f2719960265e525bff9154edccd7b5e8a7bf05a682faec45629b247764765a",
+      "compiler_flags": [
+        "BACKWARDS_COMPATIBILITY",
+        "IEEE_STRICTNESS",
+        "OPTIMIZATION_LEVEL3"
+      ],
+      "assembly_sha256": "91b3d961f30737d56fcab24b8647151db48e251a54ba7af72d47e31526730645",
+      "target": "ps_3_0",
+      "symbol": "kAoContactBloomShader"
     },
     "ContactBloom": {
       "bytes": 804,
       "sha256": "60d848b716243336eb587339f87e8d59d822b9df5ac85bd737254650582337bd",
-      "compiler_sha256": "4432bbd1a390874f3f0a503d45cc48d346abc3a8c0213c289f4b615bf0ee84f3",
+      "compiler_sha256": "e407b9ffadef47e87994dc488214f75405cf04ee99589f2315fc7ab99fd1dfe2",
       "static_instruction_slots": 29,
       "temporary_registers": 4,
       "samplers": [
@@ -90,12 +134,34 @@
         "mov": 3,
         "add": 2
       },
-      "source_sha256": "32c38f25f42077c1e2df5f27d390dd932fe575e103cd287464b3439a2d38b218"
+      "instruction_count": 29,
+      "cube_instruction_extra_slots": 0,
+      "source_sha256": "0cb0ac497fa97b9ae2d3bd3143ff10e28623da9acbed0ffad4f7899e24108426",
+      "source": "shaders/effects.hlsl",
+      "dependencies": {
+        "shaders/effects.hlsl": "0cb0ac497fa97b9ae2d3bd3143ff10e28623da9acbed0ffad4f7899e24108426"
+      },
+      "compiler_inputs": {
+        "scripts/shaders/compile_shaders.cpp": "4faf7f9e8f6a5bdbc63406db030ef66bd65beed1d789a525949ceba7d2a1cd89",
+        "scripts/shaders/shader_inputs.h": "e78f9ff80c7e01f3b4c5a9d7dd7e00c1552cbad9f30345f63ecefe26b28ef63c",
+        "scripts/shaders/shader_compiler.py": "1dc622cd01cc0997e303483310ad272484ae7d62f51158c81ae1b851635041ea",
+        "scripts/shaders/shader_manifest.py": "f0fcb820509e8ee00f8693e6414b7032be82913ad4b7f7ccc4ad2033f89131fe",
+        "scripts/shaders/compile_shaders.py": "24c392d87ca409afcc103afb29f39b3b88f1f693ececfd21f8650e2edea19bb2"
+      },
+      "compiler_driver_sha256": "28f2719960265e525bff9154edccd7b5e8a7bf05a682faec45629b247764765a",
+      "compiler_flags": [
+        "BACKWARDS_COMPATIBILITY",
+        "IEEE_STRICTNESS",
+        "OPTIMIZATION_LEVEL3"
+      ],
+      "assembly_sha256": "b8a51da102819cc9426e4cc026e52b808174f70eed914f568e7b5f23db2ff107",
+      "target": "ps_3_0",
+      "symbol": "kContactBloomShader"
     },
     "HDAOContactBloom": {
       "bytes": 4360,
       "sha256": "4c65d2f852a755db38875a52f9932222b0f258ee810087ed392ba158b80b48c2",
-      "compiler_sha256": "3c5f066a121a446e55db9c699b392da5d3aca6ad9019437b722360d09698e3c3",
+      "compiler_sha256": "e407b9ffadef47e87994dc488214f75405cf04ee99589f2315fc7ab99fd1dfe2",
       "static_instruction_slots": 255,
       "temporary_registers": 13,
       "samplers": [
@@ -125,12 +191,34 @@
         "sincos": 1,
         "endrep": 1
       },
-      "source_sha256": "0cb0ac497fa97b9ae2d3bd3143ff10e28623da9acbed0ffad4f7899e24108426"
+      "instruction_count": 234,
+      "cube_instruction_extra_slots": 0,
+      "source_sha256": "0cb0ac497fa97b9ae2d3bd3143ff10e28623da9acbed0ffad4f7899e24108426",
+      "source": "shaders/effects.hlsl",
+      "dependencies": {
+        "shaders/effects.hlsl": "0cb0ac497fa97b9ae2d3bd3143ff10e28623da9acbed0ffad4f7899e24108426"
+      },
+      "compiler_inputs": {
+        "scripts/shaders/compile_shaders.cpp": "4faf7f9e8f6a5bdbc63406db030ef66bd65beed1d789a525949ceba7d2a1cd89",
+        "scripts/shaders/shader_inputs.h": "e78f9ff80c7e01f3b4c5a9d7dd7e00c1552cbad9f30345f63ecefe26b28ef63c",
+        "scripts/shaders/shader_compiler.py": "1dc622cd01cc0997e303483310ad272484ae7d62f51158c81ae1b851635041ea",
+        "scripts/shaders/shader_manifest.py": "f0fcb820509e8ee00f8693e6414b7032be82913ad4b7f7ccc4ad2033f89131fe",
+        "scripts/shaders/compile_shaders.py": "24c392d87ca409afcc103afb29f39b3b88f1f693ececfd21f8650e2edea19bb2"
+      },
+      "compiler_driver_sha256": "28f2719960265e525bff9154edccd7b5e8a7bf05a682faec45629b247764765a",
+      "compiler_flags": [
+        "BACKWARDS_COMPATIBILITY",
+        "IEEE_STRICTNESS",
+        "OPTIMIZATION_LEVEL3"
+      ],
+      "assembly_sha256": "ee165023a3fcbd1a593a0eb270a38a6f8b5f5c7181106d56ebb53531f3f9b861",
+      "target": "ps_3_0",
+      "symbol": "kHdaoContactBloomShader"
     },
     "HBAOPlusContactBloom": {
       "bytes": 5128,
       "sha256": "a7036377b0ccf0ea79c73c704b5d9d18c7287390bbbccf2767fd5c5663146d3e",
-      "compiler_sha256": "3c5f066a121a446e55db9c699b392da5d3aca6ad9019437b722360d09698e3c3",
+      "compiler_sha256": "e407b9ffadef47e87994dc488214f75405cf04ee99589f2315fc7ab99fd1dfe2",
       "static_instruction_slots": 303,
       "temporary_registers": 9,
       "samplers": [
@@ -160,12 +248,34 @@
         "sincos": 1,
         "endrep": 1
       },
-      "source_sha256": "0cb0ac497fa97b9ae2d3bd3143ff10e28623da9acbed0ffad4f7899e24108426"
+      "instruction_count": 279,
+      "cube_instruction_extra_slots": 0,
+      "source_sha256": "0cb0ac497fa97b9ae2d3bd3143ff10e28623da9acbed0ffad4f7899e24108426",
+      "source": "shaders/effects.hlsl",
+      "dependencies": {
+        "shaders/effects.hlsl": "0cb0ac497fa97b9ae2d3bd3143ff10e28623da9acbed0ffad4f7899e24108426"
+      },
+      "compiler_inputs": {
+        "scripts/shaders/compile_shaders.cpp": "4faf7f9e8f6a5bdbc63406db030ef66bd65beed1d789a525949ceba7d2a1cd89",
+        "scripts/shaders/shader_inputs.h": "e78f9ff80c7e01f3b4c5a9d7dd7e00c1552cbad9f30345f63ecefe26b28ef63c",
+        "scripts/shaders/shader_compiler.py": "1dc622cd01cc0997e303483310ad272484ae7d62f51158c81ae1b851635041ea",
+        "scripts/shaders/shader_manifest.py": "f0fcb820509e8ee00f8693e6414b7032be82913ad4b7f7ccc4ad2033f89131fe",
+        "scripts/shaders/compile_shaders.py": "24c392d87ca409afcc103afb29f39b3b88f1f693ececfd21f8650e2edea19bb2"
+      },
+      "compiler_driver_sha256": "28f2719960265e525bff9154edccd7b5e8a7bf05a682faec45629b247764765a",
+      "compiler_flags": [
+        "BACKWARDS_COMPATIBILITY",
+        "IEEE_STRICTNESS",
+        "OPTIMIZATION_LEVEL3"
+      ],
+      "assembly_sha256": "6d41de421a96b069fc88bd4b33551db9a46f15edd234ae7f95e009fc4bcad407",
+      "target": "ps_3_0",
+      "symbol": "kHbaoPlusContactBloomShader"
     },
     "GTAOContactBloom": {
       "bytes": 7472,
       "sha256": "54d0de534a12c075a15f9031645f2ac94efa174adb2e65b11d0d7d0755e2683e",
-      "compiler_sha256": "3c5f066a121a446e55db9c699b392da5d3aca6ad9019437b722360d09698e3c3",
+      "compiler_sha256": "e407b9ffadef47e87994dc488214f75405cf04ee99589f2315fc7ab99fd1dfe2",
       "static_instruction_slots": 462,
       "temporary_registers": 16,
       "samplers": [
@@ -195,12 +305,34 @@
         "sincos": 1,
         "endrep": 2
       },
-      "source_sha256": "0cb0ac497fa97b9ae2d3bd3143ff10e28623da9acbed0ffad4f7899e24108426"
+      "instruction_count": 431,
+      "cube_instruction_extra_slots": 0,
+      "source_sha256": "0cb0ac497fa97b9ae2d3bd3143ff10e28623da9acbed0ffad4f7899e24108426",
+      "source": "shaders/effects.hlsl",
+      "dependencies": {
+        "shaders/effects.hlsl": "0cb0ac497fa97b9ae2d3bd3143ff10e28623da9acbed0ffad4f7899e24108426"
+      },
+      "compiler_inputs": {
+        "scripts/shaders/compile_shaders.cpp": "4faf7f9e8f6a5bdbc63406db030ef66bd65beed1d789a525949ceba7d2a1cd89",
+        "scripts/shaders/shader_inputs.h": "e78f9ff80c7e01f3b4c5a9d7dd7e00c1552cbad9f30345f63ecefe26b28ef63c",
+        "scripts/shaders/shader_compiler.py": "1dc622cd01cc0997e303483310ad272484ae7d62f51158c81ae1b851635041ea",
+        "scripts/shaders/shader_manifest.py": "f0fcb820509e8ee00f8693e6414b7032be82913ad4b7f7ccc4ad2033f89131fe",
+        "scripts/shaders/compile_shaders.py": "24c392d87ca409afcc103afb29f39b3b88f1f693ececfd21f8650e2edea19bb2"
+      },
+      "compiler_driver_sha256": "28f2719960265e525bff9154edccd7b5e8a7bf05a682faec45629b247764765a",
+      "compiler_flags": [
+        "BACKWARDS_COMPATIBILITY",
+        "IEEE_STRICTNESS",
+        "OPTIMIZATION_LEVEL3"
+      ],
+      "assembly_sha256": "c2f77a2ed5145482155e9f13727ef948c85f61d63743cad3403f5103fb839a69",
+      "target": "ps_3_0",
+      "symbol": "kGtaoContactBloomShader"
     },
     "AOBlur": {
       "bytes": 5188,
       "sha256": "f90638a01cda1c5360231f2b3b3c11bdf7bcc381dd9a9be0cba4d846af57cab8",
-      "compiler_sha256": "4432bbd1a390874f3f0a503d45cc48d346abc3a8c0213c289f4b615bf0ee84f3",
+      "compiler_sha256": "e407b9ffadef47e87994dc488214f75405cf04ee99589f2315fc7ab99fd1dfe2",
       "static_instruction_slots": 321,
       "temporary_registers": 16,
       "samplers": [
@@ -229,12 +361,34 @@
         "rsq": 1,
         "exp": 1
       },
-      "source_sha256": "32c38f25f42077c1e2df5f27d390dd932fe575e103cd287464b3439a2d38b218"
+      "instruction_count": 292,
+      "cube_instruction_extra_slots": 0,
+      "source_sha256": "0cb0ac497fa97b9ae2d3bd3143ff10e28623da9acbed0ffad4f7899e24108426",
+      "source": "shaders/effects.hlsl",
+      "dependencies": {
+        "shaders/effects.hlsl": "0cb0ac497fa97b9ae2d3bd3143ff10e28623da9acbed0ffad4f7899e24108426"
+      },
+      "compiler_inputs": {
+        "scripts/shaders/compile_shaders.cpp": "4faf7f9e8f6a5bdbc63406db030ef66bd65beed1d789a525949ceba7d2a1cd89",
+        "scripts/shaders/shader_inputs.h": "e78f9ff80c7e01f3b4c5a9d7dd7e00c1552cbad9f30345f63ecefe26b28ef63c",
+        "scripts/shaders/shader_compiler.py": "1dc622cd01cc0997e303483310ad272484ae7d62f51158c81ae1b851635041ea",
+        "scripts/shaders/shader_manifest.py": "f0fcb820509e8ee00f8693e6414b7032be82913ad4b7f7ccc4ad2033f89131fe",
+        "scripts/shaders/compile_shaders.py": "24c392d87ca409afcc103afb29f39b3b88f1f693ececfd21f8650e2edea19bb2"
+      },
+      "compiler_driver_sha256": "28f2719960265e525bff9154edccd7b5e8a7bf05a682faec45629b247764765a",
+      "compiler_flags": [
+        "BACKWARDS_COMPATIBILITY",
+        "IEEE_STRICTNESS",
+        "OPTIMIZATION_LEVEL3"
+      ],
+      "assembly_sha256": "498686fa0ab9e47a70e8207663035a65dd2655bbf893efd87702fd1ca8400ff8",
+      "target": "ps_3_0",
+      "symbol": "kAoBlurShader"
     },
     "Composite": {
       "bytes": 5428,
       "sha256": "36d90667788788500a5e0a6a7c8f100fe858ed9ec550dd489edb8fe5a6ca02f2",
-      "compiler_sha256": "4432bbd1a390874f3f0a503d45cc48d346abc3a8c0213c289f4b615bf0ee84f3",
+      "compiler_sha256": "e407b9ffadef47e87994dc488214f75405cf04ee99589f2315fc7ab99fd1dfe2",
       "static_instruction_slots": 328,
       "temporary_registers": 15,
       "samplers": [
@@ -265,29 +419,72 @@
         "log": 2,
         "pow": 1
       },
-      "source_sha256": "32c38f25f42077c1e2df5f27d390dd932fe575e103cd287464b3439a2d38b218"
+      "instruction_count": 302,
+      "cube_instruction_extra_slots": 0,
+      "source_sha256": "0cb0ac497fa97b9ae2d3bd3143ff10e28623da9acbed0ffad4f7899e24108426",
+      "source": "shaders/effects.hlsl",
+      "dependencies": {
+        "shaders/effects.hlsl": "0cb0ac497fa97b9ae2d3bd3143ff10e28623da9acbed0ffad4f7899e24108426"
+      },
+      "compiler_inputs": {
+        "scripts/shaders/compile_shaders.cpp": "4faf7f9e8f6a5bdbc63406db030ef66bd65beed1d789a525949ceba7d2a1cd89",
+        "scripts/shaders/shader_inputs.h": "e78f9ff80c7e01f3b4c5a9d7dd7e00c1552cbad9f30345f63ecefe26b28ef63c",
+        "scripts/shaders/shader_compiler.py": "1dc622cd01cc0997e303483310ad272484ae7d62f51158c81ae1b851635041ea",
+        "scripts/shaders/shader_manifest.py": "f0fcb820509e8ee00f8693e6414b7032be82913ad4b7f7ccc4ad2033f89131fe",
+        "scripts/shaders/compile_shaders.py": "24c392d87ca409afcc103afb29f39b3b88f1f693ececfd21f8650e2edea19bb2"
+      },
+      "compiler_driver_sha256": "28f2719960265e525bff9154edccd7b5e8a7bf05a682faec45629b247764765a",
+      "compiler_flags": [
+        "BACKWARDS_COMPATIBILITY",
+        "IEEE_STRICTNESS",
+        "OPTIMIZATION_LEVEL3"
+      ],
+      "assembly_sha256": "8dcd1308faaa5c2439166095346b8846ad1a5600f17f70fc108dccd70818ddc9",
+      "target": "ps_3_0",
+      "symbol": "kCompositeShader"
     },
     "RainMaskMRT": {
-      "bytes": 264,
-      "sha256": "d087b9569ef00903e1caa72b1cedea9c5fecc65eec13ad6ca6b502f645ec8200",
-      "compiler_sha256": "4432bbd1a390874f3f0a503d45cc48d346abc3a8c0213c289f4b615bf0ee84f3",
+      "bytes": 332,
+      "sha256": "aae3c0087f9f546216376b778d8dd62ca6ca6801a9b40344de89e78836e4e79b",
+      "compiler_sha256": "e407b9ffadef47e87994dc488214f75405cf04ee99589f2315fc7ab99fd1dfe2",
       "target": "ps_2_0",
-      "static_instruction_slots": 5,
+      "static_instruction_slots": 6,
       "temporary_registers": 1,
       "samplers": [
         0
       ],
       "instructions": {
         "texld": 1,
-        "mul": 1,
+        "mul": 2,
         "mov": 3
       },
-      "source_sha256": "10948a355dc52e824d9ae61b5251a5146a20955295070dbe9ce749dec0eac172"
+      "instruction_count": 6,
+      "cube_instruction_extra_slots": 0,
+      "source_sha256": "fb1465e8d01eb7efc35ea6b7600e82daf5e276a20a4fe345fe2ac344e7ed36d0",
+      "source": "shaders/rain_mask.hlsl",
+      "dependencies": {
+        "shaders/rain_mask.hlsl": "fb1465e8d01eb7efc35ea6b7600e82daf5e276a20a4fe345fe2ac344e7ed36d0"
+      },
+      "compiler_inputs": {
+        "scripts/shaders/compile_shaders.cpp": "4faf7f9e8f6a5bdbc63406db030ef66bd65beed1d789a525949ceba7d2a1cd89",
+        "scripts/shaders/shader_inputs.h": "e78f9ff80c7e01f3b4c5a9d7dd7e00c1552cbad9f30345f63ecefe26b28ef63c",
+        "scripts/shaders/shader_compiler.py": "1dc622cd01cc0997e303483310ad272484ae7d62f51158c81ae1b851635041ea",
+        "scripts/shaders/shader_manifest.py": "f0fcb820509e8ee00f8693e6414b7032be82913ad4b7f7ccc4ad2033f89131fe",
+        "scripts/shaders/compile_shaders.py": "24c392d87ca409afcc103afb29f39b3b88f1f693ececfd21f8650e2edea19bb2"
+      },
+      "compiler_driver_sha256": "28f2719960265e525bff9154edccd7b5e8a7bf05a682faec45629b247764765a",
+      "compiler_flags": [
+        "BACKWARDS_COMPATIBILITY",
+        "IEEE_STRICTNESS",
+        "OPTIMIZATION_LEVEL3"
+      ],
+      "assembly_sha256": "0287039fea8075805d99b69772065a92dedebfeb9402acb8e60e2a5d9237de52",
+      "symbol": "kRainMaskMrtShader"
     },
     "RainScrub": {
       "bytes": 348,
       "sha256": "04e9c68d306dc5afa4125ddcfa370a1e00c535f3587fe096f1b54a377068edee",
-      "compiler_sha256": "4432bbd1a390874f3f0a503d45cc48d346abc3a8c0213c289f4b615bf0ee84f3",
+      "compiler_sha256": "e407b9ffadef47e87994dc488214f75405cf04ee99589f2315fc7ab99fd1dfe2",
       "target": "ps_2_0",
       "static_instruction_slots": 9,
       "temporary_registers": 2,
@@ -302,7 +499,115 @@
         "texkill": 1,
         "mov": 2
       },
-      "source_sha256": "10948a355dc52e824d9ae61b5251a5146a20955295070dbe9ce749dec0eac172"
+      "instruction_count": 8,
+      "cube_instruction_extra_slots": 0,
+      "source_sha256": "fb1465e8d01eb7efc35ea6b7600e82daf5e276a20a4fe345fe2ac344e7ed36d0",
+      "source": "shaders/rain_mask.hlsl",
+      "dependencies": {
+        "shaders/rain_mask.hlsl": "fb1465e8d01eb7efc35ea6b7600e82daf5e276a20a4fe345fe2ac344e7ed36d0"
+      },
+      "compiler_inputs": {
+        "scripts/shaders/compile_shaders.cpp": "4faf7f9e8f6a5bdbc63406db030ef66bd65beed1d789a525949ceba7d2a1cd89",
+        "scripts/shaders/shader_inputs.h": "e78f9ff80c7e01f3b4c5a9d7dd7e00c1552cbad9f30345f63ecefe26b28ef63c",
+        "scripts/shaders/shader_compiler.py": "1dc622cd01cc0997e303483310ad272484ae7d62f51158c81ae1b851635041ea",
+        "scripts/shaders/shader_manifest.py": "f0fcb820509e8ee00f8693e6414b7032be82913ad4b7f7ccc4ad2033f89131fe",
+        "scripts/shaders/compile_shaders.py": "24c392d87ca409afcc103afb29f39b3b88f1f693ececfd21f8650e2edea19bb2"
+      },
+      "compiler_driver_sha256": "28f2719960265e525bff9154edccd7b5e8a7bf05a682faec45629b247764765a",
+      "compiler_flags": [
+        "BACKWARDS_COMPATIBILITY",
+        "IEEE_STRICTNESS",
+        "OPTIMIZATION_LEVEL3"
+      ],
+      "assembly_sha256": "c95b874323f2a847631faaaae516b3c8590661f2d15a0c38864f163c44ed9581",
+      "symbol": "kRainScrubShader"
+    },
+    "RainColourMRT": {
+      "bytes": 344,
+      "sha256": "4fedb914af91f4a262a0939f8c983b210b9af76632952d003c338b9cb2873c79",
+      "compiler_sha256": "e407b9ffadef47e87994dc488214f75405cf04ee99589f2315fc7ab99fd1dfe2",
+      "target": "ps_2_0",
+      "static_instruction_slots": 7,
+      "temporary_registers": 1,
+      "samplers": [
+        0
+      ],
+      "instructions": {
+        "texld": 1,
+        "mul": 2,
+        "mov": 4
+      },
+      "instruction_count": 7,
+      "cube_instruction_extra_slots": 0,
+      "source_sha256": "fb1465e8d01eb7efc35ea6b7600e82daf5e276a20a4fe345fe2ac344e7ed36d0",
+      "source": "shaders/rain_mask.hlsl",
+      "dependencies": {
+        "shaders/rain_mask.hlsl": "fb1465e8d01eb7efc35ea6b7600e82daf5e276a20a4fe345fe2ac344e7ed36d0"
+      },
+      "compiler_inputs": {
+        "scripts/shaders/compile_shaders.cpp": "4faf7f9e8f6a5bdbc63406db030ef66bd65beed1d789a525949ceba7d2a1cd89",
+        "scripts/shaders/shader_inputs.h": "e78f9ff80c7e01f3b4c5a9d7dd7e00c1552cbad9f30345f63ecefe26b28ef63c",
+        "scripts/shaders/shader_compiler.py": "1dc622cd01cc0997e303483310ad272484ae7d62f51158c81ae1b851635041ea",
+        "scripts/shaders/shader_manifest.py": "f0fcb820509e8ee00f8693e6414b7032be82913ad4b7f7ccc4ad2033f89131fe",
+        "scripts/shaders/compile_shaders.py": "24c392d87ca409afcc103afb29f39b3b88f1f693ececfd21f8650e2edea19bb2"
+      },
+      "compiler_driver_sha256": "28f2719960265e525bff9154edccd7b5e8a7bf05a682faec45629b247764765a",
+      "compiler_flags": [
+        "BACKWARDS_COMPATIBILITY",
+        "IEEE_STRICTNESS",
+        "OPTIMIZATION_LEVEL3"
+      ],
+      "assembly_sha256": "e2c44600de6ddac8c729aa3b707a8669180e9fef15ebd0fdff7f44675e354627",
+      "symbol": "kRainColourMrtShader"
+    },
+    "RainColourRestore": {
+      "bytes": 532,
+      "sha256": "87087401febfb50f7fe536a5e78f0d917892e2bb18f699d793509528862f5f84",
+      "compiler_sha256": "e407b9ffadef47e87994dc488214f75405cf04ee99589f2315fc7ab99fd1dfe2",
+      "target": "ps_2_0",
+      "static_instruction_slots": 10,
+      "temporary_registers": 4,
+      "samplers": [
+        0,
+        1,
+        2,
+        3
+      ],
+      "instructions": {
+        "texld": 4,
+        "add": 1,
+        "cmp": 3,
+        "mov": 2
+      },
+      "instruction_count": 10,
+      "cube_instruction_extra_slots": 0,
+      "source_sha256": "fb1465e8d01eb7efc35ea6b7600e82daf5e276a20a4fe345fe2ac344e7ed36d0",
+      "source": "shaders/rain_mask.hlsl",
+      "dependencies": {
+        "shaders/rain_mask.hlsl": "fb1465e8d01eb7efc35ea6b7600e82daf5e276a20a4fe345fe2ac344e7ed36d0"
+      },
+      "compiler_inputs": {
+        "scripts/shaders/compile_shaders.cpp": "4faf7f9e8f6a5bdbc63406db030ef66bd65beed1d789a525949ceba7d2a1cd89",
+        "scripts/shaders/shader_inputs.h": "e78f9ff80c7e01f3b4c5a9d7dd7e00c1552cbad9f30345f63ecefe26b28ef63c",
+        "scripts/shaders/shader_compiler.py": "1dc622cd01cc0997e303483310ad272484ae7d62f51158c81ae1b851635041ea",
+        "scripts/shaders/shader_manifest.py": "f0fcb820509e8ee00f8693e6414b7032be82913ad4b7f7ccc4ad2033f89131fe",
+        "scripts/shaders/compile_shaders.py": "24c392d87ca409afcc103afb29f39b3b88f1f693ececfd21f8650e2edea19bb2"
+      },
+      "compiler_driver_sha256": "28f2719960265e525bff9154edccd7b5e8a7bf05a682faec45629b247764765a",
+      "compiler_flags": [
+        "BACKWARDS_COMPATIBILITY",
+        "IEEE_STRICTNESS",
+        "OPTIMIZATION_LEVEL3"
+      ],
+      "assembly_sha256": "1986a1a2516ed5fc4b3e4e1df2c90436266c934a5426e7bfed7197f673d2aeec",
+      "symbol": "kRainColourRestoreShader"
     }
+  },
+  "header_sha256": "74c7453a4d00657cffe4a9cb3e7b37367302d0fbb6199ae71b5a1c27fe324d20",
+  "water_header_sha256": "102d22aad0f47573304ef1b4fa9092a8c8ea81994319e23b32aa36c7dd6a0602",
+  "provenance_version": 1,
+  "headers": {
+    "src/generated/compiled_shaders.h": "74c7453a4d00657cffe4a9cb3e7b37367302d0fbb6199ae71b5a1c27fe324d20",
+    "src/generated/water_rain_compiled.h": "102d22aad0f47573304ef1b4fa9092a8c8ea81994319e23b32aa36c7dd6a0602"
   }
 }

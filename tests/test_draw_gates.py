@@ -123,8 +123,12 @@ def old_parts(line):
 def new_parts(sig):
     body=member(renderer,sig+' override')
     draw=re.search(r'return (ext->Draw\w+\([^)]*\));',body).group(1)
-    cap=re.search(r'return drawHook\(t,count,\[&\]\(IDirect3DVertexShader9\* vs\)\{(.*?)captureWater\(vs,(\w+::\w+),draw\);\},draw\);\}',body)
+    cap=re.search(r'return drawHook\(t,count,\[&\]\(IDirect3DVertexShader9\* vs\)\{(.*?)captureWater\(vs,(\w+::\w+),draw\);\},draw\);\}',body,re.S)
     capture=cap.group(1)
+    if capture.startswith('{'):
+        trace = '#ifdef NORTHLIGHT_WATER\n            NorthlightWaterCall trace((classifyVs(vs).entry&kTagMask)==1?"Northlight::terrain capture":nullptr);\n#endif'
+        assert capture.count(trace)==1 and capture.rstrip().endswith('}')
+        capture=capture.replace(trace,'').strip()[1:-1].strip()
     if capture.startswith('if(autoBump'):
         prefix,capture=capture.split('world->capture',1)
         assert prefix.startswith('if(autoBump&&enabled&&!applied&&!failed&&!memoryGuard.capsHalved())')
@@ -143,7 +147,7 @@ checks['four overrides: 0.3.184 capture, water capture and draw, unchanged, thro
 finish=member(renderer,'void finishFrameImpl() {')
 reset=member(renderer,'HRESULT STDMETHODCALLTYPE Reset(D3DPRESENT_PARAMETERS* pp) override')
 ctor=renderer[renderer.index('    Device(IDirect3DDevice9* d,IDirect3D9* p'):renderer.index('    ~Device() {')]
-code=re.sub(r'"(?:[^"\\]|\\.)*"','""',re.sub(r'/\*.*?\*/|//[^\n]*','',renderer))  # no comments, no string literals
+code=re.sub(r'"(?:[^"\\]|\\.)*"','""',re.sub(r'/\*.*?\*/|//[^\n]*','',member(renderer,'class Device final : public GuardedMirrorDevice')))  # no comments, no string literals
 writes=lambda name,text=None:re.findall(r'(?<![.>\w])'+name+r'\s*=(?!=)\s*([^;,]*)',code if text is None else text)
 checks['enabled: rises only by F10 in finishFrameImpl; else only lowered']=sorted(writes('enabled'))==['!enabled','false','true'] and 'if(k10&&!key10){enabled=!enabled;' in finish
 checks['failed=false only in Reset (latched there) and the retry in finishFrameImpl']=(len(re.findall(r'\bfailed\s*=\s*false',code))==3  # + the member initialiser

@@ -62,6 +62,12 @@ int main(int argc,char** argv){
             std::vector<Word> code(bytes.size()/4);std::memcpy(code.data(),bytes.data(),code.size()*4);
             std::vector<Word> out;PatchInfo info;
             if(patch(code.data(),code.size(),out,&info)){
+                unsigned constant=0;std::vector<Word> gradual;
+                if(!weighted(code.data(),code.size(),gradual,constant)){
+                    std::fprintf(stderr,"WEIGHTED_REFUSED %s major=%u instructions=%u\n",argv[i],info.major,info.instructions);
+                    return 2;
+                }
+                std::ofstream w(std::string(argv[i])+".weighted",std::ios::binary);w.write((const char*)gradual.data(),gradual.size()*4);
                 std::printf("TERRAIN_SHADOW %u %u.%u r%u.%u one=c%u.%u %s\n",info.replaced,info.major,info.minor,info.shadowRegister,info.shadowComponent,unsigned(info.oneConstant),info.oneComponent,argv[i]);
                 std::ofstream o(std::string(argv[i])+".patched",std::ios::binary);o.write((const char*)out.data(),out.size()*4);
             } else std::printf("TERRAIN_SHADOW -1 %u.%u - - %s\n",(code.empty()?0u:(code[0]>>8)&255),(code.empty()?0u:code[0]&255),argv[i]);
@@ -85,6 +91,10 @@ int main(int argc,char** argv){
     auto truncated=terrain1();truncated.pop_back();assert(!patch(truncated.data(),truncated.size(),out,&info));
     auto noShadow=terrain1();for(auto& w:noShadow)if(w==src(Const,0,XXXX))w=src(Const,0,ZZZZ);assert(!patch(noShadow.data(),noShadow.size(),out,&info));
     std::vector<Word> empty{0xffff0300,0xffff};assert(!patch(empty.data(),empty.size(),out,&info));
+    // Both branch-free and Terrain3's combined branch result support a
+    // runtime handoff weight. Insertion must occur outside the if/else.
+    {unsigned constant=0;auto t=terrain1();assert(weighted(t.data(),t.size(),out,constant));
+     t=terrain3();assert(weighted(t.data(),t.size(),out,constant));}
     // Terrain3: replacement follows the combined register through if/else.
     auto t3=terrain3();assert(patch(t3.data(),t3.size(),out,&info));
     assert(info.replaced==2&&info.shadowRegister==3&&info.shadowComponent==0&&info.oneConstant==0&&info.oneComponent==0);

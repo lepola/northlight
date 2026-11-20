@@ -111,6 +111,18 @@ static void perBatch(const P::Plan& plan,const std::vector<std::uint32_t>& list,
 // Two pages whose index ranges touch (page 0 ends where page 1's batch starts): merging across the
 // page draws page 1's indices from page 0's vertices.
 static void syntheticRuns(){
+    // The shared range helper is also used by opaque shadows: preserve the
+    // vertex union, reject gaps/pages/capacity without mutating the open run.
+    P::Batch a{};a.page=4;a.start=90;a.count=2;a.minVertex=20;a.vertexCount=8;
+    NorthlightTriangleRun::Run run;run.begin(a);
+    P::Batch b=a;b.start=96;b.count=3;b.minVertex=5;b.vertexCount=12;
+    assert(run.append(b,15)&&run.start==90&&run.count==5&&run.minVertex==5&&run.vertexEnd==28);
+    b.start=105;b.count=1;
+    assert(!run.append(b,15)&&run.count==5);
+    b.page=5;assert(!run.append(b,18)&&run.page==4);
+    b.page=4;b.start=108;assert(!run.append(b,18)&&run.count==5);
+    b.start=105;assert(run.append(b,18)&&run.count==6);
+
     P::Plan plan;plan.pages.resize(2);
     for(unsigned pg=0;pg<2;++pg){auto& page=plan.pages[pg];for(unsigned v=0;v<6;++v){NorthlightGI::WorldVertex w{};w.position=NorthlightGI::Vec3(float(v%3)+pg*10.f,float(v/3),float(pg));page.vertices.push_back(w);}
         for(std::uint32_t i:{0u,1u,3u,1u,4u,3u})page.indices.push_back(i);}

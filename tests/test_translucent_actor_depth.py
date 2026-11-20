@@ -140,7 +140,8 @@ fin=r[r.index('void finishFrameImpl() {'):r.index('++frame;mirrorState.gate.fram
 checks['TRANSLUCENT logged before clearFrame in finishFrameImpl']=fin.index('TRANSLUCENT frame=')<fin.index('clearFrame();')
 terr=r[r.index('if(!bindWorldDepth(desc))return;'):][:400]
 checks['terrain draw undo uses earlyCaptured, counted before captured=false']=terr.index('captured&&earlyDepth.earlyCaptured')<terr.index('++earlyResolveUndone')<terr.index('terrain=true; captured=false;')
-clr=r[r.index('HRESULT STDMETHODCALLTYPE Clear('):][:2200]
+clear_start=r.index('HRESULT STDMETHODCALLTYPE Clear(')
+clr=r[clear_start:r.index('HRESULT STDMETHODCALLTYPE',clear_start+len('HRESULT STDMETHODCALLTYPE'))]
 checks['Clear(Z) after the early resolve freezes it instead of resolving']='earlyDepth.earlyCaptured' in clr and 'earlyDepth.freeze()' in clr and 'resolveDepth()' in clr
 checks['state reads cached per draw']='known=true' in impl
 checks['no TranslucentActorDepth setting']=all('ranslucentActorDepth' not in x for x in (r,q,w))

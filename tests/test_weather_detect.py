@@ -4,14 +4,15 @@
 and the real per-draw comparison extracted from renderer.cpp's drawHook over a mock mirror.
 Signatures (format, aspect 1:16 / 1:2, widths 8/16/32), address reuse (a re-created address with another signature stops being a
 candidate, generation bumps, hot cleared), volume/cube forget, reset, per-kind table slots (rain 2, snow 4; never-drawn first, lookalike flood), hot
-rotation on every frame without draws, the tall-texture log, and the hook: stage 0 unknown / UI phase (applied) / no hot = no count, a match
+rotation on every frame without draws, the game's weather marking lookalikes and choosing hot's kind, the tall-texture log, and the hook: stage 0 unknown / UI phase (applied) / no hot = no count, a match
 accumulates primitives and draws. Native clang++, plain -O2 and ASan/UBSan. No device or game."""
 import sys; from pathlib import Path; sys.path.insert(0, str(Path(__file__).resolve().parents[1]))  # repo root
 import northlight_paths as fp
 import subprocess,tempfile
 
 r=fp.src('renderer.cpp').read_text()
-hook=[l for l in r.split('\n') if l.strip().startswith('if(weatherDetect.hot&&mirrorState')]
+start=r.index('if(weatherDetect.hot&&mirrorState')
+hook=[r[start:r.index('else if(weatherDetect.mistArmed)',start)]]
 assert len(hook)==1,'the draw hook comparison must exist exactly once'
 mistline=[l for l in r.split('\n') if l.strip().startswith('else if(weatherDetect.mistArmed)')]
 assert len(mistline)==1,'0.3.199 (rain mist): the mist test follows the hot comparison exactly once'
@@ -38,10 +39,10 @@ typedef unsigned UINT;typedef unsigned DWORD;typedef long HRESULT;
 #define SUCCEEDED(h) ((h)>=0)
 #define FALSE 0
 #define FAILED(h) ((h)<0)
-enum D3DRENDERSTATETYPE{D3DRS_ALPHABLENDENABLE=27,D3DRS_SRCBLEND=19,D3DRS_DESTBLEND=20,D3DRS_BLENDOP=171,D3DRS_ZWRITEENABLE=14,D3DRS_COLORWRITEENABLE=168,D3DRS_COLORWRITEENABLE1=190,D3DRS_SEPARATEALPHABLENDENABLE=206,D3DRS_SRCBLENDALPHA=207,D3DRS_DESTBLENDALPHA=208,D3DRS_BLENDOPALPHA=209,D3DRS_SPECULARENABLE=29,D3DRS_SCISSORTESTENABLE=174};
+enum D3DRENDERSTATETYPE{D3DRS_TEXTUREFACTOR=60,D3DRS_ALPHABLENDENABLE=27,D3DRS_SRCBLEND=19,D3DRS_DESTBLEND=20,D3DRS_BLENDOP=171,D3DRS_ZWRITEENABLE=14,D3DRS_COLORWRITEENABLE=168,D3DRS_COLORWRITEENABLE1=190,D3DRS_SEPARATEALPHABLENDENABLE=206,D3DRS_SRCBLENDALPHA=207,D3DRS_DESTBLENDALPHA=208,D3DRS_BLENDOPALPHA=209,D3DRS_SPECULARENABLE=29,D3DRS_SCISSORTESTENABLE=174};
 enum D3DTEXTURESTAGESTATETYPE{D3DTSS_COLOROP=1,D3DTSS_COLORARG1=2,D3DTSS_COLORARG2=3,D3DTSS_ALPHAOP=4,D3DTSS_ALPHAARG1=5,D3DTSS_ALPHAARG2=6,D3DTSS_TEXCOORDINDEX=11,D3DTSS_TEXTURETRANSFORMFLAGS=24};
 enum D3DSAMPLERSTATETYPE{D3DSAMP_MAGFILTER=5,D3DSAMP_MINFILTER=6,D3DSAMP_MIPFILTER=7};
-enum{D3DTOP_DISABLE=1,D3DTOP_SELECTARG1=2,D3DTOP_MODULATE=4,D3DTA_DIFFUSE=0,D3DTA_CURRENT=1,D3DTA_TEXTURE=2,D3DTTFF_DISABLE=0,D3DTEXF_POINT=1};
+enum{D3DTOP_DISABLE=1,D3DTOP_SELECTARG1=2,D3DTOP_MODULATE=4,D3DTA_DIFFUSE=0,D3DTA_CURRENT=1,D3DTA_TEXTURE=2,D3DTA_TFACTOR=3,D3DTTFF_DISABLE=0,D3DTEXF_POINT=1};
 struct RECT{long left=0,top=0,right=0,bottom=0;};
 enum D3DMULTISAMPLE_TYPE{D3DMULTISAMPLE_NONE=0,D3DMULTISAMPLE_4_SAMPLES=4};enum D3DFORMAT:unsigned{D3DFMT_A8R8G8B8=21};enum D3DPOOL{D3DPOOL_DEFAULT=0};typedef DWORD D3DCOLOR;struct D3DRECT{long a,b,c,d;};
 #define MAKEFOURCC(a,b,c,d) ((DWORD)(unsigned char)(a)|((DWORD)(unsigned char)(b)<<8)|((DWORD)(unsigned char)(c)<<16)|((DWORD)(unsigned char)(d)<<24))
@@ -87,6 +88,8 @@ struct Ext{DWORD rs[256]={};DWORD tss[2][32]={};std::vector<std::pair<int,DWORD>
     bool peekPixelShader(IDirect3DPixelShader9*& o){if(!borrowOk||!ps)return false;o=ps;return true;}
     HRESULT GetVertexShader(IDirect3DVertexShader9** o){*o=vsBound;return 0;}HRESULT GetPixelShader(IDirect3DPixelShader9** o){*o=ps;return 0;}
     HRESULT SetPixelShader(IDirect3DPixelShader9* p){ps=p;return 0;}
+    float psc[4]={};HRESULT SetPixelShaderConstantF(UINT r,const float* v,UINT){if(r==0)for(int i=0;i<4;++i)psc[i]=v[i];return 0;}
+    HRESULT SetTextureStageState(DWORD st,D3DTEXTURESTAGESTATETYPE t,DWORD v){tss[st][t]=v;return 0;}
     HRESULT SetTexture(DWORD st,IDirect3DTexture9* t){if(st<4)tex[st]=t;return 0;}
     HRESULT SetSamplerState(DWORD st,D3DSAMPLERSTATETYPE t,DWORD v){++samplerSets;if(st==0&&t==D3DSAMP_MINFILTER)minFilter0=v;if(st==0&&t==D3DSAMP_MAGFILTER)magFilter0=v;return 0;}
     HRESULT GetViewport(D3DVIEWPORT9* o){*o=vp;return 0;}HRESULT SetViewport(const D3DVIEWPORT9* v){vp=*v;return 0;}
@@ -100,7 +103,7 @@ struct Ext{DWORD rs[256]={};DWORD tss[2][32]={};std::vector<std::pair<int,DWORD>
     HRESULT StretchRect(Surface* src,const RECT*,Surface* dst,const RECT*,int){++stretches;(void)src;(void)dst;return stretchFails?-1:0;}};
 struct ExtensionDevice{struct RawScope{explicit RawScope(Ext&){}};};
 struct VsClass{bool world=false,skinned=false;};
-struct World{bool on=true;bool rainBlendSetting()const{return on;}};
+struct World{bool on=true,liquid=false;float opacity=1;bool rainBlendSetting()const{return on;}float rainOpacitySetting()const{return opacity;}bool cameraInLiquid()const{return liquid;}};
 namespace NorthlightWeather{}
 struct SavedState{Ext* d;Surface* rt;D3DVIEWPORT9 vp;bool ok=true;static inline bool fail=false;SavedState(Ext* e,void*):d(e),rt(e->rt),vp(e->vp){ok=!fail;}~SavedState(){d->rt=rt;d->vp=vp;}};
 struct Hook{
@@ -117,7 +120,7 @@ struct Hook{
     void newFrame(){rainMrtUnbind();rainMaskCleared=rainMaskDrawn=rainMaskFrame=rainMaskOk=rainDepthOk=false;applied=false;} /* clearFrame's part */
     Ext extObj;Ext* ext=&extObj;World worldObj;World* world=&worldObj;bool claimedSkip=false;bool gateFrame=true;
     template<class Draw> HRESULT blobFaintDraw(bool claimed,Draw draw){return claimed?0:draw();}
-    unsigned blendAtDraw[4]={};unsigned drawn=0;unsigned weatherMistSkips=0,weatherMistUnknown=0,weatherMistOtherStage=0,weatherMistReports=0,weatherStateReports=0,logged=0;
+    unsigned blendAtDraw[4]={};DWORD stageAtDraw[3]={},factorAtDraw=0;unsigned drawn=0;unsigned weatherMistSkips=0,weatherMistUnknown=0,weatherMistOtherStage=0,weatherMistReports=0,weatherStateReports=0,logged=0;
     template<class... A> void logf(const char* f,A...){++logged;logs.push_back(f);}
     void weatherDrawStates(UINT){++weatherStateReports;}
 @MISTFN@
@@ -129,7 +132,7 @@ struct Hook{
 @HOOK@
 @MISTLINE@
 @UNBINDLINE@
-        auto draw=[&]{++drawn;blendAtDraw[0]=ext->rs[D3DRS_ALPHABLENDENABLE];blendAtDraw[1]=ext->rs[D3DRS_SRCBLEND];blendAtDraw[2]=ext->rs[D3DRS_DESTBLEND];blendAtDraw[3]=ext->rs[D3DRS_BLENDOP];
+        auto draw=[&]{++drawn;stageAtDraw[0]=ext->tss[1][D3DTSS_COLOROP];stageAtDraw[1]=ext->tss[1][D3DTSS_ALPHAOP];stageAtDraw[2]=ext->tss[1][D3DTSS_ALPHAARG2];factorAtDraw=ext->rs[D3DRS_TEXTUREFACTOR];blendAtDraw[0]=ext->rs[D3DRS_ALPHABLENDENABLE];blendAtDraw[1]=ext->rs[D3DRS_SRCBLEND];blendAtDraw[2]=ext->rs[D3DRS_DESTBLEND];blendAtDraw[3]=ext->rs[D3DRS_BLENDOP];
             ext->draws.push_back({ext->rt,ext->rt1,ext->ps,ext->rs[D3DRS_COLORWRITEENABLE],ext->rs[D3DRS_COLORWRITEENABLE1],ext->rs[D3DRS_ALPHABLENDENABLE],ext->rs[D3DRS_SEPARATEALPHABLENDENABLE],ext->rs[D3DRS_SRCBLENDALPHA],ext->rs[D3DRS_DESTBLENDALPHA],ext->rs[D3DRS_BLENDOPALPHA],ext->rs[D3DRS_SRCBLEND],ext->rs[D3DRS_DESTBLEND],ext->rs[D3DRS_BLENDOP]});return HRESULT(0);};
         const HRESULT hr=nameMaskDraw(rainBlend,claimed||mist,draw);
         return hr;
@@ -210,6 +213,23 @@ int main(){
         o.endFrame(false);assert(o.hot==P(52)&&o.hotKind==Kind::Snow);
         o.endFrame(false);assert(o.hot==P(50)); /* wraps */
         Detector e;e.endFrame(true);e.endFrame(false);assert(e.hot==nullptr); /* no candidates */
+    }
+    {   // the game's weather settles a lookalike that draws every frame (2026-11-08: a snow-shaped interface texture held hot
+        // through a storm, so the rain was never counted)
+        lines.clear();Detector o;o.sink=&sink;
+        o.noteCreate(P(60),32,64,1,A);assert(o.hot==P(60)&&o.hotKind==Kind::Snow); /* created at login: hot */
+        for(int f=0;f<5;++f)o.endFrame(true,true,Kind::None); /* draws every frame in clear weather */
+        assert(o.hot==P(60)&&o.candidate(0).clearDraws&&count("WEATHER candidate raw=")==1);
+        o.noteCreate(P(61),32,512,1,A);assert(o.hot==P(60)); /* the storm's rain arrives */
+        o.endFrame(true,true,Kind::Rain);assert(o.hot==P(61)&&o.hotKind==Kind::Rain); /* the game reports rain: hot is the rain at once */
+        for(int f=0;f<5;++f){o.endFrame(true,true,Kind::Rain);assert(o.hot==P(61));}
+        o.endFrame(false,true,Kind::Rain);assert(o.hot==P(61)); /* a frame without rain draws rotates; the game's kind brings it back */
+        o.endFrame(false);assert(o.hot==P(60)); /* the game's weather unknown: plain rotation, as before */
+        o.noteCreate(P(62),32,64,1,A);
+        o.endFrame(true,true,Kind::Snow);assert(o.hot==P(62)&&o.hotKind==Kind::Snow); /* snow: the real flakes over the lookalike */
+        Detector q;q.noteCreate(P(63),32,512,1,A);q.endFrame(true,true,Kind::None);assert(q.candidate(0).clearDraws);
+        q.endFrame(true,true,Kind::Rain);assert(q.hot==P(63)); /* rain that drew a moment before the game reported it is still used */
+        Detector r;r.noteCreate(P(64),32,64,1,A);r.endFrame(true,true,Kind::Rain);assert(r.hot==P(64)); /* no rain candidate yet: hot stays */
     }
     {   // tall log: any format with h>=4w, the first 8 only
         lines.clear();Detector t;t.sink=&sink;
@@ -304,6 +324,16 @@ int main(){
         {Hook h;mk(h);h.ext->caps.PrimitiveMiscCaps=D3DPMISCCAPS_INDEPENDENTWRITEMASKS|D3DPMISCCAPS_MRTPOSTPIXELSHADERBLENDING;h.draw(10);assert(h.rainMaskDraws==1);} // separate alpha blend not needed
         {Hook h;mk(h);h.ext->caps.PixelShaderVersion=D3DPS_VERSION(1,4);h.draw(10);assert(h.rainMaskDraws==0);}
         {Hook h;mk(h);h.ext->capsGetFails=true;h.draw(10);assert(h.rainMaskDraws==0&&h.drawn==1);}
+        {Hook h;mk(h);h.world->liquid=true;h.draw(10);assert(h.drawn==0&&h.weatherSample.draws==1&&h.rainMaskDraws==0);} /* camera in liquid: the rain is counted, not drawn */
+        {Hook h;mk(h);h.weatherDetect.endFrame(false);h.world->liquid=true;h.bind(0,51);h.draw(10);assert(h.drawn==1);} /* snow (not rain) is still drawn */
+        // RainOpacity: the mask path's shader gets it in c0; the game's own fixed-function draw multiplies its alpha on stage 1 by the
+        // texture factor during the draw only; at full opacity, or with stage 1 already in use, the draw is the game's.
+        {Hook h;mk(h);h.world->opacity=.5f;h.draw(10);assert(h.rainMaskDraws==1&&h.ext->draws[0].ps==&h.ext->psMrt&&h.ext->psc[0]==.5f);}
+        {Hook h;mk(h);h.ext->capsGetFails=true;h.world->opacity=.5f;h.ext->rs[D3DRS_TEXTUREFACTOR]=0x11223344;h.draw(10);
+            assert(h.rainMaskDraws==0&&h.stageAtDraw[0]==D3DTOP_SELECTARG1&&h.stageAtDraw[1]==D3DTOP_MODULATE&&h.stageAtDraw[2]==D3DTA_TFACTOR&&(h.factorAtDraw>>24)==128);
+            assert(h.ext->tss[1][D3DTSS_COLOROP]==D3DTOP_DISABLE&&h.ext->rs[D3DRS_TEXTUREFACTOR]==0x11223344);}
+        {Hook h;mk(h);h.ext->capsGetFails=true;h.draw(10);assert(h.stageAtDraw[0]==D3DTOP_DISABLE&&h.stageAtDraw[1]!=D3DTOP_MODULATE);}
+        {Hook h;mk(h);h.ext->capsGetFails=true;h.world->opacity=.5f;h.ext->tss[1][D3DTSS_COLOROP]=D3DTOP_MODULATE;h.draw(10);assert(h.stageAtDraw[0]==D3DTOP_MODULATE&&h.stageAtDraw[2]!=D3DTA_TFACTOR);}
         {Hook h;mk(h);h.terrain=false;h.draw(10);assert(h.drawn==1&&h.rainMaskDraws==0&&h.rainMaskSkips==0&&h.ext->colorFills==0&&h.ext->rt1Binds==0);}
         {Hook h;mk(h);h.world->on=false;h.draw(10);assert(h.drawn==1&&h.rainMaskDraws==0&&h.ext->draws[0].ps==nullptr);}
         {Hook h;mk(h);h.claimedSkip=true;h.draw(10);assert(h.drawn==0&&h.rainMaskDraws==0&&h.ext->colorFills==0&&h.ext->rt1Binds==0);}

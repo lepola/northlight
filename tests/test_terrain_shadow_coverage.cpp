@@ -69,10 +69,13 @@ int main(){
         assert((v.output[1]==V{10,20,30,1})); // existing VS overwrote view temporary.w with .5
         for(unsigned i=0;i<30000;++i){
             V q0={sample(gen),sample(gen),sample(gen),1},q1={sample(gen),sample(gen),sample(gen),1};
-            if(i%3==0)q1={0,0,.5f,1}; // either active source covering the receiver removes the authored shadow
+            if(i%3==0)q1={0,0,.5f,1};
+            const float strength0=i%7==0?0.f:i%7==1?1.f:i%7==2?1e-7f:unit(gen);
+            const float strength1=sources==1?0.f:(1-strength0)*unit(gen);
             float shadow=unit(gen),rgb=unit(gen);VM machine;machine.input[0]={rgb,rgb,rgb,shadow};machine.input[1]={0,0,0,1};
             for(unsigned s=0;s<sources;++s){V q=s?q1:q0;for(unsigned j=0;j<3;++j)machine.constant[info.constants+s*3+j][3]=q[j];}
-            machine.run(patched);float weight=sources==1?coverage(q0):std::max(coverage(q0),coverage(q1));
+            machine.constant[info.constants+sources*3]={strength0,strength1,0,0};
+            machine.run(patched);float weight=coverage(q0)*strength0+(sources==1?0.f:coverage(q1)*strength1);
             float expected=rgb*(.7f+.3f*(shadow+(1-shadow)*weight));
             assert(std::fabs(machine.output[0][0]-expected)<2e-6f);++cases;
         }
@@ -80,6 +83,19 @@ int main(){
         auto bad=vertexOriginal;for(auto& t:bad)if(t==src(2,1))t=src(2,2);
         assert(!vertex(bad.data(),bad.size(),vertexPatched)&&vertexPatched.empty());
         auto legacy=original;legacy[0]=0xffff0200;assert(!pixel(legacy.data(),legacy.size(),patched,info)&&patched.empty());
+    }
+    // The fallback must execute a gradual handoff too, including ps_2_0.
+    // Full replacement yields the previous neutralised result; zero retains
+    // the original baked term, and epsilon must not jump to full removal.
+    for(unsigned version:{0xffff0200u,0xffff0300u}){
+        auto original=ps(false);original[0]=version;std::vector<Word> patched;unsigned constant=0;
+        assert(NorthlightTerrainShadow::weighted(original.data(),original.size(),patched,constant));
+        for(float strength:{0.f,1e-7f,.01f,.25f,.5f,.75f,.99f,1.f})for(unsigned i=0;i<1000;++i){
+            const float shadow=unit(gen),rgb=unit(gen);VM machine;machine.input[0]={rgb,rgb,rgb,shadow};
+            machine.constant[constant]={strength,1,0,0};machine.run(patched);
+            const float expected=rgb*(.7f+.3f*(shadow+(1-shadow)*strength));
+            assert(std::fabs(machine.output[0][0]-expected)<2e-6f);++cases;
+        }
     }
     // A camera rotation/translation must cancel: the same receiver retains the
     // same coverage in world space, without reading a previous screen buffer.

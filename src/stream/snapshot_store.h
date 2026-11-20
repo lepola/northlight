@@ -11,6 +11,9 @@
 #include <memory>
 #include <mutex>
 #include <vector>
+#ifdef NORTHLIGHT_WATER
+#include "host_client.h"
+#endif
 #ifdef _WIN32
 #include <windows.h>
 #endif
@@ -70,10 +73,17 @@ public:
     enum class Mode:std::uint8_t{Idle,Recording,Playing};
     enum class Serve:std::uint8_t{Miss,Ok,Failed};
     Mode mode=Mode::Idle;
+#ifdef NORTHLIGHT_WATER
+    WaterHostFrameRef waterFrame;
+#endif
     // Which trigger took it and the draw ordinal of that draw; the consumer's age is its own draw ordinal minus this.
     std::uint32_t triggerKind=0;std::uint64_t triggerDraw=0;
     unsigned long hits=0,misses=0; // this activation, flushed by ScopedPlayback
-    void clear(){keyCount_=copyCount_=0;used_=0;overflowed_=false;mode=Mode::Idle;triggerKind=0;triggerDraw=0;hits=misses=0;}
+    void clear(){
+#ifdef NORTHLIGHT_WATER
+        waterFrame = {};
+#endif
+        keyCount_=copyCount_=0;used_=0;overflowed_=false;mode=Mode::Idle;triggerKind=0;triggerDraw=0;hits=misses=0;}
     bool usable()const{return !overflowed_&&copyCount_>0;}
     bool overflowed()const{return overflowed_;}
     std::size_t keys()const{return keyCount_;}
@@ -170,7 +180,11 @@ public:
         try{all_.push_back(std::make_unique<GameSnapshot>());}catch(...){return nullptr;}
         all_.back()->clear();return all_.back().get();
     }
-    void release(GameSnapshot* s){if(!s)return;std::lock_guard<std::mutex> lock(mutex_);try{free_.push_back(s);}catch(...){}}
+    void release(GameSnapshot* s){if(!s)return;
+#ifdef NORTHLIGHT_WATER
+        s->waterFrame = {};
+#endif
+        std::lock_guard<std::mutex> lock(mutex_);try{free_.push_back(s);}catch(...){}}
     std::size_t allocated()const{std::lock_guard<std::mutex> lock(mutex_);return all_.size();}
     std::size_t reservedBytes()const{return allocated()*sizeof(GameSnapshot);}
     std::size_t idle()const{std::lock_guard<std::mutex> lock(mutex_);return free_.size();}

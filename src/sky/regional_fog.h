@@ -21,7 +21,7 @@ struct Tile {int x=0,y=0;std::array<uint32_t,256> zones{};std::vector<Water> wat
 struct Region {std::vector<Tile> tiles;unsigned missing=0,invalid=0;};
 struct Texel {float ground=0,day=0,nightExtra=0,height=0;};
 static_assert(sizeof(Texel)==16,"Fog texture float4");
-struct Field {float originX=0,originY=0;std::array<Texel,N*N> texels{};std::array<uint8_t,N*N> lush{}; /* 0.3.199 (fog clouds): 1 = outdoor forest/grass zone (lushZone), CPU only */unsigned groundCells=0,fogCells=0,airCells=0,indoorCells=0,citySurfaceCells=0;};
+struct Field {float originX=0,originY=0;std::array<Texel,N*N> texels{};std::array<uint8_t,N*N> lush{}; /* 0.3.199 (fog clouds): 1 = outdoor forest/grass zone (lushZone), CPU only */std::vector<float> raised;float raisedMin=1e6f,raisedMax=-1e6f;unsigned groundCells=0,fogCells=0,airCells=0,indoorCells=0,citySurfaceCells=0;};
 inline float smooth(float x){x=std::clamp(x,0.f,1.f);return x*x*(3-2*x);}
 // Artist policy transitions, applied to the VERIFIED game's normalized render
 // time (minute-of-day / 1440, including fixed-time map override). Unknown clock
@@ -218,5 +218,51 @@ inline Field buildField(const NorthlightGI::WorldScene& scene,const Region& regi
         if(cell.height>0&&edge>0)++out.airCells;
     }
     return out;
+}
+// Private raised-air experiment. Records are sorted, world-locked eight-yard
+// lattice samples. All disk access is on the existing region worker.
+inline unsigned applyRaised(Field& field,const Region& region,const std::string& directory,const std::string& map){
+    if(map!="Northrend"&&map!="Expansion01")return 0;
+    const std::string path=directory+map+".rfs";
+    FILE* file=std::fopen(path.c_str(),"rb");if(!file)return 0;
+    struct Close{FILE* file;~Close(){std::fclose(file);}} close{file};
+    struct Sample{int16_t x,y;float z;};
+    static_assert(sizeof(Sample)==8,"raised surface record");
+    uint32_t header[2];
+    if(std::fread(header,sizeof(header),1,file)!=1||header[0]!=0x31534652u||header[1]>65536)return 0;
+    std::vector<Sample> samples(header[1]);
+    if(std::fread(samples.data(),sizeof(Sample),samples.size(),file)!=samples.size()||std::fgetc(file)!=EOF)return 0;
+    const int x0=int(field.originX/Spacing),y0=int(field.originY/Spacing);
+    unsigned changed=0;
+    for(const auto& s:samples){
+        const int x=s.x-x0,y=s.y-y0;
+        if(x<0||x>=int(N)||y<0||y>=int(N)||!std::isfinite(s.z))continue;
+        const auto& base=field.texels[y*N+x];
+        if(base.height>0&&s.z-base.ground<64.f)continue;
+        const unsigned zone=zoneAt(region,s.x*Spacing,s.y*Spacing);
+        if(!zone)continue;
+        if(field.raised.empty())field.raised.assign(N*N,-1000000.f);
+        field.raised[y*N+x]=s.z;field.raisedMin=std::min(field.raisedMin,s.z);field.raisedMax=std::max(field.raisedMax,s.z);
+        ++changed;
+    }
+    return changed;
+}
+inline float raisedDensity(const Field& f,float x,float y,float z,float height,float strength){
+    float density=0;
+    if(!f.raised.empty()){
+        const float gx=(x-f.originX)/NorthlightRegionalFog::Spacing,gy=(y-f.originY)/NorthlightRegionalFog::Spacing;
+        constexpr unsigned n=NorthlightRegionalFog::N;
+        if(gx>=0&&gy>=0&&gx<n-1&&gy<n-1){
+            const unsigned ix=unsigned(gx),iy=unsigned(gy);
+            const float edge=std::clamp(std::min({gx,gy,n-1-gx,n-1-gy})*.5f,0.f,1.f);
+            for(unsigned j=0;j<2;++j)for(unsigned i=0;i<2;++i){
+                const float dz=z-f.raised[(iy+j)*n+ix+i];
+                const float v=dz>=0?std::clamp(1-dz/std::max(height,.001f),0.f,1.f):0;
+                const float w=(i?gx-ix:1-(gx-ix))*(j?gy-iy:1-(gy-iy));
+                density+=w*v*v*strength*edge*edge*(3-2*edge);
+            }
+        }
+    }
+    return density;
 }
 } // namespace NorthlightRegionalFog

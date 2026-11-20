@@ -1,4 +1,5 @@
 #pragma once
+#include "static_shadow_runs.h"
 #include "static_shadow_scene.h"
 #ifndef STATIC_SHADOW_GPU_TEST
 #include "static_shadow_compiled_shaders.h"
@@ -29,6 +30,13 @@ namespace StaticShadow {
 // World AABB of every instance-batch a command/slice draws; exact per-pixel
 // partial cache redraws skip only commands whose footprint misses the rect.
 struct CasterBounds {Vec3 low{INFINITY,INFINITY,INFINITY},high{-INFINITY,-INFINITY,-INFINITY};bool bounded=true;
+    // A failed or empty envelope cannot certify a child. Compare the actual
+    // transformed bounds as well so overflow and invalid children fall back.
+    bool contains(Vec3 a,Vec3 b)const{
+        return bounded && a.x>=low.x && b.x<=high.x && a.x<=b.x
+                       && a.y>=low.y && b.y<=high.y && a.y<=b.y
+                       && a.z>=low.z && b.z<=high.z && a.z<=b.z;
+    }
     void add(Vec3 a,Vec3 b){if(!std::isfinite(a.x)||!std::isfinite(a.y)||!std::isfinite(a.z)||!std::isfinite(b.x)||!std::isfinite(b.y)||!std::isfinite(b.z))bounded=false;low={std::min(low.x,a.x),std::min(low.y,a.y),std::min(low.z,a.z)};high={std::max(high.x,b.x),std::max(high.y,b.y),std::max(high.z,b.z)};}};
 // Device resources are confined to the render thread. CPU snapshots never own
 // D3D objects; failed staging never overwrites an already drawable resource.
@@ -39,7 +47,7 @@ public:
         uint64_t residentBytes=0,peakBytes=0,uploadedBytes=0,frameBytes=0,uploads=0,evictions=0,failures=0;
         uint64_t drawCalls=0,instances=0,culled=0,maintenanceVisits=0,publications=0;unsigned readyModels=0,pendingModels=0;
         uint64_t instanceLocks=0,instanceDiscards=0,instanceBytes=0;
-        uint64_t planBuilds=0,planHits=0,planInvalidations=0,placementTests=0,batchTests=0;
+        uint64_t planBuilds=0,planHits=0,planInvalidations=0,placementTests=0,batchTests=0,interiorBatchHits=0;
         uint64_t modelPlanBuilds=0,modelPlanReuses=0,modelPlanFallbacks=0,rectSkipped=0;
         uint64_t coveredMemoFills=0,planEvictions=0,planSelfChecks=0,planSelfCheckMismatches=0,planDiscards=0,planIdleReleases=0,publishDiffs=0,publishDiffFallbacks=0,ownerTests=0;double publishMs=0,publishPeakMs=0;double planMs=0,planPeakMs=0;
         double planReuseMs=0,planRebuildMs=0,planWalkMs=0; /* 0.3.152: build split, cumulative: reused-slice copies, rebuilt slices, the rest (group walk, lookups, metadata) */
@@ -108,7 +116,7 @@ private:
         uint64_t signature=0,culled=0;CasterBounds bounds;uint32_t chunk=0; /* in the tail padding: metadata caps (sizeof) unchanged */
     };
     struct Plan {
-        float matrix[16]{};bool occupied=false,valid=false,fullRebuild=true,pinned=false;uint64_t signature=0,culled=0,used=0; /* pinned: reserved for the plan worker */
+        float matrix[16]{};bool occupied=false,valid=false,fullRebuild=true,pinned=false;uint64_t signature=0,culled=0,used=0; /* pinned: reserved by an in-flight plan build */
         // 0.3.152: instances live in one chunk per non-empty model slice, in
         // command order; a reused slice moves its chunk (no copy, no big block).
         // Commands stay one ordered vector. Metadata is independently capped per slot.
@@ -144,10 +152,10 @@ private:
     static constexpr bool PlanSelfCheck=false;
     bool fastPlans_=FastPlanLookups,lruPlans_=LruPlanSlots,selfCheck_=PlanSelfCheck;
     bool exactDiff_=ExactPublishDiff,groupedOwners_=GroupedOwnerInvalidation,idleRelease_=IdlePlanRelease;std::string keyScratch_;uint64_t idleTicks_=IdlePlanTicks;
-    struct Candidate {const Placement* placement;Instance instance;};
+    struct Candidate {const Placement* placement;Instance instance;CasterBounds interior;};
     // 0.3.152: everything one plan build writes besides the plan: scratch, the
     // covered() memo and counters. The render thread and the plan worker each own one.
-    struct BuildCounters {uint64_t placementTests=0,batchTests=0,modelPlanBuilds=0,modelPlanReuses=0,modelPlanFallbacks=0,coveredMemoFills=0;double reuseMs=0,rebuildMs=0,walkMs=0;};
+    struct BuildCounters {uint64_t placementTests=0,batchTests=0,interiorBatchHits=0,modelPlanBuilds=0,modelPlanReuses=0,modelPlanFallbacks=0,coveredMemoFills=0;double reuseMs=0,rebuildMs=0,walkMs=0;};
     struct BuildContext {
         std::vector<Candidate> candidates;std::vector<Instance> transforms[2];std::vector<std::pair<Vec3,Vec3>> boxes[2];
         // covered() per placement index for the current snapshot and owner set:
@@ -169,8 +177,8 @@ private:
         if(index>=ctx.memo.size())return covered(scene_->placements[index]);
         auto& known=ctx.memo[index];if(!known)known=covered(scene_->placements[index])?2:1;return known==2;
     }
-    void addCounters(BuildCounters& c)const{auto& s=stats_;s.placementTests+=c.placementTests;s.batchTests+=c.batchTests;s.modelPlanBuilds+=c.modelPlanBuilds;s.modelPlanReuses+=c.modelPlanReuses;s.modelPlanFallbacks+=c.modelPlanFallbacks;s.coveredMemoFills+=c.coveredMemoFills;s.planReuseMs+=c.reuseMs;s.planRebuildMs+=c.rebuildMs;s.planWalkMs+=c.walkMs;c={};}
-    Plan& planSlot()const{ /* pinned slots belong to the plan worker */
+    void addCounters(BuildCounters& c)const{auto& s=stats_;s.placementTests+=c.placementTests;s.batchTests+=c.batchTests;s.interiorBatchHits+=c.interiorBatchHits;s.modelPlanBuilds+=c.modelPlanBuilds;s.modelPlanReuses+=c.modelPlanReuses;s.modelPlanFallbacks+=c.modelPlanFallbacks;s.coveredMemoFills+=c.coveredMemoFills;s.planReuseMs+=c.reuseMs;s.planRebuildMs+=c.rebuildMs;s.planWalkMs+=c.walkMs;c={};}
+    Plan& planSlot()const{ /* reserved builds must keep their slots */
         if(!lruPlans_){for(;;){auto& plan=plans_[planCursor_++%8];if(!plan.pinned)return plan;}}
         Plan* oldest=nullptr;for(auto& plan:plans_){if(plan.pinned)continue;if(!plan.occupied)return plan;if(!oldest||plan.used<oldest->used)oldest=&plan;}
         ++stats_.planEvictions;return *oldest;
@@ -191,7 +199,7 @@ private:
     // Bounds come from the actual drawable batches, not asset placement boxes.
     // Invalid metadata fails open. Union-transform roundoff is expanded before
     // the light-space test so coarse rejection cannot trim a visible child.
-    static bool coarseVisible(const Placement& p,const Resource& r,const float* matrix,bool affine=false){
+    static bool coarseVisible(const Placement& p,const Resource& r,const float* matrix,bool affine=false,CasterBounds* interior=nullptr){
         if(!r.boundsValid)return true;
         const float low[]={r.low.x,r.low.y,r.low.z},high[]={r.high.x,r.high.y,r.high.z};
         const float translation[]={p.translation.x,p.translation.y,p.translation.z};
@@ -203,6 +211,12 @@ private:
                 const double a=c*low[j],b=c*high[j];l+=std::min(a,b);h+=std::max(a,b);mag+=std::max(std::fabs(a),std::fabs(b));}
             const double margin=1e-4+mag*(32.0*std::numeric_limits<float>::epsilon());
             *lows[axis]=float(l-margin);*highs[axis]=float(h+margin);
+        }
+        if(affine && interior){
+            bool inside=false;
+            const auto classification=NorthlightShadowBounds::classifyAffine(lo,hi,matrix,1e-4f,true,true,&inside);
+            if(inside)*interior={lo,hi};
+            return !classification.rejected;
         }
         return !(affine?NorthlightShadowBounds::directionalClipRejectAffine(lo,hi,matrix):NorthlightShadowBounds::directionalClipReject(lo,hi,matrix));
     }
@@ -365,15 +379,26 @@ private:
     static uint64_t mix(uint64_t h,uint64_t v){return (h^v)*1099511628211ull;}
     static Instance transform(const Placement& p){Instance x{};for(unsigned r=0;r<3;++r){for(unsigned c=0;c<3;++c)x.row[r*4+c]=p.matrix[r*3+c];x.row[r*4+3]=r==0?p.translation.x:r==1?p.translation.y:p.translation.z;}return x;}
     static bool visible(const Placement& p,const Batch& b,const float* matrix){Vec3 lo,hi;transformBounds(p,b.low,b.high,lo,hi);return !NorthlightShadowBounds::directionalClipReject(lo,hi,matrix);}
-    const Plan& prepare(const float* matrix)const {
-        const bool installed=asyncCount_&&joinMatrix(matrix); /* 0.3.152: this matrix's worker build (counted as a build, not a hit) */
-        Plan* result=nullptr;
+    // Choose and stamp in render order even when the builds overlap. In particular,
+    // the first cascade's reservation must evict the same old matrix as prepare().
+    Plan& selectPlan(const float* matrix,bool& reuseMatrix)const {
         for(auto& plan:plans_)if(plan.occupied&&std::memcmp(plan.matrix,matrix,sizeof(plan.matrix))==0){
-            plan.used=++planClock_;if(plan.valid){if(!installed)++stats_.planHits;return plan;}result=&plan;break;}
-        bool reuseMatrix=result!=nullptr;
-        if(!result){result=&planSlot();result->used=++planClock_;}
+            reuseMatrix=true;plan.used=++planClock_;return plan;}
+        reuseMatrix=false;auto& plan=planSlot();plan.used=++planClock_;return plan;
+    }
+    const Plan& prepare(const float* matrix)const {
+        const bool installed=asyncCount_&&joinMatrix(matrix); /* this matrix's worker build counts as a build, not a hit */
+        bool reuseMatrix=false;auto& plan=selectPlan(matrix,reuseMatrix);
+        if(reuseMatrix&&plan.valid){if(!installed)++stats_.planHits;return plan;}
+        rebuildPlan(plan,reuseMatrix,matrix);
+        return plan;
+    }
+    void rebuildPlan(Plan& previous,bool reuseMatrix,const float* matrix)const {
         const auto buildStart=std::chrono::steady_clock::now();
-        auto& previous=*result;previous.valid=false;++stats_.planBuilds;
+        previous.valid=false;++stats_.planBuilds;
+#ifdef STATIC_SHADOW_GPU_TEST
+        if(testBeforeSyncBuild_)testBeforeSyncBuild_();
+#endif
         // Debug self-check: the 0.3.136 build from a copy of the same previous
         // plan, compared field by field (strict) with the fast build.
         Plan reference;const bool check=selfCheck_&&fastPlans_;
@@ -384,7 +409,6 @@ private:
         previous=std::move(next);
         const double spent=std::chrono::duration<double,std::milli>(std::chrono::steady_clock::now()-buildStart).count();stats_.planMs+=spent;stats_.planPeakMs=std::max(stats_.planPeakMs,spent);
         stats_.planWalkMs+=std::max(0.,spent-(stats_.planReuseMs+stats_.planRebuildMs-splitBefore));
-        return previous;
     }
     static constexpr size_t SpareChunks=64,SpareChunkInstances=256;
     // Nodes taken from `previous` go back to it with their old values.
@@ -441,14 +465,20 @@ private:
                 uint64_t modelHash=1469598103934665603ull;
                 candidates.clear();
                 for(size_t index:group.second){const auto& p=scene_->placements[index];if(fast?coveredAt(ctx,index):covered(p))continue;++counters.placementTests;
-                    if(!coarseVisible(p,*r,matrix,affine)){slice.culled+=m.batches.size();continue;}
-                    candidates.push_back({&p,transform(p)});
+                    CasterBounds interior;
+                    if(!coarseVisible(p,*r,matrix,affine,affine?&interior:nullptr)){slice.culled+=m.batches.size();continue;}
+                    candidates.push_back({&p,transform(p),interior});
                 }
                 if(!candidates.empty())chunk.reserve(candidates.size()*m.batches.size()); /* one allocation per rebuilt slice at most */
                 if(!candidates.empty())for(size_t b=0;b<m.batches.size();++b){const auto& batch=m.batches[b];transforms[0].clear();transforms[1].clear();boxes[0].clear();boxes[1].clear();
                     for(const auto& candidate:candidates){const auto& p=*candidate.placement;Vec3 lo,hi;transformBounds(p,batch.low,batch.high,lo,hi);++counters.batchTests;
-                        if(affine?NorthlightShadowBounds::directionalClipRejectAffine(lo,hi,matrix):NorthlightShadowBounds::directionalClipReject(lo,hi,matrix)){++slice.culled;continue;}
-                        const unsigned path=(affine?NorthlightShadowBounds::depthFullyInsideAffine(lo,hi,matrix):NorthlightShadowBounds::depthFullyInside(lo,hi,matrix))?1:0;transforms[path].push_back(candidate.instance);boxes[path].push_back({lo,hi});slice.bounds.add(lo,hi);
+                        NorthlightShadowBounds::Classification classification;
+                        if(affine){
+                            if(candidate.interior.contains(lo,hi)){classification.depthInside=true;++counters.interiorBatchHits;}
+                            else classification=NorthlightShadowBounds::classifyAffine(lo,hi,matrix,1e-4f,true);
+                        }
+                        if(affine?classification.rejected:NorthlightShadowBounds::directionalClipReject(lo,hi,matrix)){++slice.culled;continue;}
+                        const unsigned path=(affine?classification.depthInside:NorthlightShadowBounds::depthFullyInside(lo,hi,matrix))?1:0;transforms[path].push_back(candidate.instance);boxes[path].push_back({lo,hi});slice.bounds.add(lo,hi);
                         modelHash=mix(modelHash,p.uid);modelHash=mix(modelHash,p.category);modelHash=mix(modelHash,keyHash);modelHash=mix(modelHash,m.contentRevision);modelHash=mix(modelHash,b);
                         for(float f:candidate.instance.row){uint32_t bits;std::memcpy(&bits,&f,4);modelHash=mix(modelHash,bits);}
                     }
@@ -477,11 +507,6 @@ private:
         }
         next.signature=h;next.valid=true;
     }
-    // Field-exact plan serialization; resources by key/revision plus whether
-    // each is this cache's current ready resource for its key.
-    // Field-exact plan serialization; resources by key/revision plus whether
-    // each is this cache's current ready resource for its key. strict adds the
-    // bookkeeping that never reaches a draw (culled count, empty slices, caps).
     // Field-exact plan serialization; resources by key/revision plus whether
     // each is this cache's current ready resource for its key. strict adds the
     // bookkeeping that never reaches a draw (culled count, empty slices, caps).
@@ -676,6 +701,7 @@ public:
     // Tests: the plan worker on/off regardless of cores, a worker delay per item
     // (steal-back), and a bad_alloc after failAfter ready models in items of failMask.
     void testAsync(bool on,unsigned delayUs=0,unsigned failMask=0,size_t failAfter=0,unsigned dequeueDelayUs=0){mutate();asyncPlans_=on;testDelayUs_=delayUs;testFailMask_=failMask;testFailAfter_=failAfter;testDequeueDelayUs_=dequeueDelayUs;}
+    void testBeforeSyncBuild(std::function<void()> hook){mutate();testBeforeSyncBuild_=std::move(hook);}
     unsigned testRetractions()const{return worker_?worker_->retractions():0;}
     unsigned asyncPending()const{return asyncCount_;}
 #endif
@@ -728,10 +754,12 @@ public:
     void drawCalls(const float* matrix,const std::vector<const std::vector<NorthlightShadowBounds::TexelRect>*>& candidates,long size,long margin,std::vector<size_t>& out)const {
         out.assign(candidates.size(),0);if(!scene_||!stats_.readyModels||!groups_||groups_->empty())return;callsIn(prepare(matrix),canInstance_,matrix,candidates,size,margin,out);
     }
-    static void callsIn(const Plan& plan,bool instancing,const float* matrix,const std::vector<const std::vector<NorthlightShadowBounds::TexelRect>*>& candidates,long size,long margin,std::vector<size_t>& out){
-        for(const auto& command:plan.commands){const size_t calls=instancing&&command.count>1?1:command.count;NorthlightShadowBounds::TexelRect footprint;
+    void callsIn(const Plan& plan,bool instancing,const float* matrix,const std::vector<const std::vector<NorthlightShadowBounds::TexelRect>*>& candidates,long size,long margin,std::vector<size_t>& out)const{
+        size_t fullEnd=0;
+        for(size_t c=0;c<plan.commands.size();++c){const auto& command=plan.commands[c];
+            const bool full=c>=fullEnd;if(full)fullEnd=opaqueRun(plan.commands,c,opaquePS_!=nullptr,opaqueFastPS_!=nullptr).end;const size_t calls=instancing&&command.count>1?1:command.count;NorthlightShadowBounds::TexelRect footprint;
             const bool known=command.bounds.bounded&&NorthlightShadowBounds::texelFootprint(command.bounds.low,command.bounds.high,matrix,size,margin,footprint);
-            for(size_t k=0;k<candidates.size();++k){if(!candidates[k]){out[k]+=calls;continue;}for(const auto& rect:*candidates[k])if(!known||NorthlightShadowBounds::intersects(footprint,rect))out[k]+=calls;}}
+            for(size_t k=0;k<candidates.size();++k){if(!candidates[k]){if(full)out[k]+=calls;continue;}for(const auto& rect:*candidates[k])if(!known||NorthlightShadowBounds::intersects(footprint,rect))out[k]+=calls;}}
     }
     // 0.3.152 plan worker. The worker's detached plan for kickPlans' after():
     // the answers changedBounds()/drawCalls() give for its matrix, with the
@@ -745,15 +773,15 @@ public:
             changed.clear();models=0;if(!old.valid||old.epoch!=cache_.asyncEpoch_||old.instancing!=cache_.asyncInstancing_||std::memcmp(old.matrix,matrix,sizeof(old.matrix))!=0)return false;
             return changedIn(plan_,old,changed,models);}
         void drawCalls(const float* matrix,const std::vector<const std::vector<NorthlightShadowBounds::TexelRect>*>& candidates,long size,long margin,std::vector<size_t>& out)const{
-            out.assign(candidates.size(),0);callsIn(plan_,cache_.asyncInstancing_,matrix,candidates,size,margin,out);}
+            out.assign(candidates.size(),0);cache_.callsIn(plan_,cache_.asyncInstancing_,matrix,candidates,size,margin,out);}
     };
     // after() results still describe this cache: same instancing mode and epoch, no mutator since the kick.
     bool kickedModeCurrent()const{return canInstance_==asyncInstancing_&&epoch_==asyncEpoch_&&mutations_==asyncMutations_;}
-    // Render thread, with every plan input final for the frame: prepares
-    // `first` synchronously (needed at once), then builds the plans of `later`
-    // (loop order) that are not ready on the plan worker. Their entries are
-    // reserved (pinned) now, in order, exactly as their prepare() would pick
-    // them; the old contents move into the item the worker builds from. The
+    // Render thread, with every plan input final for the frame: reserve `first`,
+    // then the missing `later` plans in render order. Start the worker before
+    // building `first` synchronously, so independent cascade builds overlap.
+    // Each build owns its previous plan and scratch; only the render thread
+    // installs results into the reserved (pinned) cache entries. The
     // first prepare() of a kicked matrix installs its build or steals it back
     // (not started: built inline), any failure is rebuilt there synchronously,
     // and every mutator settles all items first. after(i,view) runs on the
@@ -768,7 +796,18 @@ public:
             for(unsigned k=0;k<i;++k)if(!std::memcmp(later[k],later[i],sizeof(Plan::matrix)))return true;return false;};
         bool any=false;for(unsigned i=0;i<count&&!any;++i)any=!repeated(i)&&!validPlan(later[i]);
         if(!any)return 0; /* all later plans ready: nothing else */
-        if(first)prepare(first);
+        Plan firstSaved;Plan* firstSlot=nullptr;bool firstReuse=false;
+        if(first){auto& slot=selectPlan(first,firstReuse);
+            if(firstReuse&&slot.valid)++stats_.planHits;
+            else{firstSlot=&slot;firstSaved=std::move(slot);slot=Plan{};
+                slot.occupied=slot.pinned=true;slot.used=firstSaved.used;std::memcpy(slot.matrix,first,sizeof(slot.matrix));}}
+        // A failed first build must not leave a pinned placeholder or a worker
+        // reading frame inputs after this call unwinds. build() restores moved
+        // storage before throwing; settle() joins or cancels every later item.
+        struct RestoreFirst {
+            GpuCache& cache;Plan* slot;Plan& saved;
+            ~RestoreFirst(){if(slot){cache.settle();*slot=std::move(saved);}}
+        } restore{*this,firstSlot,firstSaved};
         unsigned n=0;
         for(unsigned i=0;i<count&&n<NorthlightStaticPlanJob::MaxItems;++i){if(repeated(i))continue;const float* m=later[i];Plan* slot=nullptr;
             for(auto& plan:plans_)if(plan.occupied&&!std::memcmp(plan.matrix,m,sizeof(plan.matrix))){slot=&plan;break;}
@@ -779,16 +818,19 @@ public:
             *slot=Plan{};slot->occupied=slot->pinned=true;std::memcpy(slot->matrix,m,sizeof(slot->matrix));slot->used=item.savedUsed;
             item.slot=slot;std::memcpy(item.matrix,m,sizeof(item.matrix));item.failed=false;item.ms=0;item.counters={};
         }
-        if(!n)return 0;
-        asyncCount_=n;asyncInstancing_=canInstance_;asyncEpoch_=epoch_;asyncMutations_=mutations_;after_=std::move(after);++stats_.asyncKicks;
-        bool started=false;try{if(!worker_)worker_=std::make_unique<NorthlightStaticPlanJob::Worker>();
+        bool started=false;
+        if(n){
+            asyncCount_=n;asyncInstancing_=canInstance_;asyncEpoch_=epoch_;asyncMutations_=mutations_;after_=std::move(after);++stats_.asyncKicks;
+            try{if(!worker_)worker_=std::make_unique<NorthlightStaticPlanJob::Worker>();
 #ifdef STATIC_SHADOW_GPU_TEST
-            worker_->testDequeueDelay(testDequeueDelayUs_);
+                worker_->testDequeueDelay(testDequeueDelayUs_);
 #endif
-            started=worker_->start(n,[this](unsigned i){runItem(i);});}catch(...){}
-        if(!started){for(unsigned i=0;i<n;++i){auto& item=async_[i];*item.slot=std::move(item.saved);if(item.evicted)--stats_.planEvictions;item.slot=nullptr;item.saved=Plan{};}
-            asyncCount_=0;after_=nullptr;--stats_.asyncKicks;return 0;}
-        return n;
+                started=worker_->start(n,[this](unsigned i){runItem(i);});}catch(...){}
+            if(!started){for(unsigned i=0;i<n;++i){auto& item=async_[i];*item.slot=std::move(item.saved);if(item.evicted)--stats_.planEvictions;item.slot=nullptr;item.saved=Plan{};}
+                asyncCount_=0;after_=nullptr;--stats_.asyncKicks;}
+        }
+        if(firstSlot){rebuildPlan(firstSaved,firstReuse,first);*firstSlot=std::move(firstSaved);restore.slot=nullptr;}
+        return started?n:0;
     }
     // Joins the plan worker: pending items are stolen back (their entries get
     // the old contents again), running ones awaited, finished ones installed.
@@ -830,6 +872,10 @@ public:
             if(boundPixel!=pixel){d->SetPixelShader(pixel);boundPixel=pixel;}
             auto* texture=(pixel==opaqueFastPS_||pixel==opaquePS_)?nullptr:r.textures[b.material]->gpu;
             if(!textureBound||boundTexture!=texture){d->SetTexture(0,texture);boundTexture=texture;textureBound=true;}
+            // Depth-only parts with identical transforms can share one range.
+            // Its policy also serves the dirty-rect/full-redraw cost estimate.
+            const auto merged=opaqueRun(plan.commands,c,!rects&&opaquePS_,!rects&&opaqueFastPS_);
+            const auto& range=merged.triangles;
             bool instanced=canInstance_&&count>1;
             if(instanced&&c>=uploadedEnd){
                 if(instanceCapacity_==InstanceCapacity||instanceCursor_+count>instanceCapacity_)instanceCursor_=0;
@@ -852,10 +898,11 @@ public:
             const UINT instanceByteOffset=UINT((uploadedCursor+command.first-uploadedFirst)*sizeof(Instance));
             if(instanced&&!drawMode.apply(d,true,count,instanceByteOffset,instancedVS_,instancedDecl_,instances_,sizeof(Instance))){canInstance_=false;instanced=false;}
             size_t done=0;
-            if(instanced)for(;done<passes;++done){pass(done);if(FAILED(d->DrawIndexedPrimitive(D3DPT_TRIANGLELIST,0,0,r.vertexCount,b.firstIndex,b.indexCount/3))){drawMode.invalidate();canInstance_=false;instanced=false;break;}++stats_.drawCalls;stats_.instances+=count;}
+            if(instanced)for(;done<passes;++done){pass(done);if(FAILED(d->DrawIndexedPrimitive(D3DPT_TRIANGLELIST,0,0,r.vertexCount,range.start,range.count))){drawMode.invalidate();canInstance_=false;instanced=false;break;}++stats_.drawCalls;stats_.instances+=count;}
             // A failed instanced pass is retried per instance, like the full path.
             if(!instanced){if(!drawMode.apply(d,false,1,0,vs_,decl_,instances_,sizeof(Instance)))return false;
-                for(;done<passes;++done){pass(done);for(unsigned n=0;n<count;++n){d->SetVertexShaderConstantF(4,command.data[n].row,3);if(FAILED(d->DrawIndexedPrimitive(D3DPT_TRIANGLELIST,0,0,r.vertexCount,b.firstIndex,b.indexCount/3)))return false;++stats_.drawCalls;++stats_.instances;}}}
+                for(;done<passes;++done){pass(done);for(unsigned n=0;n<count;++n){d->SetVertexShaderConstantF(4,command.data[n].row,3);if(FAILED(d->DrawIndexedPrimitive(D3DPT_TRIANGLELIST,0,0,r.vertexCount,range.start,range.count)))return false;++stats_.drawCalls;++stats_.instances;}}}
+            c=merged.end-1;
         }
         stats_.instancing=canInstance_;return true;
     }
@@ -869,6 +916,7 @@ private:
     void mutate(bool discard=false){settle(discard);++mutations_;} /* first in every mutator */
 #ifdef STATIC_SHADOW_GPU_TEST
     unsigned testDelayUs_=0,testFailMask_=0,testDequeueDelayUs_=0;size_t testFailAfter_=0;
+    std::function<void()> testBeforeSyncBuild_;
 #endif
     // Worker thread: item i only (its saved/built plans, workerContext_) and
     // the frozen inputs. Never plans_, stats_, D3D or the render thread's context.

@@ -11,9 +11,13 @@
 // pointer) with `hot` - one pointer comparison, no peek, lock, Get* or hash lookup.
 // Table: kRainSlots/kSnowSlots slots per kind (a new candidate can only replace an entry of its own kind, preferring
 // one that never drew), fixed array, no allocation. `hot` rotates on every frame in which it counted no draws, so a
-// lookalike that draws nothing never holds it. Known limitation: a lookalike of the same signature that draws every
-// frame can hold `hot`; mitigated by the rare rain aspect and the WEATHER candidate log. All members are touched
-// under the Device's gate only.
+// lookalike that draws nothing never holds it. A lookalike that draws every frame could hold it: an interface texture of
+// the snow shape, created at login, held `hot` through a whole storm, so the rain never counted and stayed under the
+// water until hiding the interface let `hot` move on (2026-11-08). So the game's own weather state, when it is read,
+// settles it (endFrame): a candidate that draws while the game reports clear weather is marked a lookalike, and while
+// the game reports rain or snow `hot` is a candidate of that kind, one never seen drawing in clear weather if there is
+// one. Lookalikes are kept, not forgotten: weather that draws a moment before the game's state reports it is only
+// passed over while a better candidate exists. All members are touched under the Device's gate only.
 // 0.3.199 (rain mist): the game's weather mist puffs (WEATHERMISTGRAINY01, SNOWMIST01: white, the shape in alpha) are alpha
 // blended (SrcAlpha/InvSrcAlpha, game test) with stage 0 = texture x vertex colour, unlit; in night and storm rain that vertex colour is
 // near black, so the puffs read as black balls. The art layer ships them resampled to 1:4 (128x512, A8R8G8B8 like the rain); `mist`
@@ -53,7 +57,7 @@ inline bool isMistShape(std::uint32_t w,std::uint32_t h,std::uint32_t fmt){
 
 class Detector{
 public:
-    struct Candidate{const void* raw=nullptr;Kind kind=Kind::None;bool drawn=false;};
+    struct Candidate{const void* raw=nullptr;Kind kind=Kind::None;bool drawn=false,clearDraws=false;};
     using Sink=void(*)(const char* line);
     const void* hot=nullptr;Kind hotKind=Kind::None; /* the per-draw comparison target */
     std::uint32_t mistOverflows=0,mistSeen=0; /* mistSeen: mist-shaped creates, logged up to kShapeLogs */
@@ -97,10 +101,16 @@ public:
     }
     void forget(const void* raw){if(raw)remove(raw);}
     void reset(){if(n)++generation;n=0;hot=nullptr;hotKind=Kind::None;mists=0;mistArmed=false;for(unsigned i=0;i<kMistSlots;++i)mist[i]=nullptr,mistProven[i]=false;}
-    // Frame end: hot counted draws -> it stays and is marked drawn; otherwise try the next candidate.
-    void endFrame(bool counted){
-        if(counted&&hot){for(unsigned i=0;i<n;++i)if(table[i].raw==hot)table[i].drawn=true;return;}
-        rotate();
+    // Frame end: hot counted draws -> it stays and is marked drawn; otherwise try the next candidate. With the game's
+    // weather known (`game`: its kind, None for clear), a hot that drew in clear weather is marked a lookalike, and
+    // while the game reports weather, hot moves to a candidate of that kind (see the top).
+    void endFrame(bool counted,bool gameKnown=false,Kind game=Kind::None){
+        const int at=slot(hot);
+        if(gameKnown&&game==Kind::None&&counted&&at>=0&&!table[at].clearDraws){
+            table[at].clearDraws=true;say("WEATHER candidate raw=%p draws in clear weather: a lookalike",hot);
+        }
+        if(counted&&at>=0)table[at].drawn=true;else rotate();
+        if(gameKnown&&game!=Kind::None)follow(game);
     }
     // Next candidate (hot's slot + 1, wrapping).
     void rotate(){
@@ -113,6 +123,21 @@ public:
 private:
     void say(const char* fmt,...)const __attribute__((format(printf,2,3))){
         if(!sink)return;char line[200];__builtin_va_list a;__builtin_va_start(a,fmt);std::vsnprintf(line,sizeof line,fmt,a);__builtin_va_end(a);sink(line);
+    }
+    int slot(const void* raw)const{for(unsigned i=0;i<n;++i)if(raw&&table[i].raw==raw)return int(i);return -1;}
+    // Hot becomes a candidate of the game's kind: one never seen drawing in clear weather, else any; the current hot
+    // stays when it already is one, else the next after it.
+    void follow(Kind game){
+        if(off||!n)return;
+        const int at=slot(hot);
+        for(int strict=1;strict>=0;--strict){
+            const auto fits=[&](unsigned i){return table[i].kind==game&&(!strict||!table[i].clearDraws);};
+            if(at>=0&&fits(unsigned(at)))return;
+            for(unsigned k=0;k<n;++k){
+                const unsigned i=(unsigned(at+1)+k)%n;
+                if(fits(i)){hot=table[i].raw;hotKind=table[i].kind;return;}
+            }
+        }
     }
     void remove(const void* raw){
         for(unsigned i=0;i<mists;++i)if(mist[i]==raw){dropMist(i);break;}

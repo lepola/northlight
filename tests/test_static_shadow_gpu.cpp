@@ -63,5 +63,35 @@ int main(){float matrix[16]={1,0,0,0,0,1,0,0,0,0,1,0,0,0,0,1};
  // Hundreds of small groups share one backing store instead of renaming it for
  // every model. Draw count, instance count, shaders and material grouping match.
  {IDirect3DDevice9 d;auto limits=lifecycleLimits();limits.uploadMs=1000;GpuCache gpu(limits);auto s=std::make_shared<Snapshot>();s->map="groups";s->mapGeneration=1;for(unsigned i=0;i<400;++i){auto m=model("group"+std::to_string(i));s->models[m->key]=m;for(unsigned j=0;j<2;++j){Placement p;p.modelKey=m->key;p.uid=i*2+j;s->placements.push_back(p);}}assert(gpu.update(&d,s,1));assert(gpu.stats().readyModels==400);assert(gpu.draw(&d,matrix));assert(gpu.stats().drawCalls==400&&gpu.stats().instances==800&&gpu.stats().instanceLocks==1&&gpu.stats().instanceDiscards==1);gpu.reset();assert(FakeResource::alive==0);}
+ // Exact per-triangle/transform coverage when opaque adjacent parts merge.
+ // Partial redraws, index gaps, alpha and shader fallback remain boundaries;
+ // failed instancing still draws every part for every instance.
+ for(unsigned mode=0;mode<7;++mode){
+  IDirect3DDevice9 d;d.captureTransforms=true;d.maxStreams=mode==1?1:2;
+  d.failInstancedDraw=mode==2;d.failOptionalShaders=mode==6;
+  GpuCache gpu(lifecycleLimits());auto m=model("merged");m->materials[0].alphaCutoff=0;
+  auto alpha=m->materials[0];alpha.alphaCutoff=.5f;alpha.rgba[3]=128;m->materials.push_back(alpha);m->materialKeys.push_back(99);
+  m->indices={0,1,2,0,1,2,0,1,2,0,1,2};m->batches.resize(3,m->batches.front());
+  for(unsigned n=0;n<3;++n){m->batches[n].firstIndex=3*(n+(mode==4&&n?1:0));m->batches[n].material=mode==5&&n==1?1:0;}
+  auto s=snapshot(m,2);s->placements[1].translation.x=.1f;
+  assert(gpu.update(&d,s,1));
+  std::vector<NorthlightShadowBounds::TexelRect> rects={{0,0,1024,1024}};
+  assert(gpu.draw(&d,matrix,mode==3?&rects:nullptr,1024,0));
+  unsigned seen[2][4]={};
+  for(const auto& record:d.drawnRecords){
+   const unsigned instance=record.transform[3]==0?0:1;
+   assert(record.transform[3]==s->placements[instance].translation.x);
+   for(unsigned t=0;t<record.primitives;++t){const unsigned triangle=record.firstIndex/3+t;assert(triangle<4);++seen[instance][triangle];}
+  }
+  for(unsigned i=0;i<2;++i)for(unsigned t=0;t<4;++t)
+   assert(seen[i][t]==unsigned(mode==4?t!=1:t<3));
+  const unsigned expected=mode==0?1:mode==1||mode==2||mode==4?2:3;
+  assert(gpu.stats().drawCalls==expected);
+  std::vector<size_t> estimates;gpu.drawCalls(matrix,{nullptr,&rects},1024,0,estimates);
+  const unsigned full=mode==3?1:expected,partial=mode==1||mode==2?6:3;
+  assert(estimates.size()==2&&estimates[0]==full&&estimates[1]==partial);
+  assert(d.frequencies[0]==1&&d.frequencies[1]==1&&!d.streams[1]);
+  gpu.reset();assert(FakeResource::alive==0);
+ }
  std::cout<<"static shadow GPU lifecycle/budget/alpha-sharing/cascade/fallback/upstream/append-stream tests passed\n";
 }

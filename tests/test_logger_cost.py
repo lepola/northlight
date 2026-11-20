@@ -65,7 +65,7 @@ SUFFIX = r'''
 static void reset(){
     if(logFile)std::fclose(logFile);
     logFile=nullptr;logCost={};logFrequency=logIntervalStart=0;openCalls=0;logRotated=false;rotations=0;openCallsAtRotation=0;
-    failOpen=failPrint=failNewline=failFlush=failClock=false;
+    failOpen=failPrint=failNewline=failFlush=failClock=false;threadLogLines=0;
 }
 static std::string contents(){
     assert(logFile);assert(std::fflush(logFile)==0);assert(std::fseek(logFile,0,SEEK_SET)==0);
@@ -77,6 +77,7 @@ static void failures(){
     reset();reportLogCost();assert(!logFile&&openCalls==0&&logCost.calls==0);
     failOpen=true;logf("first");assert(!logFile&&logCost.calls==1&&logCost.ioErrors==1&&logCost.formattedBytes==0);
     assert(rotations==1&&openCallsAtRotation==0); // previous log kept before the first open
+    assert(threadLogLines==1); // frame-cost accounting is per caller, even if opening the file failed
     logf("recovery %d",7);assert(logFile&&openCalls==2&&logCost.calls==2&&logCost.ioErrors==1);
     assert(rotations==1); // a failed first open never rotates twice
     assert(logCost.formattedBytes==11&&contents()=="recovery 7\n");

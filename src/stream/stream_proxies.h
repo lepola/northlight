@@ -184,17 +184,37 @@ public:
     static bool takesRaw(Kind k){return k==Kind::Surface||k==Kind::Texture||k==Kind::CubeTexture||k==Kind::VolumeTexture||k==Kind::VertexBuffer||k==Kind::IndexBuffer||k==Kind::VertexShader||k==Kind::PixelShader||k==Kind::VertexDeclaration;}
     void bindInner(ProxyBase* p,IUnknown* inner){
         if(p->kind==Kind::Texture)NorthlightParticleTextures::cache().erase(p->raw,p);
-        {std::lock_guard<std::mutex> l(m_);p->inner=inner;byInner_[inner]=p;}
-        p->raw=rawOf&&inner&&takesRaw(p->kind)?rawOf(inner,p->kind):nullptr;
+        auto* raw=rawOf&&inner&&takesRaw(p->kind)?rawOf(inner,p->kind):nullptr;
+        // Publish both identities together. Opaque game-memory lookups use this
+        // registry without entering the renderer's device-wide gate.
+        {std::lock_guard<std::mutex> l(m_);p->inner=inner;p->raw=raw;byInner_[inner]=p;}
     }   // the newest proxy of an object wins identity
-    void unbindInner(ProxyBase* p){if(p->kind==Kind::Texture)NorthlightParticleTextures::cache().erase(p->raw,p);p->raw=nullptr;std::lock_guard<std::mutex> l(m_);if(p->inner){auto i=byInner_.find(p->inner);if(i!=byInner_.end()&&i->second==p)byInner_.erase(i);}}
+    void unbindInner(ProxyBase* p){
+        if(p->kind==Kind::Texture)NorthlightParticleTextures::cache().erase(p->raw,p);
+        std::lock_guard<std::mutex> l(m_);
+        if(p->inner){auto i=byInner_.find(p->inner);if(i!=byInner_.end()&&i->second==p)byInner_.erase(i);}
+        p->raw=nullptr;p->inner=nullptr;
+    }
     ProxyBase* findInner(const void* inner){std::lock_guard<std::mutex> l(m_);auto i=byInner_.find(inner);return i==byInner_.end()?nullptr:i->second;}
     // Replay thread (destroy): forget the proxy; the inner entry only if it still names this proxy.
     void erase(ProxyBase* p){if(p->kind==Kind::Texture)NorthlightParticleTextures::cache().erase(p->raw,p);std::lock_guard<std::mutex> l(m_);byProxy_.erase(p->unk);if(p->inner){auto i=byInner_.find(p->inner);if(i!=byInner_.end()&&i->second==p)byInner_.erase(i);}}
     // The Target-level object behind a proxy pointer the game stored in its own memory (an opaque value, never dereferenced).
     const void* innerOf(const void* maybeProxy){std::lock_guard<std::mutex> l(m_);auto i=byProxy_.find(maybeProxy);return i==byProxy_.end()||!i->second->inner?maybeProxy:static_cast<const void*>(i->second->inner);}
+    // An opaque identity only: never dereference or retain the returned address.
+    // Uncreated/retired proxies return true and zero. A live inner object with
+    // no proven raw mapping returns false for the ordinary unwrap fallback.
+    bool rawIdentity(const void* maybeProxy,std::uintptr_t& raw){
+        std::lock_guard<std::mutex> l(m_);
+        const auto found=byProxy_.find(maybeProxy);
+        raw=0;
+        if(found==byProxy_.end())return false;
+        const auto* p=found->second;
+        if(p->dead.load(std::memory_order_relaxed)||!p->inner)return true;
+        raw=reinterpret_cast<std::uintptr_t>(p->raw);
+        return raw!=0;
+    }
     // Init failure only (the replay thread is gone or about to be): release every Target object the proxies hold, and hand the proxies out to be deleted.
-    void releaseInners(){std::lock_guard<std::mutex> l(m_);for(auto& e:byProxy_)if(e.second->inner){e.second->inner->Release();e.second->inner=nullptr;e.second->dead.store(true);}byInner_.clear();}
+    void releaseInners(){std::lock_guard<std::mutex> l(m_);for(auto& e:byProxy_)if(e.second->inner){e.second->inner->Release();e.second->inner=nullptr;e.second->raw=nullptr;e.second->dead.store(true);}byInner_.clear();}
     void takeAll(std::vector<ProxyBase*>& out){std::lock_guard<std::mutex> l(m_);for(auto& e:byProxy_)out.push_back(e.second);byProxy_.clear();byInner_.clear();}
     std::size_t proxies(){std::lock_guard<std::mutex> l(m_);return byProxy_.size();}
 };
@@ -732,6 +752,9 @@ struct BufferState {
     SliceMem shadow;bool shadowOn=false,written=false,whole=false;
     // lastUse: StreamCore::frameNo of its last shadow lock. lru: StreamCore::bufRegular / bufLarge, least recently locked first, so lastUse never decreases from the head
     // (an eviction scan stops at the first entry locked in the current frame). proxy: the owner, set when the shadow is registered.
+    // A recently evicted shadow needed again proves churn even when its previous
+    // use was outside the hot window (turning back towards geometry).
+    std::uint64_t evictedAt=0;
     std::uint64_t lastUse=0;LruNode<BufferState> lru;ProxyBase* proxy=nullptr;
     enum Mode:std::uint8_t{Free,Shadow,Staged,Pass,Scratch} mode=Free;UINT off=0,size=0;DWORD flags=0;Block* stage=nullptr;unsigned char scratchSlot=0;   // Scratch: a small staged lock in StreamCore::scratch
     // canShadow: made by the game and shadow-able (DYNAMIC of any size, or non-DYNAMIC <= kMaxStaticShadow). shadowDead: never a shadow again
@@ -811,7 +834,7 @@ inline std::uint64_t overlapSeq(Queue& q,BufferState& s,UINT off,UINT end){
 inline bool dynamicBuffer(const ProxyBase& p){return (p.info.usage&D3::kUsageDynamic)!=0;}
 inline LruList<BufferState>& bufListOf(StreamCore& c,const BufferState& s){return s.large?c.bufLarge:c.bufRegular;}
 inline void registerShadow(ProxyBase& p,BufferState& s,bool large=false){
-    s.shadowOn=true;s.large=large;s.proxy=&p;clearPending(s);dropPatches(p.core->q,s);   // 0.3.205 (#34): a fresh shadow (takeShadow / readBackShadow) has no pending refs or patches
+    s.shadowOn=true;s.large=large;s.proxy=&p;s.evictedAt=0;clearPending(s);dropPatches(p.core->q,s);   // 0.3.205 (#34): a fresh shadow (takeShadow / readBackShadow) has no pending refs or patches
     if(large){p.core->q.addLargeBytes(std::int64_t(p.info.length));add(p.core->q.stats.largeShadowGrants);}else p.core->q.addShadowBytes(std::int64_t(p.info.length));s.lastUse=p.core->frameNo;
     std::lock_guard<std::mutex> l(p.core->texMutex);bufListOf(*p.core,s).pushBack(&s);
 }
@@ -859,19 +882,21 @@ inline void touchBufferShadow(StreamCore& c,BufferState& s){
 inline bool slicesBusy(const StreamCore& c,const BufferState& s){const std::uint64_t r=c.q.replayedSeq();if(r<s.sliceSeq)return true;for(const auto& sl:s.ring)if(r<sl.seq)return true;return false;}
 // Game thread: makes `bytes` fit the cap by evicting shadows, least recently locked first (the head of the LRU list), never a locked one, `keep`,
 // or one locked in the CURRENT frame (anti-thrash: it is in use now; the requester is refused instead; the list is in lastUse order, so the scan ends there).
-// Thrash signal for the adaptive cap: evicting a HOT shadow (locked within kShadowHotFrames) or, for a re-lock (`relock`), finding no victim at all grows the
+// Thrash signals: evicting a hot shadow, refilling a recently evicted one, or finding no eligible victim for a re-lock. Each grows the
 // cap one step if allowed (interval) and then re-checks before evicting anything. A request above a quarter of the cap never evicts (one buffer
 // must not flush the rest). The large allowance is a list of its own (a large shadow frees nothing of the regular cap). false = still no room.
 inline bool makeRoomForBufferShadow(StreamCore& c,std::size_t bytes,bool relock,const BufferState* keep){
     while(!c.q.shadowAdmit(bytes)){
         if(bytes>c.q.shadowItemLimit())return false;
+        if(relock&&keep&&keep->evictedAt&&c.frameNo>=keep->evictedAt&&
+           c.frameNo-keep->evictedAt<kShadowHotFrames&&c.q.growShadowCap(c.frameNo))continue;
         std::lock_guard<std::mutex> l(c.texMutex);
         BufferState* victim=nullptr;
         for(BufferState* s=c.bufRegular.head;s&&s->lastUse<c.frameNo;s=s->lru.next)if(s!=keep&&s->mode==BufferState::Free&&!slicesBusy(c,*s)){victim=s;break;}   // 0.3.204 (task 21): never a holder whose slices unreplayed unlocks still read
         if(!victim){if(relock&&c.q.growShadowCap(c.frameNo))continue;return false;}
         const bool hot=c.frameNo-victim->lastUse<kShadowHotFrames;
         if(hot&&c.q.growShadowCap(c.frameNo))continue;
-        ProxyBase& vp=*victim->proxy;noteShadowEvicted(c,vp);if(hot)add(c.q.stats.hotShadowEvicted);dropShadowLocked(vp,*victim);
+        ProxyBase& vp=*victim->proxy;noteShadowEvicted(c,vp);if(hot)add(c.q.stats.hotShadowEvicted);victim->evictedAt=c.frameNo;dropShadowLocked(vp,*victim);
     }
     return true;
 }

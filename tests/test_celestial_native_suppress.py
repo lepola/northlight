@@ -34,7 +34,7 @@ assert len(hooks)==1,len(hooks)
 # item 8: viewport-band pre-filter ahead of the texture-identity claim
 assert 'skyClaimPossible(worldMinDepth,worldMaxDepth,vp.MinZ,vp.MaxZ)' in renderer and renderer.index('skyClaimPossible(')<renderer.index('claimNativeGlare(t,count)')
 assert renderer.count('skyClaim(t,count,claimed);')==2 and renderer.count('return drawHook(t,count,')==4
-effects=renderer[renderer.index('    void renderEffects() {'):renderer.index('template<class Capture> void prepareDraw(')]
+effects=renderer[renderer.index('    void renderEffects('):renderer.index('template<class Capture> void prepareDraw(')]
 assert effects.index('if (applied || !enabled || failed || !projectionValid) return;')<effects.index('celestialDiscs->render(')
 
 host=fp.src('celestial_disc_renderer.h').read_text()

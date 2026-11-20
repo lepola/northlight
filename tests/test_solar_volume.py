@@ -160,10 +160,11 @@ def main():
     assert 'airBase=lerp(airBase,FogColor.w,generalForest);' in shader
     # Horizon haze sits between the scene and the local scattering, same debug gate.
     # 0.3.202 (rain mask): the lerp back to the unfogged colour on rain-mask pixels wraps haze + fog mad.
-    assert ('if(PassInfo.z<.5){\n        float3 unfogged=color;\n'
-            '        // Rain streaks were drawn into the scene before the composite: on mask pixels go back toward the unfogged pixel so they are not hazed.\n'
-            '        float rain=tex2Dlod(RainMask,float4(uv,0,0)).r;\n'
-            '        color=lerp(mad(horizonHaze(color,centerUV,viewZ,d>=.99999&&liquid<=0),fog.a,fog.rgb),unfogged,rain);\n    }') in shader
+    composite=shader[shader.index('float4 WorldCompositeImpl('):shader.index('// Separate geometry pass')]
+    haze=composite[composite.index('if(beforeRefraction<.5&&PassInfo.z<.5){'):composite.index('if(PassInfo.z==3)')]
+    assert haze.index('float3 unfogged=color;')<haze.index('float rain=tex2Dlod(RainMask,float4(uv,0,0)).r;')<haze.index('horizonHaze(color,centerUV,viewZ,d>=.99999&&liquid<=0,liquid>0)')<haze.index('color=lerp(mad(background,fog.a,fog.rgb),unfogged,rain);')
+    assert 'float3 background=liquid>0&&atmosphereOwned>.5?color:horizonHaze(' in haze
+    assert 'return WorldCompositeImpl(uv,pixel,0,0,0);' in composite  # the original path keeps atmosphere ownership
     assert 'mad(legacyT,fog.rgb,fogPart)' not in shader
     # 0.3.163: fog-pass-only overrides. The sun's forward soft cap .38 -> .95 (moon .24 kept),
     # the sun's c17 takes the glow hue, c18.rgb is cooled (w kept) for the fog loop only and
@@ -202,7 +203,12 @@ def main():
         if altitude>0:assert after[3][0]>before[3][0]
         else:assert before[3]==after[3]==(0.,0.,0.)
     assert 'c[33][0]=float(w);c[33][1]=float(h);c[33][2]=float(w/2);c[33][3]=float(h/2)' in cpu
-    assert cpu.count('d->SetPixelShaderConstantF(0,&c[0][0],68)') == 2
+    # The fog bank must be live again after the cooperative liquid draw.
+    publication = 'd->SetPixelShaderConstantF(0,&c[0][0],68)'
+    first_bank = cpu.index(publication, cpu.index('c[33][0]=float(w)'))
+    fog_draw = cpu.index('setSource(source,first,true)', first_bank)
+    liquid_draw = cpu.index('surface scene copy', first_bank, fog_draw)
+    assert cpu.index(publication, liquid_draw) < fog_draw
     assert 'uploadedFogField->fogCells||uploadedFogField->airCells' in cpu
     assert 'if(cell.height>0&&edge>0)++out.airCells' in policy
     heights = []

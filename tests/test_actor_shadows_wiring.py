@@ -93,7 +93,7 @@ checks['ini and README document ActorShadows']=(';ActorShadows=1\n' in ini and '
 bf=fp.src('shadow_blob_filter.h').read_text()
 bq=fp.src('quality_settings.h').read_text()
 checks['0.3.193 BlobShadowStrength: read once at device creation, gates blobFilterActive and the latched gate; no compile-time switch']=('HidesNativeBlobs' not in bf and 'HidesNativeBlobs' not in r
-    and 'unsigned blobShadowStrength=50;' in bq and 'shadowBlobs=std::make_unique<NorthlightShadowBlobFilter>(ext,world->blobShadowStrength());' in r and 'blobStrength' not in r
+    and 'unsigned blobShadowStrength=0;' in bq and 'shadowBlobs=std::make_unique<NorthlightShadowBlobFilter>(ext,world->blobShadowStrength());' in r and 'blobStrength' not in r
     and 'in.blobs=shadowBlobs!=nullptr&&shadowBlobs->active();' in r and 'bool blobFilterActive()const{return shadowBlobs&&shadowBlobs->active()&&' in r
     and 'unsigned blobShadowStrength()const{return quality.blobShadowStrength;}' in w and 'blobShadowStrength=0)' not in bf and 'strength(blobShadowStrength)' in bf)
 checks['0.3.193 filter: Skip at 0, Faint only under a modulate blend, faint texture A8R8G8B8 MANAGED, released in the destructor']=(
@@ -102,6 +102,6 @@ checks['0.3.193 filter: Skip at 0, Faint only under a modulate blend, faint text
 for name,ok in checks.items():print(('PASS ' if ok else 'FAIL ')+name)
 assert all(checks.values())
 print('PASS ActorShadows wiring: predicates reduce to freshReplays at 1; at 0 GI-only capture, no replay consumer, no deferral, forced keys; 0.3.193 BlobShadowStrength wiring')
-ini2=ini[ini.index(';BlobShadowStrength=50')-1500:ini.index(';BlobShadowStrength=50')+30]
-assert ';BlobShadowStrength=50\n' in ini and '\nBlobShadowStrength=' not in ini and 'Allowed 0..100. 50 / 50 / 50' in ini2 and 'BlobShadowStrength   ' in readme
+ini2=ini[ini.index(';BlobShadowStrength=0')-1500:ini.index(';BlobShadowStrength=0')+30]
+assert ';BlobShadowStrength=0\n' in ini and '\nBlobShadowStrength=' not in ini and 'Allowed 0..100. 0 / 0 / 0' in ini2 and 'BlobShadowStrength   ' in readme
 print('PASS BlobShadowStrength documented in the ini and the README')

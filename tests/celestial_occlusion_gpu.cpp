@@ -104,6 +104,46 @@ int main(int argc,char** argv){
     }
     assert(baselineInterior&&fixedInterior==baselineInterior&&edgeSpill);
     std::printf("veil actor baselineLitInterior=%u fixedLitInterior=%u edgeBloomPixels=%u\n",baselineInterior,fixedInterior,edgeSpill);
+    // Atmospheric glare must cross a shoreline continuously. Compare an opaque
+    // reference with the same rays hitting water over sky depth, then switch the
+    // water mask off. This also proves that open sky is not veiled a second time.
+    Image waterImage{size,size,D3DFMT_G32R32F,8,std::vector<unsigned char>(size*size*8)};
+    for(unsigned y=0;y<size;++y)for(unsigned x=0;x<size;++x){
+        const float wet[2]={5,1};std::memcpy(waterImage.pixels.data()+(y*size+x)*8,wet,8);
+    }
+    auto waterSurface=texture(d,waterImage);ok(d->SetTexture(2,waterSurface));
+    float c[49][4]{};const float cs=std::cos(.35f),sn=std::sin(.35f);
+    c[0][0]=c[0][1]=1.f/size;c[0][3]=1/.94f;c[1][0]=c[1][1]=5;c[1][2]=1;
+    c[2][1]=1;c[3][0]=-sn;c[3][2]=cs;c[4][0]=cs;c[4][2]=sn;c[5][3]=1;
+    c[6][0]=cs;c[6][2]=sn;c[6][3]=std::tan(.2f);c[7][1]=1;c[8][0]=-sn;c[8][2]=cs;
+    c[9][0]=c[9][1]=c[9][2]=c[9][3]=1;c[10][1]=.2f;c[10][2]=1000;c[10][3]=1;
+    c[11][0]=band.depth(.94f);c[11][1]=1;c[11][2]=NorthlightCelestialDisc::RepairDepthTolerance;c[11][3]=1;
+    c[12][0]=1.1f;c[12][1]=20;c[12][3]=1;
+    c[47][0]=.8f;c[47][1]=.5f;c[47][2]=.2f;c[47][3]=.9f;
+    c[48][0]=c[48][1]=c[48][2]=1;c[48][3]=.6f;
+    std::vector<float> reference(size*size);unsigned waterLit=0;
+    for(unsigned mode=0;mode<3;++mode){
+        for(unsigned y=0;y<size;++y)for(unsigned x=0;x<size;++x){
+            const float z=mode&&x>=size/2?1.f:.5f;
+            std::memcpy(depth.pixels.data()+(y*size+x)*4,&z,4);
+        }
+        auto receiver=texture(d,depth);ok(d->SetTexture(0,receiver));c[1][3]=mode==1?1.f:0.f;
+        ok(d->Clear(0,nullptr,D3DCLEAR_TARGET,0,1,0));ok(d->SetPixelShaderConstantF(0,c[0],49));ok(d->SetPixelShader(fixedVeil));
+        ok(d->BeginScene());ok(d->DrawPrimitiveUP(D3DPT_TRIANGLESTRIP,2,quad,sizeof(Vertex)));ok(d->EndScene());ok(d->GetRenderTargetData(target,staging));
+        D3DLOCKED_RECT lock{};ok(staging->LockRect(&lock,nullptr,D3DLOCK_READONLY));
+        for(unsigned y=0;y<size;++y)for(unsigned x=0;x<size;++x){
+            float got;std::memcpy(&got,static_cast<char*>(lock.pBits)+y*lock.Pitch+x*16,4);
+            const unsigned i=y*size+x;
+            if(!mode)reference[i]=got;
+            else {const float expected=mode==2&&x>=size/2?0.f:reference[i];
+                if(!std::isfinite(got)||std::fabs(got-expected)>1e-6)++failures;
+                if(mode==1&&x>=size/2&&got>0)++waterLit;}
+            ++pixels;
+        }
+        ok(staging->UnlockRect());receiver->Release();++cases;
+    }
+    assert(waterLit==size*size/2);ok(d->SetTexture(2,nullptr));waterSurface->Release();
+    std::printf("veil shoreline waterLit=%u, opaque/water equality and water-to-sky transition checked\n",waterLit);
     oldVeil->Release();fixedVeil->Release();blocker->Release();d->SetTexture(3,nullptr);d->SetTexture(5,nullptr);
     std::printf("celestial GPU cases=%u pixels=%u baselineBelowHorizon=%u baselineThroughMountains=%u failures=%u\n",cases,pixels,oldHorizonLeaks,oldMountainLeaks,failures);
     d->SetPixelShader(nullptr);d->SetTexture(0,nullptr);d->SetTexture(1,nullptr);old->Release();fixed->Release();halo->Release();dep->Release();white->Release();staging->Release();target->Release();d->Release();api->Release();FreeLibrary(module);DestroyWindow(window);UnregisterClassW(wc.lpszClassName,wc.hInstance);return failures?1:0;

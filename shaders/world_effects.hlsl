@@ -19,9 +19,9 @@ sampler2D ActorMap : register(s12);
 sampler2D ActorVisibility : register(s12);
 sampler2D RegionalFog : register(s13); // ground, day extinction, night extra, layer height
 sampler2D RainMask : register(s13); // 0.3.202 (rain mask): WorldComposite only, rain streak coverage (r), 0 without rain
-sampler2D DitherNoise : register(s2); // WorldComposite only: 64x64 signed blue-noise offsets (rgb, +-1/255, POINT, WRAP; sky/dither_noise.h); ShadowNear's slot, idle by then
+sampler2D DitherNoise : register(s2); // WorldComposite only: 64x64 signed blue-noise offsets (rgb, +-0.5/255, POINT, WRAP; sky/dither_noise.h); ShadowNear's slot, idle by then
 float4 RegionalFogInfo : register(c31); // world node0 XY, inverse field span, night fraction
-float4 WaterInfo : register(c30);
+float4 WaterInfo : register(c30); // x liquid mask (2: light the pre-refraction source), y/z pass-specific ownership/removal controls
 float4 RemovalInfo : register(c30); // RemovalSmooth, TemporalLight: y 1 when a lit source is drawn, z 1/(summed source weight), w disc radius in half-res pixels at view distance 1
 sampler2D ProbeMetadata : register(s10); // exact integer world-cell xyz, first-valid time w (-1 invalid)
 // 0.3.209 (task 29): ActorShadow only: the 64x64 tile minimum of the actor map (ActorTiles writes it; R32F, POINT, CLAMP)
@@ -117,6 +117,22 @@ float waterDistance(float2 uv,float d) {
     if(WaterInfo.x<.5)return 0;
     float2 m=tex2Dlod(WaterMask,float4(uv,0,0)).rg;
     return m.x>ImageClip.z && m.x<=viewDistance(d)+max(.012,m.x*.0007) && m.y>.003?m.x:0;
+}
+// The share of a liquid pixel's colour that came up through it from the ground below, which the ground's shadow darkens: a clear
+// body shows its seabed where it is thin, and reflects or holds its own colour where it is not. Depth lies under native water (it
+// writes none), so the distance from surface to ground is the path through the water. A shoreline's path runs down to nothing, and
+// there the seabed takes all of the land's light: leaving it out drew a bright line along every shore, wider with distance. Lava puts
+// its own surface in the depth and glows of itself, and shaded went dull: its mask marks it with coverage above 1.
+static const float SeabedShadowPath=2.5; // yards of water that leave 1/e of the shadow showing
+float seabedShare(float2 uv,float d,float liquid) {
+    if(liquid<=0||d>=.99999)return 0;
+    float path=viewDistance(d)-liquid;
+    if(path<=max(.03,liquid*.001)&&tex2Dlod(WaterMask,float4(uv,0,0)).g>1.5)return 0;
+    // A pre-refraction source is still opaque scene colour. The material applies
+    // water absorption afterwards; attenuating here too would erase its shadows.
+    if(WaterInfo.x>1.5)return 1;
+    float share=exp(-max(path,0)/SeabedShadowPath);
+    return share>.02?share:0;
 }
 float receiverDistance(float2 uv,float d) {
     float water=waterDistance(uv,d);return water>0?water:viewDistance(d);
@@ -231,22 +247,42 @@ float directionalShadow(float3 p,float3 normal,float confidence) {
     }
     return result;
 }
+// Surface foam needs visibility at the water, not at the ground beneath it.
+// Full-resolution, point-sampled output avoids blending unoccluded dry pixels
+// into the bank. PCF still filters the shadow itself. Source channel is host-masked.
+float4 WorldWaterVisibility(float2 uv:TEXCOORD0):COLOR0 {
+    float2 water=tex2Dlod(WaterMask,float4(uv,0,0)).rg;
+    float3 v=viewPositionDistance(uv,max(water.x,ImageClip.z));
+    float3 p=v.x*InverseView[0].xyz+v.y*InverseView[1].xyz+v.z*InverseView[2].xyz+InverseView[3].xyz;
+    float3 n=cross(ddx(p),ddy(p));
+    n*=rsqrt(max(dot(n,n),1e-12));
+    n=n.z<0?-n:n;
+    // A derivative spanning dry pixels is not a surface tangent.
+    n=n.z>.5?n:float3(0,0,1);
+    float visibility=1;
+    [branch] if(water.x>ImageClip.z && water.y>.003) {
+        float shadow=directionalShadow(p,n,1);
+        float strength=lerp(GridInfo.z,1,SunDirection.w)*(1-WeatherInfo.z);
+        visibility=lerp(1,shadow,strength);
+    }
+    return visibility.xxxx;
+}
+
 float fogShadowProjected(float3 q) {
     // The 192-unit far map covers the 128-unit air volume. Use it throughout:
     // switching cascade resolution around the moving player changes thin
     // foliage visibility even at an otherwise stationary world sample.
     float2 uv=float2(q.x*.5+.5,.5-q.y*.5)+.5*DepthParams.w;
     if(any(uv<0)||any(uv>1)||q.z<0||q.z>1)return 1;
-    // Filter on a 1.5-world-unit light-plane lattice, independent of the shadow
-    // camera/pivot. Fine leaf silhouettes otherwise alias into falling streaks
-    // when the view-ray samples move. Interpolate comparisons, never depths.
-    float2 plane=(q.xy-FarMatrix[3].xy)*float2(DepthParams.z,-DepthParams.z)/1.5;
-    float2 fraction=frac(plane);
-    float2 weight=fraction*fraction*(3-2*fraction);
+    // Compare the four adjacent far-map texels before interpolating visibility.
+    // The old coarse grid rotated about the map origin as the sun moved, sweeping
+    // the sampling pattern across stationary foliage far from that origin.
+    float2 pixel=uv/DepthParams.w-.5;
+    float2 base=floor(pixel),weight=pixel-base;
     float receiver=q.z-PassInfo.x*4,visibility=0;
     [unroll]for(int tap=0;tap<4;++tap){
         float row=floor(tap*.5);float2 bit=float2(tap-row*2,row);
-        float2 sampleUV=uv+(bit-fraction)*(1.5/(2*DepthParams.z));
+        float2 sampleUV=(base+bit+.5)*DepthParams.w;
         float z=tex2Dlod(ShadowFar,float4(sampleUV,0,0)).r;
         float2 w=lerp(1-weight,weight,bit);
         visibility+=(receiver<=z?1:0)*w.x*w.y;
@@ -408,7 +444,8 @@ LightingOutput WorldLighting(float2 uv:TEXCOORD0) {
     float4 smoothNormal=tex2Dlod(NormalBuffer,float4(uv,0,0));float2 halfUV=uv;
     uv=depthUV(uv);float d=normalizedDepth(uv);
     LightingOutput o;o.correction=float4(0,0,0,SourcePolicy.y);o.baseline=float4(max(AmbientLight.rgb,.15),1);
-    if(d>=.99999||waterDistance(uv,d)>0)return o;
+    float liquid=waterDistance(uv,d);
+    if(d>=.99999||(liquid>0&&seabedShare(uv,d,liquid)<=0))return o;
     float3 p=worldPosition(uv,d);float3 n=smoothNormal.xyz;
     float shadow=1;
     // 0.3.209 (task 29): the moving casters near the player shadow from the actor map (ActorShadow, written per source at this
@@ -469,7 +506,8 @@ float4 ActorShadow(float2 uv:TEXCOORD0,uniform row_major float4x4 ActorMatrix:re
     // Coarse border test first, so the pixels outside the map skip the water and normal fetches: the normal offset below moves the
     // point at most .04+2*texel*radius (~.064 u, .0053 of the 12 u half width), well inside the .01 margin.
     float3 coarse=affinePoint(position,ActorMatrix);
-    if(max(abs(coarse.x),abs(coarse.y))>=1.01||waterDistance(uv,d)>0)return 1;
+    if(max(abs(coarse.x),abs(coarse.y))>=1.01)return 1;
+    float liquid=waterDistance(uv,d);if(liquid>0&&seabedShare(uv,d,liquid)<=0)return 1;
     float4 smoothNormal=tex2Dlod(NormalBuffer,float4(screen,0,0));
     float3 n=smoothNormal.xyz;float confidence=smoothNormal.w;
     float facing=dot(n,SunDirection.xyz);
@@ -790,7 +828,17 @@ float4 SourceVisibilityPS(float2 uv:TEXCOORD0):COLOR0 {
     }
     return lerp(current,previous,SourceInfo.y).xxxx;
 }
-float4 WorldFog(float2 uv:TEXCOORD0):COLOR0 {
+sampler2D RaisedFog : register(s14);
+float marchRaisedAir(float2 uv,float z) {
+    float2 grid=uv*64-.5,base=floor(grid),f=grid-base;
+    float4 dz=z-tex2Dlod(RaisedFog,float4((base+.5)/64,0,0));
+    float4 vertical=saturate(1-dz/max(VolumeAir.w,.001));
+    float4 density=vertical*vertical*step(0,dz);
+    float edge=saturate(min(min(grid.x,grid.y),min(63-grid.x,63-grid.y))*.5);
+    return lerp(lerp(density.x,density.y,f.x),lerp(density.z,density.w,f.x),f.y)
+        *edge*edge*(3-2*edge)*(WeatherInfo.w+FogColor.w);
+}
+float4 worldFogMarch(float2 uv, bool raised) {
     if(FogInfo.x<.5)return float4(0,0,0,1);
     uv=depthUV(uv);
     float depth=normalizedDepth(uv);float3 view=viewPositionDistance(uv,fogReceiverDistance(uv,depth));
@@ -870,7 +918,7 @@ float4 WorldFog(float2 uv:TEXCOORD0):COLOR0 {
         // from zero at FogRange.x to full one fade length later, so the player
         // and nearby ground stay clear while the middle distance fills in.
         float nearFade=saturate(((start+end)*.5-FogRange.x)*FogRange.y);nearFade*=nearFade*(3-2*nearFade);
-        float sigma=max(groundSigma+airSigma,0)*valid*nearFade;
+        float sigma=(max(groundSigma+airSigma,0)*valid+(raised?marchRaisedAir(fieldUV,p.z):0))*nearFade;
         if(sigma>0){
             float absorb=1-exp(-sigma*stepSize);
             // A zero source has no valid shadow pass/maps to sample. Its air
@@ -892,6 +940,8 @@ float4 WorldFog(float2 uv:TEXCOORD0):COLOR0 {
     float3 skySource=max(AmbientLight.rgb,0)*saturate(FogColor.rgb)*(SourcePolicy.x*.35);
     return float4(skySource*(1-transmittance)+directScatter,transmittance);
 }
+float4 WorldFog(float2 uv:TEXCOORD0):COLOR0 {return worldFogMarch(uv,false);}
+float4 WorldFogRaised(float2 uv:TEXCOORD0):COLOR0 {return worldFogMarch(uv,true);}
 // Glow of the nearest authored local lights inside the fog (lanterns, fires):
 // in-scattering of an isotropic point source along the view ray in closed form,
 // integral of a softened inverse-square source, tapered to zero at its range,
@@ -1128,15 +1178,12 @@ float4 FogTemporal(float2 uv:TEXCOORD0):COLOR0 {
 // sky without a step. Band by world elevation: camera pitch/roll never moves
 // it. Full below the horizon, where only the distance weight protects ground.
 // No samples, passes or raymarch steps.
-float3 horizonHaze(float3 color,float2 uv,float viewZ,bool sky) {
-    float range=sky?1:saturate((viewZ-HorizonShape.y)*HorizonShape.z);
+float3 horizonHazeDirection(float3 color,float3 world,float inverseLength,float range) {
     [branch]if(range<=0||HorizonHaze.w<=0)return color;
-    float3 ray=viewPositionDistance(uv,1);
-    float3 world=ray.x*InverseView[0].xyz+ray.y*InverseView[1].xyz+ray.z*InverseView[2].xyz;
     // Elevation over the camera's far edge (c64.w, 0 to -sin 3 deg): a camera high over the sea sees past the
     // mathematical horizon, and the setting sun with it. Over the horizon the band hid the sky below 0 entirely, so
     // the disc was cut on the same line at any height. The mad costs no extra slot.
-    float band=exp2(-max(mad(world.z,rsqrt(dot(ray,ray)),-HorizonEdge.w),0)*HorizonShape.w);
+    float band=exp2(-max(mad(world.z,inverseLength,-HorizonEdge.w),0)*HorizonShape.w);
     float amount=range*range*(3-2*range)*(1-exp2(-HorizonHaze.w*band));
     // Distant forward scattering toward a low sun: Henyey-Greenstein g=.6 in
     // azimuth, amplitude sunWeight*cos(sun elevation) from the host, capped.
@@ -1147,8 +1194,18 @@ float3 horizonHaze(float3 color,float2 uv,float viewZ,bool sky) {
     float3 haze=HorizonHaze.rgb*mad(lift,ShadowRange.yzw,1);
     return lerp(color,haze,amount);
 }
-// 512 of the 512 ps_3_0 slots (shaders/world-shader-build.json): free slots before adding to this pass.
-float4 WorldComposite(float2 uv:TEXCOORD0,float2 pixel:VPOS):COLOR0 {
+float3 horizonHaze(float3 color,float2 uv,float viewZ,bool sky,bool water) {
+    // Flat water exposes the terrain's short end-distance ramp as a stripe.
+    // Spread its approach across the full range, retaining the same endpoint,
+    // optical depth, horizon colour and sky-only/disabled policy.
+    float inverseEnd=HorizonShape.z/max(1+HorizonShape.y*HorizonShape.z,1);
+    float range=sky?1:water?saturate(viewZ*inverseEnd):saturate((viewZ-HorizonShape.y)*HorizonShape.z);
+    float3 ray=viewPositionDistance(uv,1);
+    float3 world=ray.x*InverseView[0].xyz+ray.y*InverseView[1].xyz+ray.z*InverseView[2].xyz;
+    return horizonHazeDirection(color,world,rsqrt(dot(ray,ray)),range);
+}
+// Shader limits and compiler identity are validated in shaders/world-shader-build.json.
+float4 WorldCompositeImpl(float2 uv,float2 pixel,float atmosphereOwned,float surfaceShaded,float beforeRefraction) {
     // Fetches before any flow control use texld (1 slot; tex2Dlod costs 3-4): Scene and Depth have one level and no mip filter, so texld reads what tex2Dlod(.,0) does.
     float4 original=tex2D(Scene,uv);
     float2 centerUV=depthUV(uv);
@@ -1157,7 +1214,15 @@ float4 WorldComposite(float2 uv:TEXCOORD0,float2 pixel:VPOS):COLOR0 {
     // Original Terrain VS uses SIGNED view Z, including right-handed cameras.
     // Unknown fog uploads the safe identity (0,1,1,0), giving T=1 exactly.
     float legacyT=mad(LegacyFog.w,saturate(pow(max(mad(viewZ*Projection.z,LegacyFog.x,LegacyFog.y),0),LegacyFog.z))-1,1);
-    bool relight=d<.99999&&liquid<=0;
+    float seabed=seabedShare(centerUV,d,liquid);
+    // A composited liquid already contains refraction. Its original scene depth no longer
+    // identifies the visible material: relighting there stamps an unshifted swimmer over it.
+    // Native liquid keeps its seabed lighting; foreground and atmospheric effects remain shared.
+    bool relight=d<.99999&&(liquid<=0||(surfaceShaded<.5&&seabed>0));
+    // Refraction can sample dry banks and foreground receivers too. Light the
+    // entire opaque source consistently; only the water consumes this private
+    // copy. The final dry-world pass still reads the original scene, so it is
+    // corrected once, while completed water remains exempt from relighting.
         float3 baseline=0;
         float3 bounce=0;float shadow=0,total=0,closest=1e20;
         float2 fallbackUV=0,fogFallbackUV=0;
@@ -1194,6 +1259,7 @@ float4 WorldComposite(float2 uv:TEXCOORD0,float2 pixel:VPOS):COLOR0 {
             bounce=mad(light.rgb,weight,bounce);shadow=mad(light.a,weight,shadow);baseline=mad(lit,weight,baseline);ao=mad(occlusion,weight,ao);total+=weight;
             if(score<closest){closest=score;fallbackUV=q;}
             }
+            if(beforeRefraction<.5){
             float receiverZ=sampleZ;
             if(WaterInfo.x>=.5){
                 float2 water=tex2Dlod(WaterMask,float4(tapUV,0,0)).rg;
@@ -1204,6 +1270,7 @@ float4 WorldComposite(float2 uv:TEXCOORD0,float2 pixel:VPOS):COLOR0 {
             float fogWeight=blend.x*blend.y*exp(-fogDelta/max(.2,viewZ*.02));
             fogSum=mad(fogSample,fogWeight,fogSum);fogTotal+=fogWeight;
             if(fogDelta<fogClosest){fogClosest=fogDelta;fogFallbackUV=q;}
+            }
         }
     // Retain only fallback coordinates across the loop; fetch colours only on fallback.
     float4 fogFallback=float4(0,0,0,1);
@@ -1218,10 +1285,10 @@ float4 WorldComposite(float2 uv:TEXCOORD0,float2 pixel:VPOS):COLOR0 {
     // Native distance fog is already in Scene. AO belongs to its transported
     // surface term, never to atmospheric radiance in front of that surface.
     // Unknown fog is the identity. The same split also bounds relighting below.
-    ao=relight?(total<.02?fallbackAO:ao/total):1;
+    ao=relight&&liquid<=0?(total<.02?fallbackAO:ao/total):1;
     float3 fogPart=min((1-legacyT)*LegacyFogColor.rgb,original.rgb);
     original.rgb=mad(original.rgb-fogPart,ao,fogPart);
-    float3 bloom=tex2D(AmbientOcclusion,uv).rgb;
+    float3 bloom=beforeRefraction<.5?tex2D(AmbientOcclusion,uv).rgb:0;
     original.rgb=saturate(mad(bloom,1-saturate(original.rgb),original.rgb));
     float3 color=original.rgb;
     if(relight){
@@ -1235,6 +1302,7 @@ float4 WorldComposite(float2 uv:TEXCOORD0,float2 pixel:VPOS):COLOR0 {
         // transported surface term: do not infer material albedo from fog RGB.
         float3 oldLight=max(baseline*inverseWeight,.15);
         float3 transported=max(original.rgb-fogPart,0);
+        if(liquid>0)transported*=seabed; // only what came up through the water
         float3 albedoT=min(transported/oldLight,legacyT);
         color=mad(albedoT,bounce,original.rgb);
         // Bound combined GI/shadow darkening relative to the existing surface;
@@ -1253,17 +1321,30 @@ float4 WorldComposite(float2 uv:TEXCOORD0,float2 pixel:VPOS):COLOR0 {
     // Retain fogPart only for safe surface relighting above; never de-fog/divide.
     // Horizon haze extinguishes the far scene (including the depth-occluded
     // sun/moon disc) BEFORE the local scattering is added in front of it.
-    if(PassInfo.z<.5){
+    if(beforeRefraction<.5&&PassInfo.z<.5){
         float3 unfogged=color;
         // Rain streaks were drawn into the scene before the composite: on mask pixels go back toward the unfogged pixel so they are not hazed.
         float rain=tex2Dlod(RainMask,float4(uv,0,0)).r;
-        color=lerp(mad(horizonHaze(color,centerUV,viewZ,d>=.99999&&liquid<=0),fog.a,fog.rgb),unfogged,rain);
+        // Keep spatial foreground fog and bloom. Only the background haze is
+        // omitted on a surface whose renderer confirmed distance-atmosphere ownership.
+        float3 background=liquid>0&&atmosphereOwned>.5?color:horizonHaze(color,centerUV,viewZ,d>=.99999&&liquid<=0,liquid>0);
+        color=lerp(mad(background,fog.a,fog.rgb),unfogged,rain);
     }
     if(PassInfo.z==3)color=fog.rgb;
     // Dither before the 8-bit target rounds: haze and night air vary only with view elevation and would band into
     // horizontal lines. VPOS is the integer pixel; +.5 texel hits the POINT texel centre.
-    return float4(max(color+tex2D(DitherNoise,mad(pixel,1.0/64,.5/64)).rgb,0),original.a);
+    float3 dither=beforeRefraction<.5?tex2D(DitherNoise,mad(pixel,1.0/64,.5/64)).rgb:0;
+    return float4(max(color+dither,0),original.a);
 }
+
+// Constant-zero ownership retains the original default program exactly. The
+// optional variant receives completed-surface and distance-atmosphere ownership independently.
+float4 WorldComposite(float2 uv:TEXCOORD0,float2 pixel:VPOS):COLOR0 {return WorldCompositeImpl(uv,pixel,0,0,0);}
+float4 WorldCompositeWaterProbe(float2 uv:TEXCOORD0,float2 pixel:VPOS):COLOR0 {return WorldCompositeImpl(uv,pixel,WaterInfo.y,WaterInfo.z,0);}
+
+// Light the complete opaque source before the liquid refracts it. The same
+// bilateral light resolve and material correction serve the final dry-world pass.
+float4 WorldWaterLighting(float2 uv:TEXCOORD0,float2 pixel:VPOS):COLOR0 {return WorldCompositeImpl(uv,pixel,0,0,1);}
 
 // Separate geometry pass: c0..3 contains the light's world->clip matrix.
 row_major float4x4 LightMatrix:register(c0);
@@ -1299,4 +1380,84 @@ float4 ShadowUnion(float2 uv:TEXCOORD0):COLOR0 {
         if(c<1){c+=UnionOffset.z;cached=c<=1?max(c,0):1;}
     }
     return min(own,cached).xxxx;
+}
+
+
+// Private feasibility entry. Same pre-local-fog Scene and current world constants;
+// a directional observed-background field, never a reconstruction of hidden sky.
+float4 WaterSkyField(float2 uv:TEXCOORD0):COLOR0 {
+    float2 p=uv*2-1;
+    float3 direction=float3(p,1-abs(p.x)-abs(p.y));
+    float2 signs=float2(p.x>=0?1:-1,p.y>=0?1:-1);
+    if(direction.z<0)direction.xy=(1-abs(direction.yx))*signs;
+    direction=normalize(direction);
+    float3 view=float3(dot(direction,InverseView[0].xyz),dot(direction,InverseView[1].xyz),dot(direction,InverseView[2].xyz));
+    float ahead=view.z*Projection.z;
+    float2 source=.5+float2(.5,-.5)*view.xy/max(ahead,1e-6)*Projection.xy+.5*ImageClip.xy;
+    bool valid=ahead>0&&all(source>=ImageClip.xy)&&all(source<=1-ImageClip.xy);
+    float2 base=(floor(source/ImageClip.xy-.5)+.5)*ImageClip.xy;
+    [unroll]for(int y=0;y<2;++y){
+        [unroll]for(int x=0;x<2;++x){
+            float2 at=base+float2(x,y)*ImageClip.xy;
+            float depth=normalizedDepth(at);
+            valid=valid&&depth>=.99999&&waterDistance(at,depth)<=0;
+        }
+    }
+    float3 colour=tex2Dlod(Scene,float4(source,0,0)).rgb;
+    if(WaterInfo.z<.5)colour=horizonHaze(colour,source,ImageClip.w,true,false);
+    return valid?float4(colour,1):0;
+}
+
+// Programmatic adapter field. The palette function is the shared MIT Tideglass
+// implementation; only this host's own atmosphere is applied here.
+#include "water_palette.hlsli"
+float4 WaterGradientPalette[6]:register(c80);
+#include "celestial_glare.hlsli"
+float4 WaterGlare[13]:register(c88); // direction/radius, emission, hue/tail, core/wrap, opacity/solar/known; each body
+sampler2D WaterMoonBody:register(s4);
+float4 WaterSkyGradient(float2 uv:TEXCOORD0):COLOR0 {
+    float2 p=uv*2-1;float3 direction=float3(p,1-abs(p.x)-abs(p.y));
+    float2 signs=float2(p.x>=0?1:-1,p.y>=0?1:-1);
+    if(direction.z<0)direction.xy=(1-abs(direction.yx))*signs;
+    direction=normalize(direction);
+    float3 colour=WaterPaletteGradient(direction,WaterGradientPalette);
+    if(WaterGlare[4].z>.5){
+        float2 visibility=float2(1,1); // source radiance; reflected geometry owns occlusion
+        colour=CelestialGlareBackground(colour,direction,WaterGlare[0],WaterGlare[1],WaterGlare[2],WaterGlare[3],WaterGlare[4],visibility);
+    }
+    if(WaterGlare[9].z>.5){
+        float2 visibility=float2(1,1); // source radiance; reflected geometry owns occlusion
+        float forward=dot(direction,WaterGlare[5].xyz);
+        float2 local=float2(dot(direction,WaterGlare[10].xyz),-dot(direction,WaterGlare[11].xyz))/max(forward*WaterGlare[5].w,1e-6);
+        float bodyAlpha=tex2Dlod(WaterMoonBody,float4(local*.5+.5,0,WaterGlare[12].x)).a;
+        float4 control=WaterGlare[9];control.x*=1-bodyAlpha*saturate(30*direction.z/max(forward,1e-6));
+        colour=CelestialGlareBackground(colour,direction,WaterGlare[5],WaterGlare[6],WaterGlare[7],WaterGlare[8],control,visibility);
+    }
+    return float4(horizonHazeDirection(colour,direction,1,1),1);
+}
+
+// The probe admits the native diffuse-times-texture straight-alpha combiner.
+// c2 is the recorded material's folded fog colour. Keep that path wherever
+// the world fog stopped at a different depth from this transparent fragment.
+float4 AlphaGameRamp : register(c216);
+float4 AlphaGameColour : register(c217);
+float4 AlphaRaster : register(c218); // inverse full size, march limit, native near plane
+float4 AlphaGrid : register(c219);   // half size, world step spacing, water mask available
+float4 SpatialAlphaFog(float4 diffuse:COLOR0,float2 uv:TEXCOORD0,float fitted:FOG,
+                       float4 clip:TEXCOORD7,float2 pixel:VPOS):COLOR0 {
+    float4 material=tex2D(Scene,uv)*diffuse;
+    float3 legacy=mad(fitted,material.rgb-DepthParams.rgb,DepthParams.rgb);
+    float2 screen=(pixel+.5)*AlphaRaster.xy;
+    float2 q=(floor(screen*AlphaGrid.xy)+.5)/AlphaGrid.xy;
+    float sceneZ=tex2Dlod(CurrentDistance,float4(q,0,0)).r;
+    float2 liquid=tex2Dlod(WaterMask,float4(q,0,0)).rg;
+    if(AlphaGrid.w>.5 && liquid.y>.003 && liquid.x>AlphaRaster.w && liquid.x<=sceneZ+max(.012,liquid.x*.0007))
+        sceneZ=liquid.x;
+    float4 volume=tex2Dlod(FogBuffer,float4(q,0,0));
+    float z=clip.w;
+    float farWeight=smoothstep(AlphaRaster.z,AlphaRaster.z+AlphaGrid.z,min(sceneZ,z));
+    float contactWeight=1-smoothstep(0,AlphaGrid.z,abs(sceneZ-z));
+    float visibility=saturate(pow(max(.000001,mad(z,AlphaGameRamp.x,AlphaGameRamp.y)),AlphaGameRamp.z));
+    float3 native=lerp(AlphaGameColour.rgb,material.rgb,visibility);
+    return float4(lerp(legacy,mad(native,volume.a,volume.rgb),max(contactWeight,farWeight)),material.a);
 }

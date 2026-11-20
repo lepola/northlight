@@ -22,6 +22,11 @@
 #include "stream_hooks.h"
 #include "unlock_source.h"
 
+#ifdef NORTHLIGHT_WATER
+uint64_t NorthlightWaterTraceBegin();
+void NorthlightWaterTraceEnd(uint64_t,const char*);
+#endif
+
 namespace NorthlightStream {
 // ---- implicit proxies: objects the game never created (back buffers, the default depth buffer, objects the mod bound) ----
 template<class T> inline T* StreamCore::toProxy(T* r){
@@ -599,7 +604,14 @@ private:
             }
             if(h->id==(std::uint16_t)Cmd::Stop){q.retire(h);return;}
             if(!frameOpen_)beginFrame();   // 0.3.200 (frame skip)
+#ifdef NORTHLIGHT_WATER
+            const bool traceable=h->id!=(std::uint16_t)Cmd::Present&&h->id!=(std::uint16_t)Cmd::SwapPresent;
+            const auto callToken=traceable?NorthlightWaterTraceBegin():0;
+#endif
             execute(h);
+#ifdef NORTHLIGHT_WATER
+            if(callToken)NorthlightWaterTraceEnd(callToken,cmdName((Cmd)h->id));
+#endif
             lastCmd=h->id;
             q.retire(h);
         }

@@ -11,6 +11,7 @@
 #include "replay_copy_reader.h"
 #include "vertex_declaration_cache.h"
 #include "capture_buffer_metadata.h"
+#include "capture_phase_profile.h"
 #include <algorithm>
 #include <array>
 #include <cmath>
@@ -114,8 +115,10 @@ inline bool classifyTriangleSequence(VertexAt vertexAt,std::size_t count,
         if(std::fabs(area)<1e-9)continue; // Includes strip connectors.
         const double centerX=(double(p[0].x)+p[1].x+p[2].x)/3.;
         const double centerY=(double(p[0].y)+p[1].y+p[2].y)/3.;
-        const double gridX=std::floor((origin-centerY)/step);
-        const double gridY=std::floor((origin-centerX)/step);
+        // Accepted grid coordinates are nonnegative. After the range check,
+        // truncation equals floor; avoid two runtime floor calls per triangle.
+        const double gridX=(origin-centerY)/step;
+        const double gridY=(origin-centerX)/step;
         if(gridX<0||gridX>=1024||gridY<0||gridY>=1024)return false;
         const int x=int(gridX),y=int(gridY);
         const double minX=origin-(y+1)*step,maxX=origin-y*step;
@@ -155,6 +158,8 @@ inline bool classifyIndexedTriangles(const Position* vertices,std::size_t vertex
 
 class FrameCache {
 public:
+    // Metadata, indices, vertex validation, mesh decode, coverage, cache retention.
+    using PhaseStats=NorthlightCapturePhases::Stats<6>;
     using IdentityFn=std::uint64_t(*)(void*,bool);
     using VersionFn=std::uint64_t(*)(void*,bool);
 private:
@@ -201,7 +206,7 @@ private:
         bool operator==(const ContentKey& b)const{return draw==b.draw&&stream==b.stream&&format==b.format&&vertexBytes==b.vertexBytes&&indexBytes==b.indexBytes;}
     };
     struct ContentEntry {
-        ContentKey key;Stamp stamp;std::uint64_t hash=0,bytes=0,charged=0;size_t slot=0;
+        ContentKey key;Stamp stamp;std::uint64_t hash=0,geometryHash=0,bytes=0,charged=0;size_t slot=0;
         NorthlightIntrusiveLRU::Links<ContentEntry> lru;
         UINT smallest=0,largest=0;
         float low[3]={},high[3]={};
@@ -213,7 +218,7 @@ private:
     static constexpr size_t ContentEntries=4096;
     std::array<std::unique_ptr<ContentEntry>,ContentEntries> content;
     std::array<size_t,ContentEntries> freeContent{};size_t freeContentCount=ContentEntries;
-    std::unordered_multimap<std::uint64_t,ContentEntry*> contentLookup;
+    std::unordered_multimap<std::uint64_t,ContentEntry*> contentLookup,geometryLookup;
     NorthlightIntrusiveLRU::List<ContentEntry> contentLRU;
     static constexpr size_t ContentBaseBytes=sizeof(content)+sizeof(freeContent);
     std::uint64_t contentBytes=ContentBaseBytes,contentHits=0,trackedHits_=0,avoidedReadBytes_=0;
@@ -222,7 +227,7 @@ public:
     struct Maintenance {
         unsigned lookupMisses=0,evictions=0,countPressure=0,bytePressure=0;
         unsigned trackedHits=0,unproven=0,lifetimeChanged=0,vertexChanged=0,indexChanged=0,unstable=0,exactReuses=0,rebuilds=0,indexTokenHits=0;
-        unsigned metadataBatches=0,metadataHits=0,metadataFallbacks=0;
+        unsigned metadataBatches=0,metadataHits=0,metadataFallbacks=0,relocatedReuses=0;
     };
 private:
     Maintenance maintenance_;
@@ -239,13 +244,61 @@ private:
         for(auto it=range.first;it!=range.second;++it)if(it->second->key==key)return it->second;
         ++maintenance_.lookupMisses;return nullptr;
     }
+    // Dynamic terrain is copied into changing buffer offsets during camera turns.
+    // Hash only the geometry inputs, then verify exact live bytes before reuse.
+    // Unreferenced XYZ in the span may cause a harmless miss; no hash is proof.
+    static std::uint64_t geometryHash(const ContentKey& key,const std::vector<unsigned char>& indices,
+                                      const std::vector<unsigned char>& vertices){
+        std::uint64_t h=1469598103934665603ull;
+        const auto mix=[&](std::uint64_t value){h^=value;h*=1099511628211ull;};
+        mix(key.draw.topology);mix(key.draw.stride);mix(key.draw.positionType);mix(key.format);mix(indices.size());mix(vertices.size());
+        size_t i=0;
+        for(;i+8<=indices.size();i+=8){std::uint64_t value;std::memcpy(&value,indices.data()+i,8);mix(value);}
+        for(;i<indices.size();++i)mix(indices[i]);
+        for(i=0;i+sizeof(Position)<=vertices.size();i+=key.draw.stride){
+            std::uint64_t xy;std::uint32_t z;std::memcpy(&xy,vertices.data()+i,8);std::memcpy(&z,vertices.data()+i+8,4);mix(xy);mix(z);
+        }
+        return h;
+    }
+    static bool positionsMatch(const ContentEntry& entry,const void* raw,size_t span){
+        if(!entry.sourceOffsets.empty()&&entry.sourceOffsets.size()==entry.snapshot->positions.size()){
+            for(size_t i=0;i<entry.sourceOffsets.size();++i){
+                const auto offset=entry.sourceOffsets[i];
+                if(offset>span||span-offset<sizeof(Position)||
+                   std::memcmp(static_cast<const unsigned char*>(raw)+offset,&entry.snapshot->positions[i],sizeof(Position)))return false;
+            }
+            return true;
+        }
+        return entry.vertices.size()==span&&!std::memcmp(raw,entry.vertices.data(),span);
+    }
+    ContentEntry* relocatedContent(const ContentKey& key,std::uint64_t fingerprint,
+                                  const std::vector<unsigned char>& indices,const std::vector<unsigned char>& vertices){
+        const auto range=geometryLookup.equal_range(fingerprint);
+        for(auto it=range.first;it!=range.second;++it){
+            auto& entry=*it->second;
+            if(entry.key.draw.topology==key.draw.topology&&entry.key.draw.stride==key.draw.stride&&
+               entry.key.draw.positionType==key.draw.positionType&&entry.key.format==key.format&&
+               entry.indices==indices&&positionsMatch(entry,vertices.data(),vertices.size()))return &entry;
+        }
+        return nullptr;
+    }
+    void relocate(ContentEntry& entry,const ContentKey& key,std::uint64_t hash,Stamp verified){
+        // Allocate before removing the old index. Failure only forgoes the next
+        // token-only hit; the immutable, byte-verified snapshot is still usable.
+        try{contentLookup.emplace(hash,&entry);}catch(...){return;}
+        const auto old=contentLookup.equal_range(entry.hash);
+        for(auto it=old.first;it!=old.second;++it)if(it->second==&entry&&it->first==entry.hash){contentLookup.erase(it);break;}
+        entry.key=key;entry.hash=hash;entry.stamp=verified;
+    }
     void eraseContent(ContentEntry& entry){
         const auto range=contentLookup.equal_range(entry.hash);
         for(auto it=range.first;it!=range.second;++it)if(it->second==&entry){contentLookup.erase(it);break;}
+        const auto geometry=geometryLookup.equal_range(entry.geometryHash);
+        for(auto it=geometry.first;it!=geometry.second;++it)if(it->second==&entry){geometryLookup.erase(it);break;}
         const auto slot=entry.slot;contentBytes-=entry.bytes;contentLRU.remove(entry);
         content[slot].reset();freeContent[freeContentCount++]=slot;
     }
-    void rememberContent(const ContentKey& key,std::uint64_t hash,UINT smallest,UINT largest,
+    void rememberContent(const ContentKey& key,std::uint64_t hash,std::uint64_t fingerprint,UINT smallest,UINT largest,
                          const std::vector<unsigned char>& rawIndices,const std::vector<unsigned char>& rawVertices,
                          const std::vector<UINT>& sourceOffsets,
                          const std::shared_ptr<const MeshSnapshot>& snapshot,const Diagnostics& detail,Stamp verified){
@@ -270,7 +323,7 @@ private:
         // Evict before allocation, so replacement does not transiently double
         // the retained cache. Accounting includes object/capacity/node allowance.
         if(!makeRoom(estimate))return;
-        auto next=std::make_unique<ContentEntry>();next->key=key;next->stamp=verified;next->hash=hash;next->smallest=smallest;next->largest=largest;
+        auto next=std::make_unique<ContentEntry>();next->key=key;next->stamp=verified;next->hash=hash;next->geometryHash=fingerprint;next->smallest=smallest;next->largest=largest;
         next->charged=rawIndices.size()+rawVertices.size();
         next->indices=rawIndices;
         if(keepRaw)next->vertices=rawVertices;
@@ -291,9 +344,11 @@ private:
         // Insert the optional hash node before publishing ownership/links. An
         // allocation failure must leave the computed snapshot valid and the
         // free-slot/LRU invariants intact. The per-entry allowance includes
-        // hash-node and amortized bucket storage.
+        // both hash nodes and amortized bucket storage.
         const auto slot=freeContent[freeContentCount-1];next->slot=slot;
-        contentLookup.emplace(hash,next.get());--freeContentCount;
+        const auto node=contentLookup.emplace(hash,next.get());
+        try{geometryLookup.emplace(fingerprint,next.get());}catch(...){contentLookup.erase(node);throw;}
+        --freeContentCount;
         contentLRU.append(*next);contentBytes+=next->bytes;content[slot]=std::move(next);
       }catch(...){return;} // Cache allocation is optional; snapshot remains valid.
     }
@@ -323,7 +378,7 @@ public:
     // or COM resource reference. Shared snapshots are immutable and remain valid
     // if callers retain them across eviction/reset. The cache budget accounts
     // for cache-owned storage; callers must separately bound retained outputs.
-    void clearPersistent(){contentLookup.clear();contentLRU.clear();for(auto& entry:content)entry.reset();contentBytes=ContentBaseBytes;contentHits=trackedHits_=avoidedReadBytes_=0;freeContentCount=ContentEntries;for(size_t i=0;i<freeContent.size();++i)freeContent[i]=i;maintenance_={};}
+    void clearPersistent(){contentLookup.clear();geometryLookup.clear();contentLRU.clear();for(auto& entry:content)entry.reset();contentBytes=ContentBaseBytes;contentHits=trackedHits_=avoidedReadBytes_=0;freeContentCount=ContentEntries;for(size_t i=0;i<freeContent.size();++i)freeContent[i]=i;maintenance_={};}
     // Memory guard: cap in [ContentBaseBytes+1 MiB, 32 MiB]; evicts oldest down to it now.
     void setPersistentByteLimit(std::uint64_t bytes){
         contentLimit=std::max<std::uint64_t>(ContentBaseBytes+1024u*1024u,std::min<std::uint64_t>(bytes,ContentLimit));
@@ -460,7 +515,8 @@ public:
     // Snapshot immediately before the original draw. DYNAMIC/WRITEONLY is not
     // a rejection: the verified D9VK backend exposes its current CPU mapping
     // for READONLY locks. Cached results require exact indices and positions and
-    // the full draw/layout contract; pointer identity alone is never trusted.
+    // a valid current draw/layout contract; identical geometry may be reused after
+    // buffer relocation. Pointer identity alone is never trusted.
     // Returned immutable snapshots cannot change after later DISCARD/NOOVERWRITE
     // writes. Cache hits share the object without copying its geometry.
     // This path does not require a patched game vertex shader and supports SM1
@@ -468,7 +524,8 @@ public:
     bool readMeshShared(IDirect3DDevice9* device,D3DPRIMITIVETYPE topology,INT base,
                   UINT minimum,UINT vertexCount,UINT start,UINT primitiveCount,
                   const float* expectedWorldToView,std::shared_ptr<const MeshSnapshot>& output,
-                  Diagnostics* diagnostics=nullptr){
+                  Diagnostics* diagnostics=nullptr,PhaseStats* timings=nullptr){
+        NorthlightCapturePhases::Scope<6> phase(timings);
         output.reset();Diagnostics detail;
         auto reject=[&](RejectReason reason,HRESULT hr=D3DERR_INVALIDCALL){
             detail.reason=reason;detail.hr=hr;if(diagnostics)*diagnostics=detail;return false;
@@ -553,6 +610,7 @@ public:
             ++maintenance_.unstable;
         }
         if(chargedBytes+indexBytes>limits.maxReadBytesPerFrame)return reject(RejectReason::ByteBudget);
+        phase.next(1);
         auto& indices=scratchIndices;
         // A vertex write does not invalidate the independently tracked index buffer.
         // Unknown/pending revisions still require the complete byte verification.
@@ -592,6 +650,7 @@ public:
         const std::uint64_t span=lastByte-firstByte;
         if(lastByte>vd.Size||!span)return reject(RejectReason::VertexRange);
         if(chargedBytes+span>limits.maxReadBytesPerFrame)return reject(RejectReason::ByteBudget);
+        phase.next(2);
         scratchRawVertices.reserve(size_t(span)); // resize below cannot allocate while locked
         raw=nullptr;NorthlightReplayCopies::Reader<IDirect3DVertexBuffer9> readVertices(vb.p);hr=readVertices.lock(UINT(firstByte),UINT(span),&raw);
         if(FAILED(hr))return reject(RejectReason::VertexLock,hr);
@@ -599,11 +658,7 @@ public:
         chargedBytes+=span;readBytes+=span;
         bool sameVertices=sameIndices&&cached->vertices.size()==span&&!std::memcmp(raw,cached->vertices.data(),size_t(span));
         if(sameIndices&&!sameVertices&&!cached->sourceOffsets.empty()&&cached->sourceOffsets.size()==cached->snapshot->positions.size()){
-            sameVertices=true;
-            for(size_t i=0;i<cached->sourceOffsets.size();++i){
-                const auto offset=cached->sourceOffsets[i];
-                if(std::memcmp(static_cast<const unsigned char*>(raw)+offset,&cached->snapshot->positions[i],sizeof(Position))){sameVertices=false;break;}
-            }
+            sameVertices=positionsMatch(*cached,raw,size_t(span));
         }
         if(!sameVertices){scratchRawVertices.resize(size_t(span));std::memcpy(scratchRawVertices.data(),raw,size_t(span));}
         hr=readVertices.unlock();if(FAILED(hr))return reject(RejectReason::VertexUnlock,hr);
@@ -617,7 +672,22 @@ public:
             contentLRU.touch(*cached);++contentHits;++snapshots;
             if(diagnostics)*diagnostics=detail;return true;
         }
-        if(sameIndices){scratchRawIndices.resize(size_t(indexBytes));std::memcpy(scratchRawIndices.data(),cached->indices.data(),size_t(indexBytes));decodeIndices();}
+        if(sameIndices){scratchRawIndices.resize(size_t(indexBytes));std::memcpy(scratchRawIndices.data(),cached->indices.data(),size_t(indexBytes));}
+        const auto fingerprint=geometryHash(contentKey,scratchRawIndices,scratchRawVertices);
+        if(auto* moved=relocatedContent(contentKey,fingerprint,scratchRawIndices,scratchRawVertices)){
+            // Both buffers were read under their ordinary snapshot contract. A
+            // matching fingerprint only selects candidates: exact indices and
+            // referenced XYZ above establish reuse, even without write tokens.
+            output=moved->snapshot;detail.contentCacheHit=true;
+            const Stamp after=stamp(vb.p,ib.p);
+            if(cached&&cached!=moved)eraseContent(*cached);
+            relocate(*moved,contentKey,hash,before.valid()&&after==before?before:Stamp{});
+            std::memcpy(detail.low,moved->low,sizeof detail.low);std::memcpy(detail.high,moved->high,sizeof detail.high);
+            contentLRU.touch(*moved);++contentHits;++snapshots;++maintenance_.relocatedReuses;
+            if(diagnostics)*diagnostics=detail;return true;
+        }
+        phase.next(3);
+        if(sameIndices)decodeIndices();
         const UINT unused=std::numeric_limits<UINT>::max();
         auto& remap=scratchRemap;remap.assign(std::size_t(largest)-smallest+1,unused);
         MeshSnapshot result;result.positions.resize(std::min(indices.size(),remap.size()));UINT unique=0;
@@ -647,11 +717,13 @@ public:
             if(topology==D3DPT_TRIANGLESTRIP&&(primitive&1))std::swap(a,b);
             result.indices.push_back(a);result.indices.push_back(b);result.indices.push_back(c);
         }
+        phase.next(4);
         if(!classifyIndexedTriangles(result.positions.data(),result.positions.size(),result.indices.data(),result.indices.size(),D3DPT_TRIANGLELIST,result.bounds))return reject(RejectReason::ChunkCoverage);
+        phase.next(5);
         std::shared_ptr<const MeshSnapshot> shared=std::make_shared<const MeshSnapshot>(std::move(result));
         const Stamp after=stamp(vb.p,ib.p);
         ++maintenance_.rebuilds;
-        rememberContent(contentKey,hash,smallest,largest,scratchRawIndices,scratchRawVertices,scratchSourceOffsets,shared,detail,before.valid()&&after==before?before:Stamp{});
+        rememberContent(contentKey,hash,fingerprint,smallest,largest,scratchRawIndices,scratchRawVertices,scratchSourceOffsets,shared,detail,before.valid()&&after==before?before:Stamp{});
         ++snapshots;output=std::move(shared);if(diagnostics)*diagnostics=detail;return true;
     }
 

@@ -27,6 +27,11 @@ sources={f.name:f.read_text(errors='replace') for f in fp.sources(('.h','.inl','
 # (file, receiver) -> (flags, class, creation evidence in the same file or None)
 Fresh,Managed,Dynamic,Read,Forward='fresh DEFAULT|WRITEONLY','MANAGED','DEFAULT|DYNAMIC','READONLY','game flags'
 expected={
+ # ImGui's per-frame UI uploads use dynamic buffers and discard their previous contents.
+ ('imgui_impl_dx9.cpp','bd->pVB'):('D3DLOCK_DISCARD',Dynamic,'D3DUSAGE_DYNAMIC | D3DUSAGE_WRITEONLY, D3DFVF_CUSTOMVERTEX, D3DPOOL_DEFAULT, &bd->pVB'),
+ ('imgui_impl_dx9.cpp','bd->pIB'):('D3DLOCK_DISCARD',Dynamic,'D3DUSAGE_DYNAMIC | D3DUSAGE_WRITEONLY, sizeof(ImDrawIdx) == 2 ? D3DFMT_INDEX16 : D3DFMT_INDEX32, D3DPOOL_DEFAULT, &bd->pIB'),
+ # Explicit, bounded material diagnostics read native bytes; not part of normal rendering.
+ ('renderer.cpp','stream'):('D3DLOCK_READONLY',Read,None),
  ('replay_gpu_batches.h','b'):(F,Fresh,'D3DUSAGE_WRITEONLY,0,D3DPOOL_DEFAULT,&built->vertices[s]'),
  ('replay_gpu_batches.h','batch->vertices'):(F,Fresh,'D3DUSAGE_WRITEONLY,0,D3DPOOL_DEFAULT,&batch->vertices'),
  ('replay_gpu_batches.h','batch->indices'):(F,Fresh,'D3DUSAGE_WRITEONLY,D3DFMT_INDEX32,D3DPOOL_DEFAULT,&batch->indices'),
@@ -105,6 +110,11 @@ reader=sources['replay_copy_reader.h']
 assert reader.count('NorthlightUpload::readBackLock()')==2 and reader.count('->Lock(')==2 # the whole-buffer fill and the ordinary fallback lock
 assert reader.index('if(enabled.load(std::memory_order_relaxed)&&b){')<reader.index('->Lock(0,slot->size') # the stream gate comes first: with it off only the fallback runs
 renderer=sources['renderer.cpp']
+# Cooperative liquid bounds use this same reader; no direct per-draw readback is allowed.
+assert 'LiquidDrawBounds<NorthlightReplayCopies::Reader>(ext,liquidDraw,liquidBounds)' in renderer
+material=body(renderer,'    void Material(','    bool ObserveBackground()')
+assert 'if(!enabled||!terrain||!vs)return;' in material and 'materialRequests<16' in material
+assert 'materialCount==16' in material and 'std::min(desc.Size,UINT(16384))' in material
 gate='NorthlightUpload::ReadBackNoOverwrite.store(module&&!result.fallback&&last.info.dxvk&&NorthlightBackend::dxvkMajor(last.info.dxvkVersion)>=3,std::memory_order_relaxed);'
 stores=[n for n,t in sources.items() if re.search(r'ReadBackNoOverwrite(?:\.store\(|\s*=[^=])',t.replace('inline std::atomic<bool> ReadBackNoOverwrite{false};',''))]
 assert stores==['renderer.cpp'] and renderer.count('ReadBackNoOverwrite.store(')==1 and renderer.count(gate)==1,stores

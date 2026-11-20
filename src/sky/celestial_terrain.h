@@ -4,6 +4,7 @@
 #include <cstdint>
 #include <limits>
 #include "celestial_disc.h"
+#include "../core/triangle_run.h"
 
 // Viewer-to-sky occlusion, deliberately independent of light-to-world shadows.
 namespace NorthlightCelestialTerrain {
@@ -94,17 +95,15 @@ template<class V> bool reject(V lo,V hi,const float* m){return Frustum(m).reject
 // one page whose index ranges are contiguous in list order (prev.start + 3*prev.count == start)
 // are one DrawIndexedPrimitive over exactly their indices, with the union vertex range. A page
 // change, an index gap (a rejected or non-terrain batch between) or maxIndices ends a run.
-struct Run {std::uint32_t page=0,start=0,count=0,minVertex=0;std::uint64_t vertexEnd=0;};
+using Run=NorthlightTriangleRun::Run;
 struct RunStats {unsigned accepted=0,runs=0;std::uint64_t triangles=0;};
 // list: batch indices in batch order. accept(batch): drawn at all. emit(run): false stops (failure).
 template<class Batches,class List,class Accept,class Emit> bool forEachRun(const Batches& batches,const List& list,std::uint32_t maxIndices,Accept accept,Emit emit,RunStats& stats){
     Run run;bool open=false;
     for(const auto index:list){const auto& b=batches[index];if(!accept(b))continue;++stats.accepted;stats.triangles+=b.count;
-        const std::uint64_t end=std::uint64_t(b.minVertex)+b.vertexCount;
-        if(open&&b.page==run.page&&std::uint64_t(run.start)+3ull*run.count==b.start&&3ull*(std::uint64_t(run.count)+b.count)<=maxIndices){
-            run.count+=b.count;run.minVertex=std::min(run.minVertex,b.minVertex);run.vertexEnd=std::max(run.vertexEnd,end);continue;}
+        if(open&&run.append(b,maxIndices))continue;
         if(open){++stats.runs;if(!emit(run))return false;}
-        run.page=b.page;run.start=b.start;run.count=b.count;run.minVertex=b.minVertex;run.vertexEnd=end;open=true;}
+        run.begin(b);open=true;}
     if(open){++stats.runs;if(!emit(run))return false;}
     return true;
 }

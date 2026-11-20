@@ -4,11 +4,16 @@
 // builtin reimplementation can never stand in for it.
 #include <windows.h>
 #include <d3dcompiler.h>
+#include "shader_inputs.h"
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <cwchar>
 
+#ifndef NORTHLIGHT_COMPILER_VERSION_MS
+#define NORTHLIGHT_COMPILER_VERSION_MS MAKELONG(0,10)
+#define NORTHLIGHT_COMPILER_VERSION_LS MAKELONG(12,17134)
+#endif
 // The module must be the file next to this executable, a real PE (not a Wine builtin or
 // placeholder, which carry "Wine " in the DOS stub) and FileVersion 10.0.17134.12.
 static bool microsoft_compiler(HMODULE module, const wchar_t *expected) {
@@ -29,8 +34,8 @@ static bool microsoft_compiler(HMODULE module, const wchar_t *expected) {
         VS_FIXEDFILEINFO fixed;
         std::memcpy(&fixed, data + i, sizeof fixed);
         if (fixed.dwSignature != 0xFEEF04BD) continue;
-        if (fixed.dwFileVersionMS == MAKELONG(0, 10) && fixed.dwFileVersionLS == MAKELONG(12, 17134)) return true;
-        std::fprintf(stderr, "d3dcompiler_47 FileVersion %lu.%lu.%lu.%lu, expected 10.0.17134.12\n",
+        if (fixed.dwFileVersionMS == NORTHLIGHT_COMPILER_VERSION_MS && fixed.dwFileVersionLS == NORTHLIGHT_COMPILER_VERSION_LS) return true;
+        std::fprintf(stderr, "d3dcompiler_47 FileVersion %lu.%lu.%lu.%lu, expected configured checksum-pinned Microsoft profile\n",
             (unsigned long)HIWORD(fixed.dwFileVersionMS), (unsigned long)LOWORD(fixed.dwFileVersionMS),
             (unsigned long)HIWORD(fixed.dwFileVersionLS), (unsigned long)LOWORD(fixed.dwFileVersionLS));
         return false;
@@ -66,7 +71,8 @@ int main(int argc, char **argv) {
     auto compile = reinterpret_cast<pD3DCompile>(GetProcAddress(compiler, "D3DCompile"));
     if (!compile) { std::free(source); FreeLibrary(compiler); return 4; }
     ID3DBlob *shader = nullptr, *diagnostics = nullptr;
-    HRESULT result = compile(source, size, argv[1], nullptr, D3D_COMPILE_STANDARD_FILE_INCLUDE, argv[2], argv[3],
+    ShaderInputs inputs(argv[1],source,static_cast<size_t>(size));
+    HRESULT result = compile(source, size, argv[1], nullptr, &inputs, argv[2], argv[3],
         D3DCOMPILE_ENABLE_BACKWARDS_COMPATIBILITY | D3DCOMPILE_IEEE_STRICTNESS | D3DCOMPILE_OPTIMIZATION_LEVEL3,
         0, &shader, &diagnostics);
     std::free(source);
@@ -82,7 +88,7 @@ int main(int argc, char **argv) {
     if (!output) { std::perror(argv[4]); shader->Release(); FreeLibrary(compiler); return 6; }
     size_t written = std::fwrite(shader->GetBufferPointer(), 1, shader->GetBufferSize(), output);
     int close_result = std::fclose(output);
-    bool success = written == shader->GetBufferSize() && close_result == 0;
+    bool success = written == shader->GetBufferSize() && close_result == 0 && inputs.Write(std::string(argv[4])+".inputs");
     using Disassemble = HRESULT (WINAPI *)(const void *, SIZE_T, UINT, const char *, ID3DBlob **);
     auto disassemble = reinterpret_cast<Disassemble>(GetProcAddress(compiler, "D3DDisassemble"));
     ID3DBlob *assembly = nullptr;

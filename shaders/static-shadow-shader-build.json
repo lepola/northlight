@@ -1,7 +1,7 @@
 {
   "source_sha256": "d11ded7248dc73794f1f7345b4472032573f357f4b9809ec0f2f12762b329561",
-  "compiler": "Microsoft d3dcompiler_47 10.0.17134.12 IEEE strict",
-  "compiler_sha256": "3c5f066a121a446e55db9c699b392da5d3aca6ad9019437b722360d09698e3c3",
+  "compiler": "Microsoft d3dcompiler_47 Windows SDK 10.0.26100.8249 IEEE strict",
+  "compiler_sha256": "e407b9ffadef47e87994dc488214f75405cf04ee99589f2315fc7ab99fd1dfe2",
   "game_launched": false,
   "shaders": {
     "StaticCasterVS": {
@@ -16,7 +16,29 @@
         "add": 4,
         "dp4": 3,
         "mov": 4
-      }
+      },
+      "instruction_count": 15,
+      "cube_instruction_extra_slots": 0,
+      "source": "shaders/static_shadow_effects.hlsl",
+      "dependencies": {
+        "shaders/static_shadow_effects.hlsl": "d11ded7248dc73794f1f7345b4472032573f357f4b9809ec0f2f12762b329561"
+      },
+      "compiler_inputs": {
+        "scripts/shaders/compile_shaders.cpp": "4faf7f9e8f6a5bdbc63406db030ef66bd65beed1d789a525949ceba7d2a1cd89",
+        "scripts/shaders/shader_inputs.h": "e78f9ff80c7e01f3b4c5a9d7dd7e00c1552cbad9f30345f63ecefe26b28ef63c",
+        "scripts/shaders/shader_compiler.py": "1dc622cd01cc0997e303483310ad272484ae7d62f51158c81ae1b851635041ea",
+        "scripts/shaders/shader_manifest.py": "f0fcb820509e8ee00f8693e6414b7032be82913ad4b7f7ccc4ad2033f89131fe",
+        "scripts/shaders/compile_static_shadow_shaders.py": "845cab5bfecb7cc4b819297ff6f81d4d0d3110ce946e3e5205ea8e85b2c484b5"
+      },
+      "compiler_sha256": "e407b9ffadef47e87994dc488214f75405cf04ee99589f2315fc7ab99fd1dfe2",
+      "compiler_driver_sha256": "28f2719960265e525bff9154edccd7b5e8a7bf05a682faec45629b247764765a",
+      "compiler_flags": [
+        "BACKWARDS_COMPATIBILITY",
+        "IEEE_STRICTNESS",
+        "OPTIMIZATION_LEVEL3"
+      ],
+      "assembly_sha256": "c6099e4b9fd6d8f0da25bee1a6af14532ddef69385f09c7553b5a31248822ceb",
+      "symbol": "kStaticCasterVSShader"
     },
     "StaticCasterInstancedVS": {
       "target": "vs_3_0",
@@ -30,7 +52,29 @@
         "add": 4,
         "dp4": 3,
         "mov": 4
-      }
+      },
+      "instruction_count": 15,
+      "cube_instruction_extra_slots": 0,
+      "source": "shaders/static_shadow_effects.hlsl",
+      "dependencies": {
+        "shaders/static_shadow_effects.hlsl": "d11ded7248dc73794f1f7345b4472032573f357f4b9809ec0f2f12762b329561"
+      },
+      "compiler_inputs": {
+        "scripts/shaders/compile_shaders.cpp": "4faf7f9e8f6a5bdbc63406db030ef66bd65beed1d789a525949ceba7d2a1cd89",
+        "scripts/shaders/shader_inputs.h": "e78f9ff80c7e01f3b4c5a9d7dd7e00c1552cbad9f30345f63ecefe26b28ef63c",
+        "scripts/shaders/shader_compiler.py": "1dc622cd01cc0997e303483310ad272484ae7d62f51158c81ae1b851635041ea",
+        "scripts/shaders/shader_manifest.py": "f0fcb820509e8ee00f8693e6414b7032be82913ad4b7f7ccc4ad2033f89131fe",
+        "scripts/shaders/compile_static_shadow_shaders.py": "845cab5bfecb7cc4b819297ff6f81d4d0d3110ce946e3e5205ea8e85b2c484b5"
+      },
+      "compiler_sha256": "e407b9ffadef47e87994dc488214f75405cf04ee99589f2315fc7ab99fd1dfe2",
+      "compiler_driver_sha256": "28f2719960265e525bff9154edccd7b5e8a7bf05a682faec45629b247764765a",
+      "compiler_flags": [
+        "BACKWARDS_COMPATIBILITY",
+        "IEEE_STRICTNESS",
+        "OPTIMIZATION_LEVEL3"
+      ],
+      "assembly_sha256": "a60c724834858c6904ac0bba7b4cb0c4c9caabe70fa9efd898be2019fdd7cdc6",
+      "symbol": "kStaticCasterInstancedVSShader"
     },
     "StaticCasterPS": {
       "target": "ps_3_0",
@@ -47,7 +91,29 @@
         "texkill": 2,
         "max": 1,
         "mov": 2
-      }
+      },
+      "instruction_count": 8,
+      "cube_instruction_extra_slots": 0,
+      "source": "shaders/static_shadow_effects.hlsl",
+      "dependencies": {
+        "shaders/static_shadow_effects.hlsl": "d11ded7248dc73794f1f7345b4472032573f357f4b9809ec0f2f12762b329561"
+      },
+      "compiler_inputs": {
+        "scripts/shaders/compile_shaders.cpp": "4faf7f9e8f6a5bdbc63406db030ef66bd65beed1d789a525949ceba7d2a1cd89",
+        "scripts/shaders/shader_inputs.h": "e78f9ff80c7e01f3b4c5a9d7dd7e00c1552cbad9f30345f63ecefe26b28ef63c",
+        "scripts/shaders/shader_compiler.py": "1dc622cd01cc0997e303483310ad272484ae7d62f51158c81ae1b851635041ea",
+        "scripts/shaders/shader_manifest.py": "f0fcb820509e8ee00f8693e6414b7032be82913ad4b7f7ccc4ad2033f89131fe",
+        "scripts/shaders/compile_static_shadow_shaders.py": "845cab5bfecb7cc4b819297ff6f81d4d0d3110ce946e3e5205ea8e85b2c484b5"
+      },
+      "compiler_sha256": "e407b9ffadef47e87994dc488214f75405cf04ee99589f2315fc7ab99fd1dfe2",
+      "compiler_driver_sha256": "28f2719960265e525bff9154edccd7b5e8a7bf05a682faec45629b247764765a",
+      "compiler_flags": [
+        "BACKWARDS_COMPATIBILITY",
+        "IEEE_STRICTNESS",
+        "OPTIMIZATION_LEVEL3"
+      ],
+      "assembly_sha256": "a26888860496c4fee9558d2d59b7812de843f6b9b05f0e07c133a4bf0e23ec99",
+      "symbol": "kStaticCasterPSShader"
     },
     "StaticCasterFastPS": {
       "target": "ps_3_0",
@@ -63,7 +129,29 @@
         "add": 1,
         "texkill": 1,
         "mov": 1
-      }
+      },
+      "instruction_count": 4,
+      "cube_instruction_extra_slots": 0,
+      "source": "shaders/static_shadow_effects.hlsl",
+      "dependencies": {
+        "shaders/static_shadow_effects.hlsl": "d11ded7248dc73794f1f7345b4472032573f357f4b9809ec0f2f12762b329561"
+      },
+      "compiler_inputs": {
+        "scripts/shaders/compile_shaders.cpp": "4faf7f9e8f6a5bdbc63406db030ef66bd65beed1d789a525949ceba7d2a1cd89",
+        "scripts/shaders/shader_inputs.h": "e78f9ff80c7e01f3b4c5a9d7dd7e00c1552cbad9f30345f63ecefe26b28ef63c",
+        "scripts/shaders/shader_compiler.py": "1dc622cd01cc0997e303483310ad272484ae7d62f51158c81ae1b851635041ea",
+        "scripts/shaders/shader_manifest.py": "f0fcb820509e8ee00f8693e6414b7032be82913ad4b7f7ccc4ad2033f89131fe",
+        "scripts/shaders/compile_static_shadow_shaders.py": "845cab5bfecb7cc4b819297ff6f81d4d0d3110ce946e3e5205ea8e85b2c484b5"
+      },
+      "compiler_sha256": "e407b9ffadef47e87994dc488214f75405cf04ee99589f2315fc7ab99fd1dfe2",
+      "compiler_driver_sha256": "28f2719960265e525bff9154edccd7b5e8a7bf05a682faec45629b247764765a",
+      "compiler_flags": [
+        "BACKWARDS_COMPATIBILITY",
+        "IEEE_STRICTNESS",
+        "OPTIMIZATION_LEVEL3"
+      ],
+      "assembly_sha256": "8de71dca42ec9b1c3626a6879f7431b7ad5ab38fd2be414f85deae7c08ea85f5",
+      "symbol": "kStaticCasterFastPSShader"
     },
     "StaticCasterOpaqueFastPS": {
       "target": "ps_3_0",
@@ -74,7 +162,29 @@
       "samplers": [],
       "instructions": {
         "mov": 1
-      }
+      },
+      "instruction_count": 1,
+      "cube_instruction_extra_slots": 0,
+      "source": "shaders/static_shadow_effects.hlsl",
+      "dependencies": {
+        "shaders/static_shadow_effects.hlsl": "d11ded7248dc73794f1f7345b4472032573f357f4b9809ec0f2f12762b329561"
+      },
+      "compiler_inputs": {
+        "scripts/shaders/compile_shaders.cpp": "4faf7f9e8f6a5bdbc63406db030ef66bd65beed1d789a525949ceba7d2a1cd89",
+        "scripts/shaders/shader_inputs.h": "e78f9ff80c7e01f3b4c5a9d7dd7e00c1552cbad9f30345f63ecefe26b28ef63c",
+        "scripts/shaders/shader_compiler.py": "1dc622cd01cc0997e303483310ad272484ae7d62f51158c81ae1b851635041ea",
+        "scripts/shaders/shader_manifest.py": "f0fcb820509e8ee00f8693e6414b7032be82913ad4b7f7ccc4ad2033f89131fe",
+        "scripts/shaders/compile_static_shadow_shaders.py": "845cab5bfecb7cc4b819297ff6f81d4d0d3110ce946e3e5205ea8e85b2c484b5"
+      },
+      "compiler_sha256": "e407b9ffadef47e87994dc488214f75405cf04ee99589f2315fc7ab99fd1dfe2",
+      "compiler_driver_sha256": "28f2719960265e525bff9154edccd7b5e8a7bf05a682faec45629b247764765a",
+      "compiler_flags": [
+        "BACKWARDS_COMPATIBILITY",
+        "IEEE_STRICTNESS",
+        "OPTIMIZATION_LEVEL3"
+      ],
+      "assembly_sha256": "2868de79f2e51ef6dcf082008c1970884c7ed93a74f96ee384af6529347239c4",
+      "symbol": "kStaticCasterOpaqueFastPSShader"
     },
     "StaticCasterOpaquePS": {
       "target": "ps_3_0",
@@ -88,7 +198,33 @@
         "texkill": 1,
         "max": 1,
         "mov": 2
-      }
+      },
+      "instruction_count": 5,
+      "cube_instruction_extra_slots": 0,
+      "source": "shaders/static_shadow_effects.hlsl",
+      "dependencies": {
+        "shaders/static_shadow_effects.hlsl": "d11ded7248dc73794f1f7345b4472032573f357f4b9809ec0f2f12762b329561"
+      },
+      "compiler_inputs": {
+        "scripts/shaders/compile_shaders.cpp": "4faf7f9e8f6a5bdbc63406db030ef66bd65beed1d789a525949ceba7d2a1cd89",
+        "scripts/shaders/shader_inputs.h": "e78f9ff80c7e01f3b4c5a9d7dd7e00c1552cbad9f30345f63ecefe26b28ef63c",
+        "scripts/shaders/shader_compiler.py": "1dc622cd01cc0997e303483310ad272484ae7d62f51158c81ae1b851635041ea",
+        "scripts/shaders/shader_manifest.py": "f0fcb820509e8ee00f8693e6414b7032be82913ad4b7f7ccc4ad2033f89131fe",
+        "scripts/shaders/compile_static_shadow_shaders.py": "845cab5bfecb7cc4b819297ff6f81d4d0d3110ce946e3e5205ea8e85b2c484b5"
+      },
+      "compiler_sha256": "e407b9ffadef47e87994dc488214f75405cf04ee99589f2315fc7ab99fd1dfe2",
+      "compiler_driver_sha256": "28f2719960265e525bff9154edccd7b5e8a7bf05a682faec45629b247764765a",
+      "compiler_flags": [
+        "BACKWARDS_COMPATIBILITY",
+        "IEEE_STRICTNESS",
+        "OPTIMIZATION_LEVEL3"
+      ],
+      "assembly_sha256": "6ecfbe89b37c4bd9511c4650e96f897805eccc08ba285a11e4caf9fe5c4e0896",
+      "symbol": "kStaticCasterOpaquePSShader"
     }
+  },
+  "provenance_version": 1,
+  "headers": {
+    "src/generated/static_shadow_compiled_shaders.h": "4c7dffaf5f0de4abff982c563605df6bf9cf9f4cfc15fd9f6a2c4bcc5b4e781d"
   }
 }

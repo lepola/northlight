@@ -18,7 +18,7 @@ render=w[w.index('    bool render(IDirect3DSurface9* targetSurface'):]
 once(w,'        if(modelCaptureSkipped())return; /* previous replays/actor packets are not needed this frame */\n        const CaptureShader* found=lookupShader(current).capture;if(!found){if(sample)++unknownCaptureCalls;return;}','model skip at captureModel entry')
 cap=w[w.index('    void capture(D3DPRIMITIVETYPE type'):w.index('    void releaseReplayGPU()')]
 assert cap.index('if(isTerrain)')<cap.index('captureModel('),'terrain capture precedes (and is independent of) the model skip'
-assert 'modelCaptureSkipped' not in r and len(re.findall(r'world->capture(?:UP)?\([^;]*\);captureWater\(vs,',r))==4,'renderer.cpp: every draw still captures water right after world capture'
+assert 'modelCaptureSkipped' not in r and len(re.findall(r'world->capture(?:UP)?\([^;]*\);\}?captureWater\(vs,',r))==4,'renderer.cpp: every draw still captures water right after world capture'
 # Consumers of fresh replays on the render path.
 for needle,what in [('if(replayShadows)selectShadowReplays();','selection history + fate frame'),
                     ('(replayShadows&&!timedReplay())','GPU cache LRU/probation clock'),

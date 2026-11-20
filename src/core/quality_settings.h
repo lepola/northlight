@@ -65,11 +65,14 @@ struct Settings {
     // (stream_hooks.h commandStreamRequested), so it is a creation-time key.
     unsigned commandStream=1;
     // 0.3.193 BlobShadowStrength: how strongly the game's own round blob shadow under characters shows while the mod draws
-    // actor shadows: 100 = the game's texture unchanged (no filter work), 0 = hidden, 1..99 = drawn with a lighter texture.
-    unsigned blobShadowStrength=50;
+    // actor shadows. Default 0 avoids duplicate shadows; native fallback is retained when actor shadows are inactive.
+    // 100 = the game's texture unchanged (no filter work), 0 = hidden, 1..99 = drawn with a lighter texture.
+    unsigned blobShadowStrength=0;
     // 0.3.198 (rain): Weather 1 = Northlight's own effects follow detected rain or snow (sky/weather_effects.h); 0 = nothing reacts.
     // RainFog 0..2 scales the haze/fog/shafts/sun/shadow/GI/lamp couplings (1 = the tuned look).
     unsigned weather=1,rainFog=1;
+    // RainOpacity: the game's rain streaks' opacity in percent while Weather draws them alpha-blended (100 = as the game draws them).
+    unsigned rainOpacity=100;
     // 0.3.199 (fog clouds): FogClouds 1 = low fog banks that drift with the wind (own half-resolution raymarch pass, sky/fog_clouds.h);
     // 0 = none. FogCloudDensity 0..200 percent scales how much of the ground they cover (100 = the tuned look; thicker and faster in rain).
     unsigned fogClouds=1,fogCloudDensity=100;
@@ -106,7 +109,7 @@ struct Settings {
     // SpellLayerClasses: bit mask of the blends deferred (1 additive, 2 alpha, 4 modulate/mod2x, 8 other). SpellTrace: frames of the SPELLTRACE draw-order log
     // (diagnostic, 0 = off). Creation-time keys (the renderer reads them once with the device). SpellLayerClasses and SpellTrace are developer/diagnostic keys: still parsed and
     // logged on the QUALITY line, intentionally NOT in the player docs (README.md, README.txt, northlight-quality.ini).
-    unsigned spellLayer=1,spellLayerClasses=15,spellTrace=0,spellFog=1; // SpellFog: 1 = replayed spell draws get Northlight's fog through the game's own fog constants (a creation-time key; 0 = the recorded values unchanged)
+    unsigned spellLayer=1,spellLayerClasses=15,spellTrace=0,spatialAlphaFog=0,spellFog=1; // SpellFog: 1 = replayed spell draws get Northlight's fog through the game's own fog constants (a creation-time key; 0 = the recorded values unchanged)
     // 0.3.212 (task 32) NameMask: 1 = floating unit names (world text) mark a stencil bit and WorldComposite leaves the marked pixels as the game drew them, so relight, shadows, AO, bloom and fog do not darken
     // them; 0 = off, exactly the game's path before 0.3.212 (no marks, no stencil clears, no composite stencil test).
     // NameMaskDebug: 1 = the marked pixels are drawn 50 percent magenta over the finished effects. Creation-time keys.
@@ -126,7 +129,7 @@ struct Settings {
     // WeatherMemory: 1 = the game's own weather state (kind incl. sand, intensity), read from memory, drives the weather effects on frames where the world drew a sky-band draw (the client skips weather
     // while the viewer is inside a building); 0 = the texture/draw detector only, as before.
     unsigned weatherMemory=1;
-    char origin[61]={'d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d'};
+    char origin[63]={'d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d','d'};
 };
 struct Key { const char* name; unsigned Settings::*field; unsigned low,high; unsigned preset[3]; };
 // preset[] = Quality, Balanced, Performance. Quality must equal Settings{}.
@@ -165,7 +168,7 @@ inline const Key Keys[]={
     {"FrameDrawGates",&Settings::frameDrawGates,0,1,{1,1,1}},
     {"ShadowPivotCorrection",&Settings::shadowPivotCorrection,0,1,{1,1,1}},
     {"CommandStream",&Settings::commandStream,0,1,{1,1,1}},
-    {"BlobShadowStrength",&Settings::blobShadowStrength,0,100,{50,50,50}},
+    {"BlobShadowStrength",&Settings::blobShadowStrength,0,100,{0,0,0}},
     {"Weather",&Settings::weather,0,1,{1,1,1}},
     {"RainFog",&Settings::rainFog,0,2,{1,1,1}},
     {"FogClouds",&Settings::fogClouds,0,1,{1,1,0}},
@@ -192,6 +195,8 @@ inline const Key Keys[]={
     {"AOMethod",&Settings::aoMethod,0,3,{0,0,0}},
     {"AOStrength",&Settings::aoStrength,0,200,{100,100,100}},
     {"AORadius",&Settings::aoRadius,10,1000,{200,200,200}},
+    {"RainOpacity",&Settings::rainOpacity,0,100,{100,100,100}},
+    {"SpatialAlphaFog",&Settings::spatialAlphaFog,0,1,{0,0,0}},
 };
 inline bool operator==(const Settings& a,const Settings& b){for(const auto& k:Keys)if(a.*k.field!=b.*k.field)return false;return true;}
 inline bool operator!=(const Settings& a,const Settings& b){return !(a==b);}

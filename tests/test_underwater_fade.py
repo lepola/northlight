@@ -34,7 +34,7 @@ def wiring():
     assert 'c[59][2]=std::max(wx.shadowSoften(),1.f-underwaterFade.scale());' in WORLD  # lighting pass: sun correction 0, soft shadow
     assert 'c[27][0]=first?(volume?1.f:1.f-authoredFill):0.f;' in WORLD and 'authoredFill)*underwaterFade' not in WORLD
     assert 'underwaterFade.underwater!=underwaterLogged' in WORLD
-    assert 'const float hazeSunWeight=underwaterFade.scale()*sourceWeights[0];' in WORLD  # haze sun lobe
+    assert 'farZ,zone,effects.fog,celestialValid,sun,underwaterFade.scale()*sourceWeights[0],lift,weatherEffects().hazeTauScale());' in WORLD  # haze sun lobe
     assert 'discGain()*world->underwaterScale()' in RENDERER  # glare weights and veil
 
 

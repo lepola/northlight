@@ -306,7 +306,19 @@ inline uint32_t vertexCount(unsigned prim,uint32_t primCount){ // D3DPT_* vertex
 }
 // The arguments of the draw call, as the game made it. `first`: StartVertex (Primitive) or StartIndex (Indexed). UP data pointers are only read
 // during defer(). Indexed: baseVertex/minIndex/numVertices as in DrawIndexedPrimitive; IndexedUP: minIndex/numVertices/indexData/indexFormat/vertexData.
+struct SpatialFogMaterial {
+    IDirect3DVertexShader9* vertex=nullptr;
+    IDirect3DPixelShader9* pixel=nullptr;
+    UINT width=0,height=0;
+    float ramp[4]={},colour[4]={};
+};
+struct SpatialFogReplay {
+    void* owner;
+    void (*bind)(void*,const SpatialFogMaterial&);
+    void (*restore)(void*);
+};
 struct DrawArgs{
+    bool spatialFog=false;
     DrawType type=DrawType::Primitive;D3DPRIMITIVETYPE prim=D3DPT_TRIANGLELIST;
     INT baseVertex=0;UINT minIndex=0,numVertices=0,first=0,primCount=0;
     const void* vertexData=nullptr;UINT stride=0;const void* indexData=nullptr;D3DFORMAT indexFormat=D3DFMT_INDEX16;
@@ -596,7 +608,7 @@ class Layer{
     struct Entry{
         DrawType type=DrawType::Primitive;D3DPRIMITIVETYPE prim=D3DPT_TRIANGLELIST;
         INT base=0;UINT minIndex=0,numVertices=0,first=0,primCount=0;
-        uint8_t nStreams=0,isz=0;Stream streams[kMaxStreams];
+        uint8_t nStreams=0,isz=0,spatial=0;Stream streams[kMaxStreams];
         IDirect3DIndexBuffer9* ib=nullptr;uint32_t ibLo=0,ibHi=0;int32_t ibBlob=-1; // streams and ib are kept alive by the frame's held references
         uint32_t upVtx=0,upStride=0,upIdx=0;D3DFORMAT upFmt=D3DFMT_INDEX16;
         uint16_t dChunk=0,dOff=0,dLen=0;               // the state delta: dLen words at dOff of delta chunk dChunk
@@ -729,7 +741,7 @@ private:
     void clearFrame(){
         guards_.clear([&](void* key){mark(key,false);}); // before the entries drop their references: the marked buffers are still alive
         releaseHeld();
-        count_=0;ffCount_=0;deltaChunk_=0;deltaUsed_=0;model_.reset();if(cfg_.synced)cfg_.synced->clearAll();stTouched_=0;ibTouched_=anyFf_=false;ffLights_=0;blobs_.clear();hits_.clear();
+        spatialCount_=0;count_=0;ffCount_=0;deltaChunk_=0;deltaUsed_=0;model_.reset();if(cfg_.synced)cfg_.synced->clearAll();stTouched_=0;ibTouched_=anyFf_=false;ffLights_=0;blobs_.clear();hits_.clear();
         frame_.arenaHigh=std::max(frame_.arenaHigh,arenaUsed_);total_.arenaHigh=std::max(total_.arenaHigh,arenaUsed_);
         arenaUsed_=0;vbBase_=vbUsed_;ibBase_[0]=ibUsed_[0];ibBase_[1]=ibUsed_[1]; // the uploaded bytes of earlier drains stay where they are for the rest of the frame
         if(target_){target_->Release();target_=nullptr;}
@@ -768,6 +780,19 @@ private:
         else releaseHeld(); // nothing pending: the references this refused record took are not needed
         fm_.fallback(r!=Reason::Frame);
         return false;
+    }
+    const SpatialFogReplay* spatialReplay_=nullptr;
+    SpatialFogMaterial spatialMaterials_[32],spatialPending_;
+    unsigned spatialCount_=0;
+    uint8_t rememberSpatial(const SpatialFogMaterial& m){
+        for(unsigned i=0;i<spatialCount_;++i){
+            const auto& v=spatialMaterials_[i];
+            if(v.vertex==m.vertex && v.pixel==m.pixel && v.width==m.width && v.height==m.height && !std::memcmp(v.ramp,m.ramp,16) && !std::memcmp(v.colour,m.colour,16))
+                return uint8_t(i+1);
+        }
+        if(spatialCount_==32)return 0;
+        spatialMaterials_[spatialCount_++]=m;
+        return uint8_t(spatialCount_);
     }
     void drain(){count([](Counters& c){++c.drains;});timing_=cfg_.clock&&cfg_.timing&&cfg_.timing(cfg_.clockCtx);runReplay();clearFrame();}
 
@@ -862,6 +887,7 @@ private:
     // and moves the other streams to offset+f*stride (always >=0). Index values are never rewritten.
     bool drawEntry(const Entry& e,Shadow& sh,bool vbOk,const bool (&ibOk)[2]){
         applyState(e);
+        if(spatialReplay_ && e.spatial)spatialReplay_->bind(spatialReplay_->owner,spatialMaterials_[e.spatial-1]);
         const bool idx=e.type==DrawType::Indexed,up=e.type==DrawType::PrimitiveUP||e.type==DrawType::IndexedUP;
         bool matV=false;
         for(unsigned i=0;i<e.nStreams;++i)if(e.streams[i].blob>=0)matV=true;
@@ -1047,9 +1073,12 @@ private:
         dev_->SetDepthStencilSurface(ds_);
         Shadow sh;sets_=0;ffPrev_=nullptr;
         for(unsigned i=0;i<count_;++i){
+            if(spatialReplay_ && i && entryAt(i-1).spatial && !entryAt(i).spatial)
+                spatialReplay_->restore(spatialReplay_->owner);
             const bool ok=bound&&drawEntry(entryAt(i),sh,vbOk,ibOk);
             count([&](Counters& c){if(ok)++c.replayedDraws;else ++c.replaySkipped;});
         }
+        if(spatialReplay_)spatialReplay_->restore(spatialReplay_->owner);
         count([&](Counters& c){c.replaySets+=sets_;});
         {Phase t(*this,timing_?&tRestore_:nullptr);if(minimal){restoreBefore();releaseUndo();}else scope.reset();}
     }
@@ -1228,7 +1257,7 @@ private:
     }
     // Builds the delta of the draw into scratch_ (the model is not touched: the record may still be refused). Reason::Count: built. sy: the synced bits to use (null: examine every
     // slot of the read set, the full compare); track: fill pend_ with the stage and viewport slots examined (sy or not); pend_ receives the slots this record examined (they become synced at commit) and how many there were.
-    Reason buildDelta(const Reads& rd,bool fixed,IDirect3DVertexShader9* vs,IDirect3DPixelShader9* ps,IDirect3DVertexDeclaration9* decl,DWORD fvf,IDirect3DBaseTexture9* const (&tex)[kMaxTextures],const SyncedSlots* sy,bool track){
+    Reason buildDelta(const Reads& rd,bool fixed,IDirect3DVertexShader9* vs,IDirect3DPixelShader9* ps,IDirect3DVertexDeclaration9* decl,DWORD fvf,IDirect3DBaseTexture9* const (&tex)[kMaxTextures],const SyncedSlots* sy,bool track,SpatialFogMaterial* spatial){
         const Model& m=model_;n_=0;pend_=SyncPend{};unsigned slots=0;
         if(!m.vsV||m.vs!=static_cast<void*>(vs))emitPtr(Op::Vs,0,static_cast<void*>(vs));
         if(!m.psV||m.ps!=static_cast<void*>(ps))emitPtr(Op::Ps,0,static_cast<void*>(ps));
@@ -1309,6 +1338,11 @@ private:
             unsigned ovr=~0u;float row[4]={};
             if(fogReg>=0&&fitOk){
                 float out[3]={0,0,0};
+                if(spatial && target==FogTarget::Scatter){
+                    spatial->vertex=vs;spatial->pixel=ps;
+                    std::memcpy(spatial->ramp,gameV,12);
+                    std::memcpy(spatial->colour,src[fogReg],16);
+                }
                 if(target==FogTarget::Scatter)fogColor(gameV,fitV,src[fogReg],out);
                 else if(target==FogTarget::White)out[0]=out[1]=out[2]=1.f;
                 else if(target==FogTarget::Grey)out[0]=out[1]=out[2]=.5f;
@@ -1578,14 +1612,16 @@ public:
             tex[t]=tx;texHeld[t]=h;
         }
         fogSub_=sub;fogReg_=a.psFogReg;fogProven_=a.vsFog;fogVsHash_=a.vsHash;
-        {   Reason why=buildDelta(rd,fixed,vs,ps,decl,fvf,tex,sy,sy!=nullptr);
+        SpatialFogMaterial* spatial=a.spatialFog && a.vsFor==vs && a.psFor==ps ? &spatialPending_ : nullptr;
+        if(spatial)spatial->vertex=nullptr;
+        {   Reason why=buildDelta(rd,fixed,vs,ps,decl,fvf,tex,sy,sy!=nullptr,spatial);
             if(sy&&cfg_.dirtyCheck){ const bool tm=cfg_.clock&&cfg_.timing&&cfg_.timing(cfg_.clockCtx);Phase checkTime(*this,tm?&tCheck_:nullptr); // tests and sampled frames: the full compare must give the same delta (its result, and its larger examined set, is the one used); a Get the full compare needs and the dirty path never makes may fail
                 if(!checkScratch_&&!allocFails())checkScratch_.reset(new(std::nothrow) uint32_t[kScratchWords]); // allocated once, only when the check is used
                 if(!checkScratch_){ // no memory to verify with: do not trust the unverified delta - the full compare is used and the dirty record is off from now on
-                    count([](Counters& c){++c.checkAllocFails;});cfg_.dirtyRecord=false;why=buildDelta(rd,fixed,vs,ps,decl,fvf,tex,nullptr,false);
+                    count([](Counters& c){++c.checkAllocFails;});cfg_.dirtyRecord=false;why=buildDelta(rd,fixed,vs,ps,decl,fvf,tex,nullptr,false,spatial);
                 }else{
                 const unsigned n1=n_;const SyncPend p1=pend_;std::memcpy(checkScratch_.get(),scratch_.get(),size_t(n_)*4);
-                const Reason why2=buildDelta(rd,fixed,vs,ps,decl,fvf,tex,nullptr,true);
+                const Reason why2=buildDelta(rd,fixed,vs,ps,decl,fvf,tex,nullptr,true,spatial);
                 if(why==Reason::Count&&why2!=Reason::Count){n_=n1;pend_=p1;std::memcpy(scratch_.get(),checkScratch_.get(),size_t(n1)*4);}   // keep the dirty result
                 else{
                     if(why2!=why||n_!=n1||std::memcmp(checkScratch_.get(),scratch_.get(),size_t(n1)*4)){
@@ -1610,6 +1646,10 @@ public:
         // Committed from here: nothing below fails.
         {   uint32_t* dst=deltaChunks_[e.dChunk].get()+e.dOff;std::memcpy(dst,scratch_.get(),size_t(n_)*4);
             ModelSink ms{model_};decodeOps(dst,dst+n_,ms);}
+        if(spatial && spatial->vertex && model_.vpV && !model_.vp.X && !model_.vp.Y){
+            spatial->width=model_.vp.Width;spatial->height=model_.vp.Height;
+            e.spatial=rememberSpatial(*spatial);
+        }
         if(sy){if(pend_.fogVs)sy->vsF[0]&=~(1ull<<30);if(pend_.fogPs>=0)sy->psF[pend_.fogPs>>6]&=~(1ull<<(pend_.fogPs&63));} // the fog rows hold Northlight's value in the Model, not the device's: never synced
         if(pend_.fogApplied||pend_.fogRefused||pend_.fogBareSkip||pend_.fogUnproven||pend_.fogNoRead||pend_.fogNoPsReg||pend_.fogOtherBlend)count([&](Counters& c){c.fogEntries+=pend_.fogApplied?1u:0u;c.fogFlat+=pend_.fogFlat;c.fogRefused+=pend_.fogRefused;c.fogBareSkip+=pend_.fogBareSkip;c.fogNoPsReg+=pend_.fogNoPsReg;c.fogOtherBlend+=pend_.fogOtherBlend;c.fogUnproven+=pend_.fogUnproven;c.fogNoRead+=pend_.fogNoRead;});
         if(sy&&sy->epoch==epoch0){ // nothing changed the device under this record: what it examined now equals the model
@@ -1689,11 +1729,11 @@ public:
 
     // At B, after the effects: draws all pending entries in their original order into T/DS and restores the device state (minimal restore, else SavedState). Idempotent;
     // closes the frame (no more deferral until beginFrame, no cooldown). Entries whose upload could not be made are skipped and counted.
-    void replay(){
+    void replay(const SpatialFogReplay* spatial=nullptr){
         fm_.close();
         if(!count_)return;
         count([](Counters& c){++c.replays;});
-        drain();
+        spatialReplay_=spatial;drain();spatialReplay_=nullptr;
     }
     // Releases entry, delta and arena storage (and the upload buffers) beyond `keep` records; never below what is pending. For idle frames and memory pressure.
     void trim(size_t keep=0){

@@ -1409,6 +1409,14 @@ static void testSpellFogFit(){
         worst=std::max(worst,err);
     }
     CHECK(worst<.31f);                                                                    // the worst: very thick fog (0.02 per unit) over a long game range, or a late start with a high power
+    // The dock's native ramp starts beyond the last volume sample. It still fades at distance.
+    {
+        Frame f=fogFrame(.002f);
+        const float game[3]={-.00526f,1.7857f,1.f};
+        CHECK(emitFog(f,game,fit));
+        for(float z:{15.f,128.f,198.f,270.f,339.f})
+            CHECK(std::fabs(fitVisibility(fit,z)-gameVisibility(game,z)*foldedTransmittance(f,z))<.06f);
+    }
     // the fog colour of the alpha sub-class: unchanged where there is no fog, never negative, pulled toward the in-scatter with fog
     {Frame f=fogFrame(.01f);const float g[3]={-1/150.f,1.f,1.f},cF[3]={.4f,.5f,.6f};CHECK(emitFog(f,g,fit));
      float c[3];emitColor(f,g,fit,cF,c);for(float v:c)CHECK(v>=0&&std::isfinite(v));

@@ -28,8 +28,11 @@ def method(file, signature):
     return source[start:end]
 
 
-MODEL = method('src/world/world_renderer.h', 'bool modelContext(')
-BEFORE = method('src/proxy/renderer.cpp', 'void beforeDraw(')
+MODEL = '\n'.join(method('src/world/world_renderer.h', signature) for signature in
+                  ('bool acceptCameraLighting(', 'bool modelContext(', 'bool skyContext('))
+SKY_VIEW = method('src/proxy/renderer.cpp', 'bool prepareSkyView(')
+BEFORE = (method('src/proxy/renderer.cpp', 'void beforeDraw(') + '\n' +
+          method('src/proxy/renderer.cpp', 'void beforeUiDraw('))
 PROJECTION = method('src/proxy/renderer.cpp', 'bool readProjection(')
 assert 'metadata.fog=NorthlightSpellFog::vsFogProven' in (ROOT / 'src/world/world_renderer.h').read_text()
 
@@ -57,7 +60,9 @@ bool read(char (&map)[64],float sign,Camera& out,Diagnostics*){
     float view[16]={};view[15]=1;
     for(unsigned k=0;k<3;++k){view[k*4]=data[6+k];view[k*4+1]=data[9+k];view[k*4+2]=data[3+k]*sign;}
     std::strcpy(map,"Northrend");return NorthlightWorldCamera::decode(data,view,sign,out);
-}}
+}
+bool readSkyPhase(char (&map)[64],float sign,Camera& out){return TestCamera::read(map,sign,out,nullptr);}
+}
 namespace TestLight {
 using NorthlightWmoContext::Lighting;using NorthlightWmoContext::LightingHold;
 bool readGlobalLighting(const float*,Lighting& l){l.lightDirection[2]=1;l.ambient[0]=.1f;l.direct[0]=1;return lightOK;}
@@ -77,7 +82,11 @@ struct Ext {
 };
 struct World {
     bool hasOriginalFog()const{return legacyFogKnown;}
-    Ext* d;bool failed=false,valid=false,legacyFogKnown=false,fogProof=false;
+    explicit World(Ext* device):d(device){}
+    Ext* d;
+    std::string lensMap;
+    enum {CaptureUndecided,CaptureFresh,CaptureSkipped} captureMode=CaptureUndecided;
+    bool failed=false,valid=false,legacyFogKnown=false,fogProof=false;
     struct Capture {bool skinned=true;unsigned projectionKind=2;bool fog=true;};
     std::map<IDirect3DVertexShader9*,Capture> captureShaders;
     NorthlightWorldContext::TerrainContext context;
@@ -102,7 +111,8 @@ struct Device {
     static constexpr int kTagMask=3,kWaterTag=4;
     struct VsClass{int entry=0;bool wmo=false,skinned=true;} vc;
     struct Counts{unsigned wmo=0,fullPasses=0;} gateCounts;
-    bool gateFrame=false,projectionValid=false,terrain=false,captured=false,drawWaterVS=false,drawUiHashVS=false;
+    bool gateFrame=false,applied=false,projectionValid=false,terrain=false,captured=false,drawWaterVS=false,drawUiHashVS=false;
+    bool skyView=false,skyTried=false,worldDepth=true;unsigned width=1920,height=1080;
     bool viewportOK=true,depthOK=true,hashBoundaryThisFrame=false;
     unsigned terrainDraws=0,projectionRejects=0,earlyResolveUndone=0,earlyResolveUndoneTotal=0,uiDraws=0,uiAfterTerrain=0,frame=0,drawCalls=0,binds=0,allocations=0;
     float nearZ=0,farZ=0,scaleX=0,scaleY=0,fogForward=1,worldMinDepth=0,worldMaxDepth=.94f;
@@ -115,8 +125,10 @@ struct Device {
     bool bindWorldDepth(const D3DSURFACE_DESC&){++binds;return depthOK;}
     void resources(UINT,UINT,D3DFORMAT){++allocations;}
     void uiFallbackDraw(const VsClass&,IDirect3DVertexShader9*){}
-    bool sampled(){return false;}void renderEffects(){}void spellReplay(){}
+    unsigned effects=0,replays=0;
+    bool sampled(){return false;}void renderEffects(){++effects;}void spellReplay(){++replays;}
 __PROJECTION__
+__SKY_VIEW__
 __BEFORE__
 };
 int main(){
@@ -127,6 +139,32 @@ int main(){
         assert(p.world->traceContext==4&&p.world->traceFog==1&&p.world->updates==1);
         assert(std::fabs(p.world->context.view[2]-std::cos(a))<1e-6f);
         p.beforeDraw(shader);assert(p.binds==1&&p.world->updates==1);++cases;
+    }
+    for(unsigned reject=0;reject<=8;++reject){
+        Device p;p.skyView=true;p.world->projection[2]=1;p.world->lensMap="Northrend";
+        D3DSURFACE_DESC desc={};desc.Width=1920;desc.Height=1080;
+        switch(reject){
+        case 1:p.skyView=false;break;
+        case 2:p.worldDepth=false;break;
+        case 3:desc.Width=1280;break;
+        case 4:p.world->lensMap="Kalimdor";break;
+        case 5:cameraOK=false;break;
+        case 6:lightOK=false;break;
+        case 7:contextOK=false;break;
+        case 8:p.world->failed=true;break;
+        }
+        assert(p.prepareSkyView(desc)==(reject==0));
+        assert(p.projectionValid==(reject==0)&&!p.terrain);
+        assert(p.world->updates==unsigned(reject==0));
+        if(!reject)assert(p.world->traceContext==5&&p.world->captureMode==World::CaptureSkipped);
+        cameraOK=lightOK=contextOK=true;++cases;
+    }
+    for(bool early:{false,true})for(bool mainView:{false,true}){
+        Device p;p.terrain=true;p.vc.entry=2;p.applied=early;p.viewportOK=mainView;
+        p.state.zf=D3DCMP_ALWAYS;p.state.rows[14]=0;p.state.rows[15]=1;
+        p.beforeUiDraw(p.vc,shader);
+        assert(p.effects==unsigned(mainView&&!early)&&p.replays==unsigned(mainView));
+        ++cases;
     }
     for(unsigned reject=0;reject<17;++reject){
         Device p;p.world->captureShaders[shader]={};cameraOK=lightOK=contextOK=true;
@@ -165,7 +203,8 @@ if __name__ == '__main__':
     compiler = [zig, 'c++', '-target', 'x86-windows-gnu'] if zig else shlex.split(os.environ.get('CXX', 'c++'))
     with tempfile.TemporaryDirectory(prefix='model-context-') as tmp:
         source = Path(tmp) / 'test.cpp'
-        source.write_text(HARNESS.replace('__MODEL__', MODEL).replace('__BEFORE__', BEFORE).replace('__PROJECTION__', PROJECTION))
+        source.write_text(HARNESS.replace('__MODEL__', MODEL).replace('__BEFORE__', BEFORE).replace('__PROJECTION__', PROJECTION).replace('__SKY_VIEW__', SKY_VIEW))
         binary = Path(tmp) / ('test.exe' if os.name == 'nt' else 'test')
         subprocess.run([*compiler, '-std=c++17', '-O2', '-UNDEBUG', *includes, str(source), '-luser32', '-o', str(binary)], check=True)
-        subprocess.run([str(binary)], check=True)
+        runner = ['wine'] if zig and os.name != 'nt' else []
+        subprocess.run([*runner, str(binary)], check=True)

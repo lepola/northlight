@@ -22,7 +22,7 @@ def body(source,start):
 renderer=fp.src('renderer.cpp').read_text()
 effects=renderer[renderer.index('    void renderEffects() {'):renderer.index('template<class Capture> void prepareDraw(')]
 order=['if (applied || !enabled || failed || !projectionValid) return;',
-       'const bool celestial=celestialDiscs&&world&&debugMode==0&&worldDebug==0;',
+       'const bool celestial=celestialDiscs&&world&&debugMode==0&&worldDebug==0',
        'celestialDiscs->render(saved.targets[0],',
        'gpuProfile->mark("CelestialDiscs");',
        'if(celestial){celestialDiscs->renderRing();gpuProfile->mark("CelestialRing");}',
@@ -56,16 +56,18 @@ veil_ps=body(shader,'float4 CelestialVeilPS(')
 # Raw-depth classification: WDL/beyond-far silhouettes (normalised depth 1, raw
 # depth below the sky sprite) are geometry; the complement of the glare.
 assert 'float sky=(depth>=.99999994&&rawDepth>=DiscRepair.x-DiscRepair.z)?1:0;' in veil_ps
-assert 'float geometry=(1-sky*terrainVisibility(ray))*(1-sea);' in veil_ps  # visible water takes no veil
+assert 'float geometry=max(1-sky*terrainVisibility(ray),sea);' in veil_ps  # water receives atmospheric glare
 assert 'float alpha=geometry*glareProfile(radius);' in veil_ps
 assert 'overEdge' not in veil_ps  # no far-edge cut: it drew a line across near hills
 # the core only by the disc taps' visibility; the ring (x wrap) only for the
 # core-free tail shifted out by 3R, so the profile is monotonic (no dark ring).
 profile=shader[shader.index('float glareProfile(float radius){'):shader.index('float3 glowColor(')]
-assert 'float ring=skyCore?0:DiscGlowCore.w*saturate(tex2Dlod(DiscRingVisibility,float4(.5,.5,0,0)).r);' in profile
+assert 'float ring=skyCore?0:saturate(tex2Dlod(DiscRingVisibility,float4(.5,.5,0,0)).r);' in profile
 assert 'float disc=skyCore?1:saturate(tex2Dlod(DiscHaloVisibility,float4(.5,.5,0,0)).r);' in profile
-assert 'float tailed=max(disc*dot(tail,float3(.25,.35,.40)),ring*dot(tail,float3(.118257,.299458,.380527)));' in profile
-assert 'return (DiscEmission.z*exp2(-DiscEmission.x*r2)*disc+DiscGlowHue.w*tailed)*edge;' in profile
+assert 'return CelestialGlareProfile(radius,DiscRepair.w>.5,DiscEmission,DiscGlowHue,DiscGlowCore,disc,ring);' in profile
+shared=(fp.SHADERS/'celestial_glare.hlsli').read_text()
+assert 'float tailed=max(disc*dot(tail,float3(.25,.35,.40)),core.w*ring*dot(tail,float3(.118257,.299458,.380527)));' in shared
+assert 'if(solar)return (emission.z*exp2(-emission.x*r2)*disc+hue.w*tailed)*edge;' in shared
 assert 'smoothstep(1.5,3' not in profile
 # The shifted-tail literals are w_i*2^(-9 k_i) of the tail terms (k .12, .025, .008).
 for w,k,c in ((.25,.12,.118257),(.35,.025,.299458),(.40,.008,.380527)):assert abs(w*2**(-9*k)-c)<1e-6

@@ -4,6 +4,7 @@ import hashlib,json,sys
 from pathlib import Path
 sys.path[:0] = [str(Path(__file__).resolve().parents[2]), str(Path(__file__).resolve().parent)]  # repo root, scripts/shaders/
 import northlight_paths as fp  # noqa: E402
+import shader_manifest
 from shader_compiler import Compiler,rows,validate_assembly
 def main():
     source=fp.SHADERS/'celestial_disc_effects.hlsl';digest=hashlib.sha256(source.read_bytes()).hexdigest()
@@ -17,8 +18,9 @@ def main():
         stats=validate_assembly(assembly,target)
         if hashlib.sha256(source.read_bytes()).hexdigest()!=digest:raise ValueError('Source changed during compile')
         header+=['static const DWORD k'+entry+'Shader[] = {']+rows(words)+['};']
-        shaders[entry]={'target':target,'bytes':len(data),'sha256':hashlib.sha256(data).hexdigest(),**stats}
-    (fp.GENERATED/'celestial_disc_compiled_shaders.h').write_text('\n'.join(header)+'\n')
+        shaders[entry]={'target':target,'bytes':len(data),'sha256':hashlib.sha256(data).hexdigest(),**stats, **compiler.record(entry, 'k'+entry+'Shader')}
     report={'source_sha256':digest,**compiler.provenance,'game_launched':False,'device_created':False,'shader':shaders['CelestialDiscPS'],'shaders':shaders}
-    (fp.SHADERS/'celestial-disc-shader-build.json').write_text(json.dumps(report,indent=2)+'\n');print(json.dumps(report))
+    shader_manifest.publish(fp.REPO, fp.SHADERS/'celestial-disc-shader-build.json', report,
+        {'src/generated/celestial_disc_compiled_shaders.h': ('\n'.join(header)+'\n').encode()})
+    print(json.dumps(report))
 if __name__=='__main__':main()

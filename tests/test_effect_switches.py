@@ -64,6 +64,7 @@ struct Fixture {
     bool temporalValid=true,sourceVisValid=true,shadowsComposited=true;
     bool shadowFrameReady=true,pointReady=true,neutralShadowMaps=false;
     bool cacheValid=true;
+    struct{bool underwater=false;} underwaterFade; // the camera's liquid state (world_renderer.h)
     Device device;Device* d=&device;
     Surface maps[4],fog;
     Surface* shadowSurface[4]={&maps[0],&maps[1],&maps[2],&maps[3]};
@@ -158,6 +159,12 @@ int main(){
             q[j]=x*neutralMatrix[j]+y*neutralMatrix[4+j]+z*neutralMatrix[8+j]+neutralMatrix[12+j];
         assert(q[0]==0&&q[1]==0&&q[2]==.5f);
       }
+#ifdef NORTHLIGHT_WATER
+    // With the water renderer: in liquid the fog is off whatever the keys say, and comes back as requested on leaving it.
+    {Fixture u;u.underwaterFade.underwater=true;u.setEffects({true,true,true});assert(!u.effects.fog&&u.effects.gi&&u.effects.shadows);
+     u.underwaterFade.underwater=false;u.setEffects(u.requestedEffects);assert(u.effects.fog&&!u.temporalValid);
+     u.underwaterFade.underwater=true;u.setEffects({true,true,false});assert(!u.effects.fog&&!u.requestedEffects.fog);}
+#endif
     puts("PASS: 8 combinations, repeat/focus, histories, neutral shadow/fog and failed clears");
 }
 '''
@@ -170,13 +177,14 @@ for key, value in [('SETTER', setter), ('SHADOW_CLEAR', shadow_clear),
 renderer = fp.src('renderer.cpp').read_text()
 assert 'if(effectKeys.poll(focus,modifiers,componentKeys)){' in renderer
 assert renderer.index('effectKeys.poll(') < renderer.index('if(world)world->setEffects(settings);')
-assert 'farZ,hazeZone,effects.fog,celestialValid,hazeSun,hazeSunWeight,hazeLift,wx.hazeTauScale());' in world
+assert 'farZ,zone,effects.fog,celestialValid,sun,underwaterFade.scale()*sourceWeights[0],lift,weatherEffects().hazeTauScale());' in world
+assert world.index('underwaterFade.update(map,known,known&&global->liquidType!=0,now);') < world.index('if(underwaterFade.changed)setEffects(requestedEffects);')
 assert world.index('d->SetPixelShaderConstantF(34,haze.haze,1);') < world.index('"world composite"')
 
 with tempfile.TemporaryDirectory(prefix='fr-effect-switches-') as temp:
     folder = Path(temp)
     (folder / 'test.cpp').write_text(body)
-    for flags in (['-O2'], ['-O1', '-g', '-fsanitize=address,undefined', '-fno-sanitize-recover=all']):
+    for flags in (['-O2'], ['-O2', '-DNORTHLIGHT_WATER=1'], ['-O1', '-g', '-fsanitize=address,undefined', '-fno-sanitize-recover=all']):
         subprocess.run(['clang++', '-std=c++17', *flags, *fp.test_include_flags(),
                         str(folder / 'test.cpp'), '-o', str(folder / 'test')], check=True)
         subprocess.run([str(folder / 'test')], check=True)

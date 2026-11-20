@@ -44,7 +44,12 @@ def wiring():
     assert 'legacyFogHold.update(active->map,legacyFog,legacyFogKnown,now)' in WORLD
     assert 'memcpy(c[25],uploadedFog.parameters,16);memcpy(c[26],uploadedFog.color,16);' in WORLD
     assert 'memcpy(c[25],legacyFog' not in WORLD
-    assert 'horizonHazeState.update(active->map,legacyFog.parameters,legacyFog.color,' in WORLD
+    # The Water adapter prepares one shared horizon state for both consumers.
+    # Its copy must use the current native fog and be committed after preparation.
+    horizon = body(WORLD, 'HorizonPreparation calculateHorizon(')
+    assert 'result.state=horizonHazeState;' in horizon
+    assert 'result.state.update(active->map,legacyFog.parameters,legacyFog.color,' in horizon
+    assert 'horizonHazeState=std::move(preparedHorizon.state);' in WORLD
     assert WORLD.count('legacyFogHold.update(') == 1
     assert 'if(traceFog==0&&!legacyFogKnown&&legacyFogHold.has)traceFog=2;' in WORLD
     assert 'context=%u fog=%u skip=%s' in RENDERER and 'frameTraceFog()' in RENDERER and 'unsigned frameTraceFog()' in WORLD

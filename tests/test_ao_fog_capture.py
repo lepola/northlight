@@ -22,7 +22,6 @@ def main():
     NorthlightLegacyFog::Hold legacyFogHold;
     struct Active {std::string map="Northrend";} activeValue;Active* active=&activeValue;
 ''')
-    harness = harness.replace('Ext* d;bool', 'explicit World(Ext* device):d(device){}\nExt* d;bool')
     harness = harness.replace('std::map<IDirect3DVertexShader9*,Capture> captureShaders;',
                               'std::map<IDirect3DVertexShader9*,Capture> captureShaders;\nstd::map<IDirect3DVertexShader9*,std::shared_ptr<Capture>> wmoShaders;')
     harness = harness.replace('assert(reg==30)', 'assert(reg==12||reg==30)')
@@ -33,6 +32,7 @@ def main():
     getter = method('src/world/world_renderer.h', 'const NorthlightLegacyFog::Constants& legacyFogConstants(')
     harness = harness.replace('__MODEL__', test['MODEL'] + '\n' + getter)
     harness = harness.replace('__BEFORE__', test['BEFORE']).replace('__PROJECTION__', test['PROJECTION'])
+    harness = harness.replace('__SKY_VIEW__', test['SKY_VIEW'])
     # Model-context reads are injected as in the existing production-gate test.
     # Only the already-valid terrain/WMO prefix is under test here.
     harness += r'''
@@ -75,7 +75,7 @@ int main(){
     subprocess.run([str(fp.zig()), 'c++', '-target', 'x86-windows-gnu', '-std=c++17', '-O2', '-UNDEBUG',
                     '-DEXPECT_FOG_BUG=' + str(int(expected)), *fp.include_flags(), str(cpp), '-luser32', '-o', str(exe)],
                    env=fp.zig_env(), check=True)
-    subprocess.run([str(exe)], check=True)
+    subprocess.run(([str(exe)] if os.name == 'nt' else ['wine', str(exe)]), check=True)
 
 
 if __name__ == '__main__':

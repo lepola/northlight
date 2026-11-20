@@ -8,7 +8,7 @@ import northlight_paths as fp
 import re
 
 # Developer/diagnostic keys: still parsed and logged on the QUALITY line, intentionally NOT in any player document.
-DEVELOPER_KEYS = {'SpellLayerClasses', 'SpellTrace'}
+DEVELOPER_KEYS = {'SpellLayerClasses', 'SpellTrace', 'SpatialAlphaFog'}
 INI_NAME, README_NAME = 'windows-package/northlight-quality.ini', 'windows-package/README.txt'
 
 code = fp.src('quality_settings.h').read_text(encoding='utf-8')

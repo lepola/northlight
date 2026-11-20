@@ -2,6 +2,7 @@
 #include <algorithm>
 #include <array>
 #include <cstdint>
+#include "effects_buckets.h"
 
 // Diagnostics only. Query spans overlap frame phases; they are not extra CPU time.
 namespace NorthlightFrameStalls {
@@ -26,6 +27,7 @@ struct Frame {
     double totalMs=0,sceneMs=-1,effectsMs=0,tailMs=-1,finishMs=0,presentMs=0;
     double sceneIdleMs=-1,frameIdleMs=-1;   // Queue waiting overlaps the phases; it is not extra time.
     Queries queries;
+    NorthlightEffectsBuckets::Snapshot effects;
 };
 struct Report {unsigned frames=0,slow=0,count=0;std::array<Frame,4> worst{};};
 class Tracker {

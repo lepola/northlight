@@ -13,6 +13,7 @@
 #include "static_shadow_gpu.h"
 #include "world_math.h"
 #include <array>
+#include <atomic>
 #include <cstdio>
 #include <cstdlib>
 #include <iostream>
@@ -58,6 +59,49 @@ static bool sameRecords(const GpuCache::ContentRecord& a,const GpuCache::Content
  return true;
 }
 static Rects rects(){Rects out;for(unsigned n=pick(4);n--;){const long x=long(pick(1100)),y=long(pick(1100));out.push_back({x,y,x+1+long(pick(300)),y+1+long(pick(300))});}return out;}
+// The later plan must finish while the first build is paused. A serial kick
+// fails this handshake; no timing-based speed threshold is needed. Fill all
+// slots first so reserving a new near matrix also exercises LRU eviction.
+static void overlapAndFailure(){
+ for(bool failFirst:{false,true}){
+  GpuCache::Limits limits;limits.uploadMs=1e9;limits.uploadBytes=1u<<30;
+  IDirect3DDevice9 sd,ad;GpuCache sync(limits),async(limits);sync.testAsync(false);async.testAsync(true);
+  auto scene=std::make_shared<Snapshot>();scene->map="overlap";scene->mapGeneration=1;
+  scene->models["model"]=model("model",1);
+  for(unsigned i=0;i<20;++i)scene->placements.push_back(placement("model",i,{0,0,0}));
+  CHECK(sync.update(&sd,scene,1)&&async.update(&ad,scene,1));
+  std::array<std::array<float,16>,10> matrices{};
+  for(unsigned i=0;i<matrices.size();++i){
+   auto& m=matrices[i];m[0]=m[5]=m[10]=.001f;m[15]=1;m[12]=float(i)*.01f;
+   if(i<8)CHECK(sync.signature(m.data())==async.signature(m.data()));
+  }
+  std::atomic<bool> farFinished{false};bool firstEntered=false;
+  async.testBeforeSyncBuild([&]{
+   firstEntered=true;
+   const auto deadline=std::chrono::steady_clock::now()+std::chrono::seconds(3);
+   while(!farFinished.load()&&std::chrono::steady_clock::now()<deadline)std::this_thread::yield();
+   CHECK(farFinished.load());
+   if(failFirst)throw std::bad_alloc();
+  });
+  const float* later[]={matrices[9].data()};bool threw=false;
+  try{CHECK(async.kickPlans(matrices[8].data(),later,1,[&](unsigned,const GpuCache::DetachedView&){farFinished=true;})==1);}
+  catch(const std::bad_alloc&){threw=true;}
+  CHECK(firstEntered&&threw==failFirst);
+  if(failFirst)CHECK(async.asyncPending()==0);
+  async.testBeforeSyncBuild({});
+  for(unsigned i=8;i<10;++i){
+   CHECK(sync.planDigest(matrices[i].data(),true)==async.planDigest(matrices[i].data(),true));
+   CHECK(sync.signature(matrices[i].data())==async.signature(matrices[i].data()));
+  }
+  async.settle();CHECK(async.asyncPending()==0);
+  if(!failFirst)CHECK(sync.planStateDigest(false)==async.planStateDigest(false));
+  // A completed far plan can remain cached after the near build fails, just
+  // like any unconsumed kick. Cache order may differ; every subsequent plan
+  // must still match, including evictions through all eight slots.
+  for(const auto& matrix:matrices)CHECK(sync.planDigest(matrix.data(),true)==async.planDigest(matrix.data(),true));
+ }
+ std::cout<<"overlapping plan builds: far completes during near build; first-build failure joins and restores cache\n";
+}
 int main(int argc,char** argv){
  const unsigned trials=argc>1?unsigned(std::atoi(argv[1])):48,frames=argc>2?unsigned(std::atoi(argv[2])):40;
  uint64_t kicks=0,retracted=0,asyncBuilds=0,stolen=0,failures=0,phases=0,phaseCompared=0,compared=0,drawRecords=0,digests=0,midResets=0,unconsumed=0;
@@ -164,6 +208,7 @@ int main(int argc,char** argv){
   CHECK(sync.stats().asyncKicks==0&&sync.stats().asyncBuilds==0);
   sync.reset();async.reset();
  }
+ overlapAndFailure();
  CHECK(FakeResource::alive==0);
  CHECK(kicks>0&&retracted>0&&asyncBuilds>0&&stolen>0&&failures>0&&phaseCompared>0&&midResets>0&&unconsumed>0);
  std::cout<<"static plan job: "<<trials<<" trials, "<<kicks<<" kicked frames, "<<asyncBuilds<<" worker builds installed, "<<stolen<<" stolen back ("<<retracted<<" jobs retracted unstarted), "<<failures<<" injected failures rebuilt synchronously, "

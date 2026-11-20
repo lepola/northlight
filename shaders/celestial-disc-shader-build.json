@@ -1,14 +1,14 @@
 {
-  "source_sha256": "1fe5235709f1c8dd57f5e20d4f8c1e3772db37acc7861e3a4154b60ffb632d6b",
-  "compiler": "Microsoft d3dcompiler_47 10.0.17134.12 IEEE strict",
-  "compiler_sha256": "3c5f066a121a446e55db9c699b392da5d3aca6ad9019437b722360d09698e3c3",
+  "source_sha256": "efbfc9060d6d95326da0199d2ae498412c708a044166254b52e6abcbb4897372",
+  "compiler": "Microsoft d3dcompiler_47 Windows SDK 10.0.26100.8249 IEEE strict",
+  "compiler_sha256": "e407b9ffadef47e87994dc488214f75405cf04ee99589f2315fc7ab99fd1dfe2",
   "game_launched": false,
   "device_created": false,
   "shader": {
     "target": "ps_3_0",
-    "bytes": 4468,
-    "sha256": "277d7779e35b901b3dbfd0afb3fbdfa2dc91225a82d939b8683e550bb0e5da03",
-    "static_instruction_slots": 260,
+    "bytes": 4452,
+    "sha256": "2e56954ee9fd3fb6f8fd813bf8903b88fba25e2e04d6d70eadc81c74d0e44b6f",
+    "static_instruction_slots": 259,
     "temporary_registers": 6,
     "samplers": [
       0,
@@ -22,7 +22,7 @@
       "rcp": 10,
       "add": 52,
       "frc": 2,
-      "mul": 66,
+      "mul": 65,
       "max": 4,
       "min": 1,
       "mov": 21,
@@ -37,14 +37,37 @@
       "rsq": 1,
       "exp": 12,
       "log": 3
-    }
+    },
+    "instruction_count": 231,
+    "cube_instruction_extra_slots": 0,
+    "source": "shaders/celestial_disc_effects.hlsl",
+    "dependencies": {
+      "shaders/celestial_disc_effects.hlsl": "efbfc9060d6d95326da0199d2ae498412c708a044166254b52e6abcbb4897372",
+      "shaders/celestial_glare.hlsli": "2b56b33995a2ed5d44e524f1337fcd1f9c00c78ee294d52dc8e2bd669466e3e8"
+    },
+    "compiler_inputs": {
+      "scripts/shaders/compile_shaders.cpp": "4faf7f9e8f6a5bdbc63406db030ef66bd65beed1d789a525949ceba7d2a1cd89",
+      "scripts/shaders/shader_inputs.h": "e78f9ff80c7e01f3b4c5a9d7dd7e00c1552cbad9f30345f63ecefe26b28ef63c",
+      "scripts/shaders/shader_compiler.py": "1dc622cd01cc0997e303483310ad272484ae7d62f51158c81ae1b851635041ea",
+      "scripts/shaders/shader_manifest.py": "f0fcb820509e8ee00f8693e6414b7032be82913ad4b7f7ccc4ad2033f89131fe",
+      "scripts/shaders/compile_celestial_disc_shaders.py": "9542fd7d10e8f75b503e4a19a2acc7ddaba15558638d536e25d6d46335ad1139"
+    },
+    "compiler_sha256": "e407b9ffadef47e87994dc488214f75405cf04ee99589f2315fc7ab99fd1dfe2",
+    "compiler_driver_sha256": "28f2719960265e525bff9154edccd7b5e8a7bf05a682faec45629b247764765a",
+    "compiler_flags": [
+      "BACKWARDS_COMPATIBILITY",
+      "IEEE_STRICTNESS",
+      "OPTIMIZATION_LEVEL3"
+    ],
+    "assembly_sha256": "bfddcf503c4487df51f112c9ac89c2038bae1c7ee8cf98243572458bf1a4138a",
+    "symbol": "kCelestialDiscPSShader"
   },
   "shaders": {
     "CelestialDiscPS": {
       "target": "ps_3_0",
-      "bytes": 4468,
-      "sha256": "277d7779e35b901b3dbfd0afb3fbdfa2dc91225a82d939b8683e550bb0e5da03",
-      "static_instruction_slots": 260,
+      "bytes": 4452,
+      "sha256": "2e56954ee9fd3fb6f8fd813bf8903b88fba25e2e04d6d70eadc81c74d0e44b6f",
+      "static_instruction_slots": 259,
       "temporary_registers": 6,
       "samplers": [
         0,
@@ -58,7 +81,7 @@
         "rcp": 10,
         "add": 52,
         "frc": 2,
-        "mul": 66,
+        "mul": 65,
         "max": 4,
         "min": 1,
         "mov": 21,
@@ -73,7 +96,30 @@
         "rsq": 1,
         "exp": 12,
         "log": 3
-      }
+      },
+      "instruction_count": 231,
+      "cube_instruction_extra_slots": 0,
+      "source": "shaders/celestial_disc_effects.hlsl",
+      "dependencies": {
+        "shaders/celestial_disc_effects.hlsl": "efbfc9060d6d95326da0199d2ae498412c708a044166254b52e6abcbb4897372",
+        "shaders/celestial_glare.hlsli": "2b56b33995a2ed5d44e524f1337fcd1f9c00c78ee294d52dc8e2bd669466e3e8"
+      },
+      "compiler_inputs": {
+        "scripts/shaders/compile_shaders.cpp": "4faf7f9e8f6a5bdbc63406db030ef66bd65beed1d789a525949ceba7d2a1cd89",
+        "scripts/shaders/shader_inputs.h": "e78f9ff80c7e01f3b4c5a9d7dd7e00c1552cbad9f30345f63ecefe26b28ef63c",
+        "scripts/shaders/shader_compiler.py": "1dc622cd01cc0997e303483310ad272484ae7d62f51158c81ae1b851635041ea",
+        "scripts/shaders/shader_manifest.py": "f0fcb820509e8ee00f8693e6414b7032be82913ad4b7f7ccc4ad2033f89131fe",
+        "scripts/shaders/compile_celestial_disc_shaders.py": "9542fd7d10e8f75b503e4a19a2acc7ddaba15558638d536e25d6d46335ad1139"
+      },
+      "compiler_sha256": "e407b9ffadef47e87994dc488214f75405cf04ee99589f2315fc7ab99fd1dfe2",
+      "compiler_driver_sha256": "28f2719960265e525bff9154edccd7b5e8a7bf05a682faec45629b247764765a",
+      "compiler_flags": [
+        "BACKWARDS_COMPATIBILITY",
+        "IEEE_STRICTNESS",
+        "OPTIMIZATION_LEVEL3"
+      ],
+      "assembly_sha256": "bfddcf503c4487df51f112c9ac89c2038bae1c7ee8cf98243572458bf1a4138a",
+      "symbol": "kCelestialDiscPSShader"
     },
     "CelestialHaloVisibilityPS": {
       "target": "ps_3_0",
@@ -101,13 +147,36 @@
         "dp3": 1,
         "endrep": 1,
         "else": 1
-      }
+      },
+      "instruction_count": 184,
+      "cube_instruction_extra_slots": 0,
+      "source": "shaders/celestial_disc_effects.hlsl",
+      "dependencies": {
+        "shaders/celestial_disc_effects.hlsl": "efbfc9060d6d95326da0199d2ae498412c708a044166254b52e6abcbb4897372",
+        "shaders/celestial_glare.hlsli": "2b56b33995a2ed5d44e524f1337fcd1f9c00c78ee294d52dc8e2bd669466e3e8"
+      },
+      "compiler_inputs": {
+        "scripts/shaders/compile_shaders.cpp": "4faf7f9e8f6a5bdbc63406db030ef66bd65beed1d789a525949ceba7d2a1cd89",
+        "scripts/shaders/shader_inputs.h": "e78f9ff80c7e01f3b4c5a9d7dd7e00c1552cbad9f30345f63ecefe26b28ef63c",
+        "scripts/shaders/shader_compiler.py": "1dc622cd01cc0997e303483310ad272484ae7d62f51158c81ae1b851635041ea",
+        "scripts/shaders/shader_manifest.py": "f0fcb820509e8ee00f8693e6414b7032be82913ad4b7f7ccc4ad2033f89131fe",
+        "scripts/shaders/compile_celestial_disc_shaders.py": "9542fd7d10e8f75b503e4a19a2acc7ddaba15558638d536e25d6d46335ad1139"
+      },
+      "compiler_sha256": "e407b9ffadef47e87994dc488214f75405cf04ee99589f2315fc7ab99fd1dfe2",
+      "compiler_driver_sha256": "28f2719960265e525bff9154edccd7b5e8a7bf05a682faec45629b247764765a",
+      "compiler_flags": [
+        "BACKWARDS_COMPATIBILITY",
+        "IEEE_STRICTNESS",
+        "OPTIMIZATION_LEVEL3"
+      ],
+      "assembly_sha256": "ef32bc98c069906ffeea7ec12e6e5ec3b0158573c2b9b7bb961462c4533156fe",
+      "symbol": "kCelestialHaloVisibilityPSShader"
     },
     "CelestialVeilPS": {
       "target": "ps_3_0",
-      "bytes": 3312,
-      "sha256": "1d4b27659d199f266d5a263af38bb7c98778566a02c4429ade9cb55efaaf31f3",
-      "static_instruction_slots": 173,
+      "bytes": 3280,
+      "sha256": "ac303019c49f3cfa481d6ac6c8c2a64794a8cac219b86a8a58c34b470ffc4bb6",
+      "static_instruction_slots": 171,
       "temporary_registers": 5,
       "samplers": [
         0,
@@ -118,10 +187,10 @@
       ],
       "instructions": {
         "rcp": 8,
-        "add": 34,
+        "add": 33,
         "frc": 2,
-        "mul": 41,
-        "max": 3,
+        "mul": 39,
+        "max": 4,
         "min": 1,
         "mov": 15,
         "texldl": 5,
@@ -135,7 +204,30 @@
         "exp": 11,
         "texkill": 2,
         "log": 3
-      }
+      },
+      "instruction_count": 155,
+      "cube_instruction_extra_slots": 0,
+      "source": "shaders/celestial_disc_effects.hlsl",
+      "dependencies": {
+        "shaders/celestial_disc_effects.hlsl": "efbfc9060d6d95326da0199d2ae498412c708a044166254b52e6abcbb4897372",
+        "shaders/celestial_glare.hlsli": "2b56b33995a2ed5d44e524f1337fcd1f9c00c78ee294d52dc8e2bd669466e3e8"
+      },
+      "compiler_inputs": {
+        "scripts/shaders/compile_shaders.cpp": "4faf7f9e8f6a5bdbc63406db030ef66bd65beed1d789a525949ceba7d2a1cd89",
+        "scripts/shaders/shader_inputs.h": "e78f9ff80c7e01f3b4c5a9d7dd7e00c1552cbad9f30345f63ecefe26b28ef63c",
+        "scripts/shaders/shader_compiler.py": "1dc622cd01cc0997e303483310ad272484ae7d62f51158c81ae1b851635041ea",
+        "scripts/shaders/shader_manifest.py": "f0fcb820509e8ee00f8693e6414b7032be82913ad4b7f7ccc4ad2033f89131fe",
+        "scripts/shaders/compile_celestial_disc_shaders.py": "9542fd7d10e8f75b503e4a19a2acc7ddaba15558638d536e25d6d46335ad1139"
+      },
+      "compiler_sha256": "e407b9ffadef47e87994dc488214f75405cf04ee99589f2315fc7ab99fd1dfe2",
+      "compiler_driver_sha256": "28f2719960265e525bff9154edccd7b5e8a7bf05a682faec45629b247764765a",
+      "compiler_flags": [
+        "BACKWARDS_COMPATIBILITY",
+        "IEEE_STRICTNESS",
+        "OPTIMIZATION_LEVEL3"
+      ],
+      "assembly_sha256": "c1282b8724edc45f83e88995ccb53d3cf94138e0ae9533aea4f2bed88d35f2f2",
+      "symbol": "kCelestialVeilPSShader"
     },
     "CelestialTerrainVS": {
       "target": "vs_3_0",
@@ -147,7 +239,30 @@
       "instructions": {
         "mul": 3,
         "add": 3
-      }
+      },
+      "instruction_count": 6,
+      "cube_instruction_extra_slots": 0,
+      "source": "shaders/celestial_disc_effects.hlsl",
+      "dependencies": {
+        "shaders/celestial_disc_effects.hlsl": "efbfc9060d6d95326da0199d2ae498412c708a044166254b52e6abcbb4897372",
+        "shaders/celestial_glare.hlsli": "2b56b33995a2ed5d44e524f1337fcd1f9c00c78ee294d52dc8e2bd669466e3e8"
+      },
+      "compiler_inputs": {
+        "scripts/shaders/compile_shaders.cpp": "4faf7f9e8f6a5bdbc63406db030ef66bd65beed1d789a525949ceba7d2a1cd89",
+        "scripts/shaders/shader_inputs.h": "e78f9ff80c7e01f3b4c5a9d7dd7e00c1552cbad9f30345f63ecefe26b28ef63c",
+        "scripts/shaders/shader_compiler.py": "1dc622cd01cc0997e303483310ad272484ae7d62f51158c81ae1b851635041ea",
+        "scripts/shaders/shader_manifest.py": "f0fcb820509e8ee00f8693e6414b7032be82913ad4b7f7ccc4ad2033f89131fe",
+        "scripts/shaders/compile_celestial_disc_shaders.py": "9542fd7d10e8f75b503e4a19a2acc7ddaba15558638d536e25d6d46335ad1139"
+      },
+      "compiler_sha256": "e407b9ffadef47e87994dc488214f75405cf04ee99589f2315fc7ab99fd1dfe2",
+      "compiler_driver_sha256": "28f2719960265e525bff9154edccd7b5e8a7bf05a682faec45629b247764765a",
+      "compiler_flags": [
+        "BACKWARDS_COMPATIBILITY",
+        "IEEE_STRICTNESS",
+        "OPTIMIZATION_LEVEL3"
+      ],
+      "assembly_sha256": "bb3c5610ffbf5f2e8c74a2522ba61c51d8019a1b15a39308d36551b6c4c820fe",
+      "symbol": "kCelestialTerrainVSShader"
     },
     "CelestialTerrainPS": {
       "target": "ps_3_0",
@@ -158,7 +273,34 @@
       "samplers": [],
       "instructions": {
         "mov": 1
-      }
+      },
+      "instruction_count": 1,
+      "cube_instruction_extra_slots": 0,
+      "source": "shaders/celestial_disc_effects.hlsl",
+      "dependencies": {
+        "shaders/celestial_disc_effects.hlsl": "efbfc9060d6d95326da0199d2ae498412c708a044166254b52e6abcbb4897372",
+        "shaders/celestial_glare.hlsli": "2b56b33995a2ed5d44e524f1337fcd1f9c00c78ee294d52dc8e2bd669466e3e8"
+      },
+      "compiler_inputs": {
+        "scripts/shaders/compile_shaders.cpp": "4faf7f9e8f6a5bdbc63406db030ef66bd65beed1d789a525949ceba7d2a1cd89",
+        "scripts/shaders/shader_inputs.h": "e78f9ff80c7e01f3b4c5a9d7dd7e00c1552cbad9f30345f63ecefe26b28ef63c",
+        "scripts/shaders/shader_compiler.py": "1dc622cd01cc0997e303483310ad272484ae7d62f51158c81ae1b851635041ea",
+        "scripts/shaders/shader_manifest.py": "f0fcb820509e8ee00f8693e6414b7032be82913ad4b7f7ccc4ad2033f89131fe",
+        "scripts/shaders/compile_celestial_disc_shaders.py": "9542fd7d10e8f75b503e4a19a2acc7ddaba15558638d536e25d6d46335ad1139"
+      },
+      "compiler_sha256": "e407b9ffadef47e87994dc488214f75405cf04ee99589f2315fc7ab99fd1dfe2",
+      "compiler_driver_sha256": "28f2719960265e525bff9154edccd7b5e8a7bf05a682faec45629b247764765a",
+      "compiler_flags": [
+        "BACKWARDS_COMPATIBILITY",
+        "IEEE_STRICTNESS",
+        "OPTIMIZATION_LEVEL3"
+      ],
+      "assembly_sha256": "0830430dee1409a3d94b9ffdbb654b94daa43d1c7aebd49ea58c5cb25acf6e3c",
+      "symbol": "kCelestialTerrainPSShader"
     }
+  },
+  "provenance_version": 1,
+  "headers": {
+    "src/generated/celestial_disc_compiled_shaders.h": "3c78107643d651e93f5be0cfeba4725c4186c6918c9610d8ecc5cd48e233d1cb"
   }
 }

@@ -1,7 +1,7 @@
 {
   "source_sha256": "2df3a0e625fde6a984b211b5d00918d29c8b6a1755230e8364ceacfe82fd2946",
-  "compiler": "Microsoft d3dcompiler_47 10.0.17134.12 IEEE strict",
-  "compiler_sha256": "3c5f066a121a446e55db9c699b392da5d3aca6ad9019437b722360d09698e3c3",
+  "compiler": "Microsoft d3dcompiler_47 Windows SDK 10.0.26100.8249 IEEE strict",
+  "compiler_sha256": "e407b9ffadef47e87994dc488214f75405cf04ee99589f2315fc7ab99fd1dfe2",
   "game_launched": false,
   "device_created": false,
   "shaders": {
@@ -17,7 +17,28 @@
         "add": 3,
         "mov": 3
       },
-      "cube_instruction_extra_slots": 0
+      "instruction_count": 9,
+      "cube_instruction_extra_slots": 0,
+      "source": "shaders/local_light_effects.hlsl",
+      "dependencies": {
+        "shaders/local_light_effects.hlsl": "2df3a0e625fde6a984b211b5d00918d29c8b6a1755230e8364ceacfe82fd2946"
+      },
+      "compiler_inputs": {
+        "scripts/shaders/compile_shaders.cpp": "4faf7f9e8f6a5bdbc63406db030ef66bd65beed1d789a525949ceba7d2a1cd89",
+        "scripts/shaders/shader_inputs.h": "e78f9ff80c7e01f3b4c5a9d7dd7e00c1552cbad9f30345f63ecefe26b28ef63c",
+        "scripts/shaders/shader_compiler.py": "1dc622cd01cc0997e303483310ad272484ae7d62f51158c81ae1b851635041ea",
+        "scripts/shaders/shader_manifest.py": "f0fcb820509e8ee00f8693e6414b7032be82913ad4b7f7ccc4ad2033f89131fe",
+        "scripts/shaders/compile_local_light_shaders.py": "06278b4667105b2628957678a655ddde568a577292e5f47970ae4a026ea41f45"
+      },
+      "compiler_sha256": "e407b9ffadef47e87994dc488214f75405cf04ee99589f2315fc7ab99fd1dfe2",
+      "compiler_driver_sha256": "28f2719960265e525bff9154edccd7b5e8a7bf05a682faec45629b247764765a",
+      "compiler_flags": [
+        "BACKWARDS_COMPATIBILITY",
+        "IEEE_STRICTNESS",
+        "OPTIMIZATION_LEVEL3"
+      ],
+      "assembly_sha256": "60c71c5a0f8849e6feb77c7c339c0b0ca3a4f15e5506da14d7f467fdfd7d04bb",
+      "symbol": "kLocalShadowVSShader"
     },
     "LocalShadowPS": {
       "target": "ps_3_0",
@@ -39,7 +60,28 @@
         "endif": 1,
         "rcp": 1
       },
-      "cube_instruction_extra_slots": 0
+      "instruction_count": 16,
+      "cube_instruction_extra_slots": 0,
+      "source": "shaders/local_light_effects.hlsl",
+      "dependencies": {
+        "shaders/local_light_effects.hlsl": "2df3a0e625fde6a984b211b5d00918d29c8b6a1755230e8364ceacfe82fd2946"
+      },
+      "compiler_inputs": {
+        "scripts/shaders/compile_shaders.cpp": "4faf7f9e8f6a5bdbc63406db030ef66bd65beed1d789a525949ceba7d2a1cd89",
+        "scripts/shaders/shader_inputs.h": "e78f9ff80c7e01f3b4c5a9d7dd7e00c1552cbad9f30345f63ecefe26b28ef63c",
+        "scripts/shaders/shader_compiler.py": "1dc622cd01cc0997e303483310ad272484ae7d62f51158c81ae1b851635041ea",
+        "scripts/shaders/shader_manifest.py": "f0fcb820509e8ee00f8693e6414b7032be82913ad4b7f7ccc4ad2033f89131fe",
+        "scripts/shaders/compile_local_light_shaders.py": "06278b4667105b2628957678a655ddde568a577292e5f47970ae4a026ea41f45"
+      },
+      "compiler_sha256": "e407b9ffadef47e87994dc488214f75405cf04ee99589f2315fc7ab99fd1dfe2",
+      "compiler_driver_sha256": "28f2719960265e525bff9154edccd7b5e8a7bf05a682faec45629b247764765a",
+      "compiler_flags": [
+        "BACKWARDS_COMPATIBILITY",
+        "IEEE_STRICTNESS",
+        "OPTIMIZATION_LEVEL3"
+      ],
+      "assembly_sha256": "1c23e6b6d11cd156519a90d0bd6f303783cb97d009edefcd64975d5296c4a13a",
+      "symbol": "kLocalShadowPSShader"
     },
     "LocalLighting": {
       "target": "ps_3_0",
@@ -69,7 +111,32 @@
         "rsq": 2,
         "nrm": 1
       },
-      "cube_instruction_extra_slots": 12
+      "instruction_count": 352,
+      "cube_instruction_extra_slots": 12,
+      "source": "shaders/local_light_effects.hlsl",
+      "dependencies": {
+        "shaders/local_light_effects.hlsl": "2df3a0e625fde6a984b211b5d00918d29c8b6a1755230e8364ceacfe82fd2946"
+      },
+      "compiler_inputs": {
+        "scripts/shaders/compile_shaders.cpp": "4faf7f9e8f6a5bdbc63406db030ef66bd65beed1d789a525949ceba7d2a1cd89",
+        "scripts/shaders/shader_inputs.h": "e78f9ff80c7e01f3b4c5a9d7dd7e00c1552cbad9f30345f63ecefe26b28ef63c",
+        "scripts/shaders/shader_compiler.py": "1dc622cd01cc0997e303483310ad272484ae7d62f51158c81ae1b851635041ea",
+        "scripts/shaders/shader_manifest.py": "f0fcb820509e8ee00f8693e6414b7032be82913ad4b7f7ccc4ad2033f89131fe",
+        "scripts/shaders/compile_local_light_shaders.py": "06278b4667105b2628957678a655ddde568a577292e5f47970ae4a026ea41f45"
+      },
+      "compiler_sha256": "e407b9ffadef47e87994dc488214f75405cf04ee99589f2315fc7ab99fd1dfe2",
+      "compiler_driver_sha256": "28f2719960265e525bff9154edccd7b5e8a7bf05a682faec45629b247764765a",
+      "compiler_flags": [
+        "BACKWARDS_COMPATIBILITY",
+        "IEEE_STRICTNESS",
+        "OPTIMIZATION_LEVEL3"
+      ],
+      "assembly_sha256": "236665ff08a830156b98113a906284302cfc74ad7c3a847c6ce07592042a79ca",
+      "symbol": "kLocalLightingShader"
     }
+  },
+  "provenance_version": 1,
+  "headers": {
+    "src/generated/local_light_compiled_shaders.h": "69f131b6f3f11e30e2f324e9ee8c9fae7d9663a4adcf5e2f5df3146100871bc5"
   }
 }

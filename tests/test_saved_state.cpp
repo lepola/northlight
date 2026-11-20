@@ -18,6 +18,7 @@ struct IDirect3DStateBlock9;
 struct IDirect3DDevice9 {
     int refs=1,creates=0,captures=0,applies=0,alive=0,state=17;
     bool failCreate=false,failCapture=false,failViewport=false,failApply=false;
+    int failChange=-1;
     std::array<IDirect3DSurface9*,4> targets{};
     IDirect3DSurface9* depth=nullptr;
     IDirect3DSurface9* boundResource=nullptr;
@@ -27,9 +28,9 @@ struct IDirect3DDevice9 {
     HRESULT GetRenderTarget(int i,IDirect3DSurface9** out){*out=targets[i];if(*out)(*out)->AddRef();return *out?0:-1;}
     HRESULT GetDepthStencilSurface(IDirect3DSurface9** out){*out=depth;if(*out)(*out)->AddRef();return *out?0:-1;}
     HRESULT GetViewport(D3DVIEWPORT9* out){if(failViewport)return -1;*out=viewport;return 0;}
-    HRESULT SetRenderTarget(int i,IDirect3DSurface9* value){targets[i]=value;changes.push_back(10+i);return 0;}
-    HRESULT SetDepthStencilSurface(IDirect3DSurface9* value){depth=value;changes.push_back(value?21:20);return 0;}
-    HRESULT SetViewport(const D3DVIEWPORT9* v){viewport=*v;changes.push_back(30);return 0;}
+    HRESULT SetRenderTarget(int i,IDirect3DSurface9* value){targets[i]=value;changes.push_back(10+i);return failChange==10+i?-1:0;}
+    HRESULT SetDepthStencilSurface(IDirect3DSurface9* value){depth=value;changes.push_back(value?21:20);return failChange==(value?21:20)?-1:0;}
+    HRESULT SetViewport(const D3DVIEWPORT9* v){viewport=*v;changes.push_back(30);return failChange==30?-1:0;}
 };
 struct IDirect3DStateBlock9 {
     IDirect3DDevice9* d;int value;IDirect3DSurface9* retained;
@@ -65,5 +66,12 @@ int main(){
     {SavedState s(nullptr);assert(!s.ok);NorthlightStateBlockPool pool(nullptr);assert(!pool.acquire());pool.clear();}
     {Fixture f;NorthlightStateBlockPool pool(&f.d);f.d.depth=nullptr;{SavedState s(&f.d,&pool);assert(s.ok);f.d.depth=f.surface+5;}assert(!f.d.depth);}
     {Fixture f;NorthlightStateBlockPool pool(&f.d);{SavedState s(&f.d,&pool);assert(s.ok);f.d.failApply=true;}assert(f.d.applies==1);pool.clear();assert(f.d.alive==0);}
+    {Fixture f;NorthlightStateBlockPool pool(&f.d);{SavedState s(&f.d,&pool);mutate(f,99);
+        assert(s.restore()&&s.restore());assert(f.d.state==17&&f.d.applies==1);}
+        assert(f.d.applies==1);}
+    for(int failure:{10,11,12,13,20,21,30,40}){Fixture f;NorthlightStateBlockPool pool(&f.d);
+        {SavedState s(&f.d,&pool);mutate(f,99);f.d.failChange=failure;f.d.failApply=failure==40;
+         assert(!s.restore()&&!s.restore());assert(f.d.applies==1&&f.d.changes.back()==30);}
+        assert(f.d.applies==1);pool.clear();assert(f.d.alive==0);}
     std::cout<<"SavedState: restoration order, 10000 reuses (1 create / 9999 captures), 7 nested leases, active clear, failures, device identity, null depth, resource release passed\n";
 }

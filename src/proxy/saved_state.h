@@ -58,7 +58,7 @@ struct SavedState {
     IDirect3DSurface9* targets[4]={};
     IDirect3DSurface9* depth=nullptr;
     D3DVIEWPORT9 viewport={};
-    bool ok=false;
+    bool ok=false,restored=false,restoreSucceeded=false;
     explicit SavedState(IDirect3DDevice9* device,NorthlightStateBlockPool* cache=nullptr)
         :d(device),pool(cache&&cache->ownsDevice(device)?cache:nullptr){
         if(!d)return;
@@ -71,15 +71,23 @@ struct SavedState {
     }
     SavedState(const SavedState&)=delete;
     SavedState& operator=(const SavedState&)=delete;
+    // Explicit restoration lets a nested renderer stop before using damaged
+    // state. Always attempt every binding; the destructor is the same fallback.
+    bool restore(){
+        if(restored)return restoreSucceeded;
+        restored=true;
+        if(!ok)return false;
+        bool good=SUCCEEDED(d->SetDepthStencilSurface(nullptr));
+        for(int i=1;i<4;++i)good=SUCCEEDED(d->SetRenderTarget(i,nullptr))&&good;
+        good=SUCCEEDED(d->SetRenderTarget(0,targets[0]))&&good;
+        for(int i=1;i<4;++i)good=SUCCEEDED(d->SetRenderTarget(i,targets[i]))&&good;
+        good=SUCCEEDED(d->SetDepthStencilSurface(depth))&&good;
+        good=SUCCEEDED(block->Apply())&&good;
+        restoreSucceeded=SUCCEEDED(d->SetViewport(&viewport))&&good;
+        return restoreSucceeded;
+    }
     ~SavedState(){
-        if(ok){
-            d->SetDepthStencilSurface(nullptr);
-            for(int i=1;i<4;++i)d->SetRenderTarget(i,nullptr);
-            d->SetRenderTarget(0,targets[0]);
-            for(int i=1;i<4;++i)d->SetRenderTarget(i,targets[i]);
-            d->SetDepthStencilSurface(depth);
-            block->Apply();d->SetViewport(&viewport);
-        }
+        restore();
         if(pool)pool->release(block);else if(block)block->Release();
         if(depth)depth->Release();
         for(auto* target:targets)if(target)target->Release();

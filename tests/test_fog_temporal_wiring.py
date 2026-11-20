@@ -41,12 +41,13 @@ checks['HLSL: sky reprojects the direction only, clamp over the neighbourhood, l
 checks['setting: no key (always on since the game tests)']=('FogTemporal' not in q and 'fogTemporal' not in q)  # the docs side (no FogTemporal in the ini or README.txt) is test_quality_docs
 
 g=w[w.index('bool fogResolved=false;'):]
-pas=g[g.index('if(effects.fog&&fogTemporalPS&&fogHistory&&debug==0){'):g.index('// Separable depth-aware blur')]
+assert 'bool fogTemporalScheduled(int debug)const{return effects.fog&&fogTemporalPS&&fogHistory&&debug==0;}' in w
+pas=g[g.index('if(fogTemporalScheduled(debug)){'):g.index('// Separable depth-aware blur')]
 checks['host: pass and swap guarded by the setting, the shader, the history target, fog and debug==0']=(
     'std::swap(fogBlurred,fogHistory);std::swap(fogBlurredSurface,fogHistorySurface)' in pas and pas.count('std::swap')==2 and 'else fogHistoryValid=false;' in pas)
 checks['host: history weight 0 unless fogHistoryValid&&useHistory; weight constant is c64 only, previous view c53 from the bank']=(
     'fogHistoryValid&&useHistory?FogTemporalWeight:0.f' in pas and 'SetPixelShaderConstantF(64,info,1)' in pas and 'SetPixelShaderConstantF(53,c[53],4)' in pas
-    and len(re.findall(r'SetPixelShaderConstantF\(6[4-7]',w))==1)
+    and len(re.findall(r'SetPixelShaderConstantF\(6[4-7]',g))==1)
 checks['host: reads raw fog s9 + fogHistory s14 + previous depth temporalDepth[temporalIndex] s15, writes fogBlurred; s14/s15 put back']=(
     'SetRenderTarget(0,fogBlurredSurface)' in pas and 'SetTexture(9,fog)' in pas and 'SetTexture(14,fogHistory)' in pas and 'SetTexture(15,temporalDepth[temporalIndex])' in pas
     and 'SetTexture(14,nullptr)' in pas and 'SetTexture(15,nullptr)' in pas and 'D3DSAMP_MINFILTER,D3DTEXF_POINT' in pas)
@@ -58,7 +59,7 @@ bl=g[g.index('// Separable depth-aware blur'):g.index('// c34 belongs')]
 checks['host: blur unchanged when the pass did not run (fog -> fogBlurred -> fog), resolved: fogHistory -> fog -> fogBlurred']=(
     'SetRenderTarget(0,fogResolved?fogSurface:fogBlurredSurface);d->SetTexture(9,fogResolved?fogHistory:fog)' in bl
     and 'SetRenderTarget(0,fogResolved?fogBlurredSurface:fogSurface);d->SetTexture(9,fogResolved?fog:fogBlurred)' in bl)
-checks['host: composite and the diagnostic dump read the final buffer']=('SetTexture(9,fogResolved?fogBlurred:fog);d->SetPixelShader(finalPS)' in g and 'dump(d,fogResolved?fogBlurredSurface:fogSurface,directory,"fog",capture)' in g)
+checks['host: composite and the diagnostic dump read the final buffer']=('SetTexture(9,fogResolved?fogBlurred:fog);' in g and 'd->SetPixelShader(waterDistanceOwned?waterOwnedPS:finalPS);' in g and '#else\n        d->SetPixelShader(finalPS);' in g and 'dump(d,fogResolved?fogBlurredSurface:fogSurface,directory,"fog",capture)' in g)
 checks['host: history target created with the others, dropped and invalidated in releaseGPU; shader optional']=(
     '&fogHistory,&fogHistorySurface)' in w and 'drop(fogHistorySurface);drop(fogHistory);drop(fogTemporalPS);fogHistoryValid=false;' in w and 'fogTemporalPS=nullptr;logf("WORLD fog temporal disabled' in w)
 checks['host: no per-draw work (nothing in src/stream or src/proxy mentions it)']=all(

@@ -6,7 +6,8 @@
 
 // Keep the authored terrain shadow outside the maps that replaced it. The
 // original terrain shader already scales both diffuse and specular by S;
-// substitute lerp(S, 1, coverage), rather than neutralising S everywhere.
+// substitute lerp(S, 1, sum(coverage * source strength)). The same strength
+// fades the replacement shadow; spatial coverage alone pops at moonset/sunrise.
 namespace NorthlightTerrainCoverage {
 using Word=std::uint32_t;
 using NorthlightTerrainShadow::sourceType;
@@ -112,9 +113,10 @@ inline bool pixel(const Word* w,std::size_t count,std::vector<Word>& out,PixelIn
     unsigned a=0;while(a<32&&p.temps[a])++a;
     if(a==32)return false;p.temps[a]=true;
     unsigned b=0;while(b<32&&p.temps[b])++b;if(b==32)return false;
-    unsigned base=224-sources*3;
-    for(;;){bool free=true;for(unsigned i=0;i<sources*3;++i)free&=!p.constants[base+i];if(free)break;if(!base)return false;--base;}
-    for(unsigned i=0;i<sources*3;++i)p.constants[base+i]=true;
+    const unsigned constantCount=sources*3+1; // projection rows, then source strengths
+    unsigned base=224-constantCount;
+    for(;;){bool free=true;for(unsigned i=0;i<constantCount;++i)free&=!p.constants[base+i];if(free)break;if(!base)return false;--base;}
+    for(unsigned i=0;i<constantCount;++i)p.constants[base+i]=true;
     unsigned k[2];for(unsigned j=0;j<2;++j){unsigned i=0;while(i<224&&p.constants[i])++i;if(i==224)return false;k[j]=i;p.constants[i]=true;}
     std::vector<std::size_t> reads;std::size_t insert=0;unsigned depth=0;
     for(const auto& op:p.ops){
@@ -142,7 +144,7 @@ inline bool pixel(const Word* w,std::size_t count,std::vector<Word>& out,PixelIn
         emit(3,{dst(0,a,14),src(2,k[1],0x90),src(0,b,0x90)});
         emit(88,{dst(0,a,14),src(0,a)|0x01000000u,src(2,k[0],0xaa),src(2,k[0],0xff)});
         for(unsigned lane=1;lane<4;++lane)emit(5,{dst(0,b,8),src(0,b,0xff),src(0,a,lane*0x55u)});
-        emit(11,{dst(0,a,1),src(0,a,0x00),src(0,b,0xff)});
+        emit(4,{dst(0,a,1)|0x00100000u,src(0,b,0xff),src(2,base+sources*3,source*0x55u),src(0,a,0x00)});
     }
     emit(18,{dst(0,b,8),src(0,a,0x00),src(2,k[0],0xff),src(0,proof.shadowRegister,proof.shadowComponent*0x55u)});
     info.constants=base;info.addedSlots=2+19*sources;

@@ -51,7 +51,7 @@ check('renderer: slot matrices once per frame, kick before the loop, RAII join b
       w.count('NorthlightWorldMath::shadowCachePlacement(')==1 and 'const float* cachedMatrix=staticSlotMatrix[slot];' in w
       and w.index('struct StaticPlanJoin {WorldRenderer& r;~StaticPlanJoin(){try{r.staticCasters.settle();}catch(...){}}} staticPlanJoin{*this};')<w.index('staticPlanKick(slotPlacement,sourceActive);staticKickMs+=')<w.index('for(int source=0;source<2;++source){\n          if(!effects.shadows||!sourceActive[source])continue;'))
 check('renderer: settled before static updates, device release, key invalidation and mesh clears',
-      'staticCasters.settle(); /* 0.3.152: no plan job across the static cache update */' in w and 'void releaseGPU(bool keepMesh=false){replayBoundsAbandon();releaseReplayProbe();staticCasters.settle();' in w
+      'staticCasters.settle(); /* 0.3.152: no plan job across the static cache update */' in w and 'replayBoundsAbandon();releaseReplayProbe();staticCasters.settle();' in w[w.index('void releaseGPU(bool keepMesh=false){'):w.index('void recover()')]
       and 'void invalidateShadowCache(){staticCasters.settle();dropStaticDirtyJobs();' in w and 'void clearMesh(){staticCasters.settle();dropStaticDirtyJobs();' in w)
 check('renderer: worker dirty rects for eligible slots, used only when current',
       'StaticCacheDirtyRects&&staticScissorCaps==1&&!placements[slot].reason&&key.valid&&key.staticContent.valid' in w

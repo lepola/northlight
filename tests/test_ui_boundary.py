@@ -10,12 +10,12 @@ HERE=Path(__file__).resolve().parent
 r=fp.src('renderer.cpp').read_text();h=fp.src('ui_boundary.h').read_text()
 fb=r[r.index('void uiFallbackDraw('):r.index('void uiFallbackEndFrame(')]
 ef=r[r.index('void uiFallbackEndFrame('):r.index('\npublic:',r.index('void uiFallbackEndFrame('))]
-hb=r[r.index('} else if (tag==2) {'):r.index('void uiFallbackDraw(')]
+hb=r[r.index('void beforeUiDraw('):r.index('void uiFallbackDraw(')]
 checks={}
 checks['hash branch: screen-space state and main target, flag before effects']=(all(x in hb for x in ('NorthlightUiBoundary::accepts(zw!=0,rows,zf==D3DCMP_ALWAYS,z!=0)','fullViewport(desc,nullptr,true)','D3DRS_ZWRITEENABLE','D3DRS_ZFUNC','D3DRS_ZENABLE')) and 'psTags.find' not in hb and 0<hb.index('fullViewport(desc,nullptr,true)')<hb.index('hashBoundaryThisFrame=true;')<hb.index('renderEffects();') and 'kind=ui ' in hb)
 checks['hash branch: the fallback runs after it']=hb.index('renderEffects();')<hb.index('uiFallbackDraw(vc,vs);')
 checks['fallback guarded by collecting() (sticky disarm, warm-up frames) before any state read']=fb.index('if(!uiFallback.collecting()||')<fb.index('peekPixelShader')
-checks['fallback guard names terrain, applied, hashBoundaryThisFrame']=all(x in fb[:fb.index('IDirect3DPixelShader9* ps')] for x in ('!terrain','applied','hashBoundaryThisFrame','vc.wmo'))
+checks['fallback guard requires a scene and no earlier UI boundary']=all(x in fb[:fb.index('IDirect3DPixelShader9* ps')] for x in ('!terrain','hashBoundaryThisFrame','fallbackBoundaryThisFrame','vc.wmo'))
 checks['fallback: depth function and enable read before constants; unreadable states reject while aware']=('DWORD zf=D3DCMP_ALWAYS,z=1;if(zFuncAware&&(FAILED(ext->GetRenderState(D3DRS_ZFUNC,&zf))||FAILED(ext->GetRenderState(D3DRS_ZENABLE,&z))))return;' in fb
     and fb.index('D3DRS_ZWRITEENABLE')<fb.index('D3DRS_ZFUNC')<fb.index('GetVertexShaderConstantF(0,c,4)') and 'zFuncAware=world->depthFuncAware();' in r)
 checks['fallback: disabled depth or ALWAYS, without changing the accepted projection']='NorthlightUiBoundary::accepts(zw!=0,c,zf==D3DCMP_ALWAYS,z!=0)' in fb
@@ -23,8 +23,19 @@ checks['fallback: zwrite read, then isBoundary before it, accepts() the one pred
     and fb.count('fullViewport(')==1 and 'screenSpaceRows' not in fb)
 checks['fullViewport: quiet probes preserve the world-size gate by default']='desc.Width>=640&&desc.Height>=360' in r
 checks['fallback: learning skips frames without effects (enabled/failed), the armed boundary still runs renderEffects']=fb.index('if(!armed&&(!enabled||failed))return;')<fb.index('peekPixelShader')
-checks['fallback: world/water test before the PS lookup']=fb.index('vc.world||drawWaterVS')<fb.index('peekPixelShader')
+checks['fallback: world/water test before the PS lookup']=fb.index('vc.world||(vc.entry&kWaterTag)!=0')<fb.index('peekPixelShader')
 checks['fallback: renders effects with the fallback flag and counter']=all(x in fb for x in ('fallbackBoundaryThisFrame=true','++uiFallbackBoundaries','kind=ui-fallback','renderEffects();'))
+copy=r[r.index('void beforeWorldScreenCopy('):r.index('WaterOutcome composeWater(')]
+dry=copy[copy.index('else if(!surface){'):copy.index('else if(!resources')]
+checks['dry and liquid frames both light the scene before native glow'] = (
+    'renderEffects(true);return;' in dry and 'if(world&&world->ready()){renderEffects(true);return;}' in copy and
+    copy.index('!worldScreenCopy(')<copy.index('!prepareSkyView(')<copy.index('renderEffects(true)'))
+liquid=r[r.index('template<class Draw> HRESULT slimeNativeDraw('):r.index('#else',r.index('template<class Draw> HRESULT slimeNativeDraw('))]
+checks['the liquid colour classifier only sees draws in the current world depth range'] = (
+    liquid.index('NorthlightWorldDrawDomain::accepts(')<liquid.index('surfaceKind=cooperativeLiquidKind('))
+checks['a pending replay after early lighting still reaches the verified UI boundary'] = (
+    'if(pendingUi&&late)beforeUiDraw(vc,late);' in r and
+    all('if(!applied)renderEffects();spellReplay();' in branch for branch in (hb,fb)))
 checks['end frame: FrameKind mapping']='(!enabled||failed)?K::Neutral:hashBoundaryThisFrame?K::WorldHash:fallbackBoundaryThisFrame?K::WorldFallback:!terrain?K::NoWorld:applied?K::Neutral:K::WorldMissed' in ef
 pub=r[r.index('void uiFallbackPublish(){'):r.index('void uiFallbackEndFrame(')]
 checks['stream hash: one writer (uiFallbackPublish: learned VS while armed, else 0), called after the end-of-frame and forget changes']=(r.count('learnedUiVsHash.store(')==1 and 'learnedUiVsHash.store(want,std::memory_order_relaxed)' in pub and 'uiFallback.armed()?uiFallbackVsHash(uiFallback.learnedVs()):0' in pub
@@ -35,8 +46,8 @@ checks['end frame: active, lost and no-candidate logs; a disarm after collecting
 checks['end frame runs before clearFrame and the periodic frame line']=r.index('uiFallbackEndFrame();\n')<r.index('logf("frame=%u applied=%u')<r.index('{CpuScope cpu(sampledFrame?&cleanup:nullptr);clearFrame();}') and 'uiAfterTerrain=%u uiFallback=%u uiFallbackState=%c"' in r
 checks['shader creation forgets the identity']=r.count('uiFallbackForget(*out);')==2
 checks['ui_boundary.h is pure']=not any(x in h for x in ('windows.h','d3d9','Windows.h','<vector>','new '))
-hb2=r[r.index('} else if (tag==2) {'):r.index('++uiAfterTerrain;')]
-checks['pre-world stock UI cannot disarm the fallback: only a world hash boundary does']=('if(!terrain)return;' in hb2
+hb2=r[r.index('void beforeUiDraw('):r.index('++uiAfterTerrain;')]
+checks['pre-world stock UI cannot disarm the fallback: only a world hash boundary does']=('if(!terrain&&(!skyView||skyTried))return;' in hb2 and 'fullViewport(desc,nullptr,true)&&prepareSkyView(desc)' in hb
     and 'stockPairNoWorld' not in r and 'stockUiPair' not in r and '.onHashBoundary(' not in r
     and 'auto result=uiFallback.endFrame(kind);' in ef)
 checks['periodic frame line shows the fallback state (d disarmed, a armed, l learning), no new line on stock']="uiFallback=%u uiFallbackState=%c" in r and "uiFallback.disarmed()?'d':uiFallback.armed()?'a':'l'" in r

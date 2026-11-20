@@ -26,6 +26,49 @@ struct Rig {
 // clear, copy, present and write unlock) carry the effective device state instead. With it compiled out the traces must be identical.
 static std::vector<std::string> filtered(const std::vector<std::string>& t){std::vector<std::string> r;for(auto& s:t){if(isGetName(s))continue;if(kFilterRedundantState&&isFilterableName(s))continue;if(s.size()>3&&s.compare(s.size()-3,3," ro")==0&&s.find("::Unlock ")!=std::string::npos)continue;r.push_back(s);}return r;}   // READONLY locks served from a shadow (or read back once by the stream) are no Target events worth comparing: the bytes the game reads are compared as results
 
+// Game-memory identities must not call the backend or wait for replay. The
+// registry owns publication/invalidation; an unknown address is never read.
+static void opaqueBackendIdentity(){
+    Registry registry;ProxyBase p(nullptr,Kind::Surface);
+    p.unk=reinterpret_cast<IUnknown*>(0x1000);
+    std::uintptr_t raw=99;
+    CHECK(!registry.rawIdentity(p.unk,raw)&&raw==0);
+    registry.addProxy(&p);
+    CHECK(registry.rawIdentity(p.unk,raw)&&raw==0);
+    unsigned resolutions=0;
+    registry.rawOf=[&](IUnknown* inner,Kind){++resolutions;return inner;};
+    registry.bindInner(&p,reinterpret_cast<IUnknown*>(0x5000));
+    for(unsigned i=0;i<100;++i)CHECK(registry.rawIdentity(p.unk,raw)&&raw==0x5000);
+    CHECK(resolutions==1);
+    registry.unbindInner(&p);registry.rawOf={};
+    registry.bindInner(&p,reinterpret_cast<IUnknown*>(0x5000));
+    CHECK(!registry.rawIdentity(p.unk,raw)&&raw==0); // ordinary unwrap still required
+    registry.rawOf=[&](IUnknown* inner,Kind){++resolutions;return inner;};
+    registry.bindInner(&p,reinterpret_cast<IUnknown*>(0x5000));
+    p.dead.store(true);CHECK(registry.rawIdentity(p.unk,raw)&&raw==0);
+    p.dead.store(false);registry.unbindInner(&p);
+    CHECK(registry.rawIdentity(p.unk,raw)&&raw==0);
+    std::thread reader([&]{for(unsigned i=0;i<20000;++i){std::uintptr_t observed=99;
+        CHECK(registry.rawIdentity(p.unk,observed));CHECK(observed==0||observed==0x5000||observed==0x6000);}});
+    for(unsigned i=0;i<20000;++i){registry.bindInner(&p,reinterpret_cast<IUnknown*>(i&1?0x5000:0x6000));registry.unbindInner(&p);}
+    reader.join();registry.erase(&p);
+    CHECK(!registry.rawIdentity(p.unk,raw)&&raw==0);
+    registry.addProxy(&p);CHECK(registry.rawIdentity(p.unk,raw)&&raw==0);
+    registry.bindInner(&p,reinterpret_cast<IUnknown*>(0x7000));
+    CHECK(registry.rawIdentity(p.unk,raw)&&raw==0x7000);registry.erase(&p);
+    CHECK(!rawIdentity(p.unk,raw)&&raw==0); // inactive stream
+    Rig rig(true);IDirect3DTexture9* texture=nullptr;
+    CHECK(rig.dev->CreateTexture(16,16,1,0,(D3DFORMAT)22,(D3DPOOL)1,&texture,nullptr)==D3D_OK);
+    rig.sync();const auto syncs=get(rig.core().q.stats.syncCalls);
+    CHECK(rawIdentity(texture,raw)==kDirectReplay);
+    if(kDirectReplay)CHECK(raw==reinterpret_cast<std::uintptr_t>(unwrapFake(static_cast<IUnknown*>(const_cast<void*>(inner(texture))))));
+    else CHECK(raw==0);
+    CHECK(get(rig.core().q.stats.syncCalls)==syncs);
+    const void* retired=texture;texture->Release();rig.sync();
+    CHECK(!rawIdentity(retired,raw)&&raw==0);
+    rig.finish();CHECK(!rawIdentity(retired,raw)&&raw==0);checkClean();
+}
+
 static void lifetimeAndIdentity(){
     gTrace.clear();Rig rig(true);auto& core=rig.core();const auto base=get(core.q.stats.syncCalls);
     IDirect3DTexture9* tex=nullptr;CHECK(rig.dev->CreateTexture(64,64,0,0,(D3DFORMAT)22,(D3DPOOL)1,&tex,nullptr)==D3D_OK&&tex);
@@ -283,7 +326,38 @@ static void dynamicBufferShadows(){
     rig.finish();checkClean();
 }
 // 0.3.192 (CS): the adaptive buffer-shadow cap. It grows (4 MiB steps, at most one per kShadowGrowFrames Presents, up to 32 MiB) only on a thrash signal
-// without memory pressure: evicting a HOT shadow. A cold working set never grows it. Pressure halves it, forgets the growth and never lets it grow.
+// from a hot eviction or a recent eviction/refill. One-time cold visits do not grow it; pressure preserves the cap and its bounded growth.
+// A slow camera cycle can evict an old shadow and need it again immediately.
+// The old victim-age test missed this: every refill then forced a synchronous readback.
+static void recentlyEvictedShadow(){
+    for(bool recent:{false,true})for(bool pressure:{false,true}){
+        gTrace.clear();StreamDevice::Options opt;opt.readBackLock=&dxvk3ReadBack;
+        Rig rig(true,opt);auto& q=rig.core().q;auto& stats=q.stats;IDirect3DDevice9* d=rig.dev;
+        std::vector<IDirect3DVertexBuffer9*> buffers;
+        for(unsigned i=0;i<10;++i){
+            IDirect3DVertexBuffer9* buffer=nullptr;
+            CHECK(d->CreateVertexBuffer(2u<<20,D3::kUsageDynamic,0,(D3DPOOL)0,&buffer,nullptr)==D3D_OK);
+            buffers.push_back(buffer);void* bytes=nullptr;
+            CHECK(buffer->Lock(0,16,&bytes,0)==D3D_OK);std::memset(bytes,0x40+i,16);CHECK(buffer->Unlock()==D3D_OK);
+        }
+        auto read=[&](unsigned i){void* bytes=nullptr;CHECK(buffers[i]->Lock(0,16,&bytes,0)==D3D_OK);
+            for(unsigned j=0;j<16;++j)CHECK(static_cast<unsigned char*>(bytes)[j]==0x40+i);
+            CHECK(buffers[i]->Unlock()==D3D_OK);};
+        frames(d,kShadowHotFrames*2);rig.core().memoryPressure.store(pressure);frames(d,1);
+        read(8); // Never previously retained: an ordinary cold eviction must not grow the cap.
+        CHECK(!shadowOn(buffers[0])&&shadowOn(buffers[8])&&q.shadowCap()==ShadowBudgetBytes);
+        CHECK(get(stats.hotShadowEvicted)==0&&get(stats.shadowCapGrows)==0);
+        frames(d,recent?1:kShadowHotFrames);
+        read(0); // Recent eviction, not recent use; expired eviction history stays cold.
+        CHECK(shadowOn(buffers[0])&&q.shadowCap()==ShadowBudgetBytes+(recent?kShadowGrowStep:0));
+        CHECK(get(stats.shadowCapGrows)==unsigned(recent)&&get(stats.hotShadowEvicted)==0);
+        read(9); // Free room/cooldown: no additional growth in this interval.
+        CHECK(get(stats.shadowCapGrows)==unsigned(recent)&&stats.shadowBytes.load()<=std::int64_t(q.shadowCap()));
+        for(auto* buffer:buffers)buffer->Release();rig.sync();CHECK(stats.shadowBytes.load()==0);
+        rig.finish();checkClean();
+    }
+}
+
 static void adaptiveShadowCap(){
     gTrace.clear();StreamDevice::Options opt;opt.readBackLock=&dxvk3ReadBack;
     Rig rig(true,opt);auto& q=rig.core().q;auto& s=q.stats;IDirect3DDevice9* d=rig.dev;
@@ -1058,6 +1132,35 @@ static void upDrawsAndBackpressure(){
 
 static std::atomic<int> gCaptures{0};
 static bool fakeCapture(GameSnapshot& s,Trigger,std::uint64_t draw){const unsigned v=7;s.record(0x1000,&v,4,true);s.triggerDraw=draw;gCaptures.fetch_add(1);return true;}
+// The game thread can block inside capture. Earlier D3D work must already be
+// available to replay, while the triggering world draw still follows its snapshot.
+static Queue* worldCaptureQueue=nullptr;
+static bool worldCaptureAfterQueuedWork(GameSnapshot& snapshot,Trigger trigger,std::uint64_t ordinal){
+    CHECK(trigger==Trigger::World&&worldCaptureQueue);
+    const auto beforeDraw=worldCaptureQueue->recordedSeq();
+    CHECK(waitFor([&]{return worldCaptureQueue->replayedSeq()==beforeDraw;},2000));
+    return fakeCapture(snapshot,trigger,ordinal);
+}
+static void worldCapturePublishesPriorWork(){
+    StreamDevice::Options options;options.capture=&worldCaptureAfterQueuedWork;
+    Rig rig(true,options);
+    IDirect3DVertexShader9* shader=nullptr;
+    const DWORD code[]={0xFFFE0200,0x0000FFFF};
+    CHECK(rig.dev->CreateVertexShader(code,&shader)==D3D_OK&&shader);
+    static_cast<StreamVertexShader*>(shader)->tags=NorthlightShaderTags::kTriggerWorld;
+    CHECK(rig.dev->SetVertexShader(shader)==D3D_OK);
+    rig.sync();
+    D3DVIEWPORT9 viewport{0,0,640,480,0.f,1.f};
+    CHECK(rig.dev->SetViewport(&viewport)==D3D_OK);
+    worldCaptureQueue=&rig.core().q;
+    CHECK(worldCaptureQueue->recordedSeq()>worldCaptureQueue->replayedSeq());
+    const int capturesBefore=gCaptures.load();
+    CHECK(rig.dev->DrawPrimitive((D3DPRIMITIVETYPE)4,0,2)==D3D_OK);
+    CHECK(gCaptures.load()==capturesBefore+1);
+    worldCaptureQueue=nullptr;
+    rig.sync();shader->Release();rig.finish();
+}
+
 static void snapshotTriggers(){
     gTrace.clear();gCaptures=0;StreamDevice::Options opt;opt.capture=&fakeCapture;Rig rig(true,opt);
     for(int frame=0;frame<3;++frame){
@@ -2090,8 +2193,8 @@ static void textureReadbackTable(){
     }
 }
 static void streamTests(bool threadsOnly){
-    layoutIsolation();replayTimingAccounting();diagnosticsOffSkipsAudit();idlePollWakes();
-    lifetimeAndIdentity();pressureKeepsShadows();syncStormDetector();stateKnownUnknown();locksPreserveBytes();staticBufferShadows();dynamicBufferShadows();largeBufferAllowance();twoLargeBuffers();adaptiveShadowCap();shadowCap();queriesAndSyncCensus();eventQueryBatch();occlusionFlushLocal(true);occlusionFlushLocal(false);resetAndShutdown();directReplayRaw();redundantFiltering();renderTargetResetsViewport();textureShadows();textureExpressReadback();textureReadbackDiagnostics();textureExpressBehind();textureReadbackTable();statsLine();childrenOutliveTheDevice();queryProbeAndDeadQuery();initFailureFallback();cursorHandling();nestedSyncInPump();testCooperativeLevelLocal(1);testCooperativeLevelLocal(3);upDrawsAndBackpressure();snapshotTriggers();snapshotPoolNotExhausted();memoryPressureRelease();impossibleBlockIsRefusedAtOnce();smallStagedLocksUseScratch();
+    opaqueBackendIdentity();layoutIsolation();replayTimingAccounting();diagnosticsOffSkipsAudit();idlePollWakes();
+    lifetimeAndIdentity();pressureKeepsShadows();syncStormDetector();stateKnownUnknown();locksPreserveBytes();staticBufferShadows();dynamicBufferShadows();largeBufferAllowance();twoLargeBuffers();recentlyEvictedShadow();adaptiveShadowCap();shadowCap();queriesAndSyncCensus();eventQueryBatch();occlusionFlushLocal(true);occlusionFlushLocal(false);resetAndShutdown();directReplayRaw();redundantFiltering();renderTargetResetsViewport();textureShadows();textureExpressReadback();textureReadbackDiagnostics();textureExpressBehind();textureReadbackTable();statsLine();childrenOutliveTheDevice();queryProbeAndDeadQuery();initFailureFallback();cursorHandling();nestedSyncInPump();testCooperativeLevelLocal(1);testCooperativeLevelLocal(3);upDrawsAndBackpressure();snapshotTriggers();worldCapturePublishesPriorWork();snapshotPoolNotExhausted();memoryPressureRelease();impossibleBlockIsRefusedAtOnce();smallStagedLocksUseScratch();
     framesAheadPacing();textureShadowSpares();frameSkipping();frameSkipReleasesPresentWait();   // 0.3.200 (frame skip)
     zeroCopyRenames();zeroCopyRingBudget();zeroCopyAdaptiveRing();zeroCopyRetire();zeroCopyPumpedLock(0);zeroCopyPumpedLock(1);
     for(UINT len:{512u<<10,2u<<20}){zeroCopyRenames(len);zeroCopyRetire(len);zeroCopyPumpedLock(0,len);zeroCopyPumpedLock(1,len);}   // 0.3.204 (task 21): the same for DYNAMIC buffers in the regular shadow cap

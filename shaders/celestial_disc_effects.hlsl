@@ -71,30 +71,16 @@ float filteredSkyVisibility(float4 source){
 // tail shifted out by 3R, tail(sqrt(r^2+9)), flat-topped at the tail's 3R
 // level. Both parts fall monotonically with radius, so a barely hidden sun
 // (small disc, bright ring) shows no dark ring around it.
+#include "celestial_glare.hlsli"
 float glareProfile(float radius){
-    float r2=radius*radius;
-    float edge=1-smoothstep(.35*DiscEmission.y,DiscEmission.y,radius);
-    // The sky-phase core precedes opaque geometry and cloud blending. Later
-    // geometry covers it; no previous-frame visibility texture is needed.
-    bool skyCore=abs(DiscTerrainPolicy.w-1)<.5; // mode 2 (skybox frame) is the pre-sky-phase late glare: halo-visibility taps and ring
+    // Preserve upstream's sky-phase visibility while sharing the glare equation.
+    bool skyCore=abs(DiscTerrainPolicy.w-1)<.5;
     float disc=skyCore?1:saturate(tex2Dlod(DiscHaloVisibility,float4(.5,.5,0,0)).r);
-    float ring=skyCore?0:DiscGlowCore.w*saturate(tex2Dlod(DiscRingVisibility,float4(.5,.5,0,0)).r);
-    float3 tail=float3(exp2(-.12*r2),exp2(-.025*r2),exp2(-.008*r2));
-    // tail(sqrt(r^2+9)) = sum w_i*2^(-k_i*9)*2^(-k_i*r^2): the same three terms.
-    float tailed=max(disc*dot(tail,float3(.25,.35,.40)),ring*dot(tail,float3(.118257,.299458,.380527)));
-    if(DiscRepair.w>.5)return (DiscEmission.z*exp2(-DiscEmission.x*r2)*disc+DiscGlowHue.w*tailed)*edge;
-    return DiscEmission.z*.35*exp2(-1.11*max(radius-1,0))*edge*disc;
+    float ring=skyCore?0:saturate(tex2Dlod(DiscRingVisibility,float4(.5,.5,0,0)).r);
+    return CelestialGlareProfile(radius,DiscRepair.w>.5,DiscEmission,DiscGlowHue,DiscGlowCore,disc,ring);
 }
-// Tinted by the glow hue; inside the hot core it goes to the core colour, so a
-// saturated sunset hue turns warm white instead of a red core. Mirrors
-// NorthlightSunHue::glowColour (lerp(sun,core,smoothstep(inner))) with inner the
-// core's own falloff; the hue mix with today's tint is folded in on the CPU.
-float3 glowColor(float radius){
-    return saturate(lerp(DiscGlowHue.rgb,DiscGlowCore.rgb,smoothstep(0,1,exp2(-DiscEmission.x*radius*radius))));
-}
-// Soft shoulder: 1-exp(-x*colour), written for the INVDESTCOLOR/ONE screen
-// blend: dst' = 1-(1-dst)*exp(-x*colour). Monotonic and smooth; never clips.
-float3 glowShoulder(float x,float3 color){return 1-exp2(-1.442695*x*color);}
+float3 glowColor(float radius){return CelestialGlareColour(radius,DiscEmission,DiscGlowHue,DiscGlowCore);}
+float3 glowShoulder(float x,float3 color){return CelestialGlowShoulder(x,color);}
 float3 outputColor(float3 encoded){
     // Texture sampling is raw (sRGB sampler OFF). The current renderer normally
     // writes encoded framebuffer values directly; if caller enables SRGBWRITE,
@@ -192,7 +178,7 @@ float4 CelestialDiscPS(float2 uv:TEXCOORD0):COLOR0 {
 // Draw into the target water just used. Geometry is classified by RAW depth
 // against the sky-band sprite depth, so WDL and beyond-far silhouettes, which
 // the glare's repair test removes from the sky, are veiled too; visible water
-// and loaded terrain behind the sky likewise; visible water takes none. Blend INVDESTCOLOR/ONE like the glare,
+// and loaded terrain behind the sky likewise. Blend INVDESTCOLOR/ONE like the glare,
 // so the colour continues across silhouettes. c12.z and c47.w already hold the
 // glare weights x veil strength x (1 - horizon haze at the sun) x fades.
 float4 CelestialVeilPS(float2 uv:TEXCOORD0):COLOR0 {
@@ -201,17 +187,18 @@ float4 CelestialVeilPS(float2 uv:TEXCOORD0):COLOR0 {
     float rawDepth=tex2Dlod(DiscDepth,float4(depthUV,0,0)).r;
     float depth=saturate((rawDepth-DiscImage.z)*DiscImage.w);
     float sky=(depth>=.99999994&&rawDepth>=DiscRepair.x-DiscRepair.z)?1:0;
-    // Visible water takes no veil: the sea in front of a low sun is where it sets, and a glow on it showed a bright
-    // strip under the sea's edge (the water's own sun glint lights it).
+    // Atmospheric glare lies in front of every visible surface, including water.
+    // A water mask may cover sky depth; classify that surface as geometry too.
+    // The direct disc remains occluded in CelestialDiscPS; reflected glints are separate.
     float sea=0;
     if(DiscProjection.w>.5){float2 water=tex2Dlod(DiscWater,float4(depthUV,0,0)).rg;
         if(water.x>DiscPolicy.y&&water.x<=DiscPolicy.z&&water.y>.003)sea=1;}
     float3 ray=discRay(uv);
     float forward=dot(ray,DiscDirection.xyz);clip(forward-.000001);
-    float geometry=(1-sky*terrainVisibility(ray))*(1-sea);
+    float geometry=max(1-sky*terrainVisibility(ray),sea);
     float2 local=float2(dot(ray,DiscRight.xyz),-dot(ray,DiscUp.xyz))/(forward*DiscDirection.w);
     float radius=length(local);
-    // No cut at the camera's far edge: it drew a sharp line across a near hill. The sea under the edge takes no veil (above).
+    // No cut at the camera's far edge or shoreline: glare is continuous across visible surfaces.
     float alpha=geometry*glareProfile(radius);
     clip(alpha-.001);
     return float4(outputColor(glowShoulder(alpha,DiscGlowHue.rgb)),alpha);

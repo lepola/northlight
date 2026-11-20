@@ -128,7 +128,7 @@ with tempfile.TemporaryDirectory(prefix='northlight-vs-cache-') as tmp:
 # Behavioural: the real fullViewport (with its back buffer cache) and bindWorldDepth (beforeDraw's depth step) over mocks.
 vp_start=r.index("    // Swap chain 0's back buffer description only changes through Reset.")
 vp_block=r[vp_start:r.index('\n    bool readProjection(',vp_start)]
-bw_block=member(r,'    bool bindWorldDepth(const D3DSURFACE_DESC& desc)')
+bw_block=member(r,'    bool bindWorldDepth(const D3DSURFACE_DESC& desc,')
 clear_frame=member(r,'void clearFrame() {')
 assert 'drop(worldDepth);worldDepthDescKnown=false;' in clear_frame and 'backDescKnown=false;backSurface=nullptr;' in member(r,'HRESULT STDMETHODCALLTYPE Reset(D3DPRESENT_PARAMETERS* pp) override')
 HARNESS2=r"""
@@ -190,7 +190,7 @@ int main(){
         assert(d.bindWorldDepth(want)&&b.getDescCalls==2&&d.ext->getDepth==3&&b.refs==2);                              // (f) after clearFrame the cached desc is not reused
         d.ext->peekDepth=false;assert(d.bindWorldDepth(want)&&d.ext->getDepth==4&&b.refs==2&&b.getDescCalls==3);       // peek fails: old path, still one held reference
         IDirect3DSurface9 small=surface(640,480,D3DFMT_D24S8);d.ext->depth=&small;assert(!d.bindWorldDepth(want)&&d.depthRejects==1&&small.refs==1&&d.worldDepth==&b&&b.refs==2);   // size mismatch: rejected, nothing leaks, worldDepth kept
-        IDirect3DSurface9 bad=surface(1920,1080,D3DFMT_D16);d.ext->depth=&bad;assert(!d.bindWorldDepth(want)&&d.failed&&bad.refs==1&&d.worldDepth==&b);   // unsupported format: disabled
+        IDirect3DSurface9 bad=surface(1920,1080,D3DFMT_D16);d.ext->depth=&bad;assert(!d.bindWorldDepth(want,false)&&!d.failed&&bad.refs==1);assert(!d.bindWorldDepth(want)&&d.failed&&bad.refs==1&&d.worldDepth==&b);   // unsupported format: disabled
         d.ext->depth=nullptr;d.failed=false;assert(!d.bindWorldDepth(want)&&d.depthRejects==2);                         // no depth bound
     }
     std::printf("PASS fullViewport back buffer cache and bindWorldDepth cache\n");
@@ -204,7 +204,7 @@ with tempfile.TemporaryDirectory(prefix='northlight-phase3-') as tmp:
         subprocess.run(['clang++','-std=c++17','-Wall','-Wextra','-Werror','-Wno-unused-parameter','-Wno-unused-private-field',*flags,str(Path(tmp)/'t.cpp'),'-o',str(exe)],check=True)
         print(label,subprocess.check_output([str(exe)],text=True),end='',flush=True)
 
-dm=member(r,'template<class Capture> void prepareDrawImpl(Capture capture,UINT count)');bd=member(r,'    void beforeDraw(IDirect3DVertexShader9* vs)');cw=member(r,'template<class Draw> void captureWater(');fv=member(r,'bool fullViewport(D3DSURFACE_DESC& desc');bw=member(r,'bool bindWorldDepth(const D3DSURFACE_DESC& desc)')
+dm=member(r,'template<class Capture> void prepareDrawImpl(Capture capture,UINT count)');bd=member(r,'    void beforeDraw(IDirect3DVertexShader9* vs)');cw=member(r,'template<class Draw> void captureWater(');fv=member(r,'bool fullViewport(D3DSURFACE_DESC& desc');bw=member(r,'bool bindWorldDepth(const D3DSURFACE_DESC& desc,')
 registration=member(w,'void registerShader(IDirect3DVertexShader9* shader,uint64_t hash)')
 checks={
  'prepareDrawImpl: peekVertexShader with the GetVertexShader fallback, released only when not borrowed':

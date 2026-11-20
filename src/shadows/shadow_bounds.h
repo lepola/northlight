@@ -17,53 +17,73 @@ inline bool affineLightMatrix(const float* matrix){
     for(unsigned i=0;i<16;++i)if(!std::isfinite(matrix[i]))return false;
     return matrix[3]==0&&matrix[7]==0&&matrix[11]==0&&matrix[15]==1;
 }
-inline bool clipRejectAffine(NorthlightGI::Vec3 low,NorthlightGI::Vec3 high,
-                             const float* matrix,float epsilon=1e-4f,bool retainUpstream=false) {
+// Projection and its error bound are shared by culling and depth selection.
+struct AxisInterval {
+    double lower,upper,magnitude;
+    double margin(float epsilon,unsigned roundoff)const {
+        return double(epsilon)+magnitude*(roundoff*std::numeric_limits<float>::epsilon());
+    }
+    bool depthInside(float epsilon)const {
+        const double padding=margin(epsilon,32);
+        return lower-padding>0&&upper+padding<1;
+    }
+};
+inline bool validBox(NorthlightGI::Vec3 low,NorthlightGI::Vec3 high,float epsilon) {
     if(!std::isfinite(epsilon)||epsilon<0)return false;
     const float lo[]={low.x,low.y,low.z},hi[]={high.x,high.y,high.z};
     for(unsigned axis=0;axis<3;++axis)
         if(!std::isfinite(lo[axis])||!std::isfinite(hi[axis])||lo[axis]>hi[axis])return false;
-    for(unsigned axis=0;axis<3;++axis) {
-        double lower=matrix[12+axis],upper=lower,magnitude=std::fabs(lower);
-        for(unsigned row=0;row<3;++row){
-            const double a=double(lo[row])*matrix[row*4+axis],b=double(hi[row])*matrix[row*4+axis];
-            lower+=std::min(a,b);upper+=std::max(a,b);
-            magnitude+=std::max(std::fabs(a),std::fabs(b));
-        }
-        // Interval extrema replace eight corner projections. The maximum
-        // magnitude bounds EVERY corner's old roundoff expansion (including
-        // world-coordinate cancellation), so this can only retain more casters.
-        const double margin=double(epsilon)+magnitude*(8.0*std::numeric_limits<float>::epsilon());
-        const double minimum=lower-margin,maximum=upper+margin;
-        // A separating light plane is sufficient. Do not project the other
-        // axes once this box is proven outside; invalid boxes were checked above.
-        if(axis<2?(maximum<-1||minimum>1):((!retainUpstream&&maximum<0)||minimum>1))return true;
+    return true;
+}
+inline AxisInterval projectAxis(NorthlightGI::Vec3 low,NorthlightGI::Vec3 high,
+                                const float* matrix,unsigned axis) {
+    const float lo[]={low.x,low.y,low.z},hi[]={high.x,high.y,high.z};
+    AxisInterval result={matrix[12+axis],matrix[12+axis],std::fabs(matrix[12+axis])};
+    for(unsigned row=0;row<3;++row) {
+        const double a=double(lo[row])*matrix[row*4+axis],b=double(hi[row])*matrix[row*4+axis];
+        result.lower+=std::min(a,b);result.upper+=std::max(a,b);
+        result.magnitude+=std::max(std::fabs(a),std::fabs(b));
     }
-    return false;
+    return result;
+}
+struct Classification {bool rejected=false,depthInside=false;};
+inline Classification classifyAffine(NorthlightGI::Vec3 low,NorthlightGI::Vec3 high,
+                                      const float* matrix,float epsilon=1e-4f,
+                                      bool retainUpstream=false,bool selectDepth=true,bool* fullyInside=nullptr) {
+    Classification result;
+    if(fullyInside)*fullyInside=false;
+    if(!validBox(low,high,epsilon))return result;
+    bool insideXY=true;
+    for(unsigned axis=0;axis<3;++axis) {
+        const auto interval=projectAxis(low,high,matrix,axis);
+        // Eight eps bounds every corner's projection roundoff; upstream casters
+        // are retained by directional passes whose shader clamps their depth.
+        const double margin=interval.margin(epsilon,8);
+        const double minimum=interval.lower-margin,maximum=interval.upper+margin;
+        if(axis<2?(maximum<-1||minimum>1):((!retainUpstream&&maximum<0)||minimum>1)) {
+            result.rejected=true;break;
+        }
+        // Reuse the Z projection. Depth output has the original wider margin
+        // (32 eps), also covering the preceding local-to-world float transform.
+        if(fullyInside&&axis<2 && (minimum < -1 || maximum > 1))insideXY=false;
+        if(axis==2&&selectDepth)result.depthInside=interval.depthInside(epsilon);
+    }
+    if(fullyInside)*fullyInside=insideXY&&result.depthInside;
+    return result;
+}
+inline bool clipRejectAffine(NorthlightGI::Vec3 low,NorthlightGI::Vec3 high,
+                             const float* matrix,float epsilon=1e-4f,bool retainUpstream=false) {
+    return classifyAffine(low,high,matrix,epsilon,retainUpstream,false).rejected;
 }
 inline bool clipReject(NorthlightGI::Vec3 low,NorthlightGI::Vec3 high,
                        const float* matrix,float epsilon=1e-4f,bool retainUpstream=false) {
     return affineLightMatrix(matrix)&&clipRejectAffine(low,high,matrix,epsilon,retainUpstream);
 }
-// Fast depth output is permitted only when every corner stays strictly inside
-// BOTH depth planes, including conservative CPU/GPU float roundoff. Unknown or
-// perspective inputs use the raw-depth fragment path. No XY/selection change.
+// Depth-only callers need only the Z projection. Unsupported/unknown inputs
+// keep the raw-depth fragment path; every corner must be strictly inside.
 inline bool depthFullyInsideAffine(NorthlightGI::Vec3 low,NorthlightGI::Vec3 high,
-                                   const float* matrix,float epsilon=1e-4f){
-    if(!std::isfinite(epsilon)||epsilon<0)return false;
-    const float lo[]={low.x,low.y,low.z},hi[]={high.x,high.y,high.z};
-    for(unsigned axis=0;axis<3;++axis)if(!std::isfinite(lo[axis])||!std::isfinite(hi[axis])||lo[axis]>hi[axis])return false;
-    double minimum=matrix[14],maximum=minimum,magnitude=std::fabs(minimum);
-    for(unsigned axis=0;axis<3;++axis){
-        const double coefficient=matrix[axis*4+2],a=double(lo[axis])*coefficient,b=double(hi[axis])*coefficient;
-        minimum+=std::min(a,b);maximum+=std::max(a,b);magnitude+=std::max(std::fabs(a),std::fabs(b));
-    }
-    // 32 eps also covers the preceding local->world float transform and
-    // its AABB center/extent computation, including large-coordinate
-    // cancellation. Conservative rejection costs speed, never coverage.
-    const double margin=double(epsilon)+magnitude*(32.0*std::numeric_limits<float>::epsilon());
-    if(!(minimum-margin>0&&maximum+margin<1))return false;
-    return true;
+                                   const float* matrix,float epsilon=1e-4f) {
+    return validBox(low,high,epsilon)&&projectAxis(low,high,matrix,2).depthInside(epsilon);
 }
 inline bool depthFullyInside(NorthlightGI::Vec3 low,NorthlightGI::Vec3 high,
                              const float* matrix,float epsilon=1e-4f){

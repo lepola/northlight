@@ -28,7 +28,7 @@
 #include <string>
 #include <unordered_map>
 #include <vector>
-static unsigned logLines=0;
+[[maybe_unused]] static unsigned logLines=0;
 static void logf(const char*,...){++logLines;}
 template<class T> static void drop(T*& p){if(p){p->Release();p=nullptr;}}
 #include "device_mirror.h"

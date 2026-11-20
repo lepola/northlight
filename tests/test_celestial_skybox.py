@@ -30,7 +30,9 @@ assert 'observer.lateDisc(i,suppressed)' in late[late.index('lateBody('):late.in
 assert 'context.skyboxCover>0)){' in late
 assert late.index('if(i==1)continue;')>late.index('lateBody(')  # unevidenced frames fall through to PR #90's sun-only late tail
 # Full-skybox frames: the game draws no planets, so the previous frame's late bodies keep owning the native glare.
-assert 'void endFrame(){lateOwnedPrevious=drawnLate;' in host and host.count('|suppressedPrevious|lateOwnedPrevious')==2
+end_frame=host[host.index('void endFrame(){'):host.index('skyMode.endFrame();}')]
+assert end_frame.index('lateOwnedPrevious=drawnLate;')<end_frame.index('drawnLate=offscreenOwned=0;')
+assert host.count('|suppressedPrevious|lateOwnedPrevious')==2
 assert 'bool owning()const{return ownFrame==frames||ownFrame+1==frames;}' in host and 'ownFrame=renderFrame=frames;' in late  # render() last frame keeps owning() true
 assert 'prepareTerrain(i,disc[i],inverseView)' in sky
 assert 'legacyFog,true,bodies[i]->emission,false,skyBand.depth(maxZ)))continue;' in sky

@@ -37,6 +37,15 @@ int main(int argc,char**argv){
     auto one=cell(547,820);
     assert(classifyTriangles(one.data(),one.size(),D3DPT_TRIANGLELIST,result));
     assert(result.chunks.size()==1&&result.chunks[0].x==547&&result.chunks[0].y==820);
+    // Conversion must reject negative coordinates before truncation, and the
+    // exclusive upper edge must never wrap into the last valid map cell.
+    for(int x:{-1,0,1,511,512,1022,1023,1024})for(int y:{-1,0,1,511,512,1022,1023,1024}){
+        auto edge=cell(x,y);Bounds coverage;
+        const bool accepted=classifyTriangles(edge.data(),edge.size(),D3DPT_TRIANGLELIST,coverage);
+        assert(accepted==(x>=0&&x<1024&&y>=0&&y<1024));
+        if(accepted)assert(coverage.chunks.size()==1&&coverage.chunks[0].x==x&&coverage.chunks[0].y==y);
+        else assert(coverage.chunks.empty());
+    }
     auto far=cell(550,823);auto both=one;both.insert(both.end(),far.begin(),far.end());
     assert(classifyTriangles(both.data(),both.size(),D3DPT_TRIANGLELIST,result));
     assert(result.chunks.size()==2); // Never fill the 4x4 enclosing rectangle.

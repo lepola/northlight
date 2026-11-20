@@ -20,6 +20,7 @@ int main(){
     for(unsigned i=0;i<120;++i){
         const auto previous=done;done+=i<5?spans[i]:10000;
         f={};f.id=i;f.effectsMs=2;f.applied=true;f.focus=true;f.queries.events=i;f.sampled=i==3;
+        f.effects.valid=true;f.effects.totalMs=2;f.effects.reads=3;f.effects.ms[NorthlightEffectsBuckets::SunFar]=double(i);
         const bool full=tracker.presented(f,done-600,done-500,done,1000000,previous+1000,logs);
         assert(full==(i==119));
     }
@@ -29,9 +30,11 @@ int main(){
         const auto& row=report.worst[i];times.push_back(row.totalMs);
         assert(row.phases&&std::fabs(row.sceneMs+row.effectsMs+row.tailMs+row.finishMs+row.presentMs-row.totalMs)<1e-9);
         assert(row.queries.events==row.id);
+        assert(row.effects.valid&&row.effects.totalMs==2&&row.effects.reads==3&&row.effects.ms[NorthlightEffectsBuckets::SunFar]==row.id);
     }
     std::sort(times.begin(),times.end());assert((times==std::vector<double>{30,40,50,60}));
     assert(tracker.take().count==0);
+    assert(!Frame{}.effects.valid); // bare frames never inherit an old effects breakdown
 
     tracker.reset();done=1000000;tracker.presented({},done,done,done,1000000,0,0);
     for(unsigned i=0;i<120;++i){

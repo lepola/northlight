@@ -36,6 +36,7 @@ public:
         if(!FAILED(hr))NorthlightLockMeter::readBack(b,size);
         return hr;
     }
+    bool fromCopy()const{return pinned!=nullptr;}
     HRESULT unlock(){
         if(pinned){unpin(*pinned);pinned=nullptr;return D3D_OK;}
         return b->Unlock();

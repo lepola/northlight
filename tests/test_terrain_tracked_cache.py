@@ -24,6 +24,11 @@ int main(){
  unsigned vl=d.vb.locks,il=d.ib.locks;cache.clearFrame();
  assert(read(cache)&&info.trackedCacheHit&&a==b&&cache.bytesRead()==0&&cache.avoidedReadBytes()==bytes);
  assert(d.vb.locks==vl&&d.ib.locks==il);
+ // Sampled timing observes the same tracked result without adding reads or changing ownership.
+ FrameCache::PhaseStats phases;cache.clearFrame();
+ assert(cache.readMeshShared(&d,D3DPT_TRIANGLELIST,-3,7,3,1,1,d.view,b,&info,&phases));
+ assert(b==a&&info.trackedCacheHit&&phases.clockReads==2);
+ assert(d.vb.locks==vl&&d.ib.locks==il);
  // Write/DISCARD/NOOVERWRITE revisions invalidate within the SAME frame.
  d.put(4,{x,y,30});++revisions[0];il=d.ib.locks;
  assert(read(cache)&&!info.trackedCacheHit&&b->positions[0].z==30&&a->positions[0].z==3);
@@ -61,9 +66,9 @@ int main(){
  assert(d.vb.refs==1&&d.ib.refs==1&&d.declaration.refs==1&&d.vb.locks==d.vb.unlocks&&d.ib.locks==d.ib.unlocks);
  // A rotating view revisits sparse draws: retain the decoded geometry without
  // duplicating large raw spans when lifetime/write revisions prove the hit.
- Device wide;wide.vb.bytes.resize(16+1004*24);
+ Device wide;wide.vb.bytes.resize(16+192*1004*24);
  const std::uint16_t sparse[]={123,7,500,1000};std::memcpy(wide.ib.bytes.data(),sparse,sizeof sparse);
- wide.put(4,{x,y,3});wide.put(497,{x+30,y,4});wide.put(997,{x,y+30,5});
+ for(unsigned draw=0;draw<192;++draw){wide.put(draw*1004+4,{x,y,3+float(draw)});wide.put(draw*1004+497,{x+30,y,4});wide.put(draw*1004+997,{x,y+30,5});}
  FrameCache compact;compact.setIdentityProvider(identity);compact.setVersionProvider(version);compact.setPersistentByteLimit(1);
  FrameCache untracked;untracked.setPersistentByteLimit(1);
  unsigned warmHits=0;uint64_t warmBytes=0;
@@ -72,8 +77,8 @@ int main(){
   compact.clearFrame();untracked.clearFrame();warmHits=0;
   for(unsigned draw=0;draw<192;++draw){
    std::shared_ptr<const MeshSnapshot> tracked,raw;Diagnostics td,ud;
-   assert(compact.readMeshShared(&wide,D3DPT_TRIANGLELIST,-3,7,994+draw,1,1,wide.view,tracked,&td));
-   assert(untracked.readMeshShared(&wide,D3DPT_TRIANGLELIST,-3,7,994+draw,1,1,wide.view,raw,&ud));
+   assert(compact.readMeshShared(&wide,D3DPT_TRIANGLELIST,INT(draw*1004)-3,7,994,1,1,wide.view,tracked,&td));
+   assert(untracked.readMeshShared(&wide,D3DPT_TRIANGLELIST,INT(draw*1004)-3,7,994,1,1,wide.view,raw,&ud));
    assert(tracked->positions.size()==3&&tracked->indices==raw->indices);
    assert(!std::memcmp(tracked->positions.data(),raw->positions.data(),3*sizeof(Position)));
    warmHits+=td.trackedCacheHit;
@@ -89,7 +94,7 @@ int main(){
   ++revisions[0];++revisions[1];compact.clearFrame();
   for(unsigned draw=0;draw<192;++draw){
    std::shared_ptr<const MeshSnapshot> current;Diagnostics td;
-   assert(compact.readMeshShared(&wide,D3DPT_TRIANGLELIST,-3,7,994+draw,1,1,wide.view,current,&td));
+   assert(compact.readMeshShared(&wide,D3DPT_TRIANGLELIST,INT(draw*1004)-3,7,994,1,1,wide.view,current,&td));
    assert(td.contentCacheHit&&!td.trackedCacheHit&&current==retained[draw]);
   }
   assert(compact.maintenance().exactReuses==192&&compact.maintenance().rebuilds==0&&compact.maintenance().evictions==0);
@@ -98,10 +103,38 @@ int main(){
  // change must rebuild, and must not alter earlier snapshots held by readers.
  wide.vb.bytes[16+4*24+16]^=1;++revisions[0];compact.clearFrame();
  assert(compact.readMeshShared(&wide,D3DPT_TRIANGLELIST,-3,7,994,1,1,wide.view,b,&info)&&info.contentCacheHit&&b==retained[0]);
- wide.put(4,{x,y,71});++revisions[0];compact.clearFrame();
+ wide.put(4,{x,y,1071});++revisions[0];compact.clearFrame();
  assert(compact.readMeshShared(&wide,D3DPT_TRIANGLELIST,-3,7,994,1,1,wide.view,b,&info)&&!info.contentCacheHit);
- assert(b->positions[0].z==71&&retained[0]->positions[0].z==3);
+ assert(b->positions[0].z==1071&&retained[0]->positions[0].z==3);
  assert(wide.vb.refs==1&&wide.ib.refs==1&&wide.vb.locks==wide.vb.unlocks&&wide.ib.locks==wide.ib.unlocks);
+ // The client copies identical terrain to different dynamic-buffer addresses.
+ // Exact geometry survives relocation, while new indices/XYZ and invalid ranges
+ // are still checked against current bytes. Old snapshots remain immutable.
+ Device moving;moving.vb.bytes.resize(16+64*24);moving.ib.bytes.resize(64);
+ moving.put(4,{x,y,3});moving.put(5,{x+30,y,4});moving.put(6,{x,y+30,5});
+ FrameCache relocated;relocated.setIdentityProvider(identity);relocated.setVersionProvider(version);
+ std::shared_ptr<const MeshSnapshot> original,current;
+ assert(relocated.readMeshShared(&moving,D3DPT_TRIANGLELIST,-3,7,3,1,1,moving.view,original));
+ moving.put(24,{x,y,3});moving.put(25,{x+30,y,4});moving.put(26,{x,y+30,5});
+ const std::uint16_t movedIndices[]={7,8,9};std::memcpy(moving.ib.bytes.data()+20,movedIndices,sizeof movedIndices);
+ ++revisions[0];++revisions[1];relocated.clearFrame();
+ assert(relocated.readMeshShared(&moving,D3DPT_TRIANGLELIST,17,7,3,10,1,moving.view,current,&info));
+ assert(current==original&&info.contentCacheHit&&!info.trackedCacheHit&&relocated.maintenance().relocatedReuses==1);
+ assert(relocated.persistentEntries()==1);
+ vl=moving.vb.locks;il=moving.ib.locks;relocated.clearFrame();
+ assert(relocated.readMeshShared(&moving,D3DPT_TRIANGLELIST,17,7,3,10,1,moving.view,current,&info)&&info.trackedCacheHit);
+ assert(moving.vb.locks==vl&&moving.ib.locks==il);
+ // Returning to the earlier address reads both buffers; relocation must not
+ // transfer the new address's token-only proof to the old draw.
+ moving.put(4,{x,y,31});++revisions[0];
+ assert(relocated.readMeshShared(&moving,D3DPT_TRIANGLELIST,-3,7,3,1,1,moving.view,current,&info));
+ assert(current!=original&&current->positions[0].z==31&&original->positions[0].z==3);
+ assert(!relocated.readMeshShared(&moving,D3DPT_TRIANGLELIST,17,8,2,10,1,moving.view,current,&info)&&info.reason==RejectReason::IndexRange);
+ revisions[0]=revisions[1]=0;++identities[0];++identities[1];
+ assert(relocated.readMeshShared(&moving,D3DPT_TRIANGLELIST,17,7,3,10,1,moving.view,current,&info)&&current==original&&!info.trackedCacheHit);
+ moving.put(24,{x,y,47});
+ assert(relocated.readMeshShared(&moving,D3DPT_TRIANGLELIST,17,7,3,10,1,moving.view,current,&info)&&current->positions[0].z==47);
+ relocated.clearPersistent();assert(original->positions[0].z==3&&relocated.persistentEntries()==0);
  // Differential oracle: independent writes, unrelated attributes, lifetime
  // reuse and unknown/pending revisions must match a fresh byte-read snapshot.
  Device random;random.put(4,{x,y,3});random.put(5,{x+30,y,4});random.put(6,{x,y+30,5});

@@ -62,6 +62,12 @@ KEEP={
  'PROXY WARNING':'start-up warning','GAME d3d9.dll':'start-up: game-folder d3d9.dll identity','GAME WARNING':'start-up warning',
  'WORLD shadow cache VERIFY MISMATCH':'error (debug verify)','GEOMETRY MEMORY':'warning: allocation deferral',
  'STATIC SHADOW request deferred':'warning: allocation failure','STATIC SHADOW upload deferred':'warning: allocation failure',
+ 'LAYERS capture=':'user-triggered: one summary per explicit layer capture',
+ 'WATER atmosphere glare bodies=':'periodic: cooperative environment diagnostic, every 600 frames',
+ 'WATER precipitation abort':'error: rain rollback or state restoration failed',
+ 'WATER precipitation core abort':'error: core surface transaction aborted',
+ 'WATER precipitation state=':'event: precipitation ownership state changes',
+ 'WATER native processing':'periodic: cooperative native bloom probe, every 600 frames',
  'WEATHER rain mask disabled':'error: the mask target, its depth snapshot texture or shaders could not be created, or the device lacks MRT / independent write masks / separate alpha blend / ps_2_0, once per session (0.3.202 rain)','WEATHER rain mask resolve failed':'error: the MSAA mask could not be resolved into its texture or the depth scrub pass failed, once per session (0.3.202 rain)','WEATHER rain mask skip:':'one-off: the first rain draw the MRT mask could not take, with the reason bits and the game state read (0.3.202 rain mask MRT)','WEATHER rain mask skipped':'one-off: the bound render target is not the effect size or its multisampling differs from the depth, once per session (0.3.202 rain)','WEATHER detect=off':'one-off: the mirror is disabled (0.3.198 rain)','WEATHER probe':'gated: RenderProfile sample frames only, like DRAWGATE ab (0.3.198 rain)','WEATHER draw states':'gated: RenderProfile sample frames only, first 4 detected weather draws per session (0.3.199)','WEATHER mist draw':'one-off: the first 4 skipped rain mist draws per session (0.3.199)',
  'CSTREAM active':'start-up one-off: the replay thread runs (0.3.192)','CSTREAM disabled':'start-up one-off: why the command stream is off (0.3.192)',
  'SPELLFOG estimate':'one-off error: a non-finite fog estimate reset the hold (once per session), task 34',
@@ -107,7 +113,7 @@ r=fp.src('renderer.cpp').read_text();w=fp.src('world_renderer.h').read_text()
 checks={
  'lighting clock only samples with diagnostics':'int64_t lightingClock=profileSampled()&&captureFrequency.QuadPart>0?QpcClock::now():0;' in w,
  'CpuScope timings use sampled()':all('CpuScope' not in l or 'sampled' in l or 'diagnostics()' in l for l in r.splitlines() if 'CpuScope ' in l and '(' in l and 'struct' not in l),
- 'world capture: raw sample frame in, diagnostics gated inside':r.count(',vs,frame%120==0,NorthlightRenderThreadProbe::sampleFrame(frame));captureWater(')==4 and w.count('constantSelfCheck=selfCheck;sample=sample&&NorthlightDiagnostics::enabled();')==2,
+ 'world capture: raw sample frame in, diagnostics gated inside':r.count(',vs,frame%120==0,NorthlightRenderThreadProbe::sampleFrame(frame));}captureWater(')==4 and w.count('constantSelfCheck=selfCheck;sample=sample&&NorthlightDiagnostics::enabled();')==2,
  'constant self-check keeps its 0.3.140 cadence (0.3.180 C0: its own flag and serial; the profile Stats only on diagnostic samples)':'},sample?&constantEpochProfile:nullptr,constantSelfCheck,constantSelfCheckState))return;' in w,
  'GPU timestamp queries only when on':'if(diagnostics())gpuProfile->beginFrame(frame,NorthlightRenderThreadProbe::sampleFrame(frame))' in r and 'if(diagnostics()){gpuProfile->poll();if(gpuSceneProfile)gpuSceneProfile->poll();}' in r and 'if(gpuSceneProfile&&diagnostics())gpuSceneProfile->beginFrame(frame,' in r,
  'async memory sampler always on (memory guard), periodic line only when on':'try{memoryDiagnostics=std::make_unique<NorthlightMemoryDiagnostics::Sampler>(&queryAddressSpace);}' in r and 'if(diagnostics())try{memoryDiagnostics=' not in r and 'if(decision.report&&diagnostics())logf("MEMORY frame=' in r and 'else if(diagnostics())logf("MEMORY sample failed' in r,
@@ -179,12 +185,16 @@ bad=[fmt for fmt in logs if not any(fmt.startswith(k) for k in SPAN_ALLOWED)]
 counter,_=span_logs([t.replace('deferLogf(','logf(') for t in texts])
 missed=[k for k in SPAN_DEFERRED if not any(fmt.startswith(k) for fmt in counter)]
 ra=fp.src('renderer.cpp').read_text();ao=ra.index('effectsBuckets.mark(Bucket::AO);')
+end_source=fp.src('world_renderer.h').read_text()
+water_retire="#ifdef NORTHLIGHT_WATER\n        // Invalidate this frame's inputs/ownership, retaining allocations until releaseGPU/Reset.\n        waterHorizonPending=false;waterHorizon=HorizonPreparation{};\n        waterDistanceOwned=false;\n        waterSurfaceShaded=false;\n#endif\n"
+assert end_source.count(water_retire)==1
+end_source=end_source.replace(water_retire,'')
 span_checks={
  'lighting clock only samples with diagnostics':'int64_t lightingClock=profileSampled()&&captureFrequency.QuadPart>0?QpcClock::now():0;' in w,
  'U0/S0: no logf( reachable between the selection/upload bucket marks except errors and one-off events':not bad,
  'U0/S0 counterfactual: the sampled lines are reachable there when not deferred':not missed and {'selectShadowReplays','uploadReplay','rigidMemoryInject','finishActorScene','uploadLiveTerrain'}<=reached,
  'U0/S0: the proxy has no log line from the AO mark to world->render()':'logf(' not in ra[ao:ra.index('world->render(',ao)],
- 'U0/S0: deferred lines follow only bounded equipment frame bookkeeping':'void endFrame(bool retainPool=true){\n        if(equipmentLightsOn()){equipmentLights.nextFrame();equipmentCapture.nextFrame();particleLights.nextFrame();NorthlightParticleUploads::cache().nextFrame();}\n        flushDeferredLogs();' in fp.src('world_renderer.h').read_text(),
+ 'U0/S0: deferred lines follow only bounded equipment frame bookkeeping':'void endFrame(bool retainPool=true){\n        if(equipmentLightsOn()){equipmentLights.nextFrame();equipmentCapture.nextFrame();particleLights.nextFrame();NorthlightParticleUploads::cache().nextFrame();}\n        flushDeferredLogs();' in end_source,
 }
 for name,ok in span_checks.items():print(('PASS ' if ok else 'FAIL ')+name)
 assert all(span_checks.values()),(bad,missed)

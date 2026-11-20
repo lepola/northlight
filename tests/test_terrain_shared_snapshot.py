@@ -32,7 +32,7 @@ void ownership(){
  float wrong[16];std::memcpy(wrong,d.view,64);wrong[12]=1;out=first;
  assert(!cache.readMeshShared(&d,D3DPT_TRIANGLELIST,-3,7,3,1,1,wrong,out,&why)&&!out&&why.reason==RejectReason::ViewMismatch);
  cache.clearPersistent();cache.clearFrame();assert(read());auto retained=out;std::weak_ptr<const MeshSnapshot> weak=retained;
- for(unsigned i=1;i<=4184;++i){cache.clearFrame();assert(read(3+i));assert(cache.persistentEntries()<=4096&&cache.persistentBytes()<=32u*1024u*1024u);}
+ for(unsigned i=1;i<=4184;++i){cache.clearFrame();d.put(4,{-10200,-1180,30+float(i)});assert(read(3+i));assert(cache.persistentEntries()<=4096&&cache.persistentBytes()<=32u*1024u*1024u);}
  assert(retained->positions[0].z==30&&!weak.expired());cache.clearPersistent();assert(retained->positions[0].z==30);
  retained.reset();assert(weak.expired()); // Evicted payload has no hidden retained owner.
  assert(first->positions[0].z==3);first.reset();changed.reset();out.reset();

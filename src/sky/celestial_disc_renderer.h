@@ -193,11 +193,57 @@ private:
         return NorthlightCelestialGlow::normalizeOnScreen(c+13,NorthlightCelestialHalo::Samples);
     }
 public:
+#ifdef NORTHLIGHT_WATER
+    // Borrow only previous source-visibility observations. Current body/profile/weather
+    // parameters are recomputed; no old screen bounds, depth or water mask is retained.
+    // A reflection environment is directional radiance, not the main camera's
+    // screen-space halo visibility. Its glare must survive camera turns, skipped
+    // sky draws and temporal-history resets. Reflected geometry supplies occlusion.
+    unsigned waterGlare(const NorthlightCelestial::Context& context,const NorthlightCelestialGlow::Hue& hue,
+                        float weather,float (&output)[13][4],IDirect3DTexture9*& moonBody){
+        std::memset(output,0,sizeof output);moonBody=nullptr;
+        if(failed||!std::isfinite(weather)||weather<0||weather>1)return 0;
+        unsigned mask=0;
+        const NorthlightCelestial::Body* bodies[]={&context.sun,&context.moon};
+        for(unsigned i=0;i<2;++i){
+            const auto& source=*bodies[i];NorthlightCelestialDisc::Disc disc;
+            if(!std::isfinite(source.alpha)||source.alpha<0||source.alpha>1||
+               !NorthlightCelestialDisc::prepare(source.direction,source.tint,1,source.angularRadius,disc))continue;
+            // A known inactive source still owns its zero glare. Do not switch
+            // to Water's unrelated broad-glow profile during weather/time fades.
+            if(source.alpha==0||weather==0){mask|=1u<<i;continue;}
+            if(i&&!texture[i])continue; // lunar glare excludes the authored body silhouette
+            float (*c)[4]=output+i*5;
+            std::memcpy(c[0],disc.direction,12);c[0][3]=disc.tangentRadius;
+            c[1][0]=NorthlightCelestialGlow::SunCoreRate;c[1][1]=i?MoonGlareSupport:SunGlareSupport;
+            c[1][2]=(i?NorthlightCelestialGlow::MoonGlareStrength:NorthlightCelestialGlow::SunCoreWeight)*weather;
+            NorthlightCelestialGlow::glareConstants(hue,i,disc.tint,NorthlightCelestialGlow::sunTailWeight(disc.direction[2]),0.f,c[2],c[3]);
+            c[2][3]*=weather;c[4][0]=disc.opacity*source.alpha;c[4][1]=i==0?1.f:0.f;c[4][2]=1;
+            if(i){
+                std::memcpy(output[10],disc.right,12);std::memcpy(output[11],disc.up,12);
+                // LOD belongs to the fixed environment field, never the screen.
+                output[12][0]=NorthlightCelestialDisc::discLod(textureWidth[i],disc.tangentRadius*256.f);
+                moonBody=texture[i];
+            }
+            mask|=1u<<i;
+        }
+        return mask;
+    }
+#endif
     void setTerrainSource(std::function<uint64_t()> epoch,std::function<bool(unsigned,const float*)> draw,std::function<void(unsigned)> reuse=nullptr){terrainEpoch=std::move(epoch);terrainDraw=std::move(draw);terrainReuse=std::move(reuse);}
     explicit NorthlightCelestialDiscRenderer(IDirect3DDevice9* device,std::string sourceRoot="world-cache/celestial"):d(device),root(std::move(sourceRoot)){}
+    // Fixed disc textures and their mip chains belong to device initialization,
+    // not the first visible sun/moon. Loading them during a turn caused a 27 ms
+    // stall. Call again after a successful Reset; resource guards keep it idempotent.
+    // This creates resources only: no render state, sky ownership or history changes.
+    bool initialize(){return resources();}
     ~NorthlightCelestialDiscRenderer(){reset();}
     NorthlightCelestialDiscRenderer(const NorthlightCelestialDiscRenderer&)=delete;
-    void reset(){earlySkyOk=false;earlySkyMap.clear();for(auto& s:ringSurface)drop(s);for(auto& t:ringVisibility)drop(t);drop(veilPS);ringIndex=0;ringHistory={};ringWritten=false;sunGlare=Glare{};glow=NorthlightCelestialGlow::Hue{};
+    void reset(){earlySkyOk=false;earlySkyMap.clear();
+#ifdef NORTHLIGHT_WATER
+        resetWaterBackgroundObservation();
+#endif
+        for(auto& s:ringSurface)drop(s);for(auto& t:ringVisibility)drop(t);drop(veilPS);ringIndex=0;ringHistory={};ringWritten=false;sunGlare=Glare{};glow=NorthlightCelestialGlow::Hue{};
         for(unsigned i=0;i<2;++i){edge[i]={};haloWritten[i]=false;haloFrame[i]=0;}
         for(auto& t:terrainMask)drop(t);for(auto& t:terrainSurface)drop(t);drop(terrainVS);drop(terrainPS);for(unsigned i=0;i<2;++i){terrainReady[i]=false;terrainGeneration[i]=0;std::fill(terrainCamera[i],terrainCamera[i]+3,0.f);terrainNear[i]=0;}maskFarClip=0;skyBand={};for(auto& h:haloHistory)h={};for(auto& body:haloSurface)for(auto& s:body)drop(s);for(auto& body:haloVisibility)for(auto& t:body)drop(t);drop(haloPS);haloIndex[0]=haloIndex[1]=0;for(auto& p:earlyPlacement)p.valid=false;for(auto& t:texture)drop(t);drop(ps);observer.reset();loaded=false;failed=false;drawn=0;earlyValid=false;drawnEarly=0;earlyWidth=earlyHeight=0;glareRead=false;drawnLate=offscreenOwned=0;suppressed=suppressedPrevious=lateOwnedPrevious=0;ownFrame=~0u;skyMode.reset();skyModePrevious=-1;renderFrame=~0u;}
     // Ownership: once the renderer has a validated sky context,
@@ -206,8 +252,94 @@ public:
     // geometry. Mod off (F10), debug, an invalid camera or an expired sky read
     // restores native draws. Missing terrain must not alternate native/custom moon.
     unsigned claimedDraws=0;
-    void setIdentityMap(std::function<std::uintptr_t(std::uintptr_t)> map){observer.setIdentityMap(std::move(map));glareRead=false;}
-    void endFrame(){lateOwnedPrevious=drawnLate;suppressedPrevious=suppressed;suppressed=0;terrainReady[0]=terrainReady[1]=false;sunGlare.valid=false;for(auto& p:earlyPlacement)p.valid=false;observer.beginFrame();drawn=0;++frames;drawnEarly=0;drawnLate=offscreenOwned=0;glareRead=false;skyMode.endFrame();}
+#ifdef NORTHLIGHT_WATER
+    struct WaterBackgroundState {
+        bool previousOwned=false,earlyCamera=false,earlyDisc=false;
+        bool intervalKnown=false,identitiesStable=false,recognisedOverlaysExcluded=false;
+        unsigned suppressedBodies=0,observedBodies=0,ambiguousBodies=0,glareIdentityMask=0;
+        unsigned suppressedNativeBodies=0,suppressedNativeGlare=0,escapedNativeBodies=0,escapedNativeGlare=0;
+    };
+    // Independent observation only: never finish/mutate the renderer's body observer
+    // early, or change which native/custom sky draws the original host performs.
+    bool waterBackgroundObserve=false,waterBackgroundBegun=false,waterBackgroundKnown=false;
+    unsigned waterSuppressedBody=0,waterSuppressedGlare=0,waterEscapedBody=0,waterEscapedGlare=0;
+    NorthlightCelestialDisc::Identities waterBodyStart,waterGlareStart;
+    bool waterReadIdentities(NorthlightCelestialDisc::Identities& bodies,NorthlightCelestialDisc::Identities& glares){
+        static const bool supported=NorthlightWorldContext::supportedClient()&&
+            NorthlightCelestialDisc::verifyIdentityCode(NorthlightWorldContext::readSelf)&&
+            NorthlightCelestialGlare::verify(NorthlightWorldContext::readSelf);
+        if(!supported)return false;
+        bodies=NorthlightCelestialDisc::readIdentities(NorthlightWorldContext::readSelf);
+        glares=NorthlightCelestialGlare::readIdentities(NorthlightWorldContext::readSelf);
+        bool mapped=true;
+        auto map=[&](std::uintptr_t exposed){const auto raw=observer.mapIdentity(exposed);if(exposed&&!raw)mapped=false;return raw;};
+        bodies=NorthlightCelestialDisc::mapIdentities(bodies,map);glares=NorthlightCelestialDisc::mapIdentities(glares,map);
+        if(!mapped||bodies.valid!=7||(glares.valid&3)!=3)return false;
+        // Shared identities cannot prove whether a claimed draw was body/glare.
+        const std::uint32_t ids[]={bodies.texture[0],bodies.texture[1],bodies.texture[2],glares.texture[0],glares.texture[1]};
+        for(unsigned i=0;i<5;++i)for(unsigned j=i+1;j<5;++j)if(ids[i]&&ids[i]==ids[j])return false;
+        return true;
+    }
+    void beginWaterBackgroundObservation(){
+        if(!waterBackgroundObserve||waterBackgroundBegun)return;
+        waterBackgroundBegun=true;waterBackgroundKnown=waterReadIdentities(waterBodyStart,waterGlareStart);
+    }
+    void noteWaterBackgroundDraw(D3DPRIMITIVETYPE,UINT count,bool claimed){
+        if(!waterBackgroundObserve||!waterBackgroundBegun||!waterBackgroundKnown||!count)return;
+        // Audit every nonempty native draw, independently of claim shape/gates.
+        // Reads use the host's immutable command-stream snapshot during replay.
+        NorthlightCelestialDisc::Identities bodies,glares;
+        if(!waterReadIdentities(bodies,glares)){waterBackgroundKnown=false;return;}
+        for(unsigned i=0;i<3;++i)if(bodies.texture[i]!=waterBodyStart.texture[i])waterBackgroundKnown=false;
+        for(unsigned i=0;i<2;++i)if(glares.texture[i]!=waterGlareStart.texture[i])waterBackgroundKnown=false;
+        if(!waterBackgroundKnown)return;
+        IDirect3DBaseTexture9* source=nullptr;
+        if(FAILED(d->GetTexture(0,&source))){waterBackgroundKnown=false;return;}
+        const auto bound=reinterpret_cast<std::uintptr_t>(source);drop(source);
+        if(!bound)return;
+        for(unsigned i=0;i<3;++i)if(bound==waterBodyStart.texture[i]){
+            if(claimed)waterSuppressedBody|=1u<<i;else waterEscapedBody|=1u<<i;
+        }
+        for(unsigned i=0;i<2;++i)if(bound==waterGlareStart.texture[i]){
+            if(claimed)waterSuppressedGlare|=1u<<i;else waterEscapedGlare|=1u<<i;
+        }
+    }
+    WaterBackgroundState waterBackgroundState(){
+        WaterBackgroundState state;state.previousOwned=owning();state.earlyCamera=earlyValid;state.earlyDisc=drawnEarly!=0;
+        state.suppressedBodies=suppressed;state.observedBodies=observer.mask();state.ambiguousBodies=observer.ambiguities();
+        if(glareRead){if(glareIdentities.texture[0])state.glareIdentityMask|=1;if(glareIdentities.texture[1])state.glareIdentityMask|=2;}
+        state.intervalKnown=waterBackgroundBegun&&waterBackgroundKnown;
+        NorthlightCelestialDisc::Identities bodies,glares;
+        state.identitiesStable=state.intervalKnown&&waterReadIdentities(bodies,glares);
+        if(state.identitiesStable){
+            for(unsigned i=0;i<3;++i)state.identitiesStable=state.identitiesStable&&bodies.texture[i]==waterBodyStart.texture[i];
+            for(unsigned i=0;i<2;++i)state.identitiesStable=state.identitiesStable&&glares.texture[i]==waterGlareStart.texture[i];
+        }
+        state.suppressedNativeBodies=waterSuppressedBody;state.suppressedNativeGlare=waterSuppressedGlare;
+        state.escapedNativeBodies=waterEscapedBody;state.escapedNativeGlare=waterEscapedGlare;
+        state.recognisedOverlaysExcluded=state.previousOwned&&state.earlyCamera&&!state.earlyDisc&&
+            state.identitiesStable&&!state.escapedNativeBodies&&!state.escapedNativeGlare;
+        // This excludes recognised overlays only. Embedded skybox art is NOT certified.
+        return state;
+    }
+    void resetWaterBackgroundObservation(){
+        waterBackgroundBegun=waterBackgroundKnown=false;
+        waterSuppressedBody=waterSuppressedGlare=waterEscapedBody=waterEscapedGlare=0;
+        waterBodyStart={};waterGlareStart={};
+    }
+#endif
+
+    void setIdentityMap(std::function<std::uintptr_t(std::uintptr_t)> map){
+#ifdef NORTHLIGHT_WATER
+        resetWaterBackgroundObservation();
+#endif
+        observer.setIdentityMap(std::move(map));glareRead=false;
+    }
+    void endFrame(){
+#ifdef NORTHLIGHT_WATER
+        resetWaterBackgroundObservation();
+#endif
+        lateOwnedPrevious=drawnLate;suppressedPrevious=suppressed;suppressed=0;terrainReady[0]=terrainReady[1]=false;sunGlare.valid=false;for(auto& p:earlyPlacement)p.valid=false;observer.beginFrame();drawn=0;++frames;drawnEarly=0;drawnLate=offscreenOwned=0;glareRead=false;skyMode.endFrame();}
     // Sky-phase draw: the native billboard is replaced IN PLACE by our disc,
     // drawn with sky-band depth before the zone skybox and the world, so
     // everything drawn later (skybox mountains, terrain, trees) covers it

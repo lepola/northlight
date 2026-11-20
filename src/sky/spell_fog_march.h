@@ -51,7 +51,9 @@ inline float sigma(const NorthlightRegionalFog::Field& f,const March& m,float x,
     airBase=airBase+(m.forestAir-airBase)*generalForest;
     airBase=m.airFloor+airBase*saturate(s.height*1.6f-1);
     const float airSigma=airBase*airVertical*airVertical;
-    return std::max(groundSigma+airSigma,0.f)*valid;
+    float density=std::max(groundSigma+airSigma,0.f)*valid;
+    density+=NorthlightRegionalFog::raisedDensity(f,x,y,z,m.volume[3],m.airFloor+m.forestAir);
+    return density;
 }
 inline float nearFade(const March& m,float distance){float n=saturate((distance-m.nearStart)*m.nearInv);return n*n*(3-2*n);}
 // The optical depth from `from` to `to` (a straight ray), `steps` equal midpoint samples, the near fade by distance from `from`. extra(x, y, z, sample) adds a second density at the same sample (the fog

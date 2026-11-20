@@ -56,11 +56,11 @@ const='        const float drawnWeight=std::max(sourceWeights[0],0.f)+std::max(s
 # 0.3.170: the TemporalReach (c15.w) lines sit between this block and the upload (test_shadow_shimmer).
 upload='        c[30][0]=waterMask?1.f:0.f;d->SetPixelShaderConstantF(0,&c[0][0],68);'
 checks['c30.yzw only from the drawn source weight (sum of positive weights), set once']=(w.count(const)==1 and w.count(upload)==1 and w.index(const)<w.index(upload)
-    and re.search(r'c\[30\]\[[123]\]=',w.replace(const,'')) is None and 'if(sourceWeights[source]<=0&&source!=firstSource)continue;' in w)
+    and re.search(r'c\[30\]\[[123]\]=',w[w.index('bool render('):].replace(const,'')) is None and 'if(sourceWeights[source]<=0&&source!=firstSource)continue;' in w)
 tb=w[w.index('{   // Temporal stabilization: light + history'):w.index('temporalIndex=prev;temporalValid=true;')]
 # s12 moved from the composite's binding line to the temporal pass: the same API calls per frame, and
 # nothing between the two passes rebinds s12 (the frame-start texture loop sets it to null earlier).
-between=w[w.index('temporalIndex=prev;temporalValid=true;'):w.index('d->SetPixelShader(finalPS);\n        /* 0.3.212 (task 32)')]
+between=w[w.index('temporalIndex=prev;temporalValid=true;'):w.index('/* 0.3.212 (task 32): with this frame\'s name marks')]
 # LocalDirect also reads the baseline alpha (sun visibility), so s12 is bound once more,
 # only inside the LocalDirect block (frames with lamps), before the temporal pass rebinds it.
 local=w[w.index('d->SetPixelShader(localDirectPS);'):w.index('if(profile)profile->mark("LocalLights");')]

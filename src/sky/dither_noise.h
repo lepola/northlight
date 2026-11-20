@@ -11,7 +11,7 @@
 // and already scaled, so the shader spends one add (and one texld) on it.
 namespace NorthlightDitherNoise {
 inline constexpr unsigned N=64;
-inline constexpr float Amplitude=1.f/255; // triangular, +-1 LSB: the rounding error stops depending on the gradient
+inline constexpr float Amplitude=.5f/255; // uniform, +-half LSB: unbiased rounding without texturing exact colours
 inline constexpr float Sigma=1.5f;        // void-and-cluster filter width in texels
 inline constexpr float InitialFill=.1f;
 
@@ -49,14 +49,15 @@ inline std::vector<uint32_t> ranks(){
     return rank;
 }
 
-// The tile as signed offsets: ranks spread uniformly over (0,1), then remapped to a triangular distribution of
-// +-Amplitude (it keeps the rank order, so the tile stays blue).
+// Uniform half-step offsets turn fractional 8-bit colours into unbiased rounding.
+// Exact 8-bit colours stay exact. The previous triangular full-step distribution
+// changed 25% of those pixels, adding visible grain to already composited water.
+// Keep the rank order and static blue-noise tile for smooth sky/fog gradients.
 inline std::vector<float> offsets(){
     const std::vector<uint32_t> r=ranks();std::vector<float> out(r.size());
     for(size_t i=0;i<r.size();++i){
         const float u=(float(r[i])+.5f)/float(r.size());
-        const float t=u<.5f?std::sqrt(2*u)-1:1-std::sqrt(2-2*u);
-        out[i]=t*Amplitude;
+        out[i]=(2*u-1)*Amplitude;
     }
     return out;
 }

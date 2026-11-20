@@ -70,6 +70,10 @@ public:
         if(FAILED(device->GetRenderState(D3DRS_ALPHABLENDENABLE,&blend))||!blend||
            FAILED(device->GetRenderState(D3DRS_SRCBLEND,&src))||(src!=D3DBLEND_ONE&&src!=D3DBLEND_SRCALPHA)||
            FAILED(device->GetRenderState(D3DRS_DESTBLEND,&dst))||dst!=D3DBLEND_ONE)return result;
+        // Pixel programs are classified at creation. Unsupported draws must not
+        // consume the bounded geometry probes of emitters later in draw order.
+        const auto pixel=pixels_.find(ps);
+        if(pixel==pixels_.end()){++frame.shaderMiss;return result;}
         const bool particle=families_.at(vs)!=3;if(!frame.takeProbe())return result;
         using F=NorthlightParticleLights::Frame;
         if(FAILED(device->GetRenderState(D3DRS_BLENDOP,&op))||op!=D3DBLENDOP_ADD){frame.refuse(F::BlendOp);return result;}
@@ -83,8 +87,8 @@ public:
         if(!alpha)alphaFunc=D3DCMP_ALWAYS;
         if(FAILED(device->GetRenderState(D3DRS_COLORWRITEENABLE,&mask))||(mask&7)!=7){frame.refuse(F::ColorWrite);return result;}
         if(FAILED(device->GetRenderState(D3DRS_ZENABLE,&z))||!z){frame.refuse(F::Depth);return result;}
-        auto pixel=pixels_.find(ps);Vertex* program=pixel!=pixels_.end()?vertex(vs):nullptr;
-        if(pixel==pixels_.end()||!program){++frame.shaderMiss;return result;}
+        Vertex* program=vertex(vs);
+        if(!program){++frame.shaderMiss;return result;}
         const auto& material=pixel->second;
         NorthlightDrawSnapshot::Ref<IDirect3DBaseTexture9> texture;
         if(FAILED(device->GetTexture(material.sampler,texture.out()))||!texture.p){++frame.textureMiss;return result;}

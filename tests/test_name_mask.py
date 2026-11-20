@@ -166,7 +166,7 @@ checks['run ends before anything that could draw or clear with stencil on: prepa
     '++drawCalls;maskKind=0;if(nameRun)nameMaskRunBreak();' in impl and 'if(kind!=1)nameMaskRunEnd();' in r
     and 'nameMaskRunEnd(); /* 0.3.212 (task 32): a run of names never spans a Clear */' in r[r.index('HRESULT STDMETHODCALLTYPE Clear('):][:700]
     and 'override { Guard mirrorLock(mirrorState.gate);nameMaskRunEnd();' in r and 'void renderEffects() {\n        nameMaskRunEnd();' in r and 'void finishFrameImpl() {\n        nameMaskRunEnd();' in r
-    and 'Reset(D3DPRESENT_PARAMETERS* pp) override { Guard mirrorLock(mirrorState.gate);\n        nameMaskRunEnd();' in r)
+    and re.search(r'Reset\(D3DPRESENT_PARAMETERS\* pp\) override \{ Guard mirrorLock\(mirrorState.gate\);\s*(?:#ifdef NORTHLIGHT_WATER\s+cooperativeWater.Lost\(\);\s+#endif\s+)?nameMaskRunEnd\(\);',r) is not None)
 checks['the stencil-in-use guard reads the game\'s STENCILENABLE once per frame (reset at the frame end and Reset), so a run knows the value to restore']='if(!nameMask.stencilChecked){' in r and 'nameMask.stencilChecked=true;' in r and 'FAILED(ext->GetRenderState(D3DRS_STENCILENABLE,&stencilOn))' in r
 md=r[r.index('HRESULT nameMaskDraw('):r.index('    // One shader query/reference per original draw')]
 checks['draw: unmark states around the game draw; a name draws with the run set and the alpha guard only when its alpha test is off; counted only after a successful draw']=(
@@ -175,7 +175,7 @@ checks['draw: unmark states around the game draw; a name draws with the run set 
     and 'if(!kind)return rainBlendDraw(rain,claimed,draw);' in md and 'if(claimed||!nameMask.armed())return rainBlendDraw(rain,claimed,draw);' in md)
 hook=r[r.index('template<class Capture,class Draw> HRESULT drawHook('):];hook=hook[:hook.index('\n    }\n')+7]
 checks['drawHook: both gate paths end in nameMaskDraw (optional draw wrappers retain the game call)']=hook.count('nameMaskDraw(rainBlend,claimed||mist,draw)')==2 and 'rainBlendDraw' not in hook
-checks['draw lambdas retain all four device entry points']=len(re.findall(r'return drawHook\(t,count,\[&\]\(IDirect3DVertexShader9\* vs\)\{[^\n]*?\},draw\);\}',r))==4 and all(x in r for x in ('ext->DrawPrimitive(','ext->DrawIndexedPrimitive('))
+checks['draw lambdas retain all four device entry points']=len(re.findall(r'return drawHook\(t,count,\[&\]\(IDirect3DVertexShader9\* vs\)\{[\s\S]*?\},draw\);\}',r))==4 and all(x in r for x in ('ext->DrawPrimitive(','ext->DrawIndexedPrimitive('))
 clr=r[r.index('HRESULT STDMETHODCALLTYPE Clear('):][:2800]
 checks['Clear hook: the stencil flag joins the game\'s full Clear(Z) of the world depth (no rects, scissor off) while the frame has no marks; with marks it is dropped; the mask bit in the game\'s value disables']=(
     'boundDepthIs(maskDsId)' in clr and 'n==0&&SUCCEEDED(ext->GetRenderState(D3DRS_SCISSORTESTENABLE,&scissor))&&!scissor&&SUCCEEDED(ext->GetViewport(&viewport))&&nameMaskFullViewport(viewport)' in clr and 'flags|=D3DCLEAR_STENCIL;stencil=0;' in clr and 'flags&=~DWORD(D3DCLEAR_STENCIL)' in clr

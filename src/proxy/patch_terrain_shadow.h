@@ -4,6 +4,7 @@
 #include <cstdint>
 #include <cstring>
 #include <vector>
+#include "patch_shadow_shader.h"
 
 // Neutralise the game's own terrain shadow term inside a terrain pixel shader.
 //
@@ -140,5 +141,68 @@ inline bool patch(const Word* code,std::size_t count,std::vector<Word>& output,P
     if(!local.replaced){output.clear();return false;}
     if(info)*info=local;
     return true;
+}
+// Legacy/unbounded fallback: retain S continuously as the replacement light
+// fades. The caller supplies (replacement strength, 1, 0, 0) in one unused
+// constant and restores it around the draw, just like the coverage patch.
+// Two instructions form S + strength * (1-S) in an otherwise unused temp;
+// replacing reads with a temp preserves the single-constant-register rule.
+inline bool weighted(const Word* code,std::size_t count,std::vector<Word>& output,unsigned& constant){
+    output.clear();std::vector<Word> neutral;PatchInfo proof;
+    if(!patch(code,count,neutral,&proof))return false;
+    const unsigned maxConstants=proof.major==2?32:224,maxTemps=proof.major==2?12:32;
+    bool constants[256]={},temps[32]={};
+    struct Op{std::size_t at;unsigned code,size,depth;};std::vector<Op> instructions;unsigned depth=0,slots=0,arithmetic=0,textures=0;
+    for(std::size_t at=1;at<count;){
+        const unsigned op=code[at]&65535,n=(code[at]>>24)&15;
+        if(op==65535)break;
+        if(op==65534){at+=1+((code[at]>>16)&32767);continue;}
+        // No implicit matrix constants, relative registers, loops or calls.
+        // Terrain3 chooses S inside if/else; insert only after that choice,
+        // outside control flow, so either branch retains its original value.
+        if((op>=20&&op<=30)||op==38||op==39||op==44||op==45)return false;
+        if(op==43){if(!depth)return false;--depth;}
+        for(unsigned j=op==31?2u:1u;j<=n;++j){
+            if((op==81||op==82||op==83)&&j>1)break;
+            Word t=code[at+j];if(!(t&0x80000000u))continue;
+            if(sourceRelative(t))return false;
+            const unsigned type=sourceType(t),index=t&2047;
+            if(type==2){if(index>=maxConstants)return false;constants[index]=true;}
+            if(type==0){if(index>=maxTemps)return false;temps[index]=true;}
+        }
+        if(op!=81&&op!=82&&op!=83&&op!=31){
+            instructions.push_back({at,op,n,depth});
+            const unsigned cost=NorthlightShadowShader::instructionSlots(op);slots+=cost;
+            if(op==66)++textures;else arithmetic+=cost;
+        }
+        if(op==40||op==41)++depth;
+        at+=1+n;
+    }
+    // ps_2_0 has separate 64 arithmetic / 32 texture budgets. Counting all
+    // instructions against 64 incorrectly rejects valid shipped shaders.
+    if(depth||slots+2>(proof.major==2?96u:512u)||
+       (proof.major==2&&(arithmetic+2>64||textures>32)))return false;
+    unsigned temp=0;while(temp<maxTemps&&temps[temp])++temp;if(temp==maxTemps)return false;
+    constant=maxConstants;while(constant&&constants[constant-1])--constant;if(!constant)return false;--constant;
+    const auto reg=[](unsigned type,unsigned index,unsigned mask){return 0x80000000u|((type&7)<<28)|((type&24)<<8)|index|(mask<<16);};
+    const auto source=[&](unsigned type,unsigned index,unsigned swizzle){return (reg(type,index,0)&~0xf0000u)|(swizzle<<16);};
+    const Word shadow=source(0,proof.shadowRegister,proof.shadowComponent*0x55u),replacement=source(0,temp,0);
+    std::size_t insert=0;unsigned replaced=0;
+    output.assign(code,code+count);
+    for(std::size_t i=proof.definitionIndex+1;i<instructions.size();++i){
+        const auto& op=instructions[i];const unsigned first=firstOperandIsSource(op.code)?0:1;
+        for(unsigned j=first;j<op.size;++j){const auto at=op.at+1+j;unsigned component;const Word t=code[at];
+            if(sourceType(t)==0&&(t&2047)==proof.shadowRegister&&replicated(t,component)&&component==proof.shadowComponent){
+                if(sourceModifier(t)||sourceRelative(t)){output.clear();return false;}
+                if(!insert){if(op.depth){output.clear();return false;}insert=op.at;}
+                output[at]=replacement;++replaced;
+            }}
+        if(!firstOperandIsSource(op.code)&&op.size){const Word d=code[op.at+1];
+            if(sourceType(d)==0&&(d&2047)==proof.shadowRegister&&((d>>(16+proof.shadowComponent))&1))break;}
+    }
+    if(!insert||replaced!=proof.replaced){output.clear();return false;}
+    const Word extra[]={3u|(3u<<24),reg(0,temp,1),source(2,constant,0x55),shadow,
+                        4u|(4u<<24),reg(0,temp,1),replacement,source(2,constant,0),shadow};
+    output.insert(output.begin()+std::ptrdiff_t(insert),extra,extra+9);return true;
 }
 } // namespace NorthlightTerrainShadow

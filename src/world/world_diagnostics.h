@@ -18,7 +18,7 @@ inline bool dump(IDirect3DDevice9* device,IDirect3DSurface9* source,
                  const std::string& directory,const char* name,unsigned capture){
     if(!source)return false;
     D3DSURFACE_DESC desc={};HRESULT hr=source->GetDesc(&desc);
-    unsigned bytes=desc.Format==D3DFMT_A16B16G16R16F?8:
+    unsigned bytes=(desc.Format==D3DFMT_A16B16G16R16F||desc.Format==D3DFMT_G32R32F)?8:
         (desc.Format==D3DFMT_R32F||desc.Format==D3DFMT_A8R8G8B8||desc.Format==D3DFMT_X8R8G8B8?4:0);
     if(FAILED(hr)||!bytes||!desc.Width||!desc.Height||uint64_t(desc.Width)*desc.Height*bytes>64*1024*1024)return false;
     IDirect3DSurface9* staging=nullptr;

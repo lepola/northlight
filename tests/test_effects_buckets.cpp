@@ -23,8 +23,15 @@ int main(){
     std::int64_t sum=0;std::uint32_t draws=0;for(unsigned b=0;b<Count;++b){sum+=f.ticks(b);draws+=f.drawCalls(b);}
     assert(sum==f.total()&&f.total()==38&&draws==3797&&f.drawCalls(Celestial)==3700&&f.drawCalls(SunNear)==94);
     assert(calls==7&&f.reads()==7&&f.reads()<=MaxReads&&!f.on());
+    const auto saved=f.snapshot(1000);
+    assert(saved.valid&&saved.totalMs==38&&saved.reads==7&&saved.ms[SunNear]==20);
+    assert(!f.snapshot(0).valid);
+    f.begin(false,&fake);assert(!f.snapshot(1000).valid&&calls==7);
+    f.begin(true,&fake);assert(!f.snapshot(1000).valid);f.end();
+    assert(saved.totalMs==38&&saved.ms[SunNear]==20); // owns its original frame
+    const auto readsBefore=calls;
     // A mark after end() is ignored (no read); begin() resets.
-    f.mark(Veil);assert(calls==7);f.begin(true,&fake,counters,4);assert(f.ticks(SunNear)==0&&f.drawCalls(Celestial)==0);f.end();
+    f.mark(Veil);assert(calls==readsBefore);f.begin(true,&fake,counters,4);assert(f.ticks(SunNear)==0&&f.drawCalls(Celestial)==0);f.end();
     for(unsigned b=0;b<Count;++b)assert(name(b)[0]!='?');
     std::puts("PASS effects buckets: contiguous spans sum to the whole, unreached marks roll into the next bucket, draw calls billed alike, off reads no clock");
 }

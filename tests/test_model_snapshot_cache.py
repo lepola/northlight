@@ -13,6 +13,7 @@ stub=literal(HERE/'test_terrain_snapshot.py','stub');prefix=literal(HERE/'test_d
 body=r'''
 #include <chrono>
 #include <map>
+#include <string>
 static std::map<void*,std::uint64_t> tokens;
 static std::uint64_t identity(void* p,bool){auto it=tokens.find(p);return it==tokens.end()?0:it->second;}
 static std::uint64_t digest(const Mesh& m){std::uint64_t h=0xcbf29ce484222325ull;auto mix=[&](unsigned char v){h^=v;h*=0x100000001b3ull;};
@@ -23,7 +24,9 @@ int main(){
  Frame frame;frame.setIdentityProvider(&identity);Mesh mesh;Diagnostics why;std::shared_ptr<const Mesh> shared;
  Draw draw{D3DPT_TRIANGLELIST,0,0,12,0,1,true};d.indices({7,9,8});d.ib.desc.Usage=0; // Device::indices() marks the IB DYNAMIC
  // (a) static buffers: miss then hit, identical bytes, no locks on the hit.
- frame.clearFrame();assert(frame.read(&d,&d.decl,draw,mesh,&why,false,&shared));assert(shared&&mesh.indices.empty()&&mesh.streams[0].bytes.empty());
+ frame.clearFrame();std::vector<std::string> phases;PhaseTrace trace{&phases,[](void* context,const char* name){static_cast<std::vector<std::string>*>(context)->emplace_back(name);}};
+ assert(frame.read(&d,&d.decl,draw,mesh,&why,false,&shared,false,trace));
+ for(const char* phase:{"snapshot metadata","snapshot index lock","snapshot vertex lock","snapshot cache store"})assert(std::find(phases.begin(),phases.end(),phase)!=phases.end());assert(shared&&mesh.indices.empty()&&mesh.streams[0].bytes.empty());
  const std::size_t missCharge=frame.bytesRead();assert(missCharge>0);
  assert(frame.snapshotCacheMisses()==1&&frame.snapshotCacheHits()==0);const auto first=digest(*shared);const unsigned locksAfterMiss=d.vb[0].locks+d.vb[1].locks+d.ib.locks;
  std::shared_ptr<const Mesh> again;frame.clearFrame();assert(frame.read(&d,&d.decl,draw,mesh,&why,false,&again));

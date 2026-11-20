@@ -91,9 +91,9 @@ int main(){
   if(!pick(97))lo.y=NAN;const float eps=pick(50)?1e-4f:(pick(2)?-1.f:NAN);const bool up=pick(2);const float* mm=pick(500)?m:nullptr;
   assert(Old::clipReject(lo,hi,mm,eps,up)==NorthlightShadowBounds::clipReject(lo,hi,mm,eps,up));
   assert(Old::depthFullyInside(lo,hi,mm,eps)==NorthlightShadowBounds::depthFullyInside(lo,hi,mm,eps));
-  if(NorthlightShadowBounds::affineLightMatrix(mm)){assert(Old::clipReject(lo,hi,mm,1e-4f,true)==NorthlightShadowBounds::directionalClipRejectAffine(lo,hi,mm));assert(Old::depthFullyInside(lo,hi,mm)==NorthlightShadowBounds::depthFullyInsideAffine(lo,hi,mm));}
+  if(NorthlightShadowBounds::affineLightMatrix(mm)){assert(Old::clipReject(lo,hi,mm,1e-4f,true)==NorthlightShadowBounds::directionalClipRejectAffine(lo,hi,mm));assert(Old::depthFullyInside(lo,hi,mm)==NorthlightShadowBounds::depthFullyInsideAffine(lo,hi,mm));const auto both=NorthlightShadowBounds::classifyAffine(lo,hi,mm,1e-4f,true);assert(both.rejected==Old::clipReject(lo,hi,mm,1e-4f,true));if(!both.rejected)assert(both.depthInside==Old::depthFullyInside(lo,hi,mm));}
   ++bounds;}
- uint64_t selfChecks=0;size_t compared=0,planBytes=0,drawRecords=0,scenes=0;uint64_t fastBuilds=0,referenceBuilds=0;double fastMs=0,referenceMs=0;
+ uint64_t interiorHits=0,selfChecks=0;size_t compared=0,planBytes=0,drawRecords=0,scenes=0;uint64_t fastBuilds=0,referenceBuilds=0;double fastMs=0,referenceMs=0;
  for(unsigned trial=0;trial<120;++trial){
   GpuCache::Limits l;l.uploadMs=1e9;l.uploadBytes=pick(2)?(1u<<30):unsigned(200+pick(4000));l.retainFrames=1+pick(40);if(!pick(6))l.planMetadataBytes=pick(2)?0:size_t(600+pick(4000));
   const bool strict=trial%2==0;Pair pair(l,strict);const Vec3 center{random(-17000,17000),random(-17000,17000),random(-200,400)};
@@ -146,8 +146,11 @@ int main(){
     for(size_t i=0;i<ra.slices.size();++i)assert(ra.slices[i].key==rb.slices[i].key&&ra.slices[i].signature==rb.slices[i].signature&&ra.slices[i].revision==rb.slices[i].revision);}
   }
   assert(pair.fast.stats().planSelfCheckMismatches==0);selfChecks+=pair.fast.stats().planSelfChecks;
+  interiorHits+=pair.fast.stats().interiorBatchHits;
   ++scenes;pair.fast.reset();pair.reference.reset();
  }
  assert(FakeResource::alive==0);
+ assert(interiorHits>0);
+ std::cout<<"interior batch classifications reused: "<<interiorHits<<"\n";
  std::cout<<"plan equality: "<<bounds<<" bounds tests equal to 0.3.136, "<<scenes<<" randomized scenes, "<<compared<<" field-identical plans ("<<planBytes/1024<<" KiB), "<<drawRecords<<" identical draw records, "<<selfChecks<<" in-cache self-checks without mismatch; builds fast="<<fastBuilds<<" reference="<<referenceBuilds<<" ms fast="<<fastMs<<" reference="<<referenceMs<<"\n";
 }

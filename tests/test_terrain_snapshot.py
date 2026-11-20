@@ -15,6 +15,9 @@ stub=r'''
 #pragma once
 #include <cstdint>
 #include <climits>
+#include <chrono>
+struct LARGE_INTEGER {std::int64_t QuadPart;};
+inline void QueryPerformanceCounter(LARGE_INTEGER* out){out->QuadPart=std::chrono::steady_clock::now().time_since_epoch().count();}
 using UINT=unsigned;using INT=int;using DWORD=unsigned;using HRESULT=std::int32_t;
 constexpr HRESULT D3D_OK=0,D3DERR_INVALIDCALL=HRESULT(0x8876086cu),E_POINTER=HRESULT(0x80004003u);
 inline bool FAILED(HRESULT value){return value<0;}

@@ -130,6 +130,11 @@ int main(int argc,char** argv){
     NorthlightParticleLights::Frame frame;NorthlightLocalLightSelection::Tracker selection;std::vector<NorthlightLocalLights::Light> fixed;
     const auto prepare=[&](Shader& shader){return capture.prepare(&device,&shader,&ps,args,inverse,camera,projection,frame);};
     const auto publish=[&](){frame.publish(nullptr,0,fixed,camera,selection);return selection.update(fixed,camera,8,1.f/120,true,nullptr,frame.output.data(),frame.outputCount,frame.immediate.data(),frame.immediateCount);};
+    Pixel unsupported;
+    for(unsigned i=0;i<NorthlightParticleLights::ProbeLimit+1;++i){
+        assert(!capture.prepare(&device,&vertex,&unsupported,args,inverse,camera,projection,frame).count);
+    }
+    assert(frame.probes==0&&frame.dropped==0);
     auto prepared=prepare(vertex);assert(prepared.count==1&&frame.triangles==1);
     const auto& emitted=prepared.clusters[0].sample;assert(close(emitted.position[0],100)&&close(emitted.position[1],200)&&close(emitted.position[2],302));
     assert(emitted.rgb[2]>emitted.rgb[0]&&emitted.rgb[2]>emitted.rgb[1]);
