@@ -240,12 +240,13 @@
     "src/world_texture_store.h": "0379f85bfeddb944090a3305d57cd52ae43e7df2307cb7c7deb74da0d9f11f5c",
     "src/world_wmo.cpp": "639b49aeb1a770fa116b7fb77a762bb5e91f3f9018aade118218a5b445c7550b",
     "src/world_wmo.h": "98f1e038603e14a407367023dbd1ca4e8304dd5302ac6fbfa90e8d7e6e5c4eea",
+    "tools/blp_mips.py": "4533c1681ae15363929cfcdbd9f4b04524dd548392343feb282de2ec5b427a14",
     "tools/compile_shaders.cpp": "a03c08e75fad853c05bdca9d68d0f3064c1dbe7c85f3dbaf5279e83096fe0339",
     "tools/notices/bzip2-1.0.5.txt": "e8a6b63336018eec09ac3a7cdfe5a80bda635641bc0397a77b8baa25bed03800",
     "tools/shader_build.py": "c80119742e5a2dab25846e3316e5bd691e132201ca8404227d1e00dd979fc0d6",
     "tools/shader_header.py": "0154d161dd86a4e8c320c23081a87d5123f410c9211dea016664d9bea311e189"
   },
-  "revision": "217089623e8795f84e1cc51a5b3070246d66d324",
+  "revision": "203c61b68f51749549ce21080f6ba73e93c2ad5c",
   "shaders": {
     "ps_ao": {
       "dependencies": {

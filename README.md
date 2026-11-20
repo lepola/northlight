@@ -35,12 +35,20 @@ renderer. Keep a copy of the ZIP for rollback.
   textures in `northlight-water-textures/`. This reusable cache can be removed
   with the game closed. Realm settings, add-ons and existing game archives are
   player-owned. Server acceptance needs independent confirmation.
-- Use `--no-world-cache` for a renderer-only install. A world cache enables
-  Northlight's static shadows and GI. Use `--raised-air` for extra outdoor fog
-  coverage around Dalaran and Telredor, generated locally. Use `--art-layer`
-  to generate Northlight's lighting MPQs. A foreign patch-Z keeps its slot.
-  With art enabled, `--sky current` is the default. `--sky experimental-preserve`
-  is available for HD skies. Reinstall after changing client archives or locale.
+- A fresh combo install builds the zone lighting, current skies, weather and
+  outdoor fog coverage for Dalaran and Telredor from your client. Four known
+  incomplete HD textures (dock wood, sign wood, reeds and flowers) get their
+  missing distant mip where needed. Original archives stay in place. When
+  patch-Z is occupied the installer uses a free pair of slots. A conflicting
+  higher-priority locale patch keeps its artwork and the installer reports it.
+  Conflicting lighting tables stay together. Independent texture repairs still
+  apply. The combo uses the client's existing equipment, mount and spell models.
+- The world cache supplies static shadows, global illumination and the fog
+  tables used to build the lighting art. With `--no-world-cache`, a client
+  without those tables still gets the applicable scenery repairs and raised
+  fog coverage. Use `--no-art-layer` or `--no-raised-air` to skip generating
+  those files. `--sky experimental-preserve` is available for HD skies.
+  Reinstall after changing client archives or locale.
 - `water-host.ini` controls the pairing. Set `Enable=0` and restart for Northlight
   with native water. Restore `Enable=1` and restart for Tideglass. Edit
   `water.ini` for appearance. The beta uses the game's clock, swell shape 0.8 and
@@ -59,9 +67,9 @@ of that revision can be passed using `--storm-source`.
 
 ```sh
 python3 scripts/build_combo.py
-python3 renderer/build_packages.py --platform windows --version 0.3.216-tideglass.1 \
+python3 renderer/build_packages.py --platform windows --version 0.3.216-tideglass.2 \
     --dll renderer/frd9.dll --water-core out/tideglass/water-core.dll
-python3 tests/verify_packages.py out/packages/Northlight-0.3.216-tideglass.1-Windows.zip
+python3 tests/verify_packages.py out/packages/Northlight-0.3.216-tideglass.2-Windows.zip
 ```
 
 Use `--platform linux` to build the Linux package. The packager checks the inputs

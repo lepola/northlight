@@ -124,8 +124,8 @@ continents; leaving a group out of the answer removes it and the files only it
 used. --instances answers the question for scripted installs; --yes keeps the
 current choice.
 If the game folder already holds someone else's patch-z.mpq, the installer
-leaves it in place, skips the lighting layer and builds the cache itself so
-that its content is included (it says so at the end).
+keeps it as an input to the cache. The standard Northlight package skips the
+lighting layer. The Tideglass combo looks for a free patch slot.
 
 UPPER AND LOWER CASE
 Linux file names are case-sensitive, Wine's are not. If the game folder already

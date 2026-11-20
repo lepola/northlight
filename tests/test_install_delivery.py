@@ -20,6 +20,24 @@ import test_emitter_patch
 
 
 class Delivery(unittest.TestCase):
+    def test_higher_locale_reed_keeps_lighting_and_other_repairs(self):
+        local = Path('Data/enUS')
+        reed, flower = list(art.SCENERY_INPUTS)[:2]
+        light = r'DBFilesClient\Light.dbc'
+        sky = r'DBFilesClient\LightSkybox.dbc'
+        class Assets:
+            paths = [Path('Data/patch-z.mpq'), local / 'patch-enus-z.mpq']
+            providers = {reed.lower(): 1}
+            provider = providers.get
+        payload = {name: b'local' for name in (reed, flower, light, sky)}
+        effective, overrides = art.respect_locale_patches(Assets(), payload, local, 'enUS', 'y')
+        self.assertEqual(set(effective), {flower, light, sky})
+        self.assertEqual(overrides, [reed])
+        Assets.providers[light.lower()] = 1
+        effective, overrides = art.respect_locale_patches(Assets(), payload, local, 'enUS', 'y')
+        self.assertEqual(set(effective), {flower})
+        self.assertEqual(set(overrides), {light, reed})
+
     def test_release_rejects_stale_or_missing_builder_sources(self):
         manifest = {'variant': 'stock', 'build': {'sources': packages.install_world_cache.source_hashes()}}
         packages.check_variant_sources(manifest)

@@ -151,9 +151,14 @@ class Base(unittest.TestCase):
         args = [str(a) for a in args]
         opt = lambda name: args[args.index(name) + 1]
         self.calls.append((Path(script).name, args))
+        if Path(script).name == 'raised_air.py':
+            for name in ('Northrend.rfs', 'Expansion01.rfs'):
+                (Path(opt('--output')) / name).write_bytes(b'RFS1 fixture')
+            return 0, {}
         if Path(script).name == 'build_art_layer.py':
             out = Path(opt('--output'))
-            targets = ['Data/patch-z.mpq', 'Data/enUS/patch-enus-z.mpq']
+            letter = opt('--letter')
+            targets = [f'Data/patch-{letter}.mpq', f'Data/enUS/patch-enus-{letter}.mpq']
             for t in targets:
                 (out / t).parent.mkdir(parents=True, exist_ok=True); (out / t).write_bytes(ART + (b' HD' if opt('--sky') == 'experimental-preserve' else b''))
             (out / 'art-layer-manifest.json').write_text(json.dumps({'targets': targets, 'steps': [
@@ -451,7 +456,7 @@ class Install(Base):
         self.assertEqual(report['art_layer'], f'installed {sha(ART)[:8]} Data/patch-z.mpq; '
                                               f'installed {sha(ART)[:8]} Data/enUS/patch-enus-z.mpq')
         self.assertTrue(report['payload'].startswith('installed'))
-        self.assertIn('Art layer: built from this client\'s Light tables (2 steps applied, 1 skipped',
+        self.assertIn('Art layer: generated from local assets (2 steps applied, 1 skipped',
                       self.last_output)
         cache = self.client / 'world-cache'
         self.assertEqual({n: (cache / n).read_bytes() for n in CACHE_FILES}, CACHE_FILES)
@@ -1124,9 +1129,8 @@ class WindowsInstall(Install):
         before = tree(self.client)
         self.installer().install(self.client)
         descriptor = self.client / fi.WATER_ARCHIVE_LIST
-        self.assertNotIn('./Data/enUS/patch-enus-z.mpq', descriptor.read_text().splitlines())
-        self.assertFalse((self.client / 'Data/enUS/patch-enus-z.mpq').exists())
-        self.installer().install(self.client, art=True)
+        self.assertTrue((self.client / 'raised-fog/Expansion01.rfs').is_file())
+        self.assertTrue((self.client / 'raised-fog/Northrend.rfs').is_file())
         expected = ['./' + path.relative_to(self.client).as_posix() for path in fi.client_archives.chain(self.client)]
         self.assertEqual(descriptor.read_text().splitlines(), expected)
         self.assertIn('./Data/enUS/patch-enus-z.mpq', expected)
@@ -1136,6 +1140,29 @@ class WindowsInstall(Install):
         self.installer().uninstall(self.client)
         self.assertEqual(tree(self.client), {**before, 'water.ini': settings.read_bytes()})
         self.assertEqual(settings.read_bytes(), b'[Water]\r\nWaveCrestShape=0.5\r\n')
+
+    def test_combo_reuses_free_patch_pair_and_restores_foreign_art(self):
+        self.make_water_package()
+        foreign = self.client / 'Data/patch-z.mpq'
+        foreign.write_bytes(b'foreign reeds')
+        before = tree(self.client)
+        installed = self.client / 'Data/enUS/patch-enus-y.mpq'
+        self.installer().install(self.client)
+        self.assertEqual(installed.read_bytes(), ART)
+        self.assertEqual(foreign.read_bytes(), b'foreign reeds')
+        foreign.unlink()
+        self.installer().install(self.client)
+        self.assertFalse(foreign.exists())
+        self.assertEqual(installed.read_bytes(), ART)
+        foreign.write_bytes(b'foreign reeds')
+        self.installer().uninstall(self.client)
+        self.assertEqual(tree(self.client), before)
+
+    def test_combo_visual_opt_out_on_fresh_install(self):
+        self.make_water_package()
+        self.installer().install(self.client, art=False, raised_air=False)
+        self.assertFalse((self.client / 'Data/patch-z.mpq').exists())
+        self.assertFalse((self.client / 'raised-fog/Northrend.rfs').exists())
 
     def test_water_collision_or_wrong_executable_refuses_before_any_writes(self):
         self.make_water_package()
@@ -1216,8 +1243,8 @@ class WindowsInstall(Install):
             self.assertEqual(fi.main(['install', '--backend', 'dxvk2', '--instances', '1 6', '--sky', 'experimental-preserve', '--client', str(self.client),
                                       '--package', str(self.pkg_root)]), 0)
         self.assertEqual([a[3] for a in seen], [None, 'dxvk2'])
-        self.assertEqual([kw for kw in kwargs], [{'instances': None, 'sky': None, 'raised_air': False},
-                                                 {'instances': '1 6', 'sky': 'experimental-preserve', 'raised_air': False}])
+        self.assertEqual([kw for kw in kwargs], [{'instances': None, 'sky': None, 'raised_air': None},
+                                                 {'instances': '1 6', 'sky': 'experimental-preserve', 'raised_air': None}])
 
     DXVK2 = 'renderer-backends/dxvk2/dxvk2_d3d9.dll'
 

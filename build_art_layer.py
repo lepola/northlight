@@ -37,7 +37,6 @@ folder: nothing is written into the client.
 import argparse
 import hashlib
 import json
-import shutil
 import sys
 import tempfile
 from pathlib import Path
@@ -81,90 +80,146 @@ def read_archive(path):
         return {n: archive.read(n) for n in archive.names() if not n.startswith('(')}
 
 
-def build(client, output, world_cache, locale=None, letter='z', archives='all', sky='current'):
+def lighting_payload(assets, client, locale, work, fog, sky, report, combo):
+    tables = {n: DBC(assets.read(DBC_NAME.format(n))) for n in build_lighting.TABLES}
+    stock = {n: DBC(assets.read(DBC_NAME.format(n))) for n in build_lighting.TABLES}   # untouched, for the storm sources
+    chain_skybox = assets.read(SKYBOX)
+    changes, skipped, zones = build_lighting.relight(tables)
+    retimed = build_lighting.retime(tables, [c['new'] for c in changes.values()])
+    payload = {DBC_NAME.format(n): t.bytes() for n, t in tables.items()}
+    report['steps'].append({'step': 'relighting', 'profiles': len(changes), 'skipped_incomplete_profiles': skipped,
+                            'light_volumes': zones,
+                            'sources': {n: assets.origin(DBC_NAME.format(n)) for n in build_lighting.TABLES}})
+    report['steps'].append({'step': 'retime', **{k: v for k, v in retimed.items() if k != 'rows'}})
+    report['retimed_rows'] = retimed['rows']
+    preserved = [] if sky == 'experimental-preserve' else None
+    steps = [
+        ('mulgore', lambda s, o: build_mulgore_lighting.build(s, o, client, assets, chain_skybox, fog)),
+        ('stormwind', lambda s, o: build_stormwind_single_sun.build(s, o, 'stormwind', assets, fog)),
+        ('orgrimmar', lambda s, o: build_stormwind_single_sun.build(s, o, 'orgrimmar', assets, fog)),
+        ('outdoor_sun', lambda s, o: build_outdoor_single_sun.build(s, o, assets)),
+        ('outdoor_moon', lambda s, o: build_outdoor_single_moon.build(s, o, assets, preserved)),
+    ]
+    for index, (name, step) in enumerate(steps, 1):
+        source, out = work / f'{index}-{name}-input.mpq', work / f'{index}-{name}'
+        # The relighting archive carries only the band tables; the sky steps after Mulgore also
+        # need the client's LightSkybox when Mulgore (which adds it) was skipped.
+        if name != 'mulgore' and SKYBOX not in payload:
+            payload[SKYBOX] = chain_skybox
+        write_archive(source, payload)
+        try:
+            step(source, out)
+        except Skip as skip:
+            report['steps'].append({'step': name, 'skipped': str(skip)})
+            print(f'{name}: skipped ({skip})', flush=True)
+            continue
+        payload = read_archive(out / 'patch-z.mpq')
+        manifest = json.loads((out / 'manifest.json').read_text())
+        report['steps'].append({'step': name, 'added_assets': len(manifest.get('added_assets', [])),
+                                'archive_sha256': manifest.get('archive_sha256')})
+        if manifest.get('sky_clone_skipped'):
+            report['steps'][-1]['sky_clone_skipped'] = manifest['sky_clone_skipped']
+            print(f"{name}: sky clone skipped ({manifest['sky_clone_skipped']})", flush=True)
+    # The combo preset uses native equipment, mount and spell models.
+    if not combo:
+        dynamic_models, dynamic_steps = native_model_lights.build(assets, work, read_archive)
+        payload.update(dynamic_models)
+        report['steps'].extend(dynamic_steps)
+    # 0.3.198 (rain): after the sky steps, so their skybox edits are kept: private storm profiles, then the weather textures.
+    final = {n: DBC(payload[DBC_NAME.format(n)]) for n in build_lighting.TABLES}
+    storm = build_lighting.stormify(final, stock)
+    if preserved is not None:
+        import build_tirisfal_sky
+        report['sky'] = {'mode': sky, 'preserved': preserved,
+                         'tirisfal': build_tirisfal_sky.apply(client, locale, final, payload, assets)}
+    payload.update({DBC_NAME.format(n): t.bytes() for n, t in final.items()})
+    report['steps'].append({'step': 'storm', **storm})
+    textures = build_weather_textures.weather_textures()
+    textures.update(build_weather_textures.mist_textures(assets.read, decode_blp))   # 0.3.199 (rain mist)
+    payload.update(textures)
+    report['steps'].append({'step': 'weather_textures', 'files': sorted(textures)})
+    report['steps'].append({'step': 'world_model_lights', 'skipped': 'Rendered from world-cache/lights'})
+    return payload
+
+
+# Only the known incomplete HD revisions qualify. Preserve local replacements, including
+# complete textures with the same filename, and all original compressed image levels.
+SCENERY_INPUTS = {
+    r'World\ENVIRONMENT\DOODAD\SWAMPOFSORROWS\PLANTS\REEDS\TEXTURE\SWAMPREEDS01A.BLP':
+        'a9062fbbd57f2639b423930f0e7cec62fc280a7e765fd4d4e81c21d0095a6de4',
+    r'World\Azeroth\SwampOSorrow\PassiveDoodads\Plants\WestfallFlower01.blp':
+        'f19a79e581712325bb17bac055bf132123fdb62f795fbab072b76b5c9bbf3068',
+    r'WORLD\AZEROTH\ELWYNN\PASSIVEDOODADS\SMALLDOCK\ELWYNNDOCKSUPPORT01.BLP':
+        '35c100035dcc18bc3aa18aed70eecf7ecde94ba7e5890d932258347d67d77662',
+    r'WORLD\AZEROTH\ELWYNN\PASSIVEDOODADS\SMALLDOCK\ELWYNNROADSIGNWOOD02.BLP':
+        '6a7f0908cdaff8cc79c584590193c64bdb346c1c2412de9d21106d5ca48eee4f',
+}
+
+
+def scenery_repairs(assets):
+    from tideglass.tools.blp_mips import complete_terminal_bc3_mip
+
+    repairs = {}
+    for name, digest in SCENERY_INPUTS.items():
+        try:
+            source = assets.read(name)
+        except FileNotFoundError:
+            continue
+        if hashlib.sha256(source).hexdigest() == digest:
+            repairs[name] = complete_terminal_bc3_mip(source)
+    return repairs
+
+
+def respect_locale_patches(assets, payload, local_folder, locale, letter):
+    """Keep related lighting tables together. The four scenery textures are independent."""
+    later = {i for i, path in enumerate(assets.paths) if path.parent == local_folder
+             and path.stem.lower().startswith('patch-' + locale.lower() + '-')
+             and path.stem.lower().split('-')[-1] > letter}
+    shadowed = {name for name in payload if assets.provider(name.lower()) in later}
+    if not shadowed:
+        return payload, []
+    scenery = set(SCENERY_INPUTS)
+    lighting_blocked = bool(shadowed - scenery)
+    kept = {n: data for n, data in payload.items() if n not in shadowed and (n in scenery or not lighting_blocked)}
+    return kept, sorted(shadowed)
+
+
+def build(client, output, world_cache, locale=None, letter='z', archives='all', sky='current', combo=False):
     locale = client_archives.detect_locale(client, locale)
     fog = world_cache / 'fog'
     assets = Assets(client, archives, locale, without=letter)
     report = {'client_archives': assets.fingerprint(), 'letter': letter, 'steps': []}
-    work = Path(tempfile.mkdtemp(prefix='art-layer-', dir=output.parent))
     try:
-        tables = {n: DBC(assets.read(DBC_NAME.format(n))) for n in build_lighting.TABLES}
-        stock = {n: DBC(assets.read(DBC_NAME.format(n))) for n in build_lighting.TABLES}   # untouched, for the storm sources
-        chain_skybox = assets.read(SKYBOX)
-        changes, skipped, zones = build_lighting.relight(tables)
-        retimed = build_lighting.retime(tables, [c['new'] for c in changes.values()])
-        payload = {DBC_NAME.format(n): t.bytes() for n, t in tables.items()}
-        last = None   # the last step's archive while payload is exactly its content
-        report['steps'].append({'step': 'relighting', 'profiles': len(changes), 'skipped_incomplete_profiles': skipped,
-                                'light_volumes': zones,
-                                'sources': {n: assets.origin(DBC_NAME.format(n)) for n in build_lighting.TABLES}})
-        report['steps'].append({'step': 'retime', **{k: v for k, v in retimed.items() if k != 'rows'}})
-        report['retimed_rows'] = retimed['rows']
-        preserved = [] if sky == 'experimental-preserve' else None
-        steps = [
-            ('mulgore', lambda s, o: build_mulgore_lighting.build(s, o, client, assets, chain_skybox, fog)),
-            ('stormwind', lambda s, o: build_stormwind_single_sun.build(s, o, 'stormwind', assets, fog)),
-            ('orgrimmar', lambda s, o: build_stormwind_single_sun.build(s, o, 'orgrimmar', assets, fog)),
-            ('outdoor_sun', lambda s, o: build_outdoor_single_sun.build(s, o, assets)),
-            ('outdoor_moon', lambda s, o: build_outdoor_single_moon.build(s, o, assets, preserved)),
-        ]
-        for index, (name, step) in enumerate(steps, 1):
-            source, out = work / f'{index}-{name}-input.mpq', work / f'{index}-{name}'
-            # The relighting archive carries only the band tables; the sky steps after Mulgore also
-            # need the client's LightSkybox when Mulgore (which adds it) was skipped.
-            if name != 'mulgore' and SKYBOX not in payload:
-                payload, last = {**payload, SKYBOX: chain_skybox}, None
-            write_archive(source, payload)
-            try:
-                step(source, out)
-            except Skip as skip:
-                report['steps'].append({'step': name, 'skipped': str(skip)})
-                print(f'{name}: skipped ({skip})', flush=True)
-                continue
-            payload, last = read_archive(out / 'patch-z.mpq'), work / f'{index}-{name}.mpq'
-            (out / 'patch-z.mpq').replace(last)
-            manifest = json.loads((out / 'manifest.json').read_text())
-            report['steps'].append({'step': name, 'added_assets': len(manifest.get('added_assets', [])),
-                                    'archive_sha256': manifest.get('archive_sha256')})
-            if manifest.get('sky_clone_skipped'):
-                report['steps'][-1]['sky_clone_skipped'] = manifest['sky_clone_skipped']
-                print(f"{name}: sky clone skipped ({manifest['sky_clone_skipped']})", flush=True)
-        dynamic_models, dynamic_steps = native_model_lights.build(assets, work, read_archive)
-        payload.update(dynamic_models)
-        report['steps'].extend(dynamic_steps)
-        # 0.3.198 (rain): after the sky steps, so their skybox edits are kept: private storm profiles, then the weather textures.
-        final = {n: DBC(payload[DBC_NAME.format(n)]) for n in build_lighting.TABLES}
-        storm = build_lighting.stormify(final, stock)
-        if preserved is not None:
-            import build_tirisfal_sky
-            report['sky'] = {'mode': sky, 'preserved': preserved,
-                             'tirisfal': build_tirisfal_sky.apply(client, locale, final, payload, assets)}
-        payload.update({DBC_NAME.format(n): t.bytes() for n, t in final.items()})
-        report['steps'].append({'step': 'storm', **storm})
-        textures = build_weather_textures.weather_textures()
-        textures.update(build_weather_textures.mist_textures(assets.read, decode_blp))   # 0.3.199 (rain mist)
-        payload.update(textures)
-        report['steps'].append({'step': 'weather_textures', 'files': sorted(textures)})
-        report['steps'].append({'step': 'world_model_lights', 'skipped': 'Rendered from world-cache/lights'})
-        last = None   # the payload is no longer a step's archive
+        with tempfile.TemporaryDirectory(prefix='art-layer-', dir=output.parent) as work:
+            payload = {}
+            if fog.is_dir() or not combo:
+                payload = lighting_payload(assets, client, locale, Path(work), fog, sky, report, combo)
+        if combo:
+            repairs = scenery_repairs(assets)
+            payload.update(repairs)
+            report['steps'].append({'step': 'scenery_repairs', 'files': sorted(repairs)})
         unchanged = sorted(n for n, data in payload.items() if n.lower() in assets.providers and assets.read(n) == data)
         payload = {n: data for n, data in payload.items() if n not in unchanged}
         data = client_archives.data_dir(client).name
         local = client_archives.locale_dir(client, locale).name
         targets = [f'{data}/patch-{letter}.mpq', f'{data}/{local}/patch-{local.lower()}-{letter}.mpq']
+        if combo and letter != 'z':
+            payload, report['locale_overrides'] = respect_locale_patches(
+                assets, payload, client_archives.locale_dir(client, locale), locale, letter)
+        existing = [t for t in targets if Path(t).name.lower() in client_archives._entries((client / t).parent)]
+        if not payload and not existing:
+            targets = []
+            report['skip_reason'] = 'the client has no applicable changes'
+        # An empty replacement clears obsolete members if the player repaired the input
+        # or added a higher-priority patch since installing. Uninstall still restores ownership.
         for target in targets:
-            if last and not unchanged:   # keep the step's archive bytes (reproducible against the HD chain)
-                (output / target).parent.mkdir(parents=True, exist_ok=True)
-                shutil.copyfile(last, output / target)
-            else:
-                write_archive(output / target, payload)
+            write_archive(output / target, payload)
     finally:
         assets.close()
-        shutil.rmtree(work, ignore_errors=True)
     report.update(targets=targets, locale=locale, dropped_unchanged=unchanged,
                   files={n: hashlib.sha256(d).hexdigest() for n, d in sorted(payload.items())},
-                  letter_already_in_client=[t for t in targets if (client / t).exists()],
-                  archive_sha256=hashlib.sha256((output / targets[0]).read_bytes()).hexdigest(),
+                  letter_already_in_client=existing,
+                  archive_sha256=hashlib.sha256((output / targets[0]).read_bytes()).hexdigest() if targets else None,
                   game_launched=False)
     (output / 'art-layer-manifest.json').write_text(json.dumps(report, indent=2) + '\n')
     return report
@@ -173,6 +228,7 @@ def build(client, output, world_cache, locale=None, letter='z', archives='all', 
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     client_archives.add_arguments(ap)
+    ap.add_argument('--tideglass', action='store_true', help='build the combo preset with native models and known HD scenery repairs')
     ap.add_argument('--sky', choices=('current', 'experimental-preserve'), default='current',
                     help='experimental: preserve mixed moon artwork and use compatible local HD Tirisfal clouds')
     ap.add_argument('--world-cache', type=Path, help="the client's world cache, for its fog zones (default: <client>/world-cache)")
@@ -186,7 +242,7 @@ def main():
     if output == client or client in output.parents:
         ap.error('--output must be a staging folder outside the client')
     output.mkdir(parents=True, exist_ok=True)
-    report = build(client, output, (args.world_cache or client / 'world-cache').resolve(), args.locale, args.letter, args.archives, args.sky)
+    report = build(client, output, (args.world_cache or client / 'world-cache').resolve(), args.locale, args.letter, args.archives, args.sky, args.tideglass)
     print(json.dumps({'steps': report['steps'], 'files': len(report['files']), 'targets': report['targets']}, indent=2))
 
 

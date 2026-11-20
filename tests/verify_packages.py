@@ -104,7 +104,10 @@ def verify_installer(path):
         check(problems, allowed(rel, plat, launchers, payload), f'not allowlisted: {rel}')
         parts = rel.lower().split('/')
         check(problems, Path(rel).suffix.lower() not in FORBIDDEN_SUFFIX, f'forbidden suffix: {rel}')
-        check(problems, rel.startswith('runtime/') or not FORBIDDEN_PART & set(parts[:-1]), f'forbidden folder: {rel}')
+        # This reviewed install-time codec shares its source path with the Tideglass exporter.
+        bundled_mip_codec = rel == 'app/tideglass/tools/blp_mips.py'
+        check(problems, rel.startswith('runtime/') or bundled_mip_codec or not FORBIDDEN_PART & set(parts[:-1]),
+              f'forbidden folder: {rel}')
         check(problems, not data.startswith(GAME_MAGIC), f'game data magic in {rel}')
         if not rel.startswith('runtime/') and Path(rel).suffix.lower() in TEXT_SUFFIX:
             text = data.decode('utf-8', 'replace')

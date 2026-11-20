@@ -11,11 +11,16 @@ archives. It leaves realm settings, account data, add-ons and foreign MPQs alone
 A previously installed water DLL or INI from another renderer must be moved
 aside before installing. Keep those files to restore that setup.
 
-The optional world cache adds static shadows and GI. Use --no-world-cache for
-a renderer-only install. Add --raised-air to generate the Dalaran and Telredor
-fog coverage from local geometry. In this beta the art layer is opt-in. Add
---art-layer to build Northlight's lighting MPQs. The default zone skies are used
-with art enabled. Add --sky experimental-preserve to try preserving HD skies.
+A standard install builds Northlight's lighting, current zone skies and weather,
+plus outdoor fog coverage in Dalaran and Telredor. It repairs the last mip of
+four known incomplete HD dock, sign and plant textures where needed. All inputs
+come from your client. Your original archives stay in place. If patch-Z belongs
+to another mod, the installer uses a free slot and reports any locale conflict.
+
+The world cache adds static shadows and global illumination. --no-world-cache
+skips that build. Without cached fog tables the installer can still generate
+the scenery repairs and raised fog coverage. --no-art-layer and --no-raised-air
+skip the respective generation steps. HD users can try --sky experimental-preserve.
 Reinstall after changing locale or adding or removing client archives.
 
 Set Enable=0 in water-host.ini and restart for Northlight with native water.

@@ -22,12 +22,9 @@ The launchers (Install Northlight.command, Install.cmd, install.sh) run this wit
    20-40 min). A cache that is already current is kept. The dungeon and raid maps are an optional layer on
    top of the continent cache (scripts/install_world_cache.py --instances): the installer asks which of six
    groups to build (--instances SPEC answers for it; the default is what the client has, else none), and a
-   prebuilt extract keeps the groups already built. A patch-z that is not ours (D11) is part
-   of the client: identification and the local build then read it (without=''), and the art layer
-   is skipped.
-3. the art layer (patch-z) is always built from the client's own Light*.dbc (build_art_layer.py)
-   into the package's work folder and installed through the transaction, unless Data/patch-z.mpq
-   or the locale patch-<loc>-z.mpq is someone else's (then it is skipped and reported).
+   prebuilt extract keeps the groups already built. Foreign patches remain part of the cache inputs.
+3. build lighting and applicable scenery repairs from local assets into the package work folder.
+   The combo uses a free pair of base/locale patch slots when Z belongs to another mod.
 4. the renderer: Windows and Linux install d3d9.dll, the DXVK backend and the ini files in one transaction
    (install.py; on Linux the game runs under Wine or Proton, so the payload is the Windows one and the
    summary says how to make Wine load the game-folder d3d9.dll); macOS runs migrate_mac_proxy (mods/d3d9.dll preloaded from
@@ -854,6 +851,28 @@ class Installer:
                 found.append((rel, current))
         return found
 
+    def art_letter(self, client, locale, foreign):
+        if not self.pkg.info.get('tideglass'):
+            return None if foreign else LETTER
+        data = client_archives.data_dir(client)
+        local = client_archives.locale_dir(client, locale)
+        top, localized = client_archives._entries(data), client_archives._entries(local)
+        owned = {}
+        for _, record in INSTALL.transactions(client):
+            for entry in record['files']:
+                owned.setdefault(entry['path'].lower(), set()).update(INSTALL.afters(entry))
+        available = None
+        for letter in reversed('abcdefghijklmnopqrstuvwxyz'):
+            pair = (top.get(f'patch-{letter}.mpq'), localized.get(f'patch-{locale.lower()}-{letter}.mpq'))
+            existing = [p for p in pair if p is not None]
+            # Prefer an installed pair even if a higher slot has since become free.
+            if existing and all(p.is_file() and (key := p.relative_to(client).as_posix().lower()) in owned
+                                and sha(p) in owned[key] for p in existing):
+                return letter
+            if available is None and (not existing or (letter == LETTER and not foreign and all(p.is_file() for p in existing))):
+                available = letter
+        return available
+
     def choose_sky(self, client, mode):
         if mode is not None:
             if mode not in SKY_MODES:
@@ -875,31 +894,37 @@ class Installer:
             return choices[answer]
         return self.pick(f'Sky choice [Enter keeps {current}] > ', parse, current)
 
-    def art_layer(self, client, locale, sky='current'):
+    def art_layer(self, client, locale, sky='current', letter=LETTER):
         """({client path: bytes} to install, None, {client path: action}) or ({}, reason it is skipped, {}).
         The action per target is installed (absent before), replaced (another layer of ours) or kept-identical.
         A target that exists in another letter case (Data/Patch-Z.MPQ on Linux) keeps its name on disk, so that
         Wine never sees two files."""
-        if not (client / CACHE / 'fog').is_dir():
+        combo = bool(self.pkg.info.get('tideglass'))
+        if not combo and not (client / CACHE / 'fog').is_dir():
             return {}, 'no world cache (its fog zones are an input)', {}
         work = self.pkg.work / 'art-layer'
         remove_tree(work)
         work.mkdir(parents=True)
         code, _ = self.run(APP / 'build_art_layer.py', ['--client', client, '--locale', locale, '--world-cache',
-                                                         client / CACHE, '--output', work, '--letter', LETTER, '--sky', sky], show=False)
+                                                         client / CACHE, '--output', work, '--letter', letter, '--sky', sky] +
+                           (['--tideglass'] if combo else []), show=False)
         report = read_json(work / 'art-layer-manifest.json')
         if code != 0 or not report:
             raise Failed(f'The art layer build failed (exit {code}); its last lines are shown above. '
                          f'Full output: {self.log.name if self.log else "not logged"}.')
         layer = {on_disk(client, t): (work / t).read_bytes() for t in report['targets']}
         remove_tree(work)
+        for name in report.get('locale_overrides', []):
+            self.say('Keeping artwork from a higher-priority locale patch: ' + name)
+        if not layer:
+            return {}, report['skip_reason'], {}
         if 'sky' in report:
             self.say('Experimental sky preservation: ' + report['sky']['tirisfal'])
             for item in report['sky']['preserved']:
                 self.say('  Preserved mixed moon artwork: ' + item['model'] + ' (a second moon may be visible)')
         steps = report.get('steps', [])
         skipped = sum(1 for step in steps if 'skipped' in step)
-        self.say(f'Art layer: built from this client\'s Light tables ({len(steps) - skipped} steps applied, '
+        self.say(f'Art layer: generated from local assets ({len(steps) - skipped} steps applied, '
                  f'{skipped} skipped; details in the log)')
         actions = {}
         for name, data in layer.items():
@@ -1020,10 +1045,12 @@ class Installer:
             remove_tree(previous)
 
     def install(self, client, locale=None, cache=None, backend=None, art=None, world_cache=True, jobs=None,
-                instances=None, sky=None, raised_air=False):
+                instances=None, sky=None, raised_air=None):
         client = self.resolve_client(client)
         if art is None:
-            art = not self.pkg.info.get('tideglass')
+            art = True
+        if raised_air is None:
+            raised_air = bool(self.pkg.info.get('tideglass'))
         plan = self.plan_install(client, locale, cache, backend, art, world_cache, instances, sky, raised_air)
         with locked(client):   # S5: taken once the read-only checks have passed
             return self.apply_install(plan, jobs)
@@ -1099,7 +1126,8 @@ class Installer:
         old = self.legacy(client)
         foreign = self.foreign_z(client, locale)
         # An old full package's letters (patch-y) go away before the cache step: identify without them.
-        without = ('' if foreign else LETTER) + ''.join(x for x in self.legacy_letters(old) if x != LETTER)
+        letter = self.art_letter(client, locale, foreign)
+        without = (letter or '') + ''.join(x for x in self.legacy_letters(old) if x != letter)
         for rel, digest in foreign:
             self.say(f'{rel} belongs to another mod (sha256 {digest[:12]}); it is kept, and its content is part of '
                      'this client.')
@@ -1148,12 +1176,12 @@ class Installer:
                 raise Refusal(refusal[0].upper() + refusal[1:] + '. Run again with --no-world-cache to install the '
                               'renderer without static world shadows and GI.')
         self.say('Checks passed.')
-        return {'client': client, 'locale': locale, 'backend': backend, 'art': art, 'old': old, 'foreign': foreign,
+        return {'client': client, 'locale': locale, 'backend': backend, 'art': art, 'old': old, 'letter': letter,
                 'without': without, 'variant': variant, 'manifest': manifest, 'source': source, 'action': action,
-                'instances': keys, 'raised_air': raised_air, 'sky': self.choose_sky(client, sky) if art and not foreign else None}
+                'instances': keys, 'raised_air': raised_air, 'sky': self.choose_sky(client, sky) if art and letter else None}
 
     def apply_install(self, p, jobs):
-        client, locale, action, foreign = p['client'], p['locale'], p['action'], p['foreign']
+        client, locale, action = p['client'], p['locale'], p['action']
         self.still_closed('changing anything')
         raised = {}
         if p['raised_air']:
@@ -1203,10 +1231,10 @@ class Installer:
                 p['source'].close()
         if not p['art']:
             layer, why, actions = {}, 'disabled with --no-art-layer', {}
-        elif foreign:
-            layer, why, actions = {}, f'{foreign[0][0]} belongs to another mod; it is left as it is', {}
+        elif not p['letter']:
+            layer, why, actions = {}, 'no available art patch slot; existing patches were kept', {}
         else:
-            layer, why, actions = self.art_layer(client, locale, p['sky'])
+            layer, why, actions = self.art_layer(client, locale, p['sky'], p['letter'])
         if why:
             report['art_layer'] = 'skipped: ' + why
         else:
@@ -1366,7 +1394,7 @@ class Installer:
         try:
             locale = client_archives.detect_locale(client)
             state['locale'] = locale
-            state['variant'] = self.identify_chain(client, locale, '' if self.foreign_z(client, locale) else LETTER)[0]
+            state['variant'] = self.identify_chain(client, locale, self.art_letter(client, locale, self.foreign_z(client, locale)) or '')[0]
         except (ValueError, OSError, ImportError) as e:
             state['identity_error'] = str(e)
         if self.platform == 'mac':
@@ -1397,10 +1425,10 @@ def main(argv=None):
                     help='current skies or experimental preservation of mixed moons and local HD Tirisfal clouds; '
                          'default: keep the last choice, current on first install')
     art = ap.add_mutually_exclusive_group()
-    art.add_argument('--art-layer', dest='art_layer', action='store_true', help='build the optional lighting art MPQs')
-    art.add_argument('--no-art-layer', dest='art_layer', action='store_false', help='leave out the lighting art MPQs')
+    art.add_argument('--art-layer', dest='art_layer', action='store_true', help='build the default lighting and scenery MPQs')
+    art.add_argument('--no-art-layer', dest='art_layer', action='store_false', help='skip generating lighting and scenery MPQs')
     ap.set_defaults(art_layer=None)
-    ap.add_argument('--raised-air', action='store_true', help='generate extra outdoor fog coverage for Dalaran and Telredor')
+    ap.add_argument('--raised-air', action=argparse.BooleanOptionalAction, default=None, help='generate extra outdoor fog coverage for Dalaran and Telredor')
     ap.add_argument('--no-world-cache', action='store_true', help='install the renderer without a world cache')
     ap.add_argument('--instances', metavar='SPEC', help='dungeon and raid world cache groups to have: numbers 1-6, keys, all or none '
                     '(default: asked; the groups the client has, else none)')

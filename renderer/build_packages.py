@@ -53,7 +53,7 @@ PROXY_PLATFORMS = ('windows', 'linux')   # the game-folder d3d9.dll proxy with t
 # Repository files the package needs, in their repository layout (northlight_paths finds them there).
 APP_FILES = [
     'northlight_paths.py', 'mpq.py', 'client_archives.py',
-    'build_tirisfal_sky.py', 'build_art_layer.py', 'build_lighting.py', 'build_mulgore_lighting.py', 'build_stormwind_single_sun.py',
+    'tideglass/tools/blp_mips.py', 'build_tirisfal_sky.py', 'build_art_layer.py', 'build_lighting.py', 'build_mulgore_lighting.py', 'build_stormwind_single_sun.py',
     'build_outdoor_single_sun.py', 'build_outdoor_single_moon.py', 'build_weather_textures.py',  # 0.3.198 (rain): the art layer's procedural weather textures
     'scripts/install_world_cache.py', 'scripts/client_identity.py',
     'renderer/northlight_install.py', 'renderer/migrate_mac_proxy.py', 'renderer/windows-package/install.py',
