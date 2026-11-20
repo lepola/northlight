@@ -73,6 +73,14 @@ revision, per-file hashes and shader inputs in `tideglass/source.json`.
 shader headers, run `scripts/rebuild_water_shaders.py` with Python, Wine and
 `--compiler /path/to/D3DCompiler_43.dll`. Changes to shared renderer sources go
 through Tideglass and its export so standalone receives the same fixes.
+After packaging, run the ZIP checks on each platform and exercise fallback under
+Wine. The startup check uses only the packaged DLLs and a temporary directory.
+
+```sh
+python3 tests/verify_packages.py path/to/combined.zip
+python3 tests/verify_tideglass_startup.py path/to/combined.zip
+```
+
 [Tests](#test) · [Source conventions](#conventions).
 
 ## What Northlight adds
