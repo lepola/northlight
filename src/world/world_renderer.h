@@ -1834,7 +1834,7 @@ private:
 #endif
                 auto fogField=std::make_shared<NorthlightRegionalFog::Field>(NorthlightRegionalFog::buildField(replacement->scene(),region,center.x,center.y,fogScale));
                 const unsigned raised=NorthlightRegionalFog::applyRaised(*fogField,region,root+"raised-fog/",r.map);
-                if(NorthlightDiagnostics::enabled())logf("REGIONAL RAISED map=%s centerZ=%.2f nodes=%u",r.map.c_str(),center.z,raised);
+                if(NorthlightDiagnostics::enabled())logf("REGIONAL RAISED map=\"%s\" centerZ=%.2f nodes=%u",r.map.c_str(),center.z,raised);
                 built->fog=std::move(fogField);
                 if(NorthlightDiagnostics::enabled())logf("REGIONAL FOG map=\"%s\" tiles=%zu missing=%u groundCells=%u fogCells=%u airCells=%u indoorCells=%u citySurfaceCells=%u",r.map.c_str(),region.tiles.size(),region.missing,built->fog->groundCells,built->fog->fogCells,built->fog->airCells,built->fog->indoorCells,built->fog->citySurfaceCells);
                 const double environmentMs=phaseElapsed();const auto& memoryAfter=workerAdmissionProbe.stats();
