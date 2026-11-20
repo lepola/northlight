@@ -698,8 +698,8 @@ class Device final : public GuardedMirrorDevice {
         const DWORD now=GetTickCount();if(DWORD(now-rainLayerPolled)<500)return;rainLayerPolled=now;
         std::string ini=northlightWaterSettings.SettingsPath();
         if(ini.size()<9){rainLayerMode=0;return;}ini.resize(ini.size()-9);ini+="water-host.ini";
-        // Private prototype: 0 control, 1 preservation, 2 forced-unavailable fallback test.
-        rainLayerMode=northlightWaterSettings.Enabled()?GetPrivateProfileIntA("WaterIntegration","PreserveRain",0,ini.c_str()):0;
+        // Rain restoration needs a cooperating liquid pass. Mode 2 exercises its unavailable-resource fallback.
+        rainLayerMode=northlightWaterSettings.Open()?GetPrivateProfileIntA("WaterIntegration","PreserveRain",0,ini.c_str()):0;
     }
     void rainColourUnbind(){
         if(!rainColourBound)return;
@@ -3080,6 +3080,10 @@ public:
         mirrorState.gate.ownerTid=MirrorGuard::threadId(); /* 0.3.180 (D0): the CreateDevice caller */
         mirrorState.gate.reportContext=this;mirrorState.gate.report=&gateForeignReport;
         parent->AddRef(); QueryPerformanceFrequency(&cpuFrequency);
+#ifdef NORTHLIGHT_WATER
+        if(northlightWaterSettings.Enabled()&&!northlightWaterSettings.Open())
+            logf("TIDEGLASS water-core.dll is missing, unreadable or incompatible. Using native water until restart.");
+#endif
         try{settingsService=NorthlightSettings::acquire(std::filesystem::path(rootPath));settingsRevision=settingsService->revision();if(!settingsRecovery.empty())logf("SETTINGS startup recovery incomplete: %s",settingsRecovery.c_str());}
         catch(const std::exception& e){logf("SETTINGS unavailable: %s",e.what());}
         gpuProfile=std::make_unique<NorthlightGpuProfile>(ext);gpuSceneProfile=std::make_unique<NorthlightGpuProfile>(ext,"GPU frame",2);gpuTimer=std::make_unique<NorthlightGpuFrameTimer>(ext); world=std::make_unique<WorldRenderer>(ext);world->setEffectsBuckets(&effectsBuckets);

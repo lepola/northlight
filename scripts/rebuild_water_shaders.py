@@ -40,9 +40,12 @@ def main():
             (lists / (name + '.list')).write_text('\t'.join([name, wine_path(ROOT / record['source']), record['target']]) + '\n')
         shader_build.prepare(build, lists, args.compiler)
         env = os.environ | {'WINEDEBUG': '-all', 'WINEDLLOVERRIDES': 'd3dcompiler_43=n;mscoree,mshtml='}
-        for name in selected:
-            subprocess.run(['wine', driver, wine_path(args.compiler), wine_path(lists / (name + '.list')),
-                            wine_path(generated)], env=env, check=True)
+        # One Wine process serves the full list. Individual entries above let the
+        # verifier track the dependencies actually opened by each shader.
+        batch = build / 'compile.list'
+        batch.write_bytes(b''.join((lists / (name + '.list')).read_bytes() for name in selected))
+        subprocess.run(['wine', driver, wine_path(args.compiler), wine_path(batch),
+                        wine_path(generated)], env=env, check=True)
         rebuilt = shader_build.publish(build, cache=build / 'cache')
         for name, record in rebuilt['shaders'].items():
             dependencies = {Path(p).relative_to(ROOT).as_posix(): digest for p, digest in record['dependencies'].items()

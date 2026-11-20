@@ -1,5 +1,6 @@
 #pragma once
 #include "host_client.h"
+#include <mutex>
 #include <string>
 #include <vector>
 
@@ -41,13 +42,19 @@ public:
     bool Open()
     {
         if (!m_enabled) return false;
-        return m_module.API() || m_module.Open((m_root + L"water-core.dll").c_str());
+        // Both capture and replay can reach the first frame. A rejected module
+        // stays rejected until restart, just like the startup enable setting.
+        std::call_once(m_loadOnce, [this] {
+            if (!m_module.API()) m_module.Open((m_root + L"water-core.dll").c_str());
+        });
+        return m_module.API() != nullptr;
     }
     WaterHostModule& Module() { return m_module; }
     const std::string& SettingsPath() const { return m_settings; }
     bool Enabled() const { return m_enabled; }
-    bool CompositeAfterEffects() const { return m_compositeAfterEffects; }
+    bool CompositeAfterEffects() const { return m_enabled && m_compositeAfterEffects && m_module.API(); }
 private:
+    std::once_flag m_loadOnce;
     WaterHostModule m_module;
     std::wstring m_root;
     std::string m_settings;

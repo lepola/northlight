@@ -58,7 +58,7 @@
     "generated/vs_owned_world_terrain.h": "e2c78e1b43ed356126b413868ff1560bbab59e6d52dafd642b5419fb3d926f47",
     "generated/vs_ring.h": "09df7272cccf050c35168f7e2d7fa69760f3fd6c0956d5704291007f0d0af454",
     "integrations/host_passes.h": "c74ba289ce3fc4d7baa1acb9373eccff6d2a2e936a1b569dbb9010d63c3d7f74",
-    "integrations/host_settings.h": "87632f6f068ee1d0952cb36e6f073955f728c4da96d7c3704c5d2d7668551840",
+    "integrations/host_settings.h": "013448d851182a0585fb11e5061293611af8d513afb584c29b636a032bf1e571",
     "integrations/northlight/water_bridge.h": "f9373b728121b27874a9d3f7183d47d88db4683aebe1d757e58ba2030baeee13",
     "shaders/ao_blur_ps.hlsl": "bcfd6a4dd395095f934994219fdca95948f85b259716fe7682f2183e6c44eada",
     "shaders/ao_ps.hlsl": "3b307a2da0f218886acf7973a90702ba728859f896f06c0e4fb100dc7691ef21",
@@ -245,7 +245,7 @@
     "tools/shader_build.py": "c80119742e5a2dab25846e3316e5bd691e132201ca8404227d1e00dd979fc0d6",
     "tools/shader_header.py": "0154d161dd86a4e8c320c23081a87d5123f410c9211dea016664d9bea311e189"
   },
-  "revision": "617459831aabb3d1ee69d52f1ea6f15732d23510",
+  "revision": "217089623e8795f84e1cc51a5b3070246d66d324",
   "shaders": {
     "ps_ao": {
       "dependencies": {
