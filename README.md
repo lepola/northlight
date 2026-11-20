@@ -2,7 +2,7 @@
 
 Northlight adds lighting, shadows, skies and fog. Tideglass adds waves, underwater effects and reflections, from a Nagrand lake to the green canals of Undercity. This beta pairs them for **World of Warcraft 3.3.5a, build 12340**.
 
-![Trees and the opposite shore reflected in the water at Halaa, Nagrand, in the combined renderer](renderer/docs/tideglass-nagrand.jpg)
+[![Sunbeams cut through palms on the coast and cast a band of gold across the waves](renderer/docs/screenshots/golden-coast.jpg)](renderer/docs/screenshots/golden-coast.jpg)
 
 ## Get the beta
 
@@ -29,6 +29,16 @@ When a combo build is published, open **Assets** on its GitHub release. Choose t
 ## What the defaults give you
 
 Reflected scenery, shaped ocean waves, underwater effects, slime and magma run alongside Northlight's zone skies, weather, lighting and fog. The installer includes the raised-city fog fixes for Dalaran and Telredor and repairs four known HD dock and plant textures when it finds the affected versions. Dungeon and raid lighting can be added later by running the installer again.
+
+| Marsh water | Slime |
+| --- | --- |
+| [![Blue ripples catch the light beneath giant mushrooms](renderer/docs/screenshots/marsh-water.jpg)](renderer/docs/screenshots/marsh-water.jpg) | [![Dark green slime reflects the silhouettes of two towering figures](renderer/docs/screenshots/slime.jpg)](renderer/docs/screenshots/slime.jpg) |
+
+| Magma | Fel magma |
+| --- | --- |
+| [![Orange magma winds around dark rock beneath a glowing cavern wall](renderer/docs/screenshots/magma.jpg)](renderer/docs/screenshots/magma.jpg) | [![Bright green fel magma pools around jagged black spires in shafts of sunlight](renderer/docs/screenshots/fel-magma.jpg)](renderer/docs/screenshots/fel-magma.jpg) |
+
+[View lake reflections at Halaa, Nagrand](renderer/docs/tideglass-nagrand.jpg).
 
 Your game supplies the artwork, so stock and HD clients can look different. The installer preserves existing game archives, realm settings and add-ons. Install and rollback have been checked on stock and modified client copies. The Windows installer has been tested under Wine. Native Windows gameplay and compatibility with individual realms, including Warmane, still need confirmation.
 
