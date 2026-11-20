@@ -25,7 +25,7 @@ def transparent_moon():
     # suppresses additive draws. Only the dedicated native secondary moon.
     return write_blp_bgra(64,64,[bytes(w*h*4) for w,h in mip_sizes(64,64)])
 
-def build(source,output,assets=None):
+def build(source,output,assets=None,preserved=None):
     """assets: an Assets of the client (default: the configured client). Raises
     build_lighting.Skip when no outdoor sky has an HD lunar batch."""
     with Archive(source) as a:original={n:a.read(n) for n in a.names() if not n.startswith('(')}
@@ -49,7 +49,7 @@ def build(source,output,assets=None):
             name=sky_name(sky,sky.index[sid]);stem=name[:-4];model=read(stem+'.m2')
             textures,lookup=texture_names(model);count=struct.unpack_from('<I',model,68)[0]
             assert 1<=count<=4
-            skins={};removed=[];retained=[];suspects=[]
+            skins={};removed=[];retained=[];suspects=[];mixed=[]
             for skinid in range(count):
                 before=read(stem+f'{skinid:02d}.skin');assert before[:4]==b'SKIN'
                 n,off=struct.unpack_from('<II',before,36);assert off>=48 and off+n*24<=len(before)
@@ -57,19 +57,28 @@ def build(source,output,assets=None):
                 for j in range(n):
                     raw=before[off+j*24:off+(j+1)*24];names=batch_names(raw,textures,lookup)
                     record=dict(skin=skinid,batch=j,textures=names)
-                    if set(names)&MOON_TEXTURES:
-                        assert set(names)<=MOON_TEXTURES,('Mixed lunar batch',name,names)
+                    lunar = set(names) & MOON_TEXTURES
+                    if lunar and not set(names) <= MOON_TEXTURES:
+                        if preserved is None:
+                            raise ValueError(f'Mixed lunar batch in {name}: {names}. '
+                                             'Use --sky experimental-preserve to keep this artwork.')
+                        mixed.append(record)
+                        kept.append(raw)
+                    elif lunar:
                         removed.append(record)
                     else:
                         kept.append(raw);retained.append(record)
                         if any('moon' in x or 'luna' in x for x in names):suspects.append(record)
-                assert kept
                 skin=bytearray(before);putu(skin,9,len(kept));skin[off:off+24*n]=b''.join(kept)+bytes(24*(n-len(kept)))
                 assert skin[:36]==before[:36] and skin[40:off]==before[40:off] and skin[off+24*n:]==before[off+24*n:]
                 assert skin[off:off+24*len(kept)]==b''.join(kept)
                 skins[skinid]=bytes(skin)
             audited.append(dict(sky=sid,model=name,refs=refs[sid],retained_moon_named_batches=suspects))
+            if mixed:
+                preserved.append({'model': name, 'mixed_batches': mixed})
+                continue
             if not removed:continue
+            assert all(struct.unpack_from('<I', skin, 36)[0] for skin in skins.values()), name
             custom=f'Environments\\Stars\\fr_single_moon_105_{sid}'
             assert custom.lower()+'.m2' not in lower
             payload[custom+'.m2']=model

@@ -2,7 +2,7 @@
 """Northlight renderer player installer for macOS (WoWSilicon), Windows and Linux (Wine/Proton). Never starts the game.
 
     northlight_install.py install   [--client C] [--locale xxXX] [--cache ZIP|DIR] [--backend dxvk|dxvk2|native|legacy]
-                                 [--no-art-layer] [--no-world-cache] [--instances SPEC] [--jobs N] [--yes]
+                                 [--sky current|experimental-preserve] [--no-art-layer] [--no-world-cache] [--instances SPEC] [--jobs N] [--yes]
     northlight_install.py uninstall [--client C] [--yes]
     northlight_install.py status    [--client C]
 
@@ -47,9 +47,11 @@ import json
 import os
 import re
 import shutil
+import struct
 import subprocess
 import sys
 import time
+import tempfile
 import urllib.parse
 import zipfile
 from datetime import datetime
@@ -87,6 +89,9 @@ CACHE, PREVIOUS = 'world-cache', 'world-cache.previous'
 STAGING = 'world-cache.staging'   # install_world_cache.py's build folder
 INSTMP = 'world-cache.instmp'     # and its instance layer's
 INSTANCES = 'instances-manifest.json'   # in world-cache/: the groups built
+WATER_ARCHIVE_LIST = 'northlight-water-archives.txt'
+SKY_CHOICE = 'northlight-sky.json'
+SKY_MODES = ('current', 'experimental-preserve')
 CHOICE = 'world-cache.instances.json'   # beside world-cache/, ours: the groups chosen (survives a swap of the folder)
 EXTRACT = 'world-cache.extract'   # this installer's extraction folder
 LOCK = 'northlight-installer.lock'   # one installer run per client at a time
@@ -849,7 +854,28 @@ class Installer:
                 found.append((rel, current))
         return found
 
-    def art_layer(self, client, locale):
+    def choose_sky(self, client, mode):
+        if mode is not None:
+            if mode not in SKY_MODES:
+                raise Refusal('Unknown sky choice: ' + str(mode))
+            return mode
+        saved = read_json(INSTALL.safe_path(client, SKY_CHOICE))
+        current = saved.get('mode') if isinstance(saved, dict) else None
+        if current not in SKY_MODES:
+            current = 'current'
+        if self.yes or not sys.stdin or not sys.stdin.isatty():
+            return current
+        self.say('1. Current Northlight skies (default for new installs)')
+        self.say('2. Experimental sky preservation: keep mixed moon artwork (a second moon may show) '
+                 'and use compatible local Tirisfal HD clouds.')
+        def parse(answer):
+            choices = {'1': 'current', '2': 'experimental-preserve'}
+            if answer not in choices:
+                raise ValueError('Choose 1 or 2.')
+            return choices[answer]
+        return self.pick(f'Sky choice [Enter keeps {current}] > ', parse, current)
+
+    def art_layer(self, client, locale, sky='current'):
         """({client path: bytes} to install, None, {client path: action}) or ({}, reason it is skipped, {}).
         The action per target is installed (absent before), replaced (another layer of ours) or kept-identical.
         A target that exists in another letter case (Data/Patch-Z.MPQ on Linux) keeps its name on disk, so that
@@ -860,13 +886,17 @@ class Installer:
         remove_tree(work)
         work.mkdir(parents=True)
         code, _ = self.run(APP / 'build_art_layer.py', ['--client', client, '--locale', locale, '--world-cache',
-                                                         client / CACHE, '--output', work, '--letter', LETTER], show=False)
+                                                         client / CACHE, '--output', work, '--letter', LETTER, '--sky', sky], show=False)
         report = read_json(work / 'art-layer-manifest.json')
         if code != 0 or not report:
             raise Failed(f'The art layer build failed (exit {code}); its last lines are shown above. '
                          f'Full output: {self.log.name if self.log else "not logged"}.')
         layer = {on_disk(client, t): (work / t).read_bytes() for t in report['targets']}
         remove_tree(work)
+        if 'sky' in report:
+            self.say('Experimental sky preservation: ' + report['sky']['tirisfal'])
+            for item in report['sky']['preserved']:
+                self.say('  Preserved mixed moon artwork: ' + item['model'] + ' (a second moon may be visible)')
         steps = report.get('steps', [])
         skipped = sum(1 for step in steps if 'skipped' in step)
         self.say(f'Art layer: built from this client\'s Light tables ({len(steps) - skipped} steps applied, '
@@ -990,18 +1020,58 @@ class Installer:
             remove_tree(previous)
 
     def install(self, client, locale=None, cache=None, backend=None, art=True, world_cache=True, jobs=None,
-                instances=None):
+                instances=None, sky=None, raised_air=False):
         client = self.resolve_client(client)
-        plan = self.plan_install(client, locale, cache, backend, art, world_cache, instances)
+        plan = self.plan_install(client, locale, cache, backend, art, world_cache, instances, sky, raised_air)
         with locked(client):   # S5: taken once the read-only checks have passed
             return self.apply_install(plan, jobs)
 
-    def plan_install(self, client, locale, cache, backend, art, world_cache, instances=None):
+    def check_water_client(self, client):
+        # Match the image fields that the core checks before its build-specific reads.
+        exe = client / on_disk(client, 'wow.exe')
+        with exe.open('rb') as stream:
+            dos = stream.read(64)
+            if len(dos) == 64 and dos[:2] == b'MZ':
+                offset = int.from_bytes(dos[60:64], 'little')
+                if 64 <= offset <= 1024 * 1024:
+                    stream.seek(offset)
+                    pe = stream.read(56)
+                    if (len(pe) == 56 and pe[:6] == b'PE\0\0\x4c\x01' and
+                            struct.unpack_from('<I', pe, 8)[0] == 0x4C2452FE and
+                            struct.unpack_from('<H', pe, 20)[0] >= 32 and pe[24:26] == b'\x0b\x01' and
+                            struct.unpack_from('<I', pe, 52)[0] == 0x00400000):
+                        return
+        raise Refusal('The Tideglass beta requires a 32-bit build 12340 client. Its executable was left untouched.')
+
+    def check_water_files(self, client, raised_air=False):
+        # A copied core or settings file may belong to another renderer. Only a recorded
+        # install may upgrade these names. Edited settings are kept by the transaction.
+        names = ('water-core.dll', 'water.ini', 'water-host.ini', WATER_ARCHIVE_LIST)
+        if raised_air:
+            names += ('raised-fog/Northrend.rfs', 'raised-fog/Expansion01.rfs')
+        conflicts = case_conflicts(client, names)
+        if conflicts:
+            raise Refusal('Conflicting Tideglass filename: ' + ', '.join(conflicts))
+        owned = {entry['path']: entry for _, record in INSTALL.transactions(client) for entry in record['files']}
+        for name in names:
+            path = INSTALL.safe_path(client, name)
+            if path.exists() and (name not in owned or
+                                  (name not in ('water.ini', 'water-host.ini') and
+                                   INSTALL.sha(path) not in INSTALL.afters(owned[name]))):
+                raise Refusal(f'{name} already exists outside this install or was changed. '
+                              'Move it aside with the game closed before installing the combined renderer.')
+
+    def plan_install(self, client, locale, cache, backend, art, world_cache, instances=None, sky=None, raised_air=False):
         """Every check, read-only: returns what apply_install does. Raises Refusal."""
         self.say(f'Northlight renderer {self.pkg.version} installer; game folder: {client}')
         backend = INSTALL.resolve_backend(client, backend)   # called once; payload_plan takes the result
         locale = self.preflight(client, locale)
         self.check_payload(backend)
+        if self.pkg.info.get('tideglass'):
+            self.check_water_client(client)
+            self.check_water_files(client, raised_air)
+        elif raised_air:
+            raise Refusal('--raised-air requires the combined Northlight and Tideglass package')
         marker = INSTALL.safe_path(client, INSTALL.LEGACY_DXVK3_MARKER)   # a linked renderer-backends folder is refused here
         if self.proxy and marker.is_file():
             self.say('Note: Northlight no longer switches to DXVK 2.7.1 by itself; the leftover '
@@ -1078,11 +1148,21 @@ class Installer:
         self.say('Checks passed.')
         return {'client': client, 'locale': locale, 'backend': backend, 'art': art, 'old': old, 'foreign': foreign,
                 'without': without, 'variant': variant, 'manifest': manifest, 'source': source, 'action': action,
-                'instances': keys}
+                'instances': keys, 'raised_air': raised_air, 'sky': self.choose_sky(client, sky) if art and not foreign else None}
 
     def apply_install(self, p, jobs):
         client, locale, action, foreign = p['client'], p['locale'], p['action'], p['foreign']
         self.still_closed('changing anything')
+        raised = {}
+        if p['raised_air']:
+            self.say('Building outdoor height samples for Dalaran and Telredor from your client ...')
+            with tempfile.TemporaryDirectory() as work:
+                code, _ = self.run(APP / 'renderer' / 'raised_air.py',
+                                   ['--client', client, '--locale', locale, '--output', work])
+                if code:
+                    raise Failed('Could not generate raised-area samples. See the installer log.')
+                for name in ('Northrend.rfs', 'Expansion01.rfs'):
+                    raised['raised-fog/' + name] = (Path(work) / name).read_bytes()
         for backup, _ in reversed(p['old']):
             self.say('Restoring the older package first:', backup)
             INSTALL.restore(client, backup)
@@ -1124,12 +1204,22 @@ class Installer:
         elif foreign:
             layer, why, actions = {}, f'{foreign[0][0]} belongs to another mod; it is left as it is', {}
         else:
-            layer, why, actions = self.art_layer(client, locale)
+            layer, why, actions = self.art_layer(client, locale, p['sky'])
         if why:
             report['art_layer'] = 'skipped: ' + why
         else:
             report['art_layer'] = '; '.join(f'{action} {hashlib.sha256(layer[name]).hexdigest()[:8]} {name}'
                                             for name, action in actions.items())
+            report['sky'] = p['sky']
+            if p['sky'] != 'current' or (client / SKY_CHOICE).exists():
+                layer[SKY_CHOICE] = (json.dumps({'mode': p['sky']}) + '\n').encode()
+        layer.update(raised)
+        if self.pkg.info.get('tideglass'):
+            # Include newly staged art patches in the same precedence order as the
+            # mounted client. Files in layer become visible only after the transaction.
+            paths = client_archives.chain(client, locale=locale, pending=actions)
+            layer[WATER_ARCHIVE_LIST] = ''.join('./' + path.relative_to(client).as_posix() + '\n'
+                                                for path in paths).encode('utf-8')
         backups, payload = [], 'kept (unchanged)'
         if self.platform == 'mac':
             self.still_closed('installing the renderer')
@@ -1301,7 +1391,14 @@ def main(argv=None):
                     help='Windows and Linux: the Direct3D 9 behind the renderer (default dxvk = DXVK 3.1.1, or the dxvk2 or native already '
                          'installed; dxvk2 = DXVK 2.7.1 for AMD RX 5000/6000 or drivers DXVK 3 does not support; '
                          'legacy = the d3d9.dll found in the game folder)')
-    ap.add_argument('--no-art-layer', action='store_true', help='do not install the lighting art layer (patch-z)')
+    ap.add_argument('--sky', choices=SKY_MODES,
+                    help='current skies or experimental preservation of mixed moons and local HD Tirisfal clouds; '
+                         'default: keep the last choice, current on first install')
+    art = ap.add_mutually_exclusive_group()
+    art.add_argument('--art-layer', dest='art_layer', action='store_true', help='build the optional lighting art MPQs')
+    art.add_argument('--no-art-layer', dest='art_layer', action='store_false', help='leave out the lighting art MPQs')
+    ap.set_defaults(art_layer=None)
+    ap.add_argument('--raised-air', action='store_true', help='generate extra outdoor fog coverage for Dalaran and Telredor')
     ap.add_argument('--no-world-cache', action='store_true', help='install the renderer without a world cache')
     ap.add_argument('--instances', metavar='SPEC', help='dungeon and raid world cache groups to have: numbers 1-6, keys, all or none '
                     '(default: asked; the groups the client has, else none)')
@@ -1325,8 +1422,10 @@ def main(argv=None):
     installer.open_log(args.action)
     try:
         if args.action == 'install':
-            installer.install(args.client, args.locale, args.cache, args.backend, not args.no_art_layer,
-                              not args.no_world_cache, args.jobs, instances=args.instances)
+            art = args.art_layer if args.art_layer is not None else not installer.pkg.info.get('tideglass')
+            installer.install(args.client, args.locale, args.cache, args.backend, art,
+                              not args.no_world_cache, args.jobs, instances=args.instances, sky=args.sky,
+                              raised_air=args.raised_air)
         elif args.action == 'uninstall':
             installer.uninstall(args.client)
         else:

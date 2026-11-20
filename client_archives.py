@@ -88,7 +88,7 @@ def detect_locale(client, locale=None):
                      f'{", ".join(installed) or "none"}); pass --locale')
 
 
-def chain(client, archives='all', locale=None, without=''):
+def chain(client, archives='all', locale=None, without='', pending=()):
     """The archives the game loads, lowest priority first (the last one holding a name wins).
     without: patch letters to leave out, e.g. 'z' to read the client under our own art layer."""
     if archives not in VIEWS:
@@ -101,11 +101,16 @@ def chain(client, archives='all', locale=None, without=''):
     suffixes = STOCK_SUFFIXES if archives == 'stock' else ('',) + tuple(SUFFIXES)
     suffixes = [s for s in suffixes if not s or s not in without]   # '' (patch.mpq) is never left out
     top, local = _entries(data), _entries(locale_dir(client, locale))
+    staged = {client / name for name in pending}
+    for path in staged:
+        for directory, entries in ((data, top), (locale_dir(client, locale), local)):
+            if path.parent == directory:
+                entries[path.name.lower()] = path
     names = [(top, n + '.mpq') for n in BASE]
     names += [(top, 'patch' + (f'-{s}' if s else '') + '.mpq') for s in suffixes]
     names += [(local, f'{n}-{locale}.mpq') for n in LOCALE_BASE]
     names += [(local, f'patch-{locale}' + (f'-{s}' if s else '') + '.mpq') for s in suffixes]
-    return [folder[n] for folder, n in names if n in folder and folder[n].is_file()]
+    return [folder[n] for folder, n in names if n in folder and (folder[n] in staged or folder[n].is_file())]
 
 
 def is_custom_patch(path):

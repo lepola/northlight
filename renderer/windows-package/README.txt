@@ -6,6 +6,12 @@ an unmodified (stock) 3.3.5a client. You do not need to install anything else:
 the installer's own Python, StormLib and DXVK are in the package. The installer
 never starts the game and never changes wow.exe.
 
+SKY CHOICE
+The installer offers current skies (default) or experimental sky preservation.
+Install.cmd --sky experimental-preserve keeps custom mixed star/moon artwork
+and uses compatible local HD clouds in Tirisfal. A second moon may be visible.
+Rerun with --sky current to switch back. Reinstalls remember your last choice.
+
 DOWNLOADS
 - Northlight-__RELEASE_VERSION__-Windows.zip: the installer and the renderer (about 20 MB).
 - Nothing else: the installer builds the world cache (world-cache) itself from
@@ -146,7 +152,7 @@ Individual settings (Quality / Balanced / Performance):
   ActorShadowBudgetMiB  0 / 16 / 8     character shadows, nearest first (0 = no limit)
   ActorShadowRadius     40 / 35 / 20   characters more than N yards from your own character cast no shadow (0..200; 0 = no limit; 1..3 = your own character, mount, weapons and whatever is right next to you)
   ActorShadows          1 / 1 / 1      shadows of characters and moving objects (0 = static shadows only: terrain, buildings, and the trees and objects placed on the map; characters, creatures, mounts and pets lose their shadow, your own character too, and so do objects the server places, such as doors, elevators, ships, zeppelins, mailboxes and event decorations; swaying trees, windmills and flags keep a shadow frozen in their rest pose; with 0 the game's own round shadows under characters are drawn unchanged, with 1 they follow BlobShadowStrength; saves about 4–5 ms per frame in crowds and about 1 ms in quiet areas; with GIDynamicProbes=1 characters are still copied about every 200 ms for indirect light, GIDynamicProbes=0 removes that too; 0 also turns off the ShadowFateDiagnostics and DiagReplayProbe settings; no preset changes this); with 1, shop signs and other small still objects the server places keep their shadow when the camera turns away
-  BlobShadowStrength    50 / 50 / 50   how dark the game's own round shadow under characters is while the renderer's character shadows are on (0..100; 100 = as the game draws it, 0 = hidden, in between = fainter, or hidden if the game's blend cannot be lightened; FPS cost not measured: a cached texture check on small draws and two SetTexture calls per blob draw, as in 0.3.192 and earlier; 100 skips it)
+  BlobShadowStrength    0 / 0 / 0      how dark the game's own round shadow under characters is while the renderer's character shadows are on (0..100; 100 = as the game draws it, 0 = hidden, in between = fainter, or hidden if the game's blend cannot be lightened; FPS cost not measured: a cached texture check on small draws and two SetTexture calls per blob draw, as in 0.3.192 and earlier; 100 skips it)
   MinSkinnedTriangles   100/150/180    small animated parts cast no shadow
   FarShadowInterval     4 / 5 / 6      distant shadows (beyond ~48 m) are drawn every Nth frame (1..16)
   NearShadowInterval    1 / 2 / 2      moving parts of the near shadows (characters) every Nth frame (1..16)
@@ -181,6 +187,7 @@ Individual settings (Quality / Balanced / Performance):
   CommandStream         1 / 1 / 1      the game records its graphics calls and a second thread runs the renderer (0 = everything on the game's thread as before 0.3.192, for comparisons; read at game start)
   Weather               1 / 1 / 1      Northlight's haze, fog, light shafts, sun and moon, shadows, sky light and lamps follow the game's own rain and snow (read from its memory; the art layer's weather textures are the fallback); the game's rain streaks are drawn alpha-blended (crisp, their own colour) and its mist puffs (black balls in night and storm rain) are left out while it rains (0 = nothing reacts, the game's own rain; the fallback needs the art layer; no extra passes)
   RainFog               1 / 1 / 1      how strongly rain and snow thicken the fog and haze and dim shafts, sun and moon (0..2; 0 = no change, 2 = twice as strong; snow acts at 60 percent)
+  RainOpacity           100 / 100 / 100  the game's rain streaks' opacity in percent while Weather draws them alpha-blended (0..100; 100 = as the game draws them)
   FogClouds             1 / 1 / 0      low fog banks that drift with the wind, thicker and faster in rain, few and faint in clear weather and then only in forest and grass zones (0 = none; its own half-resolution pass; Ctrl+Shift+F7 and F10 turn them off with the rest)
   FogCloudDensity       100 / 100 / 100 how much of the ground the fog clouds cover, in percent (0..200; 0 = none, 200 = twice as much)
   GpuBudgetMs           4 / 3 / 2      graphics card time per frame for Northlight's own effects, in ms (0..20; 0 = off, always the full picture); while the measured time stays over it, fewer fog cloud steps in two stages, then fewer fog steps (never fewer lamps); the full picture comes back when the time is well under it, or the graphics card is not what limits the frame rate, for a few seconds

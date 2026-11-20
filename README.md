@@ -18,17 +18,62 @@ Download the current [Northlight release](https://github.com/lepola/northlight/r
 
 ## Tideglass beta branch
 
-This branch is being prepared for a combined Northlight and Tideglass water renderer.
-The build and install instructions below currently produce standard Northlight. A combined
-player package is pending. The intended package uses one Northlight `d3d9.dll` and a
-companion `water-core.dll`. Installing a second game-folder proxy would replace Northlight.
+This branch builds Northlight and Tideglass together for the 32-bit WoW 3.3.5a
+client, build 12340. A combined ZIP has `tideglass` in its filename. The host
+loads `water-core.dll` for water, slime, magma, underwater effects and scenery
+reflections. Players can use the packaged installer without a compiler or Git.
 
-Contributors working on the combo should keep the exported Tideglass sources, shader inputs
-and licence notices sufficient to build both DLLs from this checkout. Record the source
-revision and check exported files for drift when updating them. Keep client-derived assets
-and developer settings out of the package. For installer changes, exercise install, reinstall
-and uninstall on a modified client fixture and verify its realm, add-ons and archives at
-each step. See the [test instructions](#test) and [source conventions](#conventions).
+With the game closed, unpack the ZIP outside the client. On Windows run
+`Install.cmd`. On Linux run `bash install.sh --client /path/to/game` and use the
+Wine DLL override in the [Linux instructions](#install-on-linux-wine-or-proton).
+Run the matching uninstall launcher from the package to restore the previous
+renderer. Keep a copy of the ZIP for rollback.
+
+- The installer checks the executable's header and reads the local archive chain.
+  It installs a game-folder proxy, core, settings and a relative list of archives.
+  The core uses build-specific client hooks during play. It can keep decoded
+  textures in `northlight-water-textures/`. This reusable cache can be removed
+  with the game closed. Realm settings, add-ons and existing game archives are
+  player-owned. Server acceptance needs independent confirmation.
+- Use `--no-world-cache` for a renderer-only install. A world cache enables
+  Northlight's static shadows and GI. Use `--raised-air` for extra outdoor fog
+  coverage around Dalaran and Telredor, generated locally. Use `--art-layer`
+  to generate Northlight's lighting MPQs. A foreign patch-Z keeps its slot.
+  With art enabled, `--sky current` is the default. `--sky experimental-preserve`
+  is available for HD skies. Reinstall after changing client archives or locale.
+- `water-host.ini` controls the pairing. Set `Enable=0` and restart for Northlight
+  with native water. Restore `Enable=1` and restart for Tideglass. Edit
+  `water.ini` for appearance. The beta uses the game's clock, swell shape 0.8 and
+  crest sharpness 0.65. Reinstall and upgrade preserve edited water settings.
+- For a rendering report include the package version, backend, zone, time of day
+  and a movement or camera direction that reproduces it. Review excerpts from
+  `water-core.log` and `northlight-renderer.log` before sharing. Native Windows
+  gameplay and the separate WoWSilicon loader require their own qualification.
+
+### Build the combo
+
+Use Python 3, CMake, Ninja, Zig 0.15.2 and llvm-mingw 20250910 on Linux.
+Put its i686 tools on PATH and set `NORTHLIGHT_ZIG` when Zig is outside PATH.
+The core build fetches its pinned StormLib source. An existing clean checkout
+of that revision can be passed using `--storm-source`.
+
+```sh
+python3 scripts/build_combo.py
+python3 renderer/build_packages.py --platform windows --version 0.3.216-tideglass.1 \
+    --dll renderer/frd9.dll --water-core out/tideglass/water-core.dll
+python3 tests/verify_packages.py out/packages/Northlight-0.3.216-tideglass.1-Windows.zip
+```
+
+Use `--platform linux` to build the Linux package. The packager checks the inputs
+listed in `renderer/package-pins.json`. With `--runtime-package <upstream-zip>` it
+can reuse the exact pinned StormLib library and notices from Northlight's released
+package for the same platform. Source contributors can check the exported
+revision, per-file hashes and shader inputs in `tideglass/source.json`.
+`scripts/tideglass_source.py` checks the export. To rebuild the embedded water
+shader headers, run `scripts/rebuild_water_shaders.py` with Python, Wine and
+`--compiler /path/to/D3DCompiler_43.dll`. Changes to shared renderer sources go
+through Tideglass and its export so standalone receives the same fixes.
+[Tests](#test) · [Source conventions](#conventions).
 
 ## What Northlight adds
 
@@ -82,8 +127,8 @@ Every effect below is on by default and is drawn on top of the game's own frame.
   weather and only in forest and grass zones then (its own half-resolution pass; `FogClouds`, `FogCloudDensity`). Ctrl+Shift+F7 (fog) and F10 turn
   them off with the rest; the Performance preset has them off. The fog is also smoothed over frames so lamp glows
   and shafts do not shimmer while moving.
-- **Water.** The game's water is drawn unchanged; a liquid mask keeps the relighting and AO off the
-  surface, and fog is measured to the water surface.
+- **Water.** The combined package draws the Tideglass liquid materials. With the core disabled, Northlight
+  uses native water. Its liquid mask keeps opaque-world relighting and AO off the surface.
 - **Settings.** `northlight-quality.ini` has three presets (Quality, the default, Balanced and
   Performance) and about 30 keys for shadows, GI, lamps and haze; `celestial-profiles.ini` sets the
   sun and moon look per zone.

@@ -189,6 +189,7 @@
     "name": "StormLib",
     "source": "tools/StormLib-master",
     "url": "https://github.com/ladislav-zezula/StormLib",
+    "notices_sha256": "d3ccf54a411d97242b2ce8c58dd2cedb2459813e1db1be972ad29c8dba980d0f",
     "source_tree_sha256": "e9d2ec908c1419beb1b142ea2d76103a36cdd070ae621bc3baebf41ec1a11be4",
     "built_by": "scripts/build_stormlib.py (zig 0.15.2)",
     "windows_sha256": "dc1e133965432b55e0a016d0302399bfa57770c423d93db76e7dcfa45fd41b15",

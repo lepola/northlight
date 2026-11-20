@@ -485,6 +485,8 @@ def payload_plan(client, package, use_existing=False, backend=None, extra=None, 
         # Existing settings keep ordinary overrides. New Quality feature bundles migrate once;
         # the complete result is backed up and installed through this same transaction.
         if e.get('preserve') and dst.exists():
+            if e['path'] in ('water.ini', 'water-host.ini'):
+                continue  # The player's water profile remains byte-for-byte editable.
             merged = merge_quality_ini(dst.read_bytes(), safe_path(package/'payload', e['path']).read_bytes()) if e['sha256'] is not None else None
             if merged is None:
                 print('Keeping your existing', e['path'], flush=True); continue

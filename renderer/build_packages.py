@@ -53,7 +53,7 @@ PROXY_PLATFORMS = ('windows', 'linux')   # the game-folder d3d9.dll proxy with t
 # Repository files the package needs, in their repository layout (northlight_paths finds them there).
 APP_FILES = [
     'northlight_paths.py', 'mpq.py', 'client_archives.py',
-    'build_art_layer.py', 'build_lighting.py', 'build_mulgore_lighting.py', 'build_stormwind_single_sun.py',
+    'build_tirisfal_sky.py', 'build_art_layer.py', 'build_lighting.py', 'build_mulgore_lighting.py', 'build_stormwind_single_sun.py',
     'build_outdoor_single_sun.py', 'build_outdoor_single_moon.py', 'build_weather_textures.py',  # 0.3.198 (rain): the art layer's procedural weather textures
     'scripts/install_world_cache.py', 'scripts/client_identity.py',
     'renderer/northlight_install.py', 'renderer/migrate_mac_proxy.py', 'renderer/windows-package/install.py',
@@ -64,13 +64,14 @@ APP_FILES = [
     'renderer/regional_fog_builder.py', 'renderer/build_celestial_disc_assets.py',
     'renderer/native_model_lights.py', 'renderer/build_equipment_emitters.py',
     'renderer/build_spell_emitters.py', 'renderer/build_mount_emitters.py',
-    'renderer/equipment_emitter_patch.py',
+    'renderer/equipment_emitter_patch.py', 'renderer/raised_air.py',
     'tests/validate_world_cache.py', 'src/sky/forest_regions.inc',
 ]
 PAYLOAD_COMMON = {'celestial-profiles.ini': 'client-config/celestial-profiles.ini',
                   'shadow-range-profiles.ini': 'client-config/shadow-range-profiles.ini',
                   'northlight-quality.ini': 'renderer/windows-package/northlight-quality.ini'}
-PRESERVE = set(PAYLOAD_COMMON)
+WATER_SETTINGS = ('water.ini', 'water-host.ini')
+PRESERVE = set(PAYLOAD_COMMON) | set(WATER_SETTINGS)
 DXVK_BACKEND = 'renderer-backends/dxvk/dxvk_d3d9.dll'
 DXVK2_BACKEND = 'renderer-backends/dxvk2/dxvk2_d3d9.dll'
 
@@ -330,7 +331,7 @@ def launchers(platform, version):
             'Uninstall Northlight.command': command('uninstall', 'uninstall')}
 
 
-def build(platform, version, dll, variants, out, stormlib_dir):
+def build(platform, version, dll, variants, out, stormlib_dir, water_core=None, runtime_package=None):
     for manifest in variants.values():
         check_variant_sources(manifest)
     top = f'Northlight-{version}-{PLATFORMS[platform]}'
@@ -341,7 +342,24 @@ def build(platform, version, dll, variants, out, stormlib_dir):
         tree.add('app/' + name, fp.REPO / name)
     dll_data = dll.read_bytes()
     dll_version = check_dll(dll_data)
-    lib = build_stormlib.build(platform, stormlib_dir / platform)
+    if runtime_package:
+        # Only two independently pinned members are reused. Installer code and game
+        # payload always come from this branch, including during an offline rebuild.
+        directory = stormlib_dir / platform
+        directory.mkdir(parents=True, exist_ok=True)
+        name = {'linux': 'lib/libstorm.so', 'windows': 'StormLib.dll', 'mac': 'lib/libstorm.dylib'}[platform]
+        lib = directory / Path(name).name
+        with zipfile.ZipFile(runtime_package) as previous:
+            upstream_top = next(n.split('/')[0] for n in previous.namelist() if n.endswith('/BUILD-INFO.json'))
+            binary = previous.read(f'{upstream_top}/runtime/{name}')
+            notices = previous.read(f'{upstream_top}/LICENSES/StormLib-NOTICES.txt')
+        if hashlib.sha256(binary).hexdigest() != PINS['stormlib'][platform + '_sha256'] or \
+                hashlib.sha256(notices).hexdigest() != PINS['stormlib']['notices_sha256']:
+            raise SystemExit('Upstream runtime dependency or licence digest mismatch')
+        lib.write_bytes(binary)
+    else:
+        lib = build_stormlib.build(platform, stormlib_dir / platform)
+        notices = build_stormlib.notices(build_stormlib.source_root()).encode('utf-8')
     problems, _ = build_stormlib.verify(lib)
     if problems or sha(lib) != PINS['stormlib'][platform + '_sha256']:
         raise SystemExit(f'StormLib {platform} build does not verify or does not match its pin: {problems or sha(lib)}')
@@ -358,6 +376,20 @@ def build(platform, version, dll, variants, out, stormlib_dir):
             tree.add('LICENSES/DXVK-2.x-LICENSE.txt', license_text2)
     else:
         tree.add('payload/d3d9.dll', dll_data)   # installed by migrate_mac_proxy as mods/d3d9.dll
+    water_info = {}
+    if water_core is not None:
+        if platform not in PROXY_PLATFORMS:
+            raise SystemExit('Combined beta packages support the Windows and Linux proxy layouts')
+        core = water_core.read_bytes()
+        if pe_machine(core) != 0x14c or b'WaterHostGetAPI' not in core or b'WaterHostGetAPI' not in dll_data:
+            raise SystemExit('The combined package requires a cooperative host and 32-bit Tideglass core')
+        payload['water-core.dll'] = core
+        for name in WATER_SETTINGS:
+            payload[name] = (fp.REPO / 'client-config' / name).read_bytes()
+        tree.add('LICENSES/Tideglass.txt', fp.REPO / 'tideglass/LICENSE')
+        tree.add('LICENSES/Tideglass-archive.txt', fp.REPO / 'licenses/tideglass-archive.txt')
+        water_info = {'tideglass': {'source_revision': json.loads((fp.REPO / 'tideglass/source.json').read_bytes())['revision'],
+                                    'core_sha256': hashlib.sha256(core).hexdigest()}}
     for name, data in payload.items():
         tree.add('payload/' + name, data)
     tree.add('payload-manifest.json', (json.dumps(
@@ -365,13 +397,16 @@ def build(platform, version, dll, variants, out, stormlib_dir):
          for n, d in sorted(payload.items())], indent=2) + '\n').encode())
     for name, manifest in sorted(variants.items()):
         tree.add(f'variants/{name}.json', (json.dumps(manifest, indent=2) + '\n').encode())
-    tree.add('LICENSES/StormLib-NOTICES.txt', build_stormlib.notices(build_stormlib.source_root()).encode('utf-8'))
+    tree.add('LICENSES/StormLib-NOTICES.txt', notices)
     readme = fp.RENDERER / f'{platform}-package' / 'README.txt'
     text = readme.read_text(encoding='utf-8').replace('__RELEASE_VERSION__', version)
+    if water_core is not None:
+        notes = (fp.RENDERER / 'tideglass-readme.txt').read_text(encoding='utf-8')
+        text = notes.replace('__RELEASE_VERSION__', version) + '\n' + text
     tree.add('README.txt', text.replace('\n', '\r\n').encode('utf-8') if platform == 'windows' else text.encode('utf-8'))
     for name, data in launchers(platform, version).items():
         tree.add(name, data, executable=True)
-    info = {'format': 'northlight-package/1', 'version': version, 'platform': platform,
+    info = {**water_info, 'format': 'northlight-package/1', 'version': version, 'platform': platform,
             'dll_version': dll_version, 'dll_sha256': hashlib.sha256(dll_data).hexdigest(),
             'dll_pe_normalized_sha256': hashlib.sha256(pe_normalized(dll_data)).hexdigest(),
             'stormlib_sha256': sha(lib), 'stormlib_source_tree_sha256': PINS['stormlib']['source_tree_sha256'],
@@ -400,6 +435,8 @@ def main():
     ap.add_argument('--platform', choices=[*PLATFORMS, 'all'], default='all')
     ap.add_argument('--version', required=True, help='package label, e.g. 0.3.162')
     ap.add_argument('--dll', type=Path, help='renderer build (default: renderer/frd9.dll or NORTHLIGHT_DLL)')
+    ap.add_argument('--runtime-package', type=Path, help='reuse the pinned StormLib library and notices from a released Northlight ZIP for this platform')
+    ap.add_argument('--water-core', type=Path, help='include the cooperative Tideglass DLL and player settings')
     ap.add_argument('--variant-manifest', type=Path, action='append', default=[],
                     help="a variant's northlight-cache.json (repeatable); the installer matches clients against it")
     ap.add_argument('--cache-zip', type=Path, action='append', default=[],
@@ -437,7 +474,7 @@ def main():
                         'variant': manifest['variant'], 'cache_digest': manifest['cache_digest']})
     dll = args.dll or fp.dll()
     for platform in list(PLATFORMS) if args.platform == 'all' else [args.platform]:
-        reports.append(build(platform, args.version, dll, variants, out, fp.out() / 'stormlib'))
+        reports.append(build(platform, args.version, dll, variants, out, fp.out() / 'stormlib', args.water_core, args.runtime_package))
         print('Built', reports[-1]['file'], reports[-1]['bytes'], 'bytes', flush=True)
     (out / 'packages.json').write_text(json.dumps({'version': args.version, 'packages': reports}, indent=2) + '\n')
     return 0

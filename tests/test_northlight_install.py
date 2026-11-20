@@ -6,6 +6,7 @@ other client a local build; the art layer is installed unless a foreign patch-z 
 nothing; uninstall restores the client file list and deletes only our cache; wow.exe is left
 unchanged; an old full Windows package is restored first. The pipeline scripts are replaced by a fake
 runner and client identification by a stub. No game, Wine or Windows binary runs."""
+import tarfile
 import sys; from pathlib import Path; sys.path.insert(0, str(Path(__file__).resolve().parents[1]))  # repo root
 import northlight_paths as fp
 import builtins
@@ -83,6 +84,15 @@ class Base(unittest.TestCase):
     def tearDown(self):
         for p in reversed(self.patches):
             p.stop()
+        # Each case owns only synthetic client/package files. Keep all evidence
+        # (including failed cases and symlinks) without retaining thousands of
+        # loose fixture files after a case has finished.
+        archive = self.base.with_suffix('.tar.gz')
+        with tarfile.open(archive, 'w:gz', dereference=False) as packed:
+            packed.add(self.base, arcname=self.base.name)
+        with tarfile.open(archive, 'r:gz') as packed:
+            assert packed.getmember(self.base.name).isdir()
+        shutil.rmtree(self.base)
 
     def make_client(self, client):
         data = client / 'Data'; (data / 'enUS').mkdir(parents=True)
@@ -145,7 +155,7 @@ class Base(unittest.TestCase):
             out = Path(opt('--output'))
             targets = ['Data/patch-z.mpq', 'Data/enUS/patch-enus-z.mpq']
             for t in targets:
-                (out / t).parent.mkdir(parents=True, exist_ok=True); (out / t).write_bytes(ART)
+                (out / t).parent.mkdir(parents=True, exist_ok=True); (out / t).write_bytes(ART + (b' HD' if opt('--sky') == 'experimental-preserve' else b''))
             (out / 'art-layer-manifest.json').write_text(json.dumps({'targets': targets, 'steps': [
                 {'step': 'relighting'}, {'step': 'mulgore'}, {'step': 'outdoor_sun', 'skipped': 'no HD sky'}]}))
             return 0, {'targets': targets}
@@ -415,6 +425,26 @@ class LinuxOnlyChecks(Base):
 
 
 class Install(Base):
+    def test_interactive_sky_choice(self):
+        prompts = self.tty('2')
+        report = self.installer().install(self.client, instances='none')
+        self.assertEqual(report['sky'], 'experimental-preserve')
+        self.assertIn('Experimental sky preservation', self.last_output)
+        self.assertEqual(len(prompts), 1)
+
+    def test_sky_choice_switch_reinstall_and_restore(self):
+        stock = self.installer().install(self.client)
+        self.assertEqual(stock['sky'], 'current')
+        targets = [self.client / 'Data/patch-z.mpq', self.client / 'Data/enUS/patch-enus-z.mpq']
+        for mode, expected in [('experimental-preserve', 'experimental-preserve'), (None, 'experimental-preserve'),
+                               ('current', 'current'), (None, 'current')]:
+            report = self.installer().install(self.client, sky=mode)
+            self.assertEqual(report['sky'], expected)
+            self.assertEqual([p.read_bytes() for p in targets], [ART + (b' HD' if expected != 'current' else b'')] * 2)
+            self.assertEqual(fi.read_json(self.client / fi.SKY_CHOICE), {'mode': expected})
+        self.installer().uninstall(self.client)
+        self.assertFalse(any(p.exists() for p in targets + [self.client / fi.SKY_CHOICE]))
+
     def test_stock_match_extracts_and_rerun_is_noop(self):
         report = self.installer().install(self.client)
         self.assertTrue(report['world_cache'].startswith('extracted'))
@@ -855,7 +885,7 @@ class Install(Base):
 
     def test_instances_argument_skips_the_question_and_reaches_the_orchestrator(self):
         prompts = self.tty()
-        report = self.installer().install(self.client, instances='1 6')
+        report = self.installer().install(self.client, instances='1 6', sky='current')
         self.assertEqual(prompts, [])
         (args,) = self.instance_calls()
         self.assertEqual(args[args.index('--instances') + 1], 'classic-dungeons,wotlk-raids')
@@ -1070,6 +1100,57 @@ class WindowsInstall(Install):
     test_launcher_action_passes_through = None   # main() on this host checks processes with macOS tools
     test_developer_proxy_is_reported_not_removed = None   # macOS migration
 
+    def make_water_package(self):
+        meta = self.pkg_root / 'BUILD-INFO.json'
+        meta.write_text(json.dumps({**json.loads(meta.read_bytes()), 'tideglass': {'core_sha256': sha(b'core')}}))
+        manifest = self.pkg_root / 'payload-manifest.json'
+        entries = json.loads(manifest.read_bytes())
+        for name, data in [('water-core.dll', b'core'), ('water.ini', b'[Water]\n'), ('water-host.ini', b'[WaterIntegration]\nEnable=1\n')]:
+            (self.pkg_root / 'payload' / name).write_bytes(data)
+            entries.append({'path': name, 'sha256': sha(data), 'preserve': name.endswith('.ini')})
+        manifest.write_text(json.dumps(entries))
+        image = bytearray(120)
+        image[:2] = b'MZ'
+        image[60:64] = (64).to_bytes(4, 'little')
+        image[64:70] = b'PE\0\0\x4c\x01'
+        image[72:76] = (0x4C2452FE).to_bytes(4, 'little')
+        image[84:86] = (224).to_bytes(2, 'little')
+        image[88:90] = b'\x0b\x01'
+        image[116:120] = (0x400000).to_bytes(4, 'little')
+        (self.client / 'wow.exe').write_bytes(image)
+
+    def test_water_archive_order_and_rollback(self):
+        self.make_water_package()
+        before = tree(self.client)
+        self.installer().install(self.client)
+        descriptor = self.client / fi.WATER_ARCHIVE_LIST
+        expected = ['./' + path.relative_to(self.client).as_posix() for path in fi.client_archives.chain(self.client)]
+        self.assertEqual(descriptor.read_text().splitlines(), expected)
+        self.assertIn('./Data/enUS/patch-enus-z.mpq', expected)
+        settings = self.client / 'water.ini'
+        settings.write_bytes(b'[Water]\r\nWaveCrestShape=0.5\r\n')
+        self.installer().install(self.client)
+        self.installer().uninstall(self.client)
+        self.assertEqual(tree(self.client), {**before, 'water.ini': settings.read_bytes()})
+        self.assertEqual(settings.read_bytes(), b'[Water]\r\nWaveCrestShape=0.5\r\n')
+
+    def test_water_collision_or_wrong_executable_refuses_before_any_writes(self):
+        self.make_water_package()
+        exe = self.client / 'wow.exe'
+        image = exe.read_bytes()
+        for name in ('water-core.dll', 'Water.INI', fi.WATER_ARCHIVE_LIST, 'wow.exe'):
+            with self.subTest(name=name):
+                file = self.client / name
+                file.write_bytes(b'belongs to this client')
+                before = tree(self.client)
+                with self.assertRaises(fi.Refusal):
+                    self.installer().install(self.client)
+                self.assertEqual(tree(self.client), before)
+                if file == exe:
+                    exe.write_bytes(image)
+                else:
+                    file.unlink()
+
     def test_backend_and_legacy_package_restored_first(self):
         old = self.base / 'old-package'
         (old / 'payload/world-cache').mkdir(parents=True); (old / 'payload/world-cache/a.fgm').write_bytes(b'old')
@@ -1129,10 +1210,11 @@ class WindowsInstall(Install):
         with patch.object(fi.Installer, 'install', lambda self, *a, **kw: (seen.append(a), kwargs.append(kw))), \
                 patch.object(fi, 'host_platform', lambda: 'windows'):
             self.assertEqual(fi.main(['install', '--client', str(self.client), '--package', str(self.pkg_root)]), 0)
-            self.assertEqual(fi.main(['install', '--backend', 'dxvk2', '--instances', '1 6', '--client', str(self.client),
+            self.assertEqual(fi.main(['install', '--backend', 'dxvk2', '--instances', '1 6', '--sky', 'experimental-preserve', '--client', str(self.client),
                                       '--package', str(self.pkg_root)]), 0)
         self.assertEqual([a[3] for a in seen], [None, 'dxvk2'])
-        self.assertEqual([kw for kw in kwargs], [{'instances': None}, {'instances': '1 6'}])
+        self.assertEqual([kw for kw in kwargs], [{'instances': None, 'sky': None, 'raised_air': False},
+                                                 {'instances': '1 6', 'sky': 'experimental-preserve', 'raised_air': False}])
 
     DXVK2 = 'renderer-backends/dxvk2/dxvk2_d3d9.dll'
 
