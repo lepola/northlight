@@ -834,8 +834,11 @@ bool TransportOnCurrentMap(uint64_t identity,uintptr_t object,DWORD now)
         *slot={identity,time,0,true};
         return false;   // one sighting cannot tell a moving route from a held one
     }
+    const bool before=slot->moved && now-slot->moved<1000;
     if(slot->time!=time){slot->time=time;slot->moved=now;}
-    return slot->moved && now-slot->moved<1000;
+    const bool current=slot->moved && now-slot->moved<1000;
+    if(current!=before)WATER_LOG_INFO("transport %08x%08x %s the current map",unsigned(identity>>32),unsigned(identity),current?"on":"not on");
+    return current;
 }
 }
 int ReadMovers(const float* camera, Mover* out, int max, Boat* boats, int maxBoats, int& boatCount, ReflectionObject* reflections,unsigned* reflectionCount)

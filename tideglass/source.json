@@ -139,7 +139,7 @@
     "src/config.h": "ee952887555f54a6018a5e9a048019afd9182cabc192e39bfb74ab472c08a72d",
     "src/config_reader.h": "060ae856237a25f6ef4ba54d7cb4409f3189c0e69416287de3cd934371c0655b",
     "src/d3d_resource.h": "058180c23ab84648b4f9f93b090137b9b463e520d2ba3883fe23dbf1c89323fd",
-    "src/engine.cpp": "37aabb24790e12265e4ea632fc62d07e0dc166fe7c37e2bcdf1c662ce4d34274",
+    "src/engine.cpp": "28da697f2860800dee16f4408daed146aadf0c681153e95ff003d88747044217",
     "src/engine.h": "3ddb544f43a8ea7362cfb67f1e37c45f928ce931986cd4dcea311fb857119c36",
     "src/file_reference.h": "0a1aa45e96175c8821c6d4d0f8485e7ab491a7537a7ed89753d31b6ae9c4eb61",
     "src/frame_diagnostics.cpp": "e7a2e9e6ebdcc11ebd058d3f63c44d412dcd4c9f9d0613220289e7e00bf2e88e",
@@ -247,7 +247,7 @@
     "tools/shader_build.py": "c80119742e5a2dab25846e3316e5bd691e132201ca8404227d1e00dd979fc0d6",
     "tools/shader_header.py": "0154d161dd86a4e8c320c23081a87d5123f410c9211dea016664d9bea311e189"
   },
-  "revision": "79a23299a49a35d13f77d806ceddf1df81ac0e99",
+  "revision": "cc2442be6f98b96602e636b39b31dabb02a424c0",
   "shaders": {
     "ps_ao": {
       "dependencies": {
