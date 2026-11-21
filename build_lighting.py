@@ -328,7 +328,7 @@ def copy_profile(tables, old, new):
 # liquid's own Light when LiquidType gives one (slime, magma), and darkens ocean with depth (LiquidType
 # MaxDarkenDepth; 0x7f3245-0x7f3360 in build 12340). The combo draws its own underwater medium over the
 # above-water scene, so its art layer points the underwater slots at the row's above-water profiles and
-# takes the water and slime liquids' own light and darkening away: the client lights underwater as above,
+# takes the water, ocean and slime liquids' own light and depth darkening away: the client lights underwater as above,
 # and its code stays as it is. Magma keeps the client's own look.
 UNDERWATER_SLOTS = {8: 7, 10: STORM_SLOT}
 LIQUID_TYPE, LIQUID_MAX_DARKEN, LIQUID_LIGHT = 3, 6, 10      # LiquidType.dbc columns

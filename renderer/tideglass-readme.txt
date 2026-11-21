@@ -29,7 +29,8 @@ Press {settings_key} and open Water.
 Quality keeps full reflection detail. Try Balanced for lower-resolution
 scenery reflections, or Performance for sky reflections alone. Choose Save.
 Your wave, foam and colour tuning carries over. To use the game's water,
-clear Use Tideglass, save and restart WoW.
+clear Use Tideglass, save and restart WoW. Under water the scene then keeps
+its above-water light, without the game's own underwater tint.
 
 To remove both, close WoW and {undo}.
 Choose the same game folder. Northlight and Tideglass are removed together,
