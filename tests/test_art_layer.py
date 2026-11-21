@@ -21,7 +21,7 @@ the test output):
   payloads and archives; an older patch-Z may contain world-model lights that must be removed."""
 import sys; from pathlib import Path; sys.path.insert(0, str(Path(__file__).resolve().parents[1]))  # repo root
 import northlight_paths as fp; fp.use_source_modules()
-import hashlib, json, shutil
+import hashlib, json, shutil, tempfile
 import build_art_layer, build_lighting, build_weather_textures, client_archives
 from build_lighting import DBC, u, f
 from mpq import Archive
@@ -39,8 +39,9 @@ assert set(build_weather_textures.MIST) <= set(blps), 'the client has both mist 
 files = tables | set(blps)
 report = {}
 
-stock = out / 'stock'
-shutil.rmtree(stock, ignore_errors=True)
+# A recorded run can share its output directory with other tests.
+scratch = Path(tempfile.mkdtemp(prefix='art-layer-', dir=out))
+stock = scratch / 'stock'
 r = build_art_layer.build(client, stock, cache, archives='stock')
 model_steps = {'world_model_lights', 'equipment_model_lights', 'spell_model_lights', 'mount_model_lights'}
 skipped = {s['step']: s['skipped'] for s in r['steps'] if 'skipped' in s and s['step'] not in model_steps}
@@ -173,14 +174,13 @@ def real_tables(view, folder, r):
 
 
 report['stock']['retime'] = real_tables('stock', stock, r)
-own = out / 'own'
-shutil.rmtree(own, ignore_errors=True)
+own = scratch / 'own'
 r_own = build_art_layer.build(client, own, cache)
 report['own_retime'] = real_tables('all', own, r_own)
 report['own_storm'] = storm_checks('all', own, r_own)
 # A new installer removes world-model light injection from an older patch-Z.
 # Rebuilding from the same original archive chain must still be reproducible.
-again = out / 'own-again'
+again = scratch / 'own-again'
 again.mkdir(exist_ok=True)
 r_again = build_art_layer.build(client, again, cache)
 assert r_again['files'] == r_own['files']
@@ -191,6 +191,5 @@ report['own'] = {'rebuilt_sha256': got, 'models': sum(n.lower().endswith('.m2') 
 # Optional sky resources may be absent, but skipped steps must explain why.
 assert all(isinstance(s[k], str) and s[k] for s in r_own['steps'] for k in ('skipped', 'sky_clone_skipped') if k in s)
 (out / 'art-layer.json').write_text(json.dumps(report, indent=2) + '\n')
-for generated in (stock, own, again):
-    shutil.rmtree(generated)
+shutil.rmtree(scratch)
 print(json.dumps(report, indent=2))
