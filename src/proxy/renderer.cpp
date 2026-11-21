@@ -1469,7 +1469,12 @@ private:
         }
         if(maskOn&&nameMask.debug)nameMaskDebugView(saved.targets[0]); /* 0.3.212 (task 32): the last effect pass, the mask itself */
 #ifdef NORTHLIGHT_WATER
-        if(debugMode==0&&worldDebug==0&&!waterSkyRemembered)cooperativeWater.WorldDone(worldDepth);
+        if(debugMode==0&&worldDebug==0&&!waterSkyRemembered){
+            // A frame with no liquid in view still begins the water frame: under the sea looking down, no surface is
+            // drawn but the underwater view is (2026-11-21). The water frame was captured with the world already.
+            prepareCooperativeWater(desc,saved.viewport,false);
+            cooperativeWater.WorldDone(worldDepth,saved.targets[0],depthTex,&saved.viewport);
+        }
         layerCapture.Stage(ext,saved.targets[0],"finished",16);
         layerCapture.End(world&&world->composited);
 #endif
