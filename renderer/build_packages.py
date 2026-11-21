@@ -408,10 +408,14 @@ def build(platform, version, dll, variants, out, stormlib_dir, water_core=None, 
         text = template.format(
             version=version, platform=PLATFORMS[platform],
             system='64-bit Windows 10 or 11' if windows else 'x86-64 Linux with Wine or Proton',
-            start='Double-click Install.cmd in the extracted folder.' if windows else
+            start='Double-click Install.cmd in the extracted folder. If Windows SmartScreen\n'
+                  '   appears, choose More info, then Run anyway.' if windows else
                   'Open a terminal in the extracted folder and run bash install.sh.',
             before_play='' if windows else '\n' + '\n'.join(WINE_STEPS) + '\n',
             undo='double-click Uninstall.cmd' if windows else 'run bash uninstall.sh',
+            terminal='Right-click an empty spot in the extracted folder, choose Open in Terminal\n'
+                     '(on Windows 10, hold Shift and choose Open PowerShell window here) and run:'
+                     if windows else 'Open a terminal in the extracted folder and run:',
             fallback=r'.\Install.cmd --backend dxvk2' if windows else 'bash install.sh --backend dxvk2')
     tree.add('README.txt', text.replace('\n', '\r\n').encode('utf-8') if platform == 'windows' else text.encode('utf-8'))
     for name, data in launchers(platform, version).items():

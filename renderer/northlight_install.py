@@ -255,7 +255,7 @@ WINE_STEPS = [
     '  Steam/Proton: game Properties > Launch Options:',
     '    WINEDLLOVERRIDES="d3d9=n,b" %command%',
     '  Lutris: Configure > Runner options > DLL overrides: add d3d9 with value n,b.',
-    '  Bottles: in the bottle settings, set the d3d9 DLL override to Native, then Builtin.',
+    "  Bottles: in the bottle's DLL Overrides, set d3d9 to Native, then Builtin.",
     '  Plain Wine: from the game folder run WINEDLLOVERRIDES="d3d9=n,b" wine Wow.exe',
     '    or set d3d9 to native, builtin in winecfg for Wow.exe.',
     'Keep your existing launcher DXVK setting. Northlight supplies its own copy.',
