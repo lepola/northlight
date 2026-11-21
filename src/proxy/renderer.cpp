@@ -685,12 +685,13 @@ class Device final : public GuardedMirrorDevice {
     IDirect3DTexture9* rainColour=nullptr;IDirect3DSurface9* rainColourSurface=nullptr;
     IDirect3DPixelShader9* rainColourPS=nullptr,*rainRestorePS=nullptr;
     IDirect3DStateBlock9* rainRestoreState=nullptr;
+    IDirect3DSurface9* rainRollbackMS=nullptr;
     bool rainColourFailed=false,rainColourBound=false,rainColourActive=false,rainColourCleared=false,rainColourIncomplete=false;
     unsigned rainSeen=0,rainColourDraws=0;int rainLayerMode=0,rainLayerReported=-1;DWORD rainLayerPolled=0;
     DWORD rainColourWriteBefore=0;bool rainColourWriteKnown=false;
     void rainColourRelease(){
         rainColourUnbind();
-        drop(rainColourSurface);drop(rainColour);drop(rainColourPS);drop(rainRestorePS);drop(rainRestoreState);rainColourFailed=false;
+        drop(rainRollbackMS);drop(rainColourSurface);drop(rainColour);drop(rainColourPS);drop(rainRestorePS);drop(rainRestoreState);rainColourFailed=false;
         rainColourCleared=rainColourActive=false;if(rainSeen)rainColourIncomplete=true;
     }
     void rainColourNextFrame(){
@@ -1209,9 +1210,16 @@ private:
             // skipping it for rain that is due but not drawn yet, or not captured, left no water at all. Only rain that
             // was captured is restored; at worst uncaptured rain goes missing over the water for those frames.
             const bool restoreWanted=rainRequested&&rainReady;
-            // Snapshot into the EXISTING scene target before committing surface replacement.
-            // It supplies rollback if drawing/restoring the foreground pass fails; later effects overwrite it normally.
-            const bool rollbackReady=!restoreWanted||SUCCEEDED(ext->StretchRect(target,nullptr,sceneSurface,nullptr,D3DTEXF_NONE));
+            IDirect3DSurface9* rollback=sceneSurface;
+            bool rollbackReady=true;
+            if(restoreWanted){
+                D3DSURFACE_DESC desc={};
+                rollbackReady=SUCCEEDED(target->GetDesc(&desc));
+                if(rollbackReady && desc.MultiSampleType!=D3DMULTISAMPLE_NONE){
+                    rollbackReady=screen_pass::SaveMultisampleColour(ext,target,desc,rainRollbackMS);
+                    rollback=rainRollbackMS;
+                }else if(rollbackReady)rollbackReady=SUCCEEDED(ext->StretchRect(target,nullptr,rollback,nullptr,D3DTEXF_NONE));
+            }
             bool composed=immediate&&rollbackReady&&cooperativeWater.Composite(depthTex,waterMask,worldDepth,nearZ,farZ,worldMinDepth,worldMaxDepth,false,refractionScene,surfaceVisibility);
             WaterHostSurfaceStatus coreStatus={};const bool knownStatus=cooperativeWater.SurfaceStatus(coreStatus);
             const bool coreAbort=knownStatus&&coreStatus.outcome==WaterHostSurfaceAbortFrame;
@@ -1223,7 +1231,7 @@ private:
             if(restoreWanted&&rainCovered)
                 restoredRain=restoreRain(target,rainMaskTex,cooperativeWater.SurfaceDepth(),depthTex,rainStateRestoreFailed);
             if(restoreWanted&&rollbackReady&&!restoredRain&&immediate&&(rainCovered||!composed)){
-                const bool rolled=SUCCEEDED(ext->StretchRect(sceneSurface,nullptr,target,nullptr,D3DTEXF_NONE));
+                const bool rolled=SUCCEEDED(ext->StretchRect(rollback,nullptr,target,nullptr,D3DTEXF_NONE));
                 cooperativeWater.End();composed=false;
                 if(!rolled||rainStateRestoreFailed||coreAbort){logf("WATER precipitation abort rollback=%d stateRestoreFailed=%d coreAbort=%d",int(rolled),int(rainStateRestoreFailed),int(coreAbort));return WaterOutcome::AbortEffects;}
             }
@@ -1731,7 +1739,7 @@ private:
 #ifdef NORTHLIGHT_WATER
     void prepareCooperativeWater(const D3DSURFACE_DESC& desc,const D3DVIEWPORT9& viewport,bool liquid=true) {
         if(!cooperativeWater.Attempted()){
-        if(desc.MultiSampleType!=D3DMULTISAMPLE_NONE || !world) {
+        if(!world) {
             cooperativeWater.Begin(ext,{});return;
         }
         auto* snapshot=NorthlightStream::activeSnapshot;
@@ -1791,7 +1799,7 @@ private:
            FAILED(ext->GetRenderState(D3DRS_ZWRITEENABLE,&write))||
            FAILED(ext->GetRenderState(D3DRS_ZENABLE,&depth))||!depth||(blend&&destination==D3DBLEND_ONE))return draw();
         D3DSURFACE_DESC desc={};D3DVIEWPORT9 viewport={};
-        if(!worldDepthBound()||!fullViewport(desc,&viewport)||desc.MultiSampleType!=D3DMULTISAMPLE_NONE)return draw();
+        if(!worldDepthBound()||!fullViewport(desc,&viewport))return draw();
         // The native cloud dome also uses a textured 24-byte triangle strip.
         // Only classify liquid colours inside the current world's depth interval.
         if(!NorthlightWorldDrawDomain::accepts(projectionValid,depth!=FALSE,worldMinDepth,worldMaxDepth,viewport.MinZ,viewport.MaxZ))return draw();

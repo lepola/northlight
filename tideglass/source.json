@@ -199,8 +199,8 @@
     "src/reflection_object.h": "b964160a2bd33622cfd25d82e9fa36309a97e62806d2c16adf869dcefaf5c239",
     "src/render_session.cpp": "5ac3e6952aebaab68b17fc28dd3fe0239bf0c59be9fa1606a25da2745e09861c",
     "src/render_session.h": "52e869fecb0b13976581f4af3b82c0341c0b553d940910c99f1bbd52f8930ec7",
-    "src/renderer.cpp": "5e6ca8a1e3e4c63f31626d1b1c8b00edf03a076d926781b1b77d7ec9a1b09ec4",
-    "src/renderer.h": "1aa9de515196efe169a5f8e5cbccc81dcab27487c9197d667a4d4585e960e12b",
+    "src/renderer.cpp": "28c14a2a2adb74982464d3b88aeb0d92142a41087502aebe0acc3813732e806e",
+    "src/renderer.h": "3412f65e54a068e4983731a1c149abbfc11bcf8d05511c9e111686e40217b7b6",
     "src/scenery_float_environment.h": "e08ffcfb4399f51a34e3bc87180662006831bec2b7cddcb925d315e30be81c8a",
     "src/scenery_plane_transform.h": "d331486c0cf2b5280991db05d00a8f30b49517ad3dd0f53c69f0469f3c4b6256",
     "src/scenery_receiver.h": "95255617519865dfacfe597e0a8d48709d2e787e1a12d87db464a4857915524e",
@@ -208,8 +208,8 @@
     "src/scenery_water_heights.h": "23eff7390d21a9b0aef53e3c33c109b99e0d74c35cdac210808c65e983d3c8a8",
     "src/scenery_water_planes.h": "ca60997fb4b27f8ea2aa151d858626d21ba2772d7067c952bfc8cc35e59889b3",
     "src/scenery_water_surface.h": "5581e655597a3cecbb8570d3cbcae80ef811cea20e51568a6ce7c07c69e17c6a",
-    "src/screen_pass.cpp": "7fc6476112f7f704a1d17d0ddd753a10a35143a928ea5d82d1a46694ddbc580f",
-    "src/screen_pass.h": "54ee2798b04d275066a15f28a3dd1b0155c9c651783e0e18fbf2f64d624b7e90",
+    "src/screen_pass.cpp": "7c336e24eb7f901ff4e61afd33ce9f0ca8c699023449bb266a55a7529ed45b6a",
+    "src/screen_pass.h": "ef82e29e2c59ccaf80d303cbed98cde1c29d07aef743fb036eb6ee484c223a0b",
     "src/shader_program.h": "09fff07e17f18f4c6c0bb68a4415cdf083fdbce966718cea89ea8ee05fd4502a",
     "src/surface_depth.cpp": "3e60cecca70c1451276d596bc13a621c1b6e01e54f10baefe65bfe9df6b62153",
     "src/surface_depth.h": "b1cd06a371e154ee74b4b7d732f370617ab588820fde1945b918e76e705b8cc6",
@@ -249,7 +249,7 @@
     "tools/shader_build.py": "c80119742e5a2dab25846e3316e5bd691e132201ca8404227d1e00dd979fc0d6",
     "tools/shader_header.py": "0154d161dd86a4e8c320c23081a87d5123f410c9211dea016664d9bea311e189"
   },
-  "revision": "f8fcedf8577c46122692e89eb1f47be2969ac6b9",
+  "revision": "32b3ec8186fd5c12ab4762224d08cf590d614aef",
   "shaders": {
     "ps_ao": {
       "dependencies": {

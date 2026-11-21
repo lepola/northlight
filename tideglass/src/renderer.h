@@ -450,6 +450,7 @@ private:
     bool m_snapshotValid = false;
     IDirect3DTexture9* m_sceneBefore = nullptr;
     IDirect3DTexture9* m_sceneWithWater = nullptr;
+    IDirect3DSurface9* m_multisampleRollback = nullptr;
     IDirect3DTexture9* m_compositeDepth = nullptr;
     IDirect3DTexture9* m_compositeScene = nullptr;
     D3DSURFACE_DESC m_compositeDesc = {};

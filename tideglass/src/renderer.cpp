@@ -465,12 +465,13 @@ bool Renderer::EnsureSnapshotTarget(IDirect3DDevice9* dev, UINT width, UINT heig
 bool Renderer::EnsureSceneTargets(IDirect3DDevice9* dev, const D3DSURFACE_DESC& desc)
 {
     if (m_sceneBefore && m_sceneDesc.Width == desc.Width && m_sceneDesc.Height == desc.Height &&
-        m_sceneDesc.Format == desc.Format)
+        m_sceneDesc.Format == desc.Format) {
+        m_sceneDesc = desc;
         return true;
+    }
     SafeRelease(m_sceneBefore);
     SafeRelease(m_sceneWithWater);
-    if (desc.MultiSampleType != D3DMULTISAMPLE_NONE ||
-        FAILED(dev->CreateTexture(desc.Width, desc.Height, 1, D3DUSAGE_RENDERTARGET, desc.Format, D3DPOOL_DEFAULT,
+    if (FAILED(dev->CreateTexture(desc.Width, desc.Height, 1, D3DUSAGE_RENDERTARGET, desc.Format, D3DPOOL_DEFAULT,
                                   &m_sceneBefore, nullptr)) ||
         FAILED(dev->CreateTexture(desc.Width, desc.Height, 1, D3DUSAGE_RENDERTARGET, desc.Format, D3DPOOL_DEFAULT,
                                   &m_sceneWithWater, nullptr)))
@@ -2378,7 +2379,8 @@ bool Renderer::CompositeScene::Capture(IDirect3DDevice9* dev, IDirect3DTexture9*
         z.Width != r.m_snapshotWidth || z.Height != r.m_snapshotHeight ||
         colour.Width != z.Width || colour.Height != z.Height ||
         colour.Width != r.m_sceneDesc.Width || colour.Height != r.m_sceneDesc.Height ||
-        colour.Format != r.m_sceneDesc.Format || colour.MultiSampleType != D3DMULTISAMPLE_NONE)
+        colour.Format != r.m_sceneDesc.Format || colour.MultiSampleType != r.m_sceneDesc.MultiSampleType ||
+        colour.MultiSampleQuality != r.m_sceneDesc.MultiSampleQuality)
         return r.Skip("deferred composite has no matching pre-liquid scene");
     if (r.m_compositeDesc.Width != colour.Width || r.m_compositeDesc.Height != colour.Height ||
         r.m_compositeDesc.Format != colour.Format) {
@@ -2497,6 +2499,7 @@ bool Renderer::CompositeWater(IDirect3DDevice9* dev, IDirect3DTexture9* depthTex
         return false;
     }
     bool attempted=false,shaded=false;
+    IDirect3DSurface9* rollback=nullptr;
     // The original native colour is retained until the surface transaction ends.
     // A failed draw may have written part of its target despite returning failure.
     auto finish=[&](bool success){
@@ -2505,8 +2508,8 @@ bool Renderer::CompositeWater(IDirect3DDevice9* dev, IDirect3DTexture9* depthTex
         bool recovered=true;
         if(attempted&&(!shaded||!restored)){
             IDirect3DSurface9* baseline=nullptr;
-            recovered=original&&m_sceneWithWater&&SUCCEEDED(m_sceneWithWater->GetSurfaceLevel(0,&baseline));
-            if(recovered)recovered=SUCCEEDED(dev->StretchRect(baseline,nullptr,original,nullptr,D3DTEXF_NONE));
+            recovered=original && (rollback || SUCCEEDED(m_sceneWithWater->GetSurfaceLevel(0,&baseline)));
+            if(recovered)recovered=SUCCEEDED(dev->StretchRect(rollback?rollback:baseline,nullptr,original,nullptr,D3DTEXF_NONE));
             SafeRelease(baseline);
         }
         SafeRelease(original);
@@ -2578,6 +2581,10 @@ bool Renderer::CompositeWater(IDirect3DDevice9* dev, IDirect3DTexture9* depthTex
         const std::string capture = m_reflectionCaptureDirectory.empty() ? "" : m_reflectionCaptureDirectory + "/composite";
         const bool captured = !capture.empty() && reflection::CapturePassInputs(dev, capture, m_snapshotPs,ActiveCaptureBurst());
         TimeBegin(GpuTimer::WaterComposite);
+        if(bound && m_sceneDesc.MultiSampleType!=D3DMULTISAMPLE_NONE){
+            bound=screen_pass::SaveMultisampleColour(dev,saved.color[0],m_sceneDesc,m_multisampleRollback);
+            rollback=m_multisampleRollback;
+        }
         if(bound){attempted=true;shaded=SUCCEEDED(DrawScreenTriangle(dev));}
         TimeEnd(GpuTimer::WaterComposite);
         if(captured)reflection::CapturePassOutputs(dev,capture,"output",ActiveCaptureBurst());
@@ -3231,6 +3238,7 @@ void Renderer::ReleaseDefaultPool()
     SafeRelease(m_snapshot);
     SafeRelease(m_sceneBefore);
     SafeRelease(m_sceneWithWater);
+    SafeRelease(m_multisampleRollback);
     SafeRelease(m_compositeDepth);
     SafeRelease(m_compositeScene);
     m_compositeDesc = {};

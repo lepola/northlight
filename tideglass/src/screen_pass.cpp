@@ -89,6 +89,21 @@ bool ScreenPassState::Restore()
 }
 
 namespace screen_pass {
+bool SaveMultisampleColour(IDirect3DDevice9* device, IDirect3DSurface9* source,
+                           const D3DSURFACE_DESC& desc, IDirect3DSurface9*& backup)
+{
+    D3DSURFACE_DESC old = {};
+    if (backup && (FAILED(backup->GetDesc(&old)) || old.Width != desc.Width || old.Height != desc.Height ||
+        old.Format != desc.Format || old.MultiSampleType != desc.MultiSampleType ||
+        old.MultiSampleQuality != desc.MultiSampleQuality)) {
+        backup->Release();
+        backup = nullptr;
+    }
+    if (!backup && FAILED(device->CreateRenderTarget(desc.Width, desc.Height, desc.Format,
+        desc.MultiSampleType, desc.MultiSampleQuality, FALSE, &backup, nullptr))) return false;
+    return SUCCEEDED(device->StretchRect(source, nullptr, backup, nullptr, D3DTEXF_NONE));
+}
+
 bool BindPointTexture(IDirect3DDevice9* dev, DWORD stage, IDirect3DBaseTexture9* tex)
 {
     bool ok=SUCCEEDED(dev->SetTexture(stage,tex));

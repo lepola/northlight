@@ -33,6 +33,9 @@ private:
 };
 
 namespace screen_pass {
+// The rollback must retain the original sample values at geometry edges.
+bool SaveMultisampleColour(IDirect3DDevice9* device, IDirect3DSurface9* source,
+                           const D3DSURFACE_DESC& desc, IDirect3DSurface9*& backup);
 bool BindPointTexture(IDirect3DDevice9* dev, DWORD stage, IDirect3DBaseTexture9* tex);
 bool BindLinearTexture(IDirect3DDevice9* dev, DWORD stage, IDirect3DBaseTexture9* tex);
 bool SetTarget(IDirect3DDevice9* dev, IDirect3DTexture9* tex, DWORD slot = 0);
