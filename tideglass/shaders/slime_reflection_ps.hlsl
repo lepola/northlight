@@ -2,4 +2,4 @@
 #define DEFERRED_SLIME 1
 #define REFLECTION_PASS 1
 #define REFLECTION_SCENERY_PASS 1
-#include "water_ps.hlsl"
+#include "reflection_resolve.hlsli"

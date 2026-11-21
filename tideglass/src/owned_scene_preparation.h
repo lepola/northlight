@@ -60,6 +60,7 @@ struct OwnedWorldDescription
     // Optional explicit pack for private acceptance; empty keeps source import.
     std::wstring texturePack={};
     unsigned textureMipBias=0;
+    bool shortDistance=false;
     std::size_t sceneBytes=world::SceneBytes; // imported scene budget; at most that (lower in tests)
     std::wstring textureCacheDirectory={};
     bool populateTextures=false;

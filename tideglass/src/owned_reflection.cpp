@@ -121,8 +121,9 @@ bool OwnedReflection::Begin(IDirect3DDevice9* device, FrameStamp frame, const Fr
     const auto& cachePath=settings.reflectionOwnedTextureCacheDirectory;
     const bool cachePathChanged=bool(cachePath)!=bool(m_textureCacheDirectory) ||
         (cachePath && m_textureCacheDirectory && *cachePath!=*m_textureCacheDirectory);
-    if(cachePathChanged || m_textureCacheMode!=settings.reflectionOwnedTextureCache ||
+    if(m_shortDistance!=settings.shortReflectionDistance || cachePathChanged || m_textureCacheMode!=settings.reflectionOwnedTextureCache ||
        m_textureCacheMiB!=settings.reflectionOwnedTextureCacheMiB || m_textureQuality!=settings.reflectionOwnedTextureQuality) {
+        m_shortDistance=settings.shortReflectionDistance;
         m_textureCacheDirectory=cachePath;m_textureCacheMode=settings.reflectionOwnedTextureCache;
         m_textureCacheMiB=settings.reflectionOwnedTextureCacheMiB;m_textureQuality=settings.reflectionOwnedTextureQuality;
         ++m_preparationRevision;
@@ -188,6 +189,7 @@ bool OwnedReflection::Begin(IDirect3DDevice9* device, FrameStamp frame, const Fr
     if (!m_request) {
         if (m_world){
             OwnedWorldDescription description{*m_archiveList,static_cast<unsigned>(settings.reflectionOwnedDelayMs),settings.reflectionOwnedFail,true,true,false,true,streaming,{m_identity.map,m_identity.regionX,m_identity.regionY}};
+            description.shortDistance=m_shortDistance;
             description.textureMipBias=unsigned(std::max(m_textureQuality,m_halfTextures?1:0));
             if(m_textureCacheMode && m_textureCacheDirectory)description.textureCacheDirectory=*m_textureCacheDirectory;
             description.populateTextures=m_textureCacheMode==2;
@@ -504,7 +506,7 @@ bool OwnedReflection::Draw(IDirect3DDevice9* device, FrameStamp frame, const Fra
         output.continuation=scene->worldRender->views[receiver].continuation;
         const auto& source=*scene->worldScene;
         if(m_streaming && source.waterCompleteReach>0){
-            m_coverage.Update(input.cameraPosition,source.sourceRegion,source.waterCompleteReach,m_coverageTick);
+            m_coverage.Update(input.cameraPosition,source.sourceRegion,source.waterCompleteReach,m_coverageTick,m_shortDistance?world::OwnedWorldRegion::NearReach:1.e9f);
             output.coverageEdges=m_coverage.edges;
             output.coverageWidth=m_coverage.width;
         }

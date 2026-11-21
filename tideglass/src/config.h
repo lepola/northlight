@@ -150,6 +150,8 @@ struct Config
     bool groundPreparationWorker = false; // owned same-frame shore/nearest-water preparation
     bool reflectionSceneryShoreEdge = false; // exclude dry-land taps from extra-view boundary coverage
     bool reflectionSceneryAlign = false; // align extra geometry to D3D9 integer raster centres
+    unsigned reflectionResolution = 100;
+    bool shortReflectionDistance = false;
     bool reflectionScenery = false; // continuous extra geometry, composed through ordinary water shading
     float timeOfDay = -1.0f;
     float dayCycleSeconds = 0.0f;

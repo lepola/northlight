@@ -44,7 +44,7 @@ Your game supplies the artwork, so stock and HD clients can look different. The 
 
 The in-game Water page is included in builds after beta 5. In beta 5, you can adjust water tuning in the game folder's `water.ini`.
 
-- **Adjust lighting and water in game** — press **Ctrl+Shift+F11**. On **Water**, adjust waves, foam, reflections or underwater visibility and choose **Save** to see the change. [Settings guide](renderer/docs/settings-menu.md)
+- **Adjust lighting and water in game** — press **Ctrl+Shift+F11**. On **Water**, choose **Quality**, **Balanced** or **Performance**, adjust waves or foam, then choose **Save**. Water performance presets are available from beta 7. [Settings guide](renderer/docs/settings-menu.md)
 - **Keep Northlight and use the game's water** — on **Water**, clear **Use Tideglass**, choose **Save** and restart WoW. Beta 5 users can set `Enable=0` in `water-host.ini` with the game closed.
 - **Remove the combo** — close WoW and run `Uninstall.cmd` (Windows) or `bash uninstall.sh` (Linux) from the extracted package. Select the same game folder. This restores the previous renderer and keeps edited water settings.
 - **The game closes at startup** — try the older bundled graphics backend. Open a terminal in the extracted package and run `.\Install.cmd --backend dxvk2` on Windows or `bash install.sh --backend dxvk2` on Linux.

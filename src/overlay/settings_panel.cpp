@@ -28,7 +28,7 @@ const std::map<std::string,const char*> Labels={
     {"WaveStrength","Wave strength"},{"WaveSpeed","Wave speed"},{"WaveCrestShape","Crest shape"},
     {"WaveCrestSharpness","Crest sharpness"},{"RippleStrength","Ripple strength"},
     {"FoamStrength","Foam strength"},{"OpenWaterCrestFoam","Foam on open-water crests"},
-    {"ReflectionScenery","Reflect distant scenery"},{"Clarity","Water clarity"},{"Reflection","Reflection strength"},{"NearReflection","Near reflection strength"},
+    {"ReflectionScenery","Reflections"},{"ReflectionResolution","Reflection resolution"},{"ShortReflectionDistance","Reflection distance"},{"Clarity","Water clarity"},{"Reflection","Reflection strength"},{"NearReflection","Near reflection strength"},
     {"Underwater","Underwater effects"},{"UnderwaterVisibility","Visibility (yards)"},{"UnderwaterScenery","Underwater scenery"},
     {"Slime","Slime surface"},{"Lava","Magma and fel magma surfaces"},
     {"AutoBump","Material detail"},{"AutoBumpStrength","Normal map strength (%)"},{"AutoBumpDistance","Normal map distance (yards)"},
@@ -180,6 +180,11 @@ std::string regionLabel(const std::string& section){
 }
 std::string optionLabel(const Field& f,const std::string& value){
     if(D::modeField(f))return value=="0"?"Off":value=="1"?"Normal maps":"Normal maps + POM";
+    if(f.file==NorthlightSettings::WaterFile){
+        if(f.key=="ReflectionScenery")return value=="0"?"Sky only":"Scenery + sky";
+        if(f.key=="ShortReflectionDistance")return value=="0"?"Standard":"Short";
+        if(f.key=="ReflectionResolution")return value+"%";
+    }
     if(value=="HBAOPlus")return "HBAO+ (D3D9)";
     if(f.file==D::Renderer&&f.key=="Backend"){
         if(value=="dxvk")return "DXVK 3";
@@ -514,8 +519,33 @@ struct SettingsPanel::State {
             }
             titled(title,rows);
         };
+        const auto water=[&](const char* key){return draft.field(NorthlightSettings::WaterFile,"Water",key);};
+        const Field* scenery=water("ReflectionScenery");
+        const Field* resolution=water("ReflectionResolution");
+        const Field* distance=water("ShortReflectionDistance");
+        if(scenery && resolution && distance){
+            struct Tier { const char* name; const char* scenery; const char* resolution; const char* distance; };
+            static constexpr Tier tiers[]={{"Quality","1","100","0"},{"Balanced","1","75","0"},{"Performance","0","50","1"}};
+            const char* current="Custom";
+            for(const auto& tier:tiers)
+                if(draft.effective(*scenery)==tier.scenery && draft.effective(*resolution)==tier.resolution &&
+                   draft.effective(*distance)==tier.distance)current=tier.name;
+            ImGui::TextColored(Color::Heading,"Performance");ImGui::Separator();
+            ImGui::BeginDisabled(locked());
+            if(ImGui::BeginCombo("Water preset",current)){
+                for(const auto& tier:tiers){
+                    const bool selected=std::string(current)==tier.name;
+                    if(ImGui::Selectable(tier.name,selected)){
+                        set(*scenery,tier.scenery);set(*resolution,tier.resolution);set(*distance,tier.distance);
+                    }
+                }
+                ImGui::EndCombo();
+            }
+            ImGui::EndDisabled();
+            loose("water-performance",{scenery,resolution,distance});
+        }
         waterRows("Waves and foam","WaveStrength WaveSpeed WaveCrestShape WaveCrestSharpness RippleStrength FoamStrength OpenWaterCrestFoam");
-        waterRows("Reflections","ReflectionScenery Reflection NearReflection");
+        waterRows("Reflections","Reflection NearReflection");
         waterRows("Clarity and underwater","Clarity Underwater UnderwaterVisibility UnderwaterScenery");
         waterRows("Other liquids","Slime Lava");
     }

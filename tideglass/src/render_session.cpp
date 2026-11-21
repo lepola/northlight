@@ -47,7 +47,7 @@ ReflectionProducer RenderSession::ConfigureReflection(const FrameInputs& input, 
         return m_choice;
     }
     m_reportOwned = true;
-    if (settings.reflectionProducer == 2) {
+    if (settings.reflectionProducer == 2 || (settings.reflectionProducer == 3 && !settings.reflectionScenery)) {
         if (m_owned) m_owned->Disable();
         SelectSky();
         ReportReflection("sky selected");

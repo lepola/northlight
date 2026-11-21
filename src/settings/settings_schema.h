@@ -102,7 +102,7 @@ inline std::vector<Field> schema(const Documents& docs,const Documents& initial,
             {"WaveStrength",1,0,4,.05f},{"WaveSpeed",1,0,10,.05f},
             {"WaveCrestShape",0,0,1,.05f},{"WaveCrestSharpness",0,0,1,.05f},
             {"RippleStrength",1.6f,0,5,.05f},{"FoamStrength",1,0,4,.05f},{"OpenWaterCrestFoam",1,0,1,.05f},
-            {"ReflectionScenery",0,0,1,1},{"Clarity",1,.05f,10,.05f},
+            {"ReflectionResolution",100,50,100,25},{"ShortReflectionDistance",0,0,1,1},{"ReflectionScenery",0,0,1,1},{"Clarity",1,.05f,10,.05f},
             {"Reflection",.7f,0,4,.05f},{"NearReflection",.55f,0,1,.05f},
             {"Underwater",1,0,1,1},{"UnderwaterVisibility",35,2,500,1},{"UnderwaterScenery",0,0,1,1},
             {"Slime",1,0,1,1},{"Lava",1,0,1,1},
@@ -112,13 +112,22 @@ inline std::vector<Field> schema(const Documents& docs,const Documents& initial,
             f.low=number(control.low);f.high=number(control.high);f.step=number(control.step);
             f.kind=control.high==1&&control.step==1?"check":"slider";
             f.apply=file==WaterFile?"S":"R";f.inherited=number(control.fallback);
+            if(f.key=="ReflectionResolution"){f.kind="enum";f.options="100,75,50";}
+            if(f.key=="ShortReflectionDistance" || f.key=="ReflectionScenery"){f.kind="enum";f.options="0,1";}
+            if(f.key=="ReflectionScenery" && explicitValue(savedValues[file],"Water","ReflectionProducer")=="3")f.inherited="1";
             auto value=[&](const Values& values){
                 auto raw=explicitValue(values,f.section,f.key);
                 return raw=="~"?f.inherited:raw;
             };
             f.saved=value(savedValues[file]);f.factory=value(factoryValues[file]);
             f.active=file==WaterFile?f.saved:value(initialValues[file]);
+            const bool legacyOff=f.key=="ReflectionScenery" && explicitValue(savedValues[file],"Water","ScreenReflections")=="0";
             add(std::move(f));
+            if(legacyOff){
+                Field& reflection=out.back();
+                reflection.saved=reflection.active=reflection.overrideValue="0";
+                reflection.origin="override";
+            }
         };
         addWater(WaterHostFile,{"Enable",0,0,1,1});
         for(const auto& control:controls)addWater(WaterFile,control);
@@ -141,6 +150,11 @@ inline Documents applyChanges(Documents docs,const std::vector<Field>& fields,co
         auto id=line.substr(0,at),value=line.substr(at+1);if(!known.count(id)||!changed.insert(id).second)throw std::runtime_error("Unknown or duplicate setting");const auto& f=*known.at(id);
         if(!f.available)throw std::runtime_error(f.key+" is not supported by this renderer build");
         if(value=="@factory")value=f.factoryOverride;validateValue(f,value);docs[f.file].set(f.section,f.key,value=="~"?nullptr:&value);
+        // A player who explicitly enables scenery can also restore it on older INIs
+        // whose master reflection switch was off. Leave that key alone on unrelated saves.
+        if(f.file==WaterFile && f.key=="ReflectionScenery" && (value=="1" || value=="~") &&
+           explicitValue(docs[WaterFile],"Water","ScreenReflections")=="0")
+            docs[WaterFile].set("Water","ScreenReflections",nullptr);
         if(f.file==3&&value=="~"){
             auto values=docs[3].values();if(values[lower(f.section)].empty())for(auto i=docs[3].lines.begin();i!=docs[3].lines.end();++i)if(lower(Document::content(i->text))=="["+lower(f.section)+"]"){i->text.clear();break;}}
     }return docs;

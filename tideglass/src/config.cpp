@@ -218,7 +218,11 @@ bool ConfigFile::Parse()
     next.groundPreparationWorker = reader.Int("GroundPreparationWorker",0) != 0;
     next.reflectionSceneryShoreEdge = reader.Int("ReflectionSceneryShoreEdge",defaults.reflectionSceneryShoreEdge) != 0;
     next.reflectionSceneryAlign = reader.Int("ReflectionSceneryAlign",defaults.reflectionSceneryAlign) != 0;
-    next.reflectionScenery = reader.Int("ReflectionScenery",defaults.reflectionScenery) != 0;
+    next.reflectionScenery = reader.Int("ReflectionScenery",next.reflectionProducer==3 || defaults.reflectionScenery) != 0;
+    const int resolution=reader.Int("ReflectionResolution",defaults.reflectionResolution);
+    if(resolution!=50 && resolution!=75 && resolution!=100)reader.Reject("ReflectionResolution");
+    else next.reflectionResolution=static_cast<unsigned>(resolution);
+    next.shortReflectionDistance=reader.Int("ShortReflectionDistance",defaults.shortReflectionDistance)!=0;
     next.timeOfDay = reader.Float("TimeOfDay", defaults.timeOfDay);
     if (next.timeOfDay >= 24.0f)
         next.timeOfDay = -1.0f;

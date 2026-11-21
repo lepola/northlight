@@ -1918,7 +1918,7 @@ bool Renderer::FillIn(IDirect3DDevice9* dev, FillChain& chain)
     return true;
 }
 
-// The water's reflections (a texel for every pixel): the ray each reflects traced (reflection_ps), for the composite to
+// The water's reflections at the selected resolve resolution: the ray each reflects traced (reflection_ps), for the composite to
 // read. Leaves the render targets, viewport, pixel shader and the first constants changed.
 bool Renderer::DrawReflections(IDirect3DDevice9* dev, IDirect3DTexture9* depthTexture, const FrameInputs& in, const Config& cfg,
                                const float (&frame)[9][4], const float (&constants)[kWaterConstants][4], bool slime)
@@ -1928,7 +1928,9 @@ bool Renderer::DrawReflections(IDirect3DDevice9* dev, IDirect3DTexture9* depthTe
     D3DSURFACE_DESC full = {};
     if (!m_snapshot || FAILED(m_snapshot->GetLevelDesc(0, &full)))
         return false;
-    const auto layout = reflection::TargetLayout(full.Width, full.Height, in.viewport, false);
+    const auto layout = reflection::ResolveLayout(full.Width,full.Height,in.viewport,cfg.reflectionResolution);
+    const float pixelStep[4]={float(full.Width)/layout.width-1.f,float(full.Height)/layout.height-1.f,0,0};
+    if(FAILED(dev->SetPixelShaderConstantF(79,pixelStep,1)))return false;
     const UINT width = layout.width;
     const UINT height = layout.height;
     D3DSURFACE_DESC have = {};
@@ -2013,6 +2015,7 @@ bool Renderer::DrawReflections(IDirect3DDevice9* dev, IDirect3DTexture9* depthTe
             "/rays";
         const bool captured=!drawn && !capture.empty() && reflection::CapturePassInputs(dev,capture,m_snapshotPs);
         ++m_work[0];
+        if(views)area=reflection::ScaleArea(area,full.Width,full.Height,width,height);
         const bool resolved=SUCCEEDED(DrawScreenArea(dev,views?&area:nullptr));
         if(captured && resolved)reflection::CapturePassOutputs(dev,capture);
         if(!resolved)return false;

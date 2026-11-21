@@ -24,8 +24,9 @@ game archives, realm settings and add-ons stay in place.
 
 CHANGE YOUR MIND
 
-Press Ctrl+Shift+F11 for lighting and water settings. On Water, choose Save
-to apply changes to waves, foam, reflections and underwater effects. To use
+Press Ctrl+Shift+F11 and open Water. Quality keeps full reflection detail.
+Try Balanced for lower-resolution scenery reflections, or Performance for sky
+reflections alone. Choose Save. Your wave, foam and colour tuning carries over. To use
 the game's water, clear Use Tideglass, save and restart WoW.
 To remove both, close WoW and {undo}
 from the extracted folder. Choose the same game folder. The uninstaller restores the previous renderer

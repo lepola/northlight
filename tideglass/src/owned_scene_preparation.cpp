@@ -207,8 +207,11 @@ bool OwnedScenePreparation::Prepare(const Request& request, OwnedCpuScene& scene
         // reflection, because most regions needed it anyway and finding that out cost a whole failed import each time.
         constexpr float kFitModelReach[]={0,0,768,384,384,384},kFitBuildingReach[]={0,0,0,0,768,384};
         if(request.world->streaming)options.textureMipBias=1;
-        unsigned fit=options.textureMipBias?1:0;
+        // Short distance starts with the same bounded object import used for dense regions.
+        const unsigned minimumFit=request.world->shortDistance?4u:(options.textureMipBias?1u:0u);
+        unsigned fit=minimumFit;
         const auto fitAt=[&](unsigned level){fit=level;if(fit)options.textureMipBias=1;options.modelReach=kFitModelReach[fit];options.buildingReach=kFitBuildingReach[fit];};
+        fitAt(minimumFit);
         const auto tighter=[&]{
             if(m_cancelled.load()||fit+1>=sizeof(kFitModelReach)/sizeof(kFitModelReach[0]))return false;
             fitAt(fit+1);return true;
@@ -271,7 +274,7 @@ bool OwnedScenePreparation::Prepare(const Request& request, OwnedCpuScene& scene
             prepared=deriveWhole();
         }
         m_worldResult.derivedMilliseconds=std::chrono::duration<double,std::milli>(std::chrono::steady_clock::now()-derivedAt).count();
-        if(prepared==OwnedWorldDataResult::Ready && !reuse){m_fitMap=request.world->region.map;m_fitLevel=fit;}
+        if(prepared==OwnedWorldDataResult::Ready && !reuse){m_fitMap=request.world->region.map;m_fitLevel=request.world->shortDistance?0:fit;}
         if (prepared != OwnedWorldDataResult::Ready) {
             m_worldResult.error = prepared == OwnedWorldDataResult::Cancelled ? world::SceneError::Cancelled :
                                   prepared == OwnedWorldDataResult::Budget ? world::SceneError::Budget : world::SceneError::Internal;
