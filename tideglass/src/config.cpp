@@ -222,7 +222,11 @@ bool ConfigFile::Parse()
     const int resolution=reader.Int("ReflectionResolution",defaults.reflectionResolution);
     if(resolution!=50 && resolution!=75 && resolution!=100)reader.Reject("ReflectionResolution");
     else next.reflectionResolution=static_cast<unsigned>(resolution);
-    next.shortReflectionDistance=reader.Int("ShortReflectionDistance",defaults.shortReflectionDistance)!=0;
+    // The old switch treated every nonzero integer as Short, including 2.
+    const int legacyDistance=reader.Int("ShortReflectionDistance",0)!=0 ? 1 : 0;
+    const int distance=reader.Int("ReflectionDistance",legacyDistance);
+    if(distance<0 || distance>2)reader.Reject("ReflectionDistance");
+    else next.reflectionDistance=static_cast<water::ReflectionDistance>(distance);
     next.timeOfDay = reader.Float("TimeOfDay", defaults.timeOfDay);
     if (next.timeOfDay >= 24.0f)
         next.timeOfDay = -1.0f;

@@ -6,15 +6,16 @@ Press **Ctrl+Shift+F11** in game to open or close the settings window. It takes 
 
 Open **Water** to tune waves, foam, reflections, underwater visibility, slime and magma when the Tideglass core is installed. **Save** applies the water settings in game. **Revert** discards edits and **Defaults** restores the packaged values for this page when saved. **Use Tideglass** takes effect after restarting WoW.
 
-Under **Water → Performance**, choose a water preset, then **Save**.
+Under **Water → Performance**, choose the **Water preset**, then **Save**. This controls Tideglass independently of Northlight's overall quality preset.
 
 | Preset | Reflections | Resolution | Distance |
 | --- | --- | --- | --- |
+| Ultra | Scenery and sky | 100% | Far |
 | Quality (default) | Scenery and sky | 100% | Standard |
 | Balanced | Scenery and sky | 75% | Standard |
 | Performance | Sky only | Inactive | Inactive |
 
-Reflection resolution controls the pass that maps mirrored scenery onto water and slime. Waves, foam and the game keep their usual resolution. Try **Short** distance if travel past dense reflected scenery stutters. It limits the models and buildings prepared for the mirror and brings the fade closer. The menu shows **Custom** when your choices differ from all three presets. Your wave, foam and colour settings carry across presets. **Sky only** also skips the mirrored scenery seen from below the surface.
+Reflection resolution controls the pass that maps mirrored scenery onto water and slime. Waves, foam and the game keep their usual resolution. Try **Short** distance if travel past dense reflected scenery stutters. It limits the models and buildings prepared for the mirror and brings the fade closer. **Far** prepares a larger area and fades reflections farther from the camera. The menu shows **Custom** when the active choices differ from the presets. Switching reflections to **Sky only** keeps the distance and resolution for when you restore scenery. Your wave, foam and colour settings carry across presets. **Sky only** also skips the mirrored scenery seen from below the surface.
 
 ## Saving and restarting
 

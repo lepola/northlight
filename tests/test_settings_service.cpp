@@ -177,6 +177,20 @@ int main(int argc,char** argv){
         const auto balanced=edit(scale+"75\n");
         assert(explicitValue(balanced[WaterFile],"Water","ReflectionResolution")=="75");
         assert(explicitValue(balanced[WaterFile],"Water","WaveCrestShape")=="0.8");
+        const std::string distance="W\tWater\tReflectionDistance\t";
+        const auto far=edit(scale+"100\n"+distance+"2\n");
+        const auto reopened=schema(far,docs,configOf(far,""),"","native",true);
+        const auto selected=std::find_if(reopened.begin(),reopened.end(),[](const Field& f){return f.key=="ReflectionDistance";});
+        assert(selected!=reopened.end() && selected->saved=="2");
+        fails([&]{edit(distance+"3\n");});
+        auto oldDistance=docs;
+        oldDistance[WaterFile]=Document("[Water]\nShortReflectionDistance=2\n");
+        const auto oldFields=schema(oldDistance,oldDistance,configOf(oldDistance,""),"","native",true);
+        const auto old=std::find_if(oldFields.begin(),oldFields.end(),[](const Field& f){return f.key=="ReflectionDistance";});
+        assert(old!=oldFields.end() && old->saved=="1" && old->overrideValue=="1");
+        auto upgraded=applyChanges(oldDistance,oldFields,distance+"2\n");
+        assert(explicitValue(upgraded[WaterFile],"Water","ReflectionDistance")=="2" &&
+               explicitValue(upgraded[WaterFile],"Water","ShortReflectionDistance")=="~");
         auto legacy=docs;
         legacy[WaterFile]=Document("[Water]\nScreenReflections=0\nReflectionScenery=1\n");
         auto legacyFields=schema(legacy,legacy,configOf(legacy,""),"","native",true);

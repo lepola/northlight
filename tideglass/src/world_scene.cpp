@@ -23,7 +23,7 @@ constexpr const char* Required[]={
 std::size_t NameBytes(const std::string& s) { return s.capacity()+1; }
 uint32_t SourcePolicy(const SceneOptions& o)
 {return unsigned(o.buildings)|(unsigned(o.texturePrefix)<<1)|(unsigned(o.lake)<<2)|
-        (unsigned(o.snapshotReads)<<3)|(unsigned(o.streaming)<<4)|(o.textureMipBias<<5)|(unsigned(o.shortDistance)<<6);}
+        (unsigned(o.snapshotReads)<<3)|(unsigned(o.streaming)<<4)|(o.textureMipBias<<5)|(unsigned(o.distance)<<6);}
 uint32_t U32(Bytes b,std::size_t at) { uint32_t v=0; b.U32(at,v); return v; }
 uint16_t U16(Bytes b,std::size_t at) { uint16_t v=0; b.U16(at,v); return v; }
 bool Float(Bytes b,std::size_t at,float& v) { return b.F32(at,v) && std::isfinite(v); }
@@ -317,19 +317,19 @@ public:
         return Fits(scratch);
     }
     bool Building(const AdtWmoPlacement& p)const
-    {return options.streaming?options.region.Overlaps(p.minimum,p.maximum,options.buildingReach>0?options.buildingReach:OwnedWorldRegion::SourceReach):OwnedRiverRegion::Building(p.minimum,p.maximum,options.lake);}
+    {return options.streaming?options.region.Overlaps(p.minimum,p.maximum,options.buildingReach>0?options.buildingReach:options.SourceReachLimit()):OwnedRiverRegion::Building(p.minimum,p.maximum,options.lake);}
     bool Model(const AdtModelPlacement& p)const
     {
         if(!options.streaming)return true;
         std::array<float,16> transform;
-        return PlacementMatrix(p.pose,transform)&&options.region.Contains(transform.data()+12,options.modelReach>0?options.modelReach:OwnedWorldRegion::SourceReach+64);
+        return PlacementMatrix(p.pose,transform)&&options.region.Contains(transform.data()+12,options.modelReach>0?options.modelReach:options.SourceReachLimit()+64);
     }
     unsigned ModelDetail(const StaticModel& mesh,const PlacementPose& pose)const
     {
         if(!options.streaming)return 0;
         std::array<float,16> transform;std::array<float,3> low,high;
         if(!PlacementMatrix(pose,transform)||!TransformBounds(mesh.minimum,mesh.maximum,transform.data(),low,high))return MissingSceneAsset;
-        if(!options.region.Overlaps(low,high))return MissingSceneAsset;
+        if(!options.region.Overlaps(low,high,options.SourceReachLimit()))return MissingSceneAsset;
         if(options.region.Overlaps(low,high,OwnedWorldRegion::NearReach))return 0;
         const float distance=std::max(std::abs(transform[12]-options.region.Centre(0)),std::abs(transform[13]-options.region.Centre(1)));
         float diameter=0;for(unsigned axis=0;axis<3;++axis)diameter=std::max(diameter,high[axis]-low[axis]);
@@ -359,7 +359,7 @@ public:
                 std::array<float,16> transform;std::array<float,3> low,high;
                 if(!PlacementMatrix(p.pose,transform)||!TransformBounds(mesh.minimum,mesh.maximum,transform.data(),low,high))continue;
                 if(options.region.Overlaps(low,high,OwnedWorldRegion::NearReach))return 0;
-                if(options.region.Overlaps(low,high)){
+                if(options.region.Overlaps(low,high,options.SourceReachLimit())){
                     const unsigned selected=options.region.Overlaps(low,high,OwnedWorldRegion::MiddleReach)?128:64;
                     detail=detail==MissingSceneAsset?selected:std::max(detail,selected);
                 }
@@ -395,8 +395,8 @@ public:
         unsigned ordinal=0;
         if(options.streaming&&!MapMetadata())return false;
         std::vector<std::string> names;
-        if(options.streaming)names=options.region.Tiles();else for(const auto* name : ::water::world::Tiles)names.emplace_back(name);
-        if(names.empty()||names.size()>OwnedWorldRegion::MaxTiles)return Fail(SceneError::Descriptor);
+        if(options.streaming)names=options.region.Tiles(options.SourceReachLimit());else for(const auto* name : ::water::world::Tiles)names.emplace_back(name);
+        if(names.empty()||names.size()>options.TileLimit())return Fail(SceneError::Descriptor);
         for (const auto& name : names) {
             ArchiveEntry entry;
             if (!Read(name,entry)) {
@@ -418,7 +418,7 @@ public:
             auto& target=scene.region.Edit().terrain.back();
             if(options.streaming){
                 auto& cells=target.tile.cells;
-                cells.erase(std::remove_if(cells.begin(),cells.end(),[&](const auto& c){return c.indices.empty()||!options.region.Overlaps(c.minimum,c.maximum);}),cells.end());
+                cells.erase(std::remove_if(cells.begin(),cells.end(),[&](const auto& c){return c.indices.empty()||!options.region.Overlaps(c.minimum,c.maximum,options.SourceReachLimit());}),cells.end());
                 for(auto& cell:cells){
                     const bool detailed=options.region.Overlaps(cell.minimum,cell.maximum,OwnedWorldRegion::NearReach);
                     const bool middle=options.region.Overlaps(cell.minimum,cell.maximum,OwnedWorldRegion::MiddleReach);
@@ -868,7 +868,7 @@ public:
         if(!TransformBounds(mesh.minimum,mesh.maximum,instance.transform.data(),instance.minimum,instance.maximum))return Fail(SceneError::Placement);
         // A shared group can be retained for another placement. Test this
         // placement too, so a crossing root does not admit remote instances.
-        if(options.streaming&&!options.region.Overlaps(instance.minimum,instance.maximum))return true;
+        if(options.streaming&&!options.region.Overlaps(instance.minimum,instance.maximum,options.SourceReachLimit()))return true;
         if(scene.region->instances.size()==MaxInstances)return Fail(SceneError::Budget);
         scene.region.Edit().instances.push_back(instance);
         if (placementSlots) placementSlots[slot]=static_cast<uint16_t>(scene.region->instances.size());
@@ -947,7 +947,7 @@ SceneResult LoadRiverScene(ArchiveReader& archives,const std::atomic<bool>& canc
     if(options.streaming&&!options.region.Valid()){b.Fail(SceneError::Descriptor);return b.result;}
     // Bounded metadata reservations are admitted before allocating. Runtime
     // limits cannot raise the fixed prototype's descriptor/content caps.
-    const std::size_t metadata=sizeof(WorldScene)+sizeof(RegionGeometry)+(options.streaming?OwnedWorldRegion::MaxTiles:2)*sizeof(SceneTerrain)+MaxModels*sizeof(SceneModel)+MaxModelSources*sizeof(SceneModelSource)+
+    const std::size_t metadata=sizeof(WorldScene)+sizeof(RegionGeometry)+(options.streaming?options.TileLimit():2)*sizeof(SceneTerrain)+MaxModels*sizeof(SceneModel)+MaxModelSources*sizeof(SceneModelSource)+
         MaxTextures*(sizeof(SceneTexture)+sizeof(SceneTextureIssue))+MaxSources*sizeof(SceneSource)+MaxInstances*sizeof(SceneInstance)+
         MaxWater*(sizeof(reflection::WaterSurface)+sizeof(uint16_t))+(options.buildings?MaxSceneBuildings*sizeof(SceneWmoSource):0);
     if (metadata>sceneLimit || metadata>workspaceLimit) { b.Fail(SceneError::Budget);return b.result; }
@@ -957,7 +957,7 @@ SceneResult LoadRiverScene(ArchiveReader& archives,const std::atomic<bool>& canc
     b.scene.sourceRegion=options.region;b.scene.sourcePolicy=SourcePolicy(options);
     b.scene.waterCompleteReach=options.streaming?options.WaterReachLimit():0;
     if(options.buildings || std::any_of(options.liveDisplays.begin(),options.liveDisplays.end(),[](auto id){return id!=0;}))b.scene.wmoSources.reserve(MaxSceneBuildings);
-    b.scene.region.Edit().terrain.reserve(options.streaming?OwnedWorldRegion::MaxTiles:2);b.scene.models.reserve(MaxModels);b.scene.modelSources.reserve(MaxModelSources);
+    b.scene.region.Edit().terrain.reserve(options.streaming?options.TileLimit():2);b.scene.models.reserve(MaxModels);b.scene.modelSources.reserve(MaxModelSources);
     b.scene.textures.reserve(MaxTextures);b.scene.textureIssues.reserve(MaxTextures);
     b.scene.sources.reserve(MaxSources);b.scene.region.Edit().instances.reserve(MaxInstances);
     b.scene.region.Edit().water.reserve(MaxWater);b.scene.region.Edit().waterTypes.reserve(MaxWater);

@@ -159,6 +159,22 @@ static Field field(unsigned file,const char* section,const char* key,const char*
 }
 
 static void draft(){
+    for(const auto& tier:D::WaterTiers)CHECK(std::string(D::waterPreset(tier.scenery,tier.resolution,tier.distance))==tier.name);
+    CHECK(std::string(D::waterPreset("1","75","1"))=="Custom");
+    CHECK(std::string(D::waterPreset("0","75","2"))=="Performance");
+    {
+        Field scenery{},distance{},resolution{};
+        for(Field* f:{&scenery,&distance,&resolution}){f->file=NorthlightSettings::WaterFile;f->section="Water";f->available=true;f->kind="enum";}
+        scenery.key="ReflectionScenery";scenery.overrideValue="1";
+        distance.key="ReflectionDistance";distance.overrideValue="2";
+        resolution.key="ReflectionResolution";resolution.overrideValue="75";
+        std::vector<Field> fields={scenery,distance,resolution};
+        D::Draft water;water.bind(&fields);std::string missing;
+        water.set(scenery,"0");
+        for(const auto* f:{&distance,&resolution})CHECK(D::blocked(water,*f,missing)==D::Block::NeedsKey && missing==scenery.key);
+        water.set(scenery,"1");
+        CHECK(D::blocked(water,distance,missing)==D::Block::None && water.effective(distance)=="2" && water.effective(resolution)=="75");
+    }
     std::vector<Field> fields={
         field(D::Quality,"Quality","Preset","enum","Quality,Balanced,Performance","Quality"),
         field(D::Quality,"Quality","GI","check","1,1,0","1"),

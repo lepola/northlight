@@ -90,7 +90,7 @@ private:
     bool m_drawReplacement = false, m_replacementFailed = false;
     uint64_t m_sourceRevision = 2, m_reportedPreparation = 0;
     std::shared_ptr<const std::wstring> m_archiveList,m_textureCacheDirectory;
-    bool m_shortDistance=false;
+    ReflectionDistance m_distance=ReflectionDistance::Standard;
     int m_textureCacheMode=0,m_textureCacheMiB=256,m_textureQuality=0;
     uint64_t m_preparationRevision=0,m_reportedBakeBatches=0;
     bool m_halfTextures=false; // the GPU refused this scenery at full texture detail; it is prepared again at half

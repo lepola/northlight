@@ -196,7 +196,7 @@ bool OwnedScenePreparation::Prepare(const Request& request, OwnedCpuScene& scene
         }
         const auto assetsAt=std::chrono::steady_clock::now();
         world::SceneOptions options{request.world->buildings,request.world->texturePrefix,request.world->lake,request.world->snapshotReads,request.world->streaming,request.world->region,request.world->liveDisplays,request.world->textureMipBias,request.world->texturePack,request.world->textureCacheDirectory,request.world->populateTextures};
-        options.shortDistance=request.world->shortDistance;
+        options.distance=request.world->distance;
         world::SceneError reuseError=world::SceneError::None;
         const auto importWhole=[&]{
             worldScene=std::make_unique<world::WorldScene>();renderData.reset();
@@ -209,7 +209,7 @@ bool OwnedScenePreparation::Prepare(const Request& request, OwnedCpuScene& scene
         constexpr float kFitModelReach[]={0,0,768,384,384,384},kFitBuildingReach[]={0,0,0,0,768,384};
         if(request.world->streaming)options.textureMipBias=1;
         // Short distance starts with the same bounded object import used for dense regions.
-        const unsigned minimumFit=request.world->shortDistance?4u:(options.textureMipBias?1u:0u);
+        const unsigned minimumFit=request.world->distance==ReflectionDistance::Short?4u:(options.textureMipBias?1u:0u);
         unsigned fit=minimumFit;
         const auto fitAt=[&](unsigned level){fit=level;if(fit)options.textureMipBias=1;options.modelReach=kFitModelReach[fit];options.buildingReach=kFitBuildingReach[fit];};
         fitAt(minimumFit);
@@ -242,7 +242,7 @@ bool OwnedScenePreparation::Prepare(const Request& request, OwnedCpuScene& scene
             // display-slot pressure preserve the ordinary import fallback.
             // Near a region that needed models given up, start a step short of that: each failed try is seconds, and the first ones
             // were never going to fit.
-            if(request.world->streaming && m_fitMap==request.world->region.map && m_fitLevel>1)fitAt(std::max(fit,m_fitLevel-1));
+            if(request.world->streaming && m_fitMap==request.world->region.map && m_fitDistance==options.distance && m_fitLevel>1)fitAt(std::max(fit,m_fitLevel-1));
             importWhole();
             // A region whose full-detail textures exceed the scene budget (a crowded harbour plus
             // a ship) imports again with less rather than failing.
@@ -275,7 +275,11 @@ bool OwnedScenePreparation::Prepare(const Request& request, OwnedCpuScene& scene
             prepared=deriveWhole();
         }
         m_worldResult.derivedMilliseconds=std::chrono::duration<double,std::milli>(std::chrono::steady_clock::now()-derivedAt).count();
-        if(prepared==OwnedWorldDataResult::Ready && !reuse){m_fitMap=request.world->region.map;m_fitLevel=request.world->shortDistance?0:fit;}
+        if(prepared==OwnedWorldDataResult::Ready && !reuse){
+            m_fitMap=request.world->region.map;
+            m_fitDistance=options.distance;
+            m_fitLevel=options.distance==ReflectionDistance::Short?0:fit;
+        }
         if (prepared != OwnedWorldDataResult::Ready) {
             m_worldResult.error = prepared == OwnedWorldDataResult::Cancelled ? world::SceneError::Cancelled :
                                   prepared == OwnedWorldDataResult::Budget ? world::SceneError::Budget : world::SceneError::Internal;

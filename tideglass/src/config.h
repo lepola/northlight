@@ -1,5 +1,6 @@
 #pragma once
 
+#include "reflection_distance.h"
 #include <string>
 #include <vector>
 #include <memory>
@@ -151,7 +152,7 @@ struct Config
     bool reflectionSceneryShoreEdge = false; // exclude dry-land taps from extra-view boundary coverage
     bool reflectionSceneryAlign = false; // align extra geometry to D3D9 integer raster centres
     unsigned reflectionResolution = 100;
-    bool shortReflectionDistance = false;
+    water::ReflectionDistance reflectionDistance = water::ReflectionDistance::Standard;
     bool reflectionScenery = false; // continuous extra geometry, composed through ordinary water shading
     float timeOfDay = -1.0f;
     float dayCycleSeconds = 0.0f;

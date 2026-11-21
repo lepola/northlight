@@ -89,7 +89,7 @@ OwnedWorldDataResult PrepareOwnedWorldRenderData(world::WorldScene& scene,const 
     // measurement. The field exists only on this worker during preparation.
     constexpr std::size_t fieldReservation=16*1024*1024;
     if (cancelled.load()) return OwnedWorldDataResult::Cancelled;
-    if (scene.region->water.empty() || scene.region->water.size()>8192 || scene.region->terrain.size()>world::OwnedWorldRegion::MaxTiles ||
+    if (scene.region->water.empty() || scene.region->water.size()>8192 || scene.region->terrain.size()>world::OwnedWorldRegion::MaxExtendedTiles ||
         scene.region->instances.size()>world::MaxSceneInstances) return OwnedWorldDataResult::Invalid;
     OwnedWorldRenderData candidate;
     const auto room=[&](std::size_t extra) {

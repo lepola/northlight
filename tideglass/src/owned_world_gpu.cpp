@@ -96,7 +96,7 @@ bool OwnedWorldGpu::Initialize(const world::WorldScene& scene,const OwnedWorldRe
 {
     m_sharedRegion=resident!=nullptr;
     if (scene.region->terrain.size()!=data.terrain.size() || scene.region->instances.size()!=data.instanceHeights.size() ||
-        scene.region->terrain.size()>world::OwnedWorldRegion::MaxTiles || scene.models.size()>world::MaxSceneModels || scene.textures.size()>world::MaxSceneTextures || scene.region->instances.size()>world::MaxSceneInstances) return Fail("scene counts");
+        scene.region->terrain.size()>world::OwnedWorldRegion::MaxExtendedTiles || scene.models.size()>world::MaxSceneModels || scene.textures.size()>world::MaxSceneTextures || scene.region->instances.size()>world::MaxSceneInstances) return Fail("scene counts");
     const auto gpuLimit=std::min(resourceBudget,ResidencyLimit);
     m_gpuLimit=gpuLimit;auto& planned=m_planned;planned=0;
     const auto add=[&](std::size_t count,std::size_t size) {

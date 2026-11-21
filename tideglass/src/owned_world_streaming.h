@@ -1,4 +1,5 @@
 #pragma once
+#include "reflection_distance.h"
 #include <array>
 #include <algorithm>
 #include <utility>
@@ -19,7 +20,8 @@ struct OwnedWorldRegion
     // lasts. Stopping at WaterReach left a stream's far end flat sky behind a straight line across the world, with its nearer
     // reaches mirroring the scenery; an ocean fills the budget, as it must not fail the scene.
     static constexpr float Step=128, WaterReach=160, ShortWaterFarReach=480, WaterFarReach=528, NearReach=224, MiddleReach=640, SourceReach=1536;
-    static constexpr unsigned MaxTiles=49;
+    static constexpr float ExtendedWaterReach=816, ExtendedSourceReach=1792;
+    static constexpr unsigned MaxTiles=49, MaxExtendedTiles=64;
     // A followed region is kept while the camera stays within this of its centre: a quarter cell past its edge, well
     // inside every reach its scene is prepared for.
     static constexpr float Hold=Step*.75f;
@@ -56,14 +58,14 @@ struct OwnedWorldRegion
             low[i]>high[i]||high[i]<Centre(i)-reach||low[i]>Centre(i)+reach)return false;
         return true;
     }
-    std::vector<std::string> Tiles()const
+    std::vector<std::string> Tiles(float reach=SourceReach)const
     {
         std::vector<std::string> result;if(!Valid())return result;
         constexpr double origin=17066.666666666668,tile=1600.0/3;
         const auto index=[&](unsigned axis,double offset){return int(std::floor((origin-Centre(axis)-offset)/tile));};
         std::vector<std::pair<double,std::string>> ordered;
-        for(int ty=index(0,SourceReach);ty<=index(0,-SourceReach);++ty)
-            for(int tx=index(1,SourceReach);tx<=index(1,-SourceReach);++tx)
+        for(int ty=index(0,reach);ty<=index(0,-reach);++ty)
+            for(int tx=index(1,reach);tx<=index(1,-reach);++tx)
                 if(tx>=0&&tx<64&&ty>=0&&ty<64){const std::string mapname=Directory(map);
                     const auto distance=std::max(std::abs(origin-(ty+.5)*tile-Centre(0)),std::abs(origin-(tx+.5)*tile-Centre(1)));
                     ordered.push_back({distance,"world\\maps\\"+mapname+"\\"+mapname+"_"+std::to_string(tx)+"_"+std::to_string(ty)+".adt"});}

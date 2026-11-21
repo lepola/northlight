@@ -97,6 +97,17 @@ public:
 
 inline bool canInherit(const Field& f){return f.available&&!(f.file==Renderer&&f.key=="Backend"&&(","+f.options+",").find(",legacy,")==std::string::npos);}
 
+struct WaterTier { const char* name; const char* scenery; const char* resolution; const char* distance; };
+inline constexpr WaterTier WaterTiers[]={
+    {"Ultra","1","100","2"}, {"Quality","1","100","0"},
+    {"Balanced","1","75","0"}, {"Performance","0","50","1"}
+};
+inline const char* waterPreset(const std::string& scenery,const std::string& resolution,const std::string& distance){
+    for(const auto& tier:WaterTiers)
+        if(scenery==tier.scenery && (scenery=="0" || (resolution==tier.resolution && distance==tier.distance)))return tier.name;
+    return "Custom";
+}
+
 // Keys a Quality field needs switched on (the old menu's dependencies; every GI* key needs GI).
 inline std::vector<std::string> dependencies(const Field& f){
     static const std::map<std::string,std::vector<std::string>> table={
@@ -124,6 +135,10 @@ inline Block blocked(const Draft& d,const Field& f,std::string& missing){
     if(!f.available)return Block::Unavailable;
     if(f.file==Renderer&&f.key!="Backend"&&f.key!="ExperimentalHDR")
         if(const Field* hdr=d.field(Renderer,"Renderer","ExperimentalHDR"))if(d.effective(*hdr)=="0")return Block::NeedsHdr;
+    if(f.file==NorthlightSettings::WaterFile && (f.key=="ReflectionResolution" || f.key=="ReflectionDistance")){
+        const auto* scenery=d.field(f.file,"Water","ReflectionScenery");
+        if(scenery && d.effective(*scenery)=="0"){missing="ReflectionScenery";return Block::NeedsKey;}
+    }
     for(const auto& key:dependencies(f))if(const Field* parent=d.quality(key))if(d.effective(*parent)=="0"){missing=key;return Block::NeedsKey;}
     return Block::None;
 }

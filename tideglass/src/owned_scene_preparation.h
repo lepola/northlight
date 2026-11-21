@@ -60,7 +60,7 @@ struct OwnedWorldDescription
     // Optional explicit pack for private acceptance; empty keeps source import.
     std::wstring texturePack={};
     unsigned textureMipBias=0;
-    bool shortDistance=false;
+    ReflectionDistance distance=ReflectionDistance::Standard;
     std::size_t sceneBytes=world::SceneBytes; // imported scene budget; at most that (lower in tests)
     std::wstring textureCacheDirectory={};
     bool populateTextures=false;
@@ -189,6 +189,7 @@ private:
     std::size_t m_previousBytes = 0; // includes disposal in progress outside the mutex
     world::SceneResult m_worldResult;
     double m_preparationMilliseconds=0;
+    ReflectionDistance m_fitDistance=ReflectionDistance::Standard;
     int32_t m_fitMap=-1;unsigned m_fitLevel=0; // worker only: how much the last whole region had to give up to fit
     std::thread::id m_preparedOn;
 };

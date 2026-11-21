@@ -28,7 +28,7 @@ const std::map<std::string,const char*> Labels={
     {"WaveStrength","Wave strength"},{"WaveSpeed","Wave speed"},{"WaveCrestShape","Crest shape"},
     {"WaveCrestSharpness","Crest sharpness"},{"RippleStrength","Ripple strength"},
     {"FoamStrength","Foam strength"},{"OpenWaterCrestFoam","Foam on open-water crests"},
-    {"ReflectionScenery","Reflections"},{"ReflectionResolution","Reflection resolution"},{"ShortReflectionDistance","Reflection distance"},{"Clarity","Water clarity"},{"Reflection","Reflection strength"},{"NearReflection","Near reflection strength"},
+    {"ReflectionScenery","Reflections"},{"ReflectionResolution","Reflection resolution"},{"ReflectionDistance","Reflection distance"},{"Clarity","Water clarity"},{"Reflection","Reflection strength"},{"NearReflection","Near reflection strength"},
     {"Underwater","Underwater effects"},{"UnderwaterVisibility","Visibility (yards)"},{"UnderwaterScenery","Underwater scenery"},
     {"Slime","Slime surface"},{"Lava","Magma and fel magma surfaces"},
     {"AutoBump","Material detail"},{"AutoBumpStrength","Normal map strength (%)"},{"AutoBumpDistance","Normal map distance (yards)"},
@@ -39,7 +39,7 @@ const std::map<std::string,const char*> Labels={
     {"Preset","Quality preset"},{"GI","Global illumination"},{"GIStrength","Indirect light strength (%)"},
     {"ActorShadows","Character shadows"},{"ActorShadowDetail","Detailed character shadows"},{"GrassShadows","Grass shadows"},{"ActorShadowRadius","Character shadow distance"},
     {"ContactAO","Ambient occlusion"},{"AOMethod","AO method"},{"AOStrength","AO strength (%)"},{"AORadius","AO radius (0.01 yd)"},
-    {"Weather","Enhanced rain and snow"},{"WeatherMemory","Read native weather state"},{"RainFog","Weather fog strength"},{"FogClouds","Drifting fog banks"},{"FogCloudDensity","Fog density (%)"},
+    {"Weather","Enhanced rain and snow"},{"WeatherMemory","Read native weather state"},{"RainFog","Weather fog strength"},{"RainOpacity","Rain opacity (%)"},{"FogClouds","Drifting fog banks"},{"FogCloudDensity","Fog density (%)"},
     {"HorizonHaze","Horizon haze (%)"},{"HorizonHazeStart","Haze start (%)"},{"HorizonHazeBand","Haze height (degrees)"},{"HorizonHazeTerrain","Haze over terrain"},
     {"Backend","Graphics backend"},{"ExperimentalHDR","Enable HDR"},{"HDRPaperWhite","White point (nits)"},{"HDRUIWhite","UI brightness (nits)"},{"HDRMaxNits","HDR peak brightness (nits)"},{"HDRContrast","Contrast"},{"HDRExposure","Exposure (EV)"},
     {"NightBrightness","Night brightness (%)"},{"EquipmentLights","Equipment and effect lights"},
@@ -97,9 +97,9 @@ const std::vector<Section> QualitySections={
         {"actors","Character shadows","ActorShadows","ActorShadowRadius ActorShadowDetail GrassShadows","ActorShadowBudgetMiB ActorShadowCpuMs"},
         {"point","Local light shadows","PointShadows","PointShadowLimit","PointShadowRefreshMs PointShadowFacesPerFrame"},
         {"cache","Shadow updates",nullptr,"BlobShadowStrength","FarShadowInterval NearShadowInterval ShadowDirectionSteps StaticCacheSlices ShadowPivotCorrection"}},false},
-    {"atmosphere","Atmosphere & weather","Weather WeatherMemory RainFog FogClouds FogCloudDensity HorizonHaze HorizonHazeStart HorizonHazeBand HorizonHazeTerrain",{
+    {"atmosphere","Atmosphere & weather","Weather WeatherMemory RainFog RainOpacity FogClouds FogCloudDensity HorizonHaze HorizonHazeStart HorizonHazeBand HorizonHazeTerrain",{
         {"fog","Fog banks","FogClouds","FogCloudDensity",""},
-        {"weather","Rain and snow","Weather","RainFog","WeatherMemory"},
+        {"weather","Rain and snow","Weather","RainFog RainOpacity","WeatherMemory"},
         {"haze","Horizon haze",nullptr,"HorizonHaze HorizonHazeStart HorizonHazeTerrain","HorizonHazeBand"}},false},
     {"spells","Spells & names","SpellLayer SpellLayerClasses SpellFog NameMask DepthFuncAware",{
         {"spells","Spell effects","SpellLayer","SpellFog","SpellLayerClasses DepthFuncAware"},
@@ -181,8 +181,13 @@ std::string regionLabel(const std::string& section){
 std::string optionLabel(const Field& f,const std::string& value){
     if(D::modeField(f))return value=="0"?"Off":value=="1"?"Normal maps":"Normal maps + POM";
     if(f.file==NorthlightSettings::WaterFile){
-        if(f.key=="ReflectionScenery")return value=="0"?"Sky only":"Scenery + sky";
-        if(f.key=="ShortReflectionDistance")return value=="0"?"Standard":"Short";
+        if(f.key=="ReflectionScenery" && value=="0")return "Sky only";
+        if(f.key=="ReflectionScenery" && value=="1")return "Scenery + sky";
+        if(f.key=="ReflectionDistance"){
+            if(value=="0")return "Standard";
+            if(value=="1")return "Short";
+            if(value=="2")return "Far";
+        }
         if(f.key=="ReflectionResolution")return value+"%";
     }
     if(value=="HBAOPlus")return "HBAO+ (D3D9)";
@@ -295,19 +300,21 @@ struct SettingsPanel::State {
         ImGui::TextUnformatted(fieldLabel(f).c_str());
         ImGui::TextColored(Color::Muted,"%s  [%s]  %s",fileName(f.file),f.section.c_str(),f.key.c_str());
         ImGui::Separator();
-        const auto shown=draft.effective(f);
+        const auto label=[&](const std::string& value){return f.kind=="enum" || D::modeField(f)?optionLabel(f,value):value;};
+        const auto shown=label(draft.effective(f));
         ImGui::Text("Value: %s%s",shown.c_str(),draft.edited(f)?"  (unsaved)":"");
-        ImGui::Text("Saved: %s   Running: %s",draft.saved(f).c_str(),f.available?f.active.c_str():"unavailable");
-        ImGui::Text("Factory: %s   Inherits: %s",f.factory.c_str(),f.inherited.c_str());
+        ImGui::Text("Saved: %s   Running: %s",label(draft.saved(f)).c_str(),f.available?label(f.active).c_str():"unavailable");
+        ImGui::Text("Factory: %s   Inherits: %s",label(f.factory).c_str(),label(f.inherited).c_str());
         ImGui::TextColored(Color::Muted,"Source: %s%s",originText(f.origin),draft.overrides(f)?"":" - not written to the file");
         auto help=Help.find(f.key);
         if(help!=Help.end())for(const char* line:help->second){ImGui::Spacing();ImGui::TextWrapped("%s",line);}
         ImGui::Spacing();
-        if(f.apply=="R")ImGui::TextColored(Color::Restart,draft.restartPending(f)?"Requires a game restart: the running renderer still uses %s.":"Requires a game restart.%s",draft.restartPending(f)?f.active.c_str():"");
+        if(f.apply=="R")ImGui::TextColored(Color::Restart,draft.restartPending(f)?"Requires a game restart: the running renderer still uses %s.":"Requires a game restart.%s",draft.restartPending(f)?label(f.active).c_str():"");
         else if(f.apply=="S")ImGui::TextColored(Color::Good,"Takes effect when you save.");
         else ImGui::TextColored(Color::Good,"Applies live: previewed while you edit, kept when you save.");
         if(block==D::Block::Unavailable)ImGui::TextColored(Color::Bad,"Not available in this installation.");
         else if(block==D::Block::NeedsHdr)ImGui::TextColored(Color::Bad,"Enable HDR first.");
+        else if(block==D::Block::NeedsKey && missing=="ReflectionScenery")ImGui::TextColored(Color::Muted,"Choose Scenery + sky to edit this setting.");
         else if(block==D::Block::NeedsKey){const char* l=find(Labels,missing);ImGui::TextColored(Color::Bad,"Requires: %s",l?l:missing.c_str());}
         if(D::canInherit(f)&&block==D::Block::None)ImGui::TextColored(Color::Muted,"Right-click: restore the inherited value.");
         ImGui::PopTextWrapPos();
@@ -510,7 +517,7 @@ struct SettingsPanel::State {
         titled("Other",rest);
     }
     void waterPage(){
-        ImGui::TextWrapped("Save to apply water settings. Restart the game after switching Tideglass on or off.");
+        ImGui::TextWrapped("The Water preset controls Tideglass independently of the Northlight quality preset. Save to apply water settings. Restart after switching Tideglass on or off.");
         titled("Renderer",fields(NorthlightSettings::WaterHostFile));
         auto waterRows=[&](const char* title,const char* keys){
             std::vector<const Field*> rows;
@@ -522,18 +529,13 @@ struct SettingsPanel::State {
         const auto water=[&](const char* key){return draft.field(NorthlightSettings::WaterFile,"Water",key);};
         const Field* scenery=water("ReflectionScenery");
         const Field* resolution=water("ReflectionResolution");
-        const Field* distance=water("ShortReflectionDistance");
+        const Field* distance=water("ReflectionDistance");
         if(scenery && resolution && distance){
-            struct Tier { const char* name; const char* scenery; const char* resolution; const char* distance; };
-            static constexpr Tier tiers[]={{"Quality","1","100","0"},{"Balanced","1","75","0"},{"Performance","0","50","1"}};
-            const char* current="Custom";
-            for(const auto& tier:tiers)
-                if(draft.effective(*scenery)==tier.scenery && draft.effective(*resolution)==tier.resolution &&
-                   draft.effective(*distance)==tier.distance)current=tier.name;
+            const char* current=D::waterPreset(draft.effective(*scenery),draft.effective(*resolution),draft.effective(*distance));
             ImGui::TextColored(Color::Heading,"Performance");ImGui::Separator();
             ImGui::BeginDisabled(locked());
             if(ImGui::BeginCombo("Water preset",current)){
-                for(const auto& tier:tiers){
+                for(const auto& tier:D::WaterTiers){
                     const bool selected=std::string(current)==tier.name;
                     if(ImGui::Selectable(tier.name,selected)){
                         set(*scenery,tier.scenery);set(*resolution,tier.resolution);set(*distance,tier.distance);
