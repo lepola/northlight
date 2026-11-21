@@ -131,6 +131,10 @@ def verify_installer(path):
         core = files.get('payload/water-core.dll', b'')
         check(problems, sha(core) == info['tideglass']['core_sha256'] and b'WaterHostGetAPI' in core,
               'Tideglass core identity')
+        found = bp.TIDEGLASS_MARKER.search(core)
+        check(problems, found is not None and found.group(1).decode() == info['tideglass'].get('version') and
+              info['version'] == bp.combo_version(info['dll_version'], info['tideglass']['version']),
+              'Tideglass version: the core, BUILD-INFO and the package label must agree')
         check(problems, all('payload/' + name in files for name in bp.WATER_SETTINGS), 'Tideglass settings')
     check(problems, {p for p, e in payload.items() if e.get('preserve')} == settings, 'preserve flags')
     d3d9 = [r for r in files if r.lower().endswith('/d3d9.dll') and not r.startswith('runtime/')]
@@ -197,7 +201,9 @@ def verify_installer(path):
             finally:
                 os.unlink(f.name)
     readme = files.get('README.txt', b'').decode('utf-8', 'replace')
-    check(problems, '__RELEASE_VERSION__' not in readme and info['version'] in readme, 'README.txt version')
+    shown = ([f'Northlight {info["dll_version"]} + Tideglass {info["tideglass"].get("version")} for']
+             if 'tideglass' in info else [info['version']])
+    check(problems, '__RELEASE_VERSION__' not in readme and all(v in readme for v in shown), 'README.txt version')
     for rel, data in files.items():
         if rel.startswith('variants/'):
             m = json.loads(data)

@@ -4,6 +4,7 @@
 check_water_core refuses a core importing FlushInstructionCache or WriteProcessMemory, or carrying the
 development picture clock's marker, and accepts one whose only memory-protection import is the C runtime's
 VirtualProtect. The marker matches the Tideglass source, and Northlight's core build never asks for the clock.
+The core states its version as the Tideglass source does, and a combined package's label is both parts' versions.
 Synthetic PE files; nothing is compiled or run."""
 import sys; from pathlib import Path; sys.path.insert(0, str(Path(__file__).resolve().parents[1]))  # repo root
 import northlight_paths as fp
@@ -43,12 +44,25 @@ def pe32(imports, extra=b''):
     struct.pack_into('<II', head, pe + 24 + 96 + 8, va, 40)   # the import directory
     head[section:section + 8] = b'.idata\0\0'
     struct.pack_into('<IIII', head, section + 8, len(body), va, len(body), raw)
-    return bytes(head) + bytes(body) + b'WaterHostGetAPI\0' + extra
+    return bytes(head) + bytes(body) + b'WaterHostGetAPI\0Tideglass 0.1.0; cooperative core started\0' + extra
 
 
 class PlayerWaterCore(unittest.TestCase):
     def test_runtime_page_protection_alone_is_accepted(self):
-        bp.check_water_core(pe32(['VirtualProtect', 'ReadProcessMemory', 'GetTickCount']), HOST)
+        self.assertEqual(bp.check_water_core(pe32(['VirtualProtect', 'ReadProcessMemory', 'GetTickCount']), HOST), '0.1.0')
+
+    def test_a_core_without_a_version_is_refused(self):
+        with self.assertRaises(SystemExit) as refused:
+            bp.check_water_core(pe32(['VirtualProtect']).replace(b'Tideglass 0.1.0;', b'Tideglass core  '), HOST)
+        self.assertIn('version', str(refused.exception))
+
+    def test_version_matches_the_source(self):
+        header = (fp.REPO / 'tideglass/src/version.h').read_text()
+        version = re.search(r'#define TIDEGLASS_VERSION "([^"]+)"', header).group(1)
+        logged = (fp.REPO / 'tideglass/src/host_api.cpp').read_text()
+        self.assertIn('"Tideglass " TIDEGLASS_VERSION "; cooperative core started', logged)
+        self.assertTrue(bp.TIDEGLASS_MARKER.fullmatch(f'Tideglass {version};'.encode()))
+        self.assertEqual(bp.combo_version('0.3.217', version), f'0.3.217-tideglass-{version}')
 
     def test_a_core_that_can_rewrite_code_is_refused(self):
         for name in sorted(bp.CODE_WRITE_IMPORTS):

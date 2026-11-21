@@ -1,4 +1,4 @@
-Northlight + Tideglass {version} for {platform}
+Northlight {northlight} + Tideglass {tideglass} for {platform}
 
 For the 32-bit WoW 3.3.5a client (build 12340)
 on {system}.

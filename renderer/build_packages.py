@@ -90,6 +90,7 @@ RUNTIME_DROP = {'mac': runtime_drop('darwin'), 'linux': runtime_drop('x86_64-lin
 CACHE_MEMBER = re.compile(r'^([A-Za-z0-9]+/\d+_\d+\.fg3|models/[0-9a-f]+\.fgs|lights/[A-Za-z0-9]+\.fgl|'
                           r'fog/[A-Za-z0-9]+/\d+_\d+\.frf|celestial/(sun|moon)\.fct|northlight-cache\.json)$')
 MARKER = re.compile(rb'Northlight renderer (\d+\.\d+\.\d+);')
+TIDEGLASS_MARKER = re.compile(rb'Tideglass (\d+\.\d+\.\d+);')  # the core's start-up log line (tideglass/src/version.h)
 DEV_MARKER = b'NORTHLIGHT DEV TUNING BUILD'  # embedded by build_renderer.py --dev-tuning; never ships
 # A player core never changes the client: a development core's picture clock (this text) redirects client calls,
 # and rewriting code needs FlushInstructionCache or WriteProcessMemory. VirtualProtect alone is the C runtime's
@@ -168,6 +169,15 @@ def check_water_core(core, host):
     if imports & CODE_WRITE_IMPORTS:
         raise SystemExit('the Tideglass core can change the client\'s code (imports ' +
                          ', '.join(sorted(imports & CODE_WRITE_IMPORTS)) + '); a player core must not')
+    found = TIDEGLASS_MARKER.search(core)
+    if not found:
+        raise SystemExit('the Tideglass core does not state its version')
+    return found.group(1).decode()
+
+
+def combo_version(northlight, tideglass):
+    """A combined package's label: both parts' own versions, so it names exactly what it holds."""
+    return f'{northlight}-tideglass-{tideglass}'
 
 
 def commit_time():
@@ -386,14 +396,20 @@ def combo_readme(platform, wine_steps):
 def build(platform, version, dll, variants, out, stormlib_dir, water_core=None, runtime_package=None):
     for manifest in variants.values():
         check_variant_sources(manifest)
+    dll_data = dll.read_bytes()
+    dll_version = check_dll(dll_data)
+    core = water_core.read_bytes() if water_core is not None else None
+    if core is not None:
+        tideglass_version = check_water_core(core, dll_data)
+        if version != combo_version(dll_version, tideglass_version):
+            raise SystemExit(f'this package holds Northlight {dll_version} and Tideglass {tideglass_version}: '
+                             f'its version is {combo_version(dll_version, tideglass_version)}, not {version}')
     top = f'Northlight-{version}-{PLATFORMS[platform]}'
     tree = Tree(top)
     stamp = commit_time()
     check_closure(APP_FILES)
     for name in APP_FILES:
         tree.add('app/' + name, fp.REPO / name)
-    dll_data = dll.read_bytes()
-    dll_version = check_dll(dll_data)
     if runtime_package:
         # Only two independently pinned members are reused. Installer code and game
         # payload always come from this branch, including during an offline rebuild.
@@ -429,15 +445,13 @@ def build(platform, version, dll, variants, out, stormlib_dir, water_core=None, 
     else:
         tree.add('payload/d3d9.dll', dll_data)   # installed by migrate_mac_proxy as mods/d3d9.dll
     water_info = {}
-    if water_core is not None:
-        core = water_core.read_bytes()
-        check_water_core(core, dll_data)
+    if core is not None:
         payload['water-core.dll'] = core
         for name in WATER_SETTINGS:
             payload[name] = (fp.REPO / 'client-config' / name).read_bytes()
         tree.add('LICENSES/Tideglass.txt', fp.REPO / 'tideglass/LICENSE')
         tree.add('LICENSES/Tideglass-archive.txt', fp.REPO / 'licenses/tideglass-archive.txt')
-        water_info = {'tideglass': {'source_revision': json.loads((fp.REPO / 'tideglass/source.json').read_bytes())['revision'],
+        water_info = {'tideglass': {'version': tideglass_version, 'source_revision': json.loads((fp.REPO / 'tideglass/source.json').read_bytes())['revision'],
                                     'core_sha256': hashlib.sha256(core).hexdigest()}}
     for name, data in payload.items():
         tree.add('payload/' + name, data)
@@ -453,7 +467,7 @@ def build(platform, version, dll, variants, out, stormlib_dir, water_core=None, 
     else:
         from northlight_install import WINE_STEPS
         template = (fp.RENDERER / 'tideglass-readme.txt').read_text(encoding='utf-8')
-        text = template.format(version=version, platform=PLATFORMS[platform],
+        text = template.format(northlight=dll_version, tideglass=tideglass_version, platform=PLATFORMS[platform],
                                **combo_readme(platform, WINE_STEPS))
     tree.add('README.txt', text.replace('\n', '\r\n').encode('utf-8') if platform == 'windows' else text.encode('utf-8'))
     for name, data in launchers(platform, version).items():
@@ -485,7 +499,8 @@ def pe_normalized(data):
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument('--platform', choices=[*PLATFORMS, 'all'], default='all')
-    ap.add_argument('--version', required=True, help='package label, e.g. 0.3.162')
+    ap.add_argument('--version', required=True, help='package label, e.g. 0.3.162; with --water-core, '
+                    'the renderer\'s and the core\'s versions, e.g. 0.3.217-tideglass-0.1.0')
     ap.add_argument('--dll', type=Path, help='renderer build (default: renderer/frd9.dll or NORTHLIGHT_DLL)')
     ap.add_argument('--runtime-package', type=Path, help='reuse the pinned StormLib library and notices from a released Northlight ZIP for this platform')
     ap.add_argument('--water-core', type=Path, help='include the cooperative Tideglass DLL and player settings')
@@ -528,7 +543,13 @@ def main():
     for platform in list(PLATFORMS) if args.platform == 'all' else [args.platform]:
         reports.append(build(platform, args.version, dll, variants, out, fp.out() / 'stormlib', args.water_core, args.runtime_package))
         print('Built', reports[-1]['file'], reports[-1]['bytes'], 'bytes', flush=True)
-    (out / 'packages.json').write_text(json.dumps({'version': args.version, 'packages': reports}, indent=2) + '\n')
+    # Platforms built by earlier runs into the same folder (one runtime package each) stay listed.
+    listing = out / 'packages.json'
+    earlier = json.loads(listing.read_text(encoding='utf-8')) if listing.exists() else {}
+    if earlier.get('version') == args.version:
+        built = {r['file'] for r in reports}
+        reports = [r for r in earlier['packages'] if r['file'] not in built and (out / r['file']).exists()] + reports
+    listing.write_text(json.dumps({'version': args.version, 'packages': reports}, indent=2) + '\n')
     return 0
 
 

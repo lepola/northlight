@@ -1109,7 +1109,8 @@ class Install(Base):
 
     def make_water_package(self):
         meta = self.pkg_root / 'BUILD-INFO.json'
-        meta.write_text(json.dumps({**json.loads(meta.read_bytes()), 'tideglass': {'core_sha256': sha(b'core')}}))
+        meta.write_text(json.dumps({**json.loads(meta.read_bytes()), 'dll_version': '0.3.217',
+                                    'tideglass': {'version': '0.1.0', 'core_sha256': sha(b'core')}}))
         manifest = self.pkg_root / 'payload-manifest.json'
         entries = json.loads(manifest.read_bytes())
         for name, data in [('water-core.dll', b'core'), ('water.ini', b'[Water]\n'), ('water-host.ini', b'[WaterIntegration]\nEnable=1\n')]:
@@ -1129,7 +1130,9 @@ class Install(Base):
     def test_water_archive_order_and_rollback(self):
         self.make_water_package()
         before = tree(self.client)
-        self.installer().install(self.client)
+        installer = self.installer()
+        installer.install(self.client)
+        self.assertIn('Northlight 0.3.217 + Tideglass 0.1.0: installed.', installer.out.getvalue())
         descriptor = self.client / fi.WATER_ARCHIVE_LIST
         self.assertTrue((self.client / 'raised-fog/Expansion01.rfs').is_file())
         self.assertTrue((self.client / 'raised-fog/Northrend.rfs').is_file())

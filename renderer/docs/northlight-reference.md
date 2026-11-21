@@ -28,12 +28,12 @@ of that revision can be passed using `--storm-source`.
 
 ```sh
 python3 scripts/build_combo.py
-python3 renderer/build_packages.py --platform windows --version 0.3.216-tideglass.3 \
+python3 renderer/build_packages.py --platform windows --version 0.3.217-tideglass-0.1.0 \
     --dll renderer/frd9.dll --water-core out/tideglass/water-core.dll
-python3 tests/verify_packages.py out/packages/Northlight-0.3.216-tideglass.3-Windows.zip
+python3 tests/verify_packages.py out/packages/Northlight-0.3.217-tideglass-0.1.0-Windows.zip
 ```
 
-Use `--platform linux` to build the Linux package. `--platform mac` builds a macOS package for
+The combined package's version is the renderer's and the core's own versions, which the packager reads from the two DLLs (`Northlight renderer 0.3.217;` and `Tideglass 0.1.0;`); it refuses any other label. Bump the renderer in `src/proxy/renderer.cpp`'s start-up line and Tideglass in `tideglass/src/version.h` (Water's `src/version.h`, then export it). Use `--platform linux` to build the Linux package. `--platform mac` builds a macOS package for
 WoWSilicon; on Linux it takes StormLib from Northlight's released macOS ZIP through
 `--runtime-package`. The macOS combo has not run on a Mac yet. The packager checks the inputs
 listed in `renderer/package-pins.json`. With `--runtime-package <upstream-zip>` it

@@ -390,7 +390,11 @@ class Installer:
     def __init__(self, package, platform=None, yes=False, out=None):
         self.pkg = package
         self.platform = platform or package.platform
-        self.product_name = 'Northlight + Tideglass' if package.info.get('tideglass') else 'Northlight renderer'
+        tideglass = package.info.get('tideglass') or {}
+        self.product_name = 'Northlight + Tideglass' if tideglass else 'Northlight renderer'
+        # Combined packages before Tideglass 0.1.0 carried one beta label instead of both parts' versions.
+        self.title = (f"Northlight {package.info.get('dll_version')} + Tideglass {tideglass['version']}"
+                      if tideglass.get('version') else f'{self.product_name} {package.version}')
         self.yes = yes
         self.out = out or sys.stdout
         self.log = None
@@ -1275,7 +1279,7 @@ class Installer:
         backups = [b for b in backups if b.exists()]   # the run's own record is often merged away
         report.update(payload=payload, backups=[str(b) for b in backups], backups_freed=freed)
         self.say('')
-        self.say(f'{self.product_name} {self.pkg.version}: ' + ('installed.' if changed else 'already installed; nothing changed.'))
+        self.say(f'{self.title}: ' + ('installed.' if changed else 'already installed; nothing changed.'))
         self.say(f'  world cache: {report["world_cache"]}')
         self.say('  ' + self.instance_summary(report['instances']))
         if report.get('instances_failed'):
@@ -1458,7 +1462,7 @@ def main(argv=None):
     installer.open_log(args.action)
     try:
         if args.action == 'install':
-            installer.say(f'{installer.product_name} {installer.pkg.version} installer')
+            installer.say(f'{installer.title} installer')
             installer.install(args.client, args.locale, args.cache, args.backend, args.art_layer,
                               not args.no_world_cache, args.jobs, instances=args.instances, sky=args.sky,
                               raised_air=args.raised_air)
