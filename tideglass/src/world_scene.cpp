@@ -23,7 +23,7 @@ constexpr const char* Required[]={
 std::size_t NameBytes(const std::string& s) { return s.capacity()+1; }
 uint32_t SourcePolicy(const SceneOptions& o)
 {return unsigned(o.buildings)|(unsigned(o.texturePrefix)<<1)|(unsigned(o.lake)<<2)|
-        (unsigned(o.snapshotReads)<<3)|(unsigned(o.streaming)<<4)|(o.textureMipBias<<5);}
+        (unsigned(o.snapshotReads)<<3)|(unsigned(o.streaming)<<4)|(o.textureMipBias<<5)|(unsigned(o.shortDistance)<<6);}
 uint32_t U32(Bytes b,std::size_t at) { uint32_t v=0; b.U32(at,v); return v; }
 uint16_t U16(Bytes b,std::size_t at) { uint16_t v=0; b.U16(at,v); return v; }
 bool Float(Bytes b,std::size_t at,float& v) { return b.F32(at,v) && std::isfinite(v); }
@@ -164,7 +164,7 @@ public:
         // reject an otherwise valid local ocean window.
         std::array<float,3> low3={float(points[0][0]),float(points[0][1]),0},high0=low3;
         for(const auto& p:points)for(unsigned c=0;c<2;++c){low3[c]=std::min(low3[c],float(p[c]));high0[c]=std::max(high0[c],float(p[c]));}
-        if(options.streaming&&!options.region.Overlaps(low3,high0,OwnedWorldRegion::WaterFarReach))return true;
+        if(options.streaming&&!options.region.Overlaps(low3,high0,options.WaterReachLimit()))return true;
         const bool further=options.streaming&&!options.region.Overlaps(low3,high0,OwnedWorldRegion::WaterReach);
         reflection::WaterSurface surface;
         surface.key=key;
@@ -955,7 +955,7 @@ SceneResult LoadRiverScene(ArchiveReader& archives,const std::atomic<bool>& canc
     if(b.result.archiveError!=ArchiveError::None){b.Fail(SceneError::Archive);return b.result;}
     b.scene.sourceIdentity=TextureCacheIdentity(archives,TextureRecipe());
     b.scene.sourceRegion=options.region;b.scene.sourcePolicy=SourcePolicy(options);
-    b.scene.waterCompleteReach=options.streaming?OwnedWorldRegion::WaterFarReach:0;
+    b.scene.waterCompleteReach=options.streaming?options.WaterReachLimit():0;
     if(options.buildings || std::any_of(options.liveDisplays.begin(),options.liveDisplays.end(),[](auto id){return id!=0;}))b.scene.wmoSources.reserve(MaxSceneBuildings);
     b.scene.region.Edit().terrain.reserve(options.streaming?OwnedWorldRegion::MaxTiles:2);b.scene.models.reserve(MaxModels);b.scene.modelSources.reserve(MaxModelSources);
     b.scene.textures.reserve(MaxTextures);b.scene.textureIssues.reserve(MaxTextures);

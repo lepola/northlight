@@ -17,11 +17,11 @@ public:
         const float detailRadius=reach-overlap;
         const float detailWidth=std::min(96.f,detailRadius*.25f);
         // The outer band stays inside the resident rectangle across region changes.
-        // Standard keeps bank detail into the overlap before blending to sky.
+        // A wider Standard blend straddles the previous midpoint in a fully resident window.
         const float nearLimit=world::OwnedWorldRegion::NearReach;
         const float outerRadius=detailRadius+.5f*overlap;
         const float radius=shortDistance?std::min(outerRadius,nearLimit):outerRadius;
-        const float targetWidth=shortDistance?std::min(detailWidth+.5f*overlap,nearLimit*.5f):detailWidth;
+        const float targetWidth=shortDistance?std::min(detailWidth+.5f*overlap,nearLimit*.5f):2.f*detailWidth;
         const float dt=std::min(uint32_t(tick-m_tick),uint32_t(50))*.001f;
         // Preserve the handoff speed as the colour band widens. Bound each
         // frame's advance even when loading interrupts the render clock.

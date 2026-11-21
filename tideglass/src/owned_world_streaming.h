@@ -18,7 +18,7 @@ struct OwnedWorldRegion
     // WaterReach: receiving water always prepared. WaterFarReach: further water, nearest first, while the scene's water budget
     // lasts. Stopping at WaterReach left a stream's far end flat sky behind a straight line across the world, with its nearer
     // reaches mirroring the scenery; an ocean fills the budget, as it must not fail the scene.
-    static constexpr float Step=128, WaterReach=160, WaterFarReach=480, NearReach=224, MiddleReach=640, SourceReach=1536;
+    static constexpr float Step=128, WaterReach=160, ShortWaterFarReach=480, WaterFarReach=528, NearReach=224, MiddleReach=640, SourceReach=1536;
     static constexpr unsigned MaxTiles=49;
     // A followed region is kept while the camera stays within this of its centre: a quarter cell past its edge, well
     // inside every reach its scene is prepared for.

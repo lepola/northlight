@@ -143,7 +143,10 @@ struct SceneResult
     SceneError reuseError=SceneError::None; // refused extension falls back to complete import
 };
 struct SceneOptions {bool buildings=false, texturePrefix=false, lake=false, snapshotReads=false;
-    bool streaming=false;OwnedWorldRegion region;std::array<uint32_t,MaxLiveAssets> liveDisplays={};unsigned textureMipBias=0;std::wstring texturePack={};std::wstring textureCacheDirectory={};bool populateTextures=false;float modelReach=0,buildingReach=0;};
+    bool streaming=false;OwnedWorldRegion region;std::array<uint32_t,MaxLiveAssets> liveDisplays={};unsigned textureMipBias=0;std::wstring texturePack={};std::wstring textureCacheDirectory={};bool populateTextures=false;float modelReach=0,buildingReach=0;
+    bool shortDistance=false;
+    float WaterReachLimit() const { return shortDistance?OwnedWorldRegion::ShortWaterFarReach:OwnedWorldRegion::WaterFarReach; }
+};
 // Bounded synchronous CPU preparation, called by the existing Water worker.
 // The caller supplies an immutable archive view and cancellation epoch. No game
 // pointers, D3D objects, visibility, host scheduler or public cache format.

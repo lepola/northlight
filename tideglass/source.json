@@ -180,7 +180,7 @@
     "src/owned_receiver_visibility.h": "3608aeb0a735a1a0e7b450a4b1a5be908ed0b648d44fd4663774bb0c21ff9a5a",
     "src/owned_reflection.cpp": "5e1b950a079eac1ec0e73af3c5bbfbedb356f06e4a52b72091b9ab9df11e40cd",
     "src/owned_reflection.h": "84b06c578674cb8efd2a820de76e875cdfed2524a13a42ac826a2f5b48109007",
-    "src/owned_scene_preparation.cpp": "a98e557b08c38879730d4e7a150c69a2e737b0e8b648bc2abef60d24d7729905",
+    "src/owned_scene_preparation.cpp": "ff009fdf5a2030e52e2c5d9a74b3110a17d0f3647926e7c08b4a66565f6adfc8",
     "src/owned_scene_preparation.h": "fee7ac8cda36bd610a05f08a5b0e16af4a92d4043898f7188e8c0090ebc7013e",
     "src/owned_scene_renderer.cpp": "ed633abeb9e2352994fb8c1055f66aa13d8dc7a55c599d4e1c7ec670b93ee7f0",
     "src/owned_scene_renderer.h": "4309541cdee3d8066e04dc2933be63e06a06708b0601aed306b2b2fe4a6ea197",
@@ -190,11 +190,11 @@
     "src/owned_world_region.h": "af599c53f7cb846b541dd374c64d8d950b29c43a3ac7b7c2b885cab7e933a49c",
     "src/owned_world_render_data.cpp": "5738b86c66f2bebd19122451b5fb75d9227e66d66517fbe82dee25b7e70c7a90",
     "src/owned_world_render_data.h": "29ade941b3b1bd828bf46bc80414f1e50e66262fdc25a44b111e3690efa0966c",
-    "src/owned_world_streaming.h": "30a0de60baa32362f579c8ab79ea1248f91f1c0e939fa6612a26268f4375b745",
+    "src/owned_world_streaming.h": "0f659b306a21adc10ff5427376f5782d906b15923720a3b1419b3d1ba1f593e2",
     "src/reflection_bindings.h": "c9040d6837ca7451e86f2addef8b7d92bbd39d4297b84fcf2d543490bd80fbb7",
     "src/reflection_capture.cpp": "3c85bd0a78136fabc0c83abec2fb064826dff309d03ae3484f31a653d1fd58e8",
     "src/reflection_capture.h": "7fd0db0732a0e4629dddd1da34073a704af92afa60522267752bc267c6a91b68",
-    "src/reflection_coverage.h": "2c41e84d825406d8b4c8c0ad56b6fcbaeb771957bdd891b5bb3a56b882a17c19",
+    "src/reflection_coverage.h": "26588df8cdf63061ffdf641f5108b730767331a934ce5f96d68dca1f991d716c",
     "src/reflection_object.h": "b964160a2bd33622cfd25d82e9fa36309a97e62806d2c16adf869dcefaf5c239",
     "src/render_session.cpp": "5ac3e6952aebaab68b17fc28dd3fe0239bf0c59be9fa1606a25da2745e09861c",
     "src/render_session.h": "52e869fecb0b13976581f4af3b82c0341c0b553d940910c99f1bbd52f8930ec7",
@@ -227,8 +227,8 @@
     "src/world_model.cpp": "a9a67efd9094379a951a829c6101a14e481645f72aaaa13fda44a13ecb9b85ad",
     "src/world_model.h": "4c37d4dcaa092732f2bb28ec9e68dc379ae5482523a8eeddbe0886ac0fccfcf6",
     "src/world_placement.h": "8afae8017a939a1d9beaf297ebb1d3f7a2f5fcf72c96327c9794f4b14b781a5a",
-    "src/world_scene.cpp": "69dbdbfe4f2eb68d633902c9abc87bdb816f11e13419e00ef6204dc2396d92a6",
-    "src/world_scene.h": "2afb989b11cb5d64336b6fb94a21ee5b115a9d0bbd0a97e8cf9a00d2275d7675",
+    "src/world_scene.cpp": "98119f53e9254af8f51738b7a9301db750d8296d76c03b86bab4835cfd61c57c",
+    "src/world_scene.h": "d76db670ba6313ebc36a8e2a6e77766791f35c3a5e51452e59e29228e51a7cb5",
     "src/world_terrain_lod.h": "250a30dc02eb63d39e4a199df3a9090aea181f68d9c4133c75463acb0e262c70",
     "src/world_terrain_material.h": "66652ba6a5a40074c376a1389d2796cc4b9b8f985fe3c4b757781dbd98fcc98f",
     "src/world_texture.cpp": "c058193144e93a6d0e70a3f2674111a55c6d036764d7ff0f71e71c4af4a5b9ff",
@@ -247,7 +247,7 @@
     "tools/shader_build.py": "c80119742e5a2dab25846e3316e5bd691e132201ca8404227d1e00dd979fc0d6",
     "tools/shader_header.py": "0154d161dd86a4e8c320c23081a87d5123f410c9211dea016664d9bea311e189"
   },
-  "revision": "d9582133545d2f28efb37146fffcdf35bfdee99f",
+  "revision": "88b7b19883d3bc849e02e0ecdc826b1257a6e499",
   "shaders": {
     "ps_ao": {
       "dependencies": {
