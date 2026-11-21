@@ -139,8 +139,8 @@
     "src/config.h": "ee952887555f54a6018a5e9a048019afd9182cabc192e39bfb74ab472c08a72d",
     "src/config_reader.h": "060ae856237a25f6ef4ba54d7cb4409f3189c0e69416287de3cd934371c0655b",
     "src/d3d_resource.h": "058180c23ab84648b4f9f93b090137b9b463e520d2ba3883fe23dbf1c89323fd",
-    "src/engine.cpp": "3ef194f77295b66ba6e4a8d65b7fa19161fe8aee4846d69f8c6eec5895ae9088",
-    "src/engine.h": "25e77368d9335756ebbeef1ab3929a5d93492bb94843af4867acc47f8f9422a8",
+    "src/engine.cpp": "37aabb24790e12265e4ea632fc62d07e0dc166fe7c37e2bcdf1c662ce4d34274",
+    "src/engine.h": "3ddb544f43a8ea7362cfb67f1e37c45f928ce931986cd4dcea311fb857119c36",
     "src/file_reference.h": "0a1aa45e96175c8821c6d4d0f8485e7ab491a7537a7ed89753d31b6ae9c4eb61",
     "src/frame_diagnostics.cpp": "e7a2e9e6ebdcc11ebd058d3f63c44d412dcd4c9f9d0613220289e7e00bf2e88e",
     "src/frame_diagnostics.h": "34bd43a14399804f452bb68402401ff4c28a49c57cd116913eb0bf9cf7277e36",
@@ -153,7 +153,7 @@
     "src/ground.cpp": "c1f5413297a34eb089b6cdd090c8ff0963674b4afed0300916561816b4a590aa",
     "src/ground.h": "fd28a655a76c725d87f752682be530ff3cae2ef7c61e948768bb0892b3507ff0",
     "src/ground_shift.h": "2c598520cbcf6db6a1580598bda0394fdcb43083f7aeade730b1315bb563f6bb",
-    "src/host_api.cpp": "95ff2122c0ca7d7ef677cd7a20d98f6d284b443626a72a26a42bbad78f4460b3",
+    "src/host_api.cpp": "66af97adb75f28747b4de8245fd6993e8188380a335ec3a3bc03b81c1d97bdd2",
     "src/host_api.h": "28204423e6e0c75540e40a2e6c59abfed9e1b14bd4c331f87231613587f294d1",
     "src/host_capture.h": "71a236c0d1122fcb574ca4e8ca0b9e5c665499f650a0340f346f6a94ef6a7948",
     "src/host_client.h": "321afc2bb99a290cb4b3416a187dff81e99de0635866b85d87bd45ea8e600da5",
@@ -174,7 +174,7 @@
     "src/math/projection.h": "7297d9a450d67705347a2530db36ff526c87f3e49ec50ed92728b023ee665832",
     "src/native_fog.h": "78511bc704247e9a3a0fa84600f2f29d20b829eec6f78a3c222aebc38473548a",
     "src/native_liquid.h": "ccfdeb6ba97b3101a72ac01f0387297d819b5a4218443c5c4bf662d6faf7a0ef",
-    "src/native_liquid_view.cpp": "6359c4271661a3eef8f6555715301288218cc3f1e5882e7f49f5f095a190688d",
+    "src/native_liquid_view.cpp": "8e99ad0724e35b2c11c1ab65acb775214adea3aa2602a6af99d85059fa631af9",
     "src/native_liquid_view.h": "8e3f1f3dc44863cc53e6ff84b71299923420db091234c8c2f3c1e89ef58e508e",
     "src/owned_receiver_views.h": "7ea7c992264579159f19c04eda791b6b1389475f37aa58a711cceb47145709d0",
     "src/owned_receiver_visibility.h": "3608aeb0a735a1a0e7b450a4b1a5be908ed0b648d44fd4663774bb0c21ff9a5a",
@@ -247,7 +247,7 @@
     "tools/shader_build.py": "c80119742e5a2dab25846e3316e5bd691e132201ca8404227d1e00dd979fc0d6",
     "tools/shader_header.py": "0154d161dd86a4e8c320c23081a87d5123f410c9211dea016664d9bea311e189"
   },
-  "revision": "88b7b19883d3bc849e02e0ecdc826b1257a6e499",
+  "revision": "79a23299a49a35d13f77d806ceddf1df81ac0e99",
   "shaders": {
     "ps_ao": {
       "dependencies": {

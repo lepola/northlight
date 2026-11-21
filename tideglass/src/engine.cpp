@@ -153,13 +153,17 @@ constexpr float kOutOfRangeFogStart = 50000.0f;
 
 water::NativeFogOverride g_stockFog;
 std::atomic<uint64_t> g_visualTimeSettings{0x00000000bf800000ull}; // hour=-1, period=0
+// The time-of-day clock is for test pictures. It redirects two of the client's calls, so a cooperative
+// core has it only when built for development (WATER_VISUAL_CLOCK); player builds never change the client.
+#if defined(WATER_COOPERATIVE_BUILD) && defined(WATER_VISUAL_CLOCK)
+#define WATER_COOPERATIVE_CLOCK 1
+// Release packaging refuses a core carrying this text.
+extern "C" const char kVisualClockMarker[]="TIDEGLASS VISUAL CLOCK BUILD";
 water::VisualDayCycle g_visualDayCycle;
 water::client12340::DayFractionCalls g_visualClockCalls;
 std::atomic<bool> g_visualClockEnabled{false};
 DWORD g_visualClockThread=0;
-#if defined(WATER_COOPERATIVE_BUILD)
 bool g_visualClockPinned=false;
-#endif
 bool WriteVisualCall(uintptr_t address,const void* data,size_t size)
 {
     if(size!=5||static_cast<const unsigned char*>(data)[0]!=0xe8)return false;
@@ -171,6 +175,7 @@ bool WriteVisualCall(uintptr_t address,const void* data,size_t size)
     const bool protectedAgain=VirtualProtect(target+1,4,previous,&ignored)!=0;
     return FlushInstructionCache(GetCurrentProcess(),target,5)&&protectedAgain;
 }
+#endif
 
 
 struct OpaqueState : water::client12340::Camera { int32_t mapId = -1; };
@@ -686,11 +691,6 @@ bool CameraWaterHeight(float& height){
 
 NativeLiquidFrame g_liquidIdentity;
 const NativeLiquidFrame& LiquidIdentity(){return g_liquidIdentity;}
-void CaptureLiquidViewIdentity(){
-    static const bool supported=IsSupportedClient()&&water::client12340::LiquidSourceSupported(ReadMemory);
-    g_liquidIdentity={};g_liquidIdentity.known=true;
-    if(supported)g_liquidIdentity=water::client12340::LiquidSource<decltype(&ReadMemory)>(&ReadMemory).CaptureView(CameraLiquidType());
-}
 void CaptureLiquidIdentity(LiquidTextureMap map,void* context){
     static const bool supported=IsSupportedClient()&&water::client12340::LiquidSourceSupported(ReadMemory);
     g_liquidIdentity={};
@@ -758,6 +758,7 @@ void ConfigureVisualTime(float hour,float cycleSeconds)
     const float values[]={hour,cycleSeconds};uint64_t bits;std::memcpy(&bits,values,sizeof bits);
     g_visualTimeSettings.store(bits,std::memory_order_release);
 }
+#if defined(WATER_COOPERATIVE_CLOCK)
 // Same native getter/float-return ABI as standalone's DayFractionThunk. The
 // native result is filtered at its read point, before either lighting update.
 extern "C" {
@@ -792,7 +793,6 @@ void UpdateVisualTime()
     const bool requested=(std::isfinite(values[0])&&values[0]>=0&&values[0]<24)||
                          (std::isfinite(values[1])&&values[1]>0);
     if(!requested){RestoreVisualTime();g_visualDayCycle={};return;}
-#if defined(WATER_COOPERATIVE_BUILD)
     if(!IsSupportedClient())return;
     const DWORD thread=GetCurrentThreadId();
     if(g_visualClockThread&&g_visualClockThread!=thread)return;
@@ -806,51 +806,41 @@ void UpdateVisualTime()
         if(!g_visualClockPinned)return;
     }
     const bool ready=g_visualClockCalls.Install(ReadMemory,WriteVisualCall,reinterpret_cast<uintptr_t>(&VisualDayFractionThunk));
+    if(ready&&!g_visualClockEnabled.load(std::memory_order_acquire))WATER_LOG_INFO("%s: time of day held for pictures",kVisualClockMarker);
     g_visualClockEnabled.store(ready,std::memory_order_release);
-#endif
 }
 
+#else
+bool RestoreVisualTime(){return true;}
+// Standalone runs its own clock from its client hooks; a player cooperative core has none.
+void UpdateVisualTime(){}
+#endif
+
 namespace {
-struct ObservedTransportMap {uint64_t identity=0;int32_t map=-1;DWORD time=0;};
-std::array<ObservedTransportMap,64> g_transportMaps={};
-water::client12340::NativeCalls<1> g_transportCall({0x7134f9},0x7f82b0);
-bool g_transportObserver=false;
-DWORD g_transportThread=0;
-using TransportPath=void(__thiscall*)(void*,uintptr_t,uintptr_t,uintptr_t,uintptr_t,uintptr_t,uintptr_t,uintptr_t,uintptr_t,uintptr_t,uintptr_t);
-// Observe the native route result; the client's interpolation and simulation run
-// exactly once. Register/stack ABI matches this one build12340 thiscall site.
-__attribute__((force_align_arg_pointer)) void __fastcall ObserveTransportPath(void* path,void*,uintptr_t a,uintptr_t b,uintptr_t map,uintptr_t d,uintptr_t e,uintptr_t f,uintptr_t g,uintptr_t h,uintptr_t i,uintptr_t j)
+// A transport's route part (GameObject+0x1a0, vtable 0xa348c0, owner at +4) stores its route time at +0x30 only
+// when the route resolves to the current map (0x713576); on another map the client leaves it as it was. So a
+// transport whose route time moved within the last second is on this map, read without changing the client.
+constexpr uintptr_t kGameObjectTypePart=0x1a0,kTransportRouteTable=0xa348c0,kTransportRouteTime=0x30;
+struct ObservedRoute {uint64_t identity=0;uint32_t time=0;DWORD moved=0;bool seen=false;};
+std::array<ObservedRoute,64> g_routes={};
+bool TransportOnCurrentMap(uint64_t identity,uintptr_t object,DWORD now)
 {
-    reinterpret_cast<TransportPath>(0x7f82b0)(path,a,b,map,d,e,f,g,h,i,j);
-    if(GetCurrentThreadId()!=g_transportThread)return;
-    uint32_t parent=0;uint64_t identity=0;int32_t resolved=-1;
-    if(!Read(reinterpret_cast<uintptr_t>(path)-0x40+4,parent) || !ValidPointer(parent) ||
-       !Read(parent+kObjectGuid,identity) || !Read(map,resolved) || (identity>>48)!=kTransportGuidHigh)return;
-    auto slot=std::find_if(g_transportMaps.begin(),g_transportMaps.end(),[&](const auto& r){return r.identity==identity;});
-    if(slot==g_transportMaps.end())slot=std::min_element(g_transportMaps.begin(),g_transportMaps.end(),[](const auto& a,const auto& b){return a.time<b.time;});
-    *slot={identity,resolved,GetTickCount()};
-}
-void EnableTransportObserver()
-{
-    if(g_transportObserver || !IsSupportedClient())return;
-    HMODULE pinned=nullptr;
-    if(!GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS|GET_MODULE_HANDLE_EX_FLAG_PIN,
-        reinterpret_cast<LPCSTR>(reinterpret_cast<uintptr_t>(&ObserveTransportPath)),&pinned))return;
-    g_transportThread=GetCurrentThreadId();
-    g_transportObserver=g_transportCall.Install(ReadMemory,WriteVisualCall,reinterpret_cast<uintptr_t>(&ObserveTransportPath));
-    if(g_transportObserver)WATER_LOG_INFO("native transport map observation enabled; simulation unchanged");
-}
-bool TransportOnCurrentMap(uint64_t identity)
-{
-    int32_t map=-1;if(GetCurrentThreadId()!=g_transportThread || !ReadMapId(map))return false;
-    const auto found=std::find_if(g_transportMaps.begin(),g_transportMaps.end(),[&](const auto& r){return r.identity==identity;});
-    return found!=g_transportMaps.end() && found->map==map && GetTickCount()-found->time<1000;
+    uint32_t route=0,table=0,owner=0,time=0;
+    if(!Read(object+kGameObjectTypePart,route) || !ValidPointer(route) || !Read(route,table) || table!=kTransportRouteTable ||
+       !Read(route+4,owner) || owner!=object || !Read(route+kTransportRouteTime,time))return false;
+    auto slot=std::find_if(g_routes.begin(),g_routes.end(),[&](const auto& r){return r.seen&&r.identity==identity;});
+    if(slot==g_routes.end()){
+        slot=std::min_element(g_routes.begin(),g_routes.end(),[](const auto& a,const auto& b){return !a.seen||(b.seen&&a.moved<b.moved);});
+        *slot={identity,time,0,true};
+        return false;   // one sighting cannot tell a moving route from a held one
+    }
+    if(slot->time!=time){slot->time=time;slot->moved=now;}
+    return slot->moved && now-slot->moved<1000;
 }
 }
 int ReadMovers(const float* camera, Mover* out, int max, Boat* boats, int maxBoats, int& boatCount, ReflectionObject* reflections,unsigned* reflectionCount)
 {
     if(reflectionCount)*reflectionCount=0;
-    if(reflections && reflectionCount)EnableTransportObserver();
     boatCount = 0;
     std::vector<SeenObject> objects;
     objects.reserve(512);
@@ -876,7 +866,7 @@ int ReadMovers(const float* camera, Mover* out, int max, Boat* boats, int maxBoa
         const float dy = o.position[1] - camera[1];
         const float distance = std::sqrt(dx * dx + dy * dy);
         if(reflections && reflectionCount && *reflectionCount<kMaxReflectionObjects && distance<=kReflectionObjectRange &&
-           o.type==kGameObjectType && (o.guid>>48)==kTransportGuidHigh && TransportOnCurrentMap(o.guid)){
+           o.type==kGameObjectType && (o.guid>>48)==kTransportGuidHigh && TransportOnCurrentMap(o.guid,o.object,now)){
             uint32_t fields=0;float scale=0;ReflectionObject current;current.identity=o.guid;
             // Build12340 native transport matrix and update-field display/scale.
             // Live probe verifies all four matrix rows, including pitch/roll.

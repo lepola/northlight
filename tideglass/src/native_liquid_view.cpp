@@ -1,4 +1,7 @@
 #include "native_liquid_view.h"
+// Standalone only. It changes calls and instructions in the client's code; the cooperative core never
+// writes to the client, and gets above-water light underwater from Northlight's art layer instead.
+#if !defined(WATER_COOPERATIVE_BUILD)
 #include "client_call_patch.h"
 #include "config.h"
 #include "engine.h"
@@ -12,10 +15,6 @@ DWORD owner=0;
 bool pinned=false,frameActive=false,installed=false;
 uint32_t skyLiquid=0;
 water::client12340::NativeCalls<2> lighting({engine::kDayNightLiquidSite,engine::kDayNightFogLiquidSite},engine::kCameraLiquidTarget);
-#if defined(WATER_COOPERATIVE_BUILD)
-water::client12340::NativeCalls<1> world({engine::kWorldRenderSite},engine::kWorldRenderTarget);
-water::client12340::NativeCalls<1> ready({engine::kCameraLiquidReadySite},engine::kCameraLiquidUpdateTarget);
-#endif
 struct SkyRead {uintptr_t site;bool owned=false;};
 SkyRead skies[]={{engine::kSkyClearLiquidRead},{engine::kSkyModelLiquidRead}};
 bool Read(uintptr_t p,void* dst,size_t n){SIZE_T got=0;return ReadProcessMemory(GetCurrentProcess(),reinterpret_cast<void*>(p),dst,n,&got)&&got==n;}
@@ -54,23 +53,6 @@ extern "C" __attribute__((force_align_arg_pointer)) uint32_t __cdecl water_nativ
     return skyLiquid;
 }
 
-#if defined(WATER_COOPERATIVE_BUILD)
-// These observers execute around native game work, never on the replay thread.
-// Preserve the complete incoming/returned CPU state, including floating-point controls.
-#define VIEW_SAVE "pushfl\n\tpushal\n\tmovl %esp,%eax\n\tsubl $528,%esp\n\tandl $-16,%esp\n\tmovl %eax,512(%esp)\n\tfxsave (%esp)\n\t"
-#define VIEW_RESTORE "fxrstor (%esp)\n\tmovl 512(%esp),%esp\n\tpopal\n\tpopfl\n\t"
-extern "C" {
-uintptr_t g_nativeViewWorld=engine::kWorldRenderTarget,g_nativeViewReady=engine::kCameraLiquidUpdateTarget;
-__attribute__((force_align_arg_pointer)) void water_native_view_ready(){engine::CaptureLiquidViewIdentity();}
-__attribute__((force_align_arg_pointer)) void water_native_view_begin(){water::BeginNativeLiquidView();}
-__attribute__((force_align_arg_pointer)) void water_native_view_end(){water::EndNativeLiquidView();}
-__attribute__((naked)) void NativeViewReadyThunk(){asm("calll *_g_nativeViewReady\n\t" VIEW_SAVE "calll _water_native_view_ready\n\t" VIEW_RESTORE "retl\n\t");}
-__attribute__((naked)) void NativeViewWorldThunk(){asm(VIEW_SAVE "calll _water_native_view_begin\n\t" VIEW_RESTORE
-    "calll *_g_nativeViewWorld\n\t" VIEW_SAVE "calll _water_native_view_end\n\t" VIEW_RESTORE "retl\n\t");}
-}
-#undef VIEW_SAVE
-#undef VIEW_RESTORE
-#endif
 
 namespace water {
 // The game's wake lies flat on the water plane behind whatever moves. Our water covers it on the water and draws its own, but
@@ -103,9 +85,6 @@ bool RestoreNativeLiquidView(){
     if(owner&&GetCurrentThreadId()!=owner)return false;
     if(frameActive)return false;
     bool ok=true;
-#if defined(WATER_COOPERATIVE_BUILD)
-    ok=world.Restore(Read,Write)&&ok;ok=ready.Restore(Read,Write)&&ok;
-#endif
     ok=lighting.Restore(Read,Write)&&ok;
     for(auto& sky:skies)if(sky.owned)ok=SetSky(sky,false)&&ok;
     KeepNativeRipples(true);
@@ -124,11 +103,8 @@ bool InstallNativeLiquidView(){
     for(const auto& sky:skies)if(!SkyMatches(sky,sky.owned?uint32_t(reinterpret_cast<uintptr_t>(&skyLiquid)):uint32_t(engine::kCameraLiquidGlobal)))return false;
     bool ok=lighting.Install(Read,Write,reinterpret_cast<uintptr_t>(&water_native_view_liquid));
     for(auto& sky:skies)if(ok)ok=SetSky(sky,true);
-#if defined(WATER_COOPERATIVE_BUILD)
-    if(ok)ok=ready.Install(Read,Write,reinterpret_cast<uintptr_t>(&NativeViewReadyThunk));
-    if(ok)ok=world.Install(Read,Write,reinterpret_cast<uintptr_t>(&NativeViewWorldThunk));
-#endif
     if(!ok){RestoreNativeLiquidView();return false;}
     installed=true;WATER_LOG_INFO("shared native liquid environment hooks installed");return true;
 }
 }
+#endif

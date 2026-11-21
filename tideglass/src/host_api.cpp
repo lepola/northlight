@@ -6,7 +6,6 @@
 #include "host_liquid.h"
 #include "liquid.h"
 #include "engine.h"
-#include "native_liquid_view.h"
 #include "frame_snapshot.h"
 #include "render_session.h"
 #include "log.h"
@@ -66,7 +65,6 @@ struct WaterHostContext
     {
         config.Load(settings);
         engine::ConfigureVisualTime(config.Get().timeOfDay,config.Get().dayCycleSeconds);
-        water::ConfigureNativeLiquidView(config.Get());
         session.SetOutputDirectory(config.Directory());
     }
     bool Owner() const { return thread == GetCurrentThreadId(); }
@@ -123,7 +121,7 @@ int __cdecl Destroy(WaterHostContext* context)
         context->session.ReleaseAll();
         delete context;
         LogRelease();
-        if(--liveContexts==0)water::DisableNativeLiquidView();
+        --liveContexts;
         return 1;
     });
 }
@@ -152,7 +150,6 @@ WaterHostFrame* __cdecl CaptureClientMapped(const WaterHostCamera* camera,WaterH
         if (captureThread.load() != thread) return nullptr;
         engine::UpdateGround(.001, false);
         engine::UpdateVisualTime();
-        water::InstallNativeLiquidView();
         mark(1);
         engine::CaptureLiquidIdentity(map,mapContext);
         mark(2);
@@ -201,7 +198,6 @@ int __cdecl Begin(WaterHostContext* context, WaterHostFrame* frame, WaterHostSta
         if (!End(context)) return 0;
         {water::FrameDiagnostics::Scope scope(context->session.Diagnostics(),water::FrameDiagnostics::ConfigReload);context->config.ReloadIfChanged(true);}
         engine::ConfigureVisualTime(context->config.Get().timeOfDay,context->config.Get().dayCycleSeconds);
-        water::ConfigureNativeLiquidView(context->config.Get());
         context->session.ConfigureDiagnostics(context->config.Get(),0);
         if (!context->config.Get().enable) { context->session.DisableOwnedReflection(); return 0; }
         const auto stamp = context->session.BeginFrame(context->device);
@@ -473,14 +469,13 @@ int __cdecl Restored(WaterHostContext* context)
 {
     return context && context->Owner() && context->session.RestoreDevice(context->device);
 }
-int __cdecl CanUnload() { return liveContexts.load()==0&&liveFrames.load()==0&&water::RestoreNativeLiquidView()&&engine::RestoreVisualTime(); }
+int __cdecl CanUnload() { return liveContexts.load()==0&&liveFrames.load()==0&&engine::RestoreVisualTime(); }
 int __cdecl ProfilePresentBegin(WaterHostContext* context,uint32_t source,uint64_t hostFrame)
 {
     return Boundary([&]{if(!context||!context->Owner()||source<2||source>3)return 0;
         auto& session=context->session;
         {water::FrameDiagnostics::Scope scope(session.Diagnostics(),water::FrameDiagnostics::ConfigReload);context->config.ReloadIfChanged(true);}
         engine::ConfigureVisualTime(context->config.Get().timeOfDay,context->config.Get().dayCycleSeconds);
-        water::ConfigureNativeLiquidView(context->config.Get());
         session.ConfigureDiagnostics(context->config.Get(),source);
         session.Diagnostics().PresentBegin(hostFrame);return 1;});
 }

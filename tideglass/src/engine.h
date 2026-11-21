@@ -52,7 +52,6 @@ bool CameraInSlime();
 // identities without invoking or retaining the captured numeric addresses.
 using LiquidTextureMap=uintptr_t(__cdecl*)(void*,uintptr_t);
 void CaptureLiquidIdentity(LiquidTextureMap map=nullptr,void* context=nullptr);
-void CaptureLiquidViewIdentity(); // early native lighting, no texture/renderer access
 const NativeLiquidFrame& LiquidIdentity();
 uint32_t CameraLiquidType();
 bool CameraWaterHeight(float& height);
