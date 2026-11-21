@@ -324,6 +324,30 @@ def copy_profile(tables, old, new):
         for ch in range(channels):
             row = copy.copy(table.index[(old-1)*channels+ch+1]); putu(row, 0, (new-1)*channels+ch+1); table.add(row)
 
+# Underwater the client lights the scene from a Light row's underwater slots (8 clear, 10 storm), or from the
+# liquid's own Light when LiquidType gives one (slime, magma), and darkens ocean with depth (LiquidType
+# MaxDarkenDepth; 0x7f3245-0x7f3360 in build 12340). The combo draws its own underwater medium over the
+# above-water scene, so its art layer points the underwater slots at the row's above-water profiles and
+# takes the water and slime liquids' own light and darkening away: the client lights underwater as above,
+# and its code stays as it is. Magma keeps the client's own look.
+UNDERWATER_SLOTS = {8: 7, 10: STORM_SLOT}
+LIQUID_TYPE, LIQUID_MAX_DARKEN, LIQUID_LIGHT = 3, 6, 10      # LiquidType.dbc columns
+UNDERWATER_LIQUIDS = (0, 1, 3)                               # water, ocean, slime (2 is magma)
+
+def underwater_daylight(light, liquid):
+    """In place on the final Light and the client's LiquidType tables. Returns the report."""
+    slots = 0
+    for row in light.rows:
+        for under, above in UNDERWATER_SLOTS.items():
+            source = u(row, above) or u(row, 7)
+            if source and u(row, under) != source:
+                putu(row, under, source); slots += 1
+    liquids = []
+    for row in liquid.rows:
+        if u(row, LIQUID_TYPE) in UNDERWATER_LIQUIDS and (f(row, LIQUID_MAX_DARKEN) != 0 or u(row, LIQUID_LIGHT)):
+            putf(row, LIQUID_MAX_DARKEN, 0.); putu(row, LIQUID_LIGHT, 0); liquids.append(u(row, 0))
+    return {'light_slots': slots, 'liquids': liquids}
+
 def stormify(tables, stock):
     """Private storm profiles for the outdoor rows, in place on the final `tables` (after relight, retime and
     the sky steps); `stock` is the same tables as the client's own chain has them. Returns the report."""

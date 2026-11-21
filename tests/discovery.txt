@@ -217,6 +217,7 @@ test_translucent_actor_depth.py
 test_translucent_depth_census.py
 test_ui_boundary.py
 test_uncached_map_skip_wiring.py
+test_underwater_daylight.py
 test_underwater_fade.py
 test_unlisted_archive.py
 test_upload_locks.py

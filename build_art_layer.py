@@ -195,6 +195,10 @@ def build(client, output, world_cache, locale=None, letter='z', archives='all', 
             if fog.is_dir() or not combo:
                 payload = lighting_payload(assets, client, locale, Path(work), fog, sky, report, combo)
         if combo:
+            light = DBC(payload.get(DBC_NAME.format('Light')) or assets.read(DBC_NAME.format('Light')))
+            liquid = DBC(assets.read(DBC_NAME.format('LiquidType')))
+            report['steps'].append({'step': 'underwater_daylight', **build_lighting.underwater_daylight(light, liquid)})
+            payload.update({DBC_NAME.format('Light'): light.bytes(), DBC_NAME.format('LiquidType'): liquid.bytes()})
             repairs = scenery_repairs(assets)
             payload.update(repairs)
             report['steps'].append({'step': 'scenery_repairs', 'files': sorted(repairs)})
