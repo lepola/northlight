@@ -1107,11 +1107,6 @@ class Install(Base):
         self.assertLessEqual(len(fi.INSTMP), len(fi.STAGING))
 
 
-class WindowsInstall(Install):
-    platform = 'windows'
-    test_launcher_action_passes_through = None   # main() on this host checks processes with macOS tools
-    test_developer_proxy_is_reported_not_removed = None   # macOS migration
-
     def make_water_package(self):
         meta = self.pkg_root / 'BUILD-INFO.json'
         meta.write_text(json.dumps({**json.loads(meta.read_bytes()), 'tideglass': {'core_sha256': sha(b'core')}}))
@@ -1187,6 +1182,11 @@ class WindowsInstall(Install):
                     exe.write_bytes(image)
                 else:
                     file.unlink()
+
+class WindowsInstall(Install):
+    platform = 'windows'
+    test_launcher_action_passes_through = None   # main() on this host checks processes with macOS tools
+    test_developer_proxy_is_reported_not_removed = None   # macOS migration
 
     def test_backend_and_legacy_package_restored_first(self):
         old = self.base / 'old-package'
