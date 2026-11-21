@@ -175,7 +175,7 @@
     "src/native_fog.h": "78511bc704247e9a3a0fa84600f2f29d20b829eec6f78a3c222aebc38473548a",
     "src/native_liquid.h": "ccfdeb6ba97b3101a72ac01f0387297d819b5a4218443c5c4bf662d6faf7a0ef",
     "src/native_liquid_view.cpp": "8e99ad0724e35b2c11c1ab65acb775214adea3aa2602a6af99d85059fa631af9",
-    "src/native_liquid_view.h": "8e3f1f3dc44863cc53e6ff84b71299923420db091234c8c2f3c1e89ef58e508e",
+    "src/native_liquid_view.h": "9d94cb5db59d8e26c91666abff8c661fa8e78fcdffdee420bae9c89928e45d13",
     "src/owned_receiver_views.h": "7ea7c992264579159f19c04eda791b6b1389475f37aa58a711cceb47145709d0",
     "src/owned_receiver_visibility.h": "3608aeb0a735a1a0e7b450a4b1a5be908ed0b648d44fd4663774bb0c21ff9a5a",
     "src/owned_reflection.cpp": "5e1b950a079eac1ec0e73af3c5bbfbedb356f06e4a52b72091b9ab9df11e40cd",
@@ -247,7 +247,7 @@
     "tools/shader_build.py": "c80119742e5a2dab25846e3316e5bd691e132201ca8404227d1e00dd979fc0d6",
     "tools/shader_header.py": "0154d161dd86a4e8c320c23081a87d5123f410c9211dea016664d9bea311e189"
   },
-  "revision": "25f016a3a85bb64d4a55efb5e48ea3883f1c8504",
+  "revision": "fad94f6056e52cb9ef42db6c6f840450c48e12f5",
   "shaders": {
     "ps_ao": {
       "dependencies": {
