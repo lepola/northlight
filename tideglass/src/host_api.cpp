@@ -97,7 +97,10 @@ WaterHostContext* __cdecl Create(IDirect3DDevice9* device, const char* settings)
         if (!device || !settings || !*settings) return nullptr;
         auto result = std::make_unique<WaterHostContext>(device, settings);
         LogRetain((result->config.Directory() + "water-core.log").c_str());
-        WATER_LOG_INFO("Tideglass " TIDEGLASS_VERSION "; cooperative core started; settings in %s", result->config.Directory().c_str());
+        // Once per process: later and recreated contexts leave the log as it was.
+        static std::atomic<bool> announced{false};
+        if (!announced.exchange(true))
+            WATER_LOG_INFO("Tideglass " TIDEGLASS_VERSION "; cooperative core started; settings in %s", result->config.Directory().c_str());
         result->session.PrepareUnderwaterShaders(device, result->config.Get());
         ++liveContexts;
         return result.release();

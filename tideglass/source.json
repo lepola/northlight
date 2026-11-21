@@ -59,7 +59,7 @@
     "generated/vs_ring.h": "09df7272cccf050c35168f7e2d7fa69760f3fd6c0956d5704291007f0d0af454",
     "integrations/host_passes.h": "c74ba289ce3fc4d7baa1acb9373eccff6d2a2e936a1b569dbb9010d63c3d7f74",
     "integrations/host_settings.h": "013448d851182a0585fb11e5061293611af8d513afb584c29b636a032bf1e571",
-    "integrations/northlight/water_bridge.h": "f9373b728121b27874a9d3f7183d47d88db4683aebe1d757e58ba2030baeee13",
+    "integrations/northlight/water_bridge.h": "ff125f5bcb45240fab10b14050a661011929e91befc21fbe63ea28271ec32a0a",
     "shaders/ao_blur_ps.hlsl": "bcfd6a4dd395095f934994219fdca95948f85b259716fe7682f2183e6c44eada",
     "shaders/ao_ps.hlsl": "3b307a2da0f218886acf7973a90702ba728859f896f06c0e4fb100dc7691ef21",
     "shaders/common.hlsli": "4d00796044a00963c0920089bda7f0abe911f48f4ca8128455d15b0898faf82d",
@@ -153,7 +153,7 @@
     "src/ground.cpp": "c1f5413297a34eb089b6cdd090c8ff0963674b4afed0300916561816b4a590aa",
     "src/ground.h": "fd28a655a76c725d87f752682be530ff3cae2ef7c61e948768bb0892b3507ff0",
     "src/ground_shift.h": "2c598520cbcf6db6a1580598bda0394fdcb43083f7aeade730b1315bb563f6bb",
-    "src/host_api.cpp": "17c9caed48412cd966128ea26b2fb405e0f16b11bcd582889891067120ad7616",
+    "src/host_api.cpp": "1bec2fb6820b0c11ca1b653631b74a80c542b53514b741ac5f23ccc1323aca85",
     "src/host_api.h": "28204423e6e0c75540e40a2e6c59abfed9e1b14bd4c331f87231613587f294d1",
     "src/host_capture.h": "71a236c0d1122fcb574ca4e8ca0b9e5c665499f650a0340f346f6a94ef6a7948",
     "src/host_client.h": "321afc2bb99a290cb4b3416a187dff81e99de0635866b85d87bd45ea8e600da5",
@@ -199,7 +199,7 @@
     "src/render_session.cpp": "5ac3e6952aebaab68b17fc28dd3fe0239bf0c59be9fa1606a25da2745e09861c",
     "src/render_session.h": "52e869fecb0b13976581f4af3b82c0341c0b553d940910c99f1bbd52f8930ec7",
     "src/renderer.cpp": "5e6ca8a1e3e4c63f31626d1b1c8b00edf03a076d926781b1b77d7ec9a1b09ec4",
-    "src/renderer.h": "c8bdbcdcf60c361a2cb85578c9883ba41079ba986d776a5e760481c2c4427dff",
+    "src/renderer.h": "1aa9de515196efe169a5f8e5cbccc81dcab27487c9197d667a4d4585e960e12b",
     "src/scenery_float_environment.h": "e08ffcfb4399f51a34e3bc87180662006831bec2b7cddcb925d315e30be81c8a",
     "src/scenery_plane_transform.h": "d331486c0cf2b5280991db05d00a8f30b49517ad3dd0f53c69f0469f3c4b6256",
     "src/scenery_receiver.h": "95255617519865dfacfe597e0a8d48709d2e787e1a12d87db464a4857915524e",
@@ -248,7 +248,7 @@
     "tools/shader_build.py": "c80119742e5a2dab25846e3316e5bd691e132201ca8404227d1e00dd979fc0d6",
     "tools/shader_header.py": "0154d161dd86a4e8c320c23081a87d5123f410c9211dea016664d9bea311e189"
   },
-  "revision": "3e468ef21f51f9dab95e320d99e52f354b79834c",
+  "revision": "e86c71d2edae9812f233931fe8871b9ff81f6e13",
   "shaders": {
     "ps_ao": {
       "dependencies": {

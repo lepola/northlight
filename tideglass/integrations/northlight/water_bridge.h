@@ -121,12 +121,22 @@ public:
         }
         return m_passes.AfterLiquid({sizeof(WaterHostResources), m_frameDepth, boundDepth, mask, refractionScene, surfaceVisibility}, true);
     }
-    bool WorldDone(IDirect3DSurface9* boundDepth)
+    // scene, sceneDepth and sceneViewport: the host's finished world colour, its resolved depth and viewport, used when
+    // no liquid was drawn this frame. The camera can be under a surface it cannot see (looking down from under the sea,
+    // 2026-11-21), and the underwater view is drawn here, not with a surface.
+    bool WorldDone(IDirect3DSurface9* boundDepth, IDirect3DSurface9* scene = nullptr,
+                   IDirect3DTexture9* sceneDepth = nullptr, const D3DVIEWPORT9* sceneViewport = nullptr)
     {
         // Consume the deferred pass once, even if finalisation cannot bind the
         // completed scene. End never flushes it over an incomplete world or UI.
         const bool pending = m_pendingComposite;
         m_pendingComposite = false;
+        if (!m_frameColour && scene && sceneDepth && sceneViewport && m_passes.Current()) {
+            scene->AddRef();
+            m_frameColour = scene;
+            m_frameViewport = *sceneViewport;
+            if (!m_frameDepth) m_frameDepth = sceneDepth;
+        }
         // Remember the sky from the composite's target, excluding water through the
         // converted depth: at the world read that is the world before screen effects,
         // otherwise the completed host frame. Borrowed from m_depth until End/Lost.

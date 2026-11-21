@@ -46,7 +46,9 @@ public:
     struct GroundEffectCounts { unsigned occlusion=0, puddles=0; };
     const GroundEffectCounts& GroundEffectsDrawn() const { return m_groundEffects; }
     const std::array<unsigned,9>& WorkCounts() const{return m_work;}
-    void BeginFrame() { m_passRestoreFailed=false;m_distanceAtmosphereShaded=false;m_surfaceResult=SurfaceResult::Unchanged; m_nativeWater=nullptr;m_waterDepthValid=m_slimeCaptured=false; m_work={};++m_worldFrame; SetScenery(nullptr,nullptr,0,nullptr); }
+    // The liquid snapshot belongs to the frame whose liquid took it; the end-of-world pass also runs on frames with no
+    // liquid in view (the underwater view when no surface is seen), which must not reuse an earlier frame's.
+    void BeginFrame() { m_snapshotValid=m_sceneValid=false;m_passRestoreFailed=false;m_distanceAtmosphereShaded=false;m_surfaceResult=SurfaceResult::Unchanged; m_nativeWater=nullptr;m_waterDepthValid=m_slimeCaptured=false; m_work={};++m_worldFrame; SetScenery(nullptr,nullptr,0,nullptr); }
     // Borrowed until EndFrame; WaterDevice owns and clears/releases the targets.
     void SetScenery(IDirect3DTexture9* colour, IDirect3DTexture9* depth, float height, const float* projection, const float* planes = nullptr, bool heights = false, bool underwater = false)
     {
