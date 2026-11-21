@@ -331,6 +331,42 @@ def launchers(platform, version):
             'Uninstall Northlight.command': command('uninstall', 'uninstall')}
 
 
+def combo_readme(platform, wine_steps):
+    """The platform wording of tideglass-readme.txt. Each value is pre-wrapped to 80 columns in its place."""
+    if platform == 'windows':
+        return dict(system='64-bit Windows 10 or 11', note='',
+                    start='Double-click Install.cmd in the extracted folder. If Windows SmartScreen\n'
+                          '   appears, choose More info, then Run anyway.',
+                    before_play='', settings_key='Ctrl+Shift+F11',
+                    undo='double-click Uninstall.cmd in this folder',
+                    startup='If the game closes at startup, try the older graphics backend.\n'
+                            'Right-click an empty spot in the extracted folder, choose Open in Terminal\n'
+                            '(on Windows 10, hold Shift and choose Open PowerShell window here) and run:\n'
+                            '  .\\Install.cmd --backend dxvk2')
+    if platform == 'linux':
+        return dict(system='x86-64 Linux with Wine or Proton', note='',
+                    start='Open a terminal in the extracted folder and run bash install.sh.',
+                    before_play='\n' + '\n'.join(wine_steps) + '\n', settings_key='Ctrl+Shift+F11',
+                    undo='run bash uninstall.sh in this folder',
+                    startup='If the game closes at startup, try the older graphics backend.\n'
+                            'Open a terminal in the extracted folder and run:\n'
+                            '  bash install.sh --backend dxvk2')
+    # macOS: Northlight sits in front of WoWSilicon's own DXVK, so there is no second backend to offer.
+    return dict(system='an Apple Silicon Mac with WoWSilicon',
+                note='\nThis macOS package has not been tested on a Mac yet. Please report how it\n'
+                     'goes, including what works.\n',
+                start='Open Terminal, type bash and a space, drag "Install Northlight.command"\n'
+                      '   from the extracted folder into the window and press Enter.',
+                before_play='\nWoWSilicon must have patched this client with DXVK as its graphics backend\n'
+                            '(not MTLD3D). The installer checks this before it changes anything.\n',
+                settings_key='Ctrl+Shift+F11 (with fn on a Mac keyboard)',
+                undo='run "Uninstall Northlight.command" the same way',
+                startup='If the game closes at startup or the water looks wrong, quit WoW, open\n'
+                        'water-host.ini in the game folder, change Enable=1 to Enable=0 and start\n'
+                        'WoW again. That keeps Northlight with the game\'s water. Please report\n'
+                        'whether that helped.')
+
+
 def build(platform, version, dll, variants, out, stormlib_dir, water_core=None, runtime_package=None):
     for manifest in variants.values():
         check_variant_sources(manifest)
@@ -378,8 +414,6 @@ def build(platform, version, dll, variants, out, stormlib_dir, water_core=None, 
         tree.add('payload/d3d9.dll', dll_data)   # installed by migrate_mac_proxy as mods/d3d9.dll
     water_info = {}
     if water_core is not None:
-        if platform not in PROXY_PLATFORMS:
-            raise SystemExit('Combined beta packages support the Windows and Linux proxy layouts')
         core = water_core.read_bytes()
         if pe_machine(core) != 0x14c or b'WaterHostGetAPI' not in core or b'WaterHostGetAPI' not in dll_data:
             raise SystemExit('The combined package requires a cooperative host and 32-bit Tideglass core')
@@ -403,20 +437,9 @@ def build(platform, version, dll, variants, out, stormlib_dir, water_core=None, 
         text = readme.read_text(encoding='utf-8').replace('__RELEASE_VERSION__', version)
     else:
         from northlight_install import WINE_STEPS
-        windows = platform == 'windows'
         template = (fp.RENDERER / 'tideglass-readme.txt').read_text(encoding='utf-8')
-        text = template.format(
-            version=version, platform=PLATFORMS[platform],
-            system='64-bit Windows 10 or 11' if windows else 'x86-64 Linux with Wine or Proton',
-            start='Double-click Install.cmd in the extracted folder. If Windows SmartScreen\n'
-                  '   appears, choose More info, then Run anyway.' if windows else
-                  'Open a terminal in the extracted folder and run bash install.sh.',
-            before_play='' if windows else '\n' + '\n'.join(WINE_STEPS) + '\n',
-            undo='double-click Uninstall.cmd' if windows else 'run bash uninstall.sh',
-            terminal='Right-click an empty spot in the extracted folder, choose Open in Terminal\n'
-                     '(on Windows 10, hold Shift and choose Open PowerShell window here) and run:'
-                     if windows else 'Open a terminal in the extracted folder and run:',
-            fallback=r'.\Install.cmd --backend dxvk2' if windows else 'bash install.sh --backend dxvk2')
+        text = template.format(version=version, platform=PLATFORMS[platform],
+                               **combo_readme(platform, WINE_STEPS))
     tree.add('README.txt', text.replace('\n', '\r\n').encode('utf-8') if platform == 'windows' else text.encode('utf-8'))
     for name, data in launchers(platform, version).items():
         tree.add(name, data, executable=True)

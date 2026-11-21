@@ -33,7 +33,9 @@ python3 renderer/build_packages.py --platform windows --version 0.3.216-tideglas
 python3 tests/verify_packages.py out/packages/Northlight-0.3.216-tideglass.3-Windows.zip
 ```
 
-Use `--platform linux` to build the Linux package. The packager checks the inputs
+Use `--platform linux` to build the Linux package. `--platform mac` builds a macOS package for
+WoWSilicon; on Linux it takes StormLib from Northlight's released macOS ZIP through
+`--runtime-package`. The macOS combo has not run on a Mac yet. The packager checks the inputs
 listed in `renderer/package-pins.json`. With `--runtime-package <upstream-zip>` it
 can reuse the exact pinned StormLib library and notices from Northlight's released
 package for the same platform. Source contributors can check the exported

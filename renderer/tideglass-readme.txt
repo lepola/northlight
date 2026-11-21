@@ -2,7 +2,7 @@ Northlight + Tideglass {version} for {platform}
 
 For the 32-bit WoW 3.3.5a client (build 12340)
 on {system}.
-
+{note}
 FIRST INSTALL
 
 1. Close WoW. Extract the whole ZIP into a folder outside the game, such as
@@ -25,22 +25,21 @@ game archives, realm settings and add-ons stay in place.
 
 CHANGE YOUR MIND
 
-Press Ctrl+Shift+F11 and open Water. Quality keeps full reflection detail.
-Try Balanced for lower-resolution scenery reflections, or Performance for sky
-reflections alone. Choose Save. Your wave, foam and colour tuning carries
-over. To use the game's water, clear Use Tideglass, save and restart WoW.
+Press {settings_key} and open Water.
+Quality keeps full reflection detail. Try Balanced for lower-resolution
+scenery reflections, or Performance for sky reflections alone. Choose Save.
+Your wave, foam and colour tuning carries over. To use the game's water,
+clear Use Tideglass, save and restart WoW.
 
-To remove both, close WoW and {undo} from the
-extracted folder. Choose the same game folder. Northlight and Tideglass are
-removed together, the game files return to how they were before Northlight
-was first installed, and edited water settings are kept. To keep Northlight
-without the beta, install Northlight 0.3.216 afterwards.
+To remove both, close WoW and {undo}.
+Choose the same game folder. Northlight and Tideglass are removed together,
+the game files return to how they were before Northlight was first installed,
+and edited water settings are kept. To keep Northlight without the beta,
+install Northlight 0.3.216 afterwards.
 
 IF SOMETHING GOES WRONG
 
-If the game closes at startup, try the older graphics backend.
-{terminal}
-  {fallback}
+{startup}
 If installation stops, the last message tells you why. For help, include the
 package version and that message. Installer logs are in the extracted package's
 logs folder. For a visual issue, include the zone, time of day and how to
