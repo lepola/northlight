@@ -506,7 +506,7 @@ bool OwnedReflection::Draw(IDirect3DDevice9* device, FrameStamp frame, const Fra
         output.continuation=scene->worldRender->views[receiver].continuation;
         const auto& source=*scene->worldScene;
         if(m_streaming && source.waterCompleteReach>0){
-            m_coverage.Update(input.cameraPosition,source.sourceRegion,source.waterCompleteReach,m_coverageTick,m_shortDistance?world::OwnedWorldRegion::NearReach:1.e9f);
+            m_coverage.Update(input.cameraPosition,source.sourceRegion,source.waterCompleteReach,m_coverageTick,m_shortDistance);
             output.coverageEdges=m_coverage.edges;
             output.coverageWidth=m_coverage.width;
         }
