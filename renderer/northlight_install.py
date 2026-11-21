@@ -35,6 +35,7 @@ client, newest first, and deletes the world cache only if this installer or inst
 made it. <client>/renderer-backups keeps only the files as they were before Northlight first changed
 them: each install copies what it replaces (so an interrupted run rolls back), then drops the copies of
 older Northlight versions and of restored transactions (tidy_backups). Log: <package>/logs/.
+logs (Collect Logs) zips what a problem report needs into <package>/northlight-logs-<time>.zip (collect_logs).
 """
 import argparse
 import contextlib
@@ -1390,6 +1391,36 @@ class Installer:
                     'with the game closed.')
         return None
 
+    def collect_logs(self, client):
+        """One ZIP in the package folder for a problem report: this package's installer logs, the status report, a
+        system summary and the game folder's GAME_LOG_FILES. Returns its path."""
+        client = self.resolve_client(client)
+        try:
+            state = self.status(client)
+        except (Failed, ValueError, OSError) as e:
+            state = {'client': str(client), 'status_error': str(e)}
+        crashes = sorted((client / 'Errors').glob('*.txt'), key=lambda f: f.stat().st_mtime)[-10:] \
+            if (client / 'Errors').is_dir() else []
+        report = {'package': self.pkg.info, 'system': system_summary(), 'status': state,
+                  'crash_reports': [{'name': f.name, 'bytes': f.stat().st_size,
+                                     'modified': datetime.fromtimestamp(f.stat().st_mtime).isoformat(timespec='seconds')}
+                                    for f in crashes]}
+        files = [client / n for n in GAME_LOG_FILES] + [f for pattern in GAME_LOG_PATTERNS for f in sorted(client.glob(pattern))]
+        if self.log:
+            self.log.flush()
+        archive = self.pkg.root / f'northlight-logs-{datetime.now():%Y%m%d-%H%M%S}.zip'
+        with zipfile.ZipFile(archive, 'w', zipfile.ZIP_DEFLATED) as z:
+            z.writestr('report.json', json.dumps(report, indent=2) + '\n')
+            for f in files:
+                if f.is_file():
+                    z.write(f, 'game/' + f.name)
+            for f in sorted(self.pkg.logs.glob('*.log')) if self.pkg.logs.is_dir() else []:
+                z.write(f, 'installer/' + f.name)
+        self.say(f'Logs collected in {archive}')
+        self.say('Attach this file to your issue or message. It holds the installer, renderer and Tideglass logs and '
+                 'settings and folder paths from this computer; nothing from your account, characters or chat.')
+        return archive
+
     def status(self, client):
         client = self.resolve_client(client)
         owner, manifest = self.cache_owner(client)
@@ -1413,6 +1444,22 @@ class Installer:
         return state
 
 
+# From the game folder: the renderer's and Tideglass's logs and settings, and DXVK's logs. Never account, character,
+# chat or realm files (WTF, Logs, Cache, Interface). The client's own crash reports are listed by name only: what
+# they hold is not ours to vouch for, and a tester can attach one when asked.
+GAME_LOG_FILES = ('northlight-renderer.log', 'northlight-renderer.prev.log', 'water-core.log', 'water.log',
+                  'water.ini', 'water-host.ini', 'northlight-renderer.ini', 'northlight-quality.ini', 'dxvk.conf')
+GAME_LOG_PATTERNS = ('*_d3d9.log', '*_dxgi.log')
+
+
+def system_summary():
+    import platform
+    summary = {'platform': platform.platform(), 'machine': platform.machine(), 'python': platform.python_version()}
+    if sys.platform == 'darwin':
+        summary['macos'] = platform.mac_ver()[0]
+    return summary
+
+
 def package_root():
     """The package folder (app/../) when this file runs from a package."""
     root = APP.parent
@@ -1421,9 +1468,9 @@ def package_root():
 
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument('action', nargs='?', choices=['install', 'uninstall', 'status'])
+    ap.add_argument('action', nargs='?', choices=['install', 'uninstall', 'status', 'logs'])
     # The launchers pass their own action here, so `Install Northlight.command status --client X` works too.
-    ap.add_argument('--default-action', choices=['install', 'uninstall', 'status'], help=argparse.SUPPRESS)
+    ap.add_argument('--default-action', choices=['install', 'uninstall', 'status', 'logs'], help=argparse.SUPPRESS)
     ap.add_argument('--client', help='the game folder (the folder with wow.exe); asked when missing')
     ap.add_argument('--locale', help='the game language, e.g. enUS (default: WTF/Config.wtf, else the only one)')
     ap.add_argument('--cache', help='the Northlight-cache-<variant>-<digest>.zip (or its expanded folder)')
@@ -1448,7 +1495,7 @@ def main(argv=None):
     args = ap.parse_args(argv)
     args.action = args.action or args.default_action
     if not args.action:
-        ap.error('choose install, uninstall or status')
+        ap.error('choose install, uninstall, status or logs')
     platform = host_platform()
     if platform is None:
         print('ERROR: this installer runs on macOS (WoWSilicon), Windows or Linux (Wine/Proton).', file=sys.stderr)
@@ -1468,6 +1515,8 @@ def main(argv=None):
                               raised_air=args.raised_air)
         elif args.action == 'uninstall':
             installer.uninstall(args.client)
+        elif args.action == 'logs':
+            installer.collect_logs(args.client)
         else:
             installer.status(args.client)
         return 0

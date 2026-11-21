@@ -1094,6 +1094,27 @@ class Install(Base):
         self.installer().uninstall(self.client)
         self.assertFalse(ready.exists())
 
+    def test_collect_logs_takes_reports_and_never_account_files(self):
+        for name, data in [('northlight-renderer.log', b'renderer'), ('water-core.log', b'core'), ('water.ini', b'[Water]'),
+                           ('Wow_d3d9.log', b'dxvk'), ('WTF/Account/SECRET/config-cache.wtf', b'account'),
+                           ('Logs/WoWChatLog.txt', b'chat'), ('Errors/crash.txt', b'crash')]:
+            (self.client / name).parent.mkdir(parents=True, exist_ok=True)
+            (self.client / name).write_bytes(data)
+        installer = self.installer()
+        installer.open_log('logs')
+        archive = installer.collect_logs(self.client)
+        installer.log.close()
+        with zipfile.ZipFile(archive) as z:
+            names = set(z.namelist())
+            report = json.loads(z.read('report.json'))
+        self.assertLessEqual({'report.json', 'game/northlight-renderer.log', 'game/water-core.log', 'game/water.ini',
+                              'game/Wow_d3d9.log'}, names)
+        self.assertTrue(any(n.startswith('installer/northlight-logs-') for n in names))
+        self.assertFalse([n for n in names if 'SECRET' in n or 'Chat' in n or n.endswith('crash.txt')])
+        self.assertEqual([c['name'] for c in report['crash_reports']], ['crash.txt'])
+        self.assertEqual(report['status']['client'], str(self.client.resolve()))
+        self.assertEqual(archive.parent, self.pkg_root)
+
     def test_status_shows_the_selected_groups(self):
         self.installer().install(self.client, instances='2 5')
         state = self.installer().status(self.client)

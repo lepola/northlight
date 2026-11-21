@@ -41,8 +41,10 @@ install Northlight 0.3.216 afterwards.
 IF SOMETHING GOES WRONG
 
 {startup}
-If installation stops, the last message tells you why. For help, include the
-package version and that message. Installer logs are in the extracted package's
-logs folder. For a visual issue, include the zone, time of day and how to
-reproduce it. A screenshot or a short clip is helpful. The game folder also
-contains northlight-renderer.log and water-core.log after a normal launch.
+If installation stops, the last message tells you why. To report a problem,
+close WoW and {collect}.
+It asks for the game folder and makes a northlight-logs ZIP in this folder.
+Attach that to your report. It holds the installer, renderer and Tideglass logs
+and settings and folder paths from your computer, nothing from your account,
+characters or chat. For a visual issue, also say the zone, time of day and how
+to reproduce it. A screenshot or a short clip is helpful.

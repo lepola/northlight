@@ -312,11 +312,11 @@ def dxvk_files(pin_name='dxvk'):
 
 def launchers(platform, version):
     if platform == 'linux':
-        def script(action):
+        def script(action, name):
             # POSIX sh: `sh install.sh` (dash) works as well as `bash install.sh` or ./install.sh.
             return (f'#!/bin/sh\n# Northlight renderer {version}: {action} (Linux; the game runs under Wine or Proton).\n'
-                    f'# Start it in a terminal in this folder:  bash {action}.sh\n'
-                    '# A first argument install, uninstall or status replaces the default action.\n'
+                    f'# Start it in a terminal in this folder:  bash {name}\n'
+                    '# A first argument install, uninstall, status or logs replaces the default action.\n'
                     'PKG="$(cd "$(dirname "$0")" && pwd -P)"\n'
                     'PY="$PKG/runtime/bin/python3"\n'
                     '# Some archive tools drop the executable bit; this restores it in this package folder only.\n'
@@ -334,19 +334,20 @@ def launchers(platform, version):
                     '# Started from a file manager, the window would close before the result can be read.\n'
                     'if [ -t 0 ]; then echo; printf "Press Enter to close this window. "; read -r _; fi\n'
                     'exit $status\n').encode('ascii')
-        return {'install.sh': script('install'), 'uninstall.sh': script('uninstall')}
+        return {name: script(action, name) for action, name in
+                (('install', 'install.sh'), ('uninstall', 'uninstall.sh'), ('logs', 'collect-logs.sh'))}
     if platform == 'windows':
         def cmd(action):
             return ('@echo off\r\nchcp 65001 >nul\r\n'
                     f'"%~dp0runtime\\python.exe" -I -B -X utf8 "%~dp0app\\renderer\\northlight_install.py" '
                     f'--default-action {action} %*\r\n'
                     'set "result=%errorlevel%"\r\necho.\r\npause\r\nexit /b %result%\r\n').encode('ascii')
-        return {'Install.cmd': cmd('install'), 'Uninstall.cmd': cmd('uninstall')}
+        return {'Install.cmd': cmd('install'), 'Uninstall.cmd': cmd('uninstall'), 'Collect Logs.cmd': cmd('logs')}
 
     def command(action, title):
         return (f'#!/bin/bash\n# Northlight renderer {version}: {title} (macOS, WoWSilicon).\n'
                 '# Start it in Terminal: type  bash  and a space, drag this file into the window, press Enter.\n'
-                '# A first argument install, uninstall or status replaces the default action.\n'
+                '# A first argument install, uninstall, status or logs replaces the default action.\n'
                 'PKG="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"\n'
                 '# A browser marks downloaded files as quarantined; this clears it in this package folder only.\n'
                 '/usr/bin/xattr -dr com.apple.quarantine "$PKG" 2>/dev/null\n'
@@ -354,7 +355,8 @@ def launchers(platform, version):
                 f'--default-action {action} "$@"\n'
                 'status=$?\necho\nread -r -p "Press Enter to close this window. " _\nexit $status\n').encode('ascii')
     return {'Install Northlight.command': command('install', 'install'),
-            'Uninstall Northlight.command': command('uninstall', 'uninstall')}
+            'Uninstall Northlight.command': command('uninstall', 'uninstall'),
+            'Collect Logs.command': command('logs', 'collect logs for a problem report')}
 
 
 def combo_readme(platform, wine_steps):
@@ -365,6 +367,7 @@ def combo_readme(platform, wine_steps):
                           '   appears, choose More info, then Run anyway.',
                     before_play='', settings_key='Ctrl+Shift+F11',
                     undo='double-click Uninstall.cmd in this folder',
+                    collect='double-click Collect Logs.cmd in this folder',
                     startup='If the game closes at startup, try the older graphics backend.\n'
                             'Right-click an empty spot in the extracted folder, choose Open in Terminal\n'
                             '(on Windows 10, hold Shift and choose Open PowerShell window here) and run:\n'
@@ -374,6 +377,7 @@ def combo_readme(platform, wine_steps):
                     start='Open a terminal in the extracted folder and run bash install.sh.',
                     before_play='\n' + '\n'.join(wine_steps) + '\n', settings_key='Ctrl+Shift+F11',
                     undo='run bash uninstall.sh in this folder',
+                    collect='run bash collect-logs.sh in this folder',
                     startup='If the game closes at startup, try the older graphics backend.\n'
                             'Open a terminal in the extracted folder and run:\n'
                             '  bash install.sh --backend dxvk2')
@@ -387,6 +391,7 @@ def combo_readme(platform, wine_steps):
                             '(not MTLD3D). The installer checks this before it changes anything.\n',
                 settings_key='Ctrl+Shift+F11 (with fn on a Mac keyboard)',
                 undo='run "Uninstall Northlight.command" the same way',
+                collect='run "Collect Logs.command" the way you ran the installer',
                 startup='If the game closes at startup or the water looks wrong, quit WoW, open\n'
                         'water-host.ini in the game folder, change Enable=1 to Enable=0 and start\n'
                         'WoW again. That keeps Northlight with the game\'s water. Please report\n'

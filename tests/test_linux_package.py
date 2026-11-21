@@ -30,11 +30,12 @@ class LinuxPackageRules(unittest.TestCase):
 
     def test_launchers(self):
         launchers = bp.launchers('linux', '0.3.202')
-        self.assertEqual(sorted(launchers), ['install.sh', 'uninstall.sh'])
+        self.assertEqual(sorted(launchers), ['collect-logs.sh', 'install.sh', 'uninstall.sh'])
+        actions = {'install.sh': b'install', 'uninstall.sh': b'uninstall', 'collect-logs.sh': b'logs'}
         for name, data in launchers.items():
             with self.subTest(name=name):
                 self.assertTrue(data.startswith(b'#!/bin/sh\n') and b'\r' not in data)
-                self.assertIn(b'--default-action ' + name[:-3].encode() + b' "$@"', data)
+                self.assertIn(b'--default-action ' + actions[name] + b' "$@"', data)
                 self.assertIn(b'chmod u+x "$PY"', data)
                 self.assertNotIn(b'BASH_SOURCE', data)   # `sh install.sh` runs dash on Debian/Ubuntu
                 self.assertNotIn(b'read -r -p', data)
