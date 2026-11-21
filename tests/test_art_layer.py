@@ -191,4 +191,6 @@ report['own'] = {'rebuilt_sha256': got, 'models': sum(n.lower().endswith('.m2') 
 # Optional sky resources may be absent, but skipped steps must explain why.
 assert all(isinstance(s[k], str) and s[k] for s in r_own['steps'] for k in ('skipped', 'sky_clone_skipped') if k in s)
 (out / 'art-layer.json').write_text(json.dumps(report, indent=2) + '\n')
+for generated in (stock, own, again):
+    shutil.rmtree(generated)
 print(json.dumps(report, indent=2))
