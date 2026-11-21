@@ -37,6 +37,7 @@ folder: nothing is written into the client.
 import argparse
 import hashlib
 import json
+import struct
 import sys
 import tempfile
 from pathlib import Path
@@ -142,8 +143,9 @@ def lighting_payload(assets, client, locale, work, fog, sky, report, combo):
     return payload
 
 
-# Only the known incomplete HD revisions qualify. Preserve local replacements, including
-# complete textures with the same filename, and all original compressed image levels.
+TRAM_GLASS = r'World\Generic\Gnome\Passive Doodads\GnomeMachine\GnomeSubwayGlass.m2'
+
+# Only patch the reviewed revisions. Preserve player replacements under the same name.
 SCENERY_INPUTS = {
     r'World\ENVIRONMENT\DOODAD\SWAMPOFSORROWS\PLANTS\REEDS\TEXTURE\SWAMPREEDS01A.BLP':
         'a9062fbbd57f2639b423930f0e7cec62fc280a7e765fd4d4e81c21d0095a6de4',
@@ -153,7 +155,22 @@ SCENERY_INPUTS = {
         '35c100035dcc18bc3aa18aed70eecf7ecde94ba7e5890d932258347d67d77662',
     r'WORLD\AZEROTH\ELWYNN\PASSIVEDOODADS\SMALLDOCK\ELWYNNROADSIGNWOOD02.BLP':
         '6a7f0908cdaff8cc79c584590193c64bdb346c1c2412de9d21106d5ca48eee4f',
+    TRAM_GLASS: 'f4189ea9dd5fac2c1a21027d87a1b3d77ed6bc9d591ae7152dd72c3df71a7f6e',
 }
+
+
+def tram_glass(source):
+    """Keep one native tint and a faint sheen when looking through both tracks' glass."""
+    model = bytearray(source)
+    _, materials = struct.unpack_from('<II', model, 112)
+    _, opacity_track = struct.unpack_from('<II', model, 88)
+    _, value_arrays = struct.unpack_from('<II', model, opacity_track + 12)
+    _, value = struct.unpack_from('<II', model, value_arrays)
+    # The second material uses alpha blending. The first keeps its multiplicative
+    # blend, which ignores this model's single shared opacity key.
+    struct.pack_into('<H', model, materials + 4 + 2, 2)
+    struct.pack_into('<h', model, value, round(0.06 * 32767))
+    return bytes(model)
 
 
 def scenery_repairs(assets):
@@ -166,12 +183,12 @@ def scenery_repairs(assets):
         except FileNotFoundError:
             continue
         if hashlib.sha256(source).hexdigest() == digest:
-            repairs[name] = complete_terminal_bc3_mip(source)
+            repairs[name] = tram_glass(source) if name == TRAM_GLASS else complete_terminal_bc3_mip(source)
     return repairs
 
 
 def respect_locale_patches(assets, payload, local_folder, locale, letter):
-    """Keep related lighting tables together. The four scenery textures are independent."""
+    """Keep related lighting tables together. Each scenery asset is independent."""
     later = {i for i, path in enumerate(assets.paths) if path.parent == local_folder
              and path.stem.lower().startswith('patch-' + locale.lower() + '-')
              and path.stem.lower().split('-')[-1] > letter}
@@ -232,7 +249,7 @@ def build(client, output, world_cache, locale=None, letter='z', archives='all', 
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     client_archives.add_arguments(ap)
-    ap.add_argument('--tideglass', action='store_true', help='build the combo preset with native models and known HD scenery repairs')
+    ap.add_argument('--tideglass', action='store_true', help='build the combo preset with underwater daylight and targeted scenery repairs')
     ap.add_argument('--sky', choices=('current', 'experimental-preserve'), default='current',
                     help='experimental: preserve mixed moon artwork and use compatible local HD Tirisfal clouds')
     ap.add_argument('--world-cache', type=Path, help="the client's world cache, for its fog zones (default: <client>/world-cache)")
