@@ -54,7 +54,7 @@ bool TextureName(Bytes b, std::size_t at, uint32_t count)
     return b.data[at+count-5] == '.' && lower(b.data[at+count-4]) == 'b' &&
            lower(b.data[at+count-3]) == 'l' && lower(b.data[at+count-2]) == 'p';
 }
-ModelError DecodeMotion(Bytes m,const Table& bones,uint32_t vertices,std::size_t limit,ModelMotion& out)
+ModelError DecodeMotion(Bytes m,const Table& bones,uint32_t vertices,std::size_t limit,ModelMotion& out,std::array<bool,256>& omitted)
 {
     Table sequences;
     if(bones.count>256 || !Array(m,28,64,304,sequences) || !sequences.count || sequences.count>256)return ModelError::Pose;
@@ -82,7 +82,12 @@ ModelError DecodeMotion(Bytes m,const Table& bones,uint32_t vertices,std::size_t
         if(pass){candidate.duration=duration;candidate.bones.resize(bones.count);candidate.vertices.resize(vertices);}
         for(unsigned b=0;b<bones.count;++b){
             const auto at=bones.At(b);float pivot[3];
-            if((U32(m,at+4)&~512u) || U16(m,at+8)!=0xffff || !EmptyTrack(m,at+56) || !Floats(m,at+76,pivot,3))return ModelError::Pose;
+            const auto parent=U16(m,at+8);
+            if((parent!=0xffff && parent>=bones.count) || !Floats(m,at+76,pivot,3))return ModelError::Pose;
+            // Other batches in this model can depend only on independent bones with embedded tracks.
+            omitted[b]=(U32(m,at+4)&~512u) || parent!=0xffff || !EmptyTrack(m,at+56) ||
+                       U16(m,at+18)!=0xffff || U16(m,at+38)!=0xffff;
+            if(omitted[b])continue;
             if(pass)std::copy(pivot,pivot+3,candidate.bones[b].pivot.begin());
             for(unsigned rotation=0;rotation<2;++rotation){
                 const auto track=at+(rotation?36:16);if(EmptyTrack(m,track))continue;
@@ -173,8 +178,9 @@ static ModelError DecodeModel(world::Bytes m, world::Bytes s, std::size_t limit,
         if (!charge(std::max<std::size_t>(count, std::string().capacity()+1), 1)) return ModelError::Budget;
     }
     ModelMotion animation;
+    std::array<bool,256> omittedBones{};
     if (motion) {
-        const auto error=DecodeMotion(m,bones,lookup.count,remaining,animation);
+        const auto error=DecodeMotion(m,bones,lookup.count,remaining,animation,omittedBones);
         if(error!=ModelError::None)return error;
     }
     StaticModel candidate;
@@ -220,6 +226,7 @@ static ModelError DecodeModel(world::Bytes m, world::Bytes s, std::size_t limit,
         if (rest && (U32(m, at) != 0 || (U32(m, at+4)&~3u) || offset < Header || !TextureName(m, offset, count))) continue;
         CanonicalAssetName({reinterpret_cast<const char*>(m.data+offset), count-1}, t.name);
     }
+    const bool partialMotion=motion && std::any_of(omittedBones.begin(),omittedBones.end(),[](bool omitted){return omitted;});
     for (uint32_t i = 0; i < batches.count; ++i) {
         const auto at = batches.At(i);
         const auto sub = U16(s, at+4), material = U16(s, at+10), texture = U16(s, at+16);
@@ -267,6 +274,7 @@ static ModelError DecodeModel(world::Bytes m, world::Bytes s, std::size_t limit,
         const auto palette=U16(s,sm+12), influences=U16(s,sm+16);
         if(!palette || palette>boneLookup.count-combo || !influences || influences>4)return ModelError::Pose;
         if(!motion && (palette!=1 || influences!=1 || U16(s,sm+18)!=0))return ModelError::Geometry;
+        bool drawable=true;
         for (uint32_t j = firstVertex; j < firstVertex+count; ++j) {
             if(!motion){
                 const uint32_t bone=s.data[skinBones.At(j)];
@@ -277,13 +285,20 @@ static ModelError DecodeModel(world::Bytes m, world::Bytes s, std::size_t limit,
                 if(k>=influences || bone>=palette || U16(m,boneLookup.At(combo+bone))!=influence.bones[k])return ModelError::Pose;
             }
         }
-        for (uint32_t j = draw.firstIndex; j < draw.firstIndex+draw.indexCount; ++j)
-            if (candidate.indices[j] < firstVertex || candidate.indices[j] >= firstVertex+count)
-                return ModelError::Geometry;
+        for (uint32_t j = draw.firstIndex; j < draw.firstIndex+draw.indexCount; ++j) {
+            const auto vertex=candidate.indices[j];
+            if (vertex < firstVertex || vertex >= firstVertex+count) return ModelError::Geometry;
+            if(partialMotion && drawable){
+                const auto& influence=animation.vertices[vertex];
+                for(unsigned k=0;k<4;++k)
+                    if(influence.weights[k] && omittedBones[influence.bones[k]])drawable=false;
+            }
+        }
+        if(!drawable)draw.indexCount=0;
     }
-    if (rest) {
+    if (rest || partialMotion) {
         candidate.draws.erase(std::remove_if(candidate.draws.begin(),candidate.draws.end(),[](const ModelDraw& d){return !d.indexCount;}),candidate.draws.end());
-        if (candidate.draws.empty()) return ModelError::Material;
+        if (candidate.draws.empty()) return motion ? ModelError::Pose : ModelError::Material;
     }
     if (candidate.Bytes() > limit || (motion && animation.Bytes()>limit-candidate.Bytes()))return ModelError::Budget;
     if(motion){

@@ -226,8 +226,8 @@
     "src/world_horizon.cpp": "77159f0a902d1886c4c0f631dbe97e3709a6650a424ce3b439e01a97511dae53",
     "src/world_horizon.h": "b75da7665fb6afe919e6918b71f3f739544cce46939b664d53f4a0f4a4f7ae06",
     "src/world_mesh.h": "b826ba6dab2159c806f8112ab6f2e3591c48766c54a75c8c99cc130ea5de6e9d",
-    "src/world_model.cpp": "a9a67efd9094379a951a829c6101a14e481645f72aaaa13fda44a13ecb9b85ad",
-    "src/world_model.h": "4c37d4dcaa092732f2bb28ec9e68dc379ae5482523a8eeddbe0886ac0fccfcf6",
+    "src/world_model.cpp": "f80ad418439b88edf9a022c6fd13cb3aa04405defe8d0c98222667df1a458864",
+    "src/world_model.h": "a51cd4ebd06940bcb516e9862075a4af31fe539ae1ae3c66c774adc584855590",
     "src/world_placement.h": "8afae8017a939a1d9beaf297ebb1d3f7a2f5fcf72c96327c9794f4b14b781a5a",
     "src/world_scene.cpp": "47b5eba62df5c0f7d7c6252a3b429d8b17d3664770e6f857d22bb54a23c3e18b",
     "src/world_scene.h": "2118bfefc76dbc80e6d07627b858b84a26a3d6d88d3d697b03dcfd2e92e73607",
@@ -249,7 +249,7 @@
     "tools/shader_build.py": "c80119742e5a2dab25846e3316e5bd691e132201ca8404227d1e00dd979fc0d6",
     "tools/shader_header.py": "0154d161dd86a4e8c320c23081a87d5123f410c9211dea016664d9bea311e189"
   },
-  "revision": "32b3ec8186fd5c12ab4762224d08cf590d614aef",
+  "revision": "d2ed6f33d06924eaea65ced5e4be0a704a8ffb70",
   "shaders": {
     "ps_ao": {
       "dependencies": {

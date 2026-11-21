@@ -23,7 +23,8 @@ struct ModelMotion
 using ModelPose = std::array<std::array<float,12>,256>; // independent rigid bone transforms
 // Embedded, single looping clip (including aliases), independent bones, linear
 // translation/rotation only. No camera-dependent bones or guessed external clips.
-// Mesh and motion publish together; unsupported input preserves both outputs.
+// An independently drawable batch survives an unsupported bone elsewhere in the model.
+// Mesh and motion publish together; rejection preserves both outputs.
 ModelError DecodeLoopingModel(Bytes model, Bytes skin, std::size_t limit, StaticModel& mesh, ModelMotion& motion);
 bool SampleModelPose(const ModelMotion&, uint32_t milliseconds, ModelPose&);
 ModelVertex DeformModelVertex(const ModelVertex&, const ModelMotion::Influence&, const ModelPose&);
