@@ -153,7 +153,7 @@
     "src/ground.cpp": "c1f5413297a34eb089b6cdd090c8ff0963674b4afed0300916561816b4a590aa",
     "src/ground.h": "fd28a655a76c725d87f752682be530ff3cae2ef7c61e948768bb0892b3507ff0",
     "src/ground_shift.h": "2c598520cbcf6db6a1580598bda0394fdcb43083f7aeade730b1315bb563f6bb",
-    "src/host_api.cpp": "66af97adb75f28747b4de8245fd6993e8188380a335ec3a3bc03b81c1d97bdd2",
+    "src/host_api.cpp": "17c9caed48412cd966128ea26b2fb405e0f16b11bcd582889891067120ad7616",
     "src/host_api.h": "28204423e6e0c75540e40a2e6c59abfed9e1b14bd4c331f87231613587f294d1",
     "src/host_capture.h": "71a236c0d1122fcb574ca4e8ca0b9e5c665499f650a0340f346f6a94ef6a7948",
     "src/host_client.h": "321afc2bb99a290cb4b3416a187dff81e99de0635866b85d87bd45ea8e600da5",
@@ -213,6 +213,7 @@
     "src/surface_depth.cpp": "3e60cecca70c1451276d596bc13a621c1b6e01e54f10baefe65bfe9df6b62153",
     "src/surface_depth.h": "b1cd06a371e154ee74b4b7d732f370617ab588820fde1945b918e76e705b8cc6",
     "src/surface_environment.h": "5447085946ce6ae5248d5db960b6bff80602d0565661e1ea25c93f3844442a61",
+    "src/version.h": "bb24fc1a5a5165028a84e455d58c62a12c982e66a4bf03c35305cfa6c5b30be4",
     "src/visual_time.h": "5691af27905094fd71e7db4fd608eddc7df31b7969dad4539aaf84a80792167d",
     "src/water_environment.h": "5250a3b35c6568c7c8bb814227236a85299be93a117f21faefa89ad5f9c5266d",
     "src/world_adt.cpp": "511fdb3a88a45d6c55da3d19c6623ce176ff3f45a671d5d65ff4aba9ddb9c0e4",
@@ -247,7 +248,7 @@
     "tools/shader_build.py": "c80119742e5a2dab25846e3316e5bd691e132201ca8404227d1e00dd979fc0d6",
     "tools/shader_header.py": "0154d161dd86a4e8c320c23081a87d5123f410c9211dea016664d9bea311e189"
   },
-  "revision": "fad94f6056e52cb9ef42db6c6f840450c48e12f5",
+  "revision": "3e468ef21f51f9dab95e320d99e52f354b79834c",
   "shaders": {
     "ps_ao": {
       "dependencies": {

@@ -2,6 +2,7 @@
 #include "host_api.h"
 #include "host_diagnostics.h"
 #include "host_capture.h"
+#include "version.h"
 #include "host_environment.h"
 #include "host_liquid.h"
 #include "liquid.h"
@@ -96,6 +97,7 @@ WaterHostContext* __cdecl Create(IDirect3DDevice9* device, const char* settings)
         if (!device || !settings || !*settings) return nullptr;
         auto result = std::make_unique<WaterHostContext>(device, settings);
         LogRetain((result->config.Directory() + "water-core.log").c_str());
+        WATER_LOG_INFO("Tideglass " TIDEGLASS_VERSION "; cooperative core started; settings in %s", result->config.Directory().c_str());
         result->session.PrepareUnderwaterShaders(device, result->config.Get());
         ++liveContexts;
         return result.release();
