@@ -16,4 +16,4 @@ script bug was fixed. See the commit messages.
 Not listed here: 3 tests that fail only when a prerequisite is missing. They are tagged instead,
 so the runner reports a reasoned SKIP:
 
-- `manual`, needs command-line arguments: `test_camera_upstream_capture.py`, `test_terrain_cache_capacity.py`, `test_terrain_capture_optimization.py`.
+- `manual`, needs command-line arguments: `test_terrain_cache_capacity.py`.

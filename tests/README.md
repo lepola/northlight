@@ -48,8 +48,7 @@ python3 scripts/run_tests.py --require client    # a missing client FAILs instea
 python3 scripts/run_tests.py --record 0.3.158    # reports go to renderer/records/validation-0.3.158
 ```
 
-Reports go to `out/test-output/<run>/<test>/` (logs in `out/test-output/<run>/logs/`). Nothing is
-written into the tree unless you pass `--record`. `validate_*.py` and `verify_*.py` run only when
+Each run leaves `results.tsv` in its own directory under `out/test-output/`. A failed test retains its log tail and any minimal fixture it put in `NORTHLIGHT_TEST_OUTPUT_DIR/repro/`. Use `--record VERSION` to keep generated reports for a named comparison. `validate_*.py` and `verify_*.py` run only when
 named; `verify_packages.py` checks the zips `renderer/build_packages.py` wrote.
 
 ## Tags

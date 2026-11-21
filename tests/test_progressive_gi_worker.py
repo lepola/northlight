@@ -46,7 +46,7 @@ struct Fixture {
 SNAPSHOT
  struct Request {std::shared_ptr<const int> actorJob;V camera,probeCenter;NorthlightGI::Lighting light;std::string map="Azeroth";uint64_t id=1,baseId=1;DWORD queuedAt=0;unsigned reason=1;};
  // The production relight cache answers repeated keys without solving; this tail test counts every solve and advances its clock
- // per solve, so it uses a pass-through with the same interface (the cache itself: test_probe_blend_equivalence / world_probe_cache).
+ // per solve, so it uses a pass-through with the same interface (the cache itself: test_probe_blend / world_probe_cache).
  struct PassThroughRelight {
   void reset(){} void configure(const NorthlightGI::PreparedLighting&,unsigned){}
   NorthlightGI::Probe solve(const NorthlightGI::BVH& b,NorthlightGI::ProbeGridKey,V q,const NorthlightGI::PreparedLighting& l,unsigned rays,uint32_t seed){return NorthlightGI::solveProbePrepared(b,q,l,rays,seed);}

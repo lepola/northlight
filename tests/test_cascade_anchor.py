@@ -32,4 +32,9 @@ with tempfile.TemporaryDirectory(prefix='northlight-anchor-') as tmp:
         exe=Path(tmp)/('test-'+label)
         subprocess.run(['clang++','-std=c++17','-Wall','-Wextra','-Werror',*flags,*fp.test_include_flags(),str(HERE/'test_cascade_anchor.cpp'),'-o',str(exe)],check=True)
         print(label,subprocess.check_output([str(exe)],text=True),end='',flush=True)
+    upstream = Path(tmp) / 'upstream-depth'
+    subprocess.run(['clang++', '-std=c++17', '-O2', *fp.test_include_flags(),
+                    str(HERE / 'test_upstream_shadow.cpp'), str(fp.src('world_gi.cpp')),
+                    '-o', str(upstream)], check=True)
+    subprocess.run([str(upstream)], check=True)
 print('PASS jump-stable cascade anchor: model and wiring')

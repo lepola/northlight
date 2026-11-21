@@ -13,7 +13,7 @@ A test whose requirement is not available is reported SKIP with the reason; see 
 in tests/KNOWN_FAILURES.md: it still runs, a failure is reported XFAIL and does not fail the run,
 a pass is reported XPASS (remove the tag).
 Tests run under `nice -n 15`, 4 at a time, slow ones first; `timing` tests (CPU-time budgets)
-run alone at the end. Reports go to out/test-output/<run>/<test>/ unless --record is given.
+run alone at the end. Each run writes results.tsv. Failures also keep a bounded diagnostic log and any declared reproducer.
 """
 import argparse
 import concurrent.futures as cf
@@ -24,6 +24,7 @@ import re
 import shutil
 import subprocess
 import sys
+import tempfile
 import time
 from pathlib import Path
 
@@ -156,7 +157,9 @@ def main():
 
     required = {r for r in args.require.split(',') if r}
     run_id = time.strftime('%Y%m%d-%H%M%S')
-    out_root = fp.out() / 'test-output' / run_id
+    output = fp.out() / 'test-output'
+    output.mkdir(parents=True, exist_ok=True)
+    out_root = Path(tempfile.mkdtemp(prefix=run_id + '-', dir=output))
     record = fp.RECORDS / f'validation-{args.record}' if args.record else None
     prefix = [] if args.no_nice or not shutil.which('nice') else ['nice', '-n', '15']
     probes = {}
@@ -178,20 +181,26 @@ def main():
 
     def run(item):
         t, flags = item
-        env = dict(os.environ, NORTHLIGHT_TEST_OUTPUT_DIR=str(record or out_root / t.stem))
         start = time.time()
-        try:
-            r = subprocess.run(prefix + [sys.executable, str(t)], cwd=fp.TESTS, env=env,
-                               capture_output=True, text=True, timeout=args.timeout)
-            status = 'PASS' if r.returncode == 0 else 'FAIL'
-            tail = (r.stdout + r.stderr).strip()
-        except subprocess.TimeoutExpired:
-            status, tail = 'TIMEOUT', ''
-        if 'known-fail' in flags and status != 'TIMEOUT':
-            status = {'FAIL': 'XFAIL', 'PASS': 'XPASS'}[status]   # XPASS: remove the tag
-        log = out_root / 'logs' / (t.stem + '.log')
-        log.parent.mkdir(parents=True, exist_ok=True)
-        log.write_text(tail + '\n')
+        with tempfile.TemporaryDirectory(dir=out_root, prefix=t.stem + '-') as scratch:
+            work = Path(scratch)
+            env = dict(os.environ, NORTHLIGHT_TEST_OUTPUT_DIR=str(record or work))
+            try:
+                r = subprocess.run(prefix + [sys.executable, str(t)], cwd=fp.TESTS, env=env,
+                                   capture_output=True, text=True, timeout=args.timeout)
+                status = 'PASS' if r.returncode == 0 else 'FAIL'
+                tail = (r.stdout + r.stderr).strip()
+            except subprocess.TimeoutExpired as exc:
+                status = 'TIMEOUT'
+                tail = ((exc.stdout or b'') + (exc.stderr or b'')).decode(errors='replace')
+            if 'known-fail' in flags and status != 'TIMEOUT':
+                status = {'FAIL': 'XFAIL', 'PASS': 'XPASS'}[status]
+            if record or status in ('FAIL', 'TIMEOUT', 'XFAIL'):
+                log = out_root / 'logs' / (t.stem + '.log')
+                log.parent.mkdir(parents=True, exist_ok=True)
+                log.write_bytes((tail[-16384:] + '\n').encode())
+                if (work / 'repro').is_dir():
+                    (work / 'repro').rename(out_root / t.stem)
         last = tail.splitlines()[-1] if tail and status not in ('PASS', 'XPASS') else ''
         if status in ('XFAIL', 'XPASS'):
             last = f'known-fail: {known_fail.get(t.name, "")} | {last}' if status == 'XFAIL' else 'passes now: remove known-fail'
@@ -201,7 +210,7 @@ def main():
     parallel.sort(key=lambda i: ('slow' not in i[1], i[0].name))
     serial = [i for i in plan if 'timing' in i[1]]
     print(f'{len(plan)} to run ({len(serial)} timing tests serially at the end), '
-          f'{len(results)} not run; logs in {out_root.relative_to(fp.REPO) if fp.REPO in out_root.parents else out_root}', flush=True)
+          f'{len(results)} not run; results in {out_root.relative_to(fp.REPO) if fp.REPO in out_root.parents else out_root}', flush=True)
     with cf.ThreadPoolExecutor(max_workers=max(1, args.jobs)) as ex:
         for name, res in ex.map(run, parallel):
             results[name] = res

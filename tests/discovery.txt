@@ -19,7 +19,6 @@ test_backend_proxy.py
 test_band_retime.py
 test_cache_shadow_optimizations.py
 test_cache_variant.py
-test_camera_upstream_capture.py
 test_capture_admission.py
 test_capture_skip_revalidation.py
 test_capture_skip_wiring.py
@@ -135,7 +134,6 @@ test_point_light_shadow.py
 test_point_shadow_schedule.py
 test_prepare_worker.py
 test_probe_blend.py
-test_probe_blend_equivalence.py
 test_probe_relight_cache.py
 test_probe_texture_upload.py
 test_production_draw_timers.py
@@ -202,7 +200,6 @@ test_synced_slots_wiring.py
 test_temporal_history.py
 test_terrain_cache_capacity.py
 test_terrain_capture_bounds.py
-test_terrain_capture_optimization.py
 test_terrain_content_cache.py
 test_terrain_metadata.py
 test_terrain_reach_fallback.py
