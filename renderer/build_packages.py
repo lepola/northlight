@@ -91,6 +91,11 @@ CACHE_MEMBER = re.compile(r'^([A-Za-z0-9]+/\d+_\d+\.fg3|models/[0-9a-f]+\.fgs|li
                           r'fog/[A-Za-z0-9]+/\d+_\d+\.frf|celestial/(sun|moon)\.fct|northlight-cache\.json)$')
 MARKER = re.compile(rb'Northlight renderer (\d+\.\d+\.\d+);')
 DEV_MARKER = b'NORTHLIGHT DEV TUNING BUILD'  # embedded by build_renderer.py --dev-tuning; never ships
+# A player core never changes the client: a development core's picture clock (this text) redirects client calls,
+# and rewriting code needs FlushInstructionCache or WriteProcessMemory. VirtualProtect alone is the C runtime's
+# relocation of the DLL's own pages.
+CLOCK_MARKER = b'TIDEGLASS VISUAL CLOCK BUILD'
+CODE_WRITE_IMPORTS = {'FlushInstructionCache', 'WriteProcessMemory'}
 
 
 def sha(path):
@@ -152,6 +157,17 @@ def check_dll(data):
     if DEV_MARKER in data:
         raise SystemExit('the renderer DLL is a NORTHLIGHT DEV TUNING BUILD (built with build_renderer.py --dev-tuning); rebuild it without --dev-tuning')
     return MARKER.search(data).group(1).decode()
+
+
+def check_water_core(core, host):
+    if pe_machine(core) != 0x14c or b'WaterHostGetAPI' not in core or b'WaterHostGetAPI' not in host:
+        raise SystemExit('The combined package requires a cooperative host and 32-bit Tideglass core')
+    if CLOCK_MARKER in core:
+        raise SystemExit('the Tideglass core is a development build with the picture clock; build it with scripts/build_combo.py')
+    imports = {n for names in build_stormlib.pe_info(core)['imports'].values() for n in names}
+    if imports & CODE_WRITE_IMPORTS:
+        raise SystemExit('the Tideglass core can change the client\'s code (imports ' +
+                         ', '.join(sorted(imports & CODE_WRITE_IMPORTS)) + '); a player core must not')
 
 
 def commit_time():
@@ -415,8 +431,7 @@ def build(platform, version, dll, variants, out, stormlib_dir, water_core=None, 
     water_info = {}
     if water_core is not None:
         core = water_core.read_bytes()
-        if pe_machine(core) != 0x14c or b'WaterHostGetAPI' not in core or b'WaterHostGetAPI' not in dll_data:
-            raise SystemExit('The combined package requires a cooperative host and 32-bit Tideglass core')
+        check_water_core(core, dll_data)
         payload['water-core.dll'] = core
         for name in WATER_SETTINGS:
             payload[name] = (fp.REPO / 'client-config' / name).read_bytes()

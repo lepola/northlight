@@ -130,6 +130,7 @@ test_particle_light_proof_client.py
 test_particle_lights.py
 test_particle_texture_stats.py
 test_pending_release_wiring.py
+test_player_water_core.py
 test_point_light_shadow.py
 test_point_shadow_schedule.py
 test_prepare_worker.py
