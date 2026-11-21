@@ -6,7 +6,7 @@ float4 cSceneryAlignment : register(c67); // x: D3D9 alignment; y: dry-land excl
 sampler2D sReceiverMask : register(s14); // source water geometry, before wave lookup displacement
 float4 cSceneryRegions[8] : register(c68); // unit world normal.xyz, world plane distance.w
 float4 cSceneryMapping : register(c76); // source/main projection scale.xy and NDC offset.zw
-float4 cReceiverContinuation : register(c77); // native height interval (xy), coverage half-height minus half-width (z)
+float4 cReceiverContinuation : register(c77); // continuation interval (xy), coverage half-height minus half-width (z), flat receiver height (w)
 float4 cReceiverCoverageFade : register(c78); // world XY centre, inner X reach, reciprocal fade width
 #include "reflection_scenery_raster.hlsli"
 ReflectionOutput SampleSceneryReflection(float2 pixel, LiquidSurface surface, out float excludedLand)

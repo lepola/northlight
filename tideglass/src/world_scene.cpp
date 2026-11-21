@@ -158,7 +158,7 @@ public:
         return true;
     }
     // One square of liquid, with its corners. False only on a fault in water near enough to matter.
-    bool WaterQuad(const std::array<std::array<double,3>,4>& points,uint64_t key,uint16_t type)
+    bool WaterQuad(const std::array<std::array<double,3>,4>& points,uint64_t key,uint16_t type,bool indoors=false)
     {
         // Admission precedes fitting: a remote waterfall must not
         // reject an otherwise valid local ocean window.
@@ -168,6 +168,7 @@ public:
         const bool further=options.streaming&&!options.region.Overlaps(low3,high0,OwnedWorldRegion::WaterReach);
         reflection::WaterSurface surface;
         surface.key=key;
+        surface.indoors=indoors;
         if (!reflection::FitWaterTile(points,surface,0)) {
             if(further)return true;
             return Fail(SceneError::Water);
@@ -551,6 +552,7 @@ public:
         WmoLiquid liquid;
         if(DecodeWmoLiquid(input,liquid)!=WmoError::None)return Fail(SceneError::Water,name);
         if(!liquid.width)return true;
+        const bool indoors=WmoGroupOnlyIndoors(input);
         // ADT borders repeat a building placement. Its water is admitted once,
         // in the same world transform as its scenery, before receiver selection.
         std::vector<const AdtWmoPlacement*> seen;
@@ -575,7 +577,7 @@ public:
                     for(unsigned v=0;v<4;++v)for(unsigned c=0;c<3;++c)
                         world[v][c]=transform[12+c]+local[v][0]*transform[c]+local[v][1]*transform[4+c]+local[v][2]*transform[8+c];
                     const uint64_t key=(uint64_t(1)<<63)|(uint64_t(placement.uid)<<25)|(uint64_t(group)<<16)|(y*liquid.width+x);
-                    if(!WaterQuad(world,key,liquid.type))return false;
+                    if(!WaterQuad(world,key,liquid.type,indoors))return false;
                 }
             }
         }

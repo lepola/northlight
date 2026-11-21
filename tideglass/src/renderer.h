@@ -321,6 +321,7 @@ private:
     IDirect3DPixelShader9* m_slimeUndoPs = nullptr;
     IDirect3DPixelShader9* m_slimeDeferredPs = nullptr;
     DeferredSurface m_slime;
+    bool m_buildingSlime = false;
     IDirect3DTexture9* m_surfaceBaseDepth = nullptr;
     IDirect3DTexture9* m_nativeWater = nullptr; // host distance/coverage, borrowed through this frame
     IDirect3DTexture9* m_waterDepth = nullptr; // standalone depth at the end of the liquid pass

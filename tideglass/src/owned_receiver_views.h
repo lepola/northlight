@@ -75,14 +75,16 @@ inline bool GroupReceiverViews(const std::vector<reflection::WaterSurface>& wate
         }
     }
     // The mask uses source water geometry, not the opaque scene or a character
-    // silhouette. Colour IDs start at one; zero is clear/no receiving water.
+    // silhouette. Magnitude selects the view. Negative marks an indoor level
+    // pool, whose height the native surface must match before shading it as sheltered.
     for(unsigned i=0;i<views.size();++i)for(unsigned index:views[i].surfaces){
         if(cancelled.load())return false;
         const auto& s=water[index];OwnedReceiverVertex corners[4];
+        const float id = (s.indoors && views[i].horizontal ? -1.f : 1.f) * float(i+1);
         for(unsigned c=0;c<4;++c){
             const float x=s.bounds[(c&1)?3:0],y=s.bounds[(c&2)?4:1];
             const float z=float(s.anchor[2]-(s.normal[0]*(x-s.anchor[0])+s.normal[1]*(y-s.anchor[1]))/s.normal[2]);
-            corners[c]={{x,y,z},float(i+1)};
+            corners[c]={{x,y,z},id};
             if(s.cornersKnown)for(unsigned axis=0;axis<3;++axis)corners[c].position[axis]=s.corners[c][axis];
         }
         for(unsigned c:{0u,1u,2u,2u,1u,3u})vertices.push_back(corners[c]);

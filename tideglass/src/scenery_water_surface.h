@@ -16,7 +16,7 @@ struct WaterSurface {
     // Preserve the authored quad for raster ownership. A rotated building's
     // liquid covers less than its axis-aligned box; the box is only for queries.
     std::array<std::array<float,3>,4> corners={};
-    bool cornersKnown=false;
+    bool cornersKnown=false, indoors=false;
 };
 inline bool FitWaterTile(const std::array<std::array<double,3>,4>& p,WaterSurface& out,double minimumUp=.25) {
     for(const auto& v:p)for(double c:v)if(!std::isfinite(c))return false;

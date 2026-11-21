@@ -1123,6 +1123,7 @@ bool Renderer::CaptureAndUndoSurface(IDirect3DDevice9* dev, IDirect3DTexture9* d
         dev->SetPixelShaderConstantF(0, &frame[0][0], kFrameConstants);
         if (!surface.thisFrame)
         {
+            if (keepStock) m_buildingSlime = false;
             if (!keepStock) m_lava.ordinarySeen = m_lava.felSeen = false;
             if(!SetTarget(dev, surface.depth))return false;
             dev->SetViewport(&full);
@@ -1190,6 +1191,7 @@ bool Renderer::CaptureAndUndoSurface(IDirect3DDevice9* dev, IDirect3DTexture9* d
     }
     if (!saved.Restore()) return false;
     surface.outdoorThisFrame |= ok && inLiquidPass;
+    m_buildingSlime |= ok && keepStock && !inLiquidPass;
     m_slimeCaptured |= ok && keepStock;
     if (ok && !keepStock) {
         ++m_lava.work.captures;
@@ -1260,7 +1262,7 @@ bool Renderer::CompositeDeferredSlime(IDirect3DDevice9* dev, IDirect3DTexture9* 
     if(lifted)bound=BindPointTexture(dev,1,m_slimeGround)&&bound;
     D3DSURFACE_DESC reflectionDesc={};
     const bool drawn=reflections&&SUCCEEDED(m_reflections[0]->GetLevelDesc(0,&reflectionDesc));
-    const float grid[4]={float(reflectionDesc.Width),float(reflectionDesc.Height),drawn?1.f:0.f,0.f};
+    const float grid[4]={float(reflectionDesc.Width),float(reflectionDesc.Height),drawn?1.f:0.f,drawn && m_buildingSlime && cfg.specular>0 ? 1.f : 0.f};
     bound=SUCCEEDED(dev->SetPixelShaderConstantF(kReflectionRegister,grid,1))&&bound;
     bound=BindPointTexture(dev,kReflectionStage,drawn?m_reflections[0]:nullptr)&&bound;
     bound=BindPointTexture(dev,kReflectionHitStage,drawn?m_reflections[1]:nullptr)&&bound;
@@ -1975,6 +1977,7 @@ bool Renderer::DrawReflections(IDirect3DDevice9* dev, IDirect3DTexture9* depthTe
             SetScenery(image.colour,image.depth,image.height,image.projection,
                        image.heights?nullptr:image.planes.data(),image.heights,image.underwater);
             m_sceneryViews=views;
+            continuation[3]=image.receiverHeight;
             if(!slime || m_slime.outdoorThisFrame){
                 continuation[0]=image.continuation[0];continuation[1]=image.continuation[1];
             }

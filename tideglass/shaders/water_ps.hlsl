@@ -1049,6 +1049,11 @@ float4 ShadeLiquid(float2 pixel, float surfaceDepth, float thickness)
 #else
     float3 sun = SunReflection(normal, toCamera, world.xy);
 #endif
+#ifdef SLIME_SURFACE_SHELTER
+    // The mirror resolve marks only pixels owned by an authored indoor liquid.
+    [branch] if (cReflectionGrid.w > 0.5)
+        sun *= 1.0 - tex2Dlod(sReflectionHit, float4(uv, 0, 0)).b;
+#endif
     color += sun;
     color += Scattered(normal, toCamera, light) * (1.0 - fresnel) * (1.0 - Overcast() * kOvercastScatterLoss);
 
@@ -1282,10 +1287,17 @@ ReflectionOutput main(float2 pixel : VPOS)
     // Explicit control flow avoids evaluating the surface and scenery lookup for
     // every pixel of every receiving height. clip alone need not skip that work.
     bool belongs=true;
+#ifdef DEFERRED_SLIME
+    bool indoors=false;
+#endif
     if(cSceneryAlignment.z>0.5)
     {
         float2 uv=(SceneryRaster(pixel)+0.5)*cSceneryGrid.zw;
         float receiver=tex2Dlod(sReceiverMask,float4(uv,0,0)).r;
+#ifdef DEFERRED_SLIME
+        indoors=receiver < -0.5;
+#endif
+        receiver=abs(receiver);
         belongs=abs(receiver-cSceneryAlignment.w)<0.25;
         // Source quads own their pixels. Beyond that finite import, a proven
         // flat view continues only where native liquid depth matches its level.
@@ -1312,6 +1324,9 @@ ReflectionOutput main(float2 pixel : VPOS)
         float2 lookup=lerp(pixel,ReflectionLookupPixel(pixel,surface),coverage);
         result=SceneryReflection(lookup, pixel, surface);
         result.colour*=coverage;
+#ifdef DEFERRED_SLIME
+        result.hit.b = indoors && abs(surface.world.z - cReceiverContinuation.w) < kSameWaterBody ? 1.0 : 0.0;
+#endif
     }
     return result;
 }
