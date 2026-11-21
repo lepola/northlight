@@ -6,7 +6,9 @@ Northlight adds lighting, shadows, skies and fog. Tideglass adds waves, underwat
 
 ## Get the beta
 
-When a combo build is published, open **Assets** on its GitHub release. Choose the ZIP with **tideglass** in its name and **Windows** or **Linux** at the end. If those files are absent, that release has no combo installer. The installer includes everything it needs to run. [GitHub releases](https://github.com/lepola/northlight/releases)
+**Beta 9** is the first public combo build. Download the ZIP for your platform.
+
+[Download for Windows](https://github.com/lepola/northlight/releases/download/v0.3.216-tideglass.9/Northlight-0.3.216-tideglass.9-Windows.zip) · [Download for Linux](https://github.com/lepola/northlight/releases/download/v0.3.216-tideglass.9/Northlight-0.3.216-tideglass.9-Linux.zip) · [Release notes and checksums](https://github.com/lepola/northlight/releases/tag/v0.3.216-tideglass.9)
 
 ## Install
 
@@ -42,10 +44,8 @@ Your game supplies the artwork, so stock and HD clients can look different. The 
 
 ## Change settings or roll back
 
-The in-game Water page is included in builds after beta 5. In beta 5, you can adjust water tuning in the game folder's `water.ini`.
-
-- **Adjust lighting and water in game** — press **Ctrl+Shift+F11**. On **Water**, choose **Quality**, **Balanced** or **Performance**, adjust waves or foam, then choose **Save**. Water performance presets are available from beta 7. [Settings guide](renderer/docs/settings-menu.md)
-- **Keep Northlight and use the game's water** — on **Water**, clear **Use Tideglass**, choose **Save** and restart WoW. Beta 5 users can set `Enable=0` in `water-host.ini` with the game closed.
+- **Adjust lighting and water in game** — press **Ctrl+Shift+F11**. On **Water**, choose **Quality**, **Balanced** or **Performance**, adjust waves or foam, then choose **Save**. [Settings guide](renderer/docs/settings-menu.md)
+- **Keep Northlight and use the game's water** — on **Water**, clear **Use Tideglass**, choose **Save** and restart WoW.
 - **Remove the combo** — close WoW and run `Uninstall.cmd` (Windows) or `bash uninstall.sh` (Linux) from the extracted package. Select the same game folder. This restores the previous renderer and keeps edited water settings.
 - **The game closes at startup** — try the older bundled graphics backend. Open a terminal in the extracted package and run `.\Install.cmd --backend dxvk2` on Windows or `bash install.sh --backend dxvk2` on Linux.
 - **Report a visual problem** — include the package version, zone, time of day and what you did just before it happened. For flicker or a hitch, say whether it happens while turning, moving or holding still. A screenshot or short clip helps.
