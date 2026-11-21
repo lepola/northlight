@@ -311,6 +311,7 @@ private:
     IDirect3DPixelShader9* m_underwaterFoamPs = nullptr;
     IDirect3DPixelShader9* m_underwaterSharedPs = nullptr;
     IDirect3DPixelShader9* m_underwaterSceneryPs = nullptr;
+    IDirect3DPixelShader9* m_slimeUnderwaterSceneryPs = nullptr;
     unsigned m_underwaterFrames = 0;
     unsigned m_slimeComposites = 0;
     GroundEffectCounts m_groundEffects;

@@ -6,7 +6,7 @@ sampler2D sUnderwaterFoam : register(s11);
 #endif
 
 #ifdef UNDERWATER_SCENERY
-// Shared foam supplies wake slopes, so s12/s13 no longer read wake-map textures.
+// Water takes wake slopes from shared foam. Slime has no ship wake. Both leave s12/s13 for the mirror.
 sampler2D sUnderwaterScenery : register(s12);
 sampler2D sUnderwaterSceneryDepth : register(s13);
 float4 cUnderwaterScenery : register(c65); // current source valid, authoritative water Z, dimensions
@@ -98,8 +98,9 @@ float GlancingMirror() { return saturate(cWindow.z); }
 bool UnderSlime()
 {
 #ifdef SHARED_UNDERWATER_FOAM
-    // This variant is selected only for water; slime continues using its existing underwater shader.
     return false;
+#elif defined(SLIME_UNDERSIDE)
+    return true;
 #else
     return cWindow.w > 0.5;
 #endif

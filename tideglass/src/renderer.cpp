@@ -45,6 +45,7 @@
 #include "ps_underwater_foam.h"
 #include "ps_underwater_shared.h"
 #include "ps_underwater_scenery.h"
+#include "ps_slime_underwater_scenery.h"
 #include "ps_underwater_scene.h"
 #include "ps_contact.h"
 #include "ps_contact_spread.h"
@@ -372,6 +373,7 @@ bool Renderer::EnsurePixelShader(IDirect3DDevice9* dev, IDirect3DPixelShader9*& 
         {&m_underwaterFoamPs, &p_ps_underwater_foam},
         {&m_underwaterSharedPs, &p_ps_underwater_shared},
         {&m_underwaterSceneryPs, &p_ps_underwater_scenery},
+        {&m_slimeUnderwaterSceneryPs, &p_ps_slime_underwater_scenery},
         {&m_ripplePs, &p_ps_ripple},
         {&m_slimeCapturePs, &p_ps_slime_capture},
         {&m_slimeUndoPs, &p_ps_slime_undo},
@@ -2790,7 +2792,12 @@ void Renderer::DrawUnderwater(IDirect3DDevice9* dev, IDirect3DTexture9* depthTex
     dev->SetRenderState(D3DRS_COLORWRITEENABLE, kColorOnly);
     dev->SetPixelShaderConstantF(0, &frame[0][0], kFrameConstants);
     dev->SetPixelShaderConstantF(kFrameConstants, &water[0][0], kWaterConstants);
-    if (FAILED(BindPixelShader(dev, scenery ? m_underwaterSceneryPs : (foam ? m_underwaterSharedPs : m_underwaterPs)))) return;
+    // Slime has its own absorption and no foam texture. The same shader can
+    // show the ordinary underside while a new scene or device is warming up.
+    const bool slimeMirror = slime && scenery && EnsurePixelShader(dev, m_slimeUnderwaterSceneryPs);
+    IDirect3DPixelShader9*& underside = slimeMirror ? m_slimeUnderwaterSceneryPs :
+        (!slime && scenery ? m_underwaterSceneryPs : (foam ? m_underwaterSharedPs : m_underwaterPs));
+    if (FAILED(BindPixelShader(dev, underside))) return;
     D3DSURFACE_DESC mirror={};if(source)m_sceneryDepth->GetLevelDesc(0,&mirror);
     const float reflected[4]={source?1.f:0.f,m_sceneryHeight,float(mirror.Width),float(mirror.Height)};
     dev->SetPixelShaderConstantF(65,reflected,1);
@@ -2812,9 +2819,12 @@ void Renderer::DrawUnderwater(IDirect3DDevice9* dev, IDirect3DTexture9* depthTex
     BindLinearTexture(dev, 7, slime ? nullptr : GroundTexture(dev, in.ground));
     BindLinearTexture(dev, 8, !slime && in.ground ? m_shore : nullptr);
     BindPointTexture(dev, kBoatPathStage, slime ? nullptr : BoatPathTexture(dev, in));
-    if(scenery && foam){BindPointTexture(dev,12,source?m_sceneryColour:nullptr);BindPointTexture(dev,13,source?m_sceneryDepth:nullptr);}
-    // Shared foam supplies wake slopes, leaving s10 free; the unshared shader has s11 free.
-    BindPointTexture(dev,(scenery || foam) ? 10 : 11,nativeSurface);
+    if (slimeMirror || (!slime && scenery)) {
+        BindPointTexture(dev, 12, source ? m_sceneryColour : nullptr);
+        BindPointTexture(dev, 13, source ? m_sceneryDepth : nullptr);
+    }
+    // Only the water variants using shared foam have their native surface on s10.
+    BindPointTexture(dev, !slime && (scenery || foam) ? 10 : 11, nativeSurface);
     DrawScreenTriangle(dev);
     dev->SetRenderState(D3DRS_COLORWRITEENABLE, 0xF);
     if(cfg.waterWorkAudit)TimeEnd(GpuTimer::UnderwaterView);
@@ -3304,6 +3314,7 @@ void Renderer::ReleaseAll()
     SafeRelease(m_underwaterFoamPs);
     SafeRelease(m_underwaterSharedPs);
     SafeRelease(m_underwaterSceneryPs);
+    SafeRelease(m_slimeUnderwaterSceneryPs);
     SafeRelease(m_ripplePs);
     SafeRelease(m_ground);
     SafeRelease(m_shore);
