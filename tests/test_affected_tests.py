@@ -8,6 +8,9 @@ import sys; from pathlib import Path; sys.path.insert(0, str(Path(__file__).reso
 import northlight_paths as fp
 sys.path.insert(0, str(fp.SCRIPTS))
 import affected_tests
+import subprocess
+import tempfile
+from unittest.mock import patch
 
 graph = affected_tests.Graph()
 
@@ -33,6 +36,31 @@ checks = {
     'a file no test names selects nothing (outside the source scanners)': graph.covering('docs/unmapped' + '.xyz') == [],
     'the reason chain ends at the test': all(why.endswith(t) for t, why in graph.covering('src/proxy/upload_lock.h') if 'scans' not in why and 'is the changed' not in why),
 }
+with tempfile.TemporaryDirectory() as temp:
+    repo = Path(temp)
+
+    def git(*args):
+        subprocess.run(['git', '-c', 'user.name=Test', '-c', 'user.email=test@example.invalid',
+                        '-c', 'commit.gpgsign=false', '-c', 'core.hooksPath=/dev/null', *args],
+                       cwd=repo, check=True, capture_output=True)
+
+    git('init', '-b', 'tideglass')
+    git('commit', '--allow-empty', '-m', 'published beta')
+    git('update-ref', 'refs/remotes/origin/tideglass', 'HEAD')
+    with patch.object(fp, 'REPO', repo):
+        checks['a clean single-branch beta selects no changes'] = affected_tests.changed_paths() == []
+        (repo / 'local.cpp').write_bytes(b'one')
+        git('add', 'local.cpp')
+        git('commit', '-m', 'local change')
+        (repo / 'new.cpp').write_bytes(b'two')
+        checks['the beta selects unpublished commits and untracked work'] = (
+            affected_tests.changed_paths() == ['local.cpp', 'new.cpp'])
+        git('update-ref', 'refs/remotes/origin/tideglass', 'HEAD')
+        (repo / 'local.cpp').write_bytes(b'staged')
+        git('add', 'local.cpp')
+        (repo / 'local.cpp').write_bytes(b'one')
+        checks['a staged change still counts when the working copy matches HEAD'] = (
+            affected_tests.changed_paths() == ['local.cpp', 'new.cpp'])
 for name, ok in checks.items():
     print(('ok   ' if ok else 'FAIL ') + name)
 sys.exit(0 if all(checks.values()) else 1)

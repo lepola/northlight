@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Print the tests that cover the changed files, so a change runs only those (not the ~13 minute suite).
 
-    python3 scripts/affected_tests.py                       # changed files: working tree, index, commits since the merge-base with origin/main (or main), untracked
+    python3 scripts/affected_tests.py                       # local changes, including commits since the branch baseline
     python3 scripts/affected_tests.py src/proxy/spell_layer.h shaders/effects.hlsl
     python3 scripts/affected_tests.py --why                 # also show how each test reaches the file
     python3 scripts/affected_tests.py --run                 # pass the list to scripts/run_tests.py
@@ -29,6 +29,7 @@ import os
 import re
 import subprocess
 import sys
+from functools import cached_property
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -60,9 +61,12 @@ def git(*args):
 
 
 def changed_paths():
-    base = next((b for b in ('origin/main', 'main') if git('rev-parse', '--verify', '-q', b)[0]), None)
-    since = git('merge-base', 'HEAD', base)[0] if base else ''
-    names = [*git('diff', '--name-only', 'HEAD'), *git('ls-files', '--others', '--exclude-standard')]
+    bases = ('origin/main', 'main', 'origin/tideglass')
+    if 'tideglass' in git('branch', '--show-current'):
+        bases = ('origin/tideglass', 'origin/main', 'main')
+    since = next((ref for base in bases for ref in git('merge-base', 'HEAD', base) if ref), None)
+    names = [*git('diff', '--name-only'), *git('diff', '--cached', '--name-only'),
+             *git('ls-files', '--others', '--exclude-standard')]
     if since:
         names += git('diff', '--name-only', f'{since}..HEAD')
     return sorted({n for n in names if n})
@@ -76,8 +80,11 @@ def relative(arg):
 class Graph:
     def __init__(self):
         self.index = fp._build_index()
-        self.tests = sorted(fp.TESTS.glob('test_*.py'))
         self.cache = {}
+
+    @cached_property
+    def coverage(self):
+        return {test: self.reach(test) for test in sorted(fp.TESTS.glob('test_*.py'))}
 
     def children(self, name):
         """Names a file reaches in turn: production files by #include, test-side files and manifests by any mention."""
@@ -146,11 +153,10 @@ class Graph:
         if name.endswith('.py'):
             parts.add(Path(path).stem)
         hits = []
-        for t in self.tests:
+        for t, (found, scans) in self.coverage.items():
             if path == f'tests/{t.name}':
                 hits.append((t.name, 'is the changed test'))
                 continue
-            found, scans = self.reach(t)
             hit = next((p for p in parts if p in found), None)
             if hit:
                 chain, n = [hit], found[hit]

@@ -1,6 +1,6 @@
 # Tests
 
-About 180 `tests/test_*.py` files. Each is a plain script that exits non-zero on failure. Many build
+Each `tests/test_*.py` is a plain script that exits non-zero on failure. Many build
 a native C++ harness (`tests/test_<name>.cpp`, `tests/*.h` or an inline string) against the
 production headers in `src/` and `shaders/`. The whole suite takes about 13 minutes: run it for a
 release or to verify main, not after every edit.
@@ -17,7 +17,12 @@ python3 scripts/run_tests.py 'test_replay_*'     # a name pattern
 python3 tests/test_spell_layer.py                # one test directly (it prints its checks)
 ```
 
-Which tests cover which file is derived from the tests themselves, not kept in a table:
+With no paths, the selector includes untracked, staged and working-tree changes.
+On the release branch it also includes local commits since `origin/tideglass`.
+Other branches use `origin/main` or `main` when available, falling back to
+`origin/tideglass` in a single-branch clone.
+
+The selector derives coverage from the tests themselves.
 
 - a test covers a file whose name appears in the test's `.py` (`fp.src('quality_settings.h')`,
   `'world_effects.hlsl'`, a `#include "x.h"` in a harness string) or in the native files it builds
