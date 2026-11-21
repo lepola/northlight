@@ -147,9 +147,6 @@ struct RainSplash
 static_assert(sizeof(RainSplash) == 0x18, "a rain packet's splash");
 constexpr uintptr_t kFogStart = 0x00D38BA4;
 constexpr uintptr_t kFogEnd = 0x00D38BA8;
-constexpr uintptr_t kFogGroupStart[2] = {0x00D38B90, kFogStart};
-constexpr uintptr_t kFogGroupEnd[2] = {0x00D38B94, kFogEnd};
-constexpr float kOutOfRangeFogStart = 50000.0f;
 
 water::NativeFogOverride g_stockFog;
 std::atomic<uint64_t> g_visualTimeSettings{0x00000000bf800000ull}; // hour=-1, period=0
@@ -721,6 +718,12 @@ bool CameraInWater()
     return CameraLiquidType()!=0 && g_liquidIdentity.camera==LiquidKind::Water;
 }
 
+// Standalone only: the cooperative core never writes to the client, so it has no way to.
+#if !defined(WATER_COOPERATIVE_BUILD)
+constexpr uintptr_t kFogGroupStart[2] = {0x00D38B90, kFogStart};
+constexpr uintptr_t kFogGroupEnd[2] = {0x00D38B94, kFogEnd};
+constexpr float kOutOfRangeFogStart = 50000.0f;
+
 void WriteNativeFog(const water::NativeFogRanges& ranges)
 {
     for (unsigned group = 0; group != 2; ++group)
@@ -752,6 +755,7 @@ int SwapNativeRipples(int value)
     auto* const shown=reinterpret_cast<int*>(kNativeRipplesSwitch);
     const int was=*shown;*shown=value;return was;
 }
+#endif
 
 void ConfigureVisualTime(float hour,float cycleSeconds)
 {

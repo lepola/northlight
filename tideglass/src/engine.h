@@ -55,10 +55,13 @@ void CaptureLiquidIdentity(LiquidTextureMap map=nullptr,void* context=nullptr);
 const NativeLiquidFrame& LiquidIdentity();
 uint32_t CameraLiquidType();
 bool CameraWaterHeight(float& height);
+#if !defined(WATER_COOPERATIVE_BUILD)
+// Standalone only; the cooperative core never writes to the client.
 void PushStockFogOutOfRange();
 void RestoreStockFog();
 // The game's own wake switch (its console's waterRipples), giving what it held.
 int SwapNativeRipples(int value);
+#endif
 
 void CaptureOpaqueState(IDirect3DDevice9* device);
 bool HasOpaqueState();
