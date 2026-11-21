@@ -24,9 +24,9 @@ game archives, realm settings and add-ons stay in place.
 
 CHANGE YOUR MIND
 
-For Northlight lighting settings in game, press Ctrl+Shift+F11.
-To use the game's water with Northlight, close WoW, open water-host.ini in the
-game folder and set Enable=0. Restart WoW. Set it back to 1 to use Tideglass.
+Press Ctrl+Shift+F11 for lighting and water settings. On Water, choose Save
+to apply changes to waves, foam, reflections and underwater effects. To use
+the game's water, clear Use Tideglass, save and restart WoW.
 To remove both, close WoW and {undo}
 from the extracted folder. Choose the same game folder. The uninstaller restores the previous renderer
 and keeps edited water settings.

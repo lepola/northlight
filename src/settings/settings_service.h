@@ -23,7 +23,9 @@ class Service {
     struct Commit{std::string base;std::vector<Change> changes;};
     struct Preview{bool clear=false;std::vector<Change> draft;};
     std::filesystem::path directory;
-    Store store;std::string legacy;
+    Store store;
+    const std::optional<bool> waterAtStartup;
+    std::string legacy;
     mutable std::mutex mutex;std::condition_variable wake;bool stopping=false,busy=false,snapshotJob=false;
     std::optional<Commit> commitJob;std::optional<Preview> previewJob; // latest wins; a commit is never replaced
     Documents initial;std::string initialRevision;          // creation-time state of the running renderer ("R" fields compare against it)
@@ -38,7 +40,7 @@ class Service {
     Loaded load(){
         Loaded l;l.images=store.readLenient(l.problem);l.docs=documents(l.images);l.revision=Store::revision(l.images);Documents base;
         {std::lock_guard<std::mutex> lock(mutex);l.runtime=*active;base=initial;}
-        l.fields=schema(l.docs,base,l.runtime,legacy,backends());return l;
+        l.fields=schema(l.docs,base,l.runtime,legacy,backends(),store.hasWaterCore());return l;
     }
     static std::string text(const std::vector<Change>& changes){
         std::string out;for(const auto& c:changes){
@@ -84,12 +86,12 @@ class Service {
         if(!l.problem.empty())throw std::runtime_error(blocked(l.problem));
         if(job.base!=l.revision)throw std::runtime_error("INI files changed externally; refresh before saving");
         auto next=applyChanges(l.docs,l.fields,text(job.changes));auto config=configOf(next,legacy,true);auto after=l.images;
-        for(unsigned i=0;i<4;++i){auto bytes=next[i].bytes();if(bytes!=l.images[i].raw)after[i]={true,std::move(bytes)};}
+        for(unsigned i=0;i<FileCount;++i){auto bytes=next[i].bytes();if(bytes!=l.images[i].raw)after[i]={true,std::move(bytes)};}
         auto runtime=effective(l.runtime,config);const auto revision=Store::revision(after);
         store.commit(l.images,after); // throws before anything is published; on failure the files are unchanged
         publish(config,revision,runtime,false);
         Documents base;{std::lock_guard<std::mutex> lock(mutex);base=initial;}
-        publishSnapshot(revision,revision,schema(next,base,*runtime,legacy,backends()));
+        publishSnapshot(revision,revision,schema(next,base,*runtime,legacy,backends(),store.hasWaterCore()));
         Status s;s.state=Status::State::Saved;{std::lock_guard<std::mutex> lock(mutex);s.message=restart?"Saved; some changes apply after a restart":"Saved";}return s;
     }
     void work(){
@@ -107,7 +109,8 @@ class Service {
     }
 public:
     // No file access that can fail for good: the creation-time snapshot is read unlocked (the renderer's own loaders do the same).
-    explicit Service(const std::filesystem::path& root):directory(root),store(root){
+    explicit Service(const std::filesystem::path& root,std::optional<bool> water=std::nullopt)
+        :directory(root),store(root,2000,water.has_value()),waterAtStartup(water){
         attach();worker=std::thread([this]{work();});
     }
     ~Service(){{std::lock_guard<std::mutex> lock(mutex);stopping=true;}wake.notify_one();if(worker.joinable())worker.join();}
@@ -115,6 +118,11 @@ public:
     void attach(){
         Images images;std::string leg;try{images=store.readUnlocked();leg=NorthlightQuality::narrow(readImage(directory/"shadow-experiment.ini").raw);}catch(...){images={};}
         Documents docs;Config config;try{docs=documents(images);config=configOf(docs,leg);}catch(...){docs=documents(Images{});config=configOf(docs,leg);}
+        // The host switch is read once per process, even if a new D3D device attaches.
+        if(waterAtStartup){
+            const std::string enabled=*waterAtStartup?"1":"0";
+            docs[WaterHostFile].set("WaterIntegration","Enable",&enabled);
+        }
         std::lock_guard<std::mutex> lock(mutex);legacy=leg;initial=std::move(docs);initialRevision=Store::revision(images);activeRevision=initialRevision;
         active=std::make_shared<Config>(std::move(config));update=nullptr;previewing=false;
     }
@@ -137,9 +145,9 @@ public:
 };
 inline std::mutex serviceMutex;
 inline std::weak_ptr<Service> activeService;
-inline std::shared_ptr<Service> acquire(const std::filesystem::path& root){
+inline std::shared_ptr<Service> acquire(const std::filesystem::path& root,std::optional<bool> water=std::nullopt){
     std::lock_guard<std::mutex> lock(serviceMutex);auto s=activeService.lock();
-    if(s)s->attach();else{s=std::make_shared<Service>(root);activeService=s;}
+    if(s)s->attach();else{s=std::make_shared<Service>(root,water);activeService=s;}
     return s;
 }
 } // namespace NorthlightSettings

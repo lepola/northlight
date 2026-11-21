@@ -38,14 +38,14 @@ Reflected scenery, shaped ocean waves, underwater effects, slime and magma run a
 | --- | --- |
 | [![Orange magma winds around dark rock beneath a glowing cavern wall](renderer/docs/screenshots/magma.jpg)](renderer/docs/screenshots/magma.jpg) | [![Bright green fel magma pools around jagged black spires in shafts of sunlight](renderer/docs/screenshots/fel-magma.jpg)](renderer/docs/screenshots/fel-magma.jpg) |
 
-[View lake reflections at Halaa, Nagrand](renderer/docs/tideglass-nagrand.jpg).
-
-Your game supplies the artwork, so stock and HD clients can look different. The installer preserves existing game archives, realm settings and add-ons. Install and rollback have been checked on stock and modified client copies. The Windows installer has been tested under Wine. Native Windows gameplay and compatibility with individual realms, including Warmane, still need confirmation.
+Your game supplies the artwork, so stock and HD clients can look different. The installer preserves existing game archives, realm settings and add-ons. Install and rollback have been checked on stock and modified client copies. Beta 5 also ran in-game on native Windows with updated graphics drivers. Native Windows rollback and compatibility with individual realms, including Warmane, still need confirmation.
 
 ## Change settings or roll back
 
-- **Adjust the lighting in game** — press **Ctrl+Shift+F11** to open Northlight’s settings. Preview a change and choose **Save** to keep it. [Settings guide](renderer/docs/settings-menu.md)
-- **Keep Northlight and use the game's water** — close WoW, set `Enable=0` in the game folder's `water-host.ini`, then restart. Set it back to `1` to use Tideglass again.
+The in-game Water page is included in builds after beta 5. In beta 5, you can adjust water tuning in the game folder's `water.ini`.
+
+- **Adjust lighting and water in game** — press **Ctrl+Shift+F11**. On **Water**, adjust waves, foam, reflections or underwater visibility and choose **Save** to see the change. [Settings guide](renderer/docs/settings-menu.md)
+- **Keep Northlight and use the game's water** — on **Water**, clear **Use Tideglass**, choose **Save** and restart WoW. Beta 5 users can set `Enable=0` in `water-host.ini` with the game closed.
 - **Remove the combo** — close WoW and run `Uninstall.cmd` (Windows) or `bash uninstall.sh` (Linux) from the extracted package. Select the same game folder. This restores the previous renderer and keeps edited water settings.
 - **The game closes at startup** — try the older bundled graphics backend. Open a terminal in the extracted package and run `.\Install.cmd --backend dxvk2` on Windows or `bash install.sh --backend dxvk2` on Linux.
 - **Report a visual problem** — include the package version, zone, time of day and what you did just before it happened. For flicker or a hitch, say whether it happens while turning, moving or holding still. A screenshot or short clip helps.

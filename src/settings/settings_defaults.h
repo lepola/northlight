@@ -294,3 +294,33 @@ terrain_radius = 1216
 [Azeroth:85]
 terrain_radius = 1312
 )NL";
+inline constexpr const char* kSettingsFactoryWater = R"NL([Water]
+WaveCrestShape=0.8
+WaveCrestSharpness=0.65
+DeepColor=0.05,0.24,0.34
+AbyssColor=0.03,0.12,0.22
+Reflection=0.6
+NearReflection=0.45
+Scatter=0.5
+RippleStrength=1.2
+OpenWaterCrestFoam=0.35
+WaterAtmosphere=2
+WaterGameFog=1
+WaterSceneExposure=0.85
+WaterWaveMomentSamples=16
+SharedUnderwaterFoam=1
+UnderwaterScenery=1
+StockLiquidEffects=0
+GroundPreparationWorker=1
+ReflectionScenery=1
+ReflectionSceneryAlign=1
+ReflectionSceneryShoreEdge=1
+ReflectionProducer=3
+ReflectionOwnedArchives=./northlight-water-archives.txt
+ReflectionOwnedTextureCache=2
+ReflectionOwnedTextureCacheDirectory=./northlight-water-textures
+)NL";
+inline constexpr const char* kSettingsFactoryWaterHost = R"NL([WaterIntegration]
+Enable=1
+PreserveRain=1
+)NL";

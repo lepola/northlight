@@ -138,6 +138,44 @@ int main(int argc,char** argv){
      assert(seen==3);assert(d[0].text().find("Preset=performance")!=std::string::npos);
      Documents bad={Document("[Quality]\nPreset=Turbo\n"),Document("[Renderer]\nBackend=nope\n"),Document(""),Document("")};
      for(const auto& x:schema(bad,bad,configOf(bad,""),"","native,dxvk,legacy"))if(x.key=="Preset")assert(x.overrideValue=="Turbo");else if(x.key=="Backend")assert(x.overrideValue=="nope");}
+    {
+        const auto dir=root/"water-menu";
+        std::filesystem::create_directory(dir);
+        const std::string ini="; my tuning\r\n[Water]\r\nWaveCrestShape=0.8\r\nUnknown=keep\r\n";
+        writeImage(dir/"water.ini",ini);
+        writeImage(dir/"water-host.ini","[WaterIntegration]\r\nEnable=1\r\nPreserveRain=1\r\n");
+        Store combo(dir);
+        assert(!combo.hasWaterCore()&&!combo.read()[WaterFile].exists);
+        writeImage(dir/"water-core.dll","fixture");
+        assert(combo.hasWaterCore()&&!Store(dir,50,false).read()[WaterFile].exists);
+        auto base=combo.read();
+        auto docs=documents(base);
+        auto fields=schema(docs,docs,configOf(docs,""),"","native",true);
+        auto edit=[&](const std::string& changes){return applyChanges(docs,fields,changes);};
+        const std::string crest="W\tWater\tWaveCrestShape\t",enable="H\tWaterIntegration\tEnable\t";
+        fails([&]{edit(crest+"1.1\n");});
+        fails([&]{edit(enable+"2\n");});
+        assert(explicitValue(edit(crest+"~\n")[WaterFile],"Water","WaveCrestShape")=="~");
+        auto factory=edit(crest+"@factory\n");
+        assert(std::stof(explicitValue(factory[WaterFile],"Water","WaveCrestShape"))==.8f);
+        auto both=edit(crest+"0.25\n"+enable+"0\n");
+        auto next=base;
+        for(unsigned file:{WaterFile,WaterHostFile})next[file]={true,both[file].bytes()};
+        fails([&]{combo.commit(base,next,1);});
+        assert(combo.read()==base);
+        combo.commit(base,next);
+        assert(readImage(dir/"water.ini").raw=="; my tuning\r\n[Water]\r\nWaveCrestShape=0.25\r\nUnknown=keep\r\n");
+        assert(readImage(dir/"water-host.ini").raw=="[WaterIntegration]\r\nEnable=0\r\nPreserveRain=1\r\n");
+        fails([&]{combo.commit(base,next);});
+        auto state=schema(both,docs,configOf(both,""),"","native",true);
+        auto field=[&](const std::string& id)->const Field&{
+            auto it=std::find_if(state.begin(),state.end(),[&](const Field& f){return f.id()==id;});
+            assert(it!=state.end());return *it;
+        };
+        const auto& host=field("H\tWaterIntegration\tEnable");
+        assert(host.apply=="R"&&host.saved=="0"&&host.active=="1");
+        assert(field("W\tWater\tWaveCrestShape").apply=="S");
+    }
     // The startup baseline: a new Service (or attach) sees the files as they are now.
     {Service again(root);auto s=again.revision();assert(s==Store::revision(store.read()));}
     std::cout<<"Settings: encoding (incl. astral and invalid input), comments, inheritance, bounded schema, rollback, read-only, journal recovery, snapshot, preview coalescing, commit and conflict checks passed\n";

@@ -26,7 +26,10 @@ namespace NorthlightSettings {
 inline std::string trim(std::string s){auto a=s.find_first_not_of(" \t\r\n"),b=s.find_last_not_of(" \t\r\n");return a==s.npos?"":s.substr(a,b-a+1);}
 inline std::string lower(std::string s){for(auto& c:s)c=char(std::tolower(static_cast<unsigned char>(c)));return s;}
 inline std::string hash(const std::string& s){std::uint64_t h=14695981039346656037ull;for(unsigned char c:s){h^=c;h*=1099511628211ull;}std::ostringstream o;o<<std::hex<<h;return o.str();}
-inline constexpr const char* FileNames[]={"northlight-quality.ini","northlight-renderer.ini","celestial-profiles.ini","shadow-range-profiles.ini"};
+inline constexpr const char* FileNames[]={"northlight-quality.ini","northlight-renderer.ini","celestial-profiles.ini","shadow-range-profiles.ini","water.ini","water-host.ini"};
+inline constexpr unsigned WaterFile=4, WaterHostFile=5, FileCount=std::size(FileNames);
+inline constexpr char FileIds[]="QRCSWH";
+static_assert(sizeof(FileIds)==FileCount+1);
 class TransactionLock {
 #ifdef _WIN32
     HANDLE handle=nullptr;
@@ -160,7 +163,7 @@ inline void requireWritable(const std::filesystem::path& p){
 #endif
 }
 class Store {
-    std::filesystem::path root;unsigned waitMs;
+    std::filesystem::path root;unsigned waitMs;bool supportsWater;
     std::filesystem::path path(unsigned i,const char* suffix="")const{return root/(std::string(FileNames[i])+suffix);}
     std::filesystem::path journal()const{return root/"northlight-settings.journal";}
     bool journalExists()const{std::error_code ec;return std::filesystem::exists(journal(),ec);}
@@ -168,16 +171,25 @@ class Store {
     void clean(const std::vector<unsigned>& touched){for(unsigned i:touched)for(auto s:{".northlight.tmp",".northlight.bak"}){std::error_code ec;std::filesystem::remove(path(i,s),ec);}std::error_code ec;std::filesystem::remove(journal(),ec);std::filesystem::remove(root/"northlight-settings.journal.tmp",ec);}
 public:
     // No I/O here: a failed recovery must not keep the menu from starting. Every locked read and commit finishes a pending journal first.
-    explicit Store(std::filesystem::path directory,unsigned lockWaitMs=2000):root(std::move(directory)),waitMs(lockWaitMs){}
-    std::array<FileImage,4> readUnlocked()const{std::array<FileImage,4> a;for(unsigned i=0;i<4;++i)a[i]=readImage(path(i));return a;}
-    std::array<FileImage,4> read(){TransactionLock lease(root,waitMs);if(journalExists())recoverUnlocked();return readUnlocked();}
+    explicit Store(std::filesystem::path directory,unsigned lockWaitMs=2000,bool water=true):root(std::move(directory)),waitMs(lockWaitMs),supportsWater(water){}
+    bool hasWaterCore()const{
+        std::error_code ec;
+        return supportsWater&&std::filesystem::is_regular_file(root/"water-core.dll",ec);
+    }
+    std::array<FileImage,FileCount> readUnlocked()const{
+        std::array<FileImage,FileCount> images{};
+        const unsigned count=hasWaterCore()?FileCount:WaterFile;
+        for(unsigned i=0;i<count;++i)images[i]=readImage(path(i));
+        return images;
+    }
+    std::array<FileImage,FileCount> read(){TransactionLock lease(root,waitMs);if(journalExists())recoverUnlocked();return readUnlocked();}
     // Like read(), but a recovery that cannot finish (external edit, damaged backup) is reported in `problem` and the current files are still returned.
-    std::array<FileImage,4> readLenient(std::string& problem){
+    std::array<FileImage,FileCount> readLenient(std::string& problem){
         TransactionLock lease(root,waitMs);problem.clear();
         if(journalExists())try{recoverUnlocked();}catch(const std::exception& e){problem=e.what();}
         return readUnlocked();
     }
-    static std::string revision(const std::array<FileImage,4>& a){std::string s;for(const auto& f:a)s+=(f.exists?"1":"0")+hash(f.raw)+";";return hash(s);}
+    static std::string revision(const std::array<FileImage,FileCount>& a){std::string s;for(const auto& f:a)s+=(f.exists?"1":"0")+hash(f.raw)+";";return hash(s);}
     void recover(){TransactionLock lease(root,waitMs);recoverUnlocked();}
     // Process start, before anything reads the INIs: finish a commit that a crash interrupted. Returns the failure text ("" = nothing to do or done); never throws.
     static std::string recoverAtStartup(const std::filesystem::path& directory,unsigned lockWaitMs=3000){
@@ -188,8 +200,8 @@ public:
         auto j=readImage(journal());if(!j.exists)return;
         std::istringstream in(j.raw);std::string state;if(!(in>>state)||(state!="prepared"&&state!="committed"))throw std::runtime_error("Invalid settings journal; keep backups for manual recovery");
         struct Item{unsigned i,exists;std::string oldHash,newHash;};std::vector<Item> items;Item a{};
-        while(in>>a.i>>a.exists>>a.oldHash>>a.newHash){if(a.i>=4||a.exists>1)throw std::runtime_error("Invalid settings journal");items.push_back(a);}
-        if(!in.eof()||items.empty()||items.size()>4)throw std::runtime_error("Invalid settings journal");
+        while(in>>a.i>>a.exists>>a.oldHash>>a.newHash){if(a.i>=FileCount||a.exists>1)throw std::runtime_error("Invalid settings journal");items.push_back(a);}
+        if(!in.eof()||items.empty()||items.size()>FileCount)throw std::runtime_error("Invalid settings journal");
         std::vector<unsigned> touched;for(const auto& x:items){if(std::find(touched.begin(),touched.end(),x.i)!=touched.end())throw std::runtime_error("Duplicate settings journal file");touched.push_back(x.i);}
         if(state=="committed"){clean(touched);return;}
         // Check the complete recovery before restoring any file. A file still at its old hash was never replaced (nothing to restore); one at the
@@ -207,12 +219,12 @@ public:
         clean(touched);
     }
     // failAfter is used only by the transaction fault-injection test.
-    void commit(const std::array<FileImage,4>& before,const std::array<FileImage,4>& after,int failAfter=-1){
+    void commit(const std::array<FileImage,FileCount>& before,const std::array<FileImage,FileCount>& after,int failAfter=-1){
         TransactionLock lease(root,waitMs);
         if(journalExists())recoverUnlocked();
         if(readUnlocked()!=before)throw std::runtime_error("INI files changed externally; refresh the menu before saving");
         std::vector<unsigned> touched;std::string manifest="prepared\n";
-        for(unsigned i=0;i<4;++i)if(!(before[i]==after[i])){
+        for(unsigned i=0;i<FileCount;++i)if(!(before[i]==after[i])){
             if(!after[i].exists)throw std::runtime_error("Settings commits cannot delete an INI");
             requireWritable(path(i));
             // No journal exists here (recovery above), so no file has been replaced: leftovers of a crash before the journal was written are stale copies.

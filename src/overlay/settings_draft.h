@@ -43,7 +43,7 @@ class Draft {
     std::map<std::string,std::string> values;
     const Field* preset=nullptr;
     const Field* find(unsigned file,const std::string& section,const std::string& key)const{
-        auto i=byId.find(std::string(1,"QRCS"[file])+"\t"+section+"\t"+key);return i==byId.end()?nullptr:&(*fields)[i->second];
+        auto i=byId.find(std::string(1,NorthlightSettings::FileIds[file])+"\t"+section+"\t"+key);return i==byId.end()?nullptr:&(*fields)[i->second];
     }
     std::string resolve(const Field& f,bool useDraft,unsigned depth)const{
         std::string v=f.overrideValue;

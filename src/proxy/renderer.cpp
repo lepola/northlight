@@ -3081,10 +3081,13 @@ public:
         mirrorState.gate.reportContext=this;mirrorState.gate.report=&gateForeignReport;
         parent->AddRef(); QueryPerformanceFrequency(&cpuFrequency);
 #ifdef NORTHLIGHT_WATER
+        const std::optional<bool> waterSwitch=northlightWaterSettings.Enabled();
         if(northlightWaterSettings.Enabled()&&!northlightWaterSettings.Open())
             logf("TIDEGLASS water-core.dll is missing, unreadable or incompatible. Using native water until restart.");
+#else
+        const std::optional<bool> waterSwitch;
 #endif
-        try{settingsService=NorthlightSettings::acquire(std::filesystem::path(rootPath));settingsRevision=settingsService->revision();if(!settingsRecovery.empty())logf("SETTINGS startup recovery incomplete: %s",settingsRecovery.c_str());}
+        try{settingsService=NorthlightSettings::acquire(std::filesystem::path(rootPath),waterSwitch);settingsRevision=settingsService->revision();if(!settingsRecovery.empty())logf("SETTINGS startup recovery incomplete: %s",settingsRecovery.c_str());}
         catch(const std::exception& e){logf("SETTINGS unavailable: %s",e.what());}
         gpuProfile=std::make_unique<NorthlightGpuProfile>(ext);gpuSceneProfile=std::make_unique<NorthlightGpuProfile>(ext,"GPU frame",2);gpuTimer=std::make_unique<NorthlightGpuFrameTimer>(ext); world=std::make_unique<WorldRenderer>(ext);world->setEffectsBuckets(&effectsBuckets);
         world->setConstantEpochSource({&mirrorState.constantEpoch,&mirrorState}); /* 0.3.180 (C1): read in place under the draw's gate */

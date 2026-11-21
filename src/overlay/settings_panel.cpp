@@ -25,6 +25,12 @@ const ImVec4 Accent{0.40f,0.70f,1.00f,1.f},Edited{1.00f,0.74f,0.32f,1.f},Muted{0
 
 // ---- Words (from the retired Lua menu) ----
 const std::map<std::string,const char*> Labels={
+    {"WaveStrength","Wave strength"},{"WaveSpeed","Wave speed"},{"WaveCrestShape","Crest shape"},
+    {"WaveCrestSharpness","Crest sharpness"},{"RippleStrength","Ripple strength"},
+    {"FoamStrength","Foam strength"},{"OpenWaterCrestFoam","Foam on open-water crests"},
+    {"ReflectionScenery","Reflect distant scenery"},{"Clarity","Water clarity"},{"Reflection","Reflection strength"},{"NearReflection","Near reflection strength"},
+    {"Underwater","Underwater effects"},{"UnderwaterVisibility","Visibility (yards)"},{"UnderwaterScenery","Underwater scenery"},
+    {"Slime","Slime surface"},{"Lava","Magma and fel magma surfaces"},
     {"AutoBump","Material detail"},{"AutoBumpStrength","Normal map strength (%)"},{"AutoBumpDistance","Normal map distance (yards)"},
     {"AutoBumpTerrain","Ground and roads"},{"AutoBumpWalls","Walls and floors"},{"AutoBumpGrass","Grass tufts"},
     {"AutoParallaxDepth","POM depth (%)"},{"AutoParallaxDistance","POM distance (yards)"},{"AutoParallaxSteps","POM trace steps"},
@@ -116,11 +122,11 @@ struct Preset { const char* key; const char* text; };
 const Preset Presets[3]={{"Quality","Maximum effect detail."},{"Balanced","Quality with a moderate effect budget."},{"Performance","Less work spent on effects."}};
 const char* const QuickKeys="GI ActorShadows ContactAO Weather FogClouds";   // the old menu's Quality page toggles
 // Sidebar pages, in order. quality: the QualitySections id a Quality page draws.
-enum class Page { Overview, Lighting, Materials, Shadows, Atmosphere, Celestial, ShadowRange, Spells, Renderer, Performance, Diagnostics, Count };
+enum class Page { Overview, Lighting, Materials, Shadows, Atmosphere, Water, Celestial, ShadowRange, Spells, Renderer, Performance, Diagnostics, Count };
 struct PageInfo { Page page; const char* title; const char* quality; };
 const PageInfo Pages[]={
     {Page::Overview,"Overview",nullptr},{Page::Lighting,"Lighting & AO","lighting"},{Page::Materials,"Materials & parallax","materials"},
-    {Page::Shadows,"Shadows","shadows"},{Page::Atmosphere,"Atmosphere & weather","atmosphere"},{Page::Celestial,"Sun & moon",nullptr},
+    {Page::Shadows,"Shadows","shadows"},{Page::Atmosphere,"Atmosphere & weather","atmosphere"},{Page::Water,"Water",nullptr},{Page::Celestial,"Sun & moon",nullptr},
     {Page::ShadowRange,"Shadow range",nullptr},{Page::Spells,"Spells & names","spells"},{Page::Renderer,"Renderer & HDR",nullptr},
     {Page::Performance,"Performance","performance"},{Page::Diagnostics,"Diagnostics","diagnostics"},
 };
@@ -157,6 +163,7 @@ std::string celestialName(const std::string& key,std::string* body){
     return {};
 }
 std::string fieldLabel(const Field& f){
+    if(f.file==NorthlightSettings::WaterHostFile)return "Use Tideglass";
     if(const char* l=find(Labels,f.key))return l;
     std::string body;const auto name=celestialName(f.key,&body);if(!name.empty())return body+": "+name;
     return f.key;
@@ -183,8 +190,7 @@ std::string optionLabel(const Field& f,const std::string& value){
     return value;
 }
 const char* fileName(unsigned file){
-    static const char* const names[]={"northlight-quality.ini","northlight-renderer.ini","celestial-profiles.ini","shadow-range-profiles.ini"};
-    return file<4?names[file]:"?";
+    return file<NorthlightSettings::FileCount?NorthlightSettings::FileNames[file]:"?";
 }
 const char* originText(const std::string& origin){
     if(origin=="f"||origin=="override")return "set in the file";
@@ -293,6 +299,7 @@ struct SettingsPanel::State {
         if(help!=Help.end())for(const char* line:help->second){ImGui::Spacing();ImGui::TextWrapped("%s",line);}
         ImGui::Spacing();
         if(f.apply=="R")ImGui::TextColored(Color::Restart,draft.restartPending(f)?"Requires a game restart: the running renderer still uses %s.":"Requires a game restart.%s",draft.restartPending(f)?f.active.c_str():"");
+        else if(f.apply=="S")ImGui::TextColored(Color::Good,"Takes effect when you save.");
         else ImGui::TextColored(Color::Good,"Applies live: previewed while you edit, kept when you save.");
         if(block==D::Block::Unavailable)ImGui::TextColored(Color::Bad,"Not available in this installation.");
         else if(block==D::Block::NeedsHdr)ImGui::TextColored(Color::Bad,"Enable HDR first.");
@@ -431,6 +438,11 @@ struct SettingsPanel::State {
         if(p==Page::Celestial)return fields(D::Celestial);
         if(p==Page::ShadowRange)return fields(D::ShadowRange);
         if(p==Page::Renderer)return fields(D::Renderer);
+        if(p==Page::Water){
+            auto rows=fields(NorthlightSettings::WaterHostFile);
+            const auto tuning=fields(NorthlightSettings::WaterFile);
+            rows.insert(rows.end(),tuning.begin(),tuning.end());return rows;
+        }
         if(const Section* s=qualitySection(Pages[unsigned(p)].quality))for(auto& k:sectionKeys(*s))if(const Field* f=draft.quality(k))out.push_back(f);
         if(p==Page::Performance){auto extra=unsortedQuality();out.insert(out.end(),extra.begin(),extra.end());}
         return out;
@@ -492,12 +504,28 @@ struct SettingsPanel::State {
         std::vector<const Field*> rest;for(auto& k:byKey)if(!used[k.first])rest.push_back(k.second);
         titled("Other",rest);
     }
+    void waterPage(){
+        ImGui::TextWrapped("Save to apply water settings. Restart the game after switching Tideglass on or off.");
+        titled("Renderer",fields(NorthlightSettings::WaterHostFile));
+        auto waterRows=[&](const char* title,const char* keys){
+            std::vector<const Field*> rows;
+            for(const auto& key:words(keys)){
+                if(const Field* f=draft.field(NorthlightSettings::WaterFile,"Water",key))rows.push_back(f);
+            }
+            titled(title,rows);
+        };
+        waterRows("Waves and foam","WaveStrength WaveSpeed WaveCrestShape WaveCrestSharpness RippleStrength FoamStrength OpenWaterCrestFoam");
+        waterRows("Reflections","ReflectionScenery Reflection NearReflection");
+        waterRows("Clarity and underwater","Clarity Underwater UnderwaterVisibility UnderwaterScenery");
+        waterRows("Other liquids","Slime Lava");
+    }
     void drawPage(){
         switch(page){
         case Page::Overview:overviewPage();break;
         case Page::Celestial:celestialTab();break;
         case Page::ShadowRange:shadowRangeTab();break;
         case Page::Renderer:rendererPage();break;
+        case Page::Water:waterPage();break;
         default:if(const Section* s=qualitySection(Pages[unsigned(page)].quality))qualityPage(*s,page==Page::Performance);break;
         }
     }
@@ -505,6 +533,7 @@ struct SettingsPanel::State {
     void sidebar(){
         const float h=ImGui::GetFrameHeight(),r=std::max(2.5f,h*0.14f);
         for(const auto& info:Pages){
+            if(info.page==Page::Water&&!draft.field(NorthlightSettings::WaterHostFile,"WaterIntegration","Enable"))continue;
             bool edited=false,restart=false;
             for(const Field* f:pageFields(info.page)){edited|=draft.edited(*f);restart|=draft.restartPending(*f);}
             if(ImGui::Selectable(info.title,page==info.page,0,ImVec2(0,h)))page=info.page;
