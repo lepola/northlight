@@ -162,7 +162,8 @@ class Base(unittest.TestCase):
             for t in targets:
                 (out / t).parent.mkdir(parents=True, exist_ok=True); (out / t).write_bytes(ART + (b' HD' if opt('--sky') == 'experimental-preserve' else b''))
             (out / 'art-layer-manifest.json').write_text(json.dumps({'targets': targets, 'steps': [
-                {'step': 'relighting'}, {'step': 'mulgore'}, {'step': 'outdoor_sun', 'skipped': 'no HD sky'}]}))
+                {'step': 'relighting'}, {'step': 'mulgore', 'sky_clone_skipped': 'unfamiliar sky', 'kept_sky_id': 172},
+                {'step': 'outdoor_sun', 'skipped': 'no HD sky'}]}))
             return 0, {'targets': targets}
         if Path(script).name == 'install_world_cache.py' and '--instances-plan' in args:
             keys = opt('--instances').split(',')
@@ -483,6 +484,26 @@ class Install(Base):
         self.assertIn(f'kept-identical {sha(ART)[:8]}', report['art_layer'])
         self.assertIn('already installed; nothing changed', inst.out.getvalue())
         self.assertEqual((self.backups(), tree(self.client)), (backups, after))
+
+    def test_retry_after_art_failure_keeps_completed_caches(self):
+        first = self.installer()
+        def failed_art(script, args, show=True):
+            if Path(script).name == 'build_art_layer.py':
+                return 1, {}
+            return self.fake_run(script, args, show)
+        first.run = failed_art
+        groups = ['classic-dungeons', 'classic-raids']
+        with self.assertRaisesRegex(fi.Failed, 'art layer build failed'):
+            first.install(self.client, instances=','.join(groups))
+        cache = self.client / 'world-cache'
+        before = tree(cache)
+        report = self.installer(yes=True).install(self.client)
+        self.assertTrue(report['world_cache'].startswith('kept'))
+        self.assertEqual(report['instances']['kept'], groups)
+        self.assertEqual(report['instances']['built'], [])
+        self.assertEqual(tree(cache), before)
+        self.assertIn('Kept your Mulgore sky.', self.last_output)
+        self.assertEqual((self.client / 'Data/patch-z.mpq').read_bytes(), ART)
 
     def test_no_match_builds_locally(self):
         self.variant = None

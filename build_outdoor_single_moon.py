@@ -25,7 +25,7 @@ def transparent_moon():
     # suppresses additive draws. Only the dedicated native secondary moon.
     return write_blp_bgra(64,64,[bytes(w*h*4) for w,h in mip_sizes(64,64)])
 
-def build(source,output,assets=None,preserved=None):
+def build(source,output,assets=None,preserved=None,kept_sky=None):
     """assets: an Assets of the client (default: the configured client). Raises
     build_lighting.Skip when no outdoor sky has an HD lunar batch."""
     with Archive(source) as a:original={n:a.read(n) for n in a.names() if not n.startswith('(')}
@@ -45,7 +45,7 @@ def build(source,output,assets=None,preserved=None):
             if sid:refs.setdefault(sid,[]).append((u(row,0),u(row,1),col,pid))
     changes=[];audited=[]
     try:
-        for sid in sorted(refs):
+        for sid in sorted(refs.keys() - {kept_sky}):
             name=sky_name(sky,sky.index[sid]);stem=name[:-4];model=read(stem+'.m2')
             textures,lookup=texture_names(model);count=struct.unpack_from('<I',model,68)[0]
             assert 1<=count<=4

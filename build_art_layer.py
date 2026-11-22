@@ -94,12 +94,13 @@ def lighting_payload(assets, client, locale, work, fog, sky, report, combo):
     report['steps'].append({'step': 'retime', **{k: v for k, v in retimed.items() if k != 'rows'}})
     report['retimed_rows'] = retimed['rows']
     preserved = [] if sky == 'experimental-preserve' else None
+    kept_sky = None
     steps = [
         ('mulgore', lambda s, o: build_mulgore_lighting.build(s, o, client, assets, chain_skybox, fog)),
         ('stormwind', lambda s, o: build_stormwind_single_sun.build(s, o, 'stormwind', assets, fog)),
         ('orgrimmar', lambda s, o: build_stormwind_single_sun.build(s, o, 'orgrimmar', assets, fog)),
-        ('outdoor_sun', lambda s, o: build_outdoor_single_sun.build(s, o, assets)),
-        ('outdoor_moon', lambda s, o: build_outdoor_single_moon.build(s, o, assets, preserved)),
+        ('outdoor_sun', lambda s, o: build_outdoor_single_sun.build(s, o, assets, kept_sky)),
+        ('outdoor_moon', lambda s, o: build_outdoor_single_moon.build(s, o, assets, preserved, kept_sky)),
     ]
     for index, (name, step) in enumerate(steps, 1):
         source, out = work / f'{index}-{name}-input.mpq', work / f'{index}-{name}'
@@ -120,6 +121,10 @@ def lighting_payload(assets, client, locale, work, fog, sky, report, combo):
                                 'archive_sha256': manifest.get('archive_sha256')})
         if manifest.get('sky_clone_skipped'):
             report['steps'][-1]['sky_clone_skipped'] = manifest['sky_clone_skipped']
+            if name == 'mulgore':
+                kept_sky = manifest.get('kept_sky_id')
+                if kept_sky:
+                    report['steps'][-1]['kept_sky_id'] = kept_sky
             print(f"{name}: sky clone skipped ({manifest['sky_clone_skipped']})", flush=True)
     # The combo preset uses native equipment, mount and spell models.
     if not combo:

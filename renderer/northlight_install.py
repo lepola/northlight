@@ -925,6 +925,8 @@ class Installer:
             for item in report['sky']['preserved']:
                 self.say('  Preserved mixed moon artwork: ' + item['model'] + ' (a second moon may be visible)')
         steps = report.get('steps', [])
+        if any(step.get('step') == 'mulgore' and step.get('kept_sky_id') for step in steps):
+            self.say('Kept your Mulgore sky.')
         skipped = sum(1 for step in steps if 'skipped' in step)
         self.say(f'Art layer: generated from local assets ({len(steps) - skipped} steps applied, '
                  f'{skipped} skipped; details in the log)', console=not combo or self.log is None)

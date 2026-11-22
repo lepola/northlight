@@ -20,6 +20,8 @@ MAPS = {0, 1, 530, 571}
 ORGRI = {'orgrisunray01.blp', 'orgrisunflare01.blp', 'orgrilensflare02.blp'}
 POGOST = {'arathisunflare.blp', 'pogost_sun.blp'}
 AZSUNA = {'uldumsunflare.blp', 'lazur_sun.blp', 'lazur_sunset_rays01.blp'}
+MULGORE = {'mulgor_sun.blp', 'mulgor_lensflare01.blp', 'mulgor_sunflare01.blp',
+           'mulgor_sunflare02.blp', 'mulgor_sunray01.blp'}
 OMIT = {
     23: POGOST,
     95: POGOST | {'nagrandsunset_rays01.blp', 'arathi_sunray03.blp'},
@@ -28,8 +30,7 @@ OMIT = {
     158: {'uldumsunflare.blp', 'veb_sundisk.blp'},
     165: ORGRI,
     170: {'stormwind_sun.blp', 'stormwind_sun_sunset.blp'},
-    172: {'mulgor_sunray01.blp', 'mulgor_sunflare02.blp',
-          'mulgor_lensflare01.blp', 'mulgor_sun.blp'},
+    172: MULGORE,
     178: {'orgrisunray01.blp', 'mulgor_sun.blp', 'orgrilensflare02.blp'},
     179: ORGRI, 180: ORGRI,
     # The .bl spelling is present in the original model (missing texture).
@@ -46,13 +47,17 @@ def sky_name(table, row):
 
 def texture_names(model):
     count, offset = struct.unpack_from('<II', model, 80)
+    require(offset + 16*count <= len(model), 'sky texture table extends beyond the model')
     textures = []
     for i in range(count):
         kind, flags, size, pos = struct.unpack_from('<4I', model, offset+16*i)
+        require(kind != 0 or pos + size <= len(model),
+                'unrecognised sky texture name')
         textures.append(model[pos:pos+size].rstrip(b'\0').decode().lower()
                         if kind == 0 else '')
     count, offset = struct.unpack_from('<II', model, 128)
-    lookup = struct.unpack_from('<'+'H'*count, model, offset)
+    require(offset + 2*count <= len(model), 'sky texture lookup extends beyond the model')
+    lookup = struct.unpack_from(f'<{count}H', model, offset)
     return textures, lookup
 
 
@@ -63,7 +68,29 @@ def batch_names(raw, textures, lookup):
             for k in range(start, start+count)]
 
 
-def build(source, output, assets=None):
+def separate_solar_batches(before, textures, lookup, omit, skin_id):
+    count, offset = struct.unpack_from('<II', before, 36)
+    require(before[:4] == b'SKIN' and 48 <= offset <= len(before) - 24*count,
+            'unrecognised sky batches')
+    kept, retained, removed = [], [], []
+    for j in range(count):
+        raw = before[offset+24*j:offset+24*(j+1)]
+        names = batch_names(raw, textures, lookup)
+        record = dict(skin=skin_id, batch=j, textures=names)
+        if omit.intersection(names):
+            require(set(names) <= omit, 'sun and other artwork share a batch')
+            removed.append(record)
+        else:
+            kept.append(raw)
+            retained.append(record)
+    require(kept, 'no independent sky artwork to retain')
+    skin = bytearray(before)
+    putu(skin, 9, len(kept))
+    skin[offset:offset+24*count] = b''.join(kept) + bytes(24*len(removed))
+    return bytes(skin), removed, retained
+
+
+def build(source, output, assets=None, kept_sky=None):
     """assets: a world_scene_builder.Assets of the client (default: the configured client).
     Raises build_lighting.Skip when an HD sky of OMIT is absent."""
     with Archive(source) as archive:
@@ -90,19 +117,22 @@ def build(source, output, assets=None):
             sid = u(params.index[profile], 2)
             if sid:
                 refs.setdefault(sid, []).append((u(row, 0), profile))
+    solar = {sid: names for sid, names in OMIT.items() if sid != kept_sky}
     try:
-        require(set(OMIT) <= set(refs), f'HD outdoor skies absent: {sorted(set(OMIT) - set(refs))}')
-        for sid, omit in OMIT.items():
+        require(set(solar) <= set(refs), f'HD outdoor skies absent: {sorted(set(solar) - set(refs))}')
+        for sid, omit in solar.items():
             stem = sky_name(sky, sky.index[sid])[:-4]
             require(stem.lower()+'.m2' in lower or stem.lower()+'.m2' in assets.providers, f'sky {sid} model absent')
             textures, _ = texture_names(read(stem+'.m2'))
-            require(omit <= {t.split('\\')[-1] for t in textures}, f'sky {sid} has no HD solar batches')
+            names = {t.split('\\')[-1] for t in textures}
+            require(bool(omit & names) if omit == MULGORE else omit <= names,
+                    f'sky {sid} has no HD solar batches')
     except BaseException:
         if owned:
             assets.close()
         raise
     output.mkdir(parents=True, exist_ok=True)
-    profiles = {p for sid in OMIT for _, p in refs[sid]}
+    profiles = {p for sid in solar for _, p in refs[sid]}
     # No selected profile may also control a dungeon, underwater/weather slot,
     # or other map. Fail instead of silently expanding the scope.
     for row in light.rows:
@@ -112,7 +142,7 @@ def build(source, output, assets=None):
 
     changes = []
     try:
-        for sid, omit in sorted(OMIT.items()):
+        for sid, omit in sorted(solar.items()):
             name = sky_name(sky, sky.index[sid])
             stem = name[:-4]
             custom = f'Environments\\Stars\\fr_outdoor_single_sun_{sid}'
@@ -125,32 +155,14 @@ def build(source, output, assets=None):
             removed, retained = [], []
             for skinid in range(skins):
                 before = read(stem+f'{skinid:02d}.skin')
-                assert before[:4] == b'SKIN'
-                count, offset = struct.unpack_from('<II', before, 36)
-                assert offset >= 48 and offset+24*count <= len(before)
-                kept = []
-                seen = set()
-                for j in range(count):
-                    raw = before[offset+j*24:offset+(j+1)*24]
-                    names = batch_names(raw, textures, lookup)
-                    record = dict(skin=skinid, batch=j, textures=names)
-                    if set(names) & omit:
-                        assert set(names) <= omit, 'Mixed solar/cloud batch: refuse to remove'
-                        removed.append(record)
-                        seen.update(names)
-                    else:
-                        kept.append(raw)
-                        retained.append(record)
-                assert seen == omit and kept
-                skin = bytearray(before)
-                putu(skin, 9, len(kept))
-                skin[offset:offset+24*count] = b''.join(kept)+bytes(24*(count-len(kept)))
-                assert len(skin) == len(before)
-                assert skin[:36] == before[:36] and skin[40:offset] == before[40:offset]
-                assert skin[offset+24*count:] == before[offset+24*count:]
-                assert skin[offset:offset+24*len(kept)] == b''.join(kept)
-                assert not any(set(batch_names(raw, textures, lookup)) & omit for raw in kept)
-                payload[custom+f'{skinid:02d}.skin'] = bytes(skin)
+                skin, dropped, kept = separate_solar_batches(before, textures, lookup, omit, skinid)
+                if omit != MULGORE:
+                    require({t for b in dropped for t in b['textures']} == omit,
+                            f'sky {sid} lacks its expected solar artwork')
+                removed.extend(dropped)
+                retained.extend(kept)
+                payload[custom+f'{skinid:02d}.skin'] = skin
+            require(removed, f'sky {sid} has no dedicated sun artwork')
             # Retain external animation dependencies under the clone name.
             for asset in assets.providers:
                 if asset.startswith(stem.lower()) and asset.endswith('.anim'):

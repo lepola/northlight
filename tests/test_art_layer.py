@@ -22,10 +22,43 @@ the test output):
 import sys; from pathlib import Path; sys.path.insert(0, str(Path(__file__).resolve().parents[1]))  # repo root
 import northlight_paths as fp; fp.use_source_modules()
 import hashlib, json, shutil, tempfile
+import struct
 import build_art_layer, build_lighting, build_weather_textures, client_archives
+from build_outdoor_single_sun import MULGORE, separate_solar_batches
 from build_lighting import DBC, u, f
 from mpq import Archive
 from world_scene_builder import Assets, decode_blp
+
+
+def check_sky_layers():
+    def batch(count, start):
+        raw = bytearray(24)
+        struct.pack_into('<HH', raw, 14, count, start)
+        return raw
+
+    def skin(batches):
+        header = bytearray(48)
+        header[:4] = b'SKIN'
+        struct.pack_into('<II', header, 36, len(batches), len(header))
+        return header + b''.join(batches) + b'tail'
+
+    names = ['cloud.blp', 'mulgor_sun.blp']
+    cloud, sun = batch(1, 0), batch(1, 1)
+    for n in (3, 4, 5):
+        before = skin([cloud, *([sun] * n), cloud])
+        result, dropped, kept = separate_solar_batches(before, names, [0, 1], MULGORE, 0)
+        assert len(dropped) == n and len(kept) == 2
+        assert result[48:96] == cloud + cloud and result[96:] == bytes(24*n) + b'tail'
+        assert struct.unpack_from('<II', result, 36) == (2, 48)
+    try:
+        separate_solar_batches(skin([cloud, batch(2, 0)]), names, [0, 1], MULGORE, 0)
+    except build_lighting.Skip as skip:
+        assert 'share a batch' in str(skip)
+    else:
+        raise AssertionError('removed clouds mixed with the sun')
+
+
+check_sky_layers()
 
 client = fp.client_root()
 out = fp.output_dir()
@@ -48,6 +81,7 @@ skipped = {s['step']: s['skipped'] for s in r['steps'] if 'skipped' in s and s['
 assert set(skipped) == {'orgrimmar', 'outdoor_sun', 'outdoor_moon'}, r['steps']
 sky_skipped = {s['step']: s['sky_clone_skipped'] for s in r['steps'] if 'sky_clone_skipped' in s}
 assert set(sky_skipped) == {'mulgore', 'stormwind'}, r['steps']
+assert not any(s.get('kept_sky_id') for s in r['steps']), 'stock has no HD Mulgore sky'
 models = set(r['files']) - files
 assert not any(n.lower().startswith('world\\') and n.lower().endswith('.m2') for n in models), sorted(models)
 assert all(n.lower().startswith(('item\\objectcomponents\\', 'spells\\', 'creature\\')) and n.lower().endswith('.m2') for n in models), sorted(models)

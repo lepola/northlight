@@ -15,16 +15,16 @@ import argparse
 import hashlib
 import json
 import math
+import re
 import struct
 import sys
 from pathlib import Path
 from build_lighting import DBC, u, f, putu, putf, rgb, pack, mix, sample_color, require, Skip
 from mpq import Archive
+from build_outdoor_single_sun import MULGORE, separate_solar_batches, texture_names
 
 LIGHT_IDS = {201, 202, 234}
 TABLES = ('Light', 'LightParams', 'LightIntBand', 'LightFloatBand')
-# The HD skybox's own sun and flare batches, omitted from the clone.
-OMIT = {'mulgor_sun.blp','mulgor_lensflare01.blp','mulgor_sunflare01.blp','mulgor_sunflare02.blp','mulgor_sunray01.blp'}
 # Zenith -> 30/15/5/0-degree sky rings -> distance fog. Warm horizon,
 # restrained lavender overhead; no cyan veil. Ambient fill stays cool so the
 # existing geometry shadows retain contrast with peach-gold direct light.
@@ -62,6 +62,54 @@ def rewrite(row, floating, value):
         if floating:putf(row,18+i,value(t,sample_float(old,t)))
         else:putu(row,18+i,pack(value(t,sample_color(old,t)),u(old,18)))
 
+def sky_art(assets, stem, custom):
+    original = assets.read(stem + '.m2')
+    model = bytearray(original)
+    require(model[:4] == b'MD20', 'unrecognised Mulgore sky model')
+    textures, lookup = texture_names(model)
+    skins = struct.unpack_from('<I', model, 68)[0]
+    require(0 < skins <= 4, 'unrecognised Mulgore sky skin count')
+    files, removed = {}, []
+    tinted = {0: set(), 2: set()}
+    for i in range(skins):
+        before = assets.read(stem + f'{i:02d}.skin')
+        skin, dropped, kept = separate_solar_batches(before, textures, lookup, MULGORE, i)
+        offset = struct.unpack_from('<I', before, 40)[0]
+        for record in kept:
+            color = struct.unpack_from('<h', before, offset + 24*record['batch'] + 8)[0]
+            if color in tinted:
+                tinted[color].update(record['textures'])
+        files[custom + f'{i:02d}.skin'] = skin
+        removed.extend(dropped)
+    require(removed, 'no dedicated Mulgore sun artwork found')
+    require(tinted[0] == {'mulgor_sky_top.blp'} and tinted[2] and
+            tinted[2] <= {'8swa_sky_clouds01_day.blp', '8swa_sky_clouds02_day.blp'},
+            'unrecognised daytime sky artwork')
+
+    # Only these two daytime tracks have a known warm tint. Leave unfamiliar
+    # sky art intact if its colour animation cannot be identified.
+    nc, oc = struct.unpack_from('<II', model, 72)
+    require(nc == 4 and oc >= 304 and oc + 40*nc <= len(model), 'unrecognised sky colour tracks')
+    for color, last in ((0, 633333), (2, 600000)):
+        interp, glob, nt, ot, nv, ov = struct.unpack_from('<Hh4I', model, oc+40*color)
+        require(interp == 1 and glob == -1 and nt == nv == 1, 'unrecognised daytime colour animation')
+        count, times = struct.unpack_from('<2I', model, ot)
+        values, offset = struct.unpack_from('<2I', model, ov)
+        require(values == count and times >= 304 and offset >= 304 and
+                times + 4*count <= len(model) and offset + 12*count <= len(model),
+                'unrecognised daytime colour keys')
+        for j in range(count):
+            time = struct.unpack_from('<I', model, times+4*j)[0]
+            if 200000 <= time <= last:
+                struct.pack_into('<3f', model, offset+12*j, 1., .77, .57)
+    animation = re.compile(re.escape(stem.lower()) + r'(\d+-\d+\.anim)')
+    for asset in assets.providers:
+        match = animation.fullmatch(asset)
+        if match:
+            files[custom + match[1]] = assets.read(asset)
+    return {custom + '.m2': bytes(model), **files}, removed, hashlib.sha256(original).hexdigest()
+
+
 def build(source,output,client,assets=None,skybox=None,fog=None):
     """assets: a world_scene_builder.Assets of the client (default: the configured client);
     skybox: LightSkybox.dbc bytes (default: the client's Data/patch-x.mpq); fog: the world
@@ -93,20 +141,19 @@ def build(source,output,client,assets=None,skybox=None,fog=None):
         sys.path.insert(0,str(Path(__file__).resolve().parent/'renderer'))   # this repository's renderer/
         from world_scene_builder import Assets
         assets=Assets()
-    sky_skipped=None
+    sky_skipped = None
+    old_id = u(params.index[profile], 2)
+    custom = 'Environments\\Stars\\fr_mulgore_warm'
     try:
         if skybox is None:
             with Archive(client/'Data/patch-x.mpq') as a:skybox=a.read('DBFilesClient\\LightSkybox.dbc')
-        sky=DBC(skybox);old_id=u(params.index[profile],2)
-        require(old_id in sky.index,f'Mulgore sky {old_id} absent')
-        original_name=sky.strings[u(sky.index[old_id],1):].split(b'\0',1)[0].decode()
-        require(original_name[:-4].lower()+'.m2' in assets.providers,f'Mulgore sky model {original_name} absent')
-        model=assets.read(original_name[:-4]+'.m2');count,offset=struct.unpack_from('<II',model,80)
-        names={model[pos:pos+size].rstrip(b'\0').decode().lower().split('\\')[-1]
-               for kind,_,size,pos in (struct.unpack_from('<4I',model,offset+16*i) for i in range(count)) if kind==0}
-        require(OMIT<=names,f'Mulgore sky {old_id} has no HD sun batches')
-    except Skip as skip:
-        sky_skipped=str(skip)
+        sky = DBC(skybox)
+        require(old_id in sky.index, f'Mulgore sky {old_id} absent')
+        row = sky.index[old_id]
+        original_name = sky.strings[u(row,1):].split(b'\0',1)[0].decode()
+        art, removed, original_hash = sky_art(assets, original_name[:-4], custom)
+    except (Skip, FileNotFoundError, struct.error, IndexError, UnicodeError) as skip:
+        sky_skipped = str(skip)
     except BaseException:
         if owned:assets.close()
         raise
@@ -151,60 +198,8 @@ def build(source,output,client,assets=None,skybox=None,fog=None):
     try:
         if sky_skipped is None:
             sky_before=sky.bytes()
-            skyrow=bytearray(sky.index[old_id]);offset=u(skyrow,1)
-            original_name=sky.strings[offset:].split(b'\0',1)[0].decode()
-            original_model=assets.read(original_name[:-4]+'.m2')
-            model=bytearray(original_model)
-            nc,oc=struct.unpack_from('<II',model,72);assert nc==4
-            permitted=set()
-            for color in (0,2):
-                track=oc+40*color
-                interp,glob,nt,ot,nv,ov=struct.unpack_from('<Hh4I',model,track)
-                assert interp==1 and glob==-1 and nt==nv==1
-                count,times=struct.unpack_from('<2I',model,ot)
-                values,value_offset=struct.unpack_from('<2I',model,ov);assert values==count
-                for i in range(count):
-                    t=struct.unpack_from('<I',model,times+4*i)[0]
-                    # 800000-ms sky animation spans one day. Preserve the night
-                    # endpoints (including 19:00 for the daytime cloud track).
-                    if 200000<=t<=(633333 if color==0 else 600000):
-                        at=value_offset+12*i
-                        struct.pack_into('<3f',model,at,1.,.77,.57)
-                        permitted.update(range(at,at+12))
-            assert len(model)==len(original_model)
-            assert all(a==b or i in permitted for i,(a,b) in enumerate(zip(model,original_model)))
-            custom='Environments\\Stars\\fr_mulgore_warm'
-            payload[custom+'.m2']=bytes(model)
-            skins=struct.unpack_from('<I',model,68)[0];assert 0<skins<=4
-            # The HD model has an independently animated sun + flare, while the
-            # renderer owns the clock-based sun. Omit only those named batches in
-            # this cloned skybox, otherwise the player sees two different suns.
-            texture_count,texture_offset=struct.unpack_from('<II',model,80)
-            texture_names=[]
-            for i in range(texture_count):
-                kind,flags,size,pos=struct.unpack_from('<4I',model,texture_offset+16*i)
-                texture_names.append(bytes(model[pos:pos+size]).rstrip(b'\0').decode().lower() if kind==0 else '')
-            lookup_count,lookup_offset=struct.unpack_from('<II',model,128)
-            lookup=struct.unpack_from('<'+'H'*lookup_count,model,lookup_offset)
-            omit=OMIT
-            removed=[]
-            for i in range(skins):
-                skin=bytearray(assets.read(original_name[:-4]+f'{i:02d}.skin'));before_skin=bytes(skin)
-                batch_count,batch_offset=struct.unpack_from('<II',skin,36);kept=[]
-                for j in range(batch_count):
-                    raw=bytes(skin[batch_offset+j*24:batch_offset+(j+1)*24]);assert len(raw)==24
-                    batch=struct.unpack('<2B11H',raw);count,start=batch[8],batch[9]
-                    assert start+count<=lookup_count
-                    names=[texture_names[lookup[k]].split('\\')[-1] for k in range(start,start+count)]
-                    if any(name in omit for name in names):removed.append({'skin':i,'batch':j,'textures':names})
-                    else:kept.append(raw)
-                assert len(kept)==batch_count-4
-                struct.pack_into('<I',skin,36,len(kept))
-                skin[batch_offset:batch_offset+24*batch_count]=b''.join(kept)+bytes(24*(batch_count-len(kept)))
-                assert len(skin)==len(before_skin)
-                assert skin[:36]==before_skin[:36] and skin[40:batch_offset]==before_skin[40:batch_offset]
-                assert skin[batch_offset+24*batch_count:]==before_skin[batch_offset+24*batch_count:]
-                payload[custom+f'{i:02d}.skin']=bytes(skin)
+            skyrow = bytearray(sky.index[old_id])
+            payload.update(art)
             new_id=max(sky.index)+1;putu(skyrow,0,new_id);putu(skyrow,1,len(sky.strings))
             sky.strings+=(custom+'.mdx').encode()+b'\0';sky.add(skyrow)
             putu(params.index[profile],2,new_id)
@@ -216,7 +211,7 @@ def build(source,output,client,assets=None,skybox=None,fog=None):
             payload[keys['LightParams']]=params.bytes()
             (output/'LightParams.dbc').write_bytes(params.bytes())
             (output/'LightSkybox.dbc').write_bytes(sky.bytes())
-            cloned={'old':old_id,'new':new_id,'model':custom+'.m2','original_model_sha256':hashlib.sha256(original_model).hexdigest(),'only_day_color_bytes_changed':True,'skin_count':skins,'removed_duplicate_sun_batches':removed}
+            cloned={'old':old_id,'new':new_id,'model':custom+'.m2','original_model_sha256':original_hash,'only_day_color_bytes_changed':True,'skin_count':sum(name.endswith('.skin') for name in art),'removed_duplicate_sun_batches':removed}
     finally:
         if owned:assets.close()
     archive=output/'patch-z.mpq'
@@ -230,7 +225,7 @@ def build(source,output,client,assets=None,skybox=None,fog=None):
             'profile':profile,'light_ids':sorted(LIGHT_IDS),'zone':215,
             'changed_color_bands':sorted(DAY),'changed_float_bands':[0,1],
             'other_rows_byte_identical':True,'night_interpolation_preserved_within_quantization':True,
-            'cloned_skybox':cloned,'sky_clone_skipped':sky_skipped,
+            'cloned_skybox':cloned,'sky_clone_skipped':sky_skipped,'kept_sky_id':old_id if sky_skipped else None,
             'renderer_changed':False,'game_launched':False,'visual_verified':False}
     (output/'manifest.json').write_text(json.dumps(report,indent=2)+'\n')
     print(json.dumps(report,indent=2))
