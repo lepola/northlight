@@ -725,7 +725,7 @@ static const float kWaveLength = 3.0;
 static const float kWavePeriod = 4.0;
 static const float kFrontSharpness = 0.08;
 static const float kFrontTrail = 0.12;
-static const float kBreakDistance = 4.5;
+static const float kBreakDistance = 5.25;
 static const float kWashFade = 0.3;
 static const float kWashRise = 0.08;
 static const float kWashWidth = 0.7;
@@ -1163,7 +1163,13 @@ float WavePhase(float distance, float along)
 // Each wave has its own size, so some come in bigger than others.
 float WaveSize(float phase, float along)
 {
-    return lerp(kSmallestWave, 1.0, Hash(float2(floor(phase), floor(along * 2.0))));
+    // Neighbouring stretches keep their own size. Blend across their shared edge
+    // so a single breaking crest can taper along its length.
+    float segment = along * 2.0 - 0.5;
+    float2 cell = float2(floor(phase), floor(segment));
+    float weight = smoothstep(0.25, 0.75, frac(segment));
+    float size = lerp(Hash(cell), Hash(cell + float2(0.0, 1.0)), weight);
+    return lerp(kSmallestWave, 1.0, size);
 }
 
 // A wave's cross-section: a steep face towards the shore and a gentle back. Far out it is a wide, low swell; it
@@ -1214,7 +1220,7 @@ float ShoreCrestLine(float2 p, float surfaceHeight, float footprint)
         float fromCrest = behind - peak;
         float across = (fromCrest - floor(fromCrest + 0.5)) * kWaveLength;
         float size = WaveSize(phase, waves.along) * saturate(1.0 - waves.distance / kWaveReach) * waves.known;
-        crest = CrestLine(p, across + CrestBend(p), size, kCrestLineWidth, footprint);
+        crest = CrestLine(p, across + CrestBend(p), size, kCrestLineWidth * 1.40, footprint);
     }
     return crest;
 }
