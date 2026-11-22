@@ -74,8 +74,13 @@ public:
     }
     bool Reflection(const WaterHostReflection& reflection)
     { return Current() && m_api->set_reflection(m_context, m_stamp, &reflection); }
-    bool Fog(bool ready)
-    { return Current() && m_api->set_fog(m_context, m_stamp, ready ? WaterHostFogCoversWater : WaterHostNativeFog); }
+    bool Fog(bool ready, bool spatialFog = false)
+    {
+        if (!Current()) return false;
+        // Older cores reject the optional hint and still receive their usual fog policy.
+        if (!ready && spatialFog && m_api->set_fog(m_context, m_stamp, WaterHostSpatialFog)) return true;
+        return m_api->set_fog(m_context, m_stamp, ready ? WaterHostFogCoversWater : WaterHostNativeFog);
+    }
     void End()
     {
         if (m_context) m_api->end_frame(m_context);

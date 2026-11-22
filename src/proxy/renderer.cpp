@@ -1220,7 +1220,9 @@ private:
                     rollback=rainRollbackMS;
                 }else if(rollbackReady)rollbackReady=SUCCEEDED(ext->StretchRect(target,nullptr,rollback,nullptr,D3DTEXF_NONE));
             }
-            bool composed=immediate&&rollbackReady&&cooperativeWater.Composite(depthTex,waterMask,worldDepth,nearZ,farZ,worldMinDepth,worldMaxDepth,false,refractionScene,surfaceVisibility);
+            // The material callback runs inside the lit world pass, before its scheduled fog composite.
+            const bool spatialFog = refractionScene && world && worldDebug == 0 && world->WaterSpatialFogActive();
+            bool composed=immediate&&rollbackReady&&cooperativeWater.Composite(depthTex,waterMask,worldDepth,nearZ,farZ,worldMinDepth,worldMaxDepth,false,refractionScene,surfaceVisibility,spatialFog);
             WaterHostSurfaceStatus coreStatus={};const bool knownStatus=cooperativeWater.SurfaceStatus(coreStatus);
             const bool coreAbort=knownStatus&&coreStatus.outcome==WaterHostSurfaceAbortFrame;
             // Rain needs putting back only where the core drew the water's surface over it. Seen from below the core draws

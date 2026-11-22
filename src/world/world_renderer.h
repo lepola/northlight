@@ -621,6 +621,7 @@ public:
         if(shaded&&!waterOwnedPS&&FAILED(d->CreatePixelShader(kWorldCompositeWaterProbeShader,&waterOwnedPS)))shaded=false;
         waterSurfaceShaded=shaded;
     }
+    bool WaterSpatialFogActive()const{return effects.fog;}
     bool WaterGradient(float farZ,UINT w,UINT h,const float (&glare)[13][4],IDirect3DTexture9* moonBody,unsigned glareMask,WaterEnvironmentValues& values,IDirect3DTexture9*& field,bool& restoreFailed){
         restoreFailed=false;field=nullptr;waterDistanceOwned=false;
         if(!lightSlotsValid||!celestialValid||!prepareWaterHorizon(farZ,w,h))return false;

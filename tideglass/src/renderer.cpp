@@ -606,7 +606,7 @@ float Renderer::ObservedAirWeight(const FrameInputs& in) const
 }
 
 // Bind the accepted environment when available, otherwise the ordinary sky memory.
-bool Renderer::BindSky(IDirect3DDevice9* dev, DWORD stage, const Config& cfg)
+bool Renderer::BindSky(IDirect3DDevice9* dev, DWORD stage, const Config& cfg, bool hostSpatialFog)
 {
     if(m_usingEnvironment&&m_environment){
         const auto& values=m_environment->Values();
@@ -615,7 +615,8 @@ bool Renderer::BindSky(IDirect3DDevice9* dev, DWORD stage, const Config& cfg)
         const unsigned glare=values.light.moon?WaterBackgroundMoonGlare:WaterBackgroundSunGlare;
         controls[1][2]=m_environment->Background()&&(values.backgroundContent&glare)?1.f:0.f;
         for(unsigned i=0;i<6;++i)ColorToFloat(values.palette[i],1,controls[i+2]);
-        const float layout[4]={2,0,0,0};
+        // The reflected water-to-scenery leg belongs to the material with either owner of camera distance.
+        const float layout[4]={2,hostSpatialFog ? 1.f : 0.f,0,0};
         return SUCCEEDED(dev->SetPixelShaderConstantF(WATER_SLOT_cEnvironment,&controls[0][0],8))&&
             SUCCEEDED(dev->SetPixelShaderConstantF(kSkyLayoutRegister,layout,1))&&
             BindLinearTexture(dev,stage,m_environment->Background());
@@ -1864,7 +1865,7 @@ bool Renderer::BindWaterTextures(IDirect3DDevice9* dev, IDirect3DTexture9* depth
     ok=BindLinearTexture(dev,WATER_SLOT_sSceneBefore,m_sceneBefore)&&ok;
     ok=BindPointTexture(dev,WATER_SLOT_sSceneWithWater,m_sceneWithWater)&&ok;
     ok=BindPointTexture(dev,WATER_SLOT_sWaterLevel,m_level[0]?m_level[m_levelIndex]:nullptr)&&ok;
-    ok=BindSky(dev,WATER_SLOT_sRememberedSky,cfg)&&ok;
+    ok=BindSky(dev,WATER_SLOT_sRememberedSky,cfg,in.hostSpatialFog)&&ok;
     ok=BindLinearTexture(dev,WATER_SLOT_sRipples,m_waterSurface.Ripples())&&ok;
     ok=BindLinearTexture(dev,WATER_SLOT_sSeabed,GroundTexture(dev,in.ground))&&ok;
     ok=BindLinearTexture(dev,WATER_SLOT_sShore,in.ground?m_shore:nullptr)&&ok;

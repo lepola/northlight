@@ -101,7 +101,7 @@ public:
     }
     bool Composite(IDirect3DTexture9* opaqueDepth, IDirect3DTexture9* mask, IDirect3DSurface9* boundDepth,
                    float nearPlane, float farPlane, float minDepth, float maxDepth, bool enhancedFogReady,
-                   IDirect3DTexture9* refractionScene = nullptr, IDirect3DTexture9* surfaceVisibility = nullptr)
+                   IDirect3DTexture9* refractionScene = nullptr, IDirect3DTexture9* surfaceVisibility = nullptr, bool spatialFog = false)
     {
         if (!m_liquid) return false;
         m_liquid = false;
@@ -114,7 +114,7 @@ public:
         m_nativeWater = mask;
         m_frameDepth = m_depth.Build(m_device, opaqueDepth, mask, nearPlane, farPlane, minDepth, maxDepth);
         if (!m_frameDepth) { ReleaseColour(); m_passes.End(); return false; }
-        m_passes.Fog(enhancedFogReady);
+        m_passes.Fog(enhancedFogReady, spatialFog);
         if (northlightWaterSettings.CompositeAfterEffects()) {
             m_pendingComposite = true;
             return true;

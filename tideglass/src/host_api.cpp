@@ -224,6 +224,7 @@ bool Current(WaterHostContext* context, WaterHostStamp stamp)
 FrameInputs LiquidInputs(WaterHostContext* context)
 {
     auto input = context->frame->snapshot->Inputs();
+    input.hostSpatialFog = context->fog == WaterHostSpatialFog;
     input.stockFogPushed = input.stockFogPushed || context->fog == WaterHostFogCoversWater;
     // Some outdoor slime uses a native water type. Keep the immutable captured
     // frame intact; correct only this context's view after observing its draws.
@@ -378,7 +379,7 @@ int __cdecl Reflection(WaterHostContext* context, WaterHostStamp stamp, const Wa
 }
 int __cdecl Fog(WaterHostContext* context, WaterHostStamp stamp, WaterHostFog fog)
 {
-    if (!Current(context, stamp) || (fog != WaterHostNativeFog && fog != WaterHostFogCoversWater)) return 0;
+    if (!Current(context, stamp) || (fog != WaterHostNativeFog && fog != WaterHostFogCoversWater && fog != WaterHostSpatialFog)) return 0;
     if(fog==WaterHostFogCoversWater&&context->config.Get().waterAtmosphere==1&&context->session.EnvironmentAvailable())return 0;
     context->fog = fog;
     return 1;

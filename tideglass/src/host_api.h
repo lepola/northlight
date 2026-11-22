@@ -40,7 +40,11 @@ enum WaterHostPass : uint32_t
 };
 // Native is the default each frame. Enhanced coverage must be confirmed by the
 // host for this exact frame; DLL presence is never a readiness signal.
-enum WaterHostFog : uint32_t { WaterHostNativeFog = 0, WaterHostFogCoversWater = 1 };
+enum WaterHostFog : uint32_t {
+    WaterHostNativeFog = 0, WaterHostFogCoversWater = 1,
+    // Native mirror fog is retained. The host also lights the world with spatial fog this frame.
+    WaterHostSpatialFog = 2
+};
 struct WaterHostResources
 {
     uint32_t size;
