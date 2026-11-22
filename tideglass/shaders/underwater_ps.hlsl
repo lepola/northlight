@@ -10,8 +10,8 @@ sampler2D sUnderwaterFoam : register(s11);
 sampler2D sUnderwaterScenery : register(s12);
 sampler2D sUnderwaterSceneryDepth : register(s13);
 float4 cUnderwaterScenery : register(c65); // current source valid, authoritative water Z, dimensions
-float4 cUnderwaterSceneryProjection : register(c66); // native source projection A/B, D3D9 alignment, unused
 #endif
+float4 cUnderwaterSceneryProjection : register(c66); // native source projection A/B, D3D9 alignment, direct sightline distance as depth
 float4 cUnderwater : register(c23);
 float4 cInside : register(c25);
 float4 cWindow : register(c29);
@@ -115,7 +115,7 @@ float3 UnderwaterLight()
     return brightness * lerp(kNightUnderwaterLight, 1.0, saturate(cUnderwater.w));
 }
 
-float3 WaterColorAlong(float3 direction, float distance, float cameraDepth)
+float3 WaterColorAlong(float3 direction, float distance, float cameraDepth, float distanceAsDepth = kDistanceAsDepth)
 {
     float3 gradient;
     if (UnderSlime())
@@ -138,7 +138,7 @@ float3 WaterColorAlong(float3 direction, float distance, float cameraDepth)
         float deepness = 1.0 - exp(-(depthThere / (cDeepColorDepth.w * kDepthDarkeningScale) +
                                      distance / (Visibility() * kDistanceDarkeningScale)));
         float3 shallow = lerp(cShallowColor.rgb, cTwilightShallow.rgb, saturate(cTwilightShallow.w));
-        gradient = lerp(shallow * cInside.y, DepthGradient(depthThere + distance * kDistanceAsDepth) * kDeepDimming,
+        gradient = lerp(shallow * cInside.y, DepthGradient(depthThere + distance * distanceAsDepth) * kDeepDimming,
                         deepness);
     }
     return gradient * UnderwaterLight() * (1.0 + kLightFromAbove * saturate(direction.z));
@@ -438,7 +438,7 @@ float4 main(float2 pixel : VPOS) : COLOR0
     float4 level = UnderwaterLevel(UnderSlime());
     bool surfaceKnown = level.g > 0.5 && level.r > camera.z;
     float depthBelow = surfaceKnown ? level.r - camera.z : kNoSurfaceDepth;
-    float3 waterColor = WaterColorAlong(direction, sceneDistance, depthBelow);
+    float3 waterColor = WaterColorAlong(direction, sceneDistance, depthBelow, cUnderwaterSceneryProjection.w);
     float toSurface; float3 baseNormal; bool nativeSurface;
     UnderwaterHit(pixel,direction,sceneDistance,level,toSurface,baseNormal,nativeSurface);
     if (toSurface > 0.0)

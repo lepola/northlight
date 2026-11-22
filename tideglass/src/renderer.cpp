@@ -2845,7 +2845,17 @@ void Renderer::DrawUnderwater(IDirect3DDevice9* dev, IDirect3DTexture9* depthTex
     D3DSURFACE_DESC mirror={};if(source)m_sceneryDepth->GetLevelDesc(0,&mirror);
     const float reflected[4]={source?1.f:0.f,m_sceneryHeight,float(mirror.Width),float(mirror.Height)};
     dev->SetPixelShaderConstantF(65,reflected,1);
-    const float sourceProjection[4]={m_sceneryProjection[10],m_sceneryProjection[14],cfg.reflectionSceneryAlign?1.f:0.f,0};
+    // Long sightlines near the surface still see sunlit water. The shader keeps
+    // the full path for absorption and adds the real descent when looking down.
+    float distanceAsDepth = 0.5f;
+    if (!slime && in.cameraWaterHeightKnown)
+    {
+        const float gradientDepth = water[WATER_SLOT_cDeepColorDepth - kFrameConstants][3];
+        const float cameraDepth = currentWater - in.cameraPosition[2];
+        const float shallow = std::clamp(1.f - cameraDepth / (2.f * gradientDepth), 0.f, 1.f);
+        distanceAsDepth -= 0.35f * shallow;
+    }
+    const float sourceProjection[4]={m_sceneryProjection[10],m_sceneryProjection[14],cfg.reflectionSceneryAlign?1.f:0.f,distanceAsDepth};
     dev->SetPixelShaderConstantF(66,sourceProjection,1);
     // What lies beyond the surface comes from the depth and colour captured before the client drew its own surface
     // (seen from below it would hide everything above).
