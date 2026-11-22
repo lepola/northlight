@@ -1062,8 +1062,17 @@ float4 ShadeLiquid(float2 pixel, float surfaceDepth, float thickness)
     // Tinted towards a light water colour (see FoamLines).
     foamColour *= lerp(1.0, kFoamTintColour, kFoamTint);
 #endif
-    float3 foamLit = lerp(FoamLight(FoamVisibility(pixel)) * foamColour * FoamRelief(surface.foamNormal),
+    float foamVisibility = FoamVisibility(pixel);
+    float3 foamLit = lerp(FoamLight(foamVisibility) * foamColour * FoamRelief(surface.foamNormal),
                           cFoamColor.rgb * kGlowBrightness, saturate(FoamGlow()));
+#ifndef DEFERRED_SLIME
+    // Wet foam catches a broad highlight around the glints, including the
+    // space between bright facets. Sheltered foam keeps its diffuse light.
+    float alignment = saturate(dot(toCamera, float3(-cToLight.xy, cToLight.z)));
+    float wetHighlight = pow(alignment, 8.0) * foamVisibility *
+                         saturate(cToLight.w * SunVisibility() * SpecularStrength());
+    foamLit += cSunColor.rgb * (0.3 * wetHighlight);
+#endif
     color = lerp(color, foamLit, foam) + cFoamColor.rgb * foam * FoamGlow() * kGlowSpill;
 
     [flatten]if(cEnvironment.x>.5&&cSkyLayout.x>1.5){
