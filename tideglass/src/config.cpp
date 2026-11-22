@@ -99,6 +99,7 @@ bool ConfigFile::Parse()
     next.nearReflection = std::clamp(reader.Float("NearReflection", defaults.nearReflection), 0.0f, 1.0f);
     next.reflectionRamp = std::clamp(reader.Float("ReflectionRamp", defaults.reflectionRamp), 1.0f, 500.0f);
     next.scatter = std::clamp(reader.Float("Scatter", defaults.scatter), 0.0f, 4.0f);
+    next.fineHighlights = reader.Int("FineHighlights",defaults.fineHighlights) != 0;
     next.specular = std::clamp(reader.Float("Specular", defaults.specular), 0.0f, 4.0f);
     next.stockTint = std::clamp(reader.Float("StockTint", defaults.stockTint), 0.0f, 1.0f);
     next.antiAliasing = reader.Int("AntiAliasing", defaults.antiAliasing) != 0;

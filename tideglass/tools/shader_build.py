@@ -73,7 +73,7 @@ def resources(assembly, target):
 def check_water_bindings(name, assembly, dependencies):
     # The two surface programs have different optimized-out inputs. Validate the
     # named parameters actually present, including the last row of each array.
-    if name not in ('ps_water', 'ps_water_moments', 'ps_surface_detail_moments'):
+    if name not in ('ps_water', 'ps_water_fine', 'ps_water_moments', 'ps_water_moments_fine', 'ps_surface_detail_moments'):
         return
     contracts = [Path(p) for p in dependencies if Path(p).name == 'water_registers.hlsli']
     if len(contracts) != 1:

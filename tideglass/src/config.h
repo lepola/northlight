@@ -64,6 +64,7 @@ struct Config
     float reflectionRamp = 30.0f;
     float scatter = 0.6f;
     float specular = 1.0f;
+    bool fineHighlights = false;
     float stockTint = 0.0f;
     float shallowColor[3] = {0.10f, 0.48f, 0.46f};
     float deepColor[3] = {0.02f, 0.13f, 0.24f};

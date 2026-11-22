@@ -29,6 +29,7 @@
 #include "ps_sky_memory_extend.h"
 #include "ps_slime_capture.h"
 #include "ps_slime_deferred.h"
+#include "ps_slime_deferred_fine.h"
 #include "ps_slime_undo.h"
 #include "ps_slime_lift.h"
 #include "ps_lava.h"
@@ -51,7 +52,9 @@
 #include "ps_contact.h"
 #include "ps_contact_spread.h"
 #include "ps_water.h"
+#include "ps_water_fine.h"
 #include "ps_water_moments.h"
+#include "ps_water_moments_fine.h"
 #include "ps_surface_detail_moments.h"
 #include "vs_fullscreen.h"
 #include "vs_ring.h"
@@ -366,6 +369,7 @@ bool Renderer::EnsurePixelShader(IDirect3DDevice9* dev, IDirect3DPixelShader9*& 
         {&m_overlayPs, &p_ps_overlay},
         {&m_probePs, &p_ps_probe},
         {&m_waterPs, &p_ps_water},
+        {&m_waterFinePs, &p_ps_water_fine},
         {&m_fxaaPs, &p_ps_fxaa},
         {&m_levelPs, &p_ps_level},
         {&m_skyMemoryPs, &p_ps_sky_memory},
@@ -381,6 +385,7 @@ bool Renderer::EnsurePixelShader(IDirect3DDevice9* dev, IDirect3DPixelShader9*& 
         {&m_slimeUndoPs, &p_ps_slime_undo},
         {&m_slimeLiftPs, &p_ps_slime_lift},
         {&m_slimeDeferredPs, &p_ps_slime_deferred},
+        {&m_slimeDeferredFinePs, &p_ps_slime_deferred_fine},
         {&m_lava.surfacePs, &p_ps_lava},
         {&m_lava.stirPs, &p_ps_lava_stir},
         {&m_lava.maskPs, &p_ps_lava_mask},
@@ -404,6 +409,7 @@ bool Renderer::EnsurePixelShader(IDirect3DDevice9* dev, IDirect3DPixelShader9*& 
         {&m_contactPs, &p_ps_contact},
         {&m_contactSpreadPs, &p_ps_contact_spread},
         {&m_waterMomentsPs, &p_ps_water_moments},
+        {&m_waterMomentsFinePs, &p_ps_water_moments_fine},
         {&m_reflectionSceneryPs, &p_ps_reflection_scenery},
         {&m_slimeReflectionPs, &p_ps_slime_reflection},
         {&m_surfaceMomentsPs, &p_ps_surface_detail_moments},
@@ -428,6 +434,12 @@ bool Renderer::EnsurePixelShader(IDirect3DDevice9* dev, IDirect3DPixelShader9*& 
 HRESULT Renderer::BindPixelShader(IDirect3DDevice9* dev, IDirect3DPixelShader9*& shader)
 {
     return EnsurePixelShader(dev, shader) ? dev->SetPixelShader(shader) : D3DERR_NOTAVAILABLE;
+}
+
+HRESULT Renderer::BindHighlightShader(IDirect3DDevice9* dev, const Config& cfg, IDirect3DPixelShader9*& standard, IDirect3DPixelShader9*& fine)
+{
+    if (cfg.fineHighlights && cfg.specular > 0 && SUCCEEDED(BindPixelShader(dev, fine))) return D3D_OK;
+    return BindPixelShader(dev, standard);
 }
 
 void Renderer::PrepareUnderwaterShaders(IDirect3DDevice9* dev, const Config& cfg)
@@ -1299,7 +1311,7 @@ bool Renderer::CompositeDeferredSlime(IDirect3DDevice9* dev, IDirect3DTexture9* 
     WriteDepthAlways(dev, saved.color[0], boundDepth, in.viewport);
     dev->SetPixelShaderConstantF(0, &frame[0][0], kFrameConstants);
     dev->SetPixelShaderConstantF(kFrameConstants, &constants[0][0], kWaterConstants);
-    bool bound=controls&&SUCCEEDED(BindPixelShader(dev,m_slimeDeferredPs))&&
+    bool bound=controls&&SUCCEEDED(BindHighlightShader(dev,cfg,m_slimeDeferredPs,m_slimeDeferredFinePs))&&
         BindWaterTextures(dev,m_slime.depth,in,cfg,true);
     if(lifted)bound=BindPointTexture(dev,1,m_slimeGround)&&bound;
     D3DSURFACE_DESC reflectionDesc={};
@@ -2609,7 +2621,8 @@ bool Renderer::CompositeWater(IDirect3DDevice9* dev, IDirect3DTexture9* depthTex
         bound=SUCCEEDED(dev->SetPixelShaderConstantF(0,&frame[0][0],kFrameConstants))&&bound;
         bound=SUCCEEDED(dev->SetPixelShaderConstantF(kFrameConstants,&constants[0][0],kWaterConstants))&&bound;
         IDirect3DPixelShader9*& composite=m_usingWaveMoments ? m_waterMomentsPs : m_waterPs;
-        bound=SUCCEEDED(BindPixelShader(dev, composite))&&bound;
+        IDirect3DPixelShader9*& fine=m_usingWaveMoments ? m_waterMomentsFinePs : m_waterFinePs;
+        bound=SUCCEEDED(BindHighlightShader(dev,cfg,composite,fine))&&bound;
         bound=BindWaterControls(dev,cfg,m_usingEnvironment,m_usingWaveMoments,surfaceVisibility!=nullptr,reflections && hasIndoorWater)&&bound;
         bound=BindWaterTextures(dev,depthTexture,in,cfg)&&bound;
         bound=BindSurfaceDetail(dev)&&bound;
@@ -3376,7 +3389,9 @@ void Renderer::ReleaseAll()
     SafeRelease(m_overlayPs);
     SafeRelease(m_probePs);
     SafeRelease(m_waterPs);
+    SafeRelease(m_waterFinePs);
     SafeRelease(m_waterMomentsPs);
+    SafeRelease(m_waterMomentsFinePs);
     SafeRelease(m_surfaceMomentsPs);
     SafeRelease(m_fxaaPs);
     SafeRelease(m_levelPs);
@@ -3398,6 +3413,7 @@ void Renderer::ReleaseAll()
     SafeRelease(m_slimeLiftPs);
     SafeRelease(m_slimeUndoPs);
     SafeRelease(m_slimeDeferredPs);
+    SafeRelease(m_slimeDeferredFinePs);
     m_lava.ReleaseManaged();
     SafeRelease(m_aoPs);
     SafeRelease(m_aoBlurPs);

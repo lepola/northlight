@@ -914,6 +914,21 @@ float3 FilteredSwellSun(float3 normal, float3 toCamera, float variance, float sc
 
 #endif
 
+#ifdef FINE_HIGHLIGHTS
+float3 HighlightNormal(float3 normal, float3 world, float distance, float3 toCamera, float3 baseNormal)
+{
+    float footprint = PixelFootprint(distance, dot(toCamera, baseNormal));
+    float resolved = Resolved(1.0 / 6.5, footprint) * (1.0 - smoothstep(16.0, 48.0, distance));
+    [branch] if (resolved > 0 && cToLight.w * SunVisibility() * SpecularStrength() > 0)
+    {
+        // Capillary waves break up the reflected disc while each cell still spans several screen pixels.
+        float2 fine = Octave(world.xy, float2x2(0.8, -0.6, 0.6, 0.8), 6.5, float2(-0.42, 0.55), 0.010);
+        normal = normalize(float3(normal.xy - normal.z * fine * (resolved * WaveStrength()), normal.z));
+    }
+    return normal;
+}
+#endif
+
 float4 ShadeLiquid(float2 pixel, float surfaceDepth, float thickness)
 {
     LiquidSurface surface = SurfaceAt(pixel, surfaceDepth, thickness);
@@ -1016,10 +1031,14 @@ float4 ShadeLiquid(float2 pixel, float surfaceDepth, float thickness)
 #endif
     float3 color = lerp(underwater, sky, fresnel);
 
+    float3 glintNormal = normal;
+#ifdef FINE_HIGHLIGHTS
+    glintNormal = HighlightNormal(normal, world, distance, toCamera, surface.baseNormal);
+#endif
 #ifdef WATER_FILTERED_MATERIAL
     // Screen derivatives describe the resolved mean normal. Sharing this estimate across
     // normalized slope samples avoids derivative work inside a conditional SM3 branch.
-    float screenVariance = NormalScreenVariance(normal);
+    float screenVariance = NormalScreenVariance(glintNormal);
 #ifndef DEFERRED_SLIME
     // (RefractionDebug 5 shows no reflection: fresnel is 0 above, so the samples would give back what is taken away.)
     [branch] if (FilterDistantSwell() && !(cWaterDebug.x > 4.5 && cWaterDebug.x < 5.5))
@@ -1039,7 +1058,7 @@ float4 ShadeLiquid(float2 pixel, float surfaceDepth, float thickness)
     float3 sun;
 #ifndef DEFERRED_SLIME
     [branch] if (FilterDistantSwell())
-        sun = FilteredSwellSun(normal, toCamera,
+        sun = FilteredSwellSun(glintNormal, toCamera,
             UnresolvedSwellVariance(PixelFootprint(distance, dot(toCamera, surface.baseNormal))), screenVariance
 #ifdef WATER_WAVE_MOMENT_MATERIAL
             , uv
@@ -1047,9 +1066,9 @@ float4 ShadeLiquid(float2 pixel, float surfaceDepth, float thickness)
             );
     else
 #endif
-        sun = SunReflection(normal, toCamera, world.xy, screenVariance);
+        sun = SunReflection(glintNormal, toCamera, world.xy, screenVariance);
 #else
-    float3 sun = SunReflection(normal, toCamera, world.xy);
+    float3 sun = SunReflection(glintNormal, toCamera, world.xy);
 #endif
 #ifdef SLIME_SURFACE_SHELTER
     // The mirror resolve marks only pixels owned by an authored indoor liquid.

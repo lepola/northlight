@@ -170,6 +170,7 @@ private:
     bool Skip(const char* reason);
     bool EnsureShaders(IDirect3DDevice9* dev);
     bool EnsurePixelShader(IDirect3DDevice9* dev, IDirect3DPixelShader9*& shader);
+    HRESULT BindHighlightShader(IDirect3DDevice9*, const Config&, IDirect3DPixelShader9*& standard, IDirect3DPixelShader9*& fine);
     HRESULT BindPixelShader(IDirect3DDevice9* dev, IDirect3DPixelShader9*& shader);
     std::vector<const ShaderProgram*> m_failedShaders;
     bool m_ringShaderFailed = false;
@@ -300,7 +301,9 @@ private:
     IDirect3DPixelShader9* m_overlayPs = nullptr;
     IDirect3DPixelShader9* m_probePs = nullptr;
     IDirect3DPixelShader9* m_waterPs = nullptr;
+    IDirect3DPixelShader9* m_waterFinePs = nullptr;
     IDirect3DPixelShader9* m_waterMomentsPs = nullptr;
+    IDirect3DPixelShader9* m_waterMomentsFinePs = nullptr;
     IDirect3DPixelShader9* m_surfaceMomentsPs = nullptr;
     IDirect3DPixelShader9* m_fxaaPs = nullptr;
     IDirect3DPixelShader9* m_levelPs = nullptr;
@@ -322,6 +325,7 @@ private:
     IDirect3DTexture9* m_slimeGround = nullptr; // the ground under kept fade draws (LiftFadeSurfaces)
     IDirect3DPixelShader9* m_slimeUndoPs = nullptr;
     IDirect3DPixelShader9* m_slimeDeferredPs = nullptr;
+    IDirect3DPixelShader9* m_slimeDeferredFinePs = nullptr;
     DeferredSurface m_slime;
     bool m_buildingSlime = false;
     IDirect3DTexture9* m_surfaceBaseDepth = nullptr;
