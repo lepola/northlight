@@ -44,7 +44,11 @@ float4 SeenSky(float2 pixel)
     return float4(colour,visible?1:0);
 }
 
-float4 main(float2 texel : VPOS) : COLOR0
+float4 main(float2 texel : VPOS
+#ifdef OBSERVE_AIR
+    , out float4 observedAir : COLOR1
+#endif
+) : COLOR0
 {
     float2 cell = floor(texel);
     float4 previous = tex2Dlod(sPreviousSky, float4((cell + 0.5) / float2(2.0, kRows), 0, 0));
@@ -103,6 +107,11 @@ float4 main(float2 texel : VPOS) : COLOR0
             }
         }
     }
+#ifdef OBSERVE_AIR
+    // Only direct observations can colour the surface seen on the next dive.
+    // Borrowed and historical rows still serve the ordinary sky reflection.
+    observedAir = weight > 0.05 ? float4(sum / max(weight, 0.05), 1) : 0;
+#endif
     if (weight > 0.05)
     {
         float3 seen = sum / weight;

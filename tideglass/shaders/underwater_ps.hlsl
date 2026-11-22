@@ -308,7 +308,7 @@ float3 SunThroughWindow(float3 transmitted)
 // The world above, seen through the surface: the scene captured before the client drew its water, shifted on
 // screen by the waves' slope. A shift that lands on something under the water (or off screen) keeps the unshifted
 // view, which is always above the surface.
-float3 SeenThroughSurface(float2 pixel, float3 hit, float3 downward)
+float3 SeenThroughSurface(float2 pixel, float3 hit, float3 downward, inout bool sky)
 {
     float2 uv = (pixel + 0.5) * cTexelGrid.xy;
     float3 straight = tex2Dlod(sSceneBefore, float4(uv, 0, 0)).rgb;
@@ -319,6 +319,7 @@ float3 SeenThroughSurface(float2 pixel, float3 hit, float3 downward)
     if (!InsideViewport(bent))
         return straight;
     float raw = SampleRawDepth(sOpaqueDepth, bent);
+    sky = sky && IsTrueSky(raw);
     float3 landed = WorldPosition(ViewPosition(bent, BeyondFarClip(raw) ? kSkyDistance : ViewZ(raw)));
     // Eased rather than switched, so the edge of where the bent view is usable draws no lines.
     float usable = smoothstep(hit.z - kSurfaceSideTolerance - kBentViewEase, hit.z - kSurfaceSideTolerance, landed.z);
@@ -345,7 +346,7 @@ float3 UndersideNormal(float3 hit, float distance, float3 wake, float3 direction
 // The surface seen from below, hazed by the water on the way to it: what shows through it and on it (the world
 // above, foam, the slime's pattern) by the way up to the surface; what it mirrors over the whole way down again.
 float3 SurfaceFromBelow(float2 pixel, float3 hit, float3 direction, float distance, float cameraDepth,
-                        float3 surfaceWater, float3 baseNormal)
+                        float3 surfaceWater, float3 baseNormal, bool sky)
 {
     if (cInside.x <= 0.0)
         return surfaceWater * kOpaqueCeilingShade;
@@ -373,10 +374,25 @@ float3 SurfaceFromBelow(float2 pixel, float3 hit, float3 direction, float distan
         // Scaled so that at the window's edge it meets the mirror past it without a step.
         reflectance = saturate(max(fresnel, nearCritical * nearCritical)) * (1.0 - leakAtEdge);
     }
-    float3 seen = SeenThroughSurface(pixel, hit, downward);
+    float3 seen = SeenThroughSurface(pixel, hit, downward, sky);
     float3 transmitted = refract(direction, downward, index);
     if (dot(transmitted, transmitted) > 1.0e-4)
-        seen += SunThroughWindow(normalize(transmitted));
+    {
+        transmitted = normalize(transmitted);
+#ifndef SLIME_UNDERSIDE
+        [branch] if (sky && cUnderwaterNativePlane.w > 0)
+        {
+            float row = sqrt(saturate((transmitted.z-kSkyLowest)/kSkySpan))*kSkyRows-0.5;
+            float2 across = transmitted.xy / max(length(transmitted.xy), 1.0e-4);
+            float2 sun = cToLight.xy / max(length(cToLight.xy), 1.0e-4);
+            float side = smoothstep(-0.6, 0.6, dot(across,sun));
+            float4 air = lerp(SkyMemory(0,row),SkyMemory(1,row),side);
+            // Keep the native sky detail. Unobserved directions have zero coverage.
+            seen += (air.rgb - seen*air.a)*(0.8*cUnderwaterNativePlane.w);
+        }
+#endif
+        seen += SunThroughWindow(transmitted);
+    }
     seen = Absorbed(seen, distance, surfaceWater);
     float3 result = lerp(mirror, lerp(seen, mirror, reflectance), saturate(cInside.x));
     // Foam seen from below: the broken surface lit from above, brighter patches that come and go with the waves.
@@ -452,7 +468,7 @@ float4 main(float2 pixel : VPOS) : COLOR0
                                                      sceneDistance, level), sceneDistance, waterColor);
             float3 surfaceWater = WaterColorAlong(direction, toSurface, depthBelow);
             float3 surfaceSeen =
-                SurfaceFromBelow(pixel, camera + direction * toSurface, direction, toSurface, depthBelow, surfaceWater, baseNormal);
+                SurfaceFromBelow(pixel, camera + direction * toSurface, direction, toSurface, depthBelow, surfaceWater, baseNormal, IsTrueSky(raw));
             float join = saturate((sceneDistance - toSurface) / kWaterlineBlend);
             float3 seenUp = lerp(sceneSeen, surfaceSeen, join);
 #ifdef SHARED_UNDERWATER_FOAM

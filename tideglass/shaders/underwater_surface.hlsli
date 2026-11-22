@@ -7,7 +7,7 @@ float WorldWaterHeight(float2 world)
 }
 
 // The same surface plane for underwater shading and its separate foam coverage pass.
-float4 cUnderwaterNativePlane : register(c67); // native camera plane enabled, height; native surface: 0 none, 1 distance/coverage, 2 raw depth
+float4 cUnderwaterNativePlane : register(c67); // camera plane enabled, height, native surface mode, nearby observed sky weight
 float4 UnderwaterLevel(bool slime)
 {
     float4 level = tex2Dlod(sWaterLevel, float4(0.5, 0.5, 0, 0));

@@ -246,7 +246,8 @@ private:
                           const float (&constants)[kWaterConstants][4]);
     void WriteDepthAlways(IDirect3DDevice9* dev, IDirect3DSurface9* target, IDirect3DSurface9* boundDepth,
                           const D3DVIEWPORT9& viewport);
-    void RememberSky(IDirect3DDevice9* dev, IDirect3DTexture9* depth, IDirect3DTexture9* finished, const FrameInputs& in, const Config& cfg);
+    void RememberSky(IDirect3DDevice9* dev, IDirect3DTexture9* depth, IDirect3DTexture9* finished, const FrameInputs& in,
+                     const Config& cfg, bool seesAboveHorizon);
     bool AdvanceSurface(IDirect3DDevice9* dev, SurfaceSim& sim, IDirect3DTexture9* level,
                         const SurfacePhysics& physics, const FrameInputs& in, const Config& cfg,
                         const float (&frame)[9][4], float (&constants)[kWaterConstants][4]);
@@ -306,6 +307,7 @@ private:
     IDirect3DTexture9* m_level[2] = {};
     int m_levelIndex = 0;
     IDirect3DPixelShader9* m_skyMemoryPs = nullptr;
+    IDirect3DPixelShader9* m_skyObservedAirPs = nullptr;
     IDirect3DPixelShader9* m_skyExtendPs = nullptr;
     IDirect3DPixelShader9* m_underwaterPs = nullptr;
     IDirect3DPixelShader9* m_underwaterFoamPs = nullptr;
@@ -443,6 +445,13 @@ private:
     uint64_t m_groundSource = 0;
     unsigned m_groundRevision = 0;
     IDirect3DTexture9* m_sky[2] = {};
+    IDirect3DTexture9* m_observedAir = nullptr;
+    int m_airMap = -1;
+    DWORD m_airTick = 0;
+    float m_airPosition[3] = {}, m_airLight[3] = {};
+    unsigned m_airWeather = 0;
+    float m_airIntensity = 0;
+    float ObservedAirWeight(const FrameInputs& in) const;
     int m_skyIndex = 0;
     IDirect3DVertexDeclaration9* m_decl = nullptr;
     IDirect3DStateBlock9* m_state = nullptr;

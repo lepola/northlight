@@ -25,6 +25,7 @@
 #include "ps_ring.h"
 #include "ps_ripple.h"
 #include "ps_sky_memory.h"
+#include "ps_sky_observed_air.h"
 #include "ps_sky_memory_extend.h"
 #include "ps_slime_capture.h"
 #include "ps_slime_deferred.h"
@@ -368,6 +369,7 @@ bool Renderer::EnsurePixelShader(IDirect3DDevice9* dev, IDirect3DPixelShader9*& 
         {&m_fxaaPs, &p_ps_fxaa},
         {&m_levelPs, &p_ps_level},
         {&m_skyMemoryPs, &p_ps_sky_memory},
+        {&m_skyObservedAirPs, &p_ps_sky_observed_air},
         {&m_skyExtendPs, &p_ps_sky_memory_extend},
         {&m_underwaterPs, &p_ps_underwater},
         {&m_underwaterFoamPs, &p_ps_underwater_foam},
@@ -532,7 +534,8 @@ bool Renderer::EnsureMemoryTargets(IDirect3DDevice9* dev, IDirect3DTexture9* (&t
 }
 
 // From the finished image (after the fog), so the sky is remembered as it is seen, fog glow and all.
-void Renderer::RememberSky(IDirect3DDevice9* dev, IDirect3DTexture9* depth, IDirect3DTexture9* finished, const FrameInputs& in, const Config& cfg)
+void Renderer::RememberSky(IDirect3DDevice9* dev, IDirect3DTexture9* depth, IDirect3DTexture9* finished, const FrameInputs& in,
+                           const Config& cfg, bool seesAboveHorizon)
 {
     if (!EnsureMemoryTargets(dev, m_sky, kSkySides, kSkyRows))
         return;
@@ -541,7 +544,6 @@ void Renderer::RememberSky(IDirect3DDevice9* dev, IDirect3DTexture9* depth, IDir
     if(!SetTarget(dev, m_sky[next]))return;
     D3DVIEWPORT9 vp = {0, 0, kSkySides, kSkyRows, 0.0f, 1.0f};
     dev->SetViewport(&vp);
-    if (FAILED(BindPixelShader(dev, m_skyMemoryPs))) return;
     const float horizon[]={m_level[0]?1.f:0.f,1.f/std::max(FarClipDistance(in.glProjection),1.f),0,0};
     dev->SetPixelShaderConstantF(46,horizon,1);
     BindPointTexture(dev,4,m_level[0]?m_level[m_levelIndex]:nullptr);
@@ -549,9 +551,32 @@ void Renderer::RememberSky(IDirect3DDevice9* dev, IDirect3DTexture9* depth, IDir
     BindPointTexture(dev, 1, m_snapshot);
     BindPointTexture(dev, 2, finished);
     BindPointTexture(dev, 3, m_sky[m_skyIndex]);
+    const DWORD now = GetTickCount();
+    bool observeAir = false;
+    if (cfg.underwater && seesAboveHorizon && m_surfaceResult == SurfaceResult::Shaded &&
+        !in.cameraInWater && !in.cameraInSlime && in.mapId >= 0 && (!m_airTick || now - m_airTick >= 200))
+    {
+        m_airTick = now;
+        m_airMap = -1;
+        if (!m_observedAir)
+            dev->CreateTexture(kSkySides, kSkyRows, 1, D3DUSAGE_RENDERTARGET, D3DFMT_A32B32G32R32F,
+                               D3DPOOL_DEFAULT, &m_observedAir, nullptr);
+        observeAir = m_observedAir && SUCCEEDED(BindPixelShader(dev, m_skyObservedAirPs)) &&
+                     SUCCEEDED(dev->SetRenderState(D3DRS_COLORWRITEENABLE1, 0xF)) && SetTarget(dev, m_observedAir, 1);
+    }
+    if (!observeAir && FAILED(BindPixelShader(dev, m_skyMemoryPs))) return;
     const std::string capture=!m_reflectionCaptureDirectory.empty() ? m_reflectionCaptureDirectory+"/sky-memory" : "";
     const bool captured=!capture.empty() && reflection::CapturePassInputs(dev,capture,m_snapshotPs,ActiveCaptureBurst());
-    DrawScreenTriangle(dev);
+    const bool drawn = SUCCEEDED(DrawScreenTriangle(dev));
+    if (observeAir)
+    {
+        dev->SetRenderTarget(1, nullptr);
+        m_airMap = drawn ? in.mapId : -1;
+        std::copy_n(in.cameraPosition, 3, m_airPosition);
+        std::copy_n(in.toLight, 3, m_airLight);
+        m_airWeather = in.weatherType;
+        m_airIntensity = in.weatherIntensity;
+    }
     if (captured) reflection::CapturePassOutputs(dev,capture,"output",ActiveCaptureBurst());
     m_skyIndex = next;
     // Extend missing rows from the observed sky: reuse the previous memory target after the update has finished.
@@ -563,8 +588,24 @@ void Renderer::RememberSky(IDirect3DDevice9* dev, IDirect3DTexture9* depth, IDir
     if (SUCCEEDED(DrawScreenTriangle(dev))) m_skyIndex=next^1;
 }
 
-// The remembered sky for the pass about to draw: the accepted environment where there is one, otherwise the sky memory,
-// read at its cell centres and blended in the shader; which, in the sky layout's row.
+float Renderer::ObservedAirWeight(const FrameInputs& in) const
+{
+    if (!m_observedAir || m_airMap < 0 || in.mapId != m_airMap || in.weatherType != m_airWeather)
+        return 0;
+    float distance2 = 0, lightChange2 = 0;
+    for (unsigned i = 0; i < 3; ++i)
+    {
+        const float moved = in.cameraPosition[i] - m_airPosition[i], turned = in.toLight[i] - m_airLight[i];
+        distance2 += moved * moved;
+        lightChange2 += turned * turned;
+    }
+    // The observed glow belongs to the crossing. Ease it out during long swims or a change of sky.
+    const float age = (GetTickCount() - m_airTick) * 0.001f;
+    return std::clamp(std::min({(120.f - age) / 60.f, (96.f - std::sqrt(distance2)) / 48.f,
+        (0.15f - std::sqrt(lightChange2)) / 0.10f, (0.3f - std::abs(in.weatherIntensity - m_airIntensity)) / 0.2f}), 0.f, 1.f);
+}
+
+// Bind the accepted environment when available, otherwise the ordinary sky memory.
 bool Renderer::BindSky(IDirect3DDevice9* dev, DWORD stage, const Config& cfg)
 {
     if(m_usingEnvironment&&m_environment){
@@ -2783,7 +2824,7 @@ void Renderer::DrawUnderwater(IDirect3DDevice9* dev, IDirect3DTexture9* depthTex
     IDirect3DTexture9* nativeSurface = slime ? (m_slimeCaptured ? m_slime.depth : nullptr) :
         (m_nativeWater ? m_nativeWater : (m_waterDepthValid ? m_waterDepth : nullptr));
     const float nativeMode = nativeSurface ? (!slime && m_nativeWater ? 1.f : 2.f) : 0.f;
-    const float nativePlane[4]={nativeWater?1.f:0.f,currentWater,nativeMode,0};
+    float nativePlane[4]={nativeWater?1.f:0.f,currentWater,nativeMode,0};
     // The foam pass has no live-depth input; s0 reads the same native surface there.
     BindPointTexture(dev,0,nativeSurface);
     dev->SetPixelShaderConstantF(67,nativePlane,1);
@@ -2817,7 +2858,12 @@ void Renderer::DrawUnderwater(IDirect3DDevice9* dev, IDirect3DTexture9* depthTex
         BindPointTexture(dev, 4, m_slime.level[0] ? m_slime.level[m_slime.levelIndex] : nullptr);
     else
         BindPointTexture(dev, 4, m_level[0] ? m_level[m_levelIndex] : nullptr);
-    BindSky(dev, 5, cfg);
+    const float airWeight = !slime && beyondSurface ? ObservedAirWeight(in) : 0.f;
+    if (airWeight > 0 && BindPointTexture(dev, WATER_SLOT_sRememberedSky, m_observedAir))
+    {
+        nativePlane[3] = airWeight;
+        dev->SetPixelShaderConstantF(67, nativePlane, 1);
+    }
     BindLinearTexture(dev, 6, surface.Ripples());
     BindLinearTexture(dev, 7, slime ? nullptr : GroundTexture(dev, in.ground));
     BindLinearTexture(dev, 8, !slime && in.ground ? m_shore : nullptr);
@@ -2837,6 +2883,8 @@ void Renderer::DrawUnderwater(IDirect3DDevice9* dev, IDirect3DTexture9* depthTex
 bool Renderer::Render(IDirect3DDevice9* dev, IDirect3DTexture9* depthTexture, IDirect3DSurface9* boundDepth,
                       const FrameInputs& in, const Config& cfg)
 {
+    if (!cfg.underwater || in.mapId != m_airMap || in.weatherType != m_airWeather)
+        m_airMap = -1;
     if (cfg.reflectionCapture <= 0 || cfg.reflectionCapture != m_reflectionCaptureRequest) EndReflectionCapture(true);
     const char* candidateFailure = m_candidateFailure;
     m_candidateFailure = nullptr;
@@ -2903,7 +2951,10 @@ bool Renderer::Render(IDirect3DDevice9* dev, IDirect3DTexture9* depthTexture, ID
         ColorToFloat(in.fogColor, 1.0f, fog);
         dev->SetPixelShaderConstantF(kFogColorRegister, fog, 1);
         if(cfg.waterWorkAudit)TimeBegin(GpuTimer::SkyMemory);
-        RememberSky(dev,depthTexture,m_sceneWithWater,in,cfg);
+        // Looking down to dive must not erase the sky just seen above the bank.
+        const float rightZ = constants[4][2] / proj[0], upZ = constants[5][2] / proj[5];
+        const float highestRay = constants[6][2] - rightZ * proj[8] - upZ * proj[9] + std::abs(rightZ) + std::abs(upZ);
+        RememberSky(dev, depthTexture, m_sceneWithWater, in, cfg, highestRay > 0);
         if(cfg.waterWorkAudit)TimeEnd(GpuTimer::SkyMemory);
         dev->SetRenderTarget(0, target);
     }
@@ -3262,6 +3313,8 @@ void Renderer::ReleaseDefaultPool()
     SafeRelease(m_level[1]);
     SafeRelease(m_sky[0]);
     SafeRelease(m_sky[1]);
+    SafeRelease(m_observedAir);
+    m_airMap = -1;
     ReleaseDeferred(m_slime);
     SafeRelease(m_slimeGround);
     m_lava.ReleaseDefaultPool();
@@ -3312,7 +3365,7 @@ void Renderer::ReleaseAll()
     SafeRelease(m_surfaceMomentsPs);
     SafeRelease(m_fxaaPs);
     SafeRelease(m_levelPs);
-    SafeRelease(m_skyMemoryPs); SafeRelease(m_skyExtendPs);
+    SafeRelease(m_skyMemoryPs); SafeRelease(m_skyObservedAirPs); SafeRelease(m_skyExtendPs);
     SafeRelease(m_underwaterPs);
     SafeRelease(m_underwaterFoamPs);
     SafeRelease(m_underwaterSharedPs);
