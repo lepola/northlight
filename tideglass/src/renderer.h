@@ -197,7 +197,7 @@ private:
     bool EnsureProbeTargets(IDirect3DDevice9* dev);
     bool EnsureMemoryTargets(IDirect3DDevice9* dev, IDirect3DTexture9* (&targets)[2], UINT width, UINT height = 1,
                              D3DFORMAT format = D3DFMT_A32B32G32R32F);
-    bool BindSky(IDirect3DDevice9* dev, DWORD stage, const Config& cfg, bool hostSpatialFog = false);
+    bool BindSky(IDirect3DDevice9* dev, DWORD stage, const Config& cfg, float reflectedFogWeight = 0);
     bool MeasureLevel(IDirect3DDevice9* dev, IDirect3DTexture9* surfaceDepth, IDirect3DTexture9* (&levels)[2],
                       int& index);
     // A liquid the client draws and the renderer redraws later (slime, lava): where its surface was drawn, what the

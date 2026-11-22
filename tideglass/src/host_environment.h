@@ -3,7 +3,7 @@
 #include "water_environment.h"
 
 // Separately queried companion; render ABI 1 remains unchanged.
-constexpr uint32_t kWaterEnvironmentABI=2;
+constexpr uint32_t kWaterEnvironmentABI=3;
 struct WaterHostEnvironment {
     uint32_t size;
     WaterHostStamp source; // exact current session/device generation/frame
@@ -24,6 +24,11 @@ struct WaterHostEnvironment {
     // Allocation AND contents remain stable through frame retirement, loss or destruction.
     // AddRef protects allocation lifetime; it does not make mutable contents a snapshot.
     IDirect3DTexture9* background;
+};
+// ABI 3 adds the host's measured optical depth along the first 48 yards of view.
+struct WaterHostFogEnvironment {
+    WaterHostEnvironment base;
+    float viewOpticalDepth48;
 };
 enum WaterHostSurfaceOutcome : uint32_t {
     WaterHostSurfaceUnchanged=0,

@@ -163,7 +163,7 @@ public:
     }
     bool CapturePass(const char* name,bool after){return m_passes.CapturePass(name,after);}
     bool Current() const { return m_passes.Current(); }
-    bool Environment(const WaterEnvironmentValues& values,IDirect3DTexture9* background){return m_passes.Environment(values,background);}
+    bool Environment(const WaterEnvironmentValues& values,IDirect3DTexture9* background,float viewOpticalDepth48=0){return m_passes.Environment(values,background,viewOpticalDepth48);}
     bool WantsEnvironment(){WaterHostSurfaceStatus status={};return m_passes.SurfaceStatus(status)&&status.fallback!=WaterEnvironmentDisabled;}
     bool OwnsDistance(){WaterHostSurfaceStatus status={};return m_passes.SurfaceStatus(status)&&status.outcome==WaterHostSurfaceShaded&&status.distanceAtmosphereShaded!=0;}
     bool SurfaceStatus(WaterHostSurfaceStatus& status){return m_passes.SurfaceStatus(status);}

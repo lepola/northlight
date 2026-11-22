@@ -622,6 +622,7 @@ public:
         waterSurfaceShaded=shaded;
     }
     bool WaterSpatialFogActive()const{return effects.fog;}
+    float WaterViewFogDepth48()const{return effects.fog ? waterViewFogDepth48 : 0.f;}
     bool WaterGradient(float farZ,UINT w,UINT h,const float (&glare)[13][4],IDirect3DTexture9* moonBody,unsigned glareMask,WaterEnvironmentValues& values,IDirect3DTexture9*& field,bool& restoreFailed){
         restoreFailed=false;field=nullptr;waterDistanceOwned=false;
         if(!lightSlotsValid||!celestialValid||!prepareWaterHorizon(farZ,w,h))return false;
@@ -678,6 +679,7 @@ private:
 #endif
 
     NorthlightSpellFog::Hold spellFogHold;DWORD spellFogTick=0;bool spellFogResetLogged=false; /* SpellFog: the smoothed per-frame estimate (spell_fog.h) */
+    float waterViewFogDepth48=0;
     float skyTransmittanceFrame=1; /* CPU estimate of the fog transmittance toward the sun, for the veil */
     struct FogShader { unsigned major=0;int colorRegister=-1;bool verified=false; };
     std::unordered_map<IDirect3DPixelShader9*,FogShader> fogShaders;
@@ -4699,6 +4701,9 @@ replayBoundsAbandon();releaseReplayProbe();staticCasters.settle();rigidMemoryCle
             if(fitStart)spellFitMs=1000.*double(QpcClock::now()-fitStart)/double(captureFrequency.QuadPart);
             if(spellFogHold.resets&&!spellFogResetLogged){spellFogResetLogged=true;logf("SPELLFOG estimate was not finite: the hold was reset and SpellFog goes on (resets=%u)",spellFogHold.resets);}
         }
+        // The lit-water callback runs after the atmosphere job for this frame has joined.
+        static_assert(NorthlightSpellFog::kDistance[3]==48.f);
+        waterViewFogDepth48=effects.fog&&atmosphere.spellValid ? atmosphere.spellTau[cf.active?1:0][3] : 0.f;
         skyTransmittanceFrame=cf.active?atmosphere.veil[1]:atmosphere.veil[0]; /* the clouds' term only when the pass is really active (1: no fog field or no fog) */
         c[33][0]=float(w);c[33][1]=float(h);c[33][2]=float(w/2);c[33][3]=float(h/2);
         c[1][0]=projection[0];c[1][1]=projection[1];c[1][2]=projection[2];c[1][3]=minZ;

@@ -1193,7 +1193,8 @@ private:
                     glareMask=celestialDiscs->waterGlare(sky,celestialGlowHue(),
                         world->weatherEffects().discGain()*world->underwaterScale(),glare,moonBody);
                 if(world->WaterGradient(farZ,width,height,glare,moonBody,glareMask,environment,field,restoreFailed)){
-                    const bool accepted=cooperativeWater.Environment(environment,field);
+                    const float fogDepth=refractionScene&&worldDebug==0 ? world->WaterViewFogDepth48() : 0.f;
+                    const bool accepted=cooperativeWater.Environment(environment,field,fogDepth);
                     layerCapture.SuppliedEnvironment(ext,field,environment,accepted,cameraKnown,inverseView,projection);
                 }
                 if(frame%600==0)logf("WATER atmosphere glare bodies=%u",glareMask);

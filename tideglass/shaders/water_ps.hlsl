@@ -1333,10 +1333,10 @@ ReflectionOutput main(float2 pixel : VPOS)
 #ifndef DEFERRED_SLIME
         // The foreground leg already receives host fog. Only the far part of
         // the water-to-scenery path borrows the colour of the lower sky.
-        if (!indoors && cSkyLayout.y > 0.5 && cEnvironment.y > 0.5 && cFogRange.y > cFogRange.x)
+        if (!indoors && cSkyLayout.y > 0 && cEnvironment.y > 0.5 && cFogRange.y > cFogRange.x)
         {
             float fog = saturate((result.hit.g - cFogRange.x) / (cFogRange.y - cFogRange.x));
-            float3 tint = 0.40 * (cEnvironmentPalette[4].rgb - cFogColor.rgb);
+            float3 tint = (0.40 * cSkyLayout.y) * (cEnvironmentPalette[4].rgb - cFogColor.rgb);
             result.colour.rgb += tint * (saturate(2.0 * fog - 1.0) * result.colour.a);
         }
 #endif

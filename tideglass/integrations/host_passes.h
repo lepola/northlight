@@ -63,8 +63,12 @@ public:
         m_liquid = false;
         return Draw(WaterHostCompositeWater, resources, drewWater);
     }
-    bool Environment(const WaterEnvironmentValues& values,IDirect3DTexture9* background){
+    bool Environment(const WaterEnvironmentValues& values,IDirect3DTexture9* background,float viewOpticalDepth48=0){
         if(!Current()||!m_environment)return false;
+        if(m_environment->abi>=3){
+            const WaterHostFogEnvironment input={{sizeof(WaterHostFogEnvironment),m_stamp,values,background},viewOpticalDepth48};
+            return m_environment->set_environment(m_context,m_stamp,&input.base)!=0;
+        }
         const WaterHostEnvironment input={sizeof(WaterHostEnvironment),m_stamp,values,background};
         return m_environment->set_environment(m_context,m_stamp,&input)!=0;
     }

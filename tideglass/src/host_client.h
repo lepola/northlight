@@ -54,7 +54,8 @@ public:
         if(m_trace&&(m_trace->abi!=kWaterTraceABI||m_trace->size!=sizeof(WaterHostTraceAPI)))m_trace=nullptr;
         auto getEnvironment=reinterpret_cast<WaterHostGetEnvironmentAPIFn>(reinterpret_cast<void*>(GetProcAddress(module,"WaterHostGetEnvironmentAPI")));
         m_environment=getEnvironment?getEnvironment(kWaterEnvironmentABI,sizeof(WaterHostEnvironmentAPI)):nullptr;
-        if(m_environment&&(m_environment->abi!=kWaterEnvironmentABI||m_environment->size!=sizeof(WaterHostEnvironmentAPI)||!m_environment->set_environment||!m_environment->surface_status))m_environment=nullptr;
+        if(!m_environment&&getEnvironment)m_environment=getEnvironment(2,sizeof(WaterHostEnvironmentAPI));
+        if(m_environment&&((m_environment->abi!=kWaterEnvironmentABI&&m_environment->abi!=2)||m_environment->size!=sizeof(WaterHostEnvironmentAPI)||!m_environment->set_environment||!m_environment->surface_status))m_environment=nullptr;
         auto getLiquid=reinterpret_cast<WaterHostGetLiquidAPIFn>(reinterpret_cast<void*>(GetProcAddress(module,"WaterHostGetLiquidAPI")));
         m_liquid=getLiquid?getLiquid(kWaterLiquidABI,sizeof(WaterHostLiquidAPI)):nullptr;
         if(m_liquid&&(m_liquid->abi!=kWaterLiquidABI||m_liquid->size!=sizeof(WaterHostLiquidAPI)||

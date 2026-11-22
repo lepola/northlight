@@ -18,7 +18,7 @@ constexpr int kMaxSplashes = kWaterMaxSplashes;
 struct FrameInputs : WaterFrameValues
 {
     NativeLiquidFrame nativeLiquids;
-    bool hostSpatialFog = false;
+    float reflectedFogWeight = 0;
     // Native material lighting is distinct from the visible celestial direction.
     // Captured on the game thread; the public WaterFrameValues ABI stays unchanged.
     bool skyPaletteKnown=false;
