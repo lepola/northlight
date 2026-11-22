@@ -4848,7 +4848,7 @@ replayBoundsAbandon();releaseReplayProbe();staticCasters.settle();rigidMemoryCle
 #ifdef NORTHLIGHT_WATER
         // Reuse the same directional maps at the actual sloping liquid surface.
         // A seabed visibility sample would move shadows with depth/refraction.
-        // The independent map shades foam, never the already-lit refraction.
+        // Tideglass uses the map for direct light on foam and liquid glints.
         waterVisibility.complete(false);
         if(surface && waterMask && effects.shadows) {
             bool ready=waterVisibility.begin(d,w,h,kWorldWaterVisibilityShader);

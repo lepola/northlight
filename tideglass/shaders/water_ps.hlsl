@@ -173,10 +173,10 @@ float FoamRelief(float3 normal)
 #if !defined(DEFERRED_SLIME) && defined(READS_SURFACE_DETAIL)
 // s9's rain-ring field has already been resolved into surface detail for this pass.
 sampler2D sSurfaceVisibility : WATER_S_REGISTER(WATER_SLOT_sSurfaceVisibility);
-float4 cSurfaceVisibility : WATER_C_REGISTER(WATER_SLOT_cSurfaceVisibility); // x: matching current-frame sun/moon map
+float4 cSurfaceVisibility : WATER_C_REGISTER(WATER_SLOT_cSurfaceVisibility); // x: current sun/moon map; y: the resolved mirror includes an enclosed water receiver
 #endif
 
-float FoamVisibility(float2 pixel)
+float DirectLightVisibility(float2 pixel)
 {
     float visibility = 1.0;
 #if !defined(DEFERRED_SLIME) && defined(READS_SURFACE_DETAIL)
@@ -185,6 +185,8 @@ float FoamVisibility(float2 pixel)
         float2 sources = tex2Dlod(sSurfaceVisibility, float4((pixel + 0.5) * cTexelGrid.xy, 0, 0)).rg;
         visibility = saturate(lerp(sources.r, sources.g, cSurface.y));
     }
+    [branch] if (cSurfaceVisibility.y > 0.5)
+        visibility *= 1.0 - tex2Dlod(sReflectionHit, float4((pixel + 0.5) * cTexelGrid.xy, 0, 0)).b;
 #endif
     return visibility;
 }
@@ -254,7 +256,7 @@ float3 Refracted(float2 pixel, float3 world, float3 normal, float thickness, flo
         // Bent onto nothing (dry land along the shore with no water near to fill it from): the foam's colour rather
         // than dark.
         if (bentHit.r < 1.5)
-            colour = FoamLight(FoamVisibility(pixel)) * cFoamColor.rgb;
+            colour = FoamLight(DirectLightVisibility(pixel)) * cFoamColor.rgb;
     }
 #endif
     float bentDepth = SampleRawDepth(sOpaqueDepth, bent);
@@ -1054,7 +1056,8 @@ float4 ShadeLiquid(float2 pixel, float surfaceDepth, float thickness)
     [branch] if (cReflectionGrid.w > 0.5)
         sun *= 1.0 - tex2Dlod(sReflectionHit, float4(uv, 0, 0)).b;
 #endif
-    color += sun;
+    float directVisibility = DirectLightVisibility(pixel);
+    color += sun * directVisibility;
     color += Scattered(normal, toCamera, light) * (1.0 - fresnel) * (1.0 - Overcast() * kOvercastScatterLoss);
 
     float3 foamColour = cFoamColor.rgb;
@@ -1062,14 +1065,13 @@ float4 ShadeLiquid(float2 pixel, float surfaceDepth, float thickness)
     // Tinted towards a light water colour (see FoamLines).
     foamColour *= lerp(1.0, kFoamTintColour, kFoamTint);
 #endif
-    float foamVisibility = FoamVisibility(pixel);
-    float3 foamLit = lerp(FoamLight(foamVisibility) * foamColour * FoamRelief(surface.foamNormal),
+    float3 foamLit = lerp(FoamLight(directVisibility) * foamColour * FoamRelief(surface.foamNormal),
                           cFoamColor.rgb * kGlowBrightness, saturate(FoamGlow()));
 #ifndef DEFERRED_SLIME
     // Wet foam catches a broad highlight around the glints, including the
     // space between bright facets. Sheltered foam keeps its diffuse light.
     float alignment = saturate(dot(toCamera, float3(-cToLight.xy, cToLight.z)));
-    float wetHighlight = pow(alignment, 8.0) * foamVisibility *
+    float wetHighlight = pow(alignment, 8.0) * directVisibility *
                          saturate(cToLight.w * SunVisibility() * SpecularStrength());
     foamLit += cSunColor.rgb * (0.3 * wetHighlight);
 #endif
@@ -1296,16 +1298,12 @@ ReflectionOutput main(float2 pixel : VPOS)
     // Explicit control flow avoids evaluating the surface and scenery lookup for
     // every pixel of every receiving height. clip alone need not skip that work.
     bool belongs=true;
-#ifdef DEFERRED_SLIME
     bool indoors=false;
-#endif
     if(cSceneryAlignment.z>0.5)
     {
         float2 uv=(SceneryRaster(pixel)+0.5)*cSceneryGrid.zw;
         float receiver=tex2Dlod(sReceiverMask,float4(uv,0,0)).r;
-#ifdef DEFERRED_SLIME
         indoors=receiver < -0.5;
-#endif
         receiver=abs(receiver);
         belongs=abs(receiver-cSceneryAlignment.w)<0.25;
         // Source quads own their pixels. Beyond that finite import, a proven
@@ -1333,9 +1331,7 @@ ReflectionOutput main(float2 pixel : VPOS)
         float2 lookup=lerp(pixel,ReflectionLookupPixel(pixel,surface),coverage);
         result=SceneryReflection(lookup, pixel, surface);
         result.colour*=coverage;
-#ifdef DEFERRED_SLIME
         result.hit.b = indoors && abs(surface.world.z - cReceiverContinuation.w) < kSameWaterBody ? 1.0 : 0.0;
-#endif
     }
     return result;
 }

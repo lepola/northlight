@@ -15,7 +15,7 @@ struct SceneryImage
     std::array<float,2> continuation={1,0}; // native-height fallback outside imported quads; empty when low >= high
     std::array<float,4> coverageEdges={}; // outer world-space rectangle, min XY then max XY
     float coverageWidth=0;
-    bool heights=false,underwater=false;
+    bool heights=false,underwater=false,hasIndoorWater=false;
 };
 // Borrowed for the current frame only. The producer owns geometry and its one
 // reusable colour/depth pair. The liquid renderer resolves each view immediately

@@ -11,7 +11,7 @@ namespace water
 struct OwnedReceiverView
 {
     unsigned body=OwnedWaterReceivers::Missing;
-    bool horizontal=false;
+    bool horizontal=false, hasIndoorWater=false;
     float height=0;
     // Only flat views continue beyond imported water. Disjoint native-height
     // intervals prevent a nearby canal or pond from taking the ocean fallback.
@@ -53,6 +53,7 @@ inline bool GroupReceiverViews(const std::vector<reflection::WaterSurface>& wate
             OwnedReceiverView view;view.body=body;view.horizontal=flat;view.height=height;view.bounds=s.bounds;
             views.push_back(std::move(view));match=views.end()-1;
         }
+        match->hasIndoorWater |= flat && s.indoors;
         match->surfaces.push_back(i);
         for(unsigned c=0;c<3;++c){match->bounds[c]=std::min(match->bounds[c],s.bounds[c]);match->bounds[c+3]=std::max(match->bounds[c+3],s.bounds[c+3]);}
     }

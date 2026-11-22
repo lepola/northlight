@@ -94,7 +94,7 @@ bool FilteredWaterMaterial(const Config& cfg, bool environmentAvailable)
 }
 
 constexpr UINT kGameFogRegister = WATER_SLOT_cGameFog, kWaveMomentSamplesRegister = WATER_SLOT_cWaveMomentSamples, kSurfaceVisibilityRegister = WATER_SLOT_cSurfaceVisibility;
-bool BindWaterControls(IDirect3DDevice9* dev, const Config& cfg, bool environmentAvailable, bool momentsAvailable = false, bool surfaceVisibilityAvailable = false)
+bool BindWaterControls(IDirect3DDevice9* dev, const Config& cfg, bool environmentAvailable, bool momentsAvailable = false, bool surfaceVisibilityAvailable = false, bool hasIndoorWater = false)
 {
     const float controls[4] = {static_cast<float>(cfg.refractionDebug), cfg.waterSceneExposure,
                                (FilteredWaterMaterial(cfg, environmentAvailable) ? 4.f : 0.f) +
@@ -105,7 +105,7 @@ bool BindWaterControls(IDirect3DDevice9* dev, const Config& cfg, bool environmen
     // underwater window inside the water constants block, uploaded after these controls by some passes.
     const float gameFog[4] = {cfg.waterAtmosphere == 2 && cfg.waterGameFog ? 1.f : 0.f, 0.f, 0.f, 0.f};
     const float samples[4] = {cfg.waterWaveMomentSamples * 0.5f, cfg.waveCrestShape, 0.f, 0.f};
-    const float visibility[4] = {surfaceVisibilityAvailable ? 1.f : 0.f, 0.f, 0.f, 0.f};
+    const float visibility[4] = {surfaceVisibilityAvailable ? 1.f : 0.f, hasIndoorWater ? 1.f : 0.f, 0.f, 0.f};
     return SUCCEEDED(dev->SetPixelShaderConstantF(kWaterDebugRegister, controls, 1)) &&
            SUCCEEDED(dev->SetPixelShaderConstantF(kGameFogRegister, gameFog, 1)) &&
            SUCCEEDED(dev->SetPixelShaderConstantF(kWaveMomentSamplesRegister, samples, 1)) &&
@@ -1967,7 +1967,7 @@ bool Renderer::FillIn(IDirect3DDevice9* dev, FillChain& chain)
 // The water's reflections at the selected resolve resolution: the ray each reflects traced (reflection_ps), for the composite to
 // read. Leaves the render targets, viewport, pixel shader and the first constants changed.
 bool Renderer::DrawReflections(IDirect3DDevice9* dev, IDirect3DTexture9* depthTexture, const FrameInputs& in, const Config& cfg,
-                               const float (&frame)[9][4], const float (&constants)[kWaterConstants][4], bool slime)
+                               const float (&frame)[9][4], const float (&constants)[kWaterConstants][4], bool slime, bool* hasIndoorWater)
 {
     // Only mirrored geometry reflects; without geometry each liquid shows the sky.
     if (!cfg.reflectionScenery) return false;
@@ -2019,6 +2019,7 @@ bool Renderer::DrawReflections(IDirect3DDevice9* dev, IDirect3DTexture9* depthTe
                        image.heights?nullptr:image.planes.data(),image.heights,image.underwater);
             m_sceneryViews=views;
             continuation[3]=image.receiverHeight;
+            if(hasIndoorWater && image.hasIndoorWater)*hasIndoorWater=true;
             if(!slime || m_slime.outdoorThisFrame){
                 continuation[0]=image.continuation[0];continuation[1]=image.continuation[1];
             }
@@ -2586,7 +2587,8 @@ bool Renderer::CompositeWater(IDirect3DDevice9* dev, IDirect3DTexture9* depthTex
         m_surfaceDetailDrawn=controls&&PrepareShipWakes(dev,in,cfg,frame,constants)&&DrawSurfaceDetail(dev,depthTexture,in,cfg,frame,constants);
         TimeEnd(GpuTimer::WaterDetail);
         if(!m_surfaceDetailDrawn)return finish(false);
-        const bool reflections = cfg.screenReflections && DrawReflections(dev, depthTexture, in, cfg, frame, constants);
+        bool hasIndoorWater=false;
+        const bool reflections = cfg.screenReflections && DrawReflections(dev, depthTexture, in, cfg, frame, constants, false, &hasIndoorWater);
         if (cfg.reflectionScenery && cfg.screenReflections && !reflections)
         {
             m_candidateFailure = "reflection candidate unavailable; water surface comparison skipped";
@@ -2607,7 +2609,7 @@ bool Renderer::CompositeWater(IDirect3DDevice9* dev, IDirect3DTexture9* depthTex
         bound=SUCCEEDED(dev->SetPixelShaderConstantF(kFrameConstants,&constants[0][0],kWaterConstants))&&bound;
         IDirect3DPixelShader9*& composite=m_usingWaveMoments ? m_waterMomentsPs : m_waterPs;
         bound=SUCCEEDED(BindPixelShader(dev, composite))&&bound;
-        bound=BindWaterControls(dev,cfg,m_usingEnvironment,m_usingWaveMoments,surfaceVisibility!=nullptr)&&bound;
+        bound=BindWaterControls(dev,cfg,m_usingEnvironment,m_usingWaveMoments,surfaceVisibility!=nullptr,reflections && hasIndoorWater)&&bound;
         bound=BindWaterTextures(dev,depthTexture,in,cfg)&&bound;
         bound=BindSurfaceDetail(dev)&&bound;
         // Composite normals/foam already come from surface detail: s9 no longer
@@ -2848,14 +2850,16 @@ void Renderer::DrawUnderwater(IDirect3DDevice9* dev, IDirect3DTexture9* depthTex
     // Long sightlines near the surface still see sunlit water. The shader keeps
     // the full path for absorption and adds the real descent when looking down.
     float distanceAsDepth = 0.5f;
+    float shallowDaylight = 0.f;
     if (!slime && in.cameraWaterHeightKnown)
     {
         const float gradientDepth = water[WATER_SLOT_cDeepColorDepth - kFrameConstants][3];
         const float cameraDepth = currentWater - in.cameraPosition[2];
         const float shallow = std::clamp(1.f - cameraDepth / (2.f * gradientDepth), 0.f, 1.f);
         distanceAsDepth -= 0.35f * shallow;
+        shallowDaylight = 0.45f * shallow * std::clamp(in.daylight, 0.f, 1.f);
     }
-    const float sourceProjection[4]={m_sceneryProjection[10],m_sceneryProjection[14],cfg.reflectionSceneryAlign?1.f:0.f,distanceAsDepth};
+    const float sourceProjection[4]={m_sceneryProjection[10],m_sceneryProjection[14],shallowDaylight,distanceAsDepth};
     dev->SetPixelShaderConstantF(66,sourceProjection,1);
     // What lies beyond the surface comes from the depth and colour captured before the client drew its own surface
     // (seen from below it would hide everything above).

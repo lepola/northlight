@@ -11,7 +11,7 @@ sampler2D sUnderwaterScenery : register(s12);
 sampler2D sUnderwaterSceneryDepth : register(s13);
 float4 cUnderwaterScenery : register(c65); // current source valid, authoritative water Z, dimensions
 #endif
-float4 cUnderwaterSceneryProjection : register(c66); // native source projection A/B, D3D9 alignment, direct sightline distance as depth
+float4 cUnderwaterSceneryProjection : register(c66); // native projection A/B, shallow daylight, direct sightline distance as depth
 float4 cUnderwater : register(c23);
 float4 cInside : register(c25);
 float4 cWindow : register(c29);
@@ -140,6 +140,8 @@ float3 WaterColorAlong(float3 direction, float distance, float cameraDepth, floa
         float3 shallow = lerp(cShallowColor.rgb, cTwilightShallow.rgb, saturate(cTwilightShallow.w));
         gradient = lerp(shallow * cInside.y, DepthGradient(depthThere + distance * distanceAsDepth) * kDeepDimming,
                         deepness);
+        // A level ray stays in the sunlit layer, including when it reaches the bank by way of the surface.
+        gradient += shallow * (cInside.y * cUnderwaterSceneryProjection.z * saturate(1.0 - 2.0 * abs(direction.z)));
     }
     return gradient * UnderwaterLight() * (1.0 + kLightFromAbove * saturate(direction.z));
 }

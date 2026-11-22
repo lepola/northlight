@@ -235,7 +235,7 @@ private:
     bool BindRingMap(IDirect3DDevice9* dev);
     bool BindWaterTextures(IDirect3DDevice9* dev, IDirect3DTexture9* depthTexture, const FrameInputs& in, const Config& cfg, bool slime = false);
     bool DrawReflections(IDirect3DDevice9* dev, IDirect3DTexture9* depthTexture, const FrameInputs& in, const Config& cfg,
-                         const float (&frame)[9][4], const float (&constants)[kWaterConstants][4], bool slime = false);
+                         const float (&frame)[9][4], const float (&constants)[kWaterConstants][4], bool slime = false, bool* hasIndoorWater = nullptr);
     bool DrawSurfaceDetail(IDirect3DDevice9* dev, IDirect3DTexture9* depthTexture, const FrameInputs& in, const Config& cfg,
                            const float (&frame)[9][4], const float (&constants)[kWaterConstants][4]);
     bool BindSurfaceDetail(IDirect3DDevice9* dev);
