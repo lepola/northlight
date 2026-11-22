@@ -886,15 +886,17 @@ class Installer:
             current = 'current'
         if self.yes or not sys.stdin or not sys.stdin.isatty():
             return current
-        self.say('1. Current Northlight skies (default for new installs)')
-        self.say('2. Experimental sky preservation: keep mixed moon artwork (a second moon may show) '
-                 'and use compatible local Tirisfal HD clouds.')
+        self.say('Which sky would you like?')
+        self.say("1. Use Northlight's sky (recommended)")
+        self.say('2. Keep more of your HD sky (experimental)')
+        self.say('Option 2 keeps more moon artwork and uses your HD clouds in Tirisfal when compatible. '
+                 'You may see two moons.')
         def parse(answer):
             choices = {'1': 'current', '2': 'experimental-preserve'}
             if answer not in choices:
                 raise ValueError('Choose 1 or 2.')
             return choices[answer]
-        return self.pick(f'Sky choice [Enter keeps {current}] > ', parse, current)
+        return self.pick(f'Press Enter for {SKY_MODES.index(current) + 1}, or type 1 or 2 > ', parse, current)
 
     def art_layer(self, client, locale, sky='current', letter=LETTER):
         """({client path: bytes} to install, None, {client path: action}) or ({}, reason it is skipped, {}).

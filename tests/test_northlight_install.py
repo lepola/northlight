@@ -439,11 +439,14 @@ class LinuxOnlyChecks(Base):
 
 class Install(Base):
     def test_interactive_sky_choice(self):
-        prompts = self.tty('2')
-        report = self.installer().install(self.client, instances='none')
-        self.assertEqual(report['sky'], 'experimental-preserve')
-        self.assertIn('Experimental sky preservation', self.last_output)
-        self.assertEqual(len(prompts), 1)
+        prompts = self.tty('', '2', '', '1')
+        for index, expected in enumerate(('current', 'experimental-preserve', 'experimental-preserve', 'current')):
+            report = self.installer().install(self.client, instances='none')
+            self.assertEqual(report['sky'], expected)
+            self.assertIn('Which sky would you like?', self.last_output)
+            self.assertIn('You may see two moons.', self.last_output)
+            self.assertEqual(len(prompts), index + 1)
+            self.assertIn(f'Press Enter for {(1, 1, 2, 2)[index]}', prompts[-1])
 
     def test_sky_choice_switch_reinstall_and_restore(self):
         stock = self.installer().install(self.client)
