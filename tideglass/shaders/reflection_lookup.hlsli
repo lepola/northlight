@@ -23,6 +23,12 @@ float2 ReflectionBend(float2 pixel, LiquidSurface surface)
     waveView.z = max(waveView.z, kMinRayViewZ);
     float2 bend = ViewToPixel(waveView) - ViewToPixel(flatView);
     float limit = AcrossView(max(cReflectionTuning.y, 0.0));
+#ifndef DEFERRED_SLIME
+    // At a sand bank a displaced mirror lookup can pull a dark sliver of
+    // scenery across the last film of water. Ease only the waves' displacement.
+    float verticalDepth = surface.thickness * abs(surface.toCamera.z);
+    limit *= smoothstep(0.0, 2.0 * kShoreFade, verticalDepth);
+#endif
     return baseBend + bend * (limit / (limit + length(bend) + 1.0e-4));
 }
 

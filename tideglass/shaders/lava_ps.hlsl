@@ -49,6 +49,11 @@ float ShoreMapAt(float2 p)
     return tex2Dlod(sShore, float4(RippleUv(p), 0, 0)).r;
 }
 
+float BankCrust(float yards)
+{
+    return (1.0 - smoothstep(kLavaBorderWidth * 0.55, kLavaBorderWidth, yards)) * kLavaBorder;
+}
+
 // A building can contain a whole pool beneath the terrain mesh. Its local liquid-query
 // footprint is not a bank. Allow for interpolation along a real sloping bank.
 float TerrainAtLava(float4 heights, float z)
@@ -123,7 +128,8 @@ LavaOutput Shade(float2 pixel, float surfaceDepth, float fel)
     float widest = dist * 0.04;
     if (dot(acrossPixel, acrossPixel) > widest * widest) acrossPixel *= widest / length(acrossPixel);
     if (dot(downPixel, downPixel) > widest * widest) downPixel *= widest / length(downPixel);
-    float footprint = sqrt(max(length(acrossPixel) * length(downPixel), 1.0e-8));
+    float2 pixelYards = float2(length(acrossPixel), length(downPixel));
+    float footprint = sqrt(max(pixelYards.x * pixelYards.y, 1.0e-8));
 
     float screenShore;
     float shore = LavaShore(place, world.z, length(toPoint.xy), screenShore);
@@ -232,8 +238,17 @@ LavaOutput Shade(float2 pixel, float surfaceDepth, float fel)
         float meets = saturate(tex2Dlod(sLavaHalo, float4((pixel + 0.5) * cTexelGrid.xy, 0, 0)).a * 4.8);
         borderYards = min(shore, lerp(kFarFromShore, kLavaBorderWidth * 2.5 * (1.0 - meets), screenShore));
     }
-    float borderAt = borderYards + (swirl.b - 0.5) * kLavaBorderWidth * 0.9;
-    float border = (1.0 - smoothstep(kLavaBorderWidth * 0.55, kLavaBorderWidth, borderAt)) * kLavaBorder;
+    float bankWander = (swirl.b - 0.5) * kLavaBorderWidth * 0.9;
+    float borderAt = borderYards + bankWander;
+    float border = BankCrust(borderAt);
+    if (borderYards < shore)
+    {
+        // The screen contact spans up to two halo texels. At a grazing angle that
+        // can cover several yards of lava. Keep only its share of the physical crust.
+        float contactWidth = 2.0 * kHaloScale * max(pixelYards.x, pixelYards.y);
+        float coverage = saturate(kLavaBorderWidth / max(0.0001, contactWidth));
+        border = lerp(BankCrust(shore + bankWander), border, coverage);
+    }
     crust = max(crust, border);
     // Where it is thickest the hot lava shows through the crust, and the crust closes back over as the lines thin.
     crust *= 1.0 - kLavaFoamMelt * smoothstep(0.4, 0.62, foam);
