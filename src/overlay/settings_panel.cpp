@@ -28,7 +28,7 @@ const std::map<std::string,const char*> Labels={
     {"WaveStrength","Wave strength"},{"WaveSpeed","Wave speed"},{"WaveCrestShape","Crest shape"},
     {"WaveCrestSharpness","Crest sharpness"},{"RippleStrength","Ripple strength"},
     {"FoamStrength","Foam strength"},{"OpenWaterCrestFoam","Foam on open-water crests"},
-    {"ReflectionScenery","Reflections"},{"ReflectionResolution","Reflection resolution"},{"ReflectionDistance","Reflection distance"},{"Clarity","Water clarity"},{"Reflection","Reflection strength"},{"NearReflection","Near reflection strength"},
+    {"ReflectionScenery","Reflections"},{"ReflectionResolution","Reflection resolution"},{"ReflectionDistance","Reflection distance"},{"FineHighlights","Fine water and slime highlights"},{"Clarity","Water clarity"},{"Reflection","Reflection strength"},{"NearReflection","Near reflection strength"},
     {"Underwater","Underwater effects"},{"UnderwaterVisibility","Visibility (yards)"},{"UnderwaterScenery","Underwater scenery"},
     {"Slime","Slime surface"},{"Lava","Magma and fel magma surfaces"},
     {"AutoBump","Material detail"},{"AutoBumpStrength","Normal map strength (%)"},{"AutoBumpDistance","Normal map distance (yards)"},
@@ -62,6 +62,7 @@ const std::map<std::string,const char*> CelestialLabels={
     {"fog_height_scale","Fog height"},{"horizon_haze","Horizon haze"},{"glow_strength","Glow strength"},{"glow","Glow tint"},{"glow_mix","Glow tint mix"},
 };
 const std::map<std::string,std::vector<const char*>> Help={
+    {"FineHighlights",{"Breaks nearby sun and moon highlights into finer ripples on water and slime. Uses extra GPU time when highlights are visible. Included in the Ultra Water preset."}},
     {"AutoBump",{"Generates and caches normal maps from installed textures. Directional detail is applied at full screen resolution. MPQs remain unchanged. Supports MSAA."}},
     {"AutoBumpStrength",{"Higher values make details more pronounced and can exaggerate painted shadows. Start at 75%."}},
     {"AutoBumpTerrain",{"Includes grass, dirt and stone painted on the ground.","Off: original material. Normal maps: detailed light response. Normal maps + POM: shifts the original diffuse lookup to show depth at an angle."}},
@@ -300,7 +301,10 @@ struct SettingsPanel::State {
         ImGui::TextUnformatted(fieldLabel(f).c_str());
         ImGui::TextColored(Color::Muted,"%s  [%s]  %s",fileName(f.file),f.section.c_str(),f.key.c_str());
         ImGui::Separator();
-        const auto label=[&](const std::string& value){return f.kind=="enum" || D::modeField(f)?optionLabel(f,value):value;};
+        const auto label=[&](const std::string& value){
+            if(f.kind=="check" && (value=="0" || value=="1"))return std::string(value=="1"?"On":"Off");
+            return f.kind=="enum" || D::modeField(f)?optionLabel(f,value):value;
+        };
         const auto shown=label(draft.effective(f));
         ImGui::Text("Value: %s%s",shown.c_str(),draft.edited(f)?"  (unsaved)":"");
         ImGui::Text("Saved: %s   Running: %s",label(draft.saved(f)).c_str(),f.available?label(f.active).c_str():"unavailable");
@@ -530,21 +534,22 @@ struct SettingsPanel::State {
         const Field* scenery=water("ReflectionScenery");
         const Field* resolution=water("ReflectionResolution");
         const Field* distance=water("ReflectionDistance");
-        if(scenery && resolution && distance){
-            const char* current=D::waterPreset(draft.effective(*scenery),draft.effective(*resolution),draft.effective(*distance));
+        const Field* fine=water("FineHighlights");
+        if(scenery && resolution && distance && fine){
+            const char* current=D::waterPreset(draft.effective(*scenery),draft.effective(*resolution),draft.effective(*distance),draft.effective(*fine));
             ImGui::TextColored(Color::Heading,"Performance");ImGui::Separator();
             ImGui::BeginDisabled(locked());
             if(ImGui::BeginCombo("Water preset",current)){
                 for(const auto& tier:D::WaterTiers){
                     const bool selected=std::string(current)==tier.name;
                     if(ImGui::Selectable(tier.name,selected)){
-                        set(*scenery,tier.scenery);set(*resolution,tier.resolution);set(*distance,tier.distance);
+                        set(*scenery,tier.scenery);set(*resolution,tier.resolution);set(*distance,tier.distance);set(*fine,tier.fineHighlights);
                     }
                 }
                 ImGui::EndCombo();
             }
             ImGui::EndDisabled();
-            loose("water-performance",{scenery,resolution,distance});
+            loose("water-performance",{scenery,resolution,distance,fine});
         }
         waterRows("Waves and foam","WaveStrength WaveSpeed WaveCrestShape WaveCrestSharpness RippleStrength FoamStrength OpenWaterCrestFoam");
         waterRows("Reflections","Reflection NearReflection");

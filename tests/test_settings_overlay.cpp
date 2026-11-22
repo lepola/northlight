@@ -159,9 +159,11 @@ static Field field(unsigned file,const char* section,const char* key,const char*
 }
 
 static void draft(){
-    for(const auto& tier:D::WaterTiers)CHECK(std::string(D::waterPreset(tier.scenery,tier.resolution,tier.distance))==tier.name);
-    CHECK(std::string(D::waterPreset("1","75","1"))=="Custom");
-    CHECK(std::string(D::waterPreset("0","75","2"))=="Performance");
+    for(const auto& tier:D::WaterTiers)CHECK(std::string(D::waterPreset(tier.scenery,tier.resolution,tier.distance,tier.fineHighlights))==tier.name);
+    CHECK(std::string(D::waterPreset("1","75","1","0"))=="Custom");
+    CHECK(std::string(D::waterPreset("0","75","2","0"))=="Performance");
+    CHECK(std::string(D::waterPreset("0","75","2","1"))=="Custom");
+    CHECK(std::string(D::waterPreset("1","100","2","0"))=="Custom");
     {
         Field scenery{},distance{},resolution{};
         for(Field* f:{&scenery,&distance,&resolution}){f->file=NorthlightSettings::WaterFile;f->section="Water";f->available=true;f->kind="enum";}

@@ -178,10 +178,14 @@ int main(int argc,char** argv){
         assert(explicitValue(balanced[WaterFile],"Water","ReflectionResolution")=="75");
         assert(explicitValue(balanced[WaterFile],"Water","WaveCrestShape")=="0.8");
         const std::string distance="W\tWater\tReflectionDistance\t";
-        const auto far=edit(scale+"100\n"+distance+"2\n");
+        const std::string highlights="W\tWater\tFineHighlights\t";
+        assert(field(highlights.substr(0,highlights.size()-1)).saved=="0");
+        const auto far=edit(scale+"100\n"+distance+"2\n"+highlights+"1\n");
         const auto reopened=schema(far,docs,configOf(far,""),"","native",true);
         const auto selected=std::find_if(reopened.begin(),reopened.end(),[](const Field& f){return f.key=="ReflectionDistance";});
         assert(selected!=reopened.end() && selected->saved=="2");
+        const auto glints=std::find_if(reopened.begin(),reopened.end(),[](const Field& f){return f.key=="FineHighlights";});
+        assert(glints!=reopened.end() && glints->saved=="1");
         fails([&]{edit(distance+"3\n");});
         auto oldDistance=docs;
         oldDistance[WaterFile]=Document("[Water]\nShortReflectionDistance=2\n");

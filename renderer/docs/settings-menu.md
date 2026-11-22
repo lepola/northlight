@@ -8,12 +8,14 @@ Open **Water** to tune waves, foam, reflections, underwater visibility, slime an
 
 Under **Water → Performance**, choose the **Water preset**, then **Save**. This controls Tideglass independently of Northlight's overall quality preset.
 
-| Preset | Reflections | Resolution | Distance |
-| --- | --- | --- | --- |
-| Ultra | Scenery and sky | 100% | Far |
-| Quality (default) | Scenery and sky | 100% | Standard |
-| Balanced | Scenery and sky | 75% | Standard |
-| Performance | Sky only | Inactive | Inactive |
+| Water preset | Reflections | Resolution | Distance | Fine highlights |
+| --- | --- | --- | --- | --- |
+| Ultra | Scenery and sky | 100% | Far | On |
+| Quality (default) | Scenery and sky | 100% | Standard | Off |
+| Balanced | Scenery and sky | 75% | Standard | Off |
+| Performance | Sky only | Inactive | Inactive | Off |
+
+**Fine water and slime highlights** adds detail to nearby ripples catching the sun or moon. You can select it independently, including with **Sky only**. Existing settings keep their previous highlights until you enable it or select Ultra.
 
 Reflection resolution controls the pass that maps mirrored scenery onto water and slime. Waves, foam and the game keep their usual resolution. Try **Short** distance if travel past dense reflected scenery stutters. It limits the models and buildings prepared for the mirror and brings the fade closer. **Far** prepares a larger area and fades reflections farther from the camera. The menu shows **Custom** when the active choices differ from the presets. Switching reflections to **Sky only** keeps the distance and resolution for when you restore scenery. Your wave, foam and colour settings carry across presets. **Sky only** also skips the mirrored scenery seen from below the surface.
 
