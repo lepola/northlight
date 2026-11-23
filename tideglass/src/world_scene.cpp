@@ -146,6 +146,7 @@ public:
     }
     bool IndexTerrainShore()
     {
+        if(!options.sceneryDetails)return true;
         // At this stage the water list contains only authored terrain cells. Buildings add their own pools later.
         const auto nearby=[&](const FurtherWater& w){
             const auto& b=w.surface.bounds;
@@ -564,7 +565,7 @@ public:
             const Bytes modelBytes{model.bytes.data(),model.bytes.size()}, skinBytes{skin.bytes.data(),skin.bytes.size()};
             if (attachments && (error==ModelError::Material || error==ModelError::Pose))
                 error=DecodeLoopingModel(modelBytes,skinBytes,DecodeLimit(scratch),decoded.geometry.Edit().mesh,decoded.geometry.Edit().motion);
-            if (error==ModelError::Material || error==ModelError::Pose) {
+            if (options.sceneryDetails && (error==ModelError::Material || error==ModelError::Pose)) {
                 error=DecodeScrollingModel(modelBytes,skinBytes,DecodeLimit(scratch),decoded.geometry.Edit().mesh);
                 if (error==ModelError::Pose)
                     error=DecodeScrollingModel(modelBytes,skinBytes,DecodeLimit(scratch),decoded.geometry.Edit().mesh,&decoded.geometry.Edit().motion);
@@ -642,7 +643,7 @@ public:
             WmoRoot root;
             auto error=DecodeWmoRoot({rootEntry.bytes.data(),rootEntry.bytes.size()},DecodeLimit(rootEntry.bytes.capacity()),root);
             if(error==WmoError::Budget)return Fail(SceneError::Budget,source.name);
-            const bool loadAttachments=live || root.doodads!=0;
+            const bool loadAttachments=live || (options.sceneryDetails && root.doodads!=0);
             WmoAttachments attachments;
             if(loadAttachments&&error==WmoError::None){
                 const auto cap=DecodeLimit(rootEntry.bytes.capacity());
@@ -700,7 +701,7 @@ public:
                         if(texture==MissingSceneAsset)return false;
                     }
                     for (auto index:references) {
-                        if (liquid.NearSurface(attachments.models[index].transform.data()+12,32.0)) referenced[index] |= Pool;
+                        if (options.sceneryDetails && liquid.NearSurface(attachments.models[index].transform.data()+12,32.0)) referenced[index] |= Pool;
                         if (live) referenced[index] |= Live;
                         if (exterior) referenced[index] |= Exterior;
                     }

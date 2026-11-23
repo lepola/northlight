@@ -147,6 +147,7 @@ struct SceneResult
 struct SceneOptions {bool buildings=false, texturePrefix=false, lake=false, snapshotReads=false;
     bool streaming=false;OwnedWorldRegion region;std::array<uint32_t,MaxLiveAssets> liveDisplays={};unsigned textureMipBias=0;std::wstring texturePack={};std::wstring textureCacheDirectory={};bool populateTextures=false;float modelReach=0,buildingReach=0;
     ReflectionDistance distance=ReflectionDistance::Standard;
+    bool sceneryDetails=false;
     float WaterReachLimit() const {
         if(distance==ReflectionDistance::Far)return OwnedWorldRegion::ExtendedWaterReach;
         return distance==ReflectionDistance::Short?OwnedWorldRegion::ShortWaterFarReach:OwnedWorldRegion::WaterFarReach;

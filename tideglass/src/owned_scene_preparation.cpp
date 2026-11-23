@@ -197,6 +197,7 @@ bool OwnedScenePreparation::Prepare(const Request& request, OwnedCpuScene& scene
         const auto assetsAt=std::chrono::steady_clock::now();
         world::SceneOptions options{request.world->buildings,request.world->texturePrefix,request.world->lake,request.world->snapshotReads,request.world->streaming,request.world->region,request.world->liveDisplays,request.world->textureMipBias,request.world->texturePack,request.world->textureCacheDirectory,request.world->populateTextures};
         options.distance=request.world->distance;
+        options.sceneryDetails=request.world->sceneryDetails;
         world::SceneError reuseError=world::SceneError::None;
         const auto importWhole=[&]{
             worldScene=std::make_unique<world::WorldScene>();renderData.reset();

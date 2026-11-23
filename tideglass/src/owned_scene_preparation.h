@@ -61,6 +61,7 @@ struct OwnedWorldDescription
     std::wstring texturePack={};
     unsigned textureMipBias=0;
     ReflectionDistance distance=ReflectionDistance::Standard;
+    bool sceneryDetails=false;
     std::size_t sceneBytes=world::SceneBytes; // imported scene budget; at most that (lower in tests)
     std::wstring textureCacheDirectory={};
     bool populateTextures=false;

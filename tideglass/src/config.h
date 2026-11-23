@@ -154,6 +154,7 @@ struct Config
     bool reflectionSceneryAlign = false; // align extra geometry to D3D9 integer raster centres
     unsigned reflectionResolution = 100;
     water::ReflectionDistance reflectionDistance = water::ReflectionDistance::Standard;
+    bool reflectionSceneryDetails = false;
     bool reflectionScenery = false; // continuous extra geometry, composed through ordinary water shading
     float timeOfDay = -1.0f;
     float dayCycleSeconds = 0.0f;

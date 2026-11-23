@@ -180,8 +180,12 @@ int main(int argc,char** argv){
         const std::string distance="W\tWater\tReflectionDistance\t";
         const std::string highlights="W\tWater\tFineHighlights\t";
         assert(field(highlights.substr(0,highlights.size()-1)).saved=="0");
-        const auto far=edit(scale+"100\n"+distance+"2\n"+highlights+"1\n");
+        const std::string details="W\tWater\tReflectionSceneryDetails\t";
+        assert(field(details.substr(0,details.size()-1)).saved=="0");
+        const auto far=edit(scale+"100\n"+distance+"2\n"+highlights+"1\n"+details+"1\n");
         const auto reopened=schema(far,docs,configOf(far,""),"","native",true);
+        const auto props=std::find_if(reopened.begin(),reopened.end(),[](const Field& f){return f.key=="ReflectionSceneryDetails";});
+        assert(props!=reopened.end() && props->saved=="1");
         const auto selected=std::find_if(reopened.begin(),reopened.end(),[](const Field& f){return f.key=="ReflectionDistance";});
         assert(selected!=reopened.end() && selected->saved=="2");
         const auto glints=std::find_if(reopened.begin(),reopened.end(),[](const Field& f){return f.key=="FineHighlights";});

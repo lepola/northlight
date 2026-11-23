@@ -97,14 +97,14 @@ public:
 
 inline bool canInherit(const Field& f){return f.available&&!(f.file==Renderer&&f.key=="Backend"&&(","+f.options+",").find(",legacy,")==std::string::npos);}
 
-struct WaterTier { const char* name; const char* scenery; const char* resolution; const char* distance; const char* fineHighlights; };
+struct WaterTier { const char* name; const char* scenery; const char* resolution; const char* distance; const char* fineHighlights; const char* sceneryDetails; };
 inline constexpr WaterTier WaterTiers[]={
-    {"Ultra","1","100","2","1"}, {"Quality","1","100","0","0"},
-    {"Balanced","1","75","0","0"}, {"Performance","0","50","1","0"}
+    {"Ultra","1","100","2","1","1"}, {"Quality","1","100","0","0","0"},
+    {"Balanced","1","75","0","0","0"}, {"Performance","0","50","1","0","0"}
 };
-inline const char* waterPreset(const std::string& scenery,const std::string& resolution,const std::string& distance,const std::string& fineHighlights){
+inline const char* waterPreset(const std::string& scenery,const std::string& resolution,const std::string& distance,const std::string& fineHighlights,const std::string& sceneryDetails){
     for(const auto& tier:WaterTiers)
-        if(fineHighlights==tier.fineHighlights && scenery==tier.scenery && (scenery=="0" || (resolution==tier.resolution && distance==tier.distance)))return tier.name;
+        if(fineHighlights==tier.fineHighlights && scenery==tier.scenery && (scenery=="0" || (resolution==tier.resolution && distance==tier.distance && sceneryDetails==tier.sceneryDetails)))return tier.name;
     return "Custom";
 }
 
@@ -135,7 +135,7 @@ inline Block blocked(const Draft& d,const Field& f,std::string& missing){
     if(!f.available)return Block::Unavailable;
     if(f.file==Renderer&&f.key!="Backend"&&f.key!="ExperimentalHDR")
         if(const Field* hdr=d.field(Renderer,"Renderer","ExperimentalHDR"))if(d.effective(*hdr)=="0")return Block::NeedsHdr;
-    if(f.file==NorthlightSettings::WaterFile && (f.key=="ReflectionResolution" || f.key=="ReflectionDistance")){
+    if(f.file==NorthlightSettings::WaterFile && (f.key=="ReflectionResolution" || f.key=="ReflectionDistance" || f.key=="ReflectionSceneryDetails")){
         const auto* scenery=d.field(f.file,"Water","ReflectionScenery");
         if(scenery && d.effective(*scenery)=="0"){missing="ReflectionScenery";return Block::NeedsKey;}
     }

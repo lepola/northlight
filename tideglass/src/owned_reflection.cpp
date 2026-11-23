@@ -121,9 +121,10 @@ bool OwnedReflection::Begin(IDirect3DDevice9* device, FrameStamp frame, const Fr
     const auto& cachePath=settings.reflectionOwnedTextureCacheDirectory;
     const bool cachePathChanged=bool(cachePath)!=bool(m_textureCacheDirectory) ||
         (cachePath && m_textureCacheDirectory && *cachePath!=*m_textureCacheDirectory);
-    if(m_distance!=settings.reflectionDistance || cachePathChanged || m_textureCacheMode!=settings.reflectionOwnedTextureCache ||
+    if(m_distance!=settings.reflectionDistance || m_sceneryDetails!=settings.reflectionSceneryDetails || cachePathChanged || m_textureCacheMode!=settings.reflectionOwnedTextureCache ||
        m_textureCacheMiB!=settings.reflectionOwnedTextureCacheMiB || m_textureQuality!=settings.reflectionOwnedTextureQuality) {
         m_distance=settings.reflectionDistance;
+        m_sceneryDetails=settings.reflectionSceneryDetails;
         m_textureCacheDirectory=cachePath;m_textureCacheMode=settings.reflectionOwnedTextureCache;
         m_textureCacheMiB=settings.reflectionOwnedTextureCacheMiB;m_textureQuality=settings.reflectionOwnedTextureQuality;
         ++m_preparationRevision;
@@ -190,6 +191,7 @@ bool OwnedReflection::Begin(IDirect3DDevice9* device, FrameStamp frame, const Fr
         if (m_world){
             OwnedWorldDescription description{*m_archiveList,static_cast<unsigned>(settings.reflectionOwnedDelayMs),settings.reflectionOwnedFail,true,true,false,true,streaming,{m_identity.map,m_identity.regionX,m_identity.regionY}};
             description.distance=m_distance;
+            description.sceneryDetails=m_sceneryDetails;
             description.textureMipBias=unsigned(std::max(m_textureQuality,m_halfTextures?1:0));
             if(m_textureCacheMode && m_textureCacheDirectory)description.textureCacheDirectory=*m_textureCacheDirectory;
             description.populateTextures=m_textureCacheMode==2;

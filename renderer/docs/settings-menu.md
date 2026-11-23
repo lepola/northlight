@@ -8,12 +8,14 @@ Open **Water** to tune waves, foam, reflections, underwater visibility, slime an
 
 Under **Water → Performance**, choose the **Water preset**, then **Save**. This controls Tideglass independently of Northlight's overall quality preset.
 
-| Water preset | Reflections | Resolution | Distance | Fine highlights |
-| --- | --- | --- | --- | --- |
-| Ultra | Scenery and sky | 100% | Far | On |
-| Quality (default) | Scenery and sky | 100% | Standard | Off |
-| Balanced | Scenery and sky | 75% | Standard | Off |
-| Performance | Sky only | Inactive | Inactive | Off |
+| Water preset | Reflections | Resolution | Distance | Fine highlights | Nearby reflected scenery |
+| --- | --- | --- | --- | --- | --- |
+| Ultra | Scenery and sky | 100% | Far | On | On |
+| Quality (default) | Scenery and sky | 100% | Standard | Off | Off |
+| Balanced | Scenery and sky | 75% | Standard | Off | Off |
+| Performance | Sky only | Inactive | Inactive | Off | Inactive |
+
+**Nearby reflected scenery** adds dock props, falls and supported pool attachments. It prepares extra models and draws them when visible. Existing settings keep their previous scenery.
 
 **Fine water and slime highlights** adds detail to nearby ripples catching the sun or moon. You can select it independently, including with **Sky only**. Existing settings keep their previous highlights until you enable it or select Ultra.
 

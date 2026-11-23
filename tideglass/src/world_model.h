@@ -14,7 +14,7 @@ struct ModelMotion
 {
     struct Translation {uint32_t time=0;std::array<float,3> value{};};
     struct Rotation {uint32_t time=0;std::array<float,4> value{};};
-    struct Bone {std::array<float,3> pivot{};std::vector<Translation> translations;std::vector<Rotation> rotations;std::vector<Translation> scales;uint32_t scalePeriod=0;};
+    struct Bone {std::array<float,3> pivot{};std::vector<Translation> translations;std::vector<Rotation> rotations;std::vector<Translation> scales;};
     struct Influence {std::array<uint8_t,4> bones{},weights{};};
     uint32_t duration=0;
     std::vector<Bone> bones;

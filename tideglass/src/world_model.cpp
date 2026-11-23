@@ -56,8 +56,8 @@ bool TextureName(Bytes b, std::size_t at, uint32_t count)
 }
 ModelError DecodeMotion(Bytes m,const Table& bones,uint32_t vertices,std::size_t limit,ModelMotion& out,std::array<bool,256>& omitted)
 {
-    Table sequences,periods;
-    if(!Array(m,20,4,304,periods) || bones.count>256 || !Array(m,28,64,304,sequences) || !sequences.count || sequences.count>256)return ModelError::Pose;
+    Table sequences;
+    if(bones.count>256 || !Array(m,28,64,304,sequences) || !sequences.count || sequences.count>256)return ModelError::Pose;
     unsigned canonical=sequences.count;
     for(unsigned i=0;i<sequences.count;++i)if(!(U32(m,sequences.At(i)+12)&64)){
         if(canonical!=sequences.count)return ModelError::Pose;canonical=i;
@@ -84,23 +84,16 @@ ModelError DecodeMotion(Bytes m,const Table& bones,uint32_t vertices,std::size_t
             const auto at=bones.At(b);float pivot[3];
             const auto parent=U16(m,at+8);
             if((parent!=0xffff && parent>=bones.count) || !Floats(m,at+76,pivot,3))return ModelError::Pose;
-            // Other batches in this model can depend only on independent bones with embedded tracks.
+            // A placement phase covers its local clip. Global growth cycles need a different clock.
+            // Omit batches weighted to those bones while retaining independent geometry.
             omitted[b]=(U32(m,at+4)&~512u) || parent!=0xffff ||
-                       U16(m,at+18)!=0xffff || U16(m,at+38)!=0xffff;
+                       U16(m,at+18)!=0xffff || U16(m,at+38)!=0xffff || (!EmptyTrack(m,at+56) && U16(m,at+58)!=0xffff);
             if(omitted[b])continue;
             if(pass)std::copy(pivot,pivot+3,candidate.bones[b].pivot.begin());
             for(unsigned component=0;component<3;++component){
                 const bool rotation=component==1, scale=component==2;
                 const auto track=at+16+component*20;if(EmptyTrack(m,track))continue;
                 Table times,values,t,v;
-                const auto global=U16(m,track+2);
-                uint32_t period=duration;
-                if(global!=0xffff){
-                    if(!scale || global>=periods.count)return ModelError::Pose;
-                    period=U32(m,periods.At(global));
-                    if(!period || period>3600000)return ModelError::Pose;
-                    if(pass)candidate.bones[b].scalePeriod=period;
-                }
                 if(U16(m,track)>1 ||
                    !Array(m,track+4,8,304,times) || !Array(m,track+12,8,304,values) ||
                    times.count!=sequences.count || values.count!=times.count ||
@@ -111,7 +104,7 @@ ModelError DecodeMotion(Bytes m,const Table& bones,uint32_t vertices,std::size_t
                 uint32_t previous=0;
                 for(unsigned k=0;k<t.count;++k){
                     const auto time=U32(m,t.At(k));
-                    if(time>period || (k && time<=previous))return ModelError::Pose;previous=time;
+                    if(time>duration || (k && time<=previous))return ModelError::Pose;previous=time;
                     if(rotation){
                         std::array<float,4> q;double norm=0;
                         for(unsigned a=0;a<4;++a){q[a]=float(U16(m,v.At(k)+a*2))*(2.f/65535.f)-1.f;norm+=double(q[a])*q[a];}
@@ -342,7 +335,7 @@ static ModelError DecodeModel(world::Bytes m, world::Bytes s, std::size_t limit,
                     const unsigned index=U16(m,boneLookup.At(combo+k));
                     if(index>=animation.bones.size()){supported=false;break;}
                     const auto& bone=animation.bones[index];
-                    supported &= bone.rotations.empty() && bone.translations.empty() && (!bone.scalePeriod || bone.scalePeriod==animation.duration);
+                    supported &= bone.rotations.empty() && bone.translations.empty();
                     moving |= bone.scales.size()>1;
                     layer.palette[k]=uint8_t(index);
                 }
@@ -527,7 +520,7 @@ bool SampleModelPose(const ModelMotion& motion,uint32_t milliseconds,ModelPose& 
         m={1-2*(y*y+z*z),2*(x*y-z*w),2*(x*z+y*w),0,
            2*(x*y+z*w),1-2*(x*x+z*z),2*(y*z-x*w),0,
            2*(x*z-y*w),2*(y*z+x*w),1-2*(x*x+y*y),0};
-        const auto scale=Sample(bone.scales,bone.scalePeriod?milliseconds%bone.scalePeriod:time,std::array<float,3>{1,1,1});
+        const auto scale=Sample(bone.scales,time,std::array<float,3>{1,1,1});
         for(unsigned row=0;row<3;++row)for(unsigned col=0;col<3;++col){
             const float r=m[row*4+col];
             output[b].normal[row*3+col]=std::fabs(scale[col])>1e-6f?r/scale[col]:0.f;

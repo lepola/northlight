@@ -98,6 +98,8 @@ bool OwnedWorldGpu::Fail(const char* reason)
 bool OwnedWorldGpu::Initialize(const world::WorldScene& scene,const OwnedWorldRenderData& data,std::size_t resourceBudget,const OwnedWorldGpu* resident)
 {
     m_sharedRegion=resident!=nullptr;
+    // Appending a ship to the same resident region keeps its scenery placements alive.
+    m_newPoseScene=!m_sharedRegion;
     if (scene.region->terrain.size()!=data.terrain.size() || scene.region->instances.size()!=data.instanceHeights.size() ||
         scene.region->terrain.size()>world::OwnedWorldRegion::MaxExtendedTiles || scene.models.size()>world::MaxSceneModels || scene.textures.size()>world::MaxSceneTextures || scene.region->instances.size()>world::MaxSceneInstances) return Fail("scene counts");
     const auto gpuLimit=std::min(resourceBudget,ResidencyLimit);
