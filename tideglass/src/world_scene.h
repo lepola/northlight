@@ -71,12 +71,14 @@ struct SceneWmoSource
     {
         uint32_t source=MissingSceneAsset; // modelSources index; shares decoding/material admission
         std::array<float,16> transform{};
+        uint16_t set=0;
+        bool placedAttachment=false, terrainShoreOnly=false;
     };
     std::string name;
     std::vector<uint32_t> models; // admitted group order -> owned geometry; unsupported groups reject the root
     WmoError unsupported=WmoError::None;
     uint32_t omittedDoodads=0;
-    std::vector<Attachment> attachments; // referenced default-set models for live transports
+    std::vector<Attachment> attachments; // group-referenced attachments for live transports and selected building placements
     WmoError attachmentError=WmoError::None; // optional metadata never retires containing geometry
 };
 struct SceneSource { std::string name; ArchiveIdentity archive; };

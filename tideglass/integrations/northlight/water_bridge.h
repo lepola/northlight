@@ -46,9 +46,19 @@ inline WaterHostFrameRef CaptureNorthlightWater(const D3DVIEWPORT9& viewport,Wat
 class NorthlightWaterBridge
 {
 public:
+    WaterSceneryPoseRequests* sceneryPoses=nullptr; // borrowed on the device thread
     void PresentBegin(IDirect3DDevice9* device,uint64_t frame){
         if (northlightWaterSettings.Open() && Initialise(device)) {
             northlightTracePasses = &m_passes;
+            if(sceneryPoses && sceneryPoses->waiting){
+                const DWORD now=GetTickCount();
+                for(unsigned i=0;i<sceneryPoses->count;++i){
+                    auto& p=sceneryPoses->placements[i];
+                    if(p.status==WaterPosePlacement::Waiting && now-p.started>5000){
+                        p.status=WaterPosePlacement::Unavailable;--sceneryPoses->waiting;
+                    }
+                }
+            }
             m_passes.PresentBegin(2, frame);
         }
     }
@@ -199,18 +209,25 @@ public:
         m_frameDepth = nullptr;
         m_depth.ReleaseAll();
         m_device = nullptr;
+        sceneryPoses=nullptr;m_poseConnected=false;
         return m_passes.Shutdown();
     }
 private:
     bool Initialise(IDirect3DDevice9* device)
     {
         auto& module = northlightWaterSettings.Module();
-        return m_passes.Initialise(module.API(), device, northlightWaterSettings.SettingsPath().c_str(),
+        const bool ready=m_passes.Initialise(module.API(), device, northlightWaterSettings.SettingsPath().c_str(),
                                    module.Diagnostics(), module.Trace(), module.Environment(), module.Liquid(),
                                    module.CaptureAPI());
+        if(ready && !m_poseConnected){
+            sceneryPoses=m_passes.PoseRequests(module.PoseRequests());
+            m_poseConnected=true;
+        }
+        return ready;
     }
 
     void ReleaseColour() { m_nativeWater = nullptr; if (m_frameColour) { m_frameColour->Release(); m_frameColour = nullptr; } }
+    bool m_poseConnected=false;
     WaterHostPasses m_passes;
     IDirect3DTexture9* m_nativeWater = nullptr; // borrowed only while m_frameDepth/m_frameColour are valid
     water::SurfaceDepth m_depth;

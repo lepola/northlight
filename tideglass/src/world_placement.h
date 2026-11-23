@@ -34,6 +34,12 @@ struct PlacementPose
     uint16_t scale = 1024;
 };
 
+inline std::array<float,2> PlacementOriginXY(const PlacementPose& pose)
+{
+    constexpr float origin = 17066.666666666668f;
+    return {origin-pose.position[2],origin-pose.position[0]};
+}
+
 // Static rigid placement, independently checked against captured native root
 // matrices, including a two-axis tilt. Row vectors; translation occupies 12..14.
 // Bone animation/billboarding is not implied. Failure leaves output unchanged.
@@ -66,9 +72,9 @@ inline bool PlacementMatrix(const PlacementPose& pose, std::array<float, 16>& ou
         for (unsigned col = 0; col < 3; ++col) candidate[row*4+col] = static_cast<float>(result[row][col]*scale);
     // Native float rounding matters here; the initial double-precision survey
     // differs by about 0.001 yd. MCNK terrain positions are already world space.
-    constexpr float origin = 17066.666666666668f;
-    candidate[12] = origin-pose.position[2];
-    candidate[13] = origin-pose.position[0];
+    const auto xy=PlacementOriginXY(pose);
+    candidate[12] = xy[0];
+    candidate[13] = xy[1];
     candidate[14] = pose.position[1]; candidate[15] = 1;
     for (float value : candidate) if (!std::isfinite(value)) return false;
     output = candidate;

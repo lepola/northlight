@@ -17,6 +17,7 @@ float4 main(float2 uv : TEXCOORD0,float above : TEXCOORD1,float distance : TEXCO
     float horizon=cMaterial.x<0;
     float terrain=max(cMaterial.x,0);
     float2 coordinate=uv*lerp(1,8,terrain);
+    coordinate.y+=terrain>.5?0:cMaterial.z;
     float4 colour=tex2D(Texture0,coordinate+terrain*cLayer[0].xy);
     float3 emitted=colour.rgb*(terrain*cLayer[0].z);
     float shadow=1,specularVisibility=0;

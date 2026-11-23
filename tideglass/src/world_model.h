@@ -1,4 +1,5 @@
 #pragma once
+#include "host_scenery_pose.h"
 #include "world_bytes.h"
 #include "world_mesh.h"
 #include <array>
@@ -13,19 +14,21 @@ struct ModelMotion
 {
     struct Translation {uint32_t time=0;std::array<float,3> value{};};
     struct Rotation {uint32_t time=0;std::array<float,4> value{};};
-    struct Bone {std::array<float,3> pivot{};std::vector<Translation> translations;std::vector<Rotation> rotations;};
+    struct Bone {std::array<float,3> pivot{};std::vector<Translation> translations;std::vector<Rotation> rotations;std::vector<Translation> scales;uint32_t scalePeriod=0;};
     struct Influence {std::array<uint8_t,4> bones{},weights{};};
     uint32_t duration=0;
     std::vector<Bone> bones;
     std::vector<Influence> vertices; // expanded SKIN order, parallel to mesh vertices
     std::size_t Bytes() const;
 };
-using ModelPose = std::array<std::array<float,12>,256>; // independent rigid bone transforms
+struct BonePose { std::array<float,12> position{}; std::array<float,9> normal{}; };
+using ModelPose = std::array<BonePose,256>;
 // Embedded, single looping clip (including aliases), independent bones, linear
-// translation/rotation only. No camera-dependent bones or guessed external clips.
+// translation, rotation and scale. No camera-dependent bones or guessed external clips.
 // An independently drawable batch survives an unsupported bone elsewhere in the model.
 // Mesh and motion publish together; rejection preserves both outputs.
 ModelError DecodeLoopingModel(Bytes model, Bytes skin, std::size_t limit, StaticModel& mesh, ModelMotion& motion);
+bool MatchLoopPhase(const ModelMotion&, const ScrollingLayer&, const WaterPosePlacement&, uint32_t& phase);
 bool SampleModelPose(const ModelMotion&, uint32_t milliseconds, ModelPose&);
 ModelVertex DeformModelVertex(const ModelVertex&, const ModelMotion::Influence&, const ModelPose&);
 
@@ -35,6 +38,8 @@ ModelVertex DeformModelVertex(const ModelVertex&, const ModelMotion::Influence&,
 // CPU only. Limit includes retained vectors/strings/metadata, not inputs, an old
 // output, allocator overhead or the enclosing scene. Failure preserves output.
 ModelError DecodeStaticModel(Bytes model, Bytes skin, std::size_t limit, StaticModel& output);
+// Alpha-blended layers with a repeating linear vertical translation each.
+ModelError DecodeScrollingModel(Bytes model, Bytes skin, std::size_t limit, StaticModel& output, ModelMotion* motion=nullptr);
 // A world placement seen only in a reflection: its solid and cut-out layers at rest, whatever its bones, animation and other layers do.
 // Fails only when the file is malformed or no such layer remains.
 ModelError DecodeRestModel(Bytes model, Bytes skin, std::size_t limit, StaticModel& output);

@@ -1,4 +1,5 @@
 #pragma once
+#include "host_scenery_pose.h"
 #include "host_api.h"
 #include "host_diagnostics.h"
 #include "host_capture.h"
@@ -52,6 +53,7 @@ public:
         auto getTrace=reinterpret_cast<WaterHostGetTraceAPIFn>(reinterpret_cast<void*>(GetProcAddress(module,"WaterHostGetTraceAPI")));
         m_trace=getTrace?getTrace(kWaterTraceABI,sizeof(WaterHostTraceAPI)):nullptr;
         if(m_trace&&(m_trace->abi!=kWaterTraceABI||m_trace->size!=sizeof(WaterHostTraceAPI)))m_trace=nullptr;
+        m_poseRequests=reinterpret_cast<PoseRequestsFn>(reinterpret_cast<void*>(GetProcAddress(module,"WaterHostSceneryPoses")));
         auto getEnvironment=reinterpret_cast<WaterHostGetEnvironmentAPIFn>(reinterpret_cast<void*>(GetProcAddress(module,"WaterHostGetEnvironmentAPI")));
         m_environment=getEnvironment?getEnvironment(kWaterEnvironmentABI,sizeof(WaterHostEnvironmentAPI)):nullptr;
         if(!m_environment&&getEnvironment)m_environment=getEnvironment(3,sizeof(WaterHostEnvironmentAPI));
@@ -72,10 +74,12 @@ public:
         if (!m_module) return true;
         if (!m_api->can_unload()) return false;
         if (!FreeLibrary(m_module)) return false;
-        m_module = nullptr;
+        m_module = nullptr;m_poseRequests=nullptr;
         m_api = nullptr;m_capture=nullptr;m_diagnostics=nullptr;m_trace=nullptr;m_environment=nullptr;m_liquid=nullptr;
         return true;
     }
+    using PoseRequestsFn=WaterSceneryPoseRequests* (__cdecl*)(WaterHostContext*,uint32_t,uint32_t);
+    PoseRequestsFn PoseRequests() const {return m_poseRequests;}
     const WaterHostEnvironmentAPI* Environment()const{return m_environment;}
     const WaterHostLiquidAPI* Liquid()const{return m_liquid;}
     const WaterHostCaptureAPI* CaptureAPI()const{return m_capture;}
@@ -87,6 +91,7 @@ public:
     WaterHostFrameRef Copy(const WaterFrameValues& values) const
     { return m_api ? WaterHostFrameRef(m_api, m_api->copy_frame(&values, sizeof(values))) : WaterHostFrameRef(); }
 private:
+    PoseRequestsFn m_poseRequests=nullptr;
     HMODULE m_module = nullptr;
     const WaterHostAPI* m_api = nullptr;
     const WaterHostDiagnosticsAPI* m_diagnostics=nullptr;

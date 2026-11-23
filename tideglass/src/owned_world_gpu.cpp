@@ -1,4 +1,5 @@
 #include "world_terrain_material.h"
+#include "ps_owned_cascade.h"
 #include "owned_world_gpu.h"
 #include "owned_receiver_visibility.h"
 #include "log.h"
@@ -79,9 +80,11 @@ void OwnedWorldGpu::Release()
     m_modelOffsets.clear();m_instanceOrder.clear();
     for (auto& t : m_textures) Drop(t);
     for (auto& t : m_alpha) Drop(t);
+    Drop(m_cascadeShader); m_cascadeReported=m_cascadeUnavailable=false;
     Drop(m_staging);
     m_terrain.clear();m_models.clear();m_textures.clear();m_alpha.clear();m_textureFirstMip.clear();m_textureReused.clear();
-    m_scene=nullptr;m_render=nullptr;m_device=nullptr;m_ready=m_failed=m_poseReady=false;
+    m_newPoseScene=true;
+    m_scene=nullptr;m_render=nullptr;m_device=nullptr;m_ready=m_failed=false;
     m_phase=Phase::TerrainVertices;m_item=m_offset=m_level=m_row=0;
     m_stageWidth=m_stageHeight=m_stageLevels=0;m_stageFormat=D3DFMT_UNKNOWN;
     m_bytes=m_stagingBytes=m_expectedBytes=0;
@@ -176,10 +179,19 @@ bool OwnedWorldGpu::Initialize(const world::WorldScene& scene,const OwnedWorldRe
         if (model.geometry->mesh.vertices.empty() || model.geometry->mesh.vertices.size()>65536 || model.geometry->mesh.indices.empty() || model.geometry->mesh.indices.size()%3) return Fail("model mesh");
         mesh.vertexCount=static_cast<unsigned>(model.geometry->mesh.vertices.size());mesh.indexCount=static_cast<unsigned>(model.geometry->mesh.indices.size());
         for (auto index : model.geometry->mesh.indices) if (index>=mesh.vertexCount) return Fail("model index");
+        const auto& scroll=model.geometry->mesh.scroll;
+        const bool translucent=!model.geometry->mesh.draws.empty() && model.geometry->mesh.draws.front().blend==2;
+        for (const auto& layer:scroll) {
+            if (!layer.period || layer.keys.size()<2 || layer.keys.front().time!=0 || layer.keys.back().time!=layer.period || !std::all_of(layer.centre.begin(),layer.centre.end(),
+                    [](float v){return std::isfinite(v);})) return Fail("scrolling layer");
+            for(unsigned k=0;k<layer.keys.size();++k)
+                if(!std::isfinite(layer.keys[k].v) || (k && layer.keys[k].time<=layer.keys[k-1].time))return Fail("UV keys");
+        }
         for (const auto& draw : model.geometry->mesh.draws)
             if (!draw.indexCount || draw.indexCount%3 || draw.firstIndex>mesh.indexCount || draw.indexCount>mesh.indexCount-draw.firstIndex ||
                 draw.texture>=model.textures.size() || draw.texture>=model.geometry->mesh.textures.size() || model.textures[draw.texture]>=scene.textures.size() ||
-                draw.blend>1 || (draw.materialFlags&~7u)) return Fail("model draw");
+                (draw.uvTrack!=UINT32_MAX && draw.uvTrack>=scroll.size()) ||
+                (translucent ? (draw.blend!=2 || draw.uvTrack>=scroll.size()) : draw.blend>1) || (draw.materialFlags&~7u)) return Fail("model draw");
         if(model.geometry->motion.duration && (model.geometry->motion.vertices.size()!=mesh.vertexCount || model.geometry->motion.bones.empty() || model.geometry->motion.bones.size()>256))return Fail("model motion");
         if (!add(mesh.vertexCount,sizeof(OwnedWorldVertex)) || !add(mesh.indexCount,2)) return Fail("models over budget");
     }
@@ -488,33 +500,83 @@ bool OwnedWorldGpu::DrawReceivers(IDirect3DDevice9* device,const FrameInputs& fr
         SUCCEEDED(device->SetStreamSource(0,m_receiverBuffers[0],0,sizeof(OwnedReceiverVertex))) &&
         SUCCEEDED(device->DrawPrimitive(D3DPT_TRIANGLELIST,0,unsigned(m_render->receiverVertices.size()/3)));
 }
+bool OwnedWorldGpu::UpdatePose(Mesh& mesh,const world::SceneModel& model,uint32_t time)
+{
+    if(mesh.hasPose && mesh.poseTime==time)return true;
+    LARGE_INTEGER start,end,frequency;
+    QueryPerformanceCounter(&start);
+    world::ModelPose pose;
+    if(!world::SampleModelPose(model.geometry->motion,time,pose))return false;
+    void* target=nullptr;
+    if(FAILED(mesh.vertices->Lock(0,0,&target,D3DLOCK_DISCARD)))return false;
+    auto* vertices=static_cast<OwnedWorldVertex*>(target);
+    for(unsigned j=0;j<model.geometry->mesh.vertices.size();++j){
+        const auto v=world::DeformModelVertex(model.geometry->mesh.vertices[j],model.geometry->motion.vertices[j],pose);
+        std::memcpy(vertices[j].position,v.position.data(),12);std::memcpy(vertices[j].normal,v.normal.data(),12);
+        std::memcpy(vertices[j].uv,v.uv.data(),8);vertices[j].water=0;
+    }
+    if(FAILED(mesh.vertices->Unlock()))return false;
+    mesh.poseTime=time;mesh.hasPose=true;
+    QueryPerformanceCounter(&end);QueryPerformanceFrequency(&frequency);
+    m_stats.poseMs+=double(end.QuadPart-start.QuadPart)*1000.0/double(frequency.QuadPart);
+    return true;
+}
+// Requests exist only for a visible, pose-driven cascade. Rigid scrolling water
+// uses its existing clock. Placements of the same mesh can have different phases.
+bool OwnedWorldGpu::CascadeClock(const FrameInputs& frame,const world::SceneInstance& instance,
+                                const world::SceneModel& model,bool nativeVisible,uint32_t& time)
+{
+    const auto& geometry=model.geometry.Read();
+    if(!geometry.motion.duration)return true;
+    const auto& draw=geometry.mesh.draws.front();
+    const auto& layer=geometry.mesh.scroll[draw.uvTrack];
+    auto* requests=frame.sceneryPoses;
+    if(!requests || !layer.paletteSize)return false;
+    auto* first=requests->placements;
+    const auto origin=instance.transform.data()+12;
+    auto* p=std::find_if(first,first+requests->count,[&](const WaterPosePlacement& candidate){
+        return candidate.triangles==draw.indexCount/3 && std::equal(origin,origin+3,candidate.origin) &&
+               std::equal(layer.firstVertex.begin(),layer.firstVertex.end(),candidate.firstVertex);
+    });
+    if(p==first+requests->count){
+        if(!nativeVisible || requests->count==kWaterPosePlacements)return false;
+        ++requests->count;++requests->waiting;
+        p->started=GetTickCount();p->triangles=draw.indexCount/3;p->vertices=layer.vertices;p->bones=layer.paletteSize;
+        std::copy_n(origin,3,p->origin);std::copy(layer.firstVertex.begin(),layer.firstVertex.end(),p->firstVertex);
+        WATER_LOG_INFO("scenery animation requested at %.2f %.2f %.2f, %u triangles %u vertices",origin[0],origin[1],origin[2],p->triangles,p->vertices);
+    }
+    // A first visit may present only the mirror view. Give an expired request
+    // another bounded opportunity when the native source comes back into view.
+    if(nativeVisible && p->status==WaterPosePlacement::Unavailable && frame.modelMilliseconds-p->lastVisible>1000){
+        p->started=GetTickCount();p->status=WaterPosePlacement::Waiting;
+        p->samples=p->processed=0;++requests->waiting;
+    }
+    if(nativeVisible)p->lastVisible=frame.modelMilliseconds;
+    if(p->status==WaterPosePlacement::Waiting && p->samples!=p->processed){
+        p->processed=p->samples;
+        if(world::MatchLoopPhase(geometry.motion,layer,*p,p->phase)){
+            p->epoch=p->observed[0].tick;p->status=WaterPosePlacement::Matched;--requests->waiting;
+            WATER_LOG_INFO("scenery animation matched at %.2f %.2f %.2f after %u samples, phase %u epoch %u",origin[0],origin[1],origin[2],p->samples,p->phase,p->epoch);
+        }else if(p->samples==4){
+            // A repeated or stationary part of the loop can stay ambiguous for several samples.
+            std::move(p->observed+1,p->observed+4,p->observed);
+            p->samples=p->processed=3;
+        }
+    }
+    if(p->status!=WaterPosePlacement::Matched)return false;
+    const auto elapsed=int32_t(frame.modelMilliseconds-p->epoch);
+    time=uint32_t((int64_t(p->phase)+int64_t(elapsed)%geometry.motion.duration+geometry.motion.duration)%geometry.motion.duration);
+    return true;
+}
+
 bool OwnedWorldGpu::Draw(IDirect3DDevice9* device,const FrameInputs& frame,const world::WorldScene& scene,const OwnedWorldRenderData& data,
                         const OwnedWorldShaders& shaders)
 {
     if (GetCurrentThreadId()!=m_owner || device!=m_device || !Ready(scene) || m_render!=&data) return false;
-    // Reuse the existing mesh/material path. Tiny decorative loops deform on
-    // the GPU-owner thread into a dynamic VB, without extra shader constants.
+    if(m_newPoseScene && frame.sceneryPoses){*frame.sceneryPoses={};m_newPoseScene=false;}
     using Part=OwnedWorldDrawOptions::Part;
     const auto parts=m_options.parts;
     m_stats={};
-    LARGE_INTEGER poseStart,poseEnd,frequency;QueryPerformanceCounter(&poseStart);
-    world::ModelPose pose;
-    for(unsigned i=0;(!m_poseReady || m_poseMilliseconds!=frame.modelMilliseconds) && i<scene.models.size() && (parts&Part::Animation);++i){
-        const auto& model=scene.models[i];if(!model.geometry->motion.duration)continue;
-        if(!world::SampleModelPose(model.geometry->motion,frame.modelMilliseconds,pose))return false;
-        void* target=nullptr;
-        if(FAILED(m_models[i].vertices->Lock(0,0,&target,D3DLOCK_DISCARD)))return false;
-        auto* vertices=static_cast<OwnedWorldVertex*>(target);
-        for(unsigned j=0;j<model.geometry->mesh.vertices.size();++j){
-            const auto v=world::DeformModelVertex(model.geometry->mesh.vertices[j],model.geometry->motion.vertices[j],pose);
-            std::memcpy(vertices[j].position,v.position.data(),12);std::memcpy(vertices[j].normal,v.normal.data(),12);
-            std::memcpy(vertices[j].uv,v.uv.data(),8);vertices[j].water=0;
-        }
-        if(FAILED(m_models[i].vertices->Unlock()))return false;
-    }
-    m_poseReady=true;m_poseMilliseconds=frame.modelMilliseconds;
-    QueryPerformanceCounter(&poseEnd);QueryPerformanceFrequency(&frequency);
-    m_stats.poseMs=double(poseEnd.QuadPart-poseStart.QuadPart)*1000.0/double(frequency.QuadPart);
     const auto* v=frame.cameraRelativeView;
     const double determinant=double(v[0])*(double(v[5])*v[10]-double(v[6])*v[9])-double(v[1])*(double(v[4])*v[10]-double(v[6])*v[8])+double(v[2])*(double(v[4])*v[9]-double(v[5])*v[8]);
     if (!std::isfinite(determinant) || std::fabs(determinant)<1e-6) return false;
@@ -744,7 +806,8 @@ bool OwnedWorldGpu::Draw(IDirect3DDevice9* device,const FrameInputs& frame,const
     // One model batch's material state, shared by single and instanced draws.
     unsigned modelAddress=3; // slot zero starts wrapped on both axes in this pass
     const auto batchState=[&](const world::SceneModel& model,const world::ModelDraw& draw){
-        const float material[]={0,draw.blend==1 ? .5f : 0.f,0,float(draw.materialFlags&3)};
+        const float uvOffset=(parts&Part::Animation) && draw.uvTrack!=UINT32_MAX && draw.blend<=1 ? model.geometry->mesh.scroll[draw.uvTrack].Offset(frame.modelMilliseconds) : 0.f;
+        const float material[]={0,draw.blend==1 ? .5f : 0.f,uvOffset,float(draw.materialFlags&3)};
         float emission[4];colour(draw.nightEmission,emission);
         for(unsigned channel=0;channel<3;++channel)emission[channel]*=night;
         const unsigned flags=model.geometry->mesh.textures[draw.texture].flags&3u;
@@ -758,6 +821,12 @@ bool OwnedWorldGpu::Draw(IDirect3DDevice9* device,const FrameInputs& frame,const
             SUCCEEDED(device->SetRenderState(D3DRS_CULLMODE,draw.materialFlags&4 ? D3DCULL_NONE : cull));
     };
     m_queued.clear();
+    struct CascadeDraw {
+        world::SceneInstance instance;
+        unsigned layer;
+        float height, distance;
+    };
+    std::vector<CascadeDraw> cascades;
     const auto drawInstance=[&](const world::SceneInstance& instance,float height){
         if(instance.model>=m_models.size())return false;
         if (below?instance.minimum[2]>height:instance.maximum[2]<height) return true;
@@ -772,9 +841,28 @@ bool OwnedWorldGpu::Draw(IDirect3DDevice9* device,const FrameInputs& frame,const
         ++m_stats.instances;
         const auto bucket=m_options.census ? SizeBucket(ScreenSize(reflected,frame.cameraPosition,clip,frame.viewport)) : OwnedWorldDrawStats::kSizes-1;
         if (m_options.census) modelKeys.push_back(instance.model);
-        const auto& mesh=m_models[instance.model];const auto& model=scene.models[instance.model];
+        auto& mesh=m_models[instance.model];const auto& model=scene.models[instance.model];
         for (const auto& draw : model.geometry->mesh.draws) counted(bucket,draw.indexCount);
         const float mode[]={1,height,below?1.f:0.f,frame.cameraWaterHeight};
+        const bool translucent=model.geometry->mesh.draws.front().blend==2;
+        if(translucent && (!(parts&Part::Animation) || m_cascadeUnavailable))return true;
+        // Multiple placements and receivers can use the same visible pose.
+        if(!translucent && (parts&Part::Animation) && model.geometry->motion.duration && !UpdatePose(mesh,model,frame.modelMilliseconds))return false;
+        if (translucent) {
+            const auto& geometry=model.geometry->mesh;
+            for (unsigned i=0;i<geometry.draws.size();++i) {
+                const auto& transform=instance.transform;
+                const auto& v=geometry.scroll[geometry.draws[i].uvTrack].centre;
+                float viewDepth=0;
+                for (unsigned axis=0;axis<3;++axis) {
+                    float position=v[0]*transform[axis]+v[1]*transform[4+axis]+v[2]*transform[8+axis]+transform[12+axis];
+                    if (axis==2) position=2*height-position;
+                    viewDepth+=float((position-frame.cameraPosition[axis])*clip[axis][3]);
+                }
+                cascades.push_back({instance,i,height,viewDepth});
+            }
+            return true;
+        }
         if (instancing) {
             Queued queued{instance.model,{}};
             for (unsigned row=0;row<3;++row) for (unsigned c=0;c<4;++c) queued.instance.world[row][c]=instance.transform[c*4+row];
@@ -827,6 +915,7 @@ bool OwnedWorldGpu::Draw(IDirect3DDevice9* device,const FrameInputs& frame,const
         for(auto model:source.models){ok=drawLive(model,nullptr);if(!ok)break;}
         for(const auto& attachment:source.attachments){
             if(!ok)break;
+            if(attachment.set!=0)continue;
             if(attachment.source>=scene.modelSources.size())return false;
             const auto model=scene.modelSources[attachment.source].model;
             if(model!=world::MissingSceneAsset)ok=drawLive(model,attachment.transform.data());
@@ -834,6 +923,58 @@ bool OwnedWorldGpu::Draw(IDirect3DDevice9* device,const FrameInputs& frame,const
     }
     if (ok && !m_queued.empty()) ok=DrawQueued(device,scene,shaders,batchState,submitted);
     m_queued.clear();
+    if (ok && !cascades.empty() && !m_cascadeShader) {
+        m_cascadeUnavailable=FAILED(p_ps_owned_cascade.Create(device,&m_cascadeShader));
+        if (m_cascadeUnavailable) WATER_LOG_INFO("cascade shader unavailable; retaining the reflected opaque scene");
+    }
+    if (ok && !cascades.empty() && m_cascadeShader) {
+        std::stable_sort(cascades.begin(),cascades.end(),[](const auto& a,const auto& b){return a.distance>b.distance;});
+        IDirect3DPixelShader9* previous=nullptr;
+        ok=SUCCEEDED(device->GetPixelShader(&previous)) &&
+            SUCCEEDED(device->SetPixelShader(m_cascadeShader)) &&
+            SUCCEEDED(device->SetVertexShader(shaders.vs)) && SUCCEEDED(device->SetVertexDeclaration(shaders.declaration)) &&
+            SUCCEEDED(device->SetRenderState(D3DRS_ZWRITEENABLE,FALSE)) &&
+            SUCCEEDED(device->SetRenderState(D3DRS_ALPHABLENDENABLE,TRUE)) &&
+            SUCCEEDED(device->SetRenderState(D3DRS_SRCBLEND,D3DBLEND_SRCALPHA)) &&
+            SUCCEEDED(device->SetRenderState(D3DRS_DESTBLEND,D3DBLEND_INVSRCALPHA)) &&
+            SUCCEEDED(device->SetRenderState(D3DRS_BLENDOP,D3DBLENDOP_ADD)) &&
+            SUCCEEDED(device->SetRenderState(D3DRS_COLORWRITEENABLE,7));
+        for (const auto& cascade:cascades) {
+            if (!ok) break;
+            const auto& instance=cascade.instance;
+            const auto& model=scene.models[instance.model];
+            auto& mesh=m_models[instance.model];
+            uint32_t time=frame.modelMilliseconds;
+            const auto& geometry=model.geometry.Read();
+            if(geometry.motion.duration){
+                const std::array<float,6> nativeBounds={instance.minimum[0],instance.minimum[1],instance.minimum[2],
+                                                       instance.maximum[0],instance.maximum[1],instance.maximum[2]};
+                if(!CascadeClock(frame,instance,model,!visible.Outside(nativeBounds),time))continue;
+            }
+            if(model.geometry->motion.duration && !UpdatePose(mesh,model,time)){ok=false;break;}
+            const auto& draw=model.geometry->mesh.draws[cascade.layer];
+            const auto& layer=geometry.mesh.scroll[draw.uvTrack];
+            const float scroll[]={0,layer.Offset(layer.usesModelTime?time:frame.modelMilliseconds),0,0};
+            const float mode[]={1,cascade.height,below?1.f:0.f,frame.cameraWaterHeight};
+            ok=matrix(instance.transform.data()) && batchState(model,draw) &&
+                SUCCEEDED(device->SetVertexShaderConstantF(10,mode,1)) &&
+                SUCCEEDED(device->SetPixelShaderConstantF(11,scroll,1)) &&
+                SUCCEEDED(device->SetStreamSource(0,mesh.vertices,0,sizeof(OwnedWorldVertex))) &&
+                SUCCEEDED(device->SetIndices(mesh.indices)) &&
+                SUCCEEDED(device->DrawIndexedPrimitive(D3DPT_TRIANGLELIST,0,0,mesh.vertexCount,draw.firstIndex,draw.indexCount/3));
+            if (ok) submitted();
+        }
+        if (ok && !m_cascadeReported) {
+            WATER_LOG_INFO("cascade trial drew %u scrolling layers, model time %u; first depth %.2f, last %.2f",
+                           unsigned(cascades.size()),frame.modelMilliseconds,cascades.front().distance,cascades.back().distance);
+            m_cascadeReported=true;
+        }
+        ok=SUCCEEDED(device->SetPixelShader(previous)) && ok;
+        Drop(previous);
+        ok=SUCCEEDED(device->SetRenderState(D3DRS_COLORWRITEENABLE,15)) &&
+            SUCCEEDED(device->SetRenderState(D3DRS_ALPHABLENDENABLE,FALSE)) &&
+            SUCCEEDED(device->SetRenderState(D3DRS_ZWRITEENABLE,TRUE)) && ok;
+    }
     if (limited || (parts&Part::Scissor)) ok=SUCCEEDED(device->SetRenderState(D3DRS_SCISSORTESTENABLE,FALSE)) && SUCCEEDED(device->SetScissorRect(&savedScissor)) && ok;
     std::sort(terrainKeys.begin(),terrainKeys.end());
     m_stats.terrainSets=unsigned(std::unique(terrainKeys.begin(),terrainKeys.end())-terrainKeys.begin());

@@ -36,6 +36,7 @@ struct WmoLiquid
     unsigned width=0,height=0;
     uint16_t type=0;
     std::array<float,3> origin{};
+    bool NearSurface(const float* point,double reach) const;
     bool Quad(unsigned x,unsigned y,std::array<std::array<double,3>,4>& points) const;
 };
 enum class WmoError { None,Header,Layout,Geometry,Material,Unsupported,Budget };

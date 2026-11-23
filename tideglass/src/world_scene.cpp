@@ -68,7 +68,7 @@ public:
     bool Stop() { if(!cancelled.load(std::memory_order_relaxed))return false;Fail(SceneError::Cancelled);return true; }
     bool Fits(std::size_t scratch=0,std::size_t decoded=0)
     {
-        scratch=std::max(scratch,inputBytes)+furtherWater.capacity()*sizeof(FurtherWater); decoded=std::max(decoded,pendingBytes);
+        scratch=std::max(scratch,inputBytes)+WaterScratchBytes(); decoded=std::max(decoded,pendingBytes);
         const auto bytes=RetainedBytes();
         if (bytes>sceneLimit || bytes>workspaceLimit || decoded>sceneLimit-bytes ||
             scratch>workspaceLimit-bytes || decoded>workspaceLimit-bytes-scratch) return Fail(SceneError::Budget);
@@ -78,13 +78,13 @@ public:
     {
         if (!Fits(scratch)) return 0;
         const auto retained=RetainedBytes();
-        return std::min(sceneLimit-retained,workspaceLimit-retained-scratch-furtherWater.capacity()*sizeof(FurtherWater));
+        return std::min(sceneLimit-retained,workspaceLimit-retained-scratch-WaterScratchBytes());
     }
     bool Read(const std::string& name,ArchiveEntry& entry,std::size_t scratch=0)
     {
         inputBytes=scratch;
         if (Stop() || !Fits()) return false;
-        const auto available=workspaceLimit-RetainedBytes()-scratch-furtherWater.capacity()*sizeof(FurtherWater);
+        const auto available=workspaceLimit-RetainedBytes()-scratch-WaterScratchBytes();
         result.archiveError=options.snapshotReads?archives.ReadSnapshot(name,cancelled,entry,available):
             archives.Read(name,cancelled,entry,available);
         if (result.archiveError!=ArchiveError::None)
@@ -136,6 +136,49 @@ public:
     struct FurtherWater { double distance; reflection::WaterSurface surface; decltype(scene.region->waterTypes)::value_type type; };
     static constexpr std::size_t MaxFurtherWater=65536;
     std::vector<FurtherWater> furtherWater{};
+    using WaterBounds=std::array<float,6>;
+    std::vector<WaterBounds> shoreCells{};
+    float widestShoreCell=0;
+    static constexpr float ShoreRadius=32;
+    std::size_t WaterScratchBytes() const
+    {
+        return furtherWater.capacity()*sizeof(FurtherWater)+shoreCells.capacity()*sizeof(WaterBounds);
+    }
+    bool IndexTerrainShore()
+    {
+        // At this stage the water list contains only authored terrain cells. Buildings add their own pools later.
+        const auto nearby=[&](const FurtherWater& w){
+            const auto& b=w.surface.bounds;
+            return options.region.Overlaps({b[0],b[1],b[2]},{b[3],b[4],b[5]},OwnedWorldRegion::NearReach+ShoreRadius);
+        };
+        const auto count=std::count_if(furtherWater.begin(),furtherWater.end(),nearby);
+        if(!Fits(inputBytes+count*sizeof(WaterBounds)))return false;
+        shoreCells.reserve(count);
+        for(const auto& w:furtherWater)if(nearby(w)){
+            shoreCells.push_back(w.surface.bounds);
+            widestShoreCell=std::max(widestShoreCell,w.surface.bounds[3]-w.surface.bounds[0]);
+        }
+        std::sort(shoreCells.begin(),shoreCells.end());
+        return Fits();
+    }
+    bool ShoreAttachment(const std::array<float,16>& parent,const std::array<float,16>& local)const
+    {
+        float p[3];
+        for(unsigned c=0;c<3;++c)
+            p[c]=parent[12+c]+local[12]*parent[c]+local[13]*parent[4+c]+local[14]*parent[8+c];
+        if(!options.region.Contains(p,OwnedWorldRegion::NearReach))return false;
+        auto cell=std::lower_bound(shoreCells.begin(),shoreCells.end(),p[0]-ShoreRadius-widestShoreCell,
+            [](const WaterBounds& b,float x){return b[0]<x;});
+        for(;cell!=shoreCells.end() && (*cell)[0]<=p[0]+ShoreRadius;++cell){
+            float squared=0;
+            for(unsigned c=0;c<3;++c){
+                const float d=std::max({(*cell)[c]-p[c],p[c]-(*cell)[3+c],0.f});
+                squared+=d*d;
+            }
+            if(squared<=ShoreRadius*ShoreRadius)return true;
+        }
+        return false;
+    }
     void WithheldWater(const reflection::WaterSurface& surface)
     {
         double distance=0;
@@ -518,9 +561,14 @@ public:
                                         DecodeLimit(scratch),decoded.geometry.Edit().mesh):
                 DecodeRestModel({model.bytes.data(),model.bytes.size()},{skin.bytes.data(),skin.bytes.size()},
                                         DecodeLimit(scratch),decoded.geometry.Edit().mesh);
-            if(attachments && error==ModelError::Pose)
-                error=DecodeLoopingModel({model.bytes.data(),model.bytes.size()},{skin.bytes.data(),skin.bytes.size()},
-                                        DecodeLimit(scratch),decoded.geometry.Edit().mesh,decoded.geometry.Edit().motion);
+            const Bytes modelBytes{model.bytes.data(),model.bytes.size()}, skinBytes{skin.bytes.data(),skin.bytes.size()};
+            if (attachments && (error==ModelError::Material || error==ModelError::Pose))
+                error=DecodeLoopingModel(modelBytes,skinBytes,DecodeLimit(scratch),decoded.geometry.Edit().mesh,decoded.geometry.Edit().motion);
+            if (error==ModelError::Material || error==ModelError::Pose) {
+                error=DecodeScrollingModel(modelBytes,skinBytes,DecodeLimit(scratch),decoded.geometry.Edit().mesh);
+                if (error==ModelError::Pose)
+                    error=DecodeScrollingModel(modelBytes,skinBytes,DecodeLimit(scratch),decoded.geometry.Edit().mesh,&decoded.geometry.Edit().motion);
+            }
             if (error==ModelError::Budget) return Fail(SceneError::Budget,source.name);
             source.unsupported=error;
             const auto detail=error!=ModelError::None?MissingSceneAsset:attachments?0:ModelDetail(decoded.geometry->mesh,source.name);
@@ -547,9 +595,8 @@ public:
         }
         return true;
     }
-    bool BuildingWater(Bytes input,const std::string& name,unsigned group)
+    bool BuildingWater(Bytes input,const std::string& name,unsigned group,WmoLiquid& liquid)
     {
-        WmoLiquid liquid;
         if(DecodeWmoLiquid(input,liquid)!=WmoError::None)return Fail(SceneError::Water,name);
         if(!liquid.width)return true;
         const bool indoors=WmoGroupOnlyIndoors(input);
@@ -583,6 +630,7 @@ public:
         }
         return true;
     }
+    enum AttachmentReference : uint8_t { Live=1, Pool=2, Exterior=4, Shore=8, Placed=Pool|Shore, Admitted=Live|Placed };
     bool Buildings(unsigned firstSource=0)
     {
         // Admit every supported group through the shared model, scene and
@@ -594,8 +642,9 @@ public:
             WmoRoot root;
             auto error=DecodeWmoRoot({rootEntry.bytes.data(),rootEntry.bytes.size()},DecodeLimit(rootEntry.bytes.capacity()),root);
             if(error==WmoError::Budget)return Fail(SceneError::Budget,source.name);
+            const bool loadAttachments=live || root.doodads!=0;
             WmoAttachments attachments;
-            if(live&&error==WmoError::None){
+            if(loadAttachments&&error==WmoError::None){
                 const auto cap=DecodeLimit(rootEntry.bytes.capacity());
                 source.attachmentError=DecodeWmoAttachments({rootEntry.bytes.data(),rootEntry.bytes.size()},cap>root.Bytes()?cap-root.Bytes():0,attachments);
                 if(source.attachmentError==WmoError::Budget)return Fail(SceneError::Budget,source.name);
@@ -618,7 +667,8 @@ public:
                 char suffix[16];std::snprintf(suffix,sizeof(suffix),"_%03u.wmo",i);
                 const auto name=source.name.substr(0,source.name.size()-4)+suffix;
                 ArchiveEntry entry;if(!Read(name,entry))return false;
-                if(!BuildingWater({entry.bytes.data(),entry.bytes.size()},source.name,i))return false;
+                WmoLiquid liquid;
+                if(!BuildingWater({entry.bytes.data(),entry.bytes.size()},source.name,i,liquid))return false;
                 // Unsupported scenery does not discard valid liquid in later groups.
                 if(source.unsupported!=WmoError::None){if(!Source(entry))return false;continue;}
                 SceneModel group;
@@ -626,7 +676,8 @@ public:
                 std::vector<uint16_t> references;
                 error=DecodeWmoGroup({entry.bytes.data(),entry.bytes.size()},root,cap>rootBytes?cap-rootBytes:0,group.geometry.Edit().mesh);
                 if(error==WmoError::Budget)return Fail(SceneError::Budget,name);
-                if(live&&source.attachmentError==WmoError::None){
+                const bool exterior=!shoreCells.empty() && !WmoGroupOnlyIndoors({entry.bytes.data(),entry.bytes.size()});
+                if((live || liquid.width || exterior) && loadAttachments && source.attachmentError==WmoError::None){
                     const auto occupied=rootBytes+group.geometry->mesh.Bytes();
                     source.attachmentError=DecodeWmoReferences({entry.bytes.data(),entry.bytes.size()},static_cast<uint32_t>(attachments.models.size()),cap>occupied?cap-occupied:0,references);
                     if(source.attachmentError==WmoError::Budget)return Fail(SceneError::Budget,name);
@@ -648,7 +699,11 @@ public:
                         if(texture==MissingSceneAsset)texture=Texture(group.geometry->mesh.textures[draw.texture].name,detail);
                         if(texture==MissingSceneAsset)return false;
                     }
-                    for(auto index:references)referenced[index]=1;
+                    for (auto index:references) {
+                        if (liquid.NearSurface(attachments.models[index].transform.data()+12,32.0)) referenced[index] |= Pool;
+                        if (live) referenced[index] |= Live;
+                        if (exterior) referenced[index] |= Exterior;
+                    }
                     source.models.push_back(static_cast<uint32_t>(scene.models.size()));scene.models.push_back(std::move(group));
                 }
                 pendingBytes=rootBytes+references.capacity()*sizeof(uint16_t);
@@ -656,19 +711,35 @@ public:
                 if(error!=WmoError::None){scene.models.resize(first);source.models.clear();source.unsupported=error;}
             }
             if(error!=WmoError::None){scene.models.resize(first);source.models.clear();source.unsupported=error;}
-            if(error==WmoError::None&&live&&source.attachmentError==WmoError::None){
-                const auto count=std::count(referenced.begin(),referenced.end(),uint8_t(1));
+            if(error==WmoError::None&&loadAttachments&&source.attachmentError==WmoError::None){
+                // One root can occur at the shore and inland, with different active doodad sets.
+                if(std::any_of(referenced.begin(),referenced.end(),[](uint8_t r){return (r&Exterior)!=0;})){
+                    for(const auto& terrain:scene.region->terrain)for(const auto& placement:terrain.tile.wmoInstances){
+                        if((placement.flags&~4u) || terrain.tile.wmoModels[placement.model]!=source.name ||
+                           !options.region.Overlaps(placement.minimum,placement.maximum,OwnedWorldRegion::NearReach))continue;
+                        std::array<float,16> parent;
+                        if(!PlacementMatrix(placement.pose,parent))return Fail(SceneError::Placement,source.name);
+                        for(std::size_t i=0;i<referenced.size();++i){
+                            const auto& a=attachments.models[i];
+                            if((referenced[i]&(Exterior|Placed))==Exterior && (a.set==0 || a.set==placement.doodadSet) &&
+                               ShoreAttachment(parent,a.transform))referenced[i]|=Shore;
+                        }
+                    }
+                }
+                const auto count=std::count_if(referenced.begin(),referenced.end(),[](uint8_t r){return (r&Admitted)!=0;});
                 if(!Fits(0,rootBytes+count*sizeof(SceneWmoSource::Attachment)))return false;
                 source.attachments.reserve(count);
                 for(unsigned i=0;i<attachments.models.size();++i){
-                    const auto& a=attachments.models[i];if(!referenced[i]||a.set!=0)continue;
+                    const auto& a=attachments.models[i];
+                    const bool placedAttachment=(referenced[i]&Placed)!=0;
+                    if(!(referenced[i]&Admitted)||a.set==0xffff||(!placedAttachment&&a.set!=0))continue;
                     auto model=Find(scene.modelSources,a.name);
                     if(model==MissingSceneAsset){
                         if(scene.modelSources.size()==MaxModelSources)return Fail(SceneError::Budget,a.name);
                         model=static_cast<uint32_t>(scene.modelSources.size());
                         scene.modelSources.push_back({a.name,MissingSceneAsset,ModelError::None});
                     }
-                    source.attachments.push_back({model,a.transform});
+                    source.attachments.push_back({model,a.transform,a.set,placedAttachment,(referenced[i]&Placed)==Shore});
                     if(!Fits())return false;
                 }
             }
@@ -845,7 +916,7 @@ public:
         }
         return slot;
     }
-    bool Place(uint32_t model,uint32_t uid,const PlacementPose& pose,uint16_t group=0xffff)
+    bool Place(uint32_t model,uint32_t uid,const PlacementPose& pose,uint16_t group=0xffff,const float* local=nullptr)
     {
         const auto& instances=scene.region->instances;
         const unsigned slot=placementSlots ? PlacementSlot(uid,group) : 0;
@@ -866,6 +937,7 @@ public:
         }
         SceneInstance instance;instance.model=model;instance.uid=uid;instance.group=group;instance.pose=pose;
         if(!PlacementMatrix(pose,instance.transform))return Fail(SceneError::Placement);
+        if(local && !ComposePlacement(local,instance.transform.data(),instance.transform))return Fail(SceneError::Placement);
         const auto& mesh=scene.models[model].geometry->mesh;
         if(!TransformBounds(mesh.minimum,mesh.maximum,instance.transform.data(),instance.minimum,instance.maximum))return Fail(SceneError::Placement);
         // A shared group can be retained for another placement. Test this
@@ -879,7 +951,7 @@ public:
     bool Instances()
     {
         if (!Fits()) return false;
-        const auto scratch=inputBytes+furtherWater.capacity()*sizeof(FurtherWater);
+        const auto scratch=inputBytes+WaterScratchBytes();
         const auto retained=RetainedBytes();
         constexpr auto indexBytes=PlacementSlots*sizeof(uint16_t);
         if (workspaceLimit-retained-scratch>=indexBytes) {
@@ -907,6 +979,19 @@ public:
             if(scene.omittedWmoReferences)--scene.omittedWmoReferences;
             for(unsigned group=0;group<groups.size();++group)
                 if(!Place(groups[group],placement.uid,placement.pose,static_cast<uint16_t>(group)))return false;
+            const auto& attachments=scene.wmoSources[source].attachments;
+            std::array<float,16> parent;
+            if(!attachments.empty()&&!PlacementMatrix(placement.pose,parent))return Fail(SceneError::Placement);
+            for(std::size_t i=0;i<attachments.size();++i){
+                const auto& a=attachments[i];
+                if(a.terrainShoreOnly&&!ShoreAttachment(parent,a.transform))continue;
+                if(!a.placedAttachment || (a.set!=0 && a.set!=placement.doodadSet))continue;
+                const auto model=scene.modelSources[a.source].model;
+                if(model==MissingSceneAsset)continue;
+                const auto group=groups.size()+i;
+                if(group>=0xffff)return Fail(SceneError::Budget);
+                if(!Place(model,placement.uid,placement.pose,static_cast<uint16_t>(group),a.transform.data()))return false;
+            }
         }
         if(!options.streaming)for (const auto* name : Required) {
             const auto model=scene.modelSources[Find(scene.modelSources,name)].model;
@@ -974,7 +1059,7 @@ SceneResult LoadRiverScene(ArchiveReader& archives,const std::atomic<bool>& canc
         return true;
     };
     if (b.Fits() && timed(0,b.Tiles() && potentialWater()) && timed(1,b.LiveAssets()) && timed(2,b.Models()) &&
-        timed(3,b.Buildings() && b.AdmitFurtherWater() && hasWater()) && timed(4,b.Textures()) && timed(5,b.Instances()) && !b.Stop()) {
+        timed(3,b.IndexTerrainShore() && b.Buildings() && b.AdmitFurtherWater() && hasWater()) && timed(4,b.Textures()) && timed(5,b.Instances()) && !b.Stop()) {
         b.scene.region.Edit().terrain.erase(std::remove_if(b.scene.region.Edit().terrain.begin(),b.scene.region.Edit().terrain.end(),[](const auto& t){return t.tile.cells.empty();}),b.scene.region->terrain.end());
         b.result.archiveError=archives.Validate();
         if (b.result.archiveError!=ArchiveError::None) b.Fail(SceneError::Archive);

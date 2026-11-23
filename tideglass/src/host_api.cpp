@@ -57,6 +57,8 @@ struct WaterHostContext
     WaterHostFog fog = WaterHostNativeFog;
     float reflectedFogWeight = 0;
     WaterLampSamples lamps{};
+    WaterSceneryPoseRequests sceneryPoses{};
+    bool poseHost=false;
     LiquidClassifier liquids;
     bool slimePending = false, slimeOutdoors = false, outdoorSlimeSeen = false, waterSeen = false;
     LiquidKind surfaceKind = LiquidKind::Slime;
@@ -228,6 +230,7 @@ bool Current(WaterHostContext* context, WaterHostStamp stamp)
 FrameInputs LiquidInputs(WaterHostContext* context)
 {
     auto input = context->frame->snapshot->Inputs();
+    input.sceneryPoses=context->poseHost?&context->sceneryPoses:nullptr;
     input.lamps=context->lamps;
     input.reflectedFogWeight = context->fog == WaterHostSpatialFog ? context->reflectedFogWeight : 0;
     input.stockFogPushed = input.stockFogPushed || context->fog == WaterHostFogCoversWater;
@@ -510,6 +513,7 @@ int __cdecl Lost(WaterHostContext* context)
         if (!context || !context->Owner()) return 0;
         End(context);
         context->liquids.ReleaseAll();
+        context->sceneryPoses={};
         context->session.LoseDevice();
         return 1;
     });
@@ -582,6 +586,12 @@ extern "C" __declspec(dllexport) const WaterHostTraceAPI* __cdecl WaterHostGetTr
 #endif
 
 #if defined(WATER_COOPERATIVE_BUILD)
+extern "C" __declspec(dllexport) WaterSceneryPoseRequests* __cdecl WaterHostSceneryPoses(WaterHostContext* context,uint32_t abi,uint32_t size)
+{
+    if(!context || !context->Owner() || abi!=1 || size!=sizeof(WaterSceneryPoseRequests))return nullptr;
+    context->poseHost=true;
+    return &context->sceneryPoses;
+}
 extern "C" __declspec(dllexport) const WaterHostEnvironmentAPI* __cdecl WaterHostGetEnvironmentAPI(uint32_t abi,uint32_t size)
 {
     if(size!=sizeof(WaterHostEnvironmentAPI))return nullptr;

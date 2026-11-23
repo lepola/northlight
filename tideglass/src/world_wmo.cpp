@@ -174,6 +174,28 @@ bool WmoLiquid::Quad(unsigned x,unsigned y,std::array<std::array<double,3>,4>& p
     }
     return true;
 }
+// Use only wet cells of this group. An attachment above a dry hole in a large
+// liquid grid need not load merely because the group's bounding box contains it.
+bool WmoLiquid::NearSurface(const float* point,double reach) const
+{
+    constexpr double step=1600.0/3/128;
+    if(!width || !height)return false;
+    const auto cell=[&](double coordinate,double start,unsigned limit){
+        return unsigned(std::clamp(std::floor((coordinate-start)/step),0.0,double(limit-1)));
+    };
+    for(unsigned y=cell(point[1]-reach,origin[1],height);y<=cell(point[1]+reach,origin[1],height);++y)
+        for(unsigned x=cell(point[0]-reach,origin[0],width);x<=cell(point[0]+reach,origin[0],width);++x){
+            std::array<std::array<double,3>,4> corners;
+            if(!Quad(x,y,corners))continue;
+            double low=corners[0][2],high=low;
+            for(const auto& c:corners){low=std::min(low,c[2]);high=std::max(high,c[2]);}
+            const double dx=point[0]-std::clamp(double(point[0]),corners[0][0],corners[3][0]);
+            const double dy=point[1]-std::clamp(double(point[1]),corners[0][1],corners[3][1]);
+            const double dz=point[2]-std::clamp(double(point[2]),low,high);
+            if(dx*dx+dy*dy+dz*dz<=reach*reach)return true;
+        }
+    return false;
+}
 WmoError DecodeWmoLiquid(Bytes input,WmoLiquid& output)
 {
     Parts outer,p;

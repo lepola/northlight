@@ -48,6 +48,7 @@ public:
     }
     bool CapturePass(const char* name,bool after)
     { return Current()&&m_capture&&m_capture->pass(m_context,m_stamp,name,after?1:0); }
+    WaterSceneryPoseRequests* PoseRequests(WaterHostModule::PoseRequestsFn query) const {return m_context && query?query(m_context,1,sizeof(WaterSceneryPoseRequests)):nullptr;}
     bool Ready() const { return m_context != nullptr; }
     bool Draw(WaterHostPass pass, const WaterHostResources& resources, bool shade = true)
     { return Current() && m_api->draw(m_context, m_stamp, pass, &resources, shade); }

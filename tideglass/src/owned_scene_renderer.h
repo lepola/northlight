@@ -20,7 +20,7 @@ public:
                 const OwnedSceneRenderer* reusable=nullptr);
     bool EnsureTargets(IDirect3DDevice9* device, unsigned width, unsigned height);
     bool Draw(IDirect3DDevice9* device, const FrameInputs& frame, const OwnedCpuScene& scene);
-    void BeginFrame() { assert(Owner()); m_drawn = false; m_maskDrawn=false; m_world.BeginFrame(); }
+    void BeginFrame() { assert(Owner()); m_drawn = false; m_maskDrawn=false; }
     void ReleaseGeometry();
     void ReleaseDefaultPool();
     void ReleaseAll();

@@ -76,7 +76,6 @@ public:
     unsigned LiveDraws() const {return m_stats.liveDraws;}
     void SetOptions(const OwnedWorldDrawOptions& options) {m_options=options;}
     const OwnedWorldDrawStats& Stats() const {return m_stats;}
-    void BeginFrame(){m_poseReady=false;}
     std::size_t ReusedTextureBytes() const {return m_reusedTextureBytes;}
     std::size_t ReusedGeometryBytes() const { return m_reusedGeometryBytes; }
     unsigned ReusedTextures() const {return m_reusedTextures;}
@@ -92,13 +91,17 @@ private:
         IDirect3DIndexBuffer9* indices=nullptr;
         unsigned vertexCount=0,indexCount=0;
         std::shared_ptr<const TerrainLayout> layout;
-        bool sharedBuffers=false;
+        uint32_t poseTime=0;
+        bool sharedBuffers=false,hasPose=false;
         void ShareBuffers(const Mesh& source);
     };
     enum class Phase { TerrainVertices,TerrainIndices,ModelVertices,ModelIndices,Textures,Alpha,Receivers,Complete };
     bool Initialize(const world::WorldScene&,const OwnedWorldRenderData&,std::size_t resourceBudget,const OwnedWorldGpu* resident);
     void ReuseTextures(const OwnedWorldGpu&);
     bool Buffer(IDirect3DDevice9*,const world::WorldScene&,const OwnedWorldRenderData&,unsigned& budget);
+    bool m_newPoseScene=true;
+    bool CascadeClock(const FrameInputs&,const world::SceneInstance&,const world::SceneModel&,bool nativeVisible,uint32_t&);
+    bool UpdatePose(Mesh&,const world::SceneModel&,uint32_t time);
     bool ReceiverBuffer(IDirect3DDevice9*,const OwnedWorldRenderData&,unsigned&);
     bool Texture(IDirect3DDevice9*,const world::WorldScene&,const OwnedWorldRenderData&,unsigned& budget);
     template<class BatchState,class Submitted>
@@ -113,6 +116,8 @@ private:
     std::vector<IDirect3DTexture9*> m_textures,m_alpha;
     std::vector<unsigned> m_textureFirstMip;
     std::vector<uint8_t> m_textureReused;
+    IDirect3DPixelShader9* m_cascadeShader=nullptr;
+    bool m_cascadeReported=false, m_cascadeUnavailable=false;
     IDirect3DTexture9* m_staging=nullptr;
     unsigned m_stageWidth=0,m_stageHeight=0,m_stageLevels=0;
     D3DFORMAT m_stageFormat=D3DFMT_UNKNOWN;
@@ -120,8 +125,6 @@ private:
     unsigned m_item=0,m_offset=0,m_level=0,m_row=0;
     unsigned m_uploads=0,m_draws=0;
     OwnedWorldDrawOptions m_options;
-    unsigned m_poseMilliseconds=0;
-    bool m_poseReady=false; // animation upload is shared by all receiving views this frame
     OwnedWorldDrawStats m_stats;
     std::vector<uint64_t> m_census;
     // Visible model copies of the current draw, grouped by model when drawn; the instance stream they fill.

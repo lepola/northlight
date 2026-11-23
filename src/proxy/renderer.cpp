@@ -3776,6 +3776,8 @@ public:
         lockTrace.Next(nullptr);
 #endif
 #ifdef NORTHLIGHT_WATER
+        if(world && cooperativeWater.sceneryPoses && cooperativeWater.sceneryPoses->waiting && t==D3DPT_TRIANGLELIST)
+            world->observeWaterPose(*cooperativeWater.sceneryPoses,base,min,vertices,count);
         liquidDraw={base,min,vertices,nullptr,0,start,LiquidDrawVertices(t,count)}; liquidBoundsKnown=false; /* The draw's vertex range, for its bounds. */
 #endif
         auto draw=[&]{

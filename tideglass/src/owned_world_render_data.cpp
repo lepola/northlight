@@ -8,6 +8,11 @@
 
 namespace water
 {
+static std::array<float,2> ReceiverAnchor(const world::SceneInstance& instance)
+{
+    if(instance.group!=0xffff)return world::PlacementOriginXY(instance.pose);
+    return {(instance.minimum[0]+instance.maximum[0])*.5f,(instance.minimum[1]+instance.maximum[1])*.5f};
+}
 void PrepareOwnedWorldHorizon(world::ArchiveReader& archives,world::WorldScene& scene,const OwnedWorldRenderData& data,
                              const std::atomic<bool>& cancelled,world::SceneResult& result)
 {
@@ -184,9 +189,8 @@ OwnedWorldDataResult PrepareOwnedWorldRenderData(world::WorldScene& scene,const 
         const auto& instance=scene.region->instances[i];
         // All groups of a WMO share one rigid receiver. Per-group centres can
         // otherwise split a building across the river's receiving heights.
-        const float x=instance.group==0xffff?(instance.minimum[0]+instance.maximum[0])*.5f:instance.transform[12];
-        const float y=instance.group==0xffff?(instance.minimum[1]+instance.maximum[1])*.5f:instance.transform[13];
-        if (!field.HeightAtIndexed(x,y,candidate.instanceHeights[i]) ||
+        const auto xy=ReceiverAnchor(instance);
+        if (!field.HeightAtIndexed(xy[0],xy[1],candidate.instanceHeights[i]) ||
             !std::isfinite(candidate.instanceHeights[i])) return OwnedWorldDataResult::Invalid;
     }
     if(receiver){
@@ -262,9 +266,8 @@ OwnedWorldDataResult PrepareOwnedWorldRenderData(world::WorldScene& scene,const 
             }
             view.instanceHeights.reserve(scene.region->instances.size());
             for(const auto& instance:scene.region->instances){
-                const float x=instance.group==0xffff?(instance.minimum[0]+instance.maximum[0])*.5f:instance.transform[12];
-                const float y=instance.group==0xffff?(instance.minimum[1]+instance.maximum[1])*.5f:instance.transform[13];
-                float height=0;if(!receivingField.HeightAtIndexed(x,y,height)||!std::isfinite(height))return OwnedWorldDataResult::Invalid;
+                const auto xy=ReceiverAnchor(instance);
+                float height=0;if(!receivingField.HeightAtIndexed(xy[0],xy[1],height)||!std::isfinite(height))return OwnedWorldDataResult::Invalid;
                 view.instanceHeights.push_back(height);
             }
             view.terrainExtents.reserve(scene.region->terrain.size());

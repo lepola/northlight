@@ -3639,6 +3639,54 @@ replayBoundsAbandon();releaseReplayProbe();staticCasters.settle();rigidMemoryCle
         if(program==actorPrograms.end()||program->second->paletteBase<0||program->second->paletteBase+2>=256||FAILED(d->GetVertexShaderConstantF(UINT(program->second->paletteBase),rows,3)))return nullptr;
         return program->second.get();
     }
+#ifdef NORTHLIGHT_WATER
+    void observeWaterPose(WaterSceneryPoseRequests& requests,INT base,UINT first,UINT vertices,UINT triangles){
+        const uint32_t tick=GetTickCount();
+        const auto end=requests.placements+requests.count;
+        auto* p=std::find_if(requests.placements,end,[&](const auto& q){
+            return q.status==WaterPosePlacement::Waiting && q.triangles==triangles && q.vertices==vertices && q.samples<4 &&
+                   (!q.samples || tick-q.observed[q.samples-1].tick>=320);
+        });
+        if(p==end || !hasContext())return;
+        IDirect3DVertexShader9* vs=nullptr;
+        if(FAILED(d->GetVertexShader(&vs)) || !vs)return;
+        float root[3];const NorthlightActorDeformation::Program* program=nullptr;
+        const bool known=drawRoot(vs,root,&program);vs->Release();
+        if(!known)return;
+        for(;p!=end;++p){
+            if(p->status!=WaterPosePlacement::Waiting || p->triangles!=triangles || p->vertices!=vertices || p->samples>=4 ||
+               (p->samples && tick-p->observed[p->samples-1].tick<320))continue;
+            float distance2=0;
+            for(unsigned a=0;a<3;++a){const float delta=root[a]-p->origin[a];distance2+=delta*delta;}
+            if(distance2>.25f || p->bones==0 || p->bones>kWaterPoseBones || program->paletteBase+3*p->bones>256)continue;
+            UINT offset=0,stride=0;IDirect3DVertexBuffer9* vb=nullptr;
+            if(FAILED(d->GetStreamSource(0,&vb,&offset,&stride)) || !vb)return;
+            const int64_t address=(int64_t(base)+first)*stride+offset;
+            D3DVERTEXBUFFER_DESC desc={};bool matches=false;
+            if(stride==sizeof(p->firstVertex) && address>=0 && SUCCEEDED(vb->GetDesc(&desc)) &&
+               uint64_t(address)+sizeof(p->firstVertex)<=desc.Size){
+                NorthlightReplayCopies::Reader<IDirect3DVertexBuffer9> reader(vb);void* bytes=nullptr;
+                if(SUCCEEDED(reader.lock(UINT(address),sizeof(p->firstVertex),&bytes))){
+                    matches=std::memcmp(bytes,p->firstVertex,sizeof(p->firstVertex))==0;
+                    reader.unlock();
+                }
+            }
+            vb->Release();
+            if(!matches)continue;
+            float rows[kWaterPoseBones][3][4];
+            if(FAILED(d->GetVertexShaderConstantF(UINT(program->paletteBase),&rows[0][0][0],p->bones*3)))return;
+            auto& sample=p->observed[p->samples];
+            for(unsigned axis=0;axis<3;++axis){
+                const auto length=[&](unsigned b){float sum=0;for(unsigned r=0;r<3;++r)sum+=rows[b][r][axis]*rows[b][r][axis];return std::sqrt(sum);};
+                const float rootLength=length(0);
+                if(!(rootLength>.00001f))return;
+                for(unsigned b=0;b<p->bones;++b){sample.scales[b][axis]=length(b)/rootLength;if(!std::isfinite(sample.scales[b][axis]))return;}
+            }
+            sample.tick=tick;++p->samples;
+            return;
+        }
+    }
+#endif
     // Palette root (bone 0 origin, world) of the draw about to be issued: paletteRows() through
     // the capture's inverse view. False: not a palette program, or the rows cannot be read.
     bool drawRoot(IDirect3DVertexShader9* shader,float* root,const NorthlightActorDeformation::Program** used=nullptr){
