@@ -58,10 +58,12 @@ public:
         m_liquid = Draw(WaterHostBeforeLiquid, resources);
         return m_liquid;
     }
-    bool AfterLiquid(const WaterHostResources& resources, bool drewWater)
+    bool AfterLiquid(const WaterHostResources& resources, bool drewWater, uint32_t stencilBit = 0)
     {
         if (!m_liquid) return false;
         m_liquid = false;
+        if(drewWater && stencilBit && Current() && m_liquidAPI && m_liquidAPI->abi>=10)
+            return m_liquidAPI->composite_masked_water(m_context,m_stamp,&resources,stencilBit);
         return Draw(WaterHostCompositeWater, resources, drewWater);
     }
     bool Environment(const WaterEnvironmentValues& values,IDirect3DTexture9* background,float viewOpticalDepth48=0,const WaterLampSamples& lamps={}){

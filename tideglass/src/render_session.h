@@ -158,7 +158,7 @@ public:
     { FrameDiagnostics::Scope profile(m_diagnostics,FrameDiagnostics::Slime);GpuScope gpu(m_externalTimer?nullptr:m_timer,GpuTimer::SlimeCapture);return t && z && Apply(d, &Renderer::CaptureAndUndoSurface, t, z, in, Effective(cfg), liquid, kind, undo, area, ramp); }
     bool CompositeWater(IDirect3DDevice9* d, IDirect3DTexture9* t, IDirect3DSurface9* z,
                         const FrameInputs& in, const Config& cfg, bool shade, IDirect3DTexture9* nativeWater = nullptr,
-                        IDirect3DTexture9* refractionScene = nullptr, IDirect3DTexture9* surfaceVisibility = nullptr)
+                        IDirect3DTexture9* refractionScene = nullptr, IDirect3DTexture9* surfaceVisibility = nullptr, uint32_t stencilBit = 0)
     {
         FrameDiagnostics::Scope profile(m_diagnostics,FrameDiagnostics::Composite);
         GpuScope gpu(m_externalTimer?nullptr:m_timer,GpuTimer::Water);
@@ -166,7 +166,7 @@ public:
         if (!Owner() || !t || !z) return false;
         m_environment.Seal();
         if (shade && m_choice == ReflectionProducer::Owned) UpdateOwnedReflection(in);
-        return Apply(d, &Renderer::CompositeWater, t, z, in, Effective(cfg), shade, nativeWater, refractionScene, surfaceVisibility);
+        return Apply(d, &Renderer::CompositeWater, t, z, in, Effective(cfg), shade, nativeWater, refractionScene, surfaceVisibility, stencilBit);
     }
     bool HasDeferredSurfaces() const { return m_effects.HasDeferredSlime() || m_effects.HasDeferredLava(); }
     bool CompositeDeferredSlime(IDirect3DDevice9* d, IDirect3DTexture9* t, IDirect3DSurface9* z,

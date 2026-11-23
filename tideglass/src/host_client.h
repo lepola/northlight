@@ -61,7 +61,13 @@ public:
         if(m_environment&&((m_environment->abi!=kWaterEnvironmentABI&&m_environment->abi!=3&&m_environment->abi!=2)||m_environment->size!=sizeof(WaterHostEnvironmentAPI)||!m_environment->set_environment||!m_environment->surface_status))m_environment=nullptr;
         auto getLiquid=reinterpret_cast<WaterHostGetLiquidAPIFn>(reinterpret_cast<void*>(GetProcAddress(module,"WaterHostGetLiquidAPI")));
         m_liquid=getLiquid?getLiquid(kWaterLiquidABI,sizeof(WaterHostLiquidAPI)):nullptr;
-        if(m_liquid&&(m_liquid->abi!=kWaterLiquidABI||m_liquid->size!=sizeof(WaterHostLiquidAPI)||
+        if(m_liquid&&(m_liquid->abi!=kWaterLiquidABI||m_liquid->size!=sizeof(WaterHostLiquidAPI)||!m_liquid->composite_masked_water))m_liquid=nullptr;
+        if(!m_liquid&&getLiquid){
+            const auto prefix=offsetof(WaterHostLiquidAPI,composite_masked_water);
+            m_liquid=getLiquid(9,prefix);
+            if(m_liquid&&(m_liquid->abi!=9||m_liquid->size!=prefix))m_liquid=nullptr;
+        }
+        if(m_liquid&&(
             !m_liquid->classify||!m_liquid->observe||!m_liquid->before_surface||!m_liquid->effects_mask||!m_liquid->after_surface||!m_liquid->composite||!m_liquid->capture_client||!m_liquid->observe_draw||!m_liquid->scene_before))m_liquid=nullptr;
         m_module = module;
         m_api = api;

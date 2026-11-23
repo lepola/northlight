@@ -4,7 +4,7 @@
 // Optional companion to render ABI 1. The host identifies a native liquid draw
 // by its geometry/shader, then asks the shared classifier about captured native
 // material metadata. Capture is game-thread only; drawing uses the owner/stamp.
-constexpr uint32_t kWaterLiquidABI = 9;
+constexpr uint32_t kWaterLiquidABI = 10;
 using WaterHostTextureMap=uintptr_t(__cdecl*)(void*,uintptr_t);
 // Fade (ABI 6): the draw lies where a slime style fades into water. The host draws it as water (its water mask) and
 // passes it to before_surface/after_surface with this kind as well, so the core lays the slime over the water by how
@@ -46,5 +46,8 @@ struct WaterHostLiquidAPI {
     // and constants are bound. Raw bounds may be world or placement-local; the
     // core proves and applies its transform. Null/unsupported keeps full coverage.
     int (__cdecl* observe_draw)(WaterHostContext*, WaterHostStamp, WaterHostLiquidKind, const float* rawBounds);
+    // ABI 10: preserve current framebuffer pixels marked by the host in boundDepth.
+    // The single stencil bit is read only on the final colour draw.
+    int (__cdecl* composite_masked_water)(WaterHostContext*, WaterHostStamp, const WaterHostResources*, uint32_t stencilBit);
 };
 using WaterHostGetLiquidAPIFn = const WaterHostLiquidAPI* (__cdecl*)(uint32_t, uint32_t);

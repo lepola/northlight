@@ -2496,7 +2496,7 @@ bool Renderer::CopySceneDepth(IDirect3DDevice9* dev, IDirect3DTexture9* depthTex
 
 bool Renderer::CompositeWater(IDirect3DDevice9* dev, IDirect3DTexture9* depthTexture, IDirect3DSurface9* boundDepth,
                               const FrameInputs& in, const Config& cfg, bool shadeSurface, IDirect3DTexture9* nativeWater,
-                              IDirect3DTexture9* refractionScene, IDirect3DTexture9* surfaceVisibility)
+                              IDirect3DTexture9* refractionScene, IDirect3DTexture9* surfaceVisibility, uint32_t stencilBit)
 {
     m_distanceAtmosphereShaded=false;
     if(m_surfaceResult==SurfaceResult::AbortFrame)return Skip("water frame already abandoned after unrecoverable failure");
@@ -2652,6 +2652,18 @@ bool Renderer::CompositeWater(IDirect3DDevice9* dev, IDirect3DTexture9* depthTex
         if(bound && m_sceneDesc.MultiSampleType!=D3DMULTISAMPLE_NONE){
             bound=screen_pass::SaveMultisampleColour(dev,saved.color[0],m_sceneDesc,m_multisampleRollback);
             rollback=m_multisampleRollback;
+        }
+        if(bound && stencilBit){
+            // The visible native letters are already in this target. Only the
+            // final water and lamp draws share the host's read-only exclusion.
+            bound=SUCCEEDED(dev->SetDepthStencilSurface(boundDepth));
+            const struct { D3DRENDERSTATETYPE state; DWORD value; } test[]={
+                {D3DRS_ZENABLE,FALSE},{D3DRS_ZWRITEENABLE,FALSE},{D3DRS_STENCILENABLE,TRUE},
+                {D3DRS_TWOSIDEDSTENCILMODE,FALSE},{D3DRS_STENCILFUNC,D3DCMP_NOTEQUAL},
+                {D3DRS_STENCILREF,stencilBit},{D3DRS_STENCILMASK,stencilBit},{D3DRS_STENCILWRITEMASK,0},
+                {D3DRS_STENCILFAIL,D3DSTENCILOP_KEEP},{D3DRS_STENCILZFAIL,D3DSTENCILOP_KEEP},
+                {D3DRS_STENCILPASS,D3DSTENCILOP_KEEP}};
+            for(const auto& s:test)bound=SUCCEEDED(dev->SetRenderState(s.state,s.value))&&bound;
         }
         if(bound){attempted=true;shaded=SUCCEEDED(DrawScreenTriangle(dev));}
         if(shaded && cfg.fineHighlights && cfg.specular>0 && in.lamps.positions[0][3]>0 &&

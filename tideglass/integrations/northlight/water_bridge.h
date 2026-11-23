@@ -111,7 +111,7 @@ public:
     }
     bool Composite(IDirect3DTexture9* opaqueDepth, IDirect3DTexture9* mask, IDirect3DSurface9* boundDepth,
                    float nearPlane, float farPlane, float minDepth, float maxDepth, bool enhancedFogReady,
-                   IDirect3DTexture9* refractionScene = nullptr, IDirect3DTexture9* surfaceVisibility = nullptr, bool spatialFog = false)
+                   IDirect3DTexture9* refractionScene = nullptr, IDirect3DTexture9* surfaceVisibility = nullptr, bool spatialFog = false, uint32_t stencilBit = 0)
     {
         if (!m_liquid) return false;
         m_liquid = false;
@@ -129,13 +129,13 @@ public:
             m_pendingComposite = true;
             return true;
         }
-        return m_passes.AfterLiquid({sizeof(WaterHostResources), m_frameDepth, boundDepth, mask, refractionScene, surfaceVisibility}, true);
+        return m_passes.AfterLiquid({sizeof(WaterHostResources), m_frameDepth, boundDepth, mask, refractionScene, surfaceVisibility}, true, stencilBit);
     }
     // scene, sceneDepth and sceneViewport: the host's finished world colour, its resolved depth and viewport, used when
     // no liquid was drawn this frame. The camera can be under a surface it cannot see (looking down from under the sea,
     // 2026-11-21), and the underwater view is drawn here, not with a surface.
     bool WorldDone(IDirect3DSurface9* boundDepth, IDirect3DSurface9* scene = nullptr,
-                   IDirect3DTexture9* sceneDepth = nullptr, const D3DVIEWPORT9* sceneViewport = nullptr)
+                   IDirect3DTexture9* sceneDepth = nullptr, const D3DVIEWPORT9* sceneViewport = nullptr, uint32_t stencilBit = 0)
     {
         // Consume the deferred pass once, even if finalisation cannot bind the
         // completed scene. End never flushes it over an incomplete world or UI.
@@ -164,7 +164,7 @@ public:
         bound = SUCCEEDED(m_device->SetDepthStencilSurface(boundDepth)) && bound;
         bound = SUCCEEDED(m_device->SetViewport(&m_frameViewport)) && bound;
         const WaterHostResources resources = {sizeof(WaterHostResources), m_frameDepth, boundDepth, m_nativeWater};
-        const bool composed = pending && bound && m_passes.AfterLiquid(resources, true);
+        const bool composed = pending && bound && m_passes.AfterLiquid(resources, true, stencilBit);
         // A memory-only WorldDone can succeed internally while reporting no
         // on-screen draw. Never use its result to skip restoration or composition.
         const bool drawn = bound && m_passes.Draw(WaterHostWorldDone, resources);

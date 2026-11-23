@@ -66,7 +66,7 @@ public:
                               bool captureScene);
     bool CompositeWater(IDirect3DDevice9* dev, IDirect3DTexture9* depthTexture, IDirect3DSurface9* boundDepth,
                         const FrameInputs& in, const Config& cfg, bool shadeSurface, IDirect3DTexture9* nativeWater = nullptr,
-                        IDirect3DTexture9* refractionScene = nullptr, IDirect3DTexture9* surfaceVisibility = nullptr);
+                        IDirect3DTexture9* refractionScene = nullptr, IDirect3DTexture9* surfaceVisibility = nullptr, uint32_t stencilBit = 0);
     // kind: the liquid drawn, slime or lava (each keeps its own surface).
     // undo: take the client's draw back out (false: standalone keeps a fade draw, its water is found by its depth).
     // area: where the draw lies on screen (LiquidScreenArea), or null for the whole viewport.
