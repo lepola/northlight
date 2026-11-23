@@ -3,7 +3,7 @@
 #include "water_environment.h"
 
 // Separately queried companion; render ABI 1 remains unchanged.
-constexpr uint32_t kWaterEnvironmentABI=3;
+constexpr uint32_t kWaterEnvironmentABI=4;
 struct WaterHostEnvironment {
     uint32_t size;
     WaterHostStamp source; // exact current session/device generation/frame
@@ -30,6 +30,10 @@ struct WaterHostFogEnvironment {
     WaterHostEnvironment base;
     float viewOpticalDepth48;
 };
+struct WaterHostLampEnvironment {
+    WaterHostFogEnvironment fog;
+    WaterLampSamples lamps;
+};
 enum WaterHostSurfaceOutcome : uint32_t {
     WaterHostSurfaceUnchanged=0,
     WaterHostSurfaceShaded,
@@ -39,6 +43,7 @@ enum WaterHostSurfaceOutcome : uint32_t {
 struct WaterHostSurfaceStatus {
     uint32_t size,outcome,distanceAtmosphereShaded,fallback;
 };
+struct WaterHostLampStatus { WaterHostSurfaceStatus base; uint32_t wantsLamps; };
 struct WaterHostEnvironmentAPI {
     uint32_t abi,size;
     // Availability clears every frame/lost/reset. Setter must precede the first

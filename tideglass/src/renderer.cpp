@@ -29,6 +29,7 @@
 #include "ps_sky_memory_extend.h"
 #include "ps_slime_capture.h"
 #include "ps_slime_deferred.h"
+#include "ps_slime_reflection_view.h"
 #include "ps_slime_deferred_fine.h"
 #include "ps_slime_undo.h"
 #include "ps_slime_lift.h"
@@ -53,6 +54,7 @@
 #include "ps_contact_spread.h"
 #include "ps_water.h"
 #include "ps_water_fine.h"
+#include "ps_water_lamps.h"
 #include "ps_water_moments.h"
 #include "ps_water_moments_fine.h"
 #include "ps_surface_detail_moments.h"
@@ -369,6 +371,7 @@ bool Renderer::EnsurePixelShader(IDirect3DDevice9* dev, IDirect3DPixelShader9*& 
         {&m_overlayPs, &p_ps_overlay},
         {&m_probePs, &p_ps_probe},
         {&m_waterPs, &p_ps_water},
+        {&m_waterLampPs, &p_ps_water_lamps},
         {&m_waterFinePs, &p_ps_water_fine},
         {&m_fxaaPs, &p_ps_fxaa},
         {&m_levelPs, &p_ps_level},
@@ -385,6 +388,7 @@ bool Renderer::EnsurePixelShader(IDirect3DDevice9* dev, IDirect3DPixelShader9*& 
         {&m_slimeUndoPs, &p_ps_slime_undo},
         {&m_slimeLiftPs, &p_ps_slime_lift},
         {&m_slimeDeferredPs, &p_ps_slime_deferred},
+        {&m_slimeReflectionViewPs, &p_ps_slime_reflection_view},
         {&m_slimeDeferredFinePs, &p_ps_slime_deferred_fine},
         {&m_lava.surfacePs, &p_ps_lava},
         {&m_lava.stirPs, &p_ps_lava_stir},
@@ -1311,7 +1315,9 @@ bool Renderer::CompositeDeferredSlime(IDirect3DDevice9* dev, IDirect3DTexture9* 
     WriteDepthAlways(dev, saved.color[0], boundDepth, in.viewport);
     dev->SetPixelShaderConstantF(0, &frame[0][0], kFrameConstants);
     dev->SetPixelShaderConstantF(kFrameConstants, &constants[0][0], kWaterConstants);
-    bool bound=controls&&SUCCEEDED(BindHighlightShader(dev,cfg,m_slimeDeferredPs,m_slimeDeferredFinePs))&&
+    const bool inspectMirror = cfg.reflectionView == 2 || cfg.reflectionView == 3;
+    bool bound=controls&&SUCCEEDED(inspectMirror ? BindPixelShader(dev,m_slimeReflectionViewPs) :
+                                   BindHighlightShader(dev,cfg,m_slimeDeferredPs,m_slimeDeferredFinePs))&&
         BindWaterTextures(dev,m_slime.depth,in,cfg,true);
     if(lifted)bound=BindPointTexture(dev,1,m_slimeGround)&&bound;
     D3DSURFACE_DESC reflectionDesc={};
@@ -2648,6 +2654,9 @@ bool Renderer::CompositeWater(IDirect3DDevice9* dev, IDirect3DTexture9* depthTex
             rollback=m_multisampleRollback;
         }
         if(bound){attempted=true;shaded=SUCCEEDED(DrawScreenTriangle(dev));}
+        if(shaded && cfg.fineHighlights && cfg.specular>0 && in.lamps.positions[0][3]>0 &&
+           !cfg.reflectionView && !cfg.refractionDebug && !cfg.seabedDebug && !cfg.reflectionDebug)
+            shaded=DrawLampGlints(dev,in);
         TimeEnd(GpuTimer::WaterComposite);
         if(captured)reflection::CapturePassOutputs(dev,capture,"output",ActiveCaptureBurst());
         ok=bound&&shaded;
@@ -2655,6 +2664,29 @@ bool Renderer::CompositeWater(IDirect3DDevice9* dev, IDirect3DTexture9* depthTex
         if(!ok)Skip(bound?"water surface draw failed":"water surface bindings failed");
     }
     return finish(ok);
+}
+
+bool Renderer::DrawLampGlints(IDirect3DDevice9* dev,const FrameInputs& in)
+{
+    RECT area={};
+    const RECT viewport={LONG(in.viewport.X),LONG(in.viewport.Y),LONG(in.viewport.X+in.viewport.Width),LONG(in.viewport.Y+in.viewport.Height)};
+    for(const auto& p:in.lamps.positions){
+        if(p[3]<=0)continue;
+        const float bounds[]={p[0]-p[3],p[1]-p[3],p[2]-p[3],p[0]+p[3],p[1]+p[3],p[2]};
+        RECT part={};
+        if(!LiquidScreenArea(in,bounds,part))part=viewport;
+        UnionRect(&area,&area,&part);
+    }
+    if(IsRectEmpty(&area) || FAILED(BindPixelShader(dev,m_waterLampPs)))return true;
+    // The main surface has already shaded. Native depth and the resolved wave normal are still bound.
+    const bool bound=SUCCEEDED(dev->SetPixelShaderConstantF(WATER_SLOT_cLampPositions,in.lamps.positions[0],4)) &&
+           SUCCEEDED(dev->SetPixelShaderConstantF(WATER_SLOT_cLampColours,in.lamps.colours[0],4)) &&
+           SUCCEEDED(dev->SetRenderState(D3DRS_ALPHABLENDENABLE,TRUE)) &&
+           SUCCEEDED(dev->SetRenderState(D3DRS_BLENDOP,D3DBLENDOP_ADD)) &&
+           SUCCEEDED(dev->SetRenderState(D3DRS_SRCBLEND,D3DBLEND_ONE)) &&
+           SUCCEEDED(dev->SetRenderState(D3DRS_DESTBLEND,D3DBLEND_ONE));
+    // A refused optional binding leaves the completed base surface intact.
+    return !bound || SUCCEEDED(DrawScreenArea(dev,&area));
 }
 
 // Water under fog, cloud or rain: less light reaches the bottom and the grey sky's reflection dominates, so the
@@ -3389,6 +3421,7 @@ void Renderer::ReleaseAll()
     SafeRelease(m_overlayPs);
     SafeRelease(m_probePs);
     SafeRelease(m_waterPs);
+    SafeRelease(m_waterLampPs);
     SafeRelease(m_waterFinePs);
     SafeRelease(m_waterMomentsPs);
     SafeRelease(m_waterMomentsFinePs);
@@ -3413,6 +3446,7 @@ void Renderer::ReleaseAll()
     SafeRelease(m_slimeLiftPs);
     SafeRelease(m_slimeUndoPs);
     SafeRelease(m_slimeDeferredPs);
+    SafeRelease(m_slimeReflectionViewPs);
     SafeRelease(m_slimeDeferredFinePs);
     m_lava.ReleaseManaged();
     SafeRelease(m_aoPs);

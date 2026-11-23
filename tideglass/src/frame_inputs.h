@@ -1,5 +1,6 @@
 #pragma once
 #include "frame_values.h"
+#include "water_environment.h"
 #include "reflection_object.h"
 #include "native_liquid.h"
 
@@ -19,6 +20,7 @@ struct FrameInputs : WaterFrameValues
 {
     NativeLiquidFrame nativeLiquids;
     float reflectedFogWeight = 0;
+    WaterLampSamples lamps{};
     // Native material lighting is distinct from the visible celestial direction.
     // Captured on the game thread; the public WaterFrameValues ABI stays unchanged.
     bool skyPaletteKnown=false;

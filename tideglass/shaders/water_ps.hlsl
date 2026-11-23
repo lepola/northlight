@@ -320,11 +320,13 @@ float3 WithStockRelief(float3 normal, float2 uv)
 #endif
 
 
+#include "crest_light.hlsli"
+
 float GgxDistribution(float facingHalf, float roughness)
 {
     float a2 = roughness * roughness * roughness * roughness;
     float d = facingHalf * facingHalf * (a2 - 1.0) + 1.0;
-    return a2 / (3.14159265 * d * d);
+    return CrestDensity(a2, d);
 }
 
 float NormalScreenVariance(float3 normal)
@@ -359,7 +361,19 @@ float SunReflectionResponse(float3 normal, float3 toCamera, float variance)
     float ball = (disc + glow * kSunGlowShare) * sunFresnel * kSunBallStrength;
     float energy = (glitter + sheen * kSheenWeight + ball) * lowSun * cToLight.w * SunVisibility() *
                    SpecularStrength();
-    return (1.0 - exp(-energy * kGlintExposure)) * kGlintCeiling;
+    float response = (1.0 - exp(-energy * kGlintExposure)) * kGlintCeiling;
+#if defined(FINE_HIGHLIGHTS) && !defined(DEFERRED_SLIME)
+    if (cSurface.y < .5)
+    {
+        // Compress the bright shoulder and return a compact tip to aligned facets.
+        // Use the existing solar direction and pixel footprint at every swell sample.
+        float excess = max(response - .40, 0.0);
+        float shoulder = min(response, .40) + excess * .48 / (.48 + excess);
+        float tip = FilteredCrestLobe(1.0 - facingHalf * facingHalf, .020, variance / 12.0);
+        response = lerp(shoulder, response, tip);
+    }
+#endif
+    return response;
 }
 
 float3 SunReflection(float3 normal, float3 toCamera, float2 world, float variance)
@@ -1153,8 +1167,16 @@ DeferredSlimeOutput main(float2 pixel : VPOS)
     DeferredSlimeOutput output;
     // Over water where the slime style fades: the composited water shows through by the share.
     float share = SlimeFadeShare(pixel, surfaceDepth);
+#ifdef SLIME_REFLECTION_VIEW
+    // Inspect the same resolved texel as the slime composite, before pigment and Fresnel.
+    float4 mirrored = 0;
+    [branch] if (ReflectionsDrawn()) mirrored = SceneReflection(pixel);
+    output.color = lerp(tex2Dlod(sSceneBefore, float4((pixel + 0.5) * cTexelGrid.xy, 0, 0)),
+                        float4(ReflectionView() > 2.5 ? mirrored.aaa : mirrored.rgb, 1), share);
+#else
     output.color = lerp(tex2Dlod(sSceneBefore, float4((pixel + 0.5) * cTexelGrid.xy, 0, 0)),
                         ShadeLiquid(pixel, surfaceDepth, thickness), share);
+#endif
     output.depth = surfaceDepth;
     return output;
 }

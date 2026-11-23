@@ -614,6 +614,10 @@ private:
     bool waterDistanceOwned=false,waterSurfaceShaded=false;
     HorizonPreparation waterHorizon;
     bool waterHorizonPending=false;
+    std::weak_ptr<const Snapshot> waterLampScene;
+    WaterLampSamples waterLampSamples{};
+    V waterLampCamera{};
+    unsigned waterLampLimit=0;
 public:
     void WaterDistanceOwned(bool owned){waterDistanceOwned=owned&&waterOwnedPS;}
     void WaterSurfaceShaded(bool shaded){
@@ -622,6 +626,22 @@ public:
         waterSurfaceShaded=shaded;
     }
     bool WaterSpatialFogActive()const{return effects.fog;}
+    const WaterLampSamples& WaterLamps(){
+        // Early water can precede the host lighting pass. Authored fixtures are stable
+        // across frames in a snapshot, even when a moving actor leaves the main view.
+        if(!active || !quality.localLightLimit){waterLampScene.reset();waterLampSamples={};return waterLampSamples;}
+        const auto camera=vec(context.camera);
+        if(waterLampScene.lock()!=active || different(camera,waterLampCamera,2) || waterLampLimit!=quality.localLightLimit){
+            waterLampScene=active;waterLampCamera=camera;waterLampLimit=quality.localLightLimit;
+            waterLampSamples={};
+            const auto selected=NorthlightLocalLightSelection::select(active->localLights,context.camera,std::min(4u,unsigned(quality.localLightLimit)));
+            for(unsigned i=0;i<selected.count;++i){
+                std::copy_n(selected.position[i].data(),4,waterLampSamples.positions[i]);
+                std::copy_n(selected.color[i].data(),4,waterLampSamples.colours[i]);
+            }
+        }
+        return waterLampSamples;
+    }
     float WaterViewFogDepth48()const{return effects.fog ? waterViewFogDepth48 : 0.f;}
     bool WaterGradient(float farZ,UINT w,UINT h,const float (&glare)[13][4],IDirect3DTexture9* moonBody,unsigned glareMask,WaterEnvironmentValues& values,IDirect3DTexture9*& field,bool& restoreFailed){
         restoreFailed=false;field=nullptr;waterDistanceOwned=false;

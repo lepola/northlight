@@ -56,6 +56,7 @@ struct WaterHostContext
     WaterHostFrame* frame = nullptr;
     WaterHostFog fog = WaterHostNativeFog;
     float reflectedFogWeight = 0;
+    WaterLampSamples lamps{};
     LiquidClassifier liquids;
     bool slimePending = false, slimeOutdoors = false, outdoorSlimeSeen = false, waterSeen = false;
     LiquidKind surfaceKind = LiquidKind::Slime;
@@ -116,6 +117,7 @@ int __cdecl End(WaterHostContext* context)
         context->frame = nullptr;
         context->fog = WaterHostNativeFog;
         context->reflectedFogWeight = 0;
+        context->lamps={};
         context->slimePending = context->slimeOutdoors = context->outdoorSlimeSeen = context->waterSeen = false;
         return 1;
     });
@@ -226,6 +228,7 @@ bool Current(WaterHostContext* context, WaterHostStamp stamp)
 FrameInputs LiquidInputs(WaterHostContext* context)
 {
     auto input = context->frame->snapshot->Inputs();
+    input.lamps=context->lamps;
     input.reflectedFogWeight = context->fog == WaterHostSpatialFog ? context->reflectedFogWeight : 0;
     input.stockFogPushed = input.stockFogPushed || context->fog == WaterHostFogCoversWater;
     // Some outdoor slime uses a native water type. Keep the immutable captured
@@ -391,11 +394,13 @@ int EnvironmentVersion(WaterHostContext* context,WaterHostStamp stamp,const Wate
     return Boundary([&]{
         if(!Current(context,stamp))return 0;
         // A late/stale producer cannot revoke a newer record on this context.
-        const bool measured=input&&version>=3&&input->size==sizeof(WaterHostFogEnvironment);
+        const bool lamps=input&&version>=4&&input->size==sizeof(WaterHostLampEnvironment);
+        const bool measured=lamps||(input&&version>=3&&input->size==sizeof(WaterHostFogEnvironment));
         if(input&&((!measured&&input->size!=sizeof(*input))||input->source.session!=stamp.session||input->source.generation!=stamp.generation||
            input->source.frame!=stamp.frame))return 0;
         if(!context->session.ClearEnvironment(Stamp(stamp)))return 0;
         context->reflectedFogWeight=0;
+        context->lamps={};
         if(!input)return 1;
         if(version==1&&(input->values.backgroundContent&~15u)){
             context->session.SetEnvironment(Stamp(stamp),{},nullptr);return 0;
@@ -404,6 +409,20 @@ int EnvironmentVersion(WaterHostContext* context,WaterHostStamp stamp,const Wate
             context->session.SetEnvironment(Stamp(stamp),{},nullptr);return 0;
         }
         if(!context->session.SetEnvironment(Stamp(stamp),input->values,input->background))return 0;
+        if(lamps){
+            const auto& samples=reinterpret_cast<const WaterHostLampEnvironment*>(input)->lamps;
+            unsigned count=0;
+            for(unsigned i=0;i<4;++i){
+                const auto& p=samples.positions[i];const auto& c=samples.colours[i];
+                bool valid=p[3]>0 && p[3]<=2000 && c[3]>0;
+                for(unsigned j=0;j<4;++j)valid=valid&&std::isfinite(p[j])&&std::isfinite(c[j])&&c[j]>=0&&c[j]<=10000;
+                if(valid){
+                    std::copy(p,p+4,context->lamps.positions[count]);
+                    std::copy(c,c+4,context->lamps.colours[count]);
+                    ++count;
+                }
+            }
+        }
         if(measured){
             const float tau=reinterpret_cast<const WaterHostFogEnvironment*>(input)->viewOpticalDepth48;
             // An optical depth of 0.16 extinguishes about 15 percent of the light.
@@ -414,16 +433,24 @@ int EnvironmentVersion(WaterHostContext* context,WaterHostStamp stamp,const Wate
 }
 int __cdecl Environment(WaterHostContext* context,WaterHostStamp stamp,const WaterHostEnvironment* input)
 {return EnvironmentVersion(context,stamp,input,kWaterEnvironmentABI);}
+int __cdecl EnvironmentV3(WaterHostContext* context,WaterHostStamp stamp,const WaterHostEnvironment* input)
+{return EnvironmentVersion(context,stamp,input,3);}
 int __cdecl EnvironmentV2(WaterHostContext* context,WaterHostStamp stamp,const WaterHostEnvironment* input)
 {return EnvironmentVersion(context,stamp,input,2);}
 int __cdecl EnvironmentLegacy(WaterHostContext* context,WaterHostStamp stamp,const WaterHostEnvironment* input)
 {return EnvironmentVersion(context,stamp,input,1);}
-int __cdecl SurfaceStatus(WaterHostContext* context,WaterHostStamp stamp,WaterHostSurfaceStatus* output)
+static int SurfaceStatusVersion(WaterHostContext* context,WaterHostStamp stamp,WaterHostSurfaceStatus* output,bool allowLamps)
 {
     return Boundary([&]{
-        if(!output||output->size!=sizeof(*output))return 0;
-        *output={sizeof(*output),WaterHostSurfaceUnchanged,0,WaterEnvironmentNotProvided};
+        const bool lamps=allowLamps&&output&&output->size==sizeof(WaterHostLampStatus);
+        if(!output||(!lamps&&output->size!=sizeof(*output)))return 0;
+        *output={output->size,WaterHostSurfaceUnchanged,0,WaterEnvironmentNotProvided};
+        if(lamps)reinterpret_cast<WaterHostLampStatus*>(output)->wantsLamps=0;
         if(!Current(context,stamp))return 0;
+        if(lamps){
+            const auto& cfg=context->config.Get();
+            reinterpret_cast<WaterHostLampStatus*>(output)->wantsLamps=cfg.enable&&cfg.fineHighlights&&cfg.specular>0;
+        }
         const auto result=context->session.LastSurfaceResult();
         switch(result){
         case Renderer::SurfaceResult::Unchanged:output->outcome=WaterHostSurfaceUnchanged;break;
@@ -436,6 +463,10 @@ int __cdecl SurfaceStatus(WaterHostContext* context,WaterHostStamp stamp,WaterHo
         return 1;
     });
 }
+int __cdecl SurfaceStatus(WaterHostContext* context,WaterHostStamp stamp,WaterHostSurfaceStatus* output)
+{return SurfaceStatusVersion(context,stamp,output,false);}
+int __cdecl LampStatus(WaterHostContext* context,WaterHostStamp stamp,WaterHostSurfaceStatus* output)
+{return SurfaceStatusVersion(context,stamp,output,true);}
 int __cdecl Draw(WaterHostContext* context, WaterHostStamp stamp, WaterHostPass pass,
                  const WaterHostResources* resources, int shade)
 {
@@ -504,7 +535,8 @@ int __cdecl ProfilePresentEnd(WaterHostContext* context,int32_t result)
 }
 uint64_t __cdecl TraceBegin(WaterHostContext* context){return context&&context->Owner()?context->session.Diagnostics().BeginCall():0;}
 int __cdecl TraceEnd(WaterHostContext* context,uint64_t token,const char* name){return Boundary([&]{if(!context||!context->Owner())return 0;context->session.Diagnostics().EndCall(token,name);return 1;});}
-const WaterHostEnvironmentAPI environment={kWaterEnvironmentABI,sizeof(WaterHostEnvironmentAPI),Environment,SurfaceStatus};
+const WaterHostEnvironmentAPI environment={kWaterEnvironmentABI,sizeof(WaterHostEnvironmentAPI),Environment,LampStatus};
+const WaterHostEnvironmentAPI environmentV3={3,sizeof(WaterHostEnvironmentAPI),EnvironmentV3,SurfaceStatus};
 const WaterHostEnvironmentAPI environmentV2={2,sizeof(WaterHostEnvironmentAPI),EnvironmentV2,SurfaceStatus};
 const WaterHostEnvironmentAPI environmentLegacy={1,sizeof(WaterHostEnvironmentAPI),EnvironmentLegacy,SurfaceStatus};
 const WaterHostTraceAPI trace={kWaterTraceABI,sizeof(WaterHostTraceAPI),TraceBegin,TraceEnd};
@@ -553,6 +585,6 @@ extern "C" __declspec(dllexport) const WaterHostTraceAPI* __cdecl WaterHostGetTr
 extern "C" __declspec(dllexport) const WaterHostEnvironmentAPI* __cdecl WaterHostGetEnvironmentAPI(uint32_t abi,uint32_t size)
 {
     if(size!=sizeof(WaterHostEnvironmentAPI))return nullptr;
-    return abi==kWaterEnvironmentABI?&environment:abi==2?&environmentV2:abi==1?&environmentLegacy:nullptr;
+    return abi==kWaterEnvironmentABI?&environment:abi==3?&environmentV3:abi==2?&environmentV2:abi==1?&environmentLegacy:nullptr;
 }
 #endif

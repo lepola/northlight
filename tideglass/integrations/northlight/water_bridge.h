@@ -163,8 +163,8 @@ public:
     }
     bool CapturePass(const char* name,bool after){return m_passes.CapturePass(name,after);}
     bool Current() const { return m_passes.Current(); }
-    bool Environment(const WaterEnvironmentValues& values,IDirect3DTexture9* background,float viewOpticalDepth48=0){return m_passes.Environment(values,background,viewOpticalDepth48);}
-    bool WantsEnvironment(){WaterHostSurfaceStatus status={};return m_passes.SurfaceStatus(status)&&status.fallback!=WaterEnvironmentDisabled;}
+    bool Environment(const WaterEnvironmentValues& values,IDirect3DTexture9* background,float viewOpticalDepth48=0,const WaterLampSamples& lamps={}){return m_passes.Environment(values,background,viewOpticalDepth48,lamps);}
+    bool WantsEnvironment(bool& lamps){return m_passes.WantsEnvironment(lamps);}
     bool OwnsDistance(){WaterHostSurfaceStatus status={};return m_passes.SurfaceStatus(status)&&status.outcome==WaterHostSurfaceShaded&&status.distanceAtmosphereShaded!=0;}
     bool SurfaceStatus(WaterHostSurfaceStatus& status){return m_passes.SurfaceStatus(status);}
     IDirect3DTexture9* SurfaceDepth()const{return m_frameDepth;} // borrowed until End/Lost/Shutdown

@@ -301,6 +301,8 @@ private:
     IDirect3DPixelShader9* m_overlayPs = nullptr;
     IDirect3DPixelShader9* m_probePs = nullptr;
     IDirect3DPixelShader9* m_waterPs = nullptr;
+    bool DrawLampGlints(IDirect3DDevice9*,const FrameInputs&);
+    IDirect3DPixelShader9* m_waterLampPs=nullptr;
     IDirect3DPixelShader9* m_waterFinePs = nullptr;
     IDirect3DPixelShader9* m_waterMomentsPs = nullptr;
     IDirect3DPixelShader9* m_waterMomentsFinePs = nullptr;
@@ -325,6 +327,7 @@ private:
     IDirect3DTexture9* m_slimeGround = nullptr; // the ground under kept fade draws (LiftFadeSurfaces)
     IDirect3DPixelShader9* m_slimeUndoPs = nullptr;
     IDirect3DPixelShader9* m_slimeDeferredPs = nullptr;
+    IDirect3DPixelShader9* m_slimeReflectionViewPs = nullptr;
     IDirect3DPixelShader9* m_slimeDeferredFinePs = nullptr;
     DeferredSurface m_slime;
     bool m_buildingSlime = false;

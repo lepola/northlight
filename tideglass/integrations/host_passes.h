@@ -63,14 +63,30 @@ public:
         m_liquid = false;
         return Draw(WaterHostCompositeWater, resources, drewWater);
     }
-    bool Environment(const WaterEnvironmentValues& values,IDirect3DTexture9* background,float viewOpticalDepth48=0){
+    bool Environment(const WaterEnvironmentValues& values,IDirect3DTexture9* background,float viewOpticalDepth48=0,const WaterLampSamples& lamps={}){
         if(!Current()||!m_environment)return false;
+        if(m_environment->abi>=4){
+            const WaterHostLampEnvironment input={{{sizeof(WaterHostLampEnvironment),m_stamp,values,background},viewOpticalDepth48},lamps};
+            return m_environment->set_environment(m_context,m_stamp,&input.fog.base)!=0;
+        }
         if(m_environment->abi>=3){
             const WaterHostFogEnvironment input={{sizeof(WaterHostFogEnvironment),m_stamp,values,background},viewOpticalDepth48};
             return m_environment->set_environment(m_context,m_stamp,&input.base)!=0;
         }
         const WaterHostEnvironment input={sizeof(WaterHostEnvironment),m_stamp,values,background};
         return m_environment->set_environment(m_context,m_stamp,&input)!=0;
+    }
+    bool WantsEnvironment(bool& lamps){
+        lamps=false;
+        if(!Current()||!m_environment)return false;
+        if(m_environment->abi>=4){
+            WaterHostLampStatus status={{sizeof(WaterHostLampStatus),0,0,0},0};
+            if(!m_environment->surface_status(m_context,m_stamp,&status.base))return false;
+            lamps=status.wantsLamps!=0;
+            return status.base.fallback!=WaterEnvironmentDisabled;
+        }
+        WaterHostSurfaceStatus status={};
+        return SurfaceStatus(status)&&status.fallback!=WaterEnvironmentDisabled;
     }
     bool SurfaceStatus(WaterHostSurfaceStatus& status){
         status={sizeof(WaterHostSurfaceStatus),WaterHostSurfaceUnchanged,0,WaterEnvironmentNotProvided};

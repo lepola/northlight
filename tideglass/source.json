@@ -39,6 +39,7 @@
     "generated/ps_slime_deferred_fine.h": "13b4bd5aaf3e1eff9686d2e20c5a5ae5941ea6974a234f5886d183d99b2e5b83",
     "generated/ps_slime_lift.h": "4c7d51534b4890fa79f898144ed78493f34697ea7a7b153c0616ebb6c884cf80",
     "generated/ps_slime_reflection.h": "954506b0fda88f0278ea24c2fda59caa778a122e10c487b12697552d8e048725",
+    "generated/ps_slime_reflection_view.h": "0c1a3d4580b17c7dc66d7f352fc800f694137b6c918bf1e97ee279a1f9c12b5b",
     "generated/ps_slime_underwater_scenery.h": "f2bbf72862eabbbbb259f99dd4f38c02bb4bad6861a28a4298d2d99a876a9510",
     "generated/ps_slime_undo.h": "ad4612c39a95368a23fa08dcb83c9b35f918ee86c34f3058736b4a9da30b1479",
     "generated/ps_snapshot.h": "5c0761345582385d01f8bf61ceabdda3e61423ab7144176e7d745f06db94635e",
@@ -52,9 +53,10 @@
     "generated/ps_underwater_shared.h": "7a7fe953a91a576f48fc86fc63a325db0eb75cffbf184b5c41b5e19962a55a8a",
     "generated/ps_wake_map.h": "d4694833518ef55e355b0e7d0d73f690da005cfaaf3351ad03d9b0e95c987328",
     "generated/ps_water.h": "2660afa443c3bf8b5ab3ac6d20e09ff2a14cc81a5ed637384d427b873e8b99bc",
-    "generated/ps_water_fine.h": "f757f10036949ce851154bb5eb812f89c84960be7107a6a5576e66c5ee9cc72f",
+    "generated/ps_water_fine.h": "ab655fcacf7752d68b6dc73b6d7d4ba1ccbaafc7d71e627aeff40050a41a0132",
+    "generated/ps_water_lamps.h": "909629a40dea3cd097ebc674a7f5949b7de4a36bfadd48b53cf5f03bc49d77cd",
     "generated/ps_water_moments.h": "7e506bbc4a54d3aa4e6bd3b26368e77e64feab9cc8cc29db32d7062087b2aec4",
-    "generated/ps_water_moments_fine.h": "b353a9fefa69b107bbb52509429f70964fcb9ffac1db1e60f57be84c435376b0",
+    "generated/ps_water_moments_fine.h": "8ae067fee3564f956075017d433eafad13d3f710bb9e483b5cc10bb9a2e4edec",
     "generated/vs_fullscreen.h": "854ba59485372c262ca0090a7818c49774fe4834b912c20db726e5e1b7e2df88",
     "generated/vs_owned_receiver.h": "cc57d3c5e77e7c02a4ed2918fbc4b616dddb371a89f8e9fc4532bdda5e91b682",
     "generated/vs_owned_scene.h": "4d5da2f939cb78789b18c36d72c586469cd9f162865051ef5d346af33ea6721b",
@@ -62,14 +64,15 @@
     "generated/vs_owned_world_instanced.h": "0cd0f65a8cbf343e0a17a57ef812387f7a70def0f10d62c20f215a351f15ee5f",
     "generated/vs_owned_world_terrain.h": "e2c78e1b43ed356126b413868ff1560bbab59e6d52dafd642b5419fb3d926f47",
     "generated/vs_ring.h": "09df7272cccf050c35168f7e2d7fa69760f3fd6c0956d5704291007f0d0af454",
-    "integrations/host_passes.h": "7b6b8ce60a0568fa564100c78245134dee81f252f66c3239fe9b425a4c3ccb41",
+    "integrations/host_passes.h": "b2355e5ed8e3b72184997c4257f764cb5047679595dad0c1fc88ea2430b4dac1",
     "integrations/host_settings.h": "013448d851182a0585fb11e5061293611af8d513afb584c29b636a032bf1e571",
-    "integrations/northlight/water_bridge.h": "84e370bc67ea18fe4ad27748287a2d4978ec47672198af2efa0e0e91733e414a",
+    "integrations/northlight/water_bridge.h": "702a214202db956e0904735cf9e8cccb2bc427614826334adc6d127c43acab7c",
     "shaders/ao_blur_ps.hlsl": "bcfd6a4dd395095f934994219fdca95948f85b259716fe7682f2183e6c44eada",
     "shaders/ao_ps.hlsl": "3b307a2da0f218886acf7973a90702ba728859f896f06c0e4fb100dc7691ef21",
     "shaders/common.hlsli": "4d00796044a00963c0920089bda7f0abe911f48f4ca8128455d15b0898faf82d",
     "shaders/contact_ps.hlsl": "25812d3732d1a34ea324329244a06a23b415fdeec7ea3ea2abbb0da0a406a770",
     "shaders/contact_spread_ps.hlsl": "a3db37c8f78bc560165d3bce26e0bb69cac65a86ab20747b818fcdf74986b9f4",
+    "shaders/crest_light.hlsli": "34473d782f0a31eee33591c203ea8f6c91c9e74132a76a81a1ed8c95c246893f",
     "shaders/fill_pull_ps.hlsl": "c488675be074a387f07bebcaedb15c43872159f8666c9d7de06bbe7efcdcb841",
     "shaders/fill_push_ps.hlsl": "3fc9fe9cf344073892841caba02b4818e766c0d3f86b0707ecb1a221e0a8c5cd",
     "shaders/fullscreen_vs.hlsl": "e037ab46f46ec4dbeab11e361adba13bcb83eecc617b03ad36b06b26a909bb6b",
@@ -120,6 +123,7 @@
     "shaders/slime_fade.hlsli": "aed705ad18eddc7478d373e429a986dfa19d242bc2b11628b153da1390a91a69",
     "shaders/slime_lift_ps.hlsl": "75bfb6b5df42bb05cfa5086ee748e2b3a4a2e364062b3f3b0f4b76d3cf0f9bae",
     "shaders/slime_reflection_ps.hlsl": "c9d021f8213acf5ac5145075978099bbf76344255fe3e2e13500eeeabced0538",
+    "shaders/slime_reflection_view_ps.hlsl": "840c94d00f2c3714fc2196f6d756f3cc4344e06ade620315a354360b2b8dd1b5",
     "shaders/slime_underwater_scenery_ps.hlsl": "887af3b0259a1f3f69a6099d7925cb546d17c9c97b45fd7876abd91e728c246f",
     "shaders/slime_undo_ps.hlsl": "7419ac970c763aa0c254f12da51073a280d7b227645ddf367abfd5dc288d6a9f",
     "shaders/snapshot_ps.hlsl": "7775aad53ee7bb7e57b6a3c86754c06a6409bfd279bc3a8deebec300842264ba",
@@ -136,11 +140,12 @@
     "shaders/water_common.hlsli": "7920cacb5f269bd151721229e6fa3d51eabfce7cc7f7ef4be6d97b21434cef11",
     "shaders/water_fine_ps.hlsl": "2ba6cef9838faa6be69be735a8434233d0aa1079a078b89ff372b9af1ac4c86d",
     "shaders/water_foam.hlsli": "b37d0a7ece40ee0787a34b8ed2c830ac961ac6c795435022ab5c866d1a0b336c",
+    "shaders/water_lamps_ps.hlsl": "5cba1075e242072d9c8f4ef88331bf0f73ad91dba404c6160eaf314a0e83e921",
     "shaders/water_moments_fine_ps.hlsl": "71528b3a600048a840a4c0e93bc8015a64386a36dcaaa3d3202e5cc698e7bdd9",
     "shaders/water_moments_ps.hlsl": "ac4bb0feccc2342c90cc30bdccb3edb564247c796769171b8d422a7dcb5b3781",
     "shaders/water_palette.hlsli": "ba52cc98a36a304a7604cd891deb933a2cca8f313a20c36fe82460a8cac1122d",
-    "shaders/water_ps.hlsl": "885a0f760688777547ed7e6006e6f23bf58aa748c4af7d14aec98fc1e10ab734",
-    "shaders/water_registers.hlsli": "e38856bb25c9345be0a953763d2b3ba7a18a021bb90f7c403296cce1f2164e29",
+    "shaders/water_ps.hlsl": "bfc2b9f3ee821682e075d63b34b12fdb21056719059f74c9fae39d50097072ce",
+    "shaders/water_registers.hlsli": "a2d788807eb0050fc62a3f9c3d42f63670e1dfc0c4c39d0137c3fc6e359379f1",
     "src/client_call_patch.h": "db32419a8de84e75056a34b0d04bd2f945aca3f497c559afcdf98ab6f1cadb14",
     "src/client_camera.h": "f0dd2d050da71002d77920d8f722e811c0fc3460c57cc406732bd50202478418",
     "src/client_image.h": "5439c27c04aff7f2a59ae88a865931110b90d1b536bd86315252a0b67fc09396",
@@ -154,7 +159,7 @@
     "src/file_reference.h": "0a1aa45e96175c8821c6d4d0f8485e7ab491a7537a7ed89753d31b6ae9c4eb61",
     "src/frame_diagnostics.cpp": "e7a2e9e6ebdcc11ebd058d3f63c44d412dcd4c9f9d0613220289e7e00bf2e88e",
     "src/frame_diagnostics.h": "34bd43a14399804f452bb68402401ff4c28a49c57cd116913eb0bf9cf7277e36",
-    "src/frame_inputs.h": "dfdafa62c3a3bba18075afa1268c882a00b6d6d52b15aec26c58158562380d55",
+    "src/frame_inputs.h": "b46df72d988010a7746aec5c04b3c672fc44e6c17866d2c432241bff20ff1004",
     "src/frame_lifetime.h": "73ee446f1fbf78e4487d48c08b8e65284b53a71c492cf36168bf7b06f68b8aa2",
     "src/frame_snapshot.h": "bffda93acf822d3cac41cab44e03f5c4be7cb0804b6e6a73ecfefddd5e88675e",
     "src/frame_values.h": "6778eddd230d8a562ae8afa36e2764a5e7b90cd2af65f91fdcdf1c15b78c997e",
@@ -163,12 +168,12 @@
     "src/ground.cpp": "c1f5413297a34eb089b6cdd090c8ff0963674b4afed0300916561816b4a590aa",
     "src/ground.h": "fd28a655a76c725d87f752682be530ff3cae2ef7c61e948768bb0892b3507ff0",
     "src/ground_shift.h": "2c598520cbcf6db6a1580598bda0394fdcb43083f7aeade730b1315bb563f6bb",
-    "src/host_api.cpp": "f4b1d3409f9fb71c2f9f5547d9a48d6d43a8efb8886b736e5da5e32b2063f2a2",
+    "src/host_api.cpp": "543f4345e7f5b463e143c0075fb71e02b42a86df05d9ef33146633e3f7de8c42",
     "src/host_api.h": "5a215cf9f59deb2f3b68dd9ebd5be6cf5a6b26f757c196a2324ae63c0e78fd88",
     "src/host_capture.h": "71a236c0d1122fcb574ca4e8ca0b9e5c665499f650a0340f346f6a94ef6a7948",
-    "src/host_client.h": "208054703c49ece7cbf76b169a5e1cb36f91f1af09e3378423b2867806774d4b",
+    "src/host_client.h": "6cab1c5edba67e97efe6afa1d8390dcef71691c8744f478e4f20501f612775e3",
     "src/host_diagnostics.h": "7886133942f9b9506614a5d2e5ffccc6d45468cee802948c637c50110e6282ef",
-    "src/host_environment.h": "3e06c33c683382b963a8a29f4ac7752d8acc598956c23fedb2142ccb10ad76e4",
+    "src/host_environment.h": "7db95c45f58fac64faf848c6c912874e73086eb7ec9cdb0a20abd6b5c7cff365",
     "src/host_liquid.h": "f5228fc49ca17ab3b74cffbb492524927416dde484dc14fd6920e050365ba699",
     "src/lava_resources.cpp": "0e820797794da2add0a5a6e11b1a8c2823c74b294d9ff8611908f2df757ccdb2",
     "src/liquid.cpp": "fa8f3d68f87304c701194c613f3cf4b5d0e8f693cc6d5f43307e3f200e9b75a1",
@@ -209,8 +214,8 @@
     "src/reflection_object.h": "b964160a2bd33622cfd25d82e9fa36309a97e62806d2c16adf869dcefaf5c239",
     "src/render_session.cpp": "5ac3e6952aebaab68b17fc28dd3fe0239bf0c59be9fa1606a25da2745e09861c",
     "src/render_session.h": "52e869fecb0b13976581f4af3b82c0341c0b553d940910c99f1bbd52f8930ec7",
-    "src/renderer.cpp": "2d16cf2fb653f58b1503c4e4cb4fca7ce32a3598541d5692ba420b0a2e6f3f6f",
-    "src/renderer.h": "fe222630c4b93dffafbc333339d4ebd61e2db94aabc26e7dbaac3e3ddc38e73f",
+    "src/renderer.cpp": "38209a4b090d3448b59ec4e37c455dafbc3ca534485491815a90435a3cb09449",
+    "src/renderer.h": "df698d6c92443af0a26702d8fb7574eac7c81b8332ed4e3d7ddc8e24e0fae38c",
     "src/scenery_float_environment.h": "e08ffcfb4399f51a34e3bc87180662006831bec2b7cddcb925d315e30be81c8a",
     "src/scenery_plane_transform.h": "d331486c0cf2b5280991db05d00a8f30b49517ad3dd0f53c69f0469f3c4b6256",
     "src/scenery_receiver.h": "95255617519865dfacfe597e0a8d48709d2e787e1a12d87db464a4857915524e",
@@ -226,7 +231,7 @@
     "src/surface_environment.h": "5447085946ce6ae5248d5db960b6bff80602d0565661e1ea25c93f3844442a61",
     "src/version.h": "bb24fc1a5a5165028a84e455d58c62a12c982e66a4bf03c35305cfa6c5b30be4",
     "src/visual_time.h": "5691af27905094fd71e7db4fd608eddc7df31b7969dad4539aaf84a80792167d",
-    "src/water_environment.h": "5250a3b35c6568c7c8bb814227236a85299be93a117f21faefa89ad5f9c5266d",
+    "src/water_environment.h": "d2f1eb1fbda0e49958d48126137007460ba50e40e1631fdca5d1b4d2be12e994",
     "src/world_adt.cpp": "511fdb3a88a45d6c55da3d19c6623ce176ff3f45a671d5d65ff4aba9ddb9c0e4",
     "src/world_adt.h": "011d9f60020fb465f5892777f5e7128692559a1c27c48c872a1977256ca63761",
     "src/world_archive.cpp": "11e709c4c299a8447c64eb37469807d859920856f548e026482c485e91c70d1d",
@@ -259,13 +264,13 @@
     "tools/shader_build.py": "96ed53e738f21dcd0c0f86536c88e1e16901d58934d6dcd5cbf1e43ce9a5deb5",
     "tools/shader_header.py": "0154d161dd86a4e8c320c23081a87d5123f410c9211dea016664d9bea311e189"
   },
-  "revision": "3602e2ab561bb149b7fef1ad016956ff9bc3b933",
+  "revision": "a8613a1ef36c5753ad67ad4fb7527078a3379a46",
   "shaders": {
     "ps_ao": {
       "dependencies": {
         "shaders/ao_ps.hlsl": "3b307a2da0f218886acf7973a90702ba728859f896f06c0e4fb100dc7691ef21",
         "shaders/common.hlsli": "4d00796044a00963c0920089bda7f0abe911f48f4ca8128455d15b0898faf82d",
-        "shaders/water_registers.hlsli": "e38856bb25c9345be0a953763d2b3ba7a18a021bb90f7c403296cce1f2164e29"
+        "shaders/water_registers.hlsli": "a2d788807eb0050fc62a3f9c3d42f63670e1dfc0c4c39d0137c3fc6e359379f1"
       },
       "sha256": "55208a318f85002712e11683186b0c4899337a459f7dd97f10092234d360ccab",
       "source": "shaders/ao_ps.hlsl",
@@ -275,7 +280,7 @@
       "dependencies": {
         "shaders/ao_blur_ps.hlsl": "bcfd6a4dd395095f934994219fdca95948f85b259716fe7682f2183e6c44eada",
         "shaders/common.hlsli": "4d00796044a00963c0920089bda7f0abe911f48f4ca8128455d15b0898faf82d",
-        "shaders/water_registers.hlsli": "e38856bb25c9345be0a953763d2b3ba7a18a021bb90f7c403296cce1f2164e29"
+        "shaders/water_registers.hlsli": "a2d788807eb0050fc62a3f9c3d42f63670e1dfc0c4c39d0137c3fc6e359379f1"
       },
       "sha256": "fba73bfba0e26f04fd503a662b6133306212d5fe646a758a7cdecce8cf612bad",
       "source": "shaders/ao_blur_ps.hlsl",
@@ -289,7 +294,7 @@
         "shaders/reflection_common.hlsli": "53175cd52cc94dffe2d6c696eb67823a39d2d9288599c6dfd79d6f62856fc623",
         "shaders/water_common.hlsli": "7920cacb5f269bd151721229e6fa3d51eabfce7cc7f7ef4be6d97b21434cef11",
         "shaders/water_palette.hlsli": "ba52cc98a36a304a7604cd891deb933a2cca8f313a20c36fe82460a8cac1122d",
-        "shaders/water_registers.hlsli": "e38856bb25c9345be0a953763d2b3ba7a18a021bb90f7c403296cce1f2164e29"
+        "shaders/water_registers.hlsli": "a2d788807eb0050fc62a3f9c3d42f63670e1dfc0c4c39d0137c3fc6e359379f1"
       },
       "sha256": "00f3e29d6a55f3bed63c836cdc287917b2cd1c9f541dbade919ebfd214f5dde5",
       "source": "shaders/contact_ps.hlsl",
@@ -323,7 +328,7 @@
       "dependencies": {
         "shaders/common.hlsli": "4d00796044a00963c0920089bda7f0abe911f48f4ca8128455d15b0898faf82d",
         "shaders/fxaa_ps.hlsl": "10d0ab54321acde10b85434cdbb1ce1f7d49febb94fedabaef7439993fcb9147",
-        "shaders/water_registers.hlsli": "e38856bb25c9345be0a953763d2b3ba7a18a021bb90f7c403296cce1f2164e29"
+        "shaders/water_registers.hlsli": "a2d788807eb0050fc62a3f9c3d42f63670e1dfc0c4c39d0137c3fc6e359379f1"
       },
       "sha256": "f51621e1921615ea2f4e8c2ee4f24b40e9bfa94beb1b58a1bd48e0d18ae6aa5d",
       "source": "shaders/fxaa_ps.hlsl",
@@ -338,7 +343,7 @@
         "shaders/reflection_common.hlsli": "53175cd52cc94dffe2d6c696eb67823a39d2d9288599c6dfd79d6f62856fc623",
         "shaders/water_common.hlsli": "7920cacb5f269bd151721229e6fa3d51eabfce7cc7f7ef4be6d97b21434cef11",
         "shaders/water_palette.hlsli": "ba52cc98a36a304a7604cd891deb933a2cca8f313a20c36fe82460a8cac1122d",
-        "shaders/water_registers.hlsli": "e38856bb25c9345be0a953763d2b3ba7a18a021bb90f7c403296cce1f2164e29"
+        "shaders/water_registers.hlsli": "a2d788807eb0050fc62a3f9c3d42f63670e1dfc0c4c39d0137c3fc6e359379f1"
       },
       "sha256": "c2f0d2152ecf0c5e97e8210193e0d45eebdb42f47b912ab067a8f1c6c99fa4c7",
       "source": "shaders/lava_ps.hlsl",
@@ -394,7 +399,7 @@
         "shaders/common.hlsli": "4d00796044a00963c0920089bda7f0abe911f48f4ca8128455d15b0898faf82d",
         "shaders/lava.hlsli": "0cd388478aa8960dbe028a090f918f1b24c20396d014019ebcba144fdfe1b54d",
         "shaders/lava_glow_ps.hlsl": "4c7007ad8115b1e390a43dcfd1f10ab25590993e74f1c2a2fd85091a3448144d",
-        "shaders/water_registers.hlsli": "e38856bb25c9345be0a953763d2b3ba7a18a021bb90f7c403296cce1f2164e29"
+        "shaders/water_registers.hlsli": "a2d788807eb0050fc62a3f9c3d42f63670e1dfc0c4c39d0137c3fc6e359379f1"
       },
       "sha256": "c3642f1068d44f7cb8db7c97e0d9d230a714782ad740210aa4fbd372e17c0667",
       "source": "shaders/lava_glow_ps.hlsl",
@@ -404,7 +409,7 @@
       "dependencies": {
         "shaders/common.hlsli": "4d00796044a00963c0920089bda7f0abe911f48f4ca8128455d15b0898faf82d",
         "shaders/lava_halo_ps.hlsl": "ef5016314d351b2a087d40984569a0c2fd27849a9ec05fde4e537b9cf70ffa4f",
-        "shaders/water_registers.hlsli": "e38856bb25c9345be0a953763d2b3ba7a18a021bb90f7c403296cce1f2164e29"
+        "shaders/water_registers.hlsli": "a2d788807eb0050fc62a3f9c3d42f63670e1dfc0c4c39d0137c3fc6e359379f1"
       },
       "sha256": "cc2a7f3c0992cde5c9c80414e0a1864b9262dcf0fa624e0b0bbb7e157ee5c101",
       "source": "shaders/lava_halo_ps.hlsl",
@@ -414,7 +419,7 @@
       "dependencies": {
         "shaders/common.hlsli": "4d00796044a00963c0920089bda7f0abe911f48f4ca8128455d15b0898faf82d",
         "shaders/lava_mask_ps.hlsl": "d7b3b7f3cce72105af40581dbec2afbc53a41a205740e5ce3bbfd634485c1fe1",
-        "shaders/water_registers.hlsli": "e38856bb25c9345be0a953763d2b3ba7a18a021bb90f7c403296cce1f2164e29"
+        "shaders/water_registers.hlsli": "a2d788807eb0050fc62a3f9c3d42f63670e1dfc0c4c39d0137c3fc6e359379f1"
       },
       "sha256": "1a60f980ba53fafc7adc2f7289d87a174a60efc284c875137d22b0021e7baf6e",
       "source": "shaders/lava_mask_ps.hlsl",
@@ -433,7 +438,7 @@
       "dependencies": {
         "shaders/common.hlsli": "4d00796044a00963c0920089bda7f0abe911f48f4ca8128455d15b0898faf82d",
         "shaders/level_ps.hlsl": "accefd10d0bdd53bbfdf02dc76547f5a7456d1e97efa28879e32ed3919855e7c",
-        "shaders/water_registers.hlsli": "e38856bb25c9345be0a953763d2b3ba7a18a021bb90f7c403296cce1f2164e29"
+        "shaders/water_registers.hlsli": "a2d788807eb0050fc62a3f9c3d42f63670e1dfc0c4c39d0137c3fc6e359379f1"
       },
       "sha256": "a524785ef19a04d7536ba42cbee9410bc129c928019c41f6ad21c2df93a71589",
       "source": "shaders/level_ps.hlsl",
@@ -447,7 +452,7 @@
         "shaders/reflection_common.hlsli": "53175cd52cc94dffe2d6c696eb67823a39d2d9288599c6dfd79d6f62856fc623",
         "shaders/water_common.hlsli": "7920cacb5f269bd151721229e6fa3d51eabfce7cc7f7ef4be6d97b21434cef11",
         "shaders/water_palette.hlsli": "ba52cc98a36a304a7604cd891deb933a2cca8f313a20c36fe82460a8cac1122d",
-        "shaders/water_registers.hlsli": "e38856bb25c9345be0a953763d2b3ba7a18a021bb90f7c403296cce1f2164e29"
+        "shaders/water_registers.hlsli": "a2d788807eb0050fc62a3f9c3d42f63670e1dfc0c4c39d0137c3fc6e359379f1"
       },
       "sha256": "ab442717616ffa0bc807bf8d56f8703ab8e65f8bb8efe0d617ba1765a920d212",
       "source": "shaders/noise_lattice_ps.hlsl",
@@ -457,7 +462,7 @@
       "dependencies": {
         "shaders/common.hlsli": "4d00796044a00963c0920089bda7f0abe911f48f4ca8128455d15b0898faf82d",
         "shaders/overlay_ps.hlsl": "a4181e0a2259c0446331e7e4948b101254b8930870bd14e2d2482edd26e9af27",
-        "shaders/water_registers.hlsli": "e38856bb25c9345be0a953763d2b3ba7a18a021bb90f7c403296cce1f2164e29"
+        "shaders/water_registers.hlsli": "a2d788807eb0050fc62a3f9c3d42f63670e1dfc0c4c39d0137c3fc6e359379f1"
       },
       "sha256": "42336690d992aefc198335cef944789726409cd758b3684895a9b87a79b7f158",
       "source": "shaders/overlay_ps.hlsl",
@@ -491,7 +496,7 @@
       "dependencies": {
         "shaders/common.hlsli": "4d00796044a00963c0920089bda7f0abe911f48f4ca8128455d15b0898faf82d",
         "shaders/probe_ps.hlsl": "a5c48bc4f951aaf622b08260f72d276e6de2ca24e5997f7a6ed8ce6e8c3d0d5f",
-        "shaders/water_registers.hlsli": "e38856bb25c9345be0a953763d2b3ba7a18a021bb90f7c403296cce1f2164e29"
+        "shaders/water_registers.hlsli": "a2d788807eb0050fc62a3f9c3d42f63670e1dfc0c4c39d0137c3fc6e359379f1"
       },
       "sha256": "0b23d70c3878008acb2b7adeb87fd593eb069515f9b87c328e22eee6f5d9c3cb",
       "source": "shaders/probe_ps.hlsl",
@@ -505,7 +510,7 @@
         "shaders/reflection_common.hlsli": "53175cd52cc94dffe2d6c696eb67823a39d2d9288599c6dfd79d6f62856fc623",
         "shaders/water_common.hlsli": "7920cacb5f269bd151721229e6fa3d51eabfce7cc7f7ef4be6d97b21434cef11",
         "shaders/water_palette.hlsli": "ba52cc98a36a304a7604cd891deb933a2cca8f313a20c36fe82460a8cac1122d",
-        "shaders/water_registers.hlsli": "e38856bb25c9345be0a953763d2b3ba7a18a021bb90f7c403296cce1f2164e29"
+        "shaders/water_registers.hlsli": "a2d788807eb0050fc62a3f9c3d42f63670e1dfc0c4c39d0137c3fc6e359379f1"
       },
       "sha256": "2835756d5f19cf9644643fae5a952bfef845dc0f17081b070fd1cfb8e615384f",
       "source": "shaders/puddle_ps.hlsl",
@@ -522,6 +527,7 @@
     "ps_reflection_scenery": {
       "dependencies": {
         "shaders/common.hlsli": "4d00796044a00963c0920089bda7f0abe911f48f4ca8128455d15b0898faf82d",
+        "shaders/crest_light.hlsli": "34473d782f0a31eee33591c203ea8f6c91c9e74132a76a81a1ed8c95c246893f",
         "shaders/liquid_geometry.hlsli": "a78eb21c9c3e890615ab66787dc239e7de9f13401eeaec4e37e5124d78802772",
         "shaders/rain_rings.hlsli": "bbceee9f52771fc4c8e1c0f81b0a032b3712cb9c1122446c6f0fa0154e8fd0e8",
         "shaders/reflection_common.hlsli": "53175cd52cc94dffe2d6c696eb67823a39d2d9288599c6dfd79d6f62856fc623",
@@ -533,8 +539,8 @@
         "shaders/water_common.hlsli": "7920cacb5f269bd151721229e6fa3d51eabfce7cc7f7ef4be6d97b21434cef11",
         "shaders/water_foam.hlsli": "b37d0a7ece40ee0787a34b8ed2c830ac961ac6c795435022ab5c866d1a0b336c",
         "shaders/water_palette.hlsli": "ba52cc98a36a304a7604cd891deb933a2cca8f313a20c36fe82460a8cac1122d",
-        "shaders/water_ps.hlsl": "885a0f760688777547ed7e6006e6f23bf58aa748c4af7d14aec98fc1e10ab734",
-        "shaders/water_registers.hlsli": "e38856bb25c9345be0a953763d2b3ba7a18a021bb90f7c403296cce1f2164e29"
+        "shaders/water_ps.hlsl": "bfc2b9f3ee821682e075d63b34b12fdb21056719059f74c9fae39d50097072ce",
+        "shaders/water_registers.hlsli": "a2d788807eb0050fc62a3f9c3d42f63670e1dfc0c4c39d0137c3fc6e359379f1"
       },
       "sha256": "34f465b1a36848a16b9e48fab9b0b74b9400c522672d4703ffec07eb81df0b1b",
       "source": "shaders/reflection_scenery_ps.hlsl",
@@ -561,7 +567,7 @@
       "dependencies": {
         "shaders/common.hlsli": "4d00796044a00963c0920089bda7f0abe911f48f4ca8128455d15b0898faf82d",
         "shaders/sky_memory_ps.hlsl": "fdd48db63585c721a0d39d0b873e3f3a4240cb3329bbdb8a160f7dbcebfeb676",
-        "shaders/water_registers.hlsli": "e38856bb25c9345be0a953763d2b3ba7a18a021bb90f7c403296cce1f2164e29"
+        "shaders/water_registers.hlsli": "a2d788807eb0050fc62a3f9c3d42f63670e1dfc0c4c39d0137c3fc6e359379f1"
       },
       "sha256": "c33904b988002bd7aff15698efd8b18dcfb9b63353debcaaa949b5253fee08a0",
       "source": "shaders/sky_memory_ps.hlsl",
@@ -580,7 +586,7 @@
         "shaders/common.hlsli": "4d00796044a00963c0920089bda7f0abe911f48f4ca8128455d15b0898faf82d",
         "shaders/sky_memory_ps.hlsl": "fdd48db63585c721a0d39d0b873e3f3a4240cb3329bbdb8a160f7dbcebfeb676",
         "shaders/sky_observed_air_ps.hlsl": "22b6c926c51b3817d900ac9bb0c6d1314e6455e2af9e84668a074da2add4628f",
-        "shaders/water_registers.hlsli": "e38856bb25c9345be0a953763d2b3ba7a18a021bb90f7c403296cce1f2164e29"
+        "shaders/water_registers.hlsli": "a2d788807eb0050fc62a3f9c3d42f63670e1dfc0c4c39d0137c3fc6e359379f1"
       },
       "sha256": "07566283e440fd317ed61ee0eca9d16130813af59cfd69d3ed5f9d4ed0e4a60e",
       "source": "shaders/sky_observed_air_ps.hlsl",
@@ -590,7 +596,7 @@
       "dependencies": {
         "shaders/common.hlsli": "4d00796044a00963c0920089bda7f0abe911f48f4ca8128455d15b0898faf82d",
         "shaders/slime_capture_ps.hlsl": "d7a9b3ea620cc1b19f5940843ad7db4ebab75bb3e80b1e4b207672bdcba90b67",
-        "shaders/water_registers.hlsli": "e38856bb25c9345be0a953763d2b3ba7a18a021bb90f7c403296cce1f2164e29"
+        "shaders/water_registers.hlsli": "a2d788807eb0050fc62a3f9c3d42f63670e1dfc0c4c39d0137c3fc6e359379f1"
       },
       "sha256": "41a585a5a6a059153ee7e69974426c50eff222fefbfca0c4faa65c74ec4ef0a5",
       "source": "shaders/slime_capture_ps.hlsl",
@@ -599,6 +605,7 @@
     "ps_slime_deferred": {
       "dependencies": {
         "shaders/common.hlsli": "4d00796044a00963c0920089bda7f0abe911f48f4ca8128455d15b0898faf82d",
+        "shaders/crest_light.hlsli": "34473d782f0a31eee33591c203ea8f6c91c9e74132a76a81a1ed8c95c246893f",
         "shaders/liquid_geometry.hlsli": "a78eb21c9c3e890615ab66787dc239e7de9f13401eeaec4e37e5124d78802772",
         "shaders/rain_rings.hlsli": "bbceee9f52771fc4c8e1c0f81b0a032b3712cb9c1122446c6f0fa0154e8fd0e8",
         "shaders/reflection_common.hlsli": "53175cd52cc94dffe2d6c696eb67823a39d2d9288599c6dfd79d6f62856fc623",
@@ -607,8 +614,8 @@
         "shaders/slime_fade.hlsli": "aed705ad18eddc7478d373e429a986dfa19d242bc2b11628b153da1390a91a69",
         "shaders/water_common.hlsli": "7920cacb5f269bd151721229e6fa3d51eabfce7cc7f7ef4be6d97b21434cef11",
         "shaders/water_palette.hlsli": "ba52cc98a36a304a7604cd891deb933a2cca8f313a20c36fe82460a8cac1122d",
-        "shaders/water_ps.hlsl": "885a0f760688777547ed7e6006e6f23bf58aa748c4af7d14aec98fc1e10ab734",
-        "shaders/water_registers.hlsli": "e38856bb25c9345be0a953763d2b3ba7a18a021bb90f7c403296cce1f2164e29"
+        "shaders/water_ps.hlsl": "bfc2b9f3ee821682e075d63b34b12fdb21056719059f74c9fae39d50097072ce",
+        "shaders/water_registers.hlsli": "a2d788807eb0050fc62a3f9c3d42f63670e1dfc0c4c39d0137c3fc6e359379f1"
       },
       "sha256": "f67980cb98f7d5497bdf81aea58bc075ef9a98bde5aa7fdcb7671805f9bbd418",
       "source": "shaders/slime_deferred_ps.hlsl",
@@ -617,6 +624,7 @@
     "ps_slime_deferred_fine": {
       "dependencies": {
         "shaders/common.hlsli": "4d00796044a00963c0920089bda7f0abe911f48f4ca8128455d15b0898faf82d",
+        "shaders/crest_light.hlsli": "34473d782f0a31eee33591c203ea8f6c91c9e74132a76a81a1ed8c95c246893f",
         "shaders/liquid_geometry.hlsli": "a78eb21c9c3e890615ab66787dc239e7de9f13401eeaec4e37e5124d78802772",
         "shaders/rain_rings.hlsli": "bbceee9f52771fc4c8e1c0f81b0a032b3712cb9c1122446c6f0fa0154e8fd0e8",
         "shaders/reflection_common.hlsli": "53175cd52cc94dffe2d6c696eb67823a39d2d9288599c6dfd79d6f62856fc623",
@@ -626,8 +634,8 @@
         "shaders/slime_fade.hlsli": "aed705ad18eddc7478d373e429a986dfa19d242bc2b11628b153da1390a91a69",
         "shaders/water_common.hlsli": "7920cacb5f269bd151721229e6fa3d51eabfce7cc7f7ef4be6d97b21434cef11",
         "shaders/water_palette.hlsli": "ba52cc98a36a304a7604cd891deb933a2cca8f313a20c36fe82460a8cac1122d",
-        "shaders/water_ps.hlsl": "885a0f760688777547ed7e6006e6f23bf58aa748c4af7d14aec98fc1e10ab734",
-        "shaders/water_registers.hlsli": "e38856bb25c9345be0a953763d2b3ba7a18a021bb90f7c403296cce1f2164e29"
+        "shaders/water_ps.hlsl": "bfc2b9f3ee821682e075d63b34b12fdb21056719059f74c9fae39d50097072ce",
+        "shaders/water_registers.hlsli": "a2d788807eb0050fc62a3f9c3d42f63670e1dfc0c4c39d0137c3fc6e359379f1"
       },
       "sha256": "13b4bd5aaf3e1eff9686d2e20c5a5ae5941ea6974a234f5886d183d99b2e5b83",
       "source": "shaders/slime_deferred_fine_ps.hlsl",
@@ -637,7 +645,7 @@
       "dependencies": {
         "shaders/common.hlsli": "4d00796044a00963c0920089bda7f0abe911f48f4ca8128455d15b0898faf82d",
         "shaders/slime_lift_ps.hlsl": "75bfb6b5df42bb05cfa5086ee748e2b3a4a2e364062b3f3b0f4b76d3cf0f9bae",
-        "shaders/water_registers.hlsli": "e38856bb25c9345be0a953763d2b3ba7a18a021bb90f7c403296cce1f2164e29"
+        "shaders/water_registers.hlsli": "a2d788807eb0050fc62a3f9c3d42f63670e1dfc0c4c39d0137c3fc6e359379f1"
       },
       "sha256": "4c7d51534b4890fa79f898144ed78493f34697ea7a7b153c0616ebb6c884cf80",
       "source": "shaders/slime_lift_ps.hlsl",
@@ -646,6 +654,7 @@
     "ps_slime_reflection": {
       "dependencies": {
         "shaders/common.hlsli": "4d00796044a00963c0920089bda7f0abe911f48f4ca8128455d15b0898faf82d",
+        "shaders/crest_light.hlsli": "34473d782f0a31eee33591c203ea8f6c91c9e74132a76a81a1ed8c95c246893f",
         "shaders/liquid_geometry.hlsli": "a78eb21c9c3e890615ab66787dc239e7de9f13401eeaec4e37e5124d78802772",
         "shaders/rain_rings.hlsli": "bbceee9f52771fc4c8e1c0f81b0a032b3712cb9c1122446c6f0fa0154e8fd0e8",
         "shaders/reflection_common.hlsli": "53175cd52cc94dffe2d6c696eb67823a39d2d9288599c6dfd79d6f62856fc623",
@@ -656,11 +665,30 @@
         "shaders/slime_reflection_ps.hlsl": "c9d021f8213acf5ac5145075978099bbf76344255fe3e2e13500eeeabced0538",
         "shaders/water_common.hlsli": "7920cacb5f269bd151721229e6fa3d51eabfce7cc7f7ef4be6d97b21434cef11",
         "shaders/water_palette.hlsli": "ba52cc98a36a304a7604cd891deb933a2cca8f313a20c36fe82460a8cac1122d",
-        "shaders/water_ps.hlsl": "885a0f760688777547ed7e6006e6f23bf58aa748c4af7d14aec98fc1e10ab734",
-        "shaders/water_registers.hlsli": "e38856bb25c9345be0a953763d2b3ba7a18a021bb90f7c403296cce1f2164e29"
+        "shaders/water_ps.hlsl": "bfc2b9f3ee821682e075d63b34b12fdb21056719059f74c9fae39d50097072ce",
+        "shaders/water_registers.hlsli": "a2d788807eb0050fc62a3f9c3d42f63670e1dfc0c4c39d0137c3fc6e359379f1"
       },
       "sha256": "954506b0fda88f0278ea24c2fda59caa778a122e10c487b12697552d8e048725",
       "source": "shaders/slime_reflection_ps.hlsl",
+      "target": "ps_3_0"
+    },
+    "ps_slime_reflection_view": {
+      "dependencies": {
+        "shaders/common.hlsli": "4d00796044a00963c0920089bda7f0abe911f48f4ca8128455d15b0898faf82d",
+        "shaders/crest_light.hlsli": "34473d782f0a31eee33591c203ea8f6c91c9e74132a76a81a1ed8c95c246893f",
+        "shaders/liquid_geometry.hlsli": "a78eb21c9c3e890615ab66787dc239e7de9f13401eeaec4e37e5124d78802772",
+        "shaders/rain_rings.hlsli": "bbceee9f52771fc4c8e1c0f81b0a032b3712cb9c1122446c6f0fa0154e8fd0e8",
+        "shaders/reflection_common.hlsli": "53175cd52cc94dffe2d6c696eb67823a39d2d9288599c6dfd79d6f62856fc623",
+        "shaders/reflection_lookup.hlsli": "22f194f54a15bb2b59e85a26b1ea2937ebcd1829a0ab0fd617e6e3ebe9402ac9",
+        "shaders/slime_fade.hlsli": "aed705ad18eddc7478d373e429a986dfa19d242bc2b11628b153da1390a91a69",
+        "shaders/slime_reflection_view_ps.hlsl": "840c94d00f2c3714fc2196f6d756f3cc4344e06ade620315a354360b2b8dd1b5",
+        "shaders/water_common.hlsli": "7920cacb5f269bd151721229e6fa3d51eabfce7cc7f7ef4be6d97b21434cef11",
+        "shaders/water_palette.hlsli": "ba52cc98a36a304a7604cd891deb933a2cca8f313a20c36fe82460a8cac1122d",
+        "shaders/water_ps.hlsl": "bfc2b9f3ee821682e075d63b34b12fdb21056719059f74c9fae39d50097072ce",
+        "shaders/water_registers.hlsli": "a2d788807eb0050fc62a3f9c3d42f63670e1dfc0c4c39d0137c3fc6e359379f1"
+      },
+      "sha256": "0c1a3d4580b17c7dc66d7f352fc800f694137b6c918bf1e97ee279a1f9c12b5b",
+      "source": "shaders/slime_reflection_view_ps.hlsl",
       "target": "ps_3_0"
     },
     "ps_slime_underwater_scenery": {
@@ -673,7 +701,7 @@
         "shaders/underwater_surface.hlsli": "f26f76daf486d9c14d6201d713e08f3d3c4010670a78fd37b82ab762422a713c",
         "shaders/water_common.hlsli": "7920cacb5f269bd151721229e6fa3d51eabfce7cc7f7ef4be6d97b21434cef11",
         "shaders/water_palette.hlsli": "ba52cc98a36a304a7604cd891deb933a2cca8f313a20c36fe82460a8cac1122d",
-        "shaders/water_registers.hlsli": "e38856bb25c9345be0a953763d2b3ba7a18a021bb90f7c403296cce1f2164e29"
+        "shaders/water_registers.hlsli": "a2d788807eb0050fc62a3f9c3d42f63670e1dfc0c4c39d0137c3fc6e359379f1"
       },
       "sha256": "f2bbf72862eabbbbb259f99dd4f38c02bb4bad6861a28a4298d2d99a876a9510",
       "source": "shaders/slime_underwater_scenery_ps.hlsl",
@@ -683,7 +711,7 @@
       "dependencies": {
         "shaders/common.hlsli": "4d00796044a00963c0920089bda7f0abe911f48f4ca8128455d15b0898faf82d",
         "shaders/slime_undo_ps.hlsl": "7419ac970c763aa0c254f12da51073a280d7b227645ddf367abfd5dc288d6a9f",
-        "shaders/water_registers.hlsli": "e38856bb25c9345be0a953763d2b3ba7a18a021bb90f7c403296cce1f2164e29"
+        "shaders/water_registers.hlsli": "a2d788807eb0050fc62a3f9c3d42f63670e1dfc0c4c39d0137c3fc6e359379f1"
       },
       "sha256": "ad4612c39a95368a23fa08dcb83c9b35f918ee86c34f3058736b4a9da30b1479",
       "source": "shaders/slime_undo_ps.hlsl",
@@ -693,7 +721,7 @@
       "dependencies": {
         "shaders/common.hlsli": "4d00796044a00963c0920089bda7f0abe911f48f4ca8128455d15b0898faf82d",
         "shaders/snapshot_ps.hlsl": "7775aad53ee7bb7e57b6a3c86754c06a6409bfd279bc3a8deebec300842264ba",
-        "shaders/water_registers.hlsli": "e38856bb25c9345be0a953763d2b3ba7a18a021bb90f7c403296cce1f2164e29"
+        "shaders/water_registers.hlsli": "a2d788807eb0050fc62a3f9c3d42f63670e1dfc0c4c39d0137c3fc6e359379f1"
       },
       "sha256": "5c0761345582385d01f8bf61ceabdda3e61423ab7144176e7d745f06db94635e",
       "source": "shaders/snapshot_ps.hlsl",
@@ -710,6 +738,7 @@
     "ps_surface_detail": {
       "dependencies": {
         "shaders/common.hlsli": "4d00796044a00963c0920089bda7f0abe911f48f4ca8128455d15b0898faf82d",
+        "shaders/crest_light.hlsli": "34473d782f0a31eee33591c203ea8f6c91c9e74132a76a81a1ed8c95c246893f",
         "shaders/liquid_geometry.hlsli": "a78eb21c9c3e890615ab66787dc239e7de9f13401eeaec4e37e5124d78802772",
         "shaders/rain_rings.hlsli": "bbceee9f52771fc4c8e1c0f81b0a032b3712cb9c1122446c6f0fa0154e8fd0e8",
         "shaders/reflection_common.hlsli": "53175cd52cc94dffe2d6c696eb67823a39d2d9288599c6dfd79d6f62856fc623",
@@ -718,8 +747,8 @@
         "shaders/water_common.hlsli": "7920cacb5f269bd151721229e6fa3d51eabfce7cc7f7ef4be6d97b21434cef11",
         "shaders/water_foam.hlsli": "b37d0a7ece40ee0787a34b8ed2c830ac961ac6c795435022ab5c866d1a0b336c",
         "shaders/water_palette.hlsli": "ba52cc98a36a304a7604cd891deb933a2cca8f313a20c36fe82460a8cac1122d",
-        "shaders/water_ps.hlsl": "885a0f760688777547ed7e6006e6f23bf58aa748c4af7d14aec98fc1e10ab734",
-        "shaders/water_registers.hlsli": "e38856bb25c9345be0a953763d2b3ba7a18a021bb90f7c403296cce1f2164e29"
+        "shaders/water_ps.hlsl": "bfc2b9f3ee821682e075d63b34b12fdb21056719059f74c9fae39d50097072ce",
+        "shaders/water_registers.hlsli": "a2d788807eb0050fc62a3f9c3d42f63670e1dfc0c4c39d0137c3fc6e359379f1"
       },
       "sha256": "6ee4f934af510eb63901a818c67503f91b137efb4a711e734f240bfd75197c1b",
       "source": "shaders/surface_detail_ps.hlsl",
@@ -728,6 +757,7 @@
     "ps_surface_detail_moments": {
       "dependencies": {
         "shaders/common.hlsli": "4d00796044a00963c0920089bda7f0abe911f48f4ca8128455d15b0898faf82d",
+        "shaders/crest_light.hlsli": "34473d782f0a31eee33591c203ea8f6c91c9e74132a76a81a1ed8c95c246893f",
         "shaders/liquid_geometry.hlsli": "a78eb21c9c3e890615ab66787dc239e7de9f13401eeaec4e37e5124d78802772",
         "shaders/rain_rings.hlsli": "bbceee9f52771fc4c8e1c0f81b0a032b3712cb9c1122446c6f0fa0154e8fd0e8",
         "shaders/reflection_common.hlsli": "53175cd52cc94dffe2d6c696eb67823a39d2d9288599c6dfd79d6f62856fc623",
@@ -737,8 +767,8 @@
         "shaders/water_common.hlsli": "7920cacb5f269bd151721229e6fa3d51eabfce7cc7f7ef4be6d97b21434cef11",
         "shaders/water_foam.hlsli": "b37d0a7ece40ee0787a34b8ed2c830ac961ac6c795435022ab5c866d1a0b336c",
         "shaders/water_palette.hlsli": "ba52cc98a36a304a7604cd891deb933a2cca8f313a20c36fe82460a8cac1122d",
-        "shaders/water_ps.hlsl": "885a0f760688777547ed7e6006e6f23bf58aa748c4af7d14aec98fc1e10ab734",
-        "shaders/water_registers.hlsli": "e38856bb25c9345be0a953763d2b3ba7a18a021bb90f7c403296cce1f2164e29"
+        "shaders/water_ps.hlsl": "bfc2b9f3ee821682e075d63b34b12fdb21056719059f74c9fae39d50097072ce",
+        "shaders/water_registers.hlsli": "a2d788807eb0050fc62a3f9c3d42f63670e1dfc0c4c39d0137c3fc6e359379f1"
       },
       "sha256": "ad89ab70396b060d5c5d9c25127f87611aa6547b39f3ad7d5cc1ed565fa22842",
       "source": "shaders/surface_detail_moments_ps.hlsl",
@@ -753,7 +783,7 @@
         "shaders/underwater_surface.hlsli": "f26f76daf486d9c14d6201d713e08f3d3c4010670a78fd37b82ab762422a713c",
         "shaders/water_common.hlsli": "7920cacb5f269bd151721229e6fa3d51eabfce7cc7f7ef4be6d97b21434cef11",
         "shaders/water_palette.hlsli": "ba52cc98a36a304a7604cd891deb933a2cca8f313a20c36fe82460a8cac1122d",
-        "shaders/water_registers.hlsli": "e38856bb25c9345be0a953763d2b3ba7a18a021bb90f7c403296cce1f2164e29"
+        "shaders/water_registers.hlsli": "a2d788807eb0050fc62a3f9c3d42f63670e1dfc0c4c39d0137c3fc6e359379f1"
       },
       "sha256": "1c4aa2d6e777809a632954810b53f9714ddc017f58665e5182e99cbcca25fe22",
       "source": "shaders/underwater_ps.hlsl",
@@ -769,7 +799,7 @@
         "shaders/water_common.hlsli": "7920cacb5f269bd151721229e6fa3d51eabfce7cc7f7ef4be6d97b21434cef11",
         "shaders/water_foam.hlsli": "b37d0a7ece40ee0787a34b8ed2c830ac961ac6c795435022ab5c866d1a0b336c",
         "shaders/water_palette.hlsli": "ba52cc98a36a304a7604cd891deb933a2cca8f313a20c36fe82460a8cac1122d",
-        "shaders/water_registers.hlsli": "e38856bb25c9345be0a953763d2b3ba7a18a021bb90f7c403296cce1f2164e29"
+        "shaders/water_registers.hlsli": "a2d788807eb0050fc62a3f9c3d42f63670e1dfc0c4c39d0137c3fc6e359379f1"
       },
       "sha256": "54bdd7f0aaf173a6601fcda55eac9c381152a12c6e2c1e52439f51172d3d6368",
       "source": "shaders/underwater_foam_ps.hlsl",
@@ -783,7 +813,7 @@
         "shaders/underwater_scene_ps.hlsl": "578510c43145397e7083e6e2321e20a6bbc3faf1c6124fce806e80bc05ee0c8f",
         "shaders/water_common.hlsli": "7920cacb5f269bd151721229e6fa3d51eabfce7cc7f7ef4be6d97b21434cef11",
         "shaders/water_palette.hlsli": "ba52cc98a36a304a7604cd891deb933a2cca8f313a20c36fe82460a8cac1122d",
-        "shaders/water_registers.hlsli": "e38856bb25c9345be0a953763d2b3ba7a18a021bb90f7c403296cce1f2164e29"
+        "shaders/water_registers.hlsli": "a2d788807eb0050fc62a3f9c3d42f63670e1dfc0c4c39d0137c3fc6e359379f1"
       },
       "sha256": "2d473ea2060d98dc1086a791bc6b6812bf5735438e38f10a34ba09cea75b2676",
       "source": "shaders/underwater_scene_ps.hlsl",
@@ -799,7 +829,7 @@
         "shaders/underwater_surface.hlsli": "f26f76daf486d9c14d6201d713e08f3d3c4010670a78fd37b82ab762422a713c",
         "shaders/water_common.hlsli": "7920cacb5f269bd151721229e6fa3d51eabfce7cc7f7ef4be6d97b21434cef11",
         "shaders/water_palette.hlsli": "ba52cc98a36a304a7604cd891deb933a2cca8f313a20c36fe82460a8cac1122d",
-        "shaders/water_registers.hlsli": "e38856bb25c9345be0a953763d2b3ba7a18a021bb90f7c403296cce1f2164e29"
+        "shaders/water_registers.hlsli": "a2d788807eb0050fc62a3f9c3d42f63670e1dfc0c4c39d0137c3fc6e359379f1"
       },
       "sha256": "82c6646624f43b33d0028bd42c348b88aabbd2e2cbd42d8149e732cc6241f534",
       "source": "shaders/underwater_scenery_ps.hlsl",
@@ -815,7 +845,7 @@
         "shaders/underwater_surface.hlsli": "f26f76daf486d9c14d6201d713e08f3d3c4010670a78fd37b82ab762422a713c",
         "shaders/water_common.hlsli": "7920cacb5f269bd151721229e6fa3d51eabfce7cc7f7ef4be6d97b21434cef11",
         "shaders/water_palette.hlsli": "ba52cc98a36a304a7604cd891deb933a2cca8f313a20c36fe82460a8cac1122d",
-        "shaders/water_registers.hlsli": "e38856bb25c9345be0a953763d2b3ba7a18a021bb90f7c403296cce1f2164e29"
+        "shaders/water_registers.hlsli": "a2d788807eb0050fc62a3f9c3d42f63670e1dfc0c4c39d0137c3fc6e359379f1"
       },
       "sha256": "7a7fe953a91a576f48fc86fc63a325db0eb75cffbf184b5c41b5e19962a55a8a",
       "source": "shaders/underwater_shared_ps.hlsl",
@@ -829,7 +859,7 @@
         "shaders/wake_map_ps.hlsl": "62582499a08084806cd1a6786a8becbbf6a3f7bc8fd7f2d3b800b9a41a979121",
         "shaders/water_common.hlsli": "7920cacb5f269bd151721229e6fa3d51eabfce7cc7f7ef4be6d97b21434cef11",
         "shaders/water_palette.hlsli": "ba52cc98a36a304a7604cd891deb933a2cca8f313a20c36fe82460a8cac1122d",
-        "shaders/water_registers.hlsli": "e38856bb25c9345be0a953763d2b3ba7a18a021bb90f7c403296cce1f2164e29"
+        "shaders/water_registers.hlsli": "a2d788807eb0050fc62a3f9c3d42f63670e1dfc0c4c39d0137c3fc6e359379f1"
       },
       "sha256": "d4694833518ef55e355b0e7d0d73f690da005cfaaf3351ad03d9b0e95c987328",
       "source": "shaders/wake_map_ps.hlsl",
@@ -838,6 +868,7 @@
     "ps_water": {
       "dependencies": {
         "shaders/common.hlsli": "4d00796044a00963c0920089bda7f0abe911f48f4ca8128455d15b0898faf82d",
+        "shaders/crest_light.hlsli": "34473d782f0a31eee33591c203ea8f6c91c9e74132a76a81a1ed8c95c246893f",
         "shaders/liquid_geometry.hlsli": "a78eb21c9c3e890615ab66787dc239e7de9f13401eeaec4e37e5124d78802772",
         "shaders/rain_rings.hlsli": "bbceee9f52771fc4c8e1c0f81b0a032b3712cb9c1122446c6f0fa0154e8fd0e8",
         "shaders/reflection_common.hlsli": "53175cd52cc94dffe2d6c696eb67823a39d2d9288599c6dfd79d6f62856fc623",
@@ -845,8 +876,8 @@
         "shaders/water_common.hlsli": "7920cacb5f269bd151721229e6fa3d51eabfce7cc7f7ef4be6d97b21434cef11",
         "shaders/water_foam.hlsli": "b37d0a7ece40ee0787a34b8ed2c830ac961ac6c795435022ab5c866d1a0b336c",
         "shaders/water_palette.hlsli": "ba52cc98a36a304a7604cd891deb933a2cca8f313a20c36fe82460a8cac1122d",
-        "shaders/water_ps.hlsl": "885a0f760688777547ed7e6006e6f23bf58aa748c4af7d14aec98fc1e10ab734",
-        "shaders/water_registers.hlsli": "e38856bb25c9345be0a953763d2b3ba7a18a021bb90f7c403296cce1f2164e29"
+        "shaders/water_ps.hlsl": "bfc2b9f3ee821682e075d63b34b12fdb21056719059f74c9fae39d50097072ce",
+        "shaders/water_registers.hlsli": "a2d788807eb0050fc62a3f9c3d42f63670e1dfc0c4c39d0137c3fc6e359379f1"
       },
       "sha256": "2660afa443c3bf8b5ab3ac6d20e09ff2a14cc81a5ed637384d427b873e8b99bc",
       "source": "shaders/water_ps.hlsl",
@@ -855,6 +886,7 @@
     "ps_water_fine": {
       "dependencies": {
         "shaders/common.hlsli": "4d00796044a00963c0920089bda7f0abe911f48f4ca8128455d15b0898faf82d",
+        "shaders/crest_light.hlsli": "34473d782f0a31eee33591c203ea8f6c91c9e74132a76a81a1ed8c95c246893f",
         "shaders/liquid_geometry.hlsli": "a78eb21c9c3e890615ab66787dc239e7de9f13401eeaec4e37e5124d78802772",
         "shaders/rain_rings.hlsli": "bbceee9f52771fc4c8e1c0f81b0a032b3712cb9c1122446c6f0fa0154e8fd0e8",
         "shaders/reflection_common.hlsli": "53175cd52cc94dffe2d6c696eb67823a39d2d9288599c6dfd79d6f62856fc623",
@@ -863,16 +895,32 @@
         "shaders/water_fine_ps.hlsl": "2ba6cef9838faa6be69be735a8434233d0aa1079a078b89ff372b9af1ac4c86d",
         "shaders/water_foam.hlsli": "b37d0a7ece40ee0787a34b8ed2c830ac961ac6c795435022ab5c866d1a0b336c",
         "shaders/water_palette.hlsli": "ba52cc98a36a304a7604cd891deb933a2cca8f313a20c36fe82460a8cac1122d",
-        "shaders/water_ps.hlsl": "885a0f760688777547ed7e6006e6f23bf58aa748c4af7d14aec98fc1e10ab734",
-        "shaders/water_registers.hlsli": "e38856bb25c9345be0a953763d2b3ba7a18a021bb90f7c403296cce1f2164e29"
+        "shaders/water_ps.hlsl": "bfc2b9f3ee821682e075d63b34b12fdb21056719059f74c9fae39d50097072ce",
+        "shaders/water_registers.hlsli": "a2d788807eb0050fc62a3f9c3d42f63670e1dfc0c4c39d0137c3fc6e359379f1"
       },
-      "sha256": "f757f10036949ce851154bb5eb812f89c84960be7107a6a5576e66c5ee9cc72f",
+      "sha256": "ab655fcacf7752d68b6dc73b6d7d4ba1ccbaafc7d71e627aeff40050a41a0132",
       "source": "shaders/water_fine_ps.hlsl",
+      "target": "ps_3_0"
+    },
+    "ps_water_lamps": {
+      "dependencies": {
+        "shaders/common.hlsli": "4d00796044a00963c0920089bda7f0abe911f48f4ca8128455d15b0898faf82d",
+        "shaders/crest_light.hlsli": "34473d782f0a31eee33591c203ea8f6c91c9e74132a76a81a1ed8c95c246893f",
+        "shaders/rain_rings.hlsli": "bbceee9f52771fc4c8e1c0f81b0a032b3712cb9c1122446c6f0fa0154e8fd0e8",
+        "shaders/reflection_common.hlsli": "53175cd52cc94dffe2d6c696eb67823a39d2d9288599c6dfd79d6f62856fc623",
+        "shaders/water_common.hlsli": "7920cacb5f269bd151721229e6fa3d51eabfce7cc7f7ef4be6d97b21434cef11",
+        "shaders/water_lamps_ps.hlsl": "5cba1075e242072d9c8f4ef88331bf0f73ad91dba404c6160eaf314a0e83e921",
+        "shaders/water_palette.hlsli": "ba52cc98a36a304a7604cd891deb933a2cca8f313a20c36fe82460a8cac1122d",
+        "shaders/water_registers.hlsli": "a2d788807eb0050fc62a3f9c3d42f63670e1dfc0c4c39d0137c3fc6e359379f1"
+      },
+      "sha256": "909629a40dea3cd097ebc674a7f5949b7de4a36bfadd48b53cf5f03bc49d77cd",
+      "source": "shaders/water_lamps_ps.hlsl",
       "target": "ps_3_0"
     },
     "ps_water_moments": {
       "dependencies": {
         "shaders/common.hlsli": "4d00796044a00963c0920089bda7f0abe911f48f4ca8128455d15b0898faf82d",
+        "shaders/crest_light.hlsli": "34473d782f0a31eee33591c203ea8f6c91c9e74132a76a81a1ed8c95c246893f",
         "shaders/liquid_geometry.hlsli": "a78eb21c9c3e890615ab66787dc239e7de9f13401eeaec4e37e5124d78802772",
         "shaders/rain_rings.hlsli": "bbceee9f52771fc4c8e1c0f81b0a032b3712cb9c1122446c6f0fa0154e8fd0e8",
         "shaders/reflection_common.hlsli": "53175cd52cc94dffe2d6c696eb67823a39d2d9288599c6dfd79d6f62856fc623",
@@ -881,8 +929,8 @@
         "shaders/water_foam.hlsli": "b37d0a7ece40ee0787a34b8ed2c830ac961ac6c795435022ab5c866d1a0b336c",
         "shaders/water_moments_ps.hlsl": "ac4bb0feccc2342c90cc30bdccb3edb564247c796769171b8d422a7dcb5b3781",
         "shaders/water_palette.hlsli": "ba52cc98a36a304a7604cd891deb933a2cca8f313a20c36fe82460a8cac1122d",
-        "shaders/water_ps.hlsl": "885a0f760688777547ed7e6006e6f23bf58aa748c4af7d14aec98fc1e10ab734",
-        "shaders/water_registers.hlsli": "e38856bb25c9345be0a953763d2b3ba7a18a021bb90f7c403296cce1f2164e29"
+        "shaders/water_ps.hlsl": "bfc2b9f3ee821682e075d63b34b12fdb21056719059f74c9fae39d50097072ce",
+        "shaders/water_registers.hlsli": "a2d788807eb0050fc62a3f9c3d42f63670e1dfc0c4c39d0137c3fc6e359379f1"
       },
       "sha256": "7e506bbc4a54d3aa4e6bd3b26368e77e64feab9cc8cc29db32d7062087b2aec4",
       "source": "shaders/water_moments_ps.hlsl",
@@ -891,6 +939,7 @@
     "ps_water_moments_fine": {
       "dependencies": {
         "shaders/common.hlsli": "4d00796044a00963c0920089bda7f0abe911f48f4ca8128455d15b0898faf82d",
+        "shaders/crest_light.hlsli": "34473d782f0a31eee33591c203ea8f6c91c9e74132a76a81a1ed8c95c246893f",
         "shaders/liquid_geometry.hlsli": "a78eb21c9c3e890615ab66787dc239e7de9f13401eeaec4e37e5124d78802772",
         "shaders/rain_rings.hlsli": "bbceee9f52771fc4c8e1c0f81b0a032b3712cb9c1122446c6f0fa0154e8fd0e8",
         "shaders/reflection_common.hlsli": "53175cd52cc94dffe2d6c696eb67823a39d2d9288599c6dfd79d6f62856fc623",
@@ -900,10 +949,10 @@
         "shaders/water_moments_fine_ps.hlsl": "71528b3a600048a840a4c0e93bc8015a64386a36dcaaa3d3202e5cc698e7bdd9",
         "shaders/water_moments_ps.hlsl": "ac4bb0feccc2342c90cc30bdccb3edb564247c796769171b8d422a7dcb5b3781",
         "shaders/water_palette.hlsli": "ba52cc98a36a304a7604cd891deb933a2cca8f313a20c36fe82460a8cac1122d",
-        "shaders/water_ps.hlsl": "885a0f760688777547ed7e6006e6f23bf58aa748c4af7d14aec98fc1e10ab734",
-        "shaders/water_registers.hlsli": "e38856bb25c9345be0a953763d2b3ba7a18a021bb90f7c403296cce1f2164e29"
+        "shaders/water_ps.hlsl": "bfc2b9f3ee821682e075d63b34b12fdb21056719059f74c9fae39d50097072ce",
+        "shaders/water_registers.hlsli": "a2d788807eb0050fc62a3f9c3d42f63670e1dfc0c4c39d0137c3fc6e359379f1"
       },
-      "sha256": "b353a9fefa69b107bbb52509429f70964fcb9ffac1db1e60f57be84c435376b0",
+      "sha256": "8ae067fee3564f956075017d433eafad13d3f710bb9e483b5cc10bb9a2e4edec",
       "source": "shaders/water_moments_fine_ps.hlsl",
       "target": "ps_3_0"
     },

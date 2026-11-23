@@ -1186,7 +1186,8 @@ private:
         WaterOutcome outcome=WaterOutcome::Declined;
         if(cooperativeWater.Liquid() && waterMask){
             WaterEnvironmentValues environment={};IDirect3DTexture9* field=nullptr;bool restoreFailed=false;
-            if(world&&cooperativeWater.WantsEnvironment()){
+            bool wantsLamps=false;
+            if(world&&cooperativeWater.WantsEnvironment(wantsLamps)){
                 float glare[13][4]={};IDirect3DTexture9* moonBody=nullptr;unsigned glareMask=0;
                 NorthlightCelestial::Context sky;float inverseView[16]={},projection[3]={};bool cameraKnown=false;
                 if(celestialDiscs&&debugMode==0&&worldDebug==0&&layerCapture.celestial&&(cameraKnown=world->celestialContext(sky,inverseView,projection)))
@@ -1194,7 +1195,7 @@ private:
                         world->weatherEffects().discGain()*world->underwaterScale(),glare,moonBody);
                 if(world->WaterGradient(farZ,width,height,glare,moonBody,glareMask,environment,field,restoreFailed)){
                     const float fogDepth=refractionScene&&worldDebug==0 ? world->WaterViewFogDepth48() : 0.f;
-                    const bool accepted=cooperativeWater.Environment(environment,field,fogDepth);
+                    const bool accepted=cooperativeWater.Environment(environment,field,fogDepth,wantsLamps&&worldDebug==0?world->WaterLamps():WaterLampSamples{});
                     layerCapture.SuppliedEnvironment(ext,field,environment,accepted,cameraKnown,inverseView,projection);
                 }
                 if(frame%600==0)logf("WATER atmosphere glare bodies=%u",glareMask);

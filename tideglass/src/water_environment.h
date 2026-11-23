@@ -40,6 +40,11 @@ struct WaterEnvironmentLight {
     float angularRadius; // radians, matching the visible body
     uint32_t moon;
 };
+// Compact, world-space host light samples. A zero radius is an unused slot.
+struct WaterLampSamples {
+    float positions[4][4]={}; // xyz and outer radius in yards
+    float colours[4][4]={};   // RGB irradiance and inverse attenuation width
+};
 struct WaterEnvironmentValues {
     uint32_t policy,encoding,backgroundContent;
     uint32_t paletteKnown;

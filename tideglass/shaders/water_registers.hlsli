@@ -50,6 +50,8 @@
 #define WATER_SLOT_cGameFog 88
 #define WATER_SLOT_cWaveMomentSamples 89
 #define WATER_SLOT_cSurfaceVisibility 90
+#define WATER_SLOT_cLampPositions 91
+#define WATER_SLOT_cLampColours 95
 #define WATER_SLOT_sDepth 0
 #define WATER_SLOT_sOpaqueDepth 1
 #define WATER_SLOT_sSceneBefore 2
