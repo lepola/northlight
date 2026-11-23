@@ -501,7 +501,7 @@ int DrawPass(WaterHostContext* context, WaterHostStamp stamp, WaterHostPass pass
             resources->size >= offsetof(WaterHostResources, refractionScene) ? resources->nativeWater : nullptr,
             resources->size >= offsetof(WaterHostResources, surfaceVisibility) ? resources->refractionScene : nullptr,
             resources->size == sizeof(*resources) ? resources->surfaceVisibility : nullptr, stencilBit); break;
-        case WaterHostWorldDone: result = session.Render(d, t, z, input, cfg); session.CaptureFinished(d); break;
+        case WaterHostWorldDone: result = session.Render(d, t, z, input, cfg, stencilBit); session.CaptureFinished(d); break;
         default: break;
         }
         return result ? 1 : 0;
@@ -511,11 +511,11 @@ int __cdecl Draw(WaterHostContext* context, WaterHostStamp stamp, WaterHostPass 
                  const WaterHostResources* resources, int shade)
 { return DrawPass(context,stamp,pass,resources,shade,0); }
 
-int __cdecl CompositeMaskedWater(WaterHostContext* context, WaterHostStamp stamp,
+template<WaterHostPass pass> int __cdecl MaskedPass(WaterHostContext* context, WaterHostStamp stamp,
                                  const WaterHostResources* resources, uint32_t stencilBit)
 {
     if(!stencilBit || stencilBit>0xff || (stencilBit & (stencilBit-1)))return 0;
-    return DrawPass(context,stamp,WaterHostCompositeWater,resources,1,stencilBit);
+    return DrawPass(context,stamp,pass,resources,1,stencilBit);
 }
 
 int __cdecl Lost(WaterHostContext* context)
@@ -564,9 +564,9 @@ int __cdecl CaptureHostPass(WaterHostContext* context,WaterHostStamp stamp,const
 const WaterHostCaptureAPI captureAPI={kWaterCaptureABI,sizeof(WaterHostCaptureAPI),CaptureHostPass};
 const WaterHostAPI api = {kWaterHostABI, sizeof(WaterHostAPI), Create, Destroy, CopyFrame, CaptureClient,
                           Retain, Release, Begin, Reflection, Fog, Draw, End, Lost, Restored, CanUnload};
-const WaterHostLiquidAPI liquid = {kWaterLiquidABI, sizeof(WaterHostLiquidAPI), ClassifyLiquid, ObserveLiquid, BeforeSurface, AfterSurface, CompositeSurfaces, CaptureClientMapped, EffectsMask, SceneBefore, ObserveLiquidDraw, CompositeMaskedWater};
+const WaterHostLiquidAPI liquid = {kWaterLiquidABI, sizeof(WaterHostLiquidAPI), ClassifyLiquid, ObserveLiquid, BeforeSurface, AfterSurface, CompositeSurfaces, CaptureClientMapped, EffectsMask, SceneBefore, ObserveLiquidDraw, MaskedPass<WaterHostCompositeWater>, MaskedPass<WaterHostWorldDone>};
 // ABI 6 callers read the unchanged prefix and continue to use the original scene.
-const WaterHostLiquidAPI liquidLegacy = {6, offsetof(WaterHostLiquidAPI, scene_before), ClassifyLiquid, ObserveLiquid, BeforeSurface, AfterSurface, CompositeSurfaces, CaptureClientMapped, EffectsMask, nullptr, nullptr, nullptr};
+const WaterHostLiquidAPI liquidLegacy = {6, offsetof(WaterHostLiquidAPI, scene_before), ClassifyLiquid, ObserveLiquid, BeforeSurface, AfterSurface, CompositeSurfaces, CaptureClientMapped, EffectsMask, nullptr, nullptr, nullptr, nullptr};
 }
 
 extern "C" __declspec(dllexport) const WaterHostAPI* __cdecl WaterHostGetAPI(uint32_t abi, uint32_t size)
@@ -577,11 +577,13 @@ extern "C" __declspec(dllexport) const WaterHostLiquidAPI* __cdecl WaterHostGetL
 {
     if (abi == 6 && size == offsetof(WaterHostLiquidAPI, scene_before)) return &liquidLegacy;
     // ABI 7/8 keep the original prefix; their observations remain conservative.
-    static const WaterHostLiquidAPI previous7 = {7, offsetof(WaterHostLiquidAPI, observe_draw), ClassifyLiquid, ObserveLiquid, BeforeSurface, AfterSurface, CompositeSurfaces, CaptureClientMapped, EffectsMask, SceneBefore, nullptr, nullptr};
-    static const WaterHostLiquidAPI previous8 = {8, offsetof(WaterHostLiquidAPI, observe_draw), ClassifyLiquid, ObserveLiquid, BeforeSurface, AfterSurface, CompositeSurfaces, CaptureClientMapped, EffectsMask, SceneBefore, nullptr, nullptr};
+    static const WaterHostLiquidAPI previous7 = {7, offsetof(WaterHostLiquidAPI, observe_draw), ClassifyLiquid, ObserveLiquid, BeforeSurface, AfterSurface, CompositeSurfaces, CaptureClientMapped, EffectsMask, SceneBefore, nullptr, nullptr, nullptr};
+    static const WaterHostLiquidAPI previous8 = {8, offsetof(WaterHostLiquidAPI, observe_draw), ClassifyLiquid, ObserveLiquid, BeforeSurface, AfterSurface, CompositeSurfaces, CaptureClientMapped, EffectsMask, SceneBefore, nullptr, nullptr, nullptr};
     if(size==offsetof(WaterHostLiquidAPI, observe_draw))return abi==7?&previous7:abi==8?&previous8:nullptr;
-    static const WaterHostLiquidAPI previous9 = {9, offsetof(WaterHostLiquidAPI, composite_masked_water), ClassifyLiquid, ObserveLiquid, BeforeSurface, AfterSurface, CompositeSurfaces, CaptureClientMapped, EffectsMask, SceneBefore, ObserveLiquidDraw, nullptr};
+    static const WaterHostLiquidAPI previous9 = {9, offsetof(WaterHostLiquidAPI, composite_masked_water), ClassifyLiquid, ObserveLiquid, BeforeSurface, AfterSurface, CompositeSurfaces, CaptureClientMapped, EffectsMask, SceneBefore, ObserveLiquidDraw, nullptr, nullptr};
     if(abi==9 && size==previous9.size)return &previous9;
+    static const WaterHostLiquidAPI previous10 = {10, offsetof(WaterHostLiquidAPI, finish_masked_world), ClassifyLiquid, ObserveLiquid, BeforeSurface, AfterSurface, CompositeSurfaces, CaptureClientMapped, EffectsMask, SceneBefore, ObserveLiquidDraw, MaskedPass<WaterHostCompositeWater>, nullptr};
+    if(abi==10 && size==previous10.size)return &previous10;
     return abi==kWaterLiquidABI && size==sizeof(WaterHostLiquidAPI)?&liquid:nullptr;
 }
 #endif

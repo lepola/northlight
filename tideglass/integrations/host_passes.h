@@ -66,6 +66,12 @@ public:
             return m_liquidAPI->composite_masked_water(m_context,m_stamp,&resources,stencilBit);
         return Draw(WaterHostCompositeWater, resources, drewWater);
     }
+    bool FinishWorld(const WaterHostResources& resources, uint32_t stencilBit)
+    {
+        if(stencilBit && Current() && m_liquidAPI && m_liquidAPI->abi>=11)
+            return m_liquidAPI->finish_masked_world(m_context,m_stamp,&resources,stencilBit);
+        return Draw(WaterHostWorldDone,resources);
+    }
     bool Environment(const WaterEnvironmentValues& values,IDirect3DTexture9* background,float viewOpticalDepth48=0,const WaterLampSamples& lamps={}){
         if(!Current()||!m_environment)return false;
         if(m_environment->abi>=4){

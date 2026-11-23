@@ -472,14 +472,22 @@ public:
         std::fprintf(file,"{\"kind\":\"world_boundary\",\"at\":%u,\"target\":%u,\"depth\":%u}\n",sequence,mainTarget,mainDepth);
         Shot(d,target,"before-first-world");if(target)target->Release();if(depth)depth->Release();
     }
-    unsigned Draw(IDirect3DDevice9* d,D3DPRIMITIVETYPE type,UINT primitives,bool applied){
+    unsigned Draw(IDirect3DDevice9* d,D3DPRIMITIVETYPE type,UINT primitives,bool applied,
+                  const std::unordered_map<IDirect3DPixelShader9*,uint64_t>& pixelHashes){
         if(!file)return 0;
         IDirect3DSurface9 *target=nullptr,*depth=nullptr;IDirect3DVertexShader9* vs=nullptr;IDirect3DPixelShader9* ps=nullptr;IDirect3DBaseTexture9* texture=nullptr;
         D3DVIEWPORT9 vp={};bool ok=SUCCEEDED(d->GetRenderTarget(0,&target))&&SUCCEEDED(d->GetViewport(&vp));
         d->GetDepthStencilSurface(&depth);d->GetVertexShader(&vs);d->GetPixelShader(&ps);d->GetTexture(0,&texture);
         DWORD state[9]={};unsigned n=0;for(auto key:{D3DRS_ZENABLE,D3DRS_ZFUNC,D3DRS_ZWRITEENABLE,D3DRS_ALPHABLENDENABLE,D3DRS_SRCBLEND,D3DRS_DESTBLEND,D3DRS_COLORWRITEENABLE,D3DRS_ALPHATESTENABLE,D3DRS_SCISSORTESTENABLE})ok=SUCCEEDED(d->GetRenderState(key,&state[n++]))&&ok;
         const unsigned colourId=Surface(target),depthId=Surface(depth),serial=++sequence;
-        std::fprintf(file,"{\"kind\":\"draw\",\"at\":%u,\"type\":%u,\"primitives\":%u,\"applied\":%s,\"states_ok\":%s,\"target\":%u,\"depth\":%u,\"vs\":%u,\"ps\":%u,\"texture0\":%u,\"viewport\":[%u,%u,%u,%u,%.9g,%.9g],\"states\":[%lu,%lu,%lu,%lu,%lu,%lu,%lu,%lu,%lu]}\n",serial,unsigned(type),unsigned(primitives),applied?"true":"false",ok?"true":"false",colourId,depthId,Id(vs),Id(ps),Id(texture),unsigned(vp.X),unsigned(vp.Y),unsigned(vp.Width),unsigned(vp.Height),vp.MinZ,vp.MaxZ,(unsigned long)state[0],(unsigned long)state[1],(unsigned long)state[2],(unsigned long)state[3],(unsigned long)state[4],(unsigned long)state[5],(unsigned long)state[6],(unsigned long)state[7],(unsigned long)state[8]);
+        const auto before=objects.size();
+        const unsigned pixelId=Id(ps);
+        if(objects.size()!=before){
+            const auto found=pixelHashes.find(ps);
+            if(found!=pixelHashes.end())
+                std::fprintf(file,"{\"kind\":\"pixel_shader\",\"id\":%u,\"bytecode_hash\":\"%016llx\"}\n",pixelId,static_cast<unsigned long long>(found->second));
+        }
+        std::fprintf(file,"{\"kind\":\"draw\",\"at\":%u,\"type\":%u,\"primitives\":%u,\"applied\":%s,\"states_ok\":%s,\"target\":%u,\"depth\":%u,\"vs\":%u,\"ps\":%u,\"texture0\":%u,\"viewport\":[%u,%u,%u,%u,%.9g,%.9g],\"states\":[%lu,%lu,%lu,%lu,%lu,%lu,%lu,%lu,%lu]}\n",serial,unsigned(type),unsigned(primitives),applied?"true":"false",ok?"true":"false",colourId,depthId,Id(vs),pixelId,Id(texture),unsigned(vp.X),unsigned(vp.Y),unsigned(vp.Width),unsigned(vp.Height),vp.MinZ,vp.MaxZ,(unsigned long)state[0],(unsigned long)state[1],(unsigned long)state[2],(unsigned long)state[3],(unsigned long)state[4],(unsigned long)state[5],(unsigned long)state[6],(unsigned long)state[7],(unsigned long)state[8]);
         if(mainTarget==colourId&&mainDepth==depthId&&primitives&&vp.MinZ>.999f&&late<4){
             ++late;pendingShot=serial;Shot(d,target,"late-sky-before-"+std::to_string(late));
             std::fprintf(file,"{\"kind\":\"late_sky_snapshot\",\"at\":%u,\"index\":%u}\n",serial,late);
@@ -831,7 +839,7 @@ private:
     /* Cost of the mask on sample frames only (sampledDrawTimers), CpuScopes like the other per-draw costs: the decision (every 8th world-domain call timed, scaled by calls/timed, so the timer does not dominate a
        cheap test), the name runs (begin, alpha guard, end) and the unmark state wraps. Gross: each scope includes its two clock reads (qpcNs on the CPU timers line). The composite bind is once per frame and not timed. */
     LONGLONG cpuNameDecide=0,cpuNameMark=0,cpuNameUnmark=0;unsigned nameDecideCalls=0,nameDecideTimed=0;bool nameRun=false; /* a run of consecutive name draws keeps STENCILENABLE on (the other stencil states of kMark stay set) */
-    NorthlightNameStencil::Mask nameMask;int maskKind=0; /* maskKind: this draw is 1 a name that gets marked, 2 a depth-final draw that unmarks (set by prepareDrawImpl, consumed by nameMaskDraw) */
+    NorthlightNameStencil::Mask nameMask;int maskKind=0; /* 1 marks name pixels, 2 erases covered marks, 3 preserves surviving marks during native glow. */
     IDirect3DSurface9* maskFormatFor=nullptr;unsigned long maskFormatValue=0;unsigned maskFormatLogs=0;bool maskStencil=false;const void* maskDsId=nullptr; /* identities only: the world depth the format verdict is for, and the one whose Clear(Z) also clears stencil */
     void resetTranslucentCensus(){censusDraws=lastOpaqueZAt=clearResolveAt=earlyResolves=earlyResolveAt=earlyResolveUndone=0;}
     LONGLONG cpuPrep=0,cpuCapture=0,cpuWaterCapture=0,cpuEffects=0,cpuMirrorAudit=0;
@@ -879,6 +887,7 @@ private:
         });
     }
     void clearFrame() {
+        namedWorldColour=nullptr;
         if(world)world->alphaFog.target=nullptr;
 #ifdef NORTHLIGHT_WATER
         skyOrder.Finish(true);
@@ -1174,7 +1183,7 @@ private:
         IDirect3DTexture9* waterMask=water?water->maskTextureForDepth(worldMinDepth,worldMaxDepth):nullptr;
         const auto result=composeWater(source,rainMaskTex,waterMask,true);
         if(result==WaterOutcome::AbortEffects)waterAbortEffects=true;
-        else if(result==WaterOutcome::Composed){waterSkyRemembered=true;cooperativeWater.WorldDone(worldDepth);}
+        else if(result==WaterOutcome::Composed){waterSkyRemembered=true;cooperativeWater.WorldDone(worldDepth,nullptr,nullptr,nullptr,visibleNameStencil());}
     }
     // One attempt per frame, at whichever boundary comes first. target: the world colour target, bound.
     WaterOutcome composeWater(IDirect3DSurface9* target,IDirect3DTexture9* rainMaskTex,IDirect3DTexture9* waterMask,bool early,IDirect3DTexture9* refractionScene=nullptr,IDirect3DTexture9* surfaceVisibility=nullptr){
@@ -1490,12 +1499,32 @@ private:
         layerCapture.Stage(ext,saved.targets[0],"finished",16);
         layerCapture.End(world&&world->composited);
 #endif
+        namedWorldColour=maskOn?saved.targets[0]:nullptr;
         applied = true; ++appliedFrames;
         if (appliedFrames==1) logf("FIRST EFFECT FRAME: near=%.5f far=%.2f scale=%.4f,%.4f depthRange=%.9g..%.9g (before UI)",nearZ,farZ,scaleX,scaleY,worldMinDepth,worldMaxDepth);
     }
     /* The guards of every mask decision: the game must not use stencil (a draw seen with STENCILENABLE on disables the feature for the session), the world depth must have stencil bits (checked once per surface and format; one without skips the mask while it is bound). */
     uint32_t visibleNameStencil() const {
         return nameMask.armed()&&nameMask.hasMarks()&&maskStencil&&worldDepth&&worldDebug==0 ? NorthlightNameStencil::kBit : 0;
+    }
+    // Kept by the game through its following screen copy and blur. Identity only, valid for this frame.
+    IDirect3DSurface9* namedWorldColour=nullptr;
+    bool nativeGlowOverNames(UINT count){
+        if(!namedWorldColour||count!=2||!mirrorState.pixelShaderKnown||!mirrorState.pixelShader||
+           !mirrorState.vertexShaderKnown||mirrorState.vertexShader)return false;
+        const auto shader=psHashes.find(mirrorState.pixelShader);
+        // The 12340 native glow's final combine. Its preceding three blur draws use other shaders and targets.
+        if(shader==psHashes.end()||shader->second!=0x2e4e1d13da88efeeull)return false;
+        IDirect3DSurface9* target=nullptr;
+        const bool borrowed=ext->peekRenderTarget(0,target);
+        if(!borrowed&&FAILED(ext->GetRenderTarget(0,&target)))return false;
+        const bool matched=target==namedWorldColour;
+        if(!borrowed)drop(target);
+        DWORD stencil=TRUE,depthWrite=TRUE;
+        D3DVIEWPORT9 viewport={};
+        return matched&&worldDepthBound()&&SUCCEEDED(ext->GetViewport(&viewport))&&nameMaskFullViewport(viewport)&&
+            readDrawRenderState(D3DRS_STENCILENABLE,stencil)&&!stencil&&
+            readDrawRenderState(D3DRS_ZWRITEENABLE,depthWrite)&&!depthWrite;
     }
     bool nameMaskReady(){
         if(!nameMask.stencilChecked){ /* once per frame: the game's own STENCILENABLE is then known FALSE for the frame's runs */
@@ -1542,7 +1571,12 @@ private:
     // Sets a table of render states, keeping the values it replaced (read first, in place from the mirror when it knows them); maskRestore() puts them back. False: a read failed, nothing was changed.
     template<size_t N> bool maskApply(const NorthlightNameStencil::Set (&sets)[N],DWORD (&previous)[N]){
         for(size_t i=0;i<N;++i)if(!readDrawRenderState(D3DRENDERSTATETYPE(sets[i].state),previous[i]))return false;
-        for(size_t i=0;i<N;++i)ext->SetRenderState(D3DRENDERSTATETYPE(sets[i].state),sets[i].value);
+        for(size_t i=0;i<N;++i){
+            if(FAILED(ext->SetRenderState(D3DRENDERSTATETYPE(sets[i].state),sets[i].value))){
+                while(i){--i;ext->SetRenderState(D3DRENDERSTATETYPE(sets[i].state),previous[i]);}
+                return false;
+            }
+        }
         return true;
     }
     template<size_t N> void maskRestore(const NorthlightNameStencil::Set (&sets)[N],const DWORD (&previous)[N]){for(size_t i=0;i<N;++i)ext->SetRenderState(D3DRENDERSTATETYPE(sets[i].state),previous[i]);}
@@ -1586,6 +1620,15 @@ private:
         const int kind=maskKind;maskKind=0;
         if(kind!=1)nameMaskRunEnd();
         if(!kind)return rainBlendDraw(rain,claimed,draw);
+        if(kind==3){
+            namedWorldColour=nullptr;
+            DWORD previous[sizeof NorthlightNameStencil::kComposite/sizeof NorthlightNameStencil::kComposite[0]];
+            bool set=false;
+            extensionWork("name glow",[&]{set=maskApply(NorthlightNameStencil::kComposite,previous);});
+            const HRESULT hr=rainBlendDraw(rain,claimed,draw);
+            if(set)extensionWork("name glow",[&]{maskRestore(NorthlightNameStencil::kComposite,previous);});
+            return hr;
+        }
         if(kind==2){
             DWORD previous[sizeof NorthlightNameStencil::kUnmark/sizeof NorthlightNameStencil::kUnmark[0]];bool set=false;
             extensionWork("name mask",[&]{CpuScope c(sampledDrawTimers()?&cpuNameUnmark:nullptr);set=maskApply(NorthlightNameStencil::kUnmark,previous);});
@@ -1633,6 +1676,7 @@ private:
         if(spellOn){spellDomain=false;spellVs=nullptr;} /* task 34: this draw's reads for spellDrawImpl, valid only if this function gets that far */
         if(failed||!enabled)return;
         if(applied){
+            if(nativeGlowOverNames(count))maskKind=3;
             const bool pendingUi=spellOn&&spell.pending();
             if(sampled()||pendingUi){IDirect3DVertexShader9* late=nullptr;const bool borrowed=ext->peekVertexShader(late); // 0.3.196 (task 12): identity lookup only
                 if((borrowed||(SUCCEEDED(ext->GetVertexShader(&late))&&late))&&world){
@@ -2281,7 +2325,7 @@ private:
         bool claimed=false,rainBlend=false,mist=false;
 #ifdef NORTHLIGHT_WATER
         cooperativeSurfaceDraw=WaterHostLiquidUnknown;
-        const unsigned orderSerial=skyOrder.Draw(ext,t,count,applied);
+        const unsigned orderSerial=skyOrder.Draw(ext,t,count,applied,psHashes);
         struct OrderDone {NorthlightSkyOrderCapture& capture;IDirect3DDevice9* device;unsigned serial;bool& claimed;~OrderDone(){capture.DrawDone(device,serial,claimed);}} orderDone{skyOrder,ext,orderSerial,claimed};
         if(enabled&&!applied&&layerCapture.ObserveBackground()){
             IDirect3DVertexShader9* materialVs=nullptr;

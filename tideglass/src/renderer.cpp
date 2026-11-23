@@ -2494,6 +2494,22 @@ bool Renderer::CopySceneDepth(IDirect3DDevice9* dev, IDirect3DTexture9* depthTex
     return saved.Restore() && ok;
 }
 
+// The scene already contains the visible native letters. Share the same read-only test
+// between final surface shading and the world-space anti-aliasing pass.
+static bool BindForegroundStencil(IDirect3DDevice9* dev, IDirect3DSurface9* depth, uint32_t bit)
+{
+    if(FAILED(dev->SetDepthStencilSurface(depth)))return false;
+    const struct { D3DRENDERSTATETYPE state; DWORD value; } states[]={
+        {D3DRS_ZENABLE,FALSE},{D3DRS_ZWRITEENABLE,FALSE},{D3DRS_STENCILENABLE,TRUE},
+        {D3DRS_TWOSIDEDSTENCILMODE,FALSE},{D3DRS_STENCILFUNC,D3DCMP_NOTEQUAL},
+        {D3DRS_STENCILREF,bit},{D3DRS_STENCILMASK,bit},{D3DRS_STENCILWRITEMASK,0},
+        {D3DRS_STENCILFAIL,D3DSTENCILOP_KEEP},{D3DRS_STENCILZFAIL,D3DSTENCILOP_KEEP},
+        {D3DRS_STENCILPASS,D3DSTENCILOP_KEEP}};
+    for(const auto& state:states)
+        if(FAILED(dev->SetRenderState(state.state,state.value)))return false;
+    return true;
+}
+
 bool Renderer::CompositeWater(IDirect3DDevice9* dev, IDirect3DTexture9* depthTexture, IDirect3DSurface9* boundDepth,
                               const FrameInputs& in, const Config& cfg, bool shadeSurface, IDirect3DTexture9* nativeWater,
                               IDirect3DTexture9* refractionScene, IDirect3DTexture9* surfaceVisibility, uint32_t stencilBit)
@@ -2653,18 +2669,7 @@ bool Renderer::CompositeWater(IDirect3DDevice9* dev, IDirect3DTexture9* depthTex
             bound=screen_pass::SaveMultisampleColour(dev,saved.color[0],m_sceneDesc,m_multisampleRollback);
             rollback=m_multisampleRollback;
         }
-        if(bound && stencilBit){
-            // The visible native letters are already in this target. Only the
-            // final water and lamp draws share the host's read-only exclusion.
-            bound=SUCCEEDED(dev->SetDepthStencilSurface(boundDepth));
-            const struct { D3DRENDERSTATETYPE state; DWORD value; } test[]={
-                {D3DRS_ZENABLE,FALSE},{D3DRS_ZWRITEENABLE,FALSE},{D3DRS_STENCILENABLE,TRUE},
-                {D3DRS_TWOSIDEDSTENCILMODE,FALSE},{D3DRS_STENCILFUNC,D3DCMP_NOTEQUAL},
-                {D3DRS_STENCILREF,stencilBit},{D3DRS_STENCILMASK,stencilBit},{D3DRS_STENCILWRITEMASK,0},
-                {D3DRS_STENCILFAIL,D3DSTENCILOP_KEEP},{D3DRS_STENCILZFAIL,D3DSTENCILOP_KEEP},
-                {D3DRS_STENCILPASS,D3DSTENCILOP_KEEP}};
-            for(const auto& s:test)bound=SUCCEEDED(dev->SetRenderState(s.state,s.value))&&bound;
-        }
+        if(bound && stencilBit)bound=BindForegroundStencil(dev,boundDepth,stencilBit);
         if(bound){attempted=true;shaded=SUCCEEDED(DrawScreenTriangle(dev));}
         if(shaded && cfg.fineHighlights && cfg.specular>0 && in.lamps.positions[0][3]>0 &&
            !cfg.reflectionView && !cfg.refractionDebug && !cfg.seabedDebug && !cfg.reflectionDebug)
@@ -2953,7 +2958,7 @@ void Renderer::DrawUnderwater(IDirect3DDevice9* dev, IDirect3DTexture9* depthTex
 }
 
 bool Renderer::Render(IDirect3DDevice9* dev, IDirect3DTexture9* depthTexture, IDirect3DSurface9* boundDepth,
-                      const FrameInputs& in, const Config& cfg)
+                      const FrameInputs& in, const Config& cfg, uint32_t stencilBit)
 {
     if (!cfg.underwater || in.mapId != m_airMap || in.weatherType != m_airWeather)
         m_airMap = -1;
@@ -3033,7 +3038,7 @@ bool Renderer::Render(IDirect3DDevice9* dev, IDirect3DTexture9* depthTexture, ID
     if (underwater)
         DrawUnderwater(dev, depthTexture, target, in, cfg, constants);
     if (cfg.antiAliasing)
-        Antialias(dev, target, in, constants);
+        Antialias(dev, target, boundDepth, stencilBit, in, constants);
     if (overlay)
     {
         DrawOverlay(dev, depthTexture, target, in, cfg, constants);
@@ -3050,7 +3055,7 @@ bool Renderer::Render(IDirect3DDevice9* dev, IDirect3DTexture9* depthTexture, ID
     return candidateFailure ? Skip(candidateFailure) : true;
 }
 
-void Renderer::Antialias(IDirect3DDevice9* dev, IDirect3DSurface9* target, const FrameInputs& in,
+void Renderer::Antialias(IDirect3DDevice9* dev, IDirect3DSurface9* target, IDirect3DSurface9* boundDepth, uint32_t stencilBit, const FrameInputs& in,
                          const float (&constants)[9][4])
 {
     D3DSURFACE_DESC desc = {};
@@ -3063,8 +3068,14 @@ void Renderer::Antialias(IDirect3DDevice9* dev, IDirect3DSurface9* target, const
     dev->SetRenderState(D3DRS_COLORWRITEENABLE, kColorOnly);
     dev->SetPixelShaderConstantF(0, &constants[0][0], kFrameConstants);
     if (FAILED(BindPixelShader(dev, m_fxaaPs))) return;
-    BindLinearTexture(dev, 2, m_sceneWithWater);
-    DrawScreenTriangle(dev);
+    if (!stencilBit || BindForegroundStencil(dev,boundDepth,stencilBit)){
+        BindLinearTexture(dev, 2, m_sceneWithWater);
+        DrawScreenTriangle(dev);
+    }
+    if(stencilBit){
+        dev->SetRenderState(D3DRS_STENCILENABLE,FALSE);
+        dev->SetDepthStencilSurface(nullptr);
+    }
     dev->SetRenderState(D3DRS_COLORWRITEENABLE, 0xF);
 }
 

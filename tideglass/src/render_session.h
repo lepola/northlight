@@ -207,8 +207,8 @@ public:
     bool DrawRainRings(IDirect3DDevice9* d, IDirect3DSurface9* z, const FrameInputs& in, const Config& cfg)
     { FrameDiagnostics::Scope profile(m_diagnostics,FrameDiagnostics::Rings);GpuScope gpu(m_externalTimer?nullptr:m_timer,GpuTimer::RainRings);return z && Apply(d, &Renderer::DrawRainRings, z, in, Effective(cfg)); }
     bool Render(IDirect3DDevice9* d, IDirect3DTexture9* t, IDirect3DSurface9* z,
-                const FrameInputs& in, const Config& cfg)
-    { FrameDiagnostics::Scope profile(m_diagnostics,FrameDiagnostics::WorldDone);GpuScope gpu(m_externalTimer?nullptr:m_timer,GpuTimer::WorldDone);return t && z && Apply(d, &Renderer::Render, t, z, in, Effective(cfg)); }
+                const FrameInputs& in, const Config& cfg, uint32_t stencilBit = 0)
+    { FrameDiagnostics::Scope profile(m_diagnostics,FrameDiagnostics::WorldDone);GpuScope gpu(m_externalTimer?nullptr:m_timer,GpuTimer::WorldDone);return t && z && Apply(d, &Renderer::Render, t, z, in, Effective(cfg), stencilBit); }
 
 private:
     friend struct RenderSessionTestAccess;

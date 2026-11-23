@@ -61,7 +61,12 @@ public:
         if(m_environment&&((m_environment->abi!=kWaterEnvironmentABI&&m_environment->abi!=3&&m_environment->abi!=2)||m_environment->size!=sizeof(WaterHostEnvironmentAPI)||!m_environment->set_environment||!m_environment->surface_status))m_environment=nullptr;
         auto getLiquid=reinterpret_cast<WaterHostGetLiquidAPIFn>(reinterpret_cast<void*>(GetProcAddress(module,"WaterHostGetLiquidAPI")));
         m_liquid=getLiquid?getLiquid(kWaterLiquidABI,sizeof(WaterHostLiquidAPI)):nullptr;
-        if(m_liquid&&(m_liquid->abi!=kWaterLiquidABI||m_liquid->size!=sizeof(WaterHostLiquidAPI)||!m_liquid->composite_masked_water))m_liquid=nullptr;
+        if(m_liquid&&(m_liquid->abi!=kWaterLiquidABI||m_liquid->size!=sizeof(WaterHostLiquidAPI)||!m_liquid->finish_masked_world||!m_liquid->composite_masked_water))m_liquid=nullptr;
+        if(!m_liquid&&getLiquid){
+            const auto prefix=offsetof(WaterHostLiquidAPI,finish_masked_world);
+            m_liquid=getLiquid(10,prefix);
+            if(m_liquid&&(m_liquid->abi!=10||m_liquid->size!=prefix||!m_liquid->composite_masked_water))m_liquid=nullptr;
+        }
         if(!m_liquid&&getLiquid){
             const auto prefix=offsetof(WaterHostLiquidAPI,composite_masked_water);
             m_liquid=getLiquid(9,prefix);

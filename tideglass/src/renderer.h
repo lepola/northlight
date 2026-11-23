@@ -89,7 +89,7 @@ public:
     bool CompositeDeferredSlime(IDirect3DDevice9* dev, IDirect3DTexture9* depthTexture,
                                 IDirect3DSurface9* boundDepth, const FrameInputs& in, const Config& cfg);
     bool Render(IDirect3DDevice9* dev, IDirect3DTexture9* depthTexture, IDirect3DSurface9* boundDepth,
-                const FrameInputs& in, const Config& cfg);
+                const FrameInputs& in, const Config& cfg, uint32_t stencilBit = 0);
     // Shades the solid world where it is tucked in (corners, creases, under things), once it is all drawn and before
     // the liquids, from the depth buffer.
     bool AmbientOcclusion(IDirect3DDevice9* dev, IDirect3DTexture9* depthTexture, IDirect3DSurface9* boundDepth,
@@ -283,7 +283,7 @@ private:
                             const FrameInputs& in, const Config& cfg, const float (&frame)[9][4], const float (&water)[kWaterConstants][4]);
     void DrawUnderwater(IDirect3DDevice9* dev, IDirect3DTexture9* depthTexture, IDirect3DSurface9* target,
                         const FrameInputs& in, const Config& cfg, const float (&frame)[9][4]);
-    void Antialias(IDirect3DDevice9* dev, IDirect3DSurface9* target, const FrameInputs& in,
+    void Antialias(IDirect3DDevice9* dev, IDirect3DSurface9* target, IDirect3DSurface9* boundDepth, uint32_t stencilBit, const FrameInputs& in,
                    const float (&constants)[9][4]);
     void Probe(IDirect3DDevice9* dev, IDirect3DTexture9* depthTexture, const FrameInputs& in,
                const float (&constants)[9][4]);

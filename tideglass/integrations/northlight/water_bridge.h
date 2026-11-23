@@ -167,7 +167,7 @@ public:
         const bool composed = pending && bound && m_passes.AfterLiquid(resources, true, stencilBit);
         // A memory-only WorldDone can succeed internally while reporting no
         // on-screen draw. Never use its result to skip restoration or composition.
-        const bool drawn = bound && m_passes.Draw(WaterHostWorldDone, resources);
+        const bool drawn = bound && m_passes.FinishWorld(resources, stencilBit);
         const bool restored = saved.Restore();
         return restored && (composed || drawn);
     }
