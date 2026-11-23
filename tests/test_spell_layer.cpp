@@ -94,7 +94,22 @@ static void testClassify(){
     {DrawFacts f=cand();f.pending=true;f.skinned=true;f.fadeRun=true;expect(f,Kind::InPlace,0,Reason::Count,InPlaceKind::Fade);}
     {DrawFacts f=cand();f.skinned=true;expect(f,Kind::Defer,SubAdditive);} // skinned outside a fade run defers
     {DrawFacts f=cand();f.fadeRun=true;expect(f,Kind::Defer,SubAdditive);} // a run only changes skinned draws
-    // Z-writing draws never defer
+    // Only identified world glyphs qualify for late blending, with the native
+    // depth test and an ordinary alpha blend. HUD and uncertain draws stay in place.
+    {
+        DrawFacts f=cand();
+        f.uiTag=true;f.family=Family::None;f.zWrite=true;f.destBlend=kInvSrcAlpha;
+        EagerFacts facts{f};
+        CHECK(classifyWith(facts,15,true).kind==Kind::Defer);
+        CHECK(classifyWith(facts,15,false).kind==Kind::TranslucentZ);
+        for(bool DrawFacts::*flag : {&DrawFacts::stencil,&DrawFacts::occlusionActive,&DrawFacts::instanced,&DrawFacts::mrtBound,&DrawFacts::samplesRenderTargetTexture}){
+            f.*flag=true;CHECK(classifyWith(facts,15,true).kind!=Kind::Defer);f.*flag=false;
+        }
+        f.dsIsWorldDepth=false;CHECK(classifyWith(facts,15,true).kind!=Kind::Defer);
+        f.dsIsWorldDepth=true;f.zEnable=false;CHECK(classifyWith(facts,15,true).kind!=Kind::Defer);
+        f.zEnable=true;f.worldDomain=false;CHECK(classifyWith(facts,15,true).kind!=Kind::Defer);
+    }
+    // Other Z-writing draws never defer
     {DrawFacts f=cand();f.zWrite=true;expect(f,Kind::TranslucentZ);}
     {DrawFacts f=cand();f.zWrite=true;f.srcBlend=kBlendOne;f.destBlend=kBlendZero;expect(f,Kind::Opaque);}
     {DrawFacts f=cand();f.zWrite=true;f.blend=false;expect(f,Kind::Opaque);}

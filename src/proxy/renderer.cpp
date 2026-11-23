@@ -2699,10 +2699,13 @@ private:
             if(!zWrite&&spellDomain&&!claimed&&!water&&!rain&&!uiTag&&!(fade&&skinned)&&((family!=Family::None&&family!=Family::Ripples)||!vs)&&rd(D3DRS_ALPHABLENDENABLE))spell.noteCandidate();
             return false;
         }
+        // A perspective font draw may write depth. Keep its original depth comparison
+        // when blending against the finished world at the UI boundary.
+        const bool nativeName=maskKind==1 && !nameMask.debug && rd(D3DRS_ZFUNC)==D3DCMP_LESSEQUAL;
         const bool pend=spell.pending();
         void* texKey=pend?spellTargetTexture():nullptr;
         const bool glowActive=pend&&spellGlowFrame==frame+1&&spellGlowTex; /* an allowed glow copy happened this frame while draws were pending */
-        if(!trace){
+        if(!trace&&!nativeName){
             if(!pend&&(zWrite||!spellDomain))return false;
             if(!pend&&((family==Family::None&&vs)||family==Family::Ripples||claimed||water||rain||uiTag||(fade&&skinned)||!rd(D3DRS_ALPHABLENDENABLE)))return false; /* no vertex shader: fixed function, a candidate */
             if(pend&&zWrite&&spellDomain&&!texKey&&!glowActive)return false; /* Opaque / TranslucentZ: in place, nothing to do */
@@ -2711,7 +2714,7 @@ private:
         f.zEnable=spellZEnable;f.zWrite=zWrite;f.worldDomain=spellDomain;f.family=family;f.skinned=skinned;f.water=water;f.uiTag=uiTag;f.rain=rain;f.claimed=claimed;f.fixedFunction=!vs;f.fadeRun=fade;f.pending=pend;
         f.mrtBound=rainMrtBound;f.occlusionActive=spellQueryN!=0||spellQueryUnknown;
         facts.cw=cw;facts.cwKnown=cwKnown;
-        const Result r=classifyWith(facts,spellClasses); /* the facts are read in the order the decision asks, the rest never */
+        const Result r=classifyWith(facts,spellClasses,nativeName); /* the facts are read in the order the decision asks, the rest never */
         /* The glow exemption (glowVerdict in spell_layer.h): a screen-space pass that samples the glow copy is let through; a world draw that samples it is a Sample hazard. */
         NorthlightSpellLayer::GlowVerdict glow=NorthlightSpellLayer::GlowVerdict::None;
         const bool orderHazard=r.kind==Kind::Hazard&&r.reason==Reason::Order;
@@ -2740,7 +2743,11 @@ private:
                     const auto match=vsHashes.find(vs);
                     spellArgs.spatialFog=match!=vsHashes.end() && match->second==SpatialAlphaFog::vertexHash;
                 }
-                spellArgs.vsFog=0;spellArgs.vsHash=0;if(vs){auto pit=vsFogProven.find(vs);if(pit!=vsFogProven.end())spellArgs.vsFog=pit->second;if(diagnostics()&&spell.fogSampleRoom()){auto hit=vsHashes.find(vs);if(hit!=vsHashes.end())spellArgs.vsHash=hit->second;}} /* the hash only for a SPELLFOG sample that will be logged */CpuScope record(timed?&spellRecordTicks:nullptr); /* sampled frames only */if(timed)++spellRecords;deferred=spell.defer(spellArgs,rt,ds,r.sub);}
+                spellArgs.vsFog=0;
+                spellArgs.vsHash=0;
+                if(vs&&!nativeName){auto pit=vsFogProven.find(vs);if(pit!=vsFogProven.end())spellArgs.vsFog=pit->second;if(diagnostics()&&spell.fogSampleRoom()){auto hit=vsHashes.find(vs);if(hit!=vsHashes.end())spellArgs.vsHash=hit->second;}}
+                if(nativeName)spellArgs.psFogReg=-1;
+                CpuScope record(timed?&spellRecordTicks:nullptr); /* sampled frames only */if(timed)++spellRecords;deferred=spell.defer(spellArgs,rt,ds,r.sub);}
             break;}
         case Kind::Hazard:{CpuScope flush(timed?&spellFlushTicks:nullptr); /* sampled frames only */if(timed)++spellFlushes;spellInDraw=true;spellFlush(r.reason,true,r.inPlace);spellInDraw=false;break;} /* r.inPlace: water, rain or a name drawn after a deferred draw */
         case Kind::InPlace:if(pend)spell.noteInPlace(r.inPlace);break;

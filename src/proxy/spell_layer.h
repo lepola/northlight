@@ -82,8 +82,8 @@ inline unsigned subClass(const DrawFacts& f){
     if(f.destBlend==kInvSrcAlpha)return SubAlpha;
     return SubOther;
 }
-// Z-writing draws never defer and stay in place (their depth occludes the replay). Colour-writing no-Z draws into the target are deferred when they
-// are one of the four families or a fixed-function draw (ribbons, beams; DrawFacts::fixedFunction) with a non-opaque blend. Water ripples (Family::Ripples) count as water. Water, rain and floating names are drawn in place when nothing is pending (InPlace, no
+// Z-writing scene geometry stays in place (its depth occludes the replay). Colour-writing no-Z draws into the target are deferred when they
+// are one of the four families or a fixed-function draw (ribbons, beams; DrawFacts::fixedFunction) with a non-opaque blend. Water ripples (Family::Ripples) count as water. Water, rain and names ineligible for late blending are drawn in place when nothing is pending (InPlace, no
 // effect), but a Hazard/Order while draws are pending: drawn in place they would end up UNDER the replayed spells, so the caller flushes first and
 // the original order holds (Result::inPlace names which of them it was; Layer::hazard() then splits the frame instead of falling back). A fade colour pass stays an accepted reorder (its depth pre-pass occludes
 // the replay). Everything else is a Hazard (unknown order dependency while draws are pending: the caller flushes). Claimed draws and draws into other targets are Ignore
@@ -93,13 +93,22 @@ inline unsigned subClass(const DrawFacts& f){
 // samples (samplesRenderTargetTexture), claimed, rt0IsTarget, colorWrite, worldDomain, zWrite, water, rain, uiTag, fadeRun, skinned, family, pending, fixedFunction, zEnable,
 // stencil, dsIsWorldDepth, mrtBound, instanced, occlusionActive, and opaqueBlend() / subClass() computed from the blend facts (blend enable, src, dst, op, separate alpha).
 // A fact is read at most when the decision reaches it, so a lazy F never needs the rest. EagerFacts adapts a filled DrawFacts (classify() below).
-template<class F> inline Result classifyWith(F& f,unsigned classMask){
+template<class F> inline Result classifyWith(F& f,unsigned classMask,bool nativeName=false){
     Result r;
     auto hazard=[&](Reason why){r.kind=Kind::Hazard;r.reason=why;return r;};
     if(f.samples())return hazard(Reason::Sample);
     if(f.claimed()||!f.rt0IsTarget())return r;
     const bool rgb=(f.colorWrite()&7)!=0;
     if(!f.worldDomain())return rgb?hazard(Reason::Order):r;
+    // The caller identifies world text by its perspective font draw. Screen UI
+    // can share that shader. A later replay must still use the native world depth.
+    if(nativeName && rgb && f.zEnable() && f.dsIsWorldDepth() && !f.rain() && !f.water() &&
+       !f.stencil() && !f.mrtBound() && !f.instanced() && !f.occlusionActive() &&
+       f.subClass()==SubAlpha){
+        r.kind=Kind::Defer;
+        r.sub=SubAlpha;
+        return r;
+    }
     if(f.zWrite()){r.kind=(f.opaqueBlend()||!rgb)?Kind::Opaque:Kind::TranslucentZ;return r;}
     if(!rgb)return r;
     const bool water=f.water()||f.family()==Family::Ripples; // water ripples are drawn after the spells by the game: they behave like water
