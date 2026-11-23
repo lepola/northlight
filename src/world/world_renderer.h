@@ -4134,6 +4134,9 @@ replayBoundsAbandon();releaseReplayProbe();staticCasters.settle();rigidMemoryCle
     struct SurfaceComposition {
         IDirect3DTexture9* scene=nullptr;
         IDirect3DTexture9* depth=nullptr;
+        IDirect3DSurface9* ambientTarget=nullptr;
+        IDirect3DPixelShader9* bloomShader=nullptr;
+        float bloomGain=0;
         std::function<bool(IDirect3DTexture9*,IDirect3DTexture9*,IDirect3DTexture9*&)> draw;
     };
 #ifdef NORTHLIGHT_WATER
@@ -5044,7 +5047,26 @@ replayBoundsAbandon();releaseReplayProbe();staticCasters.settle();rigidMemoryCle
             d->SetTexture(0,nullptr);
             const bool copied=check(d->StretchRect(targetSurface,nullptr,destination,nullptr,D3DTEXF_NONE),"surface scene copy");
             destination->Release();if(!copied)return false;
-            d->SetTexture(0,sceneTexture);d->SetTexture(1,depth);d->SetTexture(8,nullptr);d->SetTexture(15,nullptr);
+            d->SetTexture(0,sceneTexture);
+            if(waterSurfaceShaded && foldAO && surface->ambientTarget && surface->bloomShader){
+                // The contact pass saw native water. Keep its occlusion in alpha
+                // and take the five bloom samples from the completed material.
+                const float pixelSize[4]={1.f/w,1.f/h,0,0};
+                const float options[4]={surface->bloomGain,0,0,0};
+                constexpr DWORD rgb=D3DCOLORWRITEENABLE_RED|D3DCOLORWRITEENABLE_GREEN|D3DCOLORWRITEENABLE_BLUE;
+                if(!check(d->SetTexture(10,nullptr),"unbind ambient input") ||
+                   !check(d->SetRenderTarget(0,surface->ambientTarget),"completed scene bloom target") ||
+                   !check(d->SetRenderState(D3DRS_COLORWRITEENABLE,rgb),"preserve contact occlusion") ||
+                   !check(d->SetPixelShaderConstantF(0,pixelSize,1),"bloom pixel size") ||
+                   !check(d->SetPixelShaderConstantF(2,options,1),"bloom gain") ||
+                   !check(d->SetPixelShader(surface->bloomShader),"completed scene bloom shader") ||
+                   !check(quad(w/2,h/2),"completed scene bloom"))return false;
+                if(!check(d->SetRenderTarget(0,targetSurface),"release ambient target") ||
+                   !check(d->SetRenderState(D3DRS_COLORWRITEENABLE,15),"restore colour writes") ||
+                   !check(d->SetTexture(10,foldAO),"restore ambient input"))return false;
+                if(profile)profile->mark("WaterSceneBloom");
+            }
+            d->SetTexture(1,depth);d->SetTexture(8,nullptr);d->SetTexture(15,nullptr);
             d->SetTexture(11,waterMask);c[30][0]=waterMask?1.f:0.f;
             d->SetPixelShaderConstantF(0,&c[0][0],68);
             bucket(NorthlightEffectsBuckets::WaterSurface);

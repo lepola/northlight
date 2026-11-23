@@ -149,12 +149,23 @@ checks['proxy: one shared effect-state setup, used before the AO pass and before
     and 'kAoContactBloomShader' in renderer and 'kAoContactShader' not in renderer)
 render_fn = wr[wr.index('    bool render(IDirect3DSurface9* targetSurface'):]
 temporal = render_fn[render_fn.index('{   // Temporal stabilization'):render_fn.index('temporalIndex=prev;temporalValid=true;')]
+after_temporal = render_fn[render_fn.index('temporalIndex=prev;temporalValid=true;'):render_fn.index('"world composite"')]
 checks['world: copy skipped only with foldScene, Scene s0 = foldScene, s10 = AO or neutral LINEAR before the temporal quad'] = (
     'if(!foldScene&&!check(d->StretchRect(targetSurface,nullptr,colorSurface,nullptr,D3DTEXF_NONE),"world color copy"))return false;' in render_fn
     and 'IDirect3DTexture9* textures[]={foldScene?foldScene:color,' in render_fn
     and temporal.count('d->SetTexture(10,foldAO?foldAO:neutralAO);d->SetSamplerState(10,D3DSAMP_MINFILTER,D3DTEXF_LINEAR);d->SetSamplerState(10,D3DSAMP_MAGFILTER,D3DTEXF_LINEAR);') == 1
     and temporal.index('SetTexture(10,') < temporal.index('quad(w/2,h/2),"temporal light pass"')
-    and 'SetTexture(10' not in render_fn[render_fn.index('temporalIndex=prev;temporalValid=true;'):render_fn.index('"world composite"')])
+    and re.findall(r'SetTexture\(10,([^)]*)\)', after_temporal) == ['nullptr', 'foldAO'])
+bloom_steps = ['surface->draw(', '"surface scene copy"', 'SetTexture(0,sceneTexture)',
+               'if(waterSurfaceShaded && foldAO', 'SetTexture(10,nullptr)', 'SetRenderTarget(0,surface->ambientTarget)',
+               'SetRenderState(D3DRS_COLORWRITEENABLE,rgb)', 'SetPixelShader(surface->bloomShader)',
+               'quad(w/2,h/2),"completed scene bloom"', 'SetRenderTarget(0,targetSurface)',
+               'SetRenderState(D3DRS_COLORWRITEENABLE,15)', 'SetTexture(10,foldAO)']
+checks['completed water supplies bloom RGB and preserves contact AO for the final composite'] = (
+    'D3DCOLORWRITEENABLE_RED|D3DCOLORWRITEENABLE_GREEN|D3DCOLORWRITEENABLE_BLUE' in after_temporal
+    and all(step in after_temporal for step in bloom_steps)
+    and [after_temporal.index(step) for step in bloom_steps] == sorted(after_temporal.index(step) for step in bloom_steps)
+    and 'material.ambientTarget=aoSurface;material.bloomShader=contactBloomPS;material.bloomGain=constants[8];' in effects_cpp)
 checks['world: composited cleared at entry, set right after the WorldComposite quad; neutral 1x1 (0,0,0,1) created and released'] = (
     'shadowsComposited=false;composited=false;lastRenderDebug=debug;' in render_fn
     and 'compositeOk=check(quad(w,h),"world composite");' in render_fn and render_fn.index('compositeOk=check(quad(w,h),"world composite");')<render_fn.index('if(!compositeOk)return false;') < render_fn.index('composited=true;') # 0.3.212: the quad inside the name mask's composite bind

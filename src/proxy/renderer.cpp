@@ -1433,6 +1433,7 @@ private:
 #ifdef NORTHLIGHT_WATER
             if(lightBeforeWater){
                 material.scene=waterScene;material.depth=waterSceneDepth;
+                material.ambientTarget=aoSurface;material.bloomShader=contactBloomPS;material.bloomGain=constants[8];
                 composition=&material;
                 material.draw=[&](IDirect3DTexture9* litScene,IDirect3DTexture9* visibility,IDirect3DTexture9*& mask){
                     SavedState surfaceState(ext,&stateBlocks);if(!surfaceState.ok)return false;
