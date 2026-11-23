@@ -184,7 +184,7 @@ re_=r[r.index('void renderEffects(bool atWorldRead=false) {'):r.index('/* The gu
 checks['viewport: a world-depth Clear(Z) is the full clear only with a viewport of the depth surface size (Clear is clipped to it); our own stencil Clear sets a full viewport for the call and restores it']=(
     'v.Width==worldDepthDesc.Width&&v.Height==worldDepthDesc.Height' in r)
 checks['renderEffects: marks only with an armed feature, a stencil depth, the world depth and no debug view; the world gets the surface for its composite, the legacy composite binds it around its quad with the shared bind']=(
-    'const bool maskOn=nameMask.armed()&&nameMask.hasMarks()&&maskStencil&&worldDepth&&worldDebug==0;' in re_ and 'world->setNameMask(maskOn?worldDepth:nullptr);' in re_
+    'const bool maskOn=visibleNameStencil()!=0;' in re_ and 'return nameMask.armed()&&nameMask.hasMarks()&&maskStencil&&worldDepth&&worldDebug==0 ? NorthlightNameStencil::kBit : 0;' in r and 'world->setNameMask(maskOn?worldDepth:nullptr);' in re_
     and re_.index('{NameMaskCompositeBind mask(ext,maskOn?worldDepth:nullptr);')<re_.index('if (error(quad(width,height),"composition pass")) return false;}'))
 bind=w[w.index('struct NameMaskCompositeBind {'):w.index('class WorldRenderer {')]
 checks['composite bind (one helper for both composites): the world depth-stencil and kComposite only with marks; D3DERR_NOTFOUND counts as no depth bound; the three states and the previous depth-stencil restored at scope end']=(

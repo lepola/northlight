@@ -1176,9 +1176,6 @@ private:
         if(result==WaterOutcome::AbortEffects)waterAbortEffects=true;
         else if(result==WaterOutcome::Composed){waterSkyRemembered=true;cooperativeWater.WorldDone(worldDepth);}
     }
-    uint32_t waterNameStencil() const {
-        return nameMask.armed()&&nameMask.hasMarks()&&maskStencil&&worldDepth&&worldDebug==0 ? NorthlightNameStencil::kBit : 0;
-    }
     // One attempt per frame, at whichever boundary comes first. target: the world colour target, bound.
     WaterOutcome composeWater(IDirect3DSurface9* target,IDirect3DTexture9* rainMaskTex,IDirect3DTexture9* waterMask,bool early,IDirect3DTexture9* refractionScene=nullptr,IDirect3DTexture9* surfaceVisibility=nullptr){
         waterStage=WaterStage::Attempted;
@@ -1227,7 +1224,7 @@ private:
             }
             // The material callback runs inside the lit world pass, before its scheduled fog composite.
             const bool spatialFog = refractionScene && world && worldDebug == 0 && world->WaterSpatialFogActive();
-            bool composed=immediate&&rollbackReady&&cooperativeWater.Composite(depthTex,waterMask,worldDepth,nearZ,farZ,worldMinDepth,worldMaxDepth,false,refractionScene,surfaceVisibility,spatialFog,waterNameStencil());
+            bool composed=immediate&&rollbackReady&&cooperativeWater.Composite(depthTex,waterMask,worldDepth,nearZ,farZ,worldMinDepth,worldMaxDepth,false,refractionScene,surfaceVisibility,spatialFog,visibleNameStencil());
             WaterHostSurfaceStatus coreStatus={};const bool knownStatus=cooperativeWater.SurfaceStatus(coreStatus);
             const bool coreAbort=knownStatus&&coreStatus.outcome==WaterHostSurfaceAbortFrame;
             // Rain needs putting back only where the core drew the water's surface over it. Seen from below the core draws
@@ -1405,7 +1402,7 @@ private:
         // frame) keeps the composite before the world, exactly as before.
         const bool fold=world&&debugMode==0&&world->ready();
         /* 0.3.212 (task 32): this frame's name marks: the composite quads draw with the world depth-stencil bound and reject marked pixels; no marks, or the feature off: exactly the old calls */
-        const bool maskOn=nameMask.armed()&&nameMask.hasMarks()&&maskStencil&&worldDepth&&worldDebug==0;nameMask.composited=maskOn;
+        const bool maskOn=visibleNameStencil()!=0;nameMask.composited=maskOn;
         auto legacyComposite=[&]{
             if (error(ext->SetRenderTarget(0,saved.targets[0]),"composition render target")) return false;
             ext->SetTexture(2,ao); ext->SetPixelShader(compositePS);
@@ -1488,7 +1485,7 @@ private:
             // A frame with no liquid in view still begins the water frame: under the sea looking down, no surface is
             // drawn but the underwater view is (2026-11-21). The water frame was captured with the world already.
             prepareCooperativeWater(desc,saved.viewport,false);
-            cooperativeWater.WorldDone(worldDepth,saved.targets[0],depthTex,&saved.viewport,waterNameStencil());
+            cooperativeWater.WorldDone(worldDepth,saved.targets[0],depthTex,&saved.viewport,visibleNameStencil());
         }
         layerCapture.Stage(ext,saved.targets[0],"finished",16);
         layerCapture.End(world&&world->composited);
@@ -1497,6 +1494,9 @@ private:
         if (appliedFrames==1) logf("FIRST EFFECT FRAME: near=%.5f far=%.2f scale=%.4f,%.4f depthRange=%.9g..%.9g (before UI)",nearZ,farZ,scaleX,scaleY,worldMinDepth,worldMaxDepth);
     }
     /* The guards of every mask decision: the game must not use stencil (a draw seen with STENCILENABLE on disables the feature for the session), the world depth must have stencil bits (checked once per surface and format; one without skips the mask while it is bound). */
+    uint32_t visibleNameStencil() const {
+        return nameMask.armed()&&nameMask.hasMarks()&&maskStencil&&worldDepth&&worldDebug==0 ? NorthlightNameStencil::kBit : 0;
+    }
     bool nameMaskReady(){
         if(!nameMask.stencilChecked){ /* once per frame: the game's own STENCILENABLE is then known FALSE for the frame's runs */
             DWORD stencilOn=FALSE;if(FAILED(ext->GetRenderState(D3DRS_STENCILENABLE,&stencilOn)))return false;
