@@ -68,7 +68,7 @@ int main(int argc,char** argv){
     const auto& green=t.at("Azeroth",85);assert(green.disc[1][1]>green.disc[1][0]);
     assert(t.at("Azeroth",999999).mix[1]==0&&t.at("Kalimdor",85).mix[1]==0);
     unsigned rejected=0;
-    for(const char* bad:{"[Azeroth:85]\nmoon_disc=nan,1,0", "[Azeroth:85]\nmoon_light_strength=-1", "[Azeroth:85]\nmoon_light_mix=1.1", "[Azeroth:85]\nmoon_disc=0,1,0,1", "[Azeroth:85]\nmoon_light=0,0,0", "[Azeroth:85]\nunknown=1", "[Azeroth:85]\nmoon_disc_gain=9", "[Azeroth:85]\n[default]", "[Azeroth:85]\n[Azeroth:85]", "[Azeroth:0]", "[bad:85]", "[Azeroth:85]\nmoon_disc_gain=1\nmoon_disc_gain=2"}){
+    for(const char* bad:{"[Azeroth:85]\nmoon_disc=nan,1,0", "[Azeroth:85]\nmoon_light_strength=-1", "[Azeroth:85]\nmoon_light_mix=1.1", "[Azeroth:85]\nmoon_disc=0,1,0,1", "[Azeroth:85]\nmoon_light=0,0,0", "[Azeroth:85]\nunknown=1", "[Azeroth:85]\nmoon_disc_gain=9", "[Azeroth:85]\n[default]", "[Azeroth:85]\n[Azeroth:85]", "[Azeroth:0]", "[../bad:85]", "[Azeroth:85]\nmoon_disc_gain=1\nmoon_disc_gain=2"}){
         std::istringstream in(bad);assert(!parse(in,t,error));assert(t.zones.size()==configuredCount&&near(t.at("Azeroth",85).mix[1],.8f));++rejected;
     }
     // Sun and moon recolor independently, conserve luminance until strength is
@@ -198,6 +198,48 @@ int main(int argc,char** argv){
         }
         const auto rose=vibrantColour(.65f,.45f,.40f),purple=vibrantColour(.75f,.02f,.9f);
         assert(rose[0]>.65f&&rose[2]<.40f&&near(purple[0],.75f)&&near(purple[1],.02f)&&near(purple[2],.9f));
+    }
+    {
+        assert(safeMapName("Stratholme Raid")&&safeMapName("Zul'gurub"));
+        assert(!safeMapName("../Zul'gurub")&&!safeMapName("Azeroth\\Kalimdor"));
+        assert(!safePaletteName("../raid")&&!safePaletteName(""));
+        Table instance;
+        std::istringstream input(
+            "[default]\nmoon_disc_gain=2\n"
+            "[Stratholme Raid:default]\nsun_disc_gain=1.4\n"
+            "[Stratholme Raid:329]\nsun_disc_gain=2.1\n"
+            "[Stratholme Raid:329/330]\nmoon_disc_gain=3\n"
+            "[Zul'gurub:1977]\nsun_disc_gain=2.7\n"
+            "[Blackfathom:default]\nmoon_disc_gain=1.8\n"
+            "[Blackfathom:719]\nsun_disc_gain=2.3\n"
+            "[Appearance]\nPalette=Classic Raid\n");
+        assert(parse(input,instance,error));
+        assert(instance.palette=="Classic Raid");
+        assert(instance.explicitFallbackKeys.count("moon_disc_gain"));
+        assert(instance.explicitMapFallbackKeys.at("Stratholme Raid").count("sun_disc_gain"));
+        const auto& raidDefault=instance.at("Stratholme Raid",999);
+        assert(near(raidDefault.gain[0],1.4f)&&near(raidDefault.gain[1],2));
+        const auto& raidZone=instance.at("Stratholme Raid",329);
+        assert(near(raidZone.gain[0],2.1f)&&near(raidZone.gain[1],2));
+        const auto& raidSubzone=instance.at("Stratholme Raid",330);
+        assert(near(raidSubzone.gain[0],2.1f)&&near(raidSubzone.gain[1],3));
+        assert(near(instance.at("Zul'gurub",1977).gain[0],2.7f));
+        assert(near(instance.at("Zul'gurub",999).gain[0],3.5f));
+        // Map 48 Blackfathom, zone 719 was read from the private client at the inner pool.
+        assert(liveInstanceZone(instance,"Blackfathom",719,0)==719);
+        assert(near(instance.at("Blackfathom",liveInstanceZone(instance,"Blackfathom",719,0)).gain[0],2.3f));
+        assert(liveInstanceZone(instance,"Stratholme Raid",1977,0)==0); // stale ID from another map
+        assert(liveInstanceZone(instance,"Azeroth",719,0)==0); // continent ADT lookup remains authoritative
+        NorthlightRegionalFog::Region absent;
+        auto noAdt=sample(instance,absent,"Blackfathom",-151.89f,106.96f);
+        assert(near(noAdt.gain[0],3.5f)&&near(noAdt.gain[1],1.8f));
+        assert(instance.needsLiveZone());
+        Table mapOnly;std::istringstream mapFallback("[Stratholme Raid:default]\nsun_disc_gain=1.3\n");
+        assert(parse(mapFallback,mapOnly,error)&&!mapOnly.needsLiveZone());
+        assert(near(mapOnly.at("Stratholme Raid",1).gain[0],1.3f));
+        for(const char* bad:{"[../Azeroth:12]\nsun_disc_gain=1","[Appearance]\nPalette=../raid","[Appearance]\nmoon_disc_gain=1"}){
+            Table invalid;std::istringstream malformed(bad);assert(!parse(malformed,invalid,error));
+        }
     }
     Transition transition;auto first=transition.update(t.fallback,"Azeroth",0,0,1);assert(first.mix[1]==0);
     float previous=0;for(int i=1;i<=600;++i){auto p=transition.update(green,"Azeroth",0,0,1+i/60.);assert(p.mix[1]>=previous&&p.mix[1]<=.8f);previous=p.mix[1];}

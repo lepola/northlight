@@ -5,6 +5,7 @@
 #include <cmath>
 #include <cstdlib>
 #include <iomanip>
+#include "appearance_presets.h"
 #include "settings_store.h"
 #include "quality_settings.h"
 #include "celestial_profiles.h"
@@ -23,7 +24,7 @@ inline bool liveQuality(const std::string& key){
     return restart.count(key)==0;
 }
 inline NorthlightQuality::Settings liveQualityUpdate(NorthlightQuality::Settings current,const NorthlightQuality::Settings& next){for(const auto& k:NorthlightQuality::Keys)if(liveQuality(k.name))current.*k.field=next.*k.field;current.preset=next.preset;return NorthlightQuality::effective(current);}
-struct Config{NorthlightQuality::Settings quality;NorthlightCelestialProfiles::Table celestial;std::array<float,std::size(NorthlightHdrSettingsContract::Keys)> hdr={0,203,160,1000,1,0};};
+struct Config{NorthlightQuality::Settings quality;NorthlightCelestialProfiles::Table celestial;std::string palette="Default";std::array<float,std::size(NorthlightHdrSettingsContract::Keys)> hdr={0,203,160,1000,1,0};};
 // Only these live inputs can change the worker's GI Request. Display settings
 // still apply immediately without cancelling an otherwise identical solve.
 inline bool giRequestChanged(const NorthlightQuality::Settings& before,const NorthlightQuality::Settings& after,
@@ -40,9 +41,11 @@ inline bool giRequestChanged(const NorthlightQuality::Settings& before,const Nor
     return false;
 }
 inline NorthlightQuality::Settings qualityOf(const Document& d,const std::string& legacy){std::istringstream q(d.text()),l(legacy);std::vector<std::string> warnings;return NorthlightQuality::load(&q,&l,warnings);}
-inline Config configOf(const Documents& d,const std::string& legacy,bool validate=false){
+inline Config configOf(const Documents& d,const std::string& legacy,bool validate=false,const NorthlightAppearancePresets::Catalog* presets=nullptr){
     Config c;c.quality=qualityOf(d[0],legacy);std::string error;std::istringstream celestial(d[2].text()),shadow(d[3].text());NorthlightRegionalShadow::Table ranges;
     if(!NorthlightCelestialProfiles::parse(celestial,c.celestial,error)&&validate)throw std::runtime_error("Celestial: "+error);
+    c.palette=c.celestial.palette.empty()?"Default":c.celestial.palette;
+    if(presets)if(const auto* preset=presets->find(c.palette))if(const auto* defaults=presets->find("Default"))c.celestial=NorthlightAppearancePresets::compose(c.celestial,preset->table,defaults->table);
     if(!NorthlightRegionalShadow::parse(shadow,ranges,error)&&validate)throw std::runtime_error("Shadow range: "+error);
     auto renderer=d[1].values();for(unsigned i=0;i<c.hdr.size();++i){const auto& key=NorthlightHdrSettingsContract::Keys[i];c.hdr[i]=NorthlightHdrSettingsContract::read(key,renderer["renderer"][lower(key.name)]);}return c;
 }
@@ -51,12 +54,18 @@ inline std::pair<std::string,uint32_t> region(const std::string& section){
     if(suffix!=section.npos&&suffix+7==section.size())return region(section.substr(0,suffix));
     auto colon=section.find(':');if(colon==section.npos)throw std::runtime_error("Unknown region");auto map=lower(section.substr(0,colon)),id=section.substr(colon+1);
     static const std::map<std::string,std::string> maps={{"azeroth","Azeroth"},{"kalimdor","Kalimdor"},{"expansion01","Expansion01"},{"northrend","Northrend"}};
-    if(!maps.count(map)||id.empty()||id.size()>6||id.find_first_not_of("0123456789")!=id.npos||std::stoul(id)==0)throw std::runtime_error("Invalid region");return {maps.at(map),uint32_t(std::stoul(id))};
+    if(id=="default"){const auto exact=section.substr(0,colon);if(!NorthlightCelestialProfiles::safeMapName(exact))throw std::runtime_error("Invalid map fallback: "+section);return {exact,0};}
+    if(id.empty()||id.size()>6||id.find_first_not_of("0123456789")!=id.npos||std::stoul(id)==0)throw std::runtime_error("Invalid region: "+section);
+    if(maps.count(map))return {maps.at(map),uint32_t(std::stoul(id))};
+    const auto exact=section.substr(0,colon);if(!NorthlightCelestialProfiles::safeMapName(exact))throw std::runtime_error("Invalid region: "+section);return {exact,uint32_t(std::stoul(id))};
 }
 inline std::string parentSection(const std::string& s){
-    const auto slash=s.find('/');return slash==s.npos?"default":s.substr(0,slash);
+    if(s.size()>8&&s.compare(s.size()-8,8,":default")==0)return "default";
+    const auto slash=s.find('/');if(slash!=s.npos)return s.substr(0,slash);
+    const auto colon=s.find(':');return colon==s.npos?"default":s.substr(0,colon)+":default";
 }
 inline std::string regionName(const std::string& s){
+    if(s.size()>8&&s.compare(s.size()-8,8,":default")==0){const auto map=s.substr(0,s.size()-8);if(!NorthlightCelestialProfiles::safeMapName(map))throw std::runtime_error("Invalid region");return map+":default";}
     auto slash=s.find('/');auto root=region(s.substr(0,slash));
     auto name=root.first+":"+std::to_string(root.second);
     if(slash!=s.npos)name+="/"+std::to_string(region(root.first+":"+s.substr(slash+1)).second);
@@ -68,14 +77,12 @@ inline std::string liquidAreaKey(const std::string& section){
     auto slash=section.find('/');
     return slash==section.npos?std::to_string(region(section).second):section.substr(slash+1);
 }
-inline const std::vector<std::string> AppearanceKeys=[]{
-    std::vector<std::string> keys={"fog_tint","fog_tint_strength","shadow_contrast","tone_curve_strength","day_vibrance","night_vibrance"};
-    for(const auto& field:NorthlightTone::bindings())keys.push_back(field.first);
-    return keys;
-}();
+inline const std::vector<std::string> AppearanceKeys=NorthlightAppearancePresets::keys();
 inline const std::array<const char*,11> CelestialNames={"disc","disc_gain","light","light_mix","light_strength","fog_gain","fog_height_scale","horizon_haze","glow_strength","glow","glow_mix"};
 inline std::string profileValue(NorthlightCelestialProfiles::Profile p,const std::string& key){unsigned n=0;float lo=0,hi=0;auto* v=NorthlightCelestialProfiles::keyTarget(p,key,n,lo,hi);std::string s;for(unsigned i=0;i<n;++i)s+=(i?",":"")+number(v[i]);return s;}
-inline const NorthlightCelestialProfiles::Profile& profile(const NorthlightCelestialProfiles::Table& t,const std::string& s){if(lower(s)=="default")return t.fallback;auto slash=s.find('/');
+inline const NorthlightCelestialProfiles::Profile& profile(const NorthlightCelestialProfiles::Table& t,const std::string& s){if(lower(s)=="default")return t.fallback;
+    if(s.size()>8&&s.compare(s.size()-8,8,":default")==0){const auto map=s.substr(0,s.size()-8);const auto i=t.mapFallbacks.find(map);return i==t.mapFallbacks.end()?t.fallback:i->second;}
+    auto slash=s.find('/');
     auto r=region(s.substr(0,slash));
     if(slash!=s.npos){auto child=region(r.first+":"+s.substr(slash+1));if(t.zones.count(child))return t.at(child.first,child.second);}
     return t.at(r.first,r.second);}
@@ -85,16 +92,19 @@ inline std::string explicitValue(const Document& d,const std::string& section,co
 struct Field {
     unsigned file=0;std::string section,key,kind="slider",low="0",high="1",step="1",saved,active,factory,inherited,overrideValue="~",factoryOverride="~",apply="R",options,origin,parentKey,unconfiguredValue;
     bool available=true;
+    std::map<std::string,std::pair<std::string,bool>> paletteValues;
     std::string id()const{return std::string(1,FileIds[file])+"\t"+section+"\t"+key;}
 };
 // Case-insensitive match against a comma list of options; unknown values (and "~") stay as written so validation still reports them.
 inline std::string canonicalOption(const std::string& value,const std::string& options){
     std::istringstream s(options);std::string o;while(std::getline(s,o,','))if(lower(o)==lower(value))return o;return value;
 }
-inline std::vector<Field> schema(const Documents& docs,const Documents& initial,const Config& active,const std::string& legacy,const std::string& backendOptions="native,dxvk,dxvk2,legacy",bool waterInstalled=false){
+inline std::vector<Field> schema(const Documents& docs,const Documents& initial,const Config& active,const std::string& legacy,const std::string& backendOptions="native,dxvk,dxvk2,legacy",bool waterInstalled=false,const NorthlightAppearancePresets::Catalog* presets=nullptr){
     auto factory=factoryDocuments();const auto available=","+backendOptions+",";
     const std::string factoryBackend=available.find(",dxvk,")!=available.npos?"dxvk":available.find(",dxvk2,")!=available.npos?"dxvk2":"native";factory[1].set("Renderer","Backend",&factoryBackend);
-    const auto saved=configOf(docs,legacy),defaults=configOf(factory,legacy);std::vector<Field> out;
+    const auto saved=configOf(docs,legacy,false,presets),defaults=configOf(factory,legacy);std::vector<Field> out;
+    NorthlightCelestialProfiles::Table localCelestial;{std::istringstream input(docs[2].text());std::string error;NorthlightCelestialProfiles::parse(input,localCelestial,error);}
+    const auto* appearanceDefault=presets?presets->find("Default"):nullptr;
     std::array<Values,FileCount> savedValues,factoryValues,initialValues;
     for(unsigned i=0;i<FileCount;++i){savedValues[i]=docs[i].values();factoryValues[i]=factory[i].values();initialValues[i]=initial[i].values();}
     const auto legacyQuality=qualityOf(Document("[Quality]\nPreset=Quality\n"),legacy);
@@ -108,6 +118,10 @@ inline std::vector<Field> schema(const Documents& docs,const Documents& initial,
         if(f.key=="AOMethod"){const char* names[]={"SSAO","HDAO","HBAOPlus","GTAO"};f.kind="enum";f.saved=names[std::min(3u,unsigned(std::stoul(f.saved)))];f.active=names[std::min(3u,unsigned(std::stoul(f.active)))];f.factory=f.inherited="SSAO";f.options="SSAO,HDAO,HBAOPlus,GTAO";}
         add(f);out.back().origin=std::string(1,saved.quality.origin[index++]);}
     Field b;b.file=1;b.section="Renderer";b.key="Backend";b.kind="enum";b.saved=lower(explicitValue(savedValues[1],b.section,b.key));if(b.saved=="~")b.saved="legacy";b.active=lower(explicitValue(initialValues[1],b.section,b.key));if(b.active=="~")b.active="legacy";b.factory=factoryBackend;b.inherited="legacy";b.options=backendOptions;add(b);
+    Field appearance;appearance.file=2;appearance.section="Appearance";appearance.key="Palette";appearance.kind="enum";appearance.saved=saved.palette;appearance.active=active.palette;appearance.factory=appearance.inherited="Default";appearance.apply="F";appearance.options="Default";
+    std::set<std::string> paletteOptions={"default"};auto option=[&](const std::string& name){if(!name.empty()&&paletteOptions.insert(lower(name)).second)appearance.options+=","+name;};
+    if(presets)for(const auto& name:presets->names())option(name);option(appearance.saved);option(appearance.active);
+    add(appearance);
     unsigned hdrIndex=0;for(const auto& key:NorthlightHdrSettingsContract::Keys){Field f;f.file=1;f.section="Renderer";f.key=key.name;f.kind=key.low==0&&key.high==1?"check":"slider";f.low=number(key.low);f.high=number(key.high);f.step=number(key.step);f.factory=f.inherited=number(key.value);f.apply=hdrIndex?"F":"R";f.available=false; /* no HDR consumer in this build: kept in the snapshot so the files are preserved, shown disabled, never writable */
         f.saved=number(NorthlightHdrSettingsContract::read(key,explicitValue(savedValues[1],f.section,f.key)));
         f.active=number(hdrIndex?active.hdr[hdrIndex]:NorthlightHdrSettingsContract::read(key,explicitValue(initialValues[1],f.section,f.key)));++hdrIndex;add(f);}
@@ -115,20 +129,46 @@ inline std::vector<Field> schema(const Documents& docs,const Documents& initial,
         // Keep an existing player's section spelling when the packaged profile
         // adds a parent or interior qualifier for that same AreaTable entry.
         std::set<std::pair<std::string,std::string>> areas;
-        for(const auto* values:{&savedValues[file],&factoryValues[file]}){
+        if(file==3)for(const auto* values:{&savedValues[file],&factoryValues[file]}){
             for(const auto& entry:*values){
                 if(entry.first.empty()||entry.first=="default")continue;
                 const auto name=regionName(entry.first);
                 if(areas.emplace(name.substr(0,name.find(':')),liquidAreaKey(name)).second)sections.insert(name);
             }
         }
+        if(file==2){
+            for(const auto& row:saved.celestial.zones)sections.insert(NorthlightAppearancePresets::section(saved.celestial,row.first));
+            for(const auto& row:defaults.celestial.zones){
+                const auto name=NorthlightAppearancePresets::section(defaults.celestial,row.first);
+                if(presets||name.find("@inside")==name.npos)sections.insert(name);
+            }
+            for(const auto& row:active.celestial.zones)sections.insert(NorthlightAppearancePresets::section(active.celestial,row.first));
+            for(const auto& row:saved.celestial.mapFallbacks)sections.insert(row.first+":default");
+            if(presets)for(const auto& row:defaults.celestial.mapFallbacks)sections.insert(row.first+":default");
+            for(const auto& row:active.celestial.mapFallbacks)sections.insert(row.first+":default");
+            if(presets){
+                for(const auto& preset:presets->entries){
+                    for(const auto& row:preset.table.zones)sections.insert(NorthlightAppearancePresets::section(preset.table,row.first));
+                    for(const auto& row:preset.table.mapFallbacks)sections.insert(row.first+":default");
+                }
+            }
+        }
         for(const auto& section:sections){
-            if(file==2){
+            if(file==2&&section!="Appearance"){
                 std::vector<std::string> keys(std::begin(AppearanceKeys),std::end(AppearanceKeys));
                 for(auto body:{"sun_","moon_"})for(auto name:CelestialNames)keys.emplace_back(std::string(body)+name);
                 for(const auto& key:keys){Field f;f.file=2;f.section=section;f.key=key;f.apply="F";unsigned n=0;float lo=0,hi=0;NorthlightCelestialProfiles::Profile dummy;
                 NorthlightCelestialProfiles::keyTarget(dummy,f.key,n,lo,hi);f.kind=n==3?"rgb":"slider";f.low=number(lo);f.high=number(hi);f.step="0.01";
-                f.saved=profileValue(profile(saved.celestial,section),f.key);f.active=profileValue(profile(active.celestial,section),f.key);f.factory=profileValue(profile(defaults.celestial,section),f.key);f.inherited=profileValue(section=="default"?NorthlightCelestialProfiles::Profile{}:profile(saved.celestial,parentSection(section)),f.key);add(f);
+                f.saved=profileValue(profile(saved.celestial,section),f.key);f.active=profileValue(profile(active.celestial,section),f.key);f.factory=profileValue(profile(defaults.celestial,section),f.key);
+                f.inherited=profileValue(section=="default"?profile(saved.celestial,"default"):profile(saved.celestial,parentSection(section)),f.key);add(f);
+                if(file==2&&NorthlightAppearancePresets::visualKey(f.key)){
+                    if(presets)for(const auto& item:presets->entries)out.back().paletteValues[item.name]={profileValue(profile(item.table,section),f.key),NorthlightAppearancePresets::hasDirectValue(item.table,section,f.key)};
+                    if(out.back().overrideValue!="~"&&appearanceDefault&&NorthlightAppearancePresets::hasDirectValue(localCelestial,section,f.key)&&
+                       NorthlightAppearancePresets::hasDirectValue(appearanceDefault->table,section,f.key)&&
+                       NorthlightAppearancePresets::sameValue(profile(localCelestial,section),profile(appearanceDefault->table,section),f.key)){
+                        out.back().overrideValue="~";out.back().origin="inherited";
+                    }
+                }
             }}else{Field f;f.file=3;f.section=section;f.key="terrain_radius";f.low=number(NorthlightRegionalShadow::DefaultRadius);f.high=number(NorthlightRegionalShadow::MaximumRadius);
                 auto value=[&](const Values& v){auto s=explicitValue(v,section,f.key);return s=="~"?f.low:s;};f.saved=value(savedValues[3]);f.active=value(initialValues[3]);f.factory=value(factoryValues[3]);f.inherited=f.low;add(f);}
         }
@@ -189,9 +229,12 @@ inline std::vector<Field> schema(const Documents& docs,const Documents& initial,
         for(const auto& control:controls)addWater(WaterFile,control);
         std::map<std::string,std::string> slimeParents;
         for(const auto& field:out){
-            if(field.file==2&&field.key=="fog_tint_strength"){
+            if(field.file==2&&field.key=="fog_tint_strength"&&
+               !(field.section.size()>8&&field.section.compare(field.section.size()-8,8,":default")==0)){
                 const auto id=liquidAreaKey(field.section);
-                slimeParents[id]=liquidAreaKey(parentSection(field.section));
+                const auto parent=parentSection(field.section);
+                const auto parentId=parent=="default"||(parent.size()>8&&parent.compare(parent.size()-8,8,":default")==0)?"default":liquidAreaKey(parent);
+                slimeParents.try_emplace(id,parentId);
             }
         }
         const auto& water=savedValues[WaterFile];

@@ -70,8 +70,10 @@ APP_FILES = [
 PAYLOAD_COMMON = {'celestial-profiles.ini': 'client-config/celestial-profiles.ini',
                   'shadow-range-profiles.ini': 'client-config/shadow-range-profiles.ini',
                   'northlight-quality.ini': 'renderer/windows-package/northlight-quality.ini'}
+PAYLOAD_PRESETS = {'appearance-presets/Vibrant.ini': 'client-config/appearance-presets/Vibrant.ini'}
 WATER_SETTINGS = ('water.ini', 'water-host.ini')
-PRESERVE = set(PAYLOAD_COMMON) | set(WATER_SETTINGS)
+PRESET_FILES = {'appearance-presets/Default.ini', 'appearance-presets/Vibrant.ini'}
+PRESERVE = set(PAYLOAD_COMMON) | set(WATER_SETTINGS) | PRESET_FILES
 DXVK_BACKEND = 'renderer-backends/dxvk/dxvk_d3d9.dll'
 DXVK2_BACKEND = 'renderer-backends/dxvk2/dxvk2_d3d9.dll'
 
@@ -173,6 +175,38 @@ def check_water_core(core, host):
     if not found:
         raise SystemExit('the Tideglass core does not state its version')
     return found.group(1).decode()
+
+
+def default_appearance_preset():
+    """A visual-only baseline from the authored regional profile. The game-folder profile may contain player edits;
+    comparing it with this package copy lets Vibrant retain those edits while replacing packaged starting values."""
+    keys = {'fog_tint', 'fog_tint_strength', 'shadow_contrast', 'tone_curve_strength', 'day_vibrance', 'night_vibrance'}
+    params = ('low_input', 'low_bend', 'shadow_level', 'midtone_level', 'highlight_level')
+    for time_name in ('day', 'night'):
+        for channel in ('', 'red_', 'green_', 'blue_'):
+            for param in params:
+                keys.add(time_name + '_' + channel + param)
+    sections, section = {}, ''
+    source = (fp.REPO / 'client-config/celestial-profiles.ini').read_text(encoding='utf-8-sig')
+    for raw in source.splitlines():
+        line = raw.split('#', 1)[0].strip()
+        if not line:
+            continue
+        if line.startswith('[') and line.endswith(']'):
+            section = line[1:-1].strip()
+            sections.setdefault(section, [])
+            continue
+        if '=' not in line:
+            continue
+        key, value = (part.strip() for part in line.split('=', 1))
+        if key in keys:
+            sections.setdefault(section, []).append(f'{key}={value}')
+    result = ['# Northlight Default appearance baseline. Managed by the installer.', '[default]']
+    result.extend(sections.get('default', []))
+    for name, values in sections.items():
+        if name and name.lower() != 'default' and values:
+            result.extend(['', f'[{name}]', *values])
+    return ('\n'.join(result) + '\n').encode('utf-8')
 
 
 def combo_version(northlight, tideglass):
@@ -439,6 +473,8 @@ def build(platform, version, dll, variants, out, stormlib_dir, water_core=None, 
     runtime_pin = PINS['python_' + platform]
     {'windows': windows_runtime, 'mac': mac_runtime, 'linux': linux_runtime}[platform](tree, runtime_pin, lib)
     payload = {n: (fp.REPO / src).read_bytes() for n, src in PAYLOAD_COMMON.items()}
+    payload['appearance-presets/Default.ini'] = default_appearance_preset()
+    payload.update({n: (fp.REPO / src).read_bytes() for n, src in PAYLOAD_PRESETS.items()})
     if platform in PROXY_PLATFORMS:
         backend, license_text = dxvk_files('dxvk')
         backend2, license_text2 = dxvk_files('dxvk2')

@@ -221,5 +221,28 @@ int main(int argc,char** argv){
     }
     // The startup baseline: a new Service (or attach) sees the files as they are now.
     {Service again(root);auto s=again.revision();assert(s==Store::revision(store.read()));}
-    std::cout<<"Settings: encoding (incl. astral and invalid input), comments, inheritance, bounded schema, rollback, read-only, journal recovery, snapshot, preview coalescing, commit and conflict checks passed\n";
+    // Appearance-copy save includes a draft without committing it, and a cold service waits for the menu snapshot.
+    {const auto presetRoot=root/"appearance-save";std::filesystem::create_directories(presetRoot/"appearance-presets");
+     const std::string profile="[Appearance]\nPalette=Vibrant\n[default]\nfog_tint=1,1,1\n";
+     writeImage(presetRoot/"celestial-profiles.ini",profile);
+     writeImage(presetRoot/"appearance-presets"/"Default.ini","[default]\nfog_tint=1,1,1\nshadow_contrast=0\n");
+     writeImage(presetRoot/"appearance-presets"/"Vibrant.ini","[default]\nfog_tint=1,1,1\nshadow_contrast=0\n[Expansion01:3430]\nfog_tint=0.975,0.675,0.625\nshadow_contrast=0.04\n");
+     Service svc(presetRoot);assert(!svc.snapshot());auto waitFor=[&](auto pred){for(unsigned i=0;i<1500;++i){if(pred())return true;std::this_thread::sleep_for(std::chrono::milliseconds(2));}return false;};
+     assert(waitFor([&]{return svc.requestSnapshot();}));assert(waitFor([&]{return svc.snapshot()&&svc.status().state!=Status::State::Busy;}));
+     const auto snap=svc.snapshot();auto tint=std::find_if(snap->fields.begin(),snap->fields.end(),[](const Field& f){return f.file==2&&f.section=="Expansion01:3430"&&f.key=="shadow_contrast";});
+     assert(tint!=snap->fields.end());const auto before=readImage(presetRoot/"celestial-profiles.ini").raw;
+     const auto serial=svc.status().serial;assert(svc.savePreset("Evening",snap->revision,{{tint->id(),"0.6"}}));
+     assert(waitFor([&]{return svc.status().serial>serial&&svc.status().state!=Status::State::Busy;}));assert(svc.status().state==Status::State::Saved);
+     NorthlightAppearancePresets::Table exported;std::string presetError;
+     const auto exportedImage=readImage(presetRoot/"appearance-presets"/"Evening.ini");assert(exportedImage.exists&&NorthlightAppearancePresets::parse(exportedImage.raw,exported,presetError));
+     assert(std::fabs(exported.at("Expansion01",3430).shadowContrast-.6f)<1e-5f);
+     assert(readImage(presetRoot/"celestial-profiles.ini").raw==before);
+     assert(std::any_of(svc.snapshot()->fields.begin(),svc.snapshot()->fields.end(),[](const Field& f){return f.file==2&&f.section=="Appearance"&&f.key=="Palette"&&f.options.find("Evening")!=std::string::npos;}));
+     const auto duplicateSerial=svc.status().serial;assert(svc.savePreset("vIbRaNt",snap->revision,{}));
+     assert(waitFor([&]{return svc.status().serial>duplicateSerial&&svc.status().state!=Status::State::Busy;}));
+     assert(svc.status().state==Status::State::Error&&svc.status().message.find("already exists")!=std::string::npos);
+     unsigned vibrantFiles=0;for(const auto& item:std::filesystem::directory_iterator(presetRoot/"appearance-presets"))
+         if(NorthlightSettings::lower(item.path().stem().string())=="vibrant")++vibrantFiles;
+     assert(vibrantFiles==1);}
+    std::cout<<"Settings: encoding (incl. astral and invalid input), comments, inheritance, bounded schema, rollback, read-only, journal recovery, cold snapshots, preview coalescing, commit, conflict and appearance-copy checks passed\n";
 }

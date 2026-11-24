@@ -93,7 +93,7 @@ def verify_installer(path):
     launchers = bp.launchers(plat, info['version'])
     manifest = json.loads(files['payload-manifest.json'])
     payload = {e['path']: e for e in manifest}
-    expected_payload = set(bp.PAYLOAD_COMMON)
+    expected_payload = set(bp.PAYLOAD_COMMON) | bp.PRESET_FILES
     if plat in bp.PROXY_PLATFORMS:
         expected_payload.update(('d3d9.dll', bp.DXVK_BACKEND, bp.DXVK2_BACKEND,
                                  'renderer-backends/dxvk/LICENSE', 'renderer-backends/dxvk2/LICENSE'))
@@ -125,7 +125,7 @@ def verify_installer(path):
     check(problems, sha(dll) == info['dll_sha256'] and bp.MARKER.search(dll) is not None, 'payload/d3d9.dll')
     for p, e in payload.items():
         check(problems, sha(files.get('payload/' + p, b'')) == e['sha256'], f'payload/{p} does not match its manifest')
-    settings = set(bp.PAYLOAD_COMMON)
+    settings = set(bp.PAYLOAD_COMMON) | bp.PRESET_FILES
     if 'tideglass' in info:
         settings.update(bp.WATER_SETTINGS)
         core = files.get('payload/water-core.dll', b'')

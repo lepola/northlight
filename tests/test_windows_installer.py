@@ -101,6 +101,33 @@ class InstallerTests(unittest.TestCase):
         with patch('builtins.print',lambda *x,**y:out.append(' '.join(map(str,x)))):
             result=fn(*a,**k)
         return result,out
+    def set_preset_payload(self, name, data):
+        path='appearance-presets/'+name+'.ini'
+        target=self.pkg/'payload'/path;target.parent.mkdir(parents=True,exist_ok=True);target.write_bytes(data)
+        manifest=json.loads((self.pkg/'payload-manifest.json').read_text())
+        entry={'path':path,'sha256':hashlib.sha256(data).hexdigest(),'preserve':True}
+        for i,row in enumerate(manifest):
+            if row['path']==path:manifest[i]=entry;break
+        else:manifest.append(entry)
+        (self.pkg/'payload-manifest.json').write_text(json.dumps(manifest))
+    def test_bundled_appearance_updates_use_installed_hash_and_keep_player_copies(self):
+        self.set_preset_payload('Default',b'[default]\nfog_tint=1,1,1\n')
+        self.set_preset_payload('Vibrant',b'[default]\nfog_tint=1,.7,.6\n')
+        m.install(self.client,self.pkg,backend='native')
+        self.set_preset_payload('Default',b'[default]\nfog_tint=.98,.98,1\n')
+        self.set_preset_payload('Vibrant',b'[default]\nfog_tint=1,.6,.55\n')
+        m.install(self.client,self.pkg,backend='native')
+        self.assertEqual(self.read('appearance-presets/Default.ini'),b'[default]\nfog_tint=.98,.98,1\n')
+        self.assertEqual(self.read('appearance-presets/Vibrant.ini'),b'[default]\nfog_tint=1,.6,.55\n')
+        personal=b'[default]\nfog_tint=.2,.3,.4\n'
+        (self.client/'appearance-presets/Vibrant.ini').write_bytes(personal)
+        named=self.client/'appearance-presets/Night Market.ini';named.write_bytes(b'[default]\nfog_tint=.3,.4,.5\n')
+        self.set_preset_payload('Default',b'[default]\nfog_tint=.96,.96,1\n')
+        self.set_preset_payload('Vibrant',b'[default]\nfog_tint=1,.5,.45\n')
+        m.install(self.client,self.pkg,backend='native')
+        self.assertEqual(self.read('appearance-presets/Default.ini'),b'[default]\nfog_tint=.96,.96,1\n')
+        self.assertEqual(self.read('appearance-presets/Vibrant.ini'),personal)
+        self.assertEqual(named.read_bytes(),b'[default]\nfog_tint=.3,.4,.5\n')
     def test_unselected_dxvk_file_may_be_missing(self):
         for backend,gone in [('dxvk',self.DXVK2_FILE),('dxvk2',self.DXVK_FILE),('native',self.DXVK_FILE)]:
             with self.subTest(backend=backend):

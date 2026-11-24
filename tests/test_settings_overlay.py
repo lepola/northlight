@@ -112,6 +112,15 @@ panel = uncomment(fp.src('settings_panel.cpp').read_text())
 titles = re.findall(r'\{Page::\w+,"([^"]+)"', panel)
 check(titles == ['Overview', 'Lighting & AO', 'Materials & parallax', 'Shadows', 'Atmosphere & weather', 'Water', 'Sun & moon', 'Shadow range',
                  'Spells & names', 'Renderer & HDR', 'Performance', 'Diagnostics'], f'settings_panel.cpp: sidebar pages {titles}')
+check('if(appearancePresetModal){ImGui::OpenPopup("Save appearance copy");appearancePresetModal=false;}' in panel,
+      'Save As popup: opening request is consumed once and closing cannot reopen it')
+check('ImGui::SetNextWindowSizeConstraints(ImVec2(440*scale,0),ImVec2(440*scale,FLT_MAX));' in panel and
+      'ImGui::TextWrapped("%s",NorthlightAppearancePresets::NameRuleText);' in panel and
+      'NameRuleText[]="Use 1 to 40 letters, numbers, spaces, underscores or hyphens; Default is reserved.";' in fp.src('appearance_presets.h').read_text(),
+      'Save As popup: fixed width and wrapped ASCII validation text keep a stable layout')
+check('noteColor=status.state==NorthlightSettings::Status::State::Saved?Color::Good' in panel and
+      'ImGui::TextColored(noteColor,"%s",note.c_str())' in panel,
+      'Save As status: successful exports use the normal success colour')
 
 # The embedded font: generated header present and loaded first; its licence ships.
 font_header = fp.GENERATED / 'overlay_font_roboto.h'

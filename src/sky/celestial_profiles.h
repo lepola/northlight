@@ -88,21 +88,56 @@ inline float horizonHaze(const Profile& p,float night){
     return p.horizonHaze[0]+(p.horizonHaze[1]-p.horizonHaze[0])*std::clamp(night,0.f,1.f);
 }
 inline std::string trim(const std::string& s){auto a=s.find_first_not_of(" \t\r\n"),b=s.find_last_not_of(" \t\r\n");return a==std::string::npos?"":s.substr(a,b-a+1);}
+// Map.dbc Directory is used verbatim as a cache directory basename by the
+// verified world-context reader. Keep the same bounded ASCII alphabet here;
+// spaces and apostrophes are real names (for example "Stratholme Raid" and
+// "Zul'gurub"), while path components are never accepted.
+inline bool safeMapName(const std::string& map){
+    if(map.empty()||map.size()>63)return false;
+    return std::all_of(map.begin(),map.end(),[](char c){return (c>='a'&&c<='z')||(c>='A'&&c<='Z')||(c>='0'&&c<='9')||c=='_'||c=='\''||c==' ';});
+}
+inline bool hasRegionalAreaData(const std::string& map){return map=="Azeroth"||map=="Kalimdor"||map=="Expansion01"||map=="Northrend";}
+inline bool safePaletteName(const std::string& name){
+    if(name.empty()||name.size()>64)return false;
+    return std::all_of(name.begin(),name.end(),[](char c){return (c>='a'&&c<='z')||(c>='A'&&c<='Z')||(c>='0'&&c<='9')||c=='_'||c=='-'||c==' ';});
+}
 struct Table {
     Profile fallback;
+    std::string palette;
     std::map<std::pair<std::string,uint32_t>,Profile> zones;
+    std::map<std::string,Profile> mapFallbacks;
     std::set<std::pair<std::string,uint32_t>> interiors;
     std::map<std::pair<std::string,uint32_t>,uint32_t> parents;
     // Keys each zone section set itself (the rest were copied from [default]); lets an overlay move [default] under them.
     std::map<std::pair<std::string,uint32_t>,std::set<std::string>> explicitKeys;
+    // Keep authored fallback keys separate so a palette overlay can retain
+    // global and map-specific defaults without confusing either with a zone.
+    std::set<std::string> explicitFallbackKeys;
+    std::map<std::string,std::set<std::string>> explicitMapFallbackKeys;
+    const Profile& fallbackFor(const std::string& map)const {auto i=mapFallbacks.find(map);return i==mapFallbacks.end()?fallback:i->second;}
     bool needsLiveZone()const{
         if(zones.empty())return false;
         auto tuned=[](const Profile& p){return p.fogTintStrength>0||p.shadowContrast>0||p.toneStrength>0;};
         if(tuned(fallback))return true;
-        return std::any_of(zones.begin(),zones.end(),[&](const auto& row){return tuned(row.second);});
+        if(std::any_of(zones.begin(),zones.end(),[&](const auto& row){return tuned(row.second);}))return true;
+        // Instance map-zone profiles have no regional ADT lookup in the
+        // shipped cache; the verified live AreaTable ID selects them.
+        return std::any_of(zones.begin(),zones.end(),[&](const auto& row){
+            const auto authored=explicitKeys.find(row.first);
+            return !hasRegionalAreaData(row.first.first)&&authored!=explicitKeys.end()&&!authored->second.empty();
+        });
     }
-    const Profile& at(const std::string& map,uint32_t zone)const {auto i=zones.find({map,zone});return i==zones.end()?fallback:i->second;}
+    const Profile& at(const std::string& map,uint32_t zone)const {auto i=zones.find({map,zone});return i==zones.end()?fallbackFor(map):i->second;}
 };
+// Instance map-zone IDs come from the verified live context because the
+// shipped regional cache has no ADT data for those maps. Returning only an
+// authored map+ID key prevents a zone remembered on another map from matching.
+inline uint32_t liveInstanceZone(const Table& table,const std::string& map,uint32_t zone,uint32_t subzone){
+    if(!safeMapName(map)||hasRegionalAreaData(map)||!zone)return 0;
+    if(table.zones.count({map,zone}))return zone;
+    const auto parent=table.parents.find({map,subzone});
+    return parent!=table.parents.end()&&parent->second==zone&&table.zones.count({map,subzone})?subzone:0;
+}
 // One "sun_/moon_<name> = value" assignment with its range checks; nullptr on success, else the reason.
 // Shared by the ini parser and the dev tuning overlay (zone_tuning.h).
 inline float* keyTarget(Profile& profile,const std::string& key,unsigned& count,float& minimum,float& maximum){
@@ -161,17 +196,23 @@ inline void inheritParent(Table& table,const std::pair<std::string,uint32_t>& ch
 }
 // Build the entire table before publishing it so invalid edits retain the saved appearance.
 inline bool parse(std::istream& input,Table& out,std::string& error){
-    Table t;Profile* p=nullptr;std::set<std::string>* explicitSet=nullptr;std::string line;unsigned number=0;bool defaultSeen=false;
+    Table t;Profile* p=nullptr;std::set<std::string>* explicitSet=nullptr;std::string line;unsigned number=0;bool defaultSeen=false,appearanceSeen=false;
     std::map<std::string,bool> keys;
     auto fail=[&](const char* why){error="line "+std::to_string(number)+": "+why;return false;};
     while(std::getline(input,line)){
         ++number;if(number>8192)return fail("file too large");line=trim(line.substr(0,line.find('#')));if(line.empty())continue;
         if(line.front()=='['&&line.back()==']'){
             std::string section=trim(line.substr(1,line.size()-2));keys.clear();
-            if(section=="default") {if(defaultSeen||!t.zones.empty())return fail("default must appear once, before zones");defaultSeen=true;p=&t.fallback;explicitSet=nullptr;continue;}
+            if(section=="default") {if(defaultSeen||!t.zones.empty()||!t.mapFallbacks.empty())return fail("default must appear once, before map and zone profiles");defaultSeen=true;p=&t.fallback;explicitSet=&t.explicitFallbackKeys;continue;}
+            if(section=="Appearance") {if(appearanceSeen)return fail("duplicate Appearance section");appearanceSeen=true;p=nullptr;explicitSet=nullptr;continue;}
             auto colon=section.find(':');if(colon==std::string::npos)return fail("expected [Map:ZoneID]");
             std::string map=trim(section.substr(0,colon)),id=trim(section.substr(colon+1));
-            if(map!="Azeroth"&&map!="Kalimdor"&&map!="Expansion01"&&map!="Northrend")return fail("unsupported map");
+            if(!safeMapName(map))return fail("invalid map name");
+            if(id=="default"){
+                if(t.zones.count({map,0})||t.mapFallbacks.count(map))return fail("duplicate map fallback");
+                if(std::any_of(t.zones.begin(),t.zones.end(),[&](const auto& row){return row.first.first==map;}))return fail("map fallback must precede its zones");
+                auto entry=t.mapFallbacks.emplace(map,t.fallback);p=&entry.first->second;explicitSet=&t.explicitMapFallbackKeys[map];continue;
+            }
             auto slash=id.find('/');uint32_t parent=0;
             if(slash!=id.npos){
                 auto root=id.substr(0,slash);
@@ -186,10 +227,15 @@ inline bool parse(std::istream& input,Table& out,std::string& error){
             if(interior)t.interiors.emplace(map,zone);
             if(parent==zone)return fail("subzone equals parent");
             if(parent)t.parents[{map,zone}]=parent;
-            auto entry=t.zones.emplace(std::make_pair(map,zone),t.fallback);if(!entry.second)return fail("duplicate zone");p=&entry.first->second;explicitSet=&t.explicitKeys[entry.first->first];continue;
+            auto entry=t.zones.emplace(std::make_pair(map,zone),t.fallbackFor(map));if(!entry.second)return fail("duplicate zone");p=&entry.first->second;explicitSet=&t.explicitKeys[entry.first->first];continue;
         }
-        auto eq=line.find('=');if(!p||eq==std::string::npos)return fail("expected key=value in section");
+        auto eq=line.find('=');if(eq==std::string::npos)return fail("expected key=value in section");
         std::string key=trim(line.substr(0,eq)),value=trim(line.substr(eq+1));if(!keys.emplace(key,true).second)return fail("duplicate key");
+        if(appearanceSeen&&p==nullptr){
+            if(key!="Palette"||!safePaletteName(value))return fail("Appearance accepts only a safe Palette name");
+            t.palette=value;continue;
+        }
+        if(!p)return fail("expected key=value in section");
         if(const char* why=assignKey(*p,key,value))return fail(why);
         if(explicitSet)explicitSet->insert(key);
     }
@@ -215,7 +261,7 @@ inline bool load(const std::string& path,Table& out,std::string& error){
 // tile boundaries, about 33 world units wide. No camera-anchored pattern or I/O.
 inline Profile sample(const Table& table,const NorthlightRegionalFog::Region& region,const std::string& map,float x,float y){
     using namespace NorthlightRegionalFog;
-    if(!std::isfinite(x)||!std::isfinite(y)||std::fabs(x)>100000||std::fabs(y)>100000)return table.fallback;
+    if(!std::isfinite(x)||!std::isfinite(y)||std::fabs(x)>100000||std::fabs(y)>100000)return table.fallbackFor(map);
     double gx=(WorldZero-y)/ChunkSize-.5,gy=(WorldZero-x)/ChunkSize-.5;
     double ix=std::floor(gx),iy=std::floor(gy);Profile p[4];
     for(unsigned row=0;row<2;++row)for(unsigned col=0;col<2;++col){

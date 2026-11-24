@@ -2705,9 +2705,21 @@ public:
         replaySnapshots.configureBudget(size_t(captureBudgetMiB)*1048576,size_t(captureBudgetMiB)*524288);setNearReserve();
         logf("SHADOW experiment minSkinnedTriangles=%u captureBudgetMiB=%u actorShadowBudgetMiB=%u actorShadowRadius=%u distance=sampled-current-vertex unknown=first GI=preserved-at-capture-budget",minSkinnedShadowTriangles,captureBudgetMiB,actorShadowBudgetMiB,quality.actorShadowRadius);
         (void)NorthlightStreaming::cpuRetirement();
-        bool paletteLoaded=NorthlightCelestialProfiles::load(root+"celestial-profiles.ini",celestialProfiles,paletteError);
+        NorthlightCelestialProfiles::Table localProfiles;
+        bool paletteLoaded=NorthlightCelestialProfiles::load(root+"celestial-profiles.ini",localProfiles,paletteError);
+        celestialProfiles=localProfiles;
+        const std::string selectedPalette=localProfiles.palette.empty()?"Default":localProfiles.palette;
+        try{
+            if(NorthlightSettings::lower(selectedPalette)!="default"){
+                const auto presets=NorthlightAppearancePresets::loadSelected(root,selectedPalette);
+                const auto* selected=presets.find(selectedPalette);const auto* defaults=presets.find("Default");
+                if(presets.errors.empty()&&selected&&defaults)celestialProfiles=NorthlightAppearancePresets::compose(localProfiles,selected->table,defaults->table);
+                else paletteError+="; selected appearance preset unavailable, using celestial-profiles.ini";
+                if(!presets.errors.empty())paletteError+="; "+presets.errors.front();
+            }
+        }catch(const std::exception& e){paletteError+=std::string("; appearance preset load failed: ")+e.what();}
         NorthlightWorldContext::regionalZoneNeeded.store(celestialProfiles.needsLiveZone(),std::memory_order_relaxed);
-        logf("CELESTIAL profiles loaded=%d zones=%zu %s",paletteLoaded,celestialProfiles.zones.size(),paletteError.c_str());
+        logf("CELESTIAL profiles loaded=%d palette=%s zones=%zu %s",paletteLoaded,selectedPalette.c_str(),celestialProfiles.zones.size(),paletteError.c_str());
 #if NORTHLIGHT_DEV_TUNING
         celestialShipped=celestialProfiles;
         logf("TUNING %s: %snorthlight-tuning.ini is polled, never ship this DLL",NorthlightZoneTuning::Marker,root.c_str());
@@ -2987,7 +2999,7 @@ replayBoundsAbandon();releaseReplayProbe();staticCasters.settle();rigidMemoryCle
 #if NORTHLIGHT_DEV_TUNING
         devPoll(map,camera,region&&region->map==map?NorthlightRegionalFog::zoneAt(region->region,camera[0],camera[1]):0);
 #endif
-        auto target=celestialProfiles.fallback;
+        auto target=celestialProfiles.fallbackFor(map);
         if(region&&region->map==map)target=NorthlightCelestialProfiles::sample(celestialProfiles,region->region,map,camera[0],camera[1]);
         const auto live=NorthlightWorldContext::liveArea();
         const DWORD now=GetTickCount();
@@ -2995,7 +3007,12 @@ replayBoundsAbandon();releaseReplayProbe();staticCasters.settle();rigidMemoryCle
         const auto area=(live.zone||logPalette)&&region&&region->map==map?NorthlightRegionalFog::areaAt(region->region,camera[0],camera[1]):NorthlightRegionalFog::Area{};
         uint32_t localId=0;
         if(live.zone){
-            if(celestialProfiles.interiors.count({map,live.zone}))localId=live.zone;
+            if(!NorthlightCelestialProfiles::hasRegionalAreaData(map)){
+                // Dungeon map files are absent from world-cache/fog. Resolve
+                // only explicit AreaTable sections for the currently verified
+                // map name. No previous map's local ID is held between frames.
+                localId=NorthlightCelestialProfiles::liveInstanceZone(celestialProfiles,map,live.zone,live.subzone);
+            }else if(celestialProfiles.interiors.count({map,live.zone}))localId=live.zone;
             else if(!area.subzonesKnown&&(!area.zone||area.zone==live.zone)){
                 // Older caches retain root zones. The client's named subzone supplies the local appearance.
                 auto parent=celestialProfiles.parents.find({map,live.subzone});
@@ -3005,17 +3022,21 @@ replayBoundsAbandon();releaseReplayProbe();staticCasters.settle();rigidMemoryCle
         }
         if(localId){
             const auto& local=celestialProfiles.at(map,localId);
-            std::copy_n(local.fogTint,3,target.fogTint);
-            target.fogTintStrength=local.fogTintStrength;target.shadowContrast=local.shadowContrast;
-            target.toneStrength=local.toneStrength;
-            target.curves=local.curves;
-            target.vibrance=local.vibrance;
+            if(!NorthlightCelestialProfiles::hasRegionalAreaData(map))target=local;
+            else{
+                std::copy_n(local.fogTint,3,target.fogTint);
+                target.fogTintStrength=local.fogTintStrength;target.shadowContrast=local.shadowContrast;
+                target.toneStrength=local.toneStrength;
+                target.curves=local.curves;
+                target.vibrance=local.vibrance;
+            }
         }
         framePalette=paletteTransition.update(target,map,camera[0],camera[1],double(now)*.001);
         paletteFrameMap=map;paletteFrameValid=true;
         if(logPalette){paletteLogAt=now;
-            uint32_t zone=area.zone;
-            logf("REGIONAL appearance map=%s zone=%u subzone=%u live=%u tint=%.3f contrast=%.3f",map,zone,area.subzone,live.zone,framePalette.fogTintStrength,framePalette.shadowContrast);
+            uint32_t zone=area.zone?area.zone:(localId?live.zone:0);
+            uint32_t subzone=area.subzone?area.subzone:(localId?live.subzone:0);
+            logf("REGIONAL appearance map=%s zone=%u subzone=%u live=%u tint=%.3f contrast=%.3f",map,zone,subzone,live.zone,framePalette.fogTintStrength,framePalette.shadowContrast);
             logf("CELESTIAL palette map=\"%s\" zone=%u moonDisc=(%.3f %.3f %.3f) lightMix=%.3f/%.3f strength=%.3f/%.3f",map,zone,framePalette.disc[1][0],framePalette.disc[1][1],framePalette.disc[1][2],framePalette.mix[0],framePalette.mix[1],framePalette.strength[0],framePalette.strength[1]);
         }return framePalette;
     }

@@ -27,6 +27,7 @@ DXVK2 = 'renderer-backends/dxvk2/dxvk2_d3d9.dll'   # DXVK 2.7.1, the alternative
 # never packaged or recorded.
 LEGACY_DXVK3_MARKER = 'renderer-backends/dxvk/northlight-dxvk3-init.pending'
 DXVK_FOLDERS = {'dxvk': 'renderer-backends/dxvk/', 'dxvk2': 'renderer-backends/dxvk2/'}
+APPEARANCE_PRESETS = {'appearance-presets/Default.ini', 'appearance-presets/Vibrant.ini'}
 CONFIG = 'northlight-renderer.ini'
 MARKER = b'Northlight renderer '
 PROXY_SIGNATURE = b'PROXY module=%ls root=%ls'   # the proxy's start-up log line; carries no product name
@@ -465,6 +466,11 @@ def payload_plan(client, package, use_existing=False, backend=None, extra=None, 
     if proxy and backend is not None and not keep_ini and CONFIG not in [e['path'] for e in manifest]:
         manifest = manifest+[{'path':CONFIG, 'sha256':None}]
     print('Verifying package and comparing installed files...', flush=True)
+    installed_preset_hashes = {}
+    for _, record in transactions(client):
+        for entry in record.get('files', []):
+            if entry.get('path') in APPEARANCE_PRESETS:
+                installed_preset_hashes.setdefault(entry['path'], set()).update(afters(entry))
     for e in manifest:
         if e['path'] == CONFIG and keep_ini: continue
         dst = safe_path(client, e['path'])
@@ -482,9 +488,12 @@ def payload_plan(client, package, use_existing=False, backend=None, extra=None, 
                     plan.append({'path':e['path'], 'before':sha(dst), 'after':None})
                 continue
         old = sha(dst) if dst.exists() else None
+        if e['path'] in APPEARANCE_PRESETS and dst.exists() and old != e['sha256'] and old not in installed_preset_hashes.get(e['path'], set()):
+            print('Keeping your edited', e['path'], flush=True)
+            continue  # A changed bundled look is player data; an unchanged installed copy can receive package updates.
         # Existing settings keep ordinary overrides. New Quality feature bundles migrate once;
         # the complete result is backed up and installed through this same transaction.
-        if e.get('preserve') and dst.exists():
+        if e.get('preserve') and dst.exists() and e['path'] not in APPEARANCE_PRESETS:
             if e['path'] in ('water.ini', 'water-host.ini'):
                 continue  # The player's water profile remains byte-for-byte editable.
             merged = merge_quality_ini(dst.read_bytes(), safe_path(package/'payload', e['path']).read_bytes()) if e['sha256'] is not None else None

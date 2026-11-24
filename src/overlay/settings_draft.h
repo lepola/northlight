@@ -42,6 +42,7 @@ class Draft {
     std::map<std::string,std::size_t> byId;
     std::map<std::string,std::string> values;
     const Field* preset=nullptr;
+    const Field* palette=nullptr;
     const Field* find(unsigned file,const std::string& section,const std::string& key)const{
         auto i=byId.find(std::string(1,NorthlightSettings::FileIds[file])+"\t"+section+"\t"+key);return i==byId.end()?nullptr:&(*fields)[i->second];
     }
@@ -51,7 +52,20 @@ class Draft {
         if(v=="@factory")v=f.factoryOverride;
         if(v!="~")return v;
         if(depth>4)return f.inherited;
-        if(f.file==Celestial&&f.section!="default")if(const Field* base=find(Celestial,NorthlightSettings::parentSection(f.section),f.key))return resolve(*base,useDraft,depth+1);
+        if(f.file==Celestial&&NorthlightAppearancePresets::visualKey(f.key)){
+            const auto selected=palette?resolve(*palette,useDraft,depth+1):"Default";
+            const auto values=f.paletteValues.find(selected);
+            if(values!=f.paletteValues.end()&&values->second.second)return values->second.first;
+        }
+        if(f.file==Celestial&&f.section!="default"){
+            const auto parent=NorthlightSettings::parentSection(f.section);
+            if(const Field* base=find(Celestial,parent,f.key))return resolve(*base,useDraft,depth+1);
+            if(parent!="default"){
+                const auto colon=f.section.find(':');if(colon!=f.section.npos){const auto mapBase=f.section.substr(0,colon)+":default";
+                    if(mapBase!=parent)if(const Field* base=find(Celestial,mapBase,f.key))return resolve(*base,useDraft,depth+1);}
+            }
+            if(parent!="default")if(const Field* base=find(Celestial,"default",f.key))return resolve(*base,useDraft,depth+1);
+        }
         if(f.section=="RegionalSlime"&&f.key!="default"){
             if(f.parentKey!="default")if(const Field* parent=find(f.file,f.section,f.parentKey))return resolve(*parent,useDraft,depth+1);
             if(const Field* base=find(f.file,f.section,"default")){
@@ -69,10 +83,11 @@ class Draft {
 public:
     // Adopts new fields; draft entries whose field no longer exists are dropped.
     void bind(const std::vector<Field>* next){
-        fields=next;byId.clear();preset=nullptr;
+        fields=next;byId.clear();preset=nullptr;palette=nullptr;
         if(!fields){values.clear();return;}
         for(std::size_t i=0;i<fields->size();++i){byId[(*fields)[i].id()]=i;}
         preset=find(Quality,"Quality","Preset");
+        palette=find(Celestial,"Appearance","Palette");
         for(auto i=values.begin();i!=values.end();)i=byId.count(i->first)?std::next(i):values.erase(i);
     }
     const Field* field(unsigned file,const std::string& section,const std::string& key)const{return find(file,section,key);}

@@ -3,10 +3,12 @@
 #include <algorithm>
 #include <array>
 #include <cfloat>
+#include <cctype>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
 #include <map>
+#include <set>
 #include <string>
 #include <vector>
 #include "imgui.h"
@@ -30,7 +32,7 @@ const std::map<std::string,const char*> Labels={
     {"FoamStrength","Foam strength"},{"OpenWaterCrestFoam","Foam on open-water crests"},
     {"ReflectionScenery","Reflections"},{"ReflectionResolution","Reflection resolution"},{"ReflectionDistance","Reflection distance"},{"ReflectionSceneryDetails","Nearby reflected scenery"},{"FineHighlights","Fine water and slime highlights"},{"Clarity","Water clarity"},{"SurfaceBlur","Depth blur"},{"Reflection","Reflection strength"},{"NearReflection","Near reflection strength"},
     {"Underwater","Underwater effects"},{"UnderwaterVisibility","Visibility (yards)"},{"UnderwaterScenery","Underwater scenery"},
-    {"day_vibrance","Vibrance"},{"night_vibrance","Vibrance"},{"tone_curve_strength","Tone curve strength"},{"day_shadow_level","Shadows (25%)"},{"day_midtone_level","Midtones (50%)"},{"day_highlight_level","Highlights (75%)"},
+    {"Palette","Whole-world appearance"},{"day_vibrance","Vibrance"},{"night_vibrance","Vibrance"},{"tone_curve_strength","Tone curve strength"},{"day_shadow_level","Shadows (25%)"},{"day_midtone_level","Midtones (50%)"},{"day_highlight_level","Highlights (75%)"},
     {"night_shadow_level","Shadows (25%)"},{"night_midtone_level","Midtones (50%)"},{"night_highlight_level","Highlights (75%)"},{"fog_tint","Fog colour"},{"fog_tint_strength","Fog tint strength"},{"shadow_contrast","Shadow contrast"},{"Slime","Slime surface"},{"Lava","Magma and fel magma surfaces"},
     {"AutoBump","Material detail"},{"AutoBumpStrength","Normal map strength (%)"},{"AutoBumpDistance","Normal map distance (yards)"},
     {"AutoBumpTerrain","Ground and roads"},{"AutoBumpWalls","Walls and floors"},{"AutoBumpGrass","Grass tufts"},
@@ -145,22 +147,216 @@ std::vector<std::string> sectionKeys(const Section& s){
     for(const auto& g:s.groups)for(const char* list:{g.master,g.fields,g.advanced})for(auto& k:words(list))if(std::find(out.begin(),out.end(),k)==out.end())out.push_back(k);
     return out;
 }
-// AreaTable zone ids of the shipped profile regions (3.3.5a); other ids show as Map:id.
+// Exact menu keys and names from the active enUS AreaTable.dbc; only snapshot-backed profiles are listed.
 const std::map<std::string,const char*> Zones={
-    {"Azeroth:1","Dun Morogh"},{"Azeroth:3","Badlands"},{"Azeroth:4","Blasted Lands"},{"Azeroth:8","Swamp of Sorrows"},{"Azeroth:10","Duskwood"},{"Azeroth:11","Wetlands"},
-    {"Azeroth:12","Elwynn Forest"},{"Azeroth:28","Western Plaguelands"},{"Azeroth:33","Stranglethorn Vale"},{"Azeroth:38","Loch Modan"},{"Azeroth:40","Westfall"},
-    {"Azeroth:41","Deadwind Pass"},{"Azeroth:44","Redridge Mountains"},{"Azeroth:45","Arathi Highlands"},{"Azeroth:46","Burning Steppes"},{"Azeroth:47","The Hinterlands"},
-    {"Azeroth:51","Searing Gorge"},{"Azeroth:85","Tirisfal Glades"},{"Azeroth:130","Silverpine Forest"},{"Azeroth:139","Eastern Plaguelands"},{"Azeroth:267","Hillsbrad Foothills"},
-    {"Azeroth:85/159","Brill (Tirisfal Glades)"},{"Expansion01:3430","Eversong Woods"},{"Azeroth:1497@inside","Undercity"},{"Azeroth:1519","Stormwind City"},{"Azeroth:1537","Ironforge"},
-    {"Kalimdor:14","Durotar"},{"Kalimdor:15","Dustwallow Marsh"},{"Kalimdor:16","Azshara"},{"Kalimdor:17","The Barrens"},{"Kalimdor:141","Teldrassil"},{"Kalimdor:148","Darkshore"},
-    {"Kalimdor:215","Mulgore"},{"Kalimdor:331","Ashenvale"},{"Kalimdor:357","Feralas"},{"Kalimdor:361","Felwood"},{"Kalimdor:400","Thousand Needles"},{"Kalimdor:405","Desolace"},
-    {"Kalimdor:406","Stonetalon Mountains"},{"Kalimdor:440","Tanaris"},{"Kalimdor:490","Un'Goro Crater"},{"Kalimdor:493","Moonglade"},{"Kalimdor:618","Winterspring"},
-    {"Kalimdor:1377","Silithus"},{"Kalimdor:1637","Orgrimmar"},{"Kalimdor:1638","Thunder Bluff"},{"Kalimdor:1657","Darnassus"},
-    {"Expansion01:3483","Hellfire Peninsula"},{"Expansion01:3518","Nagrand"},{"Expansion01:3519","Terokkar Forest"},{"Expansion01:3520","Shadowmoon Valley"},
-    {"Expansion01:3521","Zangarmarsh"},{"Expansion01:3522","Blade's Edge Mountains"},{"Expansion01:3523","Netherstorm"},{"Expansion01:3703","Shattrath City"},
-    {"Northrend:65","Dragonblight"},{"Northrend:66","Zul'Drak"},{"Northrend:67","The Storm Peaks"},{"Northrend:210","Icecrown"},{"Northrend:394","Grizzly Hills"},
-    {"Northrend:495","Howling Fjord"},{"Northrend:2817","Crystalsong Forest"},{"Northrend:3537","Borean Tundra"},{"Northrend:3711","Sholazar Basin"},
-    {"Northrend:4197","Wintergrasp"},{"Northrend:4395","Dalaran"},
+    {"Azeroth:36", "Alterac Mountains"},
+    {"Azeroth:45", "Arathi Highlands"},
+    {"Azeroth:3", "Badlands"},
+    {"Azeroth:25", "Blackrock Mountain"},
+    {"Azeroth:4", "Blasted Lands"},
+    {"Azeroth:85/159", "Brill"},
+    {"Azeroth:46", "Burning Steppes"},
+    {"Azeroth:3459", "City"},
+    {"Azeroth:41", "Deadwind Pass"},
+    {"Azeroth:2280", "DO NOT USE"},
+    {"Azeroth:269", "Dun Algaz"},
+    {"Azeroth:1", "Dun Morogh"},
+    {"Azeroth:10", "Duskwood"},
+    {"Azeroth:139", "Eastern Plaguelands"},
+    {"Azeroth:12", "Elwynn Forest"},
+    {"Azeroth:408", "Gillijim's Isle"},
+    {"Azeroth:267", "Hillsbrad Foothills"},
+    {"Azeroth:1537", "Ironforge"},
+    {"Azeroth:409", "Island of Doctor Lapidis"},
+    {"Azeroth:21", "Kul Tiras"},
+    {"Azeroth:38", "Loch Modan"},
+    {"Azeroth:170", "Lordamere Lake"},
+    {"Azeroth:30", "Nine"},
+    {"Azeroth:2037", "Quel'thalas"},
+    {"Azeroth:44", "Redridge Mountains"},
+    {"Azeroth:51", "Searing Gorge"},
+    {"Azeroth:130", "Silverpine Forest"},
+    {"Azeroth:296", "South Seas UNUSED"},
+    {"Azeroth:1519", "Stormwind City"},
+    {"Azeroth:33", "Stranglethorn Vale"},
+    {"Azeroth:8", "Swamp of Sorrows"},
+    {"Azeroth:330", "Thandol Span"},
+    {"Azeroth:308", "The Forbidding Sea"},
+    {"Azeroth:214", "The Great Sea"},
+    {"Azeroth:47", "The Hinterlands"},
+    {"Azeroth:293", "Thoradin's Wall"},
+    {"Azeroth:85", "Tirisfal Glades"},
+    {"Azeroth:1497", "Undercity"},
+    {"Azeroth:1497@inside", "Undercity interior"},
+    {"Azeroth:276", "UNUSED Stonewrought Pass"},
+    {"Azeroth:1579", "Unused The Deadmines 002"},
+    {"Azeroth:28", "Western Plaguelands"},
+    {"Azeroth:40", "Westfall"},
+    {"Azeroth:11", "Wetlands"},
+    {"Expansion01:3917", "Auchindoun"},
+    {"Expansion01:3524", "Azuremyst Isle"},
+    {"Expansion01:3522", "Blade's Edge Mountains"},
+    {"Expansion01:3525", "Bloodmyst Isle"},
+    {"Expansion01:3430", "Eversong Woods"},
+    {"Expansion01:3430/3665", "Falconwing Square"},
+    {"Expansion01:3433", "Ghostlands"},
+    {"Expansion01:3483", "Hellfire Peninsula"},
+    {"Expansion01:4080", "Isle of Quel'Danas"},
+    {"Expansion01:3518", "Nagrand"},
+    {"Expansion01:3523", "Netherstorm"},
+    {"Expansion01:3520", "Shadowmoon Valley"},
+    {"Expansion01:3703", "Shattrath City"},
+    {"Expansion01:3487", "Silvermoon City"},
+    {"Expansion01:3519", "Terokkar Forest"},
+    {"Expansion01:3557", "The Exodar"},
+    {"Expansion01:3455", "The North Sea"},
+    {"Expansion01:3479", "The Veiled Sea"},
+    {"Expansion01:3540", "Twisting Nether"},
+    {"Expansion01:3521", "Zangarmarsh"},
+    {"Kalimdor:331", "Ashenvale"},
+    {"Kalimdor:148/442", "Auberdine"},
+    {"Kalimdor:16", "Azshara"},
+    {"Kalimdor:1941", "Caverns of Time"},
+    {"Kalimdor:148", "Darkshore"},
+    {"Kalimdor:1657", "Darnassus"},
+    {"Kalimdor:405", "Desolace"},
+    {"Kalimdor:14", "Durotar"},
+    {"Kalimdor:15", "Dustwallow Marsh"},
+    {"Kalimdor:361", "Felwood"},
+    {"Kalimdor:357", "Feralas"},
+    {"Kalimdor:3478", "Gates of Ahn'Qiraj"},
+    {"Kalimdor:876", "GM Island"},
+    {"Kalimdor:2917", "Hall of Legends"},
+    {"Kalimdor:616", "Hyjal"},
+    {"Kalimdor:493", "Moonglade"},
+    {"Kalimdor:215", "Mulgore"},
+    {"Kalimdor:2159", "Onyxia's Lair"},
+    {"Kalimdor:1637", "Orgrimmar"},
+    {"Kalimdor:1377", "Silithus"},
+    {"Kalimdor:377", "Southfury River"},
+    {"Kalimdor:406", "Stonetalon Mountains"},
+    {"Kalimdor:440", "Tanaris"},
+    {"Kalimdor:141", "Teldrassil"},
+    {"Kalimdor:17", "The Barrens"},
+    {"Kalimdor:332", "The Great Sea"},
+    {"Kalimdor:457", "The Veiled Sea"},
+    {"Kalimdor:400", "Thousand Needles"},
+    {"Kalimdor:1638", "Thunder Bluff"},
+    {"Kalimdor:490", "Un'Goro Crater"},
+    {"Kalimdor:618", "Winterspring"},
+    {"Northrend:3477", "Azjol-Nerub"},
+    {"Northrend:3537", "Borean Tundra"},
+    {"Northrend:2817", "Crystalsong Forest"},
+    {"Northrend:495/3980", "Daggercap Bay"},
+    {"Northrend:4395", "Dalaran"},
+    {"Northrend:65", "Dragonblight"},
+    {"Northrend:4602", "Force Interior"},
+    {"Northrend:394", "Grizzly Hills"},
+    {"Northrend:495", "Howling Fjord"},
+    {"Northrend:4742", "Hrothgar's Landing"},
+    {"Northrend:210", "Icecrown"},
+    {"Northrend:3711", "Sholazar Basin"},
+    {"Northrend:3979", "The Frozen Sea"},
+    {"Northrend:4258", "The North Sea"},
+    {"Northrend:4630", "The North Sea"},
+    {"Northrend:67", "The Storm Peaks"},
+    {"Northrend:4201", "Vordrassil's Tears"},
+    {"Northrend:4197", "Wintergrasp"},
+    {"Northrend:66", "Zul'Drak"},
+};
+// Map.dbc directory names remain the keys; localized display names label map-wide fallback sections.
+const std::map<std::string,const char*> MapLabels={
+    {"AhnQiraj", "Ruins of Ahn'Qiraj"},
+    {"AhnQirajTemple", "Ahn'Qiraj Temple"},
+    {"ArgentTournamentDungeon", "Trial of the Champion"},
+    {"ArgentTournamentRaid", "Trial of the Crusader"},
+    {"AuchindounDemon", "Auchindoun: Sethekk Halls"},
+    {"AuchindounDraenei", "Auchindoun: Auchenai Crypts"},
+    {"AuchindounEthereal", "Auchindoun: Mana-Tombs"},
+    {"AuchindounShadow", "Auchindoun: Shadow Labyrinth"},
+    {"Azeroth", "Eastern Kingdoms"},
+    {"Azjol_LowerCity", "Ahn'kahet: The Old Kingdom"},
+    {"Azjol_Uppercity", "Azjol-Nerub"},
+    {"Blackfathom", "Blackfathom Deeps"},
+    {"BlackrockDepths", "Blackrock Depths"},
+    {"BlackRockSpire", "Blackrock Spire"},
+    {"BlackTemple", "Black Temple"},
+    {"BlackwingLair", "Blackwing Lair"},
+    {"bladesedgearena", "Blade's Edge Arena"},
+    {"CavernsOfTime", "Opening of the Dark Portal"},
+    {"ChamberOfAspectsBlack", "The Obsidian Sanctum"},
+    {"ChamberofAspectsRed", "The Ruby Sanctum"},
+    {"CoilfangDraenei", "Coilfang: The Slave Pens"},
+    {"CoilfangMarsh", "Coilfang: The Underbog"},
+    {"CoilfangPumping", "Coilfang: The Steamvault"},
+    {"CoilfangRaid", "Coilfang: Serpentshrine Cavern"},
+    {"DalaranArena", "Dalaran Sewers"},
+    {"DalaranPrison", "Violet Hold"},
+    {"DeadminesInstance", "Deadmines"},
+    {"DeathKnightStart", "Ebon Hold"},
+    {"DeeprunTram", "Deeprun Tram"},
+    {"DireMaul", "Dire Maul"},
+    {"DrakTheronKeep", "Drak'Tharon Keep"},
+    {"Expansion01", "Outland"},
+    {"GnomeragonInstance", "Gnomeregan"},
+    {"GruulsLair", "Gruul's Lair"},
+    {"GunDrak", "Gundrak"},
+    {"HallsOfReflection", "Halls of Reflection"},
+    {"HellfireDemon", "Hellfire Citadel: The Blood Furnace"},
+    {"HellfireMilitary", "Hellfire Citadel: The Shattered Halls"},
+    {"HellfireRaid", "Magtheridon's Lair"},
+    {"HellfireRampart", "Hellfire Citadel: Ramparts"},
+    {"HillsbradPast", "The Escape From Durnholde"},
+    {"HyjalPast", "The Battle for Mount Hyjal"},
+    {"IcecrownCitadel", "Icecrown Citadel"},
+    {"IcecrownCitadel5Man", "The Forge of Souls"},
+    {"IsleofConquest", "Isle of Conquest"},
+    {"Kalimdor", "Kalimdor"},
+    {"Karazahn", "Karazhan"},
+    {"Mauradon", "Maraudon"},
+    {"MoltenCore", "Molten Core"},
+    {"MonasteryInstances", "Scarlet Monastery"},
+    {"NetherstormBG", "Eye of the Storm"},
+    {"Nexus70", "The Nexus"},
+    {"Nexus80", "The Oculus"},
+    {"NexusRaid", "The Eye of Eternity"},
+    {"Northrend", "Northrend"},
+    {"NorthrendBG", "Strand of the Ancients"},
+    {"OnyxiaLairInstance", "Onyxia's Lair"},
+    {"OrgrimmarArena", "The Ring of Valor"},
+    {"OrgrimmarInstance", "Ragefire Chasm"},
+    {"PVPLordaeron", "Ruins of Lordaeron"},
+    {"PVPZone01", "Alterac Valley"},
+    {"PVPZone03", "Warsong Gulch"},
+    {"PVPZone04", "Arathi Basin"},
+    {"PVPZone05", "Nagrand Arena"},
+    {"QuarryofTears", "Pit of Saron"},
+    {"RazorfenDowns", "Razorfen Downs"},
+    {"RazorfenKraulInstance", "Razorfen Kraul"},
+    {"SchoolofNecromancy", "Scholomance"},
+    {"Shadowfang", "Shadowfang Keep"},
+    {"StormwindJail", "Stormwind Stockade"},
+    {"Stratholme", "Stratholme"},
+    {"Stratholme Raid", "Naxxramas"},
+    {"StratholmeCOT", "The Culling of Stratholme"},
+    {"SunkenTemple", "Sunken Temple"},
+    {"Sunwell5ManFix", "Magister's Terrace"},
+    {"SunwellPlateau", "The Sunwell"},
+    {"TanarisInstance", "Zul'Farrak"},
+    {"TempestKeepArcane", "Tempest Keep: The Arcatraz"},
+    {"TempestKeepAtrium", "Tempest Keep: The Botanica"},
+    {"TempestKeepFactory", "Tempest Keep: The Mechanar"},
+    {"TempestKeepRaid", "Tempest Keep"},
+    {"Uldaman", "Uldaman"},
+    {"Ulduar70", "Halls of Stone"},
+    {"Ulduar80", "Halls of Lightning"},
+    {"UlduarRaid", "Ulduar"},
+    {"UtgardePinnacle", "Utgarde Pinnacle"},
+    {"Valgarde70", "Utgarde Keep"},
+    {"WailingCaverns", "Wailing Caverns"},
+    {"WintergraspRaid", "Vault of Archavon"},
+    {"Zul'gurub", "Zul'Gurub"},
+    {"ZulAman", "Zul'Aman"},
 };
 
 const char* find(const std::map<std::string,const char*>& m,const std::string& key){auto i=m.find(key);return i==m.end()?nullptr:i->second;}
@@ -168,6 +364,64 @@ std::string celestialName(const std::string& key,std::string* body){
     for(const char* prefix:{"sun_","moon_"}){const std::string p=prefix;
         if(key.compare(0,p.size(),p)==0){if(body)*body=p=="sun_"?"Sun":"Moon";const char* name=find(CelestialLabels,key.substr(p.size()));return name?name:key.substr(p.size());}}
     return {};
+}
+bool mapDefaultSection(const std::string& section){
+    return section.size()>8&&section.compare(section.size()-8,8,":default")==0;
+}
+std::string mapDirectory(const std::string& section){
+    return mapDefaultSection(section)?section.substr(0,section.size()-8):std::string();
+}
+std::string mapGroup(const std::string& map){
+    if(map=="Azeroth")return "Eastern Kingdoms";
+    if(map=="Kalimdor")return "Kalimdor";
+    if(map=="Expansion01")return "Outland";
+    if(map=="Northrend")return "Northrend";
+    return {};
+}
+// Expansion01 also contains these verified Azeroth locations; unlisted area roots stay grouped as Outland.
+const std::map<std::string,const char*> ExpansionAreaGroups={
+    {"3430","Eastern Kingdoms"},{"3433","Eastern Kingdoms"},{"3455","Eastern Kingdoms"},
+    {"3487","Eastern Kingdoms"},{"4080","Eastern Kingdoms"},
+    {"3479","Kalimdor"},{"3524","Kalimdor"},{"3525","Kalimdor"},{"3557","Kalimdor"},
+};
+std::string expansionAreaGroup(const std::string& section){
+    const auto colon=section.find(':');
+    auto area=section.substr(colon+1);
+    if(const auto suffix=area.find_first_of("/@");suffix!=area.npos)area.resize(suffix);
+    if(const char* group=find(ExpansionAreaGroups,area))return group;
+    return "Outland";
+}
+std::string regionGroup(const std::string& section){
+    if(section=="default")return "All regions";
+    const auto colon=section.find(':');
+    if(colon==section.npos)return "Other profiles";
+    const auto map=section.substr(0,colon);
+    if(mapDefaultSection(section)){
+        if(const auto group=mapGroup(map);!group.empty())return group+" map defaults";
+        return "Instance map defaults";
+    }
+    if(map=="Expansion01")return expansionAreaGroup(section);
+    if(const auto group=mapGroup(map);!group.empty())return group;
+    if(find(MapLabels,map))return "Instance regions";
+    return "Other profiles";
+}
+int regionGroupOrder(const std::string& group){
+    if(group=="All regions")return 0;
+    if(group=="Eastern Kingdoms")return 1;
+    if(group=="Kalimdor")return 2;
+    if(group=="Outland")return 3;
+    if(group=="Northrend")return 4;
+    if(group=="Eastern Kingdoms map defaults")return 5;
+    if(group=="Kalimdor map defaults")return 6;
+    if(group=="Outland map defaults")return 7;
+    if(group=="Northrend map defaults")return 8;
+    if(group=="Instance regions")return 9;
+    if(group=="Instance map defaults")return 10;
+    return 11;
+}
+std::string folded(std::string text){
+    std::transform(text.begin(),text.end(),text.begin(),[](unsigned char c){return char(std::tolower(c));});
+    return text;
 }
 std::string fieldLabel(const Field& f){
     if(f.file==NorthlightSettings::WaterHostFile)return "Use Tideglass";
@@ -182,6 +436,10 @@ std::string rowLabel(const Field& f){
 }
 std::string regionLabel(const std::string& section){
     if(section=="default")return "All regions (default)";
+    if(mapDefaultSection(section)){
+        const auto map=mapDirectory(section);const char* name=find(MapLabels,map);
+        return std::string(name?name:map.c_str())+" (map default; "+section+")";
+    }
     if(const char* zone=find(Zones,section))return std::string(zone)+"  ("+section+")";
     return section;
 }
@@ -246,9 +504,18 @@ struct SettingsPanel::State {
     NorthlightSettings::Status status;
     D::Draft draft;
     std::map<std::string,std::array<float,3>> live;   // a slider or colour being dragged: committed on release
-    bool wantSnapshot=false,wantPreview=false,wantClear=false,previewing=false,saving=false,awaitingSnapshot=false;
-    std::uint64_t commitSerial=0;
+    bool wantSnapshot=false,wantPreview=false,wantClear=false,previewing=false,saving=false,awaitingSnapshot=false,savingAppearancePreset=false;
+    std::uint64_t commitSerial=0,appearancePresetSerial=0;
+    char appearancePresetName[64]{};bool appearancePresetModal=false;
+    ImVec4 noteColor=Color::Bad;
     std::string region="default",note;                 // note: a local message (a refused request), cleared by the next action
+    std::string waterRegion="default";
+    struct RegionChoice { std::string section,label,group,search; };
+    const NorthlightSettings::Snapshot* regionChoicesSnapshot=nullptr;
+    std::vector<RegionChoice> regionChoices,waterRegionChoices;
+    std::array<char,128> regionFilter{},waterRegionFilter{};
+    mutable const NorthlightSettings::Snapshot* pageFieldsSnapshot=nullptr;
+    mutable std::array<std::vector<const Field*>,std::size_t(Page::Count)> pageFieldCache;
     int curveChannel=0,selectedPoint=0,dragPoint=-1;
     ImVec2 curveDragOffset{};
     bool curveDragged=false;
@@ -259,7 +526,7 @@ struct SettingsPanel::State {
     Confirm confirm=Confirm::None;
     float scale=1;
 
-    bool locked()const{return saving||awaitingSnapshot||!snapshot;}
+    bool locked()const{return saving||awaitingSnapshot||savingAppearancePreset||!snapshot;}
     // ---- Service ----
     void poll(){
         if(!service)return;
@@ -273,6 +540,10 @@ struct SettingsPanel::State {
         if(saving&&status.serial>commitSerial&&status.state!=NorthlightSettings::Status::State::Busy){
             saving=false;
             if(status.state==NorthlightSettings::Status::State::Saved){awaitingSnapshot=true;wantSnapshot=true;previewing=false;wantPreview=false;}
+        }
+        if(savingAppearancePreset&&status.serial>appearancePresetSerial&&status.state!=NorthlightSettings::Status::State::Busy){
+            savingAppearancePreset=false;note=status.message;
+            noteColor=status.state==NorthlightSettings::Status::State::Saved?Color::Good:status.state==NorthlightSettings::Status::State::Error?Color::Bad:Color::Muted;
         }
         if(wantClear&&!saving&&service->clearPreview()){wantClear=false;previewing=false;}
         if(wantPreview&&!saving&&!wantClear){
@@ -299,7 +570,15 @@ struct SettingsPanel::State {
         if(!service||!snapshot||draft.empty()||locked())return;
         const auto serial=service->status().serial;
         if(service->commit(snapshot->revision,changes())){saving=true;commitSerial=serial;note.clear();}
-        else note="The settings service is busy; try again in a moment.";
+        else{note="The settings service is busy; try again in a moment.";noteColor=Color::Muted;}
+    }
+    void saveAppearancePreset(){
+        if(!service||!snapshot||locked())return;
+        const std::string name=appearancePresetName;std::string error;
+        if(!NorthlightAppearancePresets::validName(name,error)){note=error;noteColor=Color::Bad;return;}
+        const auto serial=service->status().serial;
+        if(service->savePreset(name,snapshot->revision,changes())){savingAppearancePreset=true;appearancePresetSerial=serial;note.clear();}
+        else{note="The settings service is busy; try again in a moment.";noteColor=Color::Muted;}
     }
     void revert(){draft.clear();live.clear();wantPreview=false;wantClear=true;note.clear();}
     std::vector<const Field*> fields(unsigned file,const std::string* section=nullptr)const{
@@ -471,10 +750,11 @@ struct SettingsPanel::State {
         return out;
     }
     // The fields a page shows (Sun & moon: every region), for its sidebar markers and Defaults.
-    std::vector<const Field*> pageFields(Page p)const{
+    std::vector<const Field*> buildPageFields(Page p)const{
         std::vector<const Field*> out;
         if(p==Page::Overview){if(const Field* f=draft.quality("Preset"))out.push_back(f);for(auto& k:words(QuickKeys))if(const Field* f=draft.quality(k))out.push_back(f);return out;}
         if(p==Page::Celestial||p==Page::Atmosphere){
+            if(p==Page::Atmosphere)if(const Field* f=draft.field(D::Celestial,"Appearance","Palette"))out.push_back(f);
             for(const Field* f:fields(D::Celestial)){
                 const bool appearance=std::find(std::begin(NorthlightSettings::AppearanceKeys),std::end(NorthlightSettings::AppearanceKeys),f->key)!=std::end(NorthlightSettings::AppearanceKeys);
                 if(appearance==(p==Page::Atmosphere))out.push_back(f);
@@ -491,6 +771,19 @@ struct SettingsPanel::State {
         if(const Section* s=qualitySection(Pages[unsigned(p)].quality))for(auto& k:sectionKeys(*s))if(const Field* f=draft.quality(k))out.push_back(f);
         if(p==Page::Performance){auto extra=unsortedQuality();out.insert(out.end(),extra.begin(),extra.end());}
         return out;
+    }
+    void refreshPageFields()const{
+        if(pageFieldsSnapshot==snapshot.get())return;
+        for(auto& pageFields:pageFieldCache)pageFields.clear();
+        pageFieldsSnapshot=nullptr;
+        if(!snapshot)return;
+        for(unsigned i=0;i<std::size(pageFieldCache);++i)
+            pageFieldCache[i]=buildPageFields(Page(i));
+        pageFieldsSnapshot=snapshot.get();
+    }
+    const std::vector<const Field*>& pageFields(Page p)const{
+        refreshPageFields();
+        return pageFieldCache[unsigned(p)];
     }
     void titled(const char* title,const std::vector<const Field*>& rows){
         if(rows.empty())return;
@@ -586,8 +879,8 @@ struct SettingsPanel::State {
         waterRows("Reflections","Reflection NearReflection");
         waterRows("Clarity and underwater","Clarity Underwater UnderwaterVisibility UnderwaterScenery");
         waterRows("Other liquids","Slime Lava");
-        if(water("Slime")&&pickRegion()){
-            const auto id=NorthlightSettings::liquidAreaKey(region);
+        if(water("Slime")&&pickRegion(waterRegion,true)){
+            const auto id=NorthlightSettings::liquidAreaKey(waterRegion);
             if(const Field* f=draft.field(NorthlightSettings::WaterFile,"RegionalSlime",id))regionalControl(*f,"Slime pigment and movement");
         }
     }
@@ -599,7 +892,12 @@ struct SettingsPanel::State {
         case Page::Renderer:rendererPage();break;
         case Page::Water:waterPage();break;
         case Page::Atmosphere:
-            if(const Section* s=qualitySection("atmosphere"))qualityPage(*s,false);
+            ImGui::Spacing();ImGui::TextColored(Color::Heading,"World appearance");ImGui::Separator();
+            if(const Field* palette=draft.field(D::Celestial,"Appearance","Palette"))loose("world-palette",{palette});
+            ImGui::TextWrapped("Default keeps Northlight's current regional look and your personal region edits. Other looks supply a whole-world base; personal regional edits remain layered above it.");
+            if(ImGui::Button("Save current look as a named copy...")){appearancePresetName[0]='\0';appearancePresetModal=true;}
+            ImGui::SameLine();
+            ImGui::TextColored(Color::Muted,"Portable INI files: appearance-presets");
             if(pickRegion()){
                 for(const char* key:{"fog_tint_strength","shadow_contrast"})
                     if(const Field* f=draft.field(D::Celestial,region,key))regionalControl(*f,rowLabel(*f).c_str());
@@ -613,6 +911,10 @@ struct SettingsPanel::State {
                         ImGui::TreePop();
                     }
                 }
+            }
+            if(const Section* s=qualitySection("atmosphere")){
+                ImGui::Spacing();ImGui::TextColored(Color::Heading,"Atmosphere and weather");ImGui::Separator();
+                qualityPage(*s,false);
             }
             break;
         default:if(const Section* s=qualitySection(Pages[unsigned(page)].quality))qualityPage(*s,page==Page::Performance);break;
@@ -633,26 +935,79 @@ struct SettingsPanel::State {
         }
     }
     std::vector<std::string> sections(unsigned file)const{
-        std::vector<std::string> out;if(!snapshot)return out;
-        for(const auto& f:snapshot->fields)if(f.file==file&&std::find(out.begin(),out.end(),f.section)==out.end())out.push_back(f.section);
+        std::vector<std::string> out;if(!snapshot)return out;std::set<std::string> unique;
+        for(const auto& f:snapshot->fields)if(f.file==file)unique.insert(f.section);
+        out.assign(unique.begin(),unique.end());
         std::sort(out.begin(),out.end(),[](const std::string& a,const std::string& b){
-            if(a=="default"||b=="default")return a=="default"&&b!="default";
-            return regionLabel(a)<regionLabel(b);});
+            const auto ag=regionGroup(a),bg=regionGroup(b);const int ao=regionGroupOrder(ag),bo=regionGroupOrder(bg);
+            if(ao!=bo)return ao<bo;
+            if(ag!=bg)return ag<bg;
+            const auto al=regionLabel(a),bl=regionLabel(b);return al==bl?a<b:al<bl;});
         return out;
     }
-    bool pickRegion(){
-        auto regions=sections(D::Celestial);
-        if(page==Page::Celestial)regions.erase(std::remove_if(regions.begin(),regions.end(),[](const auto& s){return s.find("@inside")!=s.npos;}),regions.end());
+    void refreshRegionChoices(){
+        if(!snapshot||regionChoicesSnapshot==snapshot.get())return;
+        regionChoices.clear();waterRegionChoices.clear();
+        std::set<std::string> waterAreaIds;
+        for(const auto& section:sections(D::Celestial)){
+            if(section=="Appearance")continue;
+            RegionChoice choice{section,regionLabel(section),regionGroup(section),{}};
+            choice.search=folded(choice.label+" "+section);
+            regionChoices.push_back(choice);
+            if(mapDefaultSection(section))continue;
+            const auto id=section=="default"?section:NorthlightSettings::liquidAreaKey(section);
+            if(!draft.field(NorthlightSettings::WaterFile,"RegionalSlime",id)||!waterAreaIds.insert(id).second)continue;
+            if(section.find("@inside")!=section.npos){
+                const auto root=section.substr(0,section.size()-7);
+                if(const char* name=find(Zones,root))choice.label=std::string(name)+"  ("+section+")";
+                choice.search=folded(choice.label+" "+section);
+            }
+            waterRegionChoices.push_back(std::move(choice));
+        }
+        regionChoicesSnapshot=snapshot.get();
+    }
+    bool pickRegion(std::string& selected,bool waterOnly=false){
+        refreshRegionChoices();
+        auto& regions=waterOnly?waterRegionChoices:regionChoices;
         if(regions.empty())return false;
-        if(std::find(regions.begin(),regions.end(),region)==regions.end())region=regions.front();
+        const bool hideInterior=page==Page::Celestial;
+        const auto visible=[&](const RegionChoice& choice){
+            return !hideInterior||choice.section.find("@inside")==choice.section.npos;
+        };
+        auto current=std::find_if(regions.begin(),regions.end(),
+            [&](const RegionChoice& choice){return choice.section==selected&&visible(choice);});
+        if(current==regions.end()){
+            current=std::find_if(regions.begin(),regions.end(),visible);
+            if(current==regions.end())return false;
+            selected=current->section;
+        }
+        auto& filter=waterOnly?waterRegionFilter:regionFilter;
         ImGui::AlignTextToFramePadding();ImGui::TextUnformatted("Region");ImGui::SameLine();
         ImGui::SetNextItemWidth(-FLT_MIN);
-        if(ImGui::BeginCombo("##region",regionLabel(region).c_str(),ImGuiComboFlags_HeightLarge)){
-            for(const auto& r:regions){const bool selected=r==region;if(ImGui::Selectable(regionLabel(r).c_str(),selected))region=r;if(selected)ImGui::SetItemDefaultFocus();}
+        if(ImGui::BeginCombo(waterOnly?"##water-region":"##region",current->label.c_str(),
+                             ImGuiComboFlags_HeightLarge)){
+            ImGui::SetNextItemWidth(-FLT_MIN);
+            ImGui::InputTextWithHint(waterOnly?"##water-region-search":"##region-search",
+                                     "Search by region name or INI key",filter.data(),filter.size());
+            ImGui::Separator();
+            const std::string query=folded(filter.data());std::string visibleGroup;bool found=false;
+            for(const auto& choice:regions){
+                if(!visible(choice))continue;
+                if(!query.empty()&&choice.search.find(query)==choice.search.npos)continue;
+                if(choice.group!=visibleGroup){
+                    if(found)ImGui::Spacing();
+                    ImGui::TextDisabled("%s",choice.group.c_str());visibleGroup=choice.group;
+                }
+                const bool active=choice.section==selected;
+                if(ImGui::Selectable(choice.label.c_str(),active)){selected=choice.section;filter[0]='\0';}
+                if(active)ImGui::SetItemDefaultFocus();found=true;
+            }
+            if(!found)ImGui::TextDisabled("No matching regions.");
             ImGui::EndCombo();
         }
         return true;
     }
+    bool pickRegion(){return pickRegion(region);}
     void curveEditor(unsigned time){
         ImGui::PushID(int(time));
         const char* channels[]={"Brightness","Red","Green","Blue"};
@@ -790,7 +1145,7 @@ struct SettingsPanel::State {
     void statusLine(){
         using S=NorthlightSettings::Status::State;
         if(!service){ImGui::TextColored(Color::Bad,"Settings are unavailable (see northlight-renderer.log).");return;}
-        if(!note.empty()){ImGui::TextColored(Color::Bad,"%s",note.c_str());return;}
+        if(!note.empty()){ImGui::TextColored(noteColor,"%s",note.c_str());return;}
         if(!snapshot){ImGui::TextColored(Color::Muted,status.state==S::Error?"%s":"Loading settings...",status.message.c_str());return;}
         if(saving||status.state==S::Busy)ImGui::TextColored(Color::Edited,"%s",saving?"Saving...":"Working...");
         else if(status.state==S::Error)ImGui::TextColored(Color::Bad,"%s",status.message.empty()?"The last request failed.":status.message.c_str());
@@ -843,7 +1198,7 @@ struct SettingsPanel::State {
         return std::string("Restore the factory values of every setting on the ")+Pages[unsigned(page)].title+" page.";
     }
     void factoryDefaults(){
-        const auto targets=pageFields(page);
+        const auto& targets=pageFields(page);
         for(const Field* f:targets)if(f->available&&(f->file!=D::Celestial||f->section==region)){draft.factory(*f);live.erase(f->id());edited(*f);}
     }
     // The old menu's preset choice: quality overrides back to inherit, optionally Sun & moon and Shadow range to factory.
@@ -857,6 +1212,7 @@ struct SettingsPanel::State {
     void modals(){
         if(confirm==Confirm::Preset)ImGui::OpenPopup("Choose preset?");
         if(confirm==Confirm::Factory)ImGui::OpenPopup("Restore defaults?");
+        if(appearancePresetModal){ImGui::OpenPopup("Save appearance copy");appearancePresetModal=false;}
         confirm=Confirm::None;
         const ImVec2 centre=ImGui::GetMainViewport()->GetCenter();
         auto ask=[&](const char* title,const char* body,const char* yes,auto&& accept){
@@ -886,6 +1242,21 @@ struct SettingsPanel::State {
         }
         const std::string scope=factoryScope();
         ask("Restore defaults?",scope.c_str(),"Restore",[&]{factoryDefaults();});
+        ImGui::SetNextWindowPos(centre,ImGuiCond_Appearing,ImVec2(0.5f,0.5f));
+        ImGui::SetNextWindowSizeConstraints(ImVec2(440*scale,0),ImVec2(440*scale,FLT_MAX));
+        if(ImGui::BeginPopupModal("Save appearance copy",nullptr,ImGuiWindowFlags_AlwaysAutoResize|ImGuiWindowFlags_NoSavedSettings)){
+            ImGui::TextWrapped("Copy the current whole-world appearance, including regional differences, to a portable INI file. Existing files are never overwritten.");
+            ImGui::SetNextItemWidth(280*scale);ImGui::InputText("Name",appearancePresetName,sizeof appearancePresetName);
+            std::string error;const bool valid=NorthlightAppearancePresets::validName(appearancePresetName,error);
+            ImGui::TextWrapped("%s",NorthlightAppearancePresets::NameRuleText);
+            ImGui::TextColored(Color::Muted,"The copy is saved beside the renderer; Revert does not remove it.");
+            ImGui::Spacing();
+            ImGui::BeginDisabled(!valid||locked()||status.state==NorthlightSettings::Status::State::Busy);
+            if(ImGui::Button("Save copy")){saveAppearancePreset();if(savingAppearancePreset)ImGui::CloseCurrentPopup();}
+            ImGui::EndDisabled();ImGui::SameLine();
+            if(ImGui::Button("Cancel")||ImGui::IsKeyPressed(ImGuiKey_Escape))ImGui::CloseCurrentPopup();
+            ImGui::EndPopup();
+        }
     }
 };
 
@@ -893,7 +1264,7 @@ SettingsPanel::SettingsPanel(std::shared_ptr<NorthlightSettings::Service> servic
 SettingsPanel::~SettingsPanel()=default;
 void SettingsPanel::opened(){s->wantSnapshot=true;}
 void SettingsPanel::poll(){if(s->comparing){s->comparing=false;s->wantPreview=true;}s->poll();}
-bool SettingsPanel::pending()const{return s->service&&(s->comparing||s->wantSnapshot||s->wantPreview||s->wantClear||s->saving||s->awaitingSnapshot);}
+bool SettingsPanel::pending()const{return s->service&&(s->comparing||s->wantSnapshot||s->wantPreview||s->wantClear||s->saving||s->awaitingSnapshot||s->savingAppearancePreset);}
 bool SettingsPanel::unsaved()const{return !s->draft.empty();}
 void SettingsPanel::notice(float scale){
     const ImGuiViewport* view=ImGui::GetMainViewport();
