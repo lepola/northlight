@@ -1205,7 +1205,8 @@ float3 horizonHaze(float3 color,float2 uv,float viewZ,bool sky,bool water) {
     return horizonHazeDirection(color,world,rsqrt(dot(ray,ray)),range);
 }
 // Shader limits and compiler identity are validated in shaders/world-shader-build.json.
-float4 WorldCompositeImpl(float2 uv,float2 pixel,float atmosphereOwned,float surfaceShaded,float beforeRefraction) {
+float4 RegionalAppearance : register(c101); // rgb: fog colour adjustment, w: shadow contrast
+float4 WorldCompositeImpl(float2 uv,float2 pixel,float atmosphereOwned,float surfaceShaded,float beforeRefraction,bool regional=false) {
     // Fetches before any flow control use texld (1 slot; tex2Dlod costs 3-4): Scene and Depth have one level and no mip filter, so texld reads what tex2Dlod(.,0) does.
     float4 original=tex2D(Scene,uv);
     float2 centerUV=depthUV(uv);
@@ -1323,6 +1324,16 @@ float4 WorldCompositeImpl(float2 uv,float2 pixel,float atmosphereOwned,float sur
     // sun/moon disc) BEFORE the local scattering is added in front of it.
     if(beforeRefraction<.5&&PassInfo.z<.5){
         float3 unfogged=color;
+        if(regional){
+            if(relight && liquid<=0){
+                float3 surface=max(color-fogPart,0);
+                float shoulder=saturate(1-dot(surface,float3(.2126,.7152,.0722))*2);
+                color-=surface*(RegionalAppearance.w*shoulder*shoulder);
+                color+=fogPart*RegionalAppearance.rgb;
+            }
+            // Tint neutral mist while preserving a local lamp's excess coloured radiance.
+            fog.rgb+=min(fog.r,min(fog.g,fog.b))*RegionalAppearance.rgb;
+        }
         // Rain streaks were drawn into the scene before the composite: on mask pixels go back toward the unfogged pixel so they are not hazed.
         float rain=tex2Dlod(RainMask,float4(uv,0,0)).r;
         // Keep spatial foreground fog and bloom. Only the background haze is
@@ -1340,6 +1351,8 @@ float4 WorldCompositeImpl(float2 uv,float2 pixel,float atmosphereOwned,float sur
 // Constant-zero ownership retains the original default program exactly. The
 // optional variant receives completed-surface and distance-atmosphere ownership independently.
 float4 WorldComposite(float2 uv:TEXCOORD0,float2 pixel:VPOS):COLOR0 {return WorldCompositeImpl(uv,pixel,0,0,0);}
+float4 WorldCompositeRegional(float2 uv:TEXCOORD0,float2 pixel:VPOS):COLOR0 {return WorldCompositeImpl(uv,pixel,0,0,0,true);}
+float4 WorldCompositeWaterRegional(float2 uv:TEXCOORD0,float2 pixel:VPOS):COLOR0 {return WorldCompositeImpl(uv,pixel,WaterInfo.y,WaterInfo.z,0,true);}
 float4 WorldCompositeWaterProbe(float2 uv:TEXCOORD0,float2 pixel:VPOS):COLOR0 {return WorldCompositeImpl(uv,pixel,WaterInfo.y,WaterInfo.z,0);}
 
 // Light the complete opaque source before the liquid refracts it. The same

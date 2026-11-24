@@ -2,6 +2,7 @@
 """Extract authored regional metadata only; never starts game or Wine.
 FRF1: <4s5I magic/version/tileX/tileY/waterCount/indoorCount,256*u32 zone,
 water <3fQ cornerWorldX/Y,maxHeight,8x8presence; indoor <6f worldAABB.
+Version 2 appends 256 uint32 subzone IDs after the indoor records.
 Only MOGP indoor groups contribute exclusion bounds, never root WMO bounds.
 """
 from pathlib import Path
@@ -114,18 +115,22 @@ def main():
         for tile in files:
             tx,ty=map(int,tile.stem.split('_'));name=f'world\\maps\\{mapname}\\{mapname}_{tx}_{ty}.adt'
             try:
-                parts=list(chunks(assets.read(name)));root=dict(parts);zones=[0]*256;positions={}
+                parts=list(chunks(assets.read(name)));root=dict(parts);zones=[0]*256;subzones=[0]*256;positions={}
                 for tag,b in parts:
                     if tag!='MCNK':continue
                     ix,iy=unpack('<2I',b,4)
                     if ix>=16 or iy>=16:raise ValueError('MCNK indices')
-                    index=iy*16+ix;zones[index]=root_zone(areas,unpack('<I',b,52)[0]);positions[index]=unpack('<3f',b,104)
+                    index=iy*16+ix;area=unpack('<I',b,52)[0]
+                    zones[index]=root_zone(areas,area)
+                    if zones[index] and zones[index]!=area:subzones[index]=area
+                    positions[index]=unpack('<3f',b,104)
                 waters=water_records(root,positions,types,stats);indoors=[]
                 # Non-target zones never add fog: no costly WMO reads needed.
                 if any(zone in SUPPORTED_REGIONS for zone in zones):
                     indoors=placed_indoors(root,lambda path:wmo_indoors(memo,assets.read,path,stats,clamped,manifest['unreadable_wmos']))
-                blob=struct.pack('<4s5I',b'FRF1',1,tx,ty,len(waters),len(indoors))+struct.pack('<256I',*zones)
+                blob=struct.pack('<4s5I',b'FRF1',2 if any(subzones) else 1,tx,ty,len(waters),len(indoors))+struct.pack('<256I',*zones)
                 blob+=b''.join(struct.pack('<3fQ',*v) for v in waters)+b''.join(struct.pack('<6f',*v) for v in indoors)
+                if any(subzones):blob+=struct.pack('<256I',*subzones)
                 (outdir/(tile.stem+'.frf')).write_bytes(blob);digest.update(tile.stem.encode()+blob);done+=1;stats['water_layers']+=len(waters);stats['placed_indoor_groups']+=len(indoors)
             except (ValueError,FileNotFoundError,IndexError,KeyError,struct.error) as exc:
                 (outdir/(tile.stem+'.frf')).unlink(missing_ok=True)

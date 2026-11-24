@@ -30,7 +30,7 @@ const std::map<std::string,const char*> Labels={
     {"FoamStrength","Foam strength"},{"OpenWaterCrestFoam","Foam on open-water crests"},
     {"ReflectionScenery","Reflections"},{"ReflectionResolution","Reflection resolution"},{"ReflectionDistance","Reflection distance"},{"ReflectionSceneryDetails","Nearby reflected scenery"},{"FineHighlights","Fine water and slime highlights"},{"Clarity","Water clarity"},{"SurfaceBlur","Depth blur"},{"Reflection","Reflection strength"},{"NearReflection","Near reflection strength"},
     {"Underwater","Underwater effects"},{"UnderwaterVisibility","Visibility (yards)"},{"UnderwaterScenery","Underwater scenery"},
-    {"Slime","Slime surface"},{"Lava","Magma and fel magma surfaces"},
+    {"fog_tint","Fog colour"},{"fog_tint_strength","Fog tint strength"},{"shadow_contrast","Shadow contrast"},{"Slime","Slime surface"},{"Lava","Magma and fel magma surfaces"},
     {"AutoBump","Material detail"},{"AutoBumpStrength","Normal map strength (%)"},{"AutoBumpDistance","Normal map distance (yards)"},
     {"AutoBumpTerrain","Ground and roads"},{"AutoBumpWalls","Walls and floors"},{"AutoBumpGrass","Grass tufts"},
     {"AutoParallaxDepth","POM depth (%)"},{"AutoParallaxDistance","POM distance (yards)"},{"AutoParallaxSteps","POM trace steps"},
@@ -147,7 +147,7 @@ const std::map<std::string,const char*> Zones={
     {"Azeroth:12","Elwynn Forest"},{"Azeroth:28","Western Plaguelands"},{"Azeroth:33","Stranglethorn Vale"},{"Azeroth:38","Loch Modan"},{"Azeroth:40","Westfall"},
     {"Azeroth:41","Deadwind Pass"},{"Azeroth:44","Redridge Mountains"},{"Azeroth:45","Arathi Highlands"},{"Azeroth:46","Burning Steppes"},{"Azeroth:47","The Hinterlands"},
     {"Azeroth:51","Searing Gorge"},{"Azeroth:85","Tirisfal Glades"},{"Azeroth:130","Silverpine Forest"},{"Azeroth:139","Eastern Plaguelands"},{"Azeroth:267","Hillsbrad Foothills"},
-    {"Azeroth:1497","Undercity"},{"Azeroth:1519","Stormwind City"},{"Azeroth:1537","Ironforge"},
+    {"Azeroth:85/159","Brill (Tirisfal Glades)"},{"Expansion01:3430","Eversong Woods"},{"Azeroth:1497@inside","Undercity"},{"Azeroth:1519","Stormwind City"},{"Azeroth:1537","Ironforge"},
     {"Kalimdor:14","Durotar"},{"Kalimdor:15","Dustwallow Marsh"},{"Kalimdor:16","Azshara"},{"Kalimdor:17","The Barrens"},{"Kalimdor:141","Teldrassil"},{"Kalimdor:148","Darkshore"},
     {"Kalimdor:215","Mulgore"},{"Kalimdor:331","Ashenvale"},{"Kalimdor:357","Feralas"},{"Kalimdor:361","Felwood"},{"Kalimdor:400","Thousand Needles"},{"Kalimdor:405","Desolace"},
     {"Kalimdor:406","Stonetalon Mountains"},{"Kalimdor:440","Tanaris"},{"Kalimdor:490","Un'Goro Crater"},{"Kalimdor:493","Moonglade"},{"Kalimdor:618","Winterspring"},
@@ -272,7 +272,11 @@ struct SettingsPanel::State {
         std::vector<NorthlightSettings::Change> out;for(auto& c:draft.changes())out.push_back({c.first,c.second});return out;
     }
     void edited(const Field& f){note.clear();if(f.apply=="F")wantPreview=true;}
-    void set(const Field& f,const std::string& value){draft.set(f,value);edited(f);}
+    void set(const Field& f,const std::string& value){
+        if(f.section=="RegionalSlime"||f.key=="fog_tint_strength"||f.key=="shadow_contrast")draft.pin(f,value);
+        else draft.set(f,value);
+        edited(f);
+    }
     void inherit(const Field& f){if(!D::canInherit(f))return;draft.inherit(f);live.erase(f.id());edited(f);}
     void save(){
         if(!service||!snapshot||draft.empty()||locked())return;
@@ -453,7 +457,13 @@ struct SettingsPanel::State {
     std::vector<const Field*> pageFields(Page p)const{
         std::vector<const Field*> out;
         if(p==Page::Overview){if(const Field* f=draft.quality("Preset"))out.push_back(f);for(auto& k:words(QuickKeys))if(const Field* f=draft.quality(k))out.push_back(f);return out;}
-        if(p==Page::Celestial)return fields(D::Celestial);
+        if(p==Page::Celestial||p==Page::Atmosphere){
+            for(const Field* f:fields(D::Celestial)){
+                const bool appearance=std::find(std::begin(NorthlightSettings::AppearanceKeys),std::end(NorthlightSettings::AppearanceKeys),f->key)!=std::end(NorthlightSettings::AppearanceKeys);
+                if(appearance==(p==Page::Atmosphere))out.push_back(f);
+            }
+            if(p==Page::Celestial)return out;
+        }
         if(p==Page::ShadowRange)return fields(D::ShadowRange);
         if(p==Page::Renderer)return fields(D::Renderer);
         if(p==Page::Water){
@@ -559,6 +569,10 @@ struct SettingsPanel::State {
         waterRows("Reflections","Reflection NearReflection");
         waterRows("Clarity and underwater","Clarity Underwater UnderwaterVisibility UnderwaterScenery");
         waterRows("Other liquids","Slime Lava");
+        if(water("Slime")&&pickRegion()){
+            const auto id=NorthlightSettings::liquidAreaKey(region);
+            if(const Field* f=draft.field(NorthlightSettings::WaterFile,"RegionalSlime",id))regionalControl(*f,"Slime pigment and movement");
+        }
     }
     void drawPage(){
         switch(page){
@@ -567,6 +581,14 @@ struct SettingsPanel::State {
         case Page::ShadowRange:shadowRangeTab();break;
         case Page::Renderer:rendererPage();break;
         case Page::Water:waterPage();break;
+        case Page::Atmosphere:
+            if(const Section* s=qualitySection("atmosphere"))qualityPage(*s,false);
+            if(pickRegion()){
+                for(const char* key:{"fog_tint_strength","shadow_contrast"})
+                    if(const Field* f=draft.field(D::Celestial,region,key))regionalControl(*f,rowLabel(*f).c_str());
+                if(const Field* f=draft.field(D::Celestial,region,"fog_tint"))loose("fog-colour",{f});
+            }
+            break;
         default:if(const Section* s=qualitySection(Pages[unsigned(page)].quality))qualityPage(*s,page==Page::Performance);break;
         }
     }
@@ -592,9 +614,10 @@ struct SettingsPanel::State {
             return regionLabel(a)<regionLabel(b);});
         return out;
     }
-    void celestialTab(){
-        const auto regions=sections(D::Celestial);
-        if(regions.empty()){ImGui::TextDisabled("No celestial profiles.");return;}
+    bool pickRegion(){
+        auto regions=sections(D::Celestial);
+        if(page==Page::Celestial)regions.erase(std::remove_if(regions.begin(),regions.end(),[](const auto& s){return s.find("@inside")!=s.npos;}),regions.end());
+        if(regions.empty())return false;
         if(std::find(regions.begin(),regions.end(),region)==regions.end())region=regions.front();
         ImGui::AlignTextToFramePadding();ImGui::TextUnformatted("Region");ImGui::SameLine();
         ImGui::SetNextItemWidth(-FLT_MIN);
@@ -602,10 +625,31 @@ struct SettingsPanel::State {
             for(const auto& r:regions){const bool selected=r==region;if(ImGui::Selectable(regionLabel(r).c_str(),selected))region=r;if(selected)ImGui::SetItemDefaultFocus();}
             ImGui::EndCombo();
         }
-        ImGui::TextColored(Color::Muted,region=="default"?"Applies wherever a region sets no value of its own.":"Values this region does not set follow All regions (default).");
+        return true;
+    }
+    void regionalControl(const Field& f,const char* title){
+        ImGui::PushID(f.id().c_str());
+        ImGui::TextUnformatted(title);
+        auto value=draft.effective(f);
+        const char* mode=!draft.overrides(f)?"Inherit":number(value)==0?"Off":"Tuned";
+        if(ImGui::BeginCombo("Mode",mode)){
+            for(const char* choice:{"Inherit","Off","Tuned"})if(ImGui::Selectable(choice,std::string(choice)==mode)){
+                if(std::string(choice)=="Inherit")inherit(f);
+                else{draft.pin(f,std::string(choice)=="Off"?"0":number(value)>0?value:"0.5");edited(f);}
+            }
+            ImGui::EndCombo();
+        }
+        if(std::string(mode)=="Tuned")control(f);
+        else if(std::string(mode)=="Inherit")ImGui::TextDisabled("Inherited strength: %s",value.c_str());
+        ImGui::PopID();
+    }
+    void celestialTab(){
+        if(!pickRegion())return;
+        ImGui::TextColored(Color::Muted,"Unset values follow the parent region.");
         std::map<std::string,const Field*> byKey;for(const Field* f:fields(D::Celestial,&region))byKey[f->key]=f;
         std::map<std::string,bool> used;
         ImGui::PushID(region.c_str());
+        for(const char* key:NorthlightSettings::AppearanceKeys)used[key]=true;
         for(const auto& g:CelestialGroups)group(g,byKey,used);
         std::vector<const Field*> rest;for(auto& k:byKey)if(!used[k.first])rest.push_back(k.second);
         loose("rest",rest);
@@ -685,14 +729,14 @@ struct SettingsPanel::State {
         return std::string("Restore the factory values of every setting on the ")+Pages[unsigned(page)].title+" page.";
     }
     void factoryDefaults(){
-        const auto targets=page==Page::Celestial?fields(D::Celestial,&region):pageFields(page);
-        for(const Field* f:targets)if(f->available){draft.factory(*f);live.erase(f->id());edited(*f);}
+        const auto targets=pageFields(page);
+        for(const Field* f:targets)if(f->available&&(f->file!=D::Celestial||f->section==region)){draft.factory(*f);live.erase(f->id());edited(*f);}
     }
     // The old menu's preset choice: quality overrides back to inherit, optionally Sun & moon and Shadow range to factory.
     void choosePreset(){
         const Field* preset=draft.quality("Preset");if(!preset)return;
         for(const Field* f:fields(D::Quality))if(f->key!="Preset"&&D::canInherit(*f)){draft.inherit(*f);live.erase(f->id());edited(*f);}
-        if(presetCelestial)for(const Field* f:fields(D::Celestial))if(f->available){draft.factory(*f);live.erase(f->id());edited(*f);}
+        if(presetCelestial)for(const Field* f:pageFields(Page::Celestial))if(f->available){draft.factory(*f);live.erase(f->id());edited(*f);}
         if(presetRange)for(const Field* f:fields(D::ShadowRange))if(f->available){draft.factory(*f);live.erase(f->id());edited(*f);}
         set(*preset,presetChoice);
     }

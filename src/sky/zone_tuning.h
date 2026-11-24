@@ -96,6 +96,11 @@ inline NorthlightCelestialProfiles::Table applyCelestial(const NorthlightCelesti
         if(it==out.zones.end())it=out.zones.emplace(z.first,out.fallback).first;
         applyKeys(it->second,z.second);
     }
+    for(const auto& child:out.parents){
+        NorthlightCelestialProfiles::inheritParent(out,child.first,child.second);
+        auto local=o.zones.find(child.first);
+        if(local!=o.zones.end())applyKeys(out.zones.at(child.first),local->second);
+    }
     return out;
 }
 inline const ZoneOverride* zoneOverride(const Overrides& o,const std::string& map,uint32_t zone){

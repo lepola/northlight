@@ -23,6 +23,16 @@ Under **Water → Performance**, choose the **Water preset**, then **Save**. Thi
 
 Reflection resolution controls the pass that maps mirrored scenery onto water and slime. Waves, foam and the game keep their usual resolution. Try **Short** distance if travel past dense reflected scenery stutters. It limits the models and buildings prepared for the mirror and brings the fade closer. **Far** prepares a larger area and fades reflections farther from the camera. The menu shows **Custom** when the active choices differ from the presets. Switching reflections to **Sky only** keeps the distance and resolution for when you restore scenery. Your wave, foam and colour settings carry across presets. **Sky only** also skips the mirrored scenery seen from below the surface.
 
+## Regional appearance
+
+In **Atmosphere & weather**, choose a **Region** and adjust **Fog tint strength**, the fog colour, or **Shadow contrast**. Each strength has three choices. **Inherit** follows the parent region, **Off** pins zero locally, and **Tuned** sets a local strength. Choosing Inherit for one strength leaves the other settings in place. Atmosphere previews live. Save keeps it after restart.
+
+Fog tint colours the existing fog at its current density. Shadow contrast deepens dark scene detail. Both strengths start at zero. The original composite shader runs when both effects are inactive. Tuning uses the existing composite pass. Tirisfal and Eversong have cool and warm starting colours respectively.
+
+The **Region** selector under **Water** also controls slime pigment and movement. Choose a mode and **Save** to apply it. An existing Undercity strength carries over. Outdoor slime starts at its usual appearance.
+
+For manual edits, `celestial-profiles.ini` accepts `[Azeroth:85]` for Tirisfal, `[Azeroth:85/159]` for Brill, and `[Azeroth:1497@inside]` for Undercity. The appearance keys are `fog_tint` (three colour channels), `fog_tint_strength` and `shadow_contrast`, all from 0 to 1. New terrain cache tiles let outdoor settings blend across subzone boundaries. Older tiles can use the current client area, and missing area information falls back to the parent. Tideglass reads numeric area IDs in `water.ini` under `[RegionalSlime]`.
+
 ## Saving and restarting
 
 Edits are a draft. A live ("F") setting previews immediately and writes nothing; Save commits, Revert discards the draft and returns the renderer to the saved configuration. Settings marked "R" (restart required) are saved but only read at start-up: the command stream, worker and GI solver settings, NameMask, SpellLayer, EquipmentLights, backend and regional shadow range. Unavailable controls are greyed out.

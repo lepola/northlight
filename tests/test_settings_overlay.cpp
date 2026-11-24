@@ -233,7 +233,39 @@ static void draft(){
     CHECK(D::same(strength,"1.50","1.5")&&!D::same(ao,"SSAO","HDAO")&&!D::same(strength,"1,2","1"));
 }
 
-int main(){
+static void regionalAppearance(){
+    using namespace NorthlightSettings;
+    Documents docs=factoryDocuments();
+    auto setValue=[&](unsigned file,const char* section,const char* key,std::string value){docs[file].set(section,key,&value);};
+    setValue(2,"Azeroth:85","fog_tint_strength",".65");
+    setValue(2,"Azeroth:85/159","shadow_contrast",".4");
+    setValue(WaterFile,"Water","RegionalSlimeStrength",".72");
+    auto rows=schema(docs,docs,configOf(docs,"",true),"","native",true);
+    D::Draft d;d.bind(&rows);
+    const auto& tint=*d.field(2,"Azeroth:85/159","fog_tint_strength");
+    const auto& shadow=*d.field(2,"Azeroth:85/159","shadow_contrast");
+    CHECK(D::same(tint,d.effective(tint),".65"));
+    d.pin(tint,"0");CHECK(d.overrides(tint)&&d.effective(tint)=="0");
+    d.inherit(tint);CHECK(D::same(tint,d.effective(tint),".65")&&D::same(shadow,d.effective(shadow),".4"));
+    const auto& canal=*d.field(WaterFile,"RegionalSlime","1497");
+    const auto& global=*d.field(WaterFile,"RegionalSlime","default");
+    CHECK(D::same(canal,d.effective(canal),".72"));
+    d.pin(global,"0");CHECK(d.effective(canal)=="0");
+    d.pin(canal,"0");d.inherit(global);CHECK(d.effective(canal)=="0");
+    d.inherit(canal);CHECK(D::same(canal,d.effective(canal),".72"));
+    auto restored=applyChanges(docs,rows,tint.id()+"\t0\n");
+    auto active=configOf(restored,"",true);
+    CHECK(active.celestial.at("Azeroth",159).fogTintStrength==0&&active.celestial.at("Azeroth",159).shadowContrast==.4f);
+    auto reset=applyChanges(restored,rows,tint.id()+"\t~\n");
+    CHECK(configOf(reset,"",true).celestial.at("Azeroth",159).fogTintStrength==.65f);
+    docs[2]=Document("[Azeroth:1497]\nsun_disc_gain=2\n");
+    rows=schema(docs,docs,configOf(docs,"",true),"","native",true);
+    d.bind(&rows);
+    CHECK(d.field(2,"Azeroth:1497","shadow_contrast")&&!d.field(2,"Azeroth:1497@inside","shadow_contrast"));
+    auto withDefault=applyChanges(docs,rows,d.field(2,"default","shadow_contrast")->id()+"\t.3\n");
+    CHECK(configOf(withDefault,"",true).celestial.at("Azeroth",1497).shadowContrast==.3f);
+}
+int main(){regionalAppearance();
     routing();draft();
     if(failures){std::fprintf(stderr,"%d failure(s)\n",failures);return 1;}
     std::puts("settings overlay: routing and draft OK");

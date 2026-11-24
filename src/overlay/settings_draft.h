@@ -51,7 +51,14 @@ class Draft {
         if(v=="@factory")v=f.factoryOverride;
         if(v!="~")return v;
         if(depth>4)return f.inherited;
-        if(f.file==Celestial&&f.section!="default")if(const Field* base=find(Celestial,"default",f.key))return resolve(*base,useDraft,depth+1);
+        if(f.file==Celestial&&f.section!="default")if(const Field* base=find(Celestial,NorthlightSettings::parentSection(f.section),f.key))return resolve(*base,useDraft,depth+1);
+        if(f.section=="RegionalSlime"&&f.key!="default"){
+            if(f.parentKey!="default")if(const Field* parent=find(f.file,f.section,f.parentKey))return resolve(*parent,useDraft,depth+1);
+            if(const Field* base=find(f.file,f.section,"default")){
+                if(useDraft?overrides(*base):base->overrideValue!="~")return resolve(*base,useDraft,depth+1);
+                return f.unconfiguredValue;
+            }
+        }
         if(presetValued(f)&&preset){
             const auto p=resolve(*preset,useDraft,depth+1);const auto options=split(f.options);
             const std::size_t index=p=="Performance"?2:p=="Balanced"?1:0;
@@ -86,6 +93,10 @@ public:
         if(!fields)return;const auto id=f.id();
         values.erase(id);
         if(!same(f,value,effective(f)))values[id]=value;
+    }
+    void pin(const Field& f,const std::string& value){
+        if(f.overrideValue!="~"&&same(f,f.overrideValue,value))values.erase(f.id());
+        else values[f.id()]=value;
     }
     // Right-click: back to the inherited value. Fields whose saved file never overrides need no draft entry.
     void inherit(const Field& f){if(f.overrideValue=="~")values.erase(f.id());else values[f.id()]="~";}

@@ -109,7 +109,6 @@ SOURCE_EQUIVALENTS = {
                                'c612cf39a6166cd33d815a9fbcca8b65ae545058d02b156b57edaf39b7d9b551': False},
     'world_lights_builder.py': {'5ba2844340b271a3d7671b98d98a899379e92493f0cf82a8062d9b46452850a5': False},
     'world_light_placements.py': {'651c5766dde74f945ebdff268973ff1c87e35c203fccca484bce4a75886adad8': False},
-    'regional_fog_builder.py': {'30a2af943dd0f758c1bd6067b9d58bd6b6e2f64b85af2394f2f9e6fc01daa7e3': True},
     'mpq.py': {'0b949fc438e1b71433242cd580848c7cf14281696e409903710f4191ac4b4d7a': False},
     'client_archives.py': {'efebb6a31dd00ebb73fe6fe40e1e1d2ecf4e749a6dd5d96457d8842ed1798e6c': False},
 }

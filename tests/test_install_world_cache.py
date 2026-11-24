@@ -141,7 +141,9 @@ MAIN = {'world_scene_builder.py': 'c612cf39a6166cd33d815a9fbcca8b65ae545058d02b1
         'world_light_placements.py': '651c5766dde74f945ebdff268973ff1c87e35c203fccca484bce4a75886adad8'}
 v183 = {n: h for n, equal in iwc.SOURCE_EQUIVALENTS.items() for h, clamp in equal.items() if clamp}
 v193 = {n: h for n, equal in iwc.SOURCE_EQUIVALENTS.items() for h, clamp in equal.items() if not clamp and h != MAIN.get(n)}
-assert set(v183) == {'world_scene_builder.py', 'regional_fog_builder.py'} and set(v193) == {'world_scene_builder.py', 'mpq.py', 'client_archives.py'}
+# Earlier fog tiles lack the authored subzone IDs. Only the fog cache needs upgrading.
+assert iwc.plan(base, built_with({'regional_fog_builder.py': '30a2af943dd0f758c1bd6067b9d58bd6b6e2f64b85af2394f2f9e6fc01daa7e3'}), cache, False, 'z') == ('partial', ['fog'])
+assert set(v183) == {'world_scene_builder.py'} and set(v193) == {'world_scene_builder.py', 'mpq.py', 'client_archives.py'}
 # A continent cache recorded with main's scene, lights and placement builders (before the instance maps) is up to
 # date: lights, fog and celestial come out the same, so none of their digests goes stale, and no report check is needed.
 assert all(iwc.SOURCE_EQUIVALENTS[n][h] is False for n, h in MAIN.items())

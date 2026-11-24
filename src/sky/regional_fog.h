@@ -17,7 +17,7 @@ constexpr float Spacing=8.f;
 constexpr double WorldZero=17066.666666666668,TileSize=533.3333333333334,ChunkSize=TileSize/16,Unit=ChunkSize/8;
 struct Water {float x=0,y=0,height=0;uint64_t mask=0;};
 struct Indoor {float low[3]={},high[3]={};};
-struct Tile {int x=0,y=0;std::array<uint32_t,256> zones{};std::vector<Water> water;std::vector<Indoor> indoors;};
+struct Tile {int x=0,y=0;bool subzonesKnown=false;std::array<uint32_t,256> zones{},areas{};std::vector<Water> water;std::vector<Indoor> indoors;};
 struct Region {std::vector<Tile> tiles;unsigned missing=0,invalid=0;};
 struct Texel {float ground=0,day=0,nightExtra=0,height=0;};
 static_assert(sizeof(Texel)==16,"Fog texture float4");
@@ -37,13 +37,15 @@ inline bool loadTile(const std::string& path,int x,int y,Tile& out){
     struct Close {FILE* f;~Close(){std::fclose(f);}} close{file};
     if(std::fseek(file,0,SEEK_END))return false;long bytes=std::ftell(file);
     if(bytes<1048||bytes>2*1024*1024||std::fseek(file,0,SEEK_SET))return false;
-    uint32_t h[6]={};if(std::fread(h,4,6,file)!=6||h[0]!=0x31465246u||h[1]!=1||h[2]!=unsigned(x)||h[3]!=unsigned(y)||h[4]>4096||h[5]>8192||uint64_t(bytes)!=1048ull+20ull*h[4]+24ull*h[5])return false;
+    uint32_t h[6]={};if(std::fread(h,4,6,file)!=6||h[0]!=0x31465246u||(h[1]!=1&&h[1]!=2)||h[2]!=unsigned(x)||h[3]!=unsigned(y)||h[4]>4096||h[5]>8192||uint64_t(bytes)!=1048ull+20ull*h[4]+24ull*h[5]+(h[1]==2?1024ull:0ull))return false;
     Tile t;t.x=x;t.y=y;if(std::fread(t.zones.data(),4,256,file)!=256)return false;
     t.water.resize(h[4]);t.indoors.resize(h[5]);
     for(auto& w:t.water){if(std::fread(&w.x,4,3,file)!=3||std::fread(&w.mask,8,1,file)!=1)return false;
         if(!std::isfinite(w.x)||!std::isfinite(w.y)||!std::isfinite(w.height)||std::fabs(w.x)>100000||std::fabs(w.y)>100000||std::fabs(w.height)>100000)return false;}
     for(auto& b:t.indoors){if(std::fread(b.low,4,3,file)!=3||std::fread(b.high,4,3,file)!=3)return false;
         for(unsigned k=0;k<3;++k)if(!std::isfinite(b.low[k])||!std::isfinite(b.high[k])||b.low[k]>b.high[k]||std::fabs(b.low[k])>100000||std::fabs(b.high[k])>100000)return false;}
+    t.subzonesKnown=h[1]==2;
+    if(t.subzonesKnown&&std::fread(t.areas.data(),4,256,file)!=256)return false;
     out=std::move(t);return true;
 }
 // cacheDirectory is CLIENT/world-cache/fog. Unknown maps return an empty region
@@ -57,12 +59,16 @@ inline Region loadRegion(const std::string& cacheDirectory,const std::string& ma
     }
     return r;
 }
-inline uint32_t zoneAt(const Region& region,float x,float y){
-    if(!std::isfinite(x)||!std::isfinite(y)||std::fabs(x)>100000||std::fabs(y)>100000)return 0;
+struct Area {uint32_t zone=0,subzone=0;bool subzonesKnown=false;};
+inline Area areaAt(const Region& region,float x,float y){
+    if(!std::isfinite(x)||!std::isfinite(y)||std::fabs(x)>100000||std::fabs(y)>100000)return {};
     int gx=int(std::floor((WorldZero-y)/ChunkSize)),gy=int(std::floor((WorldZero-x)/ChunkSize));
     int tx=int(std::floor(double(gx)/16)),ty=int(std::floor(double(gy)/16));
     unsigned ix=unsigned(gx-tx*16),iy=unsigned(gy-ty*16);
-    for(const auto& tile:region.tiles)if(tile.x==tx&&tile.y==ty)return tile.zones[iy*16+ix];return 0;
+    for(const auto& tile:region.tiles)if(tile.x==tx&&tile.y==ty)return {tile.zones[iy*16+ix],tile.areas[iy*16+ix],tile.subzonesKnown};return {};
+}
+inline uint32_t zoneAt(const Region& region,float x,float y){
+    return areaAt(region,x,y).zone;
 }
 inline bool indoorColumn(const Region& region,float x,float y,float ground){
     // Inflate each authored indoor GROUP footprint by one sample spacing. This

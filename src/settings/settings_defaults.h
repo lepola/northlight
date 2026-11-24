@@ -36,6 +36,7 @@ moon_disc = 0.79, 0.87, 0.97
 moon_light = 0.76, 0.85, 1.00
 moon_light_mix = 0.45
 [Azeroth:85]
+fog_tint = 0.68,0.92,0.80
 sun_fog_gain = 3.4
 sun_disc = 0.94, 1.00, 0.78
 sun_light = 0.94, 1.00, 0.88
@@ -252,6 +253,10 @@ sun_disc = 1.00, 0.9059, 0.702
 sun_glow_mix = 0.7
 [Northrend:2817]
 sun_horizon_haze = 2.46
+[Azeroth:85/159]
+[Azeroth:1497@inside]
+[Expansion01:3430]
+fog_tint = 1,0.84,0.72
 )NL";
 inline constexpr const char* kSettingsFactoryShadowRange = R"NL([Kalimdor:440]
 terrain_radius = 4096

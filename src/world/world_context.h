@@ -104,6 +104,15 @@ inline bool supportedClient() {
         !std::memcmp(actualMap,mapCode,sizeof mapCode);
 }
 
+inline std::atomic<bool> regionalZoneNeeded{false};
+struct LiveArea {uint32_t zone=0,subzone=0;};
+inline LiveArea liveArea(){
+    if(!regionalZoneNeeded.load(std::memory_order_relaxed))return {};
+    static const bool supported=supportedClient();
+    LiveArea location;
+    return supported&&readSelf(0x00BD080C,&location,sizeof location)?location:LiveArea{};
+}
+
 // Basename corresponds directly to Map.dbc Directory (Azeroth, Kalimdor,...). Instance
 // directories may carry an apostrophe or a space (Zul'gurub, Stratholme Raid).
 // On failure no partially read result is published to the caller.

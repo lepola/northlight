@@ -21,7 +21,7 @@ int main(int argc,char** argv){
         assert(near(entry.second.fogGain[1],2.5f)&&entry.second.fogHeightScale[1]==1);
         if(entry.first==std::make_pair(std::string("Azeroth"),10u))
             assert(near(entry.second.fogGain[0],4.3f)&&entry.second.fogHeightScale[0]==1);
-        else if(entry.first==std::make_pair(std::string("Azeroth"),85u)) /* Tirisfal: sun_fog_gain 3.4 since 2026-09-24 */
+        else if(entry.first==std::make_pair(std::string("Azeroth"),85u)||entry.first==std::make_pair(std::string("Azeroth"),159u)) /* Tirisfal: sun_fog_gain 3.4 since 2026-09-24 */
             assert(near(entry.second.fogGain[0],3.4f)&&entry.second.fogHeightScale[0]==2);
         else if(entry.first==std::make_pair(std::string("Azeroth"),33u)) /* Stranglethorn: sun_fog_height_scale 3 (2026-10-17 tuning) */
             assert(near(entry.second.fogGain[0],4.3f)&&entry.second.fogHeightScale[0]==3);
@@ -95,6 +95,20 @@ int main(int argc,char** argv){
     auto center=sample(t,edge,"Azeroth",x,y);assert(near(center.mix[1],.4f,.0001f));
     auto left=sample(t,edge,"Azeroth",x,y-.001f),right=sample(t,edge,"Azeroth",x,y+.001f);assert(std::fabs(left.mix[1]-right.mix[1])<.001f);
     for(int n=-400;n<=400;++n){float yy=y+n*.1f;auto p=sample(t,edge,"Azeroth",x,yy),q=sample(t,edge,"Azeroth",x,yy+.001f);assert(std::fabs(p.mix[1]-q.mix[1])<.001f);}
+    {
+        Table test;std::istringstream ini("[default]\nfog_tint_strength=.8\n[Azeroth:85/159]\nfog_tint_strength=0\n[Azeroth:85]\nshadow_contrast=.6\n[Azeroth:1497@inside]\nshadow_contrast=.3\n");
+        assert(parse(ini,test,error)&&test.needsLiveZone());
+        assert(test.at("Azeroth",159).shadowContrast==.6f&&test.interiors.count({"Azeroth",1497}));
+        edge.tiles[0].areas.fill(159);
+        assert(near(sample(test,edge,"Azeroth",x,y+40).fogTintStrength,0));
+        assert(near(sample(test,edge,"Azeroth",x,y).fogTintStrength,.4f));
+        edge.tiles[0].areas.fill(0);
+        assert(near(sample(test,edge,"Azeroth",x,y+40).fogTintStrength,.8f));
+        const float nativeFog[]={.3f,.4f,.35f};
+        auto delta=appearance(test.at("Azeroth",85),nativeFog,false);
+        assert(delta[0]==0&&delta[1]==0&&delta[2]==0&&delta[3]>0);
+        assert(!t.needsLiveZone());
+    }
     Transition transition;auto first=transition.update(t.fallback,"Azeroth",0,0,1);assert(first.mix[1]==0);
     float previous=0;for(int i=1;i<=600;++i){auto p=transition.update(green,"Azeroth",0,0,1+i/60.);assert(p.mix[1]>=previous&&p.mix[1]<=.8f);previous=p.mix[1];}
     assert(previous>.799f);

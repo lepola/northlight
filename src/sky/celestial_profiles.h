@@ -11,6 +11,7 @@
 
 namespace NorthlightCelestialProfiles {
 struct Profile {
+    float fogTint[3]={1,1,1},fogTintStrength=0,shadowContrast=0;
     float disc[2][3]={{1,.96f,.88f},{.94f,.97f,1}};
     float gain[2]={3.5f,1.1f};
     float light[2][3]={{1,1,1},{1,1,1}};
@@ -26,6 +27,9 @@ struct Profile {
 };
 inline Profile blend(const Profile& a,const Profile& b,float t){
     Profile p; t=std::clamp(t,0.f,1.f);
+    for(unsigned c=0;c<3;++c)p.fogTint[c]=a.fogTint[c]+(b.fogTint[c]-a.fogTint[c])*t;
+    p.fogTintStrength=a.fogTintStrength+(b.fogTintStrength-a.fogTintStrength)*t;
+    p.shadowContrast=a.shadowContrast+(b.shadowContrast-a.shadowContrast)*t;
     for(unsigned s=0;s<2;++s){
         for(unsigned c=0;c<3;++c){p.disc[s][c]=a.disc[s][c]+(b.disc[s][c]-a.disc[s][c])*t;p.light[s][c]=a.light[s][c]+(b.light[s][c]-a.light[s][c])*t;p.glow[s][c]=a.glow[s][c]+(b.glow[s][c]-a.glow[s][c])*t;}
         p.glowStrength[s]=a.glowStrength[s]+(b.glowStrength[s]-a.glowStrength[s])*t;p.glowMix[s]=a.glowMix[s]+(b.glowMix[s]-a.glowMix[s])*t;
@@ -35,6 +39,18 @@ inline Profile blend(const Profile& a,const Profile& b,float t){
         p.fogHeightScale[s]=a.fogHeightScale[s]+(b.fogHeightScale[s]-a.fogHeightScale[s])*t;
         p.horizonHaze[s]=a.horizonHaze[s]+(b.horizonHaze[s]-a.horizonHaze[s])*t;
     }return p;
+}
+// Shift the hue of existing mist, keeping its optical depth and the scene's black point.
+inline std::array<float,4> appearance(const Profile& p,const float* fog,bool fogOn){
+    std::array<float,4> result{};
+    float channels[3];
+    for(unsigned c=0;c<3;++c)channels[c]=(0.5f+0.5f*std::clamp(fog[c],0.f,1.f))*p.fogTint[c];
+    const float mean=.2126f*channels[0]+.7152f*channels[1]+.0722f*channels[2];
+    for(unsigned c=0;c<3;++c)result[c]=fogOn?p.fogTintStrength*(channels[c]-mean):0.f;
+    result[3]=.35f*p.shadowContrast;
+    // A smoothed transition can leave a sub-pixel residue for many frames.
+    if(std::all_of(result.begin(),result.end(),[](float v){return std::abs(v)<.0001f;}))return {};
+    return result;
 }
 inline float fogHeightScale(const Profile& p,float night){
     return p.fogHeightScale[0]+(p.fogHeightScale[1]-p.fogHeightScale[0])*std::clamp(night,0.f,1.f);
@@ -46,13 +62,25 @@ inline std::string trim(const std::string& s){auto a=s.find_first_not_of(" \t\r\
 struct Table {
     Profile fallback;
     std::map<std::pair<std::string,uint32_t>,Profile> zones;
+    std::set<std::pair<std::string,uint32_t>> interiors;
+    std::map<std::pair<std::string,uint32_t>,uint32_t> parents;
     // Keys each zone section set itself (the rest were copied from [default]); lets an overlay move [default] under them.
     std::map<std::pair<std::string,uint32_t>,std::set<std::string>> explicitKeys;
+    bool needsLiveZone()const{
+        if(zones.empty())return false;
+        auto tuned=[](const Profile& p){return p.fogTintStrength>0||p.shadowContrast>0;};
+        if(tuned(fallback))return true;
+        return std::any_of(zones.begin(),zones.end(),[&](const auto& row){return tuned(row.second);});
+    }
     const Profile& at(const std::string& map,uint32_t zone)const {auto i=zones.find({map,zone});return i==zones.end()?fallback:i->second;}
 };
 // One "sun_/moon_<name> = value" assignment with its range checks; nullptr on success, else the reason.
 // Shared by the ini parser and the dev tuning overlay (zone_tuning.h).
 inline float* keyTarget(Profile& profile,const std::string& key,unsigned& count,float& minimum,float& maximum){
+    count=1;minimum=0;maximum=1;
+    if(key=="fog_tint"){count=3;return profile.fogTint;}
+    if(key=="fog_tint_strength")return &profile.fogTintStrength;
+    if(key=="shadow_contrast")return &profile.shadowContrast;
     Profile* p=&profile;
     unsigned s;if(key.rfind("sun_",0)==0)s=0;else if(key.rfind("moon_",0)==0)s=1;else return nullptr;
     auto name=key.substr(s?5:4);float* target=nullptr;count=1;minimum=0;maximum=1;
@@ -83,8 +111,18 @@ inline const char* assignKey(Profile& profile,const std::string& key,std::string
     if(target[0]<minimum)return "fog height scale must be at least .25";
     return nullptr;
 }
-// Atomic validation: a malformed file cannot install half a palette. A zone
-// inherits [default], which must precede zone sections. Duplicate keys reject.
+inline void inheritParent(Table& table,const std::pair<std::string,uint32_t>& child,uint32_t parent){
+    auto& local=table.zones.at(child);
+    Profile resolved=table.at(child.first,parent);
+    for(const auto& key:table.explicitKeys.at(child)){
+        unsigned count;float lo,hi;
+        auto* src=keyTarget(local,key,count,lo,hi);
+        auto* dst=keyTarget(resolved,key,count,lo,hi);
+        std::copy_n(src,count,dst);
+    }
+    local=resolved;
+}
+// Build the entire table before publishing it so invalid edits retain the saved appearance.
 inline bool parse(std::istream& input,Table& out,std::string& error){
     Table t;Profile* p=nullptr;std::set<std::string>* explicitSet=nullptr;std::string line;unsigned number=0;bool defaultSeen=false;
     std::map<std::string,bool> keys;
@@ -97,14 +135,31 @@ inline bool parse(std::istream& input,Table& out,std::string& error){
             auto colon=section.find(':');if(colon==std::string::npos)return fail("expected [Map:ZoneID]");
             std::string map=trim(section.substr(0,colon)),id=trim(section.substr(colon+1));
             if(map!="Azeroth"&&map!="Kalimdor"&&map!="Expansion01"&&map!="Northrend")return fail("unsupported map");
+            auto slash=id.find('/');uint32_t parent=0;
+            if(slash!=id.npos){
+                auto root=id.substr(0,slash);
+                if(root.empty()||root.size()>6||root.find_first_not_of("0123456789")!=root.npos||!(parent=uint32_t(std::stoul(root))))return fail("invalid parent zone");
+                id=id.substr(slash+1);
+            }
+            const bool interior=id.size()>7&&id.compare(id.size()-7,7,"@inside")==0;
+            if(interior)id.resize(id.size()-7);
             if(id.empty()||id.find_first_not_of("0123456789")!=std::string::npos||id.size()>6)return fail("invalid zone ID");
             uint32_t zone=uint32_t(std::stoul(id));if(!zone)return fail("zone ID must be positive");
+            if(interior&&parent)return fail("interior requires a live zone");
+            if(interior)t.interiors.emplace(map,zone);
+            if(parent==zone)return fail("subzone equals parent");
+            if(parent)t.parents[{map,zone}]=parent;
             auto entry=t.zones.emplace(std::make_pair(map,zone),t.fallback);if(!entry.second)return fail("duplicate zone");p=&entry.first->second;explicitSet=&t.explicitKeys[entry.first->first];continue;
         }
         auto eq=line.find('=');if(!p||eq==std::string::npos)return fail("expected key=value in section");
         std::string key=trim(line.substr(0,eq)),value=trim(line.substr(eq+1));if(!keys.emplace(key,true).second)return fail("duplicate key");
         if(const char* why=assignKey(*p,key,value))return fail(why);
         if(explicitSet)explicitSet->insert(key);
+    }
+    for(const auto& child:t.parents){
+        const auto root=std::make_pair(child.first.first,child.second);
+        if(t.parents.count(root))return fail("expected a top-level parent zone");
+        inheritParent(t,child.first,child.second);
     }
     if(input.bad()){error="read failed";return false;}out=std::move(t);error.clear();return true;
 }
@@ -128,7 +183,9 @@ inline Profile sample(const Table& table,const NorthlightRegionalFog::Region& re
     double ix=std::floor(gx),iy=std::floor(gy);Profile p[4];
     for(unsigned row=0;row<2;++row)for(unsigned col=0;col<2;++col){
         float px=float(WorldZero-(iy+row+.5)*ChunkSize),py=float(WorldZero-(ix+col+.5)*ChunkSize);
-        p[row*2+col]=table.at(map,zoneAt(region,px,py));
+        const auto area=areaAt(region,px,py);
+        auto child=table.parents.find({map,area.subzone});
+        p[row*2+col]=table.at(map,child!=table.parents.end()&&child->second==area.zone?area.subzone:area.zone);
     }
     return blend(blend(p[0],p[1],float(gx-ix)),blend(p[2],p[3],float(gx-ix)),float(gy-iy));
 }

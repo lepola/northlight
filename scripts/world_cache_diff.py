@@ -189,14 +189,18 @@ def diff(a_root, b_root, maps, selection, tol, margin):
 def read_fog(path):
     data = path.read_bytes()
     magic, version, tx, ty, nw, ni = struct.unpack_from('<4s5I', data)
-    if magic != b'FRF1' or version != 1:
+    if magic != b'FRF1' or version not in (1, 2):
         raise ValueError(f'invalid FRF1 {path}')
     zones = struct.unpack_from('<256I', data, 24)
     offset = 24 + 1024
     waters = sorted(struct.unpack_from('<3fQ', data, offset + 20 * i) for i in range(nw))
     offset += 20 * nw
     indoors = sorted(struct.unpack_from('<6f', data, offset + 24 * i) for i in range(ni))
-    return zones, waters, indoors
+    offset += 24 * ni
+    if len(data) != offset + (1024 if version == 2 else 0):
+        raise ValueError(f'invalid regional fog tile size {path}')
+    subzones = struct.unpack_from('<256I', data, offset) if version == 2 else (0,) * 256
+    return (zones, subzones), waters, indoors
 
 
 def compare_fog(pa, pb, name, tol, fog):
