@@ -585,8 +585,11 @@ float3 MissedReflection(float3 reflected, float3 light)
 float LiquidFoam(float3 world, float3 toCamera, float drawnHeight, float thickness, float bentThickness, float distance,
                  float2 wakeFoam)
 {
-    return WaterFoam(FoamPoint(world.xy, toCamera), drawnHeight, bentThickness, distance,
-                     PixelFootprint(distance, toCamera.z), wakeFoam, cLookingDown.w);
+    float foam = 0.0;
+    [branch] if (FoamStrength() > 0.0)
+        foam = WaterFoam(FoamPoint(world.xy, toCamera), drawnHeight, bentThickness, distance,
+                         PixelFootprint(distance, toCamera.z), wakeFoam, cLookingDown.w);
+    return foam;
 }
 
 // Where the water thins to nothing at the shore it fades to the ground under it, bent like the rest (an unbent copy

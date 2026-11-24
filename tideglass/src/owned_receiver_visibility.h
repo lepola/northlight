@@ -63,34 +63,55 @@ private:
     bool m_valid=false;
 };
 
-// Conservative projected receiving area. Corners crossing the near plane keep
-// the whole viewport; a box wholly outside one clip plane contributes no view.
+// The visible part of a box has vertices at its surviving corners and where
+// its edges cross the near plane. Project those points before rounding to pixels.
 inline bool ReceiverScreenArea(const FrameInputs& frame,const std::array<float,6>& bounds,float padding,RECT& area)
 {
     float projection[16];if(!math::ClientToDeviceProjection(frame.glProjection,projection))return false;
+    const auto& v=frame.viewport;
+    area={LONG(v.X),LONG(v.Y),LONG(v.X+v.Width),LONG(v.Y+v.Height)};
     double low[2]={1e30,1e30},high[2]={-1e30,-1e30};unsigned common=63;bool crossing=false;
+    double corners[8][4]={};
+    const auto include=[&](const double* clip){
+        for(unsigned c=0;c<2;++c){
+            const double ndc=clip[c]/clip[3];
+            low[c]=std::min(low[c],ndc);high[c]=std::max(high[c],ndc);
+        }
+    };
     for(unsigned corner=0;corner<8;++corner){
-        double view[4]={0,0,0,1},clip[4]={};
+        double view[4]={0,0,0,1};
+        auto& clip=corners[corner];
         for(unsigned c=0;c<3;++c)for(unsigned r=0;r<3;++r)
             view[c]+=(bounds[r+((corner&(1u<<r))?3:0)]-frame.cameraPosition[r])*frame.cameraRelativeView[r*4+c];
         for(unsigned c=0;c<4;++c)for(unsigned r=0;r<4;++r)clip[c]+=view[r]*projection[r*4+c];
         for(double x:clip)if(!std::isfinite(x))return false;
         common&=(clip[0]<-clip[3]?1u:0)|(clip[0]>clip[3]?2u:0)|(clip[1]<-clip[3]?4u:0)|
             (clip[1]>clip[3]?8u:0)|(clip[2]<0?16u:0)|(clip[2]>clip[3]?32u:0);
-        if(clip[3]<=.01){crossing=true;continue;}
-        for(unsigned c=0;c<2;++c){low[c]=std::min(low[c],clip[c]/clip[3]);high[c]=std::max(high[c],clip[c]/clip[3]);}
+        if(clip[2]<0){crossing=true;continue;}
+        if(!(clip[3]>0))return true;
+        include(clip);
     }
     if(common)return false;
-    const auto& v=frame.viewport;
-    area={LONG(v.X),LONG(v.Y),LONG(v.X+v.Width),LONG(v.Y+v.Height)};
-    if(!crossing){
-        // Near-camera bounds can project beyond LONG even at valid world
-        // coordinates. Intersect in floating point before integer conversion.
-        area.left=LONG(std::clamp(std::floor(v.X+(low[0]+1)*.5*v.Width-padding),double(v.X),double(v.X+v.Width)));
-        area.right=LONG(std::clamp(std::ceil(v.X+(high[0]+1)*.5*v.Width+padding),double(v.X),double(v.X+v.Width)));
-        area.top=LONG(std::clamp(std::floor(v.Y+(1-high[1])*.5*v.Height-padding),double(v.Y),double(v.Y+v.Height)));
-        area.bottom=LONG(std::clamp(std::ceil(v.Y+(1-low[1])*.5*v.Height+padding),double(v.Y),double(v.Y+v.Height)));
+    if(crossing){
+        for(unsigned i=0;i<8;++i){
+            const auto& a=corners[i];
+            for(unsigned axis:{1u,2u,4u}){
+                if(i&axis)continue;
+                const auto& b=corners[i|axis];
+                if((a[2]<0)==(b[2]<0))continue;
+                const double t=a[2]/(a[2]-b[2]);
+                const double cut[4]={a[0]+t*(b[0]-a[0]),a[1]+t*(b[1]-a[1]),0,a[3]+t*(b[3]-a[3])};
+                if(!(cut[3]>0))return true;
+                include(cut);
+            }
+        }
     }
+    // Near-camera bounds can project beyond LONG even at valid world
+    // coordinates. Intersect in floating point before integer conversion.
+    area.left=LONG(std::clamp(std::floor(v.X+(low[0]+1)*.5*v.Width-padding),double(v.X),double(v.X+v.Width)));
+    area.right=LONG(std::clamp(std::ceil(v.X+(high[0]+1)*.5*v.Width+padding),double(v.X),double(v.X+v.Width)));
+    area.top=LONG(std::clamp(std::floor(v.Y+(1-high[1])*.5*v.Height-padding),double(v.Y),double(v.Y+v.Height)));
+    area.bottom=LONG(std::clamp(std::ceil(v.Y+(1-low[1])*.5*v.Height+padding),double(v.Y),double(v.Y+v.Height)));
     return area.left<area.right && area.top<area.bottom;
 }
 // Known current draw observations restrict the receiving area independently of

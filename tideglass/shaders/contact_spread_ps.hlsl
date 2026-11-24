@@ -38,18 +38,30 @@ float4 main(float2 cell : VPOS) : COLOR0
 {
     float2 uv = (cell + 0.5) * cSpread.w;
     float step = cSpread.w;
-    float counted = (MarkAt(uv) * 4.0 +
-                     (MarkAt(uv + float2(step, 0)) + MarkAt(uv - float2(step, 0)) + MarkAt(uv + float2(0, step)) +
-                      MarkAt(uv - float2(0, step))) * 2.0 +
-                     MarkAt(uv + float2(step, step)) + MarkAt(uv - float2(step, step)) +
-                     MarkAt(uv + float2(step, -step)) + MarkAt(uv - float2(step, -step))) / 16.0;
-    float nearest = 0.0;
-    [unroll] for (int k = -kSpreadReach; k <= kSpreadReach; ++k)
-        nearest = max(nearest, MarkAt(uv + cSpread.xy * k) * exp(-0.5 * k * k / (kSpreadWidth * kSpreadWidth)));
-    float4 state = tex2Dlod(sState, float4(uv, 0, 0));
-    float foam = state.b + max(saturate(nearest) - state.b, 0.0) * cRise.x;
-    float4 kept = float4(state.rg, foam, tex2Dlod(sCounted, float4(uv, 0, 0)).r);
-    // (Selected rather than returned early: Microsoft's compiler mishandles an early return inside a branch.)
-    return cSpread.z > 1.5 ? kept : cSpread.z > 0.5 ? float4(nearest, 0.0, 0.0, 0.0)
-                                                    : float4(saturate(counted * kCountGain), 0.0, 0.0, 0.0);
+    float4 result;
+    // Every pixel in a draw uses the same pass. Keep each texture read inside
+    // its pass so the count and the two spreads only sample their own inputs.
+    [branch] if (cSpread.z < 0.5)
+    {
+        float counted = (MarkAt(uv) * 4.0 +
+                         (MarkAt(uv + float2(step, 0)) + MarkAt(uv - float2(step, 0)) + MarkAt(uv + float2(0, step)) +
+                          MarkAt(uv - float2(0, step))) * 2.0 +
+                         MarkAt(uv + float2(step, step)) + MarkAt(uv - float2(step, step)) +
+                         MarkAt(uv + float2(step, -step)) + MarkAt(uv - float2(step, -step))) / 16.0;
+        result = float4(saturate(counted * kCountGain), 0.0, 0.0, 0.0);
+    }
+    else
+    {
+        float nearest = 0.0;
+        [unroll] for (int k = -kSpreadReach; k <= kSpreadReach; ++k)
+            nearest = max(nearest, MarkAt(uv + cSpread.xy * k) * exp(-0.5 * k * k / (kSpreadWidth * kSpreadWidth)));
+        result = float4(nearest, 0.0, 0.0, 0.0);
+        [branch] if (cSpread.z > 1.5)
+        {
+            float4 state = tex2Dlod(sState, float4(uv, 0, 0));
+            float foam = state.b + max(saturate(nearest) - state.b, 0.0) * cRise.x;
+            result = float4(state.rg, foam, tex2Dlod(sCounted, float4(uv, 0, 0)).r);
+        }
+    }
+    return result;
 }

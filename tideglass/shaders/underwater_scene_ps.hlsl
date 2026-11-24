@@ -4,8 +4,8 @@
 // before the liquid where water covers it, with how much water the view crosses there, and the ground just above the
 // water as it is (the bottom carries on up into the shore, and a view bent just past the waterline shows it); what
 // stands taller out of the water (a character's body, a plant) is left to be filled in (fill_pull_ps,
-// fill_push_ps) from the water around it. Stored as the fill reads it: rgb and a 1 where known; then the state
-// (3 known, 1 to fill), the water's thickness, and how much it counts in filling what is not. Drawn at half the
+// fill_push_ps) from the water around it. RGB and thickness share one target because both use the same weights.
+// The other target holds the state (3 known, 1 to fill) and the weight used to fill missing samples. Drawn at half the
 // resolution: each texel is the first of its 2x2 pixels.
 
 // The water over a pixel (yards) from which it starts to count in the fill, and below which it counts fully: the fill is
@@ -42,10 +42,9 @@ SceneOutput main(float2 texel : VPOS)
     // (Selected rather than returned early: Microsoft's compiler mishandles an early return inside a branch.)
     bool water = thickness > 0.0;
     SceneOutput output;
-    output.colour = water || shore ? float4(colour, 1.0) : 0.0;
-    output.hit = water   ? float4(3.0, thickness,
-                                  max(smoothstep(kFillFromDepth, kFillFullDepth, thickness), kFillShallowShare), 0.0)
-                 : shore ? float4(3.0, 0.0, kFillShallowShare, 0.0)
+    output.colour = water || shore ? float4(colour, water ? thickness : 0.0) : 0.0;
+    output.hit = water   ? float4(3.0, max(smoothstep(kFillFromDepth, kFillFullDepth, thickness), kFillShallowShare), 0.0, 0.0)
+                 : shore ? float4(3.0, kFillShallowShare, 0.0, 0.0)
                          : float4(1.0, 0.0, 0.0, 0.0);
     return output;
 }

@@ -402,9 +402,10 @@ float3 SurfaceFromBelow(float2 pixel, float3 hit, float3 direction, float distan
     if (!UnderSlime())
     {
         float2 flow;
-        float shore = ShoreFoam(hit.xy, hit.z, flow);
+        float shore, crest;
+        ShoreFoam(hit.xy, hit.z, footprint, shore, crest, flow);
         float lines = FoamLines(hit.xy, max(shore, wake.z), flow, footprint);
-        float crests = max(ShoreCrestLine(hit.xy, hit.z, footprint), wake.w);
+        float crests = max(crest, wake.w);
         float foam = max(lines, crests) * FoamGrain(hit.xy) * kFoamFromBelow;
         result = lerp(result, Absorbed(UnderwaterLight() * kFoamBelowBrightness, distance, surfaceWater), foam);
     }

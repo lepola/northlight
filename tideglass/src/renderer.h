@@ -255,7 +255,7 @@ private:
     bool MarkContacts(IDirect3DDevice9* dev, SurfaceSim& sim, IDirect3DTexture9* level, IDirect3DTexture9* seabed,
                       float frameSeconds, const float (&frame)[9][4], const float (&constants)[kWaterConstants][4]);
     static SurfacePhysics WaterPhysics(const Config& cfg);
-    static SurfacePhysics SlimePhysics(const Config& cfg);
+    static SurfacePhysics SlimePhysics(const Config& cfg, float regionalStrength);
     bool EnsureRippleTargets(IDirect3DDevice9* dev, SurfaceSim& sim);
     IDirect3DTexture9* GroundTexture(IDirect3DDevice9* dev, const GroundMap* ground);
     IDirect3DTexture9* FarGroundTexture(IDirect3DDevice9* dev, const GroundMap* ground);

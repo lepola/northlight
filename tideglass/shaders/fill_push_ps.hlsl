@@ -23,18 +23,18 @@ PushOutput main(float2 texel : VPOS)
     float4 ownHit = tex2Dlod(sHit, float4(uv, 0, 0));
     float4 coarser = tex2Dlod(sCoarserColour, float4(uv, 0, 0));
     float4 coarserHit = tex2Dlod(sCoarserHit, float4(uv, 0, 0));
-    float known = ownHit.b;
+    float known = ownHit.g;
     float state = ownHit.r;
-    // At the finest level only the texels to be filled are; the rest keep what they have.
+    // At the finest level a known texel keeps its original colour and depth.
     bool unseen = state > 0.5 && state < 1.5;
     if (cLevel.z > 0.5 && !unseen)
         known = 1.0;
     PushOutput output;
     output.colour = lerp(coarser, own, known);
-    float path = lerp(coarserHit.g, ownHit.g, known);
-    float filled = max(known, coarserHit.b);
-    if (cLevel.z > 0.5 && unseen && coarserHit.b > 0.0)
+    float filled = max(known, coarserHit.g);
+    if (cLevel.z > 0.5 && unseen && coarserHit.g > 0.0)
         state = 4.0;
-    output.hit = float4(state, path, filled, 0.0);
+    // The final consumer reads state and depth. Intermediate levels read state and weight.
+    output.hit = float4(state, cLevel.z > 0.5 ? output.colour.a : filled, 0.0, 0.0);
     return output;
 }

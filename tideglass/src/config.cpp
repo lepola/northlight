@@ -148,6 +148,8 @@ bool ConfigFile::Parse()
     slime.foamGlow = std::clamp(reader.Float("SlimeEdgeGlow", slimeDefaults.foamGlow), 0.0f, 4.0f);
     slime.stockRelief = std::clamp(reader.Float("SlimeFlowRelief", slimeDefaults.stockRelief), 0.0f, 4.0f);
     slime.rippleResponse = std::clamp(reader.Float("SlimeRipples", slimeDefaults.rippleResponse), 0.0f, 4.0f);
+    next.slimeRegions = reader.SlimeRegions();
+    next.regionalSlimeStrength = std::clamp(reader.Float("RegionalSlimeStrength", defaults.regionalSlimeStrength), 0.0f, 1.0f);
     next.slimeRippleSpeed = std::clamp(reader.Float("SlimeRippleSpeed", defaults.slimeRippleSpeed), 0.1f, 4.0f);
     slime.nearReflection =
         std::clamp(reader.Float("SlimeNearReflection", slimeDefaults.nearReflection), 0.0f, 1.0f);
@@ -255,6 +257,24 @@ std::string ConfigFile::Directory() const
 {
     size_t slash = m_path.find_last_of("\\/");
     return slash == std::string::npos ? std::string() : m_path.substr(0, slash + 1);
+}
+
+LiquidStyle ConfigFile::SlimeStyle(const Config& config, float regionalStrength)
+{
+    LiquidStyle style = config.slimeStyle;
+    if (regionalStrength > 0.0f)
+    {
+        // Apply the measured canal lift proportionally to the player's chosen pigment.
+        constexpr float shallowGain[] = {0.45f / 0.42f, 0.75f / 0.70f, 0.13f / 0.12f};
+        constexpr float deepGain[] = {0.13f / 0.10f, 0.39f / 0.28f, 0.043f / 0.03f};
+        for (int channel = 0; channel < 3; ++channel)
+        {
+            style.shallowColor[channel] = std::min(1.0f, style.shallowColor[channel] * (1 + regionalStrength * (shallowGain[channel] - 1)));
+            style.deepColor[channel] = std::min(1.0f, style.deepColor[channel] * (1 + regionalStrength * (deepGain[channel] - 1)));
+            style.abyssColor[channel] = style.deepColor[channel];
+        }
+    }
+    return style;
 }
 
 LiquidStyle ConfigFile::WaterStyle(const Config& config)

@@ -665,11 +665,11 @@ Renderer::SurfacePhysics Renderer::WaterPhysics(const Config& cfg)
     return {kRippleWaveSpeed, kRippleDamping, cfg.shoreWaves, true, 0.0f, 1.0f};
 }
 
-Renderer::SurfacePhysics Renderer::SlimePhysics(const Config& cfg)
+Renderer::SurfacePhysics Renderer::SlimePhysics(const Config& cfg, float regionalStrength)
 {
     // Slime lies over building floors as often as terrain, so it does not use the ground map: its edge glow uses the
     // depth on screen, and it has no shore waves.
-    return {cfg.slimeRippleSpeed, kSlimeDamping, 0.0f, false, kSlimeViscosity, cfg.slimeStyle.rippleResponse};
+    return {cfg.slimeRippleSpeed * (1.0f - 0.25f * regionalStrength), kSlimeDamping, 0.0f, false, kSlimeViscosity, cfg.slimeStyle.rippleResponse};
 }
 
 bool Renderer::EnsureRippleTargets(IDirect3DDevice9* dev, SurfaceSim& sim)
@@ -1275,13 +1275,15 @@ bool Renderer::CompositeDeferredSlime(IDirect3DDevice9* dev, IDirect3DTexture9* 
     D3DSURFACE_DESC desc = {};
     float frame[9][4];
     float constants[kWaterConstants][4];
+    const float regionalStrength = cfg.slimeStrengthFor(in.zoneId,in.subzoneId);
+    const LiquidStyle style = ConfigFile::SlimeStyle(cfg, regionalStrength);
     if (FAILED(boundDepth->GetDesc(&desc)) || !BuildFrameConstants(in, cfg, desc, frame) ||
-        !BuildWaterConstants(in, cfg, cfg.slimeStyle, m_slimeSurface, frame, constants))
+        !BuildWaterConstants(in, cfg, style, m_slimeSurface, frame, constants))
         return false;
     // Slime's glints follow its body pigment. Clear-water light colours produced
     // blue-white patches on ripple facets and the thin, less glowing shoreline.
     for (unsigned channel = 0; channel < 3; ++channel)
-        constants[kSunColorRegister - kFrameConstants][channel] *= cfg.slimeStyle.shallowColor[channel];
+        constants[kSunColorRegister - kFrameConstants][channel] *= style.shallowColor[channel];
     SavedTargets saved(m_passRestoreFailed);
     if (!BeginPass(dev, boundDepth, saved))
         return false;
@@ -1289,7 +1291,7 @@ bool Renderer::CompositeDeferredSlime(IDirect3DDevice9* dev, IDirect3DTexture9* 
     bool prepared=SUCCEEDED(dev->SetPixelShaderConstantF(0,&frame[0][0],kFrameConstants))&&
         MeasureLevel(dev,m_slime.depth,m_slime.level,m_slime.levelIndex);
     IDirect3DTexture9* slimeLevel = m_slime.level[0] ? m_slime.level[m_slime.levelIndex] : nullptr;
-    prepared=prepared&&AdvanceSurface(dev,m_slimeSurface,slimeLevel,SlimePhysics(cfg),in,cfg,frame,constants);
+    prepared=prepared&&AdvanceSurface(dev,m_slimeSurface,slimeLevel,SlimePhysics(cfg, regionalStrength),in,cfg,frame,constants);
     TimeEnd(GpuTimer::SlimeSurface);
     if(!prepared){saved.Restore();return false;}
     if (cfg.slime && in.cameraInSlime)
@@ -1900,29 +1902,64 @@ void Renderer::ReleaseFillChain(FillChain& chain)
         }
 }
 
+namespace
+{
+bool SupportsCompactFill(IDirect3DDevice9* dev)
+{
+    D3DCAPS9 caps = {};
+    D3DDISPLAYMODE mode = {};
+    IDirect3D9* api = nullptr;
+    if (FAILED(dev->GetDeviceCaps(&caps)) || !(caps.PrimitiveMiscCaps & D3DPMISCCAPS_MRTINDEPENDENTBITDEPTHS) ||
+        FAILED(dev->GetDirect3D(&api)) || !api)
+        return false;
+    const bool supported = SUCCEEDED(api->GetAdapterDisplayMode(caps.AdapterOrdinal, &mode)) &&
+        SUCCEEDED(api->CheckDeviceFormat(caps.AdapterOrdinal, caps.DeviceType, mode.Format,
+                                        D3DUSAGE_RENDERTARGET | D3DUSAGE_QUERY_FILTER, D3DRTYPE_TEXTURE, D3DFMT_G16R16F));
+    api->Release();
+    return supported;
+}
+}
+
 bool Renderer::EnsureFillChain(IDirect3DDevice9* dev, FillChain& chain, UINT width, UINT height)
 {
-    if (chain.pull[0][0] && (chain.widths[0] != width || chain.heights[0] != height))
-        ReleaseFillChain(chain);
+    if (chain.pull[0][0] && chain.widths[0] == width && chain.heights[0] == height)
+        return true;
+    ReleaseFillChain(chain);
     for (int level = 0; level < FillChain::kLevels; ++level)
     {
         const UINT scale = 1u << level;
         chain.widths[level] = std::max((width + scale - 1) / scale, 1u);
         chain.heights[level] = std::max((height + scale - 1) / scale, 1u);
     }
-    auto create = [&](IDirect3DTexture9*& texture, int level) {
-        return texture || SUCCEEDED(dev->CreateTexture(chain.widths[level], chain.heights[level], 1,
-                                                      D3DUSAGE_RENDERTARGET, D3DFMT_A16B16G16R16F, D3DPOOL_DEFAULT,
-                                                      &texture, nullptr));
+    auto allocate = [&](D3DFORMAT hitFormat) {
+        for (int level = 0; level < FillChain::kLevels; ++level)
+        {
+            for (int i = 0; i < 2; ++i)
+            {
+                const D3DFORMAT format = i == 0 ? D3DFMT_A16B16G16R16F : hitFormat;
+                const auto create = [&](IDirect3DTexture9** out) {
+                    return SUCCEEDED(dev->CreateTexture(chain.widths[level], chain.heights[level], 1,
+                                                        D3DUSAGE_RENDERTARGET, format, D3DPOOL_DEFAULT, out, nullptr));
+                };
+                if (!create(&chain.pull[level][i]) || (level + 1 < FillChain::kLevels && !create(&chain.push[level][i])))
+                {
+                    ReleaseFillChain(chain);
+                    return false;
+                }
+            }
+        }
+        return true;
     };
-    bool ok = true;
-    for (int level = 0; level < FillChain::kLevels && ok; ++level)
-        for (int i = 0; i < 2 && ok; ++i)
-            ok = create(chain.pull[level][i], level) &&
-                 (level == FillChain::kLevels - 1 || create(chain.push[level][i], level));
-    if (!ok)
-        ReleaseFillChain(chain);
-    return ok;
+    D3DFORMAT hitFormat = D3DFMT_G16R16F;
+    if (!SupportsCompactFill(dev) || !allocate(hitFormat))
+    {
+        hitFormat = D3DFMT_A16B16G16R16F;
+        if (!allocate(hitFormat))
+            return false;
+    }
+    WATER_LOG_INFO("refraction fill %ux%u, %s metadata", width, height,
+                   hitFormat == D3DFMT_G16R16F ? "RG16F" : "RGBA16F");
+    return true;
 }
 
 namespace
@@ -2274,16 +2311,16 @@ bool Renderer::DrawUnderwaterScene(IDirect3DDevice9* dev, IDirect3DTexture9* dep
     if (!EnsureFillChain(dev, m_underwaterFill, width, height))
         return Skip("underwater scene buffers could not be created");
     if(!SetPairTargets(dev, m_underwaterFill.pull[0]))return false;
-    const D3DVIEWPORT9 whole = {0, 0, width, height, 0.0f, 1.0f};
-    if(FAILED(dev->SetViewport(&whole)))return false;
     if(FAILED(dev->SetRenderState(D3DRS_COLORWRITEENABLE, 0xF)))return false;
     if(FAILED(dev->SetRenderState(D3DRS_COLORWRITEENABLE1, 0xF)))return false;
-    if(FAILED(dev->Clear(0, nullptr, D3DCLEAR_TARGET, 0, 1.0f, 0)))return false;
-    D3DVIEWPORT9 vp = FullDepth(in.viewport);
-    vp.Width = (vp.X + vp.Width + 1) / 2 - vp.X / 2;
-    vp.Height = (vp.Y + vp.Height + 1) / 2 - vp.Y / 2;
-    vp.X /= 2;
-    vp.Y /= 2;
+    const auto& vp = layout.viewport;
+    // An inset draw leaves a border that the coarser fill levels can still sample.
+    if (vp.X || vp.Y || vp.Width != width || vp.Height != height)
+    {
+        const D3DVIEWPORT9 whole = {0, 0, width, height, 0.0f, 1.0f};
+        if (FAILED(dev->SetViewport(&whole)) || FAILED(dev->Clear(0, nullptr, D3DCLEAR_TARGET, 0, 1.0f, 0)))
+            return false;
+    }
     if(FAILED(dev->SetViewport(&vp)))return false;
     if(FAILED(dev->SetPixelShaderConstantF(0, &frame[0][0], kFrameConstants)))return false;
     if(FAILED(dev->SetPixelShaderConstantF(kFrameConstants, &constants[0][0], kWaterConstants)))return false;
@@ -2602,7 +2639,10 @@ bool Renderer::CompositeWater(IDirect3DDevice9* dev, IDirect3DTexture9* depthTex
         m_distanceAtmosphereShaded=success&&restored&&recovered&&shaded&&m_usingEnvironment&&surfaceOutput&&cfg.waterAtmosphere==1;
         return success&&restored&&recovered;
     };
-    bool ok=CopyToTexture(dev,saved.color[0],m_sceneWithWater);
+    // Level tracking and simulation use depth. Only the above-water draw reads
+    // native colour or needs it to recover from a partial write to the target.
+    const bool drawSurface = shadeSurface && !seenFromBelow;
+    bool ok = !drawSurface || CopyToTexture(dev,saved.color[0],m_sceneWithWater);
     if (ok)
     {
         TimeBegin(GpuTimer::WaterSurface);
@@ -2611,9 +2651,7 @@ bool Renderer::CompositeWater(IDirect3DDevice9* dev, IDirect3DTexture9* depthTex
             AdvanceSurface(dev,m_waterSurface,m_level[0]?m_level[m_levelIndex]:nullptr,WaterPhysics(cfg),in,cfg,frame,constants);
         TimeEnd(GpuTimer::WaterSurface);
     }
-    // SkipEmptyWater suppresses only the surface shading work: snapshots, level tracking, simulation and the
-    // end-of-world sky memory keep their existing lifetime, including frames when no water draw was submitted.
-    if (ok && !seenFromBelow && shadeSurface)
+    if (ok && drawSurface)
     {
         BeginReflectionCapture(cfg, in);
         m_usingWaveMoments = FilteredWaterMaterial(cfg,m_usingEnvironment) && PrepareWaveMoments(dev,cfg);
@@ -2849,7 +2887,7 @@ void Renderer::DrawUnderwater(IDirect3DDevice9* dev, IDirect3DTexture9* depthTex
     float water[kWaterConstants][4];
     D3DSURFACE_DESC desc = {};
     SurfaceSim& surface = slime ? m_slimeSurface : m_waterSurface;
-    if (!BuildWaterConstants(in, cfg, slime ? cfg.slimeStyle : Weathered(ConfigFile::WaterStyle(cfg), in, cfg), surface,
+    if (!BuildWaterConstants(in, cfg, slime ? ConfigFile::SlimeStyle(cfg, cfg.slimeStrengthFor(in.zoneId,in.subzoneId)) : Weathered(ConfigFile::WaterStyle(cfg), in, cfg), surface,
                              frame, water) ||
         FAILED(target->GetDesc(&desc)) || !EnsureSceneTargets(dev, desc) ||
         !CopyToTexture(dev, target, m_sceneWithWater))

@@ -4,6 +4,7 @@
 #include <string>
 #include <vector>
 #include <memory>
+#include <map>
 
 enum class DebugView
 {
@@ -99,6 +100,19 @@ struct Config
     LiquidStyle slimeStyle = {{0.42f, 0.70f, 0.12f}, {0.10f, 0.28f, 0.03f}, 2.5f, 0.1f, 0.45f, 0.1f, 0.9f, 0.55f,
                               1.0f, {0.55f, 1.0f, 0.2f}, 0.35f, 0.6f, 0.0f, 0.6f, 1.0f, 0.8f,
                               {0.10f, 0.28f, 0.03f}, 1000.0f, 0.9f, 1.0f};
+    float regionalSlimeStrength = 1.0f;
+    // AreaTable IDs are unique across maps. Key zero is the explicit all-regions value.
+    std::shared_ptr<const std::map<unsigned,float>> slimeRegions;
+    float slimeStrengthFor(unsigned zone,unsigned subzone=0) const {
+        if(!zone)return 0;
+        if(slimeRegions){
+            auto value=subzone?slimeRegions->find(subzone):slimeRegions->end();
+            if(value==slimeRegions->end())value=slimeRegions->find(zone);
+            if(value==slimeRegions->end())value=slimeRegions->find(0);
+            if(value!=slimeRegions->end())return value->second;
+        }
+        return zone==1497?regionalSlimeStrength:0.f;
+    }
     float slimeRippleSpeed = 0.6f; // yards a second a ripple spreads; water's is 2.8
     float slimeVisibility = 6.0f;
     float slimeInsideColor[3] = {0.22f, 0.44f, 0.12f};
@@ -179,6 +193,7 @@ public:
     void SetStockView(bool stock) { m_stockView = stock; }
     bool StockViewOn() const { return m_stockView; }
     static LiquidStyle WaterStyle(const Config& config);
+    static LiquidStyle SlimeStyle(const Config& config, float regionalStrength);
     std::string Directory() const;
 
 private:

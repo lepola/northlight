@@ -48,16 +48,23 @@ void ContactFoam(float2 onSurface, float distance, float footprint, out float de
     float2 uv = RippleUv(onSurface);
     float texel = cRippleGrid.x;
     float field = ContactField(uv);
-    float2 change = float2(log(max(ContactField(uv + float2(texel, 0.0)), 1.0e-4)) -
-                               log(max(ContactField(uv - float2(texel, 0.0)), 1.0e-4)),
-                           log(max(ContactField(uv + float2(0.0, texel)), 1.0e-4)) -
-                               log(max(ContactField(uv - float2(0.0, texel)), 1.0e-4))) /
-                    (2.0 * cRippleGrid.y);
-    float width = kContactFieldWidth * cRippleGrid.y;
-    float away = width * width * length(change);
+    density = 0.0;
+    rim = 0.0;
     float present = smoothstep(0.02, 0.25, field) * near;
-    density = exp(-away * away / (2.0 * kContactFoamReach * kContactFoamReach)) * present;
-    rim = ContactRim(onSurface, away, footprint) * present;
+    // A zero contact weight discards both outputs. Skip the neighbouring
+    // field samples and the animated rim across that part of the surface.
+    [branch] if (present > 0.0)
+    {
+        float2 change = float2(log(max(ContactField(uv + float2(texel, 0.0)), 1.0e-4)) -
+                                   log(max(ContactField(uv - float2(texel, 0.0)), 1.0e-4)),
+                               log(max(ContactField(uv + float2(0.0, texel)), 1.0e-4)) -
+                                   log(max(ContactField(uv - float2(0.0, texel)), 1.0e-4))) /
+                        (2.0 * cRippleGrid.y);
+        float width = kContactFieldWidth * cRippleGrid.y;
+        float away = width * width * length(change);
+        density = exp(-away * away / (2.0 * kContactFoamReach * kContactFoamReach)) * present;
+        rim = ContactRim(onSurface, away, footprint) * present;
+    }
 }
 
 // All the water's foam, drawn by the one line foam (FoamLines): each source gives how thick it is (and the shore's, the
@@ -77,11 +84,11 @@ float WaterFoam(float2 onSurface, float drawnHeight, float depth, float distance
     OpenWaterFoam(onSurface, depth, distance, footprint, openWaterAmount, sourceFoam, sourceFlow);
     float density = sourceFoam;
     float2 flow = sourceFlow;
-    float crests = 0.0;
-    density = max(density, ShoreFoam(onSurface, drawnHeight, sourceFlow));
+    float crests;
+    ShoreFoam(onSurface, drawnHeight, footprint, sourceFoam, crests, sourceFlow);
+    density = max(density, max(sourceFoam, wakeFoam.x));
     flow += sourceFlow;
-    density = max(density, wakeFoam.x);
-    crests = max(max(crests, ShoreCrestLine(onSurface, drawnHeight, footprint)), wakeFoam.y);
+    crests = max(crests, wakeFoam.y);
     float contact;
     float rim;
     ContactFoam(onSurface, distance, footprint, contact, rim);

@@ -725,22 +725,33 @@ bool OwnedWorldGpu::Draw(IDirect3DDevice9* device,const FrameInputs& frame,const
     };
     const bool terrainDrawn=(parts&Part::Terrain) && shaders.terrainVs && shaders.terrainDeclaration;
     if (terrainDrawn) ok=SUCCEEDED(device->SetVertexShader(shaders.terrainVs)) && SUCCEEDED(device->SetVertexDeclaration(shaders.terrainDeclaration)) && ok;
+    // Below the surface the vertex shader mirrors every terrain vertex about the current
+    // camera water height, including in a sloping or multi-level body.
+    const float terrainHeight = below ? frame.cameraWaterHeight : receiverHeight;
+    const auto mirroredBounds = [terrainHeight](std::array<float,6> box) {
+        const float low = box[2];
+        box[2] = 2 * terrainHeight - box[5];
+        box[5] = 2 * terrainHeight - low;
+        return box;
+    };
     for (unsigned t=0;t<m_terrain.size() && ok && terrainDrawn;++t) {
         const auto& mesh=m_terrain[t];if (!mesh.indexCount) continue;
-        if(receiver && !below){
-            auto box=receiver->horizontal?data.terrain[t].sourceExtent:receiver->terrainExtents[t];
-            if(receiver->horizontal){const auto low=box[2];box[2]=2*receiverHeight-box[5];box[5]=2*receiverHeight-low;}
-            if(visible.Outside(box))continue;
-        }
+        const auto& terrain = data.terrain[t];
+        const bool boundedBelow = below && terrain.sourceBounds.size() == terrain.reflectedBounds.size();
+        const bool flatTerrainMirror = boundedBelow || (!below && receiver && receiver->horizontal);
         uint16_t visibleGroups=0xffff;
-        if(receiver && !below){
+        if ((!below && receiver) || (boundedBelow && terrain.groupMask)) {
+            if (below && terrain.sourceExtent[2] > terrainHeight) continue;
+            const auto box = flatTerrainMirror ? mirroredBounds(terrain.sourceExtent) : receiver->terrainExtents[t];
+            if (visible.Outside(box)) continue;
             visibleGroups=0;
             for(unsigned g=0;g<OwnedTerrainRenderData::GroupCount;++g){
-                if(!(data.terrain[t].groupMask&(1u<<g)))continue;
-                auto box=receiver->horizontal?data.terrain[t].sourceGroups[g]:
+                if(!(terrain.groupMask&(1u<<g)))continue;
+                const auto& source = terrain.sourceGroups[g];
+                if (below && source[2] > terrainHeight) continue;
+                const auto bounds = flatTerrainMirror ? mirroredBounds(source) :
                     receiver->terrainGroups[t*OwnedTerrainRenderData::GroupCount+g];
-                if(receiver->horizontal){const auto low=box[2];box[2]=2*receiverHeight-box[5];box[5]=2*receiverHeight-low;}
-                if(!visible.Outside(box))visibleGroups|=uint16_t(1u<<g);
+                if(!visible.Outside(bounds))visibleGroups|=uint16_t(1u<<g);
             }
             if(!visibleGroups)continue;
         }
@@ -756,13 +767,15 @@ bool OwnedWorldGpu::Draw(IDirect3DDevice9* device,const FrameInputs& frame,const
             if (!range.count) continue;
             const auto& sourceCell=scene.region->terrain[t].tile.cells[c];
             if(!(visibleGroups&(1u<<OwnedTerrainRenderData::Group(sourceCell.x,sourceCell.y)))){outside(c);continue;}
-            auto bounds=data.terrain[t].reflectedBounds[c];
-            if(receiver){
-                if(receiver->horizontal){bounds=data.terrain[t].sourceBounds[c];const float low=bounds[2];
-                    bounds[2]=2*receiverHeight-bounds[5];bounds[5]=2*receiverHeight-low;}
-                else bounds=receiver->reflectedBounds[m_terrainCellOffsets[t]+c];
+            auto bounds = terrain.reflectedBounds[c];
+            if (flatTerrainMirror) {
+                const auto& source = terrain.sourceBounds[c];
+                if (below && source[2] > terrainHeight) {outside(c);continue;}
+                bounds = mirroredBounds(source);
+            } else if (!below && receiver) {
+                bounds = receiver->reflectedBounds[m_terrainCellOffsets[t]+c];
             }
-            if (!below && visible.Outside(bounds)) {outside(c);continue;}
+            if ((!below || boundedBelow) && visible.Outside(bounds)) {outside(c);continue;}
             if (fogSkip && fogVolume.Contains(bounds)) {++m_stats.fogSkipped;flush();continue;}
             if (pastFogSkip && pastFog(bounds)) {++m_stats.pastFog;flush();continue;}
             const auto& cell=scene.region->terrain[t].tile.cells[c];

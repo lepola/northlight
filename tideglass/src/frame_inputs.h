@@ -31,6 +31,8 @@ struct FrameInputs : WaterFrameValues
     float sceneToLight[3] = {};
     uint32_t sceneAmbientColor = 0, sceneDirectColor = 0;
     uint32_t modelMilliseconds=0; // captured once; queued rendering never reads a live animation clock
+    uint32_t zoneId = 0; // client AreaTable zone, including building interiors; zero when unavailable
+    uint32_t subzoneId = 0;
     int32_t mapId = -1; // captured with the world view; unknown never admits owned scene data
     // The camera is under a liquid surface (water or slime) and its height is known (cameraWaterHeight): the reflection
     // is then drawn from below, mirrored at that surface.

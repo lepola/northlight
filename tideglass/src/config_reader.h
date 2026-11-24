@@ -7,7 +7,9 @@
 #include <cctype>
 #include <cmath>
 #include <cstdlib>
+#include <cstring>
 #include <limits>
+#include <map>
 #include <memory>
 #include <string>
 #include <type_traits>
@@ -37,6 +39,31 @@ public:
     std::string PathValue(const char* key) {
         char value[MAX_PATH] = {};
         return Read(key, value) ? value : "";
+    }
+
+    std::shared_ptr<const std::map<unsigned,float>> SlimeRegions() {
+        std::vector<char> entries(32768);
+        const DWORD size=GetPrivateProfileSectionA("RegionalSlime",entries.data(),DWORD(entries.size()),m_path.c_str());
+        if(!size)return {};
+        if(size>=entries.size()-2){Reject("RegionalSlime");return {};}
+        auto regions=std::make_shared<std::map<unsigned,float>>();
+        for(const char* item=entries.data();*item;item+=std::strlen(item)+1){
+            const std::string entry(item);
+            auto equals=entry.find('=');
+            if(equals==entry.npos){Reject("RegionalSlime");return {};}
+            std::string key=entry.substr(0,equals);
+            int zone=0;
+            if(_stricmp(key.c_str(),"default")!=0){
+                const char* id=key.c_str();
+                if(key.empty()||key.size()>6||key.find_first_not_of("0123456789")!=key.npos||
+                   !NumberToken(id,zone)||zone<=0){Reject("RegionalSlime");return {};}
+            }
+            const char* input=item+equals+1;
+            float strength=0;
+            if(!NumberToken(input,strength)||*Whitespace(input)||strength<0||strength>1||
+               !regions->emplace(unsigned(zone),strength).second){Reject("RegionalSlime");return {};}
+        }
+        return regions;
     }
 
     void Color(const char* key, const float* fallback, float* out) {

@@ -1273,6 +1273,12 @@ bool FillFrameInputs(const OpaqueState& camera, FrameInputs& out)
 {
     out.nativeLiquids=g_liquidIdentity;
     out.mapId = camera.mapId;
+    // The terrain outside the Undercity reports Ruins of Lordaeron. Capture the
+    // interior-aware zone with the camera so queued frames use their own location.
+    struct {uint32_t zone,subzone;} location{};
+    const bool located=IsSupportedClient()&&Read(0x00BD080C,location);
+    out.zoneId=located?location.zone:0;
+    out.subzoneId=located?location.subzone:0;
     out.modelMilliseconds=GetTickCount();
     std::memcpy(out.cameraRelativeView, camera.cameraRelativeView, sizeof(out.cameraRelativeView));
     std::memcpy(out.glProjection, camera.glProjection, sizeof(out.glProjection));
