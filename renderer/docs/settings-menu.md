@@ -31,6 +31,8 @@ Fog tint colours the existing fog at its current density. Shadow contrast deepen
 
 **Tone curve strength** controls the regional grade after fog and water, before the HUD. Select **Tuned**, open **Daylight tone curve** or **Night tone curve**, then pick **Brightness**, **Red**, **Green** or **Blue**. Higher points brighten that part of the selected channel. Brightness scales the three channels together. Red, Green and Blue act afterwards on their own channel. A straight diagonal gives the original response.
 
+**Vibrance** enriches muted colours with a separate slider for daylight and night. Start at zero and raise it while watching the foliage and nearby lamps. Tone curve strength controls both curves and vibrance. Right-click the slider to inherit the parent region’s value. The saved keys are `day_vibrance` and `night_vibrance`, each from 0 to 1. On devices without a filterable 16-bit colour volume, Northlight falls back to the regional curves.
+
 Drag one of the four points and look at the world behind the overlay. The first point moves horizontally from 4% to 20% input for fine control in dark areas. The other points sit at 25%, 50% and 75%. **Point values** also offers sliders. **Inherit selected point** restores that region’s parent value for just that point. **Hold to compare** temporarily removes the selected region’s grade while keeping its fog settings. Release to restore the preview. **Save** keeps it after restart. Northlight blends the curves through dawn (06:00–08:00) and dusk (18:00–20:00) using the game clock.
 
 The **Region** selector under **Water** also controls slime pigment and movement. Choose a mode and **Save** to apply it. An existing Undercity strength carries over. Outdoor slime starts at its usual appearance.

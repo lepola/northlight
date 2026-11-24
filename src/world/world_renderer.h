@@ -575,6 +575,7 @@ private:
         NorthlightHorizonHaze::Constants constants;
         std::array<float,4> appearance{},tone{};
         NorthlightTone::TableKey curveKey{};
+        float vibrance=0;
         const Snapshot* scene=nullptr;
         const NorthlightRegionalFog::Field* field=nullptr;
         float farZ=0,edge=0,effectiveEdge=0,zone=0;
@@ -599,7 +600,10 @@ private:
         result.constants=NorthlightHorizonHaze::constants(result.state,{strength,quality.horizonHazeStart,quality.horizonHazeBand,quality.horizonHazeTerrain},
             farZ,zone,effects.fog,celestialValid,sun,underwaterFade.scale()*sourceWeights[0],lift,weatherEffects().hazeTauScale());
         result.tone=NorthlightCelestialProfiles::toneCoefficients(palette,night);
-        result.curveKey=NorthlightTone::tableKey(palette.curves,night,palette.toneStrength);
+        if(!gradeVolumeUnavailable)
+            result.vibrance=palette.toneStrength*(palette.vibrance[0]+night*(palette.vibrance[1]-palette.vibrance[0]));
+        if(result.vibrance<.0001f)result.vibrance=0;
+        result.curveKey=NorthlightTone::tableKey(palette.curves,night,palette.toneStrength,result.vibrance>0);
         result.appearance=NorthlightCelestialProfiles::appearance(palette,result.state.color,effects.fog);
         for(unsigned i=0;i<3;++i)result.constants.haze[i]*=1.f+result.appearance[i];
         float target=0;
@@ -871,6 +875,31 @@ private:
     IDirect3DPixelShader9 *cachedFastPS=nullptr,*cachedOpaqueFastPS=nullptr,*cachedOpaquePS=nullptr;
     IDirect3DPixelShader9 *regionalFinalPS=nullptr,*regionalWaterPS=nullptr;
     IDirect3DPixelShader9 *gradedFinalPS=nullptr,*gradedWaterPS=nullptr,*curveFinalPS=nullptr,*curveWaterPS=nullptr;
+    IDirect3DPixelShader9 *volumePS[2][2]={};
+    IDirect3DVolumeTexture9* gradeVolume=nullptr;
+    bool gradeVolumeUnavailable=false;
+    bool bindGradeVolume(){
+        if(gradeVolumeUnavailable)return false;
+        constexpr unsigned n=NorthlightTone::CubeSize;
+        if(!gradeVolume){
+            IDirect3D9* api=nullptr;D3DDEVICE_CREATION_PARAMETERS device{};D3DDISPLAYMODE mode{};
+            bool supported=SUCCEEDED(d->GetDirect3D(&api))&&api&&SUCCEEDED(d->GetCreationParameters(&device))&&
+                SUCCEEDED(api->GetAdapterDisplayMode(device.AdapterOrdinal,&mode))&&
+                SUCCEEDED(api->CheckDeviceFormat(device.AdapterOrdinal,device.DeviceType,mode.Format,D3DUSAGE_QUERY_FILTER,
+                    D3DRTYPE_VOLUMETEXTURE,D3DFMT_A16B16G16R16));
+            drop(api);
+            D3DLOCKED_BOX box{};
+            if(supported&&SUCCEEDED(d->CreateVolumeTexture(n,n,n,1,0,D3DFMT_A16B16G16R16,D3DPOOL_MANAGED,&gradeVolume,nullptr))&&
+               SUCCEEDED(gradeVolume->LockBox(0,&box,nullptr,0))){
+                NorthlightTone::bakeColourVolume(box.pBits,box.RowPitch,box.SlicePitch,NorthlightTone::vibrantColour);
+                supported=SUCCEEDED(gradeVolume->UnlockBox(0));
+            }else supported=false;
+            if(!supported){drop(gradeVolume);gradeVolumeUnavailable=true;return false;}
+        }
+        return SUCCEEDED(d->SetSamplerState(4,D3DSAMP_ADDRESSW,D3DTADDRESS_CLAMP))&&
+               SUCCEEDED(d->SetSamplerState(4,D3DSAMP_MAGFILTER,D3DTEXF_LINEAR))&&
+               SUCCEEDED(d->SetSamplerState(4,D3DSAMP_MINFILTER,D3DTEXF_LINEAR))&&SUCCEEDED(d->SetTexture(4,gradeVolume));
+    }
     IDirect3DTexture9* curveTexture=nullptr;
     NorthlightTone::TableKey uploadedCurve{};
     bool curveTextureWide=false;
@@ -2705,7 +2734,7 @@ public:
         waterHorizonPending=false;waterHorizon=HorizonPreparation{};
         waterDistanceOwned=waterSurfaceShaded=false;drop(waterGradient);drop(waterGradientPS);drop(waterOwnedPS);drop(waterLightingPS);waterVisibility.reset();drop(waterGradientState);
 #endif
-replayBoundsAbandon();releaseReplayProbe();staticCasters.settle();rigidMemoryClear();admission.reset();admissionOn=false;gatedBodies.clear();prepareQuiesce();neutralShadowMaps=false;prepareCaches->sampled.clear();prepareCaches->bones.clear();prepareCachesStale=false;if(replays.empty()&&heldShadowReplays.empty())prepareFrameRelease(); /* 0.3.179: no replay left to point at them */actorShadowHistory.clear();actorShadowOriginValid=false;replayBoundsMetadata.clear();replayBoundsCache.clear();declarationCache.clear();if(!keepMesh)uploadedStaticOwners.reset();staticOwnerGeneration=UINT64_MAX;staticCasters.reset();staticMatcher.clear();staticM2Memory.clear();staticScene.reset();staticRetryTick=0;stateBlocks.clear();uploadedTerrain.clear();liveTerrainIndexCount=liveDirectionalIndexCount=0;if(!keepMesh){fixedTerrain.reset();fixedTerrainBits.reset();}liveTerrainGeneration=0;drop(raisedFogTexture);drop(regionalFogTexture);drop(neutralAO);drop(neutralZero);drop(ditherNoise);rainMask=nullptr;uploadedFogField.reset();releasePointGPU();probeActivation.reset();probeBlend.reset();drop(baselineSurface);drop(baselineLight);releaseReplayGPU();liveTerrainGPU.clear();{auto& queries=fence();NorthlightDynamicRing::reset(liveIndexRing,0,queries);queries.drop();}drop(liveIndicesGPU);liveIndexBytes=0;liveIndexBase=0;if(!keepMesh){pendingMesh.reset();clearMesh();}retiredMaterials.clear();if(!keepMesh){releaseMeshPool();uploadedMap.clear();}for(auto& t:shadow)drop(t);for(auto& s:shadowSurface)drop(s);for(auto& t:shadowCache)drop(t);for(auto& s:shadowCacheSurface)drop(s);drop(shadowCacheDepth);drop(shadowVerifySurface);drop(shadowVerify);for(auto& r:shadowVerifyRead)drop(r);drop(shadowScratch);drop(shadowScratchSurface);releaseActorTargets();drop(neutralWhite);actorValid[0]=actorValid[1]=false;actorCenterValid[0]=actorCenterValid[1]=false;drop(unionPS);invalidateShadowCache();for(auto& t:probe)drop(t);drop(probePrev);drop(shadowDepth);drop(lightSurface);drop(smoothSurface);drop(fogSurface);drop(fogBlurredSurface);drop(fogHistorySurface);drop(fogHistory);drop(fogTemporalPS);fogHistoryValid=false;drop(colorSurface);drop(light);drop(smoothLight);drop(fog);drop(fogBlurred);drop(color);drop(lightingPS);drop(giPS);drop(raisedFogPS);drop(fogPS);drop(fogBlurPS);drop(fogCloudsPS);drop(cloudNoise);drop(localDirectPS);drop(localDirect16PS);drop(profileSplitSurface);profileSplitFailed=false;drop(removalPS);drop(temporalPS);drop(localFogPS);drop(localFogCombinePS);drop(localFogAccumSurface);drop(localFogAccum);drop(normalsPS);drop(normalBuffer);drop(normalSurface);drop(sourceVisPS);for(int a=0;a<2;++a)for(int b=0;b<2;++b){drop(sourceVis[a][b]);drop(sourceVisSurface[a][b]);}sourceVisValid=false;for(int i=0;i<2;++i){drop(temporalLight[i]);drop(temporalLightSurface[i]);drop(temporalDepth[i]);drop(temporalDepthSurface[i]);}temporalValid=false;drop(finalPS);drop(regionalFinalPS);drop(regionalWaterPS);drop(gradedFinalPS);drop(gradedWaterPS);drop(curveFinalPS);drop(curveWaterPS);drop(curveTexture);uploadedCurve={};drop(shadowPS);drop(replayPS);drop(shadowVS);drop(cachedShadowVS);drop(cachedShadowPS);drop(cachedFastPS);drop(cachedOpaqueFastPS);drop(cachedOpaquePS);drop(shadowDecl);width=height=0;uploadedSerial=0;}
+replayBoundsAbandon();releaseReplayProbe();staticCasters.settle();rigidMemoryClear();admission.reset();admissionOn=false;gatedBodies.clear();prepareQuiesce();neutralShadowMaps=false;prepareCaches->sampled.clear();prepareCaches->bones.clear();prepareCachesStale=false;if(replays.empty()&&heldShadowReplays.empty())prepareFrameRelease(); /* 0.3.179: no replay left to point at them */actorShadowHistory.clear();actorShadowOriginValid=false;replayBoundsMetadata.clear();replayBoundsCache.clear();declarationCache.clear();if(!keepMesh)uploadedStaticOwners.reset();staticOwnerGeneration=UINT64_MAX;staticCasters.reset();staticMatcher.clear();staticM2Memory.clear();staticScene.reset();staticRetryTick=0;stateBlocks.clear();uploadedTerrain.clear();liveTerrainIndexCount=liveDirectionalIndexCount=0;if(!keepMesh){fixedTerrain.reset();fixedTerrainBits.reset();}liveTerrainGeneration=0;drop(raisedFogTexture);drop(regionalFogTexture);drop(neutralAO);drop(neutralZero);drop(ditherNoise);rainMask=nullptr;uploadedFogField.reset();releasePointGPU();probeActivation.reset();probeBlend.reset();drop(baselineSurface);drop(baselineLight);releaseReplayGPU();liveTerrainGPU.clear();{auto& queries=fence();NorthlightDynamicRing::reset(liveIndexRing,0,queries);queries.drop();}drop(liveIndicesGPU);liveIndexBytes=0;liveIndexBase=0;if(!keepMesh){pendingMesh.reset();clearMesh();}retiredMaterials.clear();if(!keepMesh){releaseMeshPool();uploadedMap.clear();}for(auto& t:shadow)drop(t);for(auto& s:shadowSurface)drop(s);for(auto& t:shadowCache)drop(t);for(auto& s:shadowCacheSurface)drop(s);drop(shadowCacheDepth);drop(shadowVerifySurface);drop(shadowVerify);for(auto& r:shadowVerifyRead)drop(r);drop(shadowScratch);drop(shadowScratchSurface);releaseActorTargets();drop(neutralWhite);actorValid[0]=actorValid[1]=false;actorCenterValid[0]=actorCenterValid[1]=false;drop(unionPS);invalidateShadowCache();for(auto& t:probe)drop(t);drop(probePrev);drop(shadowDepth);drop(lightSurface);drop(smoothSurface);drop(fogSurface);drop(fogBlurredSurface);drop(fogHistorySurface);drop(fogHistory);drop(fogTemporalPS);fogHistoryValid=false;drop(colorSurface);drop(light);drop(smoothLight);drop(fog);drop(fogBlurred);drop(color);drop(lightingPS);drop(giPS);drop(raisedFogPS);drop(fogPS);drop(fogBlurPS);drop(fogCloudsPS);drop(cloudNoise);drop(localDirectPS);drop(localDirect16PS);drop(profileSplitSurface);profileSplitFailed=false;drop(removalPS);drop(temporalPS);drop(localFogPS);drop(localFogCombinePS);drop(localFogAccumSurface);drop(localFogAccum);drop(normalsPS);drop(normalBuffer);drop(normalSurface);drop(sourceVisPS);for(int a=0;a<2;++a)for(int b=0;b<2;++b){drop(sourceVis[a][b]);drop(sourceVisSurface[a][b]);}sourceVisValid=false;for(int i=0;i<2;++i){drop(temporalLight[i]);drop(temporalLightSurface[i]);drop(temporalDepth[i]);drop(temporalDepthSurface[i]);}temporalValid=false;drop(finalPS);drop(regionalFinalPS);drop(regionalWaterPS);drop(gradedFinalPS);drop(gradedWaterPS);drop(curveFinalPS);drop(curveWaterPS);for(auto& pair:volumePS)for(auto& program:pair)drop(program);drop(gradeVolume);gradeVolumeUnavailable=false;drop(curveTexture);uploadedCurve={};drop(shadowPS);drop(replayPS);drop(shadowVS);drop(cachedShadowVS);drop(cachedShadowPS);drop(cachedFastPS);drop(cachedOpaqueFastPS);drop(cachedOpaquePS);drop(shadowDecl);width=height=0;uploadedSerial=0;}
     // Explicit enable/retry only, called after the wrapper's clearFrame(). This
     // never calls endFrame(), so packet capture and cleanup run exactly once.
     void recover(){meshRetry.clear();if(!failed)return;releaseGPU(true);failed=false;valid=false;streamingReports=0;logf("WORLD explicit recovery requested");}
@@ -2980,6 +3009,7 @@ replayBoundsAbandon();releaseReplayProbe();staticCasters.settle();rigidMemoryCle
             target.fogTintStrength=local.fogTintStrength;target.shadowContrast=local.shadowContrast;
             target.toneStrength=local.toneStrength;
             target.curves=local.curves;
+            target.vibrance=local.vibrance;
         }
         framePalette=paletteTransition.update(target,map,camera[0],camera[1],double(now)*.001);
         paletteFrameMap=map;paletteFrameValid=true;
@@ -5294,9 +5324,22 @@ replayBoundsAbandon();releaseReplayProbe();staticCasters.settle();rigidMemoryCle
         const auto& appearance=preparedHorizon.appearance;
         const auto& tone=preparedHorizon.tone;
         const bool graded=tone!=std::array<float,4>{};
-        if(!debug&&(preparedHorizon.curveKey.strength||graded||appearance!=std::array<float,4>{})){
+        if(!debug&&(preparedHorizon.vibrance||preparedHorizon.curveKey.strength||graded||appearance!=std::array<float,4>{})){
             IDirect3DPixelShader9* selected=nullptr;
-            if(preparedHorizon.curveKey.strength){
+            if(preparedHorizon.vibrance&&!gradeVolumeUnavailable){
+                const bool curves=preparedHorizon.curveKey.strength!=0;
+                auto*& shader=volumePS[waterOwned][curves];
+                if(!shader){
+                    const DWORD* code=waterOwned?(curves?kWorldCompositeWaterVolumeCurvesShader:kWorldCompositeWaterVolumeShader):
+                                                 (curves?kWorldCompositeVolumeCurvesShader:kWorldCompositeVolumeShader);
+                    if(FAILED(d->CreatePixelShader(code,&shader)))gradeVolumeUnavailable=true;
+                }
+                constexpr float n=NorthlightTone::CubeSize;
+                const float controls[]={preparedHorizon.vibrance,0,(n-1)/n,.5f/n};
+                if(shader&&bindGradeVolume()&&(!curves||bindCurveTable(preparedHorizon.curveKey))&&
+                   SUCCEEDED(d->SetPixelShaderConstantF(103,controls,1)))selected=shader;
+            }
+            if(!selected&&preparedHorizon.curveKey.strength){
                 auto*& shader=waterOwned?curveWaterPS:curveFinalPS;
                 if(!shader)d->CreatePixelShader(waterOwned?kWorldCompositeWaterCurvesShader:kWorldCompositeCurvesShader,&shader);
                 if(shader&&bindCurveTable(preparedHorizon.curveKey))selected=shader;

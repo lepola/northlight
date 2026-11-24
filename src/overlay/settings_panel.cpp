@@ -30,7 +30,7 @@ const std::map<std::string,const char*> Labels={
     {"FoamStrength","Foam strength"},{"OpenWaterCrestFoam","Foam on open-water crests"},
     {"ReflectionScenery","Reflections"},{"ReflectionResolution","Reflection resolution"},{"ReflectionDistance","Reflection distance"},{"ReflectionSceneryDetails","Nearby reflected scenery"},{"FineHighlights","Fine water and slime highlights"},{"Clarity","Water clarity"},{"SurfaceBlur","Depth blur"},{"Reflection","Reflection strength"},{"NearReflection","Near reflection strength"},
     {"Underwater","Underwater effects"},{"UnderwaterVisibility","Visibility (yards)"},{"UnderwaterScenery","Underwater scenery"},
-    {"tone_curve_strength","Tone curve strength"},{"day_shadow_level","Shadows (25%)"},{"day_midtone_level","Midtones (50%)"},{"day_highlight_level","Highlights (75%)"},
+    {"day_vibrance","Vibrance"},{"night_vibrance","Vibrance"},{"tone_curve_strength","Tone curve strength"},{"day_shadow_level","Shadows (25%)"},{"day_midtone_level","Midtones (50%)"},{"day_highlight_level","Highlights (75%)"},
     {"night_shadow_level","Shadows (25%)"},{"night_midtone_level","Midtones (50%)"},{"night_highlight_level","Highlights (75%)"},{"fog_tint","Fog colour"},{"fog_tint_strength","Fog tint strength"},{"shadow_contrast","Shadow contrast"},{"Slime","Slime surface"},{"Lava","Magma and fel magma surfaces"},
     {"AutoBump","Material detail"},{"AutoBumpStrength","Normal map strength (%)"},{"AutoBumpDistance","Normal map distance (yards)"},
     {"AutoBumpTerrain","Ground and roads"},{"AutoBumpWalls","Walls and floors"},{"AutoBumpGrass","Grass tufts"},
@@ -63,6 +63,8 @@ const std::map<std::string,const char*> CelestialLabels={
     {"fog_height_scale","Fog height"},{"horizon_haze","Horizon haze"},{"glow_strength","Glow strength"},{"glow","Glow tint"},{"glow_mix","Glow tint mix"},
 };
 const std::map<std::string,std::vector<const char*>> Help={
+    {"day_vibrance",{"Enriches muted colours in daylight. Greys and vivid colours are protected. Tone curve strength controls the whole grade."}},
+    {"night_vibrance",{"Enriches muted colours at night. Greys and vivid colours are protected. Tone curve strength controls the whole grade."}},
     {"tone_curve_strength",{"Blends in the selected region's daylight and night curves. Choose Brightness, Red, Green or Blue and drag a point on its curve."}},
     {"ReflectionSceneryDetails",{"Reflects extra dock props and animated falls near water. Adds scenery preparation and draw work. Included in the Ultra Water preset."}},
     {"SurfaceBlur",{"Softens the bottom seen through the surface as the water gets deeper. Zero keeps the bottom sharp. Waves still bend the view."}},
@@ -735,6 +737,8 @@ struct SettingsPanel::State {
             }
             ImGui::TreePop();
         }
+        if(const Field* f=draft.field(D::Celestial,region,time?"night_vibrance":"day_vibrance"))
+            loose("colour-grade",{f});
         ImGui::PopID();
     }
     void regionalControl(const Field& f,const char* title){

@@ -75,7 +75,7 @@ struct TableKey {
     uint16_t strength=0;
     bool operator==(const TableKey& b)const{return strength==b.strength&&points==b.points;}
 };
-inline TableKey tableKey(const Regional& curves,float night,float strength){
+inline TableKey tableKey(const Regional& curves,float night,float strength,bool includeBrightness=false){
     TableKey k;
     if(strength<=0)return k;
     bool advanced=false;
@@ -84,10 +84,34 @@ inline TableKey tableKey(const Regional& curves,float night,float strength){
         const Curve c=blend(curves[0][i],curves[1][i],night);
         auto& p=k.points[i];
         p={encode(c.lowInput),encode(c.lowBend),encode(c.levels[0]),encode(c.levels[1]),encode(c.levels[2])};
-        advanced|=p[1]!=2048 || (i>0&&(p[2]!=1024||p[3]!=2048||p[4]!=3072));
+        advanced|=p[1]!=2048 || ((i>0||includeBrightness)&&(p[2]!=1024||p[3]!=2048||p[4]!=3072));
     }
     k.strength=advanced?encode(strength):0;
     return k;
+}
+// Bake at full strength once per device. Each channel moves away from the
+// same luminance; limit all three together to preserve hue at the gamut edge.
+constexpr unsigned CubeSize=32;
+inline std::array<float,3> vibrantColour(float r,float g,float b){
+    const float peak=std::max({r,g,b}),low=std::min({r,g,b});
+    if(peak==low)return {r,g,b};
+    const float luma=.2126f*r+.7152f*g+.0722f*b;
+    const float weight=std::clamp((.90f-(peak-low)/peak)/.70f,0.f,1.f);
+    const float gain=std::min({1.2f*weight*weight*(3-2*weight),
+                               (1-peak)/(peak-luma),low/(luma-low)});
+    return {r+(r-luma)*gain,g+(g-luma)*gain,b+(b-luma)*gain};
+}
+template<typename Transform>
+inline void bakeColourVolume(void* pixels,unsigned rowPitch,unsigned slicePitch,Transform transform){
+    const float step=1.f/(CubeSize-1);
+    for(unsigned b=0;b<CubeSize;++b)for(unsigned g=0;g<CubeSize;++g){
+        auto* row=reinterpret_cast<uint16_t*>(static_cast<uint8_t*>(pixels)+b*slicePitch+g*rowPitch);
+        for(unsigned r=0;r<CubeSize;++r){
+            const auto color=transform(r*step,g*step,b*step);
+            for(unsigned c=0;c<3;++c)row[4*r+c]=uint16_t(std::lround(std::clamp(color[c],0.f,1.f)*65535));
+            row[4*r+3]=65535;
+        }
+    }
 }
 inline void bake(const TableKey& k,uint16_t* rgba){
     for(unsigned i=0;i<4;++i){

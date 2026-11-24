@@ -256,7 +256,12 @@ static void regionalAppearance(){
     const auto& lowInput=*d.field(2,"Azeroth:85/159","night_low_input");
     const auto& lowBend=*d.field(2,"Azeroth:85/159","night_low_bend");
     auto rgb=applyChanges(graded,rows,red.id()+"\t.57\n"+lowInput.id()+"\t.08\n"+lowBend.id()+"\t.64\n");
-    const auto profile=configOf(rgb,"",true).celestial.at("Azeroth",159);
+    const auto& vibrance=*d.field(2,"Azeroth:85/159","day_vibrance");
+    auto vivid=applyChanges(rgb,rows,vibrance.id()+"\t.55\n");
+    const auto profile=configOf(vivid,"",true).celestial.at("Azeroth",159);
+    CHECK(profile.vibrance[0]==.55f&&profile.vibrance[1]==0);
+    auto inheritVibrance=applyChanges(vivid,rows,vibrance.id()+"\t~\n");
+    CHECK(configOf(inheritVibrance,"",true).celestial.at("Azeroth",159).vibrance[0]==0);
     CHECK(profile.curves[0][1].levels[1]==.57f&&profile.curves[0][2].levels[1]==.50f);
     CHECK(profile.curves[1][0].lowInput==.08f&&profile.curves[1][0].lowBend==.64f&&profile.curves[0][0].lowBend==.50f);
     auto redReset=applyChanges(rgb,rows,red.id()+"\t~\n");

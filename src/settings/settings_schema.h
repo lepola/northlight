@@ -69,7 +69,7 @@ inline std::string liquidAreaKey(const std::string& section){
     return slash==section.npos?std::to_string(region(section).second):section.substr(slash+1);
 }
 inline const std::vector<std::string> AppearanceKeys=[]{
-    std::vector<std::string> keys={"fog_tint","fog_tint_strength","shadow_contrast","tone_curve_strength"};
+    std::vector<std::string> keys={"fog_tint","fog_tint_strength","shadow_contrast","tone_curve_strength","day_vibrance","night_vibrance"};
     for(const auto& field:NorthlightTone::bindings())keys.push_back(field.first);
     return keys;
 }();

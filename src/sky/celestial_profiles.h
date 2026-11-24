@@ -14,6 +14,7 @@ namespace NorthlightCelestialProfiles {
 struct Profile {
     float fogTint[3]={1,1,1},fogTintStrength=0,shadowContrast=0;
     float toneStrength=0;
+    std::array<float,2> vibrance{};
     NorthlightTone::Regional curves{};
     float disc[2][3]={{1,.96f,.88f},{.94f,.97f,1}};
     float gain[2]={3.5f,1.1f};
@@ -35,6 +36,7 @@ inline Profile blend(const Profile& a,const Profile& b,float t){
     p.shadowContrast=a.shadowContrast+(b.shadowContrast-a.shadowContrast)*t;
     p.toneStrength=a.toneStrength+(b.toneStrength-a.toneStrength)*t;
     for(unsigned s=0;s<2;++s){
+        p.vibrance[s]=a.vibrance[s]+(b.vibrance[s]-a.vibrance[s])*t;
         for(unsigned c=0;c<4;++c)p.curves[s][c]=NorthlightTone::blend(a.curves[s][c],b.curves[s][c],t);
         for(unsigned c=0;c<3;++c){p.disc[s][c]=a.disc[s][c]+(b.disc[s][c]-a.disc[s][c])*t;p.light[s][c]=a.light[s][c]+(b.light[s][c]-a.light[s][c])*t;p.glow[s][c]=a.glow[s][c]+(b.glow[s][c]-a.glow[s][c])*t;}
         p.glowStrength[s]=a.glowStrength[s]+(b.glowStrength[s]-a.glowStrength[s])*t;p.glowMix[s]=a.glowMix[s]+(b.glowMix[s]-a.glowMix[s])*t;
@@ -108,6 +110,8 @@ inline float* keyTarget(Profile& profile,const std::string& key,unsigned& count,
     if(key=="fog_tint"){count=3;return profile.fogTint;}
     if(key=="fog_tint_strength"){maximum=2;return &profile.fogTintStrength;}
     if(key=="tone_curve_strength")return &profile.toneStrength;
+    if(key=="day_vibrance")return &profile.vibrance[0];
+    if(key=="night_vibrance")return &profile.vibrance[1];
     const auto binding=NorthlightTone::bindings().find(key);
     if(binding!=NorthlightTone::bindings().end()){
         const auto& b=binding->second;

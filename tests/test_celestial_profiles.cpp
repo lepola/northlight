@@ -175,6 +175,30 @@ int main(int argc,char** argv){
             assert(near(lowOutput(low),y));
         }
     }
+    {
+        using namespace NorthlightTone;
+        Profile base,day;
+        assert(!assignKey(day,"day_vibrance",".65")&&assignKey(day,"night_vibrance","1.1"));
+        assert(near(blend(base,day,.5f).vibrance[0],.325f));
+        assert(!tableKey(base.curves,0,1,true).strength);
+        base.curves[0][0].levels[1]=.55f;
+        assert(tableKey(base.curves,0,1,true).strength&&!tableKey(base.curves,0,1).strength);
+        const unsigned pitch=CubeSize*4+8,slice=pitch*CubeSize+8;
+        std::vector<uint16_t> voxels(slice*CubeSize,0xaaaa);
+        bakeColourVolume(voxels.data(),pitch*2,slice*2,vibrantColour);
+        for(unsigned z=0;z<CubeSize;++z)for(unsigned y=0;y<CubeSize;++y){
+            const auto* row=voxels.data()+z*slice+y*pitch;
+            assert(row[CubeSize*4]==0xaaaa);
+            for(unsigned x=0;x<CubeSize;++x){
+                const float in[]={float(x)/(CubeSize-1),float(y)/(CubeSize-1),float(z)/(CubeSize-1)};
+                float out[3];for(unsigned c=0;c<3;++c)out[c]=row[4*x+c]/65535.f;
+                assert(std::abs(luma(in)-luma(out))<.00003f&&row[4*x+3]==65535);
+                if(x==y&&y==z)assert(near(out[0],out[1])&&near(out[1],out[2]));
+            }
+        }
+        const auto rose=vibrantColour(.65f,.45f,.40f),purple=vibrantColour(.75f,.02f,.9f);
+        assert(rose[0]>.65f&&rose[2]<.40f&&near(purple[0],.75f)&&near(purple[1],.02f)&&near(purple[2],.9f));
+    }
     Transition transition;auto first=transition.update(t.fallback,"Azeroth",0,0,1);assert(first.mix[1]==0);
     float previous=0;for(int i=1;i<=600;++i){auto p=transition.update(green,"Azeroth",0,0,1+i/60.);assert(p.mix[1]>=previous&&p.mix[1]<=.8f);previous=p.mix[1];}
     assert(previous>.799f);
