@@ -251,7 +251,17 @@ static void regionalAppearance(){
     CHECK(D::same(night,d.effective(night),".42")&&D::same(daylight,d.effective(daylight),".54"));
     auto graded=applyChanges(docs,rows,night.id()+"\t.48\n"+tint.id()+"\t1.7\n");
     auto local=configOf(graded,"",true).celestial.at("Azeroth",159);
-    CHECK(local.toneLevels[1][1]==.48f&&local.toneLevels[0][1]==.54f&&local.fogTintStrength==1.7f);
+    CHECK(local.curves[1][0].levels[1]==.48f&&local.curves[0][0].levels[1]==.54f&&local.fogTintStrength==1.7f);
+    const auto& red=*d.field(2,"Azeroth:85/159","day_red_midtone_level");
+    const auto& lowInput=*d.field(2,"Azeroth:85/159","night_low_input");
+    const auto& lowBend=*d.field(2,"Azeroth:85/159","night_low_bend");
+    auto rgb=applyChanges(graded,rows,red.id()+"\t.57\n"+lowInput.id()+"\t.08\n"+lowBend.id()+"\t.64\n");
+    const auto profile=configOf(rgb,"",true).celestial.at("Azeroth",159);
+    CHECK(profile.curves[0][1].levels[1]==.57f&&profile.curves[0][2].levels[1]==.50f);
+    CHECK(profile.curves[1][0].lowInput==.08f&&profile.curves[1][0].lowBend==.64f&&profile.curves[0][0].lowBend==.50f);
+    auto redReset=applyChanges(rgb,rows,red.id()+"\t~\n");
+    const auto resetProfile=configOf(redReset,"",true).celestial.at("Azeroth",159);
+    CHECK(resetProfile.curves[0][1].levels[1]==.5f&&resetProfile.curves[1][0].lowBend==.64f&&resetProfile.fogTintStrength==1.7f);
     CHECK(D::same(tint,d.effective(tint),".65"));
     d.pin(tint,"0");CHECK(d.overrides(tint)&&d.effective(tint)=="0");
     d.inherit(tint);CHECK(D::same(tint,d.effective(tint),".65")&&D::same(shadow,d.effective(shadow),".4"));

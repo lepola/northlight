@@ -115,7 +115,7 @@ int main(int argc,char** argv){
             "fog_tint_strength=1.7\ntone_curve_strength=1\nday_shadow_level=.21\nnight_shadow_level=.27\n");
         assert(parse(input,table,error));
         auto p=table.at("Azeroth",159);
-        assert(near(p.fogTintStrength,1.7f)&&near(p.toneLevels[1][1],.44f));
+        assert(near(p.fogTintStrength,1.7f)&&near(p.curves[1][0].levels[1],.44f));
         const auto day=toneCoefficients(p,0),night=toneCoefficients(p,1),dusk=toneCoefficients(p,.5f);
         for(unsigned i=0;i<4;++i)assert(near(dusk[i],(day[i]+night[i])*.5f));
         p.toneStrength=0;
@@ -125,7 +125,7 @@ int main(int argc,char** argv){
         // Even the most compressed neighbouring points must retain their brightness order.
         for(unsigned mask=0;mask<8;++mask){
             Profile extreme;extreme.toneStrength=1;
-            for(unsigned i=0;i<3;++i)extreme.toneLevels[0][i]=.25f*(i+1)+((mask&(1u<<i))?.12f:-.12f);
+            for(unsigned i=0;i<3;++i)extreme.curves[0][0].levels[i]=.25f*(i+1)+((mask&(1u<<i))?.12f:-.12f);
             const auto coeff=toneCoefficients(extreme,0);
             float previous=-1;
             for(unsigned code=0;code<=255;++code){
@@ -146,6 +146,34 @@ int main(int argc,char** argv){
         assert(delta[0]>=-1.f&&std::abs(luma(delta.data()))<.00001f);
         assert(assignKey(p,"fog_tint_strength","2.01")&&assignKey(p,"night_midtone_level",".1"));
         assert(assignKey(p,"day_highlight_level",".95"));
+    }
+    {
+        using namespace NorthlightTone;
+        Table regions;
+        std::istringstream input("[Azeroth:85]\ntone_curve_strength=1\nday_red_midtone_level=.58\n"
+                                 "[Azeroth:85/159]\nnight_low_input=.08\nnight_low_bend=.80\n");
+        assert(parse(input,regions,error));
+        const auto& curves=regions.at("Azeroth",159).curves;
+        assert(!tableKey(curves,.5f,0).strength);
+        std::array<uint16_t,256*4> pixels{};
+        for(float night:{0.f,.5f,1.f}){
+            auto key=tableKey(curves,night,1);
+            assert(key.strength);
+            bake(key,pixels.data());
+            for(unsigned c=0;c<4;++c){
+                assert(pixels[c]==0&&pixels[255*4+c]==65535);
+                for(unsigned x=1;x<256;++x)assert(pixels[x*4+c]>=pixels[(x-1)*4+c]);
+            }
+            assert(pixels[128*4+1]==128*257&&pixels[128*4+2]==128*257);
+            if(night==0){assert(pixels[128*4]>143*257&&pixels[20*4+3]==20*257);}
+            if(night==1){assert(pixels[128*4]==128*257&&pixels[20*4+3]>35*257);}
+        }
+        assert(!tableKey(regions.at("Azeroth",85).curves,1,1).strength);
+        Curve low;low.lowInput=.06f;low.levels[0]=.17f;
+        for(float y:{.008f,.04f,.09f,.16f}){
+            low.lowBend=bendForOutput(low,y);
+            assert(near(lowOutput(low),y));
+        }
     }
     Transition transition;auto first=transition.update(t.fallback,"Azeroth",0,0,1);assert(first.mix[1]==0);
     float previous=0;for(int i=1;i<=600;++i){auto p=transition.update(green,"Azeroth",0,0,1+i/60.);assert(p.mix[1]>=previous&&p.mix[1]<=.8f);previous=p.mix[1];}

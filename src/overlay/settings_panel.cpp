@@ -63,7 +63,7 @@ const std::map<std::string,const char*> CelestialLabels={
     {"fog_height_scale","Fog height"},{"horizon_haze","Horizon haze"},{"glow_strength","Glow strength"},{"glow","Glow tint"},{"glow_mix","Glow tint mix"},
 };
 const std::map<std::string,std::vector<const char*>> Help={
-    {"tone_curve_strength",{"Blends in the selected region's daylight and night curves. Open a curve to set its three output levels."}},
+    {"tone_curve_strength",{"Blends in the selected region's daylight and night curves. Choose Brightness, Red, Green or Blue and drag a point on its curve."}},
     {"ReflectionSceneryDetails",{"Reflects extra dock props and animated falls near water. Adds scenery preparation and draw work. Included in the Ultra Water preset."}},
     {"SurfaceBlur",{"Softens the bottom seen through the surface as the water gets deeper. Zero keeps the bottom sharp. Waves still bend the view."}},
     {"FineHighlights",{"Breaks nearby sun and moon highlights into finer ripples on water and slime. Uses extra GPU time when highlights are visible. Included in the Ultra Water preset."}},
@@ -247,6 +247,11 @@ struct SettingsPanel::State {
     bool wantSnapshot=false,wantPreview=false,wantClear=false,previewing=false,saving=false,awaitingSnapshot=false;
     std::uint64_t commitSerial=0;
     std::string region="default",note;                 // note: a local message (a refused request), cleared by the next action
+    int curveChannel=0,selectedPoint=0,dragPoint=-1;
+    ImVec2 curveDragOffset{};
+    bool curveDragged=false;
+    double nextCurvePreview=0;
+    bool compareRequested=false,comparing=false;
     Page page=Page::Overview;                             // kept for the session
     std::string presetChoice;bool presetCelestial=true,presetRange=true;   // the preset dialog
     Confirm confirm=Confirm::None;
@@ -268,7 +273,15 @@ struct SettingsPanel::State {
             if(status.state==NorthlightSettings::Status::State::Saved){awaitingSnapshot=true;wantSnapshot=true;previewing=false;wantPreview=false;}
         }
         if(wantClear&&!saving&&service->clearPreview()){wantClear=false;previewing=false;}
-        if(wantPreview&&!saving&&!wantClear&&service->preview(changes())){wantPreview=false;previewing=!draft.empty();}
+        if(wantPreview&&!saving&&!wantClear){
+            auto pending=changes();
+            if(comparing)if(const Field* strength=draft.field(D::Celestial,region,"tone_curve_strength")){
+                const auto id=strength->id();
+                pending.erase(std::remove_if(pending.begin(),pending.end(),[&](const auto& c){return c.id==id;}),pending.end());
+                pending.push_back({id,"0"});
+            }
+            if(service->preview(std::move(pending))){wantPreview=false;previewing=comparing||!draft.empty();}
+        }
     }
     std::vector<NorthlightSettings::Change> changes()const{
         std::vector<NorthlightSettings::Change> out;for(auto& c:draft.changes())out.push_back({c.first,c.second});return out;
@@ -592,9 +605,9 @@ struct SettingsPanel::State {
                 if(const Field* strength=draft.field(D::Celestial,region,"tone_curve_strength")){
                     regionalControl(*strength,"Tone curve strength");
                     for(unsigned time=0;time<2;++time)if(ImGui::TreeNode(time?"Night tone curve":"Daylight tone curve")){
-                        ImGui::TextWrapped("Choose the output brightness for each point. 0.25, 0.50 and 0.75 give the original image.");
-                        for(const char* key:NorthlightCelestialProfiles::ToneKeys[time])
-                            if(const Field* f=draft.field(D::Celestial,region,key))loose(key,{f});
+                        ImGui::BeginDisabled(locked());
+                        curveEditor(time);
+                        ImGui::EndDisabled();
                         ImGui::TreePop();
                     }
                 }
@@ -638,6 +651,92 @@ struct SettingsPanel::State {
         }
         return true;
     }
+    void curveEditor(unsigned time){
+        ImGui::PushID(int(time));
+        const char* channels[]={"Brightness","Red","Green","Blue"};
+        ImGui::SetNextItemWidth(170*scale);
+        ImGui::Combo("Channel",&curveChannel,channels,4);
+        NorthlightTone::Curve curve;
+        const Field* fields[5]{};
+        for(unsigned i=0;i<5;++i){
+            const auto key=NorthlightTone::key(time,curveChannel,i);
+            fields[i]=draft.field(D::Celestial,region,key);
+            if(!fields[i]){ImGui::PopID();return;}
+            float lo,hi;
+            *NorthlightTone::parameter(curve,i,lo,hi)=float(number(draft.effective(*fields[i])));
+        }
+        const ImVec2 origin=ImGui::GetCursorScreenPos();
+        const ImVec2 size(ImGui::GetContentRegionAvail().x,135*scale);
+        const float pad=6*scale,w=std::max(size.x-2*pad,1.f),h=size.y-2*pad;
+        auto pos=[&](float x,float y){return ImVec2(origin.x+pad+x*w,origin.y+pad+(1-y)*h);};
+        auto nodeX=[&](int i){return i==0?curve.lowInput:i*.25f;};
+        auto nodeY=[&](int i){return i==0?NorthlightTone::lowOutput(curve):curve.levels[i-1];};
+        ImGui::InvisibleButton("Curve graph",size);
+        const auto mouse=ImGui::GetIO().MousePos;
+        if(ImGui::IsItemActivated()){
+            dragPoint=-1;
+            curveDragged=false;
+            float best=16*scale;
+            for(int i=0;i<4;++i){
+                const auto pt=pos(nodeX(i),nodeY(i));
+                const float dist=std::hypot(mouse.x-pt.x,mouse.y-pt.y);
+                if(dist<best){best=dist;dragPoint=i;selectedPoint=i;curveDragOffset={pt.x-mouse.x,pt.y-mouse.y};}
+            }
+        }
+        if(dragPoint>=0&&ImGui::IsItemActive()&&ImGui::IsMouseDragging(ImGuiMouseButton_Left,1.f))curveDragged=true;
+        if(dragPoint>=0&&curveDragged&&(ImGui::IsItemActive()||ImGui::IsItemDeactivated())){
+            const bool released=ImGui::IsItemDeactivated();
+            const bool update=released||ImGui::GetTime()>=nextCurvePreview;
+            const float y=std::clamp(1-(mouse.y+curveDragOffset.y-origin.y-pad)/h,0.f,1.f);
+            auto change=[&](unsigned index,float value){
+                float lo,hi;float* target=NorthlightTone::parameter(curve,index,lo,hi);
+                *target=std::clamp(value,lo,hi);
+                if(update){
+                    const auto& field=*fields[index];const auto rounded=text(field,*target);
+                    if(std::abs(number(rounded)-number(draft.effective(field)))>.00001)set(field,rounded);
+                }
+            };
+            if(dragPoint==0){
+                change(NorthlightTone::LowInput,(mouse.x+curveDragOffset.x-origin.x-pad)/w);
+                change(NorthlightTone::LowBend,NorthlightTone::bendForOutput(curve,y));
+            }else change(NorthlightTone::Shadow+dragPoint-1,y);
+            if(update)nextCurvePreview=ImGui::GetTime()+.12;
+        }
+        if(ImGui::IsItemDeactivated())dragPoint=-1;
+        auto* draw=ImGui::GetWindowDrawList();
+        draw->AddRectFilled(origin,{origin.x+size.x,origin.y+size.y},IM_COL32(27,33,39,255),3);
+        for(int i=1;i<4;++i){
+            draw->AddLine(pos(i*.25f,0),pos(i*.25f,1),IM_COL32(57,67,75,255));
+            draw->AddLine(pos(0,i*.25f),pos(1,i*.25f),IM_COL32(57,67,75,255));
+        }
+        draw->AddLine(pos(0,0),pos(1,1),IM_COL32(100,109,115,255));
+        const ImU32 inks[]={IM_COL32(226,223,209,255),IM_COL32(255,139,128,255),IM_COL32(130,220,165,255),IM_COL32(133,186,255,255)};
+        ImVec2 last=pos(0,0);
+        for(int i=1;i<=80;++i){
+            const float x=i/80.f;
+            const auto pt=pos(x,NorthlightTone::sample(curve,x));
+            draw->AddLine(last,pt,inks[curveChannel],2*scale);last=pt;
+        }
+        for(int i=0;i<4;++i)
+            draw->AddCircleFilled(pos(nodeX(i),nodeY(i)),(selectedPoint==i?5:3.5f)*scale,inks[curveChannel]);
+        ImGui::TextDisabled("Drag a point. The first point also moves horizontally.");
+        ImGui::Text("Input %.0f%%    Output %.1f%%",100*nodeX(selectedPoint),100*nodeY(selectedPoint));
+        if(ImGui::SmallButton("Inherit selected point")){
+            if(selectedPoint==0){inherit(*fields[0]);inherit(*fields[1]);}
+            else inherit(*fields[selectedPoint+1]);
+        }
+        ImGui::SameLine();ImGui::Button("Hold to compare");
+        if(ImGui::IsItemActive())compareRequested=true;
+        if(ImGui::TreeNode("Point values")){
+            if(beginRows("points")){
+                row(*fields[0],"Low input");row(*fields[1],"Low bend (0.50 follows shadows)");
+                row(*fields[2],"Shadows (25%)");row(*fields[3],"Midtones (50%)");row(*fields[4],"Highlights (75%)");
+                ImGui::EndTable();
+            }
+            ImGui::TreePop();
+        }
+        ImGui::PopID();
+    }
     void regionalControl(const Field& f,const char* title){
         ImGui::PushID(f.id().c_str());
         ImGui::TextUnformatted(title);
@@ -660,7 +759,7 @@ struct SettingsPanel::State {
         std::map<std::string,const Field*> byKey;for(const Field* f:fields(D::Celestial,&region))byKey[f->key]=f;
         std::map<std::string,bool> used;
         ImGui::PushID(region.c_str());
-        for(const char* key:NorthlightSettings::AppearanceKeys)used[key]=true;
+        for(const auto& key:NorthlightSettings::AppearanceKeys)used[key]=true;
         for(const auto& g:CelestialGroups)group(g,byKey,used);
         std::vector<const Field*> rest;for(auto& k:byKey)if(!used[k.first])rest.push_back(k.second);
         loose("rest",rest);
@@ -789,8 +888,8 @@ struct SettingsPanel::State {
 SettingsPanel::SettingsPanel(std::shared_ptr<NorthlightSettings::Service> service,std::string hotkey):s(std::make_unique<State>()){s->service=std::move(service);s->hotkey=std::move(hotkey);}
 SettingsPanel::~SettingsPanel()=default;
 void SettingsPanel::opened(){s->wantSnapshot=true;}
-void SettingsPanel::poll(){s->poll();}
-bool SettingsPanel::pending()const{return s->service&&(s->wantSnapshot||s->wantPreview||s->wantClear||s->saving||s->awaitingSnapshot);}
+void SettingsPanel::poll(){if(s->comparing){s->comparing=false;s->wantPreview=true;}s->poll();}
+bool SettingsPanel::pending()const{return s->service&&(s->comparing||s->wantSnapshot||s->wantPreview||s->wantClear||s->saving||s->awaitingSnapshot);}
 bool SettingsPanel::unsaved()const{return !s->draft.empty();}
 void SettingsPanel::notice(float scale){
     const ImGuiViewport* view=ImGui::GetMainViewport();
@@ -805,7 +904,7 @@ void SettingsPanel::notice(float scale){
 
 bool SettingsPanel::draw(float scale){
     State& st=*s;st.scale=scale;
-    st.poll();
+    st.poll();st.compareRequested=false;
     bool open=true;
     ImGui::SetNextWindowPos(ImVec2(48*scale,96*scale),ImGuiCond_FirstUseEver);
     ImGui::SetNextWindowSize(ImVec2(760*scale,680*scale),ImGuiCond_FirstUseEver);
@@ -827,6 +926,7 @@ bool SettingsPanel::draw(float scale){
     st.footer();
     st.modals();
     ImGui::End();
+    if(st.comparing!=st.compareRequested){st.comparing=st.compareRequested;st.wantPreview=true;}
     return open;
 }
 } // namespace NorthlightOverlay

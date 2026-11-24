@@ -68,8 +68,11 @@ inline std::string liquidAreaKey(const std::string& section){
     auto slash=section.find('/');
     return slash==section.npos?std::to_string(region(section).second):section.substr(slash+1);
 }
-inline constexpr const char* AppearanceKeys[]={"fog_tint","fog_tint_strength","shadow_contrast","tone_curve_strength",
-    "day_shadow_level","day_midtone_level","day_highlight_level","night_shadow_level","night_midtone_level","night_highlight_level"};
+inline const std::vector<std::string> AppearanceKeys=[]{
+    std::vector<std::string> keys={"fog_tint","fog_tint_strength","shadow_contrast","tone_curve_strength"};
+    for(const auto& field:NorthlightTone::bindings())keys.push_back(field.first);
+    return keys;
+}();
 inline const std::array<const char*,11> CelestialNames={"disc","disc_gain","light","light_mix","light_strength","fog_gain","fog_height_scale","horizon_haze","glow_strength","glow","glow_mix"};
 inline std::string profileValue(NorthlightCelestialProfiles::Profile p,const std::string& key){unsigned n=0;float lo=0,hi=0;auto* v=NorthlightCelestialProfiles::keyTarget(p,key,n,lo,hi);std::string s;for(unsigned i=0;i<n;++i)s+=(i?",":"")+number(v[i]);return s;}
 inline const NorthlightCelestialProfiles::Profile& profile(const NorthlightCelestialProfiles::Table& t,const std::string& s){if(lower(s)=="default")return t.fallback;auto slash=s.find('/');
