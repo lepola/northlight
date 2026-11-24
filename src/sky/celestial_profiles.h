@@ -134,9 +134,9 @@ struct Table {
 // authored map+ID key prevents a zone remembered on another map from matching.
 inline uint32_t liveInstanceZone(const Table& table,const std::string& map,uint32_t zone,uint32_t subzone){
     if(!safeMapName(map)||hasRegionalAreaData(map)||!zone)return 0;
-    if(table.zones.count({map,zone}))return zone;
     const auto parent=table.parents.find({map,subzone});
-    return parent!=table.parents.end()&&parent->second==zone&&table.zones.count({map,subzone})?subzone:0;
+    if(parent!=table.parents.end()&&parent->second==zone&&table.zones.count({map,subzone}))return subzone;
+    return table.zones.count({map,zone})?zone:0;
 }
 // One "sun_/moon_<name> = value" assignment with its range checks; nullptr on success, else the reason.
 // Shared by the ini parser and the dev tuning overlay (zone_tuning.h).

@@ -223,6 +223,9 @@ int main(int argc,char** argv){
         assert(near(raidZone.gain[0],2.1f)&&near(raidZone.gain[1],2));
         const auto& raidSubzone=instance.at("Stratholme Raid",330);
         assert(near(raidSubzone.gain[0],2.1f)&&near(raidSubzone.gain[1],3));
+        assert(liveInstanceZone(instance,"Stratholme Raid",329,330)==330);
+        assert(liveInstanceZone(instance,"Stratholme Raid",329,0)==329);
+        assert(liveInstanceZone(instance,"Stratholme Raid",1977,330)==0);
         assert(near(instance.at("Zul'gurub",1977).gain[0],2.7f));
         assert(near(instance.at("Zul'gurub",999).gain[0],3.5f));
         // Map 48 Blackfathom, zone 719 was read from the private client at the inner pool.
