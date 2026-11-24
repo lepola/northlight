@@ -88,28 +88,43 @@ inline bool parse(const std::string& raw,Table& out,std::string& error){
     }catch(const std::exception& e){error=e.what();return false;}
 }
 
+using PresetPaths=std::map<std::string,std::vector<std::filesystem::path>>;
+inline bool indexPresetFiles(const std::filesystem::path& folder,PresetPaths& paths,std::string& error){
+    paths.clear();std::error_code ec;
+    for(std::filesystem::directory_iterator it(folder,ec),end;!ec&&it!=end;it.increment(ec)){
+        if(!it->is_regular_file(ec)||ec)continue;
+        if(NorthlightSettings::lower(it->path().extension().string())==".ini")
+            paths[NorthlightSettings::lower(it->path().stem().string())].push_back(it->path());
+    }
+    if(ec){error="Cannot list appearance-presets: "+ec.message();return false;}
+    for(auto& row:paths)std::sort(row.second.begin(),row.second.end(),[](const auto& a,const auto& b){return a.filename().string()<b.filename().string();});
+    error.clear();return true;
+}
+inline bool readPresetFile(const std::filesystem::path& path,Entry& entry,std::string& error){
+    NorthlightSettings::FileImage image;
+    try{image=NorthlightSettings::readImage(path);}catch(const std::exception& e){error=e.what();return false;}
+    if(!image.exists){error="cannot read file";return false;}
+    Table table;if(!parse(image.raw,table,error))return false;
+    entry={path.stem().string(),std::move(table)};error.clear();return true;
+}
+
 inline Catalog load(const std::filesystem::path& root){
     Catalog out;const auto folder=root/"appearance-presets";std::error_code ec;
     if(!std::filesystem::exists(folder,ec)){if(ec)out.errors.push_back("Cannot inspect appearance-presets: "+ec.message());return out;}
     if(!std::filesystem::is_directory(folder,ec)){out.errors.push_back("appearance-presets is not a directory");return out;}
-    std::vector<std::filesystem::path> paths;
-    for(std::filesystem::directory_iterator it(folder,ec),end;!ec&&it!=end;it.increment(ec)){
-        if(!it->is_regular_file(ec)||ec)continue;
-        if(NorthlightSettings::lower(it->path().extension().string())==".ini")paths.push_back(it->path());
-    }
-    if(ec){out.errors.push_back("Cannot list appearance-presets: "+ec.message());return out;}
-    std::sort(paths.begin(),paths.end(),[](const auto& a,const auto& b){return NorthlightSettings::lower(a.stem().string())<NorthlightSettings::lower(b.stem().string());});
-    std::set<std::string> seen;
-    for(const auto& path:paths){
-        const auto name=path.stem().string();std::string error;
+    PresetPaths paths;std::string error;
+    if(!indexPresetFiles(folder,paths,error)){out.errors.push_back(error);return out;}
+    for(const auto& row:paths){
+        if(row.second.size()!=1){
+            for(const auto& path:row.second)out.errors.push_back(path.filename().string()+": duplicate preset name");
+            continue;
+        }
+        const auto& path=row.second.front();const auto name=path.stem().string();
         const bool packagedDefault=NorthlightSettings::lower(name)=="default"&&name=="Default";
         if(!packagedDefault&&!validName(name,error)){out.errors.push_back(path.filename().string()+": "+error);continue;}
-        if(!seen.insert(NorthlightSettings::lower(name)).second){out.errors.push_back(path.filename().string()+": duplicate preset name");continue;}
-        NorthlightSettings::FileImage image;
-        try{image=NorthlightSettings::readImage(path);}catch(const std::exception& e){out.errors.push_back(path.filename().string()+": "+e.what());continue;}
-        if(!image.exists){out.errors.push_back(path.filename().string()+": cannot read file");continue;}
-        Table table;if(!parse(image.raw,table,error)){out.errors.push_back(path.filename().string()+": "+error);continue;}
-        out.entries.push_back({name,std::move(table)});
+        Entry entry;
+        if(!readPresetFile(path,entry,error)){out.errors.push_back(path.filename().string()+": "+error);continue;}
+        out.entries.push_back(std::move(entry));
     }
     return out;
 }
@@ -123,29 +138,18 @@ inline Catalog loadSelected(const std::filesystem::path& root,const std::string&
         else out.errors.push_back("appearance-presets is not a directory");
         return out;
     }
-    std::map<std::string,std::vector<std::filesystem::path>> paths;
-    for(std::filesystem::directory_iterator it(folder,ec),end;!ec&&it!=end;it.increment(ec)){
-        if(!it->is_regular_file(ec)||ec)continue;
-        if(NorthlightSettings::lower(it->path().extension().string())==".ini")
-            paths[NorthlightSettings::lower(it->path().stem().string())].push_back(it->path());
-    }
-    if(ec){out.errors.push_back("Cannot list appearance-presets: "+ec.message());return out;}
-    auto read=[&](const std::string& name,bool required){
+    PresetPaths paths;std::string error;
+    if(!indexPresetFiles(folder,paths,error)){out.errors.push_back(error);return out;}
+    auto read=[&](const std::string& name){
         const auto found=paths.find(NorthlightSettings::lower(name));
-        if(found==paths.end()){
-            if(required)out.errors.push_back(name+".ini is missing from appearance-presets");
-            return;
-        }
+        if(found==paths.end()){out.errors.push_back(name+".ini is missing from appearance-presets");return;}
         if(found->second.size()!=1){out.errors.push_back("Duplicate preset name: "+name);return;}
-        const auto& path=found->second.front();
-        std::string error;NorthlightSettings::FileImage image;
-        try{image=NorthlightSettings::readImage(path);}catch(const std::exception& e){out.errors.push_back(path.filename().string()+": "+e.what());return;}
-        if(!image.exists){out.errors.push_back(path.filename().string()+": cannot read file");return;}
-        Table table;if(!parse(image.raw,table,error)){out.errors.push_back(path.filename().string()+": "+error);return;}
-        out.entries.push_back({path.stem().string(),std::move(table)});
+        Entry entry;
+        if(!readPresetFile(found->second.front(),entry,error)){out.errors.push_back(found->second.front().filename().string()+": "+error);return;}
+        out.entries.push_back(std::move(entry));
     };
-    read("Default",true);
-    read(selected,true);
+    read("Default");
+    read(selected);
     return out;
 }
 

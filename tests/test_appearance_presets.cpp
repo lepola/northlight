@@ -18,6 +18,24 @@ int main(int argc,char** argv){
     {std::ofstream unused(std::filesystem::path(argv[1])/"appearance-presets"/"Unused.ini");unused<<"not a preset";}
     const auto coldDefault=loadSelected(argv[1],"Default");assert(coldDefault.entries.empty()&&coldDefault.errors.empty());
     const auto coldVibrant=loadSelected(argv[1],"vIbRaNt");assert(coldVibrant.errors.empty()&&coldVibrant.entries.size()==2);
+
+    const auto presetsFolder=std::filesystem::path(argv[1])/"appearance-presets";
+    const std::string duskBytes="[default]\nfog_tint=0.8,0.7,0.6\n";
+    {std::ofstream dusk(presetsFolder/"Dusk.ini");dusk<<duskBytes;}
+    {std::ofstream dusk(presetsFolder/"dusk.ini");dusk<<duskBytes;}
+    const auto ambiguousMenu=load(argv[1]);
+    assert(!ambiguousMenu.find("Dusk")&&ambiguousMenu.find("Vibrant")&&ambiguousMenu.find("Default"));
+    assert(std::count_if(ambiguousMenu.errors.begin(),ambiguousMenu.errors.end(),[](const auto& error){return error.find("duplicate preset name")!=std::string::npos;})==2);
+    const auto ambiguousStartup=loadSelected(argv[1],"dUsK");
+    assert(ambiguousStartup.entries.size()==1&&ambiguousStartup.find("Default")&&!ambiguousStartup.find("Dusk"));
+    assert(ambiguousStartup.errors.size()==1&&ambiguousStartup.errors.front().find("Duplicate preset name: dUsK")!=std::string::npos);
+    std::filesystem::remove(presetsFolder/"dusk.ini");
+    const auto recoveredMenu=load(argv[1]);
+    assert(recoveredMenu.find("Dusk")&&recoveredMenu.find("Dusk")->name=="Dusk");
+    assert(std::count_if(recoveredMenu.errors.begin(),recoveredMenu.errors.end(),[](const auto& error){return error.find("duplicate preset name")!=std::string::npos;})==0);
+    const auto recoveredStartup=loadSelected(argv[1],"dUsK");
+    assert(recoveredStartup.errors.empty()&&recoveredStartup.entries.size()==2&&recoveredStartup.find("Default")&&recoveredStartup.find("dUsK"));
+
     std::string nameError;assert(validName("Night Market",nameError));assert(!validName("../bad",nameError));
     assert(nameError==NameRuleText&&nameError.find('\xE2')==std::string::npos);
 
