@@ -109,6 +109,44 @@ int main(int argc,char** argv){
         assert(delta[0]==0&&delta[1]==0&&delta[2]==0&&delta[3]>0);
         assert(!t.needsLiveZone());
     }
+    {
+        Table table;
+        std::istringstream input("[Azeroth:85/159]\nnight_midtone_level=.44\n[Azeroth:85]\n"
+            "fog_tint_strength=1.7\ntone_curve_strength=1\nday_shadow_level=.21\nnight_shadow_level=.27\n");
+        assert(parse(input,table,error));
+        auto p=table.at("Azeroth",159);
+        assert(near(p.fogTintStrength,1.7f)&&near(p.toneLevels[1][1],.44f));
+        const auto day=toneCoefficients(p,0),night=toneCoefficients(p,1),dusk=toneCoefficients(p,.5f);
+        for(unsigned i=0;i<4;++i)assert(near(dusk[i],(day[i]+night[i])*.5f));
+        p.toneStrength=0;
+        assert((toneCoefficients(p,.5f)==std::array<float,4>{}));
+        Profile identity;identity.toneStrength=1;
+        assert((toneCoefficients(identity,1)==std::array<float,4>{}));
+        // Even the most compressed neighbouring points must retain their brightness order.
+        for(unsigned mask=0;mask<8;++mask){
+            Profile extreme;extreme.toneStrength=1;
+            for(unsigned i=0;i<3;++i)extreme.toneLevels[0][i]=.25f*(i+1)+((mask&(1u<<i))?.12f:-.12f);
+            const auto coeff=toneCoefficients(extreme,0);
+            float previous=-1;
+            for(unsigned code=0;code<=255;++code){
+                const float in=code/255.f,r=2.f/255.f;
+                float out=in*(1+coeff[3]);
+                for(unsigned i=0;i<3;++i){
+                    const float x=in-.25f*(i+1),shoulder=std::clamp(x+r,0.f,2*r);
+                    out+=coeff[i]*(std::max(x-r,0.f)+shoulder*shoulder/(4*r));
+                }
+                assert(out>previous);
+                if(code==0||code==255)assert(near(out,in));
+                previous=out;
+            }
+        }
+        // The darkest permitted swatch at double gain must still leave nonnegative fog radiance.
+        p.fogTintStrength=2;p.fogTint[0]=0;p.fogTint[1]=p.fogTint[2]=1;
+        const float white[]={1,1,1};const auto delta=appearance(p,white,true);
+        assert(delta[0]>=-1.f&&std::abs(luma(delta.data()))<.00001f);
+        assert(assignKey(p,"fog_tint_strength","2.01")&&assignKey(p,"night_midtone_level",".1"));
+        assert(assignKey(p,"day_highlight_level",".95"));
+    }
     Transition transition;auto first=transition.update(t.fallback,"Azeroth",0,0,1);assert(first.mix[1]==0);
     float previous=0;for(int i=1;i<=600;++i){auto p=transition.update(green,"Azeroth",0,0,1+i/60.);assert(p.mix[1]>=previous&&p.mix[1]<=.8f);previous=p.mix[1];}
     assert(previous>.799f);

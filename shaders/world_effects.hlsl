@@ -1206,7 +1206,20 @@ float3 horizonHaze(float3 color,float2 uv,float viewZ,bool sky,bool water) {
 }
 // Shader limits and compiler identity are validated in shaders/world-shader-build.json.
 float4 RegionalAppearance : register(c101); // rgb: fog colour adjustment, w: shadow contrast
-float4 WorldCompositeImpl(float2 uv,float2 pixel,float atmosphereOwned,float surfaceShaded,float beforeRefraction,bool regional=false) {
+float4 ToneCurve : register(c102);
+float3 applyWorldTone(float3 color){
+    float luminance=saturate(dot(color,float3(.2126,.7152,.0722)));
+    // Round each slope transition across four 8-bit levels to avoid a line in smooth haze.
+    const float radius=2.0/255.0;
+    float3 x=luminance-float3(.25,.5,.75);
+    float3 shoulder=clamp(x+radius,0,2*radius);
+    float3 knee=max(x-radius,0)+shoulder*shoulder/(4*radius);
+    float change=mad(luminance,ToneCurve.w,dot(knee,ToneCurve.xyz));
+    float peak=max(color.r,max(color.g,color.b));
+    float gain=min(change/max(luminance,.00001),saturate(1-peak)/max(peak,.00001));
+    return color*(1+gain);
+}
+float4 WorldCompositeImpl(float2 uv,float2 pixel,float atmosphereOwned,float surfaceShaded,float beforeRefraction,bool regional=false,bool graded=false) {
     // Fetches before any flow control use texld (1 slot; tex2Dlod costs 3-4): Scene and Depth have one level and no mip filter, so texld reads what tex2Dlod(.,0) does.
     float4 original=tex2D(Scene,uv);
     float2 centerUV=depthUV(uv);
@@ -1340,6 +1353,7 @@ float4 WorldCompositeImpl(float2 uv,float2 pixel,float atmosphereOwned,float sur
         // omitted on a surface whose renderer confirmed distance-atmosphere ownership.
         float3 background=liquid>0&&atmosphereOwned>.5?color:horizonHaze(color,centerUV,viewZ,d>=.99999&&liquid<=0,liquid>0);
         color=lerp(mad(background,fog.a,fog.rgb),unfogged,rain);
+        if(graded)color=applyWorldTone(color);
     }
     if(PassInfo.z==3)color=fog.rgb;
     // Dither before the 8-bit target rounds: haze and night air vary only with view elevation and would band into
@@ -1353,6 +1367,8 @@ float4 WorldCompositeImpl(float2 uv,float2 pixel,float atmosphereOwned,float sur
 float4 WorldComposite(float2 uv:TEXCOORD0,float2 pixel:VPOS):COLOR0 {return WorldCompositeImpl(uv,pixel,0,0,0);}
 float4 WorldCompositeRegional(float2 uv:TEXCOORD0,float2 pixel:VPOS):COLOR0 {return WorldCompositeImpl(uv,pixel,0,0,0,true);}
 float4 WorldCompositeWaterRegional(float2 uv:TEXCOORD0,float2 pixel:VPOS):COLOR0 {return WorldCompositeImpl(uv,pixel,WaterInfo.y,WaterInfo.z,0,true);}
+float4 WorldCompositeGraded(float2 uv:TEXCOORD0,float2 pixel:VPOS):COLOR0 {return WorldCompositeImpl(uv,pixel,0,0,0,true,true);}
+float4 WorldCompositeWaterGraded(float2 uv:TEXCOORD0,float2 pixel:VPOS):COLOR0 {return WorldCompositeImpl(uv,pixel,WaterInfo.y,WaterInfo.z,0,true,true);}
 float4 WorldCompositeWaterProbe(float2 uv:TEXCOORD0,float2 pixel:VPOS):COLOR0 {return WorldCompositeImpl(uv,pixel,WaterInfo.y,WaterInfo.z,0);}
 
 // Light the complete opaque source before the liquid refracts it. The same

@@ -12,6 +12,8 @@
 namespace NorthlightCelestialProfiles {
 struct Profile {
     float fogTint[3]={1,1,1},fogTintStrength=0,shadowContrast=0;
+    float toneStrength=0;
+    float toneLevels[2][3]={{.25f,.5f,.75f},{.25f,.5f,.75f}};
     float disc[2][3]={{1,.96f,.88f},{.94f,.97f,1}};
     float gain[2]={3.5f,1.1f};
     float light[2][3]={{1,1,1},{1,1,1}};
@@ -30,7 +32,9 @@ inline Profile blend(const Profile& a,const Profile& b,float t){
     for(unsigned c=0;c<3;++c)p.fogTint[c]=a.fogTint[c]+(b.fogTint[c]-a.fogTint[c])*t;
     p.fogTintStrength=a.fogTintStrength+(b.fogTintStrength-a.fogTintStrength)*t;
     p.shadowContrast=a.shadowContrast+(b.shadowContrast-a.shadowContrast)*t;
+    p.toneStrength=a.toneStrength+(b.toneStrength-a.toneStrength)*t;
     for(unsigned s=0;s<2;++s){
+        for(unsigned c=0;c<3;++c)p.toneLevels[s][c]=a.toneLevels[s][c]+(b.toneLevels[s][c]-a.toneLevels[s][c])*t;
         for(unsigned c=0;c<3;++c){p.disc[s][c]=a.disc[s][c]+(b.disc[s][c]-a.disc[s][c])*t;p.light[s][c]=a.light[s][c]+(b.light[s][c]-a.light[s][c])*t;p.glow[s][c]=a.glow[s][c]+(b.glow[s][c]-a.glow[s][c])*t;}
         p.glowStrength[s]=a.glowStrength[s]+(b.glowStrength[s]-a.glowStrength[s])*t;p.glowMix[s]=a.glowMix[s]+(b.glowMix[s]-a.glowMix[s])*t;
         p.gain[s]=a.gain[s]+(b.gain[s]-a.gain[s])*t;
@@ -47,11 +51,36 @@ inline std::array<float,4> appearance(const Profile& p,const float* fog,bool fog
     for(unsigned c=0;c<3;++c)channels[c]=(0.5f+0.5f*std::clamp(fog[c],0.f,1.f))*p.fogTint[c];
     const float mean=.2126f*channels[0]+.7152f*channels[1]+.0722f*channels[2];
     for(unsigned c=0;c<3;++c)result[c]=fogOn?p.fogTintStrength*(channels[c]-mean):0.f;
+    // Keep the fog multiplier nonnegative even for a saturated swatch at high gain.
+    const float lowest=std::min({result[0],result[1],result[2]});
+    if(lowest < -1.f)for(unsigned c=0;c<3;++c)result[c]/=-lowest;
     result[3]=.35f*p.shadowContrast;
     // A smoothed transition can leave a sub-pixel residue for many frames.
     if(std::all_of(result.begin(),result.end(),[](float v){return std::abs(v)<.0001f;}))return {};
     return result;
 }
+// Slopes of the change in luminance. The endpoints stay fixed at black and white.
+inline std::array<float,4> toneCoefficients(const Profile& p,float night){
+    if(p.toneStrength==0)return {};
+    float delta[5]={};
+    for(unsigned i=0;i<3;++i){
+        const float day=p.toneLevels[0][i],evening=p.toneLevels[1][i];
+        delta[i+1]=p.toneStrength*(day+(evening-day)*night-.25f*(i+1));
+    }
+    std::array<float,4> result{};
+    float slope=(delta[1]-delta[0])*4;
+    result[3]=slope;
+    for(unsigned i=0;i<3;++i){
+        const float next=(delta[i+2]-delta[i+1])*4;
+        result[i]=next-slope;
+        slope=next;
+    }
+    if(std::all_of(result.begin(),result.end(),[](float v){return std::abs(v)<.0001f;}))return {};
+    return result;
+}
+inline constexpr const char* ToneKeys[2][3]={
+    {"day_shadow_level","day_midtone_level","day_highlight_level"},
+    {"night_shadow_level","night_midtone_level","night_highlight_level"}};
 inline float fogHeightScale(const Profile& p,float night){
     return p.fogHeightScale[0]+(p.fogHeightScale[1]-p.fogHeightScale[0])*std::clamp(night,0.f,1.f);
 }
@@ -68,7 +97,7 @@ struct Table {
     std::map<std::pair<std::string,uint32_t>,std::set<std::string>> explicitKeys;
     bool needsLiveZone()const{
         if(zones.empty())return false;
-        auto tuned=[](const Profile& p){return p.fogTintStrength>0||p.shadowContrast>0;};
+        auto tuned=[](const Profile& p){return p.fogTintStrength>0||p.shadowContrast>0||p.toneStrength>0;};
         if(tuned(fallback))return true;
         return std::any_of(zones.begin(),zones.end(),[&](const auto& row){return tuned(row.second);});
     }
@@ -79,7 +108,13 @@ struct Table {
 inline float* keyTarget(Profile& profile,const std::string& key,unsigned& count,float& minimum,float& maximum){
     count=1;minimum=0;maximum=1;
     if(key=="fog_tint"){count=3;return profile.fogTint;}
-    if(key=="fog_tint_strength")return &profile.fogTintStrength;
+    if(key=="fog_tint_strength"){maximum=2;return &profile.fogTintStrength;}
+    if(key=="tone_curve_strength")return &profile.toneStrength;
+    for(unsigned time=0;time<2;++time)for(unsigned i=0;i<3;++i)if(key==ToneKeys[time][i]){
+        // Disjoint output ranges preserve the order of the three points at all times.
+        minimum=.25f*(i+1)-.12f;maximum=.25f*(i+1)+.12f;
+        return &profile.toneLevels[time][i];
+    }
     if(key=="shadow_contrast")return &profile.shadowContrast;
     Profile* p=&profile;
     unsigned s;if(key.rfind("sun_",0)==0)s=0;else if(key.rfind("moon_",0)==0)s=1;else return nullptr;
@@ -108,7 +143,7 @@ inline const char* assignKey(Profile& profile,const std::string& key,std::string
     std::string extra;if(values>>extra)return "too many values";
     if(name=="light"&&target[0]+target[1]+target[2]<.01f)return "light hue cannot be black; use light_strength=0";
     if(name=="glow"&&target[0]+target[1]+target[2]<.01f)return "glow hue cannot be black; use glow_strength=0";
-    if(target[0]<minimum)return "fog height scale must be at least .25";
+    if(target[0]<minimum)return "value below minimum";
     return nullptr;
 }
 inline void inheritParent(Table& table,const std::pair<std::string,uint32_t>& child,uint32_t parent){

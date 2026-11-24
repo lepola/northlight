@@ -30,7 +30,8 @@ const std::map<std::string,const char*> Labels={
     {"FoamStrength","Foam strength"},{"OpenWaterCrestFoam","Foam on open-water crests"},
     {"ReflectionScenery","Reflections"},{"ReflectionResolution","Reflection resolution"},{"ReflectionDistance","Reflection distance"},{"ReflectionSceneryDetails","Nearby reflected scenery"},{"FineHighlights","Fine water and slime highlights"},{"Clarity","Water clarity"},{"SurfaceBlur","Depth blur"},{"Reflection","Reflection strength"},{"NearReflection","Near reflection strength"},
     {"Underwater","Underwater effects"},{"UnderwaterVisibility","Visibility (yards)"},{"UnderwaterScenery","Underwater scenery"},
-    {"fog_tint","Fog colour"},{"fog_tint_strength","Fog tint strength"},{"shadow_contrast","Shadow contrast"},{"Slime","Slime surface"},{"Lava","Magma and fel magma surfaces"},
+    {"tone_curve_strength","Tone curve strength"},{"day_shadow_level","Shadows (25%)"},{"day_midtone_level","Midtones (50%)"},{"day_highlight_level","Highlights (75%)"},
+    {"night_shadow_level","Shadows (25%)"},{"night_midtone_level","Midtones (50%)"},{"night_highlight_level","Highlights (75%)"},{"fog_tint","Fog colour"},{"fog_tint_strength","Fog tint strength"},{"shadow_contrast","Shadow contrast"},{"Slime","Slime surface"},{"Lava","Magma and fel magma surfaces"},
     {"AutoBump","Material detail"},{"AutoBumpStrength","Normal map strength (%)"},{"AutoBumpDistance","Normal map distance (yards)"},
     {"AutoBumpTerrain","Ground and roads"},{"AutoBumpWalls","Walls and floors"},{"AutoBumpGrass","Grass tufts"},
     {"AutoParallaxDepth","POM depth (%)"},{"AutoParallaxDistance","POM distance (yards)"},{"AutoParallaxSteps","POM trace steps"},
@@ -62,6 +63,7 @@ const std::map<std::string,const char*> CelestialLabels={
     {"fog_height_scale","Fog height"},{"horizon_haze","Horizon haze"},{"glow_strength","Glow strength"},{"glow","Glow tint"},{"glow_mix","Glow tint mix"},
 };
 const std::map<std::string,std::vector<const char*>> Help={
+    {"tone_curve_strength",{"Blends in the selected region's daylight and night curves. Open a curve to set its three output levels."}},
     {"ReflectionSceneryDetails",{"Reflects extra dock props and animated falls near water. Adds scenery preparation and draw work. Included in the Ultra Water preset."}},
     {"SurfaceBlur",{"Softens the bottom seen through the surface as the water gets deeper. Zero keeps the bottom sharp. Waves still bend the view."}},
     {"FineHighlights",{"Breaks nearby sun and moon highlights into finer ripples on water and slime. Uses extra GPU time when highlights are visible. Included in the Ultra Water preset."}},
@@ -273,7 +275,7 @@ struct SettingsPanel::State {
     }
     void edited(const Field& f){note.clear();if(f.apply=="F")wantPreview=true;}
     void set(const Field& f,const std::string& value){
-        if(f.section=="RegionalSlime"||f.key=="fog_tint_strength"||f.key=="shadow_contrast")draft.pin(f,value);
+        if(f.section=="RegionalSlime"||f.key=="fog_tint_strength"||f.key=="shadow_contrast"||f.key=="tone_curve_strength")draft.pin(f,value);
         else draft.set(f,value);
         edited(f);
     }
@@ -587,6 +589,15 @@ struct SettingsPanel::State {
                 for(const char* key:{"fog_tint_strength","shadow_contrast"})
                     if(const Field* f=draft.field(D::Celestial,region,key))regionalControl(*f,rowLabel(*f).c_str());
                 if(const Field* f=draft.field(D::Celestial,region,"fog_tint"))loose("fog-colour",{f});
+                if(const Field* strength=draft.field(D::Celestial,region,"tone_curve_strength")){
+                    regionalControl(*strength,"Tone curve strength");
+                    for(unsigned time=0;time<2;++time)if(ImGui::TreeNode(time?"Night tone curve":"Daylight tone curve")){
+                        ImGui::TextWrapped("Choose the output brightness for each point. 0.25, 0.50 and 0.75 give the original image.");
+                        for(const char* key:NorthlightCelestialProfiles::ToneKeys[time])
+                            if(const Field* f=draft.field(D::Celestial,region,key))loose(key,{f});
+                        ImGui::TreePop();
+                    }
+                }
             }
             break;
         default:if(const Section* s=qualitySection(Pages[unsigned(page)].quality))qualityPage(*s,page==Page::Performance);break;

@@ -573,7 +573,7 @@ private:
         NorthlightHorizonHaze::State state;
         NorthlightApparentHorizon::Smooth edgeState;
         NorthlightHorizonHaze::Constants constants;
-        std::array<float,4> appearance{};
+        std::array<float,4> appearance{},tone{};
         const Snapshot* scene=nullptr;
         const NorthlightRegionalFog::Field* field=nullptr;
         float farZ=0,edge=0,effectiveEdge=0,zone=0;
@@ -597,6 +597,7 @@ private:
 #endif
         result.constants=NorthlightHorizonHaze::constants(result.state,{strength,quality.horizonHazeStart,quality.horizonHazeBand,quality.horizonHazeTerrain},
             farZ,zone,effects.fog,celestialValid,sun,underwaterFade.scale()*sourceWeights[0],lift,weatherEffects().hazeTauScale());
+        result.tone=NorthlightCelestialProfiles::toneCoefficients(palette,night);
         result.appearance=NorthlightCelestialProfiles::appearance(palette,result.state.color,effects.fog);
         for(unsigned i=0;i<3;++i)result.constants.haze[i]*=1.f+result.appearance[i];
         float target=0;
@@ -867,6 +868,7 @@ private:
     uint64_t liveChunkHash()const{uint64_t h=1469598103934665603ull;for(const auto& c:liveTerrainChunks){h^=uint64_t(uint32_t(c.first))*0x9E3779B97F4A7C15ull+uint64_t(uint32_t(c.second));h*=1099511628211ull;}return h;}
     IDirect3DPixelShader9 *cachedFastPS=nullptr,*cachedOpaqueFastPS=nullptr,*cachedOpaquePS=nullptr;
     IDirect3DPixelShader9 *regionalFinalPS=nullptr,*regionalWaterPS=nullptr;
+    IDirect3DPixelShader9 *gradedFinalPS=nullptr,*gradedWaterPS=nullptr;
     IDirect3DPixelShader9 *lightingPS=nullptr,*giPS=nullptr,*fogPS=nullptr,*raisedFogPS=nullptr,*fogBlurPS=nullptr,*localDirectPS=nullptr,*localDirect16PS=nullptr,*removalPS=nullptr,*temporalPS=nullptr,*localFogPS=nullptr,*normalsPS=nullptr,*sourceVisPS=nullptr,*finalPS=nullptr,*shadowPS=nullptr,*cachedShadowPS=nullptr,*replayPS=nullptr;
     IDirect3DPixelShader9 *actorShadowPS=nullptr,*actorTilesPS=nullptr; /* 0.3.209 (task 29): optional (with their targets); without them the actor shadow map stays off */
     // 0.3.199 (fog clouds): the moving fog banks' own half-resolution pass (FogClouds), its noise volume and the wind clock. The volume's bytes are
@@ -2667,7 +2669,7 @@ public:
         waterHorizonPending=false;waterHorizon=HorizonPreparation{};
         waterDistanceOwned=waterSurfaceShaded=false;drop(waterGradient);drop(waterGradientPS);drop(waterOwnedPS);drop(waterLightingPS);waterVisibility.reset();drop(waterGradientState);
 #endif
-replayBoundsAbandon();releaseReplayProbe();staticCasters.settle();rigidMemoryClear();admission.reset();admissionOn=false;gatedBodies.clear();prepareQuiesce();neutralShadowMaps=false;prepareCaches->sampled.clear();prepareCaches->bones.clear();prepareCachesStale=false;if(replays.empty()&&heldShadowReplays.empty())prepareFrameRelease(); /* 0.3.179: no replay left to point at them */actorShadowHistory.clear();actorShadowOriginValid=false;replayBoundsMetadata.clear();replayBoundsCache.clear();declarationCache.clear();if(!keepMesh)uploadedStaticOwners.reset();staticOwnerGeneration=UINT64_MAX;staticCasters.reset();staticMatcher.clear();staticM2Memory.clear();staticScene.reset();staticRetryTick=0;stateBlocks.clear();uploadedTerrain.clear();liveTerrainIndexCount=liveDirectionalIndexCount=0;if(!keepMesh){fixedTerrain.reset();fixedTerrainBits.reset();}liveTerrainGeneration=0;drop(raisedFogTexture);drop(regionalFogTexture);drop(neutralAO);drop(neutralZero);drop(ditherNoise);rainMask=nullptr;uploadedFogField.reset();releasePointGPU();probeActivation.reset();probeBlend.reset();drop(baselineSurface);drop(baselineLight);releaseReplayGPU();liveTerrainGPU.clear();{auto& queries=fence();NorthlightDynamicRing::reset(liveIndexRing,0,queries);queries.drop();}drop(liveIndicesGPU);liveIndexBytes=0;liveIndexBase=0;if(!keepMesh){pendingMesh.reset();clearMesh();}retiredMaterials.clear();if(!keepMesh){releaseMeshPool();uploadedMap.clear();}for(auto& t:shadow)drop(t);for(auto& s:shadowSurface)drop(s);for(auto& t:shadowCache)drop(t);for(auto& s:shadowCacheSurface)drop(s);drop(shadowCacheDepth);drop(shadowVerifySurface);drop(shadowVerify);for(auto& r:shadowVerifyRead)drop(r);drop(shadowScratch);drop(shadowScratchSurface);releaseActorTargets();drop(neutralWhite);actorValid[0]=actorValid[1]=false;actorCenterValid[0]=actorCenterValid[1]=false;drop(unionPS);invalidateShadowCache();for(auto& t:probe)drop(t);drop(probePrev);drop(shadowDepth);drop(lightSurface);drop(smoothSurface);drop(fogSurface);drop(fogBlurredSurface);drop(fogHistorySurface);drop(fogHistory);drop(fogTemporalPS);fogHistoryValid=false;drop(colorSurface);drop(light);drop(smoothLight);drop(fog);drop(fogBlurred);drop(color);drop(lightingPS);drop(giPS);drop(raisedFogPS);drop(fogPS);drop(fogBlurPS);drop(fogCloudsPS);drop(cloudNoise);drop(localDirectPS);drop(localDirect16PS);drop(profileSplitSurface);profileSplitFailed=false;drop(removalPS);drop(temporalPS);drop(localFogPS);drop(localFogCombinePS);drop(localFogAccumSurface);drop(localFogAccum);drop(normalsPS);drop(normalBuffer);drop(normalSurface);drop(sourceVisPS);for(int a=0;a<2;++a)for(int b=0;b<2;++b){drop(sourceVis[a][b]);drop(sourceVisSurface[a][b]);}sourceVisValid=false;for(int i=0;i<2;++i){drop(temporalLight[i]);drop(temporalLightSurface[i]);drop(temporalDepth[i]);drop(temporalDepthSurface[i]);}temporalValid=false;drop(finalPS);drop(regionalFinalPS);drop(regionalWaterPS);drop(shadowPS);drop(replayPS);drop(shadowVS);drop(cachedShadowVS);drop(cachedShadowPS);drop(cachedFastPS);drop(cachedOpaqueFastPS);drop(cachedOpaquePS);drop(shadowDecl);width=height=0;uploadedSerial=0;}
+replayBoundsAbandon();releaseReplayProbe();staticCasters.settle();rigidMemoryClear();admission.reset();admissionOn=false;gatedBodies.clear();prepareQuiesce();neutralShadowMaps=false;prepareCaches->sampled.clear();prepareCaches->bones.clear();prepareCachesStale=false;if(replays.empty()&&heldShadowReplays.empty())prepareFrameRelease(); /* 0.3.179: no replay left to point at them */actorShadowHistory.clear();actorShadowOriginValid=false;replayBoundsMetadata.clear();replayBoundsCache.clear();declarationCache.clear();if(!keepMesh)uploadedStaticOwners.reset();staticOwnerGeneration=UINT64_MAX;staticCasters.reset();staticMatcher.clear();staticM2Memory.clear();staticScene.reset();staticRetryTick=0;stateBlocks.clear();uploadedTerrain.clear();liveTerrainIndexCount=liveDirectionalIndexCount=0;if(!keepMesh){fixedTerrain.reset();fixedTerrainBits.reset();}liveTerrainGeneration=0;drop(raisedFogTexture);drop(regionalFogTexture);drop(neutralAO);drop(neutralZero);drop(ditherNoise);rainMask=nullptr;uploadedFogField.reset();releasePointGPU();probeActivation.reset();probeBlend.reset();drop(baselineSurface);drop(baselineLight);releaseReplayGPU();liveTerrainGPU.clear();{auto& queries=fence();NorthlightDynamicRing::reset(liveIndexRing,0,queries);queries.drop();}drop(liveIndicesGPU);liveIndexBytes=0;liveIndexBase=0;if(!keepMesh){pendingMesh.reset();clearMesh();}retiredMaterials.clear();if(!keepMesh){releaseMeshPool();uploadedMap.clear();}for(auto& t:shadow)drop(t);for(auto& s:shadowSurface)drop(s);for(auto& t:shadowCache)drop(t);for(auto& s:shadowCacheSurface)drop(s);drop(shadowCacheDepth);drop(shadowVerifySurface);drop(shadowVerify);for(auto& r:shadowVerifyRead)drop(r);drop(shadowScratch);drop(shadowScratchSurface);releaseActorTargets();drop(neutralWhite);actorValid[0]=actorValid[1]=false;actorCenterValid[0]=actorCenterValid[1]=false;drop(unionPS);invalidateShadowCache();for(auto& t:probe)drop(t);drop(probePrev);drop(shadowDepth);drop(lightSurface);drop(smoothSurface);drop(fogSurface);drop(fogBlurredSurface);drop(fogHistorySurface);drop(fogHistory);drop(fogTemporalPS);fogHistoryValid=false;drop(colorSurface);drop(light);drop(smoothLight);drop(fog);drop(fogBlurred);drop(color);drop(lightingPS);drop(giPS);drop(raisedFogPS);drop(fogPS);drop(fogBlurPS);drop(fogCloudsPS);drop(cloudNoise);drop(localDirectPS);drop(localDirect16PS);drop(profileSplitSurface);profileSplitFailed=false;drop(removalPS);drop(temporalPS);drop(localFogPS);drop(localFogCombinePS);drop(localFogAccumSurface);drop(localFogAccum);drop(normalsPS);drop(normalBuffer);drop(normalSurface);drop(sourceVisPS);for(int a=0;a<2;++a)for(int b=0;b<2;++b){drop(sourceVis[a][b]);drop(sourceVisSurface[a][b]);}sourceVisValid=false;for(int i=0;i<2;++i){drop(temporalLight[i]);drop(temporalLightSurface[i]);drop(temporalDepth[i]);drop(temporalDepthSurface[i]);}temporalValid=false;drop(finalPS);drop(regionalFinalPS);drop(regionalWaterPS);drop(gradedFinalPS);drop(gradedWaterPS);drop(shadowPS);drop(replayPS);drop(shadowVS);drop(cachedShadowVS);drop(cachedShadowPS);drop(cachedFastPS);drop(cachedOpaqueFastPS);drop(cachedOpaquePS);drop(shadowDecl);width=height=0;uploadedSerial=0;}
     // Explicit enable/retry only, called after the wrapper's clearFrame(). This
     // never calls endFrame(), so packet capture and cleanup run exactly once.
     void recover(){meshRetry.clear();if(!failed)return;releaseGPU(true);failed=false;valid=false;streamingReports=0;logf("WORLD explicit recovery requested");}
@@ -2940,6 +2942,8 @@ replayBoundsAbandon();releaseReplayProbe();staticCasters.settle();rigidMemoryCle
             const auto& local=celestialProfiles.at(map,localId);
             std::copy_n(local.fogTint,3,target.fogTint);
             target.fogTintStrength=local.fogTintStrength;target.shadowContrast=local.shadowContrast;
+            target.toneStrength=local.toneStrength;
+            for(unsigned time=0;time<2;++time)std::copy_n(local.toneLevels[time],3,target.toneLevels[time]);
         }
         framePalette=paletteTransition.update(target,map,camera[0],camera[1],double(now)*.001);
         paletteFrameMap=map;paletteFrameValid=true;
@@ -5252,10 +5256,17 @@ replayBoundsAbandon();releaseReplayProbe();staticCasters.settle();rigidMemoryCle
         auto* composite=finalPS;
 #endif
         const auto& appearance=preparedHorizon.appearance;
-        if(!debug&&appearance!=std::array<float,4>{}){
-            auto*& shader=waterOwned?regionalWaterPS:regionalFinalPS;
-            if(!shader)d->CreatePixelShader(waterOwned?kWorldCompositeWaterRegionalShader:kWorldCompositeRegionalShader,&shader);
-            if(shader&&SUCCEEDED(d->SetPixelShaderConstantF(101,appearance.data(),1)))composite=shader;
+        const auto& tone=preparedHorizon.tone;
+        const bool graded=tone!=std::array<float,4>{};
+        if(!debug&&(graded||appearance!=std::array<float,4>{})){
+            auto*& shader=graded?(waterOwned?gradedWaterPS:gradedFinalPS):(waterOwned?regionalWaterPS:regionalFinalPS);
+            if(!shader){
+                const auto* code=graded?(waterOwned?kWorldCompositeWaterGradedShader:kWorldCompositeGradedShader):
+                                        (waterOwned?kWorldCompositeWaterRegionalShader:kWorldCompositeRegionalShader);
+                d->CreatePixelShader(code,&shader);
+            }
+            if(shader&&SUCCEEDED(d->SetPixelShaderConstantF(101,appearance.data(),1))&&
+               (!graded||SUCCEEDED(d->SetPixelShaderConstantF(102,tone.data(),1))))composite=shader;
         }
         d->SetPixelShader(composite);
 

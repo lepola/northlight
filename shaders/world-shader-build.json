@@ -1,5 +1,5 @@
 {
-  "source_sha256": "5095df08156188efc282a9c717df88384918f18f53014c1399581b05b8262f16",
+  "source_sha256": "aac143f97351be838ad16533a6613905923e04a176a456cff072ba3dcee3fbda",
   "compiler": "Microsoft d3dcompiler_47 Windows SDK 10.0.26100.8249 IEEE strict",
   "compiler_sha256": "e407b9ffadef47e87994dc488214f75405cf04ee99589f2315fc7ab99fd1dfe2",
   "game_launched": false,
@@ -35,10 +35,10 @@
       "instruction_count": 283,
       "cube_instruction_extra_slots": 0,
       "compiler_sha256": "e407b9ffadef47e87994dc488214f75405cf04ee99589f2315fc7ab99fd1dfe2",
-      "source_sha256": "5095df08156188efc282a9c717df88384918f18f53014c1399581b05b8262f16",
+      "source_sha256": "aac143f97351be838ad16533a6613905923e04a176a456cff072ba3dcee3fbda",
       "source": "shaders/world_effects.hlsl",
       "dependencies": {
-        "shaders/world_effects.hlsl": "5095df08156188efc282a9c717df88384918f18f53014c1399581b05b8262f16",
+        "shaders/world_effects.hlsl": "aac143f97351be838ad16533a6613905923e04a176a456cff072ba3dcee3fbda",
         "shaders/water_palette.hlsli": "ba52cc98a36a304a7604cd891deb933a2cca8f313a20c36fe82460a8cac1122d",
         "shaders/celestial_glare.hlsli": "2b56b33995a2ed5d44e524f1337fcd1f9c00c78ee294d52dc8e2bd669466e3e8"
       },
@@ -47,7 +47,7 @@
         "scripts/shaders/shader_inputs.h": "e78f9ff80c7e01f3b4c5a9d7dd7e00c1552cbad9f30345f63ecefe26b28ef63c",
         "scripts/shaders/shader_compiler.py": "1dc622cd01cc0997e303483310ad272484ae7d62f51158c81ae1b851635041ea",
         "scripts/shaders/shader_manifest.py": "f0fcb820509e8ee00f8693e6414b7032be82913ad4b7f7ccc4ad2033f89131fe",
-        "scripts/shaders/compile_world_shaders.py": "6ea7f72b6853e6f920b78c9f9c4e320fa5308c6864d678e398a7dbe932c39035"
+        "scripts/shaders/compile_world_shaders.py": "2e9effdb48f3c747fc1ade128a080d3d5bb3baccda0d3a357869085dd76fae73"
       },
       "compiler_driver_sha256": "28f2719960265e525bff9154edccd7b5e8a7bf05a682faec45629b247764765a",
       "compiler_flags": [
@@ -95,10 +95,10 @@
       "instruction_count": 305,
       "cube_instruction_extra_slots": 0,
       "compiler_sha256": "e407b9ffadef47e87994dc488214f75405cf04ee99589f2315fc7ab99fd1dfe2",
-      "source_sha256": "5095df08156188efc282a9c717df88384918f18f53014c1399581b05b8262f16",
+      "source_sha256": "aac143f97351be838ad16533a6613905923e04a176a456cff072ba3dcee3fbda",
       "source": "shaders/world_effects.hlsl",
       "dependencies": {
-        "shaders/world_effects.hlsl": "5095df08156188efc282a9c717df88384918f18f53014c1399581b05b8262f16",
+        "shaders/world_effects.hlsl": "aac143f97351be838ad16533a6613905923e04a176a456cff072ba3dcee3fbda",
         "shaders/water_palette.hlsli": "ba52cc98a36a304a7604cd891deb933a2cca8f313a20c36fe82460a8cac1122d",
         "shaders/celestial_glare.hlsli": "2b56b33995a2ed5d44e524f1337fcd1f9c00c78ee294d52dc8e2bd669466e3e8"
       },
@@ -107,7 +107,7 @@
         "scripts/shaders/shader_inputs.h": "e78f9ff80c7e01f3b4c5a9d7dd7e00c1552cbad9f30345f63ecefe26b28ef63c",
         "scripts/shaders/shader_compiler.py": "1dc622cd01cc0997e303483310ad272484ae7d62f51158c81ae1b851635041ea",
         "scripts/shaders/shader_manifest.py": "f0fcb820509e8ee00f8693e6414b7032be82913ad4b7f7ccc4ad2033f89131fe",
-        "scripts/shaders/compile_world_shaders.py": "6ea7f72b6853e6f920b78c9f9c4e320fa5308c6864d678e398a7dbe932c39035"
+        "scripts/shaders/compile_world_shaders.py": "2e9effdb48f3c747fc1ade128a080d3d5bb3baccda0d3a357869085dd76fae73"
       },
       "compiler_driver_sha256": "28f2719960265e525bff9154edccd7b5e8a7bf05a682faec45629b247764765a",
       "compiler_flags": [
@@ -154,10 +154,10 @@
       "instruction_count": 301,
       "cube_instruction_extra_slots": 0,
       "compiler_sha256": "e407b9ffadef47e87994dc488214f75405cf04ee99589f2315fc7ab99fd1dfe2",
-      "source_sha256": "5095df08156188efc282a9c717df88384918f18f53014c1399581b05b8262f16",
+      "source_sha256": "aac143f97351be838ad16533a6613905923e04a176a456cff072ba3dcee3fbda",
       "source": "shaders/world_effects.hlsl",
       "dependencies": {
-        "shaders/world_effects.hlsl": "5095df08156188efc282a9c717df88384918f18f53014c1399581b05b8262f16",
+        "shaders/world_effects.hlsl": "aac143f97351be838ad16533a6613905923e04a176a456cff072ba3dcee3fbda",
         "shaders/water_palette.hlsli": "ba52cc98a36a304a7604cd891deb933a2cca8f313a20c36fe82460a8cac1122d",
         "shaders/celestial_glare.hlsli": "2b56b33995a2ed5d44e524f1337fcd1f9c00c78ee294d52dc8e2bd669466e3e8"
       },
@@ -166,7 +166,7 @@
         "scripts/shaders/shader_inputs.h": "e78f9ff80c7e01f3b4c5a9d7dd7e00c1552cbad9f30345f63ecefe26b28ef63c",
         "scripts/shaders/shader_compiler.py": "1dc622cd01cc0997e303483310ad272484ae7d62f51158c81ae1b851635041ea",
         "scripts/shaders/shader_manifest.py": "f0fcb820509e8ee00f8693e6414b7032be82913ad4b7f7ccc4ad2033f89131fe",
-        "scripts/shaders/compile_world_shaders.py": "6ea7f72b6853e6f920b78c9f9c4e320fa5308c6864d678e398a7dbe932c39035"
+        "scripts/shaders/compile_world_shaders.py": "2e9effdb48f3c747fc1ade128a080d3d5bb3baccda0d3a357869085dd76fae73"
       },
       "compiler_driver_sha256": "28f2719960265e525bff9154edccd7b5e8a7bf05a682faec45629b247764765a",
       "compiler_flags": [
@@ -198,10 +198,10 @@
       "instruction_count": 74,
       "cube_instruction_extra_slots": 0,
       "compiler_sha256": "e407b9ffadef47e87994dc488214f75405cf04ee99589f2315fc7ab99fd1dfe2",
-      "source_sha256": "5095df08156188efc282a9c717df88384918f18f53014c1399581b05b8262f16",
+      "source_sha256": "aac143f97351be838ad16533a6613905923e04a176a456cff072ba3dcee3fbda",
       "source": "shaders/world_effects.hlsl",
       "dependencies": {
-        "shaders/world_effects.hlsl": "5095df08156188efc282a9c717df88384918f18f53014c1399581b05b8262f16",
+        "shaders/world_effects.hlsl": "aac143f97351be838ad16533a6613905923e04a176a456cff072ba3dcee3fbda",
         "shaders/water_palette.hlsli": "ba52cc98a36a304a7604cd891deb933a2cca8f313a20c36fe82460a8cac1122d",
         "shaders/celestial_glare.hlsli": "2b56b33995a2ed5d44e524f1337fcd1f9c00c78ee294d52dc8e2bd669466e3e8"
       },
@@ -210,7 +210,7 @@
         "scripts/shaders/shader_inputs.h": "e78f9ff80c7e01f3b4c5a9d7dd7e00c1552cbad9f30345f63ecefe26b28ef63c",
         "scripts/shaders/shader_compiler.py": "1dc622cd01cc0997e303483310ad272484ae7d62f51158c81ae1b851635041ea",
         "scripts/shaders/shader_manifest.py": "f0fcb820509e8ee00f8693e6414b7032be82913ad4b7f7ccc4ad2033f89131fe",
-        "scripts/shaders/compile_world_shaders.py": "6ea7f72b6853e6f920b78c9f9c4e320fa5308c6864d678e398a7dbe932c39035"
+        "scripts/shaders/compile_world_shaders.py": "2e9effdb48f3c747fc1ade128a080d3d5bb3baccda0d3a357869085dd76fae73"
       },
       "compiler_driver_sha256": "28f2719960265e525bff9154edccd7b5e8a7bf05a682faec45629b247764765a",
       "compiler_flags": [
@@ -260,10 +260,10 @@
       "instruction_count": 209,
       "cube_instruction_extra_slots": 0,
       "compiler_sha256": "e407b9ffadef47e87994dc488214f75405cf04ee99589f2315fc7ab99fd1dfe2",
-      "source_sha256": "5095df08156188efc282a9c717df88384918f18f53014c1399581b05b8262f16",
+      "source_sha256": "aac143f97351be838ad16533a6613905923e04a176a456cff072ba3dcee3fbda",
       "source": "shaders/world_effects.hlsl",
       "dependencies": {
-        "shaders/world_effects.hlsl": "5095df08156188efc282a9c717df88384918f18f53014c1399581b05b8262f16",
+        "shaders/world_effects.hlsl": "aac143f97351be838ad16533a6613905923e04a176a456cff072ba3dcee3fbda",
         "shaders/water_palette.hlsli": "ba52cc98a36a304a7604cd891deb933a2cca8f313a20c36fe82460a8cac1122d",
         "shaders/celestial_glare.hlsli": "2b56b33995a2ed5d44e524f1337fcd1f9c00c78ee294d52dc8e2bd669466e3e8"
       },
@@ -272,7 +272,7 @@
         "scripts/shaders/shader_inputs.h": "e78f9ff80c7e01f3b4c5a9d7dd7e00c1552cbad9f30345f63ecefe26b28ef63c",
         "scripts/shaders/shader_compiler.py": "1dc622cd01cc0997e303483310ad272484ae7d62f51158c81ae1b851635041ea",
         "scripts/shaders/shader_manifest.py": "f0fcb820509e8ee00f8693e6414b7032be82913ad4b7f7ccc4ad2033f89131fe",
-        "scripts/shaders/compile_world_shaders.py": "6ea7f72b6853e6f920b78c9f9c4e320fa5308c6864d678e398a7dbe932c39035"
+        "scripts/shaders/compile_world_shaders.py": "2e9effdb48f3c747fc1ade128a080d3d5bb3baccda0d3a357869085dd76fae73"
       },
       "compiler_driver_sha256": "28f2719960265e525bff9154edccd7b5e8a7bf05a682faec45629b247764765a",
       "compiler_flags": [
@@ -322,10 +322,10 @@
       "instruction_count": 390,
       "cube_instruction_extra_slots": 0,
       "compiler_sha256": "e407b9ffadef47e87994dc488214f75405cf04ee99589f2315fc7ab99fd1dfe2",
-      "source_sha256": "5095df08156188efc282a9c717df88384918f18f53014c1399581b05b8262f16",
+      "source_sha256": "aac143f97351be838ad16533a6613905923e04a176a456cff072ba3dcee3fbda",
       "source": "shaders/world_effects.hlsl",
       "dependencies": {
-        "shaders/world_effects.hlsl": "5095df08156188efc282a9c717df88384918f18f53014c1399581b05b8262f16",
+        "shaders/world_effects.hlsl": "aac143f97351be838ad16533a6613905923e04a176a456cff072ba3dcee3fbda",
         "shaders/water_palette.hlsli": "ba52cc98a36a304a7604cd891deb933a2cca8f313a20c36fe82460a8cac1122d",
         "shaders/celestial_glare.hlsli": "2b56b33995a2ed5d44e524f1337fcd1f9c00c78ee294d52dc8e2bd669466e3e8"
       },
@@ -334,7 +334,7 @@
         "scripts/shaders/shader_inputs.h": "e78f9ff80c7e01f3b4c5a9d7dd7e00c1552cbad9f30345f63ecefe26b28ef63c",
         "scripts/shaders/shader_compiler.py": "1dc622cd01cc0997e303483310ad272484ae7d62f51158c81ae1b851635041ea",
         "scripts/shaders/shader_manifest.py": "f0fcb820509e8ee00f8693e6414b7032be82913ad4b7f7ccc4ad2033f89131fe",
-        "scripts/shaders/compile_world_shaders.py": "6ea7f72b6853e6f920b78c9f9c4e320fa5308c6864d678e398a7dbe932c39035"
+        "scripts/shaders/compile_world_shaders.py": "2e9effdb48f3c747fc1ade128a080d3d5bb3baccda0d3a357869085dd76fae73"
       },
       "compiler_driver_sha256": "28f2719960265e525bff9154edccd7b5e8a7bf05a682faec45629b247764765a",
       "compiler_flags": [
@@ -385,10 +385,10 @@
       "instruction_count": 411,
       "cube_instruction_extra_slots": 0,
       "compiler_sha256": "e407b9ffadef47e87994dc488214f75405cf04ee99589f2315fc7ab99fd1dfe2",
-      "source_sha256": "5095df08156188efc282a9c717df88384918f18f53014c1399581b05b8262f16",
+      "source_sha256": "aac143f97351be838ad16533a6613905923e04a176a456cff072ba3dcee3fbda",
       "source": "shaders/world_effects.hlsl",
       "dependencies": {
-        "shaders/world_effects.hlsl": "5095df08156188efc282a9c717df88384918f18f53014c1399581b05b8262f16",
+        "shaders/world_effects.hlsl": "aac143f97351be838ad16533a6613905923e04a176a456cff072ba3dcee3fbda",
         "shaders/water_palette.hlsli": "ba52cc98a36a304a7604cd891deb933a2cca8f313a20c36fe82460a8cac1122d",
         "shaders/celestial_glare.hlsli": "2b56b33995a2ed5d44e524f1337fcd1f9c00c78ee294d52dc8e2bd669466e3e8"
       },
@@ -397,7 +397,7 @@
         "scripts/shaders/shader_inputs.h": "e78f9ff80c7e01f3b4c5a9d7dd7e00c1552cbad9f30345f63ecefe26b28ef63c",
         "scripts/shaders/shader_compiler.py": "1dc622cd01cc0997e303483310ad272484ae7d62f51158c81ae1b851635041ea",
         "scripts/shaders/shader_manifest.py": "f0fcb820509e8ee00f8693e6414b7032be82913ad4b7f7ccc4ad2033f89131fe",
-        "scripts/shaders/compile_world_shaders.py": "6ea7f72b6853e6f920b78c9f9c4e320fa5308c6864d678e398a7dbe932c39035"
+        "scripts/shaders/compile_world_shaders.py": "2e9effdb48f3c747fc1ade128a080d3d5bb3baccda0d3a357869085dd76fae73"
       },
       "compiler_driver_sha256": "28f2719960265e525bff9154edccd7b5e8a7bf05a682faec45629b247764765a",
       "compiler_flags": [
@@ -437,10 +437,10 @@
       "instruction_count": 318,
       "cube_instruction_extra_slots": 0,
       "compiler_sha256": "e407b9ffadef47e87994dc488214f75405cf04ee99589f2315fc7ab99fd1dfe2",
-      "source_sha256": "5095df08156188efc282a9c717df88384918f18f53014c1399581b05b8262f16",
+      "source_sha256": "aac143f97351be838ad16533a6613905923e04a176a456cff072ba3dcee3fbda",
       "source": "shaders/world_effects.hlsl",
       "dependencies": {
-        "shaders/world_effects.hlsl": "5095df08156188efc282a9c717df88384918f18f53014c1399581b05b8262f16",
+        "shaders/world_effects.hlsl": "aac143f97351be838ad16533a6613905923e04a176a456cff072ba3dcee3fbda",
         "shaders/water_palette.hlsli": "ba52cc98a36a304a7604cd891deb933a2cca8f313a20c36fe82460a8cac1122d",
         "shaders/celestial_glare.hlsli": "2b56b33995a2ed5d44e524f1337fcd1f9c00c78ee294d52dc8e2bd669466e3e8"
       },
@@ -449,7 +449,7 @@
         "scripts/shaders/shader_inputs.h": "e78f9ff80c7e01f3b4c5a9d7dd7e00c1552cbad9f30345f63ecefe26b28ef63c",
         "scripts/shaders/shader_compiler.py": "1dc622cd01cc0997e303483310ad272484ae7d62f51158c81ae1b851635041ea",
         "scripts/shaders/shader_manifest.py": "f0fcb820509e8ee00f8693e6414b7032be82913ad4b7f7ccc4ad2033f89131fe",
-        "scripts/shaders/compile_world_shaders.py": "6ea7f72b6853e6f920b78c9f9c4e320fa5308c6864d678e398a7dbe932c39035"
+        "scripts/shaders/compile_world_shaders.py": "2e9effdb48f3c747fc1ade128a080d3d5bb3baccda0d3a357869085dd76fae73"
       },
       "compiler_driver_sha256": "28f2719960265e525bff9154edccd7b5e8a7bf05a682faec45629b247764765a",
       "compiler_flags": [
@@ -499,10 +499,10 @@
       "instruction_count": 402,
       "cube_instruction_extra_slots": 0,
       "compiler_sha256": "e407b9ffadef47e87994dc488214f75405cf04ee99589f2315fc7ab99fd1dfe2",
-      "source_sha256": "5095df08156188efc282a9c717df88384918f18f53014c1399581b05b8262f16",
+      "source_sha256": "aac143f97351be838ad16533a6613905923e04a176a456cff072ba3dcee3fbda",
       "source": "shaders/world_effects.hlsl",
       "dependencies": {
-        "shaders/world_effects.hlsl": "5095df08156188efc282a9c717df88384918f18f53014c1399581b05b8262f16",
+        "shaders/world_effects.hlsl": "aac143f97351be838ad16533a6613905923e04a176a456cff072ba3dcee3fbda",
         "shaders/water_palette.hlsli": "ba52cc98a36a304a7604cd891deb933a2cca8f313a20c36fe82460a8cac1122d",
         "shaders/celestial_glare.hlsli": "2b56b33995a2ed5d44e524f1337fcd1f9c00c78ee294d52dc8e2bd669466e3e8"
       },
@@ -511,7 +511,7 @@
         "scripts/shaders/shader_inputs.h": "e78f9ff80c7e01f3b4c5a9d7dd7e00c1552cbad9f30345f63ecefe26b28ef63c",
         "scripts/shaders/shader_compiler.py": "1dc622cd01cc0997e303483310ad272484ae7d62f51158c81ae1b851635041ea",
         "scripts/shaders/shader_manifest.py": "f0fcb820509e8ee00f8693e6414b7032be82913ad4b7f7ccc4ad2033f89131fe",
-        "scripts/shaders/compile_world_shaders.py": "6ea7f72b6853e6f920b78c9f9c4e320fa5308c6864d678e398a7dbe932c39035"
+        "scripts/shaders/compile_world_shaders.py": "2e9effdb48f3c747fc1ade128a080d3d5bb3baccda0d3a357869085dd76fae73"
       },
       "compiler_driver_sha256": "28f2719960265e525bff9154edccd7b5e8a7bf05a682faec45629b247764765a",
       "compiler_flags": [
@@ -553,10 +553,10 @@
       "instruction_count": 212,
       "cube_instruction_extra_slots": 0,
       "compiler_sha256": "e407b9ffadef47e87994dc488214f75405cf04ee99589f2315fc7ab99fd1dfe2",
-      "source_sha256": "5095df08156188efc282a9c717df88384918f18f53014c1399581b05b8262f16",
+      "source_sha256": "aac143f97351be838ad16533a6613905923e04a176a456cff072ba3dcee3fbda",
       "source": "shaders/world_effects.hlsl",
       "dependencies": {
-        "shaders/world_effects.hlsl": "5095df08156188efc282a9c717df88384918f18f53014c1399581b05b8262f16",
+        "shaders/world_effects.hlsl": "aac143f97351be838ad16533a6613905923e04a176a456cff072ba3dcee3fbda",
         "shaders/water_palette.hlsli": "ba52cc98a36a304a7604cd891deb933a2cca8f313a20c36fe82460a8cac1122d",
         "shaders/celestial_glare.hlsli": "2b56b33995a2ed5d44e524f1337fcd1f9c00c78ee294d52dc8e2bd669466e3e8"
       },
@@ -565,7 +565,7 @@
         "scripts/shaders/shader_inputs.h": "e78f9ff80c7e01f3b4c5a9d7dd7e00c1552cbad9f30345f63ecefe26b28ef63c",
         "scripts/shaders/shader_compiler.py": "1dc622cd01cc0997e303483310ad272484ae7d62f51158c81ae1b851635041ea",
         "scripts/shaders/shader_manifest.py": "f0fcb820509e8ee00f8693e6414b7032be82913ad4b7f7ccc4ad2033f89131fe",
-        "scripts/shaders/compile_world_shaders.py": "6ea7f72b6853e6f920b78c9f9c4e320fa5308c6864d678e398a7dbe932c39035"
+        "scripts/shaders/compile_world_shaders.py": "2e9effdb48f3c747fc1ade128a080d3d5bb3baccda0d3a357869085dd76fae73"
       },
       "compiler_driver_sha256": "28f2719960265e525bff9154edccd7b5e8a7bf05a682faec45629b247764765a",
       "compiler_flags": [
@@ -607,10 +607,10 @@
       "instruction_count": 194,
       "cube_instruction_extra_slots": 0,
       "compiler_sha256": "e407b9ffadef47e87994dc488214f75405cf04ee99589f2315fc7ab99fd1dfe2",
-      "source_sha256": "5095df08156188efc282a9c717df88384918f18f53014c1399581b05b8262f16",
+      "source_sha256": "aac143f97351be838ad16533a6613905923e04a176a456cff072ba3dcee3fbda",
       "source": "shaders/world_effects.hlsl",
       "dependencies": {
-        "shaders/world_effects.hlsl": "5095df08156188efc282a9c717df88384918f18f53014c1399581b05b8262f16",
+        "shaders/world_effects.hlsl": "aac143f97351be838ad16533a6613905923e04a176a456cff072ba3dcee3fbda",
         "shaders/water_palette.hlsli": "ba52cc98a36a304a7604cd891deb933a2cca8f313a20c36fe82460a8cac1122d",
         "shaders/celestial_glare.hlsli": "2b56b33995a2ed5d44e524f1337fcd1f9c00c78ee294d52dc8e2bd669466e3e8"
       },
@@ -619,7 +619,7 @@
         "scripts/shaders/shader_inputs.h": "e78f9ff80c7e01f3b4c5a9d7dd7e00c1552cbad9f30345f63ecefe26b28ef63c",
         "scripts/shaders/shader_compiler.py": "1dc622cd01cc0997e303483310ad272484ae7d62f51158c81ae1b851635041ea",
         "scripts/shaders/shader_manifest.py": "f0fcb820509e8ee00f8693e6414b7032be82913ad4b7f7ccc4ad2033f89131fe",
-        "scripts/shaders/compile_world_shaders.py": "6ea7f72b6853e6f920b78c9f9c4e320fa5308c6864d678e398a7dbe932c39035"
+        "scripts/shaders/compile_world_shaders.py": "2e9effdb48f3c747fc1ade128a080d3d5bb3baccda0d3a357869085dd76fae73"
       },
       "compiler_driver_sha256": "28f2719960265e525bff9154edccd7b5e8a7bf05a682faec45629b247764765a",
       "compiler_flags": [
@@ -661,10 +661,10 @@
       "instruction_count": 306,
       "cube_instruction_extra_slots": 0,
       "compiler_sha256": "e407b9ffadef47e87994dc488214f75405cf04ee99589f2315fc7ab99fd1dfe2",
-      "source_sha256": "5095df08156188efc282a9c717df88384918f18f53014c1399581b05b8262f16",
+      "source_sha256": "aac143f97351be838ad16533a6613905923e04a176a456cff072ba3dcee3fbda",
       "source": "shaders/world_effects.hlsl",
       "dependencies": {
-        "shaders/world_effects.hlsl": "5095df08156188efc282a9c717df88384918f18f53014c1399581b05b8262f16",
+        "shaders/world_effects.hlsl": "aac143f97351be838ad16533a6613905923e04a176a456cff072ba3dcee3fbda",
         "shaders/water_palette.hlsli": "ba52cc98a36a304a7604cd891deb933a2cca8f313a20c36fe82460a8cac1122d",
         "shaders/celestial_glare.hlsli": "2b56b33995a2ed5d44e524f1337fcd1f9c00c78ee294d52dc8e2bd669466e3e8"
       },
@@ -673,7 +673,7 @@
         "scripts/shaders/shader_inputs.h": "e78f9ff80c7e01f3b4c5a9d7dd7e00c1552cbad9f30345f63ecefe26b28ef63c",
         "scripts/shaders/shader_compiler.py": "1dc622cd01cc0997e303483310ad272484ae7d62f51158c81ae1b851635041ea",
         "scripts/shaders/shader_manifest.py": "f0fcb820509e8ee00f8693e6414b7032be82913ad4b7f7ccc4ad2033f89131fe",
-        "scripts/shaders/compile_world_shaders.py": "6ea7f72b6853e6f920b78c9f9c4e320fa5308c6864d678e398a7dbe932c39035"
+        "scripts/shaders/compile_world_shaders.py": "2e9effdb48f3c747fc1ade128a080d3d5bb3baccda0d3a357869085dd76fae73"
       },
       "compiler_driver_sha256": "28f2719960265e525bff9154edccd7b5e8a7bf05a682faec45629b247764765a",
       "compiler_flags": [
@@ -722,10 +722,10 @@
       "instruction_count": 195,
       "cube_instruction_extra_slots": 0,
       "compiler_sha256": "e407b9ffadef47e87994dc488214f75405cf04ee99589f2315fc7ab99fd1dfe2",
-      "source_sha256": "5095df08156188efc282a9c717df88384918f18f53014c1399581b05b8262f16",
+      "source_sha256": "aac143f97351be838ad16533a6613905923e04a176a456cff072ba3dcee3fbda",
       "source": "shaders/world_effects.hlsl",
       "dependencies": {
-        "shaders/world_effects.hlsl": "5095df08156188efc282a9c717df88384918f18f53014c1399581b05b8262f16",
+        "shaders/world_effects.hlsl": "aac143f97351be838ad16533a6613905923e04a176a456cff072ba3dcee3fbda",
         "shaders/water_palette.hlsli": "ba52cc98a36a304a7604cd891deb933a2cca8f313a20c36fe82460a8cac1122d",
         "shaders/celestial_glare.hlsli": "2b56b33995a2ed5d44e524f1337fcd1f9c00c78ee294d52dc8e2bd669466e3e8"
       },
@@ -734,7 +734,7 @@
         "scripts/shaders/shader_inputs.h": "e78f9ff80c7e01f3b4c5a9d7dd7e00c1552cbad9f30345f63ecefe26b28ef63c",
         "scripts/shaders/shader_compiler.py": "1dc622cd01cc0997e303483310ad272484ae7d62f51158c81ae1b851635041ea",
         "scripts/shaders/shader_manifest.py": "f0fcb820509e8ee00f8693e6414b7032be82913ad4b7f7ccc4ad2033f89131fe",
-        "scripts/shaders/compile_world_shaders.py": "6ea7f72b6853e6f920b78c9f9c4e320fa5308c6864d678e398a7dbe932c39035"
+        "scripts/shaders/compile_world_shaders.py": "2e9effdb48f3c747fc1ade128a080d3d5bb3baccda0d3a357869085dd76fae73"
       },
       "compiler_driver_sha256": "28f2719960265e525bff9154edccd7b5e8a7bf05a682faec45629b247764765a",
       "compiler_flags": [
@@ -778,10 +778,10 @@
       "instruction_count": 187,
       "cube_instruction_extra_slots": 0,
       "compiler_sha256": "e407b9ffadef47e87994dc488214f75405cf04ee99589f2315fc7ab99fd1dfe2",
-      "source_sha256": "5095df08156188efc282a9c717df88384918f18f53014c1399581b05b8262f16",
+      "source_sha256": "aac143f97351be838ad16533a6613905923e04a176a456cff072ba3dcee3fbda",
       "source": "shaders/world_effects.hlsl",
       "dependencies": {
-        "shaders/world_effects.hlsl": "5095df08156188efc282a9c717df88384918f18f53014c1399581b05b8262f16",
+        "shaders/world_effects.hlsl": "aac143f97351be838ad16533a6613905923e04a176a456cff072ba3dcee3fbda",
         "shaders/water_palette.hlsli": "ba52cc98a36a304a7604cd891deb933a2cca8f313a20c36fe82460a8cac1122d",
         "shaders/celestial_glare.hlsli": "2b56b33995a2ed5d44e524f1337fcd1f9c00c78ee294d52dc8e2bd669466e3e8"
       },
@@ -790,7 +790,7 @@
         "scripts/shaders/shader_inputs.h": "e78f9ff80c7e01f3b4c5a9d7dd7e00c1552cbad9f30345f63ecefe26b28ef63c",
         "scripts/shaders/shader_compiler.py": "1dc622cd01cc0997e303483310ad272484ae7d62f51158c81ae1b851635041ea",
         "scripts/shaders/shader_manifest.py": "f0fcb820509e8ee00f8693e6414b7032be82913ad4b7f7ccc4ad2033f89131fe",
-        "scripts/shaders/compile_world_shaders.py": "6ea7f72b6853e6f920b78c9f9c4e320fa5308c6864d678e398a7dbe932c39035"
+        "scripts/shaders/compile_world_shaders.py": "2e9effdb48f3c747fc1ade128a080d3d5bb3baccda0d3a357869085dd76fae73"
       },
       "compiler_driver_sha256": "28f2719960265e525bff9154edccd7b5e8a7bf05a682faec45629b247764765a",
       "compiler_flags": [
@@ -830,10 +830,10 @@
       "instruction_count": 393,
       "cube_instruction_extra_slots": 0,
       "compiler_sha256": "e407b9ffadef47e87994dc488214f75405cf04ee99589f2315fc7ab99fd1dfe2",
-      "source_sha256": "5095df08156188efc282a9c717df88384918f18f53014c1399581b05b8262f16",
+      "source_sha256": "aac143f97351be838ad16533a6613905923e04a176a456cff072ba3dcee3fbda",
       "source": "shaders/world_effects.hlsl",
       "dependencies": {
-        "shaders/world_effects.hlsl": "5095df08156188efc282a9c717df88384918f18f53014c1399581b05b8262f16",
+        "shaders/world_effects.hlsl": "aac143f97351be838ad16533a6613905923e04a176a456cff072ba3dcee3fbda",
         "shaders/water_palette.hlsli": "ba52cc98a36a304a7604cd891deb933a2cca8f313a20c36fe82460a8cac1122d",
         "shaders/celestial_glare.hlsli": "2b56b33995a2ed5d44e524f1337fcd1f9c00c78ee294d52dc8e2bd669466e3e8"
       },
@@ -842,7 +842,7 @@
         "scripts/shaders/shader_inputs.h": "e78f9ff80c7e01f3b4c5a9d7dd7e00c1552cbad9f30345f63ecefe26b28ef63c",
         "scripts/shaders/shader_compiler.py": "1dc622cd01cc0997e303483310ad272484ae7d62f51158c81ae1b851635041ea",
         "scripts/shaders/shader_manifest.py": "f0fcb820509e8ee00f8693e6414b7032be82913ad4b7f7ccc4ad2033f89131fe",
-        "scripts/shaders/compile_world_shaders.py": "6ea7f72b6853e6f920b78c9f9c4e320fa5308c6864d678e398a7dbe932c39035"
+        "scripts/shaders/compile_world_shaders.py": "2e9effdb48f3c747fc1ade128a080d3d5bb3baccda0d3a357869085dd76fae73"
       },
       "compiler_driver_sha256": "28f2719960265e525bff9154edccd7b5e8a7bf05a682faec45629b247764765a",
       "compiler_flags": [
@@ -875,10 +875,10 @@
       "instruction_count": 19,
       "cube_instruction_extra_slots": 0,
       "compiler_sha256": "e407b9ffadef47e87994dc488214f75405cf04ee99589f2315fc7ab99fd1dfe2",
-      "source_sha256": "5095df08156188efc282a9c717df88384918f18f53014c1399581b05b8262f16",
+      "source_sha256": "aac143f97351be838ad16533a6613905923e04a176a456cff072ba3dcee3fbda",
       "source": "shaders/world_effects.hlsl",
       "dependencies": {
-        "shaders/world_effects.hlsl": "5095df08156188efc282a9c717df88384918f18f53014c1399581b05b8262f16",
+        "shaders/world_effects.hlsl": "aac143f97351be838ad16533a6613905923e04a176a456cff072ba3dcee3fbda",
         "shaders/water_palette.hlsli": "ba52cc98a36a304a7604cd891deb933a2cca8f313a20c36fe82460a8cac1122d",
         "shaders/celestial_glare.hlsli": "2b56b33995a2ed5d44e524f1337fcd1f9c00c78ee294d52dc8e2bd669466e3e8"
       },
@@ -887,7 +887,7 @@
         "scripts/shaders/shader_inputs.h": "e78f9ff80c7e01f3b4c5a9d7dd7e00c1552cbad9f30345f63ecefe26b28ef63c",
         "scripts/shaders/shader_compiler.py": "1dc622cd01cc0997e303483310ad272484ae7d62f51158c81ae1b851635041ea",
         "scripts/shaders/shader_manifest.py": "f0fcb820509e8ee00f8693e6414b7032be82913ad4b7f7ccc4ad2033f89131fe",
-        "scripts/shaders/compile_world_shaders.py": "6ea7f72b6853e6f920b78c9f9c4e320fa5308c6864d678e398a7dbe932c39035"
+        "scripts/shaders/compile_world_shaders.py": "2e9effdb48f3c747fc1ade128a080d3d5bb3baccda0d3a357869085dd76fae73"
       },
       "compiler_driver_sha256": "28f2719960265e525bff9154edccd7b5e8a7bf05a682faec45629b247764765a",
       "compiler_flags": [
@@ -924,10 +924,10 @@
       "instruction_count": 256,
       "cube_instruction_extra_slots": 0,
       "compiler_sha256": "e407b9ffadef47e87994dc488214f75405cf04ee99589f2315fc7ab99fd1dfe2",
-      "source_sha256": "5095df08156188efc282a9c717df88384918f18f53014c1399581b05b8262f16",
+      "source_sha256": "aac143f97351be838ad16533a6613905923e04a176a456cff072ba3dcee3fbda",
       "source": "shaders/world_effects.hlsl",
       "dependencies": {
-        "shaders/world_effects.hlsl": "5095df08156188efc282a9c717df88384918f18f53014c1399581b05b8262f16",
+        "shaders/world_effects.hlsl": "aac143f97351be838ad16533a6613905923e04a176a456cff072ba3dcee3fbda",
         "shaders/water_palette.hlsli": "ba52cc98a36a304a7604cd891deb933a2cca8f313a20c36fe82460a8cac1122d",
         "shaders/celestial_glare.hlsli": "2b56b33995a2ed5d44e524f1337fcd1f9c00c78ee294d52dc8e2bd669466e3e8"
       },
@@ -936,7 +936,7 @@
         "scripts/shaders/shader_inputs.h": "e78f9ff80c7e01f3b4c5a9d7dd7e00c1552cbad9f30345f63ecefe26b28ef63c",
         "scripts/shaders/shader_compiler.py": "1dc622cd01cc0997e303483310ad272484ae7d62f51158c81ae1b851635041ea",
         "scripts/shaders/shader_manifest.py": "f0fcb820509e8ee00f8693e6414b7032be82913ad4b7f7ccc4ad2033f89131fe",
-        "scripts/shaders/compile_world_shaders.py": "6ea7f72b6853e6f920b78c9f9c4e320fa5308c6864d678e398a7dbe932c39035"
+        "scripts/shaders/compile_world_shaders.py": "2e9effdb48f3c747fc1ade128a080d3d5bb3baccda0d3a357869085dd76fae73"
       },
       "compiler_driver_sha256": "28f2719960265e525bff9154edccd7b5e8a7bf05a682faec45629b247764765a",
       "compiler_flags": [
@@ -977,10 +977,10 @@
       "instruction_count": 64,
       "cube_instruction_extra_slots": 0,
       "compiler_sha256": "e407b9ffadef47e87994dc488214f75405cf04ee99589f2315fc7ab99fd1dfe2",
-      "source_sha256": "5095df08156188efc282a9c717df88384918f18f53014c1399581b05b8262f16",
+      "source_sha256": "aac143f97351be838ad16533a6613905923e04a176a456cff072ba3dcee3fbda",
       "source": "shaders/world_effects.hlsl",
       "dependencies": {
-        "shaders/world_effects.hlsl": "5095df08156188efc282a9c717df88384918f18f53014c1399581b05b8262f16",
+        "shaders/world_effects.hlsl": "aac143f97351be838ad16533a6613905923e04a176a456cff072ba3dcee3fbda",
         "shaders/water_palette.hlsli": "ba52cc98a36a304a7604cd891deb933a2cca8f313a20c36fe82460a8cac1122d",
         "shaders/celestial_glare.hlsli": "2b56b33995a2ed5d44e524f1337fcd1f9c00c78ee294d52dc8e2bd669466e3e8"
       },
@@ -989,7 +989,7 @@
         "scripts/shaders/shader_inputs.h": "e78f9ff80c7e01f3b4c5a9d7dd7e00c1552cbad9f30345f63ecefe26b28ef63c",
         "scripts/shaders/shader_compiler.py": "1dc622cd01cc0997e303483310ad272484ae7d62f51158c81ae1b851635041ea",
         "scripts/shaders/shader_manifest.py": "f0fcb820509e8ee00f8693e6414b7032be82913ad4b7f7ccc4ad2033f89131fe",
-        "scripts/shaders/compile_world_shaders.py": "6ea7f72b6853e6f920b78c9f9c4e320fa5308c6864d678e398a7dbe932c39035"
+        "scripts/shaders/compile_world_shaders.py": "2e9effdb48f3c747fc1ade128a080d3d5bb3baccda0d3a357869085dd76fae73"
       },
       "compiler_driver_sha256": "28f2719960265e525bff9154edccd7b5e8a7bf05a682faec45629b247764765a",
       "compiler_flags": [
@@ -1045,10 +1045,10 @@
       "instruction_count": 344,
       "cube_instruction_extra_slots": 0,
       "compiler_sha256": "e407b9ffadef47e87994dc488214f75405cf04ee99589f2315fc7ab99fd1dfe2",
-      "source_sha256": "5095df08156188efc282a9c717df88384918f18f53014c1399581b05b8262f16",
+      "source_sha256": "aac143f97351be838ad16533a6613905923e04a176a456cff072ba3dcee3fbda",
       "source": "shaders/world_effects.hlsl",
       "dependencies": {
-        "shaders/world_effects.hlsl": "5095df08156188efc282a9c717df88384918f18f53014c1399581b05b8262f16",
+        "shaders/world_effects.hlsl": "aac143f97351be838ad16533a6613905923e04a176a456cff072ba3dcee3fbda",
         "shaders/water_palette.hlsli": "ba52cc98a36a304a7604cd891deb933a2cca8f313a20c36fe82460a8cac1122d",
         "shaders/celestial_glare.hlsli": "2b56b33995a2ed5d44e524f1337fcd1f9c00c78ee294d52dc8e2bd669466e3e8"
       },
@@ -1057,7 +1057,7 @@
         "scripts/shaders/shader_inputs.h": "e78f9ff80c7e01f3b4c5a9d7dd7e00c1552cbad9f30345f63ecefe26b28ef63c",
         "scripts/shaders/shader_compiler.py": "1dc622cd01cc0997e303483310ad272484ae7d62f51158c81ae1b851635041ea",
         "scripts/shaders/shader_manifest.py": "f0fcb820509e8ee00f8693e6414b7032be82913ad4b7f7ccc4ad2033f89131fe",
-        "scripts/shaders/compile_world_shaders.py": "6ea7f72b6853e6f920b78c9f9c4e320fa5308c6864d678e398a7dbe932c39035"
+        "scripts/shaders/compile_world_shaders.py": "2e9effdb48f3c747fc1ade128a080d3d5bb3baccda0d3a357869085dd76fae73"
       },
       "compiler_driver_sha256": "28f2719960265e525bff9154edccd7b5e8a7bf05a682faec45629b247764765a",
       "compiler_flags": [
@@ -1113,10 +1113,10 @@
       "instruction_count": 349,
       "cube_instruction_extra_slots": 0,
       "compiler_sha256": "e407b9ffadef47e87994dc488214f75405cf04ee99589f2315fc7ab99fd1dfe2",
-      "source_sha256": "5095df08156188efc282a9c717df88384918f18f53014c1399581b05b8262f16",
+      "source_sha256": "aac143f97351be838ad16533a6613905923e04a176a456cff072ba3dcee3fbda",
       "source": "shaders/world_effects.hlsl",
       "dependencies": {
-        "shaders/world_effects.hlsl": "5095df08156188efc282a9c717df88384918f18f53014c1399581b05b8262f16",
+        "shaders/world_effects.hlsl": "aac143f97351be838ad16533a6613905923e04a176a456cff072ba3dcee3fbda",
         "shaders/water_palette.hlsli": "ba52cc98a36a304a7604cd891deb933a2cca8f313a20c36fe82460a8cac1122d",
         "shaders/celestial_glare.hlsli": "2b56b33995a2ed5d44e524f1337fcd1f9c00c78ee294d52dc8e2bd669466e3e8"
       },
@@ -1125,7 +1125,7 @@
         "scripts/shaders/shader_inputs.h": "e78f9ff80c7e01f3b4c5a9d7dd7e00c1552cbad9f30345f63ecefe26b28ef63c",
         "scripts/shaders/shader_compiler.py": "1dc622cd01cc0997e303483310ad272484ae7d62f51158c81ae1b851635041ea",
         "scripts/shaders/shader_manifest.py": "f0fcb820509e8ee00f8693e6414b7032be82913ad4b7f7ccc4ad2033f89131fe",
-        "scripts/shaders/compile_world_shaders.py": "6ea7f72b6853e6f920b78c9f9c4e320fa5308c6864d678e398a7dbe932c39035"
+        "scripts/shaders/compile_world_shaders.py": "2e9effdb48f3c747fc1ade128a080d3d5bb3baccda0d3a357869085dd76fae73"
       },
       "compiler_driver_sha256": "28f2719960265e525bff9154edccd7b5e8a7bf05a682faec45629b247764765a",
       "compiler_flags": [
@@ -1181,10 +1181,10 @@
       "instruction_count": 360,
       "cube_instruction_extra_slots": 0,
       "compiler_sha256": "e407b9ffadef47e87994dc488214f75405cf04ee99589f2315fc7ab99fd1dfe2",
-      "source_sha256": "5095df08156188efc282a9c717df88384918f18f53014c1399581b05b8262f16",
+      "source_sha256": "aac143f97351be838ad16533a6613905923e04a176a456cff072ba3dcee3fbda",
       "source": "shaders/world_effects.hlsl",
       "dependencies": {
-        "shaders/world_effects.hlsl": "5095df08156188efc282a9c717df88384918f18f53014c1399581b05b8262f16",
+        "shaders/world_effects.hlsl": "aac143f97351be838ad16533a6613905923e04a176a456cff072ba3dcee3fbda",
         "shaders/water_palette.hlsli": "ba52cc98a36a304a7604cd891deb933a2cca8f313a20c36fe82460a8cac1122d",
         "shaders/celestial_glare.hlsli": "2b56b33995a2ed5d44e524f1337fcd1f9c00c78ee294d52dc8e2bd669466e3e8"
       },
@@ -1193,7 +1193,7 @@
         "scripts/shaders/shader_inputs.h": "e78f9ff80c7e01f3b4c5a9d7dd7e00c1552cbad9f30345f63ecefe26b28ef63c",
         "scripts/shaders/shader_compiler.py": "1dc622cd01cc0997e303483310ad272484ae7d62f51158c81ae1b851635041ea",
         "scripts/shaders/shader_manifest.py": "f0fcb820509e8ee00f8693e6414b7032be82913ad4b7f7ccc4ad2033f89131fe",
-        "scripts/shaders/compile_world_shaders.py": "6ea7f72b6853e6f920b78c9f9c4e320fa5308c6864d678e398a7dbe932c39035"
+        "scripts/shaders/compile_world_shaders.py": "2e9effdb48f3c747fc1ade128a080d3d5bb3baccda0d3a357869085dd76fae73"
       },
       "compiler_driver_sha256": "28f2719960265e525bff9154edccd7b5e8a7bf05a682faec45629b247764765a",
       "compiler_flags": [
@@ -1249,10 +1249,10 @@
       "instruction_count": 367,
       "cube_instruction_extra_slots": 0,
       "compiler_sha256": "e407b9ffadef47e87994dc488214f75405cf04ee99589f2315fc7ab99fd1dfe2",
-      "source_sha256": "5095df08156188efc282a9c717df88384918f18f53014c1399581b05b8262f16",
+      "source_sha256": "aac143f97351be838ad16533a6613905923e04a176a456cff072ba3dcee3fbda",
       "source": "shaders/world_effects.hlsl",
       "dependencies": {
-        "shaders/world_effects.hlsl": "5095df08156188efc282a9c717df88384918f18f53014c1399581b05b8262f16",
+        "shaders/world_effects.hlsl": "aac143f97351be838ad16533a6613905923e04a176a456cff072ba3dcee3fbda",
         "shaders/water_palette.hlsli": "ba52cc98a36a304a7604cd891deb933a2cca8f313a20c36fe82460a8cac1122d",
         "shaders/celestial_glare.hlsli": "2b56b33995a2ed5d44e524f1337fcd1f9c00c78ee294d52dc8e2bd669466e3e8"
       },
@@ -1261,7 +1261,7 @@
         "scripts/shaders/shader_inputs.h": "e78f9ff80c7e01f3b4c5a9d7dd7e00c1552cbad9f30345f63ecefe26b28ef63c",
         "scripts/shaders/shader_compiler.py": "1dc622cd01cc0997e303483310ad272484ae7d62f51158c81ae1b851635041ea",
         "scripts/shaders/shader_manifest.py": "f0fcb820509e8ee00f8693e6414b7032be82913ad4b7f7ccc4ad2033f89131fe",
-        "scripts/shaders/compile_world_shaders.py": "6ea7f72b6853e6f920b78c9f9c4e320fa5308c6864d678e398a7dbe932c39035"
+        "scripts/shaders/compile_world_shaders.py": "2e9effdb48f3c747fc1ade128a080d3d5bb3baccda0d3a357869085dd76fae73"
       },
       "compiler_driver_sha256": "28f2719960265e525bff9154edccd7b5e8a7bf05a682faec45629b247764765a",
       "compiler_flags": [
@@ -1271,6 +1271,142 @@
       ],
       "assembly_sha256": "41fa32b7c59c429eeb6f592b086e879f76f7167a8add9fe7efd2e56e002e7904",
       "symbol": "kWorldCompositeWaterRegionalShader"
+    },
+    "WorldCompositeGraded": {
+      "target": "ps_3_0",
+      "bytes": 7700,
+      "sha256": "641002abb5614684564b21b400ad304a853932af81a87efd8e16736bedeccdd5",
+      "static_instruction_slots": 426,
+      "temporary_registers": 19,
+      "samplers": [
+        0,
+        1,
+        2,
+        8,
+        9,
+        10,
+        11,
+        12,
+        13,
+        15
+      ],
+      "instructions": {
+        "mul": 78,
+        "frc": 4,
+        "add": 91,
+        "max": 18,
+        "mov": 32,
+        "min": 10,
+        "texld": 4,
+        "if": 8,
+        "else": 5,
+        "rcp": 19,
+        "cmp": 53,
+        "texldl": 14,
+        "endif": 8,
+        "exp": 5,
+        "mad": 18,
+        "pow": 2,
+        "dp3": 6,
+        "rep": 1,
+        "abs": 1,
+        "endrep": 1,
+        "dp2add": 4,
+        "rsq": 3
+      },
+      "instruction_count": 385,
+      "cube_instruction_extra_slots": 0,
+      "compiler_sha256": "e407b9ffadef47e87994dc488214f75405cf04ee99589f2315fc7ab99fd1dfe2",
+      "source_sha256": "aac143f97351be838ad16533a6613905923e04a176a456cff072ba3dcee3fbda",
+      "source": "shaders/world_effects.hlsl",
+      "dependencies": {
+        "shaders/world_effects.hlsl": "aac143f97351be838ad16533a6613905923e04a176a456cff072ba3dcee3fbda",
+        "shaders/water_palette.hlsli": "ba52cc98a36a304a7604cd891deb933a2cca8f313a20c36fe82460a8cac1122d",
+        "shaders/celestial_glare.hlsli": "2b56b33995a2ed5d44e524f1337fcd1f9c00c78ee294d52dc8e2bd669466e3e8"
+      },
+      "compiler_inputs": {
+        "scripts/shaders/compile_shaders.cpp": "4faf7f9e8f6a5bdbc63406db030ef66bd65beed1d789a525949ceba7d2a1cd89",
+        "scripts/shaders/shader_inputs.h": "e78f9ff80c7e01f3b4c5a9d7dd7e00c1552cbad9f30345f63ecefe26b28ef63c",
+        "scripts/shaders/shader_compiler.py": "1dc622cd01cc0997e303483310ad272484ae7d62f51158c81ae1b851635041ea",
+        "scripts/shaders/shader_manifest.py": "f0fcb820509e8ee00f8693e6414b7032be82913ad4b7f7ccc4ad2033f89131fe",
+        "scripts/shaders/compile_world_shaders.py": "2e9effdb48f3c747fc1ade128a080d3d5bb3baccda0d3a357869085dd76fae73"
+      },
+      "compiler_driver_sha256": "28f2719960265e525bff9154edccd7b5e8a7bf05a682faec45629b247764765a",
+      "compiler_flags": [
+        "BACKWARDS_COMPATIBILITY",
+        "IEEE_STRICTNESS",
+        "OPTIMIZATION_LEVEL3"
+      ],
+      "assembly_sha256": "879480ab4f28bfca7a028554ad0f4b39a15e4f92e331333be8d0d2c9746bc14a",
+      "symbol": "kWorldCompositeGradedShader"
+    },
+    "WorldCompositeWaterGraded": {
+      "target": "ps_3_0",
+      "bytes": 7824,
+      "sha256": "dbb580a508fa57a2b1496e0712410b4c021007ff1a62b5d0a43817d0d0fcfac1",
+      "static_instruction_slots": 433,
+      "temporary_registers": 19,
+      "samplers": [
+        0,
+        1,
+        2,
+        8,
+        9,
+        10,
+        11,
+        12,
+        13,
+        15
+      ],
+      "instructions": {
+        "mul": 79,
+        "frc": 4,
+        "add": 92,
+        "max": 18,
+        "mov": 33,
+        "min": 10,
+        "texld": 4,
+        "if": 8,
+        "else": 5,
+        "rcp": 19,
+        "cmp": 57,
+        "texldl": 14,
+        "endif": 8,
+        "exp": 5,
+        "mad": 18,
+        "pow": 2,
+        "dp3": 6,
+        "rep": 1,
+        "abs": 1,
+        "endrep": 1,
+        "dp2add": 4,
+        "rsq": 3
+      },
+      "instruction_count": 392,
+      "cube_instruction_extra_slots": 0,
+      "compiler_sha256": "e407b9ffadef47e87994dc488214f75405cf04ee99589f2315fc7ab99fd1dfe2",
+      "source_sha256": "aac143f97351be838ad16533a6613905923e04a176a456cff072ba3dcee3fbda",
+      "source": "shaders/world_effects.hlsl",
+      "dependencies": {
+        "shaders/world_effects.hlsl": "aac143f97351be838ad16533a6613905923e04a176a456cff072ba3dcee3fbda",
+        "shaders/water_palette.hlsli": "ba52cc98a36a304a7604cd891deb933a2cca8f313a20c36fe82460a8cac1122d",
+        "shaders/celestial_glare.hlsli": "2b56b33995a2ed5d44e524f1337fcd1f9c00c78ee294d52dc8e2bd669466e3e8"
+      },
+      "compiler_inputs": {
+        "scripts/shaders/compile_shaders.cpp": "4faf7f9e8f6a5bdbc63406db030ef66bd65beed1d789a525949ceba7d2a1cd89",
+        "scripts/shaders/shader_inputs.h": "e78f9ff80c7e01f3b4c5a9d7dd7e00c1552cbad9f30345f63ecefe26b28ef63c",
+        "scripts/shaders/shader_compiler.py": "1dc622cd01cc0997e303483310ad272484ae7d62f51158c81ae1b851635041ea",
+        "scripts/shaders/shader_manifest.py": "f0fcb820509e8ee00f8693e6414b7032be82913ad4b7f7ccc4ad2033f89131fe",
+        "scripts/shaders/compile_world_shaders.py": "2e9effdb48f3c747fc1ade128a080d3d5bb3baccda0d3a357869085dd76fae73"
+      },
+      "compiler_driver_sha256": "28f2719960265e525bff9154edccd7b5e8a7bf05a682faec45629b247764765a",
+      "compiler_flags": [
+        "BACKWARDS_COMPATIBILITY",
+        "IEEE_STRICTNESS",
+        "OPTIMIZATION_LEVEL3"
+      ],
+      "assembly_sha256": "c9e0864e64654b0f0331bfe96ffb91caf5ecec6339b31277341c77c560e10e9b",
+      "symbol": "kWorldCompositeWaterGradedShader"
     },
     "WorldWaterLighting": {
       "target": "ps_3_0",
@@ -1311,10 +1447,10 @@
       "instruction_count": 216,
       "cube_instruction_extra_slots": 0,
       "compiler_sha256": "e407b9ffadef47e87994dc488214f75405cf04ee99589f2315fc7ab99fd1dfe2",
-      "source_sha256": "5095df08156188efc282a9c717df88384918f18f53014c1399581b05b8262f16",
+      "source_sha256": "aac143f97351be838ad16533a6613905923e04a176a456cff072ba3dcee3fbda",
       "source": "shaders/world_effects.hlsl",
       "dependencies": {
-        "shaders/world_effects.hlsl": "5095df08156188efc282a9c717df88384918f18f53014c1399581b05b8262f16",
+        "shaders/world_effects.hlsl": "aac143f97351be838ad16533a6613905923e04a176a456cff072ba3dcee3fbda",
         "shaders/water_palette.hlsli": "ba52cc98a36a304a7604cd891deb933a2cca8f313a20c36fe82460a8cac1122d",
         "shaders/celestial_glare.hlsli": "2b56b33995a2ed5d44e524f1337fcd1f9c00c78ee294d52dc8e2bd669466e3e8"
       },
@@ -1323,7 +1459,7 @@
         "scripts/shaders/shader_inputs.h": "e78f9ff80c7e01f3b4c5a9d7dd7e00c1552cbad9f30345f63ecefe26b28ef63c",
         "scripts/shaders/shader_compiler.py": "1dc622cd01cc0997e303483310ad272484ae7d62f51158c81ae1b851635041ea",
         "scripts/shaders/shader_manifest.py": "f0fcb820509e8ee00f8693e6414b7032be82913ad4b7f7ccc4ad2033f89131fe",
-        "scripts/shaders/compile_world_shaders.py": "6ea7f72b6853e6f920b78c9f9c4e320fa5308c6864d678e398a7dbe932c39035"
+        "scripts/shaders/compile_world_shaders.py": "2e9effdb48f3c747fc1ade128a080d3d5bb3baccda0d3a357869085dd76fae73"
       },
       "compiler_driver_sha256": "28f2719960265e525bff9154edccd7b5e8a7bf05a682faec45629b247764765a",
       "compiler_flags": [
@@ -1370,10 +1506,10 @@
       "instruction_count": 195,
       "cube_instruction_extra_slots": 0,
       "compiler_sha256": "e407b9ffadef47e87994dc488214f75405cf04ee99589f2315fc7ab99fd1dfe2",
-      "source_sha256": "5095df08156188efc282a9c717df88384918f18f53014c1399581b05b8262f16",
+      "source_sha256": "aac143f97351be838ad16533a6613905923e04a176a456cff072ba3dcee3fbda",
       "source": "shaders/world_effects.hlsl",
       "dependencies": {
-        "shaders/world_effects.hlsl": "5095df08156188efc282a9c717df88384918f18f53014c1399581b05b8262f16",
+        "shaders/world_effects.hlsl": "aac143f97351be838ad16533a6613905923e04a176a456cff072ba3dcee3fbda",
         "shaders/water_palette.hlsli": "ba52cc98a36a304a7604cd891deb933a2cca8f313a20c36fe82460a8cac1122d",
         "shaders/celestial_glare.hlsli": "2b56b33995a2ed5d44e524f1337fcd1f9c00c78ee294d52dc8e2bd669466e3e8"
       },
@@ -1382,7 +1518,7 @@
         "scripts/shaders/shader_inputs.h": "e78f9ff80c7e01f3b4c5a9d7dd7e00c1552cbad9f30345f63ecefe26b28ef63c",
         "scripts/shaders/shader_compiler.py": "1dc622cd01cc0997e303483310ad272484ae7d62f51158c81ae1b851635041ea",
         "scripts/shaders/shader_manifest.py": "f0fcb820509e8ee00f8693e6414b7032be82913ad4b7f7ccc4ad2033f89131fe",
-        "scripts/shaders/compile_world_shaders.py": "6ea7f72b6853e6f920b78c9f9c4e320fa5308c6864d678e398a7dbe932c39035"
+        "scripts/shaders/compile_world_shaders.py": "2e9effdb48f3c747fc1ade128a080d3d5bb3baccda0d3a357869085dd76fae73"
       },
       "compiler_driver_sha256": "28f2719960265e525bff9154edccd7b5e8a7bf05a682faec45629b247764765a",
       "compiler_flags": [
@@ -1428,10 +1564,10 @@
       "instruction_count": 222,
       "cube_instruction_extra_slots": 0,
       "compiler_sha256": "e407b9ffadef47e87994dc488214f75405cf04ee99589f2315fc7ab99fd1dfe2",
-      "source_sha256": "5095df08156188efc282a9c717df88384918f18f53014c1399581b05b8262f16",
+      "source_sha256": "aac143f97351be838ad16533a6613905923e04a176a456cff072ba3dcee3fbda",
       "source": "shaders/world_effects.hlsl",
       "dependencies": {
-        "shaders/world_effects.hlsl": "5095df08156188efc282a9c717df88384918f18f53014c1399581b05b8262f16",
+        "shaders/world_effects.hlsl": "aac143f97351be838ad16533a6613905923e04a176a456cff072ba3dcee3fbda",
         "shaders/water_palette.hlsli": "ba52cc98a36a304a7604cd891deb933a2cca8f313a20c36fe82460a8cac1122d",
         "shaders/celestial_glare.hlsli": "2b56b33995a2ed5d44e524f1337fcd1f9c00c78ee294d52dc8e2bd669466e3e8"
       },
@@ -1440,7 +1576,7 @@
         "scripts/shaders/shader_inputs.h": "e78f9ff80c7e01f3b4c5a9d7dd7e00c1552cbad9f30345f63ecefe26b28ef63c",
         "scripts/shaders/shader_compiler.py": "1dc622cd01cc0997e303483310ad272484ae7d62f51158c81ae1b851635041ea",
         "scripts/shaders/shader_manifest.py": "f0fcb820509e8ee00f8693e6414b7032be82913ad4b7f7ccc4ad2033f89131fe",
-        "scripts/shaders/compile_world_shaders.py": "6ea7f72b6853e6f920b78c9f9c4e320fa5308c6864d678e398a7dbe932c39035"
+        "scripts/shaders/compile_world_shaders.py": "2e9effdb48f3c747fc1ade128a080d3d5bb3baccda0d3a357869085dd76fae73"
       },
       "compiler_driver_sha256": "28f2719960265e525bff9154edccd7b5e8a7bf05a682faec45629b247764765a",
       "compiler_flags": [
@@ -1483,10 +1619,10 @@
       "instruction_count": 259,
       "cube_instruction_extra_slots": 0,
       "compiler_sha256": "e407b9ffadef47e87994dc488214f75405cf04ee99589f2315fc7ab99fd1dfe2",
-      "source_sha256": "5095df08156188efc282a9c717df88384918f18f53014c1399581b05b8262f16",
+      "source_sha256": "aac143f97351be838ad16533a6613905923e04a176a456cff072ba3dcee3fbda",
       "source": "shaders/world_effects.hlsl",
       "dependencies": {
-        "shaders/world_effects.hlsl": "5095df08156188efc282a9c717df88384918f18f53014c1399581b05b8262f16",
+        "shaders/world_effects.hlsl": "aac143f97351be838ad16533a6613905923e04a176a456cff072ba3dcee3fbda",
         "shaders/water_palette.hlsli": "ba52cc98a36a304a7604cd891deb933a2cca8f313a20c36fe82460a8cac1122d",
         "shaders/celestial_glare.hlsli": "2b56b33995a2ed5d44e524f1337fcd1f9c00c78ee294d52dc8e2bd669466e3e8"
       },
@@ -1495,7 +1631,7 @@
         "scripts/shaders/shader_inputs.h": "e78f9ff80c7e01f3b4c5a9d7dd7e00c1552cbad9f30345f63ecefe26b28ef63c",
         "scripts/shaders/shader_compiler.py": "1dc622cd01cc0997e303483310ad272484ae7d62f51158c81ae1b851635041ea",
         "scripts/shaders/shader_manifest.py": "f0fcb820509e8ee00f8693e6414b7032be82913ad4b7f7ccc4ad2033f89131fe",
-        "scripts/shaders/compile_world_shaders.py": "6ea7f72b6853e6f920b78c9f9c4e320fa5308c6864d678e398a7dbe932c39035"
+        "scripts/shaders/compile_world_shaders.py": "2e9effdb48f3c747fc1ade128a080d3d5bb3baccda0d3a357869085dd76fae73"
       },
       "compiler_driver_sha256": "28f2719960265e525bff9154edccd7b5e8a7bf05a682faec45629b247764765a",
       "compiler_flags": [
@@ -1521,10 +1657,10 @@
       "instruction_count": 9,
       "cube_instruction_extra_slots": 0,
       "compiler_sha256": "e407b9ffadef47e87994dc488214f75405cf04ee99589f2315fc7ab99fd1dfe2",
-      "source_sha256": "5095df08156188efc282a9c717df88384918f18f53014c1399581b05b8262f16",
+      "source_sha256": "aac143f97351be838ad16533a6613905923e04a176a456cff072ba3dcee3fbda",
       "source": "shaders/world_effects.hlsl",
       "dependencies": {
-        "shaders/world_effects.hlsl": "5095df08156188efc282a9c717df88384918f18f53014c1399581b05b8262f16",
+        "shaders/world_effects.hlsl": "aac143f97351be838ad16533a6613905923e04a176a456cff072ba3dcee3fbda",
         "shaders/water_palette.hlsli": "ba52cc98a36a304a7604cd891deb933a2cca8f313a20c36fe82460a8cac1122d",
         "shaders/celestial_glare.hlsli": "2b56b33995a2ed5d44e524f1337fcd1f9c00c78ee294d52dc8e2bd669466e3e8"
       },
@@ -1533,7 +1669,7 @@
         "scripts/shaders/shader_inputs.h": "e78f9ff80c7e01f3b4c5a9d7dd7e00c1552cbad9f30345f63ecefe26b28ef63c",
         "scripts/shaders/shader_compiler.py": "1dc622cd01cc0997e303483310ad272484ae7d62f51158c81ae1b851635041ea",
         "scripts/shaders/shader_manifest.py": "f0fcb820509e8ee00f8693e6414b7032be82913ad4b7f7ccc4ad2033f89131fe",
-        "scripts/shaders/compile_world_shaders.py": "6ea7f72b6853e6f920b78c9f9c4e320fa5308c6864d678e398a7dbe932c39035"
+        "scripts/shaders/compile_world_shaders.py": "2e9effdb48f3c747fc1ade128a080d3d5bb3baccda0d3a357869085dd76fae73"
       },
       "compiler_driver_sha256": "28f2719960265e525bff9154edccd7b5e8a7bf05a682faec45629b247764765a",
       "compiler_flags": [
@@ -1559,10 +1695,10 @@
       "instruction_count": 10,
       "cube_instruction_extra_slots": 0,
       "compiler_sha256": "e407b9ffadef47e87994dc488214f75405cf04ee99589f2315fc7ab99fd1dfe2",
-      "source_sha256": "5095df08156188efc282a9c717df88384918f18f53014c1399581b05b8262f16",
+      "source_sha256": "aac143f97351be838ad16533a6613905923e04a176a456cff072ba3dcee3fbda",
       "source": "shaders/world_effects.hlsl",
       "dependencies": {
-        "shaders/world_effects.hlsl": "5095df08156188efc282a9c717df88384918f18f53014c1399581b05b8262f16",
+        "shaders/world_effects.hlsl": "aac143f97351be838ad16533a6613905923e04a176a456cff072ba3dcee3fbda",
         "shaders/water_palette.hlsli": "ba52cc98a36a304a7604cd891deb933a2cca8f313a20c36fe82460a8cac1122d",
         "shaders/celestial_glare.hlsli": "2b56b33995a2ed5d44e524f1337fcd1f9c00c78ee294d52dc8e2bd669466e3e8"
       },
@@ -1571,7 +1707,7 @@
         "scripts/shaders/shader_inputs.h": "e78f9ff80c7e01f3b4c5a9d7dd7e00c1552cbad9f30345f63ecefe26b28ef63c",
         "scripts/shaders/shader_compiler.py": "1dc622cd01cc0997e303483310ad272484ae7d62f51158c81ae1b851635041ea",
         "scripts/shaders/shader_manifest.py": "f0fcb820509e8ee00f8693e6414b7032be82913ad4b7f7ccc4ad2033f89131fe",
-        "scripts/shaders/compile_world_shaders.py": "6ea7f72b6853e6f920b78c9f9c4e320fa5308c6864d678e398a7dbe932c39035"
+        "scripts/shaders/compile_world_shaders.py": "2e9effdb48f3c747fc1ade128a080d3d5bb3baccda0d3a357869085dd76fae73"
       },
       "compiler_driver_sha256": "28f2719960265e525bff9154edccd7b5e8a7bf05a682faec45629b247764765a",
       "compiler_flags": [
@@ -1600,10 +1736,10 @@
       "instruction_count": 4,
       "cube_instruction_extra_slots": 0,
       "compiler_sha256": "e407b9ffadef47e87994dc488214f75405cf04ee99589f2315fc7ab99fd1dfe2",
-      "source_sha256": "5095df08156188efc282a9c717df88384918f18f53014c1399581b05b8262f16",
+      "source_sha256": "aac143f97351be838ad16533a6613905923e04a176a456cff072ba3dcee3fbda",
       "source": "shaders/world_effects.hlsl",
       "dependencies": {
-        "shaders/world_effects.hlsl": "5095df08156188efc282a9c717df88384918f18f53014c1399581b05b8262f16",
+        "shaders/world_effects.hlsl": "aac143f97351be838ad16533a6613905923e04a176a456cff072ba3dcee3fbda",
         "shaders/water_palette.hlsli": "ba52cc98a36a304a7604cd891deb933a2cca8f313a20c36fe82460a8cac1122d",
         "shaders/celestial_glare.hlsli": "2b56b33995a2ed5d44e524f1337fcd1f9c00c78ee294d52dc8e2bd669466e3e8"
       },
@@ -1612,7 +1748,7 @@
         "scripts/shaders/shader_inputs.h": "e78f9ff80c7e01f3b4c5a9d7dd7e00c1552cbad9f30345f63ecefe26b28ef63c",
         "scripts/shaders/shader_compiler.py": "1dc622cd01cc0997e303483310ad272484ae7d62f51158c81ae1b851635041ea",
         "scripts/shaders/shader_manifest.py": "f0fcb820509e8ee00f8693e6414b7032be82913ad4b7f7ccc4ad2033f89131fe",
-        "scripts/shaders/compile_world_shaders.py": "6ea7f72b6853e6f920b78c9f9c4e320fa5308c6864d678e398a7dbe932c39035"
+        "scripts/shaders/compile_world_shaders.py": "2e9effdb48f3c747fc1ade128a080d3d5bb3baccda0d3a357869085dd76fae73"
       },
       "compiler_driver_sha256": "28f2719960265e525bff9154edccd7b5e8a7bf05a682faec45629b247764765a",
       "compiler_flags": [
@@ -1641,10 +1777,10 @@
       "instruction_count": 4,
       "cube_instruction_extra_slots": 0,
       "compiler_sha256": "e407b9ffadef47e87994dc488214f75405cf04ee99589f2315fc7ab99fd1dfe2",
-      "source_sha256": "5095df08156188efc282a9c717df88384918f18f53014c1399581b05b8262f16",
+      "source_sha256": "aac143f97351be838ad16533a6613905923e04a176a456cff072ba3dcee3fbda",
       "source": "shaders/world_effects.hlsl",
       "dependencies": {
-        "shaders/world_effects.hlsl": "5095df08156188efc282a9c717df88384918f18f53014c1399581b05b8262f16",
+        "shaders/world_effects.hlsl": "aac143f97351be838ad16533a6613905923e04a176a456cff072ba3dcee3fbda",
         "shaders/water_palette.hlsli": "ba52cc98a36a304a7604cd891deb933a2cca8f313a20c36fe82460a8cac1122d",
         "shaders/celestial_glare.hlsli": "2b56b33995a2ed5d44e524f1337fcd1f9c00c78ee294d52dc8e2bd669466e3e8"
       },
@@ -1653,7 +1789,7 @@
         "scripts/shaders/shader_inputs.h": "e78f9ff80c7e01f3b4c5a9d7dd7e00c1552cbad9f30345f63ecefe26b28ef63c",
         "scripts/shaders/shader_compiler.py": "1dc622cd01cc0997e303483310ad272484ae7d62f51158c81ae1b851635041ea",
         "scripts/shaders/shader_manifest.py": "f0fcb820509e8ee00f8693e6414b7032be82913ad4b7f7ccc4ad2033f89131fe",
-        "scripts/shaders/compile_world_shaders.py": "6ea7f72b6853e6f920b78c9f9c4e320fa5308c6864d678e398a7dbe932c39035"
+        "scripts/shaders/compile_world_shaders.py": "2e9effdb48f3c747fc1ade128a080d3d5bb3baccda0d3a357869085dd76fae73"
       },
       "compiler_driver_sha256": "28f2719960265e525bff9154edccd7b5e8a7bf05a682faec45629b247764765a",
       "compiler_flags": [
@@ -1691,10 +1827,10 @@
       "instruction_count": 30,
       "cube_instruction_extra_slots": 0,
       "compiler_sha256": "e407b9ffadef47e87994dc488214f75405cf04ee99589f2315fc7ab99fd1dfe2",
-      "source_sha256": "5095df08156188efc282a9c717df88384918f18f53014c1399581b05b8262f16",
+      "source_sha256": "aac143f97351be838ad16533a6613905923e04a176a456cff072ba3dcee3fbda",
       "source": "shaders/world_effects.hlsl",
       "dependencies": {
-        "shaders/world_effects.hlsl": "5095df08156188efc282a9c717df88384918f18f53014c1399581b05b8262f16",
+        "shaders/world_effects.hlsl": "aac143f97351be838ad16533a6613905923e04a176a456cff072ba3dcee3fbda",
         "shaders/water_palette.hlsli": "ba52cc98a36a304a7604cd891deb933a2cca8f313a20c36fe82460a8cac1122d",
         "shaders/celestial_glare.hlsli": "2b56b33995a2ed5d44e524f1337fcd1f9c00c78ee294d52dc8e2bd669466e3e8"
       },
@@ -1703,7 +1839,7 @@
         "scripts/shaders/shader_inputs.h": "e78f9ff80c7e01f3b4c5a9d7dd7e00c1552cbad9f30345f63ecefe26b28ef63c",
         "scripts/shaders/shader_compiler.py": "1dc622cd01cc0997e303483310ad272484ae7d62f51158c81ae1b851635041ea",
         "scripts/shaders/shader_manifest.py": "f0fcb820509e8ee00f8693e6414b7032be82913ad4b7f7ccc4ad2033f89131fe",
-        "scripts/shaders/compile_world_shaders.py": "6ea7f72b6853e6f920b78c9f9c4e320fa5308c6864d678e398a7dbe932c39035"
+        "scripts/shaders/compile_world_shaders.py": "2e9effdb48f3c747fc1ade128a080d3d5bb3baccda0d3a357869085dd76fae73"
       },
       "compiler_driver_sha256": "28f2719960265e525bff9154edccd7b5e8a7bf05a682faec45629b247764765a",
       "compiler_flags": [
@@ -1717,6 +1853,6 @@
   },
   "provenance_version": 1,
   "headers": {
-    "src/generated/world_compiled_shaders.h": "2b13b8087a32e471059a1e2ef846dbbb9fb77e60481ff8010c4a48096e1e6522"
+    "src/generated/world_compiled_shaders.h": "68bb5f5bdcc47adbf85a2a50ca18437684796d55befe97ae393da717b610245c"
   }
 }
