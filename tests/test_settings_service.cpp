@@ -172,6 +172,14 @@ int main(int argc,char** argv){
             auto it=std::find_if(state.begin(),state.end(),[&](const Field& f){return f.id()==id;});
             assert(it!=state.end());return *it;
         };
+        const std::string blur="W\tWater\tSurfaceBlur\t";
+        const auto& blurField=field(blur.substr(0,blur.size()-1));
+        assert(blurField.saved=="1" && blurField.kind=="slider");
+        auto sharp=edit(blur+"0\n");
+        assert(explicitValue(sharp[WaterFile],"Water","SurfaceBlur")=="0");
+        auto soft=edit(blur+"0.4\n");
+        assert(explicitValue(soft[WaterFile],"Water","SurfaceBlur")=="0.4");
+        fails([&]{edit(blur+"4.1\n");});
         const std::string scale="W\tWater\tReflectionResolution\t";
         fails([&]{edit(scale+"67\n");});
         const auto balanced=edit(scale+"75\n");

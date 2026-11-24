@@ -8,12 +8,14 @@ Open **Water** to tune waves, foam, reflections, underwater visibility, slime an
 
 Under **Water → Performance**, choose the **Water preset**, then **Save**. This controls Tideglass independently of Northlight's overall quality preset.
 
-| Water preset | Reflections | Resolution | Distance | Fine highlights | Nearby reflected scenery |
-| --- | --- | --- | --- | --- | --- |
-| Ultra | Scenery and sky | 100% | Far | On | On |
-| Quality (default) | Scenery and sky | 100% | Standard | Off | Off |
-| Balanced | Scenery and sky | 75% | Standard | Off | Off |
-| Performance | Sky only | Inactive | Inactive | Off | Inactive |
+| Water preset | Reflections | Resolution | Distance | Fine highlights | Nearby reflected scenery | Depth blur |
+| --- | --- | --- | --- | --- | --- | --- |
+| Ultra | Scenery and sky | 100% | Far | On | On | On |
+| Quality (default) | Scenery and sky | 100% | Standard | Off | Off | On |
+| Balanced | Scenery and sky | 75% | Standard | Off | Off | On |
+| Performance | Sky only | Inactive | Inactive | Off | Inactive | Off |
+
+**Depth blur** softens the bottom seen through deeper water. Performance selects zero. Waves still refract the scene. You can tune the strength separately. Existing installations keep their saved strength on opening the menu. A sky-only setup using the previous Performance settings and normal blur appears as **Custom** until you select a preset.
 
 **Nearby reflected scenery** adds dock props, falls and supported pool attachments. It prepares extra models and draws them when visible. Existing settings keep their previous scenery.
 

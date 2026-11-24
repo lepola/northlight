@@ -97,14 +97,16 @@ public:
 
 inline bool canInherit(const Field& f){return f.available&&!(f.file==Renderer&&f.key=="Backend"&&(","+f.options+",").find(",legacy,")==std::string::npos);}
 
-struct WaterTier { const char* name; const char* scenery; const char* resolution; const char* distance; const char* fineHighlights; const char* sceneryDetails; };
+struct WaterTier { const char* name; const char* scenery; const char* resolution; const char* distance; const char* fineHighlights; const char* sceneryDetails; const char* depthBlur; };
 inline constexpr WaterTier WaterTiers[]={
-    {"Ultra","1","100","2","1","1"}, {"Quality","1","100","0","0","0"},
-    {"Balanced","1","75","0","0","0"}, {"Performance","0","50","1","0","0"}
+    {"Ultra","1","100","2","1","1","1"}, {"Quality","1","100","0","0","0","1"},
+    {"Balanced","1","75","0","0","0","1"}, {"Performance","0","50","1","0","0","0"}
 };
-inline const char* waterPreset(const std::string& scenery,const std::string& resolution,const std::string& distance,const std::string& fineHighlights,const std::string& sceneryDetails){
+inline const char* waterPreset(const std::string& scenery,const std::string& resolution,const std::string& distance,const std::string& fineHighlights,const std::string& sceneryDetails,const std::string& depthBlur){
+    double blur;
+    if(!numeric(depthBlur,blur))return "Custom";
     for(const auto& tier:WaterTiers)
-        if(fineHighlights==tier.fineHighlights && scenery==tier.scenery && (scenery=="0" || (resolution==tier.resolution && distance==tier.distance && sceneryDetails==tier.sceneryDetails)))return tier.name;
+        if(blur==std::atof(tier.depthBlur) && fineHighlights==tier.fineHighlights && scenery==tier.scenery && (scenery=="0" || (resolution==tier.resolution && distance==tier.distance && sceneryDetails==tier.sceneryDetails)))return tier.name;
     return "Custom";
 }
 

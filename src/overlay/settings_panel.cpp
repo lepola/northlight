@@ -28,7 +28,7 @@ const std::map<std::string,const char*> Labels={
     {"WaveStrength","Wave strength"},{"WaveSpeed","Wave speed"},{"WaveCrestShape","Crest shape"},
     {"WaveCrestSharpness","Crest sharpness"},{"RippleStrength","Ripple strength"},
     {"FoamStrength","Foam strength"},{"OpenWaterCrestFoam","Foam on open-water crests"},
-    {"ReflectionScenery","Reflections"},{"ReflectionResolution","Reflection resolution"},{"ReflectionDistance","Reflection distance"},{"ReflectionSceneryDetails","Nearby reflected scenery"},{"FineHighlights","Fine water and slime highlights"},{"Clarity","Water clarity"},{"Reflection","Reflection strength"},{"NearReflection","Near reflection strength"},
+    {"ReflectionScenery","Reflections"},{"ReflectionResolution","Reflection resolution"},{"ReflectionDistance","Reflection distance"},{"ReflectionSceneryDetails","Nearby reflected scenery"},{"FineHighlights","Fine water and slime highlights"},{"Clarity","Water clarity"},{"SurfaceBlur","Depth blur"},{"Reflection","Reflection strength"},{"NearReflection","Near reflection strength"},
     {"Underwater","Underwater effects"},{"UnderwaterVisibility","Visibility (yards)"},{"UnderwaterScenery","Underwater scenery"},
     {"Slime","Slime surface"},{"Lava","Magma and fel magma surfaces"},
     {"AutoBump","Material detail"},{"AutoBumpStrength","Normal map strength (%)"},{"AutoBumpDistance","Normal map distance (yards)"},
@@ -63,6 +63,7 @@ const std::map<std::string,const char*> CelestialLabels={
 };
 const std::map<std::string,std::vector<const char*>> Help={
     {"ReflectionSceneryDetails",{"Reflects extra dock props and animated falls near water. Adds scenery preparation and draw work. Included in the Ultra Water preset."}},
+    {"SurfaceBlur",{"Softens the bottom seen through the surface as the water gets deeper. Zero keeps the bottom sharp. Waves still bend the view."}},
     {"FineHighlights",{"Breaks nearby sun and moon highlights into finer ripples on water and slime. Uses extra GPU time when highlights are visible. Included in the Ultra Water preset."}},
     {"AutoBump",{"Generates and caches normal maps from installed textures. Directional detail is applied at full screen resolution. MPQs remain unchanged. Supports MSAA."}},
     {"AutoBumpStrength",{"Higher values make details more pronounced and can exaggerate painted shadows. Start at 75%."}},
@@ -537,21 +538,22 @@ struct SettingsPanel::State {
         const Field* distance=water("ReflectionDistance");
         const Field* fine=water("FineHighlights");
         const Field* details=water("ReflectionSceneryDetails");
-        if(scenery && resolution && distance && fine && details){
-            const char* current=D::waterPreset(draft.effective(*scenery),draft.effective(*resolution),draft.effective(*distance),draft.effective(*fine),draft.effective(*details));
+        const Field* blur=water("SurfaceBlur");
+        if(scenery && resolution && distance && fine && details && blur){
+            const char* current=D::waterPreset(draft.effective(*scenery),draft.effective(*resolution),draft.effective(*distance),draft.effective(*fine),draft.effective(*details),draft.effective(*blur));
             ImGui::TextColored(Color::Heading,"Performance");ImGui::Separator();
             ImGui::BeginDisabled(locked());
             if(ImGui::BeginCombo("Water preset",current)){
                 for(const auto& tier:D::WaterTiers){
                     const bool selected=std::string(current)==tier.name;
                     if(ImGui::Selectable(tier.name,selected)){
-                        set(*scenery,tier.scenery);set(*resolution,tier.resolution);set(*distance,tier.distance);set(*fine,tier.fineHighlights);set(*details,tier.sceneryDetails);
+                        set(*scenery,tier.scenery);set(*resolution,tier.resolution);set(*distance,tier.distance);set(*fine,tier.fineHighlights);set(*details,tier.sceneryDetails);set(*blur,tier.depthBlur);
                     }
                 }
                 ImGui::EndCombo();
             }
             ImGui::EndDisabled();
-            loose("water-performance",{scenery,resolution,distance,details,fine});
+            loose("water-performance",{scenery,resolution,distance,details,fine,blur});
         }
         waterRows("Waves and foam","WaveStrength WaveSpeed WaveCrestShape WaveCrestSharpness RippleStrength FoamStrength OpenWaterCrestFoam");
         waterRows("Reflections","Reflection NearReflection");
