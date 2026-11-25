@@ -13,10 +13,10 @@ from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 parser = argparse.ArgumentParser()
-parser.add_argument('--client', type=Path, default=fp.client_root())
+parser.add_argument('--client', type=Path, help='directory containing world-cache/fog')
 parser.add_argument('--ini', type=Path, default=fp.REPO/'client-config' / 'celestial-profiles.ini')
 args = parser.parse_args()
-fog = args.client / 'world-cache' / 'fog'
+fog = (args.client or fp.client_root()) / 'world-cache' / 'fog'
 assert fog.is_dir(), f'{fog} missing: pass --client <WoW client root>'
 with tempfile.TemporaryDirectory(prefix='northlight-celestial-profiles-') as tmp:
     root = Path(tmp) / 'root'
