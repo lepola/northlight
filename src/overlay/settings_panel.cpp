@@ -32,7 +32,7 @@ const std::map<std::string,const char*> Labels={
     {"FoamStrength","Foam strength"},{"OpenWaterCrestFoam","Foam on open-water crests"},
     {"ReflectionScenery","Reflections"},{"ReflectionResolution","Reflection resolution"},{"ReflectionDistance","Reflection distance"},{"ReflectionSceneryDetails","Nearby reflected scenery"},{"FineHighlights","Fine water and slime highlights"},{"Clarity","Water clarity"},{"SurfaceBlur","Depth blur"},{"Reflection","Reflection strength"},{"NearReflection","Near reflection strength"},
     {"Underwater","Underwater effects"},{"UnderwaterVisibility","Visibility (yards)"},{"UnderwaterScenery","Underwater scenery"},
-    {"Palette","Whole-world appearance"},{"day_vibrance","Vibrance"},{"night_vibrance","Vibrance"},{"tone_curve_strength","Tone curve strength"},{"day_shadow_level","Shadows (25%)"},{"day_midtone_level","Midtones (50%)"},{"day_highlight_level","Highlights (75%)"},
+    {"Palette","Whole-world appearance"},{"day_vibrance","Vibrance"},{"dusk_vibrance","Vibrance"},{"night_vibrance","Vibrance"},{"tone_curve_strength","Tone curve strength"},{"day_shadow_level","Shadows (25%)"},{"day_midtone_level","Midtones (50%)"},{"day_highlight_level","Highlights (75%)"},
     {"night_shadow_level","Shadows (25%)"},{"night_midtone_level","Midtones (50%)"},{"night_highlight_level","Highlights (75%)"},{"fog_tint","Fog colour"},{"fog_tint_strength","Fog tint strength"},{"shadow_contrast","Shadow contrast"},{"Slime","Slime surface"},{"Lava","Magma and fel magma surfaces"},
     {"AutoBump","Material detail"},{"AutoBumpStrength","Normal map strength (%)"},{"AutoBumpDistance","Normal map distance (yards)"},
     {"AutoBumpTerrain","Ground and roads"},{"AutoBumpWalls","Walls and floors"},{"AutoBumpGrass","Grass tufts"},
@@ -65,9 +65,10 @@ const std::map<std::string,const char*> CelestialLabels={
     {"fog_height_scale","Fog height"},{"horizon_haze","Horizon haze"},{"glow_strength","Glow strength"},{"glow","Glow tint"},{"glow_mix","Glow tint mix"},
 };
 const std::map<std::string,std::vector<const char*>> Help={
-    {"day_vibrance",{"Enriches muted colours in daylight. Greys and vivid colours are protected. Tone curve strength controls the whole grade."}},
-    {"night_vibrance",{"Enriches muted colours at night. Greys and vivid colours are protected. Tone curve strength controls the whole grade."}},
-    {"tone_curve_strength",{"Blends in the selected region's daylight and night curves. Choose Brightness, Red, Green or Blue and drag a point on its curve."}},
+    {"day_vibrance",{"Enriches muted colours in daylight. Greys and vivid colours are protected. Tone curve strength controls the whole grade.","Requires filterable 16-bit colour volume support; otherwise the saved value is not rendered."}},
+    {"dusk_vibrance",{"Enriches muted colours at dusk. Greys and vivid colours are protected. Tone curve strength controls the whole grade.","Requires filterable 16-bit colour volume support; otherwise the saved value is not rendered."}},
+    {"night_vibrance",{"Enriches muted colours at night. Greys and vivid colours are protected. Tone curve strength controls the whole grade.","Requires filterable 16-bit colour volume support; otherwise the saved value is not rendered."}},
+    {"tone_curve_strength",{"Applies the selected region's Daylight, Dusk and Night curves, vibrance and selective colour. Choose Brightness, Red, Green or Blue and drag a point on its curve."}},
     {"ReflectionSceneryDetails",{"Reflects extra dock props and animated falls near water. Adds scenery preparation and draw work. Included in the Ultra Water preset."}},
     {"SurfaceBlur",{"Softens the bottom seen through the surface as the water gets deeper. Zero keeps the bottom sharp. Waves still bend the view."}},
     {"FineHighlights",{"Breaks nearby sun and moon highlights into finer ripples on water and slime. Uses extra GPU time when highlights are visible. Included in the Ultra Water preset."}},
@@ -125,6 +126,10 @@ const std::vector<Group> CelestialGroups={
     {"sun","Sun",nullptr,"sun_disc sun_disc_gain sun_light sun_light_strength","sun_light_mix sun_fog_gain sun_fog_height_scale sun_horizon_haze sun_glow_strength sun_glow sun_glow_mix"},
     {"moon","Moon",nullptr,"moon_disc moon_disc_gain moon_light moon_light_strength","moon_light_mix moon_fog_gain moon_fog_height_scale moon_horizon_haze moon_glow_strength moon_glow moon_glow_mix"},
 };
+constexpr std::array<NorthlightTone::TimeStop,3> GradeTimes={NorthlightTone::TimeStop::Day,NorthlightTone::TimeStop::Dusk,NorthlightTone::TimeStop::Night};
+constexpr std::array<const char*,3> GradeTitles={"Daylight grade","Dusk grade","Night grade"};
+constexpr std::array<NorthlightTone::HueBand,5> HueBands={NorthlightTone::HueBand::Red,NorthlightTone::HueBand::Orange,NorthlightTone::HueBand::Yellow,NorthlightTone::HueBand::Green,NorthlightTone::HueBand::Blue};
+constexpr std::array<NorthlightTone::SelectiveProperty,3> SelectiveProperties={NorthlightTone::SelectiveProperty::HueShift,NorthlightTone::SelectiveProperty::Saturation,NorthlightTone::SelectiveProperty::Lightness};
 std::vector<std::string> words(const char* text);
 // The old menu's preset page.
 struct Preset { const char* key; const char* text; };
@@ -521,6 +526,10 @@ struct SettingsPanel::State {
     std::array<char,128> regionFilter{},waterRegionFilter{};
     mutable const NorthlightSettings::Snapshot* pageFieldsSnapshot=nullptr;
     mutable std::array<std::vector<const Field*>,std::size_t(Page::Count)> pageFieldCache;
+    mutable std::array<std::vector<const Field*>,std::size_t(Page::Count)> restartFieldCache;
+    mutable std::map<std::string,unsigned> fieldPageMask;
+    mutable const NorthlightSettings::Snapshot* celestialSectionSnapshot=nullptr;
+    mutable std::map<std::string,std::map<std::string,const Field*>> celestialSectionFieldCache;
     int curveChannel=0,selectedPoint=0,dragPoint=-1;
     ImVec2 curveDragOffset{};
     bool curveDragged=false;
@@ -590,6 +599,19 @@ struct SettingsPanel::State {
         std::vector<const Field*> out;if(!snapshot)return out;
         for(const auto& f:snapshot->fields)if(f.file==file&&(!section||f.section==*section))out.push_back(&f);
         return out;
+    }
+    void refreshCelestialSectionFields()const{
+        if(celestialSectionSnapshot==snapshot.get())return;
+        celestialSectionFieldCache.clear();celestialSectionSnapshot=nullptr;
+        if(!snapshot)return;
+        for(const auto& f:snapshot->fields)if(f.file==D::Celestial)celestialSectionFieldCache[f.section][f.key]=&f;
+        celestialSectionSnapshot=snapshot.get();
+    }
+    const std::map<std::string,const Field*>& celestialFields(const std::string& section)const{
+        static const std::map<std::string,const Field*> empty;
+        refreshCelestialSectionFields();
+        const auto found=celestialSectionFieldCache.find(section);
+        return found==celestialSectionFieldCache.end()?empty:found->second;
     }
 
     // ---- Rows ----
@@ -780,10 +802,17 @@ struct SettingsPanel::State {
     void refreshPageFields()const{
         if(pageFieldsSnapshot==snapshot.get())return;
         for(auto& pageFields:pageFieldCache)pageFields.clear();
+        for(auto& restartFields:restartFieldCache)restartFields.clear();
+        fieldPageMask.clear();
         pageFieldsSnapshot=nullptr;
         if(!snapshot)return;
-        for(unsigned i=0;i<std::size(pageFieldCache);++i)
+        for(unsigned i=0;i<std::size(pageFieldCache);++i){
             pageFieldCache[i]=buildPageFields(Page(i));
+            for(const Field* f:pageFieldCache[i]){
+                fieldPageMask[f->id()]|=1u<<i;
+                if(f->apply=="R"&&f->available)restartFieldCache[i].push_back(f);
+            }
+        }
         pageFieldsSnapshot=snapshot.get();
     }
     const std::vector<const Field*>& pageFields(Page p)const{
@@ -909,9 +938,10 @@ struct SettingsPanel::State {
                 if(const Field* f=draft.field(D::Celestial,region,"fog_tint"))loose("fog-colour",{f});
                 if(const Field* strength=draft.field(D::Celestial,region,"tone_curve_strength")){
                     regionalControl(*strength,"Tone curve strength");
-                    for(unsigned time=0;time<2;++time)if(ImGui::TreeNode(time?"Night tone curve":"Daylight tone curve")){
+                    ImGui::TextWrapped("Dusk is the 19:30 anchor for the evening blend. Unset Dusk values preserve the previous Daylight-to-Night result; morning still blends Daylight directly with Night.");
+                    for(unsigned i=0;i<GradeTimes.size();++i)if(ImGui::TreeNode(GradeTitles[i])){
                         ImGui::BeginDisabled(locked());
-                        curveEditor(time);
+                        gradeEditor(GradeTimes[i]);
                         ImGui::EndDisabled();
                         ImGui::TreePop();
                     }
@@ -928,10 +958,17 @@ struct SettingsPanel::State {
     // Left column: the pages; amber dot = unsaved edits there, R = a restart-only change pending there.
     void sidebar(){
         const float h=ImGui::GetFrameHeight(),r=std::max(2.5f,h*0.14f);
-        for(const auto& info:Pages){
+        std::array<bool,std::size_t(Page::Count)> editedPages{},restartPages{};
+        for(const auto& change:draft.changes()){
+            const auto found=fieldPageMask.find(change.first);if(found==fieldPageMask.end())continue;
+            for(unsigned i=0;i<editedPages.size();++i)if(found->second&(1u<<i))editedPages[i]=true;
+        }
+        for(unsigned i=0;i<restartFieldCache.size();++i)
+            for(const Field* f:restartFieldCache[i])restartPages[i]|=draft.restartPending(*f);
+        for(unsigned i=0;i<std::size(Pages);++i){
+            const auto& info=Pages[i];
             if(info.page==Page::Water&&!draft.field(NorthlightSettings::WaterHostFile,"WaterIntegration","Enable"))continue;
-            bool edited=false,restart=false;
-            for(const Field* f:pageFields(info.page)){edited|=draft.edited(*f);restart|=draft.restartPending(*f);}
+            const bool edited=editedPages[i],restart=restartPages[i];
             if(ImGui::Selectable(info.title,page==info.page,0,ImVec2(0,h)))page=info.page;
             const ImVec2 a=ImGui::GetItemRectMin(),b=ImGui::GetItemRectMax();
             ImDrawList* dl=ImGui::GetWindowDrawList();float x=b.x-ImGui::GetStyle().ItemInnerSpacing.x-r;
@@ -1013,15 +1050,16 @@ struct SettingsPanel::State {
         return true;
     }
     bool pickRegion(){return pickRegion(region);}
-    void curveEditor(unsigned time){
+    void gradeEditor(NorthlightTone::TimeStop time){
         ImGui::PushID(int(time));
         const char* channels[]={"Brightness","Red","Green","Blue"};
         ImGui::SetNextItemWidth(170*scale);
         ImGui::Combo("Channel",&curveChannel,channels,4);
-        NorthlightTone::Curve curve;
+        NorthlightTone::Grade grade;
+        auto& curve=grade.curves[curveChannel];
         const Field* fields[5]{};
         for(unsigned i=0;i<5;++i){
-            const auto key=NorthlightTone::key(time,curveChannel,i);
+            const auto key=NorthlightTone::gradeKey(time,curveChannel,i);
             fields[i]=draft.field(D::Celestial,region,key);
             if(!fields[i]){ImGui::PopID();return;}
             float lo,hi;
@@ -1097,8 +1135,44 @@ struct SettingsPanel::State {
             }
             ImGui::TreePop();
         }
-        if(const Field* f=draft.field(D::Celestial,region,time?"night_vibrance":"day_vibrance"))
+        if(const Field* f=draft.field(D::Celestial,region,NorthlightTone::vibranceKey(time)))
             loose("colour-grade",{f});
+        if(ImGui::TreeNode("Selective colour")){
+            ImGui::TextWrapped("Adjust five colour ranges after the curve. Zero is neutral; inherit a whole range with its button or right-click one control. Vibrance and selective colour need filterable 16-bit colour volume support; curves still work on fallback.");
+            for(const auto band:HueBands){
+                std::string title=NorthlightTone::bandName(band);
+                if(!title.empty())title[0]=char(std::toupper(static_cast<unsigned char>(title[0])));
+                const Field* values[3]{};
+                std::vector<const Field*> rows;
+                bool canReset=false;
+                for(unsigned i=0;i<SelectiveProperties.size();++i){
+                    const auto key=NorthlightTone::selectiveKey(time,band,SelectiveProperties[i]);
+                    values[i]=draft.field(D::Celestial,region,key);
+                    if(values[i]){rows.push_back(values[i]);canReset|=values[i]->available&&D::canInherit(*values[i]);}
+                }
+                if(rows.empty())continue;
+                ImGui::PushID(int(band));
+                if(ImGui::TreeNode(title.c_str())){
+                    alignRight(buttonWidth("Inherit range"));
+                    ImGui::BeginDisabled(!canReset||locked());
+                    if(ImGui::SmallButton("Inherit range"))for(const Field* f:rows)if(f->available&&D::canInherit(*f))inherit(*f);
+                    ImGui::EndDisabled();
+                    if(beginRows("selective-adjustments")){
+                        for(unsigned i=0;i<SelectiveProperties.size();++i)if(values[i]){
+                            std::string label=NorthlightTone::propertyName(SelectiveProperties[i]);
+                            std::replace(label.begin(),label.end(),'_',' ');
+                            if(!label.empty())label[0]=char(std::toupper(static_cast<unsigned char>(label[0])));
+                            if(SelectiveProperties[i]==NorthlightTone::SelectiveProperty::HueShift)label+=" (degrees)";
+                            row(*values[i],label.c_str());
+                        }
+                        ImGui::EndTable();
+                    }
+                    ImGui::TreePop();
+                }
+                ImGui::PopID();
+            }
+            ImGui::TreePop();
+        }
         ImGui::PopID();
     }
     void regionalControl(const Field& f,const char* title){
@@ -1120,7 +1194,7 @@ struct SettingsPanel::State {
     void celestialTab(){
         if(!pickRegion())return;
         ImGui::TextColored(Color::Muted,"Unset values follow the parent region.");
-        std::map<std::string,const Field*> byKey;for(const Field* f:fields(D::Celestial,&region))byKey[f->key]=f;
+        const auto& byKey=celestialFields(region);
         std::map<std::string,bool> used;
         ImGui::PushID(region.c_str());
         for(const auto& key:NorthlightSettings::AppearanceKeys)used[key]=true;

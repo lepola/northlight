@@ -251,7 +251,7 @@ static void regionalAppearance(){
     CHECK(D::same(night,d.effective(night),".42")&&D::same(daylight,d.effective(daylight),".54"));
     auto graded=applyChanges(docs,rows,night.id()+"\t.48\n"+tint.id()+"\t1.7\n");
     auto local=configOf(graded,"",true).celestial.at("Azeroth",159);
-    CHECK(local.curves[1][0].levels[1]==.48f&&local.curves[0][0].levels[1]==.54f&&local.fogTintStrength==1.7f);
+    CHECK(local.grade[2].curves[0].levels[1]==.48f&&local.grade[0].curves[0].levels[1]==.54f&&local.fogTintStrength==1.7f);
     const auto& red=*d.field(2,"Azeroth:85/159","day_red_midtone_level");
     const auto& lowInput=*d.field(2,"Azeroth:85/159","night_low_input");
     const auto& lowBend=*d.field(2,"Azeroth:85/159","night_low_bend");
@@ -259,14 +259,14 @@ static void regionalAppearance(){
     const auto& vibrance=*d.field(2,"Azeroth:85/159","day_vibrance");
     auto vivid=applyChanges(rgb,rows,vibrance.id()+"\t.55\n");
     const auto profile=configOf(vivid,"",true).celestial.at("Azeroth",159);
-    CHECK(profile.vibrance[0]==.55f&&profile.vibrance[1]==0);
+    CHECK(profile.grade[0].vibrance==.55f&&profile.grade[2].vibrance==0);
     auto inheritVibrance=applyChanges(vivid,rows,vibrance.id()+"\t~\n");
-    CHECK(configOf(inheritVibrance,"",true).celestial.at("Azeroth",159).vibrance[0]==0);
-    CHECK(profile.curves[0][1].levels[1]==.57f&&profile.curves[0][2].levels[1]==.50f);
-    CHECK(profile.curves[1][0].lowInput==.08f&&profile.curves[1][0].lowBend==.64f&&profile.curves[0][0].lowBend==.50f);
+    CHECK(configOf(inheritVibrance,"",true).celestial.at("Azeroth",159).grade[0].vibrance==0);
+    CHECK(profile.grade[0].curves[1].levels[1]==.57f&&profile.grade[0].curves[2].levels[1]==.50f);
+    CHECK(profile.grade[2].curves[0].lowInput==.08f&&profile.grade[2].curves[0].lowBend==.64f&&profile.grade[0].curves[0].lowBend==.50f);
     auto redReset=applyChanges(rgb,rows,red.id()+"\t~\n");
     const auto resetProfile=configOf(redReset,"",true).celestial.at("Azeroth",159);
-    CHECK(resetProfile.curves[0][1].levels[1]==.5f&&resetProfile.curves[1][0].lowBend==.64f&&resetProfile.fogTintStrength==1.7f);
+    CHECK(resetProfile.grade[0].curves[1].levels[1]==.5f&&resetProfile.grade[2].curves[0].lowBend==.64f&&resetProfile.fogTintStrength==1.7f);
     CHECK(D::same(tint,d.effective(tint),".65"));
     d.pin(tint,"0");CHECK(d.overrides(tint)&&d.effective(tint)=="0");
     d.inherit(tint);CHECK(D::same(tint,d.effective(tint),".65")&&D::same(shadow,d.effective(shadow),".4"));
@@ -288,7 +288,39 @@ static void regionalAppearance(){
     auto withDefault=applyChanges(docs,rows,d.field(2,"default","shadow_contrast")->id()+"\t.3\n");
     CHECK(configOf(withDefault,"",true).celestial.at("Azeroth",1497).shadowContrast==.3f);
 }
-int main(){regionalAppearance();
+static void regionalGradeDraft(){
+    using namespace NorthlightTone;
+    std::vector<Field> fields;
+    const TimeStop stops[]={TimeStop::Day,TimeStop::Dusk,TimeStop::Night};
+    for(const auto stop:stops){
+        const auto curveKey=gradeKey(stop,0,Midtone);
+        auto curve=field(D::Celestial,"Azeroth:85",curveKey.c_str(),"slider","","0.5");
+        curve.low="0.38";curve.high="0.62";fields.push_back(curve);
+        const auto vibranceName=vibranceKey(stop);
+        auto vibrance=field(D::Celestial,"Azeroth:85",vibranceName.c_str(),"slider","","0");
+        vibrance.low="0";vibrance.high="1";fields.push_back(vibrance);
+        const auto hueKey=selectiveKey(stop,HueBand::Red,SelectiveProperty::HueShift);
+        auto hue=field(D::Celestial,"Azeroth:85",hueKey.c_str(),"slider","","0");
+        hue.low="-30";hue.high="30";fields.push_back(hue);
+    }
+    D::Draft draft;draft.bind(&fields);
+    const Field* day=draft.field(D::Celestial,"Azeroth:85",gradeKey(TimeStop::Day,0,Midtone));
+    const Field* dusk=draft.field(D::Celestial,"Azeroth:85",gradeKey(TimeStop::Dusk,0,Midtone));
+    const Field* night=draft.field(D::Celestial,"Azeroth:85",gradeKey(TimeStop::Night,0,Midtone));
+    const Field* duskVibrance=draft.field(D::Celestial,"Azeroth:85",vibranceKey(TimeStop::Dusk));
+    const Field* duskHue=draft.field(D::Celestial,"Azeroth:85",selectiveKey(TimeStop::Dusk,HueBand::Red,SelectiveProperty::HueShift));
+    CHECK(day&&dusk&&night&&duskVibrance&&duskHue);
+    if(!day||!dusk||!night||!duskVibrance||!duskHue)return;
+    draft.set(*dusk,"0.57");draft.set(*duskVibrance,"0.35");draft.set(*duskHue,"12");
+    CHECK(draft.effective(*day)=="0.5"&&draft.effective(*dusk)=="0.57"&&draft.effective(*night)=="0.5");
+    CHECK(draft.effective(*duskVibrance)=="0.35"&&draft.effective(*duskHue)=="12");
+    draft.inherit(*dusk);draft.inherit(*duskVibrance);draft.inherit(*duskHue);
+    CHECK(!draft.overrides(*dusk)&&!draft.overrides(*duskVibrance)&&!draft.overrides(*duskHue));
+    CHECK(draft.effective(*dusk)=="0.5"&&draft.effective(*duskVibrance)=="0"&&draft.effective(*duskHue)=="0");
+    CHECK(draft.effective(*day)=="0.5"&&draft.effective(*night)=="0.5");
+    CHECK(gradeKey(TimeStop::Day,0,Midtone)=="day_midtone_level"&&gradeKey(TimeStop::Dusk,0,Midtone)=="dusk_midtone_level"&&gradeKey(TimeStop::Night,0,Midtone)=="night_midtone_level");
+}
+int main(){regionalAppearance();regionalGradeDraft();
     routing();draft();
     if(failures){std::fprintf(stderr,"%d failure(s)\n",failures);return 1;}
     std::puts("settings overlay: routing and draft OK");

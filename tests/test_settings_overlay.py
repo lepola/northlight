@@ -121,6 +121,26 @@ check('ImGui::SetNextWindowSizeConstraints(ImVec2(440*scale,0),ImVec2(440*scale,
 check('noteColor=status.state==NorthlightSettings::Status::State::Saved?Color::Good' in panel and
       'ImGui::TextColored(noteColor,"%s",note.c_str())' in panel,
       'Save As status: successful exports use the normal success colour')
+check('GradeTimes={NorthlightTone::TimeStop::Day,NorthlightTone::TimeStop::Dusk,NorthlightTone::TimeStop::Night}' in panel and
+      'GradeTitles={"Daylight grade","Dusk grade","Night grade"}' in panel and
+      'for(unsigned i=0;i<GradeTimes.size();++i)' in panel and 'gradeEditor(GradeTimes[i])' in panel,
+      'Atmosphere: three clearly named independent Daylight, Dusk and Night grade editors')
+check('NorthlightTone::gradeKey(time,curveChannel,i)' in panel and 'NorthlightTone::vibranceKey(time)' in panel,
+      'grade editor: curves and vibrance use the native timeline key helpers')
+check('for(const auto band:HueBands)' in panel and 'NorthlightTone::selectiveKey(time,band,SelectiveProperties[i])' in panel and
+      'SmallButton("Inherit range")' in panel,
+      'grade editor: each time exposes selective colour bands with a per-range inherit action')
+check('celestialSectionSnapshot==snapshot.get()' in panel and 'celestialFields(region)' in panel and
+      'fields(D::Celestial,&region)' not in panel,
+      'Sun & Moon page: region fields are cached by snapshot instead of rescanning the full catalogue each frame')
+check('fieldPageMask[f->id()]|=1u<<i' in panel and 'for(const auto& change:draft.changes())' in panel and
+      'restartFieldCache[i]' in panel and 'for(const Field* f:pageFields(info.page))' not in panel,
+      'sidebar: page membership is indexed once per snapshot and only draft edits/restart fields are checked per frame')
+menu_docs=(fp.RENDERER / 'docs/settings-menu.md').read_text()
+check('Dusk is the 19:30 anchor' in menu_docs and 'Morning still blends Daylight directly with Night.' in menu_docs,
+      'settings-menu.md: describes the Dusk anchor and unchanged morning blend')
+check('dusk_vibrance' in menu_docs and 'dusk_red_hue_shift' in menu_docs and 'Inherit range' in menu_docs,
+      'settings-menu.md: documents saved Dusk and selective colour controls')
 
 # The embedded font: generated header present and loaded first; its licence ships.
 font_header = fp.GENERATED / 'overlay_font_roboto.h'
