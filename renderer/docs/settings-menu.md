@@ -33,7 +33,9 @@ To share a look, use **Save current look as a named copy**. Northlight saves the
 
 Fog tint colours the existing fog at its current density. Shadow contrast deepens dark scene detail. Fog tint strength ranges from 0 to 2. A value of 1.70 requests twice the tint of 0.85. Saturated swatches stop gaining strength when a fog channel reaches zero. Both strengths start at zero. The original composite shader runs when all regional appearance effects are inactive. Tuning uses the existing composite pass. Tirisfal and Eversong have cool and warm starting colours respectively.
 
-Each region can have its own daylight, dusk and night 3D lookup tables. Northlight bakes brightness, RGB curves, vibrance and selective colour together for each look. As the clock advances it blends between the baked tables. A region can inherit all or part of its parent’s settings.
+Each region can have its own daylight, dusk and night 3D lookup tables. Each table combines brightness, RGB curves, vibrance and selective colour. Northlight blends between the looks as the clock advances. A region can inherit all or part of its parent’s settings.
+
+The installer includes ready-to-use tables for **Vibrant**. A personal preset can reuse any matching table. If you change a region’s dusk colours, Northlight prepares that dusk look in the background while play continues. The named `.ini` contains everything you need to share your edit.
 
 **Tone curve strength** controls the regional grade after fog and water, before the HUD. Open **Daylight grade**, **Dusk grade** or **Night grade**, then pick **Brightness**, **Red**, **Green** or **Blue** and edit its curve. Higher points brighten that part of the selected channel. Brightness scales the three channels together. Red, Green and Blue act afterwards on their own channel. A straight diagonal gives the original response. Dusk is the 19:30 anchor for the evening blend from 18:00 to 20:00. Morning still blends Daylight directly with Night. A missing Dusk value keeps the previous Daylight-to-Night result; **Inherit selected point** removes a local value and restores its inherited result.
 
