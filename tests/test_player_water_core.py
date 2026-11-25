@@ -82,7 +82,9 @@ class PlayerWaterCore(unittest.TestCase):
             bp.check_water_core(pe32(['VirtualProtect']), b'MZ plain renderer\0')
 
     def test_marker_and_release_build_match_the_source(self):
-        engine = (fp.REPO / 'tideglass/src/engine.cpp').read_text()
+        # Found by name: the core keeps its internals in folders under src/, and only what a host includes at the top.
+        (source,) = (fp.REPO / 'tideglass/src').rglob('engine.cpp')
+        engine = source.read_text()
         self.assertEqual(re.search(r'kVisualClockMarker\[\]="([^"]+)"', engine).group(1).encode(), bp.CLOCK_MARKER)
         self.assertIn('defined(WATER_VISUAL_CLOCK)', engine)
         self.assertNotIn('WATER_VISUAL_CLOCK', (fp.REPO / 'tideglass/CMakeLists.txt').read_text(),

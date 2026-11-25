@@ -29,7 +29,8 @@ endif()
 
 get_target_property(storm_source_dir storm SOURCE_DIR)
 target_compile_options(storm PRIVATE "-ffile-prefix-map=${storm_source_dir}=StormLib")
-file(GLOB units CONFIGURE_DEPENDS src/*.cpp)
+# The core's sources sit in folders under src/; the export never includes the standalone proxy.
+file(GLOB_RECURSE units CONFIGURE_DEPENDS src/*.cpp)
 add_library(water-core SHARED ${units})
 set_target_properties(water-core PROPERTIES PREFIX "" CXX_STANDARD 17 CXX_STANDARD_REQUIRED YES)
 target_include_directories(water-core PRIVATE src generated "$<TARGET_PROPERTY:storm,SOURCE_DIR>/src")
