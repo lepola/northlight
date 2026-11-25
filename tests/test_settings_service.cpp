@@ -246,6 +246,40 @@ int main(int argc,char** argv){
      assert(svc.status().state==Status::State::Error&&svc.status().message.find("already exists")!=std::string::npos);
      unsigned vibrantFiles=0;for(const auto& item:std::filesystem::directory_iterator(presetRoot/"appearance-presets"))
          if(NorthlightSettings::lower(item.path().stem().string())=="vibrant")++vibrantFiles;
-     assert(vibrantFiles==1);}
-    std::cout<<"Settings: encoding (incl. astral and invalid input), comments, inheritance, bounded schema, rollback, read-only, journal recovery, cold snapshots, preview coalescing, commit, conflict and appearance-copy checks passed\n";
+     assert(vibrantFiles==1);
+     auto run=[&](auto request){const auto before=svc.status().serial;assert(request());
+         assert(waitFor([&]{return svc.status().serial>before&&svc.status().state!=Status::State::Busy;}));return svc.status();};
+     auto offered=[&](const char* name){const auto now=svc.snapshot();return std::any_of(now->fields.begin(),now->fields.end(),[&](const Field& f){
+         return f.file==2&&f.section=="Appearance"&&f.key=="Palette"&&(","+f.options+",").find(std::string(",")+name+",")!=std::string::npos;});};
+     auto contrast=[&](const char* file){NorthlightAppearancePresets::Table t;std::string e;
+         assert(NorthlightAppearancePresets::parse(readImage(presetRoot/"appearance-presets"/file).raw,t,e));return t.at("Expansion01",3430).shadowContrast;};
+     // A player's own look is replaced only when asked, in the file it already has; a shipped look never is.
+     assert(run([&]{return svc.savePreset("evening",svc.snapshot()->revision,{{tint->id(),"0.3"}});}).state==Status::State::Error);
+     assert(std::fabs(contrast("Evening.ini")-.6f)<1e-5f);
+     auto replaced=run([&]{return svc.savePreset("evening",svc.snapshot()->revision,{{tint->id(),"0.3"}},true);});
+     assert(replaced.state==Status::State::Saved&&replaced.message=="Replaced look: evening");
+     assert(std::fabs(contrast("Evening.ini")-.3f)<1e-5f&&!std::filesystem::exists(presetRoot/"appearance-presets"/"evening.ini")&&!std::filesystem::exists(presetRoot/"appearance-presets"/"Evening.ini.new"));
+     const auto vibrantBefore=readImage(presetRoot/"appearance-presets"/"Vibrant.ini").raw;
+     assert(run([&]{return svc.savePreset("Vibrant",svc.snapshot()->revision,{{tint->id(),"0.3"}},true);}).state==Status::State::Error);
+     assert(readImage(presetRoot/"appearance-presets"/"Vibrant.ini").raw==vibrantBefore);
+     // Shipped looks are refused before any job is queued. Deleting a look that is not selected leaves the choice alone.
+     assert(!svc.deletePreset("Vibrant",svc.snapshot()->revision)&&!svc.deletePreset("Default",svc.snapshot()->revision));
+     assert(run([&]{return svc.deletePreset("Missing",svc.snapshot()->revision);}).state==Status::State::Error);
+     assert(run([&]{return svc.savePreset("Spare",svc.snapshot()->revision,{});}).state==Status::State::Saved&&offered("Spare"));
+     auto deleted=run([&]{return svc.deletePreset("spare",svc.snapshot()->revision);});
+     assert(deleted.state==Status::State::Saved&&!std::filesystem::exists(presetRoot/"appearance-presets"/"Spare.ini")&&!offered("Spare")&&offered("Evening"));
+     assert(readImage(presetRoot/"celestial-profiles.ini").raw==before);
+     // Deleting the look in use returns the saved choice to Default, so no restart finds a missing file.
+     const auto paletteField=std::find_if(snap->fields.begin(),snap->fields.end(),[](const Field& f){return f.file==2&&f.section=="Appearance"&&f.key=="Palette";});
+     assert(paletteField!=snap->fields.end());const auto paletteId=paletteField->id();
+     {const auto serialBefore=svc.status().serial;assert(svc.commit(svc.snapshot()->revision,{{paletteId,"Evening"}}));
+      assert(waitFor([&]{return svc.status().serial>serialBefore&&svc.status().state!=Status::State::Busy;}));assert(svc.status().state==Status::State::Saved);}
+     assert(readImage(presetRoot/"celestial-profiles.ini").raw.find("Palette=Evening")!=std::string::npos);
+     assert(run([&]{return svc.deletePreset("Evening",svc.snapshot()->revision);}).state==Status::State::Saved);
+     assert(!std::filesystem::exists(presetRoot/"appearance-presets"/"Evening.ini")&&!offered("Evening")&&offered("Vibrant"));
+     const auto afterDelete=readImage(presetRoot/"celestial-profiles.ini").raw;
+     assert(afterDelete.find("Evening")==std::string::npos);
+     {Service restarted(presetRoot);assert(waitFor([&]{return restarted.requestSnapshot();}));assert(waitFor([&]{return restarted.snapshot()&&restarted.status().state!=Status::State::Busy;}));
+      assert(restarted.snapshot()->presetErrors.empty());}}
+    std::cout<<"Settings: encoding (incl. astral and invalid input), comments, inheritance, bounded schema, rollback, read-only, journal recovery, cold snapshots, preview coalescing, commit, conflict and appearance preset save, replace and delete checks passed\n";
 }

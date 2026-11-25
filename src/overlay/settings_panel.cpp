@@ -527,7 +527,8 @@ struct SettingsPanel::State {
     std::map<std::string,std::array<float,3>> live;   // a slider or colour being dragged: committed on release
     bool wantSnapshot=false,wantPreview=false,wantClear=false,previewing=false,saving=false,awaitingSnapshot=false,savingAppearancePreset=false;
     std::uint64_t commitSerial=0,appearancePresetSerial=0;
-    char appearancePresetName[64]{};bool appearancePresetModal=false;
+    char appearancePresetName[64]{};bool appearancePresetModal=false,appearancePresetDeleteModal=false;
+    std::string appearancePresetToDelete;
     ImVec4 noteColor=Color::Bad;
     std::string region="default",note;                 // note: a local message (a refused request), cleared by the next action
     std::string waterRegion="default";
@@ -602,7 +603,25 @@ struct SettingsPanel::State {
         const std::string name=appearancePresetName;std::string error;
         if(!NorthlightAppearancePresets::validName(name,error)){note=error;noteColor=Color::Bad;return;}
         const auto serial=service->status().serial;
-        if(service->savePreset(name,snapshot->revision,changes())){savingAppearancePreset=true;appearancePresetSerial=serial;note.clear();}
+        if(service->savePreset(name,snapshot->revision,changes(),!ownAppearancePreset(name).empty())){savingAppearancePreset=true;appearancePresetSerial=serial;note.clear();}
+        else{note="The settings service is busy; try again in a moment.";noteColor=Color::Muted;}
+    }
+    // The saved name of one of the player's own looks, matched without regard to letter case; empty if there is none.
+    std::string ownAppearancePreset(const std::string& name)const{
+        const Field* palette=draft.field(D::Celestial,"Appearance","Palette");
+        if(!palette||NorthlightAppearancePresets::packaged(name))return {};
+        const auto listed=NorthlightSettings::canonicalOption(name,palette->options);
+        std::istringstream options(palette->options);std::string option;
+        while(std::getline(options,option,','))if(option==listed)return listed;
+        return {};
+    }
+    void deleteAppearancePreset(){
+        if(!service||!snapshot||locked()||appearancePresetToDelete.empty())return;
+        // The service returns a saved choice to Default; an unsaved choice of this look is the draft's to give up.
+        if(const Field* palette=draft.field(D::Celestial,"Appearance","Palette"))
+            if(draft.edited(*palette)&&NorthlightSettings::lower(draft.effective(*palette))==NorthlightSettings::lower(appearancePresetToDelete)){draft.set(*palette,draft.saved(*palette));edited(*palette);}
+        const auto serial=service->status().serial;
+        if(service->deletePreset(appearancePresetToDelete,snapshot->revision)){savingAppearancePreset=true;appearancePresetSerial=serial;note.clear();}
         else{note="The settings service is busy; try again in a moment.";noteColor=Color::Muted;}
     }
     void revert(){draft.clear();live.clear();wantPreview=false;wantClear=true;note.clear();}
@@ -989,9 +1008,15 @@ struct SettingsPanel::State {
                 W::cardTitle("Whole world");
                 if(const Field* palette=draft.field(D::Celestial,"Appearance","Palette"))loose("world-palette",{palette});
                 W::hint("Default keeps Northlight's regional look and your own region edits. Another look replaces the base for the whole world; your region edits still apply on top.");
-                if(ImGui::Button("Save current look as a named copy...")){appearancePresetName[0]='\0';appearancePresetModal=true;}
-                ImGui::SameLine();
-                ImGui::TextColored(Color::Muted,"Shareable INI files: appearance-presets");
+                if(ImGui::Button("Save as preset...")){appearancePresetName[0]='\0';appearancePresetModal=true;}
+                if(const Field* palette=draft.field(D::Celestial,"Appearance","Palette")){
+                    const auto chosen=ownAppearancePreset(draft.effective(*palette));
+                    ImGui::SameLine();ImGui::BeginDisabled(chosen.empty()||locked());
+                    if(ImGui::Button("Delete preset...")){appearancePresetToDelete=chosen;appearancePresetDeleteModal=true;}
+                    ImGui::EndDisabled();
+                    if(chosen.empty()&&ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))ImGui::SetTooltip("Looks that come with Northlight cannot be deleted.");
+                }
+                W::hint("A preset is the whole-world look as you see it now, saved under a name in appearance-presets. Its files can be shared.");
             }
             W::endCard();
             if(W::beginCard("regional-look")){
@@ -1413,7 +1438,8 @@ struct SettingsPanel::State {
     void modals(){
         if(confirm==Confirm::Preset)ImGui::OpenPopup("Choose preset?");
         if(confirm==Confirm::Factory)ImGui::OpenPopup("Restore defaults?");
-        if(appearancePresetModal){ImGui::OpenPopup("Save appearance copy");appearancePresetModal=false;}
+        if(appearancePresetModal){ImGui::OpenPopup("Save as preset");appearancePresetModal=false;}
+        if(appearancePresetDeleteModal){ImGui::OpenPopup("Delete preset?");appearancePresetDeleteModal=false;}
         confirm=Confirm::None;
         const ImVec2 centre=ImGui::GetMainViewport()->GetCenter();
         auto ask=[&](const char* title,const char* body,const char* yes,auto&& accept){
@@ -1445,15 +1471,31 @@ struct SettingsPanel::State {
         ask("Restore defaults?",scope.c_str(),"Restore",[&]{factoryDefaults();});
         ImGui::SetNextWindowPos(centre,ImGuiCond_Appearing,ImVec2(0.5f,0.5f));
         ImGui::SetNextWindowSizeConstraints(ImVec2(440*scale,0),ImVec2(440*scale,FLT_MAX));
-        if(ImGui::BeginPopupModal("Save appearance copy",nullptr,ImGuiWindowFlags_AlwaysAutoResize|ImGuiWindowFlags_NoSavedSettings)){
-            ImGui::TextWrapped("Copy the current whole-world appearance, including regional differences, to a portable INI file. Existing files are never overwritten.");
+        if(ImGui::BeginPopupModal("Save as preset",nullptr,ImGuiWindowFlags_AlwaysAutoResize|ImGuiWindowFlags_NoSavedSettings)){
+            ImGui::TextWrapped("Save the whole-world look as you see it now, with every regional difference and your unsaved edits, under a name.");
+            if(ImGui::IsWindowAppearing())ImGui::SetKeyboardFocusHere();
             ImGui::SetNextItemWidth(280*scale);ImGui::InputText("Name",appearancePresetName,sizeof appearancePresetName);
-            std::string error;const bool valid=NorthlightAppearancePresets::validName(appearancePresetName,error);
-            ImGui::TextWrapped("%s",NorthlightAppearancePresets::NameRuleText);
-            ImGui::TextColored(Color::Muted,"The copy is saved beside the renderer; Revert does not remove it.");
+            std::string error;bool valid=NorthlightAppearancePresets::validName(appearancePresetName,error);
+            const bool shipped=valid&&NorthlightAppearancePresets::packaged(appearancePresetName);
+            const auto replaces=valid?ownAppearancePreset(appearancePresetName):std::string();
+            if(shipped){valid=false;ImGui::TextColored(Color::Bad,"That look comes with Northlight. Choose another name.");}
+            else if(!replaces.empty())ImGui::TextColored(Color::Edited,"This replaces your preset %s.",replaces.c_str());
+            else ImGui::TextWrapped("%s",NorthlightAppearancePresets::NameRuleText);
+            ImGui::TextColored(Color::Muted,"The file is written at once; Revert does not remove it.");
             ImGui::Spacing();
             ImGui::BeginDisabled(!valid||locked()||status.state==NorthlightSettings::Status::State::Busy);
-            if(ImGui::Button("Save copy")){saveAppearancePreset();if(savingAppearancePreset)ImGui::CloseCurrentPopup();}
+            if(ImGui::Button(replaces.empty()?"Save preset":"Replace preset")){saveAppearancePreset();if(savingAppearancePreset)ImGui::CloseCurrentPopup();}
+            ImGui::EndDisabled();ImGui::SameLine();
+            if(ImGui::Button("Cancel")||ImGui::IsKeyPressed(ImGuiKey_Escape))ImGui::CloseCurrentPopup();
+            ImGui::EndPopup();
+        }
+        ImGui::SetNextWindowPos(centre,ImGuiCond_Appearing,ImVec2(0.5f,0.5f));
+        ImGui::SetNextWindowSizeConstraints(ImVec2(440*scale,0),ImVec2(440*scale,FLT_MAX));
+        if(ImGui::BeginPopupModal("Delete preset?",nullptr,ImGuiWindowFlags_AlwaysAutoResize|ImGuiWindowFlags_NoSavedSettings)){
+            ImGui::TextWrapped("Delete your preset %s? Its file is removed from appearance-presets at once and Revert does not bring it back. If it is the look in use, the world returns to Default.",appearancePresetToDelete.c_str());
+            ImGui::Spacing();
+            ImGui::BeginDisabled(locked()||status.state==NorthlightSettings::Status::State::Busy);
+            if(ImGui::Button("Delete preset")){deleteAppearancePreset();if(savingAppearancePreset)ImGui::CloseCurrentPopup();}
             ImGui::EndDisabled();ImGui::SameLine();
             if(ImGui::Button("Cancel")||ImGui::IsKeyPressed(ImGuiKey_Escape))ImGui::CloseCurrentPopup();
             ImGui::EndPopup();

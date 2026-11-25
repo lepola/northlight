@@ -25,7 +25,9 @@ centred on 0°, 30°, 60°, 120°, 180°, 240° and 300°. A colour between two 
 proportion, so the ranges always add up to the whole wheel (`hueWeights` in `src/sky/world_tone_curves.h`).
 
 `Default` is the packaged neutral look and its name is reserved. `Vibrant` is the optional bundled look
-(`client-config/appearance-presets/Vibrant.ini`). A player's own looks sit beside them under any other name.
+(`client-config/appearance-presets/Vibrant.ini`). A player's own looks sit beside them under any other name; the menu
+saves, replaces and deletes those and leaves the packaged ones alone (`packaged`, and the preset jobs in
+`src/settings/settings_service.h`).
 
 A region without a value takes its parent's: subzone, zone, map default, then `[default]`. The menu shows this as
 Inherit, Off (an explicit zero) or Tuned. The selected look is laid under the player's own regional settings in

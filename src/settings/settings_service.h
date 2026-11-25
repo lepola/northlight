@@ -22,13 +22,14 @@ struct Status{
 class Service {
     struct Commit{std::string base;std::vector<Change> changes;};
     struct Preview{bool clear=false;std::vector<Change> draft;};
-    struct PresetSave{std::string name,base;std::vector<Change> changes;};
+    struct PresetSave{std::string name,base;std::vector<Change> changes;bool replace=false;};
+    struct PresetDelete{std::string name,base;};
     std::filesystem::path directory;
     Store store;
     const std::optional<bool> waterAtStartup;
     std::string legacy;
     mutable std::mutex mutex;std::condition_variable wake;bool stopping=false,busy=false,snapshotJob=false;
-    std::optional<Commit> commitJob;std::optional<PresetSave> presetSaveJob;std::optional<Preview> previewJob; // latest wins; a commit is never replaced
+    std::optional<Commit> commitJob;std::optional<PresetSave> presetSaveJob;std::optional<PresetDelete> presetDeleteJob;std::optional<Preview> previewJob; // latest wins; a commit is never replaced
     Documents initial;std::string initialRevision;          // creation-time state of the running renderer ("R" fields compare against it)
     std::string activeRevision;std::shared_ptr<const Config> active;std::shared_ptr<const Update> update;
     std::shared_ptr<const Snapshot> latest;Status last;bool previewing=false,committing=false,restart=false;uint64_t previewSeq=0;
@@ -131,26 +132,53 @@ class Service {
         if(!NorthlightAppearancePresets::parse(bytes,check,error))throw std::runtime_error("Cannot save look: "+error);
         const auto folder=directory/"appearance-presets";std::error_code ec;std::filesystem::create_directories(folder,ec);
         if(ec)throw std::runtime_error("Cannot create appearance-presets: "+ec.message());
-        const auto wanted=lower(job.name);
+        const auto existing=presetFiles(folder,job.name);
+        if(!existing.empty()){
+            if(NorthlightAppearancePresets::packaged(job.name)||!job.replace)throw std::runtime_error("A look with that name already exists");
+            if(existing.size()!=1)throw std::runtime_error("Two files share that look's name; remove one from appearance-presets first");
+            NorthlightAppearancePresets::writeReplacing(existing.front(),bytes);
+        }else NorthlightAppearancePresets::writeNew(folder/(job.name+".ini"),bytes);
+        republishPresets();
+        Status s;s.state=Status::State::Saved;s.message=(existing.empty()?"Saved look: ":"Replaced look: ")+job.name;return s;
+    }
+    // Every .ini in the folder whose name matches, whatever its letter case.
+    std::vector<std::filesystem::path> presetFiles(const std::filesystem::path& folder,const std::string& name)const{
+        std::vector<std::filesystem::path> out;const auto wanted=lower(name);std::error_code ec;
         for(std::filesystem::directory_iterator it(folder,ec),end;!ec&&it!=end;it.increment(ec)){
             const auto& path=it->path();
-            if(lower(path.extension().string())==".ini"&&lower(path.stem().string())==wanted)
-                throw std::runtime_error("A look with that name already exists");
+            if(lower(path.extension().string())==".ini"&&lower(path.stem().string())==wanted)out.push_back(path);
         }
         if(ec)throw std::runtime_error("Cannot inspect appearance-presets: "+ec.message());
-        NorthlightAppearancePresets::writeNew(folder/(job.name+".ini"),bytes);
+        return out;
+    }
+    void republishPresets(){
         auto latest=load();std::string activeRev;{std::lock_guard<std::mutex> lock(mutex);activeRev=activeRevision;}
-        publishSnapshot(latest.revision,activeRev,std::move(latest.fields));
-        Status s;s.state=Status::State::Saved;s.message="Saved look: "+job.name;return s;
+        publishSnapshot(latest.revision,activeRev,std::move(latest.fields),latest.presets.errors);
+    }
+    Status doDeletePreset(const PresetDelete& job){
+        std::string error;if(!NorthlightAppearancePresets::validName(job.name,error))throw std::runtime_error(error);
+        if(NorthlightAppearancePresets::packaged(job.name))throw std::runtime_error("Looks that come with Northlight cannot be deleted");
+        auto l=load();if(job.base!=l.revision)throw std::runtime_error("Settings changed externally; refresh before deleting this look");
+        const auto files=presetFiles(directory/"appearance-presets",job.name);
+        if(files.empty())throw std::runtime_error("That look is no longer in appearance-presets");
+        // A deleted look must not stay selected: the world goes back to Default in the same step, before the file goes.
+        if(lower(selectedPalette(l.docs))==lower(job.name)){
+            const auto palette=std::find_if(l.fields.begin(),l.fields.end(),[](const Field& f){return f.file==2&&f.section=="Appearance"&&f.key=="Palette";});
+            if(palette==l.fields.end())throw std::runtime_error("Cannot return to Default before deleting this look");
+            doCommit(Commit{l.revision,{Change{palette->id(),"Default"}}});
+        }
+        for(const auto& path:files){std::error_code ec;if(!std::filesystem::remove(path,ec)||ec)throw std::runtime_error("Cannot delete "+path.filename().string()+(ec?": "+ec.message():""));}
+        republishPresets();
+        Status s;s.state=Status::State::Saved;s.message="Deleted look: "+job.name;return s;
     }
     void work(){
         for(;;){
-            std::optional<Commit> commit;std::optional<PresetSave> presetSave;std::optional<Preview> preview;
-            {std::unique_lock<std::mutex> lock(mutex);wake.wait(lock,[&]{return stopping||commitJob||presetSaveJob||previewJob||snapshotJob;});if(stopping)return;
-             if(commitJob){commit=std::move(commitJob);commitJob.reset();committing=true;}else if(presetSaveJob){presetSave=std::move(presetSaveJob);presetSaveJob.reset();}else if(previewJob){preview=std::move(previewJob);previewJob.reset();}else snapshotJob=false;
+            std::optional<Commit> commit;std::optional<PresetSave> presetSave;std::optional<PresetDelete> presetDelete;std::optional<Preview> preview;
+            {std::unique_lock<std::mutex> lock(mutex);wake.wait(lock,[&]{return stopping||commitJob||presetSaveJob||presetDeleteJob||previewJob||snapshotJob;});if(stopping)return;
+             if(commitJob){commit=std::move(commitJob);commitJob.reset();committing=true;}else if(presetSaveJob){presetSave=std::move(presetSaveJob);presetSaveJob.reset();}else if(presetDeleteJob){presetDelete=std::move(presetDeleteJob);presetDeleteJob.reset();committing=true;}else if(previewJob){preview=std::move(previewJob);previewJob.reset();}else snapshotJob=false;
              busy=true;}
             Status result;
-            try{result=commit?doCommit(*commit):presetSave?doSavePreset(*presetSave):preview?doPreview(*preview):doSnapshot();}
+            try{result=commit?doCommit(*commit):presetSave?doSavePreset(*presetSave):presetDelete?doDeletePreset(*presetDelete):preview?doPreview(*preview):doSnapshot();}
             catch(const std::exception& e){result.state=Status::State::Error;result.message=e.what();}
             catch(...){result.state=Status::State::Error;result.message="Settings allocation failed";}
             {std::lock_guard<std::mutex> lock(mutex);result.serial=last.serial+1;last=std::move(result);busy=committing=false;}
@@ -177,7 +205,7 @@ public:
     }
     std::string revision()const{std::lock_guard<std::mutex> lock(mutex);return activeRevision;}
     // false while any job is queued or running; the overlay retries next frame.
-    bool requestSnapshot(){std::lock_guard<std::mutex> lock(mutex);if(busy||snapshotJob||commitJob||presetSaveJob||previewJob)return false;snapshotJob=true;wake.notify_one();return true;}
+    bool requestSnapshot(){std::lock_guard<std::mutex> lock(mutex);if(busy||snapshotJob||commitJob||presetSaveJob||presetDeleteJob||previewJob)return false;snapshotJob=true;wake.notify_one();return true;}
     std::shared_ptr<const Snapshot> snapshot()const{std::lock_guard<std::mutex> lock(mutex);return latest;}
     // Live-only draft, no file writes. Coalesced: a newer draft replaces one that has not started. Only "F" fields take part.
     bool preview(std::vector<Change> draft){
@@ -185,15 +213,22 @@ public:
     }
     bool clearPreview(){std::lock_guard<std::mutex> lock(mutex);previewJob=Preview{true,{}};wake.notify_one();return true;}
     bool commit(const std::string& baseRevision,std::vector<Change> changes){
-        if(changes.size()>1024)return false;std::lock_guard<std::mutex> lock(mutex);if(commitJob||presetSaveJob||committing)return false;
+        if(changes.size()>1024)return false;std::lock_guard<std::mutex> lock(mutex);if(commitJob||presetSaveJob||presetDeleteJob||committing)return false;
         commitJob=Commit{baseRevision,std::move(changes)};wake.notify_one();return true;
     }
-    bool savePreset(const std::string& name,const std::string& baseRevision,std::vector<Change> changes){
+    // The current look, with the draft, as a named file. `replace` allows writing over one of the player's own looks.
+    bool savePreset(const std::string& name,const std::string& baseRevision,std::vector<Change> changes,bool replace=false){
         std::string error;if(!NorthlightAppearancePresets::validName(name,error)||changes.size()>1024)return false;
-        std::lock_guard<std::mutex> lock(mutex);if(presetSaveJob||commitJob||committing)return false;
-        presetSaveJob=PresetSave{name,baseRevision,std::move(changes)};wake.notify_one();return true;
+        std::lock_guard<std::mutex> lock(mutex);if(presetSaveJob||presetDeleteJob||commitJob||committing)return false;
+        presetSaveJob=PresetSave{name,baseRevision,std::move(changes),replace};wake.notify_one();return true;
     }
-    Status status()const{std::lock_guard<std::mutex> lock(mutex);Status s=last;s.restartRequired=restart;if(busy||snapshotJob||commitJob||presetSaveJob||previewJob)s.state=Status::State::Busy;return s;}
+    // Removes one of the player's own looks. If it is the saved choice, the world returns to Default first.
+    bool deletePreset(const std::string& name,const std::string& baseRevision){
+        std::string error;if(!NorthlightAppearancePresets::validName(name,error)||NorthlightAppearancePresets::packaged(name))return false;
+        std::lock_guard<std::mutex> lock(mutex);if(presetSaveJob||presetDeleteJob||commitJob||committing)return false;
+        presetDeleteJob=PresetDelete{name,baseRevision};wake.notify_one();return true;
+    }
+    Status status()const{std::lock_guard<std::mutex> lock(mutex);Status s=last;s.restartRequired=restart;if(busy||snapshotJob||commitJob||presetSaveJob||presetDeleteJob||previewJob)s.state=Status::State::Busy;return s;}
     std::shared_ptr<const Update> after(const std::string& revision)const{std::lock_guard<std::mutex> lock(mutex);return update&&update->revision!=revision?update:nullptr;}
     void acknowledge(const Update& value){std::lock_guard<std::mutex> lock(mutex);active=value.runtime;activeRevision=value.preview?activeRevision:value.revision;}
 };

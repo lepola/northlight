@@ -56,6 +56,11 @@ struct Catalog {
     std::vector<std::string> names()const{std::vector<std::string> out;for(const auto& e:entries)out.push_back(e.name);return out;}
 };
 
+// The looks the installer ships. A player may edit Vibrant's file by hand, but the menu neither replaces nor deletes
+// these: an update restores them, so a deletion would not last and a replacement would be overwritten.
+inline bool packaged(const std::string& name){
+    const auto wanted=NorthlightSettings::lower(name);return wanted=="default"||wanted=="vibrant";
+}
 inline bool validName(const std::string& name,std::string& error){
     auto invalid=[&]{error=NameRuleText;return false;};
     if(name.empty()||name.size()>40||name=="."||name==".."||NorthlightSettings::lower(name)=="default")return invalid();
@@ -277,5 +282,11 @@ inline void writeNew(const std::filesystem::path& path,const std::string& bytes)
     size_t at=0;while(at<bytes.size()){const auto n=::write(file,bytes.data()+at,bytes.size()-at);if(n<=0){::close(file);::unlink(path.c_str());throw std::runtime_error("Preset write failed");}at+=size_t(n);}
     if(::fsync(file)){::close(file);::unlink(path.c_str());throw std::runtime_error("Preset flush failed");}::close(file);
 #endif
+}
+// The whole new file is on disk before it takes the old one's place, so a failed write leaves the old look intact.
+inline void writeReplacing(const std::filesystem::path& path,const std::string& bytes){
+    auto staged=path;staged+=".new";std::error_code ec;std::filesystem::remove(staged,ec);
+    writeNew(staged,bytes);
+    try{NorthlightSettings::replaceFile(staged,path);}catch(...){std::filesystem::remove(staged,ec);throw;}
 }
 } // namespace NorthlightAppearancePresets

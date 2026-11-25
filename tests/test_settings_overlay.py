@@ -123,8 +123,9 @@ check((fp.SCRIPTS / 'dev_tuning' / 'settings_menu_preview.py').read_text().count
 sidebar = panel[panel.index('void sidebar(){'):panel.index('std::vector<std::string> sections(unsigned file)const{')]
 check(sidebar.index('refreshPageFields();') < sidebar.index('fieldPageMask.find('),
       'sidebar: the per-page index is refreshed before its unsaved and restart marks read it')
-check('if(appearancePresetModal){ImGui::OpenPopup("Save appearance copy");appearancePresetModal=false;}' in panel,
-      'Save As popup: opening request is consumed once and closing cannot reopen it')
+check('if(appearancePresetModal){ImGui::OpenPopup("Save as preset");appearancePresetModal=false;}' in panel and
+      'if(appearancePresetDeleteModal){ImGui::OpenPopup("Delete preset?");appearancePresetDeleteModal=false;}' in panel,
+      'Preset popups: each opening request is consumed once and closing cannot reopen it')
 check('ImGui::SetNextWindowSizeConstraints(ImVec2(440*scale,0),ImVec2(440*scale,FLT_MAX));' in panel and
       'ImGui::TextWrapped("%s",NorthlightAppearancePresets::NameRuleText);' in panel and
       'NameRuleText[]="Use 1 to 40 letters, numbers, spaces, underscores or hyphens; Default is reserved.";' in fp.src('appearance_presets.h').read_text(),
