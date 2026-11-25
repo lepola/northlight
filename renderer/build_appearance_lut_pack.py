@@ -164,9 +164,9 @@ def validate_pack(data, *, source_ini=None, verify_tables=False, expected_math_v
     }
 
 
-def build_pack(input_path, *, compiler=None):
+def build_pack(input_path, *, compiler=None, source_ini=None):
     input_path = Path(input_path)
-    source_ini = input_path.read_bytes()
+    source_ini = input_path.read_bytes() if source_ini is None else bytes(source_ini)
     producer = ROOT / 'renderer' / 'appearance_lut_pack.cpp'
     if not producer.is_file():
         raise FileNotFoundError(f'missing C++ LUT producer: {producer}')
@@ -174,6 +174,8 @@ def build_pack(input_path, *, compiler=None):
         work = Path(directory)
         executable = work / ('appearance_lut_pack.exe' if os.name == 'nt' else 'appearance_lut_pack')
         raw_path = work / 'Vibrant.raw'
+        source_snapshot = work / 'Vibrant.ini'
+        source_snapshot.write_bytes(source_ini)
         include_dirs = sorted({ROOT / 'src', *(path.parent for path in (ROOT / 'src').rglob('*.h'))})
         command = _compiler_command(compiler) + ['-std=c++17', '-O2']
         for include_dir in include_dirs:
@@ -182,7 +184,7 @@ def build_pack(input_path, *, compiler=None):
         compiled = subprocess.run(command, cwd=ROOT, capture_output=True, text=True)
         if compiled.returncode:
             raise RuntimeError('C++ LUT producer compile failed:\n' + compiled.stderr.strip())
-        baked = subprocess.run([str(executable), str(input_path), str(raw_path)], cwd=ROOT,
+        baked = subprocess.run([str(executable), str(source_snapshot.resolve()), str(raw_path)], cwd=ROOT,
                                capture_output=True, text=True)
         if baked.returncode:
             raise RuntimeError('C++ LUT bake failed:\n' + baked.stderr.strip())
@@ -195,11 +197,20 @@ def main(argv=None):
     parser.add_argument('--output', type=Path, required=True, help='output .nllutpack file')
     parser.add_argument('--compiler', help='C++17 compiler command; default: CXX, c++, clang++ or g++')
     args = parser.parse_args(argv)
+    temp_path = None
     try:
-        packed = build_pack(args.input, compiler=args.compiler)
+        source_ini = args.input.read_bytes()
+        packed = build_pack(args.input, compiler=args.compiler, source_ini=source_ini)
+        report = validate_pack(packed, source_ini=source_ini, verify_tables=True)
         args.output.parent.mkdir(parents=True, exist_ok=True)
-        args.output.write_bytes(packed)
-        report = validate_pack(packed, source_ini=args.input.read_bytes(), verify_tables=True)
+        with tempfile.NamedTemporaryFile(dir=args.output.parent, prefix='.' + args.output.name + '.',
+                                         suffix='.tmp', delete=False) as temporary:
+            temp_path = Path(temporary.name)
+            temporary.write(packed)
+            temporary.flush()
+            os.fsync(temporary.fileno())
+        os.replace(temp_path, args.output)
+        temp_path = None
         report.pop('entries')
         report['output'] = str(args.output)
         print(json.dumps(report, indent=2))
@@ -207,6 +218,9 @@ def main(argv=None):
     except (OSError, RuntimeError, ValueError, subprocess.SubprocessError) as exc:
         print(str(exc), file=sys.stderr)
         return 1
+    finally:
+        if temp_path is not None:
+            temp_path.unlink(missing_ok=True)
 
 
 if __name__ == '__main__':

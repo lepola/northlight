@@ -2,7 +2,10 @@
 """CPU checks for the shipped Vibrant 32^3 table pack; uses the C++ renderer baker, no client or GPU."""
 import sys
 import struct
+import os
 from pathlib import Path
+from tempfile import TemporaryDirectory
+from unittest.mock import patch
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import unittest
@@ -39,6 +42,40 @@ class AppearanceLutPackTests(unittest.TestCase):
 
     def test_rebuild_is_byte_identical(self):
         self.assertEqual(pack_builder.build_pack(self.source), self.pack)
+
+    def test_relative_input_uses_exact_source_snapshot(self):
+        with TemporaryDirectory(prefix='northlight-lut-source-snapshot-') as temp:
+            source = Path(temp) / 'Vibrant.ini'
+            source.write_bytes(self.source_bytes)
+            relative = Path(os.path.relpath(source, fp.REPO.parent))
+            real_run = pack_builder.subprocess.run
+
+            def edit_before_bake(command, *args, **kwargs):
+                if len(command) == 3 and Path(command[0]).name.startswith('appearance_lut_pack'):
+                    source.write_bytes(b'[invalid section\n')
+                return real_run(command, *args, **kwargs)
+
+            old_cwd = Path.cwd()
+            try:
+                os.chdir(fp.REPO.parent)
+                with patch.object(pack_builder.subprocess, 'run', side_effect=edit_before_bake):
+                    packed = pack_builder.build_pack(relative, source_ini=self.source_bytes)
+            finally:
+                os.chdir(old_cwd)
+            self.assertEqual(source.read_bytes(), b'[invalid section\n')
+            self.assertEqual(packed, self.pack)
+
+    def test_failed_cli_build_keeps_existing_output(self):
+        with TemporaryDirectory(prefix='northlight-lut-cli-') as temp:
+            root = Path(temp)
+            source, output = root / 'Vibrant.ini', root / 'Vibrant.nllutpack'
+            source.write_bytes(self.source_bytes)
+            output.write_bytes(b'previous pack')
+            with patch.object(pack_builder, 'build_pack', return_value=b'bad'):
+                result = pack_builder.main(['--input', str(source), '--output', str(output)])
+            self.assertEqual(result, 1)
+            self.assertEqual(output.read_bytes(), b'previous pack')
+            self.assertEqual(sorted(p.name for p in root.iterdir()), ['Vibrant.ini', 'Vibrant.nllutpack'])
 
     def test_lazy_index_check_and_touched_table_digest(self):
         damaged = bytearray(self.pack)
