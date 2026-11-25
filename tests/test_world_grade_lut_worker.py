@@ -26,8 +26,15 @@ assert 'parent->second==area.zone' in renderer
 assert '!gradeVolumeSupported||gradeVolumeUnavailable' in renderer
 assert 'gradeSampler(4,grade.to[timePair.first]' in renderer
 assert 'gradeSampler(7,grade.from[timePair.second]' in renderer
-assert 'DWORD(now-gradeMismatchSince)>=500' in renderer
-assert 'cpu_bakes=%u cache_hits=%u worker_ms=%.2f gpu_uploads=%u upload_ms=%.2f' in renderer
+assert 'gradeMismatchSince' not in renderer and 'gradeNeutralizing' not in renderer
+assert 'logGradeEvent("area"' in renderer and 'root_zone=%u' in renderer and 'lut_samples=%u' in renderer
+assert 'gradeAreaProbePending' in renderer and 'gradeSteadyProbePending' in renderer
+assert 'gradeGpuProbe->beginFrame(hostFrame?hostFrame-1:0,true)' in renderer
+assert 'gradeGpuProbe->mark("composite")' in renderer
+assert 'gradeLutWorker.setPackPath' in renderer and 'appearance-luts' in renderer
+assert 'total_pack_decoded=%u' in renderer and 'upload_submit_cpu_max_ms=%.3f' in renderer
+assert 'const bool locked=created&&SUCCEEDED(texture->LockBox' in renderer
+assert 'bool ok=created&&locked;' in renderer
 assert manifest['source_sha256'] == hashlib.sha256(fp.SHADERS.joinpath('world_effects.hlsl').read_bytes()).hexdigest()
 for name, slots in (('WorldCompositeGrade', 422), ('WorldCompositeWaterGrade', 429),
                     ('WorldCompositeGradeBlend', 440), ('WorldCompositeWaterGradeBlend', 447)):
@@ -41,4 +48,4 @@ with tempfile.TemporaryDirectory(prefix='northlight-world-grade-worker-') as tmp
         'clang++', '-std=c++17', '-O2', '-Wall', '-Wextra', '-Werror', '-UNDEBUG',
         *fp.test_include_flags(), str(HERE / 'test_world_grade_lut_worker.cpp'), '-o', str(exe)
     ], check=True)
-    subprocess.run([str(exe)], check=True)
+    subprocess.run([str(exe), str(Path(tmp) / 'Vibrant.nllutpack')], check=True)

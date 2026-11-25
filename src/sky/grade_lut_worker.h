@@ -1,10 +1,13 @@
 #pragma once
+#include "grade_lut_pack.h"
 #include "world_tone_curves.h"
 #include <algorithm>
 #include <array>
 #include <chrono>
 #include <condition_variable>
 #include <cstdint>
+#include <cstdio>
+#include <filesystem>
 #include <memory>
 #include <mutex>
 #include <thread>
@@ -17,15 +20,20 @@ constexpr size_t CpuCacheVolumes=12;
 constexpr size_t VolumeWords=size_t(NorthlightTone::CubeSize)*NorthlightTone::CubeSize*NorthlightTone::CubeSize*4;
 
 struct Volume {
+    enum class Origin : uint8_t {Fresh,Pack};
     NorthlightTone::BakeKey key;
     std::vector<uint16_t> rgba;
+    Origin origin=Origin::Fresh;
 };
 struct Result {
     NorthlightTone::BakeKeys keys{};
     std::array<std::shared_ptr<const Volume>,NorthlightTone::StopCount> volumes{};
     uint64_t serial=0;
-    unsigned bakedVolumes=0,cacheHits=0;
-    double workerMs=0;
+    unsigned bakedVolumes=0,packDecodedVolumes=0,cacheHits=0,packCacheHits=0,packRecords=0,packRejectedTables=0;
+    Pack::Status packStatus=Pack::Status::Untried;
+    std::array<uint8_t,32> packSourceSha{};
+    std::array<char,80> packError{};
+    double workerMs=0,packIndexMs=0,packDecodeMs=0,bakeMs=0;
 };
 
 // The worker owns only CPU data. A request replaces queued work so a fast
@@ -37,9 +45,22 @@ class Worker {
     std::thread thread_;
     std::vector<Entry> cache_;
     bool started_=false,stopping_=false,pending_=false,working_=false;
+    bool packAttempted_=false;
+    std::filesystem::path packPath_;
+    Pack::Index pack_;
     uint64_t serial_=0,workingSerial_=0,clock_=0;
     NorthlightTone::BakeKeys requested_{},workingKeys_{};
     std::shared_ptr<const Result> completed_;
+    NorthlightTone::BakeKeys failedKeys_{};
+    std::array<char,80> failureError_{};
+    bool failureReady_=false;
+
+    void fail(uint64_t serial,const NorthlightTone::BakeKeys& keys,const char* reason){
+        std::lock_guard<std::mutex> lock(mutex_);
+        if(serial!=serial_||stopping_)return;
+        failedKeys_=keys;failureError_={};std::snprintf(failureError_.data(),failureError_.size(),"%s",reason?reason:"worker failure");failureReady_=true;
+        working_=false;
+    }
 
     bool stale(uint64_t serial)const {
         std::lock_guard<std::mutex> lock(mutex_);
@@ -75,25 +96,54 @@ class Worker {
             }
             const auto started=std::chrono::steady_clock::now();
             std::shared_ptr<Result> result;
-            try{result=std::make_shared<Result>();}catch(...){std::lock_guard<std::mutex> lock(mutex_);working_=false;continue;}
+            try{result=std::make_shared<Result>();}catch(...){fail(serial,keys,"result allocation failed");continue;}
             result->keys=keys;result->serial=serial;
-            bool complete=true;
+            bool loadPack=false;
+            {std::lock_guard<std::mutex> lock(mutex_);if(!packAttempted_){packAttempted_=true;loadPack=true;}}
+            if(loadPack){
+                const auto indexStarted=std::chrono::steady_clock::now();
+                try{if(!packPath_.empty())pack_.load(packPath_);else pack_.status=Pack::Status::Missing;}
+                catch(...){pack_.status=Pack::Status::Invalid;try{pack_.error="exception while reading pack index";}catch(...){}}
+                result->packIndexMs=std::chrono::duration<double,std::milli>(std::chrono::steady_clock::now()-indexStarted).count();
+            }
+            result->packStatus=pack_.status;result->packRecords=static_cast<unsigned>(pack_.records.size());result->packSourceSha=pack_.sourceSha;
+            std::snprintf(result->packError.data(),result->packError.size(),"%s",pack_.error.c_str());
+            bool complete=true;const char* failure=nullptr;
             for(unsigned i=0;i<NorthlightTone::StopCount;++i){
                 const auto& key=keys[i];if(!key.strength)continue;
-                auto volume=cacheLookup(key);
-                if(volume)++result->cacheHits;
+                std::shared_ptr<const Volume> volume=cacheLookup(key);
+                if(volume){++result->cacheHits;if(volume->origin==Volume::Origin::Pack)++result->packCacheHits;}
                 else {
                     if(stale(serial)){complete=false;break;}
-                    try{volume=bake(key);}catch(...){complete=false;break;}
-                    try{retain(volume);}catch(...){}
-                    ++result->bakedVolumes;
+                    Pack::Record* record=pack_.find(key);
+                    if(record){
+                        const auto packStarted=std::chrono::steady_clock::now();
+                        std::shared_ptr<Volume> decoded;std::string reason;
+                        try{decoded=std::make_shared<Volume>();decoded->key=key;decoded->origin=Volume::Origin::Pack;
+                            if(!pack_.decode(*record,decoded->rgba,reason))decoded.reset();}
+                        catch(...){decoded.reset();reason="exception while decoding table";record->rejected=true;}
+                        result->packDecodeMs+=std::chrono::duration<double,std::milli>(std::chrono::steady_clock::now()-packStarted).count();
+                        if(decoded){volume=decoded;++result->packDecodedVolumes;try{retain(volume);}catch(...){}}
+                        else{
+                            ++result->packRejectedTables;
+                            std::snprintf(result->packError.data(),result->packError.size(),"%s",reason.c_str());
+                        }
+                    }
+                    if(!volume){
+                        const auto bakeStarted=std::chrono::steady_clock::now();
+                        try{volume=bake(key);}catch(...){failure="volume bake failed";complete=false;break;}
+                        result->bakeMs+=std::chrono::duration<double,std::milli>(std::chrono::steady_clock::now()-bakeStarted).count();
+                        try{retain(volume);}catch(...){}
+                        ++result->bakedVolumes;
+                    }
                 }
                 result->volumes[i]=std::move(volume);
             }
             result->workerMs=std::chrono::duration<double,std::milli>(std::chrono::steady_clock::now()-started).count();
             {
                 std::lock_guard<std::mutex> lock(mutex_);
-                if(complete&&serial==serial_)completed_=std::move(result);
+                if(complete&&serial==serial_){completed_=std::move(result);failureReady_=false;failureError_={};}
+                else if(failure&&serial==serial_){failedKeys_=keys;failureError_={};std::snprintf(failureError_.data(),failureError_.size(),"%s",failure);failureReady_=true;}
                 working_=false;
             }
         }
@@ -106,6 +156,10 @@ public:
         wake_.notify_one();if(thread_.joinable())thread_.join();
     }
     ~Worker(){shutdown();}
+    bool setPackPath(const std::filesystem::path& path){
+        std::lock_guard<std::mutex> lock(mutex_);if(started_||packAttempted_)return false;
+        try{packPath_=path;return true;}catch(...){return false;}
+    }
     uint64_t request(const NorthlightTone::BakeKeys& keys) {
         std::lock_guard<std::mutex> lock(mutex_);
         if((pending_&&requested_==keys)||(working_&&workingSerial_==serial_&&workingKeys_==keys))return serial_;
@@ -115,20 +169,24 @@ public:
             }
             return completed_->serial;
         }
-        completed_.reset();++serial_;requested_=keys;
+        completed_.reset();failureReady_=false;failureError_={};++serial_;requested_=keys;
         bool any=false;for(const auto& key:keys)any|=key.strength!=0;
         if(!any){
             try{auto result=std::make_shared<Result>();result->keys=keys;result->serial=serial_;completed_=std::move(result);}catch(...){return 0;}
             pending_=false;return serial_;
         }
-        if(!started_){try{thread_=std::thread([this]{run();});started_=true;}catch(...){return 0;}}
+        if(!started_){try{thread_=std::thread([this]{run();});started_=true;}catch(...){failureReady_=true;failedKeys_=keys;std::snprintf(failureError_.data(),failureError_.size(),"worker start failed");return 0;}}
         pending_=true;wake_.notify_one();return serial_;
     }
     std::shared_ptr<const Result> ready(const NorthlightTone::BakeKeys& keys)const {
         std::lock_guard<std::mutex> lock(mutex_);
         return completed_&&completed_->keys==keys?completed_:std::shared_ptr<const Result>{};
     }
+    bool failed(const NorthlightTone::BakeKeys& keys,std::array<char,80>& reason)const{
+        std::lock_guard<std::mutex> lock(mutex_);if(!failureReady_||failedKeys_!=keys)return false;reason=failureError_;return true;
+    }
     std::shared_ptr<const Volume> findCached(const NorthlightTone::BakeKey& key){return key.strength?cacheLookup(key):std::shared_ptr<const Volume>{};}
     size_t cachedVolumes()const {std::lock_guard<std::mutex> lock(mutex_);return cache_.size();}
+    bool packAttempted()const {std::lock_guard<std::mutex> lock(mutex_);return packAttempted_;}
 };
 }

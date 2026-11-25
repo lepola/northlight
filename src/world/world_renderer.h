@@ -44,6 +44,7 @@
 #include "replay_bounds_metadata.h"
 #include "replay_bounds_job.h"
 #include <atomic>
+#include <filesystem>
 #include <optional>
 #include "world_math.h"
 #include "patch_terrain_shadow_coverage.h"
@@ -255,7 +256,7 @@ public:
         if(actorResources)releaseGPU(true);else if(directions)invalidateShadowCache();
         staticPrebuild.steps=float(quality.shadowDirectionSteps);
         celestialProfiles=std::move(profiles);paletteFrameValid=false;gradeAnchorSource=nullptr;
-        NorthlightWorldContext::regionalZoneNeeded.store(celestialProfiles.needsLiveZone(),std::memory_order_relaxed);
+        NorthlightWorldContext::regionalZoneNeeded.store(celestialProfiles.needsLiveZone()||NorthlightDiagnostics::enabled(),std::memory_order_relaxed);
     }
     // Read-only access to the COMMITTED terrain pages. Never start uploads,
     // loads, shadow updates or mesh publication from the native sky draw hook.
@@ -478,12 +479,30 @@ private:
     NorthlightTone::BakeKeys frameGradeKeys{};
     NorthlightGradeLut::Worker gradeLutWorker;
     NorthlightTone::BakeKeys requestedGradeKeys{},gradeFromKeys{},gradeToKeys{};
-    bool gradeRequestValid=false,gradeStateInitialized=false,gradeTransitionActive=false,gradeNeutralizing=false;
-    bool gradeDiagnosticPending=false;
-    DWORD gradeTransitionAt=0,gradeMismatchSince=0,gradeDiagnosticAt=0;
-    double gradeUploadMs=0;unsigned gradeUploads=0;uint64_t gradeGpuClock=0;
-    unsigned gradeCpuBakes=0,gradeCpuHits=0;double gradeWorkerMs=0;uint64_t gradeReportedSerial=0;
-    std::string frameGradeAnchorMap;uint32_t frameGradeAnchorZone=0;
+    bool gradeRequestValid=false,gradeStateInitialized=false,gradeTransitionActive=false;
+    bool gradeRequestReadyLogged=false,gradeAreaEventPending=false;
+    DWORD gradeTransitionAt=0;
+    double gradeUploadSubmitCpuMs=0,gradeUploadSubmitCpuMaxMs=0,gradeUploadEventMs=0,gradeUploadEventMaxMs=0;
+    unsigned gradeUploads=0,gradeUploadAttempts=0,gradeUploadEventCount=0,gradeUploadAttemptEventCount=0;uint64_t gradeGpuClock=0;
+    unsigned gradeCpuBakes=0,gradeCpuHits=0,gradePackDecoded=0,gradePackCacheHits=0,gradePackRejectedTables=0;
+    double gradeWorkerMs=0,gradePackIndexMs=0,gradePackDecodeMs=0,gradeBakeMs=0;uint64_t gradeReportedSerial=0,gradeRequestGeneration=0,gradeFirstUseGeneration=0;
+    std::chrono::steady_clock::time_point gradeRequestStarted{};uint64_t gradeRequestHostFrame=0;
+    unsigned gradeRequestBakes=0,gradeRequestPackDecoded=0,gradeRequestCacheHits=0,gradeRequestPackCacheHits=0,gradeRequestPackRejectedTables=0,gradeRequestPackRecords=0;
+    double gradeRequestWorkerMs=0,gradeRequestPackIndexMs=0,gradeRequestPackDecodeMs=0,gradeRequestBakeMs=0,gradeRequestColdMs=0;
+    NorthlightGradeLut::Pack::Status gradeRequestPackStatus=NorthlightGradeLut::Pack::Status::Untried;
+    std::array<char,80> gradeRequestPackError{};
+    std::array<uint8_t,32> gradeRequestPackSourceSha{};
+    NorthlightTone::BakeKeys gradeEventTargetKeys{};bool gradeEventTargetValid=false;
+    std::string frameGradeAnchorMap,gradeObservedMap;
+    uint32_t frameRootZone=0,frameAreaId=0,frameSubzoneId=0,frameGradeAnchorZone=0;uint8_t frameAreaSource=0;
+    uint32_t gradeObservedRootZone=0,gradeObservedAreaId=0,gradeObservedSubzoneId=0,gradeObservedAnchorZone=0;
+    NorthlightTone::BakeKeys gradeObservedKeys{};bool gradeObservedValid=false;
+    bool gradeAreaProbePending=false,gradeUploadProbeLogged=false,gradeFirstUseLogged=false,gradeSteadyProbePending=false;
+    DWORD gradeSteadyDueAt=0;uint64_t gradeSteadyMinFrame=0,gradeObservedGeneration=0;
+    std::string gradeObservedAnchorMap;
+    std::unique_ptr<NorthlightGpuProfile> gradeGpuProbe;
+    LARGE_INTEGER gradeGpuProbeQpcStart{},gradeGpuProbeQpcEnd{};
+    char gradeGpuProbePurpose[48]={};uint64_t gradeGpuProbeHostFrame=0;bool gradeGpuProbeArmed=false;
     bool paletteFrameValid=false;std::string paletteFrameMap;DWORD paletteLogAt=0;
 #if NORTHLIGHT_DEV_TUNING
     // Developer-only zone tuning (scripts/dev_tuning/zone_tuner.py), never compiled into a release build. Two files in the game root:
@@ -509,7 +528,7 @@ private:
         next.revision=devRevision+1;
         const auto published=std::make_shared<const NorthlightZoneTuning::Overrides>(std::move(next));
         celestialProfiles=NorthlightZoneTuning::applyCelestial(celestialShipped,*published);gradeAnchorSource=nullptr;
-        NorthlightWorldContext::regionalZoneNeeded.store(celestialProfiles.needsLiveZone(),std::memory_order_relaxed);
+        NorthlightWorldContext::regionalZoneNeeded.store(celestialProfiles.needsLiveZone()||NorthlightDiagnostics::enabled(),std::memory_order_relaxed);
         {std::lock_guard<std::mutex> lock(devMutex);devOverrides=published;}
         logf("TUNING overrides revision=%u keys=%u error=%s",++devRevision,published->count(),"");
     }
@@ -588,6 +607,7 @@ private:
         NorthlightTone::TableKey curveKey{};
         NorthlightTone::BakeKeys gradeKeys{};
         NorthlightTone::TimeWeights gradeWeights{};
+        float gameDayFraction=-1.f;
         const Snapshot* scene=nullptr;
         const NorthlightRegionalFog::Field* field=nullptr;
         float farZ=0,edge=0,effectiveEdge=0,zone=0;
@@ -603,6 +623,7 @@ private:
         const float sun[3]={sourceDirections[0].x,sourceDirections[0].y,sourceDirections[0].z};
         const auto& palette=paletteFrameValid?framePalette:celestialProfiles.fallback;
         const float night=NorthlightRegionalFog::nightFactor(celestialValid?celestial.dayFraction:-1.f);
+        result.gameDayFraction=celestialValid&&std::isfinite(celestial.dayFraction)?celestial.dayFraction:-1.f;
         const float hour=celestialValid&&std::isfinite(celestial.dayFraction)?celestial.dayFraction*24.f:-1.f;
         const bool evening=hour>=18.f&&hour<20.f;
         result.gradeWeights=NorthlightTone::timeWeights(night,evening);
@@ -919,9 +940,15 @@ private:
         if(findGradeVolume(key))return true;
         if(gradeVolumeUnavailable||!source||uploaded||!checkGradeVolumeSupport())return false;
         constexpr unsigned n=NorthlightTone::CubeSize;const auto started=std::chrono::steady_clock::now();
+        auto finishUploadCpu=[&]{
+            const double elapsed=std::chrono::duration<double,std::milli>(std::chrono::steady_clock::now()-started).count();
+            ++gradeUploadAttempts;++gradeUploadAttemptEventCount;gradeUploadSubmitCpuMs+=elapsed;gradeUploadSubmitCpuMaxMs=std::max(gradeUploadSubmitCpuMaxMs,elapsed);
+            gradeUploadEventMs+=elapsed;gradeUploadEventMaxMs=std::max(gradeUploadEventMaxMs,elapsed);
+        };
         IDirect3DVolumeTexture9* texture=nullptr;D3DLOCKED_BOX box{};
-        bool ok=SUCCEEDED(d->CreateVolumeTexture(n,n,n,1,0,D3DFMT_A16B16G16R16,D3DPOOL_MANAGED,&texture,nullptr));
-        const bool locked=ok&&SUCCEEDED(texture->LockBox(0,&box,nullptr,0));
+        const bool created=SUCCEEDED(d->CreateVolumeTexture(n,n,n,1,0,D3DFMT_A16B16G16R16,D3DPOOL_MANAGED,&texture,nullptr))&&texture;
+        const bool locked=created&&SUCCEEDED(texture->LockBox(0,&box,nullptr,0));
+        bool ok=created&&locked;
         if(locked&&box.pBits&&box.RowPitch>=long(n*4*sizeof(uint16_t))&&box.SlicePitch>=box.RowPitch*long(n)){
             const auto* pixels=reinterpret_cast<const uint8_t*>(source->rgba.data());
             auto* destination=static_cast<uint8_t*>(box.pBits);
@@ -929,16 +956,15 @@ private:
                 std::memcpy(destination+b*box.SlicePitch+g*box.RowPitch,pixels+(size_t(b)*n+g)*n*4*sizeof(uint16_t),n*4*sizeof(uint16_t));
         }else if(locked)ok=false;
         if(locked)ok=SUCCEEDED(texture->UnlockBox(0))&&ok;
-        if(!ok){drop(texture);gradeVolumeUnavailable=true;return false;}
+        if(!ok){finishUploadCpu();drop(texture);gradeVolumeUnavailable=true;return false;}
         if(gradeGpuVolumes.size()>=NorthlightGradeLut::CpuCacheVolumes){
             auto oldest=gradeGpuVolumes.end();
             for(auto it=gradeGpuVolumes.begin();it!=gradeGpuVolumes.end();++it)
                 if(!pinnedGradeKey(it->key)&&(oldest==gradeGpuVolumes.end()||it->used<oldest->used))oldest=it;
-            if(oldest==gradeGpuVolumes.end()){drop(texture);return false;}
+            if(oldest==gradeGpuVolumes.end()){finishUploadCpu();drop(texture);return false;}
             drop(oldest->texture);*oldest={key,texture,++gradeGpuClock};
-        }else gradeGpuVolumes.push_back({key,texture,++gradeGpuClock});
-        uploaded=true;++gradeUploads;
-        gradeUploadMs+=std::chrono::duration<double,std::milli>(std::chrono::steady_clock::now()-started).count();
+        }else try{gradeGpuVolumes.push_back({key,texture,++gradeGpuClock});}catch(...){finishUploadCpu();drop(texture);return false;}
+        uploaded=true;++gradeUploads;++gradeUploadEventCount;finishUploadCpu();
         return true;
     }
     bool gradeSampler(unsigned slot,const NorthlightTone::BakeKey& key,const std::shared_ptr<const NorthlightGradeLut::Volume>& source,bool& uploaded){
@@ -972,29 +998,128 @@ private:
         for(const auto& key:keys){const uint64_t value=key.stableHash();for(unsigned i=0;i<8;++i){hash^=uint8_t(value>>(i*8));hash*=1099511628211ull;}}
         return hash;
     }
+    void resetGradeGpuProbe(){if(gradeGpuProbe)gradeGpuProbe->reset();gradeGpuProbeArmed=false;}
+    bool beginGradeGpuProbe(const char* purpose,uint64_t hostFrame,const char* map,unsigned area,unsigned rootZone,
+                            unsigned anchor,uint64_t requestedHash,unsigned uploadDelta,double uploadCpuMs){
+        if(!NorthlightDiagnostics::enabled())return false;
+        try{if(!gradeGpuProbe)gradeGpuProbe=std::make_unique<NorthlightGpuProfile>(d,"CELESTIAL grade_gpu",1);}catch(...){return false;}
+        std::snprintf(gradeGpuProbePurpose,sizeof gradeGpuProbePurpose,"%s",purpose?purpose:"composite");
+        char safeMap[64]={};std::snprintf(safeMap,sizeof safeMap,"%s",map?map:"");
+        logf("CELESTIAL grade_gpu_probe event=request sample=%s host_frame=%llu native_gpu_frame=%llu map=\"%s\" area=%u root_zone=%u area_source=%s anchor=%u requested_hash=%016llx upload_delta=%u upload_submit_cpu_ms=%.3f",
+            gradeGpuProbePurpose,(unsigned long long)hostFrame,(unsigned long long)(hostFrame?hostFrame-1:0),safeMap,area,rootZone,frameAreaSource==1?"terrain":frameAreaSource==2?"live":"none",anchor,
+            (unsigned long long)requestedHash,uploadDelta,uploadCpuMs);
+        QueryPerformanceCounter(&gradeGpuProbeQpcStart);
+        if(!gradeGpuProbe->beginFrame(hostFrame?hostFrame-1:0,true))return false;
+        gradeGpuProbeArmed=true;gradeGpuProbeHostFrame=hostFrame;
+        return true;
+    }
+    void endGradeGpuProbe(bool drawSucceeded){
+        if(!gradeGpuProbeArmed||!gradeGpuProbe)return;
+        gradeGpuProbe->mark("composite");gradeGpuProbe->endFrame();gradeGpuProbeArmed=false;
+        QueryPerformanceCounter(&gradeGpuProbeQpcEnd);
+        logf("CELESTIAL grade_gpu_probe event=closed sample=%s host_frame=%llu native_gpu_frame=%llu draw_ok=%d qpc_scope=cpu_issue_and_submission qpc_start=%llu qpc_end=%llu gpu_transfer=deferred",
+            gradeGpuProbePurpose,(unsigned long long)gradeGpuProbeHostFrame,(unsigned long long)(gradeGpuProbeHostFrame?gradeGpuProbeHostFrame-1:0),int(drawSucceeded),
+            (unsigned long long)gradeGpuProbeQpcStart.QuadPart,(unsigned long long)gradeGpuProbeQpcEnd.QuadPart);
+    }
+    void pollGradeGpuProbes(){if(gradeGpuProbe&&NorthlightDiagnostics::enabled())gradeGpuProbe->poll();}
+    void logGradeEvent(const char* event,uint64_t hostFrame,const HorizonPreparation& horizon,
+                       const NorthlightTone::BakeKeys& wanted,const NorthlightTone::BakeKeys& from,
+                       const NorthlightTone::BakeKeys& to,float zoneMix,unsigned uploadDelta,
+                       unsigned uploadAttempts,double uploadCpuMs,double uploadCpuMaxMs,bool gpuProfileSampled){
+        if(!NorthlightDiagnostics::enabled())return;
+        const auto pair=gradeTimePair(horizon.gradeWeights);
+        const float gameDay=horizon.gameDayFraction;
+        const float hour=gameDay>=0.f?gameDay*24.f:-1.f;
+        auto timeSamples=[&](const NorthlightTone::BakeKeys& keys){return unsigned(keys[pair.first].strength!=0)+unsigned(pair.secondWeight>0&&keys[pair.second].strength!=0);};
+        const unsigned lutSamples=timeSamples(to)+(zoneMix<1.f?timeSamples(from):0);
+        const bool lutEnabled=!gradeVolumeUnavailable&&lutSamples!=0;
+        char sourceSha[65];for(unsigned i=0;i<32;++i)std::snprintf(sourceSha+i*2,3,"%02x",gradeRequestPackSourceSha[i]);
+        logf("CELESTIAL grade event=%s host_frame=%llu request_host_frame=%llu native_gpu_frame=%llu game_day=%.6f hour=%.3f map=\"%s\" area=%u root_zone=%u subzone=%u area_source=%s anchor=%u requested_hash=%016llx from_hash=%016llx to_hash=%016llx zone_mix=%.3f time_a=%s time_b=%s time_weight=%.3f lut_enabled=%d lut_samples=%u upload_delta=%u upload_attempt_delta=%u upload_submit_cpu_ms=%.3f upload_submit_cpu_max_ms=%.3f fresh_bakes=%u pack_decoded=%u cache_hits=%u pack_cache_hits=%u pack_bad_tables=%u worker_ms=%.3f pack_index_ms=%.3f pack_decode_ms=%.3f bake_ms=%.3f cold_prepare_ms=%.3f total_fresh_bakes=%u total_pack_decoded=%u total_cache_hits=%u total_pack_cache_hits=%u total_pack_bad_tables=%u total_worker_ms=%.3f total_pack_index_ms=%.3f total_pack_decode_ms=%.3f total_bake_ms=%.3f total_uploads=%u total_upload_attempts=%u total_upload_submit_cpu_ms=%.3f total_upload_submit_cpu_max_ms=%.3f pack_status=%s pack_records=%u pack_source_sha=%s pack_error=\"%s\" supported=%d gpu_profile_sampled=%d gpu_transfer=deferred",
+            event,(unsigned long long)hostFrame,(unsigned long long)gradeRequestHostFrame,(unsigned long long)(hostFrame?hostFrame-1:0),gameDay,hour,
+            frameGradeAnchorMap.c_str(),frameAreaId,frameRootZone,frameSubzoneId,frameAreaSource==1?"terrain":frameAreaSource==2?"live":"none",frameGradeAnchorZone,(unsigned long long)gradeHash(wanted),
+            (unsigned long long)gradeHash(from),(unsigned long long)gradeHash(to),zoneMix,
+            NorthlightTone::timeName(static_cast<NorthlightTone::TimeStop>(pair.first)),
+            NorthlightTone::timeName(static_cast<NorthlightTone::TimeStop>(pair.second)),pair.secondWeight,int(lutEnabled),lutSamples,
+            uploadDelta,uploadAttempts,uploadCpuMs,uploadCpuMaxMs,gradeRequestBakes,gradeRequestPackDecoded,
+            gradeRequestCacheHits,gradeRequestPackCacheHits,gradeRequestPackRejectedTables,gradeRequestWorkerMs,
+            gradeRequestPackIndexMs,gradeRequestPackDecodeMs,gradeRequestBakeMs,gradeRequestColdMs,
+            gradeCpuBakes,gradePackDecoded,gradeCpuHits,gradePackCacheHits,gradePackRejectedTables,
+            gradeWorkerMs,gradePackIndexMs,gradePackDecodeMs,gradeBakeMs,gradeUploads,gradeUploadAttempts,gradeUploadSubmitCpuMs,gradeUploadSubmitCpuMaxMs,
+            NorthlightGradeLut::Pack::statusName(gradeRequestPackStatus),gradeRequestPackRecords,sourceSha,
+            gradeRequestPackError.data(),gradeVolumeChecked?(gradeVolumeSupported?1:0):-1,int(gpuProfileSampled));
+    }
     // A stable endpoint samples once; a clock blend samples twice; simultaneous
     // clock and region blends sample at most four LUT values.
-    struct GradeFrame {bool active=false,blending=false;float blend=1;NorthlightTone::BakeKeys from{},to{};};
-    GradeFrame prepareGrade(const HorizonPreparation& horizon,DWORD now){
-        GradeFrame frame;bool gradeEvent=false;
+    struct GradeFrame {bool active=false,blending=false;float blend=1;uint64_t generation=0;NorthlightTone::BakeKeys from{},to{};};
+    GradeFrame prepareGrade(const HorizonPreparation& horizon,DWORD now,uint64_t hostFrame,NorthlightGpuProfile* profile){
+        GradeFrame frame;
+        gradeUploadEventMs=gradeUploadEventMaxMs=0;gradeUploadEventCount=gradeUploadAttemptEventCount=0;
+        const bool gpuProfileSampled=profile&&profile->recording();
+        if(gradeAreaEventPending&&NorthlightDiagnostics::enabled()){
+            const float mix=gradeTransitionActive?std::clamp(float(DWORD(now-gradeTransitionAt))/180.f,0.f,1.f):1.f;
+            logGradeEvent("area",hostFrame,horizon,horizon.gradeKeys,gradeFromKeys,gradeToKeys,mix,0,0,0,0,gpuProfileSampled);
+            gradeAreaEventPending=false;gradeAreaProbePending=true;gradeSteadyProbePending=true;
+            gradeSteadyDueAt=now+180;gradeSteadyMinFrame=hostFrame+3;
+        }
         if(!gradeStateInitialized){gradeFromKeys={};gradeToKeys={};gradeStateInitialized=true;}
         const auto& wanted=horizon.gradeKeys;
         const bool wantedActive=!identityGrade(wanted);
         if(!gradeVolumeUnavailable&&(wantedActive||!identityGrade(gradeToKeys)||!identityGrade(gradeFromKeys)))checkGradeVolumeSupport();
-        if(!gradeVolumeUnavailable&&(!gradeRequestValid||requestedGradeKeys!=wanted)){
-            requestedGradeKeys=wanted;gradeRequestValid=gradeLutWorker.request(wanted)!=0;
-            if(gradeMismatchSince==0&&wanted!=gradeToKeys)gradeMismatchSince=now?now:1;
-            gradeEvent=true;
+        const bool keyChanged=requestedGradeKeys!=wanted;
+        const bool targetChanged=!gradeEventTargetValid||gradeEventTargetKeys!=wanted;
+        if(targetChanged){gradeEventTargetKeys=wanted;gradeEventTargetValid=true;}
+        if(!gradeVolumeUnavailable&&wantedActive){
+            if(targetChanged){++gradeRequestGeneration;gradeRequestReadyLogged=false;gradeRequestStarted=std::chrono::steady_clock::now();gradeRequestHostFrame=hostFrame;
+                gradeRequestBakes=gradeRequestPackDecoded=gradeRequestCacheHits=gradeRequestPackCacheHits=gradeRequestPackRejectedTables=gradeRequestPackRecords=0;
+                gradeRequestWorkerMs=gradeRequestPackIndexMs=gradeRequestPackDecodeMs=gradeRequestBakeMs=gradeRequestColdMs=0;
+                gradeRequestPackStatus=NorthlightGradeLut::Pack::Status::Untried;gradeRequestPackError={};gradeRequestPackSourceSha={};
+                logGradeEvent("request",hostFrame,horizon,wanted,gradeFromKeys,gradeToKeys,
+                    gradeTransitionActive?std::clamp(float(DWORD(now-gradeTransitionAt))/180.f,0.f,1.f):1.f,0,0,0,0,gpuProfileSampled);}
+            if(keyChanged||!gradeRequestValid){
+                if(keyChanged)requestedGradeKeys=wanted;
+                gradeRequestValid=gradeLutWorker.request(wanted)!=0;
+                if(!gradeRequestValid){
+                    gradeVolumeUnavailable=true;gradeRequestPackError={};std::snprintf(gradeRequestPackError.data(),gradeRequestPackError.size(),"worker request failed");
+                    logGradeEvent("failed",hostFrame,horizon,wanted,gradeFromKeys,gradeToKeys,
+                        gradeTransitionActive?std::clamp(float(DWORD(now-gradeTransitionAt))/180.f,0.f,1.f):1.f,0,0,0,0,gpuProfileSampled);
+                }
+            }
         }
-        auto target=gradeVolumeUnavailable?std::shared_ptr<const NorthlightGradeLut::Result>{}:gradeLutWorker.ready(wanted);
-        if(target&&target->serial!=gradeReportedSerial){
-            gradeReportedSerial=target->serial;gradeCpuBakes+=target->bakedVolumes;gradeCpuHits+=target->cacheHits;gradeWorkerMs+=target->workerMs;
-            gradeEvent=true;
+        auto target=!wantedActive||gradeVolumeUnavailable?std::shared_ptr<const NorthlightGradeLut::Result>{}:gradeLutWorker.ready(wanted);
+        if(wantedActive&&!target&&!gradeVolumeUnavailable){
+            std::array<char,80> reason{};
+            if(gradeLutWorker.failed(wanted,reason)){
+                gradeVolumeUnavailable=true;gradeRequestPackError=reason;
+                logGradeEvent("failed",hostFrame,horizon,wanted,gradeFromKeys,gradeToKeys,
+                    gradeTransitionActive?std::clamp(float(DWORD(now-gradeTransitionAt))/180.f,0.f,1.f):1.f,0,0,0,0,gpuProfileSampled);
+            }
+        }
+        const bool freshStats=target&&target->serial!=gradeReportedSerial;
+        if(freshStats){
+            gradeReportedSerial=target->serial;gradeCpuBakes+=target->bakedVolumes;gradeCpuHits+=target->cacheHits;
+            gradePackDecoded+=target->packDecodedVolumes;gradePackCacheHits+=target->packCacheHits;gradePackRejectedTables+=target->packRejectedTables;
+            gradeWorkerMs+=target->workerMs;gradePackIndexMs+=target->packIndexMs;gradePackDecodeMs+=target->packDecodeMs;gradeBakeMs+=target->bakeMs;
+        }
+        if(target&&!gradeRequestReadyLogged){
+            if(freshStats){
+                gradeRequestBakes=target->bakedVolumes;gradeRequestPackDecoded=target->packDecodedVolumes;gradeRequestCacheHits=target->cacheHits;
+                gradeRequestPackCacheHits=target->packCacheHits;gradeRequestPackRejectedTables=target->packRejectedTables;gradeRequestPackRecords=target->packRecords;
+                gradeRequestWorkerMs=target->workerMs;gradeRequestPackIndexMs=target->packIndexMs;gradeRequestPackDecodeMs=target->packDecodeMs;gradeRequestBakeMs=target->bakeMs;
+                gradeRequestPackStatus=target->packStatus;gradeRequestPackError=target->packError;gradeRequestPackSourceSha=target->packSourceSha;
+            }else{
+                gradeRequestBakes=gradeRequestPackDecoded=gradeRequestPackRejectedTables=0;gradeRequestCacheHits=gradeRequestPackCacheHits=0;
+                for(const auto& volume:target->volumes)if(volume){++gradeRequestCacheHits;if(volume->origin==NorthlightGradeLut::Volume::Origin::Pack)++gradeRequestPackCacheHits;}
+                gradeRequestPackRecords=target->packRecords;gradeRequestPackStatus=target->packStatus;gradeRequestPackError=target->packError;gradeRequestPackSourceSha=target->packSourceSha;
+                gradeRequestWorkerMs=gradeRequestPackIndexMs=gradeRequestPackDecodeMs=gradeRequestBakeMs=0;
+            }
+            gradeRequestColdMs=gradeRequestStarted==std::chrono::steady_clock::time_point{}?0.0:
+                std::chrono::duration<double,std::milli>(std::chrono::steady_clock::now()-gradeRequestStarted).count();
+            gradeRequestReadyLogged=true;
+            logGradeEvent("ready",hostFrame,horizon,wanted,gradeFromKeys,gradeToKeys,
+                gradeTransitionActive?std::clamp(float(DWORD(now-gradeTransitionAt))/180.f,0.f,1.f):1.f,0,0,0,0,gpuProfileSampled);
         }
         if(gradeTransitionActive&&DWORD(now-gradeTransitionAt)>=180){
             gradeFromKeys=gradeToKeys;gradeTransitionActive=false;
-            if(gradeNeutralizing&&identityGrade(gradeToKeys))gradeNeutralizing=false;
-            gradeEvent=true;
         }
         bool uploaded=false;
         auto ensureSet=[&](const NorthlightTone::BakeKeys& keys,const std::shared_ptr<const NorthlightGradeLut::Result>& ready){
@@ -1009,30 +1134,23 @@ private:
             }
             return all;
         };
-        bool targetReady=false;
+        bool targetReady=!wantedActive;
         if(target&&!gradeVolumeUnavailable){
             const bool fromReady=ensureSet(gradeFromKeys,{});
             const bool toReady=ensureSet(gradeToKeys,{});
             targetReady=ensureSet(wanted,target)&&fromReady&&toReady;
         }
-        if(!gradeVolumeUnavailable&&targetReady&&!gradeNeutralizing){
+        if(!gradeVolumeUnavailable&&targetReady){
             if(gradeTransitionActive){
                 if(wanted==gradeFromKeys){
                     const float old=std::clamp(float(DWORD(now-gradeTransitionAt))/180.f,0.f,1.f);
                     std::swap(gradeFromKeys,gradeToKeys);gradeTransitionAt=now-DWORD((1.f-old)*180.f);
-                    gradeEvent=true;
                 }
             }else if(wanted!=gradeToKeys){
                 gradeFromKeys=gradeToKeys;gradeToKeys=wanted;gradeTransitionAt=now;gradeTransitionActive=true;
-                gradeEvent=true;
+                gradeSteadyProbePending=true;gradeSteadyDueAt=now+180;gradeSteadyMinFrame=hostFrame+3;
             }
         }
-        if(gradeMismatchSince&&DWORD(now-gradeMismatchSince)>=500&&!gradeNeutralizing&&
-           !gradeTransitionActive&&!identityGrade(gradeToKeys)){
-            gradeFromKeys=gradeToKeys;gradeToKeys={};gradeTransitionAt=now;gradeTransitionActive=true;gradeNeutralizing=true;
-            gradeEvent=true;
-        }
-        if(!gradeTransitionActive&&wanted==gradeToKeys)gradeMismatchSince=0;
         frame.from=gradeFromKeys;frame.to=gradeToKeys;
         frame.blending=gradeTransitionActive&&gradeFromKeys!=gradeToKeys;
         frame.blend=gradeTransitionActive?std::clamp(float(DWORD(now-gradeTransitionAt))/180.f,0.f,1.f):1.f;
@@ -1042,21 +1160,9 @@ private:
         };
         frame.active=!gradeVolumeUnavailable&&(activeStop(frame.to)||(frame.blending&&activeStop(frame.from)));
         if(frame.blending&&frame.blend>=1.f){frame.from=frame.to;frame.blending=false;frame.blend=1.f;}
-        gradeDiagnosticPending=gradeDiagnosticPending||gradeEvent;
-        if(NorthlightDiagnostics::enabled()&&(!gradeDiagnosticAt||DWORD(now-gradeDiagnosticAt)>=1000)&&
-           (gradeDiagnosticPending||(frame.active&&DWORD(now-gradeDiagnosticAt)>=10000))){
-            gradeDiagnosticAt=now?now:1;
-            gradeDiagnosticPending=false;
-            auto samples=[&](const NorthlightTone::BakeKeys& keys){
-                return unsigned(keys[pair.first].strength!=0)+unsigned(pair.secondWeight>0&&keys[pair.second].strength!=0);
-            };
-            const unsigned sampleCount=frame.active?samples(frame.to)+(frame.blending?samples(frame.from):0):0;
-            logf("CELESTIAL grade map=\"%s\" area=%u requested=%016llx from=%016llx to=%016llx zone_mix=%.3f time=%u,%u weight=%.3f samples=%u cpu_bakes=%u cache_hits=%u worker_ms=%.2f gpu_uploads=%u upload_ms=%.2f supported=%d",
-                frameGradeAnchorMap.c_str(),frameGradeAnchorZone,(unsigned long long)gradeHash(wanted),
-                (unsigned long long)gradeHash(frame.from),(unsigned long long)gradeHash(frame.to),frame.blending?frame.blend:1.f,
-                pair.first,pair.second,pair.secondWeight,sampleCount,gradeCpuBakes,gradeCpuHits,gradeWorkerMs,gradeUploads,gradeUploadMs,
-                gradeVolumeChecked?(gradeVolumeSupported?1:0):-1);
-        }
+        frame.generation=gradeRequestGeneration;
+        if(gradeUploadAttemptEventCount)logGradeEvent("upload",hostFrame,horizon,wanted,frame.from,frame.to,frame.blending?frame.blend:1.f,
+            gradeUploadEventCount,gradeUploadAttemptEventCount,gradeUploadEventMs,gradeUploadEventMaxMs,gpuProfileSampled);
         return frame;
     }
     IDirect3DTexture9* curveTexture=nullptr;
@@ -2857,7 +2963,7 @@ public:
         for(auto& replay:replays)replay->constantStamp={};
         constantEpochSource=source;
     }
-    explicit WorldRenderer(IDirect3DDevice9* device):d(device),stateBlocks(device){terrainBoundsCache.setIdentityProvider(&bufferIdentity);terrainBoundsCache.setVersionProvider(&NorthlightTrackedBuffers::version);terrainBoundsCache.setMetadataProvider(&NorthlightTrackedBuffers::captureMetadata);terrainBoundsCache.setDeclarationCache(&declarationCache);replaySnapshots.setDeclarationProvider(&declarationCache,[](void* c,IDirect3DVertexDeclaration9* decl,const D3DVERTEXELEMENT9*& e,UINT& n){return static_cast<NorthlightVertexDeclarations::Cache*>(c)->get(decl,e,n);});replaySnapshots.setLayoutProvider(&declarationCache,[](void* c,IDirect3DVertexDeclaration9* decl,UINT* extent){return static_cast<NorthlightVertexDeclarations::Cache*>(c)->captureLayout(decl,extent);});replaySnapshots.setIdentityProvider(&bufferIdentity);replaySnapshots.setVersionProvider(&NorthlightTrackedBuffers::version);replaySnapshots.setMetadataProvider(&NorthlightTrackedBuffers::captureMetadata);QueryPerformanceFrequency(&captureFrequency);char path[MAX_PATH*3];WideCharToMultiByte(CP_UTF8,0,rootPath,-1,path,sizeof path,nullptr,nullptr);root=path;std::string paletteError;
+    explicit WorldRenderer(IDirect3DDevice9* device):d(device),stateBlocks(device){terrainBoundsCache.setIdentityProvider(&bufferIdentity);terrainBoundsCache.setVersionProvider(&NorthlightTrackedBuffers::version);terrainBoundsCache.setMetadataProvider(&NorthlightTrackedBuffers::captureMetadata);terrainBoundsCache.setDeclarationCache(&declarationCache);replaySnapshots.setDeclarationProvider(&declarationCache,[](void* c,IDirect3DVertexDeclaration9* decl,const D3DVERTEXELEMENT9*& e,UINT& n){return static_cast<NorthlightVertexDeclarations::Cache*>(c)->get(decl,e,n);});replaySnapshots.setLayoutProvider(&declarationCache,[](void* c,IDirect3DVertexDeclaration9* decl,UINT* extent){return static_cast<NorthlightVertexDeclarations::Cache*>(c)->captureLayout(decl,extent);});replaySnapshots.setIdentityProvider(&bufferIdentity);replaySnapshots.setVersionProvider(&NorthlightTrackedBuffers::version);replaySnapshots.setMetadataProvider(&NorthlightTrackedBuffers::captureMetadata);QueryPerformanceFrequency(&captureFrequency);char path[MAX_PATH*3];WideCharToMultiByte(CP_UTF8,0,rootPath,-1,path,sizeof path,nullptr,nullptr);root=path;try{gradeLutWorker.setPackPath(std::filesystem::u8path(root)/"appearance-luts"/"Vibrant.nllutpack");}catch(...){}std::string paletteError;
         loadQuality();effects.gi=NorthlightQuality::giPass(quality,effects.gi);
         staticPrebuild.steps=float(quality.shadowDirectionSteps); /* prebuild targets the same direction lattice */
         minSkinnedShadowTriangles=quality.minSkinnedTriangles;captureBudgetMiB=quality.captureBudgetMiB;actorShadowBudgetMiB=quality.actorShadowBudgetMiB;shadowFateDiagnostics=NorthlightQuality::shadowFate(quality);
@@ -2877,7 +2983,7 @@ public:
                 if(!presets.errors.empty())paletteError+="; "+presets.errors.front();
             }
         }catch(const std::exception& e){paletteError+=std::string("; appearance preset load failed: ")+e.what();}
-        NorthlightWorldContext::regionalZoneNeeded.store(celestialProfiles.needsLiveZone(),std::memory_order_relaxed);
+        NorthlightWorldContext::regionalZoneNeeded.store(celestialProfiles.needsLiveZone()||NorthlightDiagnostics::enabled(),std::memory_order_relaxed);
         logf("CELESTIAL profiles loaded=%d palette=%s zones=%zu %s",paletteLoaded,selectedPalette.c_str(),celestialProfiles.zones.size(),paletteError.c_str());
 #if NORTHLIGHT_DEV_TUNING
         celestialShipped=celestialProfiles;
@@ -2905,7 +3011,7 @@ public:
         waterHorizonPending=false;waterHorizon=HorizonPreparation{};
         waterDistanceOwned=waterSurfaceShaded=false;drop(waterGradient);drop(waterGradientPS);drop(waterOwnedPS);drop(waterLightingPS);waterVisibility.reset();drop(waterGradientState);
 #endif
-replayBoundsAbandon();releaseReplayProbe();staticCasters.settle();rigidMemoryClear();admission.reset();admissionOn=false;gatedBodies.clear();prepareQuiesce();neutralShadowMaps=false;prepareCaches->sampled.clear();prepareCaches->bones.clear();prepareCachesStale=false;if(replays.empty()&&heldShadowReplays.empty())prepareFrameRelease(); /* 0.3.179: no replay left to point at them */actorShadowHistory.clear();actorShadowOriginValid=false;replayBoundsMetadata.clear();replayBoundsCache.clear();declarationCache.clear();if(!keepMesh)uploadedStaticOwners.reset();staticOwnerGeneration=UINT64_MAX;staticCasters.reset();staticMatcher.clear();staticM2Memory.clear();staticScene.reset();staticRetryTick=0;stateBlocks.clear();uploadedTerrain.clear();liveTerrainIndexCount=liveDirectionalIndexCount=0;if(!keepMesh){fixedTerrain.reset();fixedTerrainBits.reset();}liveTerrainGeneration=0;drop(raisedFogTexture);drop(regionalFogTexture);drop(neutralAO);drop(neutralZero);drop(ditherNoise);rainMask=nullptr;uploadedFogField.reset();releasePointGPU();probeActivation.reset();probeBlend.reset();drop(baselineSurface);drop(baselineLight);releaseReplayGPU();liveTerrainGPU.clear();{auto& queries=fence();NorthlightDynamicRing::reset(liveIndexRing,0,queries);queries.drop();}drop(liveIndicesGPU);liveIndexBytes=0;liveIndexBase=0;if(!keepMesh){pendingMesh.reset();clearMesh();}retiredMaterials.clear();if(!keepMesh){releaseMeshPool();uploadedMap.clear();}for(auto& t:shadow)drop(t);for(auto& s:shadowSurface)drop(s);for(auto& t:shadowCache)drop(t);for(auto& s:shadowCacheSurface)drop(s);drop(shadowCacheDepth);drop(shadowVerifySurface);drop(shadowVerify);for(auto& r:shadowVerifyRead)drop(r);drop(shadowScratch);drop(shadowScratchSurface);releaseActorTargets();drop(neutralWhite);actorValid[0]=actorValid[1]=false;actorCenterValid[0]=actorCenterValid[1]=false;drop(unionPS);invalidateShadowCache();for(auto& t:probe)drop(t);drop(probePrev);drop(shadowDepth);drop(lightSurface);drop(smoothSurface);drop(fogSurface);drop(fogBlurredSurface);drop(fogHistorySurface);drop(fogHistory);drop(fogTemporalPS);fogHistoryValid=false;drop(colorSurface);drop(light);drop(smoothLight);drop(fog);drop(fogBlurred);drop(color);drop(lightingPS);drop(giPS);drop(raisedFogPS);drop(fogPS);drop(fogBlurPS);drop(fogCloudsPS);drop(cloudNoise);drop(localDirectPS);drop(localDirect16PS);drop(profileSplitSurface);profileSplitFailed=false;drop(removalPS);drop(temporalPS);drop(localFogPS);drop(localFogCombinePS);drop(localFogAccumSurface);drop(localFogAccum);drop(normalsPS);drop(normalBuffer);drop(normalSurface);drop(sourceVisPS);for(int a=0;a<2;++a)for(int b=0;b<2;++b){drop(sourceVis[a][b]);drop(sourceVisSurface[a][b]);}sourceVisValid=false;for(int i=0;i<2;++i){drop(temporalLight[i]);drop(temporalLightSurface[i]);drop(temporalDepth[i]);drop(temporalDepthSurface[i]);}temporalValid=false;drop(finalPS);drop(regionalFinalPS);drop(regionalWaterPS);drop(gradeFinalPS);drop(gradeWaterPS);drop(gradeBlendFinalPS);drop(gradeBlendWaterPS);drop(curveFinalPS);drop(curveWaterPS);for(auto& volume:gradeGpuVolumes)drop(volume.texture);gradeGpuVolumes.clear();gradeVolumeChecked=gradeVolumeUnavailable=gradeVolumeSupported=false;gradeStateInitialized=gradeTransitionActive=gradeNeutralizing=false;gradeFromKeys={};gradeToKeys={};drop(curveTexture);uploadedCurve={};drop(shadowPS);drop(replayPS);drop(shadowVS);drop(cachedShadowVS);drop(cachedShadowPS);drop(cachedFastPS);drop(cachedOpaqueFastPS);drop(cachedOpaquePS);drop(shadowDecl);width=height=0;uploadedSerial=0;}
+replayBoundsAbandon();releaseReplayProbe();staticCasters.settle();rigidMemoryClear();admission.reset();admissionOn=false;gatedBodies.clear();prepareQuiesce();neutralShadowMaps=false;prepareCaches->sampled.clear();prepareCaches->bones.clear();prepareCachesStale=false;if(replays.empty()&&heldShadowReplays.empty())prepareFrameRelease(); /* 0.3.179: no replay left to point at them */actorShadowHistory.clear();actorShadowOriginValid=false;replayBoundsMetadata.clear();replayBoundsCache.clear();declarationCache.clear();if(!keepMesh)uploadedStaticOwners.reset();staticOwnerGeneration=UINT64_MAX;staticCasters.reset();staticMatcher.clear();staticM2Memory.clear();staticScene.reset();staticRetryTick=0;stateBlocks.clear();uploadedTerrain.clear();liveTerrainIndexCount=liveDirectionalIndexCount=0;if(!keepMesh){fixedTerrain.reset();fixedTerrainBits.reset();}liveTerrainGeneration=0;drop(raisedFogTexture);drop(regionalFogTexture);drop(neutralAO);drop(neutralZero);drop(ditherNoise);rainMask=nullptr;uploadedFogField.reset();releasePointGPU();probeActivation.reset();probeBlend.reset();drop(baselineSurface);drop(baselineLight);releaseReplayGPU();liveTerrainGPU.clear();{auto& queries=fence();NorthlightDynamicRing::reset(liveIndexRing,0,queries);queries.drop();}drop(liveIndicesGPU);liveIndexBytes=0;liveIndexBase=0;if(!keepMesh){pendingMesh.reset();clearMesh();}retiredMaterials.clear();if(!keepMesh){releaseMeshPool();uploadedMap.clear();}for(auto& t:shadow)drop(t);for(auto& s:shadowSurface)drop(s);for(auto& t:shadowCache)drop(t);for(auto& s:shadowCacheSurface)drop(s);drop(shadowCacheDepth);drop(shadowVerifySurface);drop(shadowVerify);for(auto& r:shadowVerifyRead)drop(r);drop(shadowScratch);drop(shadowScratchSurface);releaseActorTargets();drop(neutralWhite);actorValid[0]=actorValid[1]=false;actorCenterValid[0]=actorCenterValid[1]=false;drop(unionPS);invalidateShadowCache();for(auto& t:probe)drop(t);drop(probePrev);drop(shadowDepth);drop(lightSurface);drop(smoothSurface);drop(fogSurface);drop(fogBlurredSurface);drop(fogHistorySurface);drop(fogHistory);drop(fogTemporalPS);fogHistoryValid=false;drop(colorSurface);drop(light);drop(smoothLight);drop(fog);drop(fogBlurred);drop(color);drop(lightingPS);drop(giPS);drop(raisedFogPS);drop(fogPS);drop(fogBlurPS);drop(fogCloudsPS);drop(cloudNoise);drop(localDirectPS);drop(localDirect16PS);drop(profileSplitSurface);profileSplitFailed=false;drop(removalPS);drop(temporalPS);drop(localFogPS);drop(localFogCombinePS);drop(localFogAccumSurface);drop(localFogAccum);drop(normalsPS);drop(normalBuffer);drop(normalSurface);drop(sourceVisPS);for(int a=0;a<2;++a)for(int b=0;b<2;++b){drop(sourceVis[a][b]);drop(sourceVisSurface[a][b]);}sourceVisValid=false;for(int i=0;i<2;++i){drop(temporalLight[i]);drop(temporalLightSurface[i]);drop(temporalDepth[i]);drop(temporalDepthSurface[i]);}temporalValid=false;drop(finalPS);drop(regionalFinalPS);drop(regionalWaterPS);drop(gradeFinalPS);drop(gradeWaterPS);drop(gradeBlendFinalPS);drop(gradeBlendWaterPS);drop(curveFinalPS);drop(curveWaterPS);for(auto& volume:gradeGpuVolumes)drop(volume.texture);gradeGpuVolumes.clear();resetGradeGpuProbe();gradeVolumeChecked=gradeVolumeUnavailable=gradeVolumeSupported=false;gradeStateInitialized=gradeTransitionActive=false;gradeFromKeys={};gradeToKeys={};gradeFirstUseGeneration=0;drop(curveTexture);uploadedCurve={};drop(shadowPS);drop(replayPS);drop(shadowVS);drop(cachedShadowVS);drop(cachedShadowPS);drop(cachedFastPS);drop(cachedOpaqueFastPS);drop(cachedOpaquePS);drop(shadowDecl);width=height=0;uploadedSerial=0;}
     // Explicit enable/retry only, called after the wrapper's clearFrame(). This
     // never calls endFrame(), so packet capture and cleanup run exactly once.
     void recover(){meshRetry.clear();if(!failed)return;releaseGPU(true);failed=false;valid=false;streamingReports=0;logf("WORLD explicit recovery requested");}
@@ -3165,7 +3271,7 @@ replayBoundsAbandon();releaseReplayProbe();staticCasters.settle();rigidMemoryCle
         const bool logPalette=NorthlightDiagnostics::enabled()&&(!paletteLogAt||now-paletteLogAt>=10000);
         const auto firstMapZone=celestialProfiles.zones.lower_bound({map,0});
         const bool mapHasProfiles=firstMapZone!=celestialProfiles.zones.end()&&firstMapZone->first.first==map;
-        const auto area=(live.zone||logPalette||mapHasProfiles)&&region&&region->map==map?NorthlightRegionalFog::areaAt(region->region,camera[0],camera[1]):NorthlightRegionalFog::Area{};
+        const auto area=(live.zone||logPalette||mapHasProfiles||NorthlightDiagnostics::enabled())&&region&&region->map==map?NorthlightRegionalFog::areaAt(region->region,camera[0],camera[1]):NorthlightRegionalFog::Area{};
         uint32_t localId=0;
         if(live.zone){
             if(!NorthlightCelestialProfiles::hasRegionalAreaData(map)){
@@ -3207,6 +3313,20 @@ replayBoundsAbandon();releaseReplayProbe();staticCasters.settle();rigidMemoryCle
             frameGradeKeys=NorthlightTone::makeBakeKeys(gradeAnchor->grade,gradeAnchor->toneStrength);gradeAnchorSource=gradeAnchor;
         }
         frameGradeAnchorMap=map;frameGradeAnchorZone=gradeAnchorZone;
+        frameRootZone=area.zone?area.zone:(localId?live.zone:0);
+        frameSubzoneId=area.subzone?area.subzone:(localId?live.subzone:0);
+        frameAreaId=area.subzone?area.subzone:(localId?localId:frameRootZone);
+        frameAreaSource=area.zone?1:(localId?2:0);
+        const bool areaChanged=!gradeObservedValid||gradeObservedMap!=map||gradeObservedRootZone!=frameRootZone||
+            gradeObservedAreaId!=frameAreaId||gradeObservedSubzoneId!=frameSubzoneId||
+            gradeObservedAnchorZone!=gradeAnchorZone||gradeObservedAnchorMap!=map||gradeObservedKeys!=frameGradeKeys;
+        if(areaChanged){
+            gradeAreaEventPending=true;gradeAreaProbePending=true;gradeUploadProbeLogged=false;gradeFirstUseLogged=false;
+            gradeSteadyProbePending=true;gradeSteadyDueAt=0;gradeSteadyMinFrame=0;++gradeObservedGeneration;
+            gradeObservedMap=map;gradeObservedRootZone=frameRootZone;gradeObservedAreaId=frameAreaId;
+            gradeObservedSubzoneId=frameSubzoneId;gradeObservedAnchorZone=gradeAnchorZone;
+            gradeObservedAnchorMap=map;gradeObservedKeys=frameGradeKeys;gradeObservedValid=true;
+        }
         framePalette=paletteTransition.update(target,map,camera[0],camera[1],double(now)*.001);
         paletteFrameMap=map;paletteFrameValid=true;
         if(logPalette){paletteLogAt=now;
@@ -4455,13 +4575,13 @@ replayBoundsAbandon();releaseReplayProbe();staticCasters.settle();rigidMemoryCle
     // foldScene/foldAO (0.3.174 FOLD): the proxy's pre-AO scene copy replaces the world colour
     // copy, and its AOContactBloom target (bloom rgb, AO alpha) is applied by TemporalLight's
     // removal smoothing and WorldComposite. Null: the proxy composited already (neutral s10).
-    bool render(IDirect3DSurface9* targetSurface,IDirect3DTexture9* depth,UINT w,UINT h,D3DFORMAT fmt,float nearZ,float farZ,float minZ,float maxZ,int debug,NorthlightGpuProfile* profile,IDirect3DTexture9* waterMask,IDirect3DTexture9* foldScene=nullptr,IDirect3DTexture9* foldAO=nullptr,
+    bool render(IDirect3DSurface9* targetSurface,IDirect3DTexture9* depth,UINT w,UINT h,D3DFORMAT fmt,float nearZ,float farZ,float minZ,float maxZ,int debug,NorthlightGpuProfile* profile,uint64_t hostFrame,IDirect3DTexture9* waterMask,IDirect3DTexture9* foldScene=nullptr,IDirect3DTexture9* foldAO=nullptr,
                 const SurfaceComposition* surface=nullptr){
         alphaFog={};shadowsComposited=false;composited=false;lastRenderDebug=debug;
         if(debug!=1)gpuDiagnosticArmed=true;
         // 0.3.169 lastSkipReason(): why this call returned false. Untagged returns below the
         // upload gate are failed device calls in the draw stages ("draw").
-        skipReason="fault";if(workerFault())return false;
+        skipReason="fault";pollGradeGpuProbes();if(workerFault())return false;
         DWORD submissionStart=GetTickCount();
         // false only when this frame's model capture was skipped: no replays, and every
         // per-frame replay consumer (selection history and fate frame, GPU cache, bounds,
@@ -5519,8 +5639,9 @@ replayBoundsAbandon();releaseReplayProbe();staticCasters.settle();rigidMemoryCle
         auto* composite=finalPS;
 #endif
         const auto& appearance=preparedHorizon.appearance;
-        const auto grade=debug?GradeFrame{}:prepareGrade(preparedHorizon,GetTickCount());
+        const auto grade=debug?GradeFrame{}:prepareGrade(preparedHorizon,GetTickCount(),hostFrame,profile);
         const auto timePair=gradeTimePair(preparedHorizon.gradeWeights);
+        bool gradeVolumeShaderSelected=false;
         if(!debug&&(grade.active||preparedHorizon.curveKey.strength||appearance!=std::array<float,4>{})){
             IDirect3DPixelShader9* selected=nullptr;
             if(grade.active&&!gradeVolumeUnavailable){
@@ -5558,15 +5679,52 @@ replayBoundsAbandon();releaseReplayProbe();staticCasters.settle();rigidMemoryCle
                 }
                 if(shader)selected=shader;
             }
-            if(selected&&SUCCEEDED(d->SetPixelShaderConstantF(101,appearance.data(),1)))composite=selected;
+            if(selected&&SUCCEEDED(d->SetPixelShaderConstantF(101,appearance.data(),1))){
+                composite=selected;
+                gradeVolumeShaderSelected=grade.active&&!gradeVolumeUnavailable&&
+                    selected==(grade.blending?(waterOwned?gradeBlendWaterPS:gradeBlendFinalPS):(waterOwned?gradeWaterPS:gradeFinalPS));
+            }
         }
         d->SetPixelShader(composite);
 
         /* 0.3.212 (task 32): with this frame's name marks the quad draws with the world depth-stencil bound and a stencil test that rejects marked pixels (they keep the game's colour in the target); no marks: the quad as before. */
         if(captureSurfacePass)captureSurfacePass("world",false);
         bool compositeOk=false;
+        const bool targetBound=gradeVolumeShaderSelected&&grade.to==preparedHorizon.gradeKeys;
+        const auto pairSamples=[&](const NorthlightTone::BakeKeys& keys){
+            return keys[timePair.first].strength!=0||(timePair.secondWeight>0&&keys[timePair.second].strength!=0);
+        };
+        const bool gradeDiagnostics=NorthlightDiagnostics::enabled();
+        const bool firstUseCandidate=gradeDiagnostics&&targetBound&&pairSamples(grade.to)&&
+            (!grade.blending||grade.blend>0.f)&&grade.generation!=gradeFirstUseGeneration&&!gradeFirstUseLogged;
+        const DWORD probeNow=gradeDiagnostics?GetTickCount():0;
+        const bool steadyTargetReady=identityGrade(preparedHorizon.gradeKeys)?identityGrade(grade.to):targetBound;
+        const bool steadyCandidate=gradeDiagnostics&&gradeSteadyProbePending&&steadyTargetReady&&!grade.blending&&
+            hostFrame>=gradeSteadyMinFrame&&int32_t(probeNow-gradeSteadyDueAt)>=0;
+        char probePurpose[48]={};size_t probeUsed=0;
+        auto addProbeReason=[&](const char* name){
+            if(probeUsed&&probeUsed+1<sizeof probePurpose)probePurpose[probeUsed++]='+';
+            const int wrote=std::snprintf(probePurpose+probeUsed,sizeof probePurpose-probeUsed,"%s",name);
+            if(wrote>0)probeUsed=std::min(sizeof probePurpose-1,probeUsed+size_t(wrote));
+        };
+        const bool areaProbe=gradeDiagnostics&&gradeAreaProbePending;
+        const bool bindProbe=gradeDiagnostics&&targetBound&&!gradeUploadProbeLogged;
+        if(areaProbe)addProbeReason("area");
+        if(bindProbe)addProbeReason("first_bind");
+        if(firstUseCandidate)addProbeReason("first_use");
+        if(steadyCandidate)addProbeReason("steady");
+        const bool gradeProbe=probeUsed&&beginGradeGpuProbe(probePurpose,hostFrame,frameGradeAnchorMap.c_str(),frameAreaId,frameRootZone,
+            frameGradeAnchorZone,gradeHash(preparedHorizon.gradeKeys),gradeUploadEventCount,gradeUploadEventMs);
         {IDirect3DSurface9* maskDepth=nameMaskDepth;nameMaskDepth=nullptr;NameMaskCompositeBind mask(d,maskDepth);compositeOk=check(quad(w,h),"world composite");}
+        if(gradeProbe)endGradeGpuProbe(compositeOk);
         if(captureSurfacePass)captureSurfacePass("world",true);
+        if(gradeProbe){if(areaProbe)gradeAreaProbePending=false;if(bindProbe)gradeUploadProbeLogged=true;if(steadyCandidate)gradeSteadyProbePending=false;}
+        if(compositeOk&&firstUseCandidate){
+            gradeFirstUseLogged=true;gradeFirstUseGeneration=grade.generation;
+            logGradeEvent("first_use",hostFrame,preparedHorizon,preparedHorizon.gradeKeys,grade.from,grade.to,
+                grade.blending?grade.blend:1.f,gradeUploadEventCount,gradeUploadAttemptEventCount,
+                gradeUploadEventMs,gradeUploadEventMaxMs,profile&&profile->recording());
+        }
 #ifdef NORTHLIGHT_WATER
         if(compositeOk)CaptureWaterEnvironment();
 #endif
