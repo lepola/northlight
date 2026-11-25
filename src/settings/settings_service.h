@@ -38,11 +38,19 @@ class Service {
     std::string backends()const{
         std::string out="native";for(auto name:{"dxvk","dxvk2","legacy"}){std::error_code ec;const auto file=directory/"renderer-backends"/name/(std::string(name)+"_d3d9.dll");if(std::filesystem::is_regular_file(file,ec))out+=","+std::string(name);}return out;
     }
-    Loaded load(){
+    Loaded load(bool buildFields=true){
         Loaded l;l.images=store.readLenient(l.problem);l.docs=documents(l.images);l.revision=Store::revision(l.images);Documents base;
         {std::lock_guard<std::mutex> lock(mutex);l.runtime=*active;base=initial;}
-        l.presets=NorthlightAppearancePresets::load(directory);
-        l.fields=schema(l.docs,base,l.runtime,legacy,backends(),store.hasWaterCore(),&l.presets);return l;
+        if(buildFields){
+            l.presets=NorthlightAppearancePresets::load(directory);
+            l.fields=schema(l.docs,base,l.runtime,legacy,backends(),store.hasWaterCore(),&l.presets);
+        }
+        return l;
+    }
+    static std::string selectedPalette(const Documents& docs){
+        const auto values=docs[2].values();const auto section=values.find("appearance");
+        if(section==values.end())return "Default";const auto value=section->second.find("palette");
+        return value==section->second.end()?"Default":value->second;
     }
     static std::string text(const std::vector<Change>& changes){
         std::string out;for(const auto& c:changes){
@@ -79,11 +87,26 @@ class Service {
         Status s;
         if(job.clear){bool was;{std::lock_guard<std::mutex> lock(mutex);was=previewing;}
             if(!was)return s;
-            auto l=load();auto config=configOf(l.docs,legacy,false,&l.presets);auto runtime=effective(l.runtime,config);
+            auto l=load(false);l.presets=NorthlightAppearancePresets::loadSelected(directory,selectedPalette(l.docs));
+            auto config=configOf(l.docs,legacy,false,&l.presets);auto runtime=effective(l.runtime,config);
             publish(std::move(config),l.revision,std::move(runtime),false);s.message="Preview cleared";return s;}
-        auto l=load();std::vector<Change> live;std::map<std::string,const Field*> known;for(const auto& f:l.fields)known[f.id()]=&f;
-        for(const auto& c:job.draft){auto at=known.find(c.id);if(at!=known.end()&&(at->second->apply=="F"&&at->second->available))live.push_back(c);} // "R" and unknown ids are not previewable
-        auto next=applyChanges(l.docs,l.fields,text(live));auto config=configOf(next,legacy,true,&l.presets);auto runtime=effective(l.runtime,config);
+        auto l=load(false);std::shared_ptr<const Snapshot> cached;Documents base;std::string activeRev;
+        {std::lock_guard<std::mutex> lock(mutex);cached=latest;base=initial;activeRev=activeRevision;}
+        const std::vector<Field>* fields=nullptr;
+        if(cached&&cached->revision==l.revision)fields=&cached->fields;
+        else{
+            l.presets=NorthlightAppearancePresets::load(directory);
+            l.fields=schema(l.docs,base,l.runtime,legacy,backends(),store.hasWaterCore(),&l.presets);fields=&l.fields;
+            publishSnapshot(l.revision,activeRev,l.fields,l.presets.errors);
+        }
+        std::vector<Change> live;live.reserve(job.draft.size());
+        for(const auto& change:job.draft){
+            const auto field=std::find_if(fields->begin(),fields->end(),[&](const Field& candidate){return candidate.id()==change.id;});
+            if(field!=fields->end()&&field->apply=="F"&&field->available)live.push_back(change);
+        } // "R" and unknown ids are not previewable
+        auto next=applyChanges(l.docs,*fields,text(live));
+        l.presets=NorthlightAppearancePresets::loadSelected(directory,selectedPalette(next));
+        auto config=configOf(next,legacy,true,&l.presets);auto runtime=effective(l.runtime,config);
         uint64_t seq;{std::lock_guard<std::mutex> lock(mutex);seq=++previewSeq;}
         publish(std::move(config),l.revision+"+preview"+std::to_string(seq),std::move(runtime),true);s.message="Preview applied";return s;
     }

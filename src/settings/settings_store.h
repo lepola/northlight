@@ -28,6 +28,7 @@ inline std::string lower(std::string s){for(auto& c:s)c=char(std::tolower(static
 inline std::string hash(const std::string& s){std::uint64_t h=14695981039346656037ull;for(unsigned char c:s){h^=c;h*=1099511628211ull;}std::ostringstream o;o<<std::hex<<h;return o.str();}
 inline constexpr const char* FileNames[]={"northlight-quality.ini","northlight-renderer.ini","celestial-profiles.ini","shadow-range-profiles.ini","water.ini","water-host.ini"};
 inline constexpr unsigned WaterFile=4, WaterHostFile=5, FileCount=std::size(FileNames);
+inline constexpr size_t MaxIniBytes=4*1024*1024;
 inline constexpr char FileIds[]="QRCSWH";
 static_assert(sizeof(FileIds)==FileCount+1);
 class TransactionLock {
@@ -91,7 +92,7 @@ struct Document {
     std::vector<Line> lines;enum Encoding{Bytes,Utf8Bom,Utf16LE} encoding=Bytes;std::string newline="\r\n";
     Document()=default;
     explicit Document(std::string raw){
-        if(raw.size()>524288)throw std::runtime_error("INI exceeds 512 KiB");
+        if(raw.size()>MaxIniBytes)throw std::runtime_error("INI exceeds 4 MiB");
         if(raw.rfind("\xfe\xff",0)==0)throw std::runtime_error("UTF-16BE is unsupported; save the INI as UTF-8");
         if(raw.rfind("\xff\xfe",0)==0){
             if(raw.size()%2)throw std::runtime_error("Truncated UTF-16LE INI");encoding=Utf16LE;raw=utf8FromUtf16le(raw,2);
@@ -134,7 +135,7 @@ inline bool operator==(const FileImage& a,const FileImage& b){return a.exists==b
 inline FileImage readImage(const std::filesystem::path& p){
     std::error_code ec;if(!std::filesystem::exists(p,ec)){if(ec)throw std::runtime_error("Cannot inspect INI");return {};}
     std::ifstream f(p,std::ios::binary);if(!f)throw std::runtime_error("Cannot read INI");
-    std::string s;char b[4096];while(f){f.read(b,sizeof b);s.append(b,size_t(f.gcount()));if(s.size()>524288)throw std::runtime_error("INI exceeds 512 KiB");}
+    std::string s;char b[4096];while(f){f.read(b,sizeof b);s.append(b,size_t(f.gcount()));if(s.size()>MaxIniBytes)throw std::runtime_error("INI exceeds 4 MiB");}
     if(!f.eof())throw std::runtime_error("INI read failed");return {true,s};
 }
 inline std::string leaf(const std::filesystem::path& p){return p.filename().string();}

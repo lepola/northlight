@@ -23,8 +23,8 @@ inline constexpr char NameRuleText[]="Use 1 to 40 letters, numbers, spaces, unde
 
 inline const std::vector<std::string>& keys(){
     static const std::vector<std::string> value=[] {
-        std::vector<std::string> out={"fog_tint","fog_tint_strength","shadow_contrast","tone_curve_strength","day_vibrance","night_vibrance"};
-        for(const auto& field:NorthlightTone::bindings())out.push_back(field.first);
+        std::vector<std::string> out={"fog_tint","fog_tint_strength","shadow_contrast","tone_curve_strength"};
+        for(const auto& field:NorthlightTone::gradeBindings())out.push_back(field.first);
         return out;
     }();
     return value;
@@ -167,6 +167,10 @@ inline bool sameValue(const Profile& a,const Profile& b,const std::string& key){
 }
 inline Table compose(const Table& local,const Table& palette,const Table& defaults){
     Table out=local;out.palette=local.palette;
+    for(const Table* source:{&palette,&defaults}){
+        out.explicitFallbackKeys.insert(source->explicitFallbackKeys.begin(),source->explicitFallbackKeys.end());
+        for(const auto& row:source->explicitMapFallbackKeys)out.explicitMapFallbackKeys[row.first].insert(row.second.begin(),row.second.end());
+    }
     for(const auto& key:keys()){
         const bool localDirect=local.explicitFallbackKeys.count(key)!=0;
         const bool baselineDirect=defaults.explicitFallbackKeys.count(key)!=0;
@@ -232,6 +236,7 @@ inline Table compose(const Table& local,const Table& palette,const Table& defaul
         visiting.erase(id);resolved[id]=base;out.zones[id]=base;return base;
     };
     for(const auto& id:zones)composeZone(id);
+    NorthlightCelestialProfiles::resolveLegacyDusk(out);
     return out;
 }
 

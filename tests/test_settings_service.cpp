@@ -114,6 +114,9 @@ int main(int argc,char** argv){
      chmod(ro.c_str(),0644);const auto serial6=service.status().serial;assert(service.commit(saved->revision,{{"Q\tQuality\tWeather",savedWeather?"1":"0"}}));assert(waitFor([&]{return idle()&&service.status().serial>serial6;}));assert(service.status().state==Status::State::Saved);
      // an external edit between snapshot and save is refused
      auto stale=service.snapshot()->revision;auto image=readImage(ro);image.raw+="\n; edited elsewhere\n";writeImage(ro,image.raw);
+     const auto previewSerial=service.status().serial;assert(service.preview({{"Q\tQuality\tWeather","0"}}));
+     assert(waitFor([&]{return idle()&&service.status().serial>previewSerial;}));
+     assert(service.snapshot()->revision==Store::revision(store.read())&&service.after("")->preview);
      const auto serial7=service.status().serial;assert(service.commit(stale,{{"Q\tQuality\tWeather","1"}}));assert(waitFor([&]{return idle()&&service.status().serial>serial7;}));assert(service.status().state==Status::State::Error);}
     // Unresolvable recovery (external edit after a crash): the menu still gets a read-only snapshot and an actionable error; saving is blocked until resolved.
     {auto ini=root/FileNames[0];auto base=store.read();const std::string newRaw="[Quality]\nWeather=1\n";

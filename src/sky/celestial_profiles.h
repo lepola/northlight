@@ -11,11 +11,12 @@
 #include <set>
 
 namespace NorthlightCelestialProfiles {
+constexpr size_t MaxProfileBytes=4*1024*1024;
+constexpr unsigned MaxProfileRows=65536;
 struct Profile {
     float fogTint[3]={1,1,1},fogTintStrength=0,shadowContrast=0;
     float toneStrength=0;
-    std::array<float,2> vibrance{};
-    NorthlightTone::Regional curves{};
+    NorthlightTone::Timeline grade{};
     float disc[2][3]={{1,.96f,.88f},{.94f,.97f,1}};
     float gain[2]={3.5f,1.1f};
     float light[2][3]={{1,1,1},{1,1,1}};
@@ -35,9 +36,8 @@ inline Profile blend(const Profile& a,const Profile& b,float t){
     p.fogTintStrength=a.fogTintStrength+(b.fogTintStrength-a.fogTintStrength)*t;
     p.shadowContrast=a.shadowContrast+(b.shadowContrast-a.shadowContrast)*t;
     p.toneStrength=a.toneStrength+(b.toneStrength-a.toneStrength)*t;
+    for(unsigned s=0;s<NorthlightTone::StopCount;++s)p.grade[s]=NorthlightTone::blend(a.grade[s],b.grade[s],t);
     for(unsigned s=0;s<2;++s){
-        p.vibrance[s]=a.vibrance[s]+(b.vibrance[s]-a.vibrance[s])*t;
-        for(unsigned c=0;c<4;++c)p.curves[s][c]=NorthlightTone::blend(a.curves[s][c],b.curves[s][c],t);
         for(unsigned c=0;c<3;++c){p.disc[s][c]=a.disc[s][c]+(b.disc[s][c]-a.disc[s][c])*t;p.light[s][c]=a.light[s][c]+(b.light[s][c]-a.light[s][c])*t;p.glow[s][c]=a.glow[s][c]+(b.glow[s][c]-a.glow[s][c])*t;}
         p.glowStrength[s]=a.glowStrength[s]+(b.glowStrength[s]-a.glowStrength[s])*t;p.glowMix[s]=a.glowMix[s]+(b.glowMix[s]-a.glowMix[s])*t;
         p.gain[s]=a.gain[s]+(b.gain[s]-a.gain[s])*t;
@@ -46,6 +46,9 @@ inline Profile blend(const Profile& a,const Profile& b,float t){
         p.fogHeightScale[s]=a.fogHeightScale[s]+(b.fogHeightScale[s]-a.fogHeightScale[s])*t;
         p.horizonHaze[s]=a.horizonHaze[s]+(b.horizonHaze[s]-a.horizonHaze[s])*t;
     }return p;
+}
+inline NorthlightTone::Grade gradeAt(const Profile& p,float nightFactor,bool evening){
+    return NorthlightTone::sample(p.grade,nightFactor,evening);
 }
 // Shift the hue of existing mist, keeping its optical depth and the scene's black point.
 inline std::array<float,4> appearance(const Profile& p,const float* fog,bool fogOn){
@@ -63,12 +66,12 @@ inline std::array<float,4> appearance(const Profile& p,const float* fog,bool fog
     return result;
 }
 // Slopes of the change in luminance. The endpoints stay fixed at black and white.
-inline std::array<float,4> toneCoefficients(const Profile& p,float night){
+inline std::array<float,4> toneCoefficients(const Profile& p,float night,bool evening=false){
     if(p.toneStrength==0)return {};
+    const auto grade=gradeAt(p,night,evening);
     float delta[5]={};
     for(unsigned i=0;i<3;++i){
-        const float day=p.curves[0][0].levels[i],evening=p.curves[1][0].levels[i];
-        delta[i+1]=p.toneStrength*(day+(evening-day)*night-.25f*(i+1));
+        delta[i+1]=p.toneStrength*(grade.curves[0].levels[i]-.25f*(i+1));
     }
     std::array<float,4> result{};
     float slope=(delta[1]-delta[0])*4;
@@ -145,12 +148,10 @@ inline float* keyTarget(Profile& profile,const std::string& key,unsigned& count,
     if(key=="fog_tint"){count=3;return profile.fogTint;}
     if(key=="fog_tint_strength"){maximum=2;return &profile.fogTintStrength;}
     if(key=="tone_curve_strength")return &profile.toneStrength;
-    if(key=="day_vibrance")return &profile.vibrance[0];
-    if(key=="night_vibrance")return &profile.vibrance[1];
-    const auto binding=NorthlightTone::bindings().find(key);
-    if(binding!=NorthlightTone::bindings().end()){
+    const auto binding=NorthlightTone::gradeBindings().find(key);
+    if(binding!=NorthlightTone::gradeBindings().end()){
         const auto& b=binding->second;
-        return NorthlightTone::parameter(profile.curves[b.time][b.channel],b.param,minimum,maximum);
+        return NorthlightTone::parameter(profile.grade[static_cast<unsigned>(b.time)],b,minimum,maximum);
     }
     if(key=="shadow_contrast")return &profile.shadowContrast;
     Profile* p=&profile;
@@ -176,11 +177,10 @@ inline const char* assignKey(Profile& profile,const std::string& key,std::string
     float* target=keyTarget(profile,key,count,minimum,maximum);if(!target)return "unknown key";
     const auto name=key.substr(key.rfind("sun_",0)==0?4:5);
     for(char& c:value)if(c==',')c=' ';std::istringstream values(value);
-    for(unsigned i=0;i<count;++i)if(!(values>>target[i])||!std::isfinite(target[i])||target[i]<0||target[i]>maximum)return "invalid numeric value";
+    for(unsigned i=0;i<count;++i)if(!(values>>target[i])||!std::isfinite(target[i])||target[i]<minimum||target[i]>maximum)return "invalid numeric value";
     std::string extra;if(values>>extra)return "too many values";
     if(name=="light"&&target[0]+target[1]+target[2]<.01f)return "light hue cannot be black; use light_strength=0";
     if(name=="glow"&&target[0]+target[1]+target[2]<.01f)return "glow hue cannot be black; use glow_strength=0";
-    if(target[0]<minimum)return "value below minimum";
     return nullptr;
 }
 inline void inheritParent(Table& table,const std::pair<std::string,uint32_t>& child,uint32_t parent){
@@ -194,13 +194,39 @@ inline void inheritParent(Table& table,const std::pair<std::string,uint32_t>& ch
     }
     local=resolved;
 }
+inline bool hasExplicitDusk(const Table& table,const std::string& map,uint32_t zone,const std::string& key){
+    if(table.explicitFallbackKeys.count(key))return true;
+    const auto mapKeys=table.explicitMapFallbackKeys.find(map);
+    if(mapKeys!=table.explicitMapFallbackKeys.end()&&mapKeys->second.count(key))return true;
+    std::set<uint32_t> visited;
+    while(zone&&visited.insert(zone).second){
+        const auto section=std::make_pair(map,zone);const auto local=table.explicitKeys.find(section);
+        if(local!=table.explicitKeys.end()&&local->second.count(key))return true;
+        const auto parent=table.parents.find(section);if(parent==table.parents.end())break;zone=parent->second;
+    }
+    return false;
+}
+inline void resolveLegacyDusk(Table& table){
+    using namespace NorthlightTone;
+    auto resolve=[&](Profile& profile,const std::string& map,uint32_t zone){
+        for(const auto& row:gradeBindings())if(static_cast<unsigned>(row.second.time)==static_cast<unsigned>(TimeStop::Dusk)&&!hasExplicitDusk(table,map,zone,row.first)){
+            const auto& key=row.first;
+            const auto suffix=key.substr(5);unsigned count=0;float lo=0,hi=0;
+            auto* dusk=keyTarget(profile,key,count,lo,hi);auto* day=keyTarget(profile,"day_"+suffix,count,lo,hi);auto* night=keyTarget(profile,"night_"+suffix,count,lo,hi);
+            for(unsigned i=0;i<count;++i)dusk[i]=day[i]+(night[i]-day[i])*DuskNightWeight;
+        }
+    };
+    resolve(table.fallback,"",0);
+    for(auto& row:table.mapFallbacks)resolve(row.second,row.first,0);
+    for(auto& row:table.zones)resolve(row.second,row.first.first,row.first.second);
+}
 // Build the entire table before publishing it so invalid edits retain the saved appearance.
 inline bool parse(std::istream& input,Table& out,std::string& error){
     Table t;Profile* p=nullptr;std::set<std::string>* explicitSet=nullptr;std::string line;unsigned number=0;bool defaultSeen=false,appearanceSeen=false;
     std::map<std::string,bool> keys;
     auto fail=[&](const char* why){error="line "+std::to_string(number)+": "+why;return false;};
     while(std::getline(input,line)){
-        ++number;if(number>8192)return fail("file too large");line=trim(line.substr(0,line.find('#')));if(line.empty())continue;
+        ++number;if(number>MaxProfileRows)return fail("file too large");line=trim(line.substr(0,line.find('#')));if(line.empty())continue;
         if(line.front()=='['&&line.back()==']'){
             std::string section=trim(line.substr(1,line.size()-2));keys.clear();
             if(section=="default") {if(defaultSeen||!t.zones.empty()||!t.mapFallbacks.empty())return fail("default must appear once, before map and zone profiles");defaultSeen=true;p=&t.fallback;explicitSet=&t.explicitFallbackKeys;continue;}
@@ -244,10 +270,11 @@ inline bool parse(std::istream& input,Table& out,std::string& error){
         if(t.parents.count(root))return fail("expected a top-level parent zone");
         inheritParent(t,child.first,child.second);
     }
+    resolveLegacyDusk(t);
     if(input.bad()){error="read failed";return false;}out=std::move(t);error.clear();return true;
 }
 inline bool readIniText(std::istream& input,std::string& text,std::string& error){
-    std::string raw;char buffer[4096];while(input){input.read(buffer,sizeof buffer);const auto n=size_t(input.gcount());if(raw.size()+n>524288){error="INI exceeds 512 KiB";return false;}raw.append(buffer,n);}
+    std::string raw;char buffer[4096];while(input){input.read(buffer,sizeof buffer);const auto n=size_t(input.gcount());if(raw.size()+n>MaxProfileBytes){error="INI exceeds 4 MiB";return false;}raw.append(buffer,n);}
     if(!input.eof()){error="INI read failed";return false;}
     if(NorthlightQuality::bigEndianUtf16(raw)||(raw.rfind("\xff\xfe",0)==0&&raw.size()%2)){error="unsupported or truncated INI encoding";return false;}
     text=NorthlightQuality::narrow(raw);if(text.rfind("\xef\xbb\xbf",0)==0)text.erase(0,3);return true;

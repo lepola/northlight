@@ -115,7 +115,7 @@ int main(int argc,char** argv){
             "fog_tint_strength=1.7\ntone_curve_strength=1\nday_shadow_level=.21\nnight_shadow_level=.27\n");
         assert(parse(input,table,error));
         auto p=table.at("Azeroth",159);
-        assert(near(p.fogTintStrength,1.7f)&&near(p.curves[1][0].levels[1],.44f));
+        assert(near(p.fogTintStrength,1.7f)&&near(p.grade[2].curves[0].levels[1],.44f));
         const auto day=toneCoefficients(p,0),night=toneCoefficients(p,1),dusk=toneCoefficients(p,.5f);
         for(unsigned i=0;i<4;++i)assert(near(dusk[i],(day[i]+night[i])*.5f));
         p.toneStrength=0;
@@ -125,7 +125,7 @@ int main(int argc,char** argv){
         // Even the most compressed neighbouring points must retain their brightness order.
         for(unsigned mask=0;mask<8;++mask){
             Profile extreme;extreme.toneStrength=1;
-            for(unsigned i=0;i<3;++i)extreme.curves[0][0].levels[i]=.25f*(i+1)+((mask&(1u<<i))?.12f:-.12f);
+            for(unsigned i=0;i<3;++i)extreme.grade[0].curves[0].levels[i]=.25f*(i+1)+((mask&(1u<<i))?.12f:-.12f);
             const auto coeff=toneCoefficients(extreme,0);
             float previous=-1;
             for(unsigned code=0;code<=255;++code){
@@ -149,15 +149,51 @@ int main(int argc,char** argv){
     }
     {
         using namespace NorthlightTone;
+        Table legacy;std::istringstream old("[default]\nday_red_midtone_level=.58\nnight_red_midtone_level=.44\nday_vibrance=.2\nnight_vibrance=.8\n");
+        assert(parse(old,legacy,error));
+        const auto& p=legacy.fallback;
+        assert(!legacy.explicitFallbackKeys.count("dusk_red_midtone_level"));
+        assert(near(p.grade[1].curves[1].levels[1],.58f+(.44f-.58f)*DuskNightWeight));
+        for(float n:{0.f,.2f,.5f,.84375f,.9f,1.f}){
+            const auto direct=sample(p.grade,n,false),evening=sample(p.grade,n,true);
+            for(unsigned c=0;c<4;++c)for(unsigned i=0;i<3;++i)
+                assert(near(direct.curves[c].levels[i],evening.curves[c].levels[i]));
+            assert(near(direct.vibrance,evening.vibrance));
+        }
+        assert(near(sample(p.grade,DuskNightWeight,true).curves[1].levels[1],p.grade[1].curves[1].levels[1]));
+        Table edited;std::istringstream custom("[default]\nday_red_hue_shift=-12\ndusk_red_hue_shift=23\nnight_blue_saturation=-.7\ndusk_orange_lightness=-.2\ndusk_vibrance=.6\n");
+        assert(parse(custom,edited,error));
+        const auto& authored=edited.fallback;
+        assert(edited.explicitFallbackKeys.count("dusk_red_hue_shift"));
+        assert(near(authored.grade[0].hueShift[0],-12)&&near(authored.grade[1].hueShift[0],23));
+        assert(near(authored.grade[2].saturation[4],-.7f)&&near(authored.grade[1].lightness[1],-.2f));
+        const auto atDusk=gradeAt(authored,DuskNightWeight,true);
+        assert(near(atDusk.hueShift[0],23)&&near(atDusk.vibrance,.6f));
+        const auto dawn=gradeAt(authored,.5f,false);
+        assert(near(dawn.hueShift[0],-6)&&near(dawn.hueShift[4],0));
+        for(const char* bad:{"dusk_red_hue_shift=-30.1","night_green_saturation=-1.01","dusk_blue_lightness=-.251"}){
+            Table invalid;std::istringstream malformed(std::string("[default]\n")+bad);assert(!parse(malformed,invalid,error));
+        }
+        Table inherited;std::istringstream child("[default]\nday_vibrance=.2\nnight_vibrance=.8\n[Expansion01:100]\ndusk_vibrance=.75\n[Expansion01:100/101]\nday_vibrance=.4\n");
+        assert(parse(child,inherited,error));
+        assert(near(inherited.at("Expansion01",101).grade[1].vibrance,.75f));
+        Table sparse;std::istringstream noDusk("[default]\nday_vibrance=.2\nnight_vibrance=.8\n[Expansion01:100/101]\nday_vibrance=.4\n");
+        assert(parse(noDusk,sparse,error));
+        assert(!sparse.explicitKeys.at({"Expansion01",101}).count("dusk_vibrance"));
+        assert(near(sparse.at("Expansion01",101).grade[1].vibrance,.4f+(.8f-.4f)*DuskNightWeight));
+        std::cout<<"PASS grade timeline: legacy dusk parity, explicit 19:30 endpoint, dawn isolation, selective ranges and inheritance\n";
+    }
+    {
+        using namespace NorthlightTone;
         Table regions;
         std::istringstream input("[Azeroth:85]\ntone_curve_strength=1\nday_red_midtone_level=.58\n"
                                  "[Azeroth:85/159]\nnight_low_input=.08\nnight_low_bend=.80\n");
         assert(parse(input,regions,error));
-        const auto& curves=regions.at("Azeroth",159).curves;
-        assert(!tableKey(curves,.5f,0).strength);
+        const auto& timeline=regions.at("Azeroth",159).grade;
+        assert(!tableKey(sample(timeline,.5f,false),0).strength);
         std::array<uint16_t,256*4> pixels{};
         for(float night:{0.f,.5f,1.f}){
-            auto key=tableKey(curves,night,1);
+            auto key=tableKey(sample(timeline,night,false),1);
             assert(key.strength);
             bake(key,pixels.data());
             for(unsigned c=0;c<4;++c){
@@ -168,7 +204,7 @@ int main(int argc,char** argv){
             if(night==0){assert(pixels[128*4]>143*257&&pixels[20*4+3]==20*257);}
             if(night==1){assert(pixels[128*4]==128*257&&pixels[20*4+3]>35*257);}
         }
-        assert(!tableKey(regions.at("Azeroth",85).curves,1,1).strength);
+        assert(!tableKey(sample(regions.at("Azeroth",85).grade,1,false),1).strength);
         Curve low;low.lowInput=.06f;low.levels[0]=.17f;
         for(float y:{.008f,.04f,.09f,.16f}){
             low.lowBend=bendForOutput(low,y);
@@ -179,10 +215,10 @@ int main(int argc,char** argv){
         using namespace NorthlightTone;
         Profile base,day;
         assert(!assignKey(day,"day_vibrance",".65")&&assignKey(day,"night_vibrance","1.1"));
-        assert(near(blend(base,day,.5f).vibrance[0],.325f));
-        assert(!tableKey(base.curves,0,1,true).strength);
-        base.curves[0][0].levels[1]=.55f;
-        assert(tableKey(base.curves,0,1,true).strength&&!tableKey(base.curves,0,1).strength);
+        assert(near(blend(base,day,.5f).grade[0].vibrance,.325f));
+        assert(!tableKey(base.grade[0],1,true).strength);
+        base.grade[0].curves[0].levels[1]=.55f;
+        assert(tableKey(base.grade[0],1,true).strength&&!tableKey(base.grade[0],1,false).strength);
         const unsigned pitch=CubeSize*4+8,slice=pitch*CubeSize+8;
         std::vector<uint16_t> voxels(slice*CubeSize,0xaaaa);
         bakeColourVolume(voxels.data(),pitch*2,slice*2,vibrantColour);

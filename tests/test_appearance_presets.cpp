@@ -6,8 +6,8 @@
 
 using namespace NorthlightAppearancePresets;
 
-static Table parseText(const std::string& text){Table table;std::string error;assert(parse(text,table,error));return table;}
-static Table parseLocalText(const std::string& text){Table table;std::string error;std::istringstream input(text);assert(NorthlightCelestialProfiles::parse(input,table,error));return table;}
+static Table parseText(const std::string& text){Table table;std::string error;if(!parse(text,table,error)){std::cerr<<"invalid preset fixture: "<<error<<'\n';std::abort();}return table;}
+static Table parseLocalText(const std::string& text){Table table;std::string error;std::istringstream input(text);if(!NorthlightCelestialProfiles::parse(input,table,error)){std::cerr<<"invalid profile fixture: "<<error<<'\n';std::abort();}return table;}
 
 int main(int argc,char** argv){
     assert(argc==3);
@@ -63,7 +63,7 @@ int main(int argc,char** argv){
     Table localParent=parseText("[default]\nday_vibrance=0\n[Expansion01:100]\nday_vibrance=0.91\n");
     Table paletteChild=parseText("[default]\n[Expansion01:default]\n[Expansion01:100/101]\nshadow_contrast=0.3\n");
     Table baseline=parseText("[default]\nday_vibrance=0\n");
-    const auto inherited=compose(localParent,paletteChild,baseline).at("Expansion01",101).vibrance[0];
+    const auto inherited=compose(localParent,paletteChild,baseline).at("Expansion01",101).grade[0].vibrance;
     assert(std::fabs(inherited-.91f)<1e-5f);
 
     // Palette-only child declarations keep the local parent's native sun/moon profile.
@@ -73,6 +73,41 @@ int main(int argc,char** argv){
     assert(std::fabs(nativeComposed.at("Expansion01",100).gain[0]-2.7f)<1e-5f);
     assert(std::fabs(nativeComposed.at("Expansion01",101).gain[0]-2.7f)<1e-5f);
     assert(nativeComposed.at("Expansion01",101).shadowContrast==.3f);
+
+    // Dusk and selective colour share the same sparse, region-inheriting appearance keys.
+    Table selective=parseText("[default]\nday_red_hue_shift=-12\nday_red_saturation=-.2\nnight_blue_lightness=.15\n"
+                              "[Expansion01:3430]\ndusk_orange_hue_shift=17\ndusk_orange_saturation=.55\ndusk_vibrance=.61\n");
+    assert(selective.explicitFallbackKeys.count("day_red_hue_shift"));
+    assert(selective.explicitKeys.at({"Expansion01",3430}).count("dusk_orange_hue_shift"));
+    assert(std::fabs(selective.at("Expansion01",3430).grade[1].hueShift[1]-17)<1e-5f);
+    assert(std::fabs(selective.at("Expansion01",3430).grade[1].saturation[1]-.55f)<1e-5f);
+    const auto selectiveCopy=parseText(serialize(selective));
+    for(const auto& key:keys())assert(sameValue(selective.at("Expansion01",3430),selectiveCopy.at("Expansion01",3430),key));
+    Table selectivePalette=parseText("[default]\ndusk_blue_saturation=.8\n[Expansion01:3430]\ndusk_red_lightness=.12\n");
+    const auto selectedGrade=compose(parseLocalText("[default]\n"),selectivePalette,parseText("[default]\nfog_tint=1,1,1\n"));
+    assert(std::fabs(selectedGrade.at("Expansion01",3430).grade[1].saturation[4]-.8f)<1e-5f);
+    assert(std::fabs(selectedGrade.at("Expansion01",3430).grade[1].lightness[0]-.12f)<1e-5f);
+    Table legacyGrade=parseText("[default]\nday_vibrance=.2\nnight_vibrance=.8\nday_red_hue_shift=-12\nnight_red_hue_shift=10\n");
+    const auto& legacyTimeline=legacyGrade.fallback.grade;
+    assert(!legacyGrade.explicitFallbackKeys.count("dusk_vibrance"));
+    assert(std::fabs(legacyTimeline[1].vibrance-(.2f+(.8f-.2f)*NorthlightTone::DuskNightWeight))<1e-5f);
+    auto sameGrade=[](const NorthlightTone::Grade& a,const NorthlightTone::Grade& b){
+        for(unsigned c=0;c<4;++c){
+            if(std::fabs(a.curves[c].lowInput-b.curves[c].lowInput)>1e-5f||std::fabs(a.curves[c].lowBend-b.curves[c].lowBend)>1e-5f)return false;
+            for(unsigned i=0;i<3;++i)if(std::fabs(a.curves[c].levels[i]-b.curves[c].levels[i])>1e-5f)return false;
+        }
+        if(std::fabs(a.vibrance-b.vibrance)>1e-5f)return false;
+        for(unsigned band=0;band<NorthlightTone::HueBandCount;++band)
+            if(std::fabs(a.hueShift[band]-b.hueShift[band])>1e-5f||std::fabs(a.saturation[band]-b.saturation[band])>1e-5f||std::fabs(a.lightness[band]-b.lightness[band])>1e-5f)return false;
+        return true;
+    };
+    for(float n:{0.f,.2f,.5f,NorthlightTone::DuskNightWeight,.9f,1.f})
+        assert(sameGrade(NorthlightTone::sample(legacyTimeline,n,false),NorthlightTone::sample(legacyTimeline,n,true)));
+    Table inheritedDusk=parseText("[default]\nday_vibrance=.2\nnight_vibrance=.8\n[Expansion01:100]\ndusk_vibrance=.75\n[Expansion01:100/101]\nday_vibrance=.4\n");
+    assert(std::fabs(inheritedDusk.at("Expansion01",101).grade[1].vibrance-.75f)<1e-5f);
+    Table derivedDusk=parseText("[default]\nday_vibrance=.2\nnight_vibrance=.8\n[Expansion01:100/101]\nday_vibrance=.4\n");
+    assert(!derivedDusk.explicitKeys.at({"Expansion01",101}).count("dusk_vibrance"));
+    assert(std::fabs(derivedDusk.at("Expansion01",101).grade[1].vibrance-(.4f+(.8f-.4f)*NorthlightTone::DuskNightWeight))<1e-5f);
 
     // An explicit Off remains personal even when Default has no key at that scope; Inherit restores the palette value.
     Table vibrantOff=parseText("[default]\nfog_tint=1,1,1\nfog_tint_strength=0.25\n[Azeroth:default]\nfog_tint_strength=0.5\n[Azeroth:85]\nfog_tint_strength=0.75\n");
@@ -111,7 +146,7 @@ int main(int argc,char** argv){
 
     const auto saved=serialize(composed);
     const auto rows=std::count(saved.begin(),saved.end(),'\n');
-    assert(rows<=8192&&saved.size()<524288);
+    assert(rows<=NorthlightCelestialProfiles::MaxProfileRows&&saved.size()<NorthlightCelestialProfiles::MaxProfileBytes);
     Table savedTable;assert(parse(saved,savedTable,error));
     for(const auto& id:composed.zones)for(const auto& key:keys())
         assert(sameValue(composed.at(id.first.first,id.first.second),savedTable.at(id.first.first,id.first.second),key));
@@ -154,6 +189,33 @@ int main(int argc,char** argv){
     assert(savedTable.interiors==composed.interiors);
     assert(reloaded.parents==composed.parents);
     assert(reloaded.interiors==composed.interiors);
+
+    // A heavily edited world file exceeds the old 8,192-row and 512-KiB limits.
+    Table large;Profile fallback=large.fallback;fallback.toneStrength=.13f;large.fallback=fallback;
+    for(unsigned zone=1000;zone<1200;++zone){
+        Profile area=large.fallback;unsigned fieldIndex=0;
+        for(const auto& key:keys()){
+            unsigned count=0;float low=0,high=0;auto* target=NorthlightCelestialProfiles::keyTarget(area,key,count,low,high);assert(target);
+            const float ratio=.2f+.006f*float((zone+fieldIndex)%80);
+            for(unsigned i=0;i<count;++i)target[i]=low+(high-low)*ratio;
+            ++fieldIndex;
+        }
+        large.zones.emplace(std::make_pair(std::string("Azeroth"),zone),area);
+    }
+    const auto largeBytes=serialize(large);const auto largeRows=std::count(largeBytes.begin(),largeBytes.end(),'\n');
+    assert(largeRows>8192&&largeRows<NorthlightCelestialProfiles::MaxProfileRows);
+    assert(largeBytes.size()>512*1024&&largeBytes.size()<NorthlightSettings::MaxIniBytes);
+    std::cout<<"Large regional grade export: "<<largeRows<<" rows, "<<largeBytes.size()<<" bytes\n";
+    NorthlightSettings::Document largeDocument(largeBytes);assert(largeDocument.text()==largeBytes);
+    Table largeRoundtrip;assert(parse(largeBytes,largeRoundtrip,error));
+    const auto largePath=std::filesystem::path(argv[1])/"large-regional-grade.ini";
+    NorthlightSettings::writeImage(largePath,largeBytes);
+    NorthlightSettings::FileImage largeImage=NorthlightSettings::readImage(largePath);assert(largeImage.raw==largeBytes);
+    Table largeLoaded;assert(NorthlightCelestialProfiles::load(largePath.string(),largeLoaded,error));
+    auto closeValue=[](const Profile& a,const Profile& b,const std::string& key){Profile x=a,y=b;unsigned count=0;float lo=0,hi=0;auto* left=NorthlightCelestialProfiles::keyTarget(x,key,count,lo,hi);auto* right=NorthlightCelestialProfiles::keyTarget(y,key,count,lo,hi);for(unsigned i=0;i<count;++i)if(std::fabs(left[i]-right[i])>1e-5f)return false;return true;};
+    for(unsigned zone:{1000u,1100u,1199u})for(const auto& key:keys())if(!closeValue(large.at("Azeroth",zone),largeLoaded.at("Azeroth",zone),key)){
+        std::cerr<<"large preset mismatch "<<zone<<" "<<key<<" expected="<<value(large.at("Azeroth",zone),key)<<" got="<<value(largeLoaded.at("Azeroth",zone),key)<<'\n';std::abort();
+    }
 
     auto docs=NorthlightSettings::factoryDocuments();
     const std::string selected="Vibrant";docs[2].set("Appearance","Palette",&selected);
