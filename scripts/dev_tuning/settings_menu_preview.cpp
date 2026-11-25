@@ -4,7 +4,7 @@
 //
 //     settings_menu_preview <config folder> <output folder> <back buffer height> <step>...
 //
-// Steps run in order:  click=<label>  drag=<label>:<dx>,<dy>  type=<text>  scroll=<wheel notches>  wait=<frames>  shot=<name>
+// Steps run in order:  click=<label>  clicknear=<label>:<dx>,<dy>  drag=<label>:<dx>,<dy>  type=<text>  scroll=<wheel notches>  wait=<frames>  shot=<name>
 // A label is what the item shows ("Water", "Save"); ImGui's test hooks report where each one was drawn.
 #include <chrono>
 #include <cstdarg>
@@ -140,6 +140,15 @@ struct Preview {
         io.AddMouseButtonEvent(0,false);frames(6);
         return true;
     }
+    // Clicks (dx,dy) pixels at scale 1 from the item's centre: the way to a control drawn without a label of its own.
+    bool clickNear(const std::string& label,float dx,float dy){
+        if(!pointAt(label))return false;
+        ImGuiIO& io=ImGui::GetIO();
+        mouse.x+=dx*scale;mouse.y+=dy*scale;io.AddMousePosEvent(mouse.x,mouse.y);frames(2);
+        io.AddMouseButtonEvent(0,true);frames(2);
+        io.AddMouseButtonEvent(0,false);frames(6);
+        return true;
+    }
     // Presses at the item's centre and releases after moving by (dx,dy) pixels at scale 1.
     bool drag(const std::string& label,float dx,float dy){
         if(!pointAt(label))return false;
@@ -176,6 +185,11 @@ int main(int argc,char** argv){
                 const auto colon=value.rfind(':');float dx=0,dy=0;
                 if(colon==value.npos||std::sscanf(value.c_str()+colon+1,"%f,%f",&dx,&dy)!=2){std::fprintf(stderr,"drag needs <label>:<dx>,<dy>\n");status=2;}
                 else if(!preview.drag(value.substr(0,colon),dx,dy)){std::fprintf(stderr,"nothing labelled \"%s\" is drawn\n",value.substr(0,colon).c_str());status=1;}
+            }
+            else if(verb=="clicknear"){
+                const auto colon=value.rfind(':');float dx=0,dy=0;
+                if(colon==value.npos||std::sscanf(value.c_str()+colon+1,"%f,%f",&dx,&dy)!=2){std::fprintf(stderr,"clicknear needs <label>:<dx>,<dy>\n");status=2;}
+                else if(!preview.clickNear(value.substr(0,colon),dx,dy)){std::fprintf(stderr,"nothing labelled \"%s\" is drawn\n",value.substr(0,colon).c_str());status=1;}
             }
             else if(verb=="type"){ImGui::GetIO().AddInputCharactersUTF8(value.c_str());preview.frames(4);}
             else if(verb=="scroll"){ImGui::GetIO().AddMouseWheelEvent(0,-float(std::atof(value.c_str())));preview.frames(4);}

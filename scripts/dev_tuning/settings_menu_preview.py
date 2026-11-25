@@ -11,7 +11,8 @@ settings come from a scratch copy of the shipped INI files; nothing in a game fo
 It shows layout, wording and how controls respond. Fonts and colours match the game; blending over a real
 scene, input routing and Direct3D do not exist here and still need a look in game.
 
-Steps after the options run in order: click=<label> drag=<label>:<dx>,<dy> type=<text> scroll=<notches>
+Steps after the options run in order: click=<label> clicknear=<label>:<dx>,<dy> (a control without a label,
+by its offset from one that has) drag=<label>:<dx>,<dy> type=<text> scroll=<notches>
 wait=<frames> shot=<name>.
 Needs clang++; Pillow converts the pictures to PNG when it is installed.
 """
