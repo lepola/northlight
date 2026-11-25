@@ -229,7 +229,7 @@ try:
     assert (code, last['event']) == (0, 'done'), text[-3000:]
     unlisted = 'Warning: Data/patch-R.MPQ has no (listfile), so its files could not be listed.'
     unopened = 'Warning: Data/patch-T.MPQ could not be opened as an MPQ archive, so the world cache is built without it'
-    assert str(out) not in text.split('World cache: ')[1].split('World cache ready')[0], 'a client path in a warning'
+    assert str(out) not in text.split('Outdoor lighting: ')[1].split('Outdoor lighting ready')[0], 'a client path in a warning'
     assert text.count(unlisted) == 1 and text.count(unopened) == 1, text
     assert 'new files only it adds may be missing from the static shadows and GI' in text
     assert 'to try it again, delete the world-cache folder and run the installer again' in text

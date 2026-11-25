@@ -180,6 +180,9 @@ class Base(unittest.TestCase):
                 {'step': 'relighting'}, {'step': 'mulgore', 'sky_clone_skipped': 'unfamiliar sky', 'kept_sky_id': 172},
                 {'step': 'outdoor_sun', 'skipped': 'no HD sky'}]}))
             return 0, {'targets': targets}
+        if Path(script).name == 'install_world_cache.py' and '--plan' in args:   # the dry run: changes nothing
+            current = (Path(opt('--output')) / 'install-manifest.json').is_file()
+            return 0, {'event': 'cache_plan', 'mode': 'up_to_date' if current else 'full', 'steps': [], 'resumes': False}
         if Path(script).name == 'install_world_cache.py' and '--instances-plan' in args:
             keys = opt('--instances').split(',')
             old = (fi.read_json(Path(opt('--output')) / fi.INSTANCES) or {}).get('groups', {})
@@ -477,14 +480,24 @@ class Install(Base):
         self.assertEqual((self.client / 'appearance-presets/Vibrant.ini').read_bytes(), personal)
 
     def test_interactive_sky_choice(self):
-        prompts = self.tty('', '2', '', '1')
-        for index, expected in enumerate(('current', 'experimental-preserve', 'experimental-preserve', 'current')):
+        # A first install asks; a rerun keeps the answer and asks only when C is typed at the confirmation.
+        prompts = self.tty('', '',   'c', '2', '',   '',   'c', '1', '')
+        # (sky installed, asked, the choice Enter keeps, prompts so far, the run's first confirmation)
+        runs = (('current', True, 1, 2, 1), ('experimental-preserve', True, 1, 5, 2),
+                ('experimental-preserve', False, None, 6, 5), ('current', True, 2, 9, 6))
+        for expected, asked, offered, shown, confirmation in runs:
             report = self.installer().install(self.client, instances='none')
             self.assertEqual(report['sky'], expected)
-            self.assertIn('Which sky would you like?', self.last_output)
-            self.assertIn('You may see two moons.', self.last_output)
-            self.assertEqual(len(prompts), index + 1)
-            self.assertIn(f'Press Enter for {(1, 1, 2, 2)[index]}', prompts[-1])
+            self.assertEqual('Which sky would you like?' in self.last_output, asked)
+            self.assertEqual('You may see two moons.' in self.last_output, asked)
+            self.assertEqual(len(prompts), shown)
+            self.assertTrue(prompts[confirmation].startswith('Press Enter to '))
+            self.assertEqual('type C to change the sky and dungeon choices' in prompts[confirmation], confirmation != 1)
+            self.assertEqual(prompts[-1], 'Press Enter to ' + ('install' if confirmation == 1 else 'check and repair') +
+                             (', type C to change the sky and dungeon choices first,' if not asked else ',') +
+                             ' or close this window to cancel > ')
+            if asked:
+                self.assertIn(f'Press Enter for {offered}', prompts[-2])
 
     def test_sky_choice_switch_reinstall_and_restore(self):
         stock = self.installer().install(self.client)
@@ -505,7 +518,7 @@ class Install(Base):
         self.assertEqual(report['art_layer'], f'installed {sha(ART)[:8]} Data/patch-z.mpq; '
                                               f'installed {sha(ART)[:8]} Data/enUS/patch-enus-z.mpq')
         self.assertTrue(report['payload'].startswith('installed'))
-        self.assertIn('Art layer: generated from local assets (2 steps applied, 1 skipped',
+        self.assertIn('Skies, weather and scenery: built from your game files (2 steps applied, 1 skipped',
                       self.last_output)
         cache = self.client / 'world-cache'
         self.assertEqual({n: (cache / n).read_bytes() for n in CACHE_FILES}, CACHE_FILES)
@@ -534,7 +547,7 @@ class Install(Base):
             return self.fake_run(script, args, show)
         first.run = failed_art
         groups = ['classic-dungeons', 'classic-raids']
-        with self.assertRaisesRegex(fi.Failed, 'art layer build failed'):
+        with self.assertRaisesRegex(fi.Failed, 'Building skies, weather and scenery failed'):
             first.install(self.client, instances=','.join(groups))
         cache = self.client / 'world-cache'
         before = tree(cache)
@@ -549,12 +562,13 @@ class Install(Base):
     def test_no_match_builds_locally(self):
         self.variant = None
         report = self.installer().install(self.client)
-        name, args = self.calls[0]
+        (name, dry), (_, args) = self.calls[:2]   # the dry run for the plan, then the build
         self.assertEqual(name, 'install_world_cache.py')
+        self.assertIn('--plan', dry)
         self.assertEqual(args[args.index('--without') + 1], 'z')
         self.assertEqual(args[args.index('--progress') + 1], 'human')
         self.assertEqual(Path(args[args.index('--output') + 1]), self.client / 'world-cache')
-        self.assertEqual(report['world_cache'], 'built from this client')
+        self.assertEqual(report['world_cache'], 'built from your game files')
         self.assertEqual((self.client / 'Data/patch-z.mpq').read_bytes(), ART)
 
     def test_unlisted_archive_warning_is_repeated_in_the_summary(self):
@@ -630,9 +644,9 @@ class Install(Base):
         self.assertTrue(report['art_layer'].startswith('skipped'))
         # identified and built WITH the foreign z (no stock cache for a client that loads it); no art layer build
         self.assertEqual(self.identified, [''])
-        self.assertEqual([n for n, _ in self.calls], ['install_world_cache.py'])
-        args = self.calls[0][1]
-        self.assertEqual(args[args.index('--without') + 1], '')
+        self.assertEqual([n for n, _ in self.calls], ['install_world_cache.py'] * 2)   # the dry run and the build
+        for _, args in self.calls:
+            self.assertEqual(args[args.index('--without') + 1], '')
         self.assertEqual((self.client / 'Data/patch-z.mpq').read_bytes(), b'someone else')
         self.assertFalse((self.client / 'Data/enUS/patch-enus-z.mpq').exists())
         paths = [e['path'] for b in self.backups() for e in json.loads(b.read_text())['files']]
@@ -954,13 +968,13 @@ class Install(Base):
         report = self.installer().install(self.client)
         self.assertEqual(self.instance_calls(), [])
         self.assertEqual(report['instances'], {'built': [], 'kept': [], 'removed': []})
-        self.assertIn('Instance world cache: none', self.last_output)
+        self.assertIn('Dungeon and raid lighting: none', self.last_output)
         self.assertFalse((self.client / 'world-cache' / fi.INSTANCES).exists())
 
     def test_instances_argument_skips_the_question_and_reaches_the_orchestrator(self):
-        prompts = self.tty()
+        prompts = self.tty('')
         report = self.installer().install(self.client, instances='1 6', sky='current')
-        self.assertEqual(prompts, [])
+        self.assertEqual(prompts, ['Press Enter to install, or close this window to cancel > '])
         (args,) = self.instance_calls()
         self.assertEqual(args[args.index('--instances') + 1], 'classic-dungeons,wotlk-raids')
         self.assertEqual(Path(args[args.index('--output') + 1]), self.client / 'world-cache')
@@ -968,7 +982,7 @@ class Install(Base):
             self.assertIn(name, args)
         self.assertEqual(args[args.index('--progress') + 1], 'human')
         self.assertEqual(report['instances']['built'], ['classic-dungeons', 'wotlk-raids'])
-        self.assertIn('Instance world cache: Classic dungeons (built), Wrath raids (built)', self.last_output)
+        self.assertIn('Dungeon and raid lighting: Classic dungeons (built), Wrath raids (built)', self.last_output)
         for m in instance_maps.maps_for(['wotlk-raids']):
             self.assertTrue((self.client / 'world-cache' / m / '1_1.fg3').is_file())
 
@@ -990,12 +1004,12 @@ class Install(Base):
         (args,) = self.instance_calls()[1:]
         self.assertEqual(args[args.index('--instances') + 1], 'classic-raids,tbc-raids')
         self.assertEqual(report['instances'], {'built': [], 'kept': ['classic-raids', 'tbc-raids'], 'removed': []})
-        self.assertIn('Instance world cache: Classic raids (kept), TBC raids (kept)', self.last_output)
+        self.assertIn('Dungeon and raid lighting: Classic raids (kept), TBC raids (kept)', self.last_output)
         self.assertIn('already installed; nothing changed', self.last_output)
         report = self.installer().install(self.client, instances='none')
         self.assertEqual(self.instance_calls()[-1][self.instance_calls()[-1].index('--instances') + 1], 'none')
         self.assertEqual(report['instances']['removed'], ['classic-raids', 'tbc-raids'])
-        self.assertIn('Instance world cache: Classic raids (removed), TBC raids (removed)', self.last_output)
+        self.assertIn('Dungeon and raid lighting: Classic raids (removed), TBC raids (removed)', self.last_output)
         self.assertFalse((self.client / 'world-cache' / fi.INSTANCES).exists())
 
     def test_the_question_lists_the_groups_and_takes_typed_answers(self):
@@ -1068,7 +1082,7 @@ class Install(Base):
         self.assertEqual({n: after.get(n) for n in instance_files}, instance_files)
         self.assertEqual(after[model], b'instance model')           # the model its tiles use came along
         self.assertEqual(after['models/0123.fgs'], CACHE_FILES['models/0123.fgs'])
-        self.assertIn('Kept the instance world cache (6 maps).', self.last_output)
+        self.assertIn('Kept dungeon and raid lighting (6 maps).', self.last_output)
         self.assertEqual(self.instance_calls()[-1][self.instance_calls()[-1].index('--instances') + 1], 'classic-raids')
         self.assertFalse((self.client / 'world-cache.previous').exists())
 
@@ -1082,8 +1096,8 @@ class Install(Base):
         inst = self.installer(); inst.run = failing
         report = inst.install(self.client, instances='classic-raids')   # the optional layer never blocks the renderer
         text = inst.out.getvalue()
-        self.assertIn('instance world cache build failed', text)
-        self.assertIn(f'Instance world cache: Classic raids failed (see {log}); the renderer was updated. '
+        self.assertIn('Building dungeon and raid lighting failed', text)
+        self.assertIn(f'Dungeon and raid lighting: Classic raids failed (see {log}); the renderer was updated. '
                       'Run the installer again, or use --instances none to skip.', text)
         self.assertEqual(report['instances_failed'], {'groups': ['classic-raids'], 'log': str(log)})
         self.assertTrue(report['payload'].startswith('installed'))
@@ -1485,6 +1499,166 @@ class LinuxInstall(WindowsInstall):
 
     def test_package_stormlib_is_the_shared_object(self):
         self.assertEqual(fi.Package(self.pkg_root, 'linux').stormlib, self.pkg_root / 'runtime/lib/libstorm.so')
+
+
+class Updating(Base):
+    """Running the installer over an install: it knows what is there, keeps the earlier choices, asks once, and a
+    game folder whose outdoor lighting is current needs neither the build's disk space nor its memory."""
+    platform = 'windows'
+    tty = Install.tty
+    make_water_package = Install.make_water_package
+
+    def newer_package(self, version='0.3.163-test'):
+        dll = PROXY.replace(b'0.3.162', version.split('-')[0].encode())
+        self.set_package_payload('d3d9.dll', dll)
+        info = self.pkg_root / 'BUILD-INFO.json'
+        info.write_text(json.dumps({**json.loads(info.read_bytes()), 'version': version, 'dll_sha256': sha(dll)}))
+
+    def test_a_wrong_folder_is_asked_again(self):
+        prompts = self.tty('/nowhere/WoW', str(self.client / 'Data'), str(self.client / 'wow.exe'))
+        installer = self.installer()
+        self.assertEqual(installer.resolve_client(None), self.client.resolve())
+        self.assertEqual(len(prompts), 3)
+        self.assertIn('Game folder not found: /nowhere/WoW.', self.last_output)
+        self.assertIn(f'Wow.exe is not in {self.client / "Data"}.', self.last_output)
+
+    def test_without_a_terminal_one_wrong_folder_ends_the_run(self):
+        with patch.object(builtins, 'input', lambda prompt='': '/nowhere/WoW'):
+            with self.assertRaises(fi.Refusal) as e:
+                self.installer().resolve_client(None)
+        self.assertIn('Game folder not found', str(e.exception))
+        with patch.object(builtins, 'input', lambda prompt='': ''):
+            with self.assertRaises(fi.Refusal) as e:
+                self.installer().resolve_client(None)
+        self.assertIn('No game folder was given', str(e.exception))
+
+    def test_the_game_folder_is_offered_next_time_and_forgotten_by_uninstall(self):
+        memory = self.base / 'user' / 'installer.json'
+        first = self.installer(); first.memory = memory
+        first.install(self.client)
+        self.assertEqual(json.loads(memory.read_text())['game_folders'], [str(self.client)])
+        prompts = self.tty('', '1', '', str(self.client))   # Enter, its number, the uninstall question, a typed folder
+        for _ in range(2):   # Enter, then its number
+            again = self.installer(); again.memory = memory
+            self.assertEqual(again.resolve_client(None), self.client.resolve())
+            self.assertIn(f'  1) {self.client}   (Northlight 0.3.162-test installed)', self.last_output)
+            self.assertTrue(prompts[-1].startswith('Press Enter for 1, type a number, or paste another game folder'))
+        gone = self.base / 'Games' / 'moved away'
+        shutil.copytree(self.client, gone)
+        other = self.installer(); other.memory = memory
+        other.remember(gone)
+        self.assertEqual(other.remembered(), [str(gone), str(self.client)])
+        shutil.rmtree(gone)
+        self.assertEqual(other.remembered(), [str(self.client)])   # a folder without its Wow.exe is no longer offered
+        last = self.installer(); last.memory = memory
+        last.uninstall(self.client)
+        self.assertFalse(memory.exists() or memory.parent.exists())
+        fresh = self.installer(); fresh.memory = memory
+        self.assertEqual(fresh.resolve_client(None), self.client.resolve())   # nothing remembered: the typed folder
+        self.assertTrue(prompts[-1].startswith('Paste the game folder path'))
+
+    def test_an_update_names_both_versions_keeps_the_choices_and_asks_once(self):
+        self.installer().install(self.client, instances='2', sky='experimental-preserve')
+        self.assertEqual(json.loads((self.client / fi.RECEIPT).read_text()),
+                         {'format': fi.RECEIPT_FORMAT, 'northlight': '0.3.162-test', 'tideglass': None, 'package': '0.3.162-test'})
+        self.newer_package()
+        prompts = self.tty('', '')   # the update, then the uninstall
+        report = self.installer().install(self.client)
+        self.assertEqual(prompts, ['Press Enter to update, type C to change the sky and dungeon choices first, '
+                                   'or close this window to cancel > '])
+        text = self.last_output
+        for line in ('Installed now:  Northlight 0.3.162-test', 'This package:   Northlight 0.3.163-test', 'The update will:',
+                     '  - replace 1 renderer file that changed', '  - keep outdoor lighting, which is up to date',
+                     '  - keep dungeon and raid lighting: Classic raids',
+                     '  - build skies, weather and scenery from your game files, with more of your HD sky (experimental)',
+                     '  - keep your settings (northlight-quality.ini) and any look preset you edited',
+                     'Takes a few minutes. Nothing has been changed yet.',
+                     'Northlight renderer 0.3.163-test: updated from Northlight 0.3.162-test.'):
+            self.assertIn(line + '\n', text)
+        self.assertNotIn('Which sky would you like?', text)
+        self.assertNotIn('Optional lighting for dungeons and raids', text)
+        self.assertEqual((report['sky'], report['instances']['kept']), ('experimental-preserve', ['classic-raids']))
+        self.assertEqual(json.loads((self.client / fi.RECEIPT).read_text())['northlight'], '0.3.163-test')
+        self.installer().uninstall(self.client)
+        self.assertEqual(tree(self.client), self.before)
+
+    def test_an_older_package_says_so(self):
+        self.newer_package('0.3.170-test')
+        self.installer().install(self.client)
+        self.newer_package('0.3.165-test')
+        prompts = self.tty('')
+        self.installer().install(self.client)
+        self.assertIn('This package is OLDER than what is installed.', self.last_output)
+        self.assertTrue(prompts[0].startswith('Press Enter to install the older version,'))
+        self.assertIn('0.3.165-test: installed in place of Northlight 0.3.170-test.', self.last_output)
+
+    def test_cancelling_at_the_confirmation_changes_nothing(self):
+        self.tty('', '', 'n')   # dungeons, sky, then no
+        installer = self.installer(); installer.memory = self.base / 'user' / 'installer.json'
+        with self.assertRaises(fi.Refusal) as e:
+            installer.install(self.client)
+        self.assertEqual(str(e.exception), 'Cancelled; nothing was changed.')
+        self.assertIn('Ready to install Northlight renderer 0.3.162-test. It will:', self.last_output)
+        self.assert_untouched()
+        self.assertFalse(installer.memory.exists())
+        self.assertEqual([args for name, args in self.calls if '--plan' not in args and '--instances-plan' not in args], [])
+
+    def test_an_install_made_before_the_receipt_is_read_from_its_files(self):
+        self.make_water_package()
+        self.set_package_payload('water-core.dll', b'MZ Tideglass 0.1.0; cooperative core started')
+        installer = self.installer()
+        self.assertIsNone(installer.installed(self.client))
+        installer.install(self.client)
+        (self.client / fi.RECEIPT).unlink()
+        self.assertEqual(installer.installed(self.client), {'northlight': '0.3.162', 'tideglass': '0.1.0'})
+        self.assertEqual(fi.describe(installer.installed(self.client)), 'Northlight 0.3.162 + Tideglass 0.1.0')
+        self.assertEqual(installer.relation(installer.installed(self.client)), 'update')   # the package holds 0.3.217
+        (self.client / 'water-core.dll').write_bytes(b'a core without its version')
+        self.assertEqual(fi.describe(installer.installed(self.client)), 'Northlight 0.3.162 + an earlier Tideglass')
+        self.assertEqual(installer.relation(installer.installed(self.client)), 'update')
+
+    def test_current_outdoor_lighting_needs_no_build_space_or_memory(self):
+        self.variant = None   # no prebuilt match: outdoor lighting is built from the game files
+        small = self.installer(); small.free_bytes = lambda path: 2 * fi.GIB
+        with self.assertRaises(fi.Refusal) as e:
+            small.install(self.client)
+        self.assertIn('Not enough free disk space', str(e.exception))
+        self.assert_untouched()
+        self.installer().install(self.client)
+        self.assertIn('  - build outdoor lighting from your game files (20-40 minutes, about 13 GB on the game drive)\n', self.last_output)
+        self.assertIn('Takes 20-40 minutes; if it is interrupted, run the installer again to continue.', self.last_output)
+        self.newer_package()
+        update = self.installer(); update.free_bytes = lambda path: 2 * fi.GIB; update.ram = lambda: 2 * fi.GIB
+        update.install(self.client)
+        self.assertIn('  - keep outdoor lighting, which is up to date\n', self.last_output)
+        self.assertIn('Checking outdoor lighting...', self.last_output)
+        self.assertNotIn('20-40 minutes', self.last_output)
+
+    def test_uninstall_says_what_it_removes_and_can_be_cancelled(self):
+        self.installer().install(self.client)
+        installed = tree(self.client)
+        prompts = self.tty('no', '')
+        with self.assertRaises(fi.Refusal):
+            self.installer().uninstall(self.client)
+        self.assertEqual(tree(self.client), installed)
+        self.assertEqual(prompts, ['Press Enter to remove it, or close this window to cancel > '])
+        self.assertIn('This removes Northlight 0.3.162-test from it:', self.last_output)
+        self.assertIn('  - deletes outdoor lighting (the world-cache folder)', self.last_output)
+        self.installer().uninstall(self.client)
+        self.assertEqual(tree(self.client), self.before)
+        self.installer().uninstall(self.client)   # nothing left: no question
+        self.assertEqual(len(prompts), 2)
+        self.assertIn('Nothing to remove.', self.last_output)
+
+    def test_the_file_steps_reach_the_installer_log(self):
+        installer = self.installer()
+        installer.open_log('install')
+        installer.install(self.client)
+        installer.log.close()
+        log = Path(installer.log.name).read_text(encoding='utf-8')
+        self.assertIn('files (each replaced file is backed up first)...', log)
+        self.assertIn('Verifying package and comparing installed files...', log)
+        self.assertLess(log.index('Checks passed.'), log.index('Verifying package and comparing installed files...'))
 
 
 class FailureOutput(Base):

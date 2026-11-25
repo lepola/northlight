@@ -6,15 +6,30 @@ on {system}.
 FIRST INSTALL
 
 1. Close WoW. Extract the whole ZIP into a folder outside the game, such as
-   Downloads. Keep this folder so you can undo the installation later.
+   Downloads.
 2. {start}
    Paste the path to your game folder or drag Wow.exe into the prompt.
-3. Press Enter for the default sky and dungeon choices. The first install
-   usually takes 20-40 minutes to prepare outdoor lighting. Allow about 13 GB
-   free on the game drive and 8 GB RAM. If interrupted, run it again to resume.
+3. Press Enter for the default dungeon and sky choices. The installer lists
+   what it is about to do and waits for Enter before it changes anything.
+   The first install usually takes 20-40 minutes to prepare outdoor lighting.
+   Allow about 13 GB free on the game drive and 8 GB RAM. If interrupted, run
+   it again to continue.
 {before_play}
 Start WoW as usual. Look across water towards trees or buildings, turn along
 the bank, then take the camera underwater to see the change.
+
+UPDATING
+
+Close WoW, extract the new ZIP and run its installer the same way, over the
+version you have. It offers the game folder you used last time, shows the
+installed and the new version, and keeps your settings, your tuning and your
+earlier dungeon and sky choices. An update usually takes a few minutes.
+Outdoor lighting is rebuilt only when a new version needs it, and the
+installer says so before it starts. Afterwards you can delete the folder of
+the older download.
+
+To offer your game folder next time, the installer keeps its path in one
+small file in your user profile. Uninstalling removes it again.
 
 WHAT CHANGES
 
@@ -33,10 +48,11 @@ clear Use Tideglass, save and restart WoW. Under water the scene then keeps
 its above-water light, without the game's own underwater tint.
 
 To remove both, close WoW and {undo}.
-Choose the same game folder. Northlight and Tideglass are removed together,
-the game files return to how they were before Northlight was first installed,
-and edited water settings are kept. To keep Northlight without the beta,
-install Northlight 0.3.216 afterwards.
+Any newer download of this package can do that too, so you do not need to
+keep an old one. Choose the same game folder. Northlight and Tideglass are
+removed together, the game files return to how they were before Northlight
+was first installed, and edited water settings are kept. To keep Northlight
+without the beta, install Northlight 0.3.216 afterwards.
 
 IF SOMETHING GOES WRONG
 

@@ -108,8 +108,9 @@ Installation status without changes:  bash install.sh status --client ~/Games/Wo
 
 Dungeon and raid world cache (optional): the continents get static world
 shadows and GI from the world cache. Dungeons and raids do not, unless you
-add them. The installer asks while it checks the client, before anything is
-built, and builds the chosen groups after the continents:
+add them. A first install asks while it checks the client, before anything
+is built, and builds the chosen groups after the continents. A later run
+keeps your choice; type C when it shows what it is about to do to change it:
   1  Classic dungeons  ~0.6 GB  ~1.7 min
   2  Classic raids     ~0.3 GB  ~0.9 min
   3  TBC dungeons      ~0.6 GB  ~1.8 min

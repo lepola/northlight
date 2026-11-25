@@ -168,13 +168,13 @@ def human(f):
     """A readable line for a progress event, or None to stay quiet."""
     event, what = f.get('event'), f.get('map') or f.get('step')
     if event == 'fingerprint':
-        return f"World cache: {f['archives']} archives, locale {f['locale']}"
+        return f"Outdoor lighting: {f['archives']} archives, locale {f['locale']}"
     if event == 'plan':
         if f['mode'] == 'instances':
-            return None if not f['groups'] else (f"Building the instance world cache: {', '.join(f['groups'])}, up to {f['jobs']} groups at a time. "
+            return None if not f['groups'] else (f"Building dungeon and raid lighting: {', '.join(f['groups'])}, up to {f['jobs']} groups at a time. "
                     'This takes a few minutes per group.')
         if f['mode'] == 'full':
-            return (f"Building the world cache: {', '.join(f['maps'])}, up to {f['jobs']} maps at a time "
+            return (f"Building outdoor lighting: {', '.join(f['maps'])}, up to {f['jobs']} maps at a time "
                     f"({f['total_memory_gb']} GB memory). This takes 10 to 40 minutes.")
         return f"Updating {', '.join(f['steps'])}; the world geometry is up to date."
     if event == 'start':
@@ -198,9 +198,9 @@ def human(f):
         return (f"Tolerated: {f['clamped_wmo_groups']} WMO groups with an oversized MOGP (clamped), "
                 f"{f['fog_unreadable_wmos']} unreadable WMOs left out of the fog")
     if event == 'instances_removed':
-        return f"Instance world cache: removed {', '.join(f['groups'])}"
+        return f"Dungeon and raid lighting: removed {', '.join(f['groups'])}"
     if event == 'instances_carry_failed':
-        return f"Warning: the instance world cache could not be carried over ({f['error']}); it is built again next time."
+        return f"Warning: dungeon and raid lighting could not be carried over ({f['error']}); it is built again next time."
     if event == 'low_memory':
         return (f"Warning: {f['available_gb']} GB of free memory, {what} needs about {f['needs_gb']} GB; "
                 'the build may be slow. Close other programs if you can.')
@@ -234,7 +234,7 @@ def final(event, code, **fields):
     """The last stdout line, JSON in both progress modes; returns the exit status. A failure's 'logs' are named,
     and in human mode their last lines are printed too, so the reason is on the console, not only in the log."""
     if PROGRESS == 'human':
-        layer = 'Instance world cache' if fields.get('layer') == 'instances' else 'World cache'
+        layer = 'Dungeon and raid lighting' if fields.get('layer') == 'instances' else 'Outdoor lighting'
         text = {'done': f"{layer} ready in {fields.get('seconds', 0) / 60:.1f} min",
                 'up_to_date': f'{layer} is up to date',
                 'failed': f"{layer} build FAILED: {fields.get('error') or '; '.join(fields.get('problems', []))}"}[event]
@@ -1045,6 +1045,9 @@ def main(argv=None):
                     'numbers (see renderer/instance_maps.py), "all" or "none" (removes it)')
     ap.add_argument('--instances-plan', action='store_true',
                     help='with --instances: print {"build": [...], "keep": [...], "remove": [...]} and change nothing')
+    ap.add_argument('--plan', action='store_true',
+                    help='without --instances: print {"mode": "full"|"partial"|"finish"|"up_to_date", "steps": [...], '
+                         '"resumes": bool} and change nothing')
     ap.add_argument('--progress', choices=['json', 'human'], default='json', help='progress format (default json)')
     args = ap.parse_args(argv)
     PROGRESS = args.progress
@@ -1063,6 +1066,17 @@ def main(argv=None):
     digest = _hash(digests)
     staging = output.with_name(output.name + '.staging')
     manifest_path = output / 'install-manifest.json'
+    if args.plan:   # a dry run, so the installer can say how long this will take before it starts
+        ready = read_json(staging / 'install-manifest.json') \
+            if staging.is_dir() and not (staging / 'install-state.json').exists() else None
+        if ready is not None and not ready.get('problems') and ready.get('digests') == digests:
+            mode, steps = 'finish', []   # built by an interrupted run; only the swap is left
+        else:
+            mode, steps = plan(digests, read_json(manifest_path) if manifest_path.is_file() else None, output,
+                               args.force, args.without)
+        resumes = mode in ('full', 'partial') and (staging / 'install-state.json').is_file()
+        print(json.dumps({'event': 'cache_plan', 'mode': mode, 'steps': steps, 'resumes': resumes}), flush=True)
+        return 0
     emit(event='fingerprint', sha256=digest, locale=locale, view=args.archives, without=args.without,
          archives=len(inputs['archives']))
     if finish_staging(staging, output, digests, args.keep_previous):

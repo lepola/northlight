@@ -33,6 +33,10 @@ MARKER = b'Northlight renderer '
 PROXY_SIGNATURE = b'PROXY module=%ls root=%ls'   # the proxy's start-up log line; carries no product name
 PACKAGE = Path(__file__).resolve().parent
 
+def emit(*parts, flush=True):
+    """Progress lines of the functions below. A front end replaces this (northlight_install.py sends them to its log too)."""
+    print(*parts, flush=flush)
+
 def sha(path):
     h = hashlib.sha256()
     with path.open('rb') as f:
@@ -179,7 +183,7 @@ def restore(client, backup):
         else: replace_file(safe_path(backup/'before', e['path']), target)
     record['status'] = 'restored'
     atomic_json(backup/'transaction.json', record)
-    print('Restored previous files:', backup)
+    emit('Restored previous files:', backup)
 
 def install_order(t):
     """Sort key of (folder, record): the second, then the exact creation time (same-second installs), then the folder name."""
@@ -342,11 +346,11 @@ def commit(client, plan, staged, payload=None, version='__RELEASE_VERSION__', ki
             else:
                 replace_file(source(e),dst)
                 if sha(dst) != e['after']: raise ValueError('Installed checksum mismatch: '+e['path'])
-            if i==0: print('Installing',len(plan),'files (each replaced file is backed up first)...',flush=True)
-            elif i%1000==0: print('Installed',i,'of',len(plan),'files',flush=True)
+            if i==0: emit('Installing',len(plan),'files (each replaced file is backed up first)...',flush=True)
+            elif i%1000==0: emit('Installed',i,'of',len(plan),'files',flush=True)
         record['status']='installed'; atomic_json(backup/'transaction.json',record)
     except BaseException:
-        print('Installation interrupted. Restoring the recorded transaction...',flush=True)
+        emit('Installation interrupted. Restoring the recorded transaction...',flush=True)
         restore(client,backup)
         raise
     finally:
@@ -453,9 +457,9 @@ def payload_plan(client, package, use_existing=False, backend=None, extra=None, 
     manifest = json.loads((package/'payload-manifest.json').read_text(encoding='utf-8'))
     if proxy and PROXY not in [e['path'] for e in manifest]: raise ValueError('Package lacks the renderer '+PROXY)
     if foreign:
-        print('Existing', PROXY, 'is not this renderer; it is kept as', LEGACY, flush=True)
+        emit('Existing', PROXY, 'is not this renderer; it is kept as', LEGACY, flush=True)
         if not is_dxvk(safe_path(client, PROXY).read_bytes()):
-            print('Note: its settings (e.g. ReShade.ini, reshade-shaders, enbseries.ini) stay in the game folder;'
+            emit('Note: its settings (e.g. ReShade.ini, reshade-shaders, enbseries.ini) stay in the game folder;'
                   ' a ReShade/ENB used as Backend=legacy may not find them there.', flush=True)
     plan, proxy_entry = list(first), []
     # The selected DXVK backend's files must verify. A file missing from another DXVK folder (an antivirus
@@ -465,7 +469,7 @@ def payload_plan(client, package, use_existing=False, backend=None, extra=None, 
     keep_ini = proxy and effective is not None and config_backend(safe_path(client, CONFIG)) == effective
     if proxy and backend is not None and not keep_ini and CONFIG not in [e['path'] for e in manifest]:
         manifest = manifest+[{'path':CONFIG, 'sha256':None}]
-    print('Verifying package and comparing installed files...', flush=True)
+    emit('Verifying package and comparing installed files...', flush=True)
     installed_preset_hashes = {}
     for _, record in transactions(client):
         for entry in record.get('files', []):
@@ -481,15 +485,15 @@ def payload_plan(client, package, use_existing=False, backend=None, extra=None, 
                 if package_sha(src) != e['sha256']: raise ValueError(package_problem(e['path'], selected, False))
             elif other is None: raise ValueError(package_problem(e['path'], selected, True))
             else:
-                print('Note:', e['path'], 'is missing from the package (an antivirus product may have removed it);'
+                emit('Note:', e['path'], 'is missing from the package (an antivirus product may have removed it);'
                       ' skipping it. Backend', other, 'will not be available.', flush=True)
                 if dst.exists():
-                    print('Removing the older', e['path'], 'from the game folder (it was not verified by this install).', flush=True)
+                    emit('Removing the older', e['path'], 'from the game folder (it was not verified by this install).', flush=True)
                     plan.append({'path':e['path'], 'before':sha(dst), 'after':None})
                 continue
         old = sha(dst) if dst.exists() else None
         if e['path'] in APPEARANCE_PRESETS and dst.exists() and old != e['sha256'] and old not in installed_preset_hashes.get(e['path'], set()):
-            print('Keeping your edited', e['path'], flush=True)
+            emit('Keeping your edited', e['path'], flush=True)
             continue  # A changed bundled look is player data; an unchanged installed copy can receive package updates.
         # Existing settings keep ordinary overrides. New Quality feature bundles migrate once;
         # the complete result is backed up and installed through this same transaction.
@@ -498,8 +502,8 @@ def payload_plan(client, package, use_existing=False, backend=None, extra=None, 
                 continue  # The player's water profile remains byte-for-byte editable.
             merged = merge_quality_ini(dst.read_bytes(), safe_path(package/'payload', e['path']).read_bytes()) if e['sha256'] is not None else None
             if merged is None:
-                print('Keeping your existing', e['path'], flush=True); continue
-            print('Updating', e['path'], '(new settings and Quality feature defaults; other overrides kept)', flush=True)
+                emit('Keeping your existing', e['path'], flush=True); continue
+            emit('Updating', e['path'], '(new settings and Quality feature defaults; other overrides kept)', flush=True)
             staged[e['path']] = merged
             plan.append({'path':e['path'], 'before':old, 'after':hashlib.sha256(merged).hexdigest(), 'source':'staged', 'preserve':True}); continue
         entry = {'path':e['path'], 'before':old, 'after':e['sha256'], **({'preserve':True} if e.get('preserve') else {})}
@@ -526,19 +530,19 @@ def install(client, package=PACKAGE, use_existing=False, backend=None, extra=Non
         raise ValueError('Extract the package OUTSIDE the game folder before installing.')
     requirements=package/'required-world-cache.json'
     if requirements.exists():
-        print('Checking existing world-cache for this update...',flush=True)
+        emit('Checking existing world-cache for this update...',flush=True)
         for e in json.loads(requirements.read_text(encoding='utf-8')):
             src=safe_path(client,e['path'])
             if not src.is_file() or sha(src)!=e['sha256']:
                 raise ValueError('This small update needs the matching world-cache. Use the FULL package: '+e['path'])
     plan, staged, foreign = payload_plan(client, package, use_existing, resolve_backend(client, backend), extra)
     if not plan:
-        print('This package is already installed.'); return None
+        emit('This package is already installed.'); return None
     backup = commit(client, plan, staged, package/'payload', version)
-    print('Installed', version+'. Rollback:', backup)
-    print('wow.exe is not modified. The renderer is loaded as', PROXY, 'from the game folder.')
-    if foreign: print('Your previous', PROXY, 'is in', LEGACY, '(Backend=legacy uses it).')
-    print('Start wow.exe yourself. Check northlight-renderer.log for selected backend and capabilities.')
+    emit('Installed', version+'. Rollback:', backup)
+    emit('wow.exe is not modified. The renderer is loaded as', PROXY, 'from the game folder.')
+    if foreign: emit('Your previous', PROXY, 'is in', LEGACY, '(Backend=legacy uses it).')
+    emit('Start wow.exe yourself. Check northlight-renderer.log for selected backend and capabilities.')
     return backup
 
 def main():

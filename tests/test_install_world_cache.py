@@ -118,6 +118,14 @@ assert iwc.side_folders(cache)[:2] == [out / 'world-cache.staging', previous]
 real_total = iwc.total_memory
 iwc.total_memory = lambda: 4 << 30                                              # stops a full build at preflight
 assert run(['--client', str(client), '--output', str(cache)])[1]['event'] == 'up_to_date'
+# --plan is a dry run: it names what a run would do and changes nothing (no memory check, no folders touched)
+listing = lambda: sorted(p.relative_to(out).as_posix() for p in out.rglob('*'))
+before_plan = listing()
+code, last = run(['--client', str(client), '--output', str(cache), '--plan'])
+assert (code, last) == (0, {'event': 'cache_plan', 'mode': 'up_to_date', 'steps': [], 'resumes': False}), last
+code, last = run(['--client', str(client), '--output', str(cache), '--plan', '--without', ''])
+assert (code, last['mode'], last['steps'], last['resumes']) == (0, 'full', list(iwc.POST), False), last
+assert listing() == before_plan
 code, last = run(['--client', str(client), '--output', str(cache), '--without', ''])
 iwc.total_memory = real_total
 assert (code, last['event'], last['stage']) == (2, 'failed', 'preflight'), last  # the foreign z is an input
@@ -188,6 +196,7 @@ fake_cache(staging, {'digests': base, 'swap': 'full'})
 (staging / 'Azeroth/1_1.fg3').write_text('new')
 shutil.rmtree(cache)
 os.makedirs(out / 'world-cache.previous', exist_ok=True)                        # killed between the two renames
+assert run(['--client', str(client), '--output', str(cache), '--plan'])[1]['mode'] == 'finish' and staging.is_dir()
 code, last = run(['--client', str(client), '--output', str(cache)])
 assert (code, last['event'], last.get('completed_interrupted_swap')) == (0, 'done', True), last
 assert (cache / 'Azeroth/1_1.fg3').read_text() == 'new' and not staging.exists()
@@ -280,7 +289,7 @@ with contextlib.redirect_stdout(buffer):
     assert iwc.final('failed', 1, problems=['scene Azeroth failed'], logs=[str(scene)]) == 1
 iwc.PROGRESS = 'json'
 lines = buffer.getvalue().splitlines()
-assert lines[0] == 'World cache build FAILED: scene Azeroth failed' and lines[1] == f'--- last lines of {scene} ---'
+assert lines[0] == 'Outdoor lighting build FAILED: scene Azeroth failed' and lines[1] == f'--- last lines of {scene} ---'
 assert '  | OSError: libstorm.so: cannot open shared object file' in lines and json.loads(lines[-1])['logs'] == [str(scene)]
 assert iwc.log_tail(logs / 'missing.log')[0].startswith('(cannot read the log')
 
