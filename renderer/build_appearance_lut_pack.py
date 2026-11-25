@@ -2,7 +2,7 @@
 """Bake the shipped Vibrant.ini into a deterministic, indexed 32^3 RGBA16 pack.
 
     python3 renderer/build_appearance_lut_pack.py --input client-config/appearance-presets/Vibrant.ini \
-        --output /tmp/Vibrant.nllutpack
+        --output Vibrant.nllutpack
 
 The small C++ producer uses the same INI parser, BakeKey and colour-volume baker as the renderer. Python only
 adds the deterministic index and integrity metadata; it does not implement or approximate the colour transform.
@@ -167,7 +167,7 @@ def validate_pack(data, *, source_ini=None, verify_tables=False, expected_math_v
 def build_pack(input_path, *, compiler=None, source_ini=None):
     input_path = Path(input_path)
     source_ini = input_path.read_bytes() if source_ini is None else bytes(source_ini)
-    producer = ROOT / 'renderer' / 'appearance_lut_pack.cpp'
+    producer = ROOT / 'src' / 'sky' / 'appearance_lut_pack.cpp'
     if not producer.is_file():
         raise FileNotFoundError(f'missing C++ LUT producer: {producer}')
     with tempfile.TemporaryDirectory(prefix='northlight-lut-pack-') as directory:
