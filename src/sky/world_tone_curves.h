@@ -283,6 +283,9 @@ inline BakeKey makeBakeKey(const Grade& grade,float strength){
     return key;
 }
 inline float smooth(float x){x=std::clamp(x,0.f,1.f);return x*x*(3.f-2.f*x);}
+// Fade hue-selective work across neighbouring LUT voxels near the neutral axis.
+// This is evaluated only while baking the volume, never in the runtime sampler.
+inline float selectiveRgbGate(float rgbSpan){return smooth((rgbSpan-1.f/31.f)/(2.f/31.f));}
 inline float wrapHue(float degrees){
     float result=std::fmod(degrees,360.f);if(result<0)result+=360.f;return result;
 }
@@ -330,6 +333,7 @@ inline std::array<float,3> transform(const BakeKey& key,const std::array<float,3
     if(!key.strength)return input;
     const float strength=key.strength/4096.f;
     std::array<float,3> color={std::clamp(input[0],0.f,1.f),std::clamp(input[1],0.f,1.f),std::clamp(input[2],0.f,1.f)};
+    const float inputSpan=std::max({color[0],color[1],color[2]})-std::min({color[0],color[1],color[2]});
     const float luminance=std::clamp(.2126f*color[0]+.7152f*color[1]+.0722f*color[2],0.f,1.f);
     const Curve brightnessCurve=curveFromKey(key,0);
     const float mappedLuminance=luminance+(sample(brightnessCurve,luminance)-luminance)*strength;
@@ -348,7 +352,7 @@ inline std::array<float,3> transform(const BakeKey& key,const std::array<float,3
     }
     std::array<float,HueBandCount> weights{};
     auto hsl=rgbToHsl(color);hueWeights(hsl[0],weights);
-    const float chroma=smooth(hsl[1]/.15f);
+    const float chroma=smooth(hsl[1]/.15f)*selectiveRgbGate(inputSpan);
     float hueShift=0,saturation=0,lightness=0;
     for(unsigned i=0;i<HueBandCount;++i){
         const float weight=weights[i]*chroma;

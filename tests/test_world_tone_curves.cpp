@@ -12,6 +12,20 @@ static float luminance(const std::array<float,3>& rgb){return .2126f*rgb[0]+.715
 static float distance(const std::array<float,3>& a,const std::array<float,3>& b){
     return std::sqrt((a[0]-b[0])*(a[0]-b[0])+(a[1]-b[1])*(a[1]-b[1])+(a[2]-b[2])*(a[2]-b[2]));
 }
+static std::array<float,3> sampleVolume(const std::vector<uint16_t>& volume,const std::array<float,3>& rgb){
+    const float p[3]={std::clamp(rgb[0],0.f,1.f)*(CubeSize-1),std::clamp(rgb[1],0.f,1.f)*(CubeSize-1),std::clamp(rgb[2],0.f,1.f)*(CubeSize-1)};
+    const unsigned low[3]={unsigned(std::floor(p[0])),unsigned(std::floor(p[1])),unsigned(std::floor(p[2]))};
+    const unsigned high[3]={std::min(low[0]+1,CubeSize-1),std::min(low[1]+1,CubeSize-1),std::min(low[2]+1,CubeSize-1)};
+    const float f[3]={p[0]-low[0],p[1]-low[1],p[2]-low[2]};
+    std::array<float,3> out{};
+    for(unsigned mask=0;mask<8;++mask){
+        const unsigned r=mask&1?high[0]:low[0],g=mask&2?high[1]:low[1],b=mask&4?high[2]:low[2];
+        const float weight=(mask&1?f[0]:1.f-f[0])*(mask&2?f[1]:1.f-f[1])*(mask&4?f[2]:1.f-f[2]);
+        const unsigned offset=((b*CubeSize+g)*CubeSize+r)*4;
+        for(unsigned channel=0;channel<3;++channel)out[channel]+=volume[offset+channel]*(weight/65535.f);
+    }
+    return out;
+}
 
 int main(){
     assert(StopCount==3&&HueBandCount==5);
@@ -95,6 +109,50 @@ int main(){
         hueWeights(45,weights);assert(near(weights[1],.5f)&&near(weights[2],.5f));
         hueWeights(330,weights);assert(near(weights[4],.25f)&&near(weights[0],.75f)&&weights[1]==0&&weights[2]==0);
         hueWeights(190,weights);assert(near(weights[3],.5f)&&near(weights[4],.5f)&&weights[1]==0&&weights[2]==0);
+    }
+    {
+        assert(selectiveRgbGate(1.f/31.f)==0);
+        assert(near(selectiveRgbGate(2.f/31.f),.5f));
+        assert(selectiveRgbGate(3.f/31.f)==1);
+        Grade intense;
+        intense.hueShift={15,-16,17,-18,19};
+        intense.saturation={.12f,-.24f,.36f,-.48f,.6f};
+        intense.lightness={.129f,-.129f,.129f,-.129f,.129f};
+        const auto key=makeBakeKey(intense,1);
+        constexpr unsigned n=CubeSize,rowPitch=n*4*sizeof(uint16_t),slicePitch=n*rowPitch;
+        std::vector<uint16_t> volume(n*n*n*4);
+        bakeColourVolume(volume.data(),rowPitch,slicePitch,key);
+        float maximumNeutralSpread=0;
+        for(unsigned value=0;value<256;++value){
+            const float grey=value/255.f;
+            const auto output=sampleVolume(volume,{grey,grey,grey});
+            const auto bounds=std::minmax_element(output.begin(),output.end());
+            maximumNeutralSpread=std::max(maximumNeutralSpread,(*bounds.second-*bounds.first)*255.f);
+        }
+        assert(maximumNeutralSpread<=1.1f);
+
+        Grade channelCurves=intense;
+        channelCurves.curves[1].levels[1]=.61f;
+        channelCurves.curves[2].levels[1]=.47f;
+        auto curveOnly=channelCurves;
+        curveOnly.hueShift.fill(0);curveOnly.saturation.fill(0);curveOnly.lightness.fill(0);
+        const auto withSelective=makeBakeKey(channelCurves,1),withoutSelective=makeBakeKey(curveOnly,1);
+        std::vector<uint16_t> gradedVolume(n*n*n*4),curveVolume(n*n*n*4);
+        bakeColourVolume(gradedVolume.data(),rowPitch,slicePitch,withSelective);
+        bakeColourVolume(curveVolume.data(),rowPitch,slicePitch,withoutSelective);
+        float maximumCurveDifference=0;
+        for(unsigned value=0;value<256;++value){
+            const float grey=value/255.f;
+            const auto actual=sampleVolume(gradedVolume,{grey,grey,grey});
+            const auto expected=sampleVolume(curveVolume,{grey,grey,grey});
+            for(unsigned channel=0;channel<3;++channel)
+                maximumCurveDifference=std::max(maximumCurveDifference,std::abs(actual[channel]-expected[channel])*255.f);
+        }
+        assert(maximumCurveDifference<=1.1f);
+        const auto vivid=hslToRgb(45,.72f,.55f);
+        assert(selectiveRgbGate(*std::max_element(vivid.begin(),vivid.end())-*std::min_element(vivid.begin(),vivid.end()))==1);
+        assert(distance(transform(withSelective,vivid),transform(withoutSelective,vivid))>.01f);
+        std::cout<<"neutral LUT ramp spread="<<maximumNeutralSpread<<" curve preservation="<<maximumCurveDifference<<"\n";
     }
     {
         Grade curve;curve.curves[1].levels[1]=.6f;
