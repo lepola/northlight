@@ -26,15 +26,18 @@ inline TimeWeights timeWeights(float nightFactor,bool evening){
     const float after=(n-DuskNightWeight)/(1-DuskNightWeight);
     return {0,1-after,after};
 }
-enum class HueBand : unsigned { Red=0,Orange=1,Yellow=2,Green=3,Blue=4 };
-constexpr unsigned HueBandCount=5;
+// The colour ranges of a grade: the six primary and secondary hues, evenly spaced, so any part of the wheel can be
+// adjusted without dragging a distant colour along, plus Orange, because the game's warm tones (sand, wood,
+// torchlight, autumn leaves) sit between red and yellow and need telling apart. hueWeights() holds their centres.
+enum class HueBand : unsigned { Red=0,Orange=1,Yellow=2,Green=3,Cyan=4,Blue=5,Magenta=6 };
+constexpr unsigned HueBandCount=7;
 enum class SelectiveProperty : unsigned { HueShift=0,Saturation=1,Lightness=2 };
 inline const char* timeName(TimeStop time){
     static constexpr const char* names[]={"day","dusk","night"};
     const auto i=static_cast<unsigned>(time);return i<StopCount?names[i]:"day";
 }
 inline const char* bandName(HueBand band){
-    static constexpr const char* names[]={"red","orange","yellow","green","blue"};
+    static constexpr const char* names[]={"red","orange","yellow","green","cyan","blue","magenta"};
     const auto i=static_cast<unsigned>(band);return i<HueBandCount?names[i]:"red";
 }
 inline const char* propertyName(SelectiveProperty property){
@@ -239,7 +242,9 @@ struct BakeKey {
     bool operator!=(const BakeKey& b)const{return !(*this==b);}
     uint64_t stableHash()const;
 };
-inline constexpr uint16_t BakeMathSchemaVersion=1;
+// 2: seven colour ranges (cyan and magenta added, green moved from 140 to 120 degrees). Tables baked under an
+// earlier schema are refused and baked again.
+inline constexpr uint16_t BakeMathSchemaVersion=2;
 inline uint64_t stableHash(const BakeKey& key){
     uint64_t hash=14695981039346656037ull;
     auto byte=[&](uint8_t value){hash^=value;hash*=1099511628211ull;};
@@ -291,7 +296,7 @@ inline float wrapHue(float degrees){
     float result=std::fmod(degrees,360.f);if(result<0)result+=360.f;return result;
 }
 inline void hueWeights(float hue,std::array<float,HueBandCount>& weights){
-    static constexpr float centers[HueBandCount]={0.f,30.f,60.f,140.f,240.f};
+    static constexpr float centers[HueBandCount]={0.f,30.f,60.f,120.f,180.f,240.f,300.f};
     weights.fill(0);hue=wrapHue(hue);
     for(unsigned i=0;i<HueBandCount;++i){
         const unsigned next=(i+1)%HueBandCount;

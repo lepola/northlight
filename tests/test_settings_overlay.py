@@ -29,7 +29,8 @@ def check(ok, what):
 def uncomment(text):
     return re.sub(r'/\*.*?\*/', '', re.sub(r'//[^\n]*', '', text), flags=re.S)
 
-OVERLAY = ['settings_overlay.h', 'settings_overlay.cpp', 'settings_panel.h', 'settings_panel.cpp', 'settings_draft.h', 'overlay_input.h', 'northlight_imconfig.h']
+OVERLAY = ['settings_overlay.h', 'settings_overlay.cpp', 'settings_panel.h', 'settings_panel.cpp', 'settings_draft.h', 'overlay_input.h', 'overlay_theme.h',
+           'overlay_widgets.h', 'northlight_imconfig.h']
 IMGUI_TUS = ['imgui.cpp', 'imgui_draw.cpp', 'imgui_tables.cpp', 'imgui_widgets.cpp', 'imgui_impl_dx9.cpp']
 
 # build_renderer.py: every overlay/ImGui TU is in the DLL, all built with northlight_imconfig.h.
@@ -107,11 +108,21 @@ check((fp.REPO / 'licenses/imgui.txt').is_file() and 'Omar Cornut' in (fp.REPO /
 check("tree.add('LICENSES/Dear-ImGui.txt', fp.REPO / 'licenses/imgui.txt')" in (fp.RENDERER / 'build_packages.py').read_text(), 'build_packages.py ships the ImGui licence')
 check('97428e8ac99e339ce05eee531cf55b77b29ea709' in (fp.SRC / 'imgui' / 'README.md').read_text(), 'src/imgui/README.md records the upstream commit')
 
-# Sidebar pages in the old menu's order (renaming or reordering one is a deliberate UI change: update this pin).
+# Sidebar pages in order, grouped by what a player comes to do: effects, water, one region's look, the system
+# (renaming or reordering one is a deliberate UI change: update this pin and renderer/docs/settings-menu.md).
 panel = uncomment(fp.src('settings_panel.cpp').read_text())
 titles = re.findall(r'\{Page::\w+,"([^"]+)"', panel)
-check(titles == ['Overview', 'Lighting & AO', 'Materials & parallax', 'Shadows', 'Atmosphere & weather', 'Water', 'Sun & moon', 'Shadow range',
-                 'Spells & names', 'Renderer & HDR', 'Performance', 'Diagnostics'], f'settings_panel.cpp: sidebar pages {titles}')
+check(titles == ['Overview', 'Lighting & AO', 'Shadows', 'Materials & parallax', 'Atmosphere & weather', 'Spells & names', 'Water',
+                 'Regional appearance', 'Colour grading', 'Sun & moon', 'Shadow range', 'Renderer & HDR', 'Performance', 'Diagnostics'],
+      f'settings_panel.cpp: sidebar pages {titles}')
+captions = re.findall(r'\{Page::(\w+),"[^"]+",(?:nullptr|"[^"]*"),"([^"]+)"', panel)
+check(captions == [('Lighting', 'Northlight effects'), ('Water', 'Tideglass'), ('Regional', 'By region'), ('Renderer', 'System')],
+      f'settings_panel.cpp: sidebar groups {captions}')
+check((fp.SCRIPTS / 'dev_tuning' / 'settings_menu_preview.py').read_text().count("'" + "', '".join(titles[:7]) + "'") == 1,
+      'settings_menu_preview.py renders the same pages in the same order')
+sidebar = panel[panel.index('void sidebar(){'):panel.index('std::vector<std::string> sections(unsigned file)const{')]
+check(sidebar.index('refreshPageFields();') < sidebar.index('fieldPageMask.find('),
+      'sidebar: the per-page index is refreshed before its unsaved and restart marks read it')
 check('if(appearancePresetModal){ImGui::OpenPopup("Save appearance copy");appearancePresetModal=false;}' in panel,
       'Save As popup: opening request is consumed once and closing cannot reopen it')
 check('ImGui::SetNextWindowSizeConstraints(ImVec2(440*scale,0),ImVec2(440*scale,FLT_MAX));' in panel and
@@ -124,7 +135,9 @@ check('noteColor=status.state==NorthlightSettings::Status::State::Saved?Color::G
 check('GradeTimes={NorthlightTone::TimeStop::Day,NorthlightTone::TimeStop::Dusk,NorthlightTone::TimeStop::Night}' in panel and
       'GradeTitles={"Daylight grade","Dusk grade","Night grade"}' in panel and
       'for(unsigned i=0;i<GradeTimes.size();++i)' in panel and 'gradeEditor(GradeTimes[i])' in panel,
-      'Atmosphere: three clearly named independent Daylight, Dusk and Night grade editors')
+      'Colour grading: three clearly named independent Daylight, Dusk and Night grade editors')
+check(panel.index('ImGui::PushID("ranges");') < panel.index('ImGui::RadioButton(bandTitle(band).c_str()'),
+      'grade editor: the colour ranges have their own ID scope (Red, Green and Blue are channel names too)')
 check('NorthlightTone::gradeKey(time,curveChannel,i)' in panel and 'NorthlightTone::vibranceKey(time)' in panel,
       'grade editor: curves and vibrance use the native timeline key helpers')
 check('for(const auto band:HueBands)' in panel and 'NorthlightTone::selectiveKey(time,band,SelectiveProperties[i])' in panel and
@@ -145,8 +158,14 @@ check('dusk_vibrance' in menu_docs and 'dusk_red_hue_shift' in menu_docs and 'In
 # The embedded font: generated header present and loaded first; its licence ships.
 font_header = fp.GENERATED / 'overlay_font_roboto.h'
 check(font_header.is_file() and 'RobotoMediumCompressed' in font_header.read_text()[:2000], 'src/generated/overlay_font_roboto.h (scripts/generate_overlay_font.py)')
-check(overlay.index('AddFontFromMemoryCompressedTTF(NorthlightOverlayFont::RobotoMediumCompressed') < overlay.index('loadSystemFont(L"segoeui.ttf"') < overlay.index('AddFontDefault('),
-      'rescale(): embedded Roboto first, system fonts as fallback, ImGui default last')
+theme = uncomment(fp.src('overlay_theme.h').read_text())
+check('AddFontFromMemoryCompressedTTF(NorthlightOverlayFont::RobotoMediumCompressed' in theme and
+      overlay.index('if(!Theme::addEmbeddedFont(next))') < overlay.index('loadSystemFont(L"segoeui.ttf"') < overlay.index('AddFontDefault('),
+      'rescale(): embedded Roboto first (overlay_theme.h), system fonts as fallback, ImGui default last')
+# One theme for the game, the window's contents and the offline preview.
+check('Theme::applyStyle(next)' in overlay and 'StyleColorsDark' not in overlay and 'NorthlightOverlayTheme::Color' in panel and
+      'NorthlightOverlayTheme::applyStyle(scale)' in (fp.SCRIPTS / 'dev_tuning' / 'settings_menu_preview.cpp').read_text(),
+      'overlay_theme.h is the only place the settings window gets its look')
 check((fp.REPO / 'licenses/roboto.txt').is_file() and 'Apache License' in (fp.REPO / 'licenses/roboto.txt').read_text(), 'licenses/roboto.txt')
 check("tree.add('LICENSES/Roboto.txt', fp.REPO / 'licenses/roboto.txt')" in (fp.RENDERER / 'build_packages.py').read_text(), 'build_packages.py ships the Roboto licence')
 

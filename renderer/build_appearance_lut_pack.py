@@ -22,13 +22,14 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 RAW_HEADER = struct.Struct('<8sHHI')
 PACK_HEADER = struct.Struct('<8sHHHHHHIQQ32s32s')
-PACK_RECORD = struct.Struct('<Q74sH QI32s')
+BAKE_KEY_BYTES = 44 + 6 * 7   # four curves of five values, strength, vibrance, three values for each of seven colour ranges
+PACK_RECORD = struct.Struct(f'<Q{BAKE_KEY_BYTES}sH QI32s')
 PACK_MAGIC = b'NLLUTPK\0'
 RAW_MAGIC = b'NLRAW001'
 FORMAT_VERSION = 1
+RAW_VERSION = 1   # the producer's intermediate file
 VOXEL_RGBA16_UNORM_LE = 1
-BAKE_KEY_BYTES = 74
-RECORD_BYTES = 128
+RECORD_BYTES = PACK_RECORD.size
 CUBE_SIZE = 32
 VOLUME_BYTES = CUBE_SIZE ** 3 * 4 * 2
 INDEX_OFFSET = PACK_HEADER.size
@@ -61,7 +62,7 @@ def _raw_records(data):
     if len(data) < RAW_HEADER.size:
         raise ValueError('C++ LUT producer wrote a truncated raw header')
     magic, raw_version, math_version, count = RAW_HEADER.unpack_from(data)
-    if magic != RAW_MAGIC or raw_version != FORMAT_VERSION or math_version == 0:
+    if magic != RAW_MAGIC or raw_version != RAW_VERSION or math_version == 0:
         raise ValueError('C++ LUT producer wrote an unsupported raw format')
     if count > MAX_ENTRIES:
         raise ValueError(f'C++ LUT producer returned too many unique tables: {count}')

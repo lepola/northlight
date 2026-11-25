@@ -15,8 +15,8 @@
 #include <vector>
 #include "imgui.h"
 #include "imgui_impl_dx9.h"
-#include "overlay_font_roboto.h"
 #include "overlay_input.h"
+#include "overlay_theme.h"
 #include "settings_panel.h"
 
 namespace {
@@ -36,6 +36,7 @@ void northlightImGuiAssert(const char* expression,const char* file,int line){
 namespace NorthlightOverlay {
 namespace {
 namespace In=NorthlightOverlayInput;
+namespace Theme=NorthlightOverlayTheme;
 static_assert(In::Msg::KillFocus==WM_KILLFOCUS&&In::Msg::ActivateApp==WM_ACTIVATEAPP&&In::Msg::KeyDown==WM_KEYDOWN&&In::Msg::KeyUp==WM_KEYUP&&In::Msg::Char==WM_CHAR&&
               In::Msg::SysKeyDown==WM_SYSKEYDOWN&&In::Msg::SysKeyUp==WM_SYSKEYUP&&In::Msg::SysChar==WM_SYSCHAR&&In::Msg::MouseMove==WM_MOUSEMOVE&&
               In::Msg::LButtonDown==WM_LBUTTONDOWN&&In::Msg::RButtonUp==WM_RBUTTONUP&&In::Msg::MButtonDblClk==WM_MBUTTONDBLCLK&&In::Msg::MouseWheel==WM_MOUSEWHEEL&&
@@ -170,31 +171,6 @@ ImGuiKey imguiKey(WPARAM vk){
     }
 }
 
-// The window's look: dark, compact, a little translucent so the scene behind stays readable.
-void baseStyle(float scale){
-    ImGuiStyle style;ImGui::StyleColorsDark(&style);
-    style.WindowRounding=7;style.ChildRounding=5;style.FrameRounding=4;style.PopupRounding=5;style.GrabRounding=3;style.TabRounding=4;style.ScrollbarRounding=6;
-    style.WindowPadding=ImVec2(12,10);style.FramePadding=ImVec2(7,4);style.ItemSpacing=ImVec2(8,5);style.ItemInnerSpacing=ImVec2(5,4);
-    style.IndentSpacing=16;style.ScrollbarSize=13;style.GrabMinSize=10;style.WindowBorderSize=1;style.FrameBorderSize=0;style.SeparatorTextBorderSize=1;
-    style.WindowTitleAlign=ImVec2(0.02f,0.5f);style.CellPadding=ImVec2(5,3);
-    ImVec4* c=style.Colors;
-    c[ImGuiCol_WindowBg]=ImVec4(0.075f,0.082f,0.098f,0.94f);c[ImGuiCol_ChildBg]=ImVec4(0,0,0,0);c[ImGuiCol_PopupBg]=ImVec4(0.09f,0.10f,0.12f,0.98f);
-    c[ImGuiCol_Border]=ImVec4(0.28f,0.31f,0.36f,0.60f);c[ImGuiCol_TitleBg]=ImVec4(0.09f,0.10f,0.12f,1);c[ImGuiCol_TitleBgActive]=ImVec4(0.12f,0.17f,0.25f,1);
-    c[ImGuiCol_FrameBg]=ImVec4(0.16f,0.18f,0.22f,1);c[ImGuiCol_FrameBgHovered]=ImVec4(0.21f,0.25f,0.31f,1);c[ImGuiCol_FrameBgActive]=ImVec4(0.24f,0.30f,0.38f,1);
-    c[ImGuiCol_CheckMark]=ImVec4(0.45f,0.74f,1.00f,1);c[ImGuiCol_SliderGrab]=ImVec4(0.38f,0.62f,0.92f,1);c[ImGuiCol_SliderGrabActive]=ImVec4(0.50f,0.76f,1.00f,1);
-    c[ImGuiCol_Button]=ImVec4(0.19f,0.22f,0.27f,1);c[ImGuiCol_ButtonHovered]=ImVec4(0.25f,0.31f,0.39f,1);c[ImGuiCol_ButtonActive]=ImVec4(0.29f,0.38f,0.50f,1);
-    c[ImGuiCol_Header]=ImVec4(0.17f,0.21f,0.27f,1);c[ImGuiCol_HeaderHovered]=ImVec4(0.22f,0.28f,0.36f,1);c[ImGuiCol_HeaderActive]=ImVec4(0.26f,0.33f,0.43f,1);
-    c[ImGuiCol_Tab]=ImVec4(0.13f,0.15f,0.19f,1);c[ImGuiCol_TabHovered]=ImVec4(0.25f,0.33f,0.45f,1);c[ImGuiCol_TabSelected]=ImVec4(0.20f,0.29f,0.42f,1);
-    c[ImGuiCol_TabSelectedOverline]=ImVec4(0.45f,0.74f,1.00f,1);c[ImGuiCol_Separator]=ImVec4(0.26f,0.29f,0.34f,1);
-    c[ImGuiCol_TableRowBg]=ImVec4(0,0,0,0);c[ImGuiCol_TableRowBgAlt]=ImVec4(1,1,1,0.025f);c[ImGuiCol_ModalWindowDimBg]=ImVec4(0,0,0,0.25f);
-    c[ImGuiCol_TextDisabled]=ImVec4(0.46f,0.48f,0.52f,1);
-    style.ScaleAllSizes(scale);
-    ImGui::GetStyle()=style;
-}
-
-// 1 at 1080p, in quarter steps up to 4 (8K); never below 1 so text stays readable on small windows.
-float uiScale(unsigned backBufferHeight){return std::clamp(std::round(float(backBufferHeight)/1080.f*4.f)/4.f,1.f,4.f);}
-
 // A system TTF into ImGui-owned memory (the atlas frees it). Missing or unreadable: false (Wine may lack the font).
 bool loadSystemFont(const wchar_t* name,float pixels,const ImWchar* ranges){
     wchar_t path[MAX_PATH];const UINT n=GetWindowsDirectoryW(path,MAX_PATH);
@@ -259,12 +235,10 @@ class Impl final : public Overlay {
         ImGui_ImplDX9_InvalidateDeviceObjects();   // the font texture is rebuilt by the next NewFrame
         io.Fonts->Clear();
         static const ImWchar ranges[]={0x0020,0x00FF,0};
-        const float pixels=std::round(16.f*next);
-        // The embedded Roboto first (the same text on Windows and under Wine, whose font folder may be empty); system fonts
-        // only if it cannot be added; ImGui's bitmap font last.
+        const float pixels=Theme::fontPixels(next);
+        // The embedded Roboto first; system fonts only if it cannot be added; ImGui's bitmap font last.
         const char* font="Roboto-Medium (embedded)";
-        ImFontConfig embedded;embedded.OversampleH=2;embedded.OversampleV=1;std::snprintf(embedded.Name,sizeof embedded.Name,"Roboto-Medium");
-        if(!io.Fonts->AddFontFromMemoryCompressedTTF(NorthlightOverlayFont::RobotoMediumCompressed,int(NorthlightOverlayFont::RobotoMediumCompressedSize),pixels,&embedded,ranges)){
+        if(!Theme::addEmbeddedFont(next)){
             font="segoeui.ttf";
             if(!loadSystemFont(L"segoeui.ttf",pixels,ranges)){
                 font="tahoma.ttf";
@@ -273,7 +247,7 @@ class Impl final : public Overlay {
                 }
             }
         }
-        baseStyle(next);
+        Theme::applyStyle(next);
         if(scale!=next)logf("OVERLAY scale=%.2f font=%s pixels=%.0f",next,font,pixels);
         scale=next;
     }
@@ -347,7 +321,7 @@ class Impl final : public Overlay {
         D3DSURFACE_DESC desc={};
         if(FAILED(device->GetBackBuffer(0,0,D3DBACKBUFFER_TYPE_MONO,&back.p))||!back.p||FAILED(back.p->GetDesc(&desc))||!desc.Width||!desc.Height)return;
         ensureContext();ImGui::SetCurrentContext(context);
-        const float wanted=uiScale(desc.Height);
+        const float wanted=Theme::uiScale(desc.Height);
         if(wanted!=scale)rescale(wanted);
         checkpoint();
         ImGuiIO& io=ImGui::GetIO();

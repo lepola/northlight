@@ -14,11 +14,11 @@ static std::vector<uint8_t> makePack(const NorthlightTone::BakeKey& key){
     std::vector<uint8_t> index(RecordBytes);
     write64(index.data(),NorthlightTone::stableHash(key));
     std::copy(canonical.begin(),canonical.end(),index.begin()+8);
-    write16(index.data()+82,0);
-    write64(index.data()+84,tablesOffset);
-    write32(index.data()+92,TableBytes);
+    write16(index.data()+RecordReservedAt,0);
+    write64(index.data()+RecordOffsetAt,tablesOffset);
+    write32(index.data()+RecordLengthAt,TableBytes);
     const auto tableSha=Sha256::digest(table.data(),table.size());
-    std::copy(tableSha.begin(),tableSha.end(),index.begin()+96);
+    std::copy(tableSha.begin(),tableSha.end(),index.begin()+RecordDigestAt);
     std::vector<uint8_t> pack(HeaderBytes+index.size()+table.size());
     static constexpr uint8_t magic[8]={'N','L','L','U','T','P','K',0};
     std::copy(std::begin(magic),std::end(magic),pack.begin());

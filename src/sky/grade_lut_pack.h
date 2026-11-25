@@ -13,7 +13,11 @@
 
 namespace NorthlightGradeLut {
 namespace Pack {
-constexpr size_t HeaderBytes=104,RecordBytes=128,KeyBytes=74;
+// The canonical key: four curves of five 16-bit values, strength, vibrance, then three 16-bit values per colour range.
+constexpr size_t HeaderBytes=104,KeyBytes=44+6*NorthlightTone::HueBandCount;
+// An index record: key hash (8 bytes), the canonical key, reserved (2), table offset (8), table length (4), SHA-256 (32).
+constexpr size_t RecordReservedAt=8+KeyBytes,RecordOffsetAt=RecordReservedAt+2,RecordLengthAt=RecordOffsetAt+8,RecordDigestAt=RecordLengthAt+4,
+                 RecordBytes=RecordDigestAt+32;
 constexpr size_t TableBytes=size_t(NorthlightTone::CubeSize)*NorthlightTone::CubeSize*NorthlightTone::CubeSize*4*sizeof(uint16_t);
 constexpr uint32_t MaxEntries=4096;
 constexpr uint16_t FormatVersion=1,VoxelRGBA16UnormLE=1;
@@ -130,7 +134,8 @@ struct Index {
         for(uint32_t i=0;i<count;++i){
             const uint8_t* row=index.data()+size_t(i)*RecordBytes;Record record;
             record.hash=read64(row);std::copy_n(row+8,KeyBytes,record.canonical.begin());record.key=decodeKey(record.canonical.data());
-            const uint16_t reserved=read16(row+82);record.offset=read64(row+84);record.length=read32(row+92);std::copy_n(row+96,32,record.digest.begin());
+            const uint16_t reserved=read16(row+RecordReservedAt);record.offset=read64(row+RecordOffsetAt);record.length=read32(row+RecordLengthAt);
+            std::copy_n(row+RecordDigestAt,32,record.digest.begin());
             if(reserved||!record.key.strength||NorthlightTone::stableHash(record.key)!=record.hash||
                record.offset!=tablesOffset+uint64_t(i)*TableBytes||record.length!=TableBytes){error="invalid index record";records.clear();return false;}
             if(!records.empty()){

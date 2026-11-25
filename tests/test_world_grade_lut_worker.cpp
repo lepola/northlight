@@ -37,10 +37,10 @@ static std::vector<uint8_t> makePack(const std::vector<BakeKey>& keys){
     const uint64_t tablesOffset=HeaderBytes+index.size();
     for(size_t i=0;i<rows.size();++i){
         auto* record=index.data()+i*RecordBytes;write64(record,NorthlightTone::stableHash(rows[i].key));
-        std::copy(rows[i].canonical.begin(),rows[i].canonical.end(),record+8);write16(record+82,0);
-        write64(record+84,tablesOffset+i*TableBytes);write32(record+92,TableBytes);
+        std::copy(rows[i].canonical.begin(),rows[i].canonical.end(),record+8);write16(record+RecordReservedAt,0);
+        write64(record+RecordOffsetAt,tablesOffset+i*TableBytes);write32(record+RecordLengthAt,TableBytes);
         std::copy(rows[i].table.begin(),rows[i].table.end(),tables.begin()+i*TableBytes);
-        const auto digest=Sha256::digest(rows[i].table.data(),rows[i].table.size());std::copy(digest.begin(),digest.end(),record+96);
+        const auto digest=Sha256::digest(rows[i].table.data(),rows[i].table.size());std::copy(digest.begin(),digest.end(),record+RecordDigestAt);
     }
     std::vector<uint8_t> result(HeaderBytes+index.size()+tables.size());
     static constexpr uint8_t magic[8]={'N','L','L','U','T','P','K',0};std::copy(std::begin(magic),std::end(magic),result.begin());

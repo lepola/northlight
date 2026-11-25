@@ -166,7 +166,7 @@ int main(int argc,char** argv){
         const auto& authored=edited.fallback;
         assert(edited.explicitFallbackKeys.count("dusk_red_hue_shift"));
         assert(near(authored.grade[0].hueShift[0],-12)&&near(authored.grade[1].hueShift[0],23));
-        assert(near(authored.grade[2].saturation[4],-.7f)&&near(authored.grade[1].lightness[1],-.2f));
+        assert(near(authored.grade[2].saturation[unsigned(NorthlightTone::HueBand::Blue)],-.7f)&&near(authored.grade[1].lightness[1],-.2f));
         const auto atDusk=gradeAt(authored,DuskNightWeight,true);
         assert(near(atDusk.hueShift[0],23)&&near(atDusk.vibrance,.6f));
         const auto dawn=gradeAt(authored,.5f,false);

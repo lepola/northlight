@@ -14,16 +14,17 @@
 #include "imgui.h"
 #include "settings_service.h"
 #include "settings_draft.h"
+#include "overlay_theme.h"
+#include "overlay_widgets.h"
 
 namespace NorthlightOverlay {
 namespace {
 using NorthlightSettings::Field;
 namespace D=NorthlightSettingsDraft;
 
-namespace Color {
-const ImVec4 Accent{0.40f,0.70f,1.00f,1.f},Edited{1.00f,0.74f,0.32f,1.f},Muted{0.60f,0.63f,0.68f,1.f},Good{0.48f,0.84f,0.54f,1.f},
-    Bad{1.00f,0.48f,0.43f,1.f},Restart{1.00f,0.60f,0.26f,1.f},Heading{0.94f,0.81f,0.52f,1.f};
-}
+namespace Color=NorthlightOverlayTheme::Color;
+namespace W=NorthlightOverlayWidgets;
+using W::alignRight;using W::buttonWidth;using W::u32;
 
 // ---- Words (from the retired Lua menu) ----
 const std::map<std::string,const char*> Labels={
@@ -128,21 +129,35 @@ const std::vector<Group> CelestialGroups={
 };
 constexpr std::array<NorthlightTone::TimeStop,3> GradeTimes={NorthlightTone::TimeStop::Day,NorthlightTone::TimeStop::Dusk,NorthlightTone::TimeStop::Night};
 constexpr std::array<const char*,3> GradeTitles={"Daylight grade","Dusk grade","Night grade"};
-constexpr std::array<NorthlightTone::HueBand,5> HueBands={NorthlightTone::HueBand::Red,NorthlightTone::HueBand::Orange,NorthlightTone::HueBand::Yellow,NorthlightTone::HueBand::Green,NorthlightTone::HueBand::Blue};
+constexpr std::array<NorthlightTone::HueBand,NorthlightTone::HueBandCount> HueBands={NorthlightTone::HueBand::Red,NorthlightTone::HueBand::Orange,NorthlightTone::HueBand::Yellow,
+    NorthlightTone::HueBand::Green,NorthlightTone::HueBand::Cyan,NorthlightTone::HueBand::Blue,NorthlightTone::HueBand::Magenta};
 constexpr std::array<NorthlightTone::SelectiveProperty,3> SelectiveProperties={NorthlightTone::SelectiveProperty::HueShift,NorthlightTone::SelectiveProperty::Saturation,NorthlightTone::SelectiveProperty::Lightness};
 std::vector<std::string> words(const char* text);
 // The old menu's preset page.
 struct Preset { const char* key; const char* text; };
 const Preset Presets[3]={{"Quality","Maximum effect detail."},{"Balanced","Quality with a moderate effect budget."},{"Performance","Less work spent on effects."}};
 const char* const QuickKeys="GI ActorShadows ContactAO Weather FogClouds";   // the old menu's Quality page toggles
-// Sidebar pages, in order. quality: the QualitySections id a Quality page draws.
-enum class Page { Overview, Lighting, Materials, Shadows, Atmosphere, Water, Celestial, ShadowRange, Spells, Renderer, Performance, Diagnostics, Count };
-struct PageInfo { Page page; const char* title; const char* quality; };
+const char* const WaterPresetKeys="ReflectionScenery ReflectionResolution ReflectionDistance ReflectionSceneryDetails FineHighlights SurfaceBlur";   // what a Water preset sets
+// Sidebar pages, in order, grouped by what a player comes to do: choose a starting point (Overview), switch or tune
+// an effect, tune the water, shape how one region looks, or look after the system. quality: the QualitySections id
+// a Quality page draws. caption: the sidebar group this page starts. about: the line under the page's name.
+enum class Page { Overview, Lighting, Shadows, Materials, Atmosphere, Spells, Water, Regional, Grading, Celestial, ShadowRange, Renderer, Performance, Diagnostics, Count };
+struct PageInfo { Page page; const char* title; const char* quality; const char* caption; const char* about; };
 const PageInfo Pages[]={
-    {Page::Overview,"Overview",nullptr},{Page::Lighting,"Lighting & AO","lighting"},{Page::Materials,"Materials & parallax","materials"},
-    {Page::Shadows,"Shadows","shadows"},{Page::Atmosphere,"Atmosphere & weather","atmosphere"},{Page::Water,"Water",nullptr},{Page::Celestial,"Sun & moon",nullptr},
-    {Page::ShadowRange,"Shadow range",nullptr},{Page::Spells,"Spells & names","spells"},{Page::Renderer,"Renderer & HDR",nullptr},
-    {Page::Performance,"Performance","performance"},{Page::Diagnostics,"Diagnostics","diagnostics"},
+    {Page::Overview,"Overview",nullptr,nullptr,"The three choices that set the overall look and cost, and the main effects."},
+    {Page::Lighting,"Lighting & AO","lighting","Northlight effects","Bounced light, ambient occlusion and how bright nights are."},
+    {Page::Shadows,"Shadows","shadows",nullptr,"Shadows from characters, lamps and the landscape."},
+    {Page::Materials,"Materials & parallax","materials",nullptr,"Surface relief worked out from the textures you have installed."},
+    {Page::Atmosphere,"Atmosphere & weather","atmosphere",nullptr,"Fog banks, rain and snow, and haze toward the horizon."},
+    {Page::Spells,"Spells & names","spells",nullptr,"How spell effects and unit names sit in the lit scene."},
+    {Page::Water,"Water",nullptr,"Tideglass","Waves, reflections, underwater and other liquids."},
+    {Page::Regional,"Regional appearance",nullptr,"By region","One colour look for the whole world, then fog tint and shadow contrast for each region."},
+    {Page::Grading,"Colour grading",nullptr,nullptr,"Each region's Daylight, Dusk and Night grade: tone curves, vibrance and colour ranges."},
+    {Page::Celestial,"Sun & moon",nullptr,nullptr,"How the sun and moon look and light each region."},
+    {Page::ShadowRange,"Shadow range",nullptr,nullptr,"How far the landscape casts shadows in each region."},
+    {Page::Renderer,"Renderer & HDR",nullptr,"System","The graphics backend and HDR output."},
+    {Page::Performance,"Performance","performance",nullptr,"Threads and budgets. The defaults suit most systems."},
+    {Page::Diagnostics,"Diagnostics","diagnostics",nullptr,"Logging and profiling for tracking down a problem."},
 };
 static_assert(sizeof(Pages)/sizeof(Pages[0])==std::size_t(Page::Count),"one entry per page");
 const Section* qualitySection(const char* id){if(id)for(const auto& s:QualitySections)if(std::string(s.id)==id)return &s;return nullptr;}
@@ -499,10 +514,6 @@ double quantize(const Field& f,double v){
     return std::clamp(v,std::min(lo,hi),std::max(lo,hi));
 }
 std::string text(const Field& f,double v){char b[64];std::snprintf(b,sizeof b,"%.*f",decimals(f),quantize(f,v));return b;}
-ImU32 u32(const ImVec4& c){return ImGui::ColorConvertFloat4ToU32(c);}
-// Right-aligns the next item of the given width on the current line.
-void alignRight(float width){const float x=ImGui::GetCursorPosX()+ImGui::GetContentRegionAvail().x-width;ImGui::SameLine(0,0);ImGui::SetCursorPosX(std::max(ImGui::GetCursorPosX(),x));}
-float buttonWidth(const char* label){return ImGui::CalcTextSize(label).x+ImGui::GetStyle().FramePadding.x*2;}
 } // namespace
 
 struct SettingsPanel::State {
@@ -530,7 +541,7 @@ struct SettingsPanel::State {
     mutable std::map<std::string,unsigned> fieldPageMask;
     mutable const NorthlightSettings::Snapshot* celestialSectionSnapshot=nullptr;
     mutable std::map<std::string,std::map<std::string,const Field*>> celestialSectionFieldCache;
-    int curveChannel=0,selectedPoint=0,dragPoint=-1;
+    int curveChannel=0,selectedPoint=0,dragPoint=-1,selectedBand=0;
     ImVec2 curveDragOffset{};
     bool curveDragged=false;
     double nextCurvePreview=0;
@@ -616,13 +627,9 @@ struct SettingsPanel::State {
 
     // ---- Rows ----
     void marker(const Field& f){
-        const float h=ImGui::GetFrameHeight(),r=std::max(2.5f,h*0.15f);
-        const ImVec2 p=ImGui::GetCursorScreenPos(),c(p.x+r+1,p.y+h*0.5f);
-        ImDrawList* dl=ImGui::GetWindowDrawList();
-        if(draft.edited(f))dl->AddCircleFilled(c,r,u32(Color::Edited));
-        else if(draft.overrides(f))dl->AddCircleFilled(c,r,u32(Color::Accent));
-        else dl->AddCircle(c,r,u32(Color::Muted),0,std::max(1.f,scale));
-        ImGui::Dummy(ImVec2(2*r+2,h));ImGui::SameLine(0,ImGui::GetStyle().ItemInnerSpacing.x);
+        if(draft.edited(f))W::dot(Color::Edited,true);
+        else if(draft.overrides(f))W::dot(Color::Accent,true);
+        else W::dot(Color::Muted,false);
     }
     void tooltip(const Field& f,D::Block block,const std::string& missing){
         if(!ImGui::BeginTooltip())return;
@@ -698,7 +705,7 @@ struct SettingsPanel::State {
         }
         settle(f);
     }
-    // One table row: marker, label (amber while edited, "R" for restart-only keys), control.
+    // One table row: marker, label (amber while edited, an "R" badge for restart-only keys), control.
     void row(const Field& f,const char* label=nullptr){
         std::string missing;const auto block=D::blocked(draft,f,missing);
         ImGui::PushID(f.id().c_str());
@@ -710,7 +717,7 @@ struct SettingsPanel::State {
         else if(draft.edited(f))ImGui::TextColored(Color::Edited,"%s",name.c_str());
         else ImGui::TextUnformatted(name.c_str());
         interact(f,block,missing);
-        if(f.apply=="R"){ImGui::SameLine(0,ImGui::GetStyle().ItemInnerSpacing.x*2);ImGui::TextColored(draft.restartPending(f)?Color::Restart:Color::Muted,"R");interact(f,block,missing);}
+        if(f.apply=="R"){ImGui::SameLine(0,ImGui::GetStyle().ItemInnerSpacing.x*2);W::badge("R",draft.restartPending(f)?Color::Restart:Color::Muted);interact(f,block,missing);}
         ImGui::TableSetColumnIndex(1);
         ImGui::BeginDisabled(block!=D::Block::None||locked());
         control(f);
@@ -724,7 +731,7 @@ struct SettingsPanel::State {
         ImGui::TableSetupColumn("value",ImGuiTableColumnFlags_WidthStretch,1.0f);
         return true;
     }
-    // A titled group: optional master checkbox in the title, a Reset button, its rows and a "Fine tuning" fold.
+    // A titled group on a card: optional master checkbox in the title, a Reset button, its rows and a "Fine tuning" fold.
     void group(const Group& g,const std::map<std::string,const Field*>& byKey,std::map<std::string,bool>& used){
         auto take=[&](const char* list){std::vector<const Field*> out;for(const auto& k:words(list)){auto i=byKey.find(k);if(i!=byKey.end()&&!used[k]){out.push_back(i->second);used[k]=true;}}return out;};
         const Field* master=nullptr;
@@ -732,7 +739,7 @@ struct SettingsPanel::State {
         const auto main=take(g.fields),advanced=take(g.advanced);
         if(!master&&main.empty()&&advanced.empty())return;
         ImGui::PushID(g.id);
-        ImGui::Spacing();
+        if(W::beginCard("card")){
         std::vector<const Field*> all=main;all.insert(all.end(),advanced.begin(),advanced.end());if(master)all.insert(all.begin(),master);
         if(master){
             std::string missing;const auto block=D::blocked(draft,*master,missing);
@@ -753,7 +760,6 @@ struct SettingsPanel::State {
         if(ImGui::SmallButton("Reset"))for(const Field* f:all)if(D::canInherit(*f)){draft.inherit(*f);live.erase(f->id());edited(*f);}
         ImGui::EndDisabled();
         if(ImGui::IsItemHovered(ImGuiHoveredFlags_ForTooltip|ImGuiHoveredFlags_AllowWhenDisabled))ImGui::SetTooltip("Restore the inherited values of this group.");
-        ImGui::Separator();
         if(!main.empty()&&beginRows("rows")){for(const Field* f:main)row(*f);ImGui::EndTable();}
         if(!advanced.empty()){
             char title[64];std::snprintf(title,sizeof title,"Fine tuning (%u)",unsigned(advanced.size()));
@@ -761,6 +767,8 @@ struct SettingsPanel::State {
                 for(const Field* f:advanced)row(*f);ImGui::EndTable();
             }
         }
+        }
+        W::endCard();
         ImGui::PopID();
     }
     void loose(const char* id,const std::vector<const Field*>& rest){
@@ -779,14 +787,23 @@ struct SettingsPanel::State {
     // The fields a page shows (Sun & moon: every region), for its sidebar markers and Defaults.
     std::vector<const Field*> buildPageFields(Page p)const{
         std::vector<const Field*> out;
-        if(p==Page::Overview){if(const Field* f=draft.quality("Preset"))out.push_back(f);for(auto& k:words(QuickKeys))if(const Field* f=draft.quality(k))out.push_back(f);return out;}
-        if(p==Page::Celestial||p==Page::Atmosphere){
-            if(p==Page::Atmosphere)if(const Field* f=draft.field(D::Celestial,"Appearance","Palette"))out.push_back(f);
+        const Field* palette=draft.field(D::Celestial,"Appearance","Palette");
+        if(p==Page::Overview){
+            if(const Field* f=draft.quality("Preset"))out.push_back(f);
+            for(auto& k:words(QuickKeys))if(const Field* f=draft.quality(k))out.push_back(f);
+            for(auto& k:words(WaterPresetKeys))if(const Field* f=draft.field(NorthlightSettings::WaterFile,"Water",k))out.push_back(f);
+            if(palette)out.push_back(palette);
+            return out;
+        }
+        if(p==Page::Celestial||p==Page::Regional||p==Page::Grading){
+            if(p==Page::Regional&&palette)out.push_back(palette);
             for(const Field* f:fields(D::Celestial)){
                 const bool appearance=std::find(std::begin(NorthlightSettings::AppearanceKeys),std::end(NorthlightSettings::AppearanceKeys),f->key)!=std::end(NorthlightSettings::AppearanceKeys);
-                if(appearance==(p==Page::Atmosphere))out.push_back(f);
+                const bool fog=f->key=="fog_tint"||f->key=="fog_tint_strength"||f->key=="shadow_contrast";
+                const Page home=!appearance?Page::Celestial:fog?Page::Regional:Page::Grading;
+                if(home==p)out.push_back(f);
             }
-            if(p==Page::Celestial)return out;
+            return out;
         }
         if(p==Page::ShadowRange)return fields(D::ShadowRange);
         if(p==Page::Renderer)return fields(D::Renderer);
@@ -821,8 +838,9 @@ struct SettingsPanel::State {
     }
     void titled(const char* title,const std::vector<const Field*>& rows){
         if(rows.empty())return;
-        ImGui::Spacing();ImGui::AlignTextToFramePadding();ImGui::TextColored(Color::Heading,"%s",title);ImGui::Separator();
-        ImGui::PushID(title);if(beginRows("rows")){for(const Field* f:rows)row(*f);ImGui::EndTable();}ImGui::PopID();
+        ImGui::PushID(title);
+        if(W::beginCard("card")){W::cardTitle(title);if(beginRows("rows")){for(const Field* f:rows)row(*f);ImGui::EndTable();}}
+        W::endCard();ImGui::PopID();
     }
     void qualityPage(const Section& sec,bool withUnsorted){
         std::map<std::string,const Field*> mine;for(const auto& k:sectionKeys(sec))if(const Field* f=draft.quality(k))mine[k]=f;
@@ -833,52 +851,96 @@ struct SettingsPanel::State {
         if(withUnsorted)titled("Other",unsortedQuality());
     }
     void overviewPage(){
-        ImGui::PushTextWrapPos(0);
-        ImGui::TextColored(Color::Muted,"Choose starting settings, then adjust effects in the categories on the left.");
-        ImGui::PopTextWrapPos();
-        ImGui::Spacing();ImGui::TextColored(Color::Heading,"Quality preset");ImGui::Separator();
         const Field* preset=draft.quality("Preset");
         const std::string current=preset?draft.effective(*preset):"";
-        for(const auto& p:Presets){
-            ImGui::PushID(p.key);
-            const bool here=current==p.key;
-            ImGui::BeginGroup();
-            ImGui::AlignTextToFramePadding();
-            if(here)ImGui::TextColored(Color::Accent,"%s  (current)",p.key);else ImGui::TextUnformatted(p.key);
-            ImGui::TextColored(Color::Muted,"%s",p.text);
-            ImGui::EndGroup();
-            ImGui::SameLine();alignRight(buttonWidth("Choose..."));
-            ImGui::BeginDisabled(here||!preset||locked());
-            if(ImGui::Button("Choose...")){presetChoice=p.key;confirm=Confirm::Preset;}
-            ImGui::EndDisabled();
-            ImGui::PopID();
-            ImGui::Separator();
+        if(W::beginCard("presets")){
+            W::cardTitle("Quality preset");
+            for(const auto& p:Presets){
+                ImGui::PushID(p.key);
+                const bool here=current==p.key;
+                ImGui::AlignTextToFramePadding();
+                if(here)ImGui::TextColored(Color::Accent,"%s  (current)",p.key);else ImGui::TextUnformatted(p.key);
+                ImGui::SameLine();ImGui::TextColored(Color::Muted,"%s",p.text);
+                ImGui::SameLine();alignRight(buttonWidth("Choose..."));
+                ImGui::BeginDisabled(here||!preset||locked());
+                if(ImGui::Button("Choose...")){presetChoice=p.key;confirm=Confirm::Preset;}
+                ImGui::EndDisabled();
+                ImGui::PopID();
+            }
+            W::hint("Choosing a preset returns your quality changes to that preset's values. You confirm before anything changes.");
         }
-        ImGui::PushTextWrapPos(0);
-        ImGui::TextColored(Color::Muted,"Choosing a preset resets your quality changes to the preset's values. You will be asked to confirm.");
-        ImGui::PopTextWrapPos();
+        W::endCard();
+        const Field* palette=draft.field(D::Celestial,"Appearance","Palette");
+        if(palette||waterPresetFields().complete()){
+            if(W::beginCard("looks")){
+                W::cardTitle("Water and world");
+                if(beginRows("looks")){
+                    waterPresetRow("Water preset");
+                    if(palette)row(*palette);
+                    ImGui::EndTable();
+                }
+                W::hint("The Water preset sets Tideglass on its own, apart from the quality preset above. Whole-world appearance picks one colour look for everywhere; the By region pages tune single regions.");
+            }
+            W::endCard();
+        }
         std::vector<const Field*> quick;for(auto& k:words(QuickKeys))if(const Field* f=draft.quality(k))quick.push_back(f);
-        titled("Quick toggles",quick);
-        ImGui::Spacing();ImGui::TextColored(Color::Heading,"Summary");ImGui::Separator();
-        unsigned set=0;if(snapshot)for(const auto& f:snapshot->fields)if(f.overrideValue!="~")++set;
-        ImGui::Text("%u setting%s set in the INI files, %u unsaved change%s.",set,set==1?"":"s",unsigned(draft.size()),draft.size()==1?"":"s");
-        if(const auto n=restartPending())ImGui::TextColored(Color::Restart,"%u change%s apply after a game restart.",unsigned(n),n==1?"":"s");
+        titled("Main effects",quick);
+        if(W::beginCard("summary")){
+            W::cardTitle("Summary");
+            unsigned set=0;if(snapshot)for(const auto& f:snapshot->fields)if(f.overrideValue!="~")++set;
+            ImGui::Text("%u setting%s set in the INI files, %u unsaved change%s.",set,set==1?"":"s",unsigned(draft.size()),draft.size()==1?"":"s");
+            if(const auto n=restartPending())ImGui::TextColored(Color::Restart,n==1?"%u change applies after a game restart.":"%u changes apply after a game restart.",unsigned(n));
+        }
+        W::endCard();
     }
     void rendererPage(){
         std::map<std::string,const Field*> byKey;for(const Field* f:fields(D::Renderer))byKey[f->key]=f;
         std::map<std::string,bool> used;
         if(auto b=byKey.find("Backend");b!=byKey.end()){used["Backend"]=true;titled("Renderer",{b->second});}
         for(const auto& g:HdrGroups)group(g,byKey,used);
-        ImGui::Spacing();
-        ImGui::PushTextWrapPos(0);
-        ImGui::TextColored(Color::Muted,"HDR needs DXVK 2 or 3, the separate render thread, windowed mode and HDR output from the system or Wine. Restart after switching HDR on or off; its sliders apply live.");
-        ImGui::PopTextWrapPos();
+        W::hint("HDR needs DXVK 2 or 3, the separate render thread, windowed mode and HDR output from the system or Wine. Restart after switching HDR on or off; its sliders apply live.");
         std::vector<const Field*> rest;for(auto& k:byKey)if(!used[k.first])rest.push_back(k.second);
         titled("Other",rest);
     }
+    // The six settings a Water preset chooses together.
+    struct WaterPresetFields {
+        const Field *scenery=nullptr,*resolution=nullptr,*distance=nullptr,*fine=nullptr,*details=nullptr,*blur=nullptr;
+        bool complete()const{return scenery&&resolution&&distance&&fine&&details&&blur;}
+    };
+    WaterPresetFields waterPresetFields()const{
+        const auto water=[&](const char* key){return draft.field(NorthlightSettings::WaterFile,"Water",key);};
+        return {water("ReflectionScenery"),water("ReflectionResolution"),water("ReflectionDistance"),water("FineHighlights"),water("ReflectionSceneryDetails"),water("SurfaceBlur")};
+    }
+    // The Water preset as one table row. It reads Custom when the six settings match no preset.
+    void waterPresetRow(const char* label){
+        const auto f=waterPresetFields();
+        if(!f.complete())return;
+        const char* current=D::waterPreset(draft.effective(*f.scenery),draft.effective(*f.resolution),draft.effective(*f.distance),draft.effective(*f.fine),draft.effective(*f.details),draft.effective(*f.blur));
+        bool changed=false;for(const Field* field:{f.scenery,f.resolution,f.distance,f.fine,f.details,f.blur})changed|=draft.edited(*field);
+        ImGui::PushID("water-preset");
+        ImGui::TableNextRow();ImGui::TableSetColumnIndex(0);
+        if(changed)W::dot(Color::Edited,true);else W::dotSpace();
+        ImGui::AlignTextToFramePadding();
+        if(changed)ImGui::TextColored(Color::Edited,"%s",label);else ImGui::TextUnformatted(label);
+        ImGui::TableSetColumnIndex(1);
+        ImGui::BeginDisabled(locked());
+        ImGui::SetNextItemWidth(-FLT_MIN);
+        if(ImGui::BeginCombo("##value",current)){
+            for(const auto& tier:D::WaterTiers){
+                const bool selected=std::string(current)==tier.name;
+                if(ImGui::Selectable(tier.name,selected)){
+                    set(*f.scenery,tier.scenery);set(*f.resolution,tier.resolution);set(*f.distance,tier.distance);set(*f.fine,tier.fineHighlights);set(*f.details,tier.sceneryDetails);set(*f.blur,tier.depthBlur);
+                }
+            }
+            ImGui::EndCombo();
+        }
+        ImGui::EndDisabled();
+        if(ImGui::IsItemHovered(ImGuiHoveredFlags_ForTooltip|ImGuiHoveredFlags_AllowWhenDisabled))ImGui::SetTooltip("Sets reflections, their resolution and distance, nearby reflected scenery, fine highlights and depth blur together.\nYour wave, foam and colour settings are kept. Takes effect when you save.");
+        ImGui::PopID();
+    }
     void waterPage(){
-        ImGui::TextWrapped("The Water preset controls Tideglass independently of the Northlight quality preset. Save to apply water settings. Restart after switching Tideglass on or off.");
-        titled("Renderer",fields(NorthlightSettings::WaterHostFile));
+        W::hint("Water settings take effect when you save. Switching Tideglass on or off needs a game restart.");
+        titled("Tideglass",fields(NorthlightSettings::WaterHostFile));
         auto waterRows=[&](const char* title,const char* keys){
             std::vector<const Field*> rows;
             for(const auto& key:words(keys)){
@@ -887,76 +949,90 @@ struct SettingsPanel::State {
             titled(title,rows);
         };
         const auto water=[&](const char* key){return draft.field(NorthlightSettings::WaterFile,"Water",key);};
-        const Field* scenery=water("ReflectionScenery");
-        const Field* resolution=water("ReflectionResolution");
-        const Field* distance=water("ReflectionDistance");
-        const Field* fine=water("FineHighlights");
-        const Field* details=water("ReflectionSceneryDetails");
-        const Field* blur=water("SurfaceBlur");
-        if(scenery && resolution && distance && fine && details && blur){
-            const char* current=D::waterPreset(draft.effective(*scenery),draft.effective(*resolution),draft.effective(*distance),draft.effective(*fine),draft.effective(*details),draft.effective(*blur));
-            ImGui::TextColored(Color::Heading,"Performance");ImGui::Separator();
-            ImGui::BeginDisabled(locked());
-            if(ImGui::BeginCombo("Water preset",current)){
-                for(const auto& tier:D::WaterTiers){
-                    const bool selected=std::string(current)==tier.name;
-                    if(ImGui::Selectable(tier.name,selected)){
-                        set(*scenery,tier.scenery);set(*resolution,tier.resolution);set(*distance,tier.distance);set(*fine,tier.fineHighlights);set(*details,tier.sceneryDetails);set(*blur,tier.depthBlur);
-                    }
+        if(const auto preset=waterPresetFields();preset.complete()){
+            if(W::beginCard("water-preset")){
+                W::cardTitle("Water preset");
+                if(beginRows("preset")){
+                    waterPresetRow("Preset");
+                    for(const Field* f:{preset.scenery,preset.resolution,preset.distance,preset.details,preset.fine,preset.blur})row(*f);
+                    ImGui::EndTable();
                 }
-                ImGui::EndCombo();
             }
-            ImGui::EndDisabled();
-            loose("water-performance",{scenery,resolution,distance,details,fine,blur});
+            W::endCard();
         }
         waterRows("Waves and foam","WaveStrength WaveSpeed WaveCrestShape WaveCrestSharpness RippleStrength FoamStrength OpenWaterCrestFoam");
         waterRows("Reflections","Reflection NearReflection");
         waterRows("Clarity and underwater","Clarity Underwater UnderwaterVisibility UnderwaterScenery");
         waterRows("Other liquids","Slime Lava");
-        if(water("Slime")&&pickRegion(waterRegion,true)){
-            const auto id=NorthlightSettings::liquidAreaKey(waterRegion);
-            if(const Field* f=draft.field(NorthlightSettings::WaterFile,"RegionalSlime",id))regionalControl(*f,"Slime pigment and movement");
+        if(water("Slime")){
+            if(W::beginCard("regional-slime")){
+                W::cardTitle("Slime by region");
+                if(pickRegion(waterRegion,true)){
+                    const auto id=NorthlightSettings::liquidAreaKey(waterRegion);
+                    if(const Field* f=draft.field(NorthlightSettings::WaterFile,"RegionalSlime",id))
+                        if(beginRows("slime")){regionalRow(*f,"Pigment and movement");ImGui::EndTable();}
+                }
+            }
+            W::endCard();
         }
     }
     void drawPage(){
+        W::pageHeader(Pages[unsigned(page)].title,Pages[unsigned(page)].about);
         switch(page){
         case Page::Overview:overviewPage();break;
         case Page::Celestial:celestialTab();break;
         case Page::ShadowRange:shadowRangeTab();break;
         case Page::Renderer:rendererPage();break;
         case Page::Water:waterPage();break;
-        case Page::Atmosphere:
-            ImGui::Spacing();ImGui::TextColored(Color::Heading,"World appearance");ImGui::Separator();
-            if(const Field* palette=draft.field(D::Celestial,"Appearance","Palette"))loose("world-palette",{palette});
-            ImGui::TextWrapped("Default keeps Northlight's current regional look and your personal region edits. Other looks supply a whole-world base; personal regional edits remain layered above it.");
-            if(ImGui::Button("Save current look as a named copy...")){appearancePresetName[0]='\0';appearancePresetModal=true;}
-            ImGui::SameLine();
-            ImGui::TextColored(Color::Muted,"Portable INI files: appearance-presets");
-            if(pickRegion()){
-                for(const char* key:{"fog_tint_strength","shadow_contrast"})
-                    if(const Field* f=draft.field(D::Celestial,region,key))regionalControl(*f,rowLabel(*f).c_str());
-                if(const Field* f=draft.field(D::Celestial,region,"fog_tint"))loose("fog-colour",{f});
-                if(const Field* strength=draft.field(D::Celestial,region,"tone_curve_strength")){
-                    regionalControl(*strength,"Tone curve strength");
-                    ImGui::TextWrapped("Dusk is the 19:30 anchor for the evening blend. Unset Dusk values preserve the previous Daylight-to-Night result; morning still blends Daylight directly with Night.");
-                    for(unsigned i=0;i<GradeTimes.size();++i)if(ImGui::TreeNode(GradeTitles[i])){
-                        ImGui::BeginDisabled(locked());
-                        gradeEditor(GradeTimes[i]);
-                        ImGui::EndDisabled();
-                        ImGui::TreePop();
+        case Page::Regional:
+            if(W::beginCard("world-look")){
+                W::cardTitle("Whole world");
+                if(const Field* palette=draft.field(D::Celestial,"Appearance","Palette"))loose("world-palette",{palette});
+                W::hint("Default keeps Northlight's regional look and your own region edits. Another look replaces the base for the whole world; your region edits still apply on top.");
+                if(ImGui::Button("Save current look as a named copy...")){appearancePresetName[0]='\0';appearancePresetModal=true;}
+                ImGui::SameLine();
+                ImGui::TextColored(Color::Muted,"Shareable INI files: appearance-presets");
+            }
+            W::endCard();
+            if(W::beginCard("regional-look")){
+                W::cardTitle("Fog and contrast");
+                if(pickRegion()&&beginRows("regional")){
+                    for(const char* key:{"fog_tint_strength","shadow_contrast"})
+                        if(const Field* f=draft.field(D::Celestial,region,key))regionalRow(*f,rowLabel(*f).c_str());
+                    if(const Field* f=draft.field(D::Celestial,region,"fog_tint"))row(*f);
+                    ImGui::EndTable();
+                }
+                W::hint("Fog tint colours the fog a region already has. Shadow contrast deepens its dark detail. The region chosen here is the one Colour grading and Sun & moon edit too.");
+            }
+            W::endCard();
+            break;
+        case Page::Grading:
+            if(W::beginCard("grading")){
+                if(pickRegion()){
+                    if(const Field* strength=draft.field(D::Celestial,region,"tone_curve_strength")){
+                        if(beginRows("strength")){regionalRow(*strength,"Tone curve strength");ImGui::EndTable();}
+                        if(number(draft.effective(*strength))==0)ImGui::TextWrapped("This region's grade is off while its strength is zero. Choose Tuned above to see your edits.");
+                        W::hint("Strength scales the whole grade; at zero the grade is off. Dusk is the 19:30 look of the evening blend; what it leaves unset follows the Daylight-to-Night blend. Morning blends Daylight directly with Night.");
+                        if(ImGui::BeginTabBar("grades")){
+                            for(unsigned i=0;i<GradeTimes.size();++i)if(ImGui::BeginTabItem(GradeTitles[i])){
+                                ImGui::BeginDisabled(locked());
+                                gradeEditor(GradeTimes[i]);
+                                ImGui::EndDisabled();
+                                ImGui::EndTabItem();
+                            }
+                            ImGui::EndTabBar();
+                        }
                     }
                 }
             }
-            if(const Section* s=qualitySection("atmosphere")){
-                ImGui::Spacing();ImGui::TextColored(Color::Heading,"Atmosphere and weather");ImGui::Separator();
-                qualityPage(*s,false);
-            }
+            W::endCard();
             break;
         default:if(const Section* s=qualitySection(Pages[unsigned(page)].quality))qualityPage(*s,page==Page::Performance);break;
         }
     }
-    // Left column: the pages; amber dot = unsaved edits there, R = a restart-only change pending there.
+    // Left column: the pages under their group captions; amber dot = unsaved edits there, R = a restart-only change pending there.
     void sidebar(){
+        refreshPageFields();   // the marks below read the per-page index; it is rebuilt only when the snapshot changes
         const float h=ImGui::GetFrameHeight(),r=std::max(2.5f,h*0.14f);
         std::array<bool,std::size_t(Page::Count)> editedPages{},restartPages{};
         for(const auto& change:draft.changes()){
@@ -969,6 +1045,7 @@ struct SettingsPanel::State {
             const auto& info=Pages[i];
             if(info.page==Page::Water&&!draft.field(NorthlightSettings::WaterHostFile,"WaterIntegration","Enable"))continue;
             const bool edited=editedPages[i],restart=restartPages[i];
+            if(info.caption)W::sidebarCaption(info.caption);
             if(ImGui::Selectable(info.title,page==info.page,0,ImVec2(0,h)))page=info.page;
             const ImVec2 a=ImGui::GetItemRectMin(),b=ImGui::GetItemRectMax();
             ImDrawList* dl=ImGui::GetWindowDrawList();float x=b.x-ImGui::GetStyle().ItemInnerSpacing.x-r;
@@ -1053,8 +1130,6 @@ struct SettingsPanel::State {
     void gradeEditor(NorthlightTone::TimeStop time){
         ImGui::PushID(int(time));
         const char* channels[]={"Brightness","Red","Green","Blue"};
-        ImGui::SetNextItemWidth(170*scale);
-        ImGui::Combo("Channel",&curveChannel,channels,4);
         NorthlightTone::Grade grade;
         auto& curve=grade.curves[curveChannel];
         const Field* fields[5]{};
@@ -1066,13 +1141,29 @@ struct SettingsPanel::State {
             *NorthlightTone::parameter(curve,i,lo,hi)=float(number(draft.effective(*fields[i])));
         }
         const ImVec2 origin=ImGui::GetCursorScreenPos();
-        const ImVec2 size(ImGui::GetContentRegionAvail().x,135*scale);
+        // Square, so a slope on screen is the slope of the curve; the channel choice and readout sit beside it.
+        const float side=std::clamp(ImGui::GetContentRegionAvail().x*.46f,190*scale,300*scale);
+        const ImVec2 size(side,side);
         const float pad=6*scale,w=std::max(size.x-2*pad,1.f),h=size.y-2*pad;
         auto pos=[&](float x,float y){return ImVec2(origin.x+pad+x*w,origin.y+pad+(1-y)*h);};
         auto nodeX=[&](int i){return i==0?curve.lowInput:i*.25f;};
         auto nodeY=[&](int i){return i==0?NorthlightTone::lowOutput(curve):curve.levels[i-1];};
         ImGui::InvisibleButton("Curve graph",size);
         const auto mouse=ImGui::GetIO().MousePos;
+        auto inheritPoint=[&](int point){
+            if(point==0){inherit(*fields[0]);inherit(*fields[1]);}
+            else inherit(*fields[point+1]);
+        };
+        int hoverPoint=-1;
+        if(ImGui::IsItemHovered()&&dragPoint<0){
+            float best=16*scale;
+            for(int i=0;i<4;++i){
+                const auto pt=pos(nodeX(i),nodeY(i));
+                const float dist=std::hypot(mouse.x-pt.x,mouse.y-pt.y);
+                if(dist<best){best=dist;hoverPoint=i;}
+            }
+            if(hoverPoint>=0&&ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)&&!locked()){selectedPoint=hoverPoint;inheritPoint(hoverPoint);}
+        }
         if(ImGui::IsItemActivated()){
             dragPoint=-1;
             curveDragged=false;
@@ -1109,6 +1200,14 @@ struct SettingsPanel::State {
             draw->AddLine(pos(i*.25f,0),pos(i*.25f,1),IM_COL32(57,67,75,255));
             draw->AddLine(pos(0,i*.25f),pos(1,i*.25f),IM_COL32(57,67,75,255));
         }
+        // How far each point may travel.
+        const ImU32 travel=IM_COL32(255,255,255,18);
+        {float lo,hi;NorthlightTone::parameter(curve,NorthlightTone::LowInput,lo,hi);draw->AddRectFilled(pos(lo,nodeY(1)),pos(hi,0),travel);}
+        for(int i=1;i<4;++i){
+            float lo,hi;NorthlightTone::parameter(curve,NorthlightTone::Shadow+i-1,lo,hi);
+            const ImVec2 top=pos(i*.25f,hi),bottom=pos(i*.25f,lo);
+            draw->AddRectFilled({top.x-4*scale,top.y},{bottom.x+4*scale,bottom.y},travel);
+        }
         draw->AddLine(pos(0,0),pos(1,1),IM_COL32(100,109,115,255));
         const ImU32 inks[]={IM_COL32(226,223,209,255),IM_COL32(255,139,128,255),IM_COL32(130,220,165,255),IM_COL32(133,186,255,255)};
         ImVec2 last=pos(0,0);
@@ -1117,16 +1216,21 @@ struct SettingsPanel::State {
             const auto pt=pos(x,NorthlightTone::sample(curve,x));
             draw->AddLine(last,pt,inks[curveChannel],2*scale);last=pt;
         }
-        for(int i=0;i<4;++i)
-            draw->AddCircleFilled(pos(nodeX(i),nodeY(i)),(selectedPoint==i?5:3.5f)*scale,inks[curveChannel]);
-        ImGui::TextDisabled("Drag a point. The first point also moves horizontally.");
-        ImGui::Text("Input %.0f%%    Output %.1f%%",100*nodeX(selectedPoint),100*nodeY(selectedPoint));
-        if(ImGui::SmallButton("Inherit selected point")){
-            if(selectedPoint==0){inherit(*fields[0]);inherit(*fields[1]);}
-            else inherit(*fields[selectedPoint+1]);
+        for(int i=0;i<4;++i){
+            const auto pt=pos(nodeX(i),nodeY(i));
+            if(selectedPoint==i)draw->AddCircleFilled(pt,5.5f*scale,inks[curveChannel]);
+            else{draw->AddCircleFilled(pt,4.5f*scale,IM_COL32(27,33,39,255));draw->AddCircle(pt,4.5f*scale,inks[curveChannel],0,(hoverPoint==i?2.4f:1.5f)*scale);}
         }
-        ImGui::SameLine();ImGui::Button("Hold to compare");
+        ImGui::SameLine();ImGui::BeginGroup();
+        for(int i=0;i<4;++i)ImGui::RadioButton(channels[i],&curveChannel,i);
+        ImGui::Spacing();
+        static const char* const PointNames[]={"Low","Shadows","Midtones","Highlights"};
+        ImGui::Text("%s: %.0f%% in, %.1f%% out (%+.1f)",PointNames[selectedPoint],100*nodeX(selectedPoint),100*nodeY(selectedPoint),100*(nodeY(selectedPoint)-nodeX(selectedPoint)));
+        W::hint("Drag a point within its pale bar; the first also moves sideways. Double-click returns a point to its inherited place.");
+        if(ImGui::Button("Inherit selected point"))inheritPoint(selectedPoint);
+        ImGui::Button("Hold to compare");
         if(ImGui::IsItemActive())compareRequested=true;
+        ImGui::EndGroup();
         if(ImGui::TreeNode("Point values")){
             if(beginRows("points")){
                 row(*fields[0],"Low input");row(*fields[1],"Low bend (0.50 follows shadows)");
@@ -1137,63 +1241,79 @@ struct SettingsPanel::State {
         }
         if(const Field* f=draft.field(D::Celestial,region,NorthlightTone::vibranceKey(time)))
             loose("colour-grade",{f});
-        if(ImGui::TreeNode("Selective colour")){
-            ImGui::TextWrapped("Adjust five colour ranges after the curve. Zero is neutral; inherit a whole range with its button or right-click one control. Vibrance and selective colour need filterable 16-bit colour volume support; curves still work on fallback.");
-            for(const auto band:HueBands){
-                std::string title=NorthlightTone::bandName(band);
-                if(!title.empty())title[0]=char(std::toupper(static_cast<unsigned char>(title[0])));
-                const Field* values[3]{};
-                std::vector<const Field*> rows;
-                bool canReset=false;
-                for(unsigned i=0;i<SelectiveProperties.size();++i){
-                    const auto key=NorthlightTone::selectiveKey(time,band,SelectiveProperties[i]);
-                    values[i]=draft.field(D::Celestial,region,key);
-                    if(values[i]){rows.push_back(values[i]);canReset|=values[i]->available&&D::canInherit(*values[i]);}
-                }
-                if(rows.empty())continue;
-                ImGui::PushID(int(band));
-                if(ImGui::TreeNode(title.c_str())){
-                    alignRight(buttonWidth("Inherit range"));
-                    ImGui::BeginDisabled(!canReset||locked());
-                    if(ImGui::SmallButton("Inherit range"))for(const Field* f:rows)if(f->available&&D::canInherit(*f))inherit(*f);
-                    ImGui::EndDisabled();
-                    if(beginRows("selective-adjustments")){
-                        for(unsigned i=0;i<SelectiveProperties.size();++i)if(values[i]){
-                            std::string label=NorthlightTone::propertyName(SelectiveProperties[i]);
-                            std::replace(label.begin(),label.end(),'_',' ');
-                            if(!label.empty())label[0]=char(std::toupper(static_cast<unsigned char>(label[0])));
-                            if(SelectiveProperties[i]==NorthlightTone::SelectiveProperty::HueShift)label+=" (degrees)";
-                            row(*values[i],label.c_str());
-                        }
-                        ImGui::EndTable();
-                    }
-                    ImGui::TreePop();
-                }
-                ImGui::PopID();
+        // Colour ranges: choose one, then its three adjustments.
+        ImGui::Spacing();
+        ImGui::TextColored(Color::Heading,"Colour ranges");
+        auto bandTitle=[](NorthlightTone::HueBand band){
+            std::string title=NorthlightTone::bandName(band);
+            if(!title.empty())title[0]=char(std::toupper(static_cast<unsigned char>(title[0])));
+            return title;
+        };
+        // Red, Green and Blue are also channel names above: the ranges need their own ID scope.
+        ImGui::PushID("ranges");
+        int index=0;
+        for(const auto band:HueBands){if(index)ImGui::SameLine();ImGui::RadioButton(bandTitle(band).c_str(),&selectedBand,index);++index;}
+        ImGui::PopID();
+        index=0;
+        for(const auto band:HueBands){
+            if(index++!=selectedBand)continue;
+            const Field* values[3]{};
+            bool canReset=false,any=false;
+            for(unsigned i=0;i<SelectiveProperties.size();++i){
+                const auto key=NorthlightTone::selectiveKey(time,band,SelectiveProperties[i]);
+                values[i]=draft.field(D::Celestial,region,key);
+                if(values[i]){any=true;canReset|=values[i]->available&&D::canInherit(*values[i]);}
             }
-            ImGui::TreePop();
+            if(!any)continue;
+            ImGui::PushID(int(band));
+            if(beginRows("selective-adjustments")){
+                for(unsigned i=0;i<SelectiveProperties.size();++i)if(values[i]){
+                    std::string label=NorthlightTone::propertyName(SelectiveProperties[i]);
+                    std::replace(label.begin(),label.end(),'_',' ');
+                    if(!label.empty())label[0]=char(std::toupper(static_cast<unsigned char>(label[0])));
+                    if(SelectiveProperties[i]==NorthlightTone::SelectiveProperty::HueShift)label+=" (degrees)";
+                    row(*values[i],label.c_str());
+                }
+                ImGui::EndTable();
+            }
+            ImGui::BeginDisabled(!canReset||locked());
+            if(ImGui::SmallButton("Inherit range"))for(const Field* f:values)if(f&&f->available&&D::canInherit(*f))inherit(*f);
+            ImGui::EndDisabled();
+            ImGui::PopID();
         }
+        W::hint("Each range acts on nearby hues only, after the curve. Zero leaves it alone. These and Vibrance need filterable 16-bit colour volume support; the curves work without it.");
         ImGui::PopID();
     }
-    void regionalControl(const Field& f,const char* title){
+    // A regional strength as one table row. It has three states: follow the parent region, pinned off here, or tuned here.
+    void regionalRow(const Field& f,const char* title){
         ImGui::PushID(f.id().c_str());
-        ImGui::TextUnformatted(title);
-        auto value=draft.effective(f);
-        const char* mode=!draft.overrides(f)?"Inherit":number(value)==0?"Off":"Tuned";
-        if(ImGui::BeginCombo("Mode",mode)){
-            for(const char* choice:{"Inherit","Off","Tuned"})if(ImGui::Selectable(choice,std::string(choice)==mode)){
+        ImGui::TableNextRow();ImGui::TableSetColumnIndex(0);
+        marker(f);ImGui::AlignTextToFramePadding();
+        if(draft.edited(f))ImGui::TextColored(Color::Edited,"%s",title);else ImGui::TextUnformatted(title);
+        ImGui::TableSetColumnIndex(1);
+        const auto value=draft.effective(f);
+        const std::string mode=!draft.overrides(f)?"Inherit":number(value)==0?"Off":"Tuned";
+        ImGui::BeginDisabled(locked());
+        ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x*0.36f);
+        if(ImGui::BeginCombo("##mode",mode.c_str())){
+            for(const char* choice:{"Inherit","Off","Tuned"})if(ImGui::Selectable(choice,mode==choice)){
                 if(std::string(choice)=="Inherit")inherit(f);
                 else{draft.pin(f,std::string(choice)=="Off"?"0":number(value)>0?value:"0.5");edited(f);}
             }
             ImGui::EndCombo();
         }
-        if(std::string(mode)=="Tuned")control(f);
-        else if(std::string(mode)=="Inherit")ImGui::TextDisabled("Inherited strength: %s",value.c_str());
+        ImGui::SameLine();
+        if(mode=="Tuned")control(f);
+        else{
+            ImGui::AlignTextToFramePadding();
+            if(mode=="Inherit")ImGui::TextDisabled("follows parent: %s",value.c_str());else ImGui::TextDisabled("off in this region");
+        }
+        ImGui::EndDisabled();
         ImGui::PopID();
     }
     void celestialTab(){
         if(!pickRegion())return;
-        ImGui::TextColored(Color::Muted,"Unset values follow the parent region.");
+        W::hint("Values a region does not set follow its parent region.");
         const auto& byKey=celestialFields(region);
         std::map<std::string,bool> used;
         ImGui::PushID(region.c_str());
@@ -1204,15 +1324,16 @@ struct SettingsPanel::State {
         ImGui::PopID();
     }
     void shadowRangeTab(){
-        ImGui::PushTextWrapPos(0);
-        ImGui::TextColored(Color::Muted,"Terrain shadow reach per region, in yards. Regions not listed use the default reach.");
-        ImGui::PopTextWrapPos();
+        W::hint("In yards. Regions not listed use the default reach.");
         const auto regions=sections(D::ShadowRange);
         if(regions.empty()){ImGui::TextDisabled("No shadow range profiles.");return;}
-        if(beginRows("ranges")){
-            for(const auto& r:regions)if(const Field* f=draft.field(D::ShadowRange,r,"terrain_radius"))row(*f,regionLabel(r).c_str());
-            ImGui::EndTable();
+        if(W::beginCard("ranges")){
+            if(beginRows("ranges")){
+                for(const auto& r:regions)if(const Field* f=draft.field(D::ShadowRange,r,"terrain_radius"))row(*f,regionLabel(r).c_str());
+                ImGui::EndTable();
+            }
         }
+        W::endCard();
     }
 
     // ---- Footer ----
@@ -1234,45 +1355,46 @@ struct SettingsPanel::State {
         if(status.restartRequired||restartPending()){ImGui::SameLine();ImGui::TextColored(Color::Restart,"  R: restart required");}
     }
     void legend(){
-        const float h=ImGui::GetTextLineHeight(),r=std::max(2.5f,h*0.2f);
-        auto dot=[&](const ImVec4& c,bool filled,const char* label){
-            const ImVec2 p=ImGui::GetCursorScreenPos();const ImVec2 at(p.x+r+1,p.y+ImGui::GetFrameHeight()*0.5f);
-            if(filled)ImGui::GetWindowDrawList()->AddCircleFilled(at,r,u32(c));else ImGui::GetWindowDrawList()->AddCircle(at,r,u32(c),0,std::max(1.f,scale));
-            ImGui::Dummy(ImVec2(2*r+2,ImGui::GetFrameHeight()));ImGui::SameLine(0,ImGui::GetStyle().ItemInnerSpacing.x);
-            ImGui::AlignTextToFramePadding();ImGui::TextColored(Color::Muted,"%s",label);ImGui::SameLine();
-        };
         const auto& st=ImGui::GetStyle();
-        const float width=4*(2*r+2+st.ItemInnerSpacing.x+st.ItemSpacing.x)+ImGui::CalcTextSize("set").x+ImGui::CalcTextSize("inherited").x+ImGui::CalcTextSize("unsaved").x+ImGui::CalcTextSize("R restart").x;
+        const float mark=2*std::max(2.5f,ImGui::GetFrameHeight()*0.15f)+2+st.ItemInnerSpacing.x;
+        const float badge=ImGui::CalcTextSize("R").x+ImGui::GetFontSize()*0.6f+st.ItemInnerSpacing.x;
+        const float width=3*(mark+st.ItemSpacing.x)+badge+ImGui::CalcTextSize("set").x+ImGui::CalcTextSize("inherited").x+ImGui::CalcTextSize("unsaved").x+ImGui::CalcTextSize("after restart").x;
         alignRight(width);
-        dot(Color::Accent,true,"set");dot(Color::Muted,false,"inherited");dot(Color::Edited,true,"unsaved");
-        ImGui::TextColored(Color::Restart,"R");ImGui::SameLine(0,st.ItemInnerSpacing.x);ImGui::TextColored(Color::Muted,"restart");
+        auto entry=[&](const ImVec4& c,bool filled,const char* label){
+            W::dot(c,filled);ImGui::AlignTextToFramePadding();ImGui::TextColored(Color::Muted,"%s",label);ImGui::SameLine();
+        };
+        entry(Color::Accent,true,"set");entry(Color::Muted,false,"inherited");entry(Color::Edited,true,"unsaved");
+        W::badge("R",Color::Restart);ImGui::SameLine(0,st.ItemInnerSpacing.x);ImGui::AlignTextToFramePadding();ImGui::TextColored(Color::Muted,"after restart");
     }
+    // Two lines under the pages: what state the settings are in beside the key to the marks, then the actions.
+    // Defaults sits apart on the left; Revert and Save, the pair that ends an edit, sit on the right.
     void footer(){
         ImGui::Separator();
+        ImGui::AlignTextToFramePadding();
         statusLine();
-        // Only while the service is idle: a queued preview would otherwise finish after the commit and hide its result.
-        const bool idle=status.state!=NorthlightSettings::Status::State::Busy;
-        ImGui::BeginDisabled(draft.empty()||locked()||!service||!idle);
-        const bool dirty=!draft.empty()&&!locked()&&idle;
-        if(dirty){ImGui::PushStyleColor(ImGuiCol_Button,ImVec4(0.20f,0.42f,0.70f,1));ImGui::PushStyleColor(ImGuiCol_ButtonHovered,ImVec4(0.26f,0.50f,0.80f,1));}
-        if(ImGui::Button("Save"))save();
-        if(dirty)ImGui::PopStyleColor(2);
+        ImGui::SameLine();legend();
+        ImGui::BeginDisabled(locked());
+        if(ImGui::Button("Defaults..."))confirm=Confirm::Factory;
         ImGui::EndDisabled();
-        if(ImGui::IsItemHovered(ImGuiHoveredFlags_ForTooltip|ImGuiHoveredFlags_AllowWhenDisabled))ImGui::SetTooltip("Write the changes to the INI files. Live settings stay applied; R settings apply after a restart.");
-        ImGui::SameLine();
+        if(ImGui::IsItemHovered(ImGuiHoveredFlags_ForTooltip|ImGuiHoveredFlags_AllowWhenDisabled))ImGui::SetTooltip("%s",factoryScope().c_str());
+        ImGui::SameLine();alignRight(buttonWidth("Revert")+buttonWidth("Save")+ImGui::GetStyle().ItemSpacing.x);
         ImGui::BeginDisabled((draft.empty()&&!previewing)||locked());
         if(ImGui::Button("Revert"))revert();
         ImGui::EndDisabled();
         if(ImGui::IsItemHovered(ImGuiHoveredFlags_ForTooltip|ImGuiHoveredFlags_AllowWhenDisabled))ImGui::SetTooltip("Discard the unsaved changes and return to the saved settings.");
         ImGui::SameLine();
-        ImGui::BeginDisabled(locked());
-        if(ImGui::Button("Defaults..."))confirm=Confirm::Factory;
+        // Only while the service is idle: a queued preview would otherwise finish after the commit and hide its result.
+        const bool idle=status.state!=NorthlightSettings::Status::State::Busy;
+        const bool ready=!draft.empty()&&!locked()&&service&&idle;
+        ImGui::BeginDisabled(!ready);
+        if(W::primaryButton("Save",ready))save();
         ImGui::EndDisabled();
-        if(ImGui::IsItemHovered(ImGuiHoveredFlags_ForTooltip|ImGuiHoveredFlags_AllowWhenDisabled))ImGui::SetTooltip("%s",factoryScope().c_str());
-        ImGui::SameLine();legend();
+        if(ImGui::IsItemHovered(ImGuiHoveredFlags_ForTooltip|ImGuiHoveredFlags_AllowWhenDisabled))ImGui::SetTooltip("Write the changes to the INI files. Live settings stay applied; R settings apply after a restart.");
     }
     std::string factoryScope()const{
         if(page==Page::Celestial)return "Restore the factory sun and moon values of the selected region ("+regionLabel(region)+").";
+        if(page==Page::Regional)return "Restore the factory fog tint and shadow contrast of the selected region ("+regionLabel(region)+").";
+        if(page==Page::Grading)return "Restore the factory colour grading of the selected region ("+regionLabel(region)+").";
         if(page==Page::ShadowRange)return "Restore the factory shadow reach of every region.";
         return std::string("Restore the factory values of every setting on the ")+Pages[unsigned(page)].title+" page.";
     }
@@ -1361,14 +1483,16 @@ bool SettingsPanel::draw(float scale){
     st.poll();st.compareRequested=false;
     bool open=true;
     ImGui::SetNextWindowPos(ImVec2(48*scale,96*scale),ImGuiCond_FirstUseEver);
-    ImGui::SetNextWindowSize(ImVec2(760*scale,680*scale),ImGuiCond_FirstUseEver);
-    ImGui::SetNextWindowSizeConstraints(ImVec2(560*scale,360*scale),ImVec2(FLT_MAX,FLT_MAX));
+    ImGui::SetNextWindowSize(ImVec2(820*scale,700*scale),ImGuiCond_FirstUseEver);
+    ImGui::SetNextWindowSizeConstraints(ImVec2(620*scale,380*scale),ImVec2(FLT_MAX,FLT_MAX));
     if(!ImGui::Begin("Northlight settings###NorthlightSettings",&open,ImGuiWindowFlags_NoCollapse)){ImGui::End();return open;}
     const auto& style=ImGui::GetStyle();
-    const float footer=ImGui::GetTextLineHeightWithSpacing()+ImGui::GetFrameHeightWithSpacing()+style.ItemSpacing.y*2+style.SeparatorTextBorderSize+2;
+    const float footer=2*ImGui::GetFrameHeightWithSpacing()+style.ItemSpacing.y*2+2;
     // Sidebar (fixed width, scaled) and the selected page; the footer below stays put on every page.
-    if(ImGui::BeginChild("nav",ImVec2(180*scale,-footer),ImGuiChildFlags_Borders))st.sidebar();
+    ImGui::PushStyleColor(ImGuiCol_ChildBg,Color::Card);
+    if(ImGui::BeginChild("nav",ImVec2(190*scale,-footer),ImGuiChildFlags_AlwaysUseWindowPadding))st.sidebar();
     ImGui::EndChild();
+    ImGui::PopStyleColor();
     ImGui::SameLine();
     ImGui::PushID(int(st.page));
     if(ImGui::BeginChild("page",ImVec2(0,-footer))){

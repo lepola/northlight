@@ -85,7 +85,7 @@ int main(int argc,char** argv){
     for(const auto& key:keys())assert(sameValue(selective.at("Expansion01",3430),selectiveCopy.at("Expansion01",3430),key));
     Table selectivePalette=parseText("[default]\ndusk_blue_saturation=.8\n[Expansion01:3430]\ndusk_red_lightness=.12\n");
     const auto selectedGrade=compose(parseLocalText("[default]\n"),selectivePalette,parseText("[default]\nfog_tint=1,1,1\n"));
-    assert(std::fabs(selectedGrade.at("Expansion01",3430).grade[1].saturation[4]-.8f)<1e-5f);
+    assert(std::fabs(selectedGrade.at("Expansion01",3430).grade[1].saturation[unsigned(NorthlightTone::HueBand::Blue)]-.8f)<1e-5f);
     assert(std::fabs(selectedGrade.at("Expansion01",3430).grade[1].lightness[0]-.12f)<1e-5f);
     Table legacyGrade=parseText("[default]\nday_vibrance=.2\nnight_vibrance=.8\nday_red_hue_shift=-12\nnight_red_hue_shift=10\n");
     const auto& legacyTimeline=legacyGrade.fallback.grade;

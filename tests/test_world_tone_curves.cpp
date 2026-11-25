@@ -7,7 +7,7 @@
 
 using namespace NorthlightTone;
 
-static_assert(BakeMathSchemaVersion==1);
+static_assert(BakeMathSchemaVersion==2);
 
 static bool near(float a,float b,float epsilon=1e-5f){return std::abs(a-b)<=epsilon;}
 static float luminance(const std::array<float,3>& rgb){return .2126f*rgb[0]+.7152f*rgb[1]+.0722f*rgb[2];}
@@ -30,14 +30,15 @@ static std::array<float,3> sampleVolume(const std::vector<uint16_t>& volume,cons
 }
 
 int main(){
-    assert(StopCount==3&&HueBandCount==5);
+    assert(StopCount==3&&HueBandCount==7);
+    assert(std::string(bandName(HueBand::Cyan))=="cyan"&&std::string(bandName(HueBand::Magenta))=="magenta");
     assert(std::string(timeName(TimeStop::Dusk))=="dusk");
     assert(std::string(bandName(HueBand::Yellow))=="yellow");
     assert(std::string(propertyName(SelectiveProperty::HueShift))=="hue_shift");
     assert(gradeKey(TimeStop::Dusk,0,2)=="dusk_shadow_level");
     assert(vibranceKey(TimeStop::Night)=="night_vibrance");
     assert(selectiveKey(TimeStop::Dusk,HueBand::Orange,SelectiveProperty::Saturation)=="dusk_orange_saturation");
-    assert(gradeBindings().size()==108);
+    assert(gradeBindings().size()==3*(4*5+1+3*HueBandCount));
 
     {
         const auto day=timeWeights(0,false),night=timeWeights(1,false),dawn=timeWeights(.5f,false);
@@ -109,8 +110,11 @@ int main(){
                  <<" cyan190="<<cyan[0]<<','<<cyan[1]<<','<<cyan[2]<<'\n';
         std::array<float,HueBandCount> weights{};
         hueWeights(45,weights);assert(near(weights[1],.5f)&&near(weights[2],.5f));
-        hueWeights(330,weights);assert(near(weights[4],.25f)&&near(weights[0],.75f)&&weights[1]==0&&weights[2]==0);
-        hueWeights(190,weights);assert(near(weights[3],.5f)&&near(weights[4],.5f)&&weights[1]==0&&weights[2]==0);
+        // Pink sits between magenta and red, turquoise between cyan and blue: each is reached by its two neighbours only.
+        hueWeights(330,weights);assert(near(weights[6],.5f)&&near(weights[0],.5f)&&weights[1]==0&&weights[2]==0&&weights[5]==0);
+        hueWeights(190,weights);assert(near(weights[4],5.f/6.f)&&near(weights[5],1.f/6.f)&&weights[3]==0&&weights[1]==0&&weights[2]==0);
+        hueWeights(120,weights);assert(near(weights[3],1.f)&&weights[2]==0&&weights[4]==0);
+        float total=0;hueWeights(275,weights);for(float w:weights)total+=w;assert(near(total,1.f)&&near(weights[5],5.f/12.f)&&near(weights[6],7.f/12.f));
     }
     {
         assert(selectiveRgbGate(1.f/31.f)==0);
