@@ -59,7 +59,7 @@ bl=g[g.index('// Separable depth-aware blur'):g.index('// c34 belongs')]
 checks['host: blur unchanged when the pass did not run (fog -> fogBlurred -> fog), resolved: fogHistory -> fog -> fogBlurred']=(
     'SetRenderTarget(0,fogResolved?fogSurface:fogBlurredSurface);d->SetTexture(9,fogResolved?fogHistory:fog)' in bl
     and 'SetRenderTarget(0,fogResolved?fogBlurredSurface:fogSurface);d->SetTexture(9,fogResolved?fog:fogBlurred)' in bl)
-checks['host: composite and the diagnostic dump read the final buffer']=('SetTexture(9,fogResolved?fogBlurred:fog);' in g and 'd->SetPixelShader(waterOwned?waterOwnedPS:finalPS);' in g and '#else\n        d->SetPixelShader(finalPS);' in g and 'dump(d,fogResolved?fogBlurredSurface:fogSurface,directory,"fog",capture)' in g)
+checks['host: composite and the diagnostic dump read the final buffer']=('SetTexture(9,fogResolved?fogBlurred:fog);' in g and 'auto* composite=waterOwned?waterOwnedPS:finalPS;' in g and '#else\n        constexpr bool waterOwned=false;\n        auto* composite=finalPS;' in g and 'dump(d,fogResolved?fogBlurredSurface:fogSurface,directory,"fog",capture)' in g)
 checks['host: history target created with the others, dropped and invalidated in releaseGPU; shader optional']=(
     '&fogHistory,&fogHistorySurface)' in w and 'drop(fogHistorySurface);drop(fogHistory);drop(fogTemporalPS);fogHistoryValid=false;' in w and 'fogTemporalPS=nullptr;logf("WORLD fog temporal disabled' in w)
 checks['host: no per-draw work (nothing in src/stream or src/proxy mentions it)']=all(

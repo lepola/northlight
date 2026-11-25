@@ -25,9 +25,9 @@ harness=r'''
 #include <atomic>
 #include <cassert>
 #include <iostream>
-namespace NorthlightDiagnostics {bool value;void configure(bool v){value=v;}}
+namespace NorthlightDiagnostics {bool value;void configure(bool v){value=v;}bool enabled(){return value;}}
 #ifndef _WIN32
-namespace NorthlightWorldContext {struct SelfReadStats{inline static std::atomic<bool> timed{false};};}
+namespace NorthlightWorldContext {struct SelfReadStats{inline static std::atomic<bool> timed{false};};inline std::atomic<bool> regionalZoneNeeded{false};}
 #endif
 namespace NorthlightWeatherMemory {void configure(bool){}}
 namespace NorthlightMemorySwitches {void configure(bool){}}
@@ -38,6 +38,8 @@ struct World {
     bool settingsRequestDirty=false,paletteFrameValid=true;
     unsigned minSkinnedShadowTriangles=0,captureBudgetMiB=0,actorShadowBudgetMiB=0;
     bool shadowFateDiagnostics=false;
+    inline static const NorthlightCelestialProfiles::Profile staleAnchor{};
+    const NorthlightCelestialProfiles::Profile* gradeAnchorSource=&staleAnchor; // the grade keys built for the previous table
     struct Fx{bool gi=true;};Fx effects,requestedEffects;unsigned effectResets=0;
     void setEffects(const Fx& requested){requestedEffects=requested;Fx next=requested;next.gi=NorthlightQuality::giPass(quality,next.gi);if(effects.gi==next.gi)return;++effectResets;effects=next;} // the production method masks the user's key state by GI=0 the same way
     struct {float steps=0;} staticPrebuild;
@@ -58,6 +60,8 @@ int main(){
         for(const auto& k:NorthlightQuality::Keys)assert(w.quality.*k.field==(NorthlightSettings::liveQuality(k.name)?effective.*k.field:old.*k.field));
         assert(w.settingsRequestDirty==NorthlightSettings::giRequestChanged(old,w.quality,oldProfiles,next.celestial));
         assert(!w.paletteFrameValid&&w.quality.preset==next.quality.preset);
+        assert(!w.gradeAnchorSource); // a new table rebuilds the grade keys
+        assert(NorthlightWorldContext::regionalZoneNeeded.load()==(w.celestialProfiles.needsLiveZone()||w.quality.diagnostics!=0));
         assert(w.effects.gi==(next.quality.gi!=0));
         assert(w.replaySnapshots.full==size_t(w.quality.captureBudgetMiB)*1048576);
         assert(w.resets==unsigned(old.actorShadows!=w.quality.actorShadows||old.actorShadowDetail!=w.quality.actorShadowDetail));
