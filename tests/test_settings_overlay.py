@@ -150,8 +150,12 @@ check('fieldPageMask[f->id()]|=1u<<i' in panel and 'for(const auto& change:draft
       'restartFieldCache[i]' in panel and 'for(const Field* f:pageFields(info.page))' not in panel,
       'sidebar: page membership is indexed once per snapshot and only draft edits/restart fields are checked per frame')
 menu_docs=(fp.RENDERER / 'docs/settings-menu.md').read_text()
-check('Dusk is the 19:30 anchor' in menu_docs and 'Morning still blends Daylight directly with Night.' in menu_docs,
-      'settings-menu.md: describes the Dusk anchor and unchanged morning blend')
+check('Dusk is the look at 19:30' in menu_docs and 'returns around sunrise at 06:00' in menu_docs and 'Night from 21:15' in menu_docs,
+      'settings-menu.md: describes the Dusk anchor, its return at sunrise and the grade clock')
+tone_h=fp.src('world_tone_curves.h').read_text()
+check('DawnStart=4.5f,Sunrise=6.f,DayStart=8.f,DayEnd=18.f,DuskAnchor=19.5f,SunsetEnd=20.5f,NightStart=21.25f' in tone_h
+      and 'NorthlightTone::clockWeights(' in fp.src('world_renderer.h').read_text(),
+      'grade clock: the frame uses the hours the menu guide states')
 check('dusk_vibrance' in menu_docs and 'dusk_red_hue_shift' in menu_docs and 'Inherit range' in menu_docs,
       'settings-menu.md: documents saved Dusk and selective colour controls')
 

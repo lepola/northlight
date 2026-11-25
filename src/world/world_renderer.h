@@ -624,9 +624,7 @@ private:
         const auto& palette=paletteFrameValid?framePalette:celestialProfiles.fallback;
         const float night=NorthlightRegionalFog::nightFactor(celestialValid?celestial.dayFraction:-1.f);
         result.gameDayFraction=celestialValid&&std::isfinite(celestial.dayFraction)?celestial.dayFraction:-1.f;
-        const float hour=celestialValid&&std::isfinite(celestial.dayFraction)?celestial.dayFraction*24.f:-1.f;
-        const bool evening=hour>=18.f&&hour<20.f;
-        result.gradeWeights=NorthlightTone::timeWeights(night,evening);
+        result.gradeWeights=NorthlightTone::clockWeights(result.gameDayFraction>=0?result.gameDayFraction*24.f:-1.f);
         const float zone=NorthlightCelestialProfiles::horizonHaze(palette,night);result.zone=zone;
         float lift[3];NorthlightSunHue::horizonLift(glowHueFrame,lift);
         unsigned strength=quality.horizonHaze;

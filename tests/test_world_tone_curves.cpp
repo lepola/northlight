@@ -54,6 +54,22 @@ int main(){
         assert(near(before.day,.5f)&&near(before.dusk,.5f)&&before.night==0);
         assert(after.day==0&&near(after.dusk,.5f)&&near(after.night,.5f));
     }
+    {   // The grade's clock: Night until dawn starts, Dusk at sunrise and from 19:30 through the sunset, never three looks at once.
+        auto is=[](TimeWeights w,float day,float dusk,float night){return near(w.day,day)&&near(w.dusk,dusk)&&near(w.night,night);};
+        for(float hour:{0.f,1.f,4.49f,21.25f,23.99f})assert(is(clockWeights(hour),0,0,1));
+        for(float hour:{8.f,12.f,18.f})assert(is(clockWeights(hour),1,0,0));
+        for(float hour:{6.f,19.5f,20.f,20.5f})assert(is(clockWeights(hour),0,1,0));
+        assert(is(clockWeights(5.25f),0,.5f,.5f)&&is(clockWeights(7.f),.5f,.5f,0)&&is(clockWeights(20.875f),0,.5f,.5f));
+        // 18:00-19:30 is the earlier evening curve.
+        for(float hour:{18.25f,18.5f,19.f,19.25f}){
+            const auto old=timeWeights(NorthlightTone::smooth((hour-18)*.5f),true);assert(is(clockWeights(hour),old.day,old.dusk,old.night));
+        }
+        for(float hour=0;hour<24;hour+=1/64.f){
+            const auto w=clockWeights(hour);
+            assert(near(w.day+w.dusk+w.night,1)&&w.day>=0&&w.dusk>=0&&w.night>=0&&(w.day==0||w.night==0));
+        }
+        for(float hour:{-1.f,24.f,std::nanf("")})assert(is(clockWeights(hour),1,0,0));
+    }
     {
         Grade day,night;
         day.curves[1].levels[1]=.61f;day.vibrance=.14f;day.hueShift[0]=8;day.saturation[1]=.2f;

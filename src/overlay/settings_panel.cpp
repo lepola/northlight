@@ -1012,7 +1012,7 @@ struct SettingsPanel::State {
                     if(const Field* strength=draft.field(D::Celestial,region,"tone_curve_strength")){
                         if(beginRows("strength")){regionalRow(*strength,"Tone curve strength");ImGui::EndTable();}
                         if(number(draft.effective(*strength))==0)ImGui::TextWrapped("This region's grade is off while its strength is zero. Choose Tuned above to see your edits.");
-                        W::hint("Strength scales the whole grade; at zero the grade is off. Dusk is the 19:30 look of the evening blend; what it leaves unset follows the Daylight-to-Night blend. Morning blends Daylight directly with Night.");
+                        W::hint("Strength scales the whole grade; at zero the grade is off. Dusk is the 19:30 look, shown through sunset and again at sunrise; what it leaves unset follows the Daylight-to-Night blend.");
                         if(ImGui::BeginTabBar("grades")){
                             for(unsigned i=0;i<GradeTimes.size();++i)if(ImGui::BeginTabItem(GradeTitles[i])){
                                 ImGui::BeginDisabled(locked());

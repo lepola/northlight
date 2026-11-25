@@ -26,6 +26,24 @@ inline TimeWeights timeWeights(float nightFactor,bool evening){
     const float after=(n-DuskNightWeight)/(1-DuskNightWeight);
     return {0,1-after,after};
 }
+// The grade's own clock, in game hours. It follows when the installed light tables turn (build_lighting.py: dawn from
+// 04:30 to 06:00, sunset colour until 20:35, night at 21:15), not the 06-08 and 18-20 of nightFactor, which put the
+// Night grade on a dawn-lit or sunset-lit scene. The Dusk look serves both ends of the day: Night to Dusk as dawn
+// breaks and Dusk to Daylight by 08:00; Daylight to Dusk from 18:00, reached at 19:30 where Dusk looks are authored,
+// held through the sunset, then Dusk to Night. An unknown clock is Daylight.
+namespace GradeClock {constexpr float DawnStart=4.5f,Sunrise=6.f,DayStart=8.f,DayEnd=18.f,DuskAnchor=19.5f,SunsetEnd=20.5f,NightStart=21.25f;}
+inline TimeWeights clockWeights(float hour){
+    if(!std::isfinite(hour)||hour<0||hour>=24)return {};
+    auto ramp=[hour](float from,float to){const float x=std::clamp((hour-from)/(to-from),0.f,1.f);return x*x*(3.f-2.f*x);};
+    using namespace GradeClock;
+    if(hour<DawnStart||hour>=NightStart)return {0,0,1};
+    if(hour<Sunrise){const float dusk=ramp(DawnStart,Sunrise);return {0,dusk,1-dusk};}
+    if(hour<DayStart){const float day=ramp(Sunrise,DayStart);return {day,1-day,0};}
+    if(hour<DayEnd)return {1,0,0};
+    if(hour<DuskAnchor){const float dusk=std::min(ramp(DayEnd,DayEnd+2)/DuskNightWeight,1.f);return {1-dusk,dusk,0};} // the earlier curve, so 18:00-19:30 is unchanged
+    if(hour<SunsetEnd)return {0,1,0};
+    const float night=ramp(SunsetEnd,NightStart);return {0,1-night,night};
+}
 // The colour ranges of a grade: the six primary and secondary hues, evenly spaced, so any part of the wheel can be
 // adjusted without dragging a distant colour along, plus Orange, because the game's warm tones (sand, wood,
 // torchlight, autumn leaves) sit between red and yellow and need telling apart. hueWeights() holds their centres.
