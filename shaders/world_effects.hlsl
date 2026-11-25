@@ -1206,19 +1206,6 @@ float3 horizonHaze(float3 color,float2 uv,float viewZ,bool sky,bool water) {
 }
 // Shader limits and compiler identity are validated in shaders/world-shader-build.json.
 float4 RegionalAppearance : register(c101); // rgb: fog colour adjustment, w: shadow contrast
-float4 ToneCurve : register(c102);
-float3 applyWorldTone(float3 color){
-    float luminance=saturate(dot(color,float3(.2126,.7152,.0722)));
-    // Round each slope transition across four 8-bit levels to avoid a line in smooth haze.
-    const float radius=2.0/255.0;
-    float3 x=luminance-float3(.25,.5,.75);
-    float3 shoulder=clamp(x+radius,0,2*radius);
-    float3 knee=max(x-radius,0)+shoulder*shoulder/(4*radius);
-    float change=mad(luminance,ToneCurve.w,dot(knee,ToneCurve.xyz));
-    float peak=max(color.r,max(color.g,color.b));
-    float gain=min(change/max(luminance,.00001),saturate(1-peak)/max(peak,.00001));
-    return color*(1+gain);
-}
 // The regional lookup stores red, green and blue responses in RGB and brightness in alpha.
 sampler2D WorldCurves : register(s3);
 float2 curveUV(float inputValue){
@@ -1232,16 +1219,37 @@ float3 applyCurveTable(float3 color){
     float3 mapped=float3(tex2D(WorldCurves,curveUV(color.r)).r,tex2D(WorldCurves,curveUV(color.g)).g,tex2D(WorldCurves,curveUV(color.b)).b);
     return mapped+max(color-1,0);
 }
-// The volume is a full-strength colour transform. Interpolating its result
-// lets the regional and clock weights change without uploading a new volume.
-sampler3D ColourGrade : register(s4);
-float4 GradeControls : register(c103);
+// CPU selects the one or two active authored time stops. Four samplers cover
+// both zone anchors without aliasing the composite's lighting/fog buffers.
+sampler3D RegionalGradeA : register(s4);
+sampler3D RegionalGradeB : register(s5);
+sampler3D PreviousGradeA : register(s6);
+sampler3D PreviousGradeB : register(s7);
+float4 GradeTime : register(c103); // x: second time-stop weight, y: zone blend
+float4 GradeZone : register(c104); // previous A/B identity, selected A/B identity
+float3 gradeCoordinate(float3 color){return color*(31.0/32.0)+(0.5/32.0);}
+float3 gradeSample(sampler3D volume,float3 color){return tex3Dlod(volume,float4(gradeCoordinate(color),0)).rgb;}
+float3 sampleSelectedGrade(float3 color){
+    float3 mapped=GradeZone.z>.5?color:gradeSample(RegionalGradeA,color);
+    [branch]if(GradeTime.x>0){float3 next=GradeZone.w>.5?color:gradeSample(RegionalGradeB,color);mapped=lerp(mapped,next,GradeTime.x);}
+    return mapped;
+}
+float3 samplePreviousGrade(float3 color){
+    float3 mapped=GradeZone.x>.5?color:gradeSample(PreviousGradeA,color);
+    [branch]if(GradeTime.x>0){float3 next=GradeZone.y>.5?color:gradeSample(PreviousGradeB,color);mapped=lerp(mapped,next,GradeTime.x);}
+    return mapped;
+}
 float3 applyColourGrade(float3 color){
     float3 base=saturate(color);
-    float3 mapped=tex3D(ColourGrade,base*GradeControls.z+GradeControls.w).rgb;
-    return color+GradeControls.x*(mapped-base);
+    float3 mapped=sampleSelectedGrade(base);
+    return color+(mapped-base);
 }
-float4 WorldCompositeImpl(float2 uv,float2 pixel,float atmosphereOwned,float surfaceShaded,float beforeRefraction,bool regional=false,bool graded=false,bool table=false,bool volume=false) {
+float3 applyColourGradeBlend(float3 color){
+    float3 base=saturate(color);
+    float3 from=samplePreviousGrade(base),to=sampleSelectedGrade(base);
+    return color+(lerp(from,to,saturate(GradeTime.y))-base);
+}
+float4 WorldCompositeImpl(float2 uv,float2 pixel,float atmosphereOwned,float surfaceShaded,float beforeRefraction,bool regional=false,bool table=false,bool volume=false,bool gradeBlend=false) {
     // Fetches before any flow control use texld (1 slot; tex2Dlod costs 3-4): Scene and Depth have one level and no mip filter, so texld reads what tex2Dlod(.,0) does.
     float4 original=tex2D(Scene,uv);
     float2 centerUV=depthUV(uv);
@@ -1376,8 +1384,8 @@ float4 WorldCompositeImpl(float2 uv,float2 pixel,float atmosphereOwned,float sur
         float3 background=liquid>0&&atmosphereOwned>.5?color:horizonHaze(color,centerUV,viewZ,d>=.99999&&liquid<=0,liquid>0);
         color=lerp(mad(background,fog.a,fog.rgb),unfogged,rain);
         if(table)color=applyCurveTable(color);
-        else if(graded)color=applyWorldTone(color);
         if(volume)color=applyColourGrade(color);
+        if(gradeBlend)color=applyColourGradeBlend(color);
     }
     if(PassInfo.z==3)color=fog.rgb;
     // Dither before the 8-bit target rounds: haze and night air vary only with view elevation and would band into
@@ -1391,14 +1399,12 @@ float4 WorldCompositeImpl(float2 uv,float2 pixel,float atmosphereOwned,float sur
 float4 WorldComposite(float2 uv:TEXCOORD0,float2 pixel:VPOS):COLOR0 {return WorldCompositeImpl(uv,pixel,0,0,0);}
 float4 WorldCompositeRegional(float2 uv:TEXCOORD0,float2 pixel:VPOS):COLOR0 {return WorldCompositeImpl(uv,pixel,0,0,0,true);}
 float4 WorldCompositeWaterRegional(float2 uv:TEXCOORD0,float2 pixel:VPOS):COLOR0 {return WorldCompositeImpl(uv,pixel,WaterInfo.y,WaterInfo.z,0,true);}
-float4 WorldCompositeGraded(float2 uv:TEXCOORD0,float2 pixel:VPOS):COLOR0 {return WorldCompositeImpl(uv,pixel,0,0,0,true,true);}
-float4 WorldCompositeWaterGraded(float2 uv:TEXCOORD0,float2 pixel:VPOS):COLOR0 {return WorldCompositeImpl(uv,pixel,WaterInfo.y,WaterInfo.z,0,true,true);}
-float4 WorldCompositeCurves(float2 uv:TEXCOORD0,float2 pixel:VPOS):COLOR0 {return WorldCompositeImpl(uv,pixel,0,0,0,true,false,true);}
-float4 WorldCompositeWaterCurves(float2 uv:TEXCOORD0,float2 pixel:VPOS):COLOR0 {return WorldCompositeImpl(uv,pixel,WaterInfo.y,WaterInfo.z,0,true,false,true);}
-float4 WorldCompositeVolume(float2 uv:TEXCOORD0,float2 pixel:VPOS):COLOR0 {return WorldCompositeImpl(uv,pixel,0,0,0,true,false,false,true);}
-float4 WorldCompositeWaterVolume(float2 uv:TEXCOORD0,float2 pixel:VPOS):COLOR0 {return WorldCompositeImpl(uv,pixel,WaterInfo.y,WaterInfo.z,0,true,false,false,true);}
-float4 WorldCompositeVolumeCurves(float2 uv:TEXCOORD0,float2 pixel:VPOS):COLOR0 {return WorldCompositeImpl(uv,pixel,0,0,0,true,false,true,true);}
-float4 WorldCompositeWaterVolumeCurves(float2 uv:TEXCOORD0,float2 pixel:VPOS):COLOR0 {return WorldCompositeImpl(uv,pixel,WaterInfo.y,WaterInfo.z,0,true,false,true,true);}
+float4 WorldCompositeCurves(float2 uv:TEXCOORD0,float2 pixel:VPOS):COLOR0 {return WorldCompositeImpl(uv,pixel,0,0,0,true,true);}
+float4 WorldCompositeWaterCurves(float2 uv:TEXCOORD0,float2 pixel:VPOS):COLOR0 {return WorldCompositeImpl(uv,pixel,WaterInfo.y,WaterInfo.z,0,true,true);}
+float4 WorldCompositeGrade(float2 uv:TEXCOORD0,float2 pixel:VPOS):COLOR0 {return WorldCompositeImpl(uv,pixel,0,0,0,true,false,true);}
+float4 WorldCompositeWaterGrade(float2 uv:TEXCOORD0,float2 pixel:VPOS):COLOR0 {return WorldCompositeImpl(uv,pixel,WaterInfo.y,WaterInfo.z,0,true,false,true);}
+float4 WorldCompositeGradeBlend(float2 uv:TEXCOORD0,float2 pixel:VPOS):COLOR0 {return WorldCompositeImpl(uv,pixel,0,0,0,true,false,false,true);}
+float4 WorldCompositeWaterGradeBlend(float2 uv:TEXCOORD0,float2 pixel:VPOS):COLOR0 {return WorldCompositeImpl(uv,pixel,WaterInfo.y,WaterInfo.z,0,true,false,false,true);}
 float4 WorldCompositeWaterProbe(float2 uv:TEXCOORD0,float2 pixel:VPOS):COLOR0 {return WorldCompositeImpl(uv,pixel,WaterInfo.y,WaterInfo.z,0);}
 
 // Light the complete opaque source before the liquid refracts it. The same

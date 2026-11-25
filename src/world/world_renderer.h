@@ -24,6 +24,7 @@
 #include "regional_fog.h"
 #include "regional_shadow_range.h"
 #include "celestial_profiles.h"
+#include "grade_lut_worker.h"
 #if NORTHLIGHT_DEV_TUNING
 #include "zone_tuning.h"
 #endif
@@ -253,7 +254,7 @@ public:
         NorthlightWorldContext::SelfReadStats::timed.store(NorthlightQuality::renderProfile(quality),std::memory_order_relaxed);
         if(actorResources)releaseGPU(true);else if(directions)invalidateShadowCache();
         staticPrebuild.steps=float(quality.shadowDirectionSteps);
-        celestialProfiles=std::move(profiles);paletteFrameValid=false;
+        celestialProfiles=std::move(profiles);paletteFrameValid=false;gradeAnchorSource=nullptr;
         NorthlightWorldContext::regionalZoneNeeded.store(celestialProfiles.needsLiveZone(),std::memory_order_relaxed);
     }
     // Read-only access to the COMMITTED terrain pages. Never start uploads,
@@ -473,6 +474,16 @@ private:
     NorthlightRegionalShadow::Table shadowRanges;
     NorthlightCelestialProfiles::Transition paletteTransition;
     NorthlightCelestialProfiles::Profile framePalette;
+    const NorthlightCelestialProfiles::Profile* gradeAnchorSource=nullptr;
+    NorthlightTone::BakeKeys frameGradeKeys{};
+    NorthlightGradeLut::Worker gradeLutWorker;
+    NorthlightTone::BakeKeys requestedGradeKeys{},gradeFromKeys{},gradeToKeys{};
+    bool gradeRequestValid=false,gradeStateInitialized=false,gradeTransitionActive=false,gradeNeutralizing=false;
+    bool gradeDiagnosticPending=false;
+    DWORD gradeTransitionAt=0,gradeMismatchSince=0,gradeDiagnosticAt=0;
+    double gradeUploadMs=0;unsigned gradeUploads=0;uint64_t gradeGpuClock=0;
+    unsigned gradeCpuBakes=0,gradeCpuHits=0;double gradeWorkerMs=0;uint64_t gradeReportedSerial=0;
+    std::string frameGradeAnchorMap;uint32_t frameGradeAnchorZone=0;
     bool paletteFrameValid=false;std::string paletteFrameMap;DWORD paletteLogAt=0;
 #if NORTHLIGHT_DEV_TUNING
     // Developer-only zone tuning (scripts/dev_tuning/zone_tuner.py), never compiled into a release build. Two files in the game root:
@@ -497,7 +508,7 @@ private:
         devError.clear();
         next.revision=devRevision+1;
         const auto published=std::make_shared<const NorthlightZoneTuning::Overrides>(std::move(next));
-        celestialProfiles=NorthlightZoneTuning::applyCelestial(celestialShipped,*published);
+        celestialProfiles=NorthlightZoneTuning::applyCelestial(celestialShipped,*published);gradeAnchorSource=nullptr;
         NorthlightWorldContext::regionalZoneNeeded.store(celestialProfiles.needsLiveZone(),std::memory_order_relaxed);
         {std::lock_guard<std::mutex> lock(devMutex);devOverrides=published;}
         logf("TUNING overrides revision=%u keys=%u error=%s",++devRevision,published->count(),"");
@@ -573,9 +584,10 @@ private:
         NorthlightHorizonHaze::State state;
         NorthlightApparentHorizon::Smooth edgeState;
         NorthlightHorizonHaze::Constants constants;
-        std::array<float,4> appearance{},tone{};
+        std::array<float,4> appearance{};
         NorthlightTone::TableKey curveKey{};
-        float vibrance=0;
+        NorthlightTone::BakeKeys gradeKeys{};
+        NorthlightTone::TimeWeights gradeWeights{};
         const Snapshot* scene=nullptr;
         const NorthlightRegionalFog::Field* field=nullptr;
         float farZ=0,edge=0,effectiveEdge=0,zone=0;
@@ -591,6 +603,9 @@ private:
         const float sun[3]={sourceDirections[0].x,sourceDirections[0].y,sourceDirections[0].z};
         const auto& palette=paletteFrameValid?framePalette:celestialProfiles.fallback;
         const float night=NorthlightRegionalFog::nightFactor(celestialValid?celestial.dayFraction:-1.f);
+        const float hour=celestialValid&&std::isfinite(celestial.dayFraction)?celestial.dayFraction*24.f:-1.f;
+        const bool evening=hour>=18.f&&hour<20.f;
+        result.gradeWeights=NorthlightTone::timeWeights(night,evening);
         const float zone=NorthlightCelestialProfiles::horizonHaze(palette,night);result.zone=zone;
         float lift[3];NorthlightSunHue::horizonLift(glowHueFrame,lift);
         unsigned strength=quality.horizonHaze;
@@ -599,11 +614,11 @@ private:
 #endif
         result.constants=NorthlightHorizonHaze::constants(result.state,{strength,quality.horizonHazeStart,quality.horizonHazeBand,quality.horizonHazeTerrain},
             farZ,zone,effects.fog,celestialValid,sun,underwaterFade.scale()*sourceWeights[0],lift,weatherEffects().hazeTauScale());
-        result.tone=NorthlightCelestialProfiles::toneCoefficients(palette,night);
-        if(!gradeVolumeUnavailable)
-            result.vibrance=palette.toneStrength*(palette.vibrance[0]+night*(palette.vibrance[1]-palette.vibrance[0]));
-        if(result.vibrance<.0001f)result.vibrance=0;
-        result.curveKey=NorthlightTone::tableKey(palette.curves,night,palette.toneStrength,result.vibrance>0);
+        result.gradeKeys=frameGradeKeys;
+        if(palette.toneStrength>0&&(!gradeVolumeSupported||gradeVolumeUnavailable)){
+            const auto fallbackGrade=NorthlightTone::sample(palette.grade,result.gradeWeights);
+            result.curveKey=NorthlightTone::tableKey(fallbackGrade,palette.toneStrength,true);
+        }
         result.appearance=NorthlightCelestialProfiles::appearance(palette,result.state.color,effects.fog);
         for(unsigned i=0;i<3;++i)result.constants.haze[i]*=1.f+result.appearance[i];
         float target=0;
@@ -874,31 +889,175 @@ private:
     uint64_t liveChunkHash()const{uint64_t h=1469598103934665603ull;for(const auto& c:liveTerrainChunks){h^=uint64_t(uint32_t(c.first))*0x9E3779B97F4A7C15ull+uint64_t(uint32_t(c.second));h*=1099511628211ull;}return h;}
     IDirect3DPixelShader9 *cachedFastPS=nullptr,*cachedOpaqueFastPS=nullptr,*cachedOpaquePS=nullptr;
     IDirect3DPixelShader9 *regionalFinalPS=nullptr,*regionalWaterPS=nullptr;
-    IDirect3DPixelShader9 *gradedFinalPS=nullptr,*gradedWaterPS=nullptr,*curveFinalPS=nullptr,*curveWaterPS=nullptr;
-    IDirect3DPixelShader9 *volumePS[2][2]={};
-    IDirect3DVolumeTexture9* gradeVolume=nullptr;
-    bool gradeVolumeUnavailable=false;
-    bool bindGradeVolume(){
-        if(gradeVolumeUnavailable)return false;
-        constexpr unsigned n=NorthlightTone::CubeSize;
-        if(!gradeVolume){
-            IDirect3D9* api=nullptr;D3DDEVICE_CREATION_PARAMETERS device{};D3DDISPLAYMODE mode{};
-            bool supported=SUCCEEDED(d->GetDirect3D(&api))&&api&&SUCCEEDED(d->GetCreationParameters(&device))&&
-                SUCCEEDED(api->GetAdapterDisplayMode(device.AdapterOrdinal,&mode))&&
-                SUCCEEDED(api->CheckDeviceFormat(device.AdapterOrdinal,device.DeviceType,mode.Format,D3DUSAGE_QUERY_FILTER,
-                    D3DRTYPE_VOLUMETEXTURE,D3DFMT_A16B16G16R16));
-            drop(api);
-            D3DLOCKED_BOX box{};
-            if(supported&&SUCCEEDED(d->CreateVolumeTexture(n,n,n,1,0,D3DFMT_A16B16G16R16,D3DPOOL_MANAGED,&gradeVolume,nullptr))&&
-               SUCCEEDED(gradeVolume->LockBox(0,&box,nullptr,0))){
-                NorthlightTone::bakeColourVolume(box.pBits,box.RowPitch,box.SlicePitch,NorthlightTone::vibrantColour);
-                supported=SUCCEEDED(gradeVolume->UnlockBox(0));
-            }else supported=false;
-            if(!supported){drop(gradeVolume);gradeVolumeUnavailable=true;return false;}
+    IDirect3DPixelShader9 *gradeFinalPS=nullptr,*gradeWaterPS=nullptr,*gradeBlendFinalPS=nullptr,*gradeBlendWaterPS=nullptr,*curveFinalPS=nullptr,*curveWaterPS=nullptr;
+    struct GradeGpuVolume {NorthlightTone::BakeKey key;IDirect3DVolumeTexture9* texture=nullptr;uint64_t used=0;};
+    // Mirrors the CPU's 12-cube LRU (3 MiB); both current zone anchors stay
+    // pinned. Re-entry hits retained keys, while an evicted key is uploaded again.
+    std::vector<GradeGpuVolume> gradeGpuVolumes;
+    bool gradeVolumeChecked=false,gradeVolumeUnavailable=false,gradeVolumeSupported=false;
+    bool checkGradeVolumeSupport(){
+        if(gradeVolumeChecked)return gradeVolumeSupported;
+        gradeVolumeChecked=true;constexpr unsigned n=NorthlightTone::CubeSize;
+        IDirect3D9* api=nullptr;D3DDEVICE_CREATION_PARAMETERS device{};D3DDISPLAYMODE mode{};D3DCAPS9 caps{};
+        bool supported=SUCCEEDED(d->GetDirect3D(&api))&&api&&SUCCEEDED(d->GetCreationParameters(&device))&&
+            SUCCEEDED(d->GetDeviceCaps(&caps))&&caps.MaxVolumeExtent>=n&&SUCCEEDED(api->GetAdapterDisplayMode(device.AdapterOrdinal,&mode))&&
+            SUCCEEDED(api->CheckDeviceFormat(device.AdapterOrdinal,device.DeviceType,mode.Format,D3DUSAGE_QUERY_FILTER,
+                D3DRTYPE_VOLUMETEXTURE,D3DFMT_A16B16G16R16));
+        drop(api);gradeVolumeSupported=supported;gradeVolumeUnavailable=!supported;return supported;
+    }
+    IDirect3DVolumeTexture9* findGradeVolume(const NorthlightTone::BakeKey& key){
+        for(auto& entry:gradeGpuVolumes)if(entry.key==key){entry.used=++gradeGpuClock;return entry.texture;}
+        return nullptr;
+    }
+    bool pinnedGradeKey(const NorthlightTone::BakeKey& key)const{
+        for(const auto& value:gradeFromKeys)if(value==key&&value.strength)return true;
+        for(const auto& value:gradeToKeys)if(value==key&&value.strength)return true;
+        return false;
+    }
+    bool uploadGradeVolume(const NorthlightTone::BakeKey& key,const std::shared_ptr<const NorthlightGradeLut::Volume>& source,bool& uploaded){
+        if(!key.strength)return true;
+        if(findGradeVolume(key))return true;
+        if(gradeVolumeUnavailable||!source||uploaded||!checkGradeVolumeSupport())return false;
+        constexpr unsigned n=NorthlightTone::CubeSize;const auto started=std::chrono::steady_clock::now();
+        IDirect3DVolumeTexture9* texture=nullptr;D3DLOCKED_BOX box{};
+        bool ok=SUCCEEDED(d->CreateVolumeTexture(n,n,n,1,0,D3DFMT_A16B16G16R16,D3DPOOL_MANAGED,&texture,nullptr));
+        const bool locked=ok&&SUCCEEDED(texture->LockBox(0,&box,nullptr,0));
+        if(locked&&box.pBits&&box.RowPitch>=long(n*4*sizeof(uint16_t))&&box.SlicePitch>=box.RowPitch*long(n)){
+            const auto* pixels=reinterpret_cast<const uint8_t*>(source->rgba.data());
+            auto* destination=static_cast<uint8_t*>(box.pBits);
+            for(unsigned b=0;b<n;++b)for(unsigned g=0;g<n;++g)
+                std::memcpy(destination+b*box.SlicePitch+g*box.RowPitch,pixels+(size_t(b)*n+g)*n*4*sizeof(uint16_t),n*4*sizeof(uint16_t));
+        }else if(locked)ok=false;
+        if(locked)ok=SUCCEEDED(texture->UnlockBox(0))&&ok;
+        if(!ok){drop(texture);gradeVolumeUnavailable=true;return false;}
+        if(gradeGpuVolumes.size()>=NorthlightGradeLut::CpuCacheVolumes){
+            auto oldest=gradeGpuVolumes.end();
+            for(auto it=gradeGpuVolumes.begin();it!=gradeGpuVolumes.end();++it)
+                if(!pinnedGradeKey(it->key)&&(oldest==gradeGpuVolumes.end()||it->used<oldest->used))oldest=it;
+            if(oldest==gradeGpuVolumes.end()){drop(texture);return false;}
+            drop(oldest->texture);*oldest={key,texture,++gradeGpuClock};
+        }else gradeGpuVolumes.push_back({key,texture,++gradeGpuClock});
+        uploaded=true;++gradeUploads;
+        gradeUploadMs+=std::chrono::duration<double,std::milli>(std::chrono::steady_clock::now()-started).count();
+        return true;
+    }
+    bool gradeSampler(unsigned slot,const NorthlightTone::BakeKey& key,const std::shared_ptr<const NorthlightGradeLut::Volume>& source,bool& uploaded){
+        IDirect3DVolumeTexture9* texture=nullptr;
+        if(key.strength){
+            if(!uploadGradeVolume(key,source,uploaded)||(texture=findGradeVolume(key))==nullptr)return false;
         }
-        return SUCCEEDED(d->SetSamplerState(4,D3DSAMP_ADDRESSW,D3DTADDRESS_CLAMP))&&
-               SUCCEEDED(d->SetSamplerState(4,D3DSAMP_MAGFILTER,D3DTEXF_LINEAR))&&
-               SUCCEEDED(d->SetSamplerState(4,D3DSAMP_MINFILTER,D3DTEXF_LINEAR))&&SUCCEEDED(d->SetTexture(4,gradeVolume));
+        bool ok=SUCCEEDED(d->SetSamplerState(slot,D3DSAMP_ADDRESSU,D3DTADDRESS_CLAMP))&&
+            SUCCEEDED(d->SetSamplerState(slot,D3DSAMP_ADDRESSV,D3DTADDRESS_CLAMP))&&
+            SUCCEEDED(d->SetSamplerState(slot,D3DSAMP_ADDRESSW,D3DTADDRESS_CLAMP))&&
+            SUCCEEDED(d->SetSamplerState(slot,D3DSAMP_MAGFILTER,D3DTEXF_LINEAR))&&
+            SUCCEEDED(d->SetSamplerState(slot,D3DSAMP_MINFILTER,D3DTEXF_LINEAR))&&
+            SUCCEEDED(d->SetSamplerState(slot,D3DSAMP_MIPFILTER,D3DTEXF_NONE))&&
+            SUCCEEDED(d->SetSamplerState(slot,D3DSAMP_SRGBTEXTURE,FALSE))&&
+            SUCCEEDED(d->SetTexture(slot,texture));
+        if(!ok)gradeVolumeUnavailable=true;return ok;
+    }
+    static bool identityGrade(const NorthlightTone::BakeKeys& keys){
+        return std::none_of(keys.begin(),keys.end(),[](const auto& key){return key.strength!=0;});
+    }
+    struct GradeTimePair {unsigned first=0,second=0;float secondWeight=0;};
+    static GradeTimePair gradeTimePair(const NorthlightTone::TimeWeights& weights){
+        const float values[]={weights.day,weights.dusk,weights.night};unsigned selected[2]={0,0},count=0;float total=0;
+        for(unsigned i=0;i<NorthlightTone::StopCount;++i)if(values[i]>0&&count<2){selected[count++]=i;total+=values[i];}
+        if(!count)return {};
+        if(count==1)return {selected[0],selected[0],0};
+        return {selected[0],selected[1],values[selected[1]]/total};
+    }
+    static uint64_t gradeHash(const NorthlightTone::BakeKeys& keys){
+        uint64_t hash=14695981039346656037ull;
+        for(const auto& key:keys){const uint64_t value=key.stableHash();for(unsigned i=0;i<8;++i){hash^=uint8_t(value>>(i*8));hash*=1099511628211ull;}}
+        return hash;
+    }
+    // A stable endpoint samples once; a clock blend samples twice; simultaneous
+    // clock and region blends sample at most four LUT values.
+    struct GradeFrame {bool active=false,blending=false;float blend=1;NorthlightTone::BakeKeys from{},to{};};
+    GradeFrame prepareGrade(const HorizonPreparation& horizon,DWORD now){
+        GradeFrame frame;bool gradeEvent=false;
+        if(!gradeStateInitialized){gradeFromKeys={};gradeToKeys={};gradeStateInitialized=true;}
+        const auto& wanted=horizon.gradeKeys;
+        const bool wantedActive=!identityGrade(wanted);
+        if(!gradeVolumeUnavailable&&(wantedActive||!identityGrade(gradeToKeys)||!identityGrade(gradeFromKeys)))checkGradeVolumeSupport();
+        if(!gradeVolumeUnavailable&&(!gradeRequestValid||requestedGradeKeys!=wanted)){
+            requestedGradeKeys=wanted;gradeRequestValid=gradeLutWorker.request(wanted)!=0;
+            if(gradeMismatchSince==0&&wanted!=gradeToKeys)gradeMismatchSince=now?now:1;
+            gradeEvent=true;
+        }
+        auto target=gradeVolumeUnavailable?std::shared_ptr<const NorthlightGradeLut::Result>{}:gradeLutWorker.ready(wanted);
+        if(target&&target->serial!=gradeReportedSerial){
+            gradeReportedSerial=target->serial;gradeCpuBakes+=target->bakedVolumes;gradeCpuHits+=target->cacheHits;gradeWorkerMs+=target->workerMs;
+            gradeEvent=true;
+        }
+        if(gradeTransitionActive&&DWORD(now-gradeTransitionAt)>=180){
+            gradeFromKeys=gradeToKeys;gradeTransitionActive=false;
+            if(gradeNeutralizing&&identityGrade(gradeToKeys))gradeNeutralizing=false;
+            gradeEvent=true;
+        }
+        bool uploaded=false;
+        auto ensureSet=[&](const NorthlightTone::BakeKeys& keys,const std::shared_ptr<const NorthlightGradeLut::Result>& ready){
+            bool all=true;
+            for(unsigned i=0;i<NorthlightTone::StopCount;++i){
+                const auto& key=keys[i];if(!key.strength)continue;
+                if(findGradeVolume(key))continue;
+                std::shared_ptr<const NorthlightGradeLut::Volume> source;
+                if(ready&&ready->keys==keys)source=ready->volumes[i];
+                if(!source)source=gradeLutWorker.findCached(key);
+                if(!source||!uploadGradeVolume(key,source,uploaded))all=false;
+            }
+            return all;
+        };
+        bool targetReady=false;
+        if(target&&!gradeVolumeUnavailable){
+            const bool fromReady=ensureSet(gradeFromKeys,{});
+            const bool toReady=ensureSet(gradeToKeys,{});
+            targetReady=ensureSet(wanted,target)&&fromReady&&toReady;
+        }
+        if(!gradeVolumeUnavailable&&targetReady&&!gradeNeutralizing){
+            if(gradeTransitionActive){
+                if(wanted==gradeFromKeys){
+                    const float old=std::clamp(float(DWORD(now-gradeTransitionAt))/180.f,0.f,1.f);
+                    std::swap(gradeFromKeys,gradeToKeys);gradeTransitionAt=now-DWORD((1.f-old)*180.f);
+                    gradeEvent=true;
+                }
+            }else if(wanted!=gradeToKeys){
+                gradeFromKeys=gradeToKeys;gradeToKeys=wanted;gradeTransitionAt=now;gradeTransitionActive=true;
+                gradeEvent=true;
+            }
+        }
+        if(gradeMismatchSince&&DWORD(now-gradeMismatchSince)>=500&&!gradeNeutralizing&&
+           !gradeTransitionActive&&!identityGrade(gradeToKeys)){
+            gradeFromKeys=gradeToKeys;gradeToKeys={};gradeTransitionAt=now;gradeTransitionActive=true;gradeNeutralizing=true;
+            gradeEvent=true;
+        }
+        if(!gradeTransitionActive&&wanted==gradeToKeys)gradeMismatchSince=0;
+        frame.from=gradeFromKeys;frame.to=gradeToKeys;
+        frame.blending=gradeTransitionActive&&gradeFromKeys!=gradeToKeys;
+        frame.blend=gradeTransitionActive?std::clamp(float(DWORD(now-gradeTransitionAt))/180.f,0.f,1.f):1.f;
+        const auto pair=gradeTimePair(horizon.gradeWeights);
+        auto activeStop=[&](const NorthlightTone::BakeKeys& keys){
+            return keys[pair.first].strength!=0||(pair.secondWeight>0&&keys[pair.second].strength!=0);
+        };
+        frame.active=!gradeVolumeUnavailable&&(activeStop(frame.to)||(frame.blending&&activeStop(frame.from)));
+        if(frame.blending&&frame.blend>=1.f){frame.from=frame.to;frame.blending=false;frame.blend=1.f;}
+        gradeDiagnosticPending=gradeDiagnosticPending||gradeEvent;
+        if(NorthlightDiagnostics::enabled()&&(!gradeDiagnosticAt||DWORD(now-gradeDiagnosticAt)>=1000)&&
+           (gradeDiagnosticPending||(frame.active&&DWORD(now-gradeDiagnosticAt)>=10000))){
+            gradeDiagnosticAt=now?now:1;
+            gradeDiagnosticPending=false;
+            auto samples=[&](const NorthlightTone::BakeKeys& keys){
+                return unsigned(keys[pair.first].strength!=0)+unsigned(pair.secondWeight>0&&keys[pair.second].strength!=0);
+            };
+            const unsigned sampleCount=frame.active?samples(frame.to)+(frame.blending?samples(frame.from):0):0;
+            logf("CELESTIAL grade map=\"%s\" area=%u requested=%016llx from=%016llx to=%016llx zone_mix=%.3f time=%u,%u weight=%.3f samples=%u cpu_bakes=%u cache_hits=%u worker_ms=%.2f gpu_uploads=%u upload_ms=%.2f supported=%d",
+                frameGradeAnchorMap.c_str(),frameGradeAnchorZone,(unsigned long long)gradeHash(wanted),
+                (unsigned long long)gradeHash(frame.from),(unsigned long long)gradeHash(frame.to),frame.blending?frame.blend:1.f,
+                pair.first,pair.second,pair.secondWeight,sampleCount,gradeCpuBakes,gradeCpuHits,gradeWorkerMs,gradeUploads,gradeUploadMs,
+                gradeVolumeChecked?(gradeVolumeSupported?1:0):-1);
+        }
+        return frame;
     }
     IDirect3DTexture9* curveTexture=nullptr;
     NorthlightTone::TableKey uploadedCurve{};
@@ -2707,13 +2866,13 @@ public:
         (void)NorthlightStreaming::cpuRetirement();
         NorthlightCelestialProfiles::Table localProfiles;
         bool paletteLoaded=NorthlightCelestialProfiles::load(root+"celestial-profiles.ini",localProfiles,paletteError);
-        celestialProfiles=localProfiles;
+        celestialProfiles=localProfiles;gradeAnchorSource=nullptr;
         const std::string selectedPalette=localProfiles.palette.empty()?"Default":localProfiles.palette;
         try{
             if(NorthlightSettings::lower(selectedPalette)!="default"){
                 const auto presets=NorthlightAppearancePresets::loadSelected(root,selectedPalette);
                 const auto* selected=presets.find(selectedPalette);const auto* defaults=presets.find("Default");
-                if(presets.errors.empty()&&selected&&defaults)celestialProfiles=NorthlightAppearancePresets::compose(localProfiles,selected->table,defaults->table);
+                if(presets.errors.empty()&&selected&&defaults){celestialProfiles=NorthlightAppearancePresets::compose(localProfiles,selected->table,defaults->table);gradeAnchorSource=nullptr;}
                 else paletteError+="; selected appearance preset unavailable, using celestial-profiles.ini";
                 if(!presets.errors.empty())paletteError+="; "+presets.errors.front();
             }
@@ -2729,7 +2888,7 @@ public:
         staticStream=std::make_unique<StaticShadow::Streamer>(root+"world-cache");
         staticCasters.setAdmission([this](size_t bytes){return admitStaticAllocation(bytes);});
         worker=std::thread([this]{work();});}
-    ~WorldRenderer(){prepareWorker.join(); /* 0.3.179: first: an abandoned worker may still be inside a record */
+    ~WorldRenderer(){gradeLutWorker.shutdown();prepareWorker.join(); /* 0.3.179: first: an abandoned worker may still be inside a record */
         logSnapshotAb(); /* 0.3.181: the SNAPSHOT ab window at device destroy */
         {std::lock_guard<std::mutex> lock(mutex);stopping=true;}wake.notify_one();if(worker.joinable())worker.join();releaseGPU();for(auto& p:captureShaders)drop(p.second.replacement);for(auto& p:terrainShadowShaders)drop(p.second.shader);for(auto& p:terrainCoverageVertices)drop(p.second);for(auto& p:terrainCoveragePixels)for(auto& variant:p.second)drop(variant.shader);}
     void releaseActorTargets(){for(auto& t:actorShadow)drop(t);for(auto& t:actorShadowSurface)drop(t);for(auto& t:actorTiles)drop(t);for(auto& t:actorTilesSurface)drop(t);drop(actorTilesMid);drop(actorTilesMidSurface);drop(actorVisibility);drop(actorVisibilitySurface);drop(actorShadowPS);drop(actorTilesPS);}
@@ -2746,7 +2905,7 @@ public:
         waterHorizonPending=false;waterHorizon=HorizonPreparation{};
         waterDistanceOwned=waterSurfaceShaded=false;drop(waterGradient);drop(waterGradientPS);drop(waterOwnedPS);drop(waterLightingPS);waterVisibility.reset();drop(waterGradientState);
 #endif
-replayBoundsAbandon();releaseReplayProbe();staticCasters.settle();rigidMemoryClear();admission.reset();admissionOn=false;gatedBodies.clear();prepareQuiesce();neutralShadowMaps=false;prepareCaches->sampled.clear();prepareCaches->bones.clear();prepareCachesStale=false;if(replays.empty()&&heldShadowReplays.empty())prepareFrameRelease(); /* 0.3.179: no replay left to point at them */actorShadowHistory.clear();actorShadowOriginValid=false;replayBoundsMetadata.clear();replayBoundsCache.clear();declarationCache.clear();if(!keepMesh)uploadedStaticOwners.reset();staticOwnerGeneration=UINT64_MAX;staticCasters.reset();staticMatcher.clear();staticM2Memory.clear();staticScene.reset();staticRetryTick=0;stateBlocks.clear();uploadedTerrain.clear();liveTerrainIndexCount=liveDirectionalIndexCount=0;if(!keepMesh){fixedTerrain.reset();fixedTerrainBits.reset();}liveTerrainGeneration=0;drop(raisedFogTexture);drop(regionalFogTexture);drop(neutralAO);drop(neutralZero);drop(ditherNoise);rainMask=nullptr;uploadedFogField.reset();releasePointGPU();probeActivation.reset();probeBlend.reset();drop(baselineSurface);drop(baselineLight);releaseReplayGPU();liveTerrainGPU.clear();{auto& queries=fence();NorthlightDynamicRing::reset(liveIndexRing,0,queries);queries.drop();}drop(liveIndicesGPU);liveIndexBytes=0;liveIndexBase=0;if(!keepMesh){pendingMesh.reset();clearMesh();}retiredMaterials.clear();if(!keepMesh){releaseMeshPool();uploadedMap.clear();}for(auto& t:shadow)drop(t);for(auto& s:shadowSurface)drop(s);for(auto& t:shadowCache)drop(t);for(auto& s:shadowCacheSurface)drop(s);drop(shadowCacheDepth);drop(shadowVerifySurface);drop(shadowVerify);for(auto& r:shadowVerifyRead)drop(r);drop(shadowScratch);drop(shadowScratchSurface);releaseActorTargets();drop(neutralWhite);actorValid[0]=actorValid[1]=false;actorCenterValid[0]=actorCenterValid[1]=false;drop(unionPS);invalidateShadowCache();for(auto& t:probe)drop(t);drop(probePrev);drop(shadowDepth);drop(lightSurface);drop(smoothSurface);drop(fogSurface);drop(fogBlurredSurface);drop(fogHistorySurface);drop(fogHistory);drop(fogTemporalPS);fogHistoryValid=false;drop(colorSurface);drop(light);drop(smoothLight);drop(fog);drop(fogBlurred);drop(color);drop(lightingPS);drop(giPS);drop(raisedFogPS);drop(fogPS);drop(fogBlurPS);drop(fogCloudsPS);drop(cloudNoise);drop(localDirectPS);drop(localDirect16PS);drop(profileSplitSurface);profileSplitFailed=false;drop(removalPS);drop(temporalPS);drop(localFogPS);drop(localFogCombinePS);drop(localFogAccumSurface);drop(localFogAccum);drop(normalsPS);drop(normalBuffer);drop(normalSurface);drop(sourceVisPS);for(int a=0;a<2;++a)for(int b=0;b<2;++b){drop(sourceVis[a][b]);drop(sourceVisSurface[a][b]);}sourceVisValid=false;for(int i=0;i<2;++i){drop(temporalLight[i]);drop(temporalLightSurface[i]);drop(temporalDepth[i]);drop(temporalDepthSurface[i]);}temporalValid=false;drop(finalPS);drop(regionalFinalPS);drop(regionalWaterPS);drop(gradedFinalPS);drop(gradedWaterPS);drop(curveFinalPS);drop(curveWaterPS);for(auto& pair:volumePS)for(auto& program:pair)drop(program);drop(gradeVolume);gradeVolumeUnavailable=false;drop(curveTexture);uploadedCurve={};drop(shadowPS);drop(replayPS);drop(shadowVS);drop(cachedShadowVS);drop(cachedShadowPS);drop(cachedFastPS);drop(cachedOpaqueFastPS);drop(cachedOpaquePS);drop(shadowDecl);width=height=0;uploadedSerial=0;}
+replayBoundsAbandon();releaseReplayProbe();staticCasters.settle();rigidMemoryClear();admission.reset();admissionOn=false;gatedBodies.clear();prepareQuiesce();neutralShadowMaps=false;prepareCaches->sampled.clear();prepareCaches->bones.clear();prepareCachesStale=false;if(replays.empty()&&heldShadowReplays.empty())prepareFrameRelease(); /* 0.3.179: no replay left to point at them */actorShadowHistory.clear();actorShadowOriginValid=false;replayBoundsMetadata.clear();replayBoundsCache.clear();declarationCache.clear();if(!keepMesh)uploadedStaticOwners.reset();staticOwnerGeneration=UINT64_MAX;staticCasters.reset();staticMatcher.clear();staticM2Memory.clear();staticScene.reset();staticRetryTick=0;stateBlocks.clear();uploadedTerrain.clear();liveTerrainIndexCount=liveDirectionalIndexCount=0;if(!keepMesh){fixedTerrain.reset();fixedTerrainBits.reset();}liveTerrainGeneration=0;drop(raisedFogTexture);drop(regionalFogTexture);drop(neutralAO);drop(neutralZero);drop(ditherNoise);rainMask=nullptr;uploadedFogField.reset();releasePointGPU();probeActivation.reset();probeBlend.reset();drop(baselineSurface);drop(baselineLight);releaseReplayGPU();liveTerrainGPU.clear();{auto& queries=fence();NorthlightDynamicRing::reset(liveIndexRing,0,queries);queries.drop();}drop(liveIndicesGPU);liveIndexBytes=0;liveIndexBase=0;if(!keepMesh){pendingMesh.reset();clearMesh();}retiredMaterials.clear();if(!keepMesh){releaseMeshPool();uploadedMap.clear();}for(auto& t:shadow)drop(t);for(auto& s:shadowSurface)drop(s);for(auto& t:shadowCache)drop(t);for(auto& s:shadowCacheSurface)drop(s);drop(shadowCacheDepth);drop(shadowVerifySurface);drop(shadowVerify);for(auto& r:shadowVerifyRead)drop(r);drop(shadowScratch);drop(shadowScratchSurface);releaseActorTargets();drop(neutralWhite);actorValid[0]=actorValid[1]=false;actorCenterValid[0]=actorCenterValid[1]=false;drop(unionPS);invalidateShadowCache();for(auto& t:probe)drop(t);drop(probePrev);drop(shadowDepth);drop(lightSurface);drop(smoothSurface);drop(fogSurface);drop(fogBlurredSurface);drop(fogHistorySurface);drop(fogHistory);drop(fogTemporalPS);fogHistoryValid=false;drop(colorSurface);drop(light);drop(smoothLight);drop(fog);drop(fogBlurred);drop(color);drop(lightingPS);drop(giPS);drop(raisedFogPS);drop(fogPS);drop(fogBlurPS);drop(fogCloudsPS);drop(cloudNoise);drop(localDirectPS);drop(localDirect16PS);drop(profileSplitSurface);profileSplitFailed=false;drop(removalPS);drop(temporalPS);drop(localFogPS);drop(localFogCombinePS);drop(localFogAccumSurface);drop(localFogAccum);drop(normalsPS);drop(normalBuffer);drop(normalSurface);drop(sourceVisPS);for(int a=0;a<2;++a)for(int b=0;b<2;++b){drop(sourceVis[a][b]);drop(sourceVisSurface[a][b]);}sourceVisValid=false;for(int i=0;i<2;++i){drop(temporalLight[i]);drop(temporalLightSurface[i]);drop(temporalDepth[i]);drop(temporalDepthSurface[i]);}temporalValid=false;drop(finalPS);drop(regionalFinalPS);drop(regionalWaterPS);drop(gradeFinalPS);drop(gradeWaterPS);drop(gradeBlendFinalPS);drop(gradeBlendWaterPS);drop(curveFinalPS);drop(curveWaterPS);for(auto& volume:gradeGpuVolumes)drop(volume.texture);gradeGpuVolumes.clear();gradeVolumeChecked=gradeVolumeUnavailable=gradeVolumeSupported=false;gradeStateInitialized=gradeTransitionActive=gradeNeutralizing=false;gradeFromKeys={};gradeToKeys={};drop(curveTexture);uploadedCurve={};drop(shadowPS);drop(replayPS);drop(shadowVS);drop(cachedShadowVS);drop(cachedShadowPS);drop(cachedFastPS);drop(cachedOpaqueFastPS);drop(cachedOpaquePS);drop(shadowDecl);width=height=0;uploadedSerial=0;}
     // Explicit enable/retry only, called after the wrapper's clearFrame(). This
     // never calls endFrame(), so packet capture and cleanup run exactly once.
     void recover(){meshRetry.clear();if(!failed)return;releaseGPU(true);failed=false;valid=false;streamingReports=0;logf("WORLD explicit recovery requested");}
@@ -3004,7 +3163,9 @@ replayBoundsAbandon();releaseReplayProbe();staticCasters.settle();rigidMemoryCle
         const auto live=NorthlightWorldContext::liveArea();
         const DWORD now=GetTickCount();
         const bool logPalette=NorthlightDiagnostics::enabled()&&(!paletteLogAt||now-paletteLogAt>=10000);
-        const auto area=(live.zone||logPalette)&&region&&region->map==map?NorthlightRegionalFog::areaAt(region->region,camera[0],camera[1]):NorthlightRegionalFog::Area{};
+        const auto firstMapZone=celestialProfiles.zones.lower_bound({map,0});
+        const bool mapHasProfiles=firstMapZone!=celestialProfiles.zones.end()&&firstMapZone->first.first==map;
+        const auto area=(live.zone||logPalette||mapHasProfiles)&&region&&region->map==map?NorthlightRegionalFog::areaAt(region->region,camera[0],camera[1]):NorthlightRegionalFog::Area{};
         uint32_t localId=0;
         if(live.zone){
             if(!NorthlightCelestialProfiles::hasRegionalAreaData(map)){
@@ -3027,10 +3188,25 @@ replayBoundsAbandon();releaseReplayProbe();staticCasters.settle();rigidMemoryCle
                 std::copy_n(local.fogTint,3,target.fogTint);
                 target.fogTintStrength=local.fogTintStrength;target.shadowContrast=local.shadowContrast;
                 target.toneStrength=local.toneStrength;
-                target.curves=local.curves;
-                target.vibrance=local.vibrance;
+                target.grade=local.grade;
             }
         }
+        const NorthlightCelestialProfiles::Profile* gradeAnchor=&celestialProfiles.fallbackFor(map);
+        uint32_t gradeAnchorZone=0;
+        if(localId){gradeAnchor=&celestialProfiles.at(map,localId);gradeAnchorZone=localId;}
+        else if(region&&region->map==map){
+            auto exact=celestialProfiles.zones.end();
+            if(area.subzone){
+                const auto parent=celestialProfiles.parents.find({map,area.subzone});
+                if(parent!=celestialProfiles.parents.end()&&parent->second==area.zone)exact=celestialProfiles.zones.find({map,area.subzone});
+            }
+            if(exact==celestialProfiles.zones.end()&&area.zone)exact=celestialProfiles.zones.find({map,area.zone});
+            if(exact!=celestialProfiles.zones.end()){gradeAnchor=&exact->second;gradeAnchorZone=exact->first.second;}
+        }
+        if(gradeAnchorSource!=gradeAnchor){
+            frameGradeKeys=NorthlightTone::makeBakeKeys(gradeAnchor->grade,gradeAnchor->toneStrength);gradeAnchorSource=gradeAnchor;
+        }
+        frameGradeAnchorMap=map;frameGradeAnchorZone=gradeAnchorZone;
         framePalette=paletteTransition.update(target,map,camera[0],camera[1],double(now)*.001);
         paletteFrameMap=map;paletteFrameValid=true;
         if(logPalette){paletteLogAt=now;
@@ -5343,36 +5519,44 @@ replayBoundsAbandon();releaseReplayProbe();staticCasters.settle();rigidMemoryCle
         auto* composite=finalPS;
 #endif
         const auto& appearance=preparedHorizon.appearance;
-        const auto& tone=preparedHorizon.tone;
-        const bool graded=tone!=std::array<float,4>{};
-        if(!debug&&(preparedHorizon.vibrance||preparedHorizon.curveKey.strength||graded||appearance!=std::array<float,4>{})){
+        const auto grade=debug?GradeFrame{}:prepareGrade(preparedHorizon,GetTickCount());
+        const auto timePair=gradeTimePair(preparedHorizon.gradeWeights);
+        if(!debug&&(grade.active||preparedHorizon.curveKey.strength||appearance!=std::array<float,4>{})){
             IDirect3DPixelShader9* selected=nullptr;
-            if(preparedHorizon.vibrance&&!gradeVolumeUnavailable){
-                const bool curves=preparedHorizon.curveKey.strength!=0;
-                auto*& shader=volumePS[waterOwned][curves];
+            if(grade.active&&!gradeVolumeUnavailable){
+                auto*& shader=grade.blending?(waterOwned?gradeBlendWaterPS:gradeBlendFinalPS):(waterOwned?gradeWaterPS:gradeFinalPS);
                 if(!shader){
-                    const DWORD* code=waterOwned?(curves?kWorldCompositeWaterVolumeCurvesShader:kWorldCompositeWaterVolumeShader):
-                                                 (curves?kWorldCompositeVolumeCurvesShader:kWorldCompositeVolumeShader);
+                    const DWORD* code=grade.blending?(waterOwned?kWorldCompositeWaterGradeBlendShader:kWorldCompositeGradeBlendShader):
+                                                       (waterOwned?kWorldCompositeWaterGradeShader:kWorldCompositeGradeShader);
                     if(FAILED(d->CreatePixelShader(code,&shader)))gradeVolumeUnavailable=true;
                 }
-                constexpr float n=NorthlightTone::CubeSize;
-                const float controls[]={preparedHorizon.vibrance,0,(n-1)/n,.5f/n};
-                if(shader&&bindGradeVolume()&&(!curves||bindCurveTable(preparedHorizon.curveKey))&&
-                   SUCCEEDED(d->SetPixelShaderConstantF(103,controls,1)))selected=shader;
+                bool bound=shader!=nullptr;
+                bool uploaded=false;
+                if(bound)bound=gradeSampler(4,grade.to[timePair.first],{},uploaded)&&
+                               gradeSampler(5,grade.to[timePair.second],{},uploaded);
+                if(bound&&grade.blending)bound=gradeSampler(6,grade.from[timePair.first],{},uploaded)&&
+                                                gradeSampler(7,grade.from[timePair.second],{},uploaded);
+                else if(bound){d->SetTexture(6,nullptr);d->SetTexture(7,nullptr);}
+                const float timeConstants[]={timePair.secondWeight,grade.blend,0,0};
+                const float zoneConstants[]={grade.blending&&!grade.from[timePair.first].strength?1.f:0.f,
+                                             grade.blending&&!grade.from[timePair.second].strength?1.f:0.f,
+                                             !grade.to[timePair.first].strength?1.f:0.f,
+                                             !grade.to[timePair.second].strength?1.f:0.f};
+                if(bound&&SUCCEEDED(d->SetPixelShaderConstantF(103,timeConstants,1))&&
+                   SUCCEEDED(d->SetPixelShaderConstantF(104,zoneConstants,1)))selected=shader;
             }
             if(!selected&&preparedHorizon.curveKey.strength){
                 auto*& shader=waterOwned?curveWaterPS:curveFinalPS;
                 if(!shader)d->CreatePixelShader(waterOwned?kWorldCompositeWaterCurvesShader:kWorldCompositeCurvesShader,&shader);
                 if(shader&&bindCurveTable(preparedHorizon.curveKey))selected=shader;
             }
-            if(!selected&&(graded||appearance!=std::array<float,4>{})){
-                auto*& shader=graded?(waterOwned?gradedWaterPS:gradedFinalPS):(waterOwned?regionalWaterPS:regionalFinalPS);
+            if(!selected&&appearance!=std::array<float,4>{}){
+                auto*& shader=waterOwned?regionalWaterPS:regionalFinalPS;
                 if(!shader){
-                    const auto* code=graded?(waterOwned?kWorldCompositeWaterGradedShader:kWorldCompositeGradedShader):
-                                            (waterOwned?kWorldCompositeWaterRegionalShader:kWorldCompositeRegionalShader);
+                    const auto* code=waterOwned?kWorldCompositeWaterRegionalShader:kWorldCompositeRegionalShader;
                     d->CreatePixelShader(code,&shader);
                 }
-                if(shader&&(!graded||SUCCEEDED(d->SetPixelShaderConstantF(102,tone.data(),1))))selected=shader;
+                if(shader)selected=shader;
             }
             if(selected&&SUCCEEDED(d->SetPixelShaderConstantF(101,appearance.data(),1)))composite=selected;
         }
@@ -5386,6 +5570,7 @@ replayBoundsAbandon();releaseReplayProbe();staticCasters.settle();rigidMemoryCle
 #ifdef NORTHLIGHT_WATER
         if(compositeOk)CaptureWaterEnvironment();
 #endif
+        for(unsigned slot=4;slot<=7;++slot)d->SetTexture(slot,nullptr);
         d->SetTexture(15,nullptr);d->SetTexture(2,nullptr);d->SetSamplerState(2,D3DSAMP_ADDRESSU,D3DTADDRESS_CLAMP);d->SetSamplerState(2,D3DSAMP_ADDRESSV,D3DTADDRESS_CLAMP);
         if(compositeOk && spatialAlphaFogEnabled() && effects.fog && !debug && c[21][0]>.5f){
             alphaFog={targetSurface,fogResolved?fogBlurred:fog,temporalDepth[1-temporalIndex],
