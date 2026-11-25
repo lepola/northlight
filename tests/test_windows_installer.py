@@ -110,6 +110,15 @@ class InstallerTests(unittest.TestCase):
             if row['path']==path:manifest[i]=entry;break
         else:manifest.append(entry)
         (self.pkg/'payload-manifest.json').write_text(json.dumps(manifest))
+    def set_lut_pack_payload(self, data):
+        path='appearance-luts/Vibrant.nllutpack'
+        target=self.pkg/'payload'/path;target.parent.mkdir(parents=True,exist_ok=True);target.write_bytes(data)
+        manifest=json.loads((self.pkg/'payload-manifest.json').read_text())
+        entry={'path':path,'sha256':hashlib.sha256(data).hexdigest()}
+        for i,row in enumerate(manifest):
+            if row['path']==path:manifest[i]=entry;break
+        else:manifest.append(entry)
+        (self.pkg/'payload-manifest.json').write_text(json.dumps(manifest))
     def test_bundled_appearance_updates_use_installed_hash_and_keep_player_copies(self):
         self.set_preset_payload('Default',b'[default]\nfog_tint=1,1,1\n')
         self.set_preset_payload('Vibrant',b'[default]\nfog_tint=1,.7,.6\n')
@@ -128,6 +137,31 @@ class InstallerTests(unittest.TestCase):
         self.assertEqual(self.read('appearance-presets/Default.ini'),b'[default]\nfog_tint=.96,.96,1\n')
         self.assertEqual(self.read('appearance-presets/Vibrant.ini'),personal)
         self.assertEqual(named.read_bytes(),b'[default]\nfog_tint=.3,.4,.5\n')
+    def test_lut_pack_updates_independently_and_uninstalls_without_replacing_personal_vibrant(self):
+        self.set_preset_payload('Default',b'[default]\nfog_tint=1,1,1\n')
+        self.set_preset_payload('Vibrant',b'[Appearance]\nPalette=Vibrant\n[default]\nfog_tint=1,.7,.6\n')
+        self.set_lut_pack_payload(b'NL pack version 1')
+        first=m.install(self.client,self.pkg,backend='native')
+        self.assertEqual(self.read('appearance-luts/Vibrant.nllutpack'),b'NL pack version 1')
+
+        personal=b'[Appearance]\nPalette=Vibrant\n[default]\nfog_tint=.2,.3,.4\n'
+        (self.client/'appearance-presets/Vibrant.ini').write_bytes(personal)
+        self.set_preset_payload('Default',b'[default]\nfog_tint=.98,.98,1\n')
+        self.set_preset_payload('Vibrant',b'[Appearance]\nPalette=Vibrant\n[default]\nfog_tint=1,.5,.45\n')
+        self.set_lut_pack_payload(b'NL pack version 2')
+        latest=m.install(self.client,self.pkg,backend='native')
+        self.assertNotEqual(first,latest)
+        self.assertEqual(self.read('appearance-luts/Vibrant.nllutpack'),b'NL pack version 2')
+        self.assertEqual(self.read('appearance-presets/Default.ini'),b'[default]\nfog_tint=.98,.98,1\n')
+        self.assertEqual(self.read('appearance-presets/Vibrant.ini'),personal)
+
+        # Follow the ordinary newest-to-oldest uninstall chain. The managed pack and Default are removed;
+        # a post-install edit to Vibrant remains user data.
+        for backup,_ in reversed(m.transactions(self.client)):
+            m.restore(self.client,backup)
+        self.assertIsNone(self.read('appearance-luts/Vibrant.nllutpack'))
+        self.assertIsNone(self.read('appearance-presets/Default.ini'))
+        self.assertEqual(self.read('appearance-presets/Vibrant.ini'),personal)
     def test_unselected_dxvk_file_may_be_missing(self):
         for backend,gone in [('dxvk',self.DXVK2_FILE),('dxvk2',self.DXVK_FILE),('native',self.DXVK_FILE)]:
             with self.subTest(backend=backend):

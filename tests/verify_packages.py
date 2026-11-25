@@ -93,7 +93,7 @@ def verify_installer(path):
     launchers = bp.launchers(plat, info['version'])
     manifest = json.loads(files['payload-manifest.json'])
     payload = {e['path']: e for e in manifest}
-    expected_payload = set(bp.PAYLOAD_COMMON) | bp.PRESET_FILES
+    expected_payload = set(bp.PAYLOAD_COMMON) | bp.PRESET_FILES | {bp.PAYLOAD_LUT_PACK}
     if plat in bp.PROXY_PLATFORMS:
         expected_payload.update(('d3d9.dll', bp.DXVK_BACKEND, bp.DXVK2_BACKEND,
                                  'renderer-backends/dxvk/LICENSE', 'renderer-backends/dxvk2/LICENSE'))
@@ -125,6 +125,19 @@ def verify_installer(path):
     check(problems, sha(dll) == info['dll_sha256'] and bp.MARKER.search(dll) is not None, 'payload/d3d9.dll')
     for p, e in payload.items():
         check(problems, sha(files.get('payload/' + p, b'')) == e['sha256'], f'payload/{p} does not match its manifest')
+    try:
+        vibrant_bytes = files['payload/appearance-presets/Vibrant.ini']
+        lut_report = bp.validate_appearance_lut_pack(
+            files['payload/' + bp.PAYLOAD_LUT_PACK], source_ini=vibrant_bytes, verify_tables=True)
+        lut_info = info['appearance_lut_pack']
+        lut_keys = ('format_version', 'math_schema_version', 'cube_size', 'voxel_format', 'entry_count',
+                    'packed_bytes', 'uncompressed_table_bytes', 'source_ini_sha256', 'index_sha256', 'pack_sha256')
+        check(problems, all(lut_report[k] == lut_info.get(k) for k in lut_keys),
+              'Vibrant LUT pack metadata differs from BUILD-INFO')
+        check(problems, bp.PAYLOAD_LUT_PACK in payload and not payload[bp.PAYLOAD_LUT_PACK].get('preserve'),
+              'Vibrant LUT pack must be a managed payload updated independently of personal preset edits')
+    except (KeyError, ValueError) as exc:
+        problems.append(f'Vibrant LUT pack is invalid: {exc}')
     settings = set(bp.PAYLOAD_COMMON) | bp.PRESET_FILES
     if 'tideglass' in info:
         settings.update(bp.WATER_SETTINGS)

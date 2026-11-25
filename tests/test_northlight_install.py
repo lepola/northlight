@@ -124,6 +124,21 @@ class Base(unittest.TestCase):
         (root / 'BUILD-INFO.json').write_text(json.dumps({'version': '0.3.162-test', 'dll_sha256': sha(PROXY)}))
         return root
 
+    def set_package_payload(self, name, data, preserve=False):
+        path = self.pkg_root / 'payload' / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(data)
+        manifest_path = self.pkg_root / 'payload-manifest.json'
+        manifest = json.loads(manifest_path.read_text())
+        entry = {'path': name, 'sha256': sha(data), **({'preserve': True} if preserve else {})}
+        for i, row in enumerate(manifest):
+            if row['path'] == name:
+                manifest[i] = entry
+                break
+        else:
+            manifest.append(entry)
+        manifest_path.write_text(json.dumps(manifest))
+
     @property
     def last_output(self):
         return self.outputs[-1].getvalue()
@@ -438,6 +453,29 @@ class LinuxOnlyChecks(Base):
 
 
 class Install(Base):
+    def test_lut_pack_payload_updates_while_personal_vibrant_remains_editable(self):
+        self.set_package_payload('appearance-presets/Default.ini', b'[default]\nfog_tint=1,1,1\n', preserve=True)
+        self.set_package_payload('appearance-presets/Vibrant.ini', b'[Appearance]\nPalette=Vibrant\n[default]\nfog_tint=1,.7,.6\n', preserve=True)
+        self.set_package_payload('appearance-luts/Vibrant.nllutpack', b'Vibrant LUT pack 1')
+        options = dict(backend='native', art=False, world_cache=False, instances='none', raised_air=False)
+        self.installer().install(self.client, **options)
+        self.assertEqual((self.client / 'appearance-luts/Vibrant.nllutpack').read_bytes(), b'Vibrant LUT pack 1')
+
+        personal = b'[Appearance]\nPalette=Vibrant\n[default]\nfog_tint=.2,.3,.4\n'
+        (self.client / 'appearance-presets/Vibrant.ini').write_bytes(personal)
+        self.set_package_payload('appearance-presets/Default.ini', b'[default]\nfog_tint=.98,.98,1\n', preserve=True)
+        self.set_package_payload('appearance-presets/Vibrant.ini', b'[Appearance]\nPalette=Vibrant\n[default]\nfog_tint=1,.5,.45\n', preserve=True)
+        self.set_package_payload('appearance-luts/Vibrant.nllutpack', b'Vibrant LUT pack 2')
+        self.installer().install(self.client, **options)
+        self.assertEqual((self.client / 'appearance-luts/Vibrant.nllutpack').read_bytes(), b'Vibrant LUT pack 2')
+        self.assertEqual((self.client / 'appearance-presets/Default.ini').read_bytes(), b'[default]\nfog_tint=.98,.98,1\n')
+        self.assertEqual((self.client / 'appearance-presets/Vibrant.ini').read_bytes(), personal)
+
+        self.installer().uninstall(self.client)
+        self.assertFalse((self.client / 'appearance-luts/Vibrant.nllutpack').exists())
+        self.assertFalse((self.client / 'appearance-presets/Default.ini').exists())
+        self.assertEqual((self.client / 'appearance-presets/Vibrant.ini').read_bytes(), personal)
+
     def test_interactive_sky_choice(self):
         prompts = self.tty('', '2', '', '1')
         for index, expected in enumerate(('current', 'experimental-preserve', 'experimental-preserve', 'current')):
