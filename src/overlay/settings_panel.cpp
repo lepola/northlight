@@ -34,7 +34,7 @@ const std::map<std::string,const char*> Labels={
     {"ReflectionScenery","Reflections"},{"ReflectionResolution","Reflection resolution"},{"ReflectionDistance","Reflection distance"},{"ReflectionSceneryDetails","Nearby reflected scenery"},{"FineHighlights","Fine water and slime highlights"},{"Clarity","Water clarity"},{"SurfaceBlur","Depth blur"},{"Reflection","Reflection strength"},{"NearReflection","Near reflection strength"},
     {"Underwater","Underwater effects"},{"UnderwaterVisibility","Visibility (yards)"},{"UnderwaterScenery","Underwater scenery"},
     {"Palette","Whole-world appearance"},{"day_vibrance","Vibrance"},{"dusk_vibrance","Vibrance"},{"night_vibrance","Vibrance"},{"tone_curve_strength","Tone curve strength"},{"day_shadow_level","Shadows (25%)"},{"day_midtone_level","Midtones (50%)"},{"day_highlight_level","Highlights (75%)"},
-    {"night_shadow_level","Shadows (25%)"},{"night_midtone_level","Midtones (50%)"},{"night_highlight_level","Highlights (75%)"},{"fog_tint","Fog colour"},{"fog_tint_strength","Fog tint strength"},{"shadow_contrast","Shadow contrast"},{"Slime","Slime surface"},{"Lava","Magma and fel magma surfaces"},
+    {"night_shadow_level","Shadows (25%)"},{"night_midtone_level","Midtones (50%)"},{"night_highlight_level","Highlights (75%)"},{"day_fog_tint","Fog colour"},{"day_fog_tint_strength","Fog tint strength"},{"day_fog_brightness","Fog brightness"},{"dusk_fog_tint","Fog colour"},{"dusk_fog_tint_strength","Fog tint strength"},{"dusk_fog_brightness","Fog brightness"},{"night_fog_tint","Fog colour"},{"night_fog_tint_strength","Fog tint strength"},{"night_fog_brightness","Fog brightness"},{"shadow_contrast","Shadow contrast"},{"Slime","Slime surface"},{"Lava","Magma and fel magma surfaces"},
     {"AutoBump","Material detail"},{"AutoBumpStrength","Normal map strength (%)"},{"AutoBumpDistance","Normal map distance (yards)"},
     {"AutoBumpTerrain","Ground and roads"},{"AutoBumpWalls","Walls and floors"},{"AutoBumpGrass","Grass tufts"},
     {"AutoParallaxDepth","POM depth (%)"},{"AutoParallaxDistance","POM distance (yards)"},{"AutoParallaxSteps","POM trace steps"},
@@ -129,6 +129,9 @@ const std::vector<Group> CelestialGroups={
 };
 constexpr std::array<NorthlightTone::TimeStop,3> GradeTimes={NorthlightTone::TimeStop::Day,NorthlightTone::TimeStop::Dusk,NorthlightTone::TimeStop::Night};
 constexpr std::array<const char*,3> GradeTitles={"Daylight grade","Dusk grade","Night grade"};
+constexpr std::array<const char*,3> FogTitles={"Daylight fog","Dusk fog","Night fog"};
+// A fog key of any of the three times, such as "dusk_fog_tint_strength" for "fog_tint_strength".
+inline bool fogKey(const std::string& key,const std::string& name){return key=="day_"+name||key=="dusk_"+name||key=="night_"+name;}
 constexpr std::array<NorthlightTone::HueBand,NorthlightTone::HueBandCount> HueBands={NorthlightTone::HueBand::Red,NorthlightTone::HueBand::Orange,NorthlightTone::HueBand::Yellow,
     NorthlightTone::HueBand::Green,NorthlightTone::HueBand::Cyan,NorthlightTone::HueBand::Blue,NorthlightTone::HueBand::Magenta};
 constexpr std::array<NorthlightTone::SelectiveProperty,3> SelectiveProperties={NorthlightTone::SelectiveProperty::HueShift,NorthlightTone::SelectiveProperty::Saturation,NorthlightTone::SelectiveProperty::Lightness};
@@ -151,7 +154,7 @@ const PageInfo Pages[]={
     {Page::Atmosphere,"Atmosphere & weather","atmosphere",nullptr,"Fog banks, rain and snow, and haze toward the horizon."},
     {Page::Spells,"Spells & names","spells",nullptr,"How spell effects and unit names sit in the lit scene."},
     {Page::Water,"Water",nullptr,"Tideglass","Waves, reflections, underwater and other liquids."},
-    {Page::Regional,"Regional appearance",nullptr,"By region","One colour look for the whole world, then fog tint and shadow contrast for each region."},
+    {Page::Regional,"Regional appearance",nullptr,"By region","One colour look for the whole world, then fog and shadow contrast for each region."},
     {Page::Grading,"Colour grading",nullptr,nullptr,"Each region's Daylight, Dusk and Night grade: tone curves, vibrance and colour ranges."},
     {Page::Celestial,"Sun & moon",nullptr,nullptr,"How the sun and moon look and light each region."},
     {Page::ShadowRange,"Shadow range",nullptr,nullptr,"How far the landscape casts shadows in each region."},
@@ -587,7 +590,7 @@ struct SettingsPanel::State {
     }
     void edited(const Field& f){note.clear();if(f.apply=="F")wantPreview=true;}
     void set(const Field& f,const std::string& value){
-        if(f.section=="RegionalSlime"||f.key=="fog_tint_strength"||f.key=="shadow_contrast"||f.key=="tone_curve_strength")draft.pin(f,value);
+        if(f.section=="RegionalSlime"||fogKey(f.key,"fog_tint_strength")||f.key=="shadow_contrast"||f.key=="tone_curve_strength")draft.pin(f,value);
         else draft.set(f,value);
         edited(f);
     }
@@ -818,7 +821,7 @@ struct SettingsPanel::State {
             if(p==Page::Regional&&palette)out.push_back(palette);
             for(const Field* f:fields(D::Celestial)){
                 const bool appearance=std::find(std::begin(NorthlightSettings::AppearanceKeys),std::end(NorthlightSettings::AppearanceKeys),f->key)!=std::end(NorthlightSettings::AppearanceKeys);
-                const bool fog=f->key=="fog_tint"||f->key=="fog_tint_strength"||f->key=="shadow_contrast";
+                const bool fog=f->key.find("_fog_")!=f->key.npos||f->key=="shadow_contrast";
                 const Page home=!appearance?Page::Celestial:fog?Page::Regional:Page::Grading;
                 if(home==p)out.push_back(f);
             }
@@ -1021,13 +1024,26 @@ struct SettingsPanel::State {
             W::endCard();
             if(W::beginCard("regional-look")){
                 W::cardTitle("Fog and contrast");
-                if(pickRegion()&&beginRows("regional")){
-                    for(const char* key:{"fog_tint_strength","shadow_contrast"})
-                        if(const Field* f=draft.field(D::Celestial,region,key))regionalRow(*f,rowLabel(*f).c_str());
-                    if(const Field* f=draft.field(D::Celestial,region,"fog_tint"))row(*f);
-                    ImGui::EndTable();
+                if(pickRegion()){
+                    if(beginRows("regional")){
+                        if(const Field* f=draft.field(D::Celestial,region,"shadow_contrast"))regionalRow(*f,rowLabel(*f).c_str());
+                        ImGui::EndTable();
+                    }
+                    if(ImGui::BeginTabBar("fog-times")){
+                        for(unsigned i=0;i<GradeTimes.size();++i)if(ImGui::BeginTabItem(FogTitles[i])){
+                            const std::string time=NorthlightTone::timeName(GradeTimes[i]);
+                            if(beginRows("fog")){
+                                if(const Field* f=draft.field(D::Celestial,region,time+"_fog_tint_strength"))regionalRow(*f,rowLabel(*f).c_str());
+                                for(const char* name:{"_fog_tint","_fog_brightness"})
+                                    if(const Field* f=draft.field(D::Celestial,region,time+name))row(*f);
+                                ImGui::EndTable();
+                            }
+                            ImGui::EndTabItem();
+                        }
+                        ImGui::EndTabBar();
+                    }
                 }
-                W::hint("Fog tint colours the fog a region already has. Shadow contrast deepens its dark detail. The region chosen here is the one Colour grading and Sun & moon edit too.");
+                W::hint("Fog tint colours the fog a region already has and brightness darkens or lifts it, each for Daylight, Dusk and Night; Dusk also shows at sunrise. Shadow contrast deepens dark detail at every hour. The region chosen here is the one Colour grading and Sun & moon edit too.");
             }
             W::endCard();
             break;
@@ -1418,7 +1434,7 @@ struct SettingsPanel::State {
     }
     std::string factoryScope()const{
         if(page==Page::Celestial)return "Restore the factory sun and moon values of the selected region ("+regionLabel(region)+").";
-        if(page==Page::Regional)return "Restore the factory fog tint and shadow contrast of the selected region ("+regionLabel(region)+").";
+        if(page==Page::Regional)return "Restore the factory fog and shadow contrast of the selected region ("+regionLabel(region)+").";
         if(page==Page::Grading)return "Restore the factory colour grading of the selected region ("+regionLabel(region)+").";
         if(page==Page::ShadowRange)return "Restore the factory shadow reach of every region.";
         return std::string("Restore the factory values of every setting on the ")+Pages[unsigned(page)].title+" page.";

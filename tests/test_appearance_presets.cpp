@@ -41,12 +41,12 @@ int main(int argc,char** argv){
 
     Table local;std::string error;
     assert(NorthlightCelestialProfiles::load(argv[2],local,error));
-    const auto stock=local.at("Expansion01",3430).fogTint;
+    const auto stock=local.at("Expansion01",3430).fogTint[1];
     assert(std::fabs(stock[1]-.84f)<1e-5f);
-    const auto defaultView=compose(local,defaults->table,defaults->table).at("Expansion01",3430).fogTint;
+    const auto defaultView=compose(local,defaults->table,defaults->table).at("Expansion01",3430).fogTint[1];
     assert(std::fabs(defaultView[0]-stock[0])<1e-5f&&std::fabs(defaultView[1]-stock[1])<1e-5f&&std::fabs(defaultView[2]-stock[2])<1e-5f);
     auto composed=compose(local,vibrant->table,defaults->table);
-    const auto eversong=composed.at("Expansion01",3430).fogTint;
+    const auto eversong=composed.at("Expansion01",3430).fogTint[1];
     assert(std::fabs(eversong[0]-.975f)<1e-5f&&std::fabs(eversong[1]-.675f)<1e-5f&&std::fabs(eversong[2]-.625f)<1e-5f);
 
     // The user's explicit value differs from the shipped baseline, so both Vibrant and Default retain it.
@@ -55,7 +55,7 @@ int main(int argc,char** argv){
     auto personalVibrant=compose(personal,vibrant->table,defaults->table);
     auto personalDefault=compose(personal,defaults->table,defaults->table);
     for(const auto* table:{&personalVibrant,&personalDefault}){
-        const auto tint=table->at("Expansion01",3430).fogTint;
+        const auto tint=table->at("Expansion01",3430).fogTint[1];
         assert(std::fabs(tint[0]-.12f)<1e-5f&&std::fabs(tint[1]-.23f)<1e-5f&&std::fabs(tint[2]-.34f)<1e-5f);
     }
 
@@ -114,29 +114,54 @@ int main(int argc,char** argv){
     Table neutralBaseline=parseText("[default]\nfog_tint=1,1,1\n");
     Table offValues=parseLocalText("[default]\nfog_tint=1,1,1\nfog_tint_strength=0\n[Azeroth:default]\nfog_tint_strength=0\n[Azeroth:85]\nfog_tint_strength=0\n");
     const auto off=compose(offValues,vibrantOff,neutralBaseline);
-    assert(off.fallback.fogTintStrength==0&&off.at("Azeroth",0).fogTintStrength==0&&off.at("Azeroth",85).fogTintStrength==0);
+    assert(off.fallback.fogTintStrength[0]==0&&off.at("Azeroth",0).fogTintStrength[0]==0&&off.at("Azeroth",85).fogTintStrength[0]==0);
     Table inheritedValues=parseLocalText("[default]\nfog_tint=1,1,1\n");
     const auto inheritedOff=compose(inheritedValues,vibrantOff,neutralBaseline);
-    assert(inheritedOff.fallback.fogTintStrength==.25f&&inheritedOff.at("Azeroth",0).fogTintStrength==.5f&&inheritedOff.at("Azeroth",85).fogTintStrength==.75f);
+    assert(inheritedOff.fallback.fogTintStrength[0]==.25f&&inheritedOff.at("Azeroth",0).fogTintStrength[0]==.5f&&inheritedOff.at("Azeroth",85).fogTintStrength[0]==.75f);
     NorthlightAppearancePresets::Catalog offCatalog;offCatalog.entries={{"Default",neutralBaseline},{"Vibrant",vibrantOff}};
     auto offDocs=NorthlightSettings::factoryDocuments();
     offDocs[2]=NorthlightSettings::Document("[Appearance]\nPalette=Vibrant\n[default]\nfog_tint=1,1,1\nfog_tint_strength=0\n[Azeroth:default]\nfog_tint_strength=0\n[Azeroth:85]\nfog_tint_strength=0\n");
     const auto offConfig=NorthlightSettings::configOf(offDocs,"",true,&offCatalog);
     const auto offFields=NorthlightSettings::schema(offDocs,offDocs,offConfig,"","native",false,&offCatalog);
-    auto offField=[&](const char* section){return std::find_if(offFields.begin(),offFields.end(),[&](const auto& f){return f.file==2&&f.section==section&&f.key=="fog_tint_strength";});};
+    auto offField=[&](const char* section){return std::find_if(offFields.begin(),offFields.end(),[&](const auto& f){return f.file==2&&f.section==section&&f.key=="dusk_fog_tint_strength";});};
     const auto globalOff=offField("default"),mapOff=offField("Azeroth:default"),zoneOff=offField("Azeroth:85");
     assert(globalOff!=offFields.end()&&mapOff!=offFields.end()&&zoneOff!=offFields.end());
     assert(globalOff->overrideValue=="0"&&mapOff->overrideValue=="0"&&zoneOff->overrideValue=="0");
     const auto inheritedDocs=NorthlightSettings::applyChanges(offDocs,offFields,globalOff->id()+"\t~\n"+mapOff->id()+"\t~\n"+zoneOff->id()+"\t~\n");
     const auto inheritedConfig=NorthlightSettings::configOf(inheritedDocs,"",true,&offCatalog);
-    assert(inheritedConfig.celestial.fallback.fogTintStrength==.25f&&inheritedConfig.celestial.at("Azeroth",0).fogTintStrength==.5f&&inheritedConfig.celestial.at("Azeroth",85).fogTintStrength==.75f);
+    assert(inheritedConfig.celestial.fallback.fogTintStrength[1]==.25f&&inheritedConfig.celestial.at("Azeroth",0).fogTintStrength[1]==.5f&&inheritedConfig.celestial.at("Azeroth",85).fogTintStrength[1]==.75f);
+    // The file set one value for all hours; letting Dusk follow the look leaves Daylight and Night switched off.
+    for(unsigned time:{0u,2u})assert(inheritedConfig.celestial.fallback.fogTintStrength[time]==0&&inheritedConfig.celestial.at("Azeroth",85).fogTintStrength[time]==0);
+    assert(inheritedDocs[2].text().find("\nfog_tint_strength")==std::string::npos&&inheritedDocs[2].text().find("day_fog_tint_strength=0")!=std::string::npos);
 
     // Serialization compares a child with its parent, so a child equal to its map base is still explicit.
     Table sparse=parseText("[default]\nfog_tint_strength=0\n[Expansion01:default]\nfog_tint_strength=1\n[Expansion01:100]\nfog_tint_strength=0.5\n[Expansion01:100/101]\nfog_tint_strength=1\n");
     const auto bytes=serialize(sparse);Table roundtrip;
     assert(parse(bytes,roundtrip,error));
-    assert(std::fabs(roundtrip.at("Expansion01",101).fogTintStrength-1.f)<1e-5f);
-    assert(bytes.find("[Expansion01:100/101]\nfog_tint_strength=1")!=std::string::npos);
+    assert(std::fabs(roundtrip.at("Expansion01",101).fogTintStrength[0]-1.f)<1e-5f);
+    assert(bytes.find("[Expansion01:100/101]\nday_fog_tint_strength=1")!=std::string::npos);
+    assert(std::fabs(roundtrip.at("Expansion01",101).fogTintStrength[2]-1.f)<1e-5f&&bytes.find("\nfog_tint")==std::string::npos);
+
+    // Fog per time of day: saved, read back, and taken from a look one time at a time.
+    Table timed=parseText("[default]\nfog_tint_strength=0\n[Azeroth:default]\n[Azeroth:10]\nday_fog_brightness=0.7\nnight_fog_tint=0.5,0.6,1\nnight_fog_tint_strength=1.2\n");
+    Table timedBack;assert(parse(serialize(timed),timedBack,error));
+    const auto& duskwood=timedBack.at("Azeroth",10);
+    assert(std::fabs(duskwood.fogBrightness[0]-.7f)<1e-5f&&duskwood.fogBrightness[1]==1&&duskwood.fogBrightness[2]==1);
+    assert(std::fabs(duskwood.fogTintStrength[2]-1.2f)<1e-5f&&duskwood.fogTintStrength[0]==0&&std::fabs(duskwood.fogTint[2][0]-.5f)<1e-5f&&duskwood.fogTint[0][0]==1);
+    // The player's own Daylight brightness stays; the look still supplies the Night tint.
+    Table ownDay=parseLocalText("[default]\n[Azeroth:10]\nday_fog_brightness=0.4\n");
+    const auto ownOverLook=compose(ownDay,timed,parseText("[default]\nfog_tint=1,1,1\n")).at("Azeroth",10);
+    assert(std::fabs(ownOverLook.fogBrightness[0]-.4f)<1e-5f&&std::fabs(ownOverLook.fogTintStrength[2]-1.2f)<1e-5f);
+    // Changing one time of an all-hours value in the player's file keeps the other two times.
+    auto oldDocs=NorthlightSettings::factoryDocuments();
+    oldDocs[2]=NorthlightSettings::Document("[default]\nfog_tint=1,1,1\n[Azeroth:10]\nfog_tint=0.2,0.4,0.6\nfog_tint_strength=0.8\n");
+    const auto oldFields=NorthlightSettings::schema(oldDocs,oldDocs,NorthlightSettings::configOf(oldDocs,"",true),"","native",false);
+    auto oldField=[&](const char* key){return std::find_if(oldFields.begin(),oldFields.end(),[&](const auto& f){return f.file==2&&f.section=="Azeroth:10"&&f.key==key;});};
+    assert(oldField("night_fog_tint_strength")->overrideValue=="0.8"&&oldField("day_fog_tint")->overrideValue=="0.2,0.4,0.6"&&oldField("day_fog_brightness")->overrideValue=="~");
+    const auto editedDocs=NorthlightSettings::applyChanges(oldDocs,oldFields,oldField("night_fog_tint_strength")->id()+"\t0.1\n");
+    const auto editedFog=NorthlightSettings::configOf(editedDocs,"",true).celestial.at("Azeroth",10);
+    assert(std::fabs(editedFog.fogTintStrength[0]-.8f)<1e-5f&&std::fabs(editedFog.fogTintStrength[1]-.8f)<1e-5f&&std::fabs(editedFog.fogTintStrength[2]-.1f)<1e-5f);
+    assert(std::fabs(editedFog.fogTint[2][2]-.6f)<1e-5f&&editedDocs[2].text().find("\nfog_tint=0.2,0.4,0.6")!=std::string::npos);
 
     Table declarations=parseText("[default]\nfog_tint_strength=0\n[Azeroth:default]\nfog_tint_strength=0.2\n[Azeroth:100]\n[Azeroth:100/101]\n[Azeroth:1497@inside]\n");
     const auto declarationsBytes=serialize(declarations);Table declarationsRoundtrip;

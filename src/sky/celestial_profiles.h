@@ -14,7 +14,10 @@ namespace NorthlightCelestialProfiles {
 constexpr size_t MaxProfileBytes=4*1024*1024;
 constexpr unsigned MaxProfileRows=65536;
 struct Profile {
-    float fogTint[3]={1,1,1},fogTintStrength=0,shadowContrast=0;
+    // Fog colour per time of day, at the grade's Daylight, Dusk and Night stops and blended by the same clock. The game's
+    // fog colour changes through the day, so one tint cannot suit every hour. Brightness scales the fog a tint leaves alone.
+    float fogTint[NorthlightTone::StopCount][3]={{1,1,1},{1,1,1},{1,1,1}},fogTintStrength[NorthlightTone::StopCount]={0,0,0};
+    float fogBrightness[NorthlightTone::StopCount]={1,1,1},shadowContrast=0;
     float toneStrength=0;
     NorthlightTone::Timeline grade{};
     float disc[2][3]={{1,.96f,.88f},{.94f,.97f,1}};
@@ -32,8 +35,11 @@ struct Profile {
 };
 inline Profile blend(const Profile& a,const Profile& b,float t){
     Profile p; t=std::clamp(t,0.f,1.f);
-    for(unsigned c=0;c<3;++c)p.fogTint[c]=a.fogTint[c]+(b.fogTint[c]-a.fogTint[c])*t;
-    p.fogTintStrength=a.fogTintStrength+(b.fogTintStrength-a.fogTintStrength)*t;
+    for(unsigned s=0;s<NorthlightTone::StopCount;++s){
+        for(unsigned c=0;c<3;++c)p.fogTint[s][c]=a.fogTint[s][c]+(b.fogTint[s][c]-a.fogTint[s][c])*t;
+        p.fogTintStrength[s]=a.fogTintStrength[s]+(b.fogTintStrength[s]-a.fogTintStrength[s])*t;
+        p.fogBrightness[s]=a.fogBrightness[s]+(b.fogBrightness[s]-a.fogBrightness[s])*t;
+    }
     p.shadowContrast=a.shadowContrast+(b.shadowContrast-a.shadowContrast)*t;
     p.toneStrength=a.toneStrength+(b.toneStrength-a.toneStrength)*t;
     for(unsigned s=0;s<NorthlightTone::StopCount;++s)p.grade[s]=NorthlightTone::blend(a.grade[s],b.grade[s],t);
@@ -50,16 +56,23 @@ inline Profile blend(const Profile& a,const Profile& b,float t){
 inline NorthlightTone::Grade gradeAt(const Profile& p,float nightFactor,bool evening){
     return NorthlightTone::sample(p.grade,nightFactor,evening);
 }
-// Shift the hue of existing mist, keeping its optical depth and the scene's black point.
-inline std::array<float,4> appearance(const Profile& p,const float* fog,bool fogOn){
+// The change to existing mist as an offset on its colour (fog x (1 + offset)): a hue shift that keeps its brightness,
+// then the brightness itself. Optical depth and the scene's black point are untouched. w is the shadow contrast.
+inline std::array<float,4> appearance(const Profile& p,const float* fog,bool fogOn,const NorthlightTone::TimeWeights& weights={}){
     std::array<float,4> result{};
-    float channels[3];
-    for(unsigned c=0;c<3;++c)channels[c]=(0.5f+0.5f*std::clamp(fog[c],0.f,1.f))*p.fogTint[c];
-    const float mean=.2126f*channels[0]+.7152f*channels[1]+.0722f*channels[2];
-    for(unsigned c=0;c<3;++c)result[c]=fogOn?p.fogTintStrength*(channels[c]-mean):0.f;
-    // Keep the fog multiplier nonnegative even for a saturated swatch at high gain.
-    const float lowest=std::min({result[0],result[1],result[2]});
-    if(lowest < -1.f)for(unsigned c=0;c<3;++c)result[c]/=-lowest;
+    const float weight[]={weights.day,weights.dusk,weights.night};
+    const float total=weight[0]+weight[1]+weight[2];
+    if(fogOn&&total>0&&std::isfinite(total))for(unsigned s=0;s<NorthlightTone::StopCount;++s){
+        if(!(weight[s]>0))continue;
+        float channels[3],offset[3];
+        for(unsigned c=0;c<3;++c)channels[c]=(0.5f+0.5f*std::clamp(fog[c],0.f,1.f))*p.fogTint[s][c];
+        const float mean=.2126f*channels[0]+.7152f*channels[1]+.0722f*channels[2];
+        for(unsigned c=0;c<3;++c)offset[c]=p.fogTintStrength[s]*(channels[c]-mean);
+        // Keep the fog multiplier nonnegative even for a saturated swatch at high gain.
+        const float lowest=std::min({offset[0],offset[1],offset[2]});
+        if(lowest < -1.f)for(unsigned c=0;c<3;++c)offset[c]/=-lowest;
+        for(unsigned c=0;c<3;++c)result[c]+=weight[s]/total*(offset[c]+(p.fogBrightness[s]-1.f)*(1.f+offset[c]));
+    }
     result[3]=.35f*p.shadowContrast;
     // A smoothed transition can leave a sub-pixel residue for many frames.
     if(std::all_of(result.begin(),result.end(),[](float v){return std::abs(v)<.0001f;}))return {};
@@ -120,7 +133,10 @@ struct Table {
     const Profile& fallbackFor(const std::string& map)const {auto i=mapFallbacks.find(map);return i==mapFallbacks.end()?fallback:i->second;}
     bool needsLiveZone()const{
         if(zones.empty())return false;
-        auto tuned=[](const Profile& p){return p.fogTintStrength>0||p.shadowContrast>0||p.toneStrength>0;};
+        auto tuned=[](const Profile& p){
+            for(unsigned s=0;s<NorthlightTone::StopCount;++s)if(p.fogTintStrength[s]>0||p.fogBrightness[s]!=1)return true;
+            return p.shadowContrast>0||p.toneStrength>0;
+        };
         if(tuned(fallback))return true;
         if(std::any_of(zones.begin(),zones.end(),[&](const auto& row){return tuned(row.second);}))return true;
         // Instance map-zone profiles have no regional ADT lookup in the
@@ -145,8 +161,14 @@ inline uint32_t liveInstanceZone(const Table& table,const std::string& map,uint3
 // Shared by the ini parser and the dev tuning overlay (zone_tuning.h).
 inline float* keyTarget(Profile& profile,const std::string& key,unsigned& count,float& minimum,float& maximum){
     count=1;minimum=0;maximum=1;
-    if(key=="fog_tint"){count=3;return profile.fogTint;}
-    if(key=="fog_tint_strength"){maximum=2;return &profile.fogTintStrength;}
+    for(unsigned s=0;s<NorthlightTone::StopCount;++s){
+        const std::string time=NorthlightTone::timeName(static_cast<NorthlightTone::TimeStop>(s));
+        if(key.compare(0,time.size()+5,time+"_fog_")!=0)continue;
+        const auto name=key.substr(time.size()+5);
+        if(name=="tint"){count=3;return profile.fogTint[s];}
+        if(name=="tint_strength"){maximum=2;return &profile.fogTintStrength[s];}
+        if(name=="brightness"){maximum=2;return &profile.fogBrightness[s];}
+    }
     if(key=="tone_curve_strength")return &profile.toneStrength;
     const auto binding=NorthlightTone::gradeBindings().find(key);
     if(binding!=NorthlightTone::gradeBindings().end()){
@@ -171,6 +193,18 @@ inline float* keyTarget(Profile& profile,const std::string& key,unsigned& count,
     else return nullptr;
     if(name=="fog_height_scale")minimum=.25f;
     return target;
+}
+// A look written before fog had a value per time of day sets one for all hours. "fog_tint" and "fog_tint_strength"
+// are still read, as the three per-time keys of the same section; a per-time key in that section wins.
+inline bool allHoursFogKey(const std::string& key){return key=="fog_tint"||key=="fog_tint_strength";}
+inline std::array<std::string,NorthlightTone::StopCount> fogTimeKeys(const std::string& allHoursKey){
+    return {"day_"+allHoursKey,"dusk_"+allHoursKey,"night_"+allHoursKey};
+}
+// The all-hours key a per-time fog key replaces, or empty.
+inline std::string allHoursFogKeyOf(const std::string& key){
+    const auto at=key.find("_fog_tint");if(at==key.npos)return {};
+    const auto rest=key.substr(at+1);
+    return allHoursFogKey(rest)&&(key=="day_"+rest||key=="dusk_"+rest||key=="night_"+rest)?rest:std::string();
 }
 inline const char* assignKey(Profile& profile,const std::string& key,std::string value){
     unsigned count=0;float minimum=0,maximum=0;
@@ -262,6 +296,14 @@ inline bool parse(std::istream& input,Table& out,std::string& error){
             t.palette=value;continue;
         }
         if(!p)return fail("expected key=value in section");
+        if(allHoursFogKey(key)){
+            for(const auto& timeKey:fogTimeKeys(key)){
+                Profile checked;if(const char* why=assignKey(checked,timeKey,value))return fail(why);
+                if(keys.count(timeKey))continue;
+                assignKey(*p,timeKey,value);if(explicitSet)explicitSet->insert(timeKey);
+            }
+            continue;
+        }
         if(const char* why=assignKey(*p,key,value))return fail(why);
         if(explicitSet)explicitSet->insert(key);
     }

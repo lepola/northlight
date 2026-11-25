@@ -108,7 +108,13 @@ inline std::vector<Field> schema(const Documents& docs,const Documents& initial,
     std::array<Values,FileCount> savedValues,factoryValues,initialValues;
     for(unsigned i=0;i<FileCount;++i){savedValues[i]=docs[i].values();factoryValues[i]=factory[i].values();initialValues[i]=initial[i].values();}
     const auto legacyQuality=qualityOf(Document("[Quality]\nPreset=Quality\n"),legacy);
-    auto add=[&](Field f){f.overrideValue=explicitValue(savedValues[f.file],f.section,f.key);f.factoryOverride=explicitValue(factoryValues[f.file],f.section,f.key);if(f.kind=="enum")for(auto* v:{&f.overrideValue,&f.factoryOverride,&f.saved,&f.active})*v=canonicalOption(*v,f.options); // readers accept any case; the menu compares exact spellings
+    // A file from before fog had a value per time sets one for all hours; each per-time field shows it as its own.
+    auto written=[](const Values& values,const Field& f){
+        auto value=explicitValue(values,f.section,f.key);
+        if(value=="~"&&f.file==2)if(const auto allHours=NorthlightCelestialProfiles::allHoursFogKeyOf(f.key);!allHours.empty())value=explicitValue(values,f.section,allHours);
+        return value;
+    };
+    auto add=[&](Field f){f.overrideValue=written(savedValues[f.file],f);f.factoryOverride=written(factoryValues[f.file],f);if(f.kind=="enum")for(auto* v:{&f.overrideValue,&f.factoryOverride,&f.saved,&f.active})*v=canonicalOption(*v,f.options); // readers accept any case; the menu compares exact spellings
         f.origin=f.overrideValue=="~"?"inherited":"override";out.push_back(std::move(f));};
     Field p;p.section="Quality";p.key="Preset";p.kind="enum";p.saved=NorthlightQuality::name(saved.quality.preset);p.active=NorthlightQuality::name(active.quality.preset);p.factory=p.inherited="Quality";p.options="Quality,Balanced,Performance";p.apply="F";add(p);
     unsigned index=0;
@@ -229,7 +235,7 @@ inline std::vector<Field> schema(const Documents& docs,const Documents& initial,
         for(const auto& control:controls)addWater(WaterFile,control);
         std::map<std::string,std::string> slimeParents;
         for(const auto& field:out){
-            if(field.file==2&&field.key=="fog_tint_strength"&&
+            if(field.file==2&&field.key=="shadow_contrast"&&
                !(field.section.size()>8&&field.section.compare(field.section.size()-8,8,":default")==0)){
                 const auto id=liquidAreaKey(field.section);
                 const auto parent=parentSection(field.section);
@@ -275,6 +281,16 @@ inline Documents applyChanges(Documents docs,const std::vector<Field>& fields,co
         if(value=="@factory")value=f.factoryOverride;validateValue(f,value);
         if(f.file==2&&f.section=="default"&&value!="~"&&!docs[2].values().count("default"))
             docs[2].lines.insert(docs[2].lines.begin(),{"[default]",docs[2].newline});
+        if(f.file==2)if(const auto allHours=NorthlightCelestialProfiles::allHoursFogKeyOf(f.key);!allHours.empty()){
+            // Editing one time of an all-hours value: write it out as its three per-time values first, so the other
+            // two times keep what they had.
+            const auto old=explicitValue(docs[2],f.section,allHours);
+            if(old!="~"){
+                for(const auto& timeKey:NorthlightCelestialProfiles::fogTimeKeys(allHours))
+                    if(explicitValue(docs[2],f.section,timeKey)=="~")docs[2].set(f.section,timeKey,&old);
+                docs[2].set(f.section,allHours,nullptr);
+            }
+        }
         docs[f.file].set(f.section,f.key,value=="~"?nullptr:&value);
         if(f.file==WaterFile && f.key=="ReflectionDistance")
             docs[WaterFile].set("Water","ShortReflectionDistance",nullptr);

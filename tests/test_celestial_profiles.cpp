@@ -100,10 +100,10 @@ int main(int argc,char** argv){
         assert(parse(ini,test,error)&&test.needsLiveZone());
         assert(test.at("Azeroth",159).shadowContrast==.6f&&test.interiors.count({"Azeroth",1497}));
         edge.tiles[0].areas.fill(159);
-        assert(near(sample(test,edge,"Azeroth",x,y+40).fogTintStrength,0));
-        assert(near(sample(test,edge,"Azeroth",x,y).fogTintStrength,.4f));
+        assert(near(sample(test,edge,"Azeroth",x,y+40).fogTintStrength[0],0));
+        assert(near(sample(test,edge,"Azeroth",x,y).fogTintStrength[0],.4f));
         edge.tiles[0].areas.fill(0);
-        assert(near(sample(test,edge,"Azeroth",x,y+40).fogTintStrength,.8f));
+        assert(near(sample(test,edge,"Azeroth",x,y+40).fogTintStrength[0],.8f));
         const float nativeFog[]={.3f,.4f,.35f};
         auto delta=appearance(test.at("Azeroth",85),nativeFog,false);
         assert(delta[0]==0&&delta[1]==0&&delta[2]==0&&delta[3]>0);
@@ -115,7 +115,7 @@ int main(int argc,char** argv){
             "fog_tint_strength=1.7\ntone_curve_strength=1\nday_shadow_level=.21\nnight_shadow_level=.27\n");
         assert(parse(input,table,error));
         auto p=table.at("Azeroth",159);
-        assert(near(p.fogTintStrength,1.7f)&&near(p.grade[2].curves[0].levels[1],.44f));
+        assert(near(p.fogTintStrength[0],1.7f)&&near(p.grade[2].curves[0].levels[1],.44f));
         const auto day=toneCoefficients(p,0),night=toneCoefficients(p,1),dusk=toneCoefficients(p,.5f);
         for(unsigned i=0;i<4;++i)assert(near(dusk[i],(day[i]+night[i])*.5f));
         p.toneStrength=0;
@@ -141,11 +141,53 @@ int main(int argc,char** argv){
             }
         }
         // The darkest permitted swatch at double gain must still leave nonnegative fog radiance.
-        p.fogTintStrength=2;p.fogTint[0]=0;p.fogTint[1]=p.fogTint[2]=1;
+        p.fogTintStrength[0]=2;p.fogTint[0][0]=0;p.fogTint[0][1]=p.fogTint[0][2]=1;
         const float white[]={1,1,1};const auto delta=appearance(p,white,true);
         assert(delta[0]>=-1.f&&std::abs(luma(delta.data()))<.00001f);
-        assert(assignKey(p,"fog_tint_strength","2.01")&&assignKey(p,"night_midtone_level",".1"));
+        assert(assignKey(p,"day_fog_tint_strength","2.01")&&assignKey(p,"night_midtone_level",".1"));
         assert(assignKey(p,"day_highlight_level",".95"));
+    }
+    {
+        // Fog has a value per time of day. A look from before that sets one for all hours.
+        auto read=[](const char* text){Table table;std::istringstream ini(text);std::string error;const bool ok=parse(ini,table,error);assert(ok);return table;};
+        const Table old=read("[default]\nfog_tint=.2,.4,.6\nfog_tint_strength=1.5\n");
+        for(unsigned time=0;time<3;++time)assert(near(old.fallback.fogTint[time][2],.6f)&&near(old.fallback.fogTintStrength[time],1.5f)&&near(old.fallback.fogBrightness[time],1));
+        // A per-time value beats the all-hours one of its own section, whichever is written first.
+        for(const char* text:{"[default]\nnight_fog_tint_strength=.3\nfog_tint_strength=1.5\n","[default]\nfog_tint_strength=1.5\nnight_fog_tint_strength=.3\n"}){
+            const Table mixed=read(text);
+            assert(near(mixed.fallback.fogTintStrength[0],1.5f)&&near(mixed.fallback.fogTintStrength[1],1.5f)&&near(mixed.fallback.fogTintStrength[2],.3f));
+        }
+        // The nearer section wins: a region's all-hours value replaces a per-time value set above it.
+        const Table nearer=read("[default]\nnight_fog_tint_strength=.3\ndusk_fog_brightness=.5\n[Azeroth:default]\n[Azeroth:10]\nfog_tint_strength=.9\n[Azeroth:12]\n");
+        assert(near(nearer.at("Azeroth",10).fogTintStrength[2],.9f)&&near(nearer.at("Azeroth",12).fogTintStrength[2],.3f));
+        assert(near(nearer.at("Azeroth",10).fogBrightness[1],.5f)&&nearer.needsLiveZone());
+        {Table bad;std::istringstream ini("[default]\nfog_tint_strength=2.5\n");std::string error;assert(!parse(ini,bad,error));}
+        {Table bad;std::istringstream ini("[default]\nday_fog_brightness=2.5\n");std::string error;assert(!parse(ini,bad,error));}
+        assert(allHoursFogKeyOf("dusk_fog_tint_strength")=="fog_tint_strength"&&allHoursFogKeyOf("day_fog_tint")=="fog_tint");
+        assert(allHoursFogKeyOf("day_fog_brightness").empty()&&allHoursFogKeyOf("fog_tint").empty()&&allHoursFogKeyOf("sun_fog_tint").empty());
+
+        const float mist[]={.4f,.5f,.6f};
+        const NorthlightTone::TimeWeights day{1,0,0},dusk{0,1,0},night{0,0,1},halfway{0,.5f,.5f};
+        // One value for all hours gives the same fog at every hour, and the same as before fog had times.
+        const auto all=appearance(old.fallback,mist,true,day);
+        assert(all==appearance(old.fallback,mist,true)&&all==appearance(old.fallback,mist,true,night));
+        const auto mixedHours=appearance(old.fallback,mist,true,halfway);
+        for(unsigned c=0;c<3;++c)assert(near(mixedHours[c],all[c]));
+        // A night tint leaves the day alone and arrives with the clock.
+        Profile nightOnly;nightOnly.fogTintStrength[2]=1.5f;nightOnly.fogTint[2][0]=.2f;nightOnly.fogTint[2][1]=.4f;nightOnly.fogTint[2][2]=.6f;
+        assert(appearance(nightOnly,mist,true,day)==(std::array<float,4>{})&&appearance(nightOnly,mist,true,dusk)==(std::array<float,4>{}));
+        const auto atNight=appearance(nightOnly,mist,true,night),between=appearance(nightOnly,mist,true,halfway);
+        for(unsigned c=0;c<3;++c)assert(near(atNight[c],all[c])&&near(between[c],.5f*all[c]));
+        // Brightness scales every channel of the fog alike, and a tint under it keeps its hue.
+        Profile dim;dim.fogBrightness[0]=.7f;
+        const auto dimmed=appearance(dim,mist,true,day);
+        for(unsigned c=0;c<3;++c)assert(near(dimmed[c],-.3f));
+        assert(appearance(dim,mist,true,night)==(std::array<float,4>{})&&appearance(dim,mist,false,day)==(std::array<float,4>{}));
+        Profile both=old.fallback;both.fogBrightness[0]=.7f;
+        const auto tintedDim=appearance(both,mist,true,day);
+        for(unsigned c=0;c<3;++c)assert(near(1+tintedDim[c],.7f*(1+all[c])));
+        Profile black;black.fogBrightness[0]=0;
+        assert(near(appearance(black,mist,true,day)[1],-1));
     }
     {
         using namespace NorthlightTone;

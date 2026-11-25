@@ -244,14 +244,14 @@ static void regionalAppearance(){
     setValue(WaterFile,"Water","RegionalSlimeStrength",".72");
     auto rows=schema(docs,docs,configOf(docs,"",true),"","native",true);
     D::Draft d;d.bind(&rows);
-    const auto& tint=*d.field(2,"Azeroth:85/159","fog_tint_strength");
+    const auto& tint=*d.field(2,"Azeroth:85/159","dusk_fog_tint_strength");
     const auto& shadow=*d.field(2,"Azeroth:85/159","shadow_contrast");
     const auto& night=*d.field(2,"Azeroth:85/159","night_midtone_level");
     const auto& daylight=*d.field(2,"Azeroth:85/159","day_midtone_level");
     CHECK(D::same(night,d.effective(night),".42")&&D::same(daylight,d.effective(daylight),".54"));
     auto graded=applyChanges(docs,rows,night.id()+"\t.48\n"+tint.id()+"\t1.7\n");
     auto local=configOf(graded,"",true).celestial.at("Azeroth",159);
-    CHECK(local.grade[2].curves[0].levels[1]==.48f&&local.grade[0].curves[0].levels[1]==.54f&&local.fogTintStrength==1.7f);
+    CHECK(local.grade[2].curves[0].levels[1]==.48f&&local.grade[0].curves[0].levels[1]==.54f&&local.fogTintStrength[1]==1.7f);
     const auto& red=*d.field(2,"Azeroth:85/159","day_red_midtone_level");
     const auto& lowInput=*d.field(2,"Azeroth:85/159","night_low_input");
     const auto& lowBend=*d.field(2,"Azeroth:85/159","night_low_bend");
@@ -266,7 +266,7 @@ static void regionalAppearance(){
     CHECK(profile.grade[2].curves[0].lowInput==.08f&&profile.grade[2].curves[0].lowBend==.64f&&profile.grade[0].curves[0].lowBend==.50f);
     auto redReset=applyChanges(rgb,rows,red.id()+"\t~\n");
     const auto resetProfile=configOf(redReset,"",true).celestial.at("Azeroth",159);
-    CHECK(resetProfile.grade[0].curves[1].levels[1]==.5f&&resetProfile.grade[2].curves[0].lowBend==.64f&&resetProfile.fogTintStrength==1.7f);
+    CHECK(resetProfile.grade[0].curves[1].levels[1]==.5f&&resetProfile.grade[2].curves[0].lowBend==.64f&&resetProfile.fogTintStrength[1]==1.7f);
     CHECK(D::same(tint,d.effective(tint),".65"));
     d.pin(tint,"0");CHECK(d.overrides(tint)&&d.effective(tint)=="0");
     d.inherit(tint);CHECK(D::same(tint,d.effective(tint),".65")&&D::same(shadow,d.effective(shadow),".4"));
@@ -278,9 +278,9 @@ static void regionalAppearance(){
     d.inherit(canal);CHECK(D::same(canal,d.effective(canal),".72"));
     auto restored=applyChanges(docs,rows,tint.id()+"\t0\n");
     auto active=configOf(restored,"",true);
-    CHECK(active.celestial.at("Azeroth",159).fogTintStrength==0&&active.celestial.at("Azeroth",159).shadowContrast==.4f);
+    CHECK(active.celestial.at("Azeroth",159).fogTintStrength[1]==0&&active.celestial.at("Azeroth",159).shadowContrast==.4f);
     auto reset=applyChanges(restored,rows,tint.id()+"\t~\n");
-    CHECK(configOf(reset,"",true).celestial.at("Azeroth",159).fogTintStrength==.65f);
+    CHECK(configOf(reset,"",true).celestial.at("Azeroth",159).fogTintStrength[1]==.65f);
     docs[2]=Document("[Azeroth:1497]\nsun_disc_gain=2\n");
     rows=schema(docs,docs,configOf(docs,"",true),"","native",true);
     d.bind(&rows);

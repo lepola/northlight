@@ -638,7 +638,7 @@ private:
             const auto fallbackGrade=NorthlightTone::sample(palette.grade,result.gradeWeights);
             result.curveKey=NorthlightTone::tableKey(fallbackGrade,palette.toneStrength,true);
         }
-        result.appearance=NorthlightCelestialProfiles::appearance(palette,result.state.color,effects.fog);
+        result.appearance=NorthlightCelestialProfiles::appearance(palette,result.state.color,effects.fog,result.gradeWeights);
         for(unsigned i=0;i<3;++i)result.constants.haze[i]*=1.f+result.appearance[i];
         float target=0;
         if(celestialValid&&field){
@@ -3289,8 +3289,10 @@ replayBoundsAbandon();releaseReplayProbe();staticCasters.settle();rigidMemoryCle
             const auto& local=celestialProfiles.at(map,localId);
             if(!NorthlightCelestialProfiles::hasRegionalAreaData(map))target=local;
             else{
-                std::copy_n(local.fogTint,3,target.fogTint);
-                target.fogTintStrength=local.fogTintStrength;target.shadowContrast=local.shadowContrast;
+                std::copy_n(&local.fogTint[0][0],sizeof local.fogTint/sizeof(float),&target.fogTint[0][0]);
+                std::copy_n(local.fogTintStrength,NorthlightTone::StopCount,target.fogTintStrength);
+                std::copy_n(local.fogBrightness,NorthlightTone::StopCount,target.fogBrightness);
+                target.shadowContrast=local.shadowContrast;
                 target.toneStrength=local.toneStrength;
                 target.grade=local.grade;
             }
@@ -3330,7 +3332,9 @@ replayBoundsAbandon();releaseReplayProbe();staticCasters.settle();rigidMemoryCle
         if(logPalette){paletteLogAt=now;
             uint32_t zone=area.zone?area.zone:(localId?live.zone:0);
             uint32_t subzone=area.subzone?area.subzone:(localId?live.subzone:0);
-            logf("REGIONAL appearance map=%s zone=%u subzone=%u live=%u tint=%.3f contrast=%.3f",map,zone,subzone,live.zone,framePalette.fogTintStrength,framePalette.shadowContrast);
+            logf("REGIONAL appearance map=%s zone=%u subzone=%u live=%u tint=%.3f/%.3f/%.3f brightness=%.3f/%.3f/%.3f contrast=%.3f",map,zone,subzone,live.zone,
+                framePalette.fogTintStrength[0],framePalette.fogTintStrength[1],framePalette.fogTintStrength[2],
+                framePalette.fogBrightness[0],framePalette.fogBrightness[1],framePalette.fogBrightness[2],framePalette.shadowContrast);
             logf("CELESTIAL palette map=\"%s\" zone=%u moonDisc=(%.3f %.3f %.3f) lightMix=%.3f/%.3f strength=%.3f/%.3f",map,zone,framePalette.disc[1][0],framePalette.disc[1][1],framePalette.disc[1][2],framePalette.mix[0],framePalette.mix[1],framePalette.strength[0],framePalette.strength[1]);
         }return framePalette;
     }

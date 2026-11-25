@@ -23,7 +23,9 @@ inline constexpr char NameRuleText[]="Use 1 to 40 letters, numbers, spaces, unde
 
 inline const std::vector<std::string>& keys(){
     static const std::vector<std::string> value=[] {
-        std::vector<std::string> out={"fog_tint","fog_tint_strength","shadow_contrast","tone_curve_strength"};
+        std::vector<std::string> out;
+        for(const char* time:{"day","dusk","night"})for(const char* name:{"fog_tint","fog_tint_strength","fog_brightness"})out.push_back(std::string(time)+"_"+name);
+        out.insert(out.end(),{"shadow_contrast","tone_curve_strength"});
         for(const auto& field:NorthlightTone::gradeBindings())out.push_back(field.first);
         return out;
     }();
@@ -81,7 +83,7 @@ inline bool parse(const std::string& raw,Table& out,std::string& error){
         for(const auto& section:values){
             if(section.first=="default")hasDefault=true;
             for(const auto& field:section.second){
-                if(!visualKey(field.first)){error="preset contains a non-appearance setting: "+field.first;return false;}
+                if(!visualKey(field.first)&&!NorthlightCelestialProfiles::allHoursFogKey(field.first)){error="preset contains a non-appearance setting: "+field.first;return false;}
                 hasVisual=true;
             }
         }

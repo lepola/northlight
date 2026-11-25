@@ -13,7 +13,9 @@ only the appearance keys, never sun or moon settings (`src/settings/appearance_p
 
 | Key | What it does |
 | --- | --- |
-| `fog_tint`, `fog_tint_strength` | Colours the game's existing fog. |
+| `day_`, `dusk_`, `night_` + `fog_tint`, `fog_tint_strength` | Colours the game's existing fog at that time of day. The tint keeps the fog's brightness. |
+| `day_`, `dusk_`, `night_` + `fog_brightness` | Darkens or lifts that fog: 1 leaves it alone, 0 to 2. |
+| `fog_tint`, `fog_tint_strength` | One value for all hours, as looks had before fog was per time. Read as the three per-time keys of its section; a per-time key in the same section wins. |
 | `shadow_contrast` | Deepens or lifts shadows in the lit world. |
 | `tone_curve_strength` | How much of the grade below is applied. Zero leaves the picture untouched. |
 | `<time>_<channel>low_input`, `low_bend`, `shadow_level`, `midtone_level`, `highlight_level` | One tone curve per time and channel. Channels are brightness (no prefix), `red_`, `green_` and `blue_`. |
