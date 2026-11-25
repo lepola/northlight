@@ -239,6 +239,7 @@ struct BakeKey {
     bool operator!=(const BakeKey& b)const{return !(*this==b);}
     uint64_t stableHash()const;
 };
+inline constexpr uint16_t BakeMathSchemaVersion=1;
 inline uint64_t stableHash(const BakeKey& key){
     uint64_t hash=14695981039346656037ull;
     auto byte=[&](uint8_t value){hash^=value;hash*=1099511628211ull;};

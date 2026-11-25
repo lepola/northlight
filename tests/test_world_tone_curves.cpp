@@ -7,6 +7,8 @@
 
 using namespace NorthlightTone;
 
+static_assert(BakeMathSchemaVersion==1);
+
 static bool near(float a,float b,float epsilon=1e-5f){return std::abs(a-b)<=epsilon;}
 static float luminance(const std::array<float,3>& rgb){return .2126f*rgb[0]+.7152f*rgb[1]+.0722f*rgb[2];}
 static float distance(const std::array<float,3>& a,const std::array<float,3>& b){
