@@ -27,7 +27,7 @@ DXVK2 = 'renderer-backends/dxvk2/dxvk2_d3d9.dll'   # DXVK 2.7.1, the alternative
 # never packaged or recorded.
 LEGACY_DXVK3_MARKER = 'renderer-backends/dxvk/northlight-dxvk3-init.pending'
 DXVK_FOLDERS = {'dxvk': 'renderer-backends/dxvk/', 'dxvk2': 'renderer-backends/dxvk2/'}
-APPEARANCE_PRESETS = {'appearance-presets/Default.ini', 'appearance-presets/Vibrant.ini'}
+APPEARANCE_PRESETS = {'appearance-presets/Default.ini', 'appearance-presets/Vibrant.ini', 'appearance-presets/Atmospheric.ini'}
 CONFIG = 'northlight-renderer.ini'
 MARKER = b'Northlight renderer '
 PROXY_SIGNATURE = b'PROXY module=%ls root=%ls'   # the proxy's start-up log line; carries no product name

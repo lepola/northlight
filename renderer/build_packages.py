@@ -73,10 +73,11 @@ APP_FILES = [
 PAYLOAD_COMMON = {'celestial-profiles.ini': 'client-config/celestial-profiles.ini',
                   'shadow-range-profiles.ini': 'client-config/shadow-range-profiles.ini',
                   'northlight-quality.ini': 'renderer/windows-package/northlight-quality.ini'}
-PAYLOAD_PRESETS = {'appearance-presets/Vibrant.ini': 'client-config/appearance-presets/Vibrant.ini'}
+PAYLOAD_PRESETS = {'appearance-presets/Vibrant.ini': 'client-config/appearance-presets/Vibrant.ini',
+                   'appearance-presets/Atmospheric.ini': 'client-config/appearance-presets/Atmospheric.ini'}
 WATER_SETTINGS = ('water.ini', 'water-host.ini')
 PAYLOAD_LUT_PACK = 'appearance-luts/Vibrant.nllutpack'
-PRESET_FILES = {'appearance-presets/Default.ini', 'appearance-presets/Vibrant.ini'}
+PRESET_FILES = {'appearance-presets/Default.ini', *PAYLOAD_PRESETS}
 PRESERVE = set(PAYLOAD_COMMON) | set(WATER_SETTINGS) | PRESET_FILES
 DXVK_BACKEND = 'renderer-backends/dxvk/dxvk_d3d9.dll'
 DXVK2_BACKEND = 'renderer-backends/dxvk2/dxvk2_d3d9.dll'

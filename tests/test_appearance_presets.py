@@ -19,7 +19,8 @@ with tempfile.TemporaryDirectory(prefix='northlight-appearance-presets-') as tmp
     folder = root / 'appearance-presets'
     folder.mkdir()
     (folder / 'Default.ini').write_bytes(builder.default_appearance_preset())
-    (folder / 'Vibrant.ini').write_bytes((fp.REPO / 'client-config/appearance-presets/Vibrant.ini').read_bytes())
+    for shipped in ('Vibrant.ini', 'Atmospheric.ini'):
+        (folder / shipped).write_bytes((fp.REPO / 'client-config/appearance-presets' / shipped).read_bytes())
     exe = root / 'appearance-presets.exe'
     subprocess.run(['clang++', '-std=c++17', '-O2', '-Wall', '-Wextra', '-Werror',
                     *fp.test_include_flags(), str(Path(__file__).with_suffix('.cpp')), '-o', str(exe)], check=True)

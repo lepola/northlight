@@ -263,7 +263,7 @@ int main(int argc,char** argv){
      assert(run([&]{return svc.savePreset("Vibrant",svc.snapshot()->revision,{{tint->id(),"0.3"}},true);}).state==Status::State::Error);
      assert(readImage(presetRoot/"appearance-presets"/"Vibrant.ini").raw==vibrantBefore);
      // Shipped looks are refused before any job is queued. Deleting a look that is not selected leaves the choice alone.
-     assert(!svc.deletePreset("Vibrant",svc.snapshot()->revision)&&!svc.deletePreset("Default",svc.snapshot()->revision));
+     assert(!svc.deletePreset("Vibrant",svc.snapshot()->revision)&&!svc.deletePreset("Default",svc.snapshot()->revision)&&!svc.deletePreset("atmospheric",svc.snapshot()->revision));
      assert(run([&]{return svc.deletePreset("Missing",svc.snapshot()->revision);}).state==Status::State::Error);
      assert(run([&]{return svc.savePreset("Spare",svc.snapshot()->revision,{});}).state==Status::State::Saved&&offered("Spare"));
      auto deleted=run([&]{return svc.deletePreset("spare",svc.snapshot()->revision);});

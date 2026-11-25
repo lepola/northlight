@@ -59,7 +59,7 @@ struct Catalog {
 // The looks the installer ships. A player may edit Vibrant's file by hand, but the menu neither replaces nor deletes
 // these: an update restores them, so a deletion would not last and a replacement would be overwritten.
 inline bool packaged(const std::string& name){
-    const auto wanted=NorthlightSettings::lower(name);return wanted=="default"||wanted=="vibrant";
+    const auto wanted=NorthlightSettings::lower(name);return wanted=="default"||wanted=="vibrant"||wanted=="atmospheric";
 }
 inline bool validName(const std::string& name,std::string& error){
     auto invalid=[&]{error=NameRuleText;return false;};

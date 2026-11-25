@@ -24,8 +24,9 @@ only the appearance keys, never sun or moon settings (`src/settings/appearance_p
 centred on 0°, 30°, 60°, 120°, 180°, 240° and 300°. A colour between two centres is shared between them in
 proportion, so the ranges always add up to the whole wheel (`hueWeights` in `src/sky/world_tone_curves.h`).
 
-`Default` is the packaged neutral look and its name is reserved. `Vibrant` is the optional bundled look
-(`client-config/appearance-presets/Vibrant.ini`). A player's own looks sit beside them under any other name; the menu
+`Default` is the packaged neutral look and its name is reserved. `Vibrant` and `Atmospheric` are the optional bundled
+looks (`client-config/appearance-presets/`). Atmospheric is generated in the Tideglass checkout from written intents
+(`tools/regional-look-intents.json` there) and has no table pack: its tables are baked as the player arrives. A player's own looks sit beside them under any other name; the menu
 saves, replaces and deletes those and leaves the packaged ones alone (`packaged`, and the preset jobs in
 `src/settings/settings_service.h`).
 
