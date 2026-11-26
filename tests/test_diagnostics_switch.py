@@ -15,7 +15,29 @@ HERE=Path(__file__).resolve().parent
 FILES=['renderer.cpp','world_renderer.h','world_shadow_experiment.inl','world_point_rendering.inl','celestial_disc_renderer.h',
        'shadow_blob_filter.h','water_renderer.h','gpu_profile.h','gpu_frame_timer.h','world_diagnostics.h','world_replay_probe.inl','world_rigid_memory.inl']
 # 0.3.149: profiling()/profileSampled() = RenderProfile, which requires Diagnostics=1 (NorthlightQuality::renderProfile).
-GATES=('NorthlightDiagnostics::enabled()','diagnostics()','sampled()','captureSampled','if(diagnostics)','shadowFate.active()','sampledFrame','profiling()','profileSampled()','if(lightingClock)')
+GATES=('NorthlightDiagnostics::enabled()','diagnostics()','sampled()','captureSampled','if(diagnostics)','shadowFate.active()','sampledFrame','profiling()','profileSampled()','if(lightingClock)','if(logPalette)')
+# A function that leaves at its top unless diagnostics are on gates every line below that: the grade events, and the
+# grade's GPU probe, which is armed only by a request that passed that test.
+EARLY_RETURNS=('if(!NorthlightDiagnostics::enabled())return','if(!gradeGpuProbeArmed||!gradeGpuProbe)return;')
+CONTROL=re.compile(r'(?:^|[\s;{}])(?:if|for|while|switch|catch)\s*\([^{}]*\)\s*$|(?:else|try|do)\s*$')
+def returned_early(s,pos):
+    """Whether an EARLY_RETURNS statement stands above pos in its own function, in a block still open at pos."""
+    depth=0;k=pos
+    while k>0:
+        k-=1;c=s[k]
+        if c=='}':depth+=1
+        elif c=='{':
+            if depth:depth-=1;continue
+            header=s[max(s.rfind(';',0,k),s.rfind('{',0,k),s.rfind('}',0,k))+1:k]
+            if CONTROL.search(header):continue
+            if not header.rstrip().endswith((')','const','noexcept')):return False
+            open_blocks=[[]]
+            for i in range(k+1,pos):
+                if s[i]=='{':open_blocks.append([])
+                elif s[i]=='}':open_blocks.pop()
+                elif any(s.startswith(e,i) for e in EARLY_RETURNS):open_blocks[-1].append(i)
+            return any(open_blocks)
+    return False
 # Ungated lines that stay with Diagnostics=0: format prefix -> label.
 KEEP={
  'SETTINGS unavailable:':'one-off initialization error',
@@ -107,7 +129,7 @@ for f in FILES:
         fmt=re.match(r'(?:logf|deferLogf)\("([^"]{0,60})',s[m.start():]);fmt=fmt.group(1) if fmt else s[m.start():m.start()+30].replace('\n',' ')
         if fmt.startswith('const char*'):continue # comment text
         where=f'{f}:{s.count(chr(10),0,m.start())+1}'
-        if any(g in c for c in conditions(s,m.start())[:6] for g in GATES):gated.append((where,fmt));continue
+        if any(g in c for c in conditions(s,m.start())[:6] for g in GATES) or returned_early(s,m.start()):gated.append((where,fmt));continue
         label=next((v for k,v in KEEP.items() if fmt.startswith(k)),None)
         (kept if label else unknown).append((where,fmt,label))
 print(f'GATED (off with Diagnostics=0): {len(gated)} log sites');[print('  LOG ',w,f) for w,f in gated]

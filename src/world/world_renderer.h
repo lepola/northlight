@@ -3332,7 +3332,7 @@ replayBoundsAbandon();releaseReplayProbe();staticCasters.settle();rigidMemoryCle
         if(logPalette){paletteLogAt=now;
             uint32_t zone=area.zone?area.zone:(localId?live.zone:0);
             uint32_t subzone=area.subzone?area.subzone:(localId?live.subzone:0);
-            logf("REGIONAL appearance map=%s zone=%u subzone=%u live=%u tint=%.3f/%.3f/%.3f brightness=%.3f/%.3f/%.3f contrast=%.3f",map,zone,subzone,live.zone,
+            logf("REGIONAL appearance map=\"%s\" zone=%u subzone=%u live=%u tint=%.3f/%.3f/%.3f brightness=%.3f/%.3f/%.3f contrast=%.3f",map,zone,subzone,live.zone,
                 framePalette.fogTintStrength[0],framePalette.fogTintStrength[1],framePalette.fogTintStrength[2],
                 framePalette.fogBrightness[0],framePalette.fogBrightness[1],framePalette.fogBrightness[2],framePalette.shadowContrast);
             logf("CELESTIAL palette map=\"%s\" zone=%u moonDisc=(%.3f %.3f %.3f) lightMix=%.3f/%.3f strength=%.3f/%.3f",map,zone,framePalette.disc[1][0],framePalette.disc[1][1],framePalette.disc[1][2],framePalette.mix[0],framePalette.mix[1],framePalette.strength[0],framePalette.strength[1]);

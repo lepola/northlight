@@ -56,7 +56,7 @@ checks={
   context.count('logf("WORLD coverage hold begin dist=')==1 and context.count('logf("WORLD coverage hold end ms=')==1
   and 'coverMax=%.1f lead=%.1f' in context and context.count('coverMax=0;')==1 and 'if(distance>coverMax)coverMax=distance;' in context,
  '0.3.169 D3: a reason for every false render() and one skip-episode line per run':
-  render.count('skipReason=')>=5 and 'skipReason="fault";if(workerFault())return false;' in render
+  render.count('skipReason=')>=5 and 'skipReason="fault";pollGradeGpuProbes();if(workerFault())return false;' in render
   and r.count('logf("WORLD skip episode reason=%s last=%s frames=%u ms=%lu"')==1 and 'world->lastSkipReason()' in r,
  '0.3.169 lead: reason 128 only while a lead exists (M2); worker waiting liveness asserted (S1)':
   context.count('(NorthlightWorldStreaming::leadMoved(lastRequest.camera,lastRequest.geometryCenter,r.camera,r.geometryCenter)?128u:0u)')==1

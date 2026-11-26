@@ -44,7 +44,8 @@ checks['manifest: WorldComposite bytecode changed']=(wc['sha256']!=BEFORE['World
 # 0.3.208: WorldNormals (colour-picked one-sided tangent side) changed on purpose
 # 0.3.209 (task 29): WorldLighting reads the actor visibility (s12) on purpose, ActorShadow and ActorTiles are new
 # task 43: RemovalSmooth branches around a zero-weight tap's reads on purpose (the same output)
-checks['manifest: shaders outside the reviewed feature changes retain their historical hashes']=(set(manifest)==set(BEFORE)|{'LocalFogCombine', 'ActorTiles', 'ActorShadow', 'LocalDirect16', 'WaterSkyGradient', 'WaterSkyField', 'WorldCompositeWaterProbe', 'WorldFogRaised', 'WorldWaterLighting', 'WorldWaterVisibility', 'SpatialAlphaFog'} and all(manifest[n]['sha256']==s for n,s in BEFORE.items() if n not in ('FogClouds', 'LocalFog', 'RemovalSmooth', 'WorldComposite', 'WorldFog', 'WorldLighting', 'WorldNormals'))
+# regional appearance: the composite's regional, curve and grade variants are new, each with a water-owned twin
+checks['manifest: shaders outside the reviewed feature changes retain their historical hashes']=(set(manifest)==set(BEFORE)|{'LocalFogCombine', 'ActorTiles', 'ActorShadow', 'LocalDirect16', 'WaterSkyGradient', 'WaterSkyField', 'WorldCompositeWaterProbe', 'WorldFogRaised', 'WorldWaterLighting', 'WorldWaterVisibility', 'SpatialAlphaFog', 'WorldCompositeCurves', 'WorldCompositeGrade', 'WorldCompositeGradeBlend', 'WorldCompositeRegional', 'WorldCompositeWaterCurves', 'WorldCompositeWaterGrade', 'WorldCompositeWaterGradeBlend', 'WorldCompositeWaterRegional'} and all(manifest[n]['sha256']==s for n,s in BEFORE.items() if n not in ('FogClouds', 'LocalFog', 'RemovalSmooth', 'WorldComposite', 'WorldFog', 'WorldLighting', 'WorldNormals'))
     and manifest['LocalFog']['sha256']!=BEFORE['LocalFog'])
 checks['compiled: WorldComposite.bin exists']=(fp.COMPILED/'WorldComposite.bin').exists()
 

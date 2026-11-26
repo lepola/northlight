@@ -135,7 +135,7 @@ checks[f'equal depth: the dark side reaches at most 1 half-res px across (from x
 effects_cpp = renderer[renderer.index('    void renderEffects('):renderer.index('template<class Capture> void prepareDraw(')]
 fold_line = 'const bool fold=world&&debugMode==0&&world->ready();'
 legacy_before = 'if(!fold&&!legacyComposite())return;'
-render_call = 'world->render(saved.targets[0],depthTex,width,height,sceneFormat,nearZ,farZ,worldMinDepth,worldMaxDepth,worldDebug,gpuProfile.get(),waterMask,fold?scene:nullptr,fold?ao:nullptr,composition)'
+render_call = 'world->render(saved.targets[0],depthTex,width,height,sceneFormat,nearZ,farZ,worldMinDepth,worldMaxDepth,worldDebug,gpuProfile.get(),uint64_t(frame)+1,waterMask,fold?scene:nullptr,fold?ao:nullptr,composition)'
 legacy_after = 'if(fold&&!world->composited&&!materialAttempted){effectState();bindEffects(ao);if(!legacyComposite())return;}'
 checks['proxy: FOLD condition, legacy composite before render only when not folding, after it only if not composited'] = (
     all(effects_cpp.count(s) == 1 for s in (fold_line, legacy_before, render_call, legacy_after))
