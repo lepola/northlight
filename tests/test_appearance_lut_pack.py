@@ -35,6 +35,14 @@ class AppearanceLutPackTests(unittest.TestCase):
         self.assertTrue(all(pack_builder.stable_hash(key) == key_hash
                             for key_hash, key, _, _, _ in self.report['entries']))
 
+    def test_the_other_shipped_look_bakes_a_pack_bound_to_its_own_file(self):
+        source = fp.REPO / 'client-config/appearance-presets/Atmospheric.ini'
+        pack = pack_builder.build_pack(source)
+        report = pack_builder.validate_pack(pack, source_ini=source.read_bytes(), verify_tables=True)
+        self.assertGreater(report['entry_count'], 0)
+        with self.assertRaisesRegex(ValueError, 'source INI digest mismatch'):
+            pack_builder.validate_pack(pack, source_ini=self.source_bytes)
+
     def test_signed_selective_colour_key_fields_are_preserved(self):
         signed = [value for _, key, _, _, _ in self.report['entries']
                   for value in struct.unpack_from('<21h', key, 8 * pack_builder.CURVE_WORDS + 4)]

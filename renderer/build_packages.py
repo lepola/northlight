@@ -13,8 +13,8 @@ Northlight-<v>-<macOS|Windows|Linux>.zip holds one folder of the same name:
                 embed-amd64; Linux: python-build-standalone x86_64-linux-gnu, pruned) and StormLib
                 (scripts/build_stormlib.py; the bytes must equal the pin)
   payload/      d3d9.dll (the renderer), the profile .ini files, the generated
-                appearance-luts/Vibrant.nllutpack colour-volume resource (managed independently from the editable
-                Vibrant.ini), northlight-quality.ini (the
+                appearance-luts/Vibrant.nllutpack and Atmospheric.nllutpack colour-volume resources (each managed
+                independently from the editable look it is baked from), northlight-quality.ini (the
                 player's own is kept; only settings it lacks are appended, commented out); Windows and Linux (the game
                 runs under Wine there, so the payload is the Windows one): DXVK 3.1.1 as renderer-backends/dxvk/dxvk_d3d9.dll
                 and DXVK 2.7.1 (the alternative backend dxvk2) as renderer-backends/dxvk2/dxvk2_d3d9.dll
@@ -76,7 +76,11 @@ PAYLOAD_COMMON = {'celestial-profiles.ini': 'client-config/celestial-profiles.in
 PAYLOAD_PRESETS = {'appearance-presets/Vibrant.ini': 'client-config/appearance-presets/Vibrant.ini',
                    'appearance-presets/Atmospheric.ini': 'client-config/appearance-presets/Atmospheric.ini'}
 WATER_SETTINGS = ('water.ini', 'water-host.ini')
-PAYLOAD_LUT_PACK = 'appearance-luts/Vibrant.nllutpack'
+# The colour tables of each shipped look, baked ahead: the pack, and the look in the payload it is baked from.
+PAYLOAD_LUT_PACKS = {'appearance-luts/Vibrant.nllutpack': 'appearance-presets/Vibrant.ini',
+                     'appearance-luts/Atmospheric.nllutpack': 'appearance-presets/Atmospheric.ini'}
+LUT_PACK_REPORT = ('format_version', 'math_schema_version', 'cube_size', 'voxel_format', 'entry_count', 'packed_bytes',
+                   'uncompressed_table_bytes', 'source_ini_sha256', 'index_sha256', 'pack_sha256')
 PRESET_FILES = {'appearance-presets/Default.ini', *PAYLOAD_PRESETS}
 PRESERVE = set(PAYLOAD_COMMON) | set(WATER_SETTINGS) | PRESET_FILES
 DXVK_BACKEND = 'renderer-backends/dxvk/dxvk_d3d9.dll'
@@ -437,8 +441,13 @@ def combo_readme(platform, wine_steps):
                         'whether that helped.')
 
 
+def build_appearance_lut_packs():
+    """Each shipped look's pack, by its payload path."""
+    return {pack: build_appearance_lut_pack(fp.REPO / PAYLOAD_PRESETS[look]) for pack, look in PAYLOAD_LUT_PACKS.items()}
+
+
 def build(platform, version, dll, variants, out, stormlib_dir, water_core=None, runtime_package=None,
-          appearance_lut_pack=None):
+          appearance_lut_packs=None):
     for manifest in variants.values():
         check_variant_sources(manifest)
     dll_data = dll.read_bytes()
@@ -481,12 +490,12 @@ def build(platform, version, dll, variants, out, stormlib_dir, water_core=None, 
     payload = {n: (fp.REPO / src).read_bytes() for n, src in PAYLOAD_COMMON.items()}
     payload['appearance-presets/Default.ini'] = default_appearance_preset()
     payload.update({n: (fp.REPO / src).read_bytes() for n, src in PAYLOAD_PRESETS.items()})
-    if appearance_lut_pack is None:
-        appearance_lut_pack = build_appearance_lut_pack(
-            fp.REPO / 'client-config/appearance-presets/Vibrant.ini')
-    lut_pack_report = validate_appearance_lut_pack(
-        appearance_lut_pack, source_ini=payload['appearance-presets/Vibrant.ini'], verify_tables=True)
-    payload[PAYLOAD_LUT_PACK] = appearance_lut_pack
+    if appearance_lut_packs is None:
+        appearance_lut_packs = build_appearance_lut_packs()
+    lut_pack_reports = {pack: validate_appearance_lut_pack(appearance_lut_packs[pack], source_ini=payload[look],
+                                                           verify_tables=True)
+                        for pack, look in PAYLOAD_LUT_PACKS.items()}
+    payload.update({pack: appearance_lut_packs[pack] for pack in PAYLOAD_LUT_PACKS})
     if platform in PROXY_PLATFORMS:
         backend, license_text = dxvk_files('dxvk')
         backend2, license_text2 = dxvk_files('dxvk2')
@@ -533,10 +542,8 @@ def build(platform, version, dll, variants, out, stormlib_dir, water_core=None, 
             'dxvk': {k: PINS['dxvk'][k] for k in ('version', 'url', 'sha256')} if platform in PROXY_PLATFORMS else None,
             'dxvk_fallback': {k: PINS['dxvk2'][k] for k in ('version', 'url', 'sha256')} if platform in PROXY_PLATFORMS else None,
             'variants': {n: {'cache_digest': m['cache_digest'], 'files': len(m['files'])} for n, m in sorted(variants.items())},
-            'appearance_lut_pack': {k: lut_pack_report[k] for k in
-                                    ('format_version', 'math_schema_version', 'cube_size', 'voxel_format',
-                                     'entry_count', 'packed_bytes', 'uncompressed_table_bytes',
-                                     'source_ini_sha256', 'index_sha256', 'pack_sha256')},
+            'appearance_lut_packs': {pack: {k: report[k] for k in LUT_PACK_REPORT}
+                                     for pack, report in lut_pack_reports.items()},
             'app_files': {n: sha(fp.REPO / n) for n in APP_FILES}}
     tree.add('BUILD-INFO.json', (json.dumps(info, indent=2) + '\n').encode())
     tree.add('LICENSES/AO-methods.txt', fp.REPO / 'licenses/ao-methods.txt')
@@ -597,15 +604,16 @@ def main():
         reports.append({'platform': 'any', 'file': name, 'sha256': sha(out / name), 'bytes': (out / name).stat().st_size,
                         'variant': manifest['variant'], 'cache_digest': manifest['cache_digest']})
     dll = args.dll or fp.dll()
-    vibrant_ini = fp.REPO / 'client-config/appearance-presets/Vibrant.ini'
-    appearance_lut_pack = build_appearance_lut_pack(vibrant_ini)
-    lut_report = validate_appearance_lut_pack(appearance_lut_pack, source_ini=vibrant_ini.read_bytes())
-    print('Built Vibrant LUT pack:', lut_report['entry_count'], 'unique tables;',
-          lut_report['packed_bytes'], 'packed bytes;',
-          lut_report['uncompressed_table_bytes'], 'table bytes', flush=True)
+    appearance_lut_packs = build_appearance_lut_packs()
+    for pack, look in PAYLOAD_LUT_PACKS.items():
+        lut_report = validate_appearance_lut_pack(appearance_lut_packs[pack],
+                                                  source_ini=(fp.REPO / PAYLOAD_PRESETS[look]).read_bytes())
+        print(f'Built {pack}:', lut_report['entry_count'], 'unique tables;',
+              lut_report['packed_bytes'], 'packed bytes;',
+              lut_report['uncompressed_table_bytes'], 'table bytes', flush=True)
     for platform in list(PLATFORMS) if args.platform == 'all' else [args.platform]:
         reports.append(build(platform, args.version, dll, variants, out, fp.out() / 'stormlib', args.water_core,
-                             args.runtime_package, appearance_lut_pack))
+                             args.runtime_package, appearance_lut_packs))
         print('Built', reports[-1]['file'], reports[-1]['bytes'], 'bytes', flush=True)
     # Platforms built by earlier runs into the same folder (one runtime package each) stay listed.
     listing = out / 'packages.json'

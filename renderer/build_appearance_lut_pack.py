@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Bake the shipped Vibrant.ini into a deterministic, indexed 32^3 RGBA16 pack.
+"""Bake a shipped look (Vibrant.ini, Atmospheric.ini) into a deterministic, indexed 32^3 RGBA16 pack.
 
     python3 renderer/build_appearance_lut_pack.py --input client-config/appearance-presets/Vibrant.ini \
         --output Vibrant.nllutpack
@@ -175,8 +175,8 @@ def build_pack(input_path, *, compiler=None, source_ini=None):
     with tempfile.TemporaryDirectory(prefix='northlight-lut-pack-') as directory:
         work = Path(directory)
         executable = work / ('appearance_lut_pack.exe' if os.name == 'nt' else 'appearance_lut_pack')
-        raw_path = work / 'Vibrant.raw'
-        source_snapshot = work / 'Vibrant.ini'
+        raw_path = work / 'look.raw'
+        source_snapshot = work / 'look.ini'
         source_snapshot.write_bytes(source_ini)
         include_dirs = sorted({ROOT / 'src', *(path.parent for path in (ROOT / 'src').rglob('*.h'))})
         command = _compiler_command(compiler) + ['-std=c++17', '-O2']
@@ -195,7 +195,7 @@ def build_pack(input_path, *, compiler=None, source_ini=None):
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__.split('\n\n')[0])
-    parser.add_argument('--input', type=Path, required=True, help='the exact Vibrant.ini to bake')
+    parser.add_argument('--input', type=Path, required=True, help='the exact look file to bake')
     parser.add_argument('--output', type=Path, required=True, help='output .nllutpack file')
     parser.add_argument('--compiler', help='C++17 compiler command; default: CXX, c++, clang++ or g++')
     args = parser.parse_args(argv)

@@ -121,7 +121,7 @@ int main(int argc,char** argv){
 
     const std::filesystem::path packPath(argv[1]);
     savePack(packPath,makePack({keys[0],keys[2]}));
-    NorthlightGradeLut::Worker packWorker;assert(packWorker.setPackPath(packPath));
+    NorthlightGradeLut::Worker packWorker;assert(packWorker.setPackPaths({packPath}));
     const auto packSerial=packWorker.request(keys);auto packed=waitFor(packWorker,keys);
     assert(packSerial&&packed&&packed->serial==packSerial&&packed->packStatus==NorthlightGradeLut::Pack::Status::Ready);
     assert(packed->packDecodedVolumes==2&&packed->bakedVolumes==1&&packed->cacheHits==0);
@@ -137,10 +137,23 @@ int main(int argc,char** argv){
     const uint64_t tablesOffset=NorthlightGradeLut::Pack::read64(damaged.data()+32);
     damaged[size_t(tablesOffset)]^=1;
     const auto badPackPath=packPath.string()+".bad";savePack(badPackPath,damaged);
-    NorthlightGradeLut::Worker badPackWorker;assert(badPackWorker.setPackPath(badPackPath));
+    NorthlightGradeLut::Worker badPackWorker;assert(badPackWorker.setPackPaths({badPackPath}));
     const auto badSerial=badPackWorker.request(keys);auto recovered=waitFor(badPackWorker,keys);
     assert(badSerial&&recovered&&recovered->serial==badSerial);
     assert(recovered->packStatus==NorthlightGradeLut::Pack::Status::Ready&&recovered->packRejectedTables==1);
     assert(recovered->packDecodedVolumes==1&&recovered->bakedVolumes==2&&recovered->volumes[0]->rgba.size()==NorthlightGradeLut::VolumeWords);
-    std::filesystem::remove(packPath);std::filesystem::remove(badPackPath);
+
+    // A pack to each look: a table comes from whichever holds it, a missing pack is passed over, and the records of
+    // every pack that loaded are counted.
+    const auto secondPath=packPath.string()+".second",absentPath=packPath.string()+".absent";
+    savePack(packPath,makePack({keys[0]}));savePack(secondPath,makePack({keys[2]}));
+    NorthlightGradeLut::Worker looksWorker;assert(looksWorker.setPackPaths({absentPath,packPath,secondPath}));
+    const auto looksSerial=looksWorker.request(keys);auto looks=waitFor(looksWorker,keys);
+    assert(looksSerial&&looks&&looks->packStatus==NorthlightGradeLut::Pack::Status::Ready&&looks->packRecords==2);
+    assert(looks->packDecodedVolumes==2&&looks->bakedVolumes==1);
+    assert(looks->volumes[0]->origin==NorthlightGradeLut::Volume::Origin::Pack&&looks->volumes[2]->origin==NorthlightGradeLut::Volume::Origin::Pack);
+    NorthlightGradeLut::Worker noPackWorker;assert(noPackWorker.setPackPaths({absentPath}));
+    noPackWorker.request(keys);auto unpacked=waitFor(noPackWorker,keys);
+    assert(unpacked&&unpacked->packStatus==NorthlightGradeLut::Pack::Status::Missing&&unpacked->bakedVolumes==3);
+    std::filesystem::remove(packPath);std::filesystem::remove(badPackPath);std::filesystem::remove(secondPath);
 }

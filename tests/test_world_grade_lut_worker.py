@@ -31,7 +31,7 @@ assert 'logGradeEvent("area"' in renderer and 'root_zone=%u' in renderer and 'lu
 assert 'gradeAreaProbePending' in renderer and 'gradeSteadyProbePending' in renderer
 assert 'gradeGpuProbe->beginFrame(hostFrame?hostFrame-1:0,true)' in renderer
 assert 'gradeGpuProbe->mark("composite")' in renderer
-assert 'gradeLutWorker.setPackPath' in renderer and 'appearance-luts' in renderer
+assert 'gradeLutWorker.setPackPaths' in renderer and 'Vibrant.nllutpack' in renderer and 'Atmospheric.nllutpack' in renderer
 assert 'total_pack_decoded=%u' in renderer and 'upload_submit_cpu_max_ms=%.3f' in renderer
 assert 'const bool locked=created&&SUCCEEDED(texture->LockBox' in renderer
 assert 'bool ok=created&&locked;' in renderer

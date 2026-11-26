@@ -46,8 +46,9 @@ class Worker {
     std::vector<Entry> cache_;
     bool started_=false,stopping_=false,pending_=false,working_=false;
     bool packAttempted_=false;
-    std::filesystem::path packPath_;
-    Pack::Index pack_;
+    // The shipped looks' tables, a pack to each look; a table is taken from the first pack that holds it.
+    std::vector<std::filesystem::path> packPaths_;
+    std::vector<Pack::Index> packs_;
     uint64_t serial_=0,workingSerial_=0,clock_=0;
     NorthlightTone::BakeKeys requested_{},workingKeys_{};
     std::shared_ptr<const Result> completed_;
@@ -102,12 +103,24 @@ class Worker {
             {std::lock_guard<std::mutex> lock(mutex_);if(!packAttempted_){packAttempted_=true;loadPack=true;}}
             if(loadPack){
                 const auto indexStarted=std::chrono::steady_clock::now();
-                try{if(!packPath_.empty())pack_.load(packPath_);else pack_.status=Pack::Status::Missing;}
-                catch(...){pack_.status=Pack::Status::Invalid;try{pack_.error="exception while reading pack index";}catch(...){}}
+                try{packs_.resize(packPaths_.size());}catch(...){packs_.clear();}
+                for(size_t p=0;p<packs_.size();++p){
+                    try{packs_[p].load(packPaths_[p]);}
+                    catch(...){packs_[p].status=Pack::Status::Invalid;try{packs_[p].error="exception while reading pack index";}catch(...){}}
+                }
                 result->packIndexMs=std::chrono::duration<double,std::milli>(std::chrono::steady_clock::now()-indexStarted).count();
             }
-            result->packStatus=pack_.status;result->packRecords=static_cast<unsigned>(pack_.records.size());result->packSourceSha=pack_.sourceSha;
-            std::snprintf(result->packError.data(),result->packError.size(),"%s",pack_.error.c_str());
+            // Reported as one: ready when any pack is, with every pack's records; the source and the error are those
+            // of the pack a table last came from, or of the first pack that has either to report.
+            result->packStatus=Pack::Status::Missing;
+            const Pack::Index* reported=nullptr;
+            for(const auto& pack:packs_){
+                if(pack.status==Pack::Status::Ready){
+                    result->packRecords+=static_cast<unsigned>(pack.records.size());
+                    if(result->packStatus!=Pack::Status::Ready){result->packStatus=Pack::Status::Ready;reported=&pack;}
+                }else if(pack.status==Pack::Status::Invalid&&result->packStatus==Pack::Status::Missing){result->packStatus=Pack::Status::Invalid;reported=&pack;}
+            }
+            if(reported){result->packSourceSha=reported->sourceSha;std::snprintf(result->packError.data(),result->packError.size(),"%s",reported->error.c_str());}
             bool complete=true;const char* failure=nullptr;
             for(unsigned i=0;i<NorthlightTone::StopCount;++i){
                 const auto& key=keys[i];if(!key.strength)continue;
@@ -115,15 +128,16 @@ class Worker {
                 if(volume){++result->cacheHits;if(volume->origin==Volume::Origin::Pack)++result->packCacheHits;}
                 else {
                     if(stale(serial)){complete=false;break;}
-                    Pack::Record* record=pack_.find(key);
+                    Pack::Index* pack=nullptr;Pack::Record* record=nullptr;
+                    for(auto& candidate:packs_)if((record=candidate.find(key))){pack=&candidate;break;}
                     if(record){
                         const auto packStarted=std::chrono::steady_clock::now();
                         std::shared_ptr<Volume> decoded;std::string reason;
                         try{decoded=std::make_shared<Volume>();decoded->key=key;decoded->origin=Volume::Origin::Pack;
-                            if(!pack_.decode(*record,decoded->rgba,reason))decoded.reset();}
+                            if(!pack->decode(*record,decoded->rgba,reason))decoded.reset();}
                         catch(...){decoded.reset();reason="exception while decoding table";record->rejected=true;}
                         result->packDecodeMs+=std::chrono::duration<double,std::milli>(std::chrono::steady_clock::now()-packStarted).count();
-                        if(decoded){volume=decoded;++result->packDecodedVolumes;try{retain(volume);}catch(...){}}
+                        if(decoded){volume=decoded;++result->packDecodedVolumes;result->packSourceSha=pack->sourceSha;try{retain(volume);}catch(...){}}
                         else{
                             ++result->packRejectedTables;
                             std::snprintf(result->packError.data(),result->packError.size(),"%s",reason.c_str());
@@ -156,9 +170,9 @@ public:
         wake_.notify_one();if(thread_.joinable())thread_.join();
     }
     ~Worker(){shutdown();}
-    bool setPackPath(const std::filesystem::path& path){
+    bool setPackPaths(std::vector<std::filesystem::path> paths){
         std::lock_guard<std::mutex> lock(mutex_);if(started_||packAttempted_)return false;
-        try{packPath_=path;return true;}catch(...){return false;}
+        packPaths_=std::move(paths);return true;
     }
     uint64_t request(const NorthlightTone::BakeKeys& keys) {
         std::lock_guard<std::mutex> lock(mutex_);
