@@ -4,6 +4,7 @@
     python3 scripts/dev_tuning/settings_menu_preview.py                      # every page, into out/settings-menu-preview
     python3 scripts/dev_tuning/settings_menu_preview.py --height 1440        # at the 1440p UI scale
     python3 scripts/dev_tuning/settings_menu_preview.py --out DIR click=Water scroll=6 shot=water-lower
+    python3 scripts/dev_tuning/settings_menu_preview.py --no-tideglass       # as installed without Tideglass
 
 Builds the real window (src/overlay/settings_panel.cpp) natively against the production settings service
 and draws it in software, so a change to the menu can be looked at in seconds and without a GPU. The
@@ -53,28 +54,32 @@ def build(work):
     return exe
 
 
-def seed(config):
-    """The INI files a fresh combined install has, plus the marker that makes the Water page appear."""
+def seed(config, tideglass=True):
+    """The INI files a fresh combined install has, plus the marker that makes the Water page appear; without
+    Tideglass, what the installer's --no-tideglass leaves: no core and no water settings."""
     config.mkdir()
     shutil.copy(fp.RENDERER / 'windows-package' / 'northlight-quality.ini', config)
-    for name in ('celestial-profiles.ini', 'shadow-range-profiles.ini', 'water.ini', 'water-host.ini'):
+    for name in ('celestial-profiles.ini', 'shadow-range-profiles.ini', *(('water.ini', 'water-host.ini') if tideglass else ())):
         shutil.copy(fp.REPO / 'client-config' / name, config)
     shutil.copytree(fp.REPO / 'client-config' / 'appearance-presets', config / 'appearance-presets')
-    (config / 'water-core.dll').write_bytes(b'')
+    if tideglass:
+        (config / 'water-core.dll').write_bytes(b'')
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument('--out', type=Path, default=fp.out() / 'settings-menu-preview')
     parser.add_argument('--height', type=int, default=1080, help='back buffer height the UI scale is taken from')
+    parser.add_argument('--no-tideglass', action='store_true', help='the window as it is with Tideglass left out')
     parser.add_argument('steps', nargs='*')
     args = parser.parse_args()
-    steps = args.steps or [step for title in PAGES for step in (f'click={title}', f'shot={slug(title)}')]
+    pages = [title for title in PAGES if title != 'Water' or not args.no_tideglass]
+    steps = args.steps or [step for title in pages for step in (f'click={title}', f'shot={slug(title)}')]
     args.out.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(prefix='northlight-menu-preview-') as tmp:
         work = Path(tmp)
         exe = build(work)
-        seed(work / 'config')
+        seed(work / 'config', not args.no_tideglass)
         result = subprocess.run([str(exe), str(work / 'config'), str(args.out), str(args.height), *steps])
     try:
         from PIL import Image

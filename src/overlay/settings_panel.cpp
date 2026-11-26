@@ -902,15 +902,18 @@ struct SettingsPanel::State {
         }
         W::endCard();
         const Field* palette=draft.field(D::Celestial,"Appearance","Palette");
-        if(palette||waterPresetFields().complete()){
+        // Without Tideglass (its core is not installed) there is no Water preset, and the card is the world's alone.
+        const bool waterPreset=waterPresetFields().complete();
+        if(palette||waterPreset){
             if(W::beginCard("looks")){
-                W::cardTitle("Water and world");
+                W::cardTitle(waterPreset?"Water and world":"World");
                 if(beginRows("looks")){
                     waterPresetRow("Water preset");
                     if(palette)row(*palette);
                     ImGui::EndTable();
                 }
-                W::hint("The Water preset sets Tideglass on its own, apart from the quality preset above. Whole-world appearance picks one colour look for everywhere; the By region pages tune single regions.");
+                W::hint(waterPreset?"The Water preset sets Tideglass on its own, apart from the quality preset above. Whole-world appearance picks one colour look for everywhere; the By region pages tune single regions."
+                                   :"Whole-world appearance picks one colour look for everywhere; the By region pages tune single regions.");
             }
             W::endCard();
         }
