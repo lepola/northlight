@@ -83,10 +83,10 @@ class Transcript(tests.Base):
         self.session('2. The same package again', ['', ''], 'install')
         dll = tests.PROXY.replace(b'0.3.162', b'0.3.218')
         self.set_package_payload('d3d9.dll', dll)
-        self.set_package_payload('water-core.dll', b'core 0.1.1')
+        self.set_package_payload('water-core.dll', b'core 0.2.0')
         info = self.pkg_root / 'BUILD-INFO.json'
-        info.write_text(json.dumps({**json.loads(info.read_bytes()), 'version': '0.3.218-tideglass-0.1.1', 'dll_version': '0.3.218',
-                                    'dll_sha256': tests.sha(dll), 'tideglass': {'version': '0.1.1', 'core_sha256': tests.sha(b'core 0.1.1')}}))
+        info.write_text(json.dumps({**json.loads(info.read_bytes()), 'version': '0.3.218-tideglass-0.2.0', 'dll_version': '0.3.218',
+                                    'dll_sha256': tests.sha(dll), 'tideglass': {'version': '0.2.0', 'core_sha256': tests.sha(b'core 0.2.0')}}))
         self.session('3. A newer package over the installed one; the dungeon and sky choices are changed', ['', 'c', '5', '2', ''], 'install')
         self.session('4. Uninstall', ['', ''], 'uninstall')
         self.session('5. Uninstall with nothing left', [client], 'uninstall')
