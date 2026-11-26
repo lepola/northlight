@@ -237,7 +237,7 @@
     "src/shader_program.h": "09fff07e17f18f4c6c0bb68a4415cdf083fdbce966718cea89ea8ee05fd4502a",
     "src/surface_depth.cpp": "3e60cecca70c1451276d596bc13a621c1b6e01e54f10baefe65bfe9df6b62153",
     "src/surface_depth.h": "b1cd06a371e154ee74b4b7d732f370617ab588820fde1945b918e76e705b8cc6",
-    "src/version.h": "bb24fc1a5a5165028a84e455d58c62a12c982e66a4bf03c35305cfa6c5b30be4",
+    "src/version.h": "2810c5dda05bdf3c78a3034115fdfc4589bd0140ced06e576d4198787cdb9176",
     "src/water_environment.h": "d2f1eb1fbda0e49958d48126137007460ba50e40e1631fdca5d1b4d2be12e994",
     "src/world/owned_world_region.h": "af599c53f7cb846b541dd374c64d8d950b29c43a3ac7b7c2b885cab7e933a49c",
     "src/world/owned_world_streaming.h": "5b55c2fae127671ed9cdf691af45cfd122dface92a5765202450aa8719dbc7af",
@@ -274,7 +274,7 @@
     "tools/shader_build.py": "96ed53e738f21dcd0c0f86536c88e1e16901d58934d6dcd5cbf1e43ce9a5deb5",
     "tools/shader_header.py": "0154d161dd86a4e8c320c23081a87d5123f410c9211dea016664d9bea311e189"
   },
-  "revision": "e60a25977ae51b91f029e325ca222bee22446dd0",
+  "revision": "f36325296f36b4d038c2bc15b036c715502694bc",
   "shaders": {
     "ps_ao": {
       "dependencies": {
