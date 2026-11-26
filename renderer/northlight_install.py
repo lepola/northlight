@@ -98,6 +98,8 @@ SKY_CHOICE = 'northlight-sky.json'
 SKY_MODES = ('current', 'experimental-preserve')
 SKY_LABELS = {'current': "Northlight's sky", 'experimental-preserve': 'more of your HD sky (experimental)'}
 RECEIPT = 'northlight-install.json'   # in the game folder, through the transaction: the versions this installer put there
+# What a combined package adds to the game folder for Tideglass. --no-tideglass leaves these out.
+TIDEGLASS_FILES = ('water-core.dll', 'water.ini', 'water-host.ini')
 RECEIPT_FORMAT = 'northlight-install/1'
 # Installs made before the receipt existed: each DLL carries its version in its start-up log line.
 VERSION_IN_DLL = {'northlight': re.compile(rb'Northlight renderer (\d+(?:\.\d+)+)'),
@@ -439,14 +441,13 @@ class Installer:
     """install / uninstall / status. The hooks (running, free_bytes, ram, identify_chain, run, ask,
     search_dirs) are attributes so tests can replace them."""
 
-    def __init__(self, package, platform=None, yes=False, out=None):
+    def __init__(self, package, platform=None, yes=False, out=None, tideglass=None):
         self.pkg = package
         self.platform = platform or package.platform
-        tideglass = package.info.get('tideglass') or {}
-        self.product_name = 'Northlight + Tideglass' if tideglass else 'Northlight renderer'
-        # Combined packages before Tideglass 0.1.0 carried one beta label instead of both parts' versions.
-        self.title = (f"Northlight {package.info.get('dll_version')} + Tideglass {tideglass['version']}"
-                      if tideglass.get('version') else f'{self.product_name} {package.version}')
+        # tideglass: False leaves the package's Tideglass out (--no-tideglass), True installs it, None does as the
+        # last install in the game folder did (with it, on a first install).
+        self.asked_tideglass = tideglass
+        self.use_tideglass(tideglass is not False)
         self.yes = yes
         self.out = out or sys.stdout
         self.log = None
@@ -458,9 +459,28 @@ class Installer:
         self.ram = None   # installed-memory probe; None = install_world_cache.total_memory
         self.search_dirs = [package.root.parent, package.root, Path.home() / 'Downloads']
         self.memory = None   # user_state_file() in a real run; None remembers nothing
+        INSTALL.emit = lambda *parts, **_: self.say(*parts)   # the transaction engine's lines reach the log too
+
+    def use_tideglass(self, wanted):
+        """Set what this run installs of the package's Tideglass. Left out, a combined package is installed as the
+        Northlight renderer alone: no core, no water settings, and the skies and fog built as for Northlight."""
+        package = self.pkg
+        self.tideglass = tideglass = (package.info.get('tideglass') or {}) if wanted else {}
+        self.left_out = TIDEGLASS_FILES if package.info.get('tideglass') and not wanted else ()
+        self.product_name = 'Northlight + Tideglass' if tideglass else 'Northlight renderer'
+        # Combined packages before Tideglass 0.1.0 carried one beta label instead of both parts' versions.
+        self.title = (f"Northlight {package.info.get('dll_version')} + Tideglass {tideglass['version']}"
+                      if tideglass.get('version') else
+                      f"Northlight {package.info.get('dll_version')}" if self.left_out else
+                      f'{self.product_name} {package.version}')
         self.offers = {'northlight': package.info.get('dll_version') or self.pkg.version,
                        'tideglass': tideglass.get('version') or ('' if tideglass else None)}
-        INSTALL.emit = lambda *parts, **_: self.say(*parts)   # the transaction engine's lines reach the log too
+
+    def left_out_before(self, client):
+        """Whether the last install in this game folder left Tideglass out of a package that had it."""
+        receipt = read_json(Path(client) / RECEIPT)
+        return (isinstance(receipt, dict) and receipt.get('format') == RECEIPT_FORMAT and
+                bool(receipt.get('tideglass_left_out')))
 
     # ---- output ----
 
@@ -647,7 +667,7 @@ class Installer:
         if not previous.get('northlight') or (previous.get('tideglass') == '' and self.offers['tideglass']):
             return 'update'   # an install too old to carry its versions
         if (previous.get('tideglass') is None) != (self.offers['tideglass'] is None):
-            return 'update'   # Tideglass is being added, or left as it is by a Northlight-only package
+            return 'update'   # Tideglass is being added, taken out, or left as it is by a Northlight-only package
         return 'same' if key(self.offers) == key(previous) else 'older' if key(self.offers) < key(previous) else 'update'
 
     def prompt_client(self):
@@ -1032,7 +1052,7 @@ class Installer:
         return found
 
     def art_letter(self, client, locale, foreign):
-        if not self.pkg.info.get('tideglass'):
+        if not self.tideglass:
             return None if foreign else LETTER
         data = client_archives.data_dir(client)
         local = client_archives.locale_dir(client, locale)
@@ -1081,7 +1101,7 @@ class Installer:
         The action per target is installed (absent before), replaced (another layer of ours) or kept-identical.
         A target that exists in another letter case (Data/Patch-Z.MPQ on Linux) keeps its name on disk, so that
         Wine never sees two files."""
-        combo = bool(self.pkg.info.get('tideglass'))
+        combo = bool(self.tideglass)
         if not combo and not (client / CACHE / 'fog').is_dir():
             return {}, 'there is no outdoor lighting, and it needs the fog zones from it', {}
         work = self.pkg.work / 'art-layer'
@@ -1231,10 +1251,12 @@ class Installer:
     def install(self, client, locale=None, cache=None, backend=None, art=None, world_cache=True, jobs=None,
                 instances=None, sky=None, raised_air=None):
         client = self.resolve_client(client)
+        if self.asked_tideglass is None and self.pkg.info.get('tideglass') and self.left_out_before(client):
+            self.use_tideglass(False)
         if art is None:
             art = True
         if raised_air is None:
-            raised_air = bool(self.pkg.info.get('tideglass'))
+            raised_air = bool(self.tideglass)
         plan = self.plan_install(client, locale, cache, backend, art, world_cache, instances, sky, raised_air)
         with locked(client):   # S5: taken once the read-only checks have passed
             return self.apply_install(plan, jobs)
@@ -1282,11 +1304,12 @@ class Installer:
         backend = INSTALL.resolve_backend(client, backend)   # called once; payload_plan takes the result
         locale = self.preflight(client, locale)
         self.check_payload(backend)
-        if self.pkg.info.get('tideglass'):
+        if self.tideglass:
             self.check_water_client(client)
             self.check_water_files(client, raised_air)
         elif raised_air:
-            raise Refusal('--raised-air requires the combined Northlight and Tideglass package')
+            raise Refusal('--raised-air needs Tideglass: it cannot go with --no-tideglass' if self.left_out else
+                          '--raised-air requires the combined Northlight and Tideglass package')
         marker = INSTALL.safe_path(client, INSTALL.LEGACY_DXVK3_MARKER)   # a linked renderer-backends folder is refused here
         if self.proxy and marker.is_file():
             self.say('Note: Northlight no longer switches to DXVK 2.7.1 by itself; the leftover '
@@ -1395,8 +1418,8 @@ class Installer:
         layers generated from the game files are not known before they are built."""
         emit, INSTALL.emit = INSTALL.emit, lambda *parts, **_: None
         try:
-            plan = INSTALL.payload_plan(client, self.pkg.root, backend=backend)[0] if self.proxy else \
-                INSTALL.payload_plan(client, self.pkg.root, proxy=False)[0]
+            plan = INSTALL.payload_plan(client, self.pkg.root, backend=backend, leave_out=self.left_out)[0] if self.proxy else \
+                INSTALL.payload_plan(client, self.pkg.root, proxy=False, leave_out=self.left_out)[0]
         except (ValueError, OSError):
             return None
         finally:
@@ -1406,7 +1429,7 @@ class Installer:
     def plan_lines(self, p):
         """What apply_install is about to do, in a player's words."""
         client, relation, mode, keys = p['client'], p['relation'], p['mode'], p['instances']
-        combo = bool(self.pkg.info.get('tideglass'))
+        combo = bool(self.tideglass)
         lines = ['']
         if relation == 'new':
             lines.append(f'Ready to install {self.title}. It will:')
@@ -1465,6 +1488,13 @@ class Installer:
             lines.append(f'  - build skies, weather and scenery from your game files, with {SKY_LABELS[p["sky"]]}')
         if p['raised_air']:
             lines.append('  - prepare outdoor fog for Dalaran and Telredor')
+        if self.left_out:
+            had = (p['previous'] or {}).get('tideglass') is not None
+            lines.append('  - take out the Tideglass water installed before (water-core.dll); your water.ini and '
+                         'water-host.ini are kept. The game draws its own water' if had else
+                         '  - leave out the Tideglass water' +
+                         (', as chosen before' if self.asked_tideglass is None else '') +
+                         ': the game draws its own water. Installing with --tideglass adds it')
         if relation != 'new':
             lines.append('  - keep your settings (northlight-quality.ini' + (', water.ini, water-host.ini' if combo else '') +
                          ') and any look preset you edited')
@@ -1542,8 +1572,9 @@ class Installer:
             if p['sky'] != 'current' or (client / SKY_CHOICE).exists():
                 layer[SKY_CHOICE] = (json.dumps({'mode': p['sky']}) + '\n').encode()
         layer.update(raised)
-        layer[RECEIPT] = (json.dumps({'format': RECEIPT_FORMAT, **self.offers, 'package': self.pkg.version}, indent=2) + '\n').encode()
-        if self.pkg.info.get('tideglass'):
+        layer[RECEIPT] = (json.dumps({'format': RECEIPT_FORMAT, **self.offers, 'package': self.pkg.version,
+                                      **({'tideglass_left_out': True} if self.left_out else {})}, indent=2) + '\n').encode()
+        if self.tideglass:
             # Include newly staged art patches in the same precedence order as the
             # mounted client. Files in layer become visible only after the transaction.
             paths = client_archives.chain(client, locale=locale, pending=actions)
@@ -1556,9 +1587,10 @@ class Installer:
             if record:
                 backups.append(record)
                 payload = 'installed (mods/d3d9.dll preloaded from dlls.txt)'
-            plan, staged, _ = INSTALL.payload_plan(client, self.pkg.root, extra=layer, proxy=False)
+            plan, staged, _ = INSTALL.payload_plan(client, self.pkg.root, extra=layer, proxy=False, leave_out=self.left_out)
         else:
-            plan, staged, _ = INSTALL.payload_plan(client, self.pkg.root, backend=p['backend'], extra=layer)
+            plan, staged, _ = INSTALL.payload_plan(client, self.pkg.root, backend=p['backend'], extra=layer,
+                                                   leave_out=self.left_out)
         files = [e['path'] for e in plan if e['path'] not in layer]
         if plan:
             self.still_closed('installing the renderer files')
@@ -1590,7 +1622,7 @@ class Installer:
             import install_world_cache as iwc
             for warning in report['archive_warnings']:
                 self.say('    ' + iwc.archive_warning_text(warning))
-        details = not self.pkg.info.get('tideglass') or self.log is None
+        details = not self.tideglass or self.log is None
         self.say(f'  Skies, weather and scenery: {report["art_layer"]}', console=details or bool(why))
         self.say(f'  Renderer: {payload}' + (f' (graphics backend {p["backend"]})' if self.proxy else ''), console=details)
         if freed:
@@ -1605,7 +1637,7 @@ class Installer:
             for line in WINE_STEPS:
                 self.say(line)
         self.say('Start WoW as usual.')
-        if self.pkg.info.get('tideglass'):
+        if self.tideglass:
             self.say('To update later, download the new package and run its installer on this game folder; your '
                      'settings are kept.')
             self.say('To undo this install, close WoW and run ' +
@@ -1800,6 +1832,9 @@ def main(argv=None):
     art.add_argument('--no-art-layer', dest='art_layer', action='store_false', help='skip generating lighting and scenery MPQs')
     ap.set_defaults(art_layer=None)
     ap.add_argument('--raised-air', action=argparse.BooleanOptionalAction, default=None, help='generate extra outdoor fog coverage for Dalaran and Telredor')
+    ap.add_argument('--tideglass', action=argparse.BooleanOptionalAction, default=None,
+                    help='--no-tideglass installs the Northlight renderer and leaves the Tideglass water out, for the '
+                         'game\'s own water or one of your own; a later run keeps that choice until --tideglass')
     ap.add_argument('--no-world-cache', action='store_true', help='install the renderer without a world cache')
     ap.add_argument('--instances', metavar='SPEC', help='dungeon and raid world cache groups to have: numbers 1-6, keys, all or none '
                     '(default: asked; the groups the client has, else none)')
@@ -1819,7 +1854,7 @@ def main(argv=None):
         print('ERROR: run this from an unpacked Northlight package (Install Northlight.command, Install.cmd or install.sh).',
               file=sys.stderr)
         return 2
-    installer = Installer(Package(root, platform), platform, yes=args.yes)
+    installer = Installer(Package(root, platform), platform, yes=args.yes, tideglass=args.tideglass)
     installer.memory = user_state_file()
     installer.open_log(args.action)
     try:

@@ -1243,6 +1243,67 @@ class Install(Base):
         self.assertEqual(tree(self.client), {**before, 'water.ini': settings.read_bytes()})
         self.assertEqual(settings.read_bytes(), b'[Water]\r\nWaveCrestShape=0.5\r\n')
 
+    def test_no_tideglass_installs_the_renderer_alone_and_a_rerun_keeps_the_choice(self):
+        self.make_water_package()
+        before = tree(self.client)
+        water = ('water-core.dll', 'water.ini', 'water-host.ini', fi.WATER_ARCHIVE_LIST, 'raised-fog/Northrend.rfs')
+        installer = self.installer(tideglass=False)
+        installer.install(self.client)
+        said = installer.out.getvalue()
+        self.assertIn('Northlight 0.3.217: installed.', said)
+        self.assertIn('leave out the Tideglass water: the game draws its own water', said)
+        self.assertEqual([name for name in water if (self.client / name).exists()], [])
+        self.assertEqual(json.loads((self.client / fi.RECEIPT).read_bytes()),
+                         {'format': fi.RECEIPT_FORMAT, 'northlight': '0.3.217', 'tideglass': None,
+                          'package': '0.3.162-test', 'tideglass_left_out': True})
+        self.assertEqual(installer.installed(self.client), {'northlight': '0.3.217', 'tideglass': None})
+        # Run again as a player would for a repair or an update, with no option: still without it.
+        again = self.installer()
+        again.install(self.client)
+        self.assertIn('leave out the Tideglass water, as chosen before', again.out.getvalue())
+        self.assertEqual([name for name in water if (self.client / name).exists()], [])
+        # --tideglass adds it.
+        added = self.installer(tideglass=True)
+        added.install(self.client)
+        self.assertIn('Northlight 0.3.217 + Tideglass 0.1.0', added.out.getvalue())
+        self.assertEqual((self.client / 'water-core.dll').read_bytes(), b'core')
+        self.assertNotIn('tideglass_left_out', json.loads((self.client / fi.RECEIPT).read_bytes()))
+        self.installer().uninstall(self.client)
+        self.assertEqual(tree(self.client), before)
+
+    def test_no_tideglass_takes_out_an_installed_core_and_keeps_the_settings(self):
+        self.make_water_package()
+        before = tree(self.client)
+        self.installer().install(self.client)
+        settings = self.client / 'water.ini'
+        settings.write_bytes(b'[Water]\r\nWaveCrestShape=0.5\r\n')
+        installer = self.installer(tideglass=False)
+        installer.install(self.client)
+        self.assertIn('take out the Tideglass water installed before (water-core.dll)', installer.out.getvalue())
+        self.assertFalse((self.client / 'water-core.dll').exists())
+        self.assertEqual(settings.read_bytes(), b'[Water]\r\nWaveCrestShape=0.5\r\n')
+        self.assertTrue((self.client / 'water-host.ini').is_file())
+        self.assertEqual(installer.installed(self.client), {'northlight': '0.3.217', 'tideglass': None})
+        self.installer().uninstall(self.client)
+        self.assertEqual(tree(self.client), {**before, 'water.ini': settings.read_bytes()})
+
+    def test_no_tideglass_leaves_another_water_core_alone(self):
+        self.make_water_package()
+        own = self.client / 'water-core.dll'
+        own.write_bytes(b'a water of their own')
+        before = tree(self.client)
+        self.installer(tideglass=False).install(self.client)
+        self.assertEqual(own.read_bytes(), b'a water of their own')
+        self.installer().uninstall(self.client)
+        self.assertEqual(tree(self.client), before)
+
+    def test_no_tideglass_refuses_raised_air_and_writes_nothing(self):
+        self.make_water_package()
+        before = tree(self.client)
+        with self.assertRaisesRegex(fi.Refusal, 'cannot go with --no-tideglass'):
+            self.installer(tideglass=False).install(self.client, raised_air=True)
+        self.assertEqual(tree(self.client), before)
+
     def test_combo_reuses_free_patch_pair_and_restores_foreign_art(self):
         self.make_water_package()
         foreign = self.client / 'Data/patch-z.mpq'

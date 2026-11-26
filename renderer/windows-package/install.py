@@ -440,7 +440,7 @@ def resolve_backend(client, backend=None):
 def config_bytes(backend):
     return ('[Renderer]\r\nBackend='+backend+'\r\n').encode('ascii')
 
-def payload_plan(client, package, use_existing=False, backend=None, extra=None, proxy=True):
+def payload_plan(client, package, use_existing=False, backend=None, extra=None, proxy=True, leave_out=()):
     """(plan, staged, foreign): the entries that bring client to the package payload.
     backend is already resolved (resolve_backend; None only with proxy=False, which writes no ini): 'dxvk'/'dxvk2'/'native'
     writes Backend=<backend>; 'legacy' (like use_existing) selects a foreign d3d9.dll kept as the legacy backend.
@@ -448,7 +448,9 @@ def payload_plan(client, package, use_existing=False, backend=None, extra=None, 
     client copy of it is removed through the transaction (so the renderer never loads a copy this install did not
     put there); an installed ini whose Backend already is the resolved one is left untouched; a present file that does not match the manifest is always refused.
     extra {client path: bytes} adds staged files (the art layer). proxy=False (macOS, where
-    migrate_mac_proxy owns d3d9.dll and northlight-renderer.ini) leaves the game-folder d3d9.dll alone."""
+    migrate_mac_proxy owns d3d9.dll and northlight-renderer.ini) leaves the game-folder d3d9.dll alone.
+    leave_out names payload files this install does without: none is written, and a copy an earlier install put in
+    the game folder is removed again unless it is a settings file, which is the player's."""
     if backend is None and proxy: raise ValueError('payload_plan needs a resolved backend (resolve_backend)')
     if backend == 'legacy': use_existing = True
     first, staged, config, foreign = switch_plan(client, use_existing) if proxy else ([], {}, None, False)
@@ -470,14 +472,21 @@ def payload_plan(client, package, use_existing=False, backend=None, extra=None, 
     if proxy and backend is not None and not keep_ini and CONFIG not in [e['path'] for e in manifest]:
         manifest = manifest+[{'path':CONFIG, 'sha256':None}]
     emit('Verifying package and comparing installed files...', flush=True)
-    installed_preset_hashes = {}
+    installed_preset_hashes, installed_left_out = {}, {}
     for _, record in transactions(client):
         for entry in record.get('files', []):
             if entry.get('path') in APPEARANCE_PRESETS:
                 installed_preset_hashes.setdefault(entry['path'], set()).update(afters(entry))
+            if entry.get('path') in leave_out:
+                installed_left_out.setdefault(entry['path'], set()).update(afters(entry))
     for e in manifest:
         if e['path'] == CONFIG and keep_ini: continue
         dst = safe_path(client, e['path'])
+        if e['path'] in leave_out:
+            if dst.exists() and not e.get('preserve') and sha(dst) in installed_left_out.get(e['path'], set()):
+                emit('Removing', e['path'], '(left out of this install).', flush=True)
+                plan.append({'path':e['path'], 'before':sha(dst), 'after':None})
+            continue
         if e['sha256'] is not None:
             src = safe_path(package/'payload', e['path'])
             other = other_dxvk(e['path'], selected)

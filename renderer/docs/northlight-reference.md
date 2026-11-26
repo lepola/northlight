@@ -14,6 +14,7 @@ Pass options to `Install.cmd` or `bash install.sh` from the extracted package. C
 | Try your HD client's sky artwork | Choose experimental sky preservation or pass `--sky experimental-preserve`. A second moon can appear on some skies. Use `--sky current` to restore the default. |
 | Skip the large outdoor lighting build | Pass `--no-world-cache`. Static shadows and indirect light use that cache. Without existing fog tables, only the applicable scenery repairs and raised-area coverage are generated. |
 | Skip generating the lighting and scenery patch, or raised-area coverage | Use `--no-art-layer` or `--no-raised-air`, respectively. |
+| Install Northlight without the Tideglass water | Pass `--no-tideglass`, for the game's own water or a water of your own. The core and the water settings are left out; a Tideglass this installer put there earlier is removed and your `water.ini` and `water-host.ini` are kept. Later runs keep the choice until you pass `--tideglass`. |
 | Refresh after changing game archives or game language | Rerun the installer against the same game folder. |
 | Diagnose a startup issue | Read `northlight-renderer.log` and `water-core.log` in the game folder. Installation errors go to `logs/` in the extracted package. |
 
