@@ -4,7 +4,8 @@
 //
 //     settings_menu_preview <config folder> <output folder> <back buffer height> <step>...
 //
-// Steps run in order:  click=<label>  clicknear=<label>:<dx>,<dy>  drag=<label>:<dx>,<dy>  type=<text>  scroll=<wheel notches>  wait=<frames>  shot=<name>
+// Steps run in order:  click=<label>  clicknear=<label>:<dx>,<dy>  rclicknear=<label>:<dx>,<dy>  drag=<label>:<dx>,<dy>
+// dragnear=<label>:<x>,<y>,<dx>,<dy>  altdragnear=(the same, Alt held)  type=<text>  scroll=<wheel notches>  wait=<frames>  shot=<name>
 // A label is what the item shows ("Water", "Save"); ImGui's test hooks report where each one was drawn.
 #include <chrono>
 #include <cstdarg>
@@ -158,6 +159,27 @@ struct Preview {
         io.AddMouseButtonEvent(0,false);frames(12);
         return true;
     }
+    // Presses (x,y) pixels at scale 1 from the item's centre and releases after moving by (dx,dy): the way to a point
+    // or handle inside a graph. With alt, the Alt key is held throughout.
+    bool dragNear(const std::string& label,float x,float y,float dx,float dy,bool alt){
+        if(!pointAt(label))return false;
+        ImGuiIO& io=ImGui::GetIO();
+        mouse.x+=x*scale;mouse.y+=y*scale;io.AddMousePosEvent(mouse.x,mouse.y);frames(2);
+        if(alt)io.AddKeyEvent(ImGuiMod_Alt,true);
+        io.AddMouseButtonEvent(0,true);frames(2);
+        for(int step=1;step<=8;++step){io.AddMousePosEvent(mouse.x+dx*scale*step/8,mouse.y+dy*scale*step/8);frames(2);}
+        io.AddMouseButtonEvent(0,false);frames(12);
+        if(alt)io.AddKeyEvent(ImGuiMod_Alt,false);
+        return true;
+    }
+    bool rightClickNear(const std::string& label,float dx,float dy){
+        if(!pointAt(label))return false;
+        ImGuiIO& io=ImGui::GetIO();
+        mouse.x+=dx*scale;mouse.y+=dy*scale;io.AddMousePosEvent(mouse.x,mouse.y);frames(2);
+        io.AddMouseButtonEvent(1,true);frames(2);
+        io.AddMouseButtonEvent(1,false);frames(6);
+        return true;
+    }
     void shot(const std::filesystem::path& path){
         frames(2);
         Picture picture(width,height);picture.backdrop();
@@ -190,6 +212,16 @@ int main(int argc,char** argv){
                 const auto colon=value.rfind(':');float dx=0,dy=0;
                 if(colon==value.npos||std::sscanf(value.c_str()+colon+1,"%f,%f",&dx,&dy)!=2){std::fprintf(stderr,"clicknear needs <label>:<dx>,<dy>\n");status=2;}
                 else if(!preview.clickNear(value.substr(0,colon),dx,dy)){std::fprintf(stderr,"nothing labelled \"%s\" is drawn\n",value.substr(0,colon).c_str());status=1;}
+            }
+            else if(verb=="dragnear"||verb=="altdragnear"){
+                const auto colon=value.rfind(':');float x=0,y=0,dx=0,dy=0;
+                if(colon==value.npos||std::sscanf(value.c_str()+colon+1,"%f,%f,%f,%f",&x,&y,&dx,&dy)!=4){std::fprintf(stderr,"%s needs <label>:<x>,<y>,<dx>,<dy>\n",verb.c_str());status=2;}
+                else if(!preview.dragNear(value.substr(0,colon),x,y,dx,dy,verb=="altdragnear")){std::fprintf(stderr,"nothing labelled \"%s\" is drawn\n",value.substr(0,colon).c_str());status=1;}
+            }
+            else if(verb=="rclicknear"){
+                const auto colon=value.rfind(':');float dx=0,dy=0;
+                if(colon==value.npos||std::sscanf(value.c_str()+colon+1,"%f,%f",&dx,&dy)!=2){std::fprintf(stderr,"rclicknear needs <label>:<dx>,<dy>\n");status=2;}
+                else if(!preview.rightClickNear(value.substr(0,colon),dx,dy)){std::fprintf(stderr,"nothing labelled \"%s\" is drawn\n",value.substr(0,colon).c_str());status=1;}
             }
             else if(verb=="type"){ImGui::GetIO().AddInputCharactersUTF8(value.c_str());preview.frames(4);}
             else if(verb=="scroll"){ImGui::GetIO().AddMouseWheelEvent(0,-float(std::atof(value.c_str())));preview.frames(4);}

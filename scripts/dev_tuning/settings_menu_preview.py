@@ -12,8 +12,9 @@ It shows layout, wording and how controls respond. Fonts and colours match the g
 scene, input routing and Direct3D do not exist here and still need a look in game.
 
 Steps after the options run in order: click=<label> clicknear=<label>:<dx>,<dy> (a control without a label,
-by its offset from one that has) drag=<label>:<dx>,<dy> type=<text> scroll=<notches>
-wait=<frames> shot=<name>.
+by its offset from one that has) rclicknear=<label>:<dx>,<dy> (the same with the right button)
+drag=<label>:<dx>,<dy> dragnear=<label>:<x>,<y>,<dx>,<dy> (press at an offset, release after moving)
+altdragnear=... (the same with Alt held) type=<text> scroll=<notches> wait=<frames> shot=<name>.
 Needs clang++; Pillow converts the pictures to PNG when it is installed.
 """
 import argparse
