@@ -231,6 +231,6 @@ checks['cost: sample frames only (sampledDrawTimers/sampled), plain CpuScopes; d
     and 'double(cpuNameDecide)*double(nameDecideCalls)/double(nameDecideTimed)*us' in r and 'decideUs=%.1f markUs=%.1f unmarkUs=%.1f cpuUs=%.1f' in fl and 'cpuNameDecide=cpuNameMark=cpuNameUnmark=0;' in r
     and all(x not in r for x in ('CountedScope','qpcPairTicks','NAMEMASK timer calibration','cpuNameComposite','takeNameMaskQpc')) and 'netTicks' not in h)
 checks['no duplicate draw, no GPU pair timer: names are marked by the game\'s own draw']=('nameMarkDraw' not in r and 'nameGpu' not in r and 'NorthlightGpuPairTimer' not in r and not (fp.REPO/'src'/'core'/'gpu_pair_timer.h').exists())
-checks['banner: 0.3.217 with the name mask']='logf("Northlight renderer 0.3.217;' in r and "floating names keep the game's colour (stencil mask); instance map names with an apostrophe or a space reach the world context; lamps in view first, screen-coherent lamp batches (16-lamp passes); backend=%s" in r
+checks['banner: 0.3.218 with the name mask']='logf("Northlight renderer 0.3.218;' in r and "floating names keep the game's colour (stencil mask); instance map names with an apostrophe or a space reach the world context; lamps in view first, screen-coherent lamp batches (16-lamp passes); backend=%s" in r
 for n,ok in checks.items():print(('PASS ' if ok else 'FAIL ')+n)
 assert all(checks.values())
