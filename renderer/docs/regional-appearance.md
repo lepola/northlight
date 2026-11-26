@@ -73,7 +73,7 @@ compromise; a separate Dawn anchor would be a fourth set of values and of refere
 2. **Bake keys.** The grade at each anchor is rounded to a fixed precision and frozen into a key (`makeBakeKey`). A
    grade that changes nothing, or has strength zero, becomes the empty key and costs nothing.
 3. **Tables.** A background worker turns each key into a 32×32×32 table of 16-bit colours, about 256 KiB
-   (`src/sky/grade_lut_worker.h`). It first looks in the bundled packs, then bakes. A newer request replaces a queued
+   (`src/sky/grade_lut_worker.h`). It first looks in any table pack beside the game, then bakes. A newer request replaces a queued
    one, so a fast flight across regions bakes where the player is now. Twelve tables stay in memory.
 4. **The frame.** The final world composite samples the table after fog and water and before the interface. It
    blends the two anchors the clock sits between, and cross-fades over 180 ms when the region's keys change
@@ -82,13 +82,16 @@ compromise; a separate Dawn anchor would be a fourth set of values and of refere
 5. **Without volume textures.** A device that cannot create the table texture falls back to the tone curves alone,
    from a small one-dimensional table. Vibrance and the colour ranges are then left out.
 
-## The bundled table packs
+## Table packs
 
-Baking a bundled look's tables on first entry to each region would show a brief ungraded moment, so the installer
-ships them ready-made, a pack to each look: `appearance-luts/Vibrant.nllutpack` and
-`appearance-luts/Atmospheric.nllutpack` (`renderer/build_appearance_lut_pack.py` writes one from a look file,
-`src/sky/grade_lut_pack.h` reads it). The worker opens both and takes a table from whichever holds its key, so a
-missing pack only means those tables are baked.
+The packages carry no tables: the worker bakes a region's three in about 20 ms as it is entered, and against tables
+read ready-made from a file that showed no difference in frame times, only a first graded frame some 15 to 20 ms
+later. Both looks' tables ready-made were 65 MiB, most of the download.
+
+The renderer still reads a pack when one is there, a pack to each look: `appearance-luts/Vibrant.nllutpack` and
+`appearance-luts/Atmospheric.nllutpack` in the game folder (`renderer/build_appearance_lut_pack.py` writes one from a
+look file, `src/sky/grade_lut_pack.h` reads it). The worker takes a table from whichever holds its key, so a missing
+pack only means those tables are baked.
 
 - The file is a 104-byte header, an index and the tables. Each index record holds the key's hash, the full key, the
   table's offset and length, and its SHA-256, which is checked before a table is used.
@@ -96,8 +99,7 @@ missing pack only means those tables are baked.
   together: a pack from another version is refused as a whole and the renderer bakes instead. Version 2 introduced
   the seven colour ranges.
 - A key is found only by exact match, so a player who edits a region simply gets a baked table for it.
-- A pack belongs to the exact look file it was baked from (its header holds that file's SHA-256), and packaging
-  bakes both from the looks it ships, so a change to a look or to the bake arithmetic reaches the pack with it.
+- A pack belongs to the exact look file it was baked from (its header holds that file's SHA-256).
 
 ## Editing looks outside the game
 
@@ -111,7 +113,7 @@ nothing is graded twice.
 ## Checks
 
 - `tests/test_world_tone_curves.cpp`: the curve, range and key arithmetic, and the bake version.
-- `tests/test_grade_lut_pack.cpp` and `tests/test_appearance_lut_pack.py`: the pack format, and the shipped Vibrant
-  and Atmospheric packs against the renderer's own baker.
+- `tests/test_grade_lut_pack.cpp` and `tests/test_appearance_lut_pack.py`: the pack format, and a pack built from
+  a look against the renderer's own baker.
 - `tests/test_world_grade_lut_worker.cpp`: the background worker.
 - `tests/test_appearance_presets.cpp`: look files and how a look combines with personal settings.

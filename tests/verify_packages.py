@@ -93,7 +93,7 @@ def verify_installer(path):
     launchers = bp.launchers(plat, info['version'])
     manifest = json.loads(files['payload-manifest.json'])
     payload = {e['path']: e for e in manifest}
-    expected_payload = set(bp.PAYLOAD_COMMON) | bp.PRESET_FILES | set(bp.PAYLOAD_LUT_PACKS)
+    expected_payload = set(bp.PAYLOAD_COMMON) | bp.PRESET_FILES
     if plat in bp.PROXY_PLATFORMS:
         expected_payload.update(('d3d9.dll', bp.DXVK_BACKEND, bp.DXVK2_BACKEND,
                                  'renderer-backends/dxvk/LICENSE', 'renderer-backends/dxvk2/LICENSE'))
@@ -125,17 +125,6 @@ def verify_installer(path):
     check(problems, sha(dll) == info['dll_sha256'] and bp.MARKER.search(dll) is not None, 'payload/d3d9.dll')
     for p, e in payload.items():
         check(problems, sha(files.get('payload/' + p, b'')) == e['sha256'], f'payload/{p} does not match its manifest')
-    for pack, look in bp.PAYLOAD_LUT_PACKS.items():
-        try:
-            lut_report = bp.validate_appearance_lut_pack(
-                files['payload/' + pack], source_ini=files['payload/' + look], verify_tables=True)
-            lut_info = info['appearance_lut_packs'][pack]
-            check(problems, all(lut_report[k] == lut_info.get(k) for k in bp.LUT_PACK_REPORT),
-                  f'{pack} metadata differs from BUILD-INFO')
-            check(problems, pack in payload and not payload[pack].get('preserve'),
-                  f'{pack} must be a managed payload updated independently of personal preset edits')
-        except (KeyError, ValueError) as exc:
-            problems.append(f'{pack} is invalid: {exc}')
     settings = set(bp.PAYLOAD_COMMON) | bp.PRESET_FILES
     if 'tideglass' in info:
         settings.update(bp.WATER_SETTINGS)

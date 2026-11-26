@@ -46,7 +46,8 @@ class Worker {
     std::vector<Entry> cache_;
     bool started_=false,stopping_=false,pending_=false,working_=false;
     bool packAttempted_=false;
-    // The shipped looks' tables, a pack to each look; a table is taken from the first pack that holds it.
+    // Ready-made tables, a pack to each look, when the game folder holds any (the packages carry none); a table is
+    // taken from the first pack that holds it.
     std::vector<std::filesystem::path> packPaths_;
     std::vector<Pack::Index> packs_;
     uint64_t serial_=0,workingSerial_=0,clock_=0;
