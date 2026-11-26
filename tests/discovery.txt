@@ -13,6 +13,8 @@ test_ao_fold.py
 test_ao_methods.py
 test_ao_rotation_stripes.py
 test_ao_texel_snap.py
+test_appearance_lut_pack.py
+test_appearance_presets.py
 test_art_layer.py
 test_async_memory_diagnostics.py
 test_backend_proxy.py
@@ -76,6 +78,7 @@ test_gi_quality.py
 test_gi_settings_dependencies.py
 test_gpu_budget.py
 test_gpu_budget_wiring.py
+test_grade_lut_pack.py
 test_gtao_grazing.py
 test_horizon_haze.py
 test_index_working_set.py
@@ -143,6 +146,7 @@ test_quality_settings.py
 test_quality_upgrade.py
 test_rain_mask.py
 test_raster_reconstruction.py
+test_region_groups.py
 test_regional_surface_shadow.py
 test_render_thread_probe.py
 test_renderer_status.py
@@ -238,12 +242,14 @@ test_weather_wiring.py
 test_windows_installer.py
 test_wmo_group_tolerance.py
 test_world_cache_diff.py
+test_world_grade_lut_worker.py
 test_world_light_placements.py
 test_world_local_lights.py
 test_world_mesh_pages.py
 test_world_mesh_pages_real.py
 test_world_mesh_plan.py
 test_world_probe_coverage.py
+test_world_tone_curves.py
 test_zone_tuner.py
 test_zone_tuning.py
 test_zone_tuning_wiring.py
