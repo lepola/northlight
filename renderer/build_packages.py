@@ -410,6 +410,7 @@ def combo_readme(platform, wine_steps):
                           '   appears, choose More info, then Run anyway.',
                     before_play='', settings_key='Ctrl+Shift+F11',
                     undo='double-click Uninstall.cmd in this folder',
+                    without='open a terminal in the extracted folder\nand run .\\Install.cmd --no-tideglass.',
                     collect='double-click Collect Logs.cmd in this folder',
                     startup='If the game closes at startup, try the older graphics backend.\n'
                             'Right-click an empty spot in the extracted folder, choose Open in Terminal\n'
@@ -420,6 +421,7 @@ def combo_readme(platform, wine_steps):
                     start='Open a terminal in the extracted folder and run bash install.sh.',
                     before_play='\n' + '\n'.join(wine_steps) + '\n', settings_key='Ctrl+Shift+F11',
                     undo='run bash uninstall.sh in this folder',
+                    without='run\nbash install.sh --no-tideglass in the extracted folder.',
                     collect='run bash collect-logs.sh in this folder',
                     startup='If the game closes at startup, try the older graphics backend.\n'
                             'Open a terminal in the extracted folder and run:\n'
@@ -434,6 +436,7 @@ def combo_readme(platform, wine_steps):
                             '(not MTLD3D). The installer checks this before it changes anything.\n',
                 settings_key='Ctrl+Shift+F11 (with fn on a Mac keyboard)',
                 undo='run "Uninstall Northlight.command" the same way',
+                without='run the installer the\nsame way and type a space and --no-tideglass before you press Enter.',
                 collect='run "Collect Logs.command" the way you ran the installer',
                 startup='If the game closes at startup or the water looks wrong, quit WoW, open\n'
                         'water-host.ini in the game folder, change Enable=1 to Enable=0 and start\n'

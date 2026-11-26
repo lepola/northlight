@@ -41,8 +41,9 @@ game archives, realm settings and add-ons stay in place.
 CHANGE YOUR MIND
 
 Press {settings_key} and open Water.
-Quality keeps full reflection detail. Try Balanced for lower-resolution
-scenery reflections, or Performance for sky reflections alone. Choose Save.
+Quality is the default. Ultra reflects farther and adds nearby scenery and
+finer highlights. Try Balanced for lower-resolution scenery reflections, or
+Performance for sky reflections alone. Choose Save.
 Your wave, foam and colour tuning carries over. To use the game's water,
 clear Use Tideglass, save and restart WoW. Under water the scene then keeps
 its above-water light, without the game's own underwater tint.
@@ -51,8 +52,11 @@ To remove both, close WoW and {undo}.
 Any newer download of this package can do that too, so you do not need to
 keep an old one. Choose the same game folder. Northlight and Tideglass are
 removed together, the game files return to how they were before Northlight
-was first installed, and edited water settings are kept. To keep Northlight
-without the beta, install Northlight 0.3.216 afterwards.
+was first installed, and edited water settings are kept.
+
+To keep Northlight and leave Tideglass out of the game folder, for the game's
+water or a water of your own, {without}
+Later runs keep that choice until you pass --tideglass.
 
 IF SOMETHING GOES WRONG
 

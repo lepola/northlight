@@ -6,9 +6,9 @@ Northlight adds lighting, shadows, skies and fog. Tideglass adds waves, underwat
 
 ## Get the beta
 
-**Northlight 0.3.217 + Tideglass 0.1.0** is the first public combo release, still a beta. Download the ZIP for your platform.
+**Northlight 0.3.218 + Tideglass 0.2.0** is the second public beta. Download the ZIP for your platform.
 
-[Download for Windows](https://github.com/lepola/northlight/releases/download/v0.3.217-tideglass-0.1.0/Northlight-0.3.217-tideglass-0.1.0-Windows.zip) · [Download for Linux](https://github.com/lepola/northlight/releases/download/v0.3.217-tideglass-0.1.0/Northlight-0.3.217-tideglass-0.1.0-Linux.zip) · [Download for macOS (untested)](https://github.com/lepola/northlight/releases/download/v0.3.217-tideglass-0.1.0/Northlight-0.3.217-tideglass-0.1.0-macOS.zip) · [Release notes and checksums](https://github.com/lepola/northlight/releases/tag/v0.3.217-tideglass-0.1.0)
+[Download for Windows](https://github.com/lepola/northlight/releases/download/v0.3.218-tideglass-0.2.0/Northlight-0.3.218-tideglass-0.2.0-Windows.zip) · [Download for Linux](https://github.com/lepola/northlight/releases/download/v0.3.218-tideglass-0.2.0/Northlight-0.3.218-tideglass-0.2.0-Linux.zip) · [Download for macOS (untested)](https://github.com/lepola/northlight/releases/download/v0.3.218-tideglass-0.2.0/Northlight-0.3.218-tideglass-0.2.0-macOS.zip) · [Release notes and checksums](https://github.com/lepola/northlight/releases/tag/v0.3.218-tideglass-0.2.0)
 
 The macOS package is for Apple Silicon Macs with WoWSilicon and has not been tried on a Mac yet. Its README explains how to install it and how to switch Tideglass off if the game won't start. Please report how it goes, including what works.
 
@@ -19,6 +19,8 @@ The macOS package is for Apple Silicon Macs with WoWSilicon and has not been tri
 3. When asked for the game folder, paste the path to the folder containing **Wow.exe**, or drag the executable into the prompt and press Enter. Press **Enter** for the default sky and dungeon choices. The first install builds outdoor lighting from your game files. Allow about **20–40 minutes**, **13 GB free** on the game drive and **8 GB RAM**. If interrupted, run the installer again to resume.
 4. **Linux only** — set your launcher to load the game's copy of `d3d9.dll` before starting WoW. Use the instructions for your launcher below.
 5. Launch WoW as usual. Visit a shore with trees or buildings across the water. Turn along the bank to see their reflections, then dip the camera underwater.
+
+**Updating from the first beta** — close WoW, extract the new ZIP and run its installer the same way, over the version you have. It offers the game folder you used last time, shows the installed and the new version, and keeps your settings and earlier choices. An update usually takes a few minutes. You can then delete the older download.
 
 <details>
 <summary>Linux setup for Steam, Lutris, Bottles or plain Wine</summary>
@@ -32,7 +34,7 @@ The macOS package is for Apple Silicon Macs with WoWSilicon and has not been tri
 
 ## What the defaults give you
 
-Reflected scenery, shaped ocean waves, underwater effects, slime and magma run alongside Northlight's zone skies, weather, lighting and fog. The installer includes the raised-city fog fixes for Dalaran and Telredor and repairs four known HD dock and plant textures when it finds the affected versions. Dungeon and raid lighting can be added later by running the installer again.
+Reflected scenery, shaped ocean waves, underwater effects, slime and magma run alongside Northlight's zone skies, weather, lighting and fog. The installer includes the raised-city fog fixes for Dalaran and Telredor and repairs four known HD dock and plant textures when it finds the affected versions. Dungeon and raid lighting can be added later by running the installer again. Two optional whole-world looks, **Vibrant** and **Atmospheric**, are on the settings window's **Overview** page; **Default** leaves the world as it is.
 
 | Marsh water | Slime |
 | --- | --- |
@@ -46,9 +48,9 @@ Your game supplies the artwork, so stock and HD clients can look different. The 
 
 ## Change settings or roll back
 
-- **Adjust lighting and water in game** — press **Ctrl+Shift+F11**. On **Water**, choose **Quality**, **Balanced** or **Performance**, adjust waves or foam, then choose **Save**. [Settings guide](renderer/docs/settings-menu.md#water)
-- **Keep Northlight and use the game's water** — on **Water**, clear **Use Tideglass**, choose **Save** and restart WoW. Under water the scene keeps its above-water light, without the game's own underwater tint.
-- **Remove the combo** — close WoW and run `Uninstall.cmd` (Windows), `bash uninstall.sh` (Linux) or `Uninstall Northlight.command` (macOS, the same way as the installer) from the extracted package. Select the same game folder. This removes Northlight and Tideglass together, puts back the game files as they were before Northlight was first installed and keeps edited water settings. To keep Northlight without the beta, install [Northlight 0.3.216](https://github.com/lepola/northlight/releases/tag/v0.3.216) afterwards.
+- **Adjust lighting and water in game** — press **Ctrl+Shift+F11**. On **Water**, choose **Ultra**, **Quality**, **Balanced** or **Performance**, adjust waves or foam, then choose **Save**. [Settings guide](renderer/docs/settings-menu.md#water)
+- **Keep Northlight and use the game's water** — on **Water**, clear **Use Tideglass**, choose **Save** and restart WoW. Under water the scene keeps its above-water light, without the game's own underwater tint. To leave Tideglass out of the game folder altogether, for the game's water or a water of your own, run the installer from a terminal with `--no-tideglass` (`.\Install.cmd --no-tideglass` or `bash install.sh --no-tideglass`). Later runs keep that choice until you pass `--tideglass`.
+- **Remove the combo** — close WoW and run `Uninstall.cmd` (Windows), `bash uninstall.sh` (Linux) or `Uninstall Northlight.command` (macOS, the same way as the installer) from the extracted package. Select the same game folder. This removes Northlight and Tideglass together, puts back the game files as they were before Northlight was first installed and keeps edited water settings.
 - **The game closes at startup** — try the older bundled graphics backend. On Windows, right-click an empty spot in the extracted folder, choose **Open in Terminal** (on Windows 10, hold Shift and choose **Open PowerShell window here**) and run `.\Install.cmd --backend dxvk2`. On Linux, run `bash install.sh --backend dxvk2` in the extracted folder.
 - **Report a problem** — close WoW, run `Collect Logs.cmd` (Windows), `bash collect-logs.sh` (Linux) or `Collect Logs.command` (macOS) from the extracted package and choose the game folder. Then [open an issue](https://github.com/lepola/northlight/issues/new) and attach the `northlight-logs` ZIP it makes. It holds the installer, renderer and Tideglass logs and settings, with folder paths from your computer, and nothing from your account, characters or chat. Include the zone, time of day and what you did just before it happened. For flicker or a hitch, say whether it happens while turning, moving or holding still. A screenshot or short clip helps.
 
