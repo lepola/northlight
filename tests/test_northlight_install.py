@@ -1246,13 +1246,19 @@ class Install(Base):
     def test_no_tideglass_installs_the_renderer_alone_and_a_rerun_keeps_the_choice(self):
         self.make_water_package()
         before = tree(self.client)
-        water = ('water-core.dll', 'water.ini', 'water-host.ini', fi.WATER_ARCHIVE_LIST, 'raised-fog/Northrend.rfs')
+        water = ('water-core.dll', 'water.ini', 'water-host.ini', fi.WATER_ARCHIVE_LIST)
+        art = lambda: [args for script, args in self.calls if script == 'build_art_layer.py'][-1]
         installer = self.installer(tideglass=False)
         installer.install(self.client)
         said = installer.out.getvalue()
         self.assertIn('Northlight 0.3.217: installed.', said)
-        self.assertIn('leave out the Tideglass water: the game draws its own water', said)
+        self.assertIn('leave out the Tideglass water: the game draws its own water, and everything else is installed', said)
         self.assertEqual([name for name in water if (self.client / name).exists()], [])
+        # The rest of the combined install is there: its raised fog, and its skies and scenery with the game's own
+        # underwater light.
+        self.assertTrue((self.client / 'raised-fog/Northrend.rfs').is_file())
+        self.assertIn('--tideglass', art())
+        self.assertIn('--game-underwater', art())
         self.assertEqual(json.loads((self.client / fi.RECEIPT).read_bytes()),
                          {'format': fi.RECEIPT_FORMAT, 'northlight': '0.3.217', 'tideglass': None,
                           'package': '0.3.162-test', 'tideglass_left_out': True})
@@ -1267,6 +1273,7 @@ class Install(Base):
         added.install(self.client)
         self.assertIn('Northlight 0.3.217 + Tideglass 0.1.0', added.out.getvalue())
         self.assertEqual((self.client / 'water-core.dll').read_bytes(), b'core')
+        self.assertNotIn('--game-underwater', art())
         self.assertNotIn('tideglass_left_out', json.loads((self.client / fi.RECEIPT).read_bytes()))
         self.installer().uninstall(self.client)
         self.assertEqual(tree(self.client), before)
@@ -1283,6 +1290,8 @@ class Install(Base):
         self.assertFalse((self.client / 'water-core.dll').exists())
         self.assertEqual(settings.read_bytes(), b'[Water]\r\nWaveCrestShape=0.5\r\n')
         self.assertTrue((self.client / 'water-host.ini').is_file())
+        self.assertTrue((self.client / 'raised-fog/Northrend.rfs').is_file())
+        self.assertIn('--game-underwater', [args for script, args in self.calls if script == 'build_art_layer.py'][-1])
         self.assertEqual(installer.installed(self.client), {'northlight': '0.3.217', 'tideglass': None})
         self.installer().uninstall(self.client)
         self.assertEqual(tree(self.client), {**before, 'water.ini': settings.read_bytes()})
@@ -1297,11 +1306,13 @@ class Install(Base):
         self.installer().uninstall(self.client)
         self.assertEqual(tree(self.client), before)
 
-    def test_no_tideglass_refuses_raised_air_and_writes_nothing(self):
+    def test_no_tideglass_still_refuses_a_raised_fog_file_that_is_not_ours(self):
         self.make_water_package()
+        (self.client / 'raised-fog').mkdir()
+        (self.client / 'raised-fog/Northrend.rfs').write_bytes(b'someone else\'s')
         before = tree(self.client)
-        with self.assertRaisesRegex(fi.Refusal, 'cannot go with --no-tideglass'):
-            self.installer(tideglass=False).install(self.client, raised_air=True)
+        with self.assertRaisesRegex(fi.Refusal, 'raised-fog/Northrend.rfs already exists outside this install'):
+            self.installer(tideglass=False).install(self.client)
         self.assertEqual(tree(self.client), before)
 
     def test_combo_reuses_free_patch_pair_and_restores_foreign_art(self):

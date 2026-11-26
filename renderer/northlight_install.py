@@ -462,11 +462,14 @@ class Installer:
         INSTALL.emit = lambda *parts, **_: self.say(*parts)   # the transaction engine's lines reach the log too
 
     def use_tideglass(self, wanted):
-        """Set what this run installs of the package's Tideglass. Left out, a combined package is installed as the
-        Northlight renderer alone: no core, no water settings, and the skies and fog built as for Northlight."""
+        """Set what this run installs of the package's Tideglass. Left out, the combined package still installs all of
+        its own Northlight (its skies, raised fog and scenery repairs): only the water goes, which is the core, its
+        settings and the open-air light it gives the underwater view."""
         package = self.pkg
+        # combined: the package is the combined one, whatever this run installs of its water.
+        self.combined = bool(package.info.get('tideglass'))
         self.tideglass = tideglass = (package.info.get('tideglass') or {}) if wanted else {}
-        self.left_out = TIDEGLASS_FILES if package.info.get('tideglass') and not wanted else ()
+        self.left_out = TIDEGLASS_FILES if self.combined and not wanted else ()
         self.product_name = 'Northlight + Tideglass' if tideglass else 'Northlight renderer'
         # Combined packages before Tideglass 0.1.0 carried one beta label instead of both parts' versions.
         self.title = (f"Northlight {package.info.get('dll_version')} + Tideglass {tideglass['version']}"
@@ -1052,7 +1055,7 @@ class Installer:
         return found
 
     def art_letter(self, client, locale, foreign):
-        if not self.tideglass:
+        if not self.combined:
             return None if foreign else LETTER
         data = client_archives.data_dir(client)
         local = client_archives.locale_dir(client, locale)
@@ -1101,7 +1104,7 @@ class Installer:
         The action per target is installed (absent before), replaced (another layer of ours) or kept-identical.
         A target that exists in another letter case (Data/Patch-Z.MPQ on Linux) keeps its name on disk, so that
         Wine never sees two files."""
-        combo = bool(self.tideglass)
+        combo = self.combined
         if not combo and not (client / CACHE / 'fog').is_dir():
             return {}, 'there is no outdoor lighting, and it needs the fog zones from it', {}
         work = self.pkg.work / 'art-layer'
@@ -1109,7 +1112,7 @@ class Installer:
         work.mkdir(parents=True)
         code, _ = self.run(APP / 'build_art_layer.py', ['--client', client, '--locale', locale, '--world-cache',
                                                          client / CACHE, '--output', work, '--letter', letter, '--sky', sky] +
-                           (['--tideglass'] if combo else []), show=False)
+                           (['--tideglass'] if combo else []) + (['--game-underwater'] if self.left_out else []), show=False)
         report = read_json(work / 'art-layer-manifest.json')
         if code != 0 or not report:
             raise Failed(f'Building skies, weather and scenery failed (exit {code}); its last lines are shown above. '
@@ -1256,7 +1259,7 @@ class Installer:
         if art is None:
             art = True
         if raised_air is None:
-            raised_air = bool(self.tideglass)
+            raised_air = self.combined
         plan = self.plan_install(client, locale, cache, backend, art, world_cache, instances, sky, raised_air)
         with locked(client):   # S5: taken once the read-only checks have passed
             return self.apply_install(plan, jobs)
@@ -1281,7 +1284,7 @@ class Installer:
     def check_water_files(self, client, raised_air=False):
         # A copied core or settings file may belong to another renderer. Only a recorded
         # install may upgrade these names. Edited settings are kept by the transaction.
-        names = ('water-core.dll', 'water.ini', 'water-host.ini', WATER_ARCHIVE_LIST)
+        names = ('water-core.dll', 'water.ini', 'water-host.ini', WATER_ARCHIVE_LIST) if self.tideglass else ()
         if raised_air:
             names += ('raised-fog/Northrend.rfs', 'raised-fog/Expansion01.rfs')
         conflicts = case_conflicts(client, names)
@@ -1306,10 +1309,10 @@ class Installer:
         self.check_payload(backend)
         if self.tideglass:
             self.check_water_client(client)
+        if self.combined:
             self.check_water_files(client, raised_air)
         elif raised_air:
-            raise Refusal('--raised-air needs Tideglass: it cannot go with --no-tideglass' if self.left_out else
-                          '--raised-air requires the combined Northlight and Tideglass package')
+            raise Refusal('--raised-air requires the combined Northlight and Tideglass package')
         marker = INSTALL.safe_path(client, INSTALL.LEGACY_DXVK3_MARKER)   # a linked renderer-backends folder is refused here
         if self.proxy and marker.is_file():
             self.say('Note: Northlight no longer switches to DXVK 2.7.1 by itself; the leftover '
@@ -1491,10 +1494,11 @@ class Installer:
         if self.left_out:
             had = (p['previous'] or {}).get('tideglass') is not None
             lines.append('  - take out the Tideglass water installed before (water-core.dll); your water.ini and '
-                         'water-host.ini are kept. The game draws its own water' if had else
+                         'water-host.ini are kept. The game draws its own water; the rest stays as it is' if had else
                          '  - leave out the Tideglass water' +
                          (', as chosen before' if self.asked_tideglass is None else '') +
-                         ': the game draws its own water. Installing with --tideglass adds it')
+                         ': the game draws its own water, and everything else is installed. '
+                         'Installing with --tideglass adds it')
         if relation != 'new':
             lines.append('  - keep your settings (northlight-quality.ini' + (', water.ini, water-host.ini' if combo else '') +
                          ') and any look preset you edited')
@@ -1622,7 +1626,7 @@ class Installer:
             import install_world_cache as iwc
             for warning in report['archive_warnings']:
                 self.say('    ' + iwc.archive_warning_text(warning))
-        details = not self.tideglass or self.log is None
+        details = not self.combined or self.log is None
         self.say(f'  Skies, weather and scenery: {report["art_layer"]}', console=details or bool(why))
         self.say(f'  Renderer: {payload}' + (f' (graphics backend {p["backend"]})' if self.proxy else ''), console=details)
         if freed:
@@ -1637,7 +1641,7 @@ class Installer:
             for line in WINE_STEPS:
                 self.say(line)
         self.say('Start WoW as usual.')
-        if self.tideglass:
+        if self.combined:
             self.say('To update later, download the new package and run its installer on this game folder; your '
                      'settings are kept.')
             self.say('To undo this install, close WoW and run ' +

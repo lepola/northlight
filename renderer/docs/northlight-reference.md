@@ -14,11 +14,33 @@ Pass options to `Install.cmd` or `bash install.sh` from the extracted package. C
 | Try your HD client's sky artwork | Choose experimental sky preservation or pass `--sky experimental-preserve`. A second moon can appear on some skies. Use `--sky current` to restore the default. |
 | Skip the large outdoor lighting build | Pass `--no-world-cache`. Static shadows and indirect light use that cache. Without existing fog tables, only the applicable scenery repairs and raised-area coverage are generated. |
 | Skip generating the lighting and scenery patch, or raised-area coverage | Use `--no-art-layer` or `--no-raised-air`, respectively. |
-| Install Northlight without the Tideglass water | Pass `--no-tideglass`, for the game's own water or a water of your own. The core and the water settings are left out; a Tideglass this installer put there earlier is removed and your `water.ini` and `water-host.ini` are kept. Later runs keep the choice until you pass `--tideglass`. |
+| Install Northlight without the Tideglass water | Pass `--no-tideglass`, for the game's own water or a water of your own. Everything else is installed as usual (skies, raised fog, scenery repairs); only the core, the water settings and the open-air light Tideglass gives the underwater view are left out. A Tideglass this installer put there earlier is removed and your `water.ini` and `water-host.ini` are kept. Later runs keep the choice until you pass `--tideglass`. |
 | Refresh after changing game archives or game language | Rerun the installer against the same game folder. |
 | Diagnose a startup issue | Read `northlight-renderer.log` and `water-core.log` in the game folder. Installation errors go to `logs/` in the extracted package. |
 
 The installer writes its own graphics files and archive list. If it finds another mod's water files at the same paths, it identifies the conflict before installation. Keep any conflicting files as backups. The full install uses both the player's base and language archives and preserves higher-priority custom artwork.
+
+## How Northlight and Tideglass fit together
+
+Tideglass is its own project. Its core is one DLL, `water-core.dll`, which also runs with other renderers and by
+itself; Northlight carries a verified copy of its source in `tideglass/` (`tideglass/source.json` names the revision,
+`scripts/tideglass_source.py` checks it) and builds the core from that copy.
+
+- **The bridge.** The renderer talks to the core through one object, `NorthlightWaterBridge`
+  (`tideglass/integrations/northlight/water_bridge.h`), over a C interface with a version number and a struct size
+  for each part (`tideglass/src/host_*.h`). The liquid part must match exactly, so a renderer and a core come from
+  the same build and ship together.
+- **The switch.** Every use of the bridge in `src/` is behind `NORTHLIGHT_WATER`. `scripts/build_renderer.py` turns it
+  on; `--no-tideglass` builds `renderer/frd9-no-tideglass.dll` with it off and nothing from `tideglass/`.
+- **At run time.** The usual build loads the core only when `water-host.ini` asks for it and the file is there.
+  Without it the game draws its own water, the settings window has no Water page, Water preset or slime controls,
+  and `water.ini` is neither read nor written (`Store::hasWaterCore` in `src/settings/settings_store.h`).
+- **What Northlight still knows of Tideglass.** The settings window describes Tideglass's settings and presets
+  (`src/settings/settings_schema.h`, `src/overlay/settings_panel.cpp`), so a new water setting needs a change here.
+  The installer tells "this is the combined package" (`Installer.combined`) from "install its water"
+  (`Installer.tideglass`).
+- **What ties Tideglass to the client.** The bridge and the core read the 32-bit 12340 client's memory at fixed
+  addresses. A client with another layout runs Northlight without Tideglass until the core is ported to it.
 
 ## Build the combo
 

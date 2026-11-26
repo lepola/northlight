@@ -206,7 +206,10 @@ def respect_locale_patches(assets, payload, local_folder, locale, letter):
     return kept, sorted(shadowed)
 
 
-def build(client, output, world_cache, locale=None, letter='z', archives='all', sky='current', combo=False):
+def build(client, output, world_cache, locale=None, letter='z', archives='all', sky='current', combo=False, underwater=None):
+    # underwater: whether the combo preset also gives the game's underwater view the light of the open air, which only
+    # suits a water that draws its own underwater medium (Tideglass). Default: as combo.
+    underwater = combo if underwater is None else underwater and combo
     locale = client_archives.detect_locale(client, locale)
     fog = world_cache / 'fog'
     assets = Assets(client, archives, locale, without=letter)
@@ -216,11 +219,12 @@ def build(client, output, world_cache, locale=None, letter='z', archives='all', 
             payload = {}
             if fog.is_dir() or not combo:
                 payload = lighting_payload(assets, client, locale, Path(work), fog, sky, report, combo)
-        if combo:
+        if underwater:
             light = DBC(payload.get(DBC_NAME.format('Light')) or assets.read(DBC_NAME.format('Light')))
             liquid = DBC(assets.read(DBC_NAME.format('LiquidType')))
             report['steps'].append({'step': 'underwater_daylight', **build_lighting.underwater_daylight(light, liquid)})
             payload.update({DBC_NAME.format('Light'): light.bytes(), DBC_NAME.format('LiquidType'): liquid.bytes()})
+        if combo:
             repairs = scenery_repairs(assets)
             payload.update(repairs)
             report['steps'].append({'step': 'scenery_repairs', 'files': sorted(repairs)})
@@ -255,6 +259,8 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     client_archives.add_arguments(ap)
     ap.add_argument('--tideglass', action='store_true', help='build the combo preset with underwater daylight and targeted scenery repairs')
+    ap.add_argument('--game-underwater', action='store_true',
+                    help='with --tideglass: leave the game its own underwater light, for an install without the Tideglass water')
     ap.add_argument('--sky', choices=('current', 'experimental-preserve'), default='current',
                     help='experimental: preserve mixed moon artwork and use compatible local HD Tirisfal clouds')
     ap.add_argument('--world-cache', type=Path, help="the client's world cache, for its fog zones (default: <client>/world-cache)")
@@ -268,7 +274,8 @@ def main():
     if output == client or client in output.parents:
         ap.error('--output must be a staging folder outside the client')
     output.mkdir(parents=True, exist_ok=True)
-    report = build(client, output, (args.world_cache or client / 'world-cache').resolve(), args.locale, args.letter, args.archives, args.sky, args.tideglass)
+    report = build(client, output, (args.world_cache or client / 'world-cache').resolve(), args.locale, args.letter, args.archives, args.sky, args.tideglass,
+                   underwater=not args.game_underwater)
     print(json.dumps({'steps': report['steps'], 'files': len(report['files']), 'targets': report['targets']}, indent=2))
 
 
