@@ -18,9 +18,10 @@ static const float kBelowSurface = 3.0;
 static const float kDryDepth = 0.02;
 static const float kShoreReach = 5.0;
 static const float kShoreStart = 1.0;
-// How much of the foam where something stands in the water (b; spread from where it crosses the surface each frame,
-// see contact_spread_ps) fades each step, so it lingers a moment behind something moving.
-static const float kFoamFade = 0.04;
+// y: how much of the foam where something stands in the water (b; spread from where it crosses the surface each frame,
+// see contact_spread_ps) fades each step, so it lingers a moment behind something moving; none for slime, whose glow
+// that pass eases both ways.
+float FoamFade() { return cViscosity.y; }
 
 float TexelSize() { return cGrid.x; }
 float Courant() { return cGrid.y; }
@@ -67,7 +68,7 @@ float4 main(float2 pixel : VPOS) : COLOR0
     float laplacian = neighbours.r - 4.0 * centre.r;
     // (saturate also turns a value that is not a number to 0.)
     bool advances = cMoverCount.z < 0.5;
-    float foam = saturate(centre.b * (advances ? 1.0 - kFoamFade : 1.0));
+    float foam = saturate(centre.b * (advances ? 1.0 - FoamFade() : 1.0));
     // Viscosity (slime) smooths the surface a little each step, which kills the small ripples first.
     float height = advances ? (2.0 * centre.r - centre.g + Courant() * laplacian) * Damping() + cViscosity.x * laplacian
                             : centre.r;

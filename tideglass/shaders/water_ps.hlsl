@@ -439,11 +439,48 @@ float3 WithSurfaceDetail(float3 normal, float2 uv, float3 world, float drawnHeig
     return normalize(normal + float3(-rings, 0.0));
 }
 
+// The folds lapping at the slime's edge here (the shore's waves, see water_common's ReadShoreWaves): the slope they
+// give the surface (x, y), and the lip (z) that glows where a fold's crest nears the edge. Short laps die out nearer
+// the edge than long folds (kSlimeLipReach, in the waves' own measure, for the longest and the shortest).
+static const float2 kSlimeLipReach = float2(3.8, 2.0);
+static const float2 kSlimeLapScales = float2(1.45, 2.4);
+static const float kSlimeLipGlow = 0.4;
+// Thick slime folds over rather than breaks: its fronts keep the broad, round shape the sea's have far out, right up
+// to the edge, and being broader are steepened to show as much (kSlimeLapSlope).
+static const float kSlimeLapSlope = 2.0;
+
+float3 SlimeLap(float2 p, float footprint)
+{
+    float3 lap = 0.0;
+    ShoreWaves waves;
+    [branch] if (ReadShoreWaves(p, 0.0, waves))
+    {
+        float phase = WavePhase(waves.distance, waves.along);
+        float behind = frac(phase);
+        float size = WaveSize(phase, waves.along) * waves.known;
+        float profile = WaveProfile(behind, kWaveReach);
+        float rise = (WaveProfile(behind + kProfileStep, kWaveReach) - profile) / (kProfileStep * kWaveLength);
+        float strength = kWaveSlope * kSlimeLapSlope * saturate(1.0 - waves.distance / kWaveReach) * size *
+                         Resolved(kWaveLength * 0.5, footprint * SlimeLapScale());
+        // Rising behind the front means the surface slopes up away from the edge.
+        lap.xy = -waves.toShore * rise * strength * SlimeLaps();
+        float reach = lerp(kSlimeLipReach.x, kSlimeLipReach.y,
+                           saturate((SlimeLapScale() - kSlimeLapScales.x) / (kSlimeLapScales.y - kSlimeLapScales.x)));
+        // (The broad front's crest stands about half as high as the sea's steep one.)
+        lap.z = smoothstep(0.11, 0.39, profile * size) * (1.0 - smoothstep(0.0, reach, waves.distance)) *
+                saturate(SlimeLaps());
+    }
+    return lap;
+}
+
+// Light a region's slime gives off by itself, in the slot where water carries its crest foam.
+float SlimeBodyGlow() { return cLookingDown.w; }
+
 // The slime glows with its own colour: the scene light sets how bright it is, not its hue (the Undercity's purple
-// light would otherwise grey the green).
+// light would otherwise grey the green). A regional slime adds its own glow, so it stays bright in a dark place.
 float3 LiquidLight()
 {
-    return dot(SceneLight(), float3(0.2126, 0.7152, 0.0722));
+    return dot(SceneLight(), float3(0.2126, 0.7152, 0.0722)) + SlimeBodyGlow();
 }
 
 // Seen through the surface, so the waves and ripples bend it as they would a view into the liquid.
@@ -476,12 +513,32 @@ float3 MissedReflection(float3 reflected, float3 light)
     return lerp(cShallowColor.rgb, cDeepColorDepth.rgb, 0.5) * light * kSlimeMissedReflection;
 }
 
-// A smooth glow that brightens as the slime thins towards anything it touches (walls, steps, legs), like the green
-// edges of the depth view.
+// How near the slime here is to where it meets a wall or anything standing in it, from the marks on the ripple grid
+// (contact_ps): under an upright wall the slime is as deep as anywhere, so its depth cannot find one. The grid holds a
+// falloff exp(-d^2 / 2w^2) with the distance d from the nearest mark, w being kSlimeContactWidth cells; raised to a
+// power it falls over the edge's own width instead.
+static const float kSlimeContactWidth = 2.5;
+static const float kSlimeContactFarthest = 60.0;
+
+float SlimeContact(float2 world, float distance)
+{
+    float2 uv = RippleUv(world);
+    float field = InsideRippleArea(uv) ? saturate(tex2Dlod(sRipples, float4(uv, 0, 0)).b) : 0.0;
+    float width = kSlimeContactWidth * cRippleGrid.y;
+    // (No wider than the grid carries the falloff: wider, it would end in a step.)
+    float reach = clamp(FoamDepth(), 0.5 * width, 1.5 * width);
+    float near = 1.0 - smoothstep(kSlimeContactFarthest * 0.6, kSlimeContactFarthest, distance);
+    return field > 0.0 ? pow(field, width * width / (reach * reach)) * near : 0.0;
+}
+
+// A smooth glow that brightens as the slime thins towards anything it touches (banks, steps, legs), like the green
+// edges of the depth view, and along the walls it stands against. wakeFoam.x: the lip of a fold lapping at the edge
+// (SlimeLap), which glows a little as it comes in.
 float LiquidFoam(float3 world, float3 toCamera, float drawnHeight, float thickness, float bentThickness, float distance,
                  float2 wakeFoam)
 {
-    return saturate(exp(-bentThickness / (FoamDepth() * kSlimeGlowWidth)) * FoamStrength());
+    float shallow = exp(-bentThickness / (FoamDepth() * kSlimeGlowWidth));
+    return saturate(max(max(shallow, SlimeContact(world.xy, distance)), wakeFoam.x * kSlimeLipGlow) * FoamStrength());
 }
 
 bool DebugColour(float3 world, float drawnHeight, float foam, out float4 colour)
@@ -680,6 +737,8 @@ struct LiquidSurface
     float3 foamNormal;
     // Water: how much foam covers the surface here (from the surface detail pass).
     float foam;
+    // Slime: the fold lapping at its edge here (SlimeLap).
+    float3 lap;
     float facing;
     float glancing;
     float3 reflected;
@@ -748,6 +807,10 @@ LiquidSurface SurfaceAt(float2 pixel, float surfaceDepth, float thickness)
     {
         float3 normal = WaveNormal(surface.world, surface.distance, surface.toCamera, baseNormal, footprint, surface.uv,
                                    surface.foamNormal);
+#ifdef DEFERRED_SLIME
+        surface.lap = SlimeLap(surface.world.xy, footprint);
+        normal = normalize(normal + float3(-surface.lap.xy, 0.0));
+#endif
         surface.normal =
             WithSurfaceDetail(normal, surface.uv, surface.world, surface.drawnHeight, surface.distance, footprint);
     }
@@ -756,6 +819,9 @@ LiquidSurface SurfaceAt(float2 pixel, float surfaceDepth, float thickness)
     surface.foam = tex2Dlod(sSurfaceDetail, float4(surface.uv, 0, 0)).z;
 #else
     surface.foam = 0.0;
+#endif
+#ifndef DEFERRED_SLIME
+    surface.lap = 0.0;
 #endif
     surface.facing = saturate(dot(surface.normal, surface.toCamera));
     // Towards glancing angles the surface becomes the near-perfect mirror real water is.
@@ -961,8 +1027,8 @@ float4 ShadeLiquid(float2 pixel, float surfaceDepth, float thickness)
     float bentThickness;
     float3 refracted = Refracted(pixel, world, normal, thickness, surfaceDepth, bentThickness);
 #ifdef DEFERRED_SLIME
-    // Slime's glowing edge follows the bent view's depth.
-    float foam = LiquidFoam(world, toCamera, drawnHeight, thickness, bentThickness, distance, 0.0);
+    // Slime's glowing edge follows the bent view's depth, and takes the lip of a fold lapping at it.
+    float foam = LiquidFoam(world, toCamera, drawnHeight, thickness, bentThickness, distance, float2(surface.lap.z, 0.0));
 #else
     float foam = surface.foam;
 #endif
@@ -991,6 +1057,11 @@ float4 ShadeLiquid(float2 pixel, float surfaceDepth, float thickness)
     sceneExposure=cWaterDebug.y>0?cWaterDebug.y:1;
 #endif
     float3 underwater = SeenThrough(refracted*sceneExposure, world, toCamera, bentThickness, distance, stock, light);
+#ifdef DEFERRED_SLIME
+    // A fold lapping at the edge shades the murky body as the big waves do (SeenThrough).
+    underwater *= 1.0 + clamp(dot(-surface.lap.xy, normalize(toCamera.xy + 1.0e-5)) * kSlimeWaveShading,
+                              -kSlimeWaveShadeLimit, kSlimeWaveShadeLimit);
+#endif
 
     float facing = surface.facing;
     float distanceRamp = lerp(cInsideAndReflection.z, 1.0, saturate(distance / cInsideAndReflection.w));

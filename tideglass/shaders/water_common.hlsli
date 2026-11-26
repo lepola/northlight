@@ -1120,6 +1120,8 @@ float FoamGrain(float2 p)
     return lerp(1.0, saturate(smoothstep(0.25, 0.75, grain) * 1.3), kFoamTexture);
 }
 
+#endif
+
 // Waves rolling in to the shore. The distance to the nearest dry ground (from the world's heights) lays wave fronts
 // along every coast; they travel inwards, their timing varying slowly along the shore so the fronts are not parallel
 // lines, grow foamy as they near the edge and break there, leaving a wash of foam at the waterline that fades as it
@@ -1132,6 +1134,57 @@ struct ShoreWaves
     float along;
     float2 toShore;
 };
+
+#ifdef DEFERRED_SLIME
+// Slime's waves are the sea's made shorter and slower: slow folds that lap at its edge. Its edge is not the ground
+// map's shore (it lies in rooms and canals as often as on terrain) but what its ripple grid remembers meeting, kept as
+// how near each point is to it (slime_shore_ps). Measured in SlimeLapScale times the yards, the sea's fronts fit a
+// canal or a pool.
+// How far from its edge the map knows the slime (yards; slime_shore_ps's kReach cells of kCell yards).
+static const float kSlimeShoreReach = 4.8;
+static const float kSlimeLapPace = 0.6;
+
+// How strong the laps are (the SlimeShoreWaves setting; 0 with no shore map), and how many times shorter than the sea's.
+float SlimeLaps() { return cLookingDown.z; }
+float SlimeLapScale() { return cRippleGrid.w; }
+float ShoreSeconds() { return Seconds() * kSlimeLapPace; }
+
+float SlimeNearness(float2 uv)
+{
+    return tex2Dlod(sShore, float4(uv, 0, 0)).r;
+}
+
+bool ReadShoreWaves(float2 p, float surfaceHeight, out ShoreWaves waves)
+{
+    waves.known = 0.0;
+    waves.distance = kWaveReach;
+    waves.along = 0.0;
+    waves.toShore = 0.0;
+    float2 uv = RippleUv(p);
+    // (One return at the end: Microsoft's compiler mishandles early ones inside branches.)
+    bool found = false;
+    [branch] if (SlimeLaps() > 0.0 && InsideRippleArea(uv))
+    {
+        float nearness = SlimeNearness(uv);
+        float distance = (kSlimeShoreReach - nearness) * SlimeLapScale();
+        [branch] if (nearness > 0.0 && distance < kWaveReach)
+        {
+            // One cell of the shore map, which is two of the ripple grid's.
+            float step = 2.0 * cRippleGrid.x;
+            float2 rise = float2(SlimeNearness(uv + float2(step, 0)) - SlimeNearness(uv - float2(step, 0)),
+                                 SlimeNearness(uv + float2(0, step)) - SlimeNearness(uv - float2(0, step)));
+            waves.toShore = rise / max(length(rise), 1.0e-4);
+            waves.distance = distance;
+            waves.known = saturate(min(min(uv.x, 1.0 - uv.x), min(uv.y, 1.0 - uv.y)) * kSeabedEdgeFade);
+            float2 q = p * SlimeLapScale();
+            waves.along = ValueNoise(q * 0.07 + float2(ShoreSeconds() * 0.01, 0.0)) * 2.0 + ValueNoise(q * 0.19) * 0.8;
+            found = true;
+        }
+    }
+    return found;
+}
+#else
+float ShoreSeconds() { return Seconds(); }
 
 bool ReadShoreWaves(float2 p, float surfaceHeight, out ShoreWaves waves)
 {
@@ -1157,13 +1210,14 @@ bool ReadShoreWaves(float2 p, float surfaceHeight, out ShoreWaves waves)
     waves.along = ValueNoise(p * 0.07 + float2(Seconds() * 0.01, 0.0)) * 2.0 + ValueNoise(p * 0.19) * 0.8;
     return true;
 }
+#endif
 
 // Where a point is in the train of waves: whole numbers count the waves, the fraction is 0 at a front and grows
 // behind it, and fronts move towards the shore as time passes. The timing drifts a little so they do not arrive
 // like clockwork.
 float WavePhase(float distance, float along)
 {
-    float t = Seconds();
+    float t = ShoreSeconds();
     return distance / kWaveLength + t / kWavePeriod + along + kWaveTimingDrift * sin(t * 0.37 + along * 3.0);
 }
 
@@ -1209,6 +1263,7 @@ float2 ShoreWaveSlope(float2 p, float surfaceHeight, float footprint = 0.0)
     return -waves.toShore * rise * strength;
 }
 
+#ifndef DEFERRED_SLIME
 // Foam from a breaking front and the wash behind it share the same shoreline samples and wave phase.
 void ShoreFoam(float2 p, float surfaceHeight, float footprint, out float density, out float crest, out float2 flow)
 {

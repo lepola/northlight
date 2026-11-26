@@ -5,11 +5,11 @@
 #include "version.h"
 #include "host_environment.h"
 #include "host_liquid.h"
-#include "liquid.h"
-#include "engine.h"
-#include "frame_snapshot.h"
-#include "render_session.h"
-#include "log.h"
+#include "client/liquid.h"
+#include "client/engine.h"
+#include "frame/frame_snapshot.h"
+#include "render/render_session.h"
+#include "base/log.h"
 #include <algorithm>
 #include <array>
 #include <atomic>

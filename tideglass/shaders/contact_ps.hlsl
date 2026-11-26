@@ -8,6 +8,18 @@
 // with the view's height). Where the point is hidden, it is marked too when what hides it stands just in front of or
 // above it (inside a body, behind the side of it in sight): so the whole of what stands in the water is marked where it
 // meets the surface, not only the line of it in sight, which blurred came to little. Only what is in sight is found.
+// Slime has no ground map (it lies over building floors as often as terrain), so there the bank and the floor of a room
+// are found the same way as what stands in it: whatever of the solid world lies at the surface marks, upright or not,
+// and its edge glow and the waves that lap at its edge are read from that (see water_ps, SlimeShore).
+
+// A point of slime that could not be looked at this frame (off screen, too far, behind something) says so, so that what
+// was found there before is kept: its edge is remembered where the camera has seen it (contact_spread_ps), so the glow
+// along a wall and the waves lapping at it go on while the line where they meet is out of sight.
+
+// x: 1 where the ground map tells the ground from what stands on it (water), 0 where there is none (slime).
+float4 cContactOptions : register(c60);
+
+static const float kNotSeen = -1.0;
 
 // How near (yards) the solid world drawn at a cell's point must come to it to mark it, and how far under it at most.
 static const float kContactBand = 0.25;
@@ -48,7 +60,8 @@ float Upright(float3 met, float2 pixel)
 float4 main(float2 cell : VPOS) : COLOR0
 {
     float3 water = float3(cRippleArea.xy + (cell + 0.5) * cRippleGrid.y, 0.0);
-    float mark = 0.0;
+    bool grounded = cContactOptions.x > 0.5;
+    float mark = grounded ? 0.0 : kNotSeen;
     float height;
     if (WaterHeightAt(water.xy, height))
     {
@@ -63,20 +76,25 @@ float4 main(float2 cell : VPOS) : COLOR0
         {
             float3 met = MetAt(pixel);
             float2 mapUv = RippleUv(met.xy);
-            float4 map = InsideRippleArea(mapUv) ? tex2Dlod(sSeabed, float4(mapUv, 0, 0)) : 0.0;
-            if (map.g > 0.5 && met.z - map.r > kOnGround)
+            float4 map = grounded && InsideRippleArea(mapUv) ? tex2Dlod(sSeabed, float4(mapUv, 0, 0)) : 0.0;
+            if (!grounded || (map.g > 0.5 && met.z - map.r > kOnGround))
             {
                 // At the surface: not what lies just under it (a swimmer's back and arms a few inches down marked
                 // all the water over them, a wide disc of foam).
                 float near = (1.0 - smoothstep(kContactBand * 0.5, kContactBand, length(met - water))) *
                              (1.0 - smoothstep(kContactBelow * 0.5, kContactBelow, water.z - met.z));
-                float crossing = near * smoothstep(kUprightFrom, kUprightFull, Upright(met, pixel));
+                float crossing = near * (grounded ? smoothstep(kUprightFrom, kUprightFull, Upright(met, pixel)) : 1.0);
                 float above = met.z - water.z;
                 float covered = 0.0;
                 if (length(met - cViewToWorld3.xyz) < length(water - cViewToWorld3.xyz) - kContactBand)
                     covered = (1.0 - smoothstep(kCoverReach * 0.5, kCoverReach, length(met.xy - water.xy))) *
                               (1.0 - smoothstep(kCoverFull, kCoverHeight, above));
-                mark = saturate(max(crossing, covered));
+                float found = saturate(max(crossing, covered));
+                // Seen: the solid world here is this point of the surface, or lies beyond it (the view goes on through
+                // the surface to the floor under it).
+                bool beyond = length(met - cViewToWorld3.xyz) > length(water - cViewToWorld3.xyz);
+                if (grounded || found > 0.0 || beyond)
+                    mark = found;
             }
         }
     }
