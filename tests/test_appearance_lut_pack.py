@@ -25,7 +25,7 @@ class AppearanceLutPackTests(unittest.TestCase):
 
     def test_actual_bake_has_consistent_source_index_and_table_hashes(self):
         self.assertGreater(self.report['entry_count'], 0)
-        self.assertEqual(self.report['math_schema_version'], 2)
+        self.assertEqual(self.report['math_schema_version'], 3)
         self.assertEqual(self.report['cube_size'], 32)
         self.assertEqual(self.report['voxel_format'], 'RGBA16_UNORM_LE')
         self.assertEqual(self.report['uncompressed_table_bytes'], self.report['entry_count'] * 32 ** 3 * 8)
@@ -37,7 +37,7 @@ class AppearanceLutPackTests(unittest.TestCase):
 
     def test_signed_selective_colour_key_fields_are_preserved(self):
         signed = [value for _, key, _, _, _ in self.report['entries']
-                  for offset in (44, 54, 64) for value in struct.unpack_from('<5h', key, offset)]
+                  for value in struct.unpack_from('<21h', key, 8 * pack_builder.CURVE_WORDS + 4)]
         self.assertTrue(any(value < 0 for value in signed))
 
     def test_rebuild_is_byte_identical(self):

@@ -7,6 +7,7 @@
 #include "quality_settings.h"
 #include <fstream>
 #include <sstream>
+#include <iomanip>
 #include <map>
 #include <set>
 
@@ -83,8 +84,9 @@ inline std::array<float,4> toneCoefficients(const Profile& p,float night,bool ev
     if(p.toneStrength==0)return {};
     const auto grade=gradeAt(p,night,evening);
     float delta[5]={};
+    const auto brightness=NorthlightTone::shape(grade.curves[0]);
     for(unsigned i=0;i<3;++i){
-        delta[i+1]=p.toneStrength*(grade.curves[0].levels[i]-.25f*(i+1));
+        delta[i+1]=p.toneStrength*(float(NorthlightTone::exact(brightness,.25*(i+1)))-.25f*(i+1));
     }
     std::array<float,4> result{};
     float slope=(delta[1]-delta[0])*4;
@@ -173,6 +175,7 @@ inline float* keyTarget(Profile& profile,const std::string& key,unsigned& count,
     const auto binding=NorthlightTone::gradeBindings().find(key);
     if(binding!=NorthlightTone::gradeBindings().end()){
         const auto& b=binding->second;
+        if(b.field==NorthlightTone::GradeField::Points)count=NorthlightTone::CurveWords;
         return NorthlightTone::parameter(profile.grade[static_cast<unsigned>(b.time)],b,minimum,maximum);
     }
     if(key=="shadow_contrast")return &profile.shadowContrast;
@@ -200,6 +203,13 @@ inline bool allHoursFogKey(const std::string& key){return key=="fog_tint"||key==
 inline std::array<std::string,NorthlightTone::StopCount> fogTimeKeys(const std::string& allHoursKey){
     return {"day_"+allHoursKey,"dusk_"+allHoursKey,"night_"+allHoursKey};
 }
+// A key's value as a look file writes it.
+inline std::string valueText(const float* target,unsigned count,int precision=6){
+    if(count==NorthlightTone::CurveWords)return NorthlightTone::curveText(target);
+    std::ostringstream out;out<<std::setprecision(precision);
+    for(unsigned i=0;i<count;++i){if(i)out<<',';out<<target[i];}
+    return out.str();
+}
 // The all-hours key a per-time fog key replaces, or empty.
 inline std::string allHoursFogKeyOf(const std::string& key){
     const auto at=key.find("_fog_tint");if(at==key.npos)return {};
@@ -209,6 +219,11 @@ inline std::string allHoursFogKeyOf(const std::string& key){
 inline const char* assignKey(Profile& profile,const std::string& key,std::string value){
     unsigned count=0;float minimum=0,maximum=0;
     float* target=keyTarget(profile,key,count,minimum,maximum);if(!target)return "unknown key";
+    if(count==NorthlightTone::CurveWords){
+        std::array<float,NorthlightTone::CurveWords> points{};
+        if(const char* why=NorthlightTone::parseCurve(value,points))return why;
+        std::copy(points.begin(),points.end(),target);return nullptr;
+    }
     const auto name=key.substr(key.rfind("sun_",0)==0?4:5);
     for(char& c:value)if(c==',')c=' ';std::istringstream values(value);
     for(unsigned i=0;i<count;++i)if(!(values>>target[i])||!std::isfinite(target[i])||target[i]<minimum||target[i]>maximum)return "invalid numeric value";
@@ -243,7 +258,18 @@ inline bool hasExplicitDusk(const Table& table,const std::string& map,uint32_t z
 inline void resolveLegacyDusk(Table& table){
     using namespace NorthlightTone;
     auto resolve=[&](Profile& profile,const std::string& map,uint32_t zone){
-        for(const auto& row:gradeBindings())if(static_cast<unsigned>(row.second.time)==static_cast<unsigned>(TimeStop::Dusk)&&!hasExplicitDusk(table,map,zone,row.first)){
+        // A Dusk curve nobody wrote, between a Daylight and a Night curve of which one has free points, is their mix
+        // as points. Dusk levels somebody did write keep describing it.
+        for(unsigned channel=0;channel<4;++channel){
+            if(hasExplicitDusk(table,map,zone,pointsKey(TimeStop::Dusk,channel)))continue;
+            const Curve& day=profile.grade[0].curves[channel];const Curve& night=profile.grade[2].curves[channel];
+            Curve& dusk=profile.grade[1].curves[channel];
+            bool levels=false;
+            for(unsigned param=0;param<5;++param)levels|=hasExplicitDusk(table,map,zone,gradeKey(TimeStop::Dusk,channel,param));
+            if(levels||(!day.free()&&!night.free()))dusk.points={-1.f};
+            else dusk.points=blend(day,night,DuskNightWeight).points;
+        }
+        for(const auto& row:gradeBindings())if(row.second.field!=GradeField::Points&&static_cast<unsigned>(row.second.time)==static_cast<unsigned>(TimeStop::Dusk)&&!hasExplicitDusk(table,map,zone,row.first)){
             const auto& key=row.first;
             const auto suffix=key.substr(5);unsigned count=0;float lo=0,hi=0;
             auto* dusk=keyTarget(profile,key,count,lo,hi);auto* day=keyTarget(profile,"day_"+suffix,count,lo,hi);auto* night=keyTarget(profile,"night_"+suffix,count,lo,hi);

@@ -13,8 +13,9 @@
 
 namespace NorthlightGradeLut {
 namespace Pack {
-// The canonical key: four curves of five 16-bit values, strength, vibrance, then three 16-bit values per colour range.
-constexpr size_t HeaderBytes=104,KeyBytes=44+6*NorthlightTone::HueBandCount;
+// The canonical key: four curves (each its point count, then four 16-bit values per point), strength, vibrance, then
+// three 16-bit values per colour range.
+constexpr size_t HeaderBytes=104,KeyBytes=8*NorthlightTone::CurveWords+4+6*NorthlightTone::HueBandCount;
 // An index record: key hash (8 bytes), the canonical key, reserved (2), table offset (8), table length (4), SHA-256 (32).
 constexpr size_t RecordReservedAt=8+KeyBytes,RecordOffsetAt=RecordReservedAt+2,RecordLengthAt=RecordOffsetAt+8,RecordDigestAt=RecordLengthAt+4,
                  RecordBytes=RecordDigestAt+32;

@@ -253,14 +253,48 @@ int main(int argc,char** argv){
             assert(near(lowOutput(low),y));
         }
     }
+    {   // A curve written as points: read from a look, inherited, replaced by a subzone, and mixed into a Dusk nobody wrote.
+        using namespace NorthlightTone;
+        Table looks;
+        std::istringstream input("[default]\nnight_shadow_level=.3\n"
+                                 "[Azeroth:12]\ntone_curve_strength=1\nday_curve=0.3,0.2 0.7,0.8,0.5,-\nnight_red_curve=straight\nnight_red_midtone_level=.6\n"
+                                 "[Azeroth:12/87]\nday_curve=levels\nday_midtone_level=.58\n"
+                                 "[Azeroth:12/88]\ndusk_shadow_level=.2\n"
+                                 "[Azeroth:40]\nday_curve=0.5,0.6\ndusk_curve=0.5,0.4\n");
+        assert(parse(input,looks,error));
+        const auto& forest=looks.at("Azeroth",12).grade;
+        assert(forest[0].curves[0].free()&&pointCount(forest[0].curves[0])==2&&near(point(forest[0].curves[0],1).in,.5f));
+        assert(near(sample(forest[0].curves[0],.5f),.55f,1e-3f)&&sample(forest[0].curves[0],.3f)<.21f);
+        // Points win over the levels of the same curve; a curve of levels is untouched by another curve's points.
+        assert(forest[2].curves[1].free()&&near(sample(forest[2].curves[1],.5f),.5f));
+        assert(!forest[2].curves[0].free()&&near(forest[2].curves[0].levels[0],.3f));
+        // Dusk between a Daylight curve of points and a Night curve of levels is their mix.
+        assert(forest[1].curves[0].free());
+        for(float x:{.2f,.4f,.6f,.8f})
+            assert(near(sample(forest[1].curves[0],x),sample(forest[0].curves[0],x)+(sample(forest[2].curves[0],x)-sample(forest[0].curves[0],x))*DuskNightWeight,2e-3f));
+        // A subzone goes back to levels with "levels"; another's own Dusk level keeps Dusk as levels.
+        const auto& town=looks.at("Azeroth",87).grade;
+        assert(!town[0].curves[0].free()&&near(town[0].curves[0].levels[1],.58f)&&near(sample(town[0].curves[0],.5f),.58f,2e-3f));
+        const auto& farm=looks.at("Azeroth",88).grade;
+        assert(farm[0].curves[0].free()&&!farm[1].curves[0].free()&&near(farm[1].curves[0].levels[0],.2f));
+        // A Dusk curve somebody wrote is kept.
+        const auto& coast=looks.at("Azeroth",40).grade;
+        assert(pointCount(coast[1].curves[0])==1&&near(point(coast[1].curves[0],0).y,.4f));
+        Profile p;
+        assert(!assignKey(p,"dusk_blue_curve","0.25,0.3 0.5,0.5,1.5,1.5")&&pointCount(p.grade[1].curves[3])==2);
+        assert(assignKey(p,"dusk_blue_curve","0.5,0.5 0.25,0.3")&&pointCount(p.grade[1].curves[3])==2);
+        unsigned count=0;float lo=0,hi=0;const float* target=keyTarget(p,"dusk_blue_curve",count,lo,hi);
+        assert(target&&count==CurveWords&&valueText(target,count)=="0.25,0.3 0.5,0.5,1.5,1.5");
+        std::cout<<"PASS curve points: look keys, levels beside points, dusk mixing and inheritance\n";
+    }
     {
         using namespace NorthlightTone;
         Profile base,day;
         assert(!assignKey(day,"day_vibrance",".65")&&assignKey(day,"night_vibrance","1.1"));
         assert(near(blend(base,day,.5f).grade[0].vibrance,.325f));
-        assert(!tableKey(base.grade[0],1,true).strength);
+        assert(!tableKey(base.grade[0],1).strength);
         base.grade[0].curves[0].levels[1]=.55f;
-        assert(tableKey(base.grade[0],1,true).strength&&!tableKey(base.grade[0],1,false).strength);
+        assert(tableKey(base.grade[0],1).strength);
         const unsigned pitch=CubeSize*4+8,slice=pitch*CubeSize+8;
         std::vector<uint16_t> voxels(slice*CubeSize,0xaaaa);
         bakeColourVolume(voxels.data(),pitch*2,slice*2,vibrantColour);

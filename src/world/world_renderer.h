@@ -636,7 +636,7 @@ private:
         result.gradeKeys=frameGradeKeys;
         if(palette.toneStrength>0&&(!gradeVolumeSupported||gradeVolumeUnavailable)){
             const auto fallbackGrade=NorthlightTone::sample(palette.grade,result.gradeWeights);
-            result.curveKey=NorthlightTone::tableKey(fallbackGrade,palette.toneStrength,true);
+            result.curveKey=NorthlightTone::tableKey(fallbackGrade,palette.toneStrength);
         }
         result.appearance=NorthlightCelestialProfiles::appearance(palette,result.state.color,effects.fog,result.gradeWeights);
         for(unsigned i=0;i<3;++i)result.constants.haze[i]*=1.f+result.appearance[i];

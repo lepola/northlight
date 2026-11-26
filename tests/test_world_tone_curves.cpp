@@ -7,7 +7,7 @@
 
 using namespace NorthlightTone;
 
-static_assert(BakeMathSchemaVersion==2);
+static_assert(BakeMathSchemaVersion==3);
 
 static bool near(float a,float b,float epsilon=1e-5f){return std::abs(a-b)<=epsilon;}
 static float luminance(const std::array<float,3>& rgb){return .2126f*rgb[0]+.7152f*rgb[1]+.0722f*rgb[2];}
@@ -38,7 +38,8 @@ int main(){
     assert(gradeKey(TimeStop::Dusk,0,2)=="dusk_shadow_level");
     assert(vibranceKey(TimeStop::Night)=="night_vibrance");
     assert(selectiveKey(TimeStop::Dusk,HueBand::Orange,SelectiveProperty::Saturation)=="dusk_orange_saturation");
-    assert(gradeBindings().size()==3*(4*5+1+3*HueBandCount));
+    assert(gradeBindings().size()==3*(4*5+4+1+3*HueBandCount));
+    assert(pointsKey(TimeStop::Day,0)=="day_curve"&&pointsKey(TimeStop::Night,3)=="night_blue_curve");
 
     {
         const auto day=timeWeights(0,false),night=timeWeights(1,false),dawn=timeWeights(.5f,false);
@@ -229,6 +230,118 @@ int main(){
         auto guarded=keys;guarded[1]=BakeKey{};guarded[1].strength=4096;
         const auto dayOnly=transform(guarded,timeWeights(0,false),input);
         assert(dayOnly==day&&std::all_of(dayOnly.begin(),dayOnly.end(),[](float v){return std::isfinite(v);}));
+    }
+    {   // The five levels of an older look give the curve they always gave.
+        auto before=[](const Curve& c,float x){
+            const float points[]={0,c.lowInput,.25f,.5f,.75f,1};
+            const float values[]={0,lowOutput(c),c.levels[0],c.levels[1],c.levels[2],1};
+            float slope=values[1]/points[1],value=x*slope;constexpr float r=2.f/255.f;
+            for(unsigned i=1;i<5;++i){
+                const float next=(values[i+1]-values[i])/(points[i+1]-points[i]);
+                const float d=x-points[i],k=std::clamp(d+r,0.f,2*r);
+                value+=(next-slope)*(std::max(0.f,d-r)+k*k/(4*r));slope=next;
+            }
+            return value;
+        };
+        Curve levels;levels.lowInput=.07f;levels.lowBend=.8f;levels.levels={.31f,.46f,.80f};
+        assert(!levels.free()&&pointCount(levels)==4);
+        for(unsigned i=0;i<=1000;++i)assert(near(sample(levels,i/1000.f),before(levels,i/1000.f),4e-6f));
+        // The same curve written as points is the same curve and the same table.
+        Curve written;Point points[4];for(unsigned i=0;i<4;++i)points[i]=point(levels,i);
+        setPoints(written,points,4);
+        assert(written.free()&&curveKey(written)==curveKey(levels));
+        for(unsigned i=0;i<=100;++i)assert(sample(written,i/100.f)==sample(levels,i/100.f));
+    }
+    {   // No points: a straight line, and no table at all however it is written.
+        Curve straight;assert(!parseCurve("straight",straight.points)&&straight.free()&&pointCount(straight)==0);
+        for(unsigned i=0;i<=100;++i)assert(near(sample(straight,i/100.f),i/100.f,1e-6f));
+        Curve onLine;assert(!parseCurve("0.3,0.3 0.6,0.6",onLine.points));
+        assert(curveKey(straight)==CurveKey{}&&curveKey(onLine)==CurveKey{}&&curveKey(Curve{})==CurveKey{});
+        Grade grade;grade.curves[0]=onLine;assert(!makeBakeKey(grade,1).strength&&!tableKey(grade,1).strength);
+        Curve bent;assert(!parseCurve("0.3,0.3,2,-",bent.points)&&curveKey(bent)!=CurveKey{});
+    }
+    {   // One point without handles: straight lines to it from black and on to white, the corner rounded.
+        Curve one;assert(!parseCurve("0.5,0.6",one.points));
+        assert(near(sample(one,.25f),.3f)&&near(sample(one,.75f),.8f)&&sample(one,.5f)<.6f&&sample(one,.5f)>.59f);
+        assert(near(sample(one,0),0,1e-4f)&&near(sample(one,1),1,2e-3f));
+        // Handles bend the curve on each side and it still passes through the point.
+        Curve handled;assert(!parseCurve("0.5,0.6,0,0",handled.points));
+        const Shape s=shape(handled);
+        assert(near(float(exact(s,.5)),.6f)&&exact(s,.45)>.58&&exact(s,.55)<.61);   // flat through the point
+        assert(exact(s,.25)>.3&&exact(s,.75)<.8);                                    // rising sooner before it, later after
+        Curve oneSide;assert(!parseCurve("0.5,0.6,-,0",oneSide.points));
+        const Shape o=shape(oneSide);
+        assert(near(float(exact(o,.25)),.3f)&&exact(o,.55)<.61);                     // the left side is still straight
+        for(unsigned i=1;i<=200;++i)assert(sample(handled,i/200.f)>=sample(handled,(i-1)/200.f));
+        // A handle may point down: the curve dips after the point and still reaches white.
+        Curve dip;assert(!parseCurve("0.5,0.6,-,-2",dip.points));
+        assert(exact(shape(dip),.55)<.6&&near(float(exact(shape(dip),1)),1));
+    }
+    {   // The text of a curve: read, written back the same, and refused when it cannot be a curve.
+        Curve c;const std::string text="0.1,0.08 0.25,0.3,1.25,- 0.7,0.75,-0.5,2";
+        assert(!parseCurve(text,c.points)&&pointCount(c)==3&&curveText(c.points.data())==text);
+        assert(point(c,1).in==1.25f&&point(c,1).out==StraightHandle&&point(c,2).out==2);
+        assert(curveText(Curve{}.points.data())=="levels");
+        Curve levels;assert(!parseCurve("levels",levels.points)&&!levels.free());
+        auto refused=[](const char* text){Curve c;const auto before=c.points;return parseCurve(text,c.points)&&c.points==before;};
+        assert(refused("")&&refused("0.5")&&refused("0.5,0.5,1")&&refused("0.6,0.5 0.4,0.5")&&refused("0.5,0.5 0.5,0.6"));
+        assert(refused("0,0.5")&&refused("1,0.5")&&refused("0.5,1.2")&&refused("0.5,0.5,9,1")&&refused("0.5,0.5,-9,1")&&refused("-,0.5")&&refused("0.5,x")&&refused("straight 0.5,0.5"));
+        std::string many;for(unsigned i=0;i<MaxCurvePoints+1;++i)many+=std::to_string(.05f+.08f*i)+",0.5 ";
+        assert(refused(many.c_str()));
+        many.clear();for(unsigned i=0;i<MaxCurvePoints;++i)many+=std::to_string(.05f+.08f*i)+",0.5,1.234,5.678 ";
+        Curve full;assert(!parseCurve(many,full.points)&&pointCount(full)==MaxCurvePoints&&curveText(full.points.data()).size()<512);
+    }
+    {   // Part way between two curves is part way between their heights everywhere, whatever their points.
+        Curve a,b,levels;levels.levels={.3f,.55f,.7f};
+        assert(!parseCurve("0.2,0.3,0.5,2 0.6,0.5",a.points)&&!parseCurve("0.35,0.2 0.6,0.7,0,0 0.9,0.95",b.points));
+        for(const auto& pair:{std::pair<Curve,Curve>{a,b},{a,levels},{levels,b}}){
+            const Curve half=blend(pair.first,pair.second,.25f);
+            assert(half.free());
+            const Shape sa=shape(pair.first),sb=shape(pair.second),sh=shape(half);
+            for(unsigned i=0;i<=400;++i){
+                const double x=i/400.,inside=x>=sh.knots[1].x&&x<=sh.knots[sh.count-2].x;
+                assert(std::abs(exact(sh,x)-(exact(sa,x)*.75+exact(sb,x)*.25))<(inside?2e-6:.01));
+            }
+        }
+        assert(blend(a,b,0).points==a.points&&blend(a,b,1).points==b.points);
+        // Too many points between them to keep each: sampled at even steps, still close.
+        Curve many,other;std::string first,second;
+        for(unsigned i=0;i<8;++i){first+=std::to_string(.06f+.11f*i)+","+std::to_string(.1f+.1f*i)+" ";second+=std::to_string(.11f+.11f*i)+","+std::to_string(.05f+.11f*i)+" ";}
+        assert(!parseCurve(first,many.points)&&!parseCurve(second,other.points));
+        const Curve mixed=blend(many,other,.5f);assert(pointCount(mixed)==MaxCurvePoints);
+        for(unsigned i=0;i<=100;++i)assert(std::abs(sample(mixed,i/100.f)-.5f*(sample(many,i/100.f)+sample(other,i/100.f)))<.02f);
+        // Daylight, Dusk and Night curves with free points blend through the day like the levels do.
+        Timeline timeline{};timeline[0].curves[0]=a;timeline[1].curves[0]=b;timeline[2].curves[0]=levels;
+        const auto dusk=sample(timeline,TimeWeights{0,1,0}),between=sample(timeline,TimeWeights{0,.5f,.5f});
+        assert(dusk.curves[0].points==b.points);
+        assert(near(sample(between.curves[0],.4f),.5f*(sample(b,.4f)+sample(levels,.4f)),1e-5f));
+    }
+    {   // Editing: points go in in order, stay between their neighbours, and come out again.
+        PointList list=pointsOf(Curve{});assert(list.count==0);   // an untouched curve starts with no points
+        Curve older;older.levels[1]=.6f;assert(pointsOf(older).count==4&&pointsOf(older).points[2].y==.6f);   // an older look's levels arrive as four
+        assert(addPoint(list,.5f,.6f)==0&&addPoint(list,.2f,.1f)==0&&addPoint(list,.8f,.9f)==2&&list.count==3);
+        PointList tight;assert(addPoint(tight,.5f,.5f)==0&&addPoint(tight,.515f,.5f)==1);
+        assert(addPoint(tight,.507f,.5f)==-1&&tight.count==2);                    // no room between two close points
+        movePoint(list,1,.05f,1.5f);assert(near(list.points[1].x,.2f+EditGap)&&list.points[1].y==1);
+        movePoint(list,1,.95f,-1);assert(near(list.points[1].x,.8f-EditGap)&&list.points[1].y==0);
+        setHandle(list,1,true,2,false);assert(list.points[1].out==2&&!hasHandle(list.points[1].in));
+        setHandle(list,1,false,-20,true);assert(list.points[1].in==-MaxHandleSlope&&list.points[1].out==-MaxHandleSlope);
+        assert(handleReach(list,0,false)>=.05f&&handleReach(list,2,true)<=.12f);
+        removePoint(list,0);assert(list.count==2&&near(list.points[1].x,.8f));
+        // What the editor writes is a curve a look file accepts, and reads back as the same points.
+        Curve written=curveOf(list),read;assert(!parseCurve(curveText(written.points.data()),read.points));
+        assert(pointCount(read)==2&&near(point(read,0).x,point(written,0).x,1e-4f)&&point(read,0).in==-MaxHandleSlope);
+        PointList full;for(unsigned i=0;i<MaxCurvePoints;++i)assert(addPoint(full,.05f+.09f*i,.5f)==int(i));
+        assert(addPoint(full,.97f,.5f)==-1);
+    }
+    {   // A curve with points makes a table, and the table follows the curve.
+        Grade grade;assert(!parseCurve("0.5,0.7,1,1",grade.curves[1].points));
+        const auto key=makeBakeKey(grade,1);assert(key.strength&&key==makeBakeKey(grade,1));
+        Grade other=grade;assert(!parseCurve("0.5,0.7,1,1.5",other.curves[1].points));
+        assert(key!=makeBakeKey(other,1)&&key.stableHash()!=makeBakeKey(other,1).stableHash());
+        assert(near(transform(key,.5f,0,0)[0],sample(grade.curves[1],.5f),1e-3f)&&transform(key,.5f,0,0)[0]>.69f);
+        std::array<uint16_t,256*4> pixels{};bake(tableKey(grade,1),pixels.data());
+        assert(pixels[0]==0&&std::abs(int(pixels[128*4])-int(std::lround(sample(grade.curves[1],128/255.f)*65535)))<40);
     }
     std::cout<<"world tone curves: timeline, compatibility, selective colour, key and LUT checks passed\n";
 }

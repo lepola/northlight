@@ -18,7 +18,8 @@ only the appearance keys, never sun or moon settings (`src/settings/appearance_p
 | `fog_tint`, `fog_tint_strength` | One value for all hours, as looks had before fog was per time. Read as the three per-time keys of its section; a per-time key in the same section wins. |
 | `shadow_contrast` | Deepens or lifts shadows in the lit world. |
 | `tone_curve_strength` | How much of the grade below is applied. Zero leaves the picture untouched. |
-| `<time>_<channel>low_input`, `low_bend`, `shadow_level`, `midtone_level`, `highlight_level` | One tone curve per time and channel. Channels are brightness (no prefix), `red_`, `green_` and `blue_`. |
+| `<time>_<channel>curve` | One tone curve per time and channel, as up to ten points between black and white. Channels are brightness (no prefix), `red_`, `green_` and `blue_`. Points are separated by spaces, each `x,y` or `x,y,in,out`, where `in` and `out` are the slopes of the point's two handles (-8 to 8) and `-` stands for a side without a handle, which runs straight to its neighbour. `straight` is a curve with no points; `levels` hands the curve back to the five levels below. Example: `day_curve = 0.25,0.2 0.6,0.7,1.5,1.5`. |
+| `<time>_<channel>low_input`, `low_bend`, `shadow_level`, `midtone_level`, `highlight_level` | The same curve as older looks wrote it: a low point, then shadows, midtones and highlights at each quarter. Still read. Where a section or one it inherits from also gives the curve as points, the points are used. |
 | `<time>_vibrance` | Lifts muted colours more than saturated ones. |
 | `<time>_<range>_hue_shift`, `_saturation`, `_lightness` | Adjusts one colour range. |
 
@@ -27,8 +28,8 @@ centred on 0°, 30°, 60°, 120°, 180°, 240° and 300°. A colour between two 
 proportion, so the ranges always add up to the whole wheel (`hueWeights` in `src/sky/world_tone_curves.h`).
 
 `Default` is the packaged neutral look and its name is reserved. `Vibrant` and `Atmospheric` are the optional bundled
-looks (`client-config/appearance-presets/`). Atmospheric is generated in the Tideglass checkout from written intents
-(`tools/regional-look-intents.json` there) and has no table pack: its tables are baked as the player arrives. A player's own looks sit beside them under any other name; the menu
+looks (`client-config/appearance-presets/`). Atmospheric, its grades and its fog tints, is generated in the Tideglass
+checkout from written intents (`tools/regional-look-intents.json` there) and has no table pack: its tables are baked as the player arrives. A player's own looks sit beside them under any other name; the menu
 saves, replaces and deletes those and leaves the packaged ones alone (`packaged`, and the preset jobs in
 `src/settings/settings_service.h`).
 
@@ -99,8 +100,9 @@ ships them ready-made in `appearance-luts/Vibrant.nllutpack` (`renderer/build_ap
 
 The Tideglass checkout has a browser tool, `tools/regional_grade_lab.html`, which applies the same arithmetic to
 saved screenshots (`tools/regional_grade_lab_core.js`, checked by `regional_grade_lab_core_test.js`). It reads and
-writes the same INI files. Its arithmetic is a second copy of `world_tone_curves.h`: change both together and
-compare them on a grade that uses every control. Screenshots for it must be taken with the Default look so that
+writes the same INI files. Its arithmetic is a second copy of `world_tone_curves.h`: change both together, then
+refresh the numbers its test holds it to (`tools/regional_grade_lab_curve_reference.cpp`, which prints them from
+this header). Screenshots for it must be taken with the Default look so that
 nothing is graded twice.
 
 ## Checks

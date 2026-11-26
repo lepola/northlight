@@ -22,7 +22,8 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 RAW_HEADER = struct.Struct('<8sHHI')
 PACK_HEADER = struct.Struct('<8sHHHHHHIQQ32s32s')
-BAKE_KEY_BYTES = 44 + 6 * 7   # four curves of five values, strength, vibrance, three values for each of seven colour ranges
+CURVE_WORDS = 1 + 4 * 10   # a curve's point count, then x, y and two slopes for each of up to ten points
+BAKE_KEY_BYTES = 8 * CURVE_WORDS + 4 + 6 * 7   # four curves, strength, vibrance, three values for each of seven colour ranges
 PACK_RECORD = struct.Struct(f'<Q{BAKE_KEY_BYTES}sH QI32s')
 PACK_MAGIC = b'NLLUTPK\0'
 RAW_MAGIC = b'NLRAW001'
@@ -80,7 +81,7 @@ def _raw_records(data):
         offset += VOLUME_BYTES
         if stable_hash(key_bytes) != key_hash:
             raise ValueError('C++ BakeKey hash does not match its canonical fields')
-        if struct.unpack_from('<H', key_bytes, 40)[0] == 0:
+        if struct.unpack_from('<H', key_bytes, 8 * CURVE_WORDS)[0] == 0:   # strength follows the four curves
             raise ValueError('identity BakeKey should not have a baked table')
         ordering = (key_hash, key_bytes)
         if previous is not None and ordering <= previous:

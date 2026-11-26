@@ -186,7 +186,7 @@ def default_appearance_preset():
     """A visual-only baseline from the authored regional profile. The game-folder profile may contain player edits;
     comparing it with this package copy lets Vibrant retain those edits while replacing packaged starting values."""
     keys = {'fog_tint', 'fog_tint_strength', 'shadow_contrast', 'tone_curve_strength', 'day_vibrance', 'night_vibrance'}
-    params = ('low_input', 'low_bend', 'shadow_level', 'midtone_level', 'highlight_level')
+    params = ('low_input', 'low_bend', 'shadow_level', 'midtone_level', 'highlight_level', 'curve')
     for time_name in ('day', 'night'):
         for channel in ('', 'red_', 'green_', 'blue_'):
             for param in params:

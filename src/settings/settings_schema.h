@@ -79,7 +79,7 @@ inline std::string liquidAreaKey(const std::string& section){
 }
 inline const std::vector<std::string> AppearanceKeys=NorthlightAppearancePresets::keys();
 inline const std::array<const char*,11> CelestialNames={"disc","disc_gain","light","light_mix","light_strength","fog_gain","fog_height_scale","horizon_haze","glow_strength","glow","glow_mix"};
-inline std::string profileValue(NorthlightCelestialProfiles::Profile p,const std::string& key){unsigned n=0;float lo=0,hi=0;auto* v=NorthlightCelestialProfiles::keyTarget(p,key,n,lo,hi);std::string s;for(unsigned i=0;i<n;++i)s+=(i?",":"")+number(v[i]);return s;}
+inline std::string profileValue(NorthlightCelestialProfiles::Profile p,const std::string& key){unsigned n=0;float lo=0,hi=0;auto* v=NorthlightCelestialProfiles::keyTarget(p,key,n,lo,hi);if(n==NorthlightTone::CurveWords)return NorthlightTone::curveText(v);std::string s;for(unsigned i=0;i<n;++i)s+=(i?",":"")+number(v[i]);return s;}
 inline const NorthlightCelestialProfiles::Profile& profile(const NorthlightCelestialProfiles::Table& t,const std::string& s){if(lower(s)=="default")return t.fallback;
     if(s.size()>8&&s.compare(s.size()-8,8,":default")==0){const auto map=s.substr(0,s.size()-8);const auto i=t.mapFallbacks.find(map);return i==t.mapFallbacks.end()?t.fallback:i->second;}
     auto slash=s.find('/');
@@ -164,7 +164,7 @@ inline std::vector<Field> schema(const Documents& docs,const Documents& initial,
                 std::vector<std::string> keys(std::begin(AppearanceKeys),std::end(AppearanceKeys));
                 for(auto body:{"sun_","moon_"})for(auto name:CelestialNames)keys.emplace_back(std::string(body)+name);
                 for(const auto& key:keys){Field f;f.file=2;f.section=section;f.key=key;f.apply="F";unsigned n=0;float lo=0,hi=0;NorthlightCelestialProfiles::Profile dummy;
-                NorthlightCelestialProfiles::keyTarget(dummy,f.key,n,lo,hi);f.kind=n==3?"rgb":"slider";f.low=number(lo);f.high=number(hi);f.step="0.01";
+                NorthlightCelestialProfiles::keyTarget(dummy,f.key,n,lo,hi);f.kind=n==3?"rgb":n==NorthlightTone::CurveWords?"curve":"slider";f.low=number(lo);f.high=number(hi);f.step="0.01";
                 f.saved=profileValue(profile(saved.celestial,section),f.key);f.active=profileValue(profile(active.celestial,section),f.key);f.factory=profileValue(profile(defaults.celestial,section),f.key);
                 f.inherited=profileValue(section=="default"?profile(saved.celestial,"default"):profile(saved.celestial,parentSection(section)),f.key);add(f);
                 if(file==2&&NorthlightAppearancePresets::visualKey(f.key)){
@@ -264,7 +264,7 @@ inline std::vector<Field> schema(const Documents& docs,const Documents& initial,
     return out;
 }
 inline void validateValue(const Field& f,const std::string& value){
-    if(value.size()>128||value.find_first_of("\t\r\n\0",0,4)!=value.npos)throw std::runtime_error("Invalid settings value");
+    if(value.size()>(f.kind=="curve"?512u:128u)||value.find_first_of("\t\r\n\0",0,4)!=value.npos)throw std::runtime_error("Invalid settings value");
     if(value=="~"){if(f.file==1&&f.key=="Backend"&&(","+f.options+",").find(",legacy,")==std::string::npos)throw std::runtime_error("Legacy backend is not installed; select an available backend");return;}
     if(f.kind=="enum"){std::istringstream s(f.options);std::string v;while(std::getline(s,v,','))if(v==value)return;throw std::runtime_error("Unknown option for "+f.key);}
     if(f.file==2){NorthlightCelestialProfiles::Profile p;if(auto e=NorthlightCelestialProfiles::assignKey(p,f.key,value))throw std::runtime_error(f.key+": "+e);return;}

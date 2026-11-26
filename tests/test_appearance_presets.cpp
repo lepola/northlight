@@ -222,7 +222,10 @@ int main(int argc,char** argv){
         for(const auto& key:keys()){
             unsigned count=0;float low=0,high=0;auto* target=NorthlightCelestialProfiles::keyTarget(area,key,count,low,high);assert(target);
             const float ratio=.2f+.006f*float((zone+fieldIndex)%80);
-            for(unsigned i=0;i<count;++i)target[i]=low+(high-low)*ratio;
+            if(count==NorthlightTone::CurveWords){
+                NorthlightTone::Curve curve;const NorthlightTone::Point points[]={{.2f+.3f*ratio,ratio,1+ratio,NorthlightTone::StraightHandle},{.8f,.7f+.2f*ratio}};
+                NorthlightTone::setPoints(curve,points,2);std::copy(curve.points.begin(),curve.points.end(),target);
+            }else for(unsigned i=0;i<count;++i)target[i]=low+(high-low)*ratio;
             ++fieldIndex;
         }
         large.zones.emplace(std::make_pair(std::string("Azeroth"),zone),area);

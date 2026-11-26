@@ -163,7 +163,7 @@ inline Catalog loadSelected(const std::filesystem::path& root,const std::string&
 inline std::string value(const Profile& profile,const std::string& key){
     Profile copy=profile;unsigned count=0;float lo=0,hi=0;const float* target=NorthlightCelestialProfiles::keyTarget(copy,key,count,lo,hi);
     if(!target)throw std::runtime_error("Unknown appearance key: "+key);
-    std::ostringstream out;out<<std::setprecision(6);for(unsigned i=0;i<count;++i){if(i)out<<',';out<<target[i];}return out.str();
+    return NorthlightCelestialProfiles::valueText(target,count);
 }
 inline Profile mapBase(const Table& table,const std::string& map){
     const auto i=table.mapFallbacks.find(map);return i==table.mapFallbacks.end()?table.fallback:i->second;
