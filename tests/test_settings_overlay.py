@@ -139,8 +139,13 @@ check('GradeTimes={NorthlightTone::TimeStop::Day,NorthlightTone::TimeStop::Dusk,
       'Colour grading: three clearly named independent Daylight, Dusk and Night grade editors')
 check(panel.index('ImGui::PushID("ranges");') < panel.index('ImGui::RadioButton(bandTitle(band).c_str()'),
       'grade editor: the colour ranges have their own ID scope (Red, Green and Blue are channel names too)')
-check('NorthlightTone::gradeKey(time,curveChannel,i)' in panel and 'NorthlightTone::vibranceKey(time)' in panel,
+check('T::pointsKey(time,curveChannel)' in panel and 'T::gradeKey(time,curveChannel,i)' in panel and 'NorthlightTone::vibranceKey(time)' in panel,
       'grade editor: curves and vibrance use the native timeline key helpers')
+check('T::addPoint(list,' in panel and 'T::movePoint(list,' in panel and 'T::setHandle(list,' in panel and 'T::removePoint(list,' in panel
+      and 'ImGui::IsMouseClicked(ImGuiMouseButton_Right)' in panel and '!ImGui::GetIO().KeyAlt' in panel,
+      'grade editor: a click adds a point, a drag moves a point or a handle, right-click removes, Alt moves one handle alone')
+check('set(*pointsField,text)' in panel and 'T::curveText(T::curveOf(list).points.data())' in panel,
+      'grade editor: every edit writes the curve as its points')
 check('for(const auto band:HueBands)' in panel and 'NorthlightTone::selectiveKey(time,band,SelectiveProperties[i])' in panel and
       'SmallButton("Inherit range")' in panel,
       'grade editor: each time exposes selective colour bands with a per-range inherit action')

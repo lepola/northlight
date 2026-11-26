@@ -267,6 +267,22 @@ static void regionalAppearance(){
     auto redReset=applyChanges(rgb,rows,red.id()+"\t~\n");
     const auto resetProfile=configOf(redReset,"",true).celestial.at("Azeroth",159);
     CHECK(resetProfile.grade[0].curves[1].levels[1]==.5f&&resetProfile.grade[2].curves[0].lowBend==.64f&&resetProfile.fogTintStrength[1]==1.7f);
+    {   // A curve as points: a text field of its own kind, saved to the look, read back, and inherited again.
+        const auto& points=*d.field(2,"Azeroth:85/159","day_green_curve");
+        CHECK(points.kind=="curve"&&d.effective(points)=="levels");
+        const std::string drawn="0.2,0.1 0.5,0.55,1.5,- 0.8,0.9";
+        auto curved=applyChanges(rgb,rows,points.id()+"\t"+drawn+"\n");
+        const auto& green=configOf(curved,"",true).celestial.at("Azeroth",159).grade[0].curves[2];
+        CHECK(green.free()&&NorthlightTone::pointCount(green)==3&&NorthlightTone::point(green,1).in==1.5f&&!NorthlightTone::hasHandle(NorthlightTone::point(green,1).out));
+        const auto reopened=schema(curved,curved,configOf(curved,"",true),"","native",true);
+        for(const auto& f:reopened)if(f.section=="Azeroth:85/159"&&f.key=="day_green_curve")CHECK(f.saved==drawn&&f.overrideValue==drawn);
+        std::string longest;for(unsigned i=0;i<NorthlightTone::MaxCurvePoints;++i)longest+=(i?" ":"")+std::string("0.")+char('0'+i)+"512,0.4321,-1.234,5.678";
+        CHECK(longest.size()>128&&!configOf(applyChanges(rgb,rows,points.id()+"\t"+longest+"\n"),"",true).celestial.at("Azeroth",159).grade[0].curves[2].levels.empty());
+        bool refused=false;try{applyChanges(rgb,rows,points.id()+"\t0.6,0.5 0.4,0.5\n");}catch(const std::exception&){refused=true;}
+        CHECK(refused);
+        const auto back=configOf(applyChanges(curved,rows,points.id()+"\t~\n"),"",true).celestial.at("Azeroth",159);
+        CHECK(!back.grade[0].curves[2].free());
+    }
     CHECK(D::same(tint,d.effective(tint),".65"));
     d.pin(tint,"0");CHECK(d.overrides(tint)&&d.effective(tint)=="0");
     d.inherit(tint);CHECK(D::same(tint,d.effective(tint),".65")&&D::same(shadow,d.effective(shadow),".4"));

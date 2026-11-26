@@ -454,6 +454,11 @@ std::string folded(std::string text){
 std::string fieldLabel(const Field& f){
     if(f.file==NorthlightSettings::WaterHostFile)return "Use Tideglass";
     if(const char* l=find(Labels,f.key))return l;
+    if(f.kind=="curve"){
+        for(const char* channel:{"red","green","blue"})if(f.key.find(std::string("_")+channel+"_curve")!=f.key.npos)
+            return std::string(1,char(channel[0]-32))+(channel+1)+" curve";
+        return "Brightness curve";
+    }
     std::string body;const auto name=celestialName(f.key,&body);if(!name.empty())return body+": "+name;
     return f.key;
 }
@@ -545,7 +550,11 @@ struct SettingsPanel::State {
     mutable std::map<std::string,unsigned> fieldPageMask;
     mutable const NorthlightSettings::Snapshot* celestialSectionSnapshot=nullptr;
     mutable std::map<std::string,std::map<std::string,const Field*>> celestialSectionFieldCache;
-    int curveChannel=0,selectedPoint=0,dragPoint=-1,selectedBand=0;
+    enum class CurveDrag {None,Point,HandleIn,HandleOut};
+    int curveChannel=0,selectedPoint=-1,selectedBand=0;
+    CurveDrag curveDrag=CurveDrag::None;
+    NorthlightTone::PointList curvePoints;   // the curve under the mouse while it is dragged
+    std::string curveShown;                  // the curve the selection belongs to
     ImVec2 curveDragOffset{};
     bool curveDragged=false;
     double nextCurvePreview=0;
@@ -1168,118 +1177,147 @@ struct SettingsPanel::State {
         return true;
     }
     bool pickRegion(){return pickRegion(region);}
+    // The curve graph: click an empty spot to add a point and drag it; the selected point has two handles that bend
+    // the curve on either side; right-click removes a point, or a handle.
     void gradeEditor(NorthlightTone::TimeStop time){
+        namespace T=NorthlightTone;
         ImGui::PushID(int(time));
         const char* channels[]={"Brightness","Red","Green","Blue"};
-        NorthlightTone::Grade grade;
-        auto& curve=grade.curves[curveChannel];
-        const Field* fields[5]{};
+        const Field* pointsField=draft.field(D::Celestial,region,T::pointsKey(time,curveChannel));
+        const Field* levels[5]{};
+        T::Curve saved;
         for(unsigned i=0;i<5;++i){
-            const auto key=NorthlightTone::gradeKey(time,curveChannel,i);
-            fields[i]=draft.field(D::Celestial,region,key);
-            if(!fields[i]){ImGui::PopID();return;}
+            levels[i]=draft.field(D::Celestial,region,T::gradeKey(time,curveChannel,i));
+            if(!levels[i]||!pointsField){ImGui::PopID();return;}
             float lo,hi;
-            *NorthlightTone::parameter(curve,i,lo,hi)=float(number(draft.effective(*fields[i])));
+            *T::parameter(saved,i,lo,hi)=float(number(draft.effective(*levels[i])));
         }
+        T::parseCurve(draft.effective(*pointsField),saved.points);
+        // While something is dragged, the points under the mouse are the curve; the look follows a few times a second.
+        const std::string shown=pointsField->id();
+        if(curveShown!=shown){curveShown=shown;selectedPoint=-1;curveDrag=CurveDrag::None;}
+        if(curveDrag==CurveDrag::None)curvePoints=T::pointsOf(saved);
+        T::PointList& list=curvePoints;
+        if(selectedPoint>=int(list.count))selectedPoint=-1;
+        const T::Shape curve=T::shape(T::curveOf(list));
         const ImVec2 origin=ImGui::GetCursorScreenPos();
         // Square, so a slope on screen is the slope of the curve; the channel choice and readout sit beside it.
         const float side=std::clamp(ImGui::GetContentRegionAvail().x*.46f,190*scale,300*scale);
         const ImVec2 size(side,side);
         const float pad=6*scale,w=std::max(size.x-2*pad,1.f),h=size.y-2*pad;
         auto pos=[&](float x,float y){return ImVec2(origin.x+pad+x*w,origin.y+pad+(1-y)*h);};
-        auto nodeX=[&](int i){return i==0?curve.lowInput:i*.25f;};
-        auto nodeY=[&](int i){return i==0?NorthlightTone::lowOutput(curve):curve.levels[i-1];};
+        // A handle's end: sideways by its reach, up or down by the slope of that side.
+        auto handleEnd=[&](int i,bool out){
+            const float reach=T::handleReach(list,unsigned(i),out)*(out?1.f:-1.f);
+            const auto& knot=curve.knots[unsigned(i)+1];
+            return pos(list.points[i].x+reach,list.points[i].y+float(out?knot.out:knot.in)*reach);
+        };
         ImGui::InvisibleButton("Curve graph",size);
         const auto mouse=ImGui::GetIO().MousePos;
-        auto inheritPoint=[&](int point){
-            if(point==0){inherit(*fields[0]);inherit(*fields[1]);}
-            else inherit(*fields[point+1]);
+        const float mouseX=(mouse.x+curveDragOffset.x-origin.x-pad)/w,mouseY=1-(mouse.y+curveDragOffset.y-origin.y-pad)/h;
+        auto commit=[&]{
+            const auto text=T::curveText(T::curveOf(list).points.data());
+            if(text!=draft.effective(*pointsField))set(*pointsField,text);
         };
-        int hoverPoint=-1;
-        if(ImGui::IsItemHovered()&&dragPoint<0){
-            float best=16*scale;
-            for(int i=0;i<4;++i){
-                const auto pt=pos(nodeX(i),nodeY(i));
+        int hoverPoint=-1;CurveDrag hoverHandle=CurveDrag::None;
+        if(ImGui::IsItemHovered()&&curveDrag==CurveDrag::None){
+            float best=12*scale;
+            if(selectedPoint>=0)for(const bool out:{false,true}){
+                const auto end=handleEnd(selectedPoint,out);
+                const float dist=std::hypot(mouse.x-end.x,mouse.y-end.y);
+                if(dist<best){best=dist;hoverHandle=out?CurveDrag::HandleOut:CurveDrag::HandleIn;}
+            }
+            if(hoverHandle==CurveDrag::None)for(int i=0;i<int(list.count);++i){
+                const auto pt=pos(list.points[i].x,list.points[i].y);
                 const float dist=std::hypot(mouse.x-pt.x,mouse.y-pt.y);
                 if(dist<best){best=dist;hoverPoint=i;}
             }
-            if(hoverPoint>=0&&ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)&&!locked()){selectedPoint=hoverPoint;inheritPoint(hoverPoint);}
-        }
-        if(ImGui::IsItemActivated()){
-            dragPoint=-1;
-            curveDragged=false;
-            float best=16*scale;
-            for(int i=0;i<4;++i){
-                const auto pt=pos(nodeX(i),nodeY(i));
-                const float dist=std::hypot(mouse.x-pt.x,mouse.y-pt.y);
-                if(dist<best){best=dist;dragPoint=i;selectedPoint=i;curveDragOffset={pt.x-mouse.x,pt.y-mouse.y};}
+            if(ImGui::IsMouseClicked(ImGuiMouseButton_Right)&&!locked()){
+                if(hoverHandle!=CurveDrag::None){
+                    auto& point=list.points[selectedPoint];
+                    (hoverHandle==CurveDrag::HandleOut?point.out:point.in)=T::StraightHandle;commit();
+                }else if(hoverPoint>=0){T::removePoint(list,unsigned(hoverPoint));selectedPoint=-1;hoverPoint=-1;commit();}
             }
         }
-        if(dragPoint>=0&&ImGui::IsItemActive()&&ImGui::IsMouseDragging(ImGuiMouseButton_Left,1.f))curveDragged=true;
-        if(dragPoint>=0&&curveDragged&&(ImGui::IsItemActive()||ImGui::IsItemDeactivated())){
-            const bool released=ImGui::IsItemDeactivated();
-            const bool update=released||ImGui::GetTime()>=nextCurvePreview;
-            const float y=std::clamp(1-(mouse.y+curveDragOffset.y-origin.y-pad)/h,0.f,1.f);
-            auto change=[&](unsigned index,float value){
-                float lo,hi;float* target=NorthlightTone::parameter(curve,index,lo,hi);
-                *target=std::clamp(value,lo,hi);
-                if(update){
-                    const auto& field=*fields[index];const auto rounded=text(field,*target);
-                    if(std::abs(number(rounded)-number(draft.effective(field)))>.00001)set(field,rounded);
-                }
-            };
-            if(dragPoint==0){
-                change(NorthlightTone::LowInput,(mouse.x+curveDragOffset.x-origin.x-pad)/w);
-                change(NorthlightTone::LowBend,NorthlightTone::bendForOutput(curve,y));
-            }else change(NorthlightTone::Shadow+dragPoint-1,y);
-            if(update)nextCurvePreview=ImGui::GetTime()+.12;
+        if(ImGui::IsItemActivated()){
+            curveDragged=false;curveDragOffset={};
+            if(hoverHandle!=CurveDrag::None){
+                curveDrag=hoverHandle;
+                const auto end=handleEnd(selectedPoint,hoverHandle==CurveDrag::HandleOut);
+                curveDragOffset={end.x-mouse.x,end.y-mouse.y};
+            }else if(hoverPoint>=0){
+                curveDrag=CurveDrag::Point;selectedPoint=hoverPoint;
+                const auto pt=pos(list.points[hoverPoint].x,list.points[hoverPoint].y);
+                curveDragOffset={pt.x-mouse.x,pt.y-mouse.y};
+            }else{
+                const int added=T::addPoint(list,(mouse.x-origin.x-pad)/w,1-(mouse.y-origin.y-pad)/h);
+                if(added>=0){selectedPoint=added;curveDrag=CurveDrag::Point;commit();}
+            }
         }
-        if(ImGui::IsItemDeactivated())dragPoint=-1;
+        if(curveDrag!=CurveDrag::None&&ImGui::IsItemActive()&&ImGui::IsMouseDragging(ImGuiMouseButton_Left,1.f))curveDragged=true;
+        if(curveDrag!=CurveDrag::None&&curveDragged&&selectedPoint>=0&&(ImGui::IsItemActive()||ImGui::IsItemDeactivated())){
+            if(curveDrag==CurveDrag::Point)T::movePoint(list,unsigned(selectedPoint),mouseX,mouseY);
+            else{
+                const bool out=curveDrag==CurveDrag::HandleOut;
+                const float run=mouseX-list.points[selectedPoint].x,rise=mouseY-list.points[selectedPoint].y;
+                // The handle keeps to its own side of the point; Alt moves it alone, otherwise the other follows in line.
+                if(out?run>.004f:run<-.004f)T::setHandle(list,unsigned(selectedPoint),out,rise/run,!ImGui::GetIO().KeyAlt);
+            }
+            if(ImGui::IsItemDeactivated()||ImGui::GetTime()>=nextCurvePreview){commit();nextCurvePreview=ImGui::GetTime()+.12;}
+        }
+        if(ImGui::IsItemDeactivated())curveDrag=CurveDrag::None;
         auto* draw=ImGui::GetWindowDrawList();
         draw->AddRectFilled(origin,{origin.x+size.x,origin.y+size.y},IM_COL32(27,33,39,255),3);
         for(int i=1;i<4;++i){
             draw->AddLine(pos(i*.25f,0),pos(i*.25f,1),IM_COL32(57,67,75,255));
             draw->AddLine(pos(0,i*.25f),pos(1,i*.25f),IM_COL32(57,67,75,255));
         }
-        // How far each point may travel.
-        const ImU32 travel=IM_COL32(255,255,255,18);
-        {float lo,hi;NorthlightTone::parameter(curve,NorthlightTone::LowInput,lo,hi);draw->AddRectFilled(pos(lo,nodeY(1)),pos(hi,0),travel);}
-        for(int i=1;i<4;++i){
-            float lo,hi;NorthlightTone::parameter(curve,NorthlightTone::Shadow+i-1,lo,hi);
-            const ImVec2 top=pos(i*.25f,hi),bottom=pos(i*.25f,lo);
-            draw->AddRectFilled({top.x-4*scale,top.y},{bottom.x+4*scale,bottom.y},travel);
-        }
         draw->AddLine(pos(0,0),pos(1,1),IM_COL32(100,109,115,255));
         const ImU32 inks[]={IM_COL32(226,223,209,255),IM_COL32(255,139,128,255),IM_COL32(130,220,165,255),IM_COL32(133,186,255,255)};
+        draw->PushClipRect(origin,{origin.x+size.x,origin.y+size.y},true);
+        const T::Shape drawn=T::shape(T::curveOf(list));
         ImVec2 last=pos(0,0);
-        for(int i=1;i<=80;++i){
-            const float x=i/80.f;
-            const auto pt=pos(x,NorthlightTone::sample(curve,x));
+        for(int i=1;i<=120;++i){
+            const float x=i/120.f;
+            const auto pt=pos(x,std::clamp(T::sample(drawn,x),0.f,1.f));
             draw->AddLine(last,pt,inks[curveChannel],2*scale);last=pt;
         }
-        for(int i=0;i<4;++i){
-            const auto pt=pos(nodeX(i),nodeY(i));
+        if(selectedPoint>=0)for(const bool out:{false,true}){
+            const auto pt=pos(list.points[selectedPoint].x,list.points[selectedPoint].y);
+            const float reach=T::handleReach(list,unsigned(selectedPoint),out)*(out?1.f:-1.f);
+            const auto& knot=drawn.knots[unsigned(selectedPoint)+1];
+            const auto end=pos(list.points[selectedPoint].x+reach,list.points[selectedPoint].y+float(out?knot.out:knot.in)*reach);
+            const bool set=T::hasHandle(out?list.points[selectedPoint].out:list.points[selectedPoint].in);
+            const bool hot=hoverHandle==(out?CurveDrag::HandleOut:CurveDrag::HandleIn)||curveDrag==(out?CurveDrag::HandleOut:CurveDrag::HandleIn);
+            draw->AddLine(pt,end,IM_COL32(200,205,210,set?255:120),1.2f*scale);
+            const float r=(hot?4.5f:3.5f)*scale;
+            if(set)draw->AddRectFilled({end.x-r,end.y-r},{end.x+r,end.y+r},IM_COL32(226,230,234,255));
+            else{draw->AddRectFilled({end.x-r,end.y-r},{end.x+r,end.y+r},IM_COL32(27,33,39,255));draw->AddRect({end.x-r,end.y-r},{end.x+r,end.y+r},IM_COL32(200,205,210,200));}
+        }
+        for(int i=0;i<int(list.count);++i){
+            const auto pt=pos(list.points[i].x,list.points[i].y);
             if(selectedPoint==i)draw->AddCircleFilled(pt,5.5f*scale,inks[curveChannel]);
             else{draw->AddCircleFilled(pt,4.5f*scale,IM_COL32(27,33,39,255));draw->AddCircle(pt,4.5f*scale,inks[curveChannel],0,(hoverPoint==i?2.4f:1.5f)*scale);}
         }
+        draw->PopClipRect();
         ImGui::SameLine();ImGui::BeginGroup();
         for(int i=0;i<4;++i)ImGui::RadioButton(channels[i],&curveChannel,i);
         ImGui::Spacing();
-        static const char* const PointNames[]={"Low","Shadows","Midtones","Highlights"};
-        ImGui::Text("%s: %.0f%% in, %.1f%% out (%+.1f)",PointNames[selectedPoint],100*nodeX(selectedPoint),100*nodeY(selectedPoint),100*(nodeY(selectedPoint)-nodeX(selectedPoint)));
-        W::hint("Drag a point within its pale bar; the first also moves sideways. Double-click returns a point to its inherited place.");
-        if(ImGui::Button("Inherit selected point"))inheritPoint(selectedPoint);
+        if(selectedPoint>=0){
+            const auto& point=list.points[selectedPoint];
+            ImGui::Text("Point %d of %u: %.0f%% in, %.1f%% out (%+.1f)",selectedPoint+1,list.count,100*point.x,100*point.y,100*(point.y-point.x));
+        }else if(list.count)ImGui::Text("%u points",list.count);
+        else ImGui::TextUnformatted("A straight line: no points");
+        W::hint("Click an empty spot to add a point, then drag it. The selected point has two handles that bend the curve; hold Alt to move one alone. Right-click removes a point, or a handle.");
+        ImGui::BeginDisabled(selectedPoint<0);
+        if(ImGui::Button("Remove point")&&selectedPoint>=0){T::removePoint(list,unsigned(selectedPoint));selectedPoint=-1;commit();}
+        ImGui::SameLine();
+        if(ImGui::Button("Remove handles")&&selectedPoint>=0){list.points[selectedPoint].in=list.points[selectedPoint].out=T::StraightHandle;commit();}
+        ImGui::EndDisabled();
+        if(ImGui::Button("Inherit curve")){inherit(*pointsField);for(const Field* level:levels)inherit(*level);selectedPoint=-1;}
         ImGui::Button("Hold to compare");
         if(ImGui::IsItemActive())compareRequested=true;
         ImGui::EndGroup();
-        if(ImGui::TreeNode("Point values")){
-            if(beginRows("points")){
-                row(*fields[0],"Low input");row(*fields[1],"Low bend (0.50 follows shadows)");
-                row(*fields[2],"Shadows (25%)");row(*fields[3],"Midtones (50%)");row(*fields[4],"Highlights (75%)");
-                ImGui::EndTable();
-            }
-            ImGui::TreePop();
-        }
         if(const Field* f=draft.field(D::Celestial,region,NorthlightTone::vibranceKey(time)))
             loose("colour-grade",{f});
         // Colour ranges: choose one, then its three adjustments.
