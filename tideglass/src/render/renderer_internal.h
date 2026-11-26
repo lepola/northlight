@@ -100,9 +100,6 @@ constexpr float kContactFoamRiseSeconds = 0.06f;
 constexpr float kContactFoamFade = 0.04f;
 // Slime's edge glow lies along walls that stay put: it eases to what is found, up or down, over about this long.
 constexpr float kSlimeEdgeEaseSeconds = 0.3f;
-// How long a mark has to stay in sight to count in full as what holds the slime, for the waves that lap at it: longer
-// than the game's bubbles last.
-constexpr float kSlimeEdgeProvenSeconds = 20.0f;
 constexpr UINT kLavaHaloScale = 4;
 // The least time between steps of the lava's stirring, and between looks for what stands in it (just short of a 60 Hz frame
 // and of three of them, so 60 Hz steps every frame and finds what stands every third), and how fast that raises it (lava_stir_ps).
@@ -114,8 +111,6 @@ constexpr UINT kRippleRadiusRegister = 20;
 constexpr UINT kRippleAreaRegister = WATER_SLOT_cRippleArea;
 // contact_ps: whether a ground map tells the ground from what stands on it (clear of the frame's and the water's own).
 constexpr UINT kContactOptionsRegister = 60;
-// The slime's shore map (slime_shore_ps): its cells, each two of the ripple grid's.
-constexpr UINT kSlimeShoreCells = kRippleCells / 2;
 // (Above the water's own: c88 and c89 are WaterGameFog and the wave filter's, which stay set between its passes.)
 constexpr UINT kFarAreaRegister = 90;
 constexpr float kShoreWaveAmplitude = 0.002f;
@@ -126,9 +121,6 @@ constexpr float kShoreWaveSpeed = 1.65f;
 // narrow, sharp chevron.)
 constexpr float kSlimeDamping = 0.97f;
 constexpr float kSlimeViscosity = 0.06f;
-// How many times shorter than the sea's the waves lapping at slime's edge are (see CompositeDeferredSlime).
-constexpr float kSlimeLapScaleIndoors = 2.4f;
-constexpr float kSlimeLapScaleOutdoors = 1.45f;
 constexpr UINT kRippleViscosityRegister = 36;
 constexpr UINT kBoatRow = WATER_SLOT_cBoat;
 static_assert(kBoatRow - kFrameConstants + 2 * kMaxBoats == kWaterConstants, "the ships fill the last water constants");

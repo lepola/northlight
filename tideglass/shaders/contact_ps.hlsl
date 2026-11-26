@@ -10,11 +10,11 @@
 // meets the surface, not only the line of it in sight, which blurred came to little. Only what is in sight is found.
 // Slime has no ground map (it lies over building floors as often as terrain), so there the bank and the floor of a room
 // are found the same way as what stands in it: whatever of the solid world lies at the surface marks, upright or not,
-// and its edge glow and the waves that lap at its edge are read from that (see water_ps, SlimeShore).
+// and its edge glow is read from that (see water_ps, SlimeContact).
 
 // A point of slime that could not be looked at this frame (off screen, too far, behind something) says so, so that what
 // was found there before is kept: its edge is remembered where the camera has seen it (contact_spread_ps), so the glow
-// along a wall and the waves lapping at it go on while the line where they meet is out of sight.
+// along a wall goes on while the line where they meet is out of sight.
 
 // x: 1 where the ground map tells the ground from what stands on it (water), 0 where there is none (slime).
 float4 cContactOptions : register(c60);

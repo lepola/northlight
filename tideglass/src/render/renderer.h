@@ -231,9 +231,9 @@ private:
     static void ReleaseDeferred(DeferredSurface& surface);
     bool SpreadContactMarks(IDirect3DDevice9* dev, IDirect3DTexture9* level, IDirect3DTexture9* seabed,
                             const float (&frame)[9][4], const float (&constants)[kWaterConstants][4],
-                            IDirect3DTexture9* remembered = nullptr, float provenStep = 0.0f);
-    // How near the slime's surface is to its edge, from what its ripple grid remembers of it (slime_shore_ps).
-    bool MeasureSlimeShore(IDirect3DDevice9* dev);
+                            IDirect3DTexture9* remembered = nullptr);
+    // Whether this frame's slime takes the waves that lap up a terrain bank (water_common's ReadShoreWaves).
+    bool SlimeLapsOnTerrain(const FrameInputs& in, const Config& cfg) const;
     bool DrawLavaHalo(IDirect3DDevice9* dev, const D3DSURFACE_DESC& desc, const float (&frame)[9][4]);
     bool DrawLavaGlow(IDirect3DDevice9* dev, const D3DSURFACE_DESC& desc, const D3DVIEWPORT9& viewport,
                       IDirect3DSurface9* target);
@@ -334,11 +334,6 @@ private:
     IDirect3DPixelShader9* m_slimeCapturePs = nullptr;
     IDirect3DPixelShader9* m_slimeLiftPs = nullptr;
     IDirect3DTexture9* m_slimeGround = nullptr; // the ground under kept fade draws (LiftFadeSurfaces)
-    // The slime's nearness to its edge over the ripple grid's square (MeasureSlimeShore): the finished map, and the
-    // target its passes go through on the way; whether it was measured this frame.
-    IDirect3DPixelShader9* m_slimeShorePs = nullptr;
-    IDirect3DTexture9* m_slimeShore[2] = {};
-    bool m_slimeShoreMeasured = false;
     IDirect3DPixelShader9* m_slimeUndoPs = nullptr;
     IDirect3DPixelShader9* m_slimeDeferredPs = nullptr;
     IDirect3DPixelShader9* m_slimeReflectionViewPs = nullptr;

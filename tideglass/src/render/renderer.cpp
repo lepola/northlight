@@ -26,7 +26,6 @@
 #include "ps_slime_deferred_fine.h"
 #include "ps_slime_undo.h"
 #include "ps_slime_lift.h"
-#include "ps_slime_shore.h"
 #include "ps_lava.h"
 #include "ps_lava_stir.h"
 #include "ps_lava_mask.h"
@@ -88,7 +87,6 @@ bool Renderer::EnsurePixelShader(IDirect3DDevice9* dev, IDirect3DPixelShader9*& 
         {&m_slimeCapturePs, &p_ps_slime_capture},
         {&m_slimeUndoPs, &p_ps_slime_undo},
         {&m_slimeLiftPs, &p_ps_slime_lift},
-        {&m_slimeShorePs, &p_ps_slime_shore},
         {&m_slimeDeferredPs, &p_ps_slime_deferred},
         {&m_slimeReflectionViewPs, &p_ps_slime_reflection_view},
         {&m_slimeDeferredFinePs, &p_ps_slime_deferred_fine},
@@ -300,8 +298,10 @@ bool Renderer::BindWaterTextures(IDirect3DDevice9* dev, IDirect3DTexture9* depth
         ok=BindPointTexture(dev,WATER_SLOT_sWaterLevel,m_slime.level[0]?m_slime.level[m_slime.levelIndex]:nullptr)&&ok;
         ok=BindSky(dev,WATER_SLOT_sRememberedSky,cfg)&&ok;
         ok=BindLinearTexture(dev,WATER_SLOT_sRipples,m_slimeSurface.Ripples())&&ok;
-        ok=BindLinearTexture(dev,WATER_SLOT_sSeabed,nullptr)&&ok;
-        ok=BindLinearTexture(dev,WATER_SLOT_sShore,m_slimeShoreMeasured?m_slimeShore[0]:nullptr)&&ok;
+        // Slime reads the ground map only for the waves at a terrain bank; its level and its edge are its own.
+        const bool laps=SlimeLapsOnTerrain(in,cfg);
+        ok=BindLinearTexture(dev,WATER_SLOT_sSeabed,laps?GroundTexture(dev,in.ground):nullptr)&&ok;
+        ok=BindLinearTexture(dev,WATER_SLOT_sShore,laps?m_shore:nullptr)&&ok;
         return BindPointTexture(dev,kBoatPathStage,nullptr)&&ok;
     }
     ok=BindPointTexture(dev,WATER_SLOT_sDepth,depthTexture)&&ok;
@@ -884,8 +884,6 @@ void Renderer::ReleaseDefaultPool()
     m_airMap = -1;
     ReleaseDeferred(m_slime);
     SafeRelease(m_slimeGround);
-    for (auto*& map : m_slimeShore) SafeRelease(map);
-    m_slimeShoreMeasured = false;
     m_lava.ReleaseDefaultPool();
     SafeRelease(m_surfaceBaseDepth);
     SafeRelease(m_waterDepth);m_nativeWater=nullptr;m_waterDepthValid=m_slimeCaptured=false;
@@ -953,7 +951,6 @@ void Renderer::ReleaseAll()
     m_groundSource = 0;
     SafeRelease(m_slimeCapturePs);
     SafeRelease(m_slimeLiftPs);
-    SafeRelease(m_slimeShorePs);
     SafeRelease(m_slimeUndoPs);
     SafeRelease(m_slimeDeferredPs);
     SafeRelease(m_slimeReflectionViewPs);

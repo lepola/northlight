@@ -316,16 +316,15 @@ bool Renderer::AdvanceSurface(IDirect3DDevice9* dev, SurfaceSim& sim, IDirect3DT
 // constants changed.
 // Where something crosses the liquid's surface (contact_ps), spread one way across the grid (contact_spread_ps), into
 // m_contactMarks; the caller takes it the other way. remembered: the grid slime keeps its edge on where the camera has
-// seen it, for the points it cannot look at this frame (none for water and lava, which look by the ground map);
-// provenStep: how much what it keeps of a mark that stays grows this frame.
+// seen it, for the points it cannot look at this frame (none for water and lava, which look by the ground map).
 bool Renderer::SpreadContactMarks(IDirect3DDevice9* dev, IDirect3DTexture9* level, IDirect3DTexture9* seabed,
                                   const float (&frame)[9][4], const float (&constants)[kWaterConstants][4],
-                                  IDirect3DTexture9* remembered, float provenStep)
+                                  IDirect3DTexture9* remembered)
 {
     const float options[4] = {seabed ? 1.0f : 0.0f, 0.0f, 0.0f, 0.0f};
     if(FAILED(dev->SetPixelShaderConstantF(kContactOptionsRegister, options, 1)))return false;
     for (auto** target : {&m_contactMarks, &m_contactSpread})
-        if (!*target && FAILED(dev->CreateTexture(kRippleCells, kRippleCells, 1, D3DUSAGE_RENDERTARGET, D3DFMT_G16R16F,
+        if (!*target && FAILED(dev->CreateTexture(kRippleCells, kRippleCells, 1, D3DUSAGE_RENDERTARGET, D3DFMT_R16F,
                                                   D3DPOOL_DEFAULT, target, nullptr)))
         {
             Skip("contact foam targets could not be created");
@@ -344,7 +343,7 @@ bool Renderer::SpreadContactMarks(IDirect3DDevice9* dev, IDirect3DTexture9* leve
 
     const float cell = 1.0f / kRippleCells;
     // Which pass each is (contact_spread_ps: cSpread.z).
-    const float count[4] = {remembered ? 1.0f : 0.0f, provenStep, 0.0f, cell};
+    const float count[4] = {remembered ? 1.0f : 0.0f, 0.0f, 0.0f, cell};
     const float across[4] = {cell, 0.0f, 1.0f, cell};
     // The crossings counted by their neighbours, into the second target; the nearest of them one way, back into the
     // first (the marks are done with); then the other way, into the grid.
@@ -367,8 +366,7 @@ bool Renderer::MarkContacts(IDirect3DDevice9* dev, SurfaceSim& sim, IDirect3DTex
                             const float (&constants)[kWaterConstants][4])
 {
     if(!m_snapshotValid||(usesGround&&!seabed))return true;
-    if(!SpreadContactMarks(dev,level,seabed,frame,constants,usesGround?nullptr:sim.ripples[sim.rippleIndex],
-                           frameSeconds/kSlimeEdgeProvenSeconds))return false;
+    if(!SpreadContactMarks(dev,level,seabed,frame,constants,usesGround?nullptr:sim.ripples[sim.rippleIndex]))return false;
     const float cell = 1.0f / kRippleCells;
     // How much of the way to the new foam it rises this frame.
     const float rise = std::clamp(1.0f - std::exp(-frameSeconds / (usesGround ? kContactFoamRiseSeconds : kSlimeEdgeEaseSeconds)), 0.0f, 1.0f);

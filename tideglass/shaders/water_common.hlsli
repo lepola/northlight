@@ -1136,23 +1136,16 @@ struct ShoreWaves
 };
 
 #ifdef DEFERRED_SLIME
-// Slime's waves are the sea's made shorter and slower: slow folds that lap at its edge. Its edge is not the ground
-// map's shore (it lies in rooms and canals as often as on terrain) but what its ripple grid remembers meeting, kept as
-// how near each point is to it (slime_shore_ps). Measured in SlimeLapScale times the yards, the sea's fronts fit a
-// canal or a pool.
-// How far from its edge the map knows the slime (yards; slime_shore_ps's kReach cells of kCell yards).
-static const float kSlimeShoreReach = 4.8;
+// Slime's waves are the sea's made shorter and slower: slow folds that lap up a bank. They run where slime is the
+// terrain's own liquid (Felwood's pools), from the ground map's shore as water's do. Slime in a building (a canal, a
+// room's pool) has no shore there and no waves. Measured in kSlimeLapScale times the yards, the sea's fronts fit a
+// pool.
+static const float kSlimeLapScale = 1.45;
 static const float kSlimeLapPace = 0.6;
 
-// How strong the laps are (the SlimeShoreWaves setting; 0 with no shore map), and how many times shorter than the sea's.
+// How strong the laps are (the SlimeShoreWaves setting; 0 where no slime drawn this frame is the terrain's).
 float SlimeLaps() { return cLookingDown.z; }
-float SlimeLapScale() { return cRippleGrid.w; }
 float ShoreSeconds() { return Seconds() * kSlimeLapPace; }
-
-float SlimeNearness(float2 uv)
-{
-    return tex2Dlod(sShore, float4(uv, 0, 0)).r;
-}
 
 bool ReadShoreWaves(float2 p, float surfaceHeight, out ShoreWaves waves)
 {
@@ -1165,18 +1158,25 @@ bool ReadShoreWaves(float2 p, float surfaceHeight, out ShoreWaves waves)
     bool found = false;
     [branch] if (SlimeLaps() > 0.0 && InsideRippleArea(uv))
     {
-        float nearness = SlimeNearness(uv);
-        float distance = (kSlimeShoreReach - nearness) * SlimeLapScale();
-        [branch] if (nearness > 0.0 && distance < kWaveReach)
+        float4 heights = tex2Dlod(sSeabed, float4(uv, 0, 0));
+        // Only slime lying at the height the world gives its liquid here: a pool in a building over the same ground
+        // is not the terrain's, and the ground map's shore is not its edge.
+        float own = 1.0 - smoothstep(kSameWaterBody * 0.6, kSameWaterBody * 1.4, abs(heights.b - surfaceHeight));
+        float edge = saturate(min(min(uv.x, 1.0 - uv.x), min(uv.y, 1.0 - uv.y)) * kSeabedEdgeFade);
+        // On the slime's side of its edge only, as for water.
+        float known = saturate(heights.g) * edge * own * smoothstep(0.0, kFoamStartDepth, surfaceHeight - heights.r);
+        float distance = max(tex2Dlod(sShore, float4(uv, 0, 0)).r - kShoreCellOffset, 0.0) * kSlimeLapScale;
+        [branch] if (known > 0.0 && distance < kWaveReach)
         {
-            // One cell of the shore map, which is two of the ripple grid's.
-            float step = 2.0 * cRippleGrid.x;
-            float2 rise = float2(SlimeNearness(uv + float2(step, 0)) - SlimeNearness(uv - float2(step, 0)),
-                                 SlimeNearness(uv + float2(0, step)) - SlimeNearness(uv - float2(0, step)));
-            waves.toShore = rise / max(length(rise), 1.0e-4);
+            float step = cRippleArea.z * GroundCellSize();
+            float2 slope = float2(tex2Dlod(sShore, float4(uv + float2(step, 0), 0, 0)).r -
+                                      tex2Dlod(sShore, float4(uv - float2(step, 0), 0, 0)).r,
+                                  tex2Dlod(sShore, float4(uv + float2(0, step), 0, 0)).r -
+                                      tex2Dlod(sShore, float4(uv - float2(0, step), 0, 0)).r);
+            waves.toShore = -slope / max(length(slope), 1.0e-4);
             waves.distance = distance;
-            waves.known = saturate(min(min(uv.x, 1.0 - uv.x), min(uv.y, 1.0 - uv.y)) * kSeabedEdgeFade);
-            float2 q = p * SlimeLapScale();
+            waves.known = known;
+            float2 q = p * kSlimeLapScale;
             waves.along = ValueNoise(q * 0.07 + float2(ShoreSeconds() * 0.01, 0.0)) * 2.0 + ValueNoise(q * 0.19) * 0.8;
             found = true;
         }

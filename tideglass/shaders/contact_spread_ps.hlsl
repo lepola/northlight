@@ -11,8 +11,8 @@
 // what was marked, as a body moves and the camera with it).
 
 // x, y: one grid cell in uv, along the way taken (for the count, x is 1 where the grid remembers what it found, as
-// slime's does, and y how much a mark that stays grows towards full this frame); z: which pass, 0 to count the
-// neighbours, 1 for the first way, 2 for the last (which keeps the grid's state); w: one grid cell in uv.
+// slime's does); z: which pass, 0 to count the neighbours, 1 for the first way, 2 for the last (which keeps the
+// grid's state); w: one grid cell in uv.
 float4 cSpread : register(c0);
 // x: for the last way, how much of the way to the new foam it rises this frame (0 when no time passed: the state kept
 // as it is); y: 1 where it falls to less at the same pace (slime's glow, which lies along walls that do not move: left
@@ -22,8 +22,7 @@ sampler2D sMarks : register(s0);
 // The grid's state: for the count, where slime keeps what it found before; for the last way, what it keeps.
 sampler2D sState : register(s1);
 // The last way: the crossings as counted, kept in the grid's a: for the debug view (SeabedDebug 3) and, for slime, as
-// its edge where the camera has seen it, which the count carries on where it is out of sight and its shore is
-// measured from (slime_shore_ps).
+// its edge where the camera has seen it, which the count carries on where it is out of sight.
 sampler2D sCounted : register(s2);
 
 // How far the foam reaches from a crossing: the Gaussian's width (cells, its standard deviation) and how far out it is
@@ -33,11 +32,8 @@ static const int kSpreadReach = 7;
 // How much a crossing counts with all its neighbours marked (so a line of them one cell thick counts fully, and a single
 // cell half).
 static const float kCountGain = 2.0;
-// What the grid keeps where slime was looked at and found clear (slime_shore_ps tells an island by it): little enough
-// below nothing to leave a mark beside it standing when the two are read together.
-static const float kSeenOpen = -1.0 / 64.0;
 
-// (Below nothing where a point of slime could not be looked at this frame, see contact_ps, or was found clear.)
+// (Below nothing where a point of slime could not be looked at this frame, see contact_ps.)
 float MarkAt(float2 uv)
 {
     return max(tex2Dlod(sMarks, float4(uv, 0, 0)).r, 0.0);
@@ -57,20 +53,10 @@ float4 main(float2 cell : VPOS) : COLOR0
                           MarkAt(uv - float2(0, step))) * 2.0 +
                          MarkAt(uv + float2(step, step)) + MarkAt(uv - float2(step, step)) +
                          MarkAt(uv + float2(step, -step)) + MarkAt(uv - float2(step, -step))) / 16.0;
-        counted = saturate(counted * kCountGain);
-        // r: what the foam or glow spreads from; g: what the grid keeps in its a.
-        result = float4(counted, counted, 0.0, 0.0);
-        // Where the grid remembers: a point looked at and found clear is kept as open slime, and one that was not
-        // looked at this frame keeps what was found there before. What it keeps of a mark grows only as the mark
-        // stays, so that it tells what holds the slime (a wall, a bank) from what comes and goes in it (a bubble):
-        // the glow spreads from either at once, the waves' edge is drawn only from the first (slime_shore_ps).
-        [branch] if (cSpread.x > 0.5)
-        {
-            float kept = tex2Dlod(sState, float4(uv, 0, 0)).a;
-            bool seen = tex2Dlod(sMarks, float4(uv, 0, 0)).r >= 0.0;
-            result.r = seen ? counted : max(kept, 0.0);
-            result.g = !seen ? kept : counted > 0.0 ? min(counted, max(kept, 0.0) + cSpread.y) : kSeenOpen;
-        }
+        result = float4(saturate(counted * kCountGain), 0.0, 0.0, 0.0);
+        // Where the grid remembers, a point that was not looked at this frame keeps what was found there before.
+        [branch] if (cSpread.x > 0.5 && tex2Dlod(sMarks, float4(uv, 0, 0)).r < 0.0)
+            result.r = tex2Dlod(sState, float4(uv, 0, 0)).a;
     }
     else
     {
@@ -83,7 +69,7 @@ float4 main(float2 cell : VPOS) : COLOR0
             float4 state = tex2Dlod(sState, float4(uv, 0, 0));
             float change = saturate(nearest) - state.b;
             float foam = state.b + (cRise.y > 0.5 ? change : max(change, 0.0)) * cRise.x;
-            result = float4(state.rg, foam, tex2Dlod(sCounted, float4(uv, 0, 0)).g);
+            result = float4(state.rg, foam, tex2Dlod(sCounted, float4(uv, 0, 0)).r);
         }
     }
     return result;

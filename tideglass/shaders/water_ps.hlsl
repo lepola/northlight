@@ -440,20 +440,19 @@ float3 WithSurfaceDetail(float3 normal, float2 uv, float3 world, float drawnHeig
 }
 
 // The folds lapping at the slime's edge here (the shore's waves, see water_common's ReadShoreWaves): the slope they
-// give the surface (x, y), and the lip (z) that glows where a fold's crest nears the edge. Short laps die out nearer
-// the edge than long folds (kSlimeLipReach, in the waves' own measure, for the longest and the shortest).
-static const float2 kSlimeLipReach = float2(3.8, 2.0);
-static const float2 kSlimeLapScales = float2(1.45, 2.4);
+// give the surface (x, y), and the lip (z) that glows where a fold's crest nears the edge, within kSlimeLipReach of it
+// (in the waves' own measure).
+static const float kSlimeLipReach = 3.8;
 static const float kSlimeLipGlow = 0.4;
 // Thick slime folds over rather than breaks: its fronts keep the broad, round shape the sea's have far out, right up
 // to the edge, and being broader are steepened to show as much (kSlimeLapSlope).
 static const float kSlimeLapSlope = 2.0;
 
-float3 SlimeLap(float2 p, float footprint)
+float3 SlimeLap(float2 p, float surfaceHeight, float footprint)
 {
     float3 lap = 0.0;
     ShoreWaves waves;
-    [branch] if (ReadShoreWaves(p, 0.0, waves))
+    [branch] if (ReadShoreWaves(p, surfaceHeight, waves))
     {
         float phase = WavePhase(waves.distance, waves.along);
         float behind = frac(phase);
@@ -461,13 +460,11 @@ float3 SlimeLap(float2 p, float footprint)
         float profile = WaveProfile(behind, kWaveReach);
         float rise = (WaveProfile(behind + kProfileStep, kWaveReach) - profile) / (kProfileStep * kWaveLength);
         float strength = kWaveSlope * kSlimeLapSlope * saturate(1.0 - waves.distance / kWaveReach) * size *
-                         Resolved(kWaveLength * 0.5, footprint * SlimeLapScale());
+                         Resolved(kWaveLength * 0.5, footprint * kSlimeLapScale);
         // Rising behind the front means the surface slopes up away from the edge.
         lap.xy = -waves.toShore * rise * strength * SlimeLaps();
-        float reach = lerp(kSlimeLipReach.x, kSlimeLipReach.y,
-                           saturate((SlimeLapScale() - kSlimeLapScales.x) / (kSlimeLapScales.y - kSlimeLapScales.x)));
         // (The broad front's crest stands about half as high as the sea's steep one.)
-        lap.z = smoothstep(0.11, 0.39, profile * size) * (1.0 - smoothstep(0.0, reach, waves.distance)) *
+        lap.z = smoothstep(0.11, 0.39, profile * size) * (1.0 - smoothstep(0.0, kSlimeLipReach, waves.distance)) *
                 saturate(SlimeLaps());
     }
     return lap;
@@ -808,7 +805,7 @@ LiquidSurface SurfaceAt(float2 pixel, float surfaceDepth, float thickness)
         float3 normal = WaveNormal(surface.world, surface.distance, surface.toCamera, baseNormal, footprint, surface.uv,
                                    surface.foamNormal);
 #ifdef DEFERRED_SLIME
-        surface.lap = SlimeLap(surface.world.xy, footprint);
+        surface.lap = SlimeLap(surface.world.xy, surface.drawnHeight, footprint);
         normal = normalize(normal + float3(-surface.lap.xy, 0.0));
 #endif
         surface.normal =

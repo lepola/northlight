@@ -218,12 +218,9 @@ bool Renderer::CompositeDeferredSlime(IDirect3DDevice9* dev, IDirect3DTexture9* 
     // Slime has its own measured level and no water ground/shore field.
     constants[kGroundRegister-kFrameConstants][2]=0;
     prepared=prepared&&AdvanceSurface(dev,m_slimeSurface,slimeLevel,SlimePhysics(cfg, regionalStrength),in,cfg,frame,constants);
-    // The waves that lap at the slime's edge (water_common's ReadShoreWaves) ride in slots slime leaves unused, where
-    // water carries how peaked its swell is: how strong they are, and how many times shorter than the sea's. Inside a
-    // building they are short laps against the steps and walls of a canal; under the sky, longer folds up a bank.
-    m_slimeShoreMeasured=prepared&&cfg.slimeShoreWaves>0&&MeasureSlimeShore(dev);
-    constants[WATER_SLOT_cLookingDown-kFrameConstants][2]=m_slimeShoreMeasured?cfg.slimeShoreWaves:0.0f;
-    constants[WATER_SLOT_cRippleGrid-kFrameConstants][3]=m_buildingSlime?kSlimeLapScaleIndoors:kSlimeLapScaleOutdoors;
+    // How strong the waves at a terrain bank are (water_common's ReadShoreWaves), in a slot slime leaves unused, where
+    // water carries how peaked its swell is.
+    constants[WATER_SLOT_cLookingDown-kFrameConstants][2]=SlimeLapsOnTerrain(in,cfg)?cfg.slimeShoreWaves:0.0f;
     TimeEnd(GpuTimer::SlimeSurface);
     if(!prepared){saved.Restore();return false;}
     if (cfg.slime && in.cameraInSlime)
@@ -266,32 +263,11 @@ bool Renderer::CompositeDeferredSlime(IDirect3DDevice9* dev, IDirect3DTexture9* 
     return shaded&&restored;
 }
 
-bool Renderer::MeasureSlimeShore(IDirect3DDevice9* dev)
+// Slime that is the terrain's own liquid (Felwood's pools) has a shore on the ground map, as water has. Slime in a
+// building (a canal, a room's pool) has none, and keeps to the glow along its walls.
+bool Renderer::SlimeLapsOnTerrain(const FrameInputs& in, const Config& cfg) const
 {
-    IDirect3DTexture9* grid = m_slimeSurface.Ripples();
-    if (!grid)
-        return false;
-    for (auto*& map : m_slimeShore)
-        if (!map && FAILED(dev->CreateTexture(kSlimeShoreCells, kSlimeShoreCells, 1, D3DUSAGE_RENDERTARGET, D3DFMT_R16F,
-                                              D3DPOOL_DEFAULT, &map, nullptr)))
-            return Skip("slime shore map could not be created");
-    const D3DVIEWPORT9 cells = {0, 0, kSlimeShoreCells, kSlimeShoreCells, 0.0f, 1.0f};
-    const float cell = 1.0f / kSlimeShoreCells;
-    const float edge[4] = {0.0f, 0.0f, 0.0f, cell};
-    const float across[4] = {cell, 0.0f, 1.0f, cell};
-    const float down[4] = {0.0f, cell, 2.0f, cell};
-    const float soften[4] = {0.0f, 0.0f, 3.0f, cell};
-    const auto pass = [&](const float* way, IDirect3DTexture9* source, bool filtered, IDirect3DTexture9* target) {
-        return SetTarget(dev, target) && SUCCEEDED(dev->SetViewport(&cells)) &&
-               SUCCEEDED(dev->SetPixelShaderConstantF(0, way, 1)) &&
-               (filtered ? BindLinearTexture(dev, 0, source) : BindPointTexture(dev, 0, source)) &&
-               SUCCEEDED(DrawScreenTriangle(dev));
-    };
-    // The grid is read between its cells, four to each of the map's, and the softening between the map's own, so
-    // both have to be filtered. The two targets take the passes in turn; the first ends with the finished map.
-    return SUCCEEDED(BindPixelShader(dev, m_slimeShorePs)) && pass(edge, grid, true, m_slimeShore[1]) &&
-           pass(across, m_slimeShore[1], false, m_slimeShore[0]) && pass(down, m_slimeShore[0], false, m_slimeShore[1]) &&
-           pass(soften, m_slimeShore[1], true, m_slimeShore[0]);
+    return cfg.slimeShoreWaves > 0.0f && m_slime.outdoorThisFrame && in.ground;
 }
 
 bool Renderer::LiftFadeSurfaces(IDirect3DDevice9* dev, const D3DSURFACE_DESC& desc, const float (&frame)[9][4])

@@ -150,7 +150,7 @@ struct Config
         return zone==1497?regionalSlimeStrength:0.f;
     }
     float slimeRippleSpeed = 0.6f; // yards a second a ripple spreads; water's is 2.8
-    float slimeShoreWaves = 0.0f; // slow folds lapping at the slime's edge, each ending in a glowing lip; 0 = none
+    float slimeShoreWaves = 1.0f; // slow folds lapping up the terrain bank of outdoor slime, each ending in a glowing lip; 0 = none
     float slimeVisibility = 6.0f;
     float slimeInsideColor[3] = {0.22f, 0.44f, 0.12f};
     float slimeInsideDeepColor[3] = {0.11f, 0.23f, 0.06f};
