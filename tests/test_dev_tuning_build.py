@@ -50,6 +50,18 @@ class DevTuningBuild(unittest.TestCase):
         self.assertEqual(Path(default[-1]).name, 'frd9.dll')
         self.assertEqual(Path(dev[-1]).name, 'frd9-dev-tuning.dll', 'the dev build never overwrites frd9.dll')
 
+    def test_no_tideglass_builds_northlight_alone_into_its_own_file(self):
+        default = self.zig_command([])
+        alone = self.zig_command(['--no-tideglass'])
+        self.assertIn('-DNORTHLIGHT_WATER=1', default)
+        self.assertFalse([a for a in alone if 'NORTHLIGHT_WATER' in a or 'tideglass' in str(a).lower().replace('frd9-no-tideglass.dll', '')],
+                         'no bridge define and nothing from tideglass/')
+        self.assertEqual([a for a in default if a not in alone and 'tideglass' not in str(a) and a != '-DNORTHLIGHT_WATER=1'],
+                         [default[-1]], 'apart from Tideglass, only the output differs')
+        self.assertEqual(Path(alone[-1]).name, 'frd9-no-tideglass.dll', 'it never overwrites frd9.dll')
+        with self.assertRaises(SystemExit):
+            self.zig_command(['--dev-tuning', '--no-tideglass'])
+
     def test_marker_matches_the_source_constant(self):
         header = fp.src('zone_tuning.h').read_text()
         self.assertEqual(re.search(r'Marker\[\]="([^"]+)"', header).group(1).encode(), bp.DEV_MARKER)
