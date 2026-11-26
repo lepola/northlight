@@ -49,11 +49,13 @@ struct StaticModel
     std::vector<ModelTexture> textures;
     std::vector<ModelDraw> draws;
     std::vector<ScrollingLayer> scroll; // indexed by ModelDraw::uvTrack for animated vertical texture coordinates
+    std::vector<uint32_t> interiorLight; // first authored WMO vertex colour stream, when present
     std::array<float,3> minimum{},maximum{};
     std::size_t Bytes() const
     {
         std::size_t n=sizeof(*this)+vertices.capacity()*sizeof(ModelVertex)+indices.capacity()*sizeof(uint16_t)+
-            textures.capacity()*sizeof(ModelTexture)+draws.capacity()*sizeof(ModelDraw)+scroll.capacity()*sizeof(ScrollingLayer);
+            textures.capacity()*sizeof(ModelTexture)+draws.capacity()*sizeof(ModelDraw)+scroll.capacity()*sizeof(ScrollingLayer)+
+            interiorLight.capacity()*sizeof(uint32_t);
         for (const auto& layer:scroll)n+=layer.keys.capacity()*sizeof(ScrollingLayer::Key);
         for (const auto& t:textures) n+=t.name.capacity()+1;
         return n;

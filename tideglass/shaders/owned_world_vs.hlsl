@@ -21,7 +21,7 @@ struct Output
     float receiverHeight : TEXCOORD4;
     float3 specular : TEXCOORD5;
     float2 alpha : TEXCOORD6; // terrain: the cell's place in its tile's alpha atlas
-    float3 painted : TEXCOORD7; // terrain: the colour its map paints on it; white otherwise
+    float3 painted : TEXCOORD7; // terrain paint or authored interior model lighting
 };
 // One draw at a time takes its placement and draw mode from c6-c10. OWNED_WORLD_INSTANCED (models, many copies in one
 // draw) takes them from the instance stream instead; OWNED_WORLD_TERRAIN adds each vertex's alpha atlas coordinate
@@ -61,10 +61,10 @@ Output Shade(float3 position,float3 normal,float2 uv,float water,float4 world0,f
     return output;
 }
 #ifdef OWNED_WORLD_INSTANCED
-Output main(float3 position : POSITION,float3 normal : NORMAL,float2 uv : TEXCOORD0,float water : TEXCOORD1,
+Output main(float3 position : POSITION,float3 normal : NORMAL,float2 uv : TEXCOORD0,float4 modelLight : TEXCOORD1,
             float4 world0 : TEXCOORD2,float4 world1 : TEXCOORD3,float4 world2 : TEXCOORD4,float4 draw : TEXCOORD5)
 {
-    return Shade(position,normal,uv,water,world0,world1,world2,draw,0,1);
+    return Shade(position,normal,uv,0,world0,world1,world2,draw,0,modelLight.rgb);
 }
 #elif defined(OWNED_WORLD_TERRAIN)
 Output main(float3 position : POSITION,float3 normal : NORMAL,float2 uv : TEXCOORD0,float water : TEXCOORD1,float2 alpha : TEXCOORD2,
@@ -74,8 +74,8 @@ Output main(float3 position : POSITION,float3 normal : NORMAL,float2 uv : TEXCOO
     return Shade(position,normal,uv,water,cWorld0,cWorld1,cWorld2,cDraw,alpha,colour.rgb*(255.0/128.0));
 }
 #else
-Output main(float3 position : POSITION,float3 normal : NORMAL,float2 uv : TEXCOORD0,float water : TEXCOORD1)
+Output main(float3 position : POSITION,float3 normal : NORMAL,float2 uv : TEXCOORD0,float4 modelLight : TEXCOORD1)
 {
-    return Shade(position,normal,uv,water,cWorld0,cWorld1,cWorld2,cDraw,0,1);
+    return Shade(position,normal,uv,0,cWorld0,cWorld1,cWorld2,cDraw,0,modelLight.rgb);
 }
 #endif

@@ -12,7 +12,7 @@ namespace
 uint32_t U32(Bytes b,std::size_t at) {uint32_t v=0;b.U32(at,v);return v;}
 uint16_t U16(Bytes b,std::size_t at) {uint16_t v=0;b.U16(at,v);return v;}
 bool Float(Bytes b,std::size_t at,float& v) {return b.F32(at,v)&&std::isfinite(v);}
-struct Parts {Bytes version,header,textures,materials,group,vertices,normals,uv,secondaryUv,indices,batches,polygons,doodadNames,doodads,doodadSets,doodadRefs,liquid;};
+struct Parts {Bytes version,header,textures,materials,group,vertices,normals,uv,secondaryUv,indices,batches,polygons,doodadNames,doodads,doodadSets,doodadRefs,liquid,vertexLight;};
 bool PartsOf(Bytes b,Parts& p)
 {
     for(std::size_t at=0;at<b.size;) {
@@ -30,6 +30,7 @@ bool PartsOf(Bytes b,Parts& p)
         // Keep the base set first; readers of liquid or attachments must not
         // reject the whole group because of this independent geometry stream.
         else if(!std::memcmp(tag,"VTOM",4)) target=p.uv.data?&p.secondaryUv:&p.uv;
+        else if(!std::memcmp(tag,"VCOM",4)&&!p.vertexLight.data) target=&p.vertexLight;
         else if(!std::memcmp(tag,"IVOM",4)) target=&p.indices;
         else if(!std::memcmp(tag,"ABOM",4)) target=&p.batches;
         else if(!std::memcmp(tag,"YPOM",4)) target=&p.polygons;
@@ -241,6 +242,9 @@ WmoError DecodeWmoGroup(Bytes input,const WmoRoot& root,std::size_t limit,Static
     if(!Charge(left,1,sizeof(StaticModel))||!Charge(left,vertices,sizeof(ModelVertex))||!Charge(left,indices,2)||
        !Charge(left,batches,sizeof(ModelDraw))||!Charge(left,root.materials.size(),sizeof(ModelTexture)))return WmoError::Budget;
     for(const auto& material:root.materials)if(!Charge(left,std::max(material.texture.name.size()+1,std::string().capacity()+1),1))return WmoError::Budget;
+    const auto groupFlags=U32(outer.group,8);
+    const bool indoorLight=(groupFlags&0x2004)==0x2004 && !(groupFlags&0x48) && p.vertexLight.size==vertices*4;
+    if(indoorLight && !Charge(left,vertices,sizeof(uint32_t)))return WmoError::Budget;
     // Validate the actual MOBA geometry before allocating output. Extra MOVI
     // collision geometry is not promoted into a render batch.
     for(std::size_t i=0;i<vertices;++i) {
@@ -258,6 +262,10 @@ WmoError DecodeWmoGroup(Bytes input,const WmoRoot& root,std::size_t limit,Static
     }
     StaticModel candidate;candidate.vertices.resize(vertices);candidate.indices.resize(indices);candidate.draws.resize(batches);candidate.textures.reserve(root.materials.size());
     for(const auto& m:root.materials)candidate.textures.push_back(m.texture);
+    if(indoorLight){
+        candidate.interiorLight.resize(vertices);
+        std::memcpy(candidate.interiorLight.data(),p.vertexLight.data,vertices*4);
+    }
     for(std::size_t i=0;i<vertices;++i) {
         auto& v=candidate.vertices[i];
         for(unsigned a=0;a<3;++a){Float(p.vertices,i*12+a*4,v.position[a]);Float(p.normals,i*12+a*4,v.normal[a]);

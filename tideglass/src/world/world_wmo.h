@@ -45,7 +45,7 @@ enum class WmoError { None,Header,Layout,Geometry,Material,Unsupported,Budget };
 // Version 17, opaque/alpha-key base-texture geometry. Render only MOBA ranges,
 // never collision-only triangles. Embedded attachment poses/sets and group references
 // are retained; their model animation/material admission belongs to the scene consumer.
-// Group portals, local lights and authored vertex-lighting remain later appearance scope.
+// Indoor RGB lighting is optional. Group portals and dynamic local lights are not decoded here.
 // CPU only; both functions validate/admit before allocation and preserve prior
 // output on failure. Limits exclude inputs, prior output and allocator overhead.
 WmoError DecodeWmoRoot(Bytes input,std::size_t limit,WmoRoot& output);

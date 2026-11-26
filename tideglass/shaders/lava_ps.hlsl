@@ -247,6 +247,16 @@ LavaOutput Shade(float2 pixel, float surfaceDepth, float fel)
         // can cover several yards of lava. Keep only its share of the physical crust.
         float contactWidth = 2.0 * kHaloScale * max(pixelYards.x, pixelYards.y);
         float coverage = saturate(kLavaBorderWidth / max(0.0001, contactWidth));
+        const float pixelWidth = kLavaBorderWidth / max(0.0001, max(pixelYards.x, pixelYards.y));
+        const float resolved = smoothstep(2.0, 7.0, pixelWidth);
+        [branch] if (resolved < 1.0 && border > 0.0)
+        {
+            // The halo establishes contact in depth. Its quarter-resolution outline can
+            // spread into open lava when the physical fringe is only a pixel or two wide.
+            float nx = max(abs(SampleRawDepth(sDepth, pixel - float2(1,0))), abs(SampleRawDepth(sDepth, pixel + float2(1,0))));
+            float ny = max(abs(SampleRawDepth(sDepth, pixel - float2(0,1))), abs(SampleRawDepth(sDepth, pixel + float2(0,1))));
+            coverage *= lerp(max(nx, ny) >= kNoLava ? 1.0 : 0.0, 1.0, resolved);
+        }
         border = lerp(BankCrust(shore + bankWander), border, coverage);
     }
     crust = max(crust, border);

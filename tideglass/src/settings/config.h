@@ -112,15 +112,16 @@ struct Config
     bool slime = true;
     // Draw the client's magma as the lava material (shaders/lava.hlsli), not the stock surface.
     bool lava = true;
-    LiquidStyle slimeStyle = {{0.42f, 0.70f, 0.12f}, {0.10f, 0.28f, 0.03f}, 2.5f, 0.1f, 0.45f, 0.1f, 0.9f, 0.55f,
-                              0.7f, {0.55f, 1.0f, 0.2f}, 0.35f, 0.6f, 0.0f, 0.6f, 1.0f, 0.8f,
+    LiquidStyle slimeStyle = {{0.42f, 0.70f, 0.12f}, {0.10f, 0.28f, 0.03f}, 2.5f, 0.1f, 0.45f, 0.22f, 0.9f, 0.55f,
+                              0.4f, {0.55f, 1.0f, 0.2f}, 0.35f, 0.6f, 0.0f, 0.6f, 1.0f, 0.8f,
                               {0.10f, 0.28f, 0.03f}, 1000.0f, 0.9f, 1.0f};
     float regionalSlimeStrength = 1.0f;
     // The regional slime where a region names no colour of its own: a bright yellow-green that glows in the dark,
     // made for the Undercity canals and matched to the hue of the slime that falls into them (95 degrees).
         // The Undercity's: the yellow-green of the slime falling into its canals, and for the edge the green that glows
-    // on the walls along them, a little stronger than slime's edge is elsewhere.
-    SlimeTint regionalSlimeTint = {{0.48f, 0.95f, 0.12f}, 0.35f, {0.34f, 0.93f, 0.07f}, 1.2f};
+    // on the walls along them, about twice as strong as slime's glow is under the sky, where a wide shallow pool
+    // would otherwise light up whole.
+    SlimeTint regionalSlimeTint = {{0.48f, 0.95f, 0.12f}, 0.35f, {0.34f, 0.93f, 0.07f}, 2.1f};
     // AreaTable IDs are unique across maps. Key zero is the explicit all-regions value.
     std::shared_ptr<const std::map<unsigned,float>> slimeRegions;
     std::shared_ptr<const std::map<unsigned,SlimeTint>> slimeRegionTints;

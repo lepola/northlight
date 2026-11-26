@@ -6,7 +6,7 @@
 namespace water
 {
 enum class OwnedWorldUpload { Pending, Ready, Failed };
-struct OwnedWorldVertex { float position[3],normal[3],uv[2],water; };
+struct OwnedWorldVertex { float position[3],normal[3],uv[2]; union {float water; uint32_t modelLight;}; };
 // One model copy in an instanced draw: placement rows (as c6-c8) and draw mode (as c10).
 struct OwnedWorldInstance { float world[3][4],draw[4]; };
 // The enclosing renderer's shaders: one draw per placement, instanced (models) and terrain (alpha atlas per vertex).

@@ -179,6 +179,8 @@ bool OwnedWorldGpu::Initialize(const world::WorldScene& scene,const OwnedWorldRe
             continue;
         }
         if (model.geometry->mesh.vertices.empty() || model.geometry->mesh.vertices.size()>65536 || model.geometry->mesh.indices.empty() || model.geometry->mesh.indices.size()%3) return Fail("model mesh");
+        const auto& light=model.geometry->mesh.interiorLight;
+        if(!light.empty() && light.size()!=model.geometry->mesh.vertices.size())return Fail("model vertex lighting");
         mesh.vertexCount=static_cast<unsigned>(model.geometry->mesh.vertices.size());mesh.indexCount=static_cast<unsigned>(model.geometry->mesh.indices.size());
         for (auto index : model.geometry->mesh.indices) if (index>=mesh.vertexCount) return Fail("model index");
         const auto& scroll=model.geometry->mesh.scroll;
@@ -345,9 +347,10 @@ bool OwnedWorldGpu::Buffer(IDirect3DDevice9* device,const world::WorldScene& sce
                 // Half of full scale is unpainted: the shader doubles it.
                 alpha[v]={{rect[0]+source.uv[0]*rect[2],rect[1]+source.uv[1]*rect[3]},inCell<colours.size()?colours[inCell]:0xff808080u};
             } else {
-                const auto& source=(m_item<scene.models.size()?scene.models[m_item].geometry->mesh:scene.region->horizon).vertices[at];
+                const auto& model=m_item<scene.models.size()?scene.models[m_item].geometry->mesh:scene.region->horizon;
+                const auto& source=model.vertices[at];
                 std::memcpy(output[v].position,source.position.data(),12);std::memcpy(output[v].normal,source.normal.data(),12);
-                std::memcpy(output[v].uv,source.uv.data(),8);output[v].water=0;
+                std::memcpy(output[v].uv,source.uv.data(),8);output[v].modelLight=model.interiorLight.empty()?0xffffffffu:model.interiorLight[at];
             }
         }
         if (FAILED(mesh.vertices->Unlock())) return false;
@@ -515,7 +518,7 @@ bool OwnedWorldGpu::UpdatePose(Mesh& mesh,const world::SceneModel& model,uint32_
     for(unsigned j=0;j<model.geometry->mesh.vertices.size();++j){
         const auto v=world::DeformModelVertex(model.geometry->mesh.vertices[j],model.geometry->motion.vertices[j],pose);
         std::memcpy(vertices[j].position,v.position.data(),12);std::memcpy(vertices[j].normal,v.normal.data(),12);
-        std::memcpy(vertices[j].uv,v.uv.data(),8);vertices[j].water=0;
+        std::memcpy(vertices[j].uv,v.uv.data(),8);vertices[j].modelLight=0xffffffffu;
     }
     if(FAILED(mesh.vertices->Unlock()))return false;
     mesh.poseTime=time;mesh.hasPose=true;

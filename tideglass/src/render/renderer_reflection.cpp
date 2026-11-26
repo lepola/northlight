@@ -130,7 +130,7 @@ bool Renderer::DrawReflections(IDirect3DDevice9* dev, IDirect3DTexture9* depthTe
     if (!m_snapshot || FAILED(m_snapshot->GetLevelDesc(0, &full)))
         return false;
     const auto layout = reflection::ResolveLayout(full.Width,full.Height,in.viewport,cfg.reflectionResolution);
-    const float pixelStep[4]={float(full.Width)/layout.width-1.f,float(full.Height)/layout.height-1.f,0,0};
+    const float pixelStep[4]={float(full.Width)/layout.width-1.f,float(full.Height)/layout.height-1.f,float(layout.width),float(layout.height)};
     if(FAILED(dev->SetPixelShaderConstantF(79,pixelStep,1)))return false;
     const UINT width = layout.width;
     const UINT height = layout.height;
