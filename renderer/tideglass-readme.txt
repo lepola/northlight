@@ -38,6 +38,10 @@ magma. Dalaran and Telredor get outdoor fog coverage. On affected HD clients
 the installer also repairs distant dock and plant textures. Your original
 game archives, realm settings and add-ons stay in place.
 
+Two optional whole-world looks, Vibrant and Atmospheric, are on the Overview
+page of the settings window described below. Default leaves the world as it
+is.
+
 CHANGE YOUR MIND
 
 Press {settings_key} and open Water.
