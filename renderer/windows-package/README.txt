@@ -8,8 +8,8 @@ never starts the game and never changes wow.exe.
 
 SKY CHOICE
 The installer offers current skies (default) or experimental sky preservation.
-Install.cmd --sky experimental-preserve keeps custom mixed star/moon artwork
-and uses compatible local HD clouds in Tirisfal. A second moon may be visible.
+Install.cmd --sky experimental-preserve keeps more of an HD client's sky
+artwork. It is untested with most HD skies and a second moon may be visible.
 Rerun with --sky current to switch back. Reinstalls remember your last choice.
 
 DOWNLOADS

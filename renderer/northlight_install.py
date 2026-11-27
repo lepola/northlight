@@ -1090,8 +1090,7 @@ class Installer:
         self.say('Which sky would you like?')
         self.say("1. Use Northlight's sky (recommended)")
         self.say('2. Keep more of your HD sky (experimental)')
-        self.say('Option 2 keeps HD skies whose moon is painted in with the stars, so you may see two moons, and uses '
-                 'your HD cloud sky over Tirisfal Glades, the only HD cloud sky tested so far.')
+        self.say('Option 2 is untested with most HD skies. It keeps more of their artwork, and you may see two moons.')
         def parse(answer):
             choices = {'1': 'current', '2': 'experimental-preserve'}
             if answer not in choices:
@@ -1829,7 +1828,7 @@ def main(argv=None):
                          'installed; dxvk2 = DXVK 2.7.1 for AMD RX 5000/6000 or drivers DXVK 3 does not support; '
                          'legacy = the d3d9.dll found in the game folder)')
     ap.add_argument('--sky', choices=SKY_MODES,
-                    help='current skies or experimental preservation of mixed moons and local HD Tirisfal clouds; '
+                    help='current skies or experimental preservation of more HD sky artwork, untested with most HD skies; '
                          'default: keep the last choice, current on first install')
     art = ap.add_mutually_exclusive_group()
     art.add_argument('--art-layer', dest='art_layer', action='store_true', help='build the default lighting and scenery MPQs')

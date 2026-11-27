@@ -262,7 +262,7 @@ def main():
     ap.add_argument('--game-underwater', action='store_true',
                     help='with --tideglass: leave the game its own underwater light, for an install without the Tideglass water')
     ap.add_argument('--sky', choices=('current', 'experimental-preserve'), default='current',
-                    help='experimental: preserve mixed moon artwork and use compatible local HD Tirisfal clouds')
+                    help='experimental, untested with most HD skies: keep mixed moon artwork and compatible local HD clouds')
     ap.add_argument('--world-cache', type=Path, help="the client's world cache, for its fog zones (default: <client>/world-cache)")
     ap.add_argument('--output', type=Path, required=True, help='staging folder; gets <Data>/... archives and a manifest')
     ap.add_argument('--letter', default='z', help='patch letter of the art layer (default z)')
