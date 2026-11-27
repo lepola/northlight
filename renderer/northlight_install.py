@@ -1090,8 +1090,8 @@ class Installer:
         self.say('Which sky would you like?')
         self.say("1. Use Northlight's sky (recommended)")
         self.say('2. Keep more of your HD sky (experimental)')
-        self.say('Option 2 keeps more moon artwork and uses your HD clouds in Tirisfal when compatible. '
-                 'You may see two moons.')
+        self.say('Option 2 keeps HD skies whose moon is painted in with the stars, so you may see two moons, and uses '
+                 'your HD cloud sky over Tirisfal Glades, the only HD cloud sky tested so far.')
         def parse(answer):
             choices = {'1': 'current', '2': 'experimental-preserve'}
             if answer not in choices:

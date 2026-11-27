@@ -489,7 +489,7 @@ class Install(Base):
             report = self.installer().install(self.client, instances='none')
             self.assertEqual(report['sky'], expected)
             self.assertEqual('Which sky would you like?' in self.last_output, asked)
-            self.assertEqual('You may see two moons.' in self.last_output, asked)
+            self.assertEqual('you may see two moons' in self.last_output, asked)
             self.assertEqual(len(prompts), shown)
             self.assertTrue(prompts[confirmation].startswith('Press Enter to '))
             self.assertEqual('type C to change the sky and dungeon choices' in prompts[confirmation], confirmation != 1)
