@@ -44,7 +44,7 @@ Reflected scenery, shaped ocean waves, underwater effects, slime and magma run a
 | --- | --- |
 | [![Orange magma winds around dark rock beneath a glowing cavern wall](renderer/docs/screenshots/magma.jpg)](renderer/docs/screenshots/magma.jpg) | [![Bright green fel magma pools around jagged black spires in shafts of sunlight](renderer/docs/screenshots/fel-magma.jpg)](renderer/docs/screenshots/fel-magma.jpg) |
 
-Your game supplies the artwork, so stock and HD clients can look different. The installer preserves existing game archives, realm settings and add-ons. Neither Northlight nor Tideglass changes the game's program code while it runs. Install and rollback have been checked on stock and modified client copies. An earlier combo build also ran in game on native Windows with updated graphics drivers. Native Windows rollback and compatibility with individual realms, including Warmane, still need confirmation.
+Your game supplies the artwork, so stock and HD clients can look different. The installer preserves existing game archives, realm settings and add-ons. Neither Northlight nor Tideglass changes the game's program code while it runs. Install and rollback have been checked on stock and modified client copies. This beta was installed over an earlier one and played on native Windows. Native Windows rollback and compatibility with individual realms, including Warmane, still need confirmation.
 
 ## Change settings or roll back
 
