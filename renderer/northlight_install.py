@@ -1738,8 +1738,10 @@ class Installer:
         for b in backups:
             self.say('  Undo data:', b, console=details)
         if self.platform == 'linux':
+            self.say('')
             for line in WINE_STEPS:
                 self.say('  ' + line)
+            self.say('')
         self.say('  Start WoW as usual. Press Ctrl+Shift+F11' + (' (with fn on a Mac keyboard)' if self.platform == 'mac' else '') +
                  ' in game for the settings.')
         if self.combined:
