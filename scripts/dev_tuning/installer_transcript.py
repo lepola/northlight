@@ -84,16 +84,21 @@ class Transcript(tests.Base):
             installer.out.write(f'{prompt}«{answer}»\n')
             return answer
         with patch.object(sys, 'stdin', terminal), patch.object(builtins, 'input', fake_input):
+            installer.open_log(action)   # with a log, as in a real run: the screen then leaves the file details to it
             try:
                 if action == 'install':
-                    installer.say(f'{installer.title} installer')
+                    installer.banner(f'{installer.title} installer')
                     installer.install(None)
                 else:
+                    installer.banner(f'{installer.product_name} uninstaller')
                     installer.uninstall(None)
             except fi.Refusal as e:
-                installer.say('STOPPED:', e)
+                installer.stopped('STOPPED:', e)
             except (fi.Failed, ValueError, OSError) as e:
-                installer.say('ERROR:', e)
+                installer.stopped('ERROR:', e)
+            finally:
+                if installer.log:
+                    installer.log.close()
         text = installer.out.getvalue().replace(str(self.base), '~')
         if title:
             print(f'\n{"=" * 100}\n{title}\n{"=" * 100}\n{text}')

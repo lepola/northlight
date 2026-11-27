@@ -488,12 +488,12 @@ class Install(Base):
         for expected, asked, offered, shown, confirmation in runs:
             report = self.installer().install(self.client, instances='none')
             self.assertEqual(report['sky'], expected)
-            self.assertEqual('Which sky would you like?' in self.last_output, asked)
+            self.assertEqual("    1  Northlight's sky (recommended)" in self.last_output, asked)
             self.assertEqual('you may see two moons' in self.last_output, asked)
             self.assertEqual(len(prompts), shown)
-            self.assertTrue(prompts[confirmation].startswith('Press Enter to '))
+            self.assertTrue(prompts[confirmation].startswith('  Press Enter to '))
             self.assertEqual('type C to change the sky and dungeon choices' in prompts[confirmation], confirmation != 1)
-            self.assertEqual(prompts[-1], 'Press Enter to ' + ('install' if confirmation == 1 else 'check and repair') +
+            self.assertEqual(prompts[-1], '  Press Enter to ' + ('install' if confirmation == 1 else 'check and repair') +
                              (', type C to change the sky and dungeon choices first,' if not asked else ',') +
                              ' or close this window to cancel > ')
             if asked:
@@ -536,7 +536,7 @@ class Install(Base):
         self.assertTrue(report['world_cache'].startswith('kept'))
         self.assertEqual((report['backups'], report['payload']), ([], 'kept (unchanged)'))
         self.assertIn(f'kept-identical {sha(ART)[:8]}', report['art_layer'])
-        self.assertIn('already installed; nothing changed', inst.out.getvalue())
+        self.assertIn('is already installed; nothing needed changing.', inst.out.getvalue())
         self.assertEqual((self.backups(), tree(self.client)), (backups, after))
 
     def test_retry_after_art_failure_keeps_completed_caches(self):
@@ -593,7 +593,7 @@ class Install(Base):
         shutil.rmtree(self.client / 'world-cache')
         inst = self.installer(); report = inst.install(self.client)
         self.assertEqual(report['backups'], [])
-        self.assertIn('0.3.162-test: installed.', inst.out.getvalue())
+        self.assertIn('0.3.162-test is installed.', inst.out.getvalue())
 
     def test_child_reports_go_to_the_log_only(self):
         inst = self.installer()
@@ -974,7 +974,7 @@ class Install(Base):
     def test_instances_argument_skips_the_question_and_reaches_the_orchestrator(self):
         prompts = self.tty('')
         report = self.installer().install(self.client, instances='1 6', sky='current')
-        self.assertEqual(prompts, ['Press Enter to install, or close this window to cancel > '])
+        self.assertEqual(prompts, ['  Press Enter to install, or close this window to cancel > '])
         (args,) = self.instance_calls()
         self.assertEqual(args[args.index('--instances') + 1], 'classic-dungeons,wotlk-raids')
         self.assertEqual(Path(args[args.index('--output') + 1]), self.client / 'world-cache')
@@ -1005,7 +1005,7 @@ class Install(Base):
         self.assertEqual(args[args.index('--instances') + 1], 'classic-raids,tbc-raids')
         self.assertEqual(report['instances'], {'built': [], 'kept': ['classic-raids', 'tbc-raids'], 'removed': []})
         self.assertIn('Dungeon and raid lighting: Classic raids (kept), TBC raids (kept)', self.last_output)
-        self.assertIn('already installed; nothing changed', self.last_output)
+        self.assertIn('is already installed; nothing needed changing.', self.last_output)
         report = self.installer().install(self.client, instances='none')
         self.assertEqual(self.instance_calls()[-1][self.instance_calls()[-1].index('--instances') + 1], 'none')
         self.assertEqual(report['instances']['removed'], ['classic-raids', 'tbc-raids'])
@@ -1017,11 +1017,11 @@ class Install(Base):
         inst = self.installer()
         self.assertEqual(inst.choose_instances(self.client, None), ['classic-raids', 'wotlk-raids'])
         text = inst.out.getvalue()
-        self.assertIn('Optional lighting for dungeons and raids. You can add these later.', text)
+        self.assertIn('  Dungeon and raid lighting (optional; you can add it later)', text)
         for g in instance_maps.GROUPS:
             self.assertIn(f'{g["label"]}', text)
-            self.assertIn(f'~{g["est_gb"]:g} GB  ~{g["est_minutes"]:g} min', text)
-        self.assertIn('Press Enter to keep none, or choose numbers (e.g. 1 2 6), all or none', prompts[0])
+            self.assertIn(f'~{g["est_gb"]:g} GB  ~{max(1, round(g["est_minutes"]))} min', text)
+        self.assertIn('Press Enter to keep none, or type numbers (e.g. 1 2 6), all or none', prompts[0])
 
     def test_pick_rules(self):
         inst = self.installer()
@@ -1096,7 +1096,8 @@ class Install(Base):
         inst = self.installer(); inst.run = failing
         report = inst.install(self.client, instances='classic-raids')   # the optional layer never blocks the renderer
         text = inst.out.getvalue()
-        self.assertIn('Building dungeon and raid lighting failed', text)
+        self.assertIn('Dungeon and raid lighting: Classic raids ... FAILED; the rest of the install goes on\n', text)
+        self.assertIn('DONE, except for dungeon and raid lighting: ', text)
         self.assertIn(f'Dungeon and raid lighting: Classic raids failed (see {log}); the renderer was updated. '
                       'Run the installer again, or use --instances none to skip.', text)
         self.assertEqual(report['instances_failed'], {'groups': ['classic-raids'], 'log': str(log)})
@@ -1229,7 +1230,7 @@ class Install(Base):
         before = tree(self.client)
         installer = self.installer()
         installer.install(self.client)
-        self.assertIn('Northlight 0.3.217 + Tideglass 0.1.0: installed.', installer.out.getvalue())
+        self.assertIn('DONE: Northlight 0.3.217 + Tideglass 0.1.0 is installed.', installer.out.getvalue())
         descriptor = self.client / fi.WATER_ARCHIVE_LIST
         self.assertTrue((self.client / 'raised-fog/Expansion01.rfs').is_file())
         self.assertTrue((self.client / 'raised-fog/Northrend.rfs').is_file())
@@ -1251,7 +1252,7 @@ class Install(Base):
         installer = self.installer(tideglass=False)
         installer.install(self.client)
         said = installer.out.getvalue()
-        self.assertIn('Northlight 0.3.217: installed.', said)
+        self.assertIn('DONE: Northlight 0.3.217 is installed.', said)
         self.assertIn('leave out the Tideglass water: the game draws its own water, and everything else is installed', said)
         self.assertEqual([name for name in water if (self.client / name).exists()], [])
         # The rest of the combined install is there: its raised fog, and its skies and scenery with the game's own
@@ -1614,7 +1615,7 @@ class Updating(Base):
             again = self.installer(); again.memory = memory
             self.assertEqual(again.resolve_client(None), self.client.resolve())
             self.assertIn(f'  1) {self.client}   (Northlight 0.3.162-test installed)', self.last_output)
-            self.assertTrue(prompts[-1].startswith('Press Enter for 1, type a number, or paste another game folder'))
+            self.assertTrue(prompts[-1].startswith('  Press Enter for 1, type a number, or paste another game folder'))
         gone = self.base / 'Games' / 'moved away'
         shutil.copytree(self.client, gone)
         other = self.installer(); other.memory = memory
@@ -1627,7 +1628,7 @@ class Updating(Base):
         self.assertFalse(memory.exists() or memory.parent.exists())
         fresh = self.installer(); fresh.memory = memory
         self.assertEqual(fresh.resolve_client(None), self.client.resolve())   # nothing remembered: the typed folder
-        self.assertTrue(prompts[-1].startswith('Paste the game folder path'))
+        self.assertTrue(prompts[-1].startswith('  Paste the game folder path'))
 
     def test_an_update_names_both_versions_keeps_the_choices_and_asks_once(self):
         self.installer().install(self.client, instances='2', sky='experimental-preserve')
@@ -1636,19 +1637,22 @@ class Updating(Base):
         self.newer_package()
         prompts = self.tty('', '')   # the update, then the uninstall
         report = self.installer().install(self.client)
-        self.assertEqual(prompts, ['Press Enter to update, type C to change the sky and dungeon choices first, '
+        self.assertEqual(prompts, ['  Press Enter to update, type C to change the sky and dungeon choices first, '
                                    'or close this window to cancel > '])
         text = self.last_output
-        for line in ('Installed now:  Northlight 0.3.162-test', 'This package:   Northlight 0.3.163-test', 'The update will:',
-                     '  - replace 1 renderer file that changed', '  - keep outdoor lighting, which is up to date',
-                     '  - keep dungeon and raid lighting: Classic raids',
-                     '  - build skies, weather and scenery from your game files, with more of your HD sky (experimental)',
-                     '  - keep your settings (northlight-quality.ini) and any look preset you edited',
-                     'Takes a few minutes. Nothing has been changed yet.',
-                     'Northlight renderer 0.3.163-test: updated from Northlight 0.3.162-test.'):
+        for line in ('  Dungeon and raid lighting: Classic raids', '  Sky: more of your HD sky (experimental)',
+                     '  These are your choices from last time. You can change them at the next step.',
+                     '  Installed now:  Northlight 0.3.162-test', '  This package:   Northlight 0.3.163-test',
+                     '  Nothing has been changed yet. This will:',
+                     '    - update the Northlight files that changed', '    - keep outdoor lighting, which is up to date',
+                     '    - keep dungeon and raid lighting: Classic raids',
+                     '    - build skies, weather and scenery from your game files, with more of your HD sky (experimental)',
+                     '    - keep your settings (northlight-quality.ini) and any look preset you edited',
+                     '  Takes a few minutes.',
+                     'DONE: Northlight renderer 0.3.163-test is installed, updated from Northlight 0.3.162-test.'):
             self.assertIn(line + '\n', text)
-        self.assertNotIn('Which sky would you like?', text)
-        self.assertNotIn('Optional lighting for dungeons and raids', text)
+        self.assertNotIn("    1  Northlight's sky (recommended)", text)
+        self.assertNotIn('Dungeon and raid lighting (optional', text)
         self.assertEqual((report['sky'], report['instances']['kept']), ('experimental-preserve', ['classic-raids']))
         self.assertEqual(json.loads((self.client / fi.RECEIPT).read_text())['northlight'], '0.3.163-test')
         self.installer().uninstall(self.client)
@@ -1661,8 +1665,8 @@ class Updating(Base):
         prompts = self.tty('')
         self.installer().install(self.client)
         self.assertIn('This package is OLDER than what is installed.', self.last_output)
-        self.assertTrue(prompts[0].startswith('Press Enter to install the older version,'))
-        self.assertIn('0.3.165-test: installed in place of Northlight 0.3.170-test.', self.last_output)
+        self.assertTrue(prompts[0].startswith('  Press Enter to install the older version,'))
+        self.assertIn('0.3.165-test is installed in place of Northlight 0.3.170-test.', self.last_output)
 
     def test_cancelling_at_the_confirmation_changes_nothing(self):
         self.tty('', '', 'n')   # dungeons, sky, then no
@@ -1670,7 +1674,7 @@ class Updating(Base):
         with self.assertRaises(fi.Refusal) as e:
             installer.install(self.client)
         self.assertEqual(str(e.exception), 'Cancelled; nothing was changed.')
-        self.assertIn('Ready to install Northlight renderer 0.3.162-test. It will:', self.last_output)
+        self.assertIn('  Nothing has been changed yet. This will:', self.last_output)
         self.assert_untouched()
         self.assertFalse(installer.memory.exists())
         self.assertEqual([args for name, args in self.calls if '--plan' not in args and '--instances-plan' not in args], [])
@@ -1697,13 +1701,14 @@ class Updating(Base):
         self.assertIn('Not enough free disk space', str(e.exception))
         self.assert_untouched()
         self.installer().install(self.client)
-        self.assertIn('  - build outdoor lighting from your game files (20-40 minutes, about 13 GB on the game drive)\n', self.last_output)
-        self.assertIn('Takes 20-40 minutes; if it is interrupted, run the installer again to continue.', self.last_output)
+        self.assertIn('    - build outdoor lighting from your game files (20-40 minutes, about 13 GB on the game drive)\n', self.last_output)
+        self.assertIn('  Takes 20-40 minutes.', self.last_output)
         self.newer_package()
         update = self.installer(); update.free_bytes = lambda path: 2 * fi.GIB; update.ram = lambda: 2 * fi.GIB
         update.install(self.client)
-        self.assertIn('  - keep outdoor lighting, which is up to date\n', self.last_output)
-        self.assertIn('Checking outdoor lighting...', self.last_output)
+        self.assertIn('    - keep outdoor lighting, which is up to date\n', self.last_output)
+        self.assertIn('Outdoor lighting (checking) ', self.last_output)
+        self.assertIn(' up to date\n', self.last_output)
         self.assertNotIn('20-40 minutes', self.last_output)
 
     def test_uninstall_says_what_it_removes_and_can_be_cancelled(self):
@@ -1713,14 +1718,14 @@ class Updating(Base):
         with self.assertRaises(fi.Refusal):
             self.installer().uninstall(self.client)
         self.assertEqual(tree(self.client), installed)
-        self.assertEqual(prompts, ['Press Enter to remove it, or close this window to cancel > '])
-        self.assertIn('This removes Northlight 0.3.162-test from it:', self.last_output)
-        self.assertIn('  - deletes outdoor lighting (the world-cache folder)', self.last_output)
+        self.assertEqual(prompts, ['  Press Enter to remove it, or close this window to cancel > '])
+        self.assertIn('  Found Northlight 0.3.162-test in ', self.last_output)
+        self.assertIn('    - delete outdoor lighting (the world-cache folder)', self.last_output)
         self.installer().uninstall(self.client)
         self.assertEqual(tree(self.client), self.before)
         self.installer().uninstall(self.client)   # nothing left: no question
         self.assertEqual(len(prompts), 2)
-        self.assertIn('Nothing to remove.', self.last_output)
+        self.assertIn('  Nothing to remove: Northlight renderer is not installed in ', self.last_output)
 
     def test_the_file_steps_reach_the_installer_log(self):
         installer = self.installer()

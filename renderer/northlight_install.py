@@ -29,6 +29,8 @@ The launchers (Install Northlight.command, Install.cmd, install.sh) run this wit
    (install.py; on Linux the game runs under Wine or Proton, so the payload is the Windows one and the
    summary says how to make Wine load the game-folder d3d9.dll); macOS runs migrate_mac_proxy (mods/d3d9.dll preloaded from
    dlls.txt; wow.exe is never read or written), then the ini files and the art layer in a transaction.
+On screen a run is four stages with a heading each (your game, your choices, review, installing), the work as
+numbered parts, and closing lines that are the same every time; what each part wrote is in the log.
 Before step 2 writes anything the installer says what it is about to do and waits for Enter (plan_install). Run over
 an install it is an update: it names the installed and the new version (the receipt <client>/northlight-install.json,
 else the installed DLLs' own version lines), keeps the earlier sky and dungeon choices unless asked to change them,
@@ -153,6 +155,12 @@ GIB = 1 << 30
 LOCAL_BUILD_BYTES = 13 * GIB   # 1.2 x the ~11 GB cache
 MIN_FREE = GIB // 2
 PERCENT = re.compile(r': (\d+)% \(')
+PART_WIDTH = 50          # the column a part's closing word starts at
+PART_DETAIL = ' ' * 8    # what a part reports is indented under its line
+# Lines of the transaction engine a player sees; its other lines go to the log.
+ENGINE_SHOWN = ('Note', 'Existing', 'Removing', 'Installation interrupted')
+LANGUAGES = {'enUS': 'English', 'enGB': 'English', 'deDE': 'German', 'frFR': 'French', 'esES': 'Spanish', 'esMX': 'Spanish',
+             'ruRU': 'Russian', 'koKR': 'Korean', 'zhCN': 'Chinese', 'zhTW': 'Chinese'}
 WINDOWS_MAX_PATH = 259
 LONGEST_CACHE_NAME = 110   # world-cache.staging\models\<64 hex>.<pid>.tmp (world-cache.instmp\<map>\build-<map>-<time>-<pid>.json is shorter)
 INSTANCE_DISK = 1.2   # of a group's measured size: the staging folder next to what it replaces
@@ -459,7 +467,9 @@ class Installer:
         self.ram = None   # installed-memory probe; None = install_world_cache.total_memory
         self.search_dirs = [package.root.parent, package.root, Path.home() / 'Downloads']
         self.memory = None   # user_state_file() in a real run; None remembers nothing
-        INSTALL.emit = lambda *parts, **_: self.say(*parts)   # the transaction engine's lines reach the log too
+        self.part = None   # the part of the work in progress (working)
+        self.parts_done = self.parts_total = 0
+        INSTALL.emit = self.engine_line
 
     def use_tideglass(self, wanted):
         """Set what this run installs of the package's Tideglass. Left out, the combined package still installs all of
@@ -489,10 +499,69 @@ class Installer:
 
     def say(self, *parts, console=True):
         line = ' '.join(str(p) for p in parts)
+        if self.part and line:   # under the part it belongs to
+            line = '\n'.join(PART_DETAIL + each.strip() for each in line.split('\n'))
         if console:
+            if self.part and not self.part['broken']:   # the part's own line is still open
+                print(file=self.out)
+                self.part['broken'] = True
             print(line, file=self.out, flush=True)
         if self.log:
             self.log.write(line + '\n')
+            self.log.flush()
+
+    def engine_line(self, *parts, **_):
+        """A line from the transaction engine (install.py): the log has them all, the screen only what a player
+        needs to act on or would otherwise miss."""
+        line = ' '.join(str(p) for p in parts)
+        self.say(line, console=self.log is None or line.startswith(ENGINE_SHOWN))
+
+    def stopped(self, kind, why):
+        """The end of a run that did not finish: why, set apart from what came before, and where the details are."""
+        self.say('')
+        self.say(kind, why)
+        if self.log:
+            self.say(f'  Full details: {self.log.name}')
+
+    def banner(self, text):
+        self.say(text)
+        self.say('=' * len(text))
+
+    def step(self, number, total, name):
+        """The heading of one stage of a run."""
+        self.say('')
+        self.say(f'STEP {number} of {total}: {name}')
+
+    def expect_parts(self, total):
+        self.parts_done, self.parts_total = 0, total
+
+    @contextlib.contextmanager
+    def working(self, label):
+        """One numbered part of the work: its line stays open until the part ends, so a quiet part reads
+        '[1/4] Fog ... done' and a part that reports its progress has those lines beneath it. The value yielded
+        takes another closing word in ['result']."""
+        self.parts_done += 1
+        head = f'  [{self.parts_done}/{max(self.parts_total, self.parts_done)}] {label} '
+        head += '.' * max(3, PART_WIDTH - len(head))
+        print(head, end='', file=self.out, flush=True)
+        if self.log:
+            self.log.write(head + '\n')
+            self.log.flush()
+        part = self.part = {'broken': False, 'result': 'done'}
+        started = time.monotonic()
+        try:
+            yield part
+        except BaseException:
+            if not part['broken']:
+                print(file=self.out, flush=True)
+            self.part = None
+            raise
+        self.part = None
+        took = (time.monotonic() - started) / 60
+        result = part['result'] + (f' in {round(took)} minutes' if took >= 1.5 else '')
+        print((PART_DETAIL if part['broken'] else ' ') + result, file=self.out, flush=True)
+        if self.log:
+            self.log.write(PART_DETAIL + result + '\n')
             self.log.flush()
 
     def open_log(self, action):
@@ -520,7 +589,7 @@ class Installer:
         choices without asking). --yes and no terminal go ahead; n, no, q or cancel stops with nothing changed."""
         if self.yes or not self.interactive():
             return 'go'
-        question = f'Press Enter to {verb}' + (', type C to change the sky and dungeon choices first,' if can_change else ',') + \
+        question = f'  Press Enter to {verb}' + (', type C to change the sky and dungeon choices first,' if can_change else ',') + \
             ' or close this window to cancel > '
         while True:
             answer = input(question).strip().lower()
@@ -686,8 +755,8 @@ class Installer:
         for i, path in enumerate(known, 1):
             there = self.installed(path)
             self.say(f'  {i}) {path}' + (f'   ({describe(there)} installed)' if there else ''))
-        question = ('Press Enter for 1, type a number, or paste another game folder (or drag Wow.exe here) > ' if known else
-                    'Paste the game folder path or drag Wow.exe here, then press Enter > ')
+        question = ('  Press Enter for 1, type a number, or paste another game folder (or drag Wow.exe here) > ' if known else
+                    '  Paste the game folder path or drag Wow.exe here, then press Enter > ')
         while True:
             try:
                 raw = input(question).strip()
@@ -896,11 +965,11 @@ class Installer:
         current = self.chosen_instances(client)
         if not ask or self.yes or not self.interactive():
             return current
-        self.say('Optional lighting for dungeons and raids. You can add these later.')
+        self.say('  Dungeon and raid lighting (optional; you can add it later)')
         for n, g in enumerate(instance_maps.GROUPS, 1):
-            self.say(f'  {n}  {g["label"]:<17} ~{g["est_gb"]:g} GB  ~{g["est_minutes"]:g} min')
+            self.say(f'    {n}  {g["label"]:<17} ~{g["est_gb"]:g} GB  ~{max(1, round(g["est_minutes"]))} min')
         names = ', '.join(g['label'] for g in instance_maps.GROUPS if g['key'] in current) or 'none'
-        return self.pick(f'Press Enter to keep {names}, or choose numbers (e.g. 1 2 6), all or none > ',
+        return self.pick(f'  Press Enter to keep {names}, or type numbers (e.g. 1 2 6), all or none > ',
                          instance_maps.resolve, current)
 
     def instance_labels(self, keys):
@@ -981,15 +1050,9 @@ class Installer:
         self.swap(client)
         self.say('Outdoor lighting unpacked.')
 
-    def build_cache(self, client, locale, jobs, without=LETTER, mode='full'):
-        """Build the cache from this client's own archives (install_world_cache.py; no-op when current). mode is
-        cache_plan's, for the line that says how long this takes."""
+    def build_cache(self, client, locale, jobs, without=LETTER):
+        """Build the cache from this client's own archives (install_world_cache.py; no-op when current)."""
         self.still_closed('building outdoor lighting')
-        self.say({'up_to_date': 'Checking outdoor lighting...',
-                  'finish': 'Putting the finished outdoor lighting in place...',
-                  'partial': 'Updating part of outdoor lighting (a few minutes)...'}.get(
-                      mode, 'Building outdoor lighting from your game files (20-40 minutes; if it is interrupted, run the '
-                            'installer again to continue)...'))
         args = ['--client', client, '--locale', locale, '--output', client / CACHE, '--without', without,
                 '--progress', 'human'] + (['--jobs', jobs] if jobs else [])
         code, last = self.run(APP / 'scripts/install_world_cache.py', args)
@@ -1005,9 +1068,6 @@ class Installer:
     def build_instances(self, client, locale, jobs, without, keys):
         """The instance layer (install_world_cache.py --instances): builds the selected groups, removes the others.
         Returns {'built': [...], 'kept': [...], 'removed': [...]} (group keys)."""
-        if keys:
-            self.say('Building dungeon and raid lighting: ' + ', '.join(self.instance_labels(keys)) +
-                     ' (a few minutes per group; if it is interrupted, run the installer again to continue)...')
         args = ['--client', client, '--locale', locale, '--output', client / CACHE, '--without', without,
                 '--progress', 'human', '--instances', ','.join(keys) or 'none'] + (['--jobs', jobs] if jobs else [])
         code, last = self.run(APP / 'scripts/install_world_cache.py', args)
@@ -1087,16 +1147,16 @@ class Installer:
             current = 'current'
         if not ask or self.yes or not self.interactive():
             return current
-        self.say('Which sky would you like?')
-        self.say("1. Use Northlight's sky (recommended)")
-        self.say('2. Keep more of your HD sky (experimental)')
-        self.say('Option 2 is untested with most HD skies. It keeps more of their artwork, and you may see two moons.')
+        self.say('')
+        self.say('  Sky')
+        self.say("    1  Northlight's sky (recommended)")
+        self.say('    2  Keep more of your HD sky (experimental: untested with most HD skies, and you may see two moons)')
         def parse(answer):
             choices = {'1': 'current', '2': 'experimental-preserve'}
             if answer not in choices:
                 raise ValueError('Choose 1 or 2.')
             return choices[answer]
-        return self.pick(f'Press Enter for {SKY_MODES.index(current) + 1}, or type 1 or 2 > ', parse, current)
+        return self.pick(f'  Press Enter for {SKY_MODES.index(current) + 1}, or type 1 or 2 > ', parse, current)
 
     def art_layer(self, client, locale, sky='current', letter=LETTER):
         """({client path: bytes} to install, None, {client path: action}) or ({}, reason it is skipped, {}).
@@ -1252,6 +1312,7 @@ class Installer:
 
     def install(self, client, locale=None, cache=None, backend=None, art=None, world_cache=True, jobs=None,
                 instances=None, sky=None, raised_air=None):
+        self.step(1, 4, 'YOUR GAME')
         client = self.resolve_client(client)
         if self.asked_tideglass is None and self.pkg.info.get('tideglass') and self.left_out_before(client):
             self.use_tideglass(False)
@@ -1302,9 +1363,10 @@ class Installer:
         """Every check, read-only, then the choices and the one confirmation: returns what apply_install does. Raises
         Refusal. A first install asks the dungeon and sky questions; a rerun keeps the earlier answers and offers to
         change them at the confirmation."""
-        self.say(f'Game folder: {client}')
+        self.say(f'Game folder: {client}', console=False)
         backend = INSTALL.resolve_backend(client, backend)   # called once; payload_plan takes the result
         locale = self.preflight(client, locale)
+        self.say(f'  Found World of Warcraft 3.3.5a ({LANGUAGES.get(locale, locale)}) in {client}')
         self.check_payload(backend)
         if self.tideglass:
             self.check_water_client(client)
@@ -1314,15 +1376,17 @@ class Installer:
             raise Refusal('--raised-air requires the combined Northlight and Tideglass package')
         marker = INSTALL.safe_path(client, INSTALL.LEGACY_DXVK3_MARKER)   # a linked renderer-backends folder is refused here
         if self.proxy and marker.is_file():
-            self.say('Note: Northlight no longer switches to DXVK 2.7.1 by itself; the leftover '
+            self.say('  Note: Northlight no longer switches to DXVK 2.7.1 by itself; the leftover '
                      'renderer-backends\\dxvk\\northlight-dxvk3-init.pending will be removed by this install.')
+        # The screen gives this as a tip in the closing lines, where a player who meets the problem looks.
         if self.platform == 'windows' and backend == 'dxvk':
             self.say('Graphics backend: DXVK 3.1.1. On an AMD RX 5000/6000 card, or if the game closes at startup, run '
-                     'Install.cmd --backend dxvk2 to use DXVK 2.7.1 instead; Northlight does not switch by itself.')
+                     'Install.cmd --backend dxvk2 to use DXVK 2.7.1 instead; Northlight does not switch by itself.', console=False)
         if self.platform == 'linux' and backend == 'dxvk':
             self.say('Graphics backend: DXVK 3.1.1 from the package, whatever DXVK your Wine prefix or launcher has. It '
                      'needs a Vulkan 1.3 driver with 32-bit support. If the game closes at startup, run '
-                     'bash install.sh --backend dxvk2 to use DXVK 2.7.1 instead; Northlight does not switch by itself.')
+                     'bash install.sh --backend dxvk2 to use DXVK 2.7.1 instead; Northlight does not switch by itself.',
+                     console=False)
         if self.proxy and backend == 'legacy':
             proxy = client / INSTALL.PROXY
             if not ((proxy.is_file() and not INSTALL.is_ours(client)) or (client / INSTALL.LEGACY).is_file()):
@@ -1341,8 +1405,8 @@ class Installer:
         letter = self.art_letter(client, locale, foreign)
         without = (letter or '') + ''.join(x for x in self.legacy_letters(old) if x != letter)
         for rel, digest in foreign:
-            self.say(f'{rel} belongs to another mod (sha256 {digest[:12]}); it is kept, and its content is part of '
-                     'this client.')
+            self.say(f'  {rel} belongs to another mod; it is kept, and its content is part of this client.')
+            self.say(f'{rel} sha256 {digest}', console=False)
         try:
             variant, differences = self.identify_chain(client, locale, without)
         except (ValueError, OSError) as e:
@@ -1360,20 +1424,20 @@ class Installer:
             else:
                 action = 'build'
         if variant:
-            self.say(f'Game files: {variant} 3.3.5a ({locale}).')
+            self.say(f'  Game files: {variant} 3.3.5a ({locale}).', console=bool(self.pkg.variants))
         elif not self.pkg.variants:
-            self.say(f'Using your own game files ({locale}).')
+            self.say(f'Using your own game files ({locale}).', console=False)
         else:
-            self.say(f'Game files: modified 3.3.5a ({locale}); no prebuilt outdoor lighting matches:')
+            self.say(f'  Game files: modified 3.3.5a ({locale}); no prebuilt outdoor lighting matches:')
             for line in differences[:12]:
-                self.say('  ' + str(line))
+                self.say('    ' + str(line))
         if action == 'build' and manifest:
-            self.say(f'The prebuilt download Northlight-cache-{variant}-{manifest["cache_digest"][:12]}.zip was not found next to '
+            self.say(f'  The prebuilt download Northlight-cache-{variant}-{manifest["cache_digest"][:12]}.zip was not found next to '
                      'the package or in Downloads; outdoor lighting is built from your game files instead.')
         if action == 'extract' and owner == 'local':
-            self.say('The prebuilt outdoor lighting replaces what this game folder built earlier (once).')
+            self.say('  The prebuilt outdoor lighting replaces what this game folder built earlier (once).')
         if action in ('extract', 'build') and owner == 'foreign' and old == []:
-            if not self.ask(f'{client / CACHE} was not made by this installer. Replace it?', False):
+            if not self.ask(f'  {client / CACHE} was not made by this installer. Replace it?', False):
                 raise Refusal('The existing world-cache was kept; nothing changed. Move it away or answer yes.')
         # What a local build would do, so that an update of a current game folder asks for neither 13 GB nor 40 minutes.
         build = self.cache_plan(client, locale, without) if action == 'build' else None
@@ -1381,8 +1445,13 @@ class Installer:
         files = self.pending_files(client, backend)
         can_sky = bool(art and letter)
         choosing, checked = relation == 'new', False
+        asked_elsewhere = (instances is not None or not world_cache) and (sky is not None or not can_sky)
         while True:
+            self.step(2, 4, 'YOUR CHOICES')
+            asking = choosing and not self.yes and self.interactive()
             keys = self.choose_instances(client, instances, ask=choosing) if world_cache else []
+            if world_cache and not (asking and instances is None):
+                self.say('  Dungeon and raid lighting: ' + (', '.join(self.instance_labels(keys)) or 'none'))
             need = MIN_FREE + (sum(m['bytes'] for m in manifest['files'].values()) if action == 'extract' else
                                LOCAL_BUILD_BYTES if mode == 'full' else 0)
             building = self.instances_to_build(client, locale, without, keys)   # kept groups need no space
@@ -1400,16 +1469,22 @@ class Installer:
                     raise Refusal(refusal[0].upper() + refusal[1:] + '. Run again with --no-world-cache to install the '
                                   'renderer without static world shadows and GI.')
             if not checked:
-                self.say('Checks passed.')
+                self.say('Checks passed.', console=False)
                 checked = True
             p = {'client': client, 'locale': locale, 'backend': backend, 'art': art, 'old': old, 'letter': letter,
                  'without': without, 'variant': variant, 'manifest': manifest, 'source': source, 'action': action,
                  'instances': keys, 'raised_air': raised_air, 'previous': previous, 'relation': relation, 'mode': mode,
                  'resumes': bool(build and build.get('resumes')), 'building': building, 'files': files,
                  'sky': self.choose_sky(client, sky, ask=choosing) if can_sky else None}
+            if can_sky and not (asking and sky is None):
+                self.say(f'  Sky: {SKY_LABELS[p["sky"]]}')
+            if not world_cache and not can_sky:
+                self.say('  Nothing to choose for this install.')
+            elif not choosing and not asked_elsewhere and not self.yes and self.interactive():
+                self.say('  These are your choices from last time. You can change them at the next step.')
+            self.step(3, 4, 'REVIEW')
             for line in self.plan_lines(p):
                 self.say(line)
-            asked_elsewhere = (instances is not None or not world_cache) and (sky is not None or not can_sky)
             verb = {'new': 'install', 'same': 'check and repair', 'older': 'install the older version'}.get(relation, 'update')
             if self.confirm(verb, can_change=not choosing and not asked_elsewhere) == 'go':
                 return p
@@ -1432,92 +1507,99 @@ class Installer:
         """What apply_install is about to do, in a player's words."""
         client, relation, mode, keys = p['client'], p['relation'], p['mode'], p['instances']
         combo = bool(self.tideglass)
-        lines = ['']
-        if relation == 'new':
-            lines.append(f'Ready to install {self.title}. It will:')
-        elif relation == 'same':
-            lines += [f'{describe(p["previous"])} is already installed here.',
-                      'Running the installer again checks every part and repairs what is missing or changed. It will:']
-        else:
-            lines += [f'Installed now:  {describe(p["previous"])}', f'This package:   {describe(self.offers)}']
+        product = 'Northlight and Tideglass' if combo else 'Northlight'
+        lines = []
+        if relation == 'same':
+            lines += [f'  {describe(p["previous"])} is already installed here.',
+                      '  Running the installer again checks every part and repairs what is missing or changed.']
+        elif relation != 'new':
+            lines += [f'  Installed now:  {describe(p["previous"])}', f'  This package:   {describe(self.offers)}']
             if relation == 'older':
-                lines.append('This package is OLDER than what is installed. Going ahead replaces the newer files with '
+                lines.append('  This package is OLDER than what is installed. Going ahead replaces the newer files with '
                              'these older ones.')
-            lines.append('The update will:')
+        lines.append('  Nothing has been changed yet. This will:')
         if relation == 'new':
-            lines.append('  - add the renderer' + (' and water' if combo else '') + ' files to the game folder. Every file it '
-                         'replaces is copied aside first, so uninstalling puts the game back as it was')
-        elif p['files'] is None:
-            lines.append('  - replace the renderer files that changed')
+            lines.append(f'    - add {product} to the game folder (every file it replaces is copied aside first, so '
+                         'uninstalling puts the game back as it was)')
+        elif p['files'] is None or p['files']:
+            lines.append(f'    - update the {product} files that changed')
         else:
-            lines.append(f'  - replace {p["files"]} renderer file{"s" if p["files"] != 1 else ""} that changed' if p['files'] else
-                         '  - keep the renderer files, which are already current')
+            lines.append(f'    - keep the {product} files, which are already current')
         if p['action'] == 'skip':
-            lines.append('  - leave out outdoor lighting (--no-world-cache)')
+            lines.append('    - leave out outdoor lighting (--no-world-cache)')
         elif p['action'] == 'keep' or mode == 'up_to_date':
-            lines.append('  - keep outdoor lighting, which is up to date')
+            lines.append('    - keep outdoor lighting, which is up to date')
         elif p['action'] == 'extract':
             size = sum(m['bytes'] for m in p['manifest']['files'].values()) / GIB
-            lines.append(f'  - unpack the prebuilt outdoor lighting ({size:.1f} GiB)')
+            lines.append(f'    - unpack the prebuilt outdoor lighting ({size:.1f} GiB)')
         elif mode == 'finish':
-            lines.append('  - put in place the outdoor lighting an interrupted run already built')
+            lines.append('    - put in place the outdoor lighting an interrupted run already built')
         elif mode == 'partial':
-            lines.append('  - update part of outdoor lighting (a few minutes)')
+            lines.append('    - update part of outdoor lighting (a few minutes)')
         else:
-            lines.append(('  - continue building outdoor lighting where an interrupted run stopped' if p['resumes'] else
-                          '  - build outdoor lighting from your game files') +
+            lines.append(('    - continue building outdoor lighting where an interrupted run stopped' if p['resumes'] else
+                          '    - build outdoor lighting from your game files') +
                          f' (20-40 minutes, about {LOCAL_BUILD_BYTES // GIB} GB on the game drive)')
+        left_out = []
         if p['action'] != 'skip':
             groups = {g['key']: g for g in instance_maps.GROUPS}
             names = lambda chosen: ', '.join(groups[k]['label'] for k in instance_maps.KEYS if k in chosen)
             kept = [k for k in keys if k not in p['building']]
             dropped = [k for k in self.built_instances(client) if k not in keys]
             if p['building']:
-                lines.append(f'  - build dungeon and raid lighting: {names(p["building"])} '
+                lines.append(f'    - build dungeon and raid lighting: {names(p["building"])} '
                              f'({minutes(sum(groups[k]["est_minutes"] for k in p["building"]))}, '
                              f'{sum(groups[k]["est_gb"] for k in p["building"]):.1f} GB)')
             if kept:
-                lines.append(f'  - keep dungeon and raid lighting: {names(kept)}')
+                lines.append(f'    - keep dungeon and raid lighting: {names(kept)}')
             if dropped:
-                lines.append(f'  - remove dungeon and raid lighting: {names(dropped)}')
+                lines.append(f'    - remove dungeon and raid lighting: {names(dropped)}')
             if not keys and not dropped and relation == 'new':
-                lines.append('  - leave out dungeon and raid lighting (run the installer again to add it)')
+                left_out.append('dungeon and raid lighting (run the installer again to add it)')
         if not p['art']:
-            lines.append('  - leave skies, weather and scenery as they are (--no-art-layer)')
+            lines.append('    - leave skies, weather and scenery as they are (--no-art-layer)')
         elif not p['letter']:
-            lines.append('  - leave skies, weather and scenery as they are: other mods use every patch slot it could take')
+            lines.append('    - leave skies, weather and scenery as they are: other mods use every patch slot it could take')
         else:
-            lines.append(f'  - build skies, weather and scenery from your game files, with {SKY_LABELS[p["sky"]]}')
+            lines.append(f'    - build skies, weather and scenery from your game files, with {SKY_LABELS[p["sky"]]}')
         if p['raised_air']:
-            lines.append('  - prepare outdoor fog for Dalaran and Telredor')
+            lines.append('    - prepare outdoor fog for Dalaran and Telredor')
         if self.left_out:
             had = (p['previous'] or {}).get('tideglass') is not None
-            lines.append('  - take out the Tideglass water installed before (water-core.dll); your water.ini and '
+            lines.append('    - take out the Tideglass water installed before (water-core.dll); your water.ini and '
                          'water-host.ini are kept. The game draws its own water; the rest stays as it is' if had else
-                         '  - leave out the Tideglass water' +
+                         '    - leave out the Tideglass water' +
                          (', as chosen before' if self.asked_tideglass is None else '') +
                          ': the game draws its own water, and everything else is installed. '
                          'Installing with --tideglass adds it')
         if relation != 'new':
-            lines.append('  - keep your settings (northlight-quality.ini' + (', water.ini, water-host.ini' if combo else '') +
+            lines.append('    - keep your settings (northlight-quality.ini' + (', water.ini, water-host.ini' if combo else '') +
                          ') and any look preset you edited')
+        for item in left_out:
+            lines.append('  Left out: ' + item)
         if mode == 'full':
-            time_text = 'Takes 20-40 minutes; if it is interrupted, run the installer again to continue.'
+            lines.append('  Takes 20-40 minutes.')
         else:
             # Measured only for the dungeon groups; the rest is a few minutes on a client with every continent.
             extra = sum(g['est_minutes'] for g in instance_maps.GROUPS if g['key'] in p['building'])
-            time_text = f'Takes a few minutes, plus {minutes(extra)} for the dungeon lighting.' if extra else 'Takes a few minutes.'
-        lines.append(time_text + ' Nothing has been changed yet.')
+            lines.append(f'  Takes a few minutes, plus {minutes(extra)} for the dungeon lighting.' if extra else
+                         '  Takes a few minutes.')
         return lines
 
     def apply_install(self, p, jobs):
         client, locale, action = p['client'], p['locale'], p['action']
         self.still_closed('changing anything')
         self.remember(self.given or client)   # before the long steps: a rerun that continues is offered this folder
+        product = 'Northlight and Tideglass' if self.tideglass else 'Northlight'
+        instance_step = action != 'skip' and bool(p['instances'] or self.built_instances(client))   # also to remove what is built
+        art_step = bool(p['art'] and p['letter'])
+        self.step(4, 4, 'INSTALLING')
+        self.expect_parts(bool(p['raised_air']) + (action in ('extract', 'build')) + instance_step + art_step + 1)
+        if p['mode'] == 'full' or p['building']:
+            self.say('  If this is interrupted, run the installer again and it continues.')
         raised = {}
         if p['raised_air']:
-            self.say('Preparing outdoor fog for Dalaran and Telredor ...')
-            with tempfile.TemporaryDirectory() as work:
+            with self.working('Fog for Dalaran and Telredor'), tempfile.TemporaryDirectory() as work:
                 code, _ = self.run(APP / 'renderer' / 'raised_air.py',
                                    ['--client', client, '--locale', locale, '--output', work])
                 if code:
@@ -1525,7 +1607,7 @@ class Installer:
                 for name in ('Northrend.rfs', 'Expansion01.rfs'):
                     raised['raised-fog/' + name] = (Path(work) / name).read_bytes()
         for backup, _ in reversed(p['old']):
-            self.say('Restoring the older package first:', backup)
+            self.say('  Restoring the older package first:', backup)
             INSTALL.restore(client, backup)
         self.recover(client)
         self.drop_previous(client)
@@ -1534,10 +1616,18 @@ class Installer:
         instance_changed = False
         try:
             if action == 'extract':
-                self.extract(client, p['source'], p['manifest'])
+                with self.working('Outdoor lighting (unpacking)'):
+                    self.extract(client, p['source'], p['manifest'])
                 report['world_cache'] = f'extracted (prebuilt {p["variant"]} cache {p["manifest"]["cache_digest"][:12]})'
             elif action == 'build':
-                event = self.build_cache(client, locale, jobs, p['without'], p['mode'])
+                label = {'up_to_date': 'Outdoor lighting (checking)',
+                         'finish': 'Outdoor lighting (finishing)',
+                         'partial': 'Outdoor lighting (a few minutes)'}.get(
+                             p['mode'], 'Outdoor lighting (20-40 minutes)')
+                with self.working(label) as part:
+                    event = self.build_cache(client, locale, jobs, p['without'])
+                    if event == 'up_to_date':
+                        part['result'] = 'up to date'
                 report['world_cache'] = 'kept (up to date)' if event == 'up_to_date' else 'built from your game files'
                 report['archive_warnings'] = self.archive_warnings(client)
             elif action == 'keep':
@@ -1546,17 +1636,22 @@ class Installer:
                 report['world_cache'] = 'not installed (--no-world-cache)'
             if action != 'skip':   # nothing selected and nothing built earlier: no process
                 self.remember_instances(client, p['instances'])   # before the long step: a failure keeps the intent
-                if p['instances'] or self.built_instances(client):   # also to remove what is built
+                if p['instances'] or self.built_instances(client):
                     # The layer is optional: its failure is a warning in the summary, never a reason to skip the renderer.
                     self.still_closed('building dungeon and raid lighting')
-                    try:
-                        done = self.build_instances(client, locale, jobs, p['without'], p['instances'])
-                        report['instances'] = done
-                        instance_changed = bool(done['built'] or done['removed'])
-                    except Failed as e:
-                        logs = getattr(e, 'logs', None) or [str(self.log.name) if self.log else 'the installer log']
-                        report['instances_failed'] = {'groups': p['instances'], 'log': logs[0]}
-                        self.say(f'WARNING: {e}')
+                    names = ', '.join(self.instance_labels(p['instances']))
+                    with self.working(f'Dungeon and raid lighting: {names}' if names else 'Dungeon and raid lighting (removing it)') as part:
+                        try:
+                            done = self.build_instances(client, locale, jobs, p['without'], p['instances'])
+                            report['instances'] = done
+                            instance_changed = bool(done['built'] or done['removed'])
+                            if not instance_changed:
+                                part['result'] = 'up to date'
+                        except Failed as e:
+                            logs = getattr(e, 'logs', None) or [str(self.log.name) if self.log else 'the installer log']
+                            report['instances_failed'] = {'groups': p['instances'], 'log': logs[0]}
+                            self.say(f'WARNING: {e}', console=False)   # the closing lines say it, with the log to read
+                            part['result'] = 'FAILED; the rest of the install goes on'
         finally:
             if p['source']:
                 p['source'].close()
@@ -1565,7 +1660,10 @@ class Installer:
         elif not p['letter']:
             layer, why, actions = {}, 'other mods use every patch slot it could take; their patches were kept', {}
         else:
-            layer, why, actions = self.art_layer(client, locale, p['sky'], p['letter'])
+            with self.working('Skies, weather and scenery') as part:
+                layer, why, actions = self.art_layer(client, locale, p['sky'], p['letter'])
+                if why:
+                    part['result'] = 'left as they are'
         if why:
             report['art_layer'] = 'skipped: ' + why
         else:
@@ -1584,22 +1682,25 @@ class Installer:
             layer[WATER_ARCHIVE_LIST] = ''.join('./' + path.relative_to(client).as_posix() + '\n'
                                                 for path in paths).encode('utf-8')
         backups, payload = [], 'kept (unchanged)'
-        if self.platform == 'mac':
-            self.still_closed('installing the renderer')
-            record = migrate().apply(client, self.pkg.dll, self.mac_backups(client))
-            if record:
-                backups.append(record)
-                payload = 'installed (mods/d3d9.dll preloaded from dlls.txt)'
-            plan, staged, _ = INSTALL.payload_plan(client, self.pkg.root, extra=layer, proxy=False, leave_out=self.left_out)
-        else:
-            plan, staged, _ = INSTALL.payload_plan(client, self.pkg.root, backend=p['backend'], extra=layer,
-                                                   leave_out=self.left_out)
-        files = [e['path'] for e in plan if e['path'] not in layer]
-        if plan:
-            self.still_closed('installing the renderer files')
-            backups.append(INSTALL.commit(client, plan, staged, self.pkg.payload, self.pkg.version))
-            if files:
-                payload = ('installed: ' if payload.startswith('kept') else payload + '; ') + ', '.join(files)
+        with self.working(f'{product} files') as part:
+            if self.platform == 'mac':
+                self.still_closed('installing the renderer')
+                record = migrate().apply(client, self.pkg.dll, self.mac_backups(client))
+                if record:
+                    backups.append(record)
+                    payload = 'installed (mods/d3d9.dll preloaded from dlls.txt)'
+                plan, staged, _ = INSTALL.payload_plan(client, self.pkg.root, extra=layer, proxy=False, leave_out=self.left_out)
+            else:
+                plan, staged, _ = INSTALL.payload_plan(client, self.pkg.root, backend=p['backend'], extra=layer,
+                                                       leave_out=self.left_out)
+            files = [e['path'] for e in plan if e['path'] not in layer]
+            if plan:
+                self.still_closed('installing the renderer files')
+                backups.append(INSTALL.commit(client, plan, staged, self.pkg.payload, self.pkg.version))
+                if files:
+                    payload = ('installed: ' if payload.startswith('kept') else payload + '; ') + ', '.join(files)
+            if not backups:
+                part['result'] = 'already current'
         if self.proxy:   # the leftover of 0.3.189-0.3.194, whatever the backend; only after the commit
             INSTALL.safe_path(client, INSTALL.LEGACY_DXVK3_MARKER).unlink(missing_ok=True)
         changed = bool(backups) or not report['world_cache'].startswith(('kept', 'not')) or instance_changed
@@ -1611,12 +1712,15 @@ class Installer:
         report.update(payload=payload, backups=[str(b) for b in backups], backups_freed=freed)
         self.say('')
         relation = p['relation']
-        self.say(f'{self.title}: ' + ('already installed; nothing changed.' if not changed else
-                                      'installed.' if relation in ('new', 'same') else
-                                      f'installed in place of {describe(p["previous"])}.' if relation == 'older' else
-                                      f'updated from {describe(p["previous"])}.'))
-        self.say(f'  Outdoor lighting: {report["world_cache"]}')
-        self.say('  ' + self.instance_summary(report['instances']))
+        self.say(('DONE, except for dungeon and raid lighting: ' if report.get('instances_failed') else 'DONE: ') +
+                 (f'{self.title} is already installed; nothing needed changing.' if not changed else
+                  f'{self.title} is installed.' if relation in ('new', 'same') else
+                  f'{self.title} is installed in place of {describe(p["previous"])}.' if relation == 'older' else
+                  f'{self.title} is installed, updated from {describe(p["previous"])}.'))
+        # The parts above say what was done; what each one wrote is in the log (and on screen without one).
+        details = not self.combined or self.log is None
+        self.say(f'  Outdoor lighting: {report["world_cache"]}', console=details)
+        self.say('  ' + self.instance_summary(report['instances']), console=details)
         if report.get('instances_failed'):
             failed = report['instances_failed']
             self.say('  Dungeon and raid lighting: ' + ', '.join(self.instance_labels(failed['groups'])) + f' failed (see {failed["log"]}); '
@@ -1625,7 +1729,6 @@ class Installer:
             import install_world_cache as iwc
             for warning in report['archive_warnings']:
                 self.say('    ' + iwc.archive_warning_text(warning))
-        details = not self.combined or self.log is None
         self.say(f'  Skies, weather and scenery: {report["art_layer"]}', console=details or bool(why))
         self.say(f'  Renderer: {payload}' + (f' (graphics backend {p["backend"]})' if self.proxy else ''), console=details)
         if freed:
@@ -1634,18 +1737,22 @@ class Installer:
             self.say(f'  Undo data: kept as it is: {kept_why}')
         for b in backups:
             self.say('  Undo data:', b, console=details)
-        if not details:
-            self.say(f'  Installation details: {self.log.name}')
         if self.platform == 'linux':
             for line in WINE_STEPS:
-                self.say(line)
-        self.say('Start WoW as usual.')
+                self.say('  ' + line)
+        self.say('  Start WoW as usual. Press Ctrl+Shift+F11' + (' (with fn on a Mac keyboard)' if self.platform == 'mac' else '') +
+                 ' in game for the settings.')
         if self.combined:
-            self.say('To update later, download the new package and run its installer on this game folder; your '
-                     'settings are kept.')
-            self.say('To undo this install, close WoW and run ' +
+            self.say("  To update later: run the new download's installer on this game folder. Your settings are kept.")
+            self.say('  To undo:         close WoW and run ' +
                      ('Uninstall.cmd' if self.platform == 'windows' else 'bash uninstall.sh' if self.platform == 'linux'
-                      else '"Uninstall Northlight.command"') + ' from this package or any newer one.')
+                      else '"Uninstall Northlight.command"') + ' from this download or any newer one.')
+        if self.proxy and p['backend'] == 'dxvk':
+            self.say('  If the game closes at startup, or you have an AMD RX 5000/6000 card: run Install.cmd --backend dxvk2'
+                     if self.platform == 'windows' else
+                     '  If the game closes at startup: run bash install.sh --backend dxvk2')
+        if self.log:
+            self.say(f'  Full details of this install: {self.log.name}')
         return report
 
     def instance_summary(self, done):
@@ -1656,6 +1763,7 @@ class Installer:
         return f'Dungeon and raid lighting: {text}'
 
     def uninstall(self, client):
+        self.step(1, 3, 'YOUR GAME')
         client = self.resolve_client(client)
         busy = self.running()
         if busy:
@@ -1670,32 +1778,38 @@ class Installer:
             backup, problem = problems[0]
             raise Refusal(f'Cannot restore {backup.name}: {problem}. Nothing was changed.')
         owner, _ = self.cache_owner(client)
+        self.say(f'Game folder: {client}', console=False)
         if found or owner in ('variant', 'local'):
             previous = self.installed(client)
-            self.say(f'Game folder: {client}')
-            self.say(f'This removes {describe(previous) if previous else self.product_name} from it:')
+            self.say(f'  Found {describe(previous) if previous else self.product_name} in {client}')
+            self.step(2, 3, 'REVIEW')
+            self.say('  Nothing has been changed yet. This will:')
             if found:
-                self.say('  - puts the game files back as they were before the first install '
+                self.say('    - put the game files back as they were before the first install '
                          f'({sum(len(r.get("files", [])) for _, r in found)} files restored or removed)')
-                self.say('  - keeps settings files you edited')
+                self.say('    - keep settings files you edited')
             if owner in ('variant', 'local'):
-                self.say('  - deletes outdoor lighting (the world-cache folder)')
+                self.say('    - delete outdoor lighting (the world-cache folder)')
             self.confirm('remove it')
+            self.step(3, 3, 'REMOVING')
         with locked(client):
             return self.apply_uninstall(client, found)
 
     def apply_uninstall(self, client, found):
-        for backup, record in found:
-            self.say('Restoring', backup)
-            self.restore(client, backup, record)
         owner, _ = self.cache_owner(client)
+        self.expect_parts(bool(found) + (owner in ('variant', 'local')))
+        if found:
+            with self.working('Game files'):
+                for backup, record in found:
+                    self.say('Restoring', backup, console=self.log is None)
+                    self.restore(client, backup, record)
         (client / CHOICE).unlink(missing_ok=True)
         self.remember(self.given or client, keep=False)
         if owner in ('variant', 'local'):
-            self.say('Deleting outdoor lighting (the world-cache folder)...')
-            remove_tree(client / CACHE)
+            with self.working('Outdoor lighting'):
+                remove_tree(client / CACHE)
         elif owner == 'foreign':
-            self.say(f'{client / CACHE} was not made by this installer; left in place.')
+            self.say(f'  {client / CACHE} was not made by this installer; left in place.')
         for name in (STAGING, INSTMP, EXTRACT, PREVIOUS):   # ours only: each carries our marker or manifest
             leftover = client / name
             if leftover.exists() and ((leftover / EXTRACTING).exists() or (leftover / VARIANT_FILE).exists() or
@@ -1709,14 +1823,18 @@ class Installer:
                     (client / folder).rmdir()   # only when empty
                 except OSError:
                     pass
-        self.say(f'{self.product_name} removed.' if found or owner in ('variant', 'local') else 'Nothing to remove.')
+        self.say('')
+        self.say(f'DONE: {self.product_name} is removed.' if found or owner in ('variant', 'local') else
+                 f'  Nothing to remove: {self.product_name} is not installed in {client}.')
         left = self.foreign_proxy(client)
         if left:
-            self.say(left)
-        self.say(f'Backups stay in {client / "renderer-backups"}.')
+            self.say('  ' + left)
+        self.say(f'  Backups stay in {client / "renderer-backups"}.')
         if self.platform == 'linux' and (found or owner in ('variant', 'local')):
-            self.say('You can remove the WINEDLLOVERRIDES d3d9=n,b setting you added for Northlight (keep it if '
+            self.say('  You can remove the WINEDLLOVERRIDES d3d9=n,b setting you added for Northlight (keep it if '
                      'another d3d9.dll, such as DXVK in the game folder, needs it).')
+        if self.log:
+            self.say(f'  Full details: {self.log.name}')
         return {'restored': [str(b) for b, _ in found], 'world_cache_deleted': owner in ('variant', 'local'),
                 'proxy_left': bool(left)}
 
@@ -1862,11 +1980,12 @@ def main(argv=None):
     installer.open_log(args.action)
     try:
         if args.action == 'install':
-            installer.say(f'{installer.title} installer')
+            installer.banner(f'{installer.title} installer')
             installer.install(args.client, args.locale, args.cache, args.backend, args.art_layer,
                               not args.no_world_cache, args.jobs, instances=args.instances, sky=args.sky,
                               raised_air=args.raised_air)
         elif args.action == 'uninstall':
+            installer.banner(f'{installer.product_name} uninstaller')
             installer.uninstall(args.client)
         elif args.action == 'logs':
             installer.collect_logs(args.client)
@@ -1874,13 +1993,13 @@ def main(argv=None):
             installer.status(args.client)
         return 0
     except Refusal as e:
-        installer.say('STOPPED:', e)
+        installer.stopped('STOPPED:', e)
         return 2
     except (Failed, ValueError, OSError) as e:
-        installer.say('ERROR:', e)
+        installer.stopped('ERROR:', e)
         return 1
     except KeyboardInterrupt:
-        installer.say('Interrupted. Run the installer again to continue.')
+        installer.stopped('Interrupted.', 'Run the installer again to continue.')
         return 1
     finally:
         if installer.log:
