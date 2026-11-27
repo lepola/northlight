@@ -721,18 +721,25 @@ inline Result choose(std::vector<Draw>& draws,Scratch& scratch,std::size_t budge
     history.publish(actors,cutting?cut:INFINITY,tuning,true,radiusOn);
     return result;
 }
+// Trial: the game merges several instances of one rigid model into one draw (Dalaran's lamp posts: 972, 1458 or 1944
+// triangles for two, three or four posts). Each vertex is then on exactly one bone, but the bones differ between
+// vertices. Such a draw is rigid too: SeveralRigid, which is no palette index, so the rigid memory and the static M2
+// match (both need bone >= 0) leave it alone. Without this the draw is a character-like body placed at one of its
+// posts, and ActorShadowRadius drops all of them when that one is too far.
+constexpr float SeveralRigid=-1.f;
 // One palette bone for every vertex, or NaN. Weighted lanes must agree and sum
 // to one; without weights all four index lanes must agree. read(v,index,weight)
 // decodes vertex v and fails closed on anything unreadable.
 template<class Read> float rigidBone(std::size_t vertices,bool weighted,Read read){
-    float bone=NAN;
-    for(std::size_t v=0;v<vertices;++v){float index[4],weight[4]={1,1,1,1},sum=0;
+    float bone=NAN;bool several=false;
+    for(std::size_t v=0;v<vertices;++v){float index[4],weight[4]={1,1,1,1},sum=0,own=NAN;
         if(!read(v,index,weight))return NAN;
         for(unsigned lane=0;lane<4;++lane){
             if(weighted){if(!std::isfinite(weight[lane])||weight[lane]<0)return NAN;if(weight[lane]==0)continue;sum+=weight[lane];}
-            if(!std::isfinite(index[lane])||(!std::isnan(bone)&&index[lane]!=bone))return NAN;bone=index[lane];}
+            if(!std::isfinite(index[lane])||(!std::isnan(own)&&index[lane]!=own))return NAN;own=index[lane];}
         if(weighted&&std::fabs(sum-1)>.02f)return NAN;
+        if(std::isnan(bone))bone=own;else if(own!=bone)several=true;
     }
-    return bone;
+    return several?SeveralRigid:bone;
 }
 }
