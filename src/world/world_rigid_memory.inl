@@ -175,6 +175,9 @@
                     p->type=c.type;p->base=0;p->min=0;p->vertices=p->mesh().vertexCount;p->start=0;p->count=c.count;p->indexed=c.indexed;
                     p->captureRootValid=false;p->selfShadow=false;std::memcpy(p->anchor,e.world+9,sizeof p->anchor);p->anchorValid=true;p->pointBounds={};p->gpuCached=false;p->shadowSkinned=p->shadowSelected=true;p->shadowSmall=false;p->fateSlot=-1;p->fateClass=NorthlightShadowFate::NotRanked;p->fateDistance=0;
                     p->staticProofMask=p->staticM2Mask=0;p->staticM2Model=nullptr;p->boneKnown=false;p->bone=NAN;p->constantGroup=++group;
+                    if(shadowFate.active()){NorthlightShadowFate::Key key;key.vb=reinterpret_cast<std::uintptr_t>(&e);key.shader=p->originalShader;key.count=p->count;
+                        for(unsigned k=0;k<3;++k)key.cell[k]=std::int32_t(std::floor(p->anchor[k]));
+                        p->fateSlot=shadowFate.slot(key,true,p->count);shadowFate.record(p->fateSlot,NorthlightShadowFate::Remembered,true);shadowFate.locate(p->fateSlot,p->anchor);}
                     replays.emplace_back(p.release());++rigidInjected;}});
         }
         if(captureSampled){const auto& s=rigidMemory.stats();const double ms=rigidObserveMs+std::chrono::duration<double,std::milli>(std::chrono::steady_clock::now()-started).count();

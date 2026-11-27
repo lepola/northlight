@@ -77,6 +77,10 @@
             deferLogf("MODEL shadow selection captured=%zu selected=%zu smallGIExcluded=%zu actorCandidates=%zu actorKept=%zu actorDropped=%zu actorBytes=%zu keptActorBytes=%zu droppedActorBytes=%zu budgetBytes=%zu unknownDistance=%zu distanceTests=%zu distanceReused=%zu selectionMs=%.3f inputCacheHits=%u inputCacheMisses=%u scope=captured-actors distance=sampled-pose-vertex captureBudgetMiB=%u budgetTransitionsSinceLog=%u ranking=%d radius=%u radiusDropped=%zu radiusDroppedDraws=%zu radiusDroppedBytes=%zu radiusTogglesSinceLog=%zu radiusFlickerSinceLog=%zu radiusRekeyedSinceLog=%zu radiusCharacters=%zu radiusSelf=%zu radiusCompanions=%zu radiusInsideBytes=%zu radiusNoPivot=%zu rekeyFlipSinceLog=%zu attachToFreeBeyondSinceLog=%zu freeToAttachBeyondSinceLog=%zu freeRigidBeyond=%lld freeRigidBeyondBytes=%lld freeRigidMaxYards=%.1f propRigidBeyond=%lld propRigidBeyondBytes=%lld stuckBeyond=%lld",
                 captured,replays.size(),small,actors,result.kept+stable.rigidDraws,result.dropped,actorBytes,result.keptBytes+stable.rigidBytes,result.droppedBytes,budget,result.unknown,distanceTests,distanceReused,ms,prepareCaches->sampled.hits,prepareCaches->sampled.misses,captureBudgetMiB,actorShadowTransitions,int(ranked&&stable.actors+stable.rigidActors>0),
                 quality.actorShadowRadius,stable.radiusDropped,stable.radiusDroppedDraws,stable.radiusDroppedBytes,actorShadowRadiusToggles,actorShadowRadiusFlicker,actorShadowRadiusRekeyed,stable.radiusCharacters,stable.radiusSelf,stable.radiusCompanions,stable.radiusInsideBytes,stable.radiusUnreferenced,actorShadowRadiusRekeyFlips,actorShadowAttachToFreeBeyond,actorShadowFreeToAttachBeyond,beyond(stable.freeRigidBeyond),beyond(stable.freeRigidBeyondBytes),stable.beyondKnown?double(stable.freeRigidMaxYards):-1.0,beyond(stable.propRigidBeyond),beyond(stable.propRigidBeyondBytes),beyond(stable.stuckBeyond));
+            if(stable.radiusCentreKnown){deferLogf("MODEL shadow radius centre=(%.1f %.1f %.1f) yards=%.0f selfCaptured=%zu selfHeld=%zu outsideWithinRadius=%u",
+                    stable.radiusCentre[0],stable.radiusCentre[1],stable.radiusCentre[2],stable.radiusYards,stable.radiusSelf,stable.radiusSelfMissing,stable.nearOutsideTotal);
+                for(unsigned i=0;i<stable.nearOutsideCount;++i){const auto& o=stable.nearOutside[i];
+                    deferLogf("MODEL shadow radius outside at=(%.1f %.1f %.1f) boundsYards=%.1f limit=%.1f wasInside=%d dwell=%d manySections=%d",o.at[0],o.at[1],o.at[2],o.yards,o.limit,int(o.was),int(o.hold),int(o.sections));}}
             actorShadowTransitions=0;actorShadowRadiusToggles=actorShadowRadiusFlicker=actorShadowRadiusRekeyed=actorShadowRadiusRekeyFlips=actorShadowAttachToFreeBeyond=actorShadowFreeToAttachBeyond=0;
         }
     }
@@ -84,7 +88,9 @@
     void finishShadowFate(){
         if(shadowFate.active()){shadowFate.endFrame();if(shadowFate.windowEnded())shadowFate.report([](const char* format,auto... args){logf(format,args...);});}
         // ShadowFateDiagnostics=1 only: 0.2-0.5 ms per sampled window otherwise.
-        shadowFate.beginFrame(actorShadowBudgetMiB>0&&shadowFateDiagnostics);
+        shadowFate.beginFrame(shadowFateDiagnostics);
+        // The near listing is taken around the selection's player while it has one, else around the shadow pivot.
+        shadowFate.watch(actorShadowHistory.selfHold()?actorShadowHistory.selfAt():actorShadowOriginValid?actorShadowOrigin:nullptr,ShadowFateNearYards);
     }
     // ---- 0.3.177 (r83 a1-prepare): the stable selection's prepare on a worker while the game draws.
     // A frame opens at its first selected skinned capture: the camera is frozen and the caches pass to
@@ -323,6 +329,7 @@
         for(const auto& a:actorShadowScratch.actors)if(a.self)for(size_t i=a.first;i<a.first+a.count;++i)replays[actorShadowDraws[i].index]->selfShadow=true; /* the side tracker's self, and ring 0 of the bounds job's near list */
         if(shadowFate.active())for(const auto& a:actorShadowScratch.actors){using namespace NorthlightShadowFate;
             const Fate f=a.rigid?Rigid:(a.body!=SIZE_MAX||a.orphan)?Attached:a.exempt?Exempt:a.waiting?Waiting:a.keep?Kept:Dropped;
-            for(size_t i=a.first;i<a.first+a.count;++i){auto& r=*replays[actorShadowDraws[i].index];r.fateClass=f;r.fateDistance=std::sqrt(std::max(0.f,actorShadowDraws[i].distanceSquared));}}
+            for(size_t i=a.first;i<a.first+a.count;++i){const auto& d=actorShadowDraws[i];auto& r=*replays[d.index];r.fateClass=f;r.fateDistance=std::sqrt(std::max(0.f,d.distanceSquared));
+                if(d.known)shadowFate.locate(r.fateSlot,d.at);else if(a.located)shadowFate.locate(r.fateSlot,a.at);}}
         return result;
     }

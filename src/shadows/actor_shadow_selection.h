@@ -184,6 +184,11 @@ struct Result {
     // beyondKnown=false (no centre this selection, or not a diagnostics frame): the beyond gauges were not measured.
     std::size_t attachToFree=0,freeToAttach=0,attachToFreeBeyond=0,freeToAttachBeyond=0,radiusRekeyFlips=0,freeRigidBeyond=0,freeRigidBeyondBytes=0,propRigidBeyond=0,propRigidBeyondBytes=0,stuckBeyond=0;float freeRigidMaxYards=0;bool beyondKnown=false;
     bool ranked=true; /* the quota ranked this frame (Radius decide) */
+    // Diagnostics frames only: the radius centre, and the first characters judged outside although their bounds are within
+    // the set radius of it (the hysteresis limits, a body without a usable sample, a centre that just moved).
+    struct NearOutside {float at[3]={},yards=0,limit=0;bool was=false,hold=false,sections=false;};
+    static constexpr unsigned NearOutsideMax=6;
+    NearOutside nearOutside[NearOutsideMax];unsigned nearOutsideCount=0,nearOutsideTotal=0;float radiusCentre[3]={},radiusYards=0;bool radiusCentreKnown=false;
 };
 namespace detail {
 struct Character {unsigned in=0,out=0,since=~0u,streak=0;bool stay=false;}; /* ActorShadowRadius: per head, from its sections' entries */
@@ -447,6 +452,12 @@ inline void radiusStage(const std::vector<Draw>& draws,std::vector<Actor>& actor
         bool in=h.self||h.companion||!h.known;
         if(!in){const Box& b=boxes[a.head];const float limit=was?(hold?wide+margin:wide):(hold?std::max(0.f,yards-margin):yards);in=b.valid()&&b.squared(centre)<=limit*limit;}
         if(in)h.outside=false;}
+    if(diagnostics){std::memcpy(result.radiusCentre,centre,sizeof centre);result.radiusYards=yards;result.radiusCentreKnown=true;
+        for(std::size_t n=0;n<actors.size();++n){if(!isHead(n)||!actors[n].outside)continue;const Box& b=boxes[n];const float q=b.valid()?b.squared(centre):-1.f;
+            if(b.valid()&&q>yards*yards)continue;++result.nearOutsideTotal;if(result.nearOutsideCount>=Result::NearOutsideMax)continue;
+            const RadiusEntry* e=actors[n].radiusEntry;const bool was=e&&e->inside,hold=e&&e->filtered&&e->since<dwell;
+            auto& o=result.nearOutside[result.nearOutsideCount++];std::memcpy(o.at,actors[n].radiusAt,sizeof o.at);o.yards=q<0?-1.f:std::sqrt(q);
+            o.limit=was?(hold?wide+margin:wide):(hold?std::max(0.f,yards-margin):yards);o.was=was;o.hold=hold;o.sections=characters[n].in+characters[n].out>1;}}
     for(auto& a:actors){if(!body(a)||a.head==SIZE_MAX)continue;const auto& h=actors[a.head];const RadiusEntry* e=a.radiusEntry;
         a.outside=h.outside;if(&a!=&h)a.companion=h.companion||h.self;
         const bool changed=e&&e->filtered&&e->inside==a.outside;a.radiusSince=changed?0:e?e->since+(e->since<~0u):~0u;result.radiusRekeyFlips+=a.rekeyed&&changed;} /* a.rekeyed is set on diagnostics frames only */

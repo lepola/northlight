@@ -35,7 +35,7 @@ checks['counters only on sample, declared, reset per frame']=('if(sample&&priori
     and any('skinnedFadeRejected=' in l and 'otherFadeRejected=' in l and l.count('skinnedFadeRejected=')==1 for l in w.split('\n') if 'skinnedBlendRejected=skinned' in l or 'otherBlendRejected=other' in l))
 checks['logged on the main and the other MODEL frame capture lines']=('blendRejected=%u fadeRejected=%u projectionRejected=%u' in w and 'skinnedBlendRejected,skinnedFadeRejected,skinnedProjectionRejected' in w
     and 'other blendRejected=%u fadeRejected=%u' in w and 'otherBlendRejected,otherFadeRejected,' in w)
-checks['shadow_fate.h: Fade after DistanceCut, named "fade", enum and names agree']=('DistanceCut,Fade,FateCount' in fate and '"distanceCut","fade"' in fate
+checks['shadow_fate.h: Fade after DistanceCut, named "fade", enum and names agree']=('DistanceCut,Fade,' in fate and '"distanceCut","fade"' in fate
     and enum[-1].strip()=='FateCount' and len(enum)-1==len(names))
 ok=True
 for k,v in checks.items():

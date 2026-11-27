@@ -1507,7 +1507,7 @@ private:
         bool sameMesh(const ReplayMeshKey& o)const{return index==o.index&&stream==o.stream&&decl==o.decl&&offset==o.offset&&start==o.start&&count==o.count&&base==o.base;}};
     std::vector<ReplayMeshKey> replayMeshKeys;
     std::vector<NorthlightReplayShadowPolicy::Candidate> shadowCandidates;
-    unsigned minSkinnedShadowTriangles=0,captureBudgetMiB=32,actorShadowBudgetMiB=0;bool shadowFateDiagnostics=false;
+    unsigned minSkinnedShadowTriangles=0,captureBudgetMiB=32,actorShadowBudgetMiB=0;bool shadowFateDiagnostics=false;static constexpr float ShadowFateNearYards=30.f;
     NorthlightQuality::Settings quality; /* northlight-quality.ini; Settings{} is the full-quality default */
     bool shadowSelectionDone=false;
     unsigned replayTriangleBins[6]={},skinnedTriangleBins[6]={},acceptedTriangleBins[6]={},acceptedSkinnedTriangleBins[6]={};
@@ -4957,6 +4957,7 @@ replayBoundsAbandon();releaseReplayProbe();staticCasters.settle();rigidMemoryCle
             const bool sideDiag=nearSkip&&NorthlightDiagnostics::enabled(); /* diagnostics only: the side tracker, the hold counters */
             if(nearSkip)actorHold[source].begin(sideDiag,unsigned(frames)+1);else if(cascade==0)actorHold[source].invalidate();
             if(sideDiag)actorSide[source].begin();
+            const bool fated=shadowFate.active(); /* ShadowFateDiagnostics: what each map did with a selected caster */
             auto replayLoop=[&](auto& split)->bool{
               using NorthlightRenderThreadProbe::Own;
               split.start();
@@ -4968,6 +4969,7 @@ replayBoundsAbandon();releaseReplayProbe();staticCasters.settle();rigidMemoryCle
                     // Diagnostic only (no behaviour change): the proved model must be in
                     // this slot's committed cache content. Must stay 0 (same-frame commit).
                     if(key.staticContent.valid&&!key.staticContent.contains(p->staticProofModel,p->staticProofRevision))++staticDedupUncommitted;
+                    if(fated)shadowFate.replayed(p->fateSlot,unsigned(slot),NorthlightShadowFate::StaticProof,p->pointBounds.valid?p->pointBounds.low:nullptr,p->pointBounds.valid?p->pointBounds.high:nullptr);
                     ++staticDedupSkipped;continue;
                 }
                 // The actor map takes a caster whose bounds lie fully inside the inset, and keeps a skinned one while they lie within Stay (hysteresis,
@@ -4984,7 +4986,7 @@ replayBoundsAbandon();releaseReplayProbe();staticCasters.settle();rigidMemoryCle
                             if(inActor&&position)actorHold[source].stamp(model,position,matrix,extent);}}
                     else if(p->shadowSkinned&&!p->pointBounds.valid&&p->shared){ /* no bounds this frame: stays in the actor map only by the hold's carry rule */
                         if(position)inActor=actorHold[source].carry(NorthlightActorSideHold::holdModel(*p),position,matrix);}}
-                if(inActor){actorReplays.push_back(uint32_t(index));++nearSkipped;
+                if(inActor){actorReplays.push_back(uint32_t(index));++nearSkipped;if(fated)shadowFate.replayed(p->fateSlot,unsigned(slot),NorthlightShadowFate::ActorMap,p->pointBounds.valid?p->pointBounds.low:nullptr,p->pointBounds.valid?p->pointBounds.high:nullptr);
                     if(sideDiag&&p->shadowSkinned)(p->shared?actorSide[source].note(NorthlightActorSide::key(p->shared.get(),p->decl,p->count,position!=nullptr,position),true,p->selfShadow,p->captureRootValid):actorSide[source].unkeyed());continue;}
                 if(sideDiag&&p->shadowSkinned){auto& side=actorSide[source];if(p->shared)side.note(NorthlightActorSide::key(p->shared.get(),p->decl,p->count,position!=nullptr,position),false,p->selfShadow,p->captureRootValid,!p->pointBounds.valid);else side.unkeyed();
                     /* no valid bounds, yet the palette root lies inside the inset: it belongs to the actor map and fell to the near cascade for lack of bounds;
@@ -4995,13 +4997,15 @@ replayBoundsAbandon();releaseReplayProbe();staticCasters.settle();rigidMemoryCle
                 // recorded content holds the model at this revision with the replay's box inside the drawn bounds. Otherwise the replay is drawn.
                 if(p->staticM2Mask&(1u<<slot)&&p->staticM2Model&&cacheCurrent&&staticCasters.stats().readyModels&&StaticShadow::containsBounds(cachedMatrix,p->staticProofLow,p->staticProofHigh)&&
                    key.staticContent.containsBox(*p->staticM2Model,p->staticProofRevision,p->staticProofLow,p->staticProofHigh,StaticM2Dedup::BoundsPad)){
+                    if(fated)shadowFate.replayed(p->fateSlot,unsigned(slot),NorthlightShadowFate::StaticM2,p->pointBounds.valid?p->pointBounds.low:nullptr,p->pointBounds.valid?p->pointBounds.high:nullptr);
                     ++staticM2Skipped;++replaySlotM2Skipped[slot];continue;
                 }
                 ++replaySlotTested[slot];replaySlotBounded[slot]+=p->pointBounds.valid;
-                if(p->pointBounds.valid&&(cull?(cull[index]&2)!=0:(replayAffine&&NorthlightShadowBounds::clipRejectAffine(V(p->pointBounds.low[0],p->pointBounds.low[1],p->pointBounds.low[2]),V(p->pointBounds.high[0],p->pointBounds.high[1],p->pointBounds.high[2]),matrices[cascade])))){++culledReplayDraws;++replaySlotCulled[slot];continue;}
+                if(p->pointBounds.valid&&(cull?(cull[index]&2)!=0:(replayAffine&&NorthlightShadowBounds::clipRejectAffine(V(p->pointBounds.low[0],p->pointBounds.low[1],p->pointBounds.low[2]),V(p->pointBounds.high[0],p->pointBounds.high[1],p->pointBounds.high[2]),matrices[cascade])))){if(fated)shadowFate.replayed(p->fateSlot,unsigned(slot),NorthlightShadowFate::Culled,p->pointBounds.valid?p->pointBounds.low:nullptr,p->pointBounds.valid?p->pointBounds.high:nullptr);++culledReplayDraws;++replaySlotCulled[slot];continue;}
                 split.mark(Own);
                 if(!submitReplay(p.get(),replayBindings,poseConstants,rows,split,replayConstantBytes,replayConstantCalls,[&](HRESULT h,const char* s){return check(h,s);}))return false;
                 split.drawn(p.get());
+                if(fated)shadowFate.replayed(p->fateSlot,unsigned(slot),NorthlightShadowFate::Drawn,p->pointBounds.valid?p->pointBounds.low:nullptr,p->pointBounds.valid?p->pointBounds.high:nullptr);
                 ++replayDraws;replayTriangles+=p->count;
                 if(captureSampled)try{replayMeshKeys.push_back({p->index,p->stream[0],p->decl,p->offset[0],p->start,p->count,p->base,p->constantGroup});}catch(...){}
               }
